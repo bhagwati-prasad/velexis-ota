@@ -1,0 +1,103 @@
+---
+title: Velexis tenancy model - shared platform and reference schemas, one tenant schema (tenant_ + key) per OTA
+---
+erDiagram
+  %% Solid lines = real foreign keys inside one schema (or the 1:1 ownership of a schema by a tenant row).
+  %% Dotted lines = references BY VALUE across schemas (no cross-schema foreign keys exist).
+  PLATFORM_ACCOUNTS["platform.accounts"] {
+    text id PK "acc_... portal user (OTA owner / staff)"
+    text email UK "login e-mail"
+  }
+  PLATFORM_TENANTS["platform.tenants"] {
+    text id PK "ten_... one row per OTA"
+    text key UK "short immutable key"
+    text schema_name UK "always tenant_ + key"
+    text cluster "PostgreSQL cluster hosting the schema"
+    text status "provisioning, active, suspended ..."
+    text schema_version "latest tenant migration applied"
+  }
+  PLATFORM_TENANT_MEMBERSHIPS["platform.tenant_memberships"] {
+    text id PK "stf_... staff id"
+    text tenant_id FK "OTA"
+    text account_id FK "portal account"
+    text role "owner, admin, agent, finance, viewer"
+  }
+  PLATFORM_API_KEYS["platform.api_keys"] {
+    text id PK "key_..."
+    text tenant_id FK "tenant resolved from X-Api-Key"
+    text kind "publishable or secret"
+    text environment "test or live"
+    text key_hash UK "only the hash is stored"
+  }
+  PLATFORM_SUPPLIER_CONNECTIONS["platform.supplier_connections"] {
+    text id PK "sc_..."
+    text tenant_id FK "owning tenant"
+    text environment "test or live Amadeus host"
+    bytea client_secret_ciphertext "envelope-encrypted secret"
+  }
+  PLATFORM_TENANT_DOMAINS["platform.tenant_domains"] {
+    text id PK "dom_..."
+    text tenant_id FK "tenant served"
+    text hostname UK "key.velexis.app or custom domain"
+  }
+  PLATFORM_TENANT_SCHEMA_MIGRATIONS["platform.tenant_schema_migrations"] {
+    text tenant_id PK, FK "tenant"
+    text version PK "migration version"
+    text status "applied, failed ..."
+  }
+  TENANT_SCHEMA["tenant_<key> schema"] {
+    text schema_name PK "tenant_ + key, one per OTA"
+    text tables "42 tables from the same tenant migration set"
+  }
+  TENANT_SCHEMA_MIGRATIONS["tenant_<key>.schema_migrations"] {
+    text id PK "migration version applied in this schema"
+  }
+  TENANT_CUSTOMERS["tenant_<key>.customers"] {
+    text id PK "cus_... end customer (PII lives only here)"
+    text email UK "unique per OTA"
+  }
+  TENANT_BOOKINGS["tenant_<key>.bookings"] {
+    text id PK "bkg_... Amadeus flight order"
+    text customer_id FK "NULL for guest bookings"
+    text environment "test or live"
+    text supplier_connection_id "sc_ id by value"
+    char origin_iata "IATA code by value"
+    char currency "ISO currency by value"
+  }
+  TENANT_STAFF_ACTIONS["tenant_<key>.staff_actions"] {
+    text id PK "sact_... console audit"
+    text actor_type "staff, api_key or system"
+    text actor_id "stf_ or key_ id by value"
+    text staff_id "stf_ id by value (NULL for API key calls)"
+  }
+  REFERENCE_AIRPORTS["reference.airports"] {
+    char iata_code PK "IATA location code"
+    char city_code FK "reference.cities"
+  }
+  REFERENCE_AIRLINES["reference.airlines"] {
+    char iata_code PK "IATA carrier code"
+  }
+  REFERENCE_CURRENCIES["reference.currencies"] {
+    char code PK "ISO 4217 code"
+  }
+
+  PLATFORM_ACCOUNTS ||--o{ PLATFORM_TENANT_MEMBERSHIPS : "is staff via"
+  PLATFORM_TENANTS ||--o{ PLATFORM_TENANT_MEMBERSHIPS : "has staff"
+  PLATFORM_ACCOUNTS |o--o{ PLATFORM_TENANTS : "created"
+  PLATFORM_TENANTS ||--o{ PLATFORM_API_KEYS : "authenticated by"
+  PLATFORM_TENANTS ||--o{ PLATFORM_SUPPLIER_CONNECTIONS : "Amadeus credentials"
+  PLATFORM_TENANTS ||--o{ PLATFORM_TENANT_DOMAINS : "served on"
+  PLATFORM_TENANTS ||--o{ PLATFORM_TENANT_SCHEMA_MIGRATIONS : "migration ledger"
+  PLATFORM_TENANTS ||--|| TENANT_SCHEMA : "owns schema"
+  TENANT_SCHEMA ||--o{ TENANT_SCHEMA_MIGRATIONS : "contains"
+  TENANT_SCHEMA ||--o{ TENANT_CUSTOMERS : "contains"
+  TENANT_SCHEMA ||--o{ TENANT_BOOKINGS : "contains"
+  TENANT_SCHEMA ||--o{ TENANT_STAFF_ACTIONS : "contains"
+  TENANT_CUSTOMERS |o--o{ TENANT_BOOKINGS : "books"
+  PLATFORM_TENANT_SCHEMA_MIGRATIONS }o..|| TENANT_SCHEMA_MIGRATIONS : "mirrors (by value)"
+  TENANT_BOOKINGS }o..|| PLATFORM_SUPPLIER_CONNECTIONS : "by value (sc_ id)"
+  TENANT_STAFF_ACTIONS }o..o| PLATFORM_TENANT_MEMBERSHIPS : "by value (stf_ id)"
+  TENANT_STAFF_ACTIONS }o..o| PLATFORM_API_KEYS : "by value (key_ id)"
+  TENANT_BOOKINGS }o..|| REFERENCE_AIRPORTS : "by value (iata_code)"
+  TENANT_BOOKINGS }o..|| REFERENCE_AIRLINES : "by value (carrier code)"
+  TENANT_BOOKINGS }o..|| REFERENCE_CURRENCIES : "by value (currency code)"

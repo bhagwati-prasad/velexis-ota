@@ -1,0 +1,165 @@
+---
+title: Velexis control plane - schema platform (shared)
+---
+erDiagram
+  account_sessions {
+    text id PK "Session id (asn_ + ULID); one row per refresh token generation."
+    text account_id FK "Account that owns the session."
+    text active_tenant_id FK "OTA currently selected in the console for this session."
+    text refresh_token_hash UK "SHA-256 of the opaque refresh token (the token itself is never stored)."
+    text family_id "Rotation family: all tokens issued from one login; reuse of a rotated token revokes the family."
+    text replaced_by_id FK "Next token of the rotation chain."
+    timestamptz expires_at "Refresh token expiry."
+  }
+  accounts {
+    text id PK "Account id (acc_ + ULID)."
+    text email UK "Login e-mail of the portal user (unique case-insensitively)."
+    text full_name "Full name of the person."
+    text status "Lifecycle state of the account."
+    timestamptz created_at "Sign-up time."
+  }
+  api_key_tenant_grants {
+    text api_key_id PK, FK "Hosting key."
+    text tenant_id PK, FK "OTA the key may act for."
+    text granted_by_account_id FK "Owner/admin of the OTA who granted it."
+  }
+  api_keys {
+    text id PK "API key id (key_ + ULID)."
+    text tenant_id FK "Tenant resolved from the key (NULL only for hosting keys, which act for the OTAs in api_key_..."
+    text owner_account_id FK "Portal account that owns a hosting key (required for kind hosting, NULL otherwise)."
+    text kind "pk_ (browser-safe, customer scope), sk_ (server-only) or hk_ (server-only, one deployment se..."
+    text environment "test = Amadeus test connection, live = production."
+    text prefix UK "Visible lookup prefix, e.g. pk_live_3fA9x2 (first 14 chars of the key)."
+    text key_hash UK "HMAC-SHA-256 of the full key with a server pepper."
+    text created_by_account_id FK "Who created the key (NULL = provisioning)."
+    text revoked_by_account_id FK "Who revoked it."
+    timestamptz revoked_at "Revocation time (NULL = valid)."
+  }
+  invoices {
+    text id PK "Invoice id (inv_ + ULID)."
+    text tenant_id FK "Billed tenant."
+    text subscription_id FK "Subscription the invoice belongs to."
+    text number UK "Sequential legal invoice number."
+    text status "Invoice state."
+    numeric total "Total amount (subtotal + tax)."
+  }
+  payment_provider_connections {
+    text id PK "Connection id (ppc_ + ULID)."
+    text tenant_id FK "Owning tenant."
+    text provider "Payment service provider."
+    text environment "Matches the API key environment."
+    text status "Connection health."
+  }
+  plans {
+    text code PK "Natural key of the plan, e.g. starter, growth, enterprise."
+    text name "Display name of the plan."
+    boolean is_active "False = legacy plan, kept for existing subscriptions only."
+  }
+  platform_audit_log {
+    bigint id PK "Monotonic audit entry id."
+    text tenant_id FK "Tenant concerned (NULL for account-level events)."
+    text actor_type "Who acted."
+    text actor_account_id FK "Acting account."
+    text action "Dotted action name, e.g. api_key.revoked, tenant.suspended."
+    timestamptz created_at "When it happened."
+  }
+  provisioning_jobs {
+    text id PK "Job id (job_ + ULID)."
+    text tenant_id FK "Target tenant."
+    text kind "Job type."
+    text status "Job state."
+    text step "Current step, e.g. create_schema, run_migrations, seed_defaults, issue_api_keys, activate."
+    text requested_by_account_id FK "Who requested it (NULL = system)."
+  }
+  subscriptions {
+    text id PK "Subscription id (sub_ + ULID)."
+    text tenant_id FK "Subscribed tenant (billing records are never cascaded away)."
+    text plan_code FK "Subscribed plan."
+    text status "Billing state."
+    timestamptz current_period_end "End of the current billing period."
+  }
+  supplier_connections {
+    text id PK "Connection id (sc_ + ULID)."
+    text tenant_id FK "Owning tenant."
+    text provider "Supplier (Amadeus Enterprise flight APIs)."
+    text environment "test -> test.travel.api.amadeus.com, live -> travel.api.amadeus.com."
+    text client_id "OAuth2 client id (API key) issued by Amadeus."
+    text default_office_id "Office used when the caller does not choose one (queues, PNR lookup)."
+    text status "Connection health."
+    text created_by_account_id FK "Who configured it."
+  }
+  tenant_domains {
+    text id PK "Domain id (dom_ + ULID)."
+    text tenant_id FK "Tenant served on this host."
+    text hostname UK "Fully qualified host name, lower case (unique)."
+    text kind "Velexis sub-domain or customer-owned domain."
+    text verification_status "DNS ownership verification state."
+  }
+  tenant_invitations {
+    text id PK "Invitation id (ivt_ + ULID)."
+    text tenant_id FK "OTA the person is invited to."
+    text email "Invitee e-mail (staff, not end customer)."
+    text role "Role granted on acceptance."
+    text token_hash UK "SHA-256 of the invitation token sent by e-mail."
+    text status "Invitation state."
+    text invited_by_account_id FK "Account that sent the invitation."
+    text accepted_account_id FK "Account that accepted it."
+  }
+  tenant_memberships {
+    text id PK "Staff id (stf_ + ULID); subject of staff tokens, referenced by value in tenant staff_actions."
+    text tenant_id FK "OTA."
+    text account_id FK "Portal account."
+    text role "Console role of the account in this OTA."
+    text status "Membership state."
+    text invited_by_account_id FK "Who invited this member (NULL for the founder)."
+  }
+  tenant_schema_migrations {
+    text tenant_id PK, FK "Tenant whose schema was migrated."
+    text version PK "Migration version, e.g. 0001_baseline."
+    text schema_name "Schema the migration ran in (tenant_<key>)."
+    text status "Outcome for this schema."
+  }
+  tenants {
+    text id PK "Tenant id (ten_ + ULID)."
+    text key UK "Immutable short key; used for the schema name and the <key>.velexis.app host."
+    text schema_name UK "Name of the tenant schema (always tenant_<key>)."
+    text name "Display name of the OTA."
+    text status "Lifecycle; only active tenants are served."
+    text plan_code FK "Current plan (denormalised from the active subscription)."
+    text region "Data residency region of the tenant."
+    text cluster "PostgreSQL cluster that hosts the tenant schema (shard key for routing)."
+    text schema_version "Latest tenant migration applied to the schema (mirror of tenant_schema_migrations)."
+    text created_by_account_id FK "Portal account that signed up and created the OTA."
+    timestamptz created_at "Creation (sign-up) time."
+  }
+  account_sessions |o--o{ account_sessions : "replaced_by_id (set null)"
+  accounts ||--o{ account_sessions : "account_id (cascade)"
+  accounts |o--o{ api_key_tenant_grants : "granted_by_account_id (set null)"
+  accounts |o--o{ api_keys : "created_by_account_id (set null)"
+  accounts |o--o{ api_keys : "owner_account_id (cascade)"
+  accounts |o--o{ api_keys : "revoked_by_account_id (set null)"
+  accounts |o--o{ platform_audit_log : "actor_account_id (set null)"
+  accounts |o--o{ provisioning_jobs : "requested_by_account_id (set null)"
+  accounts |o--o{ supplier_connections : "created_by_account_id (set null)"
+  accounts |o--o{ tenant_invitations : "accepted_account_id (set null)"
+  accounts |o--o{ tenant_invitations : "invited_by_account_id (set null)"
+  accounts ||--o{ tenant_memberships : "account_id (cascade)"
+  accounts |o--o{ tenant_memberships : "invited_by_account_id (set null)"
+  accounts |o--o{ tenants : "created_by_account_id (set null)"
+  api_keys ||--o{ api_key_tenant_grants : "api_key_id (cascade)"
+  plans ||--o{ subscriptions : "plan_code (restrict)"
+  plans ||--o{ tenants : "plan_code (restrict)"
+  subscriptions |o--o{ invoices : "subscription_id (set null)"
+  tenants |o--o{ account_sessions : "active_tenant_id (set null)"
+  tenants ||--o{ api_key_tenant_grants : "tenant_id (cascade)"
+  tenants |o--o{ api_keys : "tenant_id (cascade)"
+  tenants ||--o{ invoices : "tenant_id (restrict)"
+  tenants ||--o{ payment_provider_connections : "tenant_id (cascade)"
+  tenants |o--o{ platform_audit_log : "tenant_id (set null)"
+  tenants ||--o{ provisioning_jobs : "tenant_id (cascade)"
+  tenants ||--o{ subscriptions : "tenant_id (restrict)"
+  tenants ||--o{ supplier_connections : "tenant_id (cascade)"
+  tenants ||--o{ tenant_domains : "tenant_id (cascade)"
+  tenants ||--o{ tenant_invitations : "tenant_id (cascade)"
+  tenants ||--o{ tenant_memberships : "tenant_id (cascade)"
+  tenants ||--o{ tenant_schema_migrations : "tenant_id (cascade)"

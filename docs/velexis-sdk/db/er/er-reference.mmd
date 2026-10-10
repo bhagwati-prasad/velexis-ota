@@ -1,0 +1,51 @@
+---
+title: Velexis reference data - schema reference (shared, read-only for tenants)
+---
+erDiagram
+  aircraft {
+    char iata_code PK "IATA aircraft type code."
+    text name "Display name, e.g. AIRBUS A320."
+  }
+  airlines {
+    char iata_code PK "IATA designator, e.g. AF."
+    char icao_code UK "ICAO designator, e.g. AFR."
+    text name "Airline name, e.g. Air France."
+    char country_code FK "Country of registration."
+  }
+  airports {
+    char iata_code PK "IATA location code, e.g. CDG (Amadeus iataCode)."
+    char icao_code UK "ICAO code, e.g. LFPG."
+    text name "Airport name, e.g. Charles de Gaulle."
+    char city_code FK "IATA city served."
+    char country_code FK "Country."
+    text time_zone FK "IANA time zone (local -> UTC conversion of flight times)."
+  }
+  cities {
+    char iata_code PK "IATA city code, e.g. PAR."
+    text name "City name, e.g. Paris."
+    char country_code FK "Country of the city."
+    text time_zone FK "IANA time zone."
+  }
+  countries {
+    char code PK "ISO 3166-1 alpha-2 code, e.g. FR (used by Amadeus document/address fields)."
+    char alpha3 UK "ISO 3166-1 alpha-3 code, e.g. FRA."
+    text name "English short name."
+    char currency_code FK "Main currency of the country."
+  }
+  currencies {
+    char code PK "ISO 4217 alphabetic code, e.g. EUR."
+    text name "English name, e.g. Euro."
+  }
+  time_zones {
+    text name PK "IANA zone name, e.g. Europe/Paris."
+    char country_code FK "Country of the zone."
+    int utc_offset_minutes "Standard offset from UTC in minutes."
+  }
+  cities |o--o{ airports : "city_code (set null)"
+  countries |o--o{ airlines : "country_code (set null)"
+  countries ||--o{ airports : "country_code (restrict)"
+  countries ||--o{ cities : "country_code (restrict)"
+  countries |o--o{ time_zones : "country_code (set null)"
+  currencies |o--o{ countries : "currency_code (set null)"
+  time_zones |o--o{ airports : "time_zone (set null)"
+  time_zones |o--o{ cities : "time_zone (set null)"
