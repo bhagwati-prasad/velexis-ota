@@ -1,0 +1,520 @@
+{
+  "openapi": "3.0.0",
+  "info": {
+    "title": "GET Queue-list",
+    "version": "1.0",
+    "description": "\n  # Introduction\n\n**Get queue-list** is a REST/JSON API. It will help to get the list of PNR and related information based on the given queue number .\nYou can also provide an optional fields like category(default value is 0),queuing office id and count to get the max number of response .\nIn the result it will display the list of PNR with related information based on the PNR creation date.\n\n\n# Authorization\n\nBefore using the API you will need to get an access token. Please read our **[Authorization Guide](https://developers.amadeus.com/self-service/apis-docs/guides/authorization)** for more information on how to get your token.\n\n# Suported Operations:\n   supported operation by ressource:\n  - GET: To get the list of PNR and related information."
+  },
+  "servers": [{
+    "url": "https://test.travel.api.amadeus.com/v1"
+  }],
+  "paths": {
+    "GET/office/queues/{queue-id}": {
+      "get": {
+        "summary": "GET PNR list",
+        "tags": [],
+        "responses": {
+          "200": {
+            "description": "Success Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "warnings": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "description": "The Warning Definition",
+                        "title": "Warning",
+                        "x-examples": {
+                          "Example - Single Source": {
+                            "warning": {
+                              "title": "Invalid property code",
+                              "code": 50010,
+                              "detail": "151",
+                              "source": {
+                                "pointer": "/data/hotels/1/hotel/propertyCode"
+                              }
+                            }
+                          },
+                          "Example - Multiple sources": {
+                            "warning": {
+                              "title": "Invalid property code",
+                              "code": 50010,
+                              "detail": "151",
+                              "sources": [
+                                {
+                                  "pointer": "/data/hotels/1/hotel/propertyCode"
+                                },
+                                {
+                                  "pointer": "/data/hotels/2/hotel/propertyCode"
+                                }
+                              ]
+                            }
+                          }
+                        },
+                        "properties": {
+                          "code": {
+                            "type": "integer",
+                            "description": "A machine-readable error code from the Canned Messages table, that will enable the API Consumers code to handle this type of error"
+                          },
+                          "title": {
+                            "type": "string",
+                            "description": "An error title from the Canned Messages table with a 1:1 correspondence to the error code. This may be localized"
+                          },
+                          "detail": {
+                            "type": "string",
+                            "description": "An easy-to-read explanation specific to this occurrence of the problem. It should give the API consumer an idea of what went wrong and how to recover from it. Like the title, this field’s value can be localized."
+                          },
+                          "source": {
+                            "type": "object",
+                            "description": "The Warning Source Definition",
+                            "title": "Warning_Source",
+                            "properties": {
+                              "parameter": {
+                                "type": "string",
+                                "description": "The key of the URI path or query parameter that caused the error"
+                              },
+                              "pointer": {
+                                "type": "string",
+                                "description": "A JSON Pointer [RFC6901] to the associated entity in the request body that caused this error"
+                              },
+                              "example": {
+                                "type": "string",
+                                "description": "A sample input to guide the user when resolving this issue"
+                              }
+                            }
+                          }
+                        },
+                        "required": [
+                          "code",
+                          "title"
+                        ]
+                      }
+                    },
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/pnr"
+                      }
+                    },
+                    "meta": {
+                      "type": "object",
+                      "description": "Meta information about the returned object(s) in \"data\"",
+                      "title": "Meta",
+                      "properties": {
+                        "count": {
+                          "type": "integer",
+                          "format": "int64",
+                          "description": "Total number of object(s) retrieved",
+                          "minimum": 0,
+                          "exclusiveMinimum": false
+                        },
+                        "links": {
+                          "type": "object",
+                          "title": "Links",
+                          "description": "Links related to the returned object(s)",
+                          "properties": {
+                            "self": {
+                              "type": "string",
+                              "format": "url",
+                              "description": "Link to the same page."
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                "examples": {
+                  "example": {
+                    "value": {
+                      "data": [{
+                        "type": "pnrList",
+                        "id": "xsd123",
+                        "creation": {
+                          "datetime": "2018-11-19T04:54"
+                        },
+                        "travelers": {
+                          "names": {
+                            "lastName": "SHARMA"
+                          }
+                        },
+                        "products": {
+                          "airSegment": {
+                            "segment": {
+                              "number": "1234",
+                              "carrierCode": "6x"
+                            }
+                          }
+                        },
+                        "originLocationCode": "PAR",
+                        "destinationLocationCode": "BLR"
+                      }],
+                      "meta": {
+                        "count": "1",
+                        "links": {
+                          "self": "https://test.api.amadeus.com/v1/queue-list/pnr?queueNumber=1&max=1"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request\n\ncode    | title                                 \n------- | -------------------------------------                       \n477     | INVALID FORMAT                        ",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "errors": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/paths/GET~1office~1queues~1%7Bqueue-id%7D/get/responses/500/content/application~1xml/schema/properties/errors/items"
+                      }
+                    }
+                  }
+                },
+                "examples": {
+                  "example-error 400": {
+                    "value": {
+                      "errors": [{
+                        "status": 400,
+                        "code": 477,
+                        "title": "INVALID FORMAT",
+                        "detail": "Format of query parameter 'queue number' should be numeric"
+                      }]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "errors": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "description": "The Error Definition",
+                        "title": "Error",
+                        "properties": {
+                          "status": {
+                            "type": "integer",
+                            "description": "The [HTTP status code](https://www.iana.org/assignments/http-status-codes/http-status-codes.xhtml) of this response. This is present only in terminal errors which cause an unsuccessful response. In the case of multiple errors, they must all have the same status."
+                          },
+                          "code": {
+                            "type": "integer",
+                            "description": "A machine-readable error code from the Amadeus Canned Messages table, that will enable the API Consumers code to handle this type of error"
+                          },
+                          "title": {
+                            "type": "string",
+                            "description": "An error title from the Canned Messages table with a 1:1 correspondence to the error code. This may be localized"
+                          },
+                          "source": {
+                            "type": "object",
+                            "title": "Error_Source",
+                            "properties": {
+                              "parameter": {
+                                "type": "string",
+                                "description": "The key of the URI path or query parameter that caused the error"
+                              },
+                              "pointer": {
+                                "type": "string",
+                                "description": "A JSON Pointer [RFC6901] to the associated entity in the request body that caused this error"
+                              },
+                              "example": {
+                                "type": "string",
+                                "description": "A sample input to guide the user when resolving this issue"
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                "examples": {
+                  "example-1": {
+                    "value": {
+                      "errors": [{
+                        "status": 403,
+                        "title": "Data not Found",
+                        "detail": "Not allow to access given office Id queue details"
+                      }]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error\n\ncode    | title                                 \n------- | ------------------------------------- \n141     | SYSTEM ERROR HAS OCCURRED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "errors": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/paths/GET~1office~1queues~1%7Bqueue-id%7D/get/responses/500/content/application~1xml/schema/properties/errors/items"
+                      }
+                    }
+                  }
+                },
+                "examples": {
+                  "example-error 500": {
+                    "value": {
+                      "errors": [{
+                        "status": 500,
+                        "code": 141,
+                        "title": "SYSTEM ERROR HAS OCCURRED"
+                      }]
+                    }
+                  }
+                }
+              },
+              "application/xml": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "errors": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "description": "The Error Definition",
+                        "title": "Error",
+                        "properties": {
+                          "status": {
+                            "type": "integer",
+                            "description": "The [HTTP status code](https://www.iana.org/assignments/http-status-codes/http-status-codes.xhtml) of this response. This is present only in terminal errors which cause an unsuccessful response. In the case of multiple errors, they must all have the same status."
+                          },
+                          "code": {
+                            "type": "integer",
+                            "description": "A machine-readable error code from the Amadeus Canned Messages table, that will enable the API Consumers code to handle this type of error"
+                          },
+                          "title": {
+                            "type": "string",
+                            "description": "An error title from the Canned Messages table with a 1:1 correspondence to the error code. This may be localized"
+                          },
+                          "detail": {
+                            "type": "string",
+                            "description": "An easy-to-read explanation specific to this occurrence of the problem. It should give the API consumer an idea of what went wrong and how to recover from it. Like the title, this field’s value can be localized."
+                          },
+                          "source": {
+                            "type": "object",
+                            "title": "Error_Source",
+                            "properties": {
+                              "parameter": {
+                                "type": "string",
+                                "description": "The key of the URI path or query parameter that caused the error"
+                              },
+                              "pointer": {
+                                "type": "string",
+                                "description": "A JSON Pointer [RFC6901] to the associated entity in the request body that caused this error"
+                              },
+                              "example": {
+                                "type": "string",
+                                "description": "A sample input to guide the user when resolving this issue"
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "operationId": "GET/office/queues/{queue-id}",
+        "parameters": [
+          {
+            "schema": {
+              "type": "integer"
+            },
+            "in": "query",
+            "name": "max",
+            "description": "Maximum no of pnr list in response \nexample:max=5 to display 5 PNR numbers based in creation date."
+          },
+          {
+            "schema": {
+              "type": "integer"
+            },
+            "in": "query",
+            "name": "category",
+            "description": "Category number, default value is 0"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "query",
+            "name": "officeId",
+            "description": "Specific office Id to get the PNR list details"
+          }
+        ],
+        "description": "This API will provide list of PNR and related information in the response based on the queue number provided in the input."
+      },
+      "parameters": [{
+        "schema": {
+          "type": "integer"
+        },
+        "name": "queue-id",
+        "in": "path",
+        "required": true
+      }]
+    }
+  },
+  "components": {
+    "schemas": {
+      "pnr": {
+        "title": "PNR list",
+        "allOf": [
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "description": "type of API result \"pnrList\""
+              }
+            }
+          },
+          {
+            "type": "object",
+            "title": "PNRModel",
+            "description": "",
+            "properties": {
+              "id": {
+                "type": "string",
+                "description": "id of Passenger name record",
+                "example": "ABC123-2019-10-05"
+              },
+              "creation": {
+                "title": "EventLog",
+                "type": "object",
+                "description": "The object representing one event and its details",
+                "properties": {
+                  "dateTime": {
+                    "type": "string",
+                    "description": "time of the change",
+                    "format": "datetime",
+                    "example": "2018-11-19T04:54"
+                  }
+                }
+              },
+              "travelers": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "description": "Definition of PNR travelers. Fields gender, nationality, placeOfBirth, countryOfResidence are only populated for passengerDelivery resources.",
+                  "x-examples": {},
+                  "title": "Stakeholder",
+                  "properties": {
+                    "names": {
+                      "description": "Names of the stakeholder. The concatenation of full name + PTC + staffType + dateOfBirth + specialSeat must remain below 59 characters.",
+                      "type": "array",
+                      "minItems": 1,
+                      "maxItems": 5,
+                      "items": {
+                        "type": "object",
+                        "description": "Description of the name of a physical person",
+                        "title": "Name",
+                        "x-tags": [
+                          "Name",
+                          "PII"
+                        ],
+                        "properties": {
+                          "firstName": {
+                            "description": "First name.",
+                            "type": "string",
+                            "x-risk-personal-data-field": "PASSENGER_NAME"
+                          },
+                          "lastName": {
+                            "description": "Last name.",
+                            "type": "string",
+                            "x-risk-personal-data-field": "PASSENGER_NAME"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              "products": {
+                "type": "array",
+                "description": "A product is either a flight segment or a service booked in reservation",
+                "items": {
+                  "type": "object",
+                  "description": "A product can either be a flight segment, a standalone service / air service i.e. related to flight segment(s), or a seat request made on a given flight segment. A service can be auxiliary [SVC] or ancillary i.e. a Special Service Request [SSR].",
+                  "title": "Product",
+                  "properties": {
+                    "airSegment": {
+                      "type": "object",
+                      "description": "Product Delivery Information related to segments",
+                      "title": "SegmentDelivery",
+                      "properties": {
+                        "segment": {
+                          "type": "object",
+                          "description": "Defining a flight segment, including both Operating and Marketing details when applicable - seats refer to SEATING product(s) & services refer to AIR_SERVICE product(s)",
+                          "title": "FlightSegment",
+                          "x-examples": {},
+                          "properties": {
+                            "arrival": {
+                              "type": "object",
+                              "description": "Departure or arrival information ",
+                              "x-examples": {},
+                              "title": "FlightSegment EndPoint",
+                              "properties": {
+                                "iataCode": {
+                                  "description": "IATA Airport code",
+                                  "type": "string",
+                                  "example": "JFK"
+                                },
+                                "localDateTime": {
+                                  "type": "string",
+                                  "description": "Local schedule dateTime of the departure or arrival.\nConversion of dateTime in local date time.",
+                                  "format": "date-time",
+                                  "example": "2020-01-13T17:09:00"
+                                }
+                              }
+                            },
+                            "carrierCode": {
+                              "type": "string",
+                              "description": "Providing the airline / carrier code",
+                              "minLength": 1,
+                              "maxLength": 2,
+                              "example": "AC"
+                            },
+                            "number": {
+                              "type": "string",
+                              "description": "The flight number as assigned by the carrier",
+                              "minLength": 1,
+                              "maxLength": 4,
+                              "example": "123"
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        ]
+      }
+    }
+  }
+}
