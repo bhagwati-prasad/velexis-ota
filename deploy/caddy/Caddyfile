@@ -66,6 +66,31 @@
 	request_header @no_request_id X-Request-Id {http.request.uuid}
 }
 
+# While an app restarts or is down, Next.js hosts show a static maintenance page (also the M0 hello-world page).
+# It lives outside the release folders (installed by provision-vm.sh, refreshed by deploy.sh), so it also
+# works before the first release and during a rollback.
+(maintenance_page) {
+	handle_errors 502 503 504 {
+		root * /srv/velexis/maintenance
+		rewrite * /index.html
+		header Cache-Control "no-store"
+		header Retry-After "30"
+		file_server {
+			status 503
+		}
+	}
+}
+
+# While an API restarts or is down, clients get the standard error envelope (SERVICE_UNAVAILABLE).
+(api_unavailable) {
+	handle_errors 502 503 504 {
+		header Content-Type "application/json"
+		header Cache-Control "no-store"
+		header Retry-After "30"
+		respond `{"error":{"code":"SERVICE_UNAVAILABLE","message":"The service is temporarily unavailable. Retry shortly.","status":503,"requestId":"{http.request.header.X-Request-Id}"}}` 503
+	}
+}
+
 # Shared rules for the two API hosts.
 (api_common) {
 	import access_log
@@ -89,6 +114,8 @@
 		not path /health/live
 	}
 	respond @private_health 404
+
+	import api_unavailable
 }
 
 # The hosted multi-tenant storefront: static files + same-origin /api proxy (ADR-0018).
@@ -133,11 +160,13 @@
 	}
 
 	handle_errors 404 {
+		root * /srv/velexis/current/storefront
 		rewrite * /404.html
 		file_server {
-			root /srv/velexis/current/storefront
+			status 404
 		}
 	}
+	import api_unavailable
 }
 
 # ---- Platform hosts ----------------------------------------------------------------------------------
@@ -152,6 +181,7 @@
 		max_size 5MB
 	}
 	reverse_proxy 127.0.0.1:3000
+	import maintenance_page
 }
 
 # Platform admin (platform/admin, Next.js). MFA is mandatory in the app.
@@ -167,6 +197,7 @@ admin.{$PLATFORM_BASE_DOMAIN:platform.example.com} {
 		max_size 5MB
 	}
 	reverse_proxy 127.0.0.1:3001
+	import maintenance_page
 }
 
 # Platform API (platform/backend) incl. /webhooks/stripe/billing. /internal/* is blocked by api_common.
@@ -187,6 +218,7 @@ admin.{$STOREFRONT_BASE_DOMAIN:ota.example.com} {
 		max_size 10MB
 	}
 	reverse_proxy 127.0.0.1:3002
+	import maintenance_page
 }
 
 # OTA API for SDK users with pk_/sk_ keys, and the Stripe payment webhooks.
