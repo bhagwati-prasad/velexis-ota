@@ -1,0 +1,219 @@
+# =====================================================================================================
+# Velexis Caddyfile (Caddy 2.8) — installed as /etc/caddy/Caddyfile by deploy/scripts/deploy.sh.
+# Design: docs/mvp/adr/0018-hosted-storefront-custom-domains.md, docs/mvp/architecture.md §3,
+#         docs/mvp/deployment-single-vm.md §6.
+#
+# Hosts are the placeholders of docs/mvp/decisions.md §4. The real base domains come from the environment
+# of the caddy service (/etc/velexis/caddy.env, loaded by deploy/systemd/caddy.service.d/velexis.conf):
+#   PLATFORM_BASE_DOMAIN   platform.example.com  -> portal, admin.<..>, api.<..>
+#   STOREFRONT_BASE_DOMAIN ota.example.com       -> admin.<..>, api.<..>, <key>.<..> storefronts
+#   ACME_EMAIL, VELEXIS_EDGE_SECRET
+# Every app listens on 127.0.0.1 only; Caddy is the only public process (ports 80 and 443).
+# Validate before installing: caddy validate --config deploy/caddy/Caddyfile --adapter caddyfile
+# =====================================================================================================
+{
+	email {$ACME_EMAIL:ops@example.com}
+	admin localhost:2019
+
+	# On-demand TLS for storefront sub-domains and verified custom domains. Caddy asks the platform
+	# backend before every new certificate; anything but 200 means "no certificate" (ADR-0018).
+	on_demand_tls {
+		ask http://127.0.0.1:3100/internal/tls/ask
+	}
+
+	servers {
+		protocols h1 h2 h3
+		# `log_credentials` stays OFF (the default), so Cookie, Set-Cookie, Authorization and
+		# Proxy-Authorization are redacted in access logs. Never enable it.
+	}
+}
+
+# ---- Snippets ---------------------------------------------------------------------------------------
+
+(access_log) {
+	log {
+		output stderr
+		format filter {
+			wrap json
+			fields {
+				request>headers>X-Api-Key delete
+				request>headers>X-Csrf-Token delete
+				request>headers>X-Booking-Token delete
+				request>headers>X-Velexis-Edge delete
+				request>headers>X-Velexis-Service-Key delete
+				request>uri query {
+					delete sig
+					delete token
+				}
+			}
+		}
+	}
+}
+
+(security_headers) {
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		X-Frame-Options "DENY"
+		-Server
+	}
+}
+
+# Keep a valid client X-Request-Id, otherwise set a fresh one (ADR-0016).
+(request_id) {
+	@no_request_id not header_regexp X-Request-Id ^[A-Za-z0-9._-]{8,128}$
+	request_header @no_request_id X-Request-Id {http.request.uuid}
+}
+
+# Shared rules for the two API hosts.
+(api_common) {
+	import access_log
+	import security_headers
+	import request_id
+	encode zstd gzip
+
+	request_body {
+		max_size 1MB
+	}
+
+	# Edge credentials are only ever set by the storefront site block below; drop any client copy.
+	request_header -X-Velexis-Edge
+	request_header -X-Velexis-Host
+
+	# Internal endpoints (TLS ask, internal jobs) and readiness details are never public.
+	@internal path /internal/*
+	respond @internal 404
+	@private_health {
+		path /health/*
+		not path /health/live
+	}
+	respond @private_health 404
+}
+
+# The hosted multi-tenant storefront: static files + same-origin /api proxy (ADR-0018).
+(storefront) {
+	import access_log
+	import request_id
+	encode zstd gzip
+
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		Content-Security-Policy "default-src 'self'; script-src 'self' https://js.stripe.com https://*.js.stripe.com; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self' https://api.stripe.com; frame-src https://js.stripe.com https://*.js.stripe.com https://hooks.stripe.com; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		X-Content-Type-Options "nosniff"
+		Permissions-Policy "camera=(), microphone=(), geolocation=()"
+		-Server
+	}
+
+	@api_internal path /api/internal/* /api/health/ready
+	respond @api_internal 404
+
+	handle /api/* {
+		request_body {
+			max_size 256KB
+		}
+		uri strip_prefix /api
+		reverse_proxy 127.0.0.1:4000 {
+			# header_up REPLACES any client-supplied value, so a browser cannot forge these.
+			header_up X-Velexis-Edge {env.VELEXIS_EDGE_SECRET}
+			header_up X-Velexis-Host {host}
+		}
+	}
+
+	handle {
+		root * /srv/velexis/current/storefront
+		# Vite puts hashed assets under /assets/; everything else (HTML) is revalidated on each load.
+		@hashed path /assets/*
+		header @hashed Cache-Control "public, max-age=31536000, immutable"
+		@not_hashed not path /assets/*
+		header @not_hashed Cache-Control "no-cache"
+		try_files {path} {path}.html {path}/index.html
+		file_server
+	}
+
+	handle_errors 404 {
+		rewrite * /404.html
+		file_server {
+			root /srv/velexis/current/storefront
+		}
+	}
+}
+
+# ---- Platform hosts ----------------------------------------------------------------------------------
+
+# Portal (platform/frontend, Next.js).
+{$PLATFORM_BASE_DOMAIN:platform.example.com} {
+	import access_log
+	import security_headers
+	import request_id
+	encode zstd gzip
+	request_body {
+		max_size 5MB
+	}
+	reverse_proxy 127.0.0.1:3000
+}
+
+# Platform admin (platform/admin, Next.js). MFA is mandatory in the app.
+admin.{$PLATFORM_BASE_DOMAIN:platform.example.com} {
+	import access_log
+	import security_headers
+	import request_id
+	encode zstd gzip
+	# Optional: allow Velexis staff networks only. Replace the documentation range and uncomment.
+	# @outside_staff not remote_ip 203.0.113.0/24
+	# respond @outside_staff 403
+	request_body {
+		max_size 5MB
+	}
+	reverse_proxy 127.0.0.1:3001
+}
+
+# Platform API (platform/backend) incl. /webhooks/stripe/billing. /internal/* is blocked by api_common.
+api.{$PLATFORM_BASE_DOMAIN:platform.example.com} {
+	import api_common
+	reverse_proxy 127.0.0.1:3100
+}
+
+# ---- OTA hosts -----------------------------------------------------------------------------------------
+
+# OTA admin (ota/admin, Next.js). The OTA is chosen after sign-in (SSO from the portal).
+admin.{$STOREFRONT_BASE_DOMAIN:ota.example.com} {
+	import access_log
+	import security_headers
+	import request_id
+	encode zstd gzip
+	request_body {
+		max_size 10MB
+	}
+	reverse_proxy 127.0.0.1:3002
+}
+
+# OTA API for SDK users with pk_/sk_ keys, and the Stripe payment webhooks.
+api.{$STOREFRONT_BASE_DOMAIN:ota.example.com} {
+	import api_common
+	reverse_proxy 127.0.0.1:4000
+}
+
+# Storefronts on <key>.ota.example.com. Exact host names above (admin., api.) win over the wildcard.
+# Certificates are issued per host name on the first handshake, only after the ask endpoint answers 200
+# (one certificate per OTA; a DNS-01 wildcard certificate is the ADR-0018 follow-up).
+*.{$STOREFRONT_BASE_DOMAIN:ota.example.com} {
+	tls {
+		on_demand
+	}
+	import storefront
+}
+
+# Verified custom domains (travel.acme.com, ...): any other host name. Same storefront, same ask gate.
+https:// {
+	tls {
+		on_demand
+	}
+	import storefront
+}
+
+# Plain HTTP for unknown hosts: redirect to HTTPS (ACME HTTP challenges are answered before this).
+http:// {
+	redir https://{host}{uri} 308
+}

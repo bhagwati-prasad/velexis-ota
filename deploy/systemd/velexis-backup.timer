@@ -1,0 +1,12 @@
+# velexis-backup.timer — nightly at 02:30 UTC (ADR-0007). Enabled by provision-vm.sh.
+[Unit]
+Description=Nightly Velexis backup at 02:30 UTC
+
+[Timer]
+OnCalendar=*-*-* 02:30:00 UTC
+RandomizedDelaySec=10min
+Persistent=true
+Unit=velexis-backup.service
+
+[Install]
+WantedBy=timers.target

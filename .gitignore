@@ -1,0 +1,66 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Build output
+dist/
+build/
+out/
+.next/
+next-env.d.ts
+*.tsbuildinfo
+ota/frontend/dist/
+ota/sdk/dist/
+
+# Release folders assembled by deploy/scripts/pack-release.sh
+release/
+*.tar.zst
+*.tar.gz
+
+# Turborepo and tool caches
+.turbo/
+.eslintcache
+.cache/
+.vite/
+
+# Tests
+coverage/
+playwright-report/
+test-results/
+blob-report/
+tools/e2e/.auth/
+*.junit.xml
+
+# Environment and secrets: only *.example files are committed (ADR-0010)
+.env
+.env.*
+!.env.example
+!**/.env.example
+deploy/env/*.env
+!deploy/env/*.env.example
+.local/
+*.pem
+*.key
+!deploy/**/*.key.example
+
+# Backup artefacts must never land in git
+*.dump
+*.age
+*.rdb
+appendonlydir/
+
+# Logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# Editors and OS
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json
+*.swp
+
+# Local agent settings
+.claude/settings.local.json

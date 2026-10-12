@@ -1,0 +1,23 @@
+# velexis-backup.service — nightly encrypted backup, started by velexis-backup.timer.
+# Runs the root-owned copy of deploy/scripts/backup.sh installed as /usr/local/sbin/velexis-backup.
+# Docs: docs/mvp/deployment-single-vm.md §10, docs/mvp/adr/0007-single-vm-without-docker.md (Backups).
+[Unit]
+Description=Velexis nightly backup (pg_dump, storage, Redis AOF, /etc/velexis) encrypted with age and copied off the VM
+Wants=network-online.target
+After=network-online.target postgresql.service redis-server.service
+OnFailure=velexis-alert@%n.service
+
+[Service]
+Type=oneshot
+User=root
+EnvironmentFile=/etc/velexis/backup.env
+ExecStart=/usr/local/sbin/velexis-backup
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+TimeoutStartSec=3h
+SyslogIdentifier=velexis-backup
+PrivateTmp=yes
+NoNewPrivileges=yes
+ProtectHome=read-only
+LimitCORE=0

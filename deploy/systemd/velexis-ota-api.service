@@ -1,0 +1,65 @@
+# velexis-ota-api.service — template from deploy/systemd/, installed to /etc/systemd/system/ by deploy.sh.
+# Docs: docs/mvp/deployment-single-vm.md §4, docs/mvp/adr/0007-single-vm-without-docker.md.
+# Health: /health/ready on PORT (polled by deploy.sh after every restart; docs/mvp/adr/0016-observability.md).
+[Unit]
+Description=Velexis OTA backend API (ota/backend dist/main.js, 127.0.0.1:4000)
+Documentation=file:///srv/velexis/current/deploy/README.md
+After=network-online.target postgresql.service redis-server.service
+Wants=network-online.target postgresql.service redis-server.service
+OnFailure=velexis-alert@%n.service
+StartLimitIntervalSec=300
+StartLimitBurst=10
+
+[Service]
+Type=simple
+User=velexis
+Group=velexis
+WorkingDirectory=/srv/velexis/current/ota-backend
+EnvironmentFile=/etc/velexis/ota-backend.env
+Environment=NODE_ENV=production
+Environment=PORT=4000
+Environment=NODE_OPTIONS=--max-old-space-size=640
+ExecStart=/usr/bin/node --enable-source-maps dist/main.js
+Restart=always
+RestartSec=3
+KillSignal=SIGTERM
+TimeoutStopSec=30
+SyslogIdentifier=velexis-ota-api
+
+# Resources (memory budget: docs/mvp/architecture.md §3). No core dumps: card data must never reach disk.
+MemoryMax=768M
+LimitNOFILE=65536
+LimitCORE=0
+
+# Sandboxing. All apps share the `velexis` user (ADR-0007), so each unit hides the other apps' secrets.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RemoveIPC=yes
+UMask=0077
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged
+SystemCallErrorNumber=EPERM
+# MemoryDenyWriteExecute is deliberately NOT set: the V8 JIT needs writable+executable memory.
+ReadWritePaths=/var/lib/velexis/storage
+InaccessiblePaths=-/etc/velexis/keys/platform-jwt-ed25519.pem -/etc/velexis/platform-backend.env -/etc/velexis/platform-worker.env -/etc/velexis/platform-frontend.env -/etc/velexis/platform-admin.env -/etc/velexis/ota-worker.env -/etc/velexis/migrator.env -/etc/velexis/caddy.env -/etc/velexis/backup.env -/etc/velexis/alert.env -/etc/velexis/backup
+
+[Install]
+WantedBy=multi-user.target

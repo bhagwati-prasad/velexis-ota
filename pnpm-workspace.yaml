@@ -1,0 +1,7 @@
+# pnpm workspaces of the Velexis monorepo (ADR-0002).
+# Directories without a package.json (for example platform/docs, ota/docs, tools/plan-lint) are ignored by pnpm.
+packages:
+  - "platform/*"
+  - "ota/*"
+  - "packages/*"
+  - "tools/*"

@@ -1,0 +1,17 @@
+# logrotate rules for the few Velexis files that are not in journald. Installed as /etc/logrotate.d/velexis.
+# App, Caddy and Redis logs live in journald (deploy/journald/velexis.conf). PostgreSQL's own log file
+# is rotated by the postgresql-common package.
+
+# Deploy, migration-report and backup logs written by deploy.sh and backup.sh.
+/var/log/velexis/*.log /var/log/velexis/*.json {
+	weekly
+	rotate 12
+	maxsize 50M
+	missingok
+	notifempty
+	compress
+	delaycompress
+	dateext
+	create 0640 root adm
+	su root adm
+}
