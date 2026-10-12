@@ -116,7 +116,7 @@ BullMQ prefix `vx` ([ADR-0009](../../docs/mvp/adr/0009-background-jobs-bullmq.md
 | `platform-emails` | API, worker → worker | `email.send {emailId}` | 4 |
 | `platform-stripe-events` | Webhook receivers → worker | `stripe.event {eventId}` (job id = Stripe event id) | 2 |
 | `platform-domains` | API, schedulers → worker | `domain.verify`, `domain.recheck`, `domain.tls_probe` `{domainId}` | 4 |
-| `platform-connections` | API, admin → worker | `amadeus_account.verify {amadeusAccountId}`, `credentials.verify {submissionId}`, `stripe_connect.refresh {connectionId}` | 2 |
+| `platform-connections` | API, admin → worker | `amadeus_account.verify {amadeusAccountId}`, `credentials.verify {submissionId}` | 2 |
 | `platform-settlements` | Scheduler, admin → worker | `settlement.generate {periodStart, tenantId?}` | 1 |
 | `platform-maintenance` | Schedulers → worker | The schedules below | 1 |
 
@@ -165,7 +165,7 @@ What the OTA backend relies on, by column:
 
 | Column | Meaning for the OTA backend |
 |---|---|
-| `tenants.status`, `storefront_environment`, `key`, `schema_name` | Serve only `active`; hosted storefront environment |
+| `tenants.status`, `storefront_environment`, `key`, `schema_name`, `billing_notice` | Serve only `active`; hosted storefront environment; billing banner in the OTA admin |
 | `tenant_domains` (`hostname`, `kind`, `purpose`, `verification_status`) | Host → tenant for edge requests (verified rows only) |
 | `api_keys` (`prefix`, `key_hash`, `kind`, `environment`, `scopes`, `allowed_origins`, `revoked_at`, `expires_at`) | Key verification |
 | `supplier_connections` (`credential_source`, `amadeus_account_id`, offices, defaults) + `amadeus_accounts` + `amadeus_offices` | Amadeus credential resolution. Orders owned by an office in status `assigned` **or** `releasing` for the tenant use the Velexis account ([PADR-0012](adr/0012-amadeus-office-pool.md)). |

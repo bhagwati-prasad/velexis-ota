@@ -125,7 +125,7 @@ The platform document has its own `x-error-catalogue`. It reuses the OTA codes a
 
 | Operation | Method and path | Auth | Purpose | Request → response | Tables | Errors | M |
 |---|---|---|---|---|---|---|---|
-| `getMe` | `GET /v1/me` | `portal*` | Current account and memberships | → `Account {id, email, emailVerified, fullName, locale, timeZone, mfaEnabled, mfaEnabledAt, isPlatformAdmin, createdAt, version, memberships: [{membershipId, tenantId, tenantKey, tenantName, tenantStatus, role}]}` | `accounts`, `tenant_memberships`, `tenants` | — | M1 |
+| `getMe` | `GET /v1/me` | `portal*` | Current account and memberships | → `Account {id, email, emailVerified, fullName, locale, timeZone, mfaEnabled, mfaEnabledAt, isPlatformAdmin, createdAt, version, memberships: [{membershipId, tenantId, tenantKey, tenantName, tenantStatus, role}], features: {stripeBilling, ownStripe, settlements, ownAmadeus, customDomains, liveSwitch}}` (milestone switches, [PADR-0015](adr/0015-milestone-feature-switches.md)) | `accounts`, `tenant_memberships`, `tenants` | — | M1 |
 | `updateMe` | `PATCH /v1/me` | `portal*` | Profile | `If-Match`, `{fullName?, locale?, timeZone?}` → `Account` | `accounts`, audit | `VALIDATION_FAILED`, `PRECONDITION_FAILED` | M1 |
 | `changePassword` | `POST /v1/me/password` | `portal` | Change password | `{currentPassword, newPassword}` → `204`; other sessions and staff sessions revoked | `accounts`, `account_sessions`, audit; `staffdeny` | `CURRENT_PASSWORD_INCORRECT`, `PASSWORD_TOO_WEAK` | M1 |
 | `startMfaSetup` | `POST /v1/me/mfa/setup` | `portal*` | New pending TOTP secret | → `200 {secret, otpauthUrl, expiresIn: 600}` (no-store) | Redis `mfasetup:<accountId>` | `MFA_ALREADY_ENABLED` | M1 |

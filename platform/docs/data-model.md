@@ -93,6 +93,7 @@ erDiagram
 | Change | Why |
 |---|---|
 | `tenants.storefront_environment` (`test`, `live`), `live_enabled_at`, `live_enabled_by_account_id` | ADR-0018 delta: the hosted storefront's environment is a per-tenant switch (M2 column, M5 switch), and the switch is audited by who and when. |
+| `tenants.billing_notice` (`past_due`, `trial_ending`) | ADR-0013 shows a billing banner in the portal **and the OTA admin**. The OTA backend cannot read `subscriptions`, so billing sync copies the banner state onto the tenant row it already reads. |
 | CHECK `tenants_key_dns_ck`: key matches `^[a-z][a-z0-9]{2,29}$` | The key is also a DNS label of `<key>.ota.example.com`. The baseline allows `_`, which is not valid in a host name and is refused by Let's Encrypt. |
 | CHECK `tenants_suspension_reason_ck` | Suspension reasons drive automatic resume (only `billing` resumes on payment) ([PADR-0014](adr/0014-tenant-suspension-and-resume.md)). |
 | `provisioning_jobs.reveal_ciphertext`, `reveal_encryption_key_id`, `revealed_at`, `revealed_by_account_id` | db README §3 step 5: the raw test keys created at provisioning are kept encrypted for one reveal within 24 h. A dedicated `bytea` column keeps ciphertext out of the `result` jsonb. |

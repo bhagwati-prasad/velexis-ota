@@ -27,6 +27,8 @@ Every plan uses exactly these ids and meanings.
 | [`tech-stack.md`](tech-stack.md) | Versions and libraries per component with a one-line reason each, and what we deliberately do not use. |
 | [`conventions.md`](conventions.md) | Code organisation (NestJS, Next.js, vanilla storefront, SDK), error model, logging, configuration, migrations, testing, git workflow, security checklist. |
 | [`roadmap.md`](roadmap.md) | Milestone timeline, exit criteria and the critical path across plans. |
+| [`deployment-single-vm.md`](deployment-single-vm.md) | Operations guide for the single VM: sizing, hardening, process layout, PostgreSQL, Redis, Caddy and TLS, secrets, deploy and rollback, migrations, backups and restore drill, logs, monitoring, capacity, the path to managed services. |
+| [`local-development.md`](local-development.md) | Local development runbook: prerequisites, one-time setup, daily commands, Mailpit, Stripe CLI, Amadeus stub, tests, troubleshooting. |
 | [`adr/README.md`](adr/README.md) | Index of the cross-cutting architecture decision records. |
 | [`plans/`](plans/) | Foundation agent tasks and the cross-cutting parts of the week-by-week plan (§5). |
 
@@ -54,6 +56,10 @@ Every plan uses exactly these ids and meanings.
 | [0018](adr/0018-hosted-storefront-custom-domains.md) Hosted storefront and custom domains | Caddy configuration, `ask` endpoint, edge credential, custom domain lifecycle. |
 | [0019](adr/0019-vanilla-js-sdk-jsdoc.md) Vanilla JS SDK with JSDoc | Source layout, type checking against the contract, session modes, bundles. |
 | [0020](adr/0020-ai-agent-development-workflow.md) AI-agent development workflow | Plans, task format, one task per PR, review gates, parallel agents. |
+| [0021](adr/0021-migration-cli-and-repeatable-grants.md) Migration CLI and repeatable grants | One migrate CLI for every caller; idempotent `R__*.sql` files for the OTA read grants. |
+| [0022](adr/0022-shared-test-support-package.md) Shared test-support package | `@velexis/testing`: test databases, Redis, clock, response checks, Mailpit, Stripe and Amadeus stub helpers. |
+| [0023](adr/0023-release-artefact-and-deploy-user.md) Release artefact and deploy user | Release folder layout, the `deploy` user's single sudo command, root-owned scripts, secrets per unit. |
+| [0024](adr/0024-reference-data-sources-and-loader.md) Reference data sources and loader | OpenTravelData and CLDR snapshots, vendored and loaded idempotently. |
 
 ## 4. Component documents
 

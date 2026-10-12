@@ -1,0 +1,115 @@
+# Manual deploy to the single VM (ADR-0007, deployment-single-vm.md §8). Only the developer runs it:
+# the "production" environment requires the developer's approval and holds the SSH secrets. Agents never run it.
+# Steps: build and test the chosen ref -> pack-release.sh -> rsync to /srv/velexis/incoming/<sha>/ as the deploy user
+# -> `sudo /usr/local/sbin/velexis-deploy <sha>` on the VM (migrations, switch, restarts, health checks, rollback).
+name: Deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Git ref to deploy (branch, tag or full sha)"
+        required: true
+        default: main
+      skip_tests:
+        description: "Skip unit tests (emergency redeploy of an already tested sha)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+env:
+  CI: "true"
+  TURBO_TELEMETRY_DISABLED: "1"
+  NEXT_TELEMETRY_DISABLED: "1"
+
+jobs:
+  deploy:
+    name: Build, upload and activate
+    runs-on: ubuntu-24.04 # same OS and glibc as the VM, so native modules (argon2) match
+    timeout-minutes: 40
+    environment:
+      name: production
+      url: https://platform.example.com
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+
+      - name: Resolve the release id
+        id: rel
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Lint and typecheck
+        run: pnpm lint && pnpm typecheck
+
+      - name: Unit tests
+        if: ${{ !inputs.skip_tests }}
+        run: pnpm test
+
+      - name: Build
+        run: pnpm build
+
+      - name: Pack the release
+        env:
+          RELEASE_SHA: ${{ steps.rel.outputs.sha }}
+          RELEASE_REF: ${{ inputs.ref }}
+        run: bash deploy/scripts/pack-release.sh release
+
+      - name: Configure SSH
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          install -d -m 0700 ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
+          chmod 0600 ~/.ssh/deploy_key
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 0644 ~/.ssh/known_hosts
+
+      - name: Upload to /srv/velexis/incoming/${{ steps.rel.outputs.sha }}
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          SHA: ${{ steps.rel.outputs.sha }}
+        run: |
+          rsync -a --delete --links --chmod=Du=rwx,Dg=rx,Do=,Fu=rw,Fg=r,Fo= \
+            -e "ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes -o BatchMode=yes" \
+            "release/${SHA}/" "${DEPLOY_USER}@${DEPLOY_HOST}:/srv/velexis/incoming/${SHA}/"
+
+      - name: Activate on the VM
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          SHA: ${{ steps.rel.outputs.sha }}
+        run: |
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes -o BatchMode=yes \
+            "${DEPLOY_USER}@${DEPLOY_HOST}" "sudo /usr/local/sbin/velexis-deploy ${SHA}"
+
+      - name: Smoke check
+        env:
+          SHA: ${{ steps.rel.outputs.sha }}
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+        run: |
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes -o BatchMode=yes \
+            "${DEPLOY_USER}@${DEPLOY_HOST}" "sudo /usr/local/sbin/velexis-deploy --status" | tee status.txt
+          grep -q "${SHA}" status.txt
+
+      - name: Remove the SSH key
+        if: always()
+        run: rm -f ~/.ssh/deploy_key

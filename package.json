@@ -21,7 +21,7 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "contracts:lint": "turbo run contracts:lint",
-    "contracts:generate": "turbo run generate --filter=@velexis/api-types --filter=@velexis/errors",
+    "contracts:generate": "turbo run generate",
     "db:migrate": "pnpm --filter @velexis/db run migrate",
     "db:migrate:tenants": "pnpm --filter @velexis/db run migrate:tenants",
     "db:codegen": "pnpm --filter @velexis/db run codegen",

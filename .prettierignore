@@ -14,6 +14,9 @@ packages/api-types/src/generated/
 packages/db/src/generated/
 packages/errors/src/generated/
 
+# OpenAPI documents are formatted by their own tooling (Redocly); never reflow them.
+**/openapi/
+
 # SQL migrations are copies of the reviewed reference DDL (checksummed).
 **/migrations/**/*.sql
 
@@ -23,3 +26,6 @@ tools/amadeus-stub/fixtures/
 
 pnpm-lock.yaml
 deploy/caddy/Caddyfile
+
+# Existing plain script with its own compact style (tools/plan-lint).
+tools/plan-lint/

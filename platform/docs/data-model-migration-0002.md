@@ -89,6 +89,7 @@ ALTER TABLE platform.tenants
   ADD COLUMN storefront_environment     text NOT NULL DEFAULT 'test' CHECK (storefront_environment IN ('test','live')),
   ADD COLUMN live_enabled_at            timestamptz,
   ADD COLUMN live_enabled_by_account_id text REFERENCES platform.accounts (id) ON DELETE SET NULL,
+  ADD COLUMN billing_notice             text CHECK (billing_notice IN ('past_due','trial_ending')),
   ADD CONSTRAINT tenants_live_ck CHECK (storefront_environment = 'test' OR live_enabled_at IS NOT NULL);
 ALTER TABLE platform.tenants ADD CONSTRAINT tenants_key_dns_ck CHECK (key ~ '^[a-z][a-z0-9]{2,29}$') NOT VALID;
 ALTER TABLE platform.tenants VALIDATE CONSTRAINT tenants_key_dns_ck;
@@ -98,6 +99,7 @@ ALTER TABLE platform.tenants VALIDATE CONSTRAINT tenants_suspension_reason_ck;
 COMMENT ON COLUMN platform.tenants.storefront_environment IS 'Environment of the hosted storefront and edge requests: test until the OTA goes live.';
 COMMENT ON COLUMN platform.tenants.live_enabled_at IS 'When the owner switched the storefront to live.';
 COMMENT ON COLUMN platform.tenants.live_enabled_by_account_id IS 'Owner who switched the storefront to live.';
+COMMENT ON COLUMN platform.tenants.billing_notice IS 'Billing banner for the portal and the OTA admin (past_due, trial_ending), set by billing sync; NULL = none.';
 COMMENT ON CONSTRAINT tenants_key_dns_ck ON platform.tenants IS 'The key is a DNS label of <key>.ota.example.com: 3-30 lower-case letters and digits, no underscore.';
 
 ALTER TABLE platform.provisioning_jobs

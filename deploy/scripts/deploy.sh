@@ -10,7 +10,7 @@
 #   sudo /usr/local/sbin/velexis-deploy --status      show the active release and the units
 #
 # Order (docs/mvp/deployment-single-vm.md §8):
-#   verify checksums -> move to releases/<sha> -> install root-owned scripts, units, Caddyfile ->
+#   verify checksums -> install root-owned scripts, units, Caddyfile from the upload -> move to releases/<sha> ->
 #   migrations (platform, reference, tenant fan-out; expand-phase files) -> reference data ->
 #   switch the `current` symlink -> restart workers, APIs, front ends one at a time with health checks ->
 #   reload Caddy -> prune old releases. Any failed health check switches `current` back (rollback).
@@ -92,6 +92,28 @@ restart_units() { # release dir; returns 1 on the first unhealthy unit
   done
 }
 
+UNITS_CHANGED=0
+CADDY_CHANGED=0
+stage_system_files() { # uploaded release dir (still owned by the deploy user, not by the app user)
+  local src="$1" f
+  for f in "$src"/deploy/systemd/*.service "$src"/deploy/systemd/*.timer; do
+    install_if_changed "$f" "/etc/systemd/system/$(basename "$f")" 0644 && UNITS_CHANGED=1
+  done
+  install -d -m 0755 /etc/systemd/system/caddy.service.d
+  install_if_changed "$src/deploy/systemd/caddy.service.d/velexis.conf" /etc/systemd/system/caddy.service.d/velexis.conf 0644 && UNITS_CHANGED=1
+  if [ "$UNITS_CHANGED" -eq 1 ]; then systemctl daemon-reload; log "systemd units updated"; fi
+
+  install -d -m 0755 "$BASE/maintenance"
+  install -m 0644 -o root -g root "$src/deploy/caddy/maintenance/index.html" "$BASE/maintenance/index.html"
+
+  if ! cmp -s "$src/deploy/caddy/Caddyfile" /etc/caddy/Caddyfile; then
+    install -m 0644 -o root -g root "$src/deploy/caddy/Caddyfile" /etc/caddy/Caddyfile.next
+    ( load_env_file /etc/velexis/caddy.env || exit 1; caddy validate --config /etc/caddy/Caddyfile.next --adapter caddyfile >/dev/null ) \
+      || die "new Caddyfile does not validate; nothing was activated"
+    CADDY_CHANGED=1
+  fi
+}
+
 previous_sha() { # last activated sha different from the current one
   local cur
   cur="$(basename "$(readlink -f "$CURRENT" 2>/dev/null || echo none)")"
@@ -128,7 +150,7 @@ REL="$RELEASES/$SHA"
 PREV_REL="$(readlink -f "$CURRENT" 2>/dev/null || true)"
 log "deploy $SHA (previous: ${PREV_REL:-none})"
 
-# ---- 1. verify and move the uploaded release -------------------------------------------------------------
+# ---- 1. verify the upload, install root-used files from it, then hand it over to the app user ----------
 if [ ! -d "$REL" ]; then
   SRC="$INCOMING/$SHA"
   [ -d "$SRC" ] || die "nothing uploaded at $SRC"
@@ -138,39 +160,24 @@ if [ ! -d "$REL" ]; then
   BUILT_NODE="$(node -p 'require(process.argv[1]).node.split(".")[0]' "$SRC/RELEASE.json")"
   [ "$BUILT_NODE" = "$(node -p 'process.version.split(".")[0]')" ] || die "release built with Node $BUILT_NODE, VM runs $(node --version)"
 
-  # Root-owned copies of the scripts are installed BEFORE the release is handed to the app user.
+  # Everything root will use (scripts, units, Caddyfile, maintenance page) is taken from the uploaded copy
+  # BEFORE the folder is handed to the app user, so a compromised app process can never change it (ADR-0023).
   install_if_changed "$SRC/deploy/scripts/deploy.sh" /usr/local/sbin/velexis-deploy 0755 && log "velexis-deploy updated (used from the next deploy)"
   install_if_changed "$SRC/deploy/scripts/backup.sh" /usr/local/sbin/velexis-backup 0755 || true
   install_if_changed "$SRC/deploy/scripts/restore.sh" /usr/local/sbin/velexis-restore 0755 || true
   install_if_changed "$SRC/deploy/scripts/alert.sh" /usr/local/sbin/velexis-alert 0755 || true
+  stage_system_files "$SRC"
 
   mv -T "$SRC" "$REL"
   chown -R "$APP_USER:$APP_USER" "$REL"
   chmod -R u=rX,g=rX,o= "$REL"                    # read-only after deploy (ADR-0007)
   chmod o+x "$REL"
   if [ -d "$REL/storefront" ]; then chmod -R o+rX "$REL/storefront"; fi   # Caddy serves these files
+else
+  log "release $SHA is already on the VM: scripts, units and Caddyfile stay as installed"
 fi
 
-# ---- 2. systemd units, Caddyfile and the maintenance page --------------------------------------------------
-UNITS_CHANGED=0
-for f in "$REL"/deploy/systemd/*.service "$REL"/deploy/systemd/*.timer; do
-  install_if_changed "$f" "/etc/systemd/system/$(basename "$f")" 0644 && UNITS_CHANGED=1
-done
-install -d -m 0755 /etc/systemd/system/caddy.service.d
-install_if_changed "$REL/deploy/systemd/caddy.service.d/velexis.conf" /etc/systemd/system/caddy.service.d/velexis.conf 0644 && UNITS_CHANGED=1
-if [ "$UNITS_CHANGED" -eq 1 ]; then systemctl daemon-reload; log "systemd units updated"; fi
-
-install -d -m 0755 "$BASE/maintenance"
-install -m 0644 "$REL/deploy/caddy/maintenance/index.html" "$BASE/maintenance/index.html"
-
-CADDY_CHANGED=0
-if ! cmp -s "$REL/deploy/caddy/Caddyfile" /etc/caddy/Caddyfile; then
-  ( load_env_file /etc/velexis/caddy.env || exit 1; caddy validate --config "$REL/deploy/caddy/Caddyfile" --adapter caddyfile >/dev/null ) \
-    || die "new Caddyfile does not validate; nothing changed"
-  CADDY_CHANGED=1
-fi
-
-# ---- 3. migrations (DDL as velexis_migrator; credentials only in root-only migrator.env) ---------------------
+# ---- 2. migrations (DDL as velexis_migrator; credentials only in root-only migrator.env) ---------------------
 # Note: errexit is off inside a subshell followed by `||`, so every step ends with `|| exit 1`.
 if [ -f "$REL/db/dist/cli/migrate.js" ]; then
   (
@@ -194,7 +201,7 @@ if [ -f "$REL/db/dist/cli/migrate.js" ]; then
   if [ -f "/var/lib/velexis/migrate-$SHA.json" ]; then cp "/var/lib/velexis/migrate-$SHA.json" "$LOG_DIR/"; fi
 fi
 
-# ---- 4. reference data (only when the vendored datasets changed) -------------------------------------------
+# ---- 3. reference data (only when the vendored datasets changed) -------------------------------------------
 if [ -f "$REL/reference-data/dist/cli/load.js" ]; then
   NEW_SUM="$(cd "$REL/reference-data" && find data -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum | cut -d' ' -f1)"
   if [ "$NEW_SUM" != "$(cat /var/lib/velexis/reference-data.sha256 2>/dev/null || true)" ]; then
@@ -209,7 +216,7 @@ if [ -f "$REL/reference-data/dist/cli/load.js" ]; then
   fi
 fi
 
-# ---- 5. switch and restart with health checks --------------------------------------------------------------
+# ---- 4. switch and restart with health checks --------------------------------------------------------------
 switch_current "$REL"
 if ! restart_units "$REL"; then
   if [ -n "$PREV_REL" ] && [ "$PREV_REL" != "$REL" ]; then
@@ -219,14 +226,14 @@ if ! restart_units "$REL"; then
 fi
 
 if [ "$CADDY_CHANGED" -eq 1 ]; then
-  install -m 0644 "$REL/deploy/caddy/Caddyfile" /etc/caddy/Caddyfile
+  mv /etc/caddy/Caddyfile.next /etc/caddy/Caddyfile
   systemctl reload caddy
   log "Caddyfile reloaded"
 fi
 
 echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) $SHA" >> "$HISTORY"
 
-# ---- 6. prune: keep the last $KEEP_RELEASES releases and never the active one ------------------------------
+# ---- 5. prune: keep the last $KEEP_RELEASES releases and never the active one ------------------------------
 ACTIVE="$(readlink -f "$CURRENT")"
 find "$RELEASES" -mindepth 1 -maxdepth 1 -type d -printf '%T@ %p\n' | sort -rn | awk -v keep="$KEEP_RELEASES" 'NR > keep { print $2 }' |
   while read -r old; do

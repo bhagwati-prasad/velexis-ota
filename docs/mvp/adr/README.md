@@ -26,6 +26,10 @@ This folder holds the cross-cutting architecture decision records (ADRs) of the 
 | [0018](0018-hosted-storefront-custom-domains.md) | Hosted storefront and custom domains | Accepted | Caddy on-demand TLS gated by an `ask` endpoint, same-origin `/api` proxy with an edge credential, CSP. |
 | [0019](0019-vanilla-js-sdk-jsdoc.md) | Vanilla JS SDK with JSDoc types | Accepted | ES modules, JSDoc on generated types, `checkJs`, contract check, ESM + IIFE bundles, token and cookie modes. |
 | [0020](0020-ai-agent-development-workflow.md) | AI-agent development workflow | Accepted | Linted Markdown task plans, one task per branch and PR, developer-only merges and deploys. |
+| [0021](0021-migration-cli-and-repeatable-grants.md) | Migration CLI and repeatable grant files | Accepted | One `migrate.js` CLI for deploys, dev, provisioning and tests; idempotent `R__*.sql` grant files keep the OTA read grants out of the baselines. |
+| [0022](0022-shared-test-support-package.md) | Shared test-support package `@velexis/testing` | Accepted | Dev-only package: template-cloned test databases with two tenants, Redis, clock, Ajv response checks, Mailpit, Stripe and Amadeus stub helpers. |
+| [0023](0023-release-artefact-and-deploy-user.md) | Release artefact and deploy user | Accepted | Checksummed release folder built in CI; `deploy` user with one sudo command; root runs only root-owned scripts; per-unit `InaccessiblePaths`. |
+| [0024](0024-reference-data-sources-and-loader.md) | Reference data sources and loader | Accepted | OpenTravelData and Unicode CLDR snapshots vendored in `tools/reference-data`, loaded idempotently with the platform role; never fetched at runtime. |
 
 ## Component ADRs
 
