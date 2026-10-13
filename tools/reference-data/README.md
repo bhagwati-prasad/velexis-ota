@@ -3,7 +3,7 @@
 The vendored reference datasets of the `reference` schema ([`reference.sql`](../../docs/velexis-sdk/db/reference.sql)): currencies, countries, time zones, cities, airports, airlines and aircraft, built from **OpenTravelData** (CC BY 4.0) and **Unicode CLDR** (Unicode License v3) as [ADR-0024](../../docs/mvp/adr/0024-reference-data-sources-and-loader.md) decides. The snapshots are committed and reviewed like code. CI, deploys and tests **never download** them.
 
 - Task [X-017](../../docs/mvp/plans/foundation-tasks.md) built the fetch and validation scripts and the first snapshot (this folder).
-- Task X-018 adds the TypeScript loader (`dist/cli/load.js`, `pnpm db:seed:reference`) that upserts `data/` into PostgreSQL. Until then the package has no build.
+- Task X-018 built the TypeScript loader (`dist/cli/load.js`, `pnpm db:seed:reference`) that upserts `data/` into PostgreSQL ([Loader](#loader) below).
 
 ## Layout
 
@@ -15,19 +15,27 @@ The vendored reference datasets of the `reference` schema ([`reference.sql`](../
 | `scripts/fetch.mjs` | Downloads the sources and rebuilds `data/` and `SOURCES.md` (by hand only), or checks the committed snapshot offline (`--check`). |
 | `scripts/validate.mjs` | The offline checks, also used by `fetch.mjs` before it writes anything and by `--check`. |
 | `scripts/*.test.mjs` | Vitest tests: the checks on small hand-written data sets, the mapping on fixture sources with a fake `fetch`, and the committed snapshot. |
+| `src/load.ts` | The loader library: `loadReferenceData({ url, dataDir })`, `readReferenceData(dataDir)` and the table definitions (the package's main export). |
+| `src/csv.ts` | The CSV reader of the loader (the canonical form below). |
+| `src/cli/load.ts` | The CLI `dist/cli/load.js --data <dir>`. |
+| `src/**/*.test.ts` | Unit tests: the CSV reader, the table definitions against `reference.sql`, the data checks, the SQL and the CLI, without a database. |
+| `test/integration/load.int.test.ts` | The loader against PostgreSQL 16 on fresh, migrated databases (`pnpm test:int`). |
 
 `package.json` ships `dist`, `data` and `SOURCES.md` in releases (`pnpm deploy`, [ADR-0023](../../docs/mvp/adr/0023-release-artefact-and-deploy-user.md)), so the Unicode notice travels with the data.
 
 ## Commands
 
-Plain Node 22, no dependencies (Vitest and ESLint only for the tests and lint).
+The scripts are plain Node 22 without dependencies. The loader is TypeScript (`pnpm build` → `dist/`) and depends on `pg`, `@velexis/config` and `@velexis/logger`.
 
 | Command | What it does |
 |---|---|
 | `node tools/reference-data/scripts/fetch.mjs --check` (`pnpm --filter @velexis/reference-data check`) | Validates the committed files **offline** and exits non-zero on any problem. Safe in CI. |
 | `node tools/reference-data/scripts/validate.mjs [--data <dir>] [--no-min-rows]` | The data checks alone, on any folder. |
 | `NODE_USE_ENV_PROXY=1 node tools/reference-data/scripts/fetch.mjs` (`pnpm --filter @velexis/reference-data fetch`) | Downloads the sources and rewrites `data/*.csv` and `SOURCES.md`. **By hand only**, never in CI. `NODE_USE_ENV_PROXY=1` makes Node's `fetch` use `HTTPS_PROXY` (Node ≥ 22.21); it is harmless without a proxy. |
-| `pnpm --filter @velexis/reference-data test` / `lint` | Vitest and ESLint. |
+| `pnpm db:seed:reference` (`pnpm --filter @velexis/reference-data load`, which runs `node dist/cli/load.js --data data` here) | Loads `data/` into the `reference` schema of `DATABASE_URL`. Build first (`pnpm build`, or `pnpm --filter @velexis/reference-data build`) and migrate (`pnpm db:migrate`). |
+| `pnpm --filter @velexis/reference-data build` / `typecheck` | `tsc -b` to `dist/` / `tsc --noEmit` of the sources and of the integration tests. |
+| `pnpm --filter @velexis/reference-data test` / `lint` | Vitest (the script tests and the loader's unit tests) and ESLint. |
+| `pnpm --filter @velexis/reference-data test:int` | The loader against PostgreSQL 16 (`vitest run --mode integration`); needs `TEST_DATABASE_ADMIN_URL`, `DATABASE_MIGRATOR_URL` and `DATABASE_URL` (root `.env.example`). |
 
 `--check` fails when:
 
@@ -94,7 +102,35 @@ airports,XYZ,is_active,false
 
 - `table` is one of the seven tables, `key` is the row's primary key, which must exist in that table's file, and `column` is any column but the key. An empty `value` sets `NULL` (only for nullable columns).
 - The value must pass the same column rules as the files, and foreign keys and `UNIQUE` columns are checked after the overrides are applied. A column of a row can be overridden only once.
-- The loader (X-018) applies the overrides after the files, in the same transaction.
+- The loader applies the overrides after reading the files and before writing anything, in the same transaction: an overridden value replaces the file's value in the row that is upserted, so the override wins and a second load still reports zero changes. Removing a line restores the file's value at the next load (counted as an update).
+
+## Loader
+
+`loadReferenceData({ url, dataDir })` (`src/load.ts`) and its CLI `node dist/cli/load.js --data <dir>` (`src/cli/load.ts`) put the files of a data folder into the `reference` schema, as [ADR-0024](../../docs/mvp/adr/0024-reference-data-sources-and-loader.md) (Loader) decides.
+
+**Who runs it, with which role.** The DSN is `DATABASE_URL`, read through `@velexis/config` (locally from `.env.local`, which `@velexis/config` loads outside production; there is no `--url` flag, so the DSN never shows in a process list). It must be the platform role `velexis_platform_app`, which has DML on `reference` ([ADR-0004](../../docs/mvp/adr/0004-postgresql-schema-per-tenant.md)). With `velexis_ota_app` (`SELECT` only) the first write fails with SQLSTATE `42501` and nothing changes.
+
+| Entry point | How |
+|---|---|
+| Locally | `pnpm build && pnpm db:migrate && pnpm db:seed:reference` |
+| Deploy | `velexis-deploy` runs `node dist/cli/load.js --data data` in the release's `reference-data/` folder when the checksum of `data/` changed, as a transient unit with a dynamic user that reads `/etc/velexis/reference-loader.env` (the platform role's DSN only; [`deployment-single-vm.md`](../../docs/mvp/deployment-single-vm.md) §8 step 5, `deploy/scripts/deploy.sh` section 3). A failure stops the deploy before the switch. |
+| Tests | `loadReferenceData` from `@velexis/reference-data` (the package's main export), for example on a small fixture folder. |
+
+**What one run does.** It reads and checks the eight files first (CSV form, headers, at least one row per table, non-empty unique keys, overrides that name an existing table, column and row) and connects only when they are fine. Then, in **one transaction** (with `lock_timeout` 10 s, `statement_timeout` 5 min and a transaction advisory lock, so two loads of the same database run one after the other), for each table in foreign-key order (currencies, countries, time zones, cities, airports, airlines, aircraft):
+
+1. **release**: a `UNIQUE` code (`countries.alpha3`, `airports.icao_code`, `airlines.icao_code`) that the file now gives to another key is set to `NULL` on the row that still holds it, so codes can move or swap between rows (for example an ICAO code that passes from a closed airport to a new one) without breaking the constraint in the middle of the upsert;
+2. **upsert**: `INSERT … ON CONFLICT (<key>) DO UPDATE SET …, updated_at = now() WHERE (<columns>) IS DISTINCT FROM (EXCLUDED.<columns>)`. The rows go to PostgreSQL as one `jsonb` parameter per table (`jsonb_populate_recordset` with the table's own row type), so the column types, `CHECK` constraints and foreign keys of `reference.sql` validate every value. An unchanged row is not written, so its `updated_at` stays;
+3. **deactivate**: in the tables with `is_active` (currencies, airports, airlines), the active rows whose code is missing from the file get `is_active = false`. **Nothing is ever deleted**, because tenant rows reference the codes by value; the other four tables keep such rows as they are.
+
+Any error rolls the whole transaction back. Every statement is schema-qualified (`"reference"."airports"`); the loader never sets `search_path`.
+
+**What it reports.** Per table: `inserted` (codes new to the table), `updated` (existing rows whose values changed, including a row that lost a `UNIQUE` code to another row) and `deactivated`; each changed row counts once. A second run with the same files reports zeros everywhere. The CLI prints one JSON line on stdout with `@velexis/logger` (`app` `reference-loader`):
+
+```text
+{"level":30,"time":"…","app":"reference-loader","env":"production","dataDir":"/srv/velexis/releases/<sha>/reference-data/data","tables":{"currencies":{"inserted":0,"updated":1,"deactivated":0}, … ,"aircraft":{"inserted":2,"updated":0,"deactivated":0}},"overrides":0,"durationMs":1977,"msg":"reference.loaded"}
+```
+
+On failure the line is `reference.load_failed` (level 50) with the error's type, message and SQLSTATE `code`, never the DSN. Usage and configuration errors (`ConfigError`, which names the variable, never its value) go to stderr. Exit codes: `0` loaded, `1` error (nothing changed). The log's `env` field is `APP_ENV`, else `NODE_ENV` (`velexis-deploy` sets `NODE_ENV=production`), else `development`. A full load of the current snapshot takes about 2 s on a developer machine.
 
 ## Attribution and licences
 
@@ -105,3 +141,6 @@ CC BY 4.0 requires attribution: the storefront's legal page and the OTA admin's 
 - **Telephone codes.** Unicode CLDR stopped publishing `telephoneCodeData` in release 34 (2018), so `calling_code` comes from OpenTravelData's `optd_countries.csv` (CC BY 4.0, already a source of this package), as does `continent_code`. Countries without a code there (uninhabited territories, and Kosovo) stay empty.
 - **Extra downloads.** Besides the three OpenTravelData files the plan names, the script downloads `optd_countries.csv` (above), the OpenTravelData `README.md` and the CLDR `LICENSE` (to re-check the licences).
 - **Minor units.** CLDR's `_digits` are display digits. For a few currencies they differ from the ISO 4217 minor units (for example `HUF`, `IDR`, `COP`, `PKR`: 0 in CLDR, 2 in ISO 4217; `IQD`: 0 and 3).
+- **Overrides before the upsert (X-018).** The plan lists `overrides.csv` after the upserts. Applied as separate updates after the upserts, an override would be undone by the next upsert and redone by the override at every run, so a second load would report updates. The loader therefore merges the overrides into the rows before writing them: the override still wins, in the same transaction, and a second load reports zero changes (ADR-0024).
+- **Release of moved `UNIQUE` codes (X-018).** Not in the plan: without it, a refresh in which an ICAO code moves to another airport (or airline) fails on the `UNIQUE` constraint, because PostgreSQL checks it row by row during the upsert.
+- **Empty files (X-018).** The loader refuses a dataset file without rows, because every code of that table would otherwise be deactivated. The plausible minimums of `validate.mjs` stay a check of the snapshot, not of the loader, so a small fixture folder (tests) loads too.

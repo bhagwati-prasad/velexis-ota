@@ -550,8 +550,8 @@ Related: [`../decisions.md`](../decisions.md) (binding), [`../architecture.md`](
   - `SOURCES.md` names each source, its licence and the attribution text.
 - **Verify:** `node tools/reference-data/scripts/fetch.mjs --check && du -sh tools/reference-data/data`
 
-### X-018 · Build the reference data loader and pnpm db:seed:reference
-- **Status:** todo
+### X-018 · Build the reference data loader and pnpm db:seed:reference ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** foundation
 - **Milestone:** M0
 - **Depends on:** X-017, X-012

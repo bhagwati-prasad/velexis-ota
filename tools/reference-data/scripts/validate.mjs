@@ -350,7 +350,11 @@ function readCsvFile(name, content, problems) {
   }
   let text;
   try {
-    text = typeof content === "string" ? content : new TextDecoder("utf-8", { fatal: true }).decode(content);
+    // ignoreBOM keeps a leading byte order mark in the text (TextDecoder drops it by default), so it is reported.
+    text =
+      typeof content === "string"
+        ? content
+        : new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(content);
   } catch {
     problems.push(`${name}: not valid UTF-8`);
     return null;

@@ -222,6 +222,11 @@ describe("validate.mjs on a small data set", () => {
     expect(problemsOf({ ...base, "aircraft.csv": `\uFEFF${base["aircraft.csv"]}` })).toEqual([
       "aircraft.csv: starts with a byte order mark",
     ]);
+    // validateDataDir reads bytes, and TextDecoder drops a leading byte order mark unless told to keep it.
+    const withBom = new TextEncoder().encode(`\uFEFF${base["aircraft.csv"]}`);
+    expect(problemsOf({ ...base, "aircraft.csv": withBom })).toEqual([
+      "aircraft.csv: starts with a byte order mark",
+    ]);
     expect(
       problemsOf({ ...base, "aircraft.csv": base["aircraft.csv"].replace("Boeing,wide", '"Boeing",wide') }),
     ).toEqual(["aircraft.csv: not in the canonical CSV form of fetch.mjs (needless quotes)"]);
