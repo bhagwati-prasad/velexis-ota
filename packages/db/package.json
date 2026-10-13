@@ -33,9 +33,12 @@
     "lint": "eslint .",
     "test": "vitest run",
     "test:int": "vitest run --config vitest.int.config.ts",
+    "premigrate": "tsc -b",
+    "migrate": "node dist/cli/migrate.js platform --dir ../../platform/backend/migrations/platform && node dist/cli/migrate.js reference --dir ../../platform/backend/migrations/reference",
     "clean": "tsc -b --clean"
   },
   "dependencies": {
+    "@velexis/config": "workspace:*",
     "@velexis/logger": "workspace:*",
     "kysely": "0.28.17",
     "pg": "8.23.1"
@@ -43,7 +46,6 @@
   "devDependencies": {
     "@types/node": "22.20.5",
     "@types/pg": "8.23.1",
-    "@velexis/config": "workspace:*",
     "typescript": "5.6.3",
     "vitest": "3.2.7"
   }

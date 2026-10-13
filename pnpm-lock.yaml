@@ -178,6 +178,9 @@ importers:
 
   packages/db:
     dependencies:
+      '@velexis/config':
+        specifier: workspace:*
+        version: link:../config
       '@velexis/logger':
         specifier: workspace:*
         version: link:../logger
@@ -194,9 +197,6 @@ importers:
       '@types/pg':
         specifier: 8.23.1
         version: 8.23.1
-      '@velexis/config':
-        specifier: workspace:*
-        version: link:../config
       typescript:
         specifier: 5.6.3
         version: 5.6.3

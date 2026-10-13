@@ -5,11 +5,12 @@ Data access and tenancy for both backends:
 - `pg` pools with the Velexis type parsers;
 - `platformDb` for the schema-qualified `platform` and `reference` tables;
 - `tenantTx`, the **only** way to reach a tenant schema;
+- the migration runner `@velexis/db/migrate` and its CLI `dist/cli/migrate.js` for the `platform` and `reference` sets;
 - the `StorageAdapter` for documents and uploads.
 
-The migration runner and CLI (`@velexis/db/migrate`, X-011 to X-013) and the generated table types (X-014) come next.
+The tenant commands of the runner (`migrateTenantSchema`, `migrateTenants`, X-013) and the generated table types (X-014) come next.
 
-Design: [ADR-0004](../../docs/mvp/adr/0004-postgresql-schema-per-tenant.md) (schema per tenant, roles, leak guards), [ADR-0005](../../docs/mvp/adr/0005-data-access-kysely-sql-migrations.md) (Kysely on `pg`, type parsers), [ADR-0017](../../docs/mvp/adr/0017-email-documents-storage.md) (storage), [db README §5 and §8](../../docs/velexis-sdk/db/README.md).
+Design: [ADR-0004](../../docs/mvp/adr/0004-postgresql-schema-per-tenant.md) (schema per tenant, roles, leak guards), [ADR-0005](../../docs/mvp/adr/0005-data-access-kysely-sql-migrations.md) (Kysely on `pg`, type parsers, migrations), [ADR-0021](../../docs/mvp/adr/0021-migration-cli-and-repeatable-grants.md) (migration CLI, repeatable grant files), [ADR-0017](../../docs/mvp/adr/0017-email-documents-storage.md) (storage), [db README §4, §5 and §8](../../docs/velexis-sdk/db/README.md).
 
 ## Usage
 
@@ -98,6 +99,67 @@ If the two differ, a session-level change survived on that pooled connection. Th
 | `jsonb`, `json` | 3802, 114 | parsed with `JSON.parse` |
 | everything else | | node-postgres defaults |
 
+## Migrations: `@velexis/db/migrate` and `migrate.js`
+
+One runner for every caller ([ADR-0021](../../docs/mvp/adr/0021-migration-cli-and-repeatable-grants.md)): `pnpm db:migrate` locally and in CI, `velexis-deploy` on the VM (`node dist/cli/migrate.js …` from the release's `db/` folder), and the library for `@velexis/testing` and the OTA worker.
+
+```sh
+pnpm db:migrate        # builds this package (premigrate: tsc -b), then applies both sets from the repository
+node dist/cli/migrate.js platform --dir ../../platform/backend/migrations/platform
+node dist/cli/migrate.js reference --dir ../../platform/backend/migrations/reference
+```
+
+```ts
+import { runMigrations, MigrationError } from "@velexis/db/migrate";
+
+const result = await runMigrations({
+  set: "platform", // or "reference": the set and the schema of its ledger
+  dir: "/opt/velexis/releases/<sha>/migrations/platform",
+  url: config.DATABASE_MIGRATOR_URL, // velexis_migrator; never logged
+  onFile: (event) => logger.info(event, "db.migrate.file"), // optional: one event per file applied, failed or changed
+});
+// result: { set, dir, dirExists, applied: MigrationFileEvent[], upToDate, ledgerOnly }
+// Throws MigrationFilesError (1), ChecksumMismatchError (2) or MigrationFailedError (1); error.exitCode is the CLI's.
+```
+
+### Files
+
+| Kind | Name | Rules |
+|---|---|---|
+| Numbered | `^\d{4}_[a-z0-9_]+\.sql$`, e.g. `0002_add_tenant_flags.sql` | Applied once, in name order. A duplicated number fails. Starts with `-- velexis:phase expand\|migrate\|contract`, then a one-line `-- description` ([conventions §9](../../docs/mvp/conventions.md#9-database-migrations)). **Never edited once merged**: the checksum makes the next run exit 2. |
+| Baseline | `0001_baseline.sql` | A byte-for-byte copy of `docs/velexis-sdk/db/<set>.sql` (X-012), so it has **no** header and counts as `expand`. Its description is the first comment line with text. |
+| Repeatable | `^R__[a-z0-9_]+\.sql$`, e.g. `R__ota_read_access.sql` | `platform` and `reference` only. Every statement (comments removed) starts with `GRANT`, `REVOKE` or `COMMENT ON`; anything else is rejected. No phase header (the ledger phase is `repeatable`), no `no-transaction`. Applied after the numbered files whenever its SHA-256 changed, so it **may** be edited. |
+
+- Header directives live in the leading comment block: `-- velexis:phase <phase>` and `-- velexis:no-transaction`. Any other `-- velexis:` line there (a typo such as `no-transation`) is an error.
+- `-- velexis:no-transaction` is for `CREATE INDEX CONCURRENTLY`. The runner splits the file into statements (psql's rules: strings, `E'…'`, quoted identifiers, dollar quotes, comments, `BEGIN ATOMIC` bodies) and runs them one by one outside a transaction, then records the file. It first sets `lock_timeout = '5s'` and `statement_timeout = '10min'` again on the session, because a plain `SET` in an earlier file would otherwise still apply. A failure leaves the statements before it applied and records nothing, so write such files idempotently (`IF NOT EXISTS`) and drop an `INVALID` index that a failed `CONCURRENTLY` leaves behind before running again.
+- A numbered file must not contain `BEGIN`, `COMMIT`, `ROLLBACK`, `END`, `ABORT`, `START TRANSACTION` or `PREPARE TRANSACTION`: the runner owns each file's transaction (savepoints are fine).
+- Other `.sql` names, invalid UTF-8 and a byte order mark are errors; other files (`README.md`, `.gitkeep`) are ignored. The checksum is the SHA-256 of the raw bytes, so even a changed comment or line ending counts.
+- Every problem of the folder is reported at once (`MigrationFilesError`), **before** a connection is opened.
+
+### What a run does
+
+1. Reads and validates the folder. A folder that does not exist is an **empty set**: a notice on stderr, nothing applied, no connection, exit `0` (CI runs `pnpm db:migrate` before X-012 creates the folders).
+2. Opens a connection of its own (`application_name` `velexis-migrate-<set>`, session `statement_timeout = '10min'`) and takes `pg_advisory_lock(hashtext('velexis:migrate:' || set))` for the whole run. A second run of the same set waits for it (up to 10 minutes, instead of the role's 5 s `lock_timeout`), then finds nothing pending. Closing the connection releases the lock. The runner never touches `search_path`.
+3. Creates `<set>.schema_migrations` when it is missing (and the schema, as the baseline would): the columns of the tenant ledger in `tenant.sql` (`id`, `description`, `checksum`, `phase`, `status`, `execution_ms`, `created_at`, `updated_at`), ids `NNNN_name` or `R__name` (the file name without `.sql`), and `repeatable` as an extra phase. It belongs to `velexis_migrator`; `bootstrap.sql`'s default privileges apply to it like to every table the migrator creates.
+4. Verifies the checksums of the applied numbered files. A mismatch prints a `checksum_mismatch` line per file and exits `2` before anything is applied.
+5. Applies each pending numbered file in its own transaction: `SET LOCAL lock_timeout = '5s'`, `SET LOCAL statement_timeout = '10min'`, the file, its ledger row, `COMMIT`. A failing file rolls back (no ledger row), the run stops with exit `1`, and the files before it stay applied.
+6. Applies the repeatable files whose checksum differs from their ledger row, the same way, and updates their row (`updated_at`).
+
+Ledger rows that have no file (for example after a rollback to an older release) are reported as a notice on stderr and otherwise ignored.
+
+### CLI output and exit codes
+
+- The DSN comes from `DATABASE_MIGRATOR_URL` only, read through `@velexis/config` (the root and package `.env.local` locally; nothing is loaded when `APP_ENV` or `NODE_ENV` is `production`). There is no `--url` flag, so a DSN never appears in a process list; the DSN is never printed.
+- stdout: one JSON line per file applied, failed or changed; nothing when everything is up to date. For example:
+
+  ```json
+  {"set":"platform","file":"0002_add_tenant_flags.sql","id":"0002_add_tenant_flags","kind":"numbered","phase":"expand","status":"applied","checksum":"<sha256>","transaction":true,"executionMs":12}
+  ```
+
+  `status` is `applied`, `failed` (with `error: { message, code, line | statement }`: PostgreSQL's message and SQLSTATE, never its detail, which can quote row values) or `checksum_mismatch` (with `appliedChecksum`).
+- stderr: notices and one error message.
+- Exit codes: `0` success, `1` error (invalid files, configuration, connection, a failing file), `2` checksum mismatch of an applied file, `3` tenant failure ratio exceeded (`tenants`, X-013).
+
 ## `@velexis/db/storage`
 
 ```ts
@@ -124,15 +186,16 @@ const url = await storage.signedUrl("tenant_acme/documents/doc_01J….pdf", 300)
 | Subpath | Contents |
 |---|---|
 | `@velexis/db` | Pools, `createPlatformDb`, `createTenantDb`, `tenantTx`, schema checks, type parsers |
-| `@velexis/db/migrate` | Migration runner (X-011; the entry exists before the code) |
+| `@velexis/db/migrate` | `runMigrations`, `readMigrationFiles`, the ledger helpers, `splitSqlStatements`, the error classes and `MIGRATE_EXIT_CODES` (X-011); the tenant functions follow in X-013 |
 | `@velexis/db/storage` | `StorageAdapter`, `LocalDiskStorage`, `createStorage`, storage keys |
 
 ## Tests
 
-- **Unit** (`pnpm --filter @velexis/db test`): schema names, type parsers, pool options, `tenantTx` against a recording fake pool (statement order, bound parameters, leak guard, rejection before any SQL), `LocalDiskStorage` in a temporary folder.
+- **Unit** (`pnpm --filter @velexis/db test`): schema names, type parsers, pool options, `tenantTx` against a recording fake pool (statement order, bound parameters, leak guard, rejection before any SQL), `LocalDiskStorage` in a temporary folder, migration file discovery and the CLI paths that need no database (`src/migrate/files.test.ts`, including the missing `--dir`), the statement splitter (also over the three reference DDL files) and the repeatable-file rules (`src/migrate/repeatable.test.ts`).
 - **Integration** (`pnpm --filter @velexis/db test:int`, `vitest.int.config.ts`, PostgreSQL 16): `test/integration/helpers.ts` connects as `TEST_DATABASE_ADMIN_URL`, read through `@velexis/config` (the environment, or `.env.local` locally). It creates a scratch database `velexis_dbtest_<random>` owned by `velexis_migrator` with the database-level grants of `bootstrap.sql`. It adds `tenant_alpha` and `tenant_beta` owned by `velexis_provisioner`, each with an `items` table of different rows and DML for `velexis_ota_app`, plus a small `platform` and `reference` schema. It drops the database at the end. The pools log in as `velexis_ota_app` with its development password from `.env.example`, so the role default `search_path = pg_catalog` applies. The roles come from `deploy/scripts/dev-setup.sh` locally and from the CI bootstrap. `@velexis/testing` (X-015) replaces this helper.
 - The isolation test of ADR-0004 runs 50 interleaved transactions of both tenants through a pool of **size 1**, with writes and rollbacks. Each transaction sees only its own tenant's rows. The plan text names the schemas `tenant_a` and `tenant_b`, but a one-letter key is not a valid schema name, so the tests use `tenant_alpha` and `tenant_beta` (the names of the X-015 template).
 - The leak-guard test uses a session-level `SET search_path` on purpose; `packages/db` is the only place CI allows one.
+- `test/integration/migrate.int.test.ts` gives every test a fresh `velexis_dbtest_<random>` database prepared like `bootstrap.sql` (empty `platform` and `reference` schemas with their default privileges) and runs the runner as `velexis_migrator` (`DATABASE_MIGRATOR_URL` with the database name swapped), through `runMigrateCli` and `runMigrations`. It covers ordering and re-runs, the reference baselines, the ledger columns against `tenant.sql`, the per-file timeouts, checksum mismatches, failing files, `no-transaction` files, repeatable files and two runs queued on the advisory lock.
 
 ## Scripts
 
@@ -140,7 +203,8 @@ const url = await storage.signedUrl("tenant_acme/documents/doc_01J….pdf", 300)
 |---|---|
 | `pnpm --filter @velexis/db build` | `tsc -b` to `dist/` (CommonJS and `.d.ts`); builds `@velexis/logger` and `@velexis/config` first (project references) |
 | `pnpm --filter @velexis/db test` | Unit tests (Vitest) |
-| `pnpm --filter @velexis/db test:int` | Integration tests (needs PostgreSQL and `TEST_DATABASE_ADMIN_URL`) |
+| `pnpm --filter @velexis/db test:int` | Integration tests (needs PostgreSQL, `TEST_DATABASE_ADMIN_URL` and `DATABASE_MIGRATOR_URL`) |
+| `pnpm --filter @velexis/db migrate` (root: `pnpm db:migrate`) | Builds the package (`premigrate`), then `migrate.js platform` and `migrate.js reference` with the repository folders `platform/backend/migrations/{platform,reference}` |
 | `pnpm --filter @velexis/db typecheck` | `tsc --noEmit` for `src/` and for `test/` (`test/tsconfig.json`) |
 | `pnpm --filter @velexis/db lint` | ESLint with the root flat config |
 | `pnpm --filter @velexis/db clean` | Removes the build output |

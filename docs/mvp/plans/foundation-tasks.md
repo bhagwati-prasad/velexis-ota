@@ -324,8 +324,8 @@ Related: [`../decisions.md`](../decisions.md) (binding), [`../architecture.md`](
   - `LocalDiskStorage` rejects a key with `..` and writes files with mode 0600.
 - **Verify:** `pnpm --filter @velexis/db build && pnpm --filter @velexis/db test && pnpm --filter @velexis/db test:int`
 
-### X-011 · Build the migration runner and the migrate CLI
-- **Status:** todo
+### X-011 · Build the migration runner and the migrate CLI ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** foundation
 - **Milestone:** M0
 - **Depends on:** X-010

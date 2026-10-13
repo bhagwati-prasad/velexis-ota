@@ -1,0 +1,58 @@
+// @velexis/db/migrate: the migration runner (X-011; ADR-0005 Migrations, ADR-0021, db README §4). The CLI
+// dist/cli/migrate.js, `pnpm db:migrate`, velexis-deploy, the OTA worker and @velexis/testing all use it.
+export {
+  BASELINE_FILE,
+  isSharedMigrationSet,
+  MIGRATE_EXIT_CODES,
+  MIGRATION_PHASES,
+  MIGRATION_SETS,
+  MigrationError,
+  MigrationFilesError,
+  NUMBERED_FILE_PATTERN,
+  readMigrationFiles,
+  REPEATABLE_FILE_PATTERN,
+  sha256Hex,
+  SHARED_MIGRATION_SETS,
+  type LedgerPhase,
+  type MigrateExitCode,
+  type MigrationFile,
+  type MigrationFileProblem,
+  type MigrationFiles,
+  type MigrationKind,
+  type MigrationPhase,
+  type MigrationSet,
+  type SharedMigrationSet,
+} from "./files.js";
+export {
+  checksumMismatches,
+  ensureSharedLedger,
+  LEDGER_TABLE,
+  ledgerIdsWithoutFile,
+  ledgerTable,
+  pendingNumberedFiles,
+  readLedger,
+  recordMigration,
+  sharedLedgerDdl,
+  type ChecksumMismatch,
+  type LedgerRow,
+  type LedgerStatus,
+  type Queryable,
+} from "./ledger.js";
+export {
+  pendingRepeatableFiles,
+  repeatableStatementProblems,
+  splitSqlStatements,
+  SqlSplitError,
+} from "./repeatable.js";
+export {
+  ChecksumMismatchError,
+  MIGRATION_LOCK_TIMEOUT,
+  MIGRATION_STATEMENT_TIMEOUT,
+  MigrationFailedError,
+  runMigrations,
+  type MigrationFailure,
+  type MigrationFileEvent,
+  type MigrationFileStatus,
+  type RunMigrationsOptions,
+  type RunMigrationsResult,
+} from "./run-set.js";
