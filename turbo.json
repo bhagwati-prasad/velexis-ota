@@ -1,0 +1,63 @@
+{
+  "$schema": "https://turborepo.com/schema.json",
+  "ui": "stream",
+  "globalDependencies": ["tsconfig.base.json", "eslint.config.mjs", ".prettierrc.json"],
+  "globalEnv": ["NODE_ENV", "APP_ENV", "CI"],
+  "tasks": {
+    "generate": {
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "$TURBO_ROOT$/ota/backend/openapi/**",
+        "$TURBO_ROOT$/platform/backend/openapi/**"
+      ],
+      "outputs": ["src/generated/**"]
+    },
+    "build": {
+      "dependsOn": ["^build", "generate"],
+      "inputs": ["$TURBO_DEFAULT$", "!**/*.test.*", "!test/**", "!.env*"],
+      "env": ["NEXT_PUBLIC_*"],
+      "outputs": ["dist/**", ".next/**", "!.next/cache/**"]
+    },
+    "typecheck": {
+      "dependsOn": ["^build", "generate"],
+      "outputs": []
+    },
+    "lint": {
+      "dependsOn": ["^build"],
+      "outputs": []
+    },
+    "test": {
+      "dependsOn": ["^build"],
+      "inputs": ["$TURBO_DEFAULT$", "!.env*"],
+      "outputs": ["coverage/**"]
+    },
+    "test:int": {
+      "dependsOn": ["^build"],
+      "cache": false,
+      "passThroughEnv": [
+        "DATABASE_URL",
+        "DATABASE_MIGRATOR_URL",
+        "TEST_DATABASE_ADMIN_URL",
+        "REDIS_URL",
+        "SMTP_URL",
+        "MAILPIT_API_URL",
+        "AMADEUS_BASE_URL_TEST",
+        "STRIPE_*",
+        "VELEXIS_*"
+      ]
+    },
+    "contracts:lint": {
+      "inputs": ["openapi/**", "redocly.yaml"],
+      "outputs": []
+    },
+    "dev": {
+      "dependsOn": ["^build"],
+      "cache": false,
+      "persistent": true,
+      "passThroughEnv": ["*"]
+    },
+    "clean": {
+      "cache": false
+    }
+  }
+}

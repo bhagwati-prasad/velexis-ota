@@ -1,0 +1,147 @@
+# Manual deploy to the single VM (ADR-0007, ADR-0023, deployment-single-vm.md §8). Only the developer runs it.
+# Two jobs, so that no build or dependency code ever runs next to the root-equivalent deploy key:
+#   build  (no secrets, no environment): install, lint, typecheck, unit tests, build, pack-release.sh, then upload
+#          release-<sha>.tar as an artefact and publish its SHA-256 as a job output;
+#   deploy (environment "production": the developer's approval, the SSH secrets, branch policy main + v* tags):
+#          download the tarball, re-check its SHA-256 and SHA256SUMS, rsync it to /srv/velexis/incoming/<sha>/ as the
+#          deploy user, then `sudo /usr/local/sbin/velexis-deploy <sha>` (migrations, switch, restarts, rollback).
+# Run it from `main` or from a release tag (Actions > Deploy > "Use workflow from"); other refs are refused, and
+# tests always run. Third-party actions are pinned to full commit SHAs. Agents never run or change this workflow.
+name: Deploy
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+env:
+  CI: "true"
+  TURBO_TELEMETRY_DISABLED: "1"
+  NEXT_TELEMETRY_DISABLED: "1"
+
+jobs:
+  build:
+    name: Build and pack (no secrets)
+    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04 # same OS and glibc as the VM, so native modules (argon2) match
+    timeout-minutes: 40
+    outputs:
+      sha: ${{ steps.rel.outputs.sha }}
+      tarball_sha256: ${{ steps.pack.outputs.tarball_sha256 }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Resolve the release id
+        id: rel
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0; pnpm version from package.json
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version-file: .nvmrc
+          # No dependency cache here: a release is built only from the registry and the lockfile.
+
+      - name: Install (dependency install scripts only for the package.json "pnpm.onlyBuiltDependencies" allow-list)
+        run: pnpm install --frozen-lockfile
+
+      - name: Lint and typecheck
+        run: pnpm lint && pnpm typecheck
+
+      - name: Unit tests
+        run: pnpm test
+
+      - name: Build
+        run: pnpm build
+
+      - name: Pack the release
+        id: pack
+        env:
+          RELEASE_SHA: ${{ steps.rel.outputs.sha }}
+          RELEASE_REF: ${{ github.ref_name }}
+        run: |
+          bash deploy/scripts/pack-release.sh release
+          (cd "release/${RELEASE_SHA}" && sha256sum --quiet -c SHA256SUMS)
+          # tar keeps symlinks and modes, which an artefact upload would not.
+          tar -C release -cf "release-${RELEASE_SHA}.tar" "${RELEASE_SHA}"
+          echo "tarball_sha256=$(sha256sum "release-${RELEASE_SHA}.tar" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-${{ steps.rel.outputs.sha }}
+          path: release-${{ steps.rel.outputs.sha }}.tar
+          if-no-files-found: error
+          retention-days: 7
+
+  deploy:
+    name: Upload and activate
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    environment:
+      name: production
+      url: https://platform.example.com
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: release-${{ needs.build.outputs.sha }}
+
+      - name: Verify the artefact
+        env:
+          SHA: ${{ needs.build.outputs.sha }}
+          EXPECTED_SHA256: ${{ needs.build.outputs.tarball_sha256 }}
+        run: |
+          echo "${EXPECTED_SHA256}  release-${SHA}.tar" | sha256sum -c -
+          mkdir -p release
+          tar -C release -xf "release-${SHA}.tar"
+          (cd "release/${SHA}" && sha256sum --quiet -c SHA256SUMS)
+
+      - name: Configure SSH
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          install -d -m 0700 ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
+          chmod 0600 ~/.ssh/deploy_key
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 0644 ~/.ssh/known_hosts
+
+      - name: Upload to /srv/velexis/incoming/${{ needs.build.outputs.sha }}
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          SHA: ${{ needs.build.outputs.sha }}
+        run: |
+          rsync -a --delete --links --chmod=Du=rwx,Dg=rx,Do=,Fu=rw,Fg=r,Fo= \
+            -e "ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes -o BatchMode=yes" \
+            "release/${SHA}/" "${DEPLOY_USER}@${DEPLOY_HOST}:/srv/velexis/incoming/${SHA}/"
+
+      - name: Activate on the VM
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          SHA: ${{ needs.build.outputs.sha }}
+        run: |
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes -o BatchMode=yes \
+            "${DEPLOY_USER}@${DEPLOY_HOST}" "sudo /usr/local/sbin/velexis-deploy ${SHA}"
+
+      - name: Smoke check
+        env:
+          SHA: ${{ needs.build.outputs.sha }}
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+        run: |
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes -o BatchMode=yes \
+            "${DEPLOY_USER}@${DEPLOY_HOST}" "sudo /usr/local/sbin/velexis-deploy --status" | tee status.txt
+          grep -q "${SHA}" status.txt
+
+      - name: Remove the SSH key
+        if: always()
+        run: rm -f ~/.ssh/deploy_key

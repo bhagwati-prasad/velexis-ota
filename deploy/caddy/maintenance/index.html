@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="robots" content="noindex" />
+    <title>Velexis — back in a moment</title>
+    <!-- Served by Caddy (deploy/caddy/Caddyfile, snippet maintenance_page) when a Next.js app is restarting
+         or not deployed yet. In M0 it is also the "hello world" page of the first deploy. No scripts. -->
+    <style>
+      :root {
+        color-scheme: light dark;
+        --fg: #1f2937;
+        --muted: #6b7280;
+        --bg: #f9fafb;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --fg: #f3f4f6;
+          --muted: #9ca3af;
+          --bg: #111827;
+        }
+      }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        background: var(--bg);
+        color: var(--fg);
+        font:
+          16px/1.5 system-ui,
+          -apple-system,
+          "Segoe UI",
+          Roboto,
+          sans-serif;
+      }
+      main {
+        max-width: 32rem;
+        padding: 2rem 1rem;
+        text-align: center;
+      }
+      h1 {
+        font-size: 1.5rem;
+        margin: 0 0 0.5rem;
+      }
+      p {
+        color: var(--muted);
+        margin: 0;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>We will be right back</h1>
+      <p>This Velexis service is restarting or being updated. Please try again in a minute.</p>
+    </main>
+  </body>
+</html>

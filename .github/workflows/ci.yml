@@ -1,0 +1,183 @@
+# CI for every pull request and every push to main (ADR-0015, ADR-0020).
+# Jobs: plan-lint (no install), deploy-files (shellcheck, Caddyfile, systemd units), build-test (install, format,
+# lint, typecheck, unit, contracts up to date, integration with PostgreSQL 16 + Redis 7.4 + Mailpit, build, guards).
+# Agents never change this file to get their own change through (AGENTS.md §7).
+# Third-party actions are pinned to full commit SHAs (tag in the comment); Dependabot proposes updates (X-019).
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  CI: "true"
+  TURBO_TELEMETRY_DISABLED: "1"
+  NEXT_TELEMETRY_DISABLED: "1"
+
+jobs:
+  plan-lint:
+    name: Plan lint
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version-file: .nvmrc
+      - name: Validate the agent task plans
+        run: node tools/plan-lint/plan-lint.mjs
+
+  deploy-files:
+    name: Deploy files
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      CADDY_VERSION: "2.8.4"
+      CADDY_SHA512: "b8bec15d14fb033562af9f207850027bcbaa1f891edc9efe00d38bf39e1bf9944f8b6b8eba041ddd4c171cd70c905174c704d705be2f23bc678fe1eaf37a2485"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: shellcheck deploy scripts
+        run: shellcheck -S style deploy/scripts/*.sh
+      - name: Validate the Caddyfile with Caddy ${{ env.CADDY_VERSION }}
+        run: |
+          curl -fsSL -o /tmp/caddy.tgz "https://github.com/caddyserver/caddy/releases/download/v${CADDY_VERSION}/caddy_${CADDY_VERSION}_linux_amd64.tar.gz"
+          echo "${CADDY_SHA512}  /tmp/caddy.tgz" | sha512sum -c -
+          tar -xzf /tmp/caddy.tgz -C /tmp caddy
+          VELEXIS_EDGE_SECRET=ci /tmp/caddy validate --config deploy/caddy/Caddyfile --adapter caddyfile
+          /tmp/caddy fmt deploy/caddy/Caddyfile | diff -u deploy/caddy/Caddyfile -
+      - name: Verify systemd units
+        run: |
+          # Off the VM only the missing /usr/bin/node and helper paths are reported; anything else fails.
+          out="$(systemd-analyze verify --man=no deploy/systemd/*.service deploy/systemd/*.timer 2>&1 || true)"
+          echo "$out"
+          if echo "$out" | grep -v -E "Command /usr/(bin/node|local/sbin/velexis-[a-z]+) is not executable|velexis-alert@|caddy.service" | grep -q .; then
+            exit 1
+          fi
+
+  build-test:
+    name: Build and test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+      redis:
+        image: redis:7.4
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+      mailpit:
+        image: axllent/mailpit:v1.29
+        ports: ["1025:1025", "8025:8025"]
+    env:
+      APP_ENV: test
+      DATABASE_URL: postgres://velexis_platform_app:dev_platform@127.0.0.1:5432/velexis
+      DATABASE_MIGRATOR_URL: postgres://velexis_migrator:dev_migrator@127.0.0.1:5432/velexis
+      DATABASE_PROVISIONER_URL: postgres://velexis_provisioner:dev_provisioner@127.0.0.1:5432/velexis
+      TEST_DATABASE_ADMIN_URL: postgres://velexis_test_admin:dev_test_admin@127.0.0.1:5432/postgres
+      REDIS_URL: redis://127.0.0.1:6379/0
+      SMTP_URL: smtp://127.0.0.1:1025
+      MAILPIT_API_URL: http://127.0.0.1:8025
+      AMADEUS_BASE_URL_TEST: http://127.0.0.1:4900
+      PGPASSWORD: postgres
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 2 # the PR merge commit and its base parent, for the guards below
+
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0; pnpm version from package.json "packageManager"
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Restore the Turborepo cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: .turbo/cache
+          key: turbo-${{ runner.os }}-${{ github.sha }}
+          restore-keys: turbo-${{ runner.os }}-
+
+      - name: Bootstrap database roles and schemas
+        run: |
+          psql -h 127.0.0.1 -U postgres -X -q -v ON_ERROR_STOP=1 -v db_name=velexis \
+            -v migrator_password=dev_migrator -v provisioner_password=dev_provisioner \
+            -v platform_password=dev_platform -v ota_password=dev_ota \
+            -f deploy/postgres/bootstrap.sql
+          psql -h 127.0.0.1 -U postgres -X -q -v ON_ERROR_STOP=1 -c "CREATE ROLE velexis_test_admin LOGIN CREATEDB PASSWORD 'dev_test_admin'" \
+            -c "GRANT velexis_migrator TO velexis_test_admin"
+
+      - name: Generate local key files
+        run: if [ -f tools/dev/dev-keys.mjs ]; then pnpm dev:keys; fi
+
+      - name: Format
+        run: pnpm format:check
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Unit, contract and UI tests
+        run: pnpm test
+
+      - name: Generated files are up to date
+        run: |
+          pnpm contracts:generate
+          if [ -f packages/db/package.json ]; then pnpm db:migrate && pnpm db:codegen; fi
+          git diff --exit-code -- packages/api-types packages/errors packages/db/src/generated \
+            || { echo "::error::Generated files are stale. Run pnpm contracts:generate / pnpm db:codegen and commit."; exit 1; }
+
+      - name: Integration tests
+        run: pnpm test:int
+
+      - name: Build
+        run: pnpm build
+
+      - name: Pack a release folder (dry run of deploy/scripts/pack-release.sh)
+        run: |
+          RELEASE_SHA="${GITHUB_SHA}" bash deploy/scripts/pack-release.sh /tmp/release
+          (cd "/tmp/release/${GITHUB_SHA}" && sha256sum --quiet -c SHA256SUMS)
+
+      - name: Repository guards
+        run: |
+          # Session-level search_path changes are forbidden outside packages/db (ADR-0004).
+          if grep -rnEi --include='*.ts' --include='*.sql' 'set[[:space:]]+(session[[:space:]]+)?search_path' platform ota packages tools 2>/dev/null \
+               | grep -v '^packages/db/'; then
+            echo "::error::Session-level SET search_path outside packages/db"; exit 1
+          fi
+          # Baselines stay byte-for-byte copies of the reference DDL (ADR-0005).
+          for pair in "platform/backend/migrations/platform/0001_baseline.sql docs/velexis-sdk/db/platform.sql" \
+                      "platform/backend/migrations/reference/0001_baseline.sql docs/velexis-sdk/db/reference.sql" \
+                      "ota/backend/migrations/tenant/0001_baseline.sql docs/velexis-sdk/db/tenant.sql"; do
+            set -- $pair
+            if [ -f "$1" ]; then cmp "$1" "$2" || { echo "::error::$1 differs from $2"; exit 1; }; fi
+          done
+          # Reference material is never edited in a pull request.
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            if git diff --name-only HEAD^1 HEAD | grep -E '^docs/(velexis-sdk|amadeus-api)/'; then
+              echo "::error::docs/velexis-sdk and docs/amadeus-api are reference material and must not change"; exit 1
+            fi
+          fi

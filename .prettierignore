@@ -1,0 +1,31 @@
+# Files Prettier must never rewrite. Prettier 3 also skips everything in .gitignore.
+
+# Reference material: reuse, do not edit (decisions.md §3).
+docs/velexis-sdk/
+docs/amadeus-api/
+docs/ota-build/
+docs/*.html
+
+# Hand-written prose and plans keep their compact tables; plan-lint parses the plans.
+**/*.md
+
+# Generated files are compared byte for byte with the generator output in CI.
+packages/api-types/src/generated/
+packages/db/src/generated/
+packages/errors/src/generated/
+
+# OpenAPI documents are formatted by their own tooling (Redocly); never reflow them.
+**/openapi/
+
+# SQL migrations are copies of the reviewed reference DDL (checksummed).
+**/migrations/**/*.sql
+
+# Vendored datasets and recorded fixtures stay exactly as produced.
+tools/reference-data/data/
+tools/amadeus-stub/fixtures/
+
+pnpm-lock.yaml
+deploy/caddy/Caddyfile
+
+# Existing plain script with its own compact style (tools/plan-lint).
+tools/plan-lint/

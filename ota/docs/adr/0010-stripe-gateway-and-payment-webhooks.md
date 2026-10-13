@@ -1,0 +1,64 @@
+# OADR-0010: Stripe gateway and payment webhooks
+
+**Status:** Accepted
+**Date:** 2026-10-12
+**Deciders:** OTA backend tech lead. Decided during planning; revisit when a second payment provider is added, when Stripe disputes need handling in the OTA admin, or when the legal review of Velexis-collected payments changes the default mode (ADR-0011 follow-up).
+
+## Context
+
+[ADR-0011](../../../docs/mvp/adr/0011-payments-stripe-and-airline-card.md) fixes three Stripe account modes (`velexis` in M3; `connect_standard` and `api_keys` in M5), PaymentIntents with manual capture after the order exists, metadata `velexis_tenant_id`, `velexis_environment`, `checkout_id`, `payment_id`, a statement descriptor suffix in `velexis` mode, webhook verification on the raw body, de-duplication on `payment_events.provider_event_id`, `200` at once and processing in `ota-stripe-events`, and a `PaymentGateway` interface. The webhook endpoints are listed in [architecture flow (d)](../../../docs/mvp/architecture.md#d-stripe-webhooks-platform-billing-vs-ota-payments). Open: how a webhook finds its payment row, which events matter, the idempotency keys, what is re-fetched, and how the mode is chosen without per-tenant code.
+
+## Decision
+
+1. **Mode selection is data.** `StripeGateway` reads the tenant's cached `payment_provider_connections` row for the environment and builds a Stripe client:
+
+   | `account_mode` | API key | Extra header | Publishable key to the storefront |
+   |---|---|---|---|
+   | `velexis` | `STRIPE_SECRET_KEY_<ENV>` | — | `STRIPE_PUBLISHABLE_KEY_<ENV>` |
+   | `connect_standard` | `STRIPE_SECRET_KEY_<ENV>` | `Stripe-Account: <account_reference>` (direct charges) | Velexis's, with `accountId` |
+   | `api_keys` | Decrypted connection secret (inside the gateway only) | — | The connection's publishable key |
+
+   The `stripe` SDK is created with a pinned `apiVersion`, 10 s timeout and `maxNetworkRetries: 1` (safe because every POST carries an idempotency key).
+2. **Payment rows first.** `createSession` inserts the `payments` row (`requires_payment_method`) and commits **before** calling Stripe, so a webhook can always find the row through `metadata.payment_id`; the PaymentIntent id is stored right after the call.
+3. **Idempotency keys** (Stripe `Idempotency-Key`): `pi:create:<pay_id>`, `pi:update:<pay_id>:<version>`, `pi:capture:<pay_id>:<amount>`, `pi:cancel:<pay_id>`, `refund:<rfd_id>`.
+4. **Webhook receivers** (`payments/webhooks/*.controller.ts`, raw body):
+   - verify the signature with the secret of the endpoint (`velexis/{test,live}`: environment secrets; `connect/{test,live}`: Connect secrets; `c/<ppc_id>`: that connection's encrypted webhook secret);
+   - find the tenant (`metadata.velexis_tenant_id`, or `event.account` → connection, or the path's connection id) and the payment (`metadata.payment_id`, then `provider_payment_id`);
+   - in one tenant transaction insert a `payment_events` row (`source = webhook`, `type = webhook.<event type>`, `provider_event_id`, redacted payload); a unique violation means a duplicate;
+   - answer `200`, then enqueue `stripe.event {tenantId, paymentEventId}` with job id = Stripe event id;
+   - an unknown tenant or payment is logged and acknowledged with `200`.
+5. **Processing re-fetches.** The `ota-stripe-events` processor never trusts the event body: it retrieves the PaymentIntent, charge or refund from Stripe and applies the state with the payment's `version` lock. Handled types: `payment_intent.amount_capturable_updated` (authorized), `payment_intent.succeeded` (captured), `payment_intent.payment_failed`, `payment_intent.canceled`, `charge.refunded` and `charge.refund.updated` (refund rows), `charge.dispute.created` (staff alert only in the MVP). Other types are stored and ignored.
+6. **Voids and retries** run in `ota-payments`: `payment.void` (checkout expiry, Amadeus rejection after authorisation, reconciliation not found), `payment.capture_retry`, `refund.submit`. Each job re-reads the row and does nothing if the state already moved.
+7. **3-D Secure:** `payment_method_options.card.request_three_d_secure = automatic`, or `any` when `storefront_settings.require_3ds`. The 3-D Secure outcome is copied to `payments.three_ds` for display; it is not forwarded to Amadeus (the OTA-merchant model uses `other` forms of payment).
+8. **What never happens:** card data reaching the backend on this path (Stripe.js collects it), refunds from the storefront (only cancellations trigger them), or a PaymentIntent without the tenant metadata.
+
+## Consequences
+
+### Positive
+
+- The same code serves all three modes; switching an OTA to its own Stripe is a platform data change plus an invalidation.
+- Webhooks are cheap and safe to retry; state comes from Stripe, not from event order.
+- Every Stripe write is idempotent, so the SDK's single network retry and our job retries cannot double-charge or double-refund.
+
+### Negative
+
+- Two Stripe calls per webhook (event + re-fetch) cost API quota; acceptable at MVP volume.
+- Disputes are only alerted, not managed, in the MVP.
+- Settlement of Velexis-collected funds is the platform's job from Stripe balance transactions; the OTA admin shows payments, not payouts.
+
+### Follow-ups
+
+- M5: Connect and API-key endpoints, tests with fixtures for each mode.
+- Dispute handling screens after launch.
+
+## Alternatives considered
+
+- **Trust webhook bodies.** Simpler, but event order is not guaranteed and bodies can be stale.
+- **An inbox table separate from `payment_events`.** The baseline table already has the unique provider event id that ADR-0011 names.
+- **Create the PaymentIntent before the row.** A fast webhook could arrive for a payment the backend does not know yet.
+
+## References
+
+- [ADR-0011](../../../docs/mvp/adr/0011-payments-stripe-and-airline-card.md), [ADR-0009](../../../docs/mvp/adr/0009-background-jobs-bullmq.md), [PADR-0011](../../../platform/docs/adr/0011-stripe-connect-standard-and-api-key-connections.md)
+- [`../api-changes.md`](../api-changes.md) §4, [`../api-changes-console-and-internal.md`](../api-changes-console-and-internal.md) §3, §5
+- [`../flows/checkout-stripe.md`](../flows/checkout-stripe.md), [`../flows/change-and-cancel.md`](../flows/change-and-cancel.md)

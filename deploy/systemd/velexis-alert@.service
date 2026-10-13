@@ -1,0 +1,15 @@
+# velexis-alert@.service — sends an e-mail when a unit enters the failed state (ADR-0016).
+# Every Velexis unit has OnFailure=velexis-alert@%n.service; %i is the failed unit's name.
+# Runs the root-owned copy of deploy/scripts/alert.sh installed as /usr/local/sbin/velexis-alert.
+[Unit]
+Description=Velexis failure alert for %i
+
+[Service]
+Type=oneshot
+User=root
+EnvironmentFile=/etc/velexis/alert.env
+ExecStart=/usr/local/sbin/velexis-alert unit-failed %i
+TimeoutStartSec=2min
+SyslogIdentifier=velexis-alert
+NoNewPrivileges=yes
+PrivateTmp=yes
