@@ -3,7 +3,7 @@
 **Status:** Accepted
 **Date:** 2026-10-12
 **Deciders:** Product owner (solo developer driving AI coding agents, plain Markdown plans), program manager (master roadmap). Decided during planning; revisit when M1 is done and the review hours actually spent per task size are known, or when an outside approval (Amadeus, Stripe, legal, PCI) is refused.
-**Revisions:** 2026-10-12 (planning review): eight new foundation tasks (298 tasks, 1,392 agent-hours, calendars unchanged); X-026 and X-027 tagged M1; OBE-016 added to the PBE-036 gate; OBE-007 placed in the M1 block; explicit launch exceptions; item 6 amends [ADR-0020](0020-ai-agent-development-workflow.md); new item 7 on where demos run.
+**Revisions:** 2026-10-12 (planning review): eight new foundation tasks (298 tasks, 1,392 agent-hours, calendars unchanged); X-026 and X-027 tagged M1; OBE-016 added to the PBE-036 gate; OBE-007 placed in the M1 block; explicit launch exceptions; item 6 amends [ADR-0020](0020-ai-agent-development-workflow.md); new item 7 on where demos run. 2026-10-13 (review fixes): PBE-066, OBE-090 and OBE-091 added and M3 storefront tasks re-ordered (301 tasks, 1,406 agent-hours, calendars unchanged; see the roadmap change log).
 
 ## Context
 

@@ -59,14 +59,14 @@ flowchart TD
 
 ## 5. Baseline numbers
 
-`node tools/plan-lint/plan-lint.mjs` on 2026-10-12, after the planning review: `tasks: 298  estimated hours: 1392`, `ERRORS: 0`, critical path 162 h over 29 tasks.
+`node tools/plan-lint/plan-lint.mjs` on 2026-10-13, after the review fixes: `tasks: 301  estimated hours: 1406`, `ERRORS: 0`, critical path 162 h over 29 tasks.
 
 | Plan | Tasks | Agent-hours | Solo days |
 |---|---|---|---|
 | Foundation (`X-`) | 40 | 170 | 42.5 |
-| Platform (`PBE-` 65, `PFE-` 28, `PAD-` 16) | 109 | 542 | 135.5 |
-| OTA (`OBE-` 89, `OFE-` 26, `OAD-` 19, `SDK-` 15) | 149 | 680 | 170 |
-| **Total** | **298** | **1,392** | **348** |
+| Platform (`PBE-` 66, `PFE-` 28, `PAD-` 16) | 110 | 552 | 138 |
+| OTA (`OBE-` 91, `OFE-` 26, `OAD-` 19, `SDK-` 15) | 151 | 684 | 171 |
+| **Total** | **301** | **1,406** | **351.5** |
 
 Calendars: **30 working weeks** with AI agents, **76 working weeks** without ([`roadmap.md`](roadmap.md) §1).
 

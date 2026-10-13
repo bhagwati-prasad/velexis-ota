@@ -1,10 +1,10 @@
 # Velexis MVP roadmap
 
-This is the master plan for the whole Velexis MVP: the shared foundation and both component groups (platform and OTA). It turns the 298 agent tasks of the three task plans into a calendar for one developer, with AI coding agents (30 working weeks) and without them (76 working weeks). For every milestone it gives the ordered batches of tasks that can run in parallel, the human review gates, the demo and the go/no-go criteria. It explains the critical path and the biggest risks, with the earliest task that retires each one. It ends with a first-week checklist, the rules for keeping the plans current, and a summary of tasks and hours per component. It does not redefine any task: ids, dependencies and sizes come from the task plans, scope and exit criteria come from the two implementation plans, and everything follows [`decisions.md`](../decisions.md).
+This is the master plan for the whole Velexis MVP: the shared foundation and both component groups (platform and OTA). It turns the 301 agent tasks of the three task plans into a calendar for one developer, with AI coding agents (30 working weeks) and without them (76 working weeks). For every milestone it gives the ordered batches of tasks that can run in parallel, the human review gates, the demo and the go/no-go criteria. It explains the critical path and the biggest risks, with the earliest task that retires each one. It ends with a first-week checklist, the rules for keeping the plans current, and a summary of tasks and hours per component. It does not redefine any task: ids, dependencies and sizes come from the task plans, scope and exit criteria come from the two implementation plans, and everything follows [`decisions.md`](../decisions.md).
 
 Related: [`README.md`](README.md) (index of all plans), [`foundation-tasks.md`](foundation-tasks.md), the platform [implementation plan](../../../platform/docs/plans/implementation-plan.md), [agent tasks](../../../platform/docs/plans/agent-tasks.md) and [solo plan](../../../platform/docs/plans/solo-developer-plan.md), the OTA [implementation plan](../../../ota/docs/plans/implementation-plan.md), [agent tasks](../../../ota/docs/plans/agent-tasks.md) and [solo plan](../../../ota/docs/plans/solo-developer-plan.md), [`../README.md`](../README.md#1-shared-milestones) (milestone definitions), [`AGENTS.md`](../../../AGENTS.md), [ADR-0020](../adr/0020-ai-agent-development-workflow.md) (agent workflow) and [ADR-0025](../adr/0025-roadmap-scheduling-and-tracking.md) (the scheduling rules decided while writing this roadmap).
 
-**Baseline (2026-10-12, after the planning review).** `node tools/plan-lint/plan-lint.mjs --graph` prints `tasks: 298  estimated hours: 1392`, `ERRORS: 0`, and a critical path of 162 h over 29 tasks. The first baseline of the same day had 290 tasks and 1,350 hours ([§4.5](#45-change-log)).
+**Baseline (2026-10-13, after the review fixes).** `node tools/plan-lint/plan-lint.mjs --graph` prints `tasks: 301  estimated hours: 1406`, `ERRORS: 0`, and a critical path of 162 h over 29 tasks. Earlier baselines: 290 tasks and 1,350 hours (first draft, 2026-10-12), then 298 tasks and 1,392 hours (planning review, 2026-10-12) ([§4.5](#45-change-log)).
 
 ## Contents
 
@@ -25,31 +25,31 @@ Related: [`README.md`](README.md) (index of all plans), [`foundation-tasks.md`](
 | Developer time per task | **S 0.75 h, M 1.5 h, L 3 h**: about 10 minutes of hand-off, review of the PR against the acceptance criteria and the [security checklist](../conventions.md#12-security-checklist-every-pr), one fix-up round, merge. **Plus 25 %** for re-runs and second rounds. | S ½ day, M 1 day, L 2 days, as in both solo plans |
 | Agent time per task | S about 1 h, M about 2 h, L about 4 h of wall-clock including CI. It is not on the developer's clock. | — |
 | Agents in parallel | **3**. Review is the bottleneck, so a fourth agent adds a review queue, not speed. | — |
-| Work to do | 522 h of review plus 130.5 h of rework = **653 developer-hours**, or 21.8 weeks at 30 h | 348 task days, or 69.6 weeks |
-| Buffer | About 20 % per milestone, rounded up to whole weeks, plus account set-up in M0 and the launch in M6: **8.2 weeks** in all | The solo plans' buffers (11.5 platform days, 17 OTA days) plus what is left of the foundation, M1 and launch buffers: **32 days** (about 8 %) |
+| Work to do | 527 h of review plus 132 h of rework = **659 developer-hours**, or 22.0 weeks at 30 h | 351.5 task days, or 70.3 weeks |
+| Buffer | About 20 % per milestone, rounded up to whole weeks, plus account set-up in M0 and the launch in M6: **8.0 weeks** in all | The solo plans' buffers (11.5 platform days, 17 OTA days) plus what is left of the foundation, M1 and launch buffers: **28.5 days** (about 7.5 %) |
 | Milestone order | Strictly M0 → M6: a milestone's batches start after the previous go/no-go, with one exception ([§2.0](#20-how-to-read-and-run-the-batches)) | The weeks of both solo plans, mapped to calendar weeks in [§1.3](#13-calendar-without-agents-76-working-weeks) |
 | Example dates | Start on Monday 19 October 2026, with a two-week break at the year end | Start on Monday 19 October 2026, with two-week breaks at the 2026 and 2027 year ends and in August 2027 |
 
 The plan-lint sizes (S 2 h, M 4 h, L 8 h of agent and review time) are kept below as **agent-hours**, so that the figures match the group plans. They are not the developer's time.
 
-A small simulation of this model (3 agents, 6 review hours a day, critical-path tasks first, strict milestone order, gates as dependencies) finishes the 298 tasks in 17.8 to 18 working weeks of pure review throughput with anything from 2 to 6 agents. It includes the parallel-work rule of [ADR-0020](../adr/0020-ai-agent-development-workflow.md): tasks that share a source file run one after the other, while registry files, generated files, workflows, Markdown sections and folder entries do not block. If every shared file blocked, it would take 19.2 to 19.4 weeks. The calendar below adds rework, buffer and the non-task work.
+A small simulation of this model (3 agents, 6 review hours a day, critical-path tasks first, strict milestone order, gates as dependencies) finished the 298 tasks of the planning-review baseline in 17.8 to 18 working weeks of pure review throughput with anything from 2 to 6 agents; the three tasks added since (PBE-066, OBE-090, OBE-091: 12 agent-hours, about 6 review hours) add roughly one review day. It includes the parallel-work rule of [ADR-0020](../adr/0020-ai-agent-development-workflow.md): tasks that share a source file run one after the other, while registry files, generated files, workflows, Markdown sections and folder entries do not block. If every shared file blocked, it would take 19.2 to 19.4 weeks. The calendar below adds rework, buffer and the non-task work.
 
 ### 1.2 Calendar with AI agents: 30 working weeks
 
 | Milestone | Weeks | Length | Example dates | Tasks | Agent-hours | Developer hours (review + 25 %) | Buffer (weeks × 30 h − developer hours) |
 |---|---|---|---|---|---|---|---|
 | M0 Foundations | W1–W3 | 3 | 19 Oct – 6 Nov 2026 | 31 | 130 | 61 | 29 h, which includes account set-up and the VM |
-| M1 Platform core | W4–W10 | 7 | 9 Nov 2026 – 8 Jan 2027 | 68 | 350 | 164 | 46 h |
+| M1 Platform core | W4–W10 | 7 | 9 Nov 2026 – 8 Jan 2027 | 69 | 360 | 169 | 41 h |
 | M2 Search & price | W11–W14 | 4 | 11 Jan – 5 Feb 2027 | 38 | 170 | 80 | 40 h |
 | M3 Book & pay | W15–W19 | 5 | 8 Feb – 12 Mar 2027 | 47 | 232 | 109 | 41 h |
-| M4 OTA admin | W20–W23 | 4 | 15 Mar – 9 Apr 2027 | 44 | 192 | 90 | 30 h |
+| M4 OTA admin | W20–W23 | 4 | 15 Mar – 9 Apr 2027 | 46 | 196 | 92 | 28 h |
 | M5 Monetisation & self-service | W24–W27 | 4 | 12 Apr – 7 May 2027 | 44 | 206 | 97 | 23 h |
 | M6 Hardening & launch | W28–W30 | 3 | 10 – 28 May 2027 | 26 | 112 | 52 | 38 h: three green nightly runs, human steps (SSH second factor, WAF week, restore drill), launch |
-| **Total** | | **30** | | **298** | **1,392** | **653** | **247 h** |
+| **Total** | | **30** | | **301** | **1,406** | **659** | **240 h** |
 
 Why these lengths:
 
-- **M1** is the largest milestone (68 tasks, 15 batches). Its four checkpoint demos keep it reviewable.
+- **M1** is the largest milestone (69 tasks, 16 batches). Its four checkpoint demos keep it reviewable.
 - **M2** is short in hours but 13 batches deep: one chain runs from the M2 contract to the storefront journey. It gets a fourth week so the chain can move one task a day.
 - **M3** holds the money and card code. Those PRs get the slowest, most careful reviews.
 - **M6** has little code but needs three consecutive green nightly runs, a restore drill and the launch itself.
@@ -208,18 +208,19 @@ A **no-go** means: start no new batch; fix the problem and repeat the check insi
 | B1 | W4 | **PBE-002**, PBE-004, PBE-005, OBE-004, X-024\*, X-025, X-026, X-035 |
 | B2 | W4–W5 | **OBE-003**, PBE-003, PBE-006, PFE-002, PFE-014, OBE-002, X-027 |
 | B3 | W5 | PBE-007, PFE-003, OBE-005 |
-| B4 | W5 | PBE-008, OBE-006 |
-| B5 | W5–W6 | PBE-009, PBE-010, PBE-012 |
-| B6 | W6 | PBE-011, PBE-017 |
-| B7 | W6 | PBE-013, PBE-020, PBE-021, PBE-025, PFE-004 |
-| B8 | W6–W7 | PBE-014, PBE-018, PBE-026, PFE-005 |
-| B9 | W7 | PBE-015, PBE-016, PBE-019 |
-| B10 | W7 | PBE-022, PBE-028, PFE-006 |
-| B11 | W7–W8 | PBE-023, PBE-024, PBE-027, PBE-029, PBE-032, PBE-033, PFE-007, PFE-008, PAD-002 |
-| B12 | W8–W9 | PBE-030, PBE-031, PBE-034, PFE-009, PFE-010, PAD-003 |
-| B13 | W9–W10 | PBE-035^, OBE-007, PFE-011, PFE-012, PFE-013, PAD-004, PAD-006, PAD-007, PAD-008, PAD-009 |
-| B14 | W10 | PFE-015, PAD-005 |
-| B15 | W10 | PAD-010 |
+| B4 | W5 | OBE-006, PBE-066 |
+| B5 | W5 | PBE-008 |
+| B6 | W5–W6 | PBE-009, PBE-010, PBE-012 |
+| B7 | W6 | PBE-011, PBE-017 |
+| B8 | W6 | PBE-013, PBE-020, PBE-021, PBE-025, PFE-004 |
+| B9 | W6–W7 | PBE-014, PBE-018, PBE-026, PFE-005 |
+| B10 | W7 | PBE-015, PBE-016, PBE-019 |
+| B11 | W7 | PBE-022, PBE-028, PFE-006 |
+| B12 | W7–W8 | PBE-023, PBE-024, PBE-027, PBE-029, PBE-032, PBE-033, PFE-007, PFE-008, PAD-002 |
+| B13 | W8–W9 | PBE-030, PBE-031, PBE-034, PFE-009, PFE-010, PAD-003 |
+| B14 | W9–W10 | PBE-035^, OBE-007, PFE-011, PFE-012, PFE-013, PAD-004, PAD-006, PAD-007, PAD-008, PAD-009 |
+| B15 | W10 | PFE-015, PAD-005 |
+| B16 | W10 | PAD-010 |
 
 The OTA provisioning worker (OBE-002 … OBE-006) lands in B1–B4, long before PBE-035 needs it in B13. The Amadeus stub (X-026, X-027) lands in B1–B2, before PBE-020 (B7) verifies credentials against it and before the end-to-end harness (PFE-014) starts it. With agents, the cross-group wait that shapes both solo plans disappears. The milestone's longest chain is the platform path from contract to pipeline, identity and admin (PBE-005 … PAD-010, [§3.2](#32-longest-chain-inside-each-milestone)). With the example dates, the year-end break falls between W9 and W10.
 
@@ -292,12 +293,12 @@ M2 is the deepest milestone for its size. Keep the OBE chain moving every day, a
 | B3 | W16 | **OBE-038**, PFE-016, OBE-034, OBE-035, OBE-037, SDK-008 |
 | B4 | W16–W17 | **OBE-042**, OBE-039, OBE-050, OFE-009, OFE-011 |
 | B5 | W17 | **OBE-046**, OBE-040, OBE-044, OBE-045, OBE-053, OFE-010, OFE-012 |
-| B6 | W17–W18 | **OBE-047**, OBE-043, OBE-055, OFE-013 |
-| B7 | W18 | **OBE-048**, OBE-051, OBE-054, OBE-056, OFE-017 |
+| B6 | W17–W18 | **OBE-047**, OBE-043, OBE-055 |
+| B7 | W18 | OFE-013, **OBE-048**, OBE-051, OBE-054, OBE-056 |
 | B8 | W18 | **OBE-049**, OFE-014 |
-| B9 | W18–W19 | OBE-052, OBE-057, OFE-015, OFE-018 |
-| B10 | W19 | OFE-016 |
-| B11 | W19 | OFE-019 |
+| B9 | W18–W19 | OBE-052, OBE-057, OFE-015 |
+| B10 | W19 | OFE-017, OFE-016 |
+| B11 | W19 | OFE-018, OFE-019 |
 
 **Human review gates.**
 
@@ -330,7 +331,7 @@ M2 is the deepest milestone for its size. Keep the OBE chain moving every day, a
 | Batch | Target week | Tasks |
 |---|---|---|
 | B1 | W20 | PBE-039, PBE-040, OBE-058 |
-| B2 | W20 | PFE-017, PFE-018, OBE-059, SDK-011 |
+| B2 | W20 | PFE-017, PFE-018, OBE-059, SDK-011, OBE-090, OBE-091 |
 | B3 | W20 | OBE-060, OBE-074, SDK-012, OAD-002 |
 | B4 | W20–W21 | OBE-061, OBE-065, OBE-066, OBE-067, OBE-068, OBE-069, OBE-070, OBE-073, SDK-013, OAD-003 |
 | B5 | W21 | OBE-062, OBE-064, OBE-071, OAD-004 |
@@ -461,23 +462,23 @@ flowchart LR
 What it means in practice:
 
 1. **It is an OTA-backend spine.** 16 of the 29 tasks are OTA backend tasks. The platform feeds it only through PBE-002, the platform `0002` migration.
-2. **It sets the order, not the length, of the agent calendar.** 162 agent-hours are about 29 review cycles, roughly 6 working weeks if nothing else ran. The 653 review hours set the 30 weeks. In every batch, start critical tasks first and review them the same day.
+2. **It sets the order, not the length, of the agent calendar.** 162 agent-hours are about 29 review cycles, roughly 6 working weeks if nothing else ran. The 659 review hours set the 30 weeks. In every batch, start critical tasks first and review them the same day.
 3. **Milestone gates make the per-milestone chains matter.** Because each milestone waits for the previous go/no-go, the chain that counts is the sum of each milestone's longest chain ([§3.2](#32-longest-chain-inside-each-milestone)): 390 agent-hours over 66 tasks. That is still well inside the calendar, but M1 and M2 hold the deepest chains.
 4. **The L tasks on the path need fast reviews.** OBE-012, OBE-018, OBE-021, OBE-023, OBE-036, OBE-038, OBE-042, OBE-049, OBE-063 and OAD-008 are L tasks with heavy reviews. Review them first thing in the day, so that their successors start the same day.
-5. **Without agents** the path is 40.5 developer-days, done in sequence anyway. The total of 348 days sets that calendar.
+5. **Without agents** the path is 40.5 developer-days, done in sequence anyway. The total of 351.5 days sets that calendar.
 
 ### 3.2 Longest chain inside each milestone
 
 | Milestone | Chain | Agent-hours | Batches |
 |---|---|---|---|
 | M0 | X-001 → X-002 → X-010 → X-011 → X-012 → X-013 → X-015 | 38 | 7 |
-| M1 | PBE-005 → PBE-006 → PBE-007 → PBE-008 → PBE-009 → PBE-011 → PBE-013 → PBE-014 → PBE-015 → PBE-028 → PAD-002 → PAD-003 → PAD-004 → PAD-005 → PAD-010 | 100 | 15 |
+| M1 | PBE-005 → PBE-006 → PBE-007 → PBE-066 → PBE-008 → PBE-009 → PBE-011 → PBE-013 → PBE-014 → PBE-015 → PBE-028 → PAD-002 → PAD-003 → PAD-004 → PAD-005 → PAD-010 | 108 | 16 |
 | M2 | OBE-009 → OBE-010 → OBE-011 → OBE-012 → OBE-017 → OBE-018 → OBE-021 → OBE-022 → OBE-023 → OFE-006 → OFE-007 → OFE-008 → PAD-011 | 70 | 13 |
-| M3 | OBE-031 → OBE-036 → OBE-038 → OBE-042 → OBE-046 → OBE-047 → OBE-048 → OBE-049 → OFE-015 → OFE-016 → OFE-019 | 62 | 11 |
+| M3 | OBE-031 → OBE-036 → OBE-038 → OBE-042 → OBE-046 → OBE-047 → OBE-048 → OBE-049 → OFE-015 → OFE-017 → OFE-018 | 64 | 11 |
 | M4 | OBE-058 → OBE-059 → OBE-060 → OBE-061 → OBE-062 → OBE-063 → OAD-008 → OAD-016 → PFE-019 | 52 | 10 |
 | M5 | PBE-041 → PBE-042 → PBE-043 → PBE-044 → PBE-045 → PBE-046 → PBE-048 → PAD-012 → PAD-015 | 52 | 9 |
 | M6 | X-039 → X-038 (and OBE-084 → OBE-089, OBE-084 → OBE-086) | 16 | 3 |
-| **Sum** | | **390** | |
+| **Sum** | | **400** | |
 
 The chains count the gates of §2.0 as dependencies (PAD-011 and PFE-019 end their chains for that reason).
 
@@ -496,7 +497,7 @@ The chains count the gates of §2.0 as dependencies (PAD-011 and PFE-019 end the
 | Risk | Mitigation |
 |---|---|
 | Review becomes the bottleneck and quality drops | Keep three agents. Run the second-agent review pass of X-036 on the M3 deep-review PRs (required) and on other deep-review PRs when review falls behind. Recalibrate review hours after M1 ([§4.3](#43-keeping-the-plans-current)). |
-| M1 (68 tasks) hides slippage | Four checkpoint demos (M1a–M1d) and a weekly check of the longest chain |
+| M1 (69 tasks) hides slippage | Four checkpoint demos (M1a–M1d) and a weekly check of the longest chain |
 | A task adds an env variable and the next deploy fails | `velexis-deploy` and `check-vm.sh` compare `/etc/velexis` with the templates and name what is missing; every milestone's human steps include adding the new variables before the deploy |
 | The plans drift from the code | Status changes inside each task's PR, plan-lint in CI, the weekly review |
 | A cross-group gate is not met (OF-11, OF-01, OF-09, OF-12) | The batches put the gate's tasks first; never fake the other side ([AGENTS.md](../../../AGENTS.md) §3) |
@@ -573,6 +574,7 @@ Without agents: day 1 is the same, then work through the foundation block in bat
 |---|---|
 | 2026-10-12 | Baseline: 290 tasks, 1,350 agent-hours; 30 working weeks with agents, 76 without ([ADR-0025](../adr/0025-roadmap-scheduling-and-tracking.md)). |
 | 2026-10-12 | Planning review: eight new foundation tasks (X-033 users per trust zone, X-034 fixture recording, X-035 plan-lint progress, X-036 second-agent review, X-037 SSH second factor, X-038 off-VM security logs, X-039 WAF, X-040 master-key rotation) and X-021 resized to M: 298 tasks, 1,392 agent-hours. X-026 and X-027 retagged M1 (PBE-020 and the M1 harness use the stub). OBE-016 added to the PBE-036 gate; PBE-036 moved to M2 B7. OBE-007 placed in C27. Demos split into VM and local-stack parts; launch exceptions PBE-064 and OBE-086 named. Calendars unchanged: the buffers absorb the work (agent calendar 247 h, calendar without agents 32 days). |
+| 2026-10-13 | Review fixes: PBE-066 (M1 platform OpenAPI operations, L) inserted before PBE-008, so M1 has 16 batches (B5–B16 keep their weeks); OBE-058 split into OBE-058, OBE-090 and OBE-091 (M4 B2); OFE-017 now follows OFE-015 and OFE-018 follows OFE-017 (M3 B7–B11 re-batched). 301 tasks, 1,406 agent-hours, 659 developer-hours; calendars unchanged (agent buffer 240 h, calendar without agents 28.5 buffer days). |
 
 ## 5. Summary
 
@@ -583,14 +585,14 @@ Each cell reads tasks / agent-hours (plan-lint sizes). Developer hours are the a
 | Component | M0 | M1 | M2 | M3 | M4 | M5 | M6 | Tasks | Agent-hours | Developer hours | Solo days |
 |---|---|---|---|---|---|---|---|---|---|---|---|
 | Foundation (`X-`) | 24 / 106 | 5 / 18 | 2 / 6 | 1 / 4 | — | — | 8 / 36 | 40 | 170 | 80 | 42.5 |
-| Platform backend (`PBE-`) | 1 / 4 | 34 / 196 | 1 / 4 | 2 / 4 | 2 / 6 | 21 / 112 | 4 / 18 | 65 | 344 | 161 | 86 |
+| Platform backend (`PBE-`) | 1 / 4 | 35 / 206 | 1 / 4 | 2 / 4 | 2 / 6 | 21 / 112 | 4 / 18 | 66 | 354 | 166 | 88.5 |
 | Portal (`PFE-`) | 1 / 4 | 14 / 66 | — | 1 / 2 | 3 / 10 | 8 / 36 | 1 / 8 | 28 | 126 | 59 | 31.5 |
 | Platform admin (`PAD-`) | 1 / 2 | 9 / 44 | 1 / 2 | — | — | 4 / 20 | 1 / 4 | 16 | 72 | 34 | 18 |
-| OTA backend (`OBE-`) | 1 / 4 | 6 / 26 | 21 / 98 | 29 / 160 | 18 / 88 | 8 / 28 | 6 / 26 | 89 | 430 | 202 | 107.5 |
+| OTA backend (`OBE-`) | 1 / 4 | 6 / 26 | 21 / 98 | 29 / 160 | 20 / 92 | 8 / 28 | 6 / 26 | 91 | 434 | 203 | 108.5 |
 | Storefront (`OFE-`) | 1 / 4 | — | 7 / 32 | 11 / 50 | 1 / 4 | 2 / 6 | 4 / 12 | 26 | 108 | 51 | 27 |
 | OTA admin (`OAD-`) | 1 / 4 | — | — | — | 16 / 70 | 1 / 4 | 1 / 4 | 19 | 82 | 38 | 20.5 |
 | JS SDK (`SDK-`) | 1 / 2 | — | 6 / 28 | 3 / 12 | 4 / 14 | — | 1 / 4 | 15 | 60 | 28 | 15 |
-| **Total** | **31 / 130** | **68 / 350** | **38 / 170** | **47 / 232** | **44 / 192** | **44 / 206** | **26 / 112** | **298** | **1,392** | **653** | **348** |
+| **Total** | **31 / 130** | **69 / 360** | **38 / 170** | **47 / 232** | **46 / 196** | **44 / 206** | **26 / 112** | **301** | **1,406** | **659** | **351.5** |
 | Calendar with agents | W1–W3 | W4–W10 | W11–W14 | W15–W19 | W20–W23 | W24–W27 | W28–W30 | 30 weeks | | | |
 | Calendar without agents | C1–C9 | C10–C27 | C28–C36 | C37–C48 | C49–C59 | C59–C70 | C71–C76 | 76 weeks | | | |
 
