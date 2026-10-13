@@ -12,13 +12,20 @@
 #   sudo bash /tmp/velexis-deploy/scripts/provision-vm.sh --steps scripts,caddy    # re-run selected steps only
 #
 # Steps: packages harden users node postgres redis caddy keys database envfiles scripts caddyconf summary
+#
+# Users (ADR-0026, task X-033): one system user per trust zone (velexis-platform, velexis-ota, velexis-portal,
+# velexis-platform-admin, velexis-ota-admin) and the group velexis, which only lets them read releases. Keys live in
+# one folder per backend zone; env files are root:root 0600 and read by systemd only.
+#
+# Tests only: VELEXIS_ROOT=<absolute folder> moves every Velexis path (/etc/velexis, /srv/velexis, /var/lib/velexis,
+# /var/log/velexis, /var/backups/velexis, /usr/local/sbin and the deploy sudoers file) under that folder, and allows
+# only the steps users, keys and envfiles (deploy/systemd/test/units-smoke.sh). The system users are real.
 # =====================================================================================================
 set -euo pipefail
 
 # ---- Placeholders: override through the environment ---------------------------------------------------
 : "${ADMIN_USER:=ubuntu}"                 # existing sudo user of the cloud image; keeps SSH access
 : "${DEPLOY_USER:=deploy}"                # GitHub Actions uploads releases and runs velexis-deploy as this user
-: "${APP_USER:=velexis}"                  # every app runs as this system user (ADR-0007)
 : "${DEPLOY_SSH_PUBKEY_FILE:=}"           # public half of the GitHub Actions deploy key (required on first run)
 : "${SSH_ALLOW_FROM:=any}"                # CIDR for SSH; "any" because GitHub-hosted runners have changing IPs
 : "${DB_NAME:=velexis}"
@@ -27,9 +34,23 @@ set -euo pipefail
 : "${PG_MAJOR:=16}"
 : "${REDIS_PIN:=6:7.4*}"                  # packages.redis.io version string of Redis 7.4
 : "${CADDY_PIN:=2.8*}"
+: "${VELEXIS_ROOT:=}"                     # tests only, see the header; empty on the VM
 
 DEPLOY_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-SECRETS_FILE=/etc/velexis/.provision-secrets   # generated passwords, root 0600, reused on every run
+ETC="$VELEXIS_ROOT/etc/velexis"
+SRV="$VELEXIS_ROOT/srv/velexis"
+LIB="$VELEXIS_ROOT/var/lib/velexis"
+LOGS="$VELEXIS_ROOT/var/log/velexis"
+BACKUPS="$VELEXIS_ROOT/var/backups/velexis"
+SBIN="$VELEXIS_ROOT/usr/local/sbin"
+SUDOERS_DIR="$VELEXIS_ROOT/etc/sudoers.d"
+SECRETS_FILE="$ETC/.provision-secrets"   # generated passwords, root 0600, reused on every run
+
+# One system user per trust zone (ADR-0026). An API and its worker share their zone's user.
+PLATFORM_USER=velexis-platform             # velexis-platform-api, velexis-platform-worker; keys/platform
+OTA_USER=velexis-ota                       # velexis-ota-api, velexis-ota-worker; keys/ota and the storage folder
+ZONE_USERS="$PLATFORM_USER $OTA_USER velexis-portal velexis-platform-admin velexis-ota-admin"
+RELEASE_GROUP=velexis                      # its only members are the zone users; it only grants reading releases
 ALL_STEPS="packages harden users node postgres redis caddy keys database envfiles scripts caddyconf summary"
 STEPS="$ALL_STEPS"
 
@@ -42,12 +63,22 @@ apt_install() { DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-r
 while [ $# -gt 0 ]; do
   case "$1" in
     --steps) STEPS="${2//,/ }"; shift 2 ;;
-    -h|--help) sed -n '2,16p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,/^# =====/p' "$0"; exit 0 ;;
     *) die "unknown argument: $1" ;;
   esac
 done
 
 [ "$(id -u)" -eq 0 ] || die "run as root"
+if [ -n "$VELEXIS_ROOT" ]; then
+  case "$VELEXIS_ROOT" in /?*) ;; *) die "VELEXIS_ROOT must be an absolute path other than /" ;; esac
+  [ -d "$VELEXIS_ROOT" ] || die "VELEXIS_ROOT $VELEXIS_ROOT is not a folder"
+  for step in $STEPS; do
+    case "$step" in
+      users | keys | envfiles) ;;
+      *) die "with VELEXIS_ROOT only the steps users, keys and envfiles run, not $step" ;;
+    esac
+  done
+fi
 # shellcheck disable=SC1091
 . /etc/os-release
 if [ "${ID:-}" != "ubuntu" ] || [ "${VERSION_ID:-}" != "24.04" ]; then
@@ -196,13 +227,26 @@ EOF
   install -m 0644 "$DEPLOY_DIR/logrotate/velexis" /etc/logrotate.d/velexis
 }
 
-# ---- users and directories (ADR-0007 table) -------------------------------------------------------------
+# ---- users and directories (deployment-single-vm.md §4, ADR-0026) ---------------------------------------
 step_users() {
   log "Users and directories"
-  id -u "$APP_USER" >/dev/null 2>&1 || useradd --system --user-group --home-dir /var/lib/velexis --shell /usr/sbin/nologin "$APP_USER"
+  local u gid others
+  getent group "$RELEASE_GROUP" >/dev/null || groupadd --system "$RELEASE_GROUP"
+  for u in $ZONE_USERS; do
+    # No home, no shell, no password (locked): systemd starts these users' processes, nobody logs in as them.
+    id -u "$u" >/dev/null 2>&1 || useradd --system --user-group --no-create-home --home-dir /nonexistent \
+      --shell /usr/sbin/nologin "$u"
+    [ "$(getent passwd "$u" | cut -d: -f7)" = /usr/sbin/nologin ] || usermod --shell /usr/sbin/nologin "$u"
+    case "$(getent shadow "$u" | cut -d: -f2)" in '!'* | '*'*) ;; *) passwd -l "$u" >/dev/null ;; esac
+  done
+  # Exactly the five zone users read releases through the group: set the member list, never add to it.
+  gpasswd -M "$(echo "$ZONE_USERS" | tr ' ' ',')" "$RELEASE_GROUP" >/dev/null
+  gid="$(getent group "$RELEASE_GROUP" | cut -d: -f3)"
+  others="$(getent passwd | awk -F: -v gid="$gid" '$4 == gid { printf "%s ", $1 }')"
+  [ -z "$others" ] || warn "accounts with the primary group $RELEASE_GROUP can read releases too: ${others}(ADR-0026)"
+
   id -u "$DEPLOY_USER" >/dev/null 2>&1 || useradd --create-home --user-group --shell /bin/bash "$DEPLOY_USER"
   passwd -l "$DEPLOY_USER" >/dev/null
-
   install -d -m 0700 -o "$DEPLOY_USER" -g "$DEPLOY_USER" "/home/$DEPLOY_USER/.ssh"
   if [ -n "$DEPLOY_SSH_PUBKEY_FILE" ]; then
     # restrict: no PTY, no forwarding. rsync and the sudo call below work without them.
@@ -214,20 +258,23 @@ step_users() {
   fi
 
   # The deploy user may run exactly one root command: the root-owned deploy script.
-  echo "${DEPLOY_USER} ALL=(root) NOPASSWD: /usr/local/sbin/velexis-deploy" > /etc/sudoers.d/velexis-deploy
-  chmod 0440 /etc/sudoers.d/velexis-deploy
-  visudo -cf /etc/sudoers.d/velexis-deploy >/dev/null
+  mkdir -p "$SUDOERS_DIR"
+  echo "${DEPLOY_USER} ALL=(root) NOPASSWD: $SBIN/velexis-deploy" > "$SUDOERS_DIR/velexis-deploy"
+  chmod 0440 "$SUDOERS_DIR/velexis-deploy"
+  visudo -cf "$SUDOERS_DIR/velexis-deploy" >/dev/null
 
-  install -d -m 0755 -o root -g root /srv/velexis
-  install -d -m 0751 -o "$APP_USER" -g "$APP_USER" /srv/velexis/releases
-  install -d -m 0750 -o "$DEPLOY_USER" -g "$DEPLOY_USER" /srv/velexis/incoming
-  install -d -m 0750 -o root -g "$APP_USER" /etc/velexis
-  install -d -m 0500 -o "$APP_USER" -g "$APP_USER" /etc/velexis/keys
-  install -d -m 0700 -o root -g root /etc/velexis/backup
-  install -d -m 0750 -o "$APP_USER" -g "$APP_USER" /var/lib/velexis
-  install -d -m 0700 -o "$APP_USER" -g "$APP_USER" /var/lib/velexis/storage
-  install -d -m 0700 -o root -g root /var/backups/velexis
-  install -d -m 0750 -o root -g adm /var/log/velexis
+  install -d -m 0755 -o root -g root "$SRV"
+  install -d -m 0751 -o root -g "$RELEASE_GROUP" "$SRV/releases"
+  install -d -m 0750 -o "$DEPLOY_USER" -g "$DEPLOY_USER" "$SRV/incoming"
+  # /etc/velexis and its keys folder can be crossed, not listed: each zone reaches only its own key folder.
+  install -d -m 0711 -o root -g root "$ETC" "$ETC/keys"
+  install -d -m 0500 -o "$PLATFORM_USER" -g "$PLATFORM_USER" "$ETC/keys/platform"
+  install -d -m 0500 -o "$OTA_USER" -g "$OTA_USER" "$ETC/keys/ota"
+  install -d -m 0700 -o root -g root "$ETC/backup"
+  install -d -m 0711 -o root -g root "$LIB"
+  install -d -m 0700 -o "$OTA_USER" -g "$OTA_USER" "$LIB/storage"
+  install -d -m 0700 -o root -g root "$BACKUPS"
+  install -d -m 0750 -o root -g adm "$LOGS"
 }
 
 # ---- node: Node.js 22 and pnpm (pnpm only for emergency builds; releases are pre-built) ----------------
@@ -270,26 +317,80 @@ step_caddy() {
   caddy version | grep -q '^v2\.8\.' || warn "Caddy 2.8 expected, got $(caddy version)"
 }
 
-# ---- keys: master key and other key files (ADR-0010) --------------------------------------------------------
+# ---- keys: one key folder per backend zone (ADR-0010, ADR-0026) ----------------------------------------------
+# Never overwrites a key file. Each file is 0400 and owned by its zone's user; the folders are 0500.
+new_key_file() { # path owner command... -> writes the command's output to path, unless path exists
+  local path="$1" owner="$2" tmp
+  shift 2
+  [ -e "$path" ] && return 0
+  tmp="$(dirname "$path")/.$(basename "$path").new"
+  rm -f "$tmp"
+  ( umask 077; "$@" > "$tmp" ) || { rm -f "$tmp"; die "could not generate $path"; }
+  [ -s "$tmp" ] || { rm -f "$tmp"; die "could not generate $path"; }
+  chown "$owner:$owner" "$tmp"
+  chmod 0400 "$tmp"
+  ln "$tmp" "$path" 2>/dev/null || true   # a hard link never replaces an existing file
+  rm -f "$tmp"
+  [ -e "$path" ] || die "could not install $path"
+}
+
+copy_key_file() { # source destination owner -> installs a copy of source, unless destination exists
+  local tmp
+  [ -e "$2" ] && return 0
+  tmp="$(dirname "$2")/.$(basename "$2").new"
+  install -m 0400 -o "$3" -g "$3" "$1" "$tmp"
+  ln "$tmp" "$2" 2>/dev/null || true
+  rm -f "$tmp"
+  [ -e "$2" ] || die "could not install $2"
+}
+
+# Fixes owner and mode only where they differ, so that a re-run leaves every correct file untouched (even its ctime).
+ensure_owner_mode() { # user:group octal-mode file...
+  local want="$1" mode="$2" f
+  shift 2
+  for f in "$@"; do
+    [ "$(stat -c '%U:%G %a' "$f")" = "$want $mode" ] && continue
+    chown "$want" "$f"
+    chmod "$mode" "$f"
+  done
+}
+
+random_key() { head -c 32 /dev/urandom | base64; }
+ed25519_key() { openssl genpkey -algorithm ed25519; }
+
 step_keys() {
-  log "Key files in /etc/velexis/keys (existing files are kept)"
-  local k=/etc/velexis/keys
-  umask 077
-  [ -f "$k/master-v1.key" ] || head -c 32 /dev/urandom | base64 > "$k/master-v1.key"
-  [ -f "$k/api-key-pepper" ] || head -c 32 /dev/urandom | base64 > "$k/api-key-pepper"
-  [ -f "$k/document-url.key" ] || head -c 32 /dev/urandom | base64 > "$k/document-url.key"
-  [ -f "$k/platform-jwt-ed25519.pem" ] || openssl genpkey -algorithm ed25519 -out "$k/platform-jwt-ed25519.pem"
-  [ -f "$k/ota-jwt-ed25519.pem" ] || openssl genpkey -algorithm ed25519 -out "$k/ota-jwt-ed25519.pem"
-  chown "$APP_USER:$APP_USER" "$k"/*
-  chmod 0400 "$k"/*
-  umask 022
+  log "Key files in $ETC/keys/platform and $ETC/keys/ota (existing files are kept)"
+  local k="$ETC/keys" name p o
+  install -d -m 0711 -o root -g root "$ETC" "$k"
+  install -d -m 0500 -o "$PLATFORM_USER" -g "$PLATFORM_USER" "$k/platform"
+  install -d -m 0500 -o "$OTA_USER" -g "$OTA_USER" "$k/ota"
+  if [ -e "$k/master-v1.key" ]; then
+    die "$k/master-v1.key belongs to the shared-user layout that ADR-0026 replaced; move it into both zone folders by hand"
+  fi
+
+  # Keys both backends need: generated once, then an identical copy in each zone's folder.
+  for name in master-v1.key api-key-pepper; do
+    p="$k/platform/$name"
+    o="$k/ota/$name"
+    if [ ! -e "$p" ] && [ ! -e "$o" ]; then new_key_file "$p" "$PLATFORM_USER" random_key; fi
+    if [ -e "$p" ]; then copy_key_file "$p" "$o" "$OTA_USER"; else copy_key_file "$o" "$p" "$PLATFORM_USER"; fi
+    cmp -s "$p" "$o" || die "$name differs between $k/platform and $k/ota; the copies must be identical (ADR-0026)"
+  done
+  # Keys of one zone only.
+  new_key_file "$k/platform/platform-jwt-ed25519.pem" "$PLATFORM_USER" ed25519_key
+  new_key_file "$k/ota/ota-jwt-ed25519.pem" "$OTA_USER" ed25519_key
+  new_key_file "$k/ota/document-url.key" "$OTA_USER" random_key
+
+  ensure_owner_mode "$PLATFORM_USER:$PLATFORM_USER" 400 "$k/platform"/*
+  ensure_owner_mode "$OTA_USER:$OTA_USER" 400 "$k/ota"/*
 }
 
 load_or_create_secrets() {
   # Each generated value is created once and kept; values added in later versions of this script are appended.
   local name
+  [ -d "$ETC" ] || install -d -m 0711 -o root -g root "$ETC"
   umask 077
-  touch "$SECRETS_FILE"
+  [ -e "$SECRETS_FILE" ] || : > "$SECRETS_FILE"
   for name in MIGRATOR_DB_PASSWORD PROVISIONER_DB_PASSWORD PLATFORM_DB_PASSWORD OTA_DB_PASSWORD REDIS_PASSWORD EDGE_SECRET; do
     grep -q "^${name}=" "$SECRETS_FILE" || echo "${name}=$(gen_secret)" >> "$SECRETS_FILE"
   done
@@ -314,36 +415,37 @@ step_database() {
 }
 
 # ---- envfiles: /etc/velexis/<app>.env from deploy/env templates (never overwritten) ------------------------
+# Every env file is root:root 0600: systemd reads it as root before it starts a unit as the zone's user, so no app
+# user can open any of them (ADR-0026). migrator.env and reference-loader.env are read the same way for the transient
+# units of velexis-deploy, each with exactly one DSN.
 step_envfiles() {
-  log "Environment files in /etc/velexis (existing files are kept)"
+  log "Environment files in $ETC (existing files are kept)"
   load_or_create_secrets
-  local tpl name dest owner mode missing
+  local tpl name dest missing
   for tpl in "$DEPLOY_DIR"/env/*.env.example; do
     name="$(basename "$tpl" .example)"
-    dest="/etc/velexis/$name"
-    case "$name" in
-      migrator.env|backup.env|alert.env) owner=root:root; mode=0600 ;;
-      caddy.env) owner=root:caddy; mode=0640 ;;
-      *) owner="root:$APP_USER"; mode=0640 ;;
-    esac
+    dest="$ETC/$name"
     if [ -f "$dest" ]; then
       # Never overwritten, but drift is reported: a later release may need variables the file does not have yet.
-      missing="$(grep -oE '^[A-Z][A-Z0-9_]*=' "$tpl" | tr -d '=' | while read -r key; do grep -qE "^${key}=" "$dest" || printf '%s ' "$key"; done)"
+      # (A template with only comments, such as platform-worker.env.example, names no variable.)
+      missing="$({ grep -oE '^[A-Z][A-Z0-9_]*=' "$tpl" || true; } | tr -d '=' |
+        while read -r key; do grep -qE "^${key}=" "$dest" || printf '%s ' "$key"; done)"
       [ -z "$missing" ] || warn "$dest lacks variables of its template: ${missing}(add them; velexis-deploy refuses a release until they exist)"
       continue
     fi
-    sed -e "s/@@MIGRATOR_DB_PASSWORD@@/${MIGRATOR_DB_PASSWORD}/g" \
+    # Paths move with VELEXIS_ROOT (tests); on the VM the two path expressions change nothing.
+    ( umask 077; sed -e "s/@@MIGRATOR_DB_PASSWORD@@/${MIGRATOR_DB_PASSWORD}/g" \
         -e "s/@@PROVISIONER_DB_PASSWORD@@/${PROVISIONER_DB_PASSWORD}/g" \
         -e "s/@@PLATFORM_DB_PASSWORD@@/${PLATFORM_DB_PASSWORD}/g" \
         -e "s/@@OTA_DB_PASSWORD@@/${OTA_DB_PASSWORD}/g" \
         -e "s/@@REDIS_PASSWORD@@/${REDIS_PASSWORD}/g" \
         -e "s/@@EDGE_SECRET@@/${EDGE_SECRET}/g" \
-        -e "s/@@OTA_ADMIN_SERVICE_KEY@@/${OTA_ADMIN_SERVICE_KEY}/g" "$tpl" > "$dest"
-    chown "$owner" "$dest"
-    chmod "$mode" "$dest"
+        -e "s/@@OTA_ADMIN_SERVICE_KEY@@/${OTA_ADMIN_SERVICE_KEY}/g" \
+        -e "s#/etc/velexis/#${ETC}/#g" -e "s#/var/lib/velexis/#${LIB}/#g" "$tpl" > "$dest" )
   done
-  if grep -l 'CHANGE_ME' /etc/velexis/*.env >/dev/null 2>&1; then
-    warn "fill in the CHANGE_ME values: $(grep -l 'CHANGE_ME' /etc/velexis/*.env | tr '\n' ' ')"
+  ensure_owner_mode root:root 600 "$ETC"/*.env "$SECRETS_FILE"
+  if grep -l 'CHANGE_ME' "$ETC"/*.env >/dev/null 2>&1; then
+    warn "fill in the CHANGE_ME values: $(grep -l 'CHANGE_ME' "$ETC"/*.env | tr '\n' ' ')"
   fi
 }
 
@@ -354,6 +456,7 @@ step_scripts() {
   install -m 0755 -o root -g root "$DEPLOY_DIR/scripts/backup.sh" /usr/local/sbin/velexis-backup
   install -m 0755 -o root -g root "$DEPLOY_DIR/scripts/restore.sh" /usr/local/sbin/velexis-restore
   install -m 0755 -o root -g root "$DEPLOY_DIR/scripts/alert.sh" /usr/local/sbin/velexis-alert
+  install -m 0755 -o root -g root "$DEPLOY_DIR/scripts/run-as.sh" /usr/local/sbin/velexis-run
   install -m 0644 -o root -g root "$DEPLOY_DIR"/systemd/*.service "$DEPLOY_DIR"/systemd/*.timer /etc/systemd/system/
   install -d -m 0755 /etc/systemd/system/caddy.service.d
   install -m 0644 "$DEPLOY_DIR/systemd/caddy.service.d/velexis.conf" /etc/systemd/system/caddy.service.d/velexis.conf

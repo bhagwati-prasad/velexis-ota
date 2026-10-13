@@ -83,7 +83,7 @@ flowchart TB
 
 Workers restart first so new consumers run before new producers ([ADR-0009](adr/0009-background-jobs-bullmq.md)). Every app unit has `Restart=always` with `RestartMode=direct` and a start limit of 10 starts in 5 minutes, sandboxing (`ProtectSystem=strict`, `PrivateTmp`, `ProtectProc=invisible`, no capabilities, a system-call filter; exposure 2.0 or lower in `systemd-analyze security`), `MemoryMax`, `LimitCORE=0` and `OnFailure=velexis-alert@%n.service`, which mails once when the start limit gives up ([`deploy/systemd/`](../../deploy/systemd/); proven under systemd by `deploy/systemd/test/units-smoke.sh`).
 
-**What separates the apps.** Each trust zone runs as its own user ([ADR-0026](adr/0026-system-users-per-trust-zone.md)): the platform API and worker as `velexis-platform`, the OTA API and worker as `velexis-ota`, and each Next.js app as its own user. That is the boundary: a process cannot read another user's `/proc/<pid>/environ` or `/proc/<pid>/root`, and with `ProtectProc=invisible` it does not even see the other zones' processes. Env files are `root:root 0600` and read only by systemd, and key folders belong to their zone's user. `InaccessiblePaths=` additionally hides the other zones' env files and key folders from each unit's mount namespace; it is defence in depth only, because it cannot stop a process from reading what another process of the **same** user holds, and it does nothing against root. Within a zone, the API and its worker can read each other's memory and environment; that is accepted (same code, same keys).
+**What separates the apps.** Each trust zone runs as its own user ([ADR-0026](adr/0026-system-users-per-trust-zone.md)): the platform API and worker as `velexis-platform`, the OTA API and worker as `velexis-ota`, and each Next.js app as its own user. That is the boundary: a process cannot read another user's `/proc/<pid>/environ` or `/proc/<pid>/root`, and with `ProtectProc=invisible` it does not even see the other zones' processes. Env files are `root:root 0600` and read only by systemd, and key folders belong to their zone's user. `InaccessiblePaths=` additionally hides the other zones' env files and key folders from each unit's mount namespace; it is defence in depth only, because it cannot stop a process from reading what another process of the **same** user holds, and it does nothing against root. Within a zone, the API and its worker can read each other's memory and environment; that is accepted (same code, same keys). One-off processes follow the same rule: `velexis-deploy` runs the migrations and the reference data loader as transient units with a dynamic user (`systemd-run -p DynamicUser=yes -p SupplementaryGroups=velexis -p EnvironmentFile=…`), so no app user's process ever holds the migrator DSN, and `velexis-run <zone> <command>` runs a CLI command as the zone's user with the identity, env files, folder and sandbox of the zone's installed unit. `deploy/systemd/test/units-smoke.sh` proves all of this under systemd in CI.
 
 | Path | Owner, mode | Content |
 |---|---|---|
@@ -91,15 +91,18 @@ Workers restart first so new consumers run before new producers ([ADR-0009](adr/
 | `/srv/velexis/releases/<sha>/` | `root:velexis`, read-only (`u=rX,g=rX,o=`; `storefront/` world-readable for Caddy). `velexis` is a group of all app users that only grants reading releases. | One release; the last five are kept |
 | `/srv/velexis/current` | symlink | Active release |
 | `/srv/velexis/maintenance/` | root, 0755 | Maintenance page served by Caddy when a Next.js app is down |
-| `/etc/velexis/<app>.env` | `root:root` 0600, read by systemd before it starts the unit (`caddy.env` the same, loaded through the drop-in) | Environment files |
+| `/etc/velexis/`, `/etc/velexis/keys/` | `root:root` 0711 | Can be crossed, not listed: each zone reaches only its own key folder |
+| `/etc/velexis/<app>.env` | `root:root` 0600, read by systemd before it starts the unit (`caddy.env` the same, loaded through the drop-in; `migrator.env` and `reference-loader.env` for the transient units of `velexis-deploy`) | Environment files |
 | `/etc/velexis/keys/platform/`, `/etc/velexis/keys/ota/` | the zone's user (`velexis-platform`, `velexis-ota`), 0500 folder, 0400 per file | Master key and pepper (identical copies in both), the zone's JWT key, the document URL key (OTA only) |
 | `/etc/velexis/backup/` | root, 0700 | age recipients, rclone config |
+| `/var/lib/velexis/` | root, 0711 | Deploy history, reference data checksum, tenant fan-out reports (`migrate-<sha>.json`, root 0600) |
 | `/var/lib/velexis/storage/` | `velexis-ota`, 0700 | Documents and exports ([ADR-0017](adr/0017-email-documents-storage.md)) |
 | `/var/lib/velexis/system/<sha>/` | root, 0755 | Root-owned snapshot of a release's units, Caddyfile and maintenance page, re-installed on rollback ([§8](#8-release-artefact-deploy-and-rollback)) |
+| `/var/lib/velexis-migrate/` | systemd (`StateDirectory=` of the transient migration unit; a link into `/var/lib/private/`, root 0700) | The tenant fan-out report while the migration runs; `velexis-deploy` moves it to `/var/lib/velexis/` and `/var/log/velexis/` |
 | `/var/cache/velexis/<app>/` | the app's user (systemd `CacheDirectory`) | Next.js runtime cache |
 | `/var/backups/velexis/` | root, 0700 | Encrypted backups before upload (two days) |
 | `/var/log/velexis/` | `root:adm` 0750 | Deploy log, migration reports, restore-drill logs |
-| `/usr/local/sbin/velexis-{deploy,backup,restore,alert,run}` | root, 0755 | Root-owned copies of `deploy/scripts/*.sh`; `velexis-run <zone> <command>` runs one-off CLI commands as the zone's user with its env files (X-033) |
+| `/usr/local/sbin/velexis-{deploy,backup,restore,alert,run}` | root, 0755 | Root-owned copies of `deploy/scripts/*.sh`; `velexis-run <zone> <command>` (`run-as.sh`) runs one-off CLI commands as the zone's user, with the env files, folder and sandbox of the zone's installed unit; the exit code is the command's |
 
 ## 5. PostgreSQL and Redis
 
@@ -124,9 +127,9 @@ Roles ([`deploy/postgres/bootstrap.sql`](../../deploy/postgres/bootstrap.sql), [
 
 | Role | Used by | Privileges |
 |---|---|---|
-| `velexis_migrator` | `velexis-deploy` (migrations, tenant fan-out) only; its DSN is in the root-only `migrator.env` | Owns the database, `platform` and `reference`; member of `velexis_provisioner` (the fan-out uses `SET LOCAL ROLE`). DDL only; never serves requests. `lock_timeout 5s`. |
+| `velexis_migrator` | `velexis-deploy` (migrations, tenant fan-out) only; its DSN is in the root-only `migrator.env`, which systemd reads for a transient unit with a dynamic user, so no app user's process ever holds it | Owns the database, `platform` and `reference`; member of `velexis_provisioner` (the fan-out uses `SET LOCAL ROLE`). DDL only; never serves requests. `lock_timeout 5s`. |
 | `velexis_provisioner` | OTA worker (tenant provisioning, `ota-worker.env`) | `CREATE` on the database, owns every `tenant_<key>`, nothing on `platform` or `reference` ([ADR-0004](adr/0004-postgresql-schema-per-tenant.md)). DDL only; never serves requests. |
-| `velexis_platform_app` | Platform API and worker | DML on `platform` and `reference` (default privileges), none on tenant schemas. Audit log is insert-only (platform migration). |
+| `velexis_platform_app` | Platform API and worker; the reference data loader at deploy (`reference-loader.env`) | DML on `platform` and `reference` (default privileges), none on tenant schemas. Audit log is insert-only (platform migration). |
 | `velexis_ota_app` | OTA API and worker | DML on tenant schemas (granted at provisioning), `SELECT` on `reference`, **read-only** `SELECT` on the listed platform tables and on the non-secret columns of `accounts` (repeatable grants file, [ADR-0021](adr/0021-migration-cli-and-repeatable-grants.md)); never password hashes or MFA secrets. `search_path = pg_catalog`. |
 
 Backups and restores run as the `postgres` superuser through peer authentication on the VM only.
@@ -182,6 +185,8 @@ Rules:
 
 - **Losing the master key loses every encrypted secret.** `/etc/velexis` is backed up nightly to a separate age key, and once by hand after provisioning.
 - Nothing secret is committed; templates hold `@@GENERATED@@` or `CHANGE_ME` values only.
+- Env files are `root:root 0600` and read by systemd only ([ADR-0026](adr/0026-system-users-per-trust-zone.md)). Each one-off process of a deploy gets exactly one DSN: the migrations `DATABASE_MIGRATOR_URL` from `migrator.env`, the reference data loader `DATABASE_URL` (platform role) from `reference-loader.env`. Both run as transient units with a dynamic user, so neither DSN is ever in the environment of an app user's process, of `velexis-deploy` itself, or on a command line.
+- `master-v1.key` and `api-key-pepper` exist twice, as identical copies in `/etc/velexis/keys/platform/` and `/etc/velexis/keys/ota/`. `provision-vm.sh` generates them once, never overwrites a key file, restores a missing copy from the other folder and stops if the two copies differ. A rotation installs the new key in both folders (runbook of X-040).
 - Anyone with root, or with a backend zone's user, can read that zone's copy of the master key; that is the accepted single-VM limit. The Next.js apps cannot read any key or env file. A KMS-backed `KeyProvider` is the follow-up ([§15](#15-moving-to-managed-postgresql-and-redis)).
 
 ## 8. Release artefact, deploy and rollback
@@ -211,7 +216,7 @@ Apps that do not exist yet are skipped, so the same pipeline ships the M0 hello 
 2. checks that every `/etc/velexis/<app>.env` has every variable that the release's `deploy/env/<app>.env.example` names (an empty value is fine) and refuses the release otherwise, before changing anything. `provision-vm.sh` never rewrites env files, so a task that adds a variable comes with a human step: add it on the VM first ([`plans/roadmap.md`](plans/roadmap.md) §2). `provision-vm.sh --steps envfiles` lists missing variables too;
 3. copies the release's systemd units, Caddy drop-in, Caddyfile and maintenance page into a root-owned snapshot, `/var/lib/velexis/system/<sha>/`, then installs from the upload the root-owned scripts and, from the snapshot, changed units (`daemon-reload`), the maintenance page and a changed Caddyfile (validated, kept as `Caddyfile.next` until the end), all before the folder is handed over;
 4. moves the folder to `/srv/velexis/releases/<sha>/`, owned by `root:velexis` and read-only. Re-deploying a release that is already on the VM re-installs its units and Caddyfile from its snapshot and keeps the newest root scripts;
-5. runs the migrations ([§9](#9-migrations-at-deploy)) and, when the datasets changed, the reference data loader. A failure stops here: the running release's units are re-installed from its snapshot, nothing was switched and the old release keeps running;
+5. runs the migrations ([§9](#9-migrations-at-deploy)) and, when the datasets changed, the reference data loader, each as a transient unit with a dynamic user that only has the `velexis` group added (`systemd-run -p DynamicUser=yes`, with `migrator.env` or `reference-loader.env` read by systemd). A failure stops here: the running release's units are re-installed from its snapshot, nothing was switched and the old release keeps running;
 6. switches `/srv/velexis/current` atomically (`ln -sfn` + `mv -T`);
 7. restarts workers, then APIs, then front ends, one at a time, polling `GET 127.0.0.1:<port>/health/ready` for up to 90 s each;
 8. on the first unhealthy unit, re-installs the previous release's units and Caddyfile from its snapshot, switches `current` back, restarts the units and exits non-zero (**automatic rollback**);
@@ -230,7 +235,8 @@ Each restart causes a few seconds of errors on that process; the maintenance pag
 | tenant | `ota/backend/migrations/tenant/` (unqualified; `0001_baseline.sql` = `tenant.sql`) | `migrate.js tenants` fan-out, and the OTA worker at provisioning | `velexis_provisioner` (the fan-out connects as `velexis_migrator` and uses `SET LOCAL ROLE velexis_provisioner`) |
 
 - Each file runs in its own transaction with `lock_timeout 5s` (except `-- velexis:no-transaction` files) and is recorded with its SHA-256 in the schema's `schema_migrations` ledger. An edited, already-applied file fails the run.
-- The tenant fan-out migrates 4 schemas at a time, each under `pg_advisory_xact_lock(hashtext(schema))`, continues past a failed schema, and stops (exit code 3, deploy aborted) when more than 10 % fail. The report is in `/var/log/velexis/migrate-<sha>.json`.
+- `migrate.js` runs as a transient unit with a dynamic user (`systemd-run --pipe --wait --collect -p DynamicUser=yes -p SupplementaryGroups=velexis -p EnvironmentFile=/etc/velexis/migrator.env`): it can read the release, nothing of the apps, and its DSN never reaches a process of an app user ([ADR-0026](adr/0026-system-users-per-trust-zone.md)). Concurrency and failure ratio come from `migrator.env` (`MIGRATE_TENANT_CONCURRENCY`, `MIGRATE_TENANT_MAX_FAILURE_RATIO`).
+- The tenant fan-out migrates 4 schemas at a time, each under `pg_advisory_xact_lock(hashtext(schema))`, continues past a failed schema, and stops (exit code 3, deploy aborted) when more than 10 % fail. The report is in `/var/log/velexis/migrate-<sha>.json` (and, root-only, in `/var/lib/velexis/migrate-<sha>.json`).
 - Only **expand** files ship with the code that needs them; **contract** files ship in a later release, once every tenant reports the version ([ADR-0005](adr/0005-data-access-kysely-sql-migrations.md)).
 - Deploys get slower as tenants grow: about 0.2 s per tenant schema per pending file. Above ~500 tenants, run the fan-out as a background job instead of inside the deploy.
 

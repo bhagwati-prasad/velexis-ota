@@ -87,9 +87,9 @@ Loaded and validated by `src/config.ts` (`@velexis/config`); the process refuses
 | `DATABASE_URL` | yes | `postgres://velexis_platform_app:…@127.0.0.1:5432/velexis` | App role | M0 |
 | `DATABASE_MIGRATOR_URL` | migrations only | `postgres://velexis_migrator:…@127.0.0.1:5432/velexis` | `pnpm db:migrate` and deploy | M0 |
 | `REDIS_URL` | yes | `redis://:…@127.0.0.1:6379/0` | BullMQ, caches, tokens | M0 |
-| `MASTER_KEY_DIR`, `MASTER_KEY_CURRENT` | yes | `/etc/velexis/keys`, `local:v1` | Envelope encryption KEK ([ADR-0010](../../docs/mvp/adr/0010-secrets-envelope-encryption.md)) | M1 |
-| `API_KEY_PEPPER_FILE` | yes | `/etc/velexis/keys/api-key-pepper` | HMAC pepper for API keys (same file as the OTA backend) | M1 |
-| `JWT_PRIVATE_KEY_FILE` | yes | `/etc/velexis/keys/platform-jwt-ed25519.pem` | Portal and admin token signing; `kid` = JWK thumbprint | M1 |
+| `MASTER_KEY_DIR`, `MASTER_KEY_CURRENT` | yes | `/etc/velexis/keys/platform`, `local:v1` | Envelope encryption KEK ([ADR-0010](../../docs/mvp/adr/0010-secrets-envelope-encryption.md)); the platform zone's key folder ([ADR-0026](../../docs/mvp/adr/0026-system-users-per-trust-zone.md)) | M1 |
+| `API_KEY_PEPPER_FILE` | yes | `/etc/velexis/keys/platform/api-key-pepper` | HMAC pepper for API keys (an identical copy of the OTA backend's) | M1 |
+| `JWT_PRIVATE_KEY_FILE` | yes | `/etc/velexis/keys/platform/platform-jwt-ed25519.pem` | Portal and admin token signing; `kid` = JWK thumbprint | M1 |
 | `SMTP_URL`, `MAIL_FROM` | yes | `smtp://127.0.0.1:1025`, `"Velexis" <no-reply@mail.platform.example.com>` | Platform e-mails | M1 |
 | `OPS_ALERT_EMAIL` | yes | `ops@example.com` | Recipient of `ops.alert` e-mails (new) | M1 |
 | `PUBLIC_PORTAL_URL` | yes | `https://platform.example.com` | Links in e-mails, Checkout and Connect redirects | M1 |

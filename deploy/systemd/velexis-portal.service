@@ -1,5 +1,6 @@
 # velexis-portal.service — template from deploy/systemd/, installed to /etc/systemd/system/ by deploy.sh.
-# Docs: docs/mvp/deployment-single-vm.md §4, docs/mvp/adr/0007-single-vm-without-docker.md.
+# Docs: docs/mvp/deployment-single-vm.md §4, docs/mvp/adr/0007-single-vm-without-docker.md,
+# docs/mvp/adr/0026-system-users-per-trust-zone.md (one system user per trust zone).
 # Health: /health/ready on PORT (polled by deploy.sh after every restart; docs/mvp/adr/0016-observability.md).
 [Unit]
 Description=Velexis platform frontend / portal (platform/frontend Next.js standalone, 127.0.0.1:3000)
@@ -12,8 +13,10 @@ StartLimitBurst=10
 
 [Service]
 Type=simple
-User=velexis
-Group=velexis
+User=velexis-portal
+Group=velexis-portal
+# Read access to the release (root:velexis, u=rX,g=rX,o=); the group grants nothing else (ADR-0026).
+SupplementaryGroups=velexis
 WorkingDirectory=/srv/velexis/current/platform-frontend
 EnvironmentFile=/etc/velexis/platform-frontend.env
 Environment=NODE_ENV=production
@@ -36,7 +39,10 @@ MemoryMax=512M
 LimitNOFILE=65536
 LimitCORE=0
 
-# Sandboxing. All apps share the `velexis` user (ADR-0007), so each unit hides the other apps' secrets.
+# Sandboxing. The boundary between the apps is the OS user (ADR-0026): each trust zone runs as its own system
+# user, so this process cannot read another zone's /proc/<pid>/environ or reach its files through /proc/<pid>/root,
+# ProtectProc=invisible hides the other users' processes, env files are root:root 0600 (systemd reads them before it
+# starts the unit) and each key folder belongs to its zone's user. InaccessiblePaths= below is defence in depth only.
 NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=yes
@@ -68,7 +74,13 @@ SystemCallErrorNumber=EPERM
 # Next.js writes its runtime cache to .next/cache, a symlink to this directory made by pack-release.sh.
 CacheDirectory=velexis/portal
 CacheDirectoryMode=0700
-InaccessiblePaths=-/etc/velexis/keys -/etc/velexis/platform-backend.env -/etc/velexis/platform-worker.env -/etc/velexis/ota-backend.env -/etc/velexis/ota-worker.env -/etc/velexis/ota-admin.env -/etc/velexis/platform-admin.env -/etc/velexis/migrator.env -/etc/velexis/caddy.env -/etc/velexis/backup.env -/etc/velexis/alert.env -/etc/velexis/backup
+# Defence in depth (ADR-0026): hide every key folder, the other zones' env files and root's files
+# from this unit's mount namespace. It does not stop a process of the same user, and nothing stops root.
+InaccessiblePaths=-/etc/velexis/keys -/etc/velexis/platform-backend.env -/etc/velexis/platform-worker.env
+InaccessiblePaths=-/etc/velexis/ota-backend.env -/etc/velexis/ota-worker.env -/etc/velexis/platform-admin.env
+InaccessiblePaths=-/etc/velexis/ota-admin.env -/etc/velexis/migrator.env -/etc/velexis/reference-loader.env
+InaccessiblePaths=-/etc/velexis/.provision-secrets -/etc/velexis/caddy.env -/etc/velexis/backup.env
+InaccessiblePaths=-/etc/velexis/alert.env -/etc/velexis/backup
 
 [Install]
 WantedBy=multi-user.target

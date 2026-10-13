@@ -1,5 +1,6 @@
 # velexis-platform-worker.service — template from deploy/systemd/, installed to /etc/systemd/system/ by deploy.sh.
-# Docs: docs/mvp/deployment-single-vm.md §4, docs/mvp/adr/0007-single-vm-without-docker.md.
+# Docs: docs/mvp/deployment-single-vm.md §4, docs/mvp/adr/0007-single-vm-without-docker.md,
+# docs/mvp/adr/0026-system-users-per-trust-zone.md (one system user per trust zone).
 # Health: /health/ready on HEALTH_PORT (polled by deploy.sh after every restart; docs/mvp/adr/0016-observability.md).
 [Unit]
 Description=Velexis platform backend worker (platform/backend dist/worker.js, health 127.0.0.1:3101)
@@ -12,8 +13,10 @@ StartLimitBurst=10
 
 [Service]
 Type=simple
-User=velexis
-Group=velexis
+User=velexis-platform
+Group=velexis-platform
+# Read access to the release (root:velexis, u=rX,g=rX,o=); the group grants nothing else (ADR-0026).
+SupplementaryGroups=velexis
 WorkingDirectory=/srv/velexis/current/platform-backend
 EnvironmentFile=/etc/velexis/platform-backend.env
 EnvironmentFile=-/etc/velexis/platform-worker.env
@@ -35,7 +38,10 @@ MemoryMax=512M
 LimitNOFILE=65536
 LimitCORE=0
 
-# Sandboxing. All apps share the `velexis` user (ADR-0007), so each unit hides the other apps' secrets.
+# Sandboxing. The boundary between the apps is the OS user (ADR-0026): each trust zone runs as its own system
+# user, so this process cannot read another zone's /proc/<pid>/environ or reach its files through /proc/<pid>/root,
+# ProtectProc=invisible hides the other users' processes, env files are root:root 0600 (systemd reads them before it
+# starts the unit) and each key folder belongs to its zone's user. InaccessiblePaths= below is defence in depth only.
 NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=yes
@@ -63,8 +69,13 @@ SystemCallFilter=~@privileged
 SystemCallErrorNumber=EPERM
 # MemoryDenyWriteExecute is deliberately NOT set: the V8 JIT needs writable+executable memory.
 # ProcSubset=pid is deliberately NOT set: it hides /proc/stat, and os.cpus() then returns nothing (units-smoke.sh).
-ReadWritePaths=/var/lib/velexis/storage
-InaccessiblePaths=-/etc/velexis/keys/ota-jwt-ed25519.pem -/etc/velexis/keys/document-url.key -/etc/velexis/ota-backend.env -/etc/velexis/ota-worker.env -/etc/velexis/ota-admin.env -/etc/velexis/migrator.env -/etc/velexis/caddy.env -/etc/velexis/backup.env -/etc/velexis/alert.env -/etc/velexis/backup
+# No writable paths: document storage (/var/lib/velexis/storage) belongs to the OTA zone (velexis-ota, 0700).
+# Defence in depth (ADR-0026): hide the OTA zone's key folder, the other zones' env files and root's files
+# from this unit's mount namespace. It does not stop a process of the same user, and nothing stops root.
+InaccessiblePaths=-/etc/velexis/keys/ota -/etc/velexis/ota-backend.env -/etc/velexis/ota-worker.env
+InaccessiblePaths=-/etc/velexis/ota-admin.env -/etc/velexis/platform-frontend.env -/etc/velexis/platform-admin.env
+InaccessiblePaths=-/etc/velexis/migrator.env -/etc/velexis/reference-loader.env -/etc/velexis/.provision-secrets
+InaccessiblePaths=-/etc/velexis/caddy.env -/etc/velexis/backup.env -/etc/velexis/alert.env -/etc/velexis/backup
 
 [Install]
 WantedBy=multi-user.target

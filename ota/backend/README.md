@@ -85,10 +85,10 @@ Loaded and validated by `src/config.ts`; the process refuses to start on a missi
 | `DATABASE_URL` | yes | `postgres://velexis_ota_app:…@127.0.0.1:5432/velexis` | App role | M0 |
 | `DATABASE_MIGRATOR_URL` | worker | `postgres://velexis_migrator:…@127.0.0.1:5432/velexis` | Provisioning and tenant migrations | M1 |
 | `REDIS_URL` | yes | `redis://:…@127.0.0.1:6379/0` | Caches, tokens, rate limits, queues | M0 |
-| `MASTER_KEY_DIR`, `MASTER_KEY_CURRENT` | yes | `/etc/velexis/keys`, `local:v1` | Envelope encryption ([ADR-0010](../../docs/mvp/adr/0010-secrets-envelope-encryption.md)) | M2 |
-| `API_KEY_PEPPER_FILE` | yes | `/etc/velexis/keys/api-key-pepper` | HMAC pepper of API keys (shared with the platform) | M2 |
-| `JWT_PRIVATE_KEY_FILE` | yes | `/etc/velexis/keys/ota-jwt-ed25519.pem` | Customer and staff token signing | M3 |
-| `DOCUMENT_URL_KEY_FILE` | yes | `/etc/velexis/keys/document-url.key` | Signed download URLs | M3 |
+| `MASTER_KEY_DIR`, `MASTER_KEY_CURRENT` | yes | `/etc/velexis/keys/ota`, `local:v1` | Envelope encryption ([ADR-0010](../../docs/mvp/adr/0010-secrets-envelope-encryption.md)); the OTA zone's key folder ([ADR-0026](../../docs/mvp/adr/0026-system-users-per-trust-zone.md)) | M2 |
+| `API_KEY_PEPPER_FILE` | yes | `/etc/velexis/keys/ota/api-key-pepper` | HMAC pepper of API keys (an identical copy of the platform's) | M2 |
+| `JWT_PRIVATE_KEY_FILE` | yes | `/etc/velexis/keys/ota/ota-jwt-ed25519.pem` | Customer and staff token signing | M3 |
+| `DOCUMENT_URL_KEY_FILE` | yes | `/etc/velexis/keys/ota/document-url.key` | Signed download URLs | M3 |
 | `SMTP_URL`, `MAIL_FROM` | yes | `smtp://127.0.0.1:1025`, `"Velexis OTA" <no-reply@mail.ota.example.com>` | E-mails (the display name is replaced by the OTA brand) | M3 |
 | `OPS_ALERT_EMAIL` | yes | `ops@example.com` | Velexis ops alerts (airline-card abuse, bad Amadeus credentials) (new for this app) | M3 |
 | `PUBLIC_OTA_API_URL` | yes | `https://api.ota.example.com` | Absolute URLs for key callers (assets, files) | M2 |

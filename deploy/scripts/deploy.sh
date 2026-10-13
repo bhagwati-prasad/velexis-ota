@@ -12,8 +12,9 @@
 # Order (docs/mvp/deployment-single-vm.md §8):
 #   verify checksums -> check that /etc/velexis/*.env have every variable of the release's env templates ->
 #   snapshot the units, Caddyfile and maintenance page root-owned under /var/lib/velexis/system/<sha>/ ->
-#   install root-owned scripts and, from the snapshot, units and Caddyfile -> move to releases/<sha> ->
-#   migrations (platform, reference, tenant fan-out; expand-phase files) -> reference data ->
+#   install root-owned scripts and, from the snapshot, units and Caddyfile -> move to releases/<sha> (root:velexis,
+#   read-only) -> migrations (platform, reference, tenant fan-out; expand-phase files) -> reference data, both as
+#   transient units with a dynamic user (run_transient) ->
 #   switch the `current` symlink -> restart workers, APIs, front ends one at a time with health checks ->
 #   reload Caddy -> prune old releases. Any failed health check rolls back: the previous release's snapshot
 #   (units, Caddyfile) is re-installed, then `current` is switched back and the units restart.
@@ -25,8 +26,9 @@ BASE=/srv/velexis
 INCOMING="$BASE/incoming"
 RELEASES="$BASE/releases"
 CURRENT="$BASE/current"
-APP_USER=velexis
+RELEASE_GROUP=velexis                             # group of the five app users (ADR-0026): reading releases only
 HISTORY=/var/lib/velexis/deploy-history          # "<utc-time> <sha>" per successful activation
+MIGRATE_STATE=/var/lib/velexis-migrate           # StateDirectory= of the transient migration unit (fan-out report)
 SYSTEM_SNAPSHOTS=/var/lib/velexis/system          # root-owned copies of each release's units and Caddyfile
 LOG_DIR=/var/log/velexis
 KEEP_RELEASES=5
@@ -60,7 +62,36 @@ load_env_file() { # export KEY=VALUE lines of a root-only env file into this pro
   set +a
 }
 
-as_app() { runuser -u "$APP_USER" -- "$@"; }   # keeps the exported environment
+env_value() { # file key -> the value of the last KEY= line, read without sourcing the file (it holds secrets)
+  { sed -n "s/^$2=//p" "$1" 2>/dev/null || true; } | tail -n 1 | sed -e 's/^"\(.*\)"$/\1/' -e "s/^'\(.*\)'$/\1/"
+}
+
+# One-off release processes (migrations, reference data) run as a transient unit with a dynamic user whose only
+# extra right is the velexis group (reading the release). systemd reads the root-only env file, so its DSN never
+# reaches a process of an app user, the environment of this script or a command line (ADR-0026). Output goes to
+# this script's stdout and stderr; the return code is the command's. deploy/systemd/test/units-smoke.sh runs this
+# function as it is, so it uses nothing but its arguments, RELEASE_GROUP and MIGRATE_STATE.
+run_transient() { # env-file working-dir command...
+  local env_file="$1" dir="$2"
+  shift 2
+  systemd-run --quiet --pipe --wait --collect \
+    --description="velexis-deploy one-off ($(basename "$env_file"))" \
+    -p DynamicUser=yes -p SupplementaryGroups="$RELEASE_GROUP" \
+    -p EnvironmentFile="$env_file" -p Environment=NODE_ENV=production \
+    -p WorkingDirectory="$dir" -p StateDirectory="${MIGRATE_STATE#/var/lib/}" \
+    -p ProtectProc=invisible -p PrivateDevices=yes -p CapabilityBoundingSet= -p LimitCORE=0 -p UMask=0077 \
+    -- "$@"
+}
+
+keep_migrate_report() { # the fan-out report, from the transient unit's state folder to root-only copies
+  local f="$MIGRATE_STATE/migrate-$SHA.json"
+  # The dynamic user owns that folder: a link there would make root copy a file that the migration cannot read.
+  if [ -L "$f" ]; then rm -f "$f"; log "ignored $f: a symbolic link, not a report"; return 0; fi
+  [ -f "$f" ] || return 0
+  install -m 0600 -o root -g root "$f" "/var/lib/velexis/migrate-$SHA.json"
+  install -m 0600 -o root -g root "$f" "$LOG_DIR/migrate-$SHA.json"
+  rm -f "$f"
+}
 
 wait_healthy() { # port
   local deadline=$((SECONDS + HEALTH_TIMEOUT))
@@ -211,7 +242,7 @@ REL="$RELEASES/$SHA"
 PREV_REL="$(readlink -f "$CURRENT" 2>/dev/null || true)"
 log "deploy $SHA (previous: ${PREV_REL:-none})"
 
-# ---- 1. verify the upload, install root-used files from it, then hand it over to the app user ----------
+# ---- 1. verify the upload, install root-used files from it, then hand it over read-only ----------------
 if [ ! -d "$REL" ]; then
   SRC="$INCOMING/$SHA"
   [ -d "$SRC" ] || die "nothing uploaded at $SRC"
@@ -223,20 +254,24 @@ if [ ! -d "$REL" ]; then
   check_env_files "$SRC/deploy/env"
 
   # Everything root will use (scripts, units, Caddyfile, maintenance page) is taken from the uploaded copy
-  # BEFORE the folder is handed to the app user, so a compromised app process can never change it (ADR-0023).
+  # BEFORE the folder is handed over, so neither the deploy user nor an app process can change it (ADR-0023).
   # Units and Caddyfile go through a root-owned snapshot that a later rollback re-installs.
   snapshot_system_files "$SRC" "$SHA"
   install_if_changed "$SRC/deploy/scripts/deploy.sh" /usr/local/sbin/velexis-deploy 0755 && log "velexis-deploy updated (used from the next deploy)"
   install_if_changed "$SRC/deploy/scripts/backup.sh" /usr/local/sbin/velexis-backup 0755 || true
   install_if_changed "$SRC/deploy/scripts/restore.sh" /usr/local/sbin/velexis-restore 0755 || true
   install_if_changed "$SRC/deploy/scripts/alert.sh" /usr/local/sbin/velexis-alert 0755 || true
+  if [ -f "$SRC/deploy/scripts/run-as.sh" ]; then
+    install_if_changed "$SRC/deploy/scripts/run-as.sh" /usr/local/sbin/velexis-run 0755 || true
+  fi
   stage_system_files "$SYSTEM_SNAPSHOTS/$SHA"
 
   mv -T "$SRC" "$REL"
-  chown -R "$APP_USER:$APP_USER" "$REL"
-  chmod -R u=rX,g=rX,o= "$REL"                    # read-only after deploy (ADR-0007)
+  # root:velexis and read-only: every app user reads it through the velexis group, none can change it (ADR-0026).
+  chown -R "root:$RELEASE_GROUP" "$REL"
+  chmod -R u=rX,g=rX,o= "$REL"
   chmod o+x "$REL"
-  if [ -d "$REL/storefront" ]; then chmod -R o+rX "$REL/storefront"; fi   # Caddy serves these files
+  if [ -d "$REL/storefront" ]; then chmod -R o+rX "$REL/storefront"; fi   # Caddy (user caddy) serves these files
 else
   check_env_files "$REL/deploy/env"
   if [ -d "$SYSTEM_SNAPSHOTS/$SHA" ]; then
@@ -247,41 +282,49 @@ else
   fi
 fi
 
-# ---- 2. migrations (DDL as velexis_migrator; credentials only in root-only migrator.env) ---------------------
+# ---- 2. migrations (DDL as velexis_migrator) ---------------------------------------------------------------
+# The DSN is only in the root-only migrator.env, which systemd reads for each transient unit (run_transient).
 # Note: errexit is off inside a subshell followed by `||`, so every step ends with `|| exit 1`.
 if [ -f "$REL/db/dist/cli/migrate.js" ]; then
+  CONCURRENCY="$(env_value /etc/velexis/migrator.env MIGRATE_TENANT_CONCURRENCY)"
+  FAILURE_RATIO="$(env_value /etc/velexis/migrator.env MIGRATE_TENANT_MAX_FAILURE_RATIO)"
+  CONCURRENCY="${CONCURRENCY:-4}"
+  FAILURE_RATIO="${FAILURE_RATIO:-0.1}"
+  [[ "$CONCURRENCY" =~ ^[1-9][0-9]*$ ]] || die "MIGRATE_TENANT_CONCURRENCY in migrator.env is not a positive integer"
+  [[ "$FAILURE_RATIO" =~ ^(0(\.[0-9]+)?|1(\.0+)?)$ ]] \
+    || die "MIGRATE_TENANT_MAX_FAILURE_RATIO in migrator.env is not a number from 0 to 1"
+  rm -f "$MIGRATE_STATE/migrate-$SHA.json"
   (
-    load_env_file /etc/velexis/migrator.env || exit 1
-    export DATABASE_MIGRATOR_URL
-    cd "$REL/db" || exit 1
     for set in platform reference; do
       if [ -d "$REL/migrations/$set" ]; then
         log "migrate $set"
-        as_app node dist/cli/migrate.js "$set" --dir "$REL/migrations/$set" || exit 1
+        run_transient /etc/velexis/migrator.env "$REL/db" node dist/cli/migrate.js "$set" --dir "$REL/migrations/$set" \
+          || exit 1
       fi
     done
     if [ -d "$REL/migrations/tenant" ]; then
-      log "migrate tenants (fan-out, concurrency ${MIGRATE_TENANT_CONCURRENCY:-4})"
-      as_app node dist/cli/migrate.js tenants --dir "$REL/migrations/tenant" \
-        --concurrency "${MIGRATE_TENANT_CONCURRENCY:-4}" \
-        --max-failure-ratio "${MIGRATE_TENANT_MAX_FAILURE_RATIO:-0.1}" \
-        --report "/var/lib/velexis/migrate-$SHA.json" || exit 1
+      log "migrate tenants (fan-out, concurrency $CONCURRENCY)"
+      run_transient /etc/velexis/migrator.env "$REL/db" \
+        node dist/cli/migrate.js tenants --dir "$REL/migrations/tenant" \
+        --concurrency "$CONCURRENCY" --max-failure-ratio "$FAILURE_RATIO" \
+        --report "$MIGRATE_STATE/migrate-$SHA.json" || exit 1
     fi
-  ) || { restore_running_system_files; die "migrations failed; the previous release keeps running (expand-only migrations are N-1 compatible)"; }
-  if [ -f "/var/lib/velexis/migrate-$SHA.json" ]; then cp "/var/lib/velexis/migrate-$SHA.json" "$LOG_DIR/"; fi
+  ) || {
+    keep_migrate_report
+    restore_running_system_files
+    die "migrations failed; the previous release keeps running (expand-only migrations are N-1 compatible)"
+  }
+  keep_migrate_report
 fi
 
 # ---- 3. reference data (only when the vendored datasets changed) -------------------------------------------
+# Same transient unit, with reference-loader.env: the platform role's DSN only, never the migrator's.
 if [ -f "$REL/reference-data/dist/cli/load.js" ]; then
   NEW_SUM="$(cd "$REL/reference-data" && find data -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum | cut -d' ' -f1)"
   if [ "$NEW_SUM" != "$(cat /var/lib/velexis/reference-data.sha256 2>/dev/null || true)" ]; then
-    (
-      load_env_file /etc/velexis/migrator.env || exit 1
-      export DATABASE_URL="$REFERENCE_DATABASE_URL"
-      cd "$REL/reference-data" || exit 1
-      log "load reference data"
-      as_app node dist/cli/load.js --data data || exit 1
-    ) || { restore_running_system_files; die "reference data load failed"; }
+    log "load reference data"
+    run_transient /etc/velexis/reference-loader.env "$REL/reference-data" node dist/cli/load.js --data data \
+      || { restore_running_system_files; die "reference data load failed"; }
     echo "$NEW_SUM" > /var/lib/velexis/reference-data.sha256
   fi
 fi

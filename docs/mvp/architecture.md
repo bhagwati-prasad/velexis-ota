@@ -475,7 +475,7 @@ Every Node app reads its configuration through `@velexis/config`, which validate
 | `DATABASE_PROVISIONER_URL` | | | | worker | | | Role `velexis_provisioner`: tenant schemas only ([ADR-0004](adr/0004-postgresql-schema-per-tenant.md)) |
 | `REDIS_URL` | ✓ | | | ✓ | | | `redis://:password@127.0.0.1:6379/0` |
 | `MASTER_KEY_DIR`, `MASTER_KEY_CURRENT` | ✓ | | | ✓ | | | The zone's key directory, `local:v1` |
-| `API_KEY_PEPPER_FILE` | ✓ | | | ✓ | | | Same file for both backends |
+| `API_KEY_PEPPER_FILE` | ✓ | | | ✓ | | | Same pepper for both backends: identical copies in each zone's key directory ([ADR-0026](adr/0026-system-users-per-trust-zone.md)) |
 | `JWT_PRIVATE_KEY_FILE` | ✓ | | | ✓ | | | Separate Ed25519 key per backend |
 | `SMTP_URL`, `MAIL_FROM` | ✓ | | | ✓ | | | Mailpit `smtp://127.0.0.1:1025` in development |
 | `PUBLIC_PORTAL_URL` | ✓ | ✓ | ✓ | | ✓ | | `https://platform.example.com` (platform admin: the "enable MFA in the portal" link) |

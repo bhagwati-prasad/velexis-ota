@@ -728,7 +728,7 @@ Related: [`../decisions.md`](../decisions.md) (binding), [`../architecture.md`](
 - **Verify:** `bash deploy/scripts/test/deploy.test.sh`
 
 ### X-033 · Run each trust zone under its own system user
-- **Status:** todo
+- **Status:** in progress (branch claude/intelligent-bardeen-90hhu7; pending: a green run of the CI job systemd-units, which AC1 names; all 11 steps of units-smoke.sh passed locally under systemd 255 run as PID 1 of a PID namespace)
 - **Component:** foundation
 - **Milestone:** M0
 - **Depends on:** X-021
