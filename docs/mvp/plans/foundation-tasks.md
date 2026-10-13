@@ -205,8 +205,8 @@ Related: [`../decisions.md`](../decisions.md) (binding), [`../architecture.md`](
   - 10,000 `newId("bkg")` values are unique, match `^bkg_[0-9A-HJKMNP-TV-Z]{26}$`, and two ids made in the same millisecond do not share their random part.
 - **Verify:** `pnpm --filter @velexis/crypto test`
 
-### X-006 · Copy the OTA OpenAPI document to ota/backend/openapi
-- **Status:** todo
+### X-006 · Copy the OTA OpenAPI document to ota/backend/openapi ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** foundation
 - **Milestone:** M0
 - **Depends on:** X-001
