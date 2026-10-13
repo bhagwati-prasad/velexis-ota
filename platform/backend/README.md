@@ -31,11 +31,10 @@ platform/backend/
 │   │   └── 0002_add_mvp_platform_deltas.sql    ../docs/data-model-migration-0002*.md
 │   └── reference/
 │       └── 0001_baseline.sql                   byte copy of docs/velexis-sdk/db/reference.sql
-├── reference-data/                 CSV files for the reference loaders + SOURCES.md (origin and licence)
 ├── src/
 │   ├── main.ts                     HTTP entry (raw body on /webhooks/*, trust proxy loopback)
 │   ├── worker.ts                   BullMQ processors and schedulers, health server on HEALTH_PORT
-│   ├── cli.ts                      admin:grant, admin:reset-mfa, ref:load, dev:seed
+│   ├── cli.ts                      admin:grant, admin:reset-mfa, dev:seed
 │   ├── app.module.ts, worker.module.ts
 │   ├── config.ts                   @velexis/config schema of every variable below
 │   ├── common/
@@ -61,7 +60,6 @@ platform/backend/
 │   ├── settlements/                generator, settlements.processor.ts, payout accounts, IBAN validation, CSV
 │   ├── provisioning/               lifecycle service (create OTA, go-live, suspend, resume, migrate), dispatcher,
 │   │                               tenant-events.processor.ts, post-steps/, reconciler, onboarding checklist
-│   ├── reference/                  loaders for currencies, countries, time zones, cities, airports, airlines, aircraft
 │   ├── admin/                      admin auth controller, one controller per admin area, dashboard, queue inspector
 │   └── health/
 └── test/
@@ -71,11 +69,13 @@ platform/backend/
     └── contract/                   route parity, jobs schemas, baseline checksums, error catalogue
 ```
 
+There is no reference-data folder and no reference loader in this package. The vendored datasets and their loader live in `tools/reference-data` (`@velexis/reference-data`) and run through `pnpm db:seed:reference` with this backend's database role ([ADR-0024](../../docs/mvp/adr/0024-reference-data-sources-and-loader.md)). The backend owns the `reference` migrations and only reads the tables.
+
 Each module follows [`conventions.md` §2](../../docs/mvp/conventions.md#layout-one-module-per-bounded-context): thin controllers bound to an `operationId`, services owning transactions, Kysely repositories, gateways for external calls, processors for jobs. The module list, layers and responsibilities are in [`../docs/architecture.md`](../docs/architecture.md) §2.
 
 ## 3. Environment variables
 
-Loaded and validated by `src/config.ts` (`@velexis/config`); the process refuses to start on a missing or invalid value. On the VM they come from `/etc/velexis/platform-api.env` and `/etc/velexis/platform-worker.env`; locally from `.env.local` based on [`.env.example`](.env.example). "New" marks variables this document adds to the [configuration matrix](../../docs/mvp/architecture.md#6-configuration-matrix); the task that first reads one adds it to the matrix, the root `.env.example` and `deploy/env/` ([`conventions.md` §8](../../docs/mvp/conventions.md#8-configuration)).
+Loaded and validated by `src/config.ts` (`@velexis/config`); the process refuses to start on a missing or invalid value. On the VM both processes read `/etc/velexis/platform-backend.env` (template [`deploy/env/platform-backend.env.example`](../../deploy/env/platform-backend.env.example)); the worker also reads the optional overlay `/etc/velexis/platform-worker.env`, which only overrides values for the worker. Locally they come from `.env.local` based on [`.env.example`](.env.example). "New" marks variables this document adds to the [configuration matrix](../../docs/mvp/architecture.md#6-configuration-matrix); the task that first reads one adds it to the matrix, the root `.env.example` and `deploy/env/` ([`conventions.md` §8](../../docs/mvp/conventions.md#8-configuration)).
 
 | Variable | Required | Example (placeholder) | Purpose | Since |
 |---|---|---|---|---|
@@ -103,6 +103,7 @@ Loaded and validated by `src/config.ts` (`@velexis/config`); the process refuses
 | `STRIPE_BILLING_WEBHOOK_SECRET` | M5 | `whsec_dummy_billing` | `/webhooks/stripe/billing` | M5 |
 | `STRIPE_CONNECT_CLIENT_ID` | M5 | `ca_dummy` | Connect Standard OAuth | M5 |
 | `STRIPE_CONNECT_WEBHOOK_SECRET` | M5 | `whsec_dummy_connect` | `/webhooks/stripe/connect-accounts` (new) | M5 |
+| `PLATFORM_BFF_KEY` | yes | (generated, 32+ random bytes) | Shared first-party key of the portal and admin servers. Only a loopback request that carries it in `X-Velexis-Bff-Key` may forward the end user's IP and user agent ([PADR-0019](../docs/adr/0019-end-user-ip-forwarding-from-the-portal-and-admin.md)) (new) | M1 |
 | `MAX_TENANTS_PER_ACCOUNT` | no (`3`) | `3` | Non-failed OTAs one account may own (new) | M1 |
 | `FEATURE_STRIPE_BILLING`, `FEATURE_OWN_STRIPE`, `FEATURE_SETTLEMENTS`, `FEATURE_OWN_AMADEUS`, `FEATURE_CUSTOM_DOMAINS`, `FEATURE_LIVE_SWITCH` | no (`false`) | `false` | Milestone switches ([PADR-0015](../docs/adr/0015-milestone-feature-switches.md)) (new) | M1 |
 | `STORAGE_DRIVER`, `STORAGE_DIR` | no | `local`, `/var/lib/velexis/storage` | Listed for the platform in the configuration matrix; not read by the MVP code (CSV exports are streamed) | — |
@@ -141,7 +142,7 @@ Run from the repository root (`pnpm --filter @velexis/platform-backend <script>`
 | `pnpm db:codegen` | Regenerate Kysely types after a migration |
 | `pnpm contracts:lint` / `pnpm contracts:generate` | Lint the OpenAPI document / regenerate `@velexis/api-types/platform` and `@velexis/errors/platform` |
 | `pnpm dev:keys` | Create local key files in `.local/keys/` (master key, pepper, JWT keys) |
-| `pnpm --filter @velexis/platform-backend ref:load` | Load reference data from `reference-data/` (idempotent upserts) |
+| `pnpm --filter @velexis/platform-backend ref:load` | Shortcut for `pnpm db:seed:reference`: loads the vendored datasets of `tools/reference-data` into `reference` (idempotent upserts, [ADR-0024](../../docs/mvp/adr/0024-reference-data-sources-and-loader.md)). The backend has no loader of its own. |
 | `pnpm --filter @velexis/platform-backend dev:seed` | Development only (refused when `APP_ENV=production`): an admin account with MFA (prints its TOTP set-up URI), a Velexis test Amadeus account pointing at the stub, 10 test offices. The `early_access` plan comes from migration `0002`. |
 | `node dist/cli.js admin:grant <email>` | Grant platform admin (account must be verified with MFA); audited as `system` |
 | `node dist/cli.js admin:reset-mfa <email>` | Emergency MFA reset of an admin; audited as `system` |
@@ -151,7 +152,7 @@ Run from the repository root (`pnpm --filter @velexis/platform-backend <script>`
 ## 6. Local development
 
 1. Install Node 22, pnpm 9, PostgreSQL 16, Redis 7, Mailpit and the Stripe CLI natively; run `deploy/scripts/dev-setup.sh` (roles and database) and `pnpm install`.
-2. `pnpm dev:keys`, copy `.env.example` to `.env.local`, then `pnpm db:migrate`, `ref:load`, `dev:seed`.
+2. `pnpm dev:keys`, copy `.env.example` to `.env.local`, then `pnpm db:migrate`, `pnpm db:seed:reference` (the same as `ref:load`) and `dev:seed`.
 3. Start the Amadeus stub (`pnpm stub:amadeus`) and the OTA worker when working on provisioning; `pnpm --filter @velexis/platform-backend dev`.
 4. Mailpit UI at `http://127.0.0.1:8025` shows every platform e-mail.
 
@@ -168,7 +169,7 @@ Run from the repository root (`pnpm --filter @velexis/platform-backend <script>`
 | Unit | Key generator, hostname rules, IBAN, settlement formula, role matrix, price check, token claims, redaction of new fields | Next to the code |
 | Integration | Every endpoint: success, validation, auth failure, role failure (`404` for non-members), main business errors; response validated with Ajv against the document | Real PostgreSQL and Redis; Stripe and Amadeus through mocks or the stub; Mailpit API for e-mails |
 | Contract | Route parity, generated types up to date, baseline checksum equals `docs/velexis-sdk/db/*.sql`, jobs JSON Schemas, error catalogue | CI |
-| Cross-backend | Provisioning with the OTA worker; API key created here accepted by the OTA API; console token redeemed by the OTA API | `test:int` with both workers |
+| Cross-backend | Provisioning with the OTA worker; API key created here accepted by the OTA API; console token redeemed by the OTA API | `test:xb`, run in CI after the `Build` step because it starts the built OTA worker ([PADR-0017](../docs/adr/0017-platform-test-doubles-and-end-to-end-harness.md)) |
 | End-to-end | Portal and admin journeys | `tools/e2e` ([`../frontend/README.md`](../frontend/README.md), [`../admin/README.md`](../admin/README.md)) |
 
 ## 9. Operations
