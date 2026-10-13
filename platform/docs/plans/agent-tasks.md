@@ -52,7 +52,8 @@ Common commands: backend `pnpm --filter @velexis/platform-backend test`, `test:i
   - `src/` has no `reference/` loader and the package has no `reference-data/` folder; `ref:load` only calls the root `db:seed:reference`.
 - **Verify:** `pnpm --filter @velexis/platform-backend build && pnpm --filter @velexis/platform-backend test && pnpm --filter @velexis/platform-backend test:int`
 
-### PFE-001 · Scaffold the portal Next.js app with Tailwind, shadcn/ui and health routes
+### PFE-001 · Scaffold the portal Next.js app with Tailwind, shadcn/ui and health routes ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-frontend
 - **Milestone:** M0
 - **Depends on:** X-002, X-003

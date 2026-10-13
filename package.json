@@ -32,7 +32,10 @@
     "clean": "turbo run clean"
   },
   "pnpm": {
-    "onlyBuiltDependencies": []
+    "onlyBuiltDependencies": [],
+    "overrides": {
+      "next>postcss": "8.5.30"
+    }
   },
   "devDependencies": {
     "@eslint/js": "9.39.5",

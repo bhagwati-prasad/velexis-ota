@@ -70,7 +70,7 @@ Route groups: `(marketing)` public pages, `(auth)` sign-in flows, `(app)` signed
 | `/connect/stripe/callback` | GET | Stripe Connect redirect target: posts `{code, state}` to `completeStripeConnect`, then `303` to the payments page |
 | `/otas/[tenantId]/payments/settlements/[settlementId]/lines.csv` | GET | Streams the CSV from the API with the user's token |
 | `/sign-out` | POST | Revokes the session and clears cookies |
-| `/health/live`, `/health/ready` | GET | Health ([ADR-0016](../../docs/mvp/adr/0016-observability.md)); `ready` checks that the platform API answers |
+| `/health/live`, `/health/ready` | GET | Health ([ADR-0016](../../docs/mvp/adr/0016-observability.md)), `Cache-Control: no-store`. `live` answers `200 {"status":"ok"}` while the process serves requests. `ready` calls `PLATFORM_API_URL/health/live` and answers `200 {"status":"ok","checks":{"platformApi":"ok"}}` when it answers 2xx within 2 seconds, otherwise `503` with `"status":"unavailable"` and `"platformApi":"down"` (refused, error status, redirect or timeout; the cause is not exposed). `deploy.sh` polls `ready` after every restart. |
 
 ## 3. Folder layout
 
@@ -90,8 +90,12 @@ platform/frontend/src/
     (app)/account/…
     connect/stripe/callback/route.ts
     health/live/route.ts, health/ready/route.ts
-  components/ui/                        shadcn/ui copies
+    layout.tsx                          root layout: lang="en", skip link to #main-content, globals.css
+    globals.css                         Tailwind CSS 4 entry and the design tokens (@theme)
+  components/ui/                        shadcn/ui copies (button.tsx first; components.json configures the CLI)
   components/                           app components (below)
+  lib/config.ts                         configuration schema and getConfig(), server-only (§8)
+  lib/utils.ts                          cn(): class-name merge helper used by the shadcn/ui copies
   lib/api.ts                            openapi-fetch client, bearer from cookies, server-only
   lib/session.ts                        cookie read/write, single-flight refresh, server-only
   lib/errors.ts                         API error code → user message
@@ -150,17 +154,54 @@ platform/frontend/src/
 
 Set in `next.config` `headers()` and middleware: CSP with a per-request nonce (`script-src 'self' 'nonce-…'`, `connect-src 'self'`, `img-src 'self' data:`, `form-action 'self'` plus the origin of `PUBLIC_OTA_ADMIN_URL` (`https://admin.ota.example.com` in production), `frame-ancestors 'none'`, `base-uri 'self'`, `object-src 'none'`), `Referrer-Policy: strict-origin-when-cross-origin` (`no-referrer` on token pages), `X-Content-Type-Options: nosniff`, `Permissions-Policy` minimal. Stripe pages are reached by navigation, never framed.
 
+| Header | Value | Where |
+|---|---|---|
+| `X-Content-Type-Options` | `nosniff` | `next.config.ts`, every response (PFE-001) |
+| `Referrer-Policy` | `strict-origin-when-cross-origin` | `next.config.ts`, every response (PFE-001); token pages override it with `no-referrer` |
+| `Permissions-Policy` | `camera=(), microphone=(), geolocation=(), payment=(), usb=(), browsing-topics=()` | `next.config.ts`, every response (PFE-001) |
+| `Content-Security-Policy` | nonce-based, as above | `middleware.ts` with `lib/csp.ts` (PFE-002) |
+
+`X-Powered-By` is switched off (`poweredByHeader: false`). Caddy adds `Strict-Transport-Security` and `X-Frame-Options: DENY` on the public host ([`deploy/caddy/Caddyfile`](../../deploy/caddy/Caddyfile)).
+
 ## 8. Configuration
 
 See [`.env.example`](.env.example). On the VM they come from `/etc/velexis/platform-frontend.env` (template [`deploy/env/platform-frontend.env.example`](../../deploy/env/platform-frontend.env.example)). Variables: `APP_ENV`, `LOG_LEVEL`, `PORT` (3000), `HOSTNAME` (`127.0.0.1`), `PLATFORM_API_URL`, `PLATFORM_BFF_KEY` (shared with the API, PADR-0019), `PUBLIC_PORTAL_URL`, `PUBLIC_OTA_ADMIN_URL`, `STOREFRONT_BASE_DOMAIN`, `SENTRY_DSN`. All read in server code through `@velexis/config`.
+
+`src/lib/config.ts` (`import "server-only"`) declares the schema `PORTAL_CONFIG_SCHEMA`; later tasks add their entries there (`PLATFORM_BFF_KEY` comes with PFE-002).
+
+| Variable | Rule | Default |
+|---|---|---|
+| `APP_ENV` | `development`, `test` or `production` | required |
+| `LOG_LEVEL` | a pino level (`fatal` … `trace`, `silent`) | `info` |
+| `PORT` | 1–65535 | `3000` |
+| `HOSTNAME` | host name or IP literal to bind | `127.0.0.1` |
+| `PLATFORM_API_URL` | absolute `http:` or `https:` URL | required |
+| `PUBLIC_PORTAL_URL`, `PUBLIC_OTA_ADMIN_URL` | absolute `http:` or `https:` URL; `https:` when `APP_ENV=production` | required |
+| `STOREFRONT_BASE_DOMAIN` | lower-case DNS name with at least two labels (`ota.example.com`) | required |
+| `SENTRY_DSN` | `https:` URL; unset or empty switches error tracking off | optional |
+
+- `getConfig()` validates the process environment on first use and caches the frozen result. Outside production it first fills unset variables from `platform/frontend/.env.local`, then from the root `.env.local` (`loadDevEnvFiles`), so the root file made from the root `.env.example` is enough for `pnpm dev`.
+- Call it inside request handling (route handlers, server components, server actions), never at module scope: `next build` imports modules without the runtime environment. An invalid environment therefore fails the first request that needs it, and `/health/ready` is such a request, so `deploy.sh` does not take a release live with a broken `/etc/velexis/platform-frontend.env`. The error is a `ConfigError` that names each variable and the reason, never a value.
+- `parseConfig(source)` validates a plain object; the unit tests use it.
+- **No browser-exposed variables.** No `NEXT_PUBLIC_` variable exists and `next.config.ts` has no `env` block, so nothing is inlined into client bundles; `src/lib/config.test.ts` fails if either appears.
 
 ## 9. Commands and tests
 
 | Command | Does |
 |---|---|
-| `pnpm --filter @velexis/platform-frontend dev` | Next.js dev server on port 3000 (needs the platform API on 3100) |
-| `pnpm --filter @velexis/platform-frontend build` | Standalone build |
-| `pnpm --filter @velexis/platform-frontend test` | Vitest + Testing Library for client components and form states |
+| `pnpm --filter @velexis/platform-frontend dev` | Next.js dev server on `127.0.0.1:3000` (needs the platform API on 3100; configuration from the root `.env.local`, §8) |
+| `pnpm --filter @velexis/platform-frontend build` | Standalone build: `.next/standalone/platform/frontend/server.js` plus `.next/static` (`outputFileTracingRoot` is the repository root, as `deploy/scripts/pack-release.sh` expects) |
+| `pnpm --filter @velexis/platform-frontend start` | Local smoke run of the production build with `next start` on `127.0.0.1:3000` (Next.js warns that standalone output is meant for `server.js`; the VM runs `node platform/frontend/server.js` from the release, unit `velexis-portal.service`) |
+| `pnpm --filter @velexis/platform-frontend test` | Vitest in Node: configuration and route handler tests (`src/**/*.test.ts`), with `fetch` mocked and fake timers. Testing Library for client components and form states arrives with the first client components (PFE-003). |
+| `pnpm --filter @velexis/platform-frontend lint` / `typecheck` | ESLint with the root flat config (Next.js rules included) / `tsc --noEmit` (strict, path alias `@/*` → `src/*`) |
 | `pnpm test:e2e -- --project=portal` | Playwright journeys in `tools/e2e` |
+
+`next build` also lints and type-checks. Its "Next.js plugin was not detected in your ESLint configuration" warning is a false positive: Next.js looks for the plugin in the configuration of `eslint.config.mjs` itself, while the root config enables it for `platform/frontend/**/*.{ts,tsx}`.
+
+**postcss override.** Next.js 15 pins `postcss` 8.4.31, which has high-severity advisories (source-map path traversal). The root `package.json` overrides `next>postcss` to the patched version already used by Vite, so `pnpm audit --prod` stays clean for all three Next.js apps. Remove the override once Next.js ships a patched `postcss`.
+
+**Tests in Node.** `server-only` throws outside the `react-server` export condition, which only Next.js sets, so `vitest.config.ts` maps it to the package's own empty module. The `@/` alias matches `tsconfig.json`.
+
+**Adding a shadcn/ui component.** From `platform/frontend`, run the CLI pinned to the 2.x line of [`tech-stack.md`](../../docs/mvp/tech-stack.md), for example `pnpm dlx shadcn@2.10.0 add dialog`. `components.json` sends the copy to `src/components/ui/` with the `new-york` style, CSS variables and lucide icons. The CLI adds the component's dependencies with `^` ranges: make them exact in `package.json` before committing (`tools/ci/check-package-json.mjs` fails otherwise), and copy the change to the platform admin and the OTA admin when the design tokens in `globals.css` change ([ADR-0014](../../docs/mvp/adr/0014-frontend-stack-nextjs-tailwind.md)).
 
 End-to-end journeys (with axe checks): sign-up → verify (Mailpit) → sign-in with MFA → create OTA → active (M1); API key create and revoke (M1); invitation accept and role change (M1); open console lands in the OTA admin (M4); Checkout with Stripe test mode and the Customer Portal link (M5); custom domain pending view (M5).

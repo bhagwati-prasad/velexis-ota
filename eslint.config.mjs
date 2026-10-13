@@ -200,7 +200,8 @@ export default tseslint.config(
     files: NEXT_APPS.map((app) => `${app}/**/*.{ts,tsx}`),
     plugins: { "@next/next": nextPlugin },
     languageOptions: { globals: { ...globals.browser, ...globals.node } },
-    settings: { next: { rootDir: NEXT_APPS } },
+    // Absolute paths: each app runs `eslint .` from its own folder, and the plugin resolves rootDir from the cwd.
+    settings: { next: { rootDir: NEXT_APPS.map((app) => `${import.meta.dirname}/${app}`) } },
     rules: {
       ...nextPlugin.configs.recommended.rules,
       ...nextPlugin.configs["core-web-vitals"].rules,
