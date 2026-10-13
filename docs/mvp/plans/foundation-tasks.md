@@ -82,8 +82,8 @@ Related: [`../decisions.md`](../decisions.md) (binding), [`../architecture.md`](
   - The lockfile contains only the root devDependencies listed in `docs/mvp/tech-stack.md`, all with exact versions.
 - **Verify:** `pnpm install --frozen-lockfile && pnpm build && pnpm lint && pnpm typecheck && pnpm test && pnpm format:check && pnpm plan:lint`
 
-### X-002 · Create @velexis/config with typed environment and key-file validation
-- **Status:** todo
+### X-002 · Create @velexis/config with typed environment and key-file validation ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** foundation
 - **Milestone:** M0
 - **Depends on:** X-001
