@@ -1,0 +1,50 @@
+{
+  "name": "@velexis/platform-backend",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Velexis platform backend: the NestJS 11 control-plane API (dist/main.js), its worker (dist/worker.js) and CLI (dist/cli.js) (ADR-0003, platform/backend/README.md).",
+  "license": "UNLICENSED",
+  "type": "commonjs",
+  "main": "./dist/main.js",
+  "files": [
+    "dist",
+    "!dist/**/*.test.*",
+    "!dist/**/*.tsbuildinfo"
+  ],
+  "scripts": {
+    "build": "rm -rf dist && tsc -b tsconfig.build.json && node -e \"for (const entry of ['main', 'worker', 'cli']) require('node:fs').accessSync('dist/' + entry + '.js')\"",
+    "dev": "pnpm run build && pnpm run \"/^dev:(tsc|api|worker)$/\"",
+    "dev:tsc": "tsc -p tsconfig.build.json --watch --preserveWatchOutput",
+    "dev:api": "node --watch --enable-source-maps dist/main.js",
+    "dev:worker": "node --watch --enable-source-maps dist/worker.js",
+    "test": "vitest run",
+    "test:int": "vitest run --config vitest.int.config.ts",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "clean": "rm -rf dist coverage",
+    "ref:load": "pnpm --dir ../.. db:seed:reference"
+  },
+  "dependencies": {
+    "@nestjs/common": "11.2.7",
+    "@nestjs/config": "4.0.4",
+    "@nestjs/core": "11.2.7",
+    "@nestjs/platform-express": "11.2.7",
+    "@velexis/config": "workspace:*",
+    "@velexis/db": "workspace:*",
+    "@velexis/errors": "workspace:*",
+    "@velexis/logger": "workspace:*",
+    "ioredis": "5.11.1",
+    "nestjs-cls": "5.4.3",
+    "nestjs-pino": "4.6.1",
+    "pino": "9.14.0",
+    "pino-http": "10.5.0",
+    "reflect-metadata": "0.2.2",
+    "rxjs": "7.8.2"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.5",
+    "eslint": "9.39.5",
+    "typescript": "5.6.3",
+    "vitest": "3.2.7"
+  }
+}

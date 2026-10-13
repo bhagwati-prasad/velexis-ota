@@ -22,6 +22,7 @@ Related: [`../docs/api-inventory.md`](../docs/api-inventory.md) (endpoints), [`.
 platform/backend/
 ├── package.json                    @velexis/platform-backend
 ├── nest-cli.json, tsconfig.json, tsconfig.build.json
+├── vitest.config.ts, vitest.int.config.ts       unit and integration tests, compiled by tsc (decorator metadata)
 ├── .env.example
 ├── openapi/
 │   └── velexis-platform-api.openapi.yaml       source of truth for every endpoint (ADR-0006)
@@ -83,9 +84,9 @@ Loaded and validated by `src/config.ts` (`@velexis/config`); the process refuses
 |---|---|---|---|---|
 | `APP_ENV` | yes | `development` \| `test` \| `production` | Environment name | M0 |
 | `LOG_LEVEL` | no (`info`) | `info` | pino level | M0 |
-| `PORT` | yes | `3100` | API port (127.0.0.1) | M0 |
-| `HEALTH_PORT` | worker | `3101` | Worker health port | M0 |
-| `TRUST_PROXY` | no (`loopback`) | `loopback` | Express trust proxy, so client IPs come from Caddy (new) | M1 |
+| `PORT` | no (`3100`) | `3100` | API port (127.0.0.1); the unit sets it | M0 |
+| `HEALTH_PORT` | no (`3101`) | `3101` | Worker health port (127.0.0.1); the unit sets it | M0 |
+| `TRUST_PROXY` | no (`loopback`) | `loopback` | Express trust proxy, so client IPs come from Caddy: a comma-separated list of `loopback`, `linklocal`, `uniquelocal` and IP addresses or subnets, never `true` or a hop count (new) | M0 (read), M1 (env files) |
 | `DATABASE_URL` | yes | `postgres://velexis_platform_app:…@127.0.0.1:5432/velexis` | App role | M0 |
 | `DATABASE_MIGRATOR_URL` | migrations only | `postgres://velexis_migrator:…@127.0.0.1:5432/velexis` | `pnpm db:migrate` and deploy | M0 |
 | `REDIS_URL` | yes | `redis://:…@127.0.0.1:6379/0` | BullMQ, caches, tokens | M0 |
@@ -136,8 +137,8 @@ Run from the repository root (`pnpm --filter @velexis/platform-backend <script>`
 
 | Command | Does |
 |---|---|
-| `pnpm --filter @velexis/platform-backend dev` | API and worker in watch mode (`dev:api` + `dev:worker` run in parallel) |
-| `pnpm --filter @velexis/platform-backend build` | `dist/main.js`, `dist/worker.js`, `dist/cli.js` |
+| `pnpm --filter @velexis/platform-backend dev` | API and worker in watch mode: one build, then `dev:tsc` (`tsc --watch` into `dist/`), `dev:api` and `dev:worker` (`node --watch` on `dist/main.js` and `dist/worker.js`) run in parallel |
+| `pnpm --filter @velexis/platform-backend build` | `dist/main.js`, `dist/worker.js`, `dist/cli.js` (`tsc -b` builds the workspace packages it references first; the script fails when an entry point is missing) |
 | `pnpm --filter @velexis/platform-backend test` | Unit and contract tests (Vitest) |
 | `pnpm --filter @velexis/platform-backend test:int` | Integration tests (PostgreSQL 16, Redis 7, Mailpit, Amadeus stub running) |
 | `pnpm db:migrate` | Apply `migrations/platform` and `migrations/reference` with `DATABASE_MIGRATOR_URL` |
@@ -146,6 +147,7 @@ Run from the repository root (`pnpm --filter @velexis/platform-backend <script>`
 | `pnpm dev:keys` | Create local key files in `.local/keys/` (master key, pepper, JWT keys) |
 | `pnpm --filter @velexis/platform-backend ref:load` | Shortcut for `pnpm db:seed:reference`: loads the vendored datasets of `tools/reference-data` into `reference` (idempotent upserts, [ADR-0024](../../docs/mvp/adr/0024-reference-data-sources-and-loader.md)). The backend has no loader of its own. |
 | `pnpm --filter @velexis/platform-backend dev:seed` | Development only (refused when `APP_ENV=production`): an admin account with MFA (prints its TOTP set-up URI), a Velexis test Amadeus account pointing at the stub, 10 test offices. The `early_access` plan comes from migration `0002`. |
+| `node dist/cli.js help` | List the CLI commands. Exit codes: `0` done, `1` the command failed, `2` no or unknown command |
 | `node dist/cli.js admin:grant <email>` | Grant platform admin (account must be verified with MFA); audited as `system` |
 | `node dist/cli.js admin:reset-mfa <email>` | Emergency MFA reset of an admin; audited as `system` |
 | `stripe listen --forward-to localhost:3100/webhooks/stripe/billing` | Forward test billing events |
@@ -176,6 +178,9 @@ Run from the repository root (`pnpm --filter @velexis/platform-backend <script>`
 
 ## 9. Operations
 
-- Health: `GET /health/live`, `GET /health/ready` (PostgreSQL, Redis, oldest waiting job per platform queue) on both processes.
-- Logs: pino JSON to journald with the standard fields and the redaction list of [ADR-0016](../../docs/mvp/adr/0016-observability.md) plus the platform additions in [`../docs/architecture.md`](../docs/architecture.md) §8.
+- Health: `GET /health/live`, `GET /health/ready` on both processes: the API on `127.0.0.1:3100`, the worker's small `node:http` server on `127.0.0.1:3101` (any other path there answers the `404 NOT_FOUND` error envelope). Both answers carry `Cache-Control: no-store`, and `/health/*` writes no request log line.
+  - `live` answers `200 {"status":"ok"}` while the process serves requests; it checks nothing else.
+  - `ready` runs `SELECT 1` on a `createPool` pool (role `velexis_platform_app`) and `PING` on Redis in parallel, each within 2 seconds, and answers `200 {"status":"ok","checks":{"postgres":"ok","redis":"ok"}}`, or `503` with `"status":"unavailable"` and `"down"` for each dependency that failed. The cause is never answered: it is logged as `health.dependency_down` (warn, with the `dependency`, the `err` and the request's `requestId`). The age of the oldest waiting job per platform queue ([`api-inventory-admin.md`](../docs/api-inventory-admin.md), `healthReady`) is not in the report yet: the queues arrive with PBE-009.
+- Start-up: an invalid configuration logs one `fatal` line `config.invalid` whose `ConfigError` names every variable (never a value) and exits `1`; so does a failure to build the module graph or bind the port (`api.start_failed`, `worker.start_failed`).
+- Logs: pino JSON to journald with the standard fields and the redaction list of [ADR-0016](../../docs/mvp/adr/0016-observability.md) plus the platform additions in [`../docs/architecture.md`](../docs/architecture.md) §8. Nest's own lines (start-up, the exception handler's error line of a failed request) go through the same logger, inside a request with its `requestId`. `createApiApp` flushes Nest's start-up buffer as soon as the logger is in place, so these lines are written also when `listen()` fails or a request test only runs `init()`.
 - Deploy order: migrations, then restart the worker, then the API ([ADR-0007](../../docs/mvp/adr/0007-single-vm-without-docker.md)).

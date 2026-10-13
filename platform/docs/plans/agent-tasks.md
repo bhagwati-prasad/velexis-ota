@@ -31,7 +31,8 @@ Common commands: backend `pnpm --filter @velexis/platform-backend test`, `test:i
 
 ## M0 — Foundations
 
-### PBE-001 · Scaffold the platform backend with API, worker and CLI entry points
+### PBE-001 · Scaffold the platform backend with API, worker and CLI entry points ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-backend
 - **Milestone:** M0
 - **Depends on:** X-002, X-003, X-009, X-010
