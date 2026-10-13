@@ -1,0 +1,266 @@
+# OTA frontend: hosted storefront (`@velexis/ota-frontend`)
+
+This is the component specification of the hosted storefront: the static website that every OTA's travellers use to search, price, book and manage Amadeus flights, served by Velexis on `<key>.ota.example.com` and verified custom domains. It is plain HTML pages, Tailwind CSS 4 and vanilla ES modules, built by Vite 6 as a multi-page app, with **every booking function going through the JS SDK in cookie mode** against the same-origin `/api`. This page covers the technology, the page inventory, shared UI pieces, theming, formatting, accessibility, performance, security, multi-tenant hosting, local development, testing, and the guide for OTAs that build their own frontend. It follows [`decisions.md`](../../docs/mvp/decisions.md), [ADR-0014](../../docs/mvp/adr/0014-frontend-stack-nextjs-tailwind.md) and [ADR-0018](../../docs/mvp/adr/0018-hosted-storefront-custom-domains.md).
+
+Related: [`docs/pages.md`](docs/pages.md), [`docs/pages-account.md`](docs/pages-account.md) (every page: SDK calls, states), [`docs/build-your-own-frontend.md`](docs/build-your-own-frontend.md), [`.env.example`](.env.example), [OADR-0015](../docs/adr/0015-storefront-build-urls-and-hosting.md), [OADR-0017](../docs/adr/0017-airline-card-form-isolation.md), [OADR-0006](../docs/adr/0006-storefront-cookie-sessions-and-csrf.md), [OADR-0012](../docs/adr/0012-storefront-settings-assets-and-pages.md), [SDK](../sdk/README.md), [scope §2.2](../docs/scope.md#22-hosted-storefront-otafrontend), [conventions §4](../../docs/mvp/conventions.md#4-vanilla-storefront-otafrontend), [flows](../docs/README.md#flows).
+
+## 1. At a glance
+
+| Item | Value |
+|---|---|
+| Package | `@velexis/ota-frontend` (private workspace package) |
+| Runtime | Evergreen browsers (ES2022). **No server process**: Caddy serves `dist/` from `/srv/velexis/current/storefront` |
+| Technology | HTML pages + **Tailwind CSS 4** (`@tailwindcss/vite`) + vanilla ES modules + `@velexis/ota-sdk`; **Vite 6** multi-page build and dev server; no framework, no state library, no jQuery |
+| API access | `createVelexisClient({ baseUrl: "/api", session: "cookie" })` only. Never `fetch` the API directly. |
+| Third-party code | Stripe.js on one page (`/checkout/pay-card.html`); nothing else anywhere |
+| Tenancy | One build for every OTA; the tenant is the host; branding and settings come from `storefront.get` at runtime |
+| UI language | English in the MVP; money and dates through `Intl` |
+| Targets | WCAG 2.2 AA; per-page JS ≤ 60 KB gzip (§9) |
+| Tests | Vitest + happy-dom (modules), Playwright + axe (journeys in `tools/e2e/specs/storefront/`) |
+| Milestones | M2 search and price; M3 checkout, accounts, bookings; M4 content pages and settings effects; M5 live mode and custom domains; M6 airline card live, hardening |
+
+## 2. How one build serves every OTA
+
+```mermaid
+flowchart LR
+  B["Browser<br/>acme.ota.example.com<br/>or travel.acme.com"] -->|"GET /search.html"| C["Caddy"]
+  C -->|"static files, same for every OTA"| F["/srv/velexis/current/storefront"]
+  B -->|"fetch /api/v1/… (cookies, X-CSRF-Token)"| C
+  C -->|"strip /api, add X-Velexis-Edge + X-Velexis-Host"| O["OTA API 127.0.0.1:4000"]
+  O -->|"host → tenant, storefront environment"| T[("tenant_acme")]
+```
+
+1. **Tenant by host.** The storefront never knows a tenant key at build time. Caddy forwards the host; the OTA API resolves it to the tenant and its storefront environment (test until the OTA goes live) ([OADR-0009](../docs/adr/0009-caller-and-tenant-resolution.md)).
+2. **Same origin.** All API calls go to `/api/*` on the page's own host, so there is no CORS, cookies are host-only, and no key or token is ever in JavaScript ([OADR-0006](../docs/adr/0006-storefront-cookie-sessions-and-csrf.md)).
+3. **Runtime configuration.** Each page calls `storefront.get` once (cached in `sessionStorage` for 5 minutes, which is per origin, so tenants never mix). It returns branding, locales, currencies, features, legal links, support details, SEO defaults and the payment configuration ([OADR-0012](../docs/adr/0012-storefront-settings-assets-and-pages.md)).
+4. **States from the API**, not from build flags: `environment = test` shows a permanent "Test mode" banner and `noindex`; `403 TENANT_SUSPENDED` shows a "temporarily unavailable" page; `403 HOST_NOT_ALLOWED` shows "this storefront does not exist".
+5. **Custom domains** need nothing from the storefront ([ADR-0018](../../docs/mvp/adr/0018-hosted-storefront-custom-domains.md)).
+
+## 3. Folder tree
+
+```
+ota/frontend/
+  package.json                @velexis/ota-frontend; deps: @velexis/ota-sdk (workspace), tailwindcss, @tailwindcss/vite, vite
+  vite.config.js              MPA inputs, Tailwind, partials plugin, dev rewrites, dev/preview proxy and headers
+  .env.example                dev server only (§11)
+  index.html  search.html  offer.html  price.html  checkout.html  confirmation.html
+  bookings.html  booking.html  lookup.html  p.html  404.html
+  checkout/pay-card.html  checkout/pay-airline.html  checkout/complete.html
+  account/index.html  account/sign-in.html  account/sign-up.html  account/verify.html
+  account/forgot-password.html  account/reset-password.html
+  partials/                   header.html, footer.html, test-banner.html, noscript.html, templates/*.html
+  public/fonts/               bundled open-licence fonts (woff2), selectable in settings
+  public/favicon.ico          neutral default, replaced at runtime by the OTA favicon
+  src/
+    pages/<page>.js           one entry module per HTML page
+    boot.js                   shared start-up of every page (§5.1)
+    lib/client.js             the single SDK client (cookie mode)
+    lib/config.js             storefront.get with the 5-minute sessionStorage cache
+    lib/dom.js                $, $$, clone(templateId), fill(el, data) via textContent, on()
+    lib/format.js             money, dates, durations with Intl
+    lib/forms.js              serialisation, fieldErrors → fields, error summary, submit state
+    lib/errors.js             VelexisError → page state (PRICE_CHANGED, SOLD_OUT, *_EXPIRED, …)
+    lib/i18n.js               UI strings (English), error code → message
+    lib/theme.js              branding → CSS custom properties, contrast checks, fonts, favicon
+    lib/session.js            auth.getSession, account menu
+    lib/blocks.js             content-page blocks → DOM (createElement only)
+    lib/url.js                query helpers, safe `next` redirects
+    components/               header, footer, test-banner, location-combobox, passenger-picker, date-range,
+                              offer-card, itinerary, filters, sort, load-more, fare-families, price-breakdown,
+                              stepper, traveller-form, contact-form, ancillary-picker, error-summary, dialog, live-region
+    styles/main.css           @import "tailwindcss"; @theme tokens; a few component classes
+    styles/fonts.css          @font-face for the bundled fonts
+  test/                       Vitest + happy-dom unit tests
+  scripts/check-budgets.mjs   gzip size budgets for dist/ (§9)
+  docs/                       page inventory, build-your-own guide
+```
+
+The page files and `src/pages/` follow [conventions §4](../../docs/mvp/conventions.md#4-vanilla-storefront-otafrontend); the checkout payment pages live in `checkout/` so each has its own entry bundle and script inventory ([OADR-0017](../docs/adr/0017-airline-card-form-isolation.md)).
+
+## 4. Page inventory
+
+URLs are the HTML file paths; dynamic values travel in the query string. The only rewrite is `/p/<slug>` → `p.html` for content pages ([OADR-0015](../docs/adr/0015-storefront-build-urls-and-hosting.md)). The SDK calls and the states of each page are in [`docs/pages.md`](docs/pages.md) (shopping and checkout) and [`docs/pages-account.md`](docs/pages-account.md) (bookings, account, content).
+
+| URL | Purpose | Milestone |
+|---|---|---|
+| `/` (`index.html`) | Home: search form (one-way, return, multi-city) with location autocomplete, passengers, cabin | M2 |
+| `/search.html?from=…&to=…&depart=…` (`&search=srch_…`) | Results: runs the search, filters, sort, "load more" | M2 |
+| `/offer.html?offer=off_…` | Offer details, itinerary, branded-fare upsell, choose a fare | M2 |
+| `/price.html?priced=prc_…` | Confirmed price, breakdown, bags and services available, fare rules; start checkout | M2 (checkout start M3) |
+| `/checkout.html?id=chk_…&step=…` | Checkout data: travellers, contacts, extras and special requests, payment method and terms | M3 |
+| `/checkout/pay-card.html?id=chk_…&payment=pay_…` | Stripe Payment Element, card-fee review, pay (the only page with Stripe.js) | M3 |
+| `/checkout/pay-airline.html?id=chk_…&payment=pay_…` | Airline-card form, fee review, pay; no third-party script | M3 (test), live after M6 |
+| `/checkout/complete.html?id=chk_…&payment=pay_…` | Completes the checkout after Stripe (also the 3-D Secure return URL) | M3 |
+| `/confirmation.html?booking=bkg_…` | Confirmation, ticketing status polling, "we are confirming your booking" | M3 |
+| `/bookings.html?tab=upcoming\|past\|cancelled` | My bookings (signed-in customers) | M3 |
+| `/booking.html?id=bkg_…` | Booking detail: itinerary, tickets, documents, change contacts, cancel with refund preview, timeline | M3 |
+| `/lookup.html` | Guest lookup by reference and last name | M3 |
+| `/account/sign-in.html`, `sign-up.html`, `verify.html?token=…`, `forgot-password.html`, `reset-password.html?token=…` | Customer authentication | M3 |
+| `/account/` (`account/index.html`) | Profile, change password, sign out everywhere, delete account | M3 |
+| `/account/travellers.html` | Saved travellers | **Later** (`features.savedTravelers = false`, [scope §3.1](../docs/scope.md#31-b1-storefront-auth-account-reference-30-20-mvp-10-deferred)) |
+| `/p/<slug>` (`p.html`) | Content pages from storefront settings: about, terms, privacy, cookies, refund policy, FAQ | M4 |
+| `/404.html` | Not found (Caddy `handle_errors 404`) | M2 |
+
+E-mail links point at these URLs (`/account/verify.html?token=…`, `/account/reset-password.html?token=…`, `/booking.html?id=bkg_…`); the backend's templates must use the same paths.
+
+## 5. Page anatomy and shared UI pieces
+
+### 5.1 Start-up of every page (`src/boot.js`)
+
+1. The HTML is meaningful without JavaScript: header, footer, the search form (a real `<form method="get" action="/search.html">`) and links. A `<noscript>` partial explains that booking needs JavaScript.
+2. The page's single module script (`<script type="module" src="/src/pages/search.js">`, bundled by Vite) calls `boot()`.
+3. `boot()` loads the configuration (`lib/config.js`), then in parallel applies the theme (§6), fills header and footer links (legal links, `storefront.listPages` with `showInFooter` from M4, its failure ignored, support contacts), shows the test banner, and asks `auth.getSession` for the account menu (a `401` means signed out).
+4. The page module runs with `{ config, session, client }`.
+5. Errors during boot render one of the shared full-page states (suspended, unknown host, service unavailable with retry).
+
+### 5.2 Components and templates
+
+- **Components are small ES modules** in `src/components/` with one export, `mount(root, props)`, that returns an object with `update(props)` and `destroy()` where needed. No component holds global state; pages pass data down and listen to `CustomEvent`s.
+- **Markup lives in HTML.** Repeated items (offer card, segment, traveller form, document row) are `<template>` elements in `partials/templates/*.html`, included at build time by a 20-line Vite plugin (`<!-- @include partials/templates/offer-card.html -->`, `transformIndexHtml`). Shared header and footer are partials too, so they are in the static HTML.
+- **Rendering**: `clone("tpl-offer-card")` then `fill(el, data)`, which sets `textContent` and safe attributes by `data-field` names. `innerHTML` with data is forbidden (ESLint `no-unsanitized`).
+- **Forms**: native elements and validation attributes first; `lib/forms.js` maps API `fieldErrors` onto fields (`aria-invalid`, `aria-describedby`) and builds the error summary that receives focus.
+- **Errors** are shown from `VelexisError.code` through `lib/i18n.js`; `PRICE_CHANGED`, `SOLD_OUT`, `SEARCH_EXPIRED`, `OFFER_EXPIRED`, `CHECKOUT_EXPIRED` and `SUPPLIER_TIMEOUT` have dedicated UI states ([conventions §4](../../docs/mvp/conventions.md#4-vanilla-storefront-otafrontend)).
+- **Dialogs** use the native `<dialog>` element (focus trap and Escape for free).
+
+## 6. Theming
+
+Branding comes from `storefront.get` (`branding.colors`, fonts, corner radius, logos, favicon) and is applied by `lib/theme.js` as CSS custom properties on `document.documentElement` with `style.setProperty`, never by injecting CSS text. CSSOM changes are allowed by the strict `style-src 'self'` CSP; custom CSS is not offered ([OADR-0012](../docs/adr/0012-storefront-settings-assets-and-pages.md)).
+
+```css
+/* src/styles/main.css */
+@import "tailwindcss";
+@import "./fonts.css";
+
+:root {                                   /* neutral defaults until storefront.get answers */
+  --vx-primary: #1d4ed8; --vx-on-primary: #ffffff; --vx-bg: #ffffff; --vx-text: #0f172a;
+  --vx-radius: 0.5rem; --vx-font-body: "Inter", system-ui, sans-serif; --vx-font-heading: var(--vx-font-body);
+}
+
+@theme inline {                           /* Tailwind utilities read the runtime variables */
+  --color-primary: var(--vx-primary);
+  --color-on-primary: var(--vx-on-primary);
+  /* secondary and accent follow the same pattern */
+  --color-surface: var(--vx-bg);
+  --color-ink: var(--vx-text);
+  --radius-ui: var(--vx-radius);
+  --font-body: var(--vx-font-body);
+  --font-heading: var(--vx-font-heading);
+}
+```
+
+- Pages use `bg-primary text-on-primary rounded-ui font-heading` and so on. Class names are always complete strings, so Tailwind's scanner finds them.
+- `lib/theme.js` computes `--vx-on-primary` (black or white, whichever reaches 4.5:1) and falls back to the neutral palette for any colour pair below WCAG contrast; the OTA admin warns when an OTA picks such colours.
+- Fonts are chosen from the bundled list (open licences, `public/fonts/`, `font-display: swap`); a browser downloads only the families in use.
+- Logos and the favicon are same-origin asset URLs (`/api/v1/assets/<key>/ast_….png`), so `img-src 'self'` holds. Airline logos are not shown in the MVP (no external images under the CSP); results show the airline name and IATA code ([OADR-0015](../docs/adr/0015-storefront-build-urls-and-hosting.md)).
+
+## 7. Language, currency and dates
+
+- **UI strings** are English and live in `lib/i18n.js` (`t("results.count", { count })` with `Intl.PluralRules`), so translation can come later without touching pages.
+- **Locale** for formatting is `config.defaultLocale` (content pages and e-mails may be localised by the OTA).
+- **Currency**: a header selector offers `config.currencies`; the choice is remembered in `localStorage` (wrapped in `try/catch`; the page works without it) and sent as `X-Currency` through `client.withOptions({ currency })`. A new search is needed for prices in the new currency.
+- **Money** is `{ amount: "412.30", currency: "EUR" }` from the API and formatted with `Intl.NumberFormat(locale, { style: "currency", currency })`. The storefront never adds or multiplies prices; totals always come from the API.
+- **Flight times** are airport-local wall-clock strings; they are formatted from their parts without time-zone conversion. Durations (`PT7H35M`) become "7 h 35 min". Booking timestamps use the OTA's time zone from the configuration.
+
+## 8. Accessibility (WCAG 2.2 AA)
+
+| Area | Rule |
+|---|---|
+| Structure | Landmarks (`header`, `nav`, `main`, `footer`), one `h1` per page, skip link to `main`, page `<title>` per step |
+| Forms | Visible labels, `autocomplete` tokens (names, e-mail, phone, `cc-*` on the airline-card page), errors linked by `aria-describedby`, an error summary that receives focus, no placeholder-only labels |
+| Search | Location autocomplete follows the ARIA 1.2 combobox pattern (listbox, `aria-activedescendant`, Escape, typed text kept); native date inputs; the passenger picker is a disclosure with steppers that have text labels |
+| Dynamic content | A polite live region announces result counts, "loading", price changes and payment progress; focus moves to the new step heading in checkout |
+| Keyboard | The whole booking flow works with the keyboard only, including filters, fare choice, extras, the Stripe element and dialogs; visible focus, never obscured by the sticky header (2.4.11) |
+| Targets and motion | Targets at least 24 × 24 px (2.5.8); the price filter offers number inputs as well as a slider (2.5.7); no auto-advancing content; `prefers-reduced-motion` respected |
+| Authentication | Paste and password managers allowed, no CAPTCHA puzzles (3.3.8); traveller data is offered for the contact step instead of retyping (3.3.7) |
+| Help | The support link sits in the same place on every page (3.2.6) |
+| Colour | Contrast checked at runtime on OTA colours (§6); status never shown by colour alone |
+| Checks | axe in every Playwright journey (no serious or critical violation), a keyboard-only checkout journey, a manual screen-reader pass (NVDA, VoiceOver) before M6 |
+
+## 9. Performance budgets
+
+| Budget | Limit | Checked by |
+|---|---|---|
+| JavaScript per page, gzip (own code + SDK, Stripe.js excluded) | ≤ 60 KB; airline-card page ≤ 30 KB | `scripts/check-budgets.mjs` in CI |
+| CSS, gzip (all pages share one file) | ≤ 20 KB | same |
+| HTML per page | ≤ 20 KB | same |
+| Fonts per page | ≤ 2 families, woff2, ≤ 120 KB | same |
+| API calls before first meaningful paint | 0 on cached pages, 1 (`storefront.get`) otherwise | Review |
+| LCP / CLS / INP on home and results (Lighthouse mobile profile) | ≤ 2.5 s / ≤ 0.1 / ≤ 200 ms | Manual Lighthouse run before M6 launch |
+
+Images carry width and height, results render 20 at a time, and search shows a skeleton at once because Amadeus can take seconds.
+
+## 10. Security
+
+- **CSP** comes from Caddy for every storefront host ([`deploy/caddy/Caddyfile`](../../deploy/caddy/Caddyfile)): `default-src 'self'`, scripts from self and Stripe only, `style-src 'self'`, `img-src 'self' data:`, `font-src 'self'`, `connect-src 'self' https://api.stripe.com`, Stripe frames only, `frame-ancestors 'none'`. The build therefore has **no inline scripts or styles**: Vite's module-preload polyfill is off and `build.assetsInlineLimit` is 0, so no font becomes a `data:` URI.
+- **No tokens in JavaScript.** Cookie mode only; the SDK throws if a key or token is passed. The only JS-readable cookie is `__Host-vx_csrf`, which is not a credential. `sessionStorage` and `localStorage` hold only the public configuration and the currency choice.
+- **No `innerHTML` with data**; content pages arrive as parsed blocks and are built with `createElement`. Links in blocks are re-checked in the browser (`https:`, `mailto:`, `tel:`, relative `/p/…` only); external ones get `rel="noopener noreferrer"`.
+- **Redirects**: a `next` parameter must be a relative path starting with a single `/`; anything else goes to `/`.
+- **Tokens in URLs**: verification and reset tokens are read once and removed from the address bar with `history.replaceState`; the referrer policy is `strict-origin-when-cross-origin`.
+- **Stripe** ([flow](../docs/flows/checkout-stripe.md)): Stripe.js is a static `<script>` tag from `https://js.stripe.com` in `checkout/pay-card.html` only, never bundled or self-hosted; the Payment Element keeps card data inside Stripe's iframes; `stripeAccount` is set in Connect mode; the Appearance API takes the OTA colours.
+- **Airline card** ([OADR-0017](../docs/adr/0017-airline-card-form-isolation.md)): its own page and entry bundle, no third-party script, card inputs without `name` attributes (a submit without JavaScript sends nothing), values only in the inputs until the single `checkout.completeWithAirlineCard` call, inputs cleared on success, error and `pagehide`, never stored, logged or put in a URL; the SDK never retries the call.
+- **Payment-page script inventory** (ADR-0011 §C, checked daily from M6):
+
+| Page | Scripts | Purpose |
+|---|---|---|
+| `/checkout/pay-card.html` | `/assets/pay-card-<hash>.js` | Page code + SDK |
+| | `https://js.stripe.com/…` (Stripe.js) | Payment Element, 3-D Secure |
+| `/checkout/pay-airline.html` | `/assets/pay-airline-<hash>.js` | Page code + SDK; nothing else |
+
+## 11. Local development
+
+```bash
+pnpm stub:amadeus &                                  # Amadeus stub on 4900
+pnpm --filter @velexis/ota-backend dev               # OTA API on 4000 (after both dev:seed commands)
+pnpm --filter @velexis/ota-frontend dev              # Vite on http://localhost:5173
+pnpm --filter @velexis/ota-frontend preview          # production build on 4173, same proxy, production CSP
+```
+
+The dev server behaves like Caddy for one tenant, the demo OTA that the backend's `dev:seed` creates on `demo.ota.example.com` ([`../backend/README.md`](../backend/README.md)):
+
+```js
+// vite.config.js (excerpt): env = root .env.local, then ota/frontend/.env.local (loadEnv)
+const host = env.STOREFRONT_DEV_HOST ?? `demo.${env.STOREFRONT_BASE_DOMAIN}`;
+const apiProxy = {
+  target: env.OTA_API_URL,                                  // http://127.0.0.1:4000
+  rewrite: (p) => p.replace(/^\/api/, ""),
+  headers: { "X-Velexis-Edge": env.VELEXIS_EDGE_SECRET,      // dev secret only
+             "X-Velexis-Host": host,
+             Origin: `https://${host}` },                    // the CSRF guard compares Origin with the host
+};
+// server.proxy and preview.proxy use apiProxy; preview also sends the production CSP header;
+// a devRewrites plugin maps /p/<slug> to /p.html and unknown paths to /404.html, like Caddy.
+```
+
+- No variable reaches the browser bundle (nothing is prefixed `VITE_`); the storefront has no runtime environment ([architecture §6](../../docs/mvp/architecture.md#6-configuration-matrix)).
+- `__Host-` cookies work on `http://localhost` in Chromium and Firefox (localhost is a secure context); Safari does not accept them there, so use Chromium or Firefox ([OADR-0006](../docs/adr/0006-storefront-cookie-sessions-and-csrf.md) point 8).
+- Another seeded tenant: set `STOREFRONT_DEV_HOST` in `ota/frontend/.env.local`.
+- Stripe test mode: the publishable key arrives through `storefront.get`; run `stripe listen` as in [local development §6](../../docs/mvp/local-development.md#6-stripe-with-the-stripe-cli-from-m3) and use Stripe's test cards only.
+- Airline card locally: `AIRLINE_CARD_ENABLED=true` in `ota/backend/.env.local`, the test switch on in the OTA admin, test PAN `4111 1111 1111 1111` against the stub only.
+
+## 12. Build and deploy
+
+- `pnpm --filter @velexis/ota-frontend build` writes `dist/`: the HTML files at their paths, hashed JS and CSS in `dist/assets/`, fonts, `404.html`. Then `scripts/check-budgets.mjs` runs.
+- The same `dist/` serves every OTA. There are no build-time variables and no per-tenant builds ([OADR-0015](../docs/adr/0015-storefront-build-urls-and-hosting.md)).
+- The release artefact carries `dist/` to `/srv/velexis/current/storefront` ([ADR-0023](../../docs/mvp/adr/0023-release-artefact-and-deploy-user.md)); Caddy caches `/assets/*` for a year and revalidates HTML. Source maps are kept as CI artefacts, not deployed.
+
+## 13. Testing
+
+| Level | Where | What |
+|---|---|---|
+| Unit | `ota/frontend/test/*.test.js` (Vitest + happy-dom) | `lib/format` (money, local times, durations), `lib/forms` (field errors, summary focus), `lib/theme` (contrast fallback), `lib/blocks` (unknown link schemes dropped), `lib/url` (`next` validation), components (combobox keyboard, filters → query string, stepper) |
+| Configuration | `test/csp.test.js` | The preview CSP equals the CSP in `deploy/caddy/Caddyfile`, so E2E runs see production headers |
+| End to end | `tools/e2e/specs/storefront/*.e2e.ts` (Playwright + `@axe-core/playwright`) | Against `vite preview` (production build) proxied to the local OTA backend, the Amadeus stub, Mailpit, Stripe test mode |
+
+Journeys (one per main flow, [ADR-0015](../../docs/mvp/adr/0015-testing-strategy.md)):
+
+1. **M2** search → filter and sort → offer → branded fare → price; no-offers and expired-search states (stub magic values such as destination `ZZZ`).
+2. **M3** guest checkout with Stripe and a 3-D Secure test card → confirmation → e-mail in Mailpit → booking page through the guest cookie.
+3. **M3** airline-card checkout in the test environment → confirmation; decline and attempt-limit states.
+4. **M3** sign-up → verify through the Mailpit link → sign-in → my bookings tabs → change contacts → cancel with refund preview; guest lookup; session refresh after access-token expiry.
+5. **M3** keyboard-only checkout.
+
+Assertions in every journey: no CSP violation (a `securitypolicyviolation` listener fails the test), `document.cookie` contains only `__Host-vx_csrf`, no request to a third-party host except Stripe on the card page and none at all on the airline-card page, and axe reports no serious or critical violation.
+
+## 14. Build your own frontend
+
+OTAs may build and host their own storefront in any framework (Next.js, React, Angular, Vue or plain HTML) with the SDK in token mode, on their own domain, against `api.ota.example.com` ([`decisions.md`](../../docs/mvp/decisions.md) §2). The outline of that guide, including what differs from the hosted storefront (no airline card, keys, token storage, CORS origins), is in [`docs/build-your-own-frontend.md`](docs/build-your-own-frontend.md). The hosted storefront's source is the reference implementation.

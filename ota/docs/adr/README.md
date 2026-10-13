@@ -22,6 +22,10 @@ Related: [OTA docs index](../README.md), [`../architecture.md`](../architecture.
 | [0012](0012-storefront-settings-assets-and-pages.md) | Storefront settings, assets and content pages | Accepted | Same-origin immutable image assets (no SVG, no CSS), theme tokens, Markdown-subset pages parsed to blocks, 5-minute caches. |
 | [0013](0013-notifications-and-booking-documents.md) | Notifications and booking documents | Accepted | Outbox in the business transaction, code-default templates, itinerary and e-ticket PDFs only (no invoices), signed downloads. |
 | [0014](0014-per-tenant-workers-and-schedulers.md) | Per-tenant workers and schedulers | Accepted | Schedulers fan out small per-tenant jobs, bounded batches, claims instead of long locks, suspended tenants keep obligations to paid travellers. |
+| [0015](0015-storefront-build-urls-and-hosting.md) | Storefront build, URLs and hosting | Accepted | One Vite MPA build for all tenants, CSP-clean output, `.html` URLs with query-string ids, one `/p/<slug>` rewrite, build-time partials, font enum, no airline logos, dev proxy and preview that mimic Caddy. |
+| [0016](0016-sdk-packaging-and-type-contract.md) | SDK packaging and type contract | Accepted | Generated route table with hand-written methods, types inferred from factories, per-method contract assertions with an approved-deviations list, `session` and `environment` options, ESM + IIFE, self-contained published types. |
+| [0017](0017-airline-card-form-isolation.md) | Airline-card form isolation on the storefront | Accepted | Separate page and bundle, no third-party code, stricter path CSP, nameless inputs, values only in inputs until one SDK call, cleared on leave, tested for leaks. |
+| [0018](0018-ota-admin-consumes-the-sdk-server-side.md) | The OTA admin consumes the SDK on the server | Accepted | Server-only SDK clients per request, staff cookies, refresh only where cookies can be written and de-duplicated per token, permissions from `console.auth.me`, read-only shopping, no card entry, audit page later. |
 
 ## Requirements from other groups that these ADRs implement
 
@@ -32,6 +36,16 @@ Related: [OTA docs index](../README.md), [`../architecture.md`](../architecture.
 | `tenant.suspend` / `tenant.resume` consumer and worker exceptions | [PADR-0014](../../../platform/docs/adr/0014-tenant-suspension-and-resume.md) | [OADR-0007](0007-tenant-migration-runner-and-provisioning-worker.md), [OADR-0014](0014-per-tenant-workers-and-schedulers.md) |
 | `tenant.provision` consumer and event producer | [PADR-0001](../../../platform/docs/adr/0001-tenant-provisioning-orchestration.md) | [OADR-0007](0007-tenant-migration-runner-and-provisioning-worker.md) |
 | Handlers for the `account`, `amadeus_account` and `plan` invalidation types | [platform architecture §6.3](../../../platform/docs/architecture.md#63-cache-invalidation-vxinvalidate) | [OADR-0009](0009-caller-and-tenant-resolution.md) |
+
+## Requests from the storefront, SDK and OTA admin ADRs to other parts
+
+| Request | Owner | Asked by |
+|---|---|---|
+| Caddyfile: `rewrite /p/* /p.html` in the storefront `handle` block | Deploy (`deploy/caddy/Caddyfile`) | [OADR-0015](0015-storefront-build-urls-and-hosting.md) |
+| Caddyfile: path-specific CSP without Stripe hosts for `/checkout/pay-airline.html` | Deploy | [OADR-0017](0017-airline-card-form-isolation.md) |
+| Font names as an enum in `StorefrontSettings.branding.fonts`; e-mail links to `/account/verify.html`, `/account/reset-password.html`, `/booking.html?id=` | OTA backend (OpenAPI, notifications) | [OADR-0015](0015-storefront-build-urls-and-hosting.md) |
+| Refuse `creditCard` in console `formOfPayments` (`403 FEATURE_DISABLED`) in the MVP | OTA backend (console) | [OADR-0018](0018-ota-admin-consumes-the-sdk-server-side.md) |
+| `console.staffActions.list`, spec-first, when a tenant-wide audit view is requested | OTA backend (later) | [OADR-0018](0018-ota-admin-consumes-the-sdk-server-side.md) |
 
 ## Adding an OTA ADR
 

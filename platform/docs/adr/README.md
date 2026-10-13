@@ -23,6 +23,9 @@ Related: [platform docs index](../README.md), [`../architecture.md`](../architec
 | [0013](0013-platform-email-outbox.md) | Platform e-mail outbox | Accepted | Outbox row in the business transaction, encrypted secret links purged at a final status, template list. |
 | [0014](0014-tenant-suspension-and-resume.md) | Tenant suspension and resume | Accepted | Status switch blocks traffic at once; `tenant.suspend` only cleans up; paid travellers keep tickets and e-mails. |
 | [0015](0015-milestone-feature-switches.md) | Milestone feature switches | Accepted | Six `FEATURE_*` booleans, default off, enforced in the backend, removed one release after M5. |
+| [0016](0016-contract-rollout-per-milestone-and-route-parity.md) | Contract rollout per milestone and route parity | Accepted | The platform OpenAPI document grows in milestone slices; route parity with a pending list that is empty at M5; the platform plan owns the `tenant.*` messages. |
+| [0017](0017-platform-test-doubles-and-end-to-end-harness.md) | Platform test doubles and the end-to-end harness | Accepted | Fake OTA worker in integration tests, gated cross-backend tests, `tools/e2e` created by the platform plan in M1, Stripe journeys nightly only. |
+| [0018](0018-onboarding-checklist-computation.md) | Onboarding checklist computation | Accepted | One done rule per checklist item over platform tables; "storefront opened" is done once the storefront can be opened. |
 
 ## Adding a platform ADR
 
