@@ -47,8 +47,10 @@ git ls-remote --tags https://github.com/actions/checkout.git 'refs/tags/v4.4.0*'
 | Job (check name) | Needs install | Steps |
 |---|---|---|
 | `plan-lint` (Plan lint) | No | `node tools/plan-lint/plan-lint.mjs` |
-| `deploy-files` (Deploy files) | No | `shellcheck -S style deploy/scripts/*.sh`; Caddy 2.8.4 (SHA-512 checked) validates and `fmt`-checks the Caddyfile; `systemd-analyze verify` of the units, which may report only the paths that exist on the VM alone (`/usr/bin/node`, the `/usr/local/sbin/velexis-*` helpers) |
-| `build-test` (Build and test) | Yes | Repository guards; `check-package-json.mjs`; install; Turborepo cache; database bootstrap; ESLint and tests of `tools/ci`; `pnpm format:check`, `lint`, `typecheck`, `test`; generated files up to date; `pnpm test:int` with PostgreSQL 16, Redis 7.4 and Mailpit; `pnpm build`; a dry run of `deploy/scripts/pack-release.sh` |
+| `deploy-files` (Deploy files) | No | `shellcheck -S style deploy/scripts/*.sh deploy/systemd/test/*.sh`; Caddy 2.8.4 (SHA-512 checked) validates and `fmt`-checks the Caddyfile; `systemd-analyze verify` of the units, which may report only the paths that exist on the VM alone (`/usr/bin/node`, the `/usr/local/sbin/velexis-*` helpers); `systemd-analyze security` keeps every app unit and `velexis-alert@` at exposure 2.0 or lower (X-021) |
+| `systemd-units` (systemd units smoke test) | No | `deploy/systemd/test/units-smoke.sh` runs the real units with a stand-in app under systemd, with PostgreSQL, Redis and Mailpit service containers, and checks that a unit killed into `failed` mails one alert (X-021) |
+| `dev-setup` (Local development setup) | Yes | [`docs/mvp/local-development.md`](../../docs/mvp/local-development.md) §2 on a clean runner: PostgreSQL 16 and Redis 7.4 from apt, `deploy/scripts/dev-setup.sh` and `tools/dev/dev-keys.mjs` twice, then the roles, every login of `.env.local`, the Redis password and the key files (X-016) |
+| `build-test` (Build and test) | Yes | Repository guards; `check-package-json.mjs`; install; Turborepo cache; database bootstrap; `pnpm dev:keys`; ESLint and tests of `tools/ci`; `pnpm format:check`, `lint`, `typecheck`, `test`; generated files up to date; `pnpm test:int` with PostgreSQL 16, Redis 7.4 and Mailpit; `pnpm build`; a dry run of `deploy/scripts/pack-release.sh` |
 
 The guards and `check-package-json.mjs` run before `pnpm install`, so a broken rule fails in seconds.
 
