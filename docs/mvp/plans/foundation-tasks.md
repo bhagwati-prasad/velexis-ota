@@ -61,8 +61,8 @@ Related: [`../decisions.md`](../decisions.md) (binding), [`../architecture.md`](
 
 ## M0 Foundations
 
-### X-001 · Verify the monorepo bootstrap and commit the lockfile
-- **Status:** todo
+### X-001 · Verify the monorepo bootstrap and commit the lockfile ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** foundation
 - **Milestone:** M0
 - **Depends on:** —
