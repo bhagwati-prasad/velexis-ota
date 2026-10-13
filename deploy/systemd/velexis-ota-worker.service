@@ -23,6 +23,9 @@ Environment=NODE_OPTIONS=--max-old-space-size=400
 ExecStart=/usr/bin/node --enable-source-maps dist/worker.js
 Restart=always
 RestartSec=3
+# Auto-restarts skip the failed state (systemd 254+): OnFailure= mails one alert when the start limit of [Unit]
+# gives up (StartLimitBurst=10 within StartLimitIntervalSec=300), not one per crash. Crashes stay in the journal.
+RestartMode=direct
 KillSignal=SIGTERM
 TimeoutStopSec=60
 SyslogIdentifier=velexis-ota-worker
@@ -59,6 +62,7 @@ SystemCallFilter=@system-service
 SystemCallFilter=~@privileged
 SystemCallErrorNumber=EPERM
 # MemoryDenyWriteExecute is deliberately NOT set: the V8 JIT needs writable+executable memory.
+# ProcSubset=pid is deliberately NOT set: it hides /proc/stat, and os.cpus() then returns nothing (units-smoke.sh).
 ReadWritePaths=/var/lib/velexis/storage
 InaccessiblePaths=-/etc/velexis/keys/platform-jwt-ed25519.pem -/etc/velexis/platform-backend.env -/etc/velexis/platform-worker.env -/etc/velexis/platform-frontend.env -/etc/velexis/platform-admin.env -/etc/velexis/migrator.env -/etc/velexis/caddy.env -/etc/velexis/backup.env -/etc/velexis/alert.env -/etc/velexis/backup
 

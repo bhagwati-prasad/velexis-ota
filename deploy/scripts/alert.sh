@@ -6,8 +6,14 @@
 #   velexis-alert unit-failed <unit>          called by velexis-alert@.service (OnFailure= of every unit)
 #   velexis-alert message "<subject>" <file>  called by scripts (health check, backup); body read from <file> or stdin
 #
-# TEMPLATE: finalised by task X-021 (systemd) and extended by X-030 (health checks).
-# Logs are already redacted by the apps; this script adds no request data.
+# TLS: ALERT_SMTP_TLS=required (the default) never sends without TLS: implicit TLS for smtps:// URLs, STARTTLS
+# for smtp:// URLs. ALERT_SMTP_TLS=none sends plain SMTP and is accepted only for a loopback host, so a local test
+# sink such as Mailpit (smtp://127.0.0.1:1025) works while alert mails never cross a network in clear text.
+# Authentication: an empty ALERT_SMTP_USER sends without SMTP AUTH (Mailpit); otherwise the user and password go
+# through a temporary netrc file, never on the command line. ALERT_SMTP_URL must not carry user info.
+#
+# Finalised by task X-021 (deploy/systemd/test/units-smoke.sh sends a real alert to Mailpit); X-030 adds the
+# health-check callers. Logs are already redacted by the apps; this script adds no request data.
 # =====================================================================================================
 set -euo pipefail
 umask 077
@@ -21,6 +27,33 @@ fi
 : "${ALERT_SMTP_URL:?set in /etc/velexis/alert.env}"
 : "${ALERT_FROM:?}" "${ALERT_TO:?}"
 : "${ALERT_HOST_LABEL:=$(hostname)}"
+: "${ALERT_SMTP_TLS:=required}"
+
+die() { echo "velexis-alert: $*" >&2; exit 2; }
+
+case "$ALERT_SMTP_URL" in
+  smtp://*|smtps://*) ;;
+  *) die "ALERT_SMTP_URL must start with smtp:// or smtps://" ;;
+esac
+# No user info in the URL: credentials would show on curl's command line (ps), and "smtp://127.0.0.1:x@host"
+# would make curl connect to host while the loopback check below sees 127.0.0.1.
+case "$ALERT_SMTP_URL" in
+  *@*) die "ALERT_SMTP_URL must not contain user info; set ALERT_SMTP_USER and ALERT_SMTP_PASSWORD" ;;
+esac
+SMTP_SCHEME="${ALERT_SMTP_URL%%://*}"
+SMTP_HOST="$(printf '%s\n' "$ALERT_SMTP_URL" | sed -E 's#^[a-z]+://(\[[^]]*\]|[^:/]+).*#\1#')"
+
+TLS_ARGS=()
+case "$ALERT_SMTP_TLS" in
+  required)
+    TLS_ARGS=(--ssl-reqd) ;;
+  none)
+    [ "$SMTP_SCHEME" = smtp ] || die "ALERT_SMTP_TLS=none needs an smtp:// URL (smtps:// is always TLS)"
+    # Loopback literals only: a name such as 127.example.com can resolve to any address.
+    [[ "$SMTP_HOST" =~ ^(localhost|\[::1\]|127\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3})$ ]] \
+      || die "ALERT_SMTP_TLS=none is only allowed for a loopback SMTP host (a local test sink), not $SMTP_HOST" ;;
+  *) die "ALERT_SMTP_TLS must be required or none" ;;
+esac
 
 MSG="$(mktemp)"
 NETRC="$(mktemp)"
@@ -54,14 +87,19 @@ esac
   echo "Date: $(date -R)"
   echo "Content-Type: text/plain; charset=utf-8"
   echo
-  echo "$BODY"
+  # SMTP allows at most 998 bytes per line; JSON log lines can be longer.
+  printf '%s\n' "$BODY" | fold -b -w 990
 } > "$MSG"
 
-# Credentials go through a netrc file, never on the command line (visible in ps).
-SMTP_HOST="$(echo "$ALERT_SMTP_URL" | sed -E 's#^[a-z]+://([^:/]+).*#\1#')"
-printf 'machine %s login %s password %s\n' "$SMTP_HOST" "${ALERT_SMTP_USER:-}" "${ALERT_SMTP_PASSWORD:-}" > "$NETRC"
+AUTH_ARGS=()
+if [ -n "${ALERT_SMTP_USER:-}" ]; then
+  printf 'machine %s login %s password %s\n' "$SMTP_HOST" "$ALERT_SMTP_USER" "${ALERT_SMTP_PASSWORD:-}" > "$NETRC"
+  AUTH_ARGS=(--netrc-file "$NETRC")
+fi
 
-curl --silent --show-error --max-time 60 --ssl-reqd \
-  --url "$ALERT_SMTP_URL" --netrc-file "$NETRC" \
+# --crlf: SMTP lines end in CRLF; providers that refuse bare line feeds (SMTP smuggling fixes) accept the mail.
+curl --silent --show-error --connect-timeout 15 --max-time 60 --crlf "${TLS_ARGS[@]}" "${AUTH_ARGS[@]}" \
+  --url "$ALERT_SMTP_URL" \
   --mail-from "$ALERT_FROM" --mail-rcpt "$ALERT_TO" \
   --upload-file "$MSG"
+echo "velexis-alert: sent \"$SUBJECT\" to $ALERT_TO"

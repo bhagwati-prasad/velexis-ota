@@ -1,9 +1,10 @@
 # CI for every pull request and every push to main (ADR-0015, ADR-0020).
-# Jobs: plan-lint (no install), deploy-files (shellcheck, Caddyfile, systemd units), dev-setup (docs/mvp/
-# local-development.md §2 on a clean runner: PostgreSQL 16 and Redis 7.4 from apt, dev-setup.sh and dev-keys.mjs
-# twice), build-test (repository guards and tools/ci/check-package-json.mjs before the install, then install, the
-# tools/ci tests, format, lint, typecheck, unit, contracts up to date, integration with PostgreSQL 16 + Redis 7.4 +
-# Mailpit, build, release dry run).
+# Jobs: plan-lint (no install), deploy-files (shellcheck, Caddyfile, systemd units and their sandbox exposure),
+# systemd-units (the real units run a stand-in app under systemd; a failure alert reaches Mailpit), dev-setup
+# (docs/mvp/local-development.md §2 on a clean runner: PostgreSQL 16 and Redis 7.4 from apt, dev-setup.sh and
+# dev-keys.mjs twice), build-test (repository guards and tools/ci/check-package-json.mjs before the install, then
+# install, the tools/ci tests, format, lint, typecheck, unit, contracts up to date, integration with PostgreSQL 16 +
+# Redis 7.4 + Mailpit, build, release dry run).
 # Agents never change this file to get their own change through (AGENTS.md §7). What each guard enforces and how to
 # run it locally: tools/ci/README.md.
 # Third-party actions are pinned to full commit SHAs with the tag as the last thing in the comment, so Dependabot
@@ -56,7 +57,7 @@ jobs:
         with:
           persist-credentials: false
       - name: shellcheck deploy scripts
-        run: shellcheck -S style deploy/scripts/*.sh
+        run: shellcheck -S style deploy/scripts/*.sh deploy/systemd/test/*.sh
       - name: Validate the Caddyfile with Caddy ${{ env.CADDY_VERSION }}
         run: |
           curl -fsSL -o /tmp/caddy.tgz "https://github.com/caddyserver/caddy/releases/download/v${CADDY_VERSION}/caddy_${CADDY_VERSION}_linux_amd64.tar.gz"
@@ -72,6 +73,53 @@ jobs:
           if echo "$out" | grep -v -E "Command /usr/(bin/node|local/sbin/velexis-[a-z]+) is not executable|velexis-alert@|caddy.service" | grep -q .; then
             exit 1
           fi
+      - name: Unit sandboxing (every app unit and velexis-alert@ at exposure 2.0 or lower)
+        run: |
+          # --threshold counts in tenths: 20 is 2.0 ("OK"); systemd-analyze exits non-zero above it.
+          for unit in deploy/systemd/velexis-{platform-api,platform-worker,portal,platform-admin,ota-api,ota-worker,ota-admin}.service \
+                      deploy/systemd/velexis-alert@.service; do
+            if ! out="$(systemd-analyze security --offline=true --threshold=20 --no-pager "$unit" 2>&1)"; then
+              echo "$out"
+              echo "::error::$unit is above exposure 2.0"
+              exit 1
+            fi
+            echo "$out" | tail -n 1
+          done
+
+  systemd-units:
+    name: systemd units smoke test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+      redis:
+        image: redis:7.4
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+      mailpit:
+        image: axllent/mailpit:v1.29
+        ports: ["1025:1025", "8025:8025"]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version-file: .nvmrc
+      - name: Run the real units with a stand-in app, kill one into failed, check the alert in Mailpit
+        # X-021: the production sandboxing against what the apps need; see the header of units-smoke.sh.
+        run: sudo env SMOKE_NODE="$(command -v node)" bash deploy/systemd/test/units-smoke.sh
 
   # X-016: the one-time setup of docs/mvp/local-development.md §2, up to `pnpm dev:keys`, on a clean runner with
   # native PostgreSQL and Redis (systemd, sudo), exactly as a developer runs it. No service containers here.

@@ -44,7 +44,7 @@ flowchart LR
 | `caddy/maintenance/index.html` | `/srv/velexis/maintenance/index.html` | `provision-vm.sh`, `deploy.sh` | Shown by Caddy when a Next.js app is down. Also the M0 "hello world" page. |
 | `systemd/velexis-*.service` (7 apps) | `/etc/systemd/system/` | `provision-vm.sh`, `deploy.sh` | Enabled by `deploy.sh` once a release contains the app. |
 | `systemd/velexis-backup.{service,timer}` | `/etc/systemd/system/` | `provision-vm.sh` | Nightly 02:30 UTC. |
-| `systemd/velexis-alert@.service` | `/etc/systemd/system/` | `provision-vm.sh` | `OnFailure=` target of every unit. |
+| `systemd/velexis-alert@.service` | `/etc/systemd/system/` | `provision-vm.sh` | `OnFailure=` target of every unit. The app units restart with `RestartMode=direct`, so it mails once, when a unit's start limit gives up. Runs `velexis-alert` as root without capabilities on a read-only file system. |
 | `systemd/caddy.service.d/velexis.conf` | `/etc/systemd/system/caddy.service.d/` | `provision-vm.sh`, `deploy.sh` | Loads `/etc/velexis/caddy.env` into Caddy and creates `/run/caddy` (0700, user `caddy`) for the admin socket. |
 | `scripts/deploy.sh` | `/usr/local/sbin/velexis-deploy` (root, 0755) | `provision-vm.sh`, then each deploy re-installs it | The only command the `deploy` user may run with sudo. |
 | `scripts/backup.sh`, `restore.sh`, `alert.sh` | `/usr/local/sbin/velexis-backup`, `velexis-restore`, `velexis-alert` | `provision-vm.sh`, `deploy.sh` | Root-owned copies, so the app user can never change code that root runs. |
@@ -74,7 +74,7 @@ Every unit binds to `127.0.0.1`, loads its settings from `/etc/velexis/<app>.env
 | Caddy | `caddy` (apt package) + drop-in | `caddy` | — | 80, 443 | `caddy.env` |
 | Deploy-time migrations | run by `velexis-deploy` | — | `db/`, `migrations/` | — | `migrator.env` (root only) |
 
-The separate users are the boundary: a process cannot read another user's `/proc/<pid>/environ` or files through `/proc/<pid>/root`, and `ProtectProc=invisible` hides the other zones' processes. Each unit also hides the other zones' env files and key folders with `InaccessiblePaths=`; that is defence in depth only, since it cannot stop a process from reading what a process of the same user holds, nor root. `systemd-analyze security` rates the app units around 1.4 ("OK").
+The separate users are the boundary: a process cannot read another user's `/proc/<pid>/environ` or files through `/proc/<pid>/root`, and `ProtectProc=invisible` hides the other zones' processes. Each unit also hides the other zones' env files and key folders with `InaccessiblePaths=`; that is defence in depth only, since it cannot stop a process from reading what a process of the same user holds, nor root. `systemd-analyze security` rates the app units 1.4 and `velexis-alert@` 1.7 ("OK"); CI fails any of them above 2.0.
 
 ## Release and deploy flow
 
@@ -116,10 +116,11 @@ Commands on the VM:
 
 | Check | Command |
 |---|---|
-| Shell scripts | `shellcheck -S style deploy/scripts/*.sh` |
+| Shell scripts | `shellcheck -S style deploy/scripts/*.sh deploy/systemd/test/*.sh` |
 | Caddyfile | `VELEXIS_EDGE_SECRET=x caddy validate --config deploy/caddy/Caddyfile --adapter caddyfile` |
 | Unit files | `systemd-analyze verify deploy/systemd/*.service` (reports only the missing `/usr/bin/node` off the VM) |
-| Unit sandboxing | `systemd-analyze security --offline=true deploy/systemd/velexis-ota-api.service` |
+| Unit sandboxing | `systemd-analyze security --offline=true --threshold=20 deploy/systemd/velexis-ota-api.service` (every app unit and `velexis-alert@` must stay at 2.0 or lower) |
+| Units under systemd | `sudo env SMOKE_NODE="$(command -v node)" bash deploy/systemd/test/units-smoke.sh` (needs systemd as PID 1, PostgreSQL, Redis and Mailpit; a CI runner or a throwaway VM, never the production VM) |
 | Release folder | `RELEASE_SHA=$(git rev-parse HEAD) bash deploy/scripts/pack-release.sh /tmp/release` |
 
-CI runs the first three on every pull request that touches `deploy/` (task X-019).
+CI runs the first four in the `deploy-files` job on every pull request (task X-019) and the units smoke test in the `systemd-units` job (task X-021). The smoke test installs `velexis-ota-api` and `velexis-portal` from these templates with their paths moved under a temporary prefix and a stand-in Node app as `dist/main.js` and `server.js`. The stand-in proves that the sandbox still lets the apps do what they need (release folder, key files, PostgreSQL, Redis, DNS and outside HTTPS, `os.cpus()`, `os.networkInterfaces()`) and that it hides what they must not read (the keys from a Next.js unit, `ota-worker.env` and `migrator.env` from the OTA API). It then kills the OTA API until the start limit puts it in `failed` and checks that `velexis-alert@` mails Mailpit once, with the unit name, its status and its last log lines. Loosen a sandboxing option only when this test proves the apps need it, and write the reason next to it in the unit.

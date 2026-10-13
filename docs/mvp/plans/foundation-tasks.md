@@ -636,7 +636,7 @@ Related: [`../decisions.md`](../decisions.md) (binding), [`../architecture.md`](
 - **Verify:** `shellcheck -S style deploy/scripts/provision-vm.sh deploy/scripts/check-vm.sh && sudo bash deploy/scripts/check-vm.sh`
 
 ### X-021 · Finalise the systemd units and the failure alert
-- **Status:** todo
+- **Status:** in progress (branch claude/intelligent-bardeen-90hhu7; pending: a green run of the CI job systemd-units for AC3, the throwaway-VM repeat of steps 2–3 (human step))
 - **Component:** foundation
 - **Milestone:** M0
 - **Depends on:** X-001
