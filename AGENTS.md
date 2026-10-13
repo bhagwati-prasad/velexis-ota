@@ -52,21 +52,21 @@ The plans are Markdown files of task blocks (`### OBE-014 · Title` with Compone
 If you were given a task id, do that task. Otherwise pick one like this:
 
 1. Take the **lowest milestone** that still has open tasks (M0 → M6). Finish foundation (`X-`) tasks of a milestone before component tasks that depend on them.
-2. Keep only tasks whose **Depends on** tasks are all **merged** into `main`. A task is merged when its status says `done (PR #n)` or its branch is merged.
+2. Keep only tasks whose **Depends on** tasks are all **merged** into `main`. A task is merged when, on `main`, its heading ends with ` ✅` and its status says `done (PR #n)` ([ADR-0025](docs/mvp/adr/0025-roadmap-scheduling-and-tracking.md) item 6).
 3. Drop tasks that are **claimed**: a status `in progress`, an open PR, or an existing branch `task/<ID>-*`.
 4. Prefer tasks on the **critical path**. `node tools/plan-lint/plan-lint.mjs` prints it.
-5. Prefer tasks whose **Files** do not overlap with tasks in progress, so parallel agents do not collide.
+5. Prefer tasks whose **Files** do not overlap with tasks in progress, so parallel agents do not collide. Registry files (`pending-operations.ts`, `config.ts`, module and scheduler registries, `cli.ts`, `package.json`, `.env.example` files, OpenAPI documents, CI workflows, Markdown sections) and folder entries do not count as overlap: add only your own entries and rebase ([ADR-0020](docs/mvp/adr/0020-ai-agent-development-workflow.md), Parallel agents).
 6. If nothing qualifies, stop and report which dependencies block progress.
 
 ## 4. Doing a task: one task = one branch = one PR
 
 1. Create the branch `task/<ID>-<short-slug>` from the latest `main`.
-2. Set the task's status to `in progress` in its plan, as the plan's header describes. If the plan has no status mechanism, add `- **Status:** in progress` to the task block (plan-lint accepts extra fields).
+2. Set the task's status to `in progress (PR #n)` in its plan once the PR exists. If the task block has no Status line, add `- **Status:** in progress (PR #n)` under the heading (plan-lint accepts extra fields).
 3. **Contract first** (§6). Then implement the steps.
 4. Change only the files listed in **Files**, plus their tests and generated files. If something else must change, keep it minimal and explain it in the PR.
 5. Write tests that prove each **Acceptance** criterion. End the test name with `[<ID> AC<n>]`.
 6. Run the task's **Verify** command and the checks in §5.
-7. Update docs that your change makes stale. Set the plan status to `done (PR #n)`.
+7. Update docs that your change makes stale. In the PR's last commit, set the plan status to `done (PR #n)` **and** end the task's heading with ` ✅` (`### X-012 · Title ✅`). Both become true when the developer merges; the roadmap counts done tasks by the ` ✅`.
 8. Commit with Conventional Commits (`feat(ota-backend): add API key guard`, footer `Task: OBE-014`) and open **one PR** using the template. Its title is `<type>(<scope>): <title> [<ID>]`.
 9. **Do not merge.** The developer reviews and merges.
 
@@ -82,8 +82,8 @@ A task is done only when **all** of these hold:
 - [ ] Contract checks pass: generated types are up to date, route parity holds, and the SDK contract check passes.
 - [ ] No test was deleted, skipped, loosened or given a longer timeout to make it pass (§7).
 - [ ] Migrations, if any, follow [`conventions.md` §9](docs/mvp/conventions.md#9-database-migrations), run from scratch and as an upgrade, and the regenerated table types are committed.
-- [ ] Docs are updated: README or docs files affected by the change, the [configuration matrix](docs/mvp/architecture.md#6-configuration-matrix) and `.env.example` for new variables, and an **ADR** for any new or changed decision (status `Proposed`).
-- [ ] The plan status is set to `done (PR #n)`, and `node tools/plan-lint/plan-lint.mjs` passes.
+- [ ] Docs are updated: README or docs files affected by the change, the [configuration matrix](docs/mvp/architecture.md#6-configuration-matrix), `.env.example` and the `deploy/env` template for new variables (with the human step "add it to `/etc/velexis` before the next deploy" in the PR), and an **ADR** for any new or changed decision (status `Proposed`).
+- [ ] The plan status is set to `done (PR #n)`, the task heading ends with ` ✅`, and `node tools/plan-lint/plan-lint.mjs` passes.
 - [ ] The security checklist in [`conventions.md` §12](docs/mvp/conventions.md#12-security-checklist-every-pr) is ticked.
 - [ ] One PR, with the template filled in, and CI green.
 
@@ -148,7 +148,7 @@ The root scripts are created by the M0 foundation tasks. Until they exist, only 
 | `pnpm format` / `pnpm format:check` | Prettier |
 | `pnpm typecheck` | `tsc --noEmit` everywhere, including the SDK's `checkJs` |
 | `pnpm test` | Unit, contract and UI tests (Vitest) |
-| `pnpm test:int` | Integration tests (needs PostgreSQL 16, Redis 7, the Amadeus stub and Mailpit running) |
+| `pnpm test:int` | Integration tests (needs PostgreSQL 16, Redis 7 and Mailpit; the Amadeus stub starts in-process) |
 | `pnpm test:e2e` | Playwright end-to-end suite (`tools/e2e`) |
 | `pnpm --filter <pkg> test -- <pattern>` | One package, matching tests only |
 | `pnpm contracts:lint` | Lint the OpenAPI documents (Redocly) |
@@ -156,9 +156,10 @@ The root scripts are created by the M0 foundation tasks. Until they exist, only 
 | `pnpm db:migrate` | Apply platform and reference migrations |
 | `pnpm db:migrate:tenants` | Apply tenant migrations to every tenant schema |
 | `pnpm db:codegen` | Regenerate Kysely table types |
+| `pnpm db:seed:reference` | Load the vendored reference data (airports, airlines, countries, currencies) into `reference` |
 | `pnpm dev:keys` | Create local key files in `.local/keys/` |
 | `pnpm stub:amadeus` | Start the Amadeus stub on `127.0.0.1:4900` |
-| `node tools/plan-lint/plan-lint.mjs` | Validate the task plans and print the critical path (`--graph` for a Mermaid graph) |
+| `node tools/plan-lint/plan-lint.mjs` (or `pnpm plan:lint`) | Validate the task plans and print the critical path (`--graph` for a Mermaid graph) |
 | `stripe listen --forward-to localhost:4000/webhooks/stripe/velexis/test` | Forward Stripe test webhooks to the local OTA backend |
 | `stripe listen --forward-to localhost:3100/webhooks/stripe/billing` | Forward Stripe billing webhooks to the local platform backend |
 
@@ -170,8 +171,8 @@ Local services: PostgreSQL `127.0.0.1:5432`, Redis `127.0.0.1:6379`, Mailpit SMT
 |---|---|
 | `platform/backend`, `platform/frontend`, `platform/admin` | Platform API (NestJS), portal and platform admin (Next.js) |
 | `ota/backend`, `ota/frontend`, `ota/admin`, `ota/sdk` | OTA API (NestJS), hosted storefront (vanilla), OTA admin (Next.js), JS SDK |
-| `packages/*` | `config`, `logger`, `db`, `crypto`, `errors`, `api-types` |
+| `packages/*` | `config`, `logger`, `db`, `crypto`, `errors`, `api-types`, `testing` (devDependency only) |
 | `deploy/` | Caddyfile, systemd units, VM, deploy and backup scripts, env templates |
-| `tools/` | `plan-lint`, `amadeus-stub`, `e2e` |
+| `tools/` | `plan-lint`, `reference-data`, `amadeus-stub`, `e2e` |
 | `docs/mvp/` | Decisions, architecture, conventions, tech stack, ADRs, plans |
 | `docs/velexis-sdk/`, `docs/amadeus-api/` | Reference contracts and designs (reuse, do not redo, do not edit) |

@@ -3,6 +3,7 @@
 **Status:** Accepted
 **Date:** 2026-10-12
 **Deciders:** Lead architect. Decided during planning; revisit when a second VM, a managed database, or more than one person on call makes a hosted log and metrics service worth its cost.
+**Revisions:** 2026-10-12 (planning review): card objects are censored at every depth and bodies never reach the `err` serializer; security logs are kept 12 months off the VM ([ADR-0027](0027-pci-scope-and-vm-controls.md)).
 
 ## Context
 
@@ -19,7 +20,7 @@ M6 includes "monitoring and alerting". The stack must be cheap and simple to run
 ### Logs
 
 - **pino** JSON logs to stdout in every Node process. In NestJS through `nestjs-pino`; in the Next.js servers through `@velexis/logger` in server code.
-- systemd sends stdout to **journald**. Retention: `SystemMaxUse=4G`, 30 days.
+- systemd sends stdout to **journald**. Retention: `SystemMaxUse=4G`, 30 days. Security logs (auditd, sshd, sudo, Caddy, app security events) are also kept 3 months on the VM and shipped off the VM with 12-month retention and a daily automated review (task X-038, [ADR-0027](0027-pci-scope-and-vm-controls.md)).
 - **Standard fields:** `time`, `level`, `app`, `env`, `requestId`, `tenantId`, `tenantKey`, `environment` (test or live), `actorType`, `actorId`, `route`, `operationId`, `status`, `durationMs`, `err` (type, message, stack, code).
 - **Request id:**
   - Caddy sets `X-Request-Id` (`{http.request.uuid}`) when the client did not send a valid one;
@@ -34,8 +35,10 @@ M6 includes "monitoring and alerting". The stack must be cheap and simple to run
   - `password`, `newPassword`, `currentPassword`, `mfaCode`;
   - `accessToken`, `refreshToken`, `portalToken`, `bookingToken`, `token`, `clientSecret`, `secret`, `apiKey`;
   - `number` (any field named `number` under `card`, `creditCard` or `documents`), `securityCode`, `cvc`, `cardNumber`, `certificateNumber`;
+  - the whole `card`, `creditCard` and `formOfPayments` objects, at every depth the apps log (pino paths are not recursive, so each depth is spelt out, plus a censor that walks error causes);
   - `authorization`, `cookie`.
-- **Tests** assert that a log line produced from a request containing a test PAN, a password and a token contains none of them.
+- The `err` serializer keeps type, message, stack and `code`, and never request or response bodies (an Amadeus or Stripe error's body can hold card data).
+- **Tests** assert that a log line produced from a request containing a test PAN, a password and a token contains none of them, and that an error carrying a nested Amadeus Create Orders body logs neither the PAN nor the CVV.
 
 ### Health
 

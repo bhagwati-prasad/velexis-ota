@@ -43,6 +43,7 @@ flowchart TB
   dev --> ota
   platform -->|"queues, read-only data, SSO token"| ota
   ota --> amadeus
+  platform -.->|"OAuth token check only"| amadeus
   ota --> stripe
   platform --> stripe
   platform --> smtp
@@ -59,8 +60,9 @@ flowchart TB
 | OTA staff | Bookings console, PNR import, queues, payments, customers, markups, storefront settings, templates | OTA admin `admin.ota.example.com` (SSO from the portal) |
 | Traveller | Search, book, pay, manage bookings | Hosted storefront `<key>.ota.example.com` or a custom domain |
 | Third-party developer | Own storefront in any framework | SDK + `api.ota.example.com` with `pk_`/`sk_` keys |
-| Amadeus Enterprise | Shopping, pricing, orders, issue, queues ([`docs/amadeus-api/`](../amadeus-api/)) | OTA backend only ([ADR-0012](adr/0012-amadeus-account-model.md)) |
-| Stripe | Subscriptions (platform), customer payments (OTA) | Both backends ([ADR-0011](adr/0011-payments-stripe-and-airline-card.md), [ADR-0013](adr/0013-subscription-billing-stripe-billing.md)) |
+| Amadeus Enterprise | Shopping, pricing, orders, issue, queues ([`docs/amadeus-api/`](../amadeus-api/)) | Flight operations: OTA backend only. The platform worker only requests OAuth tokens to verify credentials ([ADR-0012](adr/0012-amadeus-account-model.md)). |
+| Stripe | Subscriptions and Connect account events (platform), customer payments (OTA) | Both backends ([ADR-0011](adr/0011-payments-stripe-and-airline-card.md), [ADR-0013](adr/0013-subscription-billing-stripe-billing.md)) |
+| Public DNS resolvers | TXT and CNAME checks of custom domains (M5) | Platform worker ([ADR-0018](adr/0018-hosted-storefront-custom-domains.md)) |
 
 ## 2. Containers
 
@@ -119,7 +121,7 @@ flowchart LR
 
 | # | Component | Directory | Runtime and framework | Public host | Local port | Talks to |
 |---|---|---|---|---|---|---|
-| 1 | Platform backend | `platform/backend` | Node 22, NestJS 11. Two processes: API and worker | `api.platform.example.com` | 3100 (API), 3101 (worker health) | PostgreSQL (`platform`, `reference`), Redis, Stripe, SMTP |
+| 1 | Platform backend | `platform/backend` | Node 22, NestJS 11. Two processes: API and worker | `api.platform.example.com` | 3100 (API), 3101 (worker health) | PostgreSQL (`platform`, `reference`), Redis, Stripe, SMTP, the Amadeus OAuth token endpoint (credential verification only), public DNS resolvers (custom-domain checks) |
 | 2 | Platform frontend (portal) | `platform/frontend` | Next.js 15 App Router, React 19 | `platform.example.com` | 3000 | Platform API (server side) |
 | 3 | Platform admin | `platform/admin` | Next.js 15 App Router, React 19 | `admin.platform.example.com` | 3001 | Platform API (server side) |
 | 4 | OTA backend | `ota/backend` | Node 22, NestJS 11. Two processes: API and worker | `api.ota.example.com`, plus `/api/*` on storefront hosts | 4000 (API), 4001 (worker health) | PostgreSQL (tenant schemas, `reference`, platform read-only), Redis, Amadeus, Stripe, SMTP, local storage |
@@ -137,8 +139,9 @@ flowchart LR
 | `@velexis/crypto` | `packages/crypto` | Envelope encryption, HMAC, token hashing, key providers ([ADR-0010](adr/0010-secrets-envelope-encryption.md)) | Both backends |
 | `@velexis/errors` | `packages/errors` | Error codes generated from the OpenAPI error catalogues, `AppError` | Both backends, Next.js apps |
 | `@velexis/api-types` | `packages/api-types` | Types generated from both OpenAPI documents; queue message contracts under `/jobs` ([ADR-0006](adr/0006-contract-first-openapi.md)) | Everything, including the SDK (types only) |
+| `@velexis/testing` | `packages/testing` | Test databases, Redis, clock, response checks, Mailpit, Stripe and Amadeus stub helpers ([ADR-0022](adr/0022-shared-test-support-package.md)) | Every package and app, **devDependency only** |
 
-Development and test tools: `tools/amadeus-stub` (port 4900), `tools/e2e` (Playwright), `tools/plan-lint`, plus Mailpit (SMTP 1025, UI 8025).
+Tools: `tools/reference-data` (`@velexis/reference-data`: vendored datasets and the loader that deploys run, [ADR-0024](adr/0024-reference-data-sources-and-loader.md)), `tools/amadeus-stub` (`@velexis/amadeus-stub`, port 4900), `tools/e2e` (`@velexis/e2e`, Playwright), `tools/plan-lint` (plain script), plus Mailpit (SMTP 1025, UI 8025) in development and CI.
 
 ## 3. Hosts, ports and the VM
 
@@ -148,7 +151,7 @@ All hosts are placeholders from [`decisions.md`](decisions.md) §4. Every app po
 |---|---|---|
 | `platform.example.com` | `127.0.0.1:3000` | Portal |
 | `admin.platform.example.com` | `127.0.0.1:3001` | Platform admin. MFA mandatory. Optionally restricted by IP. |
-| `api.platform.example.com` | `127.0.0.1:3100` | Platform API and `/webhooks/stripe/billing`. `/internal/*` is blocked publicly. |
+| `api.platform.example.com` | `127.0.0.1:3100` | Platform API, `/webhooks/stripe/billing` and `/webhooks/stripe/connect-accounts` (M5). `/internal/*` is blocked publicly. |
 | `admin.ota.example.com` | `127.0.0.1:3002` | OTA admin. The OTA is chosen after sign-in. |
 | `api.ota.example.com` | `127.0.0.1:4000` | OTA API for SDK users with keys, and Stripe payment webhooks. `/internal/*` is blocked publicly. |
 | `<key>.ota.example.com` and verified custom domains | static files at `/srv/velexis/current/storefront`; `/api/*` → `127.0.0.1:4000` with edge headers | On-demand TLS gated by `GET 127.0.0.1:3100/internal/tls/ask` ([ADR-0018](adr/0018-hosted-storefront-custom-domains.md)) |
@@ -164,7 +167,9 @@ The VM runs seven systemd units, plus `postgresql`, `redis-server`, `caddy` and 
 | Platform API, OTA API | 768 MB each |
 | Platform worker, OTA worker | 512 MB each |
 | Portal, platform admin, OTA admin | 512 MB each |
-| Caddy, OS, page cache | the rest (~1.4 GB) |
+| Caddy, OS, page cache | the rest (~1 GB) |
+
+The budgets add up to about 7 GB (2.5 + 0.5 + 2 × 0.75 + 5 × 0.5), which leaves about 1 GB for Caddy, the OS and the page cache. That is tight: the M6 measurements (PBE-063, OBE-088) check real use against the resize rule of [ADR-0007](adr/0007-single-vm-without-docker.md).
 
 ## 4. Data ownership
 
@@ -180,7 +185,9 @@ flowchart LR
   OB["OTA backend<br/>role velexis_ota_app"] -->|read + write| T
   OB -->|read| R
   OB -->|"read only, cached in Redis"| P
-  MG["Migrations and provisioning DDL<br/>role velexis_migrator"] -->|DDL| P & R & T
+  MG["Deploy migrations<br/>role velexis_migrator"] -->|DDL| P & R
+  PV["Tenant provisioning (OTA worker)<br/>and the deploy fan-out<br/>role velexis_provisioner"] -->|DDL| T
+  MG -.->|"SET ROLE"| PV
 ```
 
 | Schema | Owner (writes, migrations) | Readers | Migrations live in |
@@ -191,7 +198,7 @@ flowchart LR
 
 Rules from [`decisions.md`](decisions.md) §5 and [ADR-0003](adr/0003-six-components-two-nestjs-backends.md):
 
-- **Platform → OTA work** goes through the BullMQ queue `ota-tenant-ops` (`tenant.provision`, `tenant.migrate`). **Results** come back through `platform-tenant-events`. `platform.provisioning_jobs` is the durable record, and a reconciler re-enqueues lost messages ([ADR-0009](adr/0009-background-jobs-bullmq.md)).
+- **Platform → OTA work** goes through the BullMQ queue `ota-tenant-ops`: `tenant.provision` and `tenant.migrate` (M1), `tenant.suspend` and `tenant.resume` (sent from M1, consumed by the OTA worker from M4). **Results** come back through `platform-tenant-events`: `tenant.provisioned`, `tenant.provision_failed`, `tenant.migrated`, `tenant.migration_failed`, `tenant.suspended`, `tenant.resumed`. `platform.provisioning_jobs` is the durable record; each attempt is the BullMQ job `<job_id>-<attempt>`, and a reconciler re-enqueues lost messages. The deploy fan-out's `tenant.migrated` reports carry `jobId = null` ([ADR-0009](adr/0009-background-jobs-bullmq.md)).
 - **The OTA backend reads platform data** through `velexis_ota_app` (`SELECT` only) and caches it in Redis. The platform backend publishes a message on the Redis channel `vx:invalidate` after every change to a cached row.
 - **The OTA backend never writes platform tables.** API key usage (`last_used_at`) is counted in Redis and flushed to `platform.api_keys` by the platform worker every 5 minutes. Staff sessions live in Redis ([ADR-0008](adr/0008-identity-accounts-customers-sessions.md)).
 - **Settlement figures** for the Velexis Stripe account come from Stripe balance transactions, not from tenant tables ([ADR-0011](adr/0011-payments-stripe-and-airline-card.md)).
@@ -207,8 +214,12 @@ Rules from [`decisions.md`](decisions.md) §5 and [ADR-0003](adr/0003-six-compon
 | `member:<accountId>:<tenantId>` | OTA backend (cache fill) | OTA backend | 60 s | `{type: "membership", accountId, tenantId}` |
 | `ptk:<sha256>` | Platform backend | OTA backend (`GETDEL`) | 60 s | single use |
 | `apikey:used:<keyId>` | OTA backend | Platform worker | 1 day | flushed every 5 minutes |
-| `staffsess:<familyId>`, `staffdeny:<familyId>` | OTA backend, platform backend (deny on "sign out everywhere") | OTA backend | session lifetime | — |
-| `t:<tenantId>:<env>:…` | OTA backend | OTA backend | per use | per use (offer caches, rate limits, Amadeus tokens; db README §5) |
+| `staffsess:<familyId>`, `staffdeny:<familyId>` | OTA backend | OTA backend | family lifetime | — |
+| `staffdeny:acct:<accountId>` | Platform backend, on sign out everywhere, password change or reset, MFA reset and account disable | OTA backend (staff guard and refresh) | 30 days | Epoch-ms cut-off: staff families created before it are refused ([PADR-0007](../../platform/docs/adr/0007-portal-to-ota-admin-sso-token.md)) |
+| `staffdeny:tenant:<tenantId>` | OTA worker, on `tenant.suspend` | OTA backend | 30 days | Deleted on `tenant.resume` ([OADR-0007](../../ota/docs/adr/0007-tenant-migration-runner-and-provisioning-worker.md)) |
+| `amadeus:token:<credId>:<env>`, `amadeus:tokenlock:<credId>:<env>` | OTA backend | OTA backend | `expires_in` − 60 s; lock 10 s | Per credential set, envelope-encrypted, shared by every OTA on the shared account ([ADR-0012](adr/0012-amadeus-account-model.md), [OADR-0001](../../ota/docs/adr/0001-amadeus-client-design.md)) |
+| `rl:amadeus:cred:<credId>:<env>`, `rl:amadeus:ten:<tenantId>:<env>` | OTA backend | OTA backend | 2 s | Token buckets per credential set and per tenant |
+| `t:<tenantId>:<env>:…` | OTA backend | OTA backend | per use | per use (offer caches and other tenant state; db README §5) |
 
 ### Schema deltas named by the cross-cutting ADRs
 
@@ -263,7 +274,7 @@ sequenceDiagram
   PW->>S: re-fetch subscription
   PW->>PDB: subscription trialing or active
   PW->>Q: ota-tenant-ops tenant.provision (jobId job_...)
-  OW->>TDB: one transaction as velexis_migrator: CREATE SCHEMA, migrations 0001..N, grants, seed settings, markups, templates
+  OW->>TDB: one transaction as velexis_provisioner: CREATE SCHEMA, migrations 0001..N, grants, seed settings, markups, templates
   OW->>Q: platform-tenant-events tenant.provisioned (schema version, migrations)
   PW->>PDB: mirror tenant_schema_migrations, issue pk_test and sk_test (hashed, reveal once)
   PW->>PDB: assign Velexis test Amadeus office, create test Stripe connection (velexis mode)
@@ -407,6 +418,7 @@ sequenceDiagram
 | Endpoint | Backend | Stripe events | Tenant comes from |
 |---|---|---|---|
 | `/webhooks/stripe/billing` | Platform | `checkout.session.completed` (subscription mode), `customer.subscription.*`, `invoice.*` | `client_reference_id` or subscription metadata |
+| `/webhooks/stripe/connect-accounts` (M5) | Platform | `account.updated`, `account.application.deauthorized` (Connect endpoint, `STRIPE_CONNECT_WEBHOOK_SECRET`) | `event.account` → `payment_provider_connections.account_reference` ([PADR-0011](../../platform/docs/adr/0011-stripe-connect-standard-and-api-key-connections.md)) |
 | `/webhooks/stripe/velexis/{test,live}` | OTA | `payment_intent.*`, `charge.refunded`, `charge.dispute.*` | `metadata.velexis_tenant_id` |
 | `/webhooks/stripe/connect/{test,live}` (M5) | OTA | Same payment events from connected accounts | `event.account` → `payment_provider_connections.account_reference` |
 | `/webhooks/stripe/c/<ppc_id>` (M5) | OTA | Same payment events from an OTA's own account (API-key mode) | The connection id in the path, verified with that connection's secret |
@@ -429,7 +441,7 @@ sequenceDiagram
   participant LE as Let's Encrypt
   participant O as OTA API
 
-  U->>FE: Add travel.acme.com
+  U->>FE: Add travel.example.net
   FE->>PA: create domain
   PA->>P: tenant_domains (custom, pending, verification token)
   PA-->>FE: CNAME and TXT records to create
@@ -439,33 +451,34 @@ sequenceDiagram
   end
   PW->>P: verification_status verified
   PW->>PW: publish vx:invalidate domain
-  B->>C: TLS handshake with SNI travel.acme.com
-  C->>PA: GET /internal/tls/ask?domain=travel.acme.com
+  B->>C: TLS handshake with SNI travel.example.net
+  C->>PA: GET /internal/tls/ask?domain=travel.example.net
   PA-->>C: 200 (verified, tenant active, plan allows custom domains)
   C->>LE: ACME order
   LE-->>C: certificate
   C-->>B: storefront static files
   B->>C: storefront.get via /api
-  C->>O: request + X-Velexis-Host travel.acme.com + edge secret
+  C->>O: request + X-Velexis-Host travel.example.net + edge secret
   O-->>B: Acme branding and settings
 ```
 
 ## 6. Configuration matrix
 
-Every Node app reads its configuration through `@velexis/config`, which validates types and refuses to start on missing values. On the VM the values come from `/etc/velexis/<app>.env`. In development they come from `.env.local` files based on the root `.env.example`. Key files are described in [ADR-0010](adr/0010-secrets-envelope-encryption.md).
+Every Node app reads its configuration through `@velexis/config`, which validates types and refuses to start on missing values. On the VM the values come from `/etc/velexis/<app>.env`; `velexis-deploy` refuses a release whose `deploy/env/*.env.example` templates name a variable that the VM's file lacks, so a new variable is added on the VM before the deploy that needs it ([`deployment-single-vm.md`](deployment-single-vm.md) §8). In development they come from `.env.local` files based on the root `.env.example`. Key files are described in [ADR-0010](adr/0010-secrets-envelope-encryption.md); on the VM each trust zone has its own key directory ([ADR-0026](adr/0026-system-users-per-trust-zone.md)).
 
 | Variable | Platform API + worker | Portal | Platform admin | OTA API + worker | OTA admin | Caddy | Example or note |
 |---|---|---|---|---|---|---|---|
 | `APP_ENV`, `LOG_LEVEL`, `PORT` | ✓ | ✓ | ✓ | ✓ | ✓ | | `production`, `info`, ports from §3 |
 | `HEALTH_PORT` | worker | | | worker | | | 3101, 4001 |
 | `DATABASE_URL` | ✓ | | | ✓ | | | Role `velexis_platform_app` / `velexis_ota_app` |
-| `DATABASE_MIGRATOR_URL` | deploy only | | | worker, deploy | | | Role `velexis_migrator` |
+| `DATABASE_MIGRATOR_URL` | deploy only | | | deploy only | | | Role `velexis_migrator` (`migrator.env`, root only; local `pnpm db:migrate`) |
+| `DATABASE_PROVISIONER_URL` | | | | worker | | | Role `velexis_provisioner`: tenant schemas only ([ADR-0004](adr/0004-postgresql-schema-per-tenant.md)) |
 | `REDIS_URL` | ✓ | | | ✓ | | | `redis://:password@127.0.0.1:6379/0` |
-| `MASTER_KEY_DIR`, `MASTER_KEY_CURRENT` | ✓ | | | ✓ | | | `/etc/velexis/keys`, `local:v1` |
+| `MASTER_KEY_DIR`, `MASTER_KEY_CURRENT` | ✓ | | | ✓ | | | The zone's key directory, `local:v1` |
 | `API_KEY_PEPPER_FILE` | ✓ | | | ✓ | | | Same file for both backends |
 | `JWT_PRIVATE_KEY_FILE` | ✓ | | | ✓ | | | Separate Ed25519 key per backend |
 | `SMTP_URL`, `MAIL_FROM` | ✓ | | | ✓ | | | Mailpit `smtp://127.0.0.1:1025` in development |
-| `PUBLIC_PORTAL_URL` | ✓ | ✓ | | | ✓ | | `https://platform.example.com` |
+| `PUBLIC_PORTAL_URL` | ✓ | ✓ | ✓ | | ✓ | | `https://platform.example.com` (platform admin: the "enable MFA in the portal" link) |
 | `PUBLIC_PLATFORM_ADMIN_URL` | ✓ | | ✓ | | | | `https://admin.platform.example.com` |
 | `PUBLIC_OTA_ADMIN_URL` | ✓ | ✓ | | | ✓ | | `https://admin.ota.example.com` |
 | `PUBLIC_OTA_API_URL` | | | | ✓ | | | `https://api.ota.example.com` |
@@ -476,11 +489,13 @@ Every Node app reads its configuration through `@velexis/config`, which validate
 | `VELEXIS_EDGE_SECRET` | | | | ✓ | | ✓ | Storefront edge credential ([ADR-0018](adr/0018-hosted-storefront-custom-domains.md)) |
 | `STRIPE_SECRET_KEY`, `STRIPE_BILLING_WEBHOOK_SECRET` | ✓ | | | | | | Velexis account, billing (M5) |
 | `STRIPE_CONNECT_CLIENT_ID` | ✓ | | | | | | Connect Standard OAuth (M5) |
+| `STRIPE_CONNECT_WEBHOOK_SECRET` | ✓ | | | | | | `/webhooks/stripe/connect-accounts` (M5); required when `FEATURE_OWN_STRIPE` is on |
 | `STRIPE_SECRET_KEY_TEST`, `STRIPE_SECRET_KEY_LIVE`, `STRIPE_PUBLISHABLE_KEY_TEST`, `STRIPE_PUBLISHABLE_KEY_LIVE` | | | | ✓ | | | Velexis account for `velexis` mode payments (M3) |
 | `STRIPE_WEBHOOK_SECRET_VELEXIS_TEST`, `…_LIVE`, `STRIPE_WEBHOOK_SECRET_CONNECT_TEST`, `…_LIVE` | | | | ✓ | | | Payment webhook endpoints |
-| `AMADEUS_BASE_URL_TEST`, `AMADEUS_BASE_URL_LIVE` | | | | ✓ | | | Optional override. The stub is `http://127.0.0.1:4900` in development and CI. |
+| `AMADEUS_BASE_URL_TEST`, `AMADEUS_BASE_URL_LIVE` | ✓ | | | ✓ | | | Optional override. The platform worker uses it only for OAuth token requests that verify credentials. The stub is `http://127.0.0.1:4900` in development and CI. |
 | `AIRLINE_CARD_ENABLED` | | | | ✓ | | | Global kill switch, `false` by default ([ADR-0011](adr/0011-payments-stripe-and-airline-card.md)) |
-| `STORAGE_DRIVER`, `STORAGE_DIR`, `DOCUMENT_URL_KEY_FILE` | ✓ | | | ✓ | | | `local`, `/var/lib/velexis/storage` |
+| `STORAGE_DRIVER`, `STORAGE_DIR` | reserved | | | ✓ | | | `local`, `/var/lib/velexis/storage`. Not read by the platform in the MVP (CSV exports are streamed). |
+| `DOCUMENT_URL_KEY_FILE` | | | | ✓ | | | Signed document URLs, OTA backend only ([ADR-0010](adr/0010-secrets-envelope-encryption.md)) |
 | `ACME_EMAIL` | | | | | | ✓ | Let's Encrypt account e-mail |
 | `SENTRY_DSN` | optional | optional | optional | optional | optional | | Off when empty ([ADR-0016](adr/0016-observability.md)) |
 
@@ -504,6 +519,6 @@ The storefront has **no runtime environment**. It is static, and everything tena
 | Stripe down | Card payments cannot start. Checkout sign-ups wait. Webhooks are delayed (Stripe retries for 3 days). | Error rates | The airline-card method still works where enabled. Re-fetch on webhook processing heals the state. |
 | SMTP provider down | E-mails pile up in the outbox | Job failures | Retries with backoff, no booking failure ([ADR-0017](adr/0017-email-documents-storage.md)) |
 | Let's Encrypt down or rate-limited | New sub-domains and custom domains get no certificate | Daily TLS probe | Existing certificates keep working. Wildcard certificate follow-up ([ADR-0018](adr/0018-hosted-storefront-custom-domains.md)). |
-| Bad deploy | New processes fail readiness | Deploy script health checks | Automatic switch back of the `current` symlink |
+| Bad deploy | New processes fail readiness | Deploy script health checks | Automatic rollback: the previous release's units and Caddyfile are re-installed from their snapshot and `current` switches back |
 | Master key lost | Encrypted secrets cannot be decrypted | — | Separate encrypted backup of `/etc/velexis` ([ADR-0010](adr/0010-secrets-envelope-encryption.md)) |
 | One noisy tenant | Shared Amadeus quota and worker capacity are used up | Rate-limit hits per tenant | Per-tenant token buckets, bounded queue concurrency ([ADR-0009](adr/0009-background-jobs-bullmq.md)) |

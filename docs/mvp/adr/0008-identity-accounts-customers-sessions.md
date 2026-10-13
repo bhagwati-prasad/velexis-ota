@@ -3,6 +3,7 @@
 **Status:** Accepted
 **Date:** 2026-10-12
 **Deciders:** Product owner (httpOnly cookies + CSRF on the storefront, no tokens in browser JS), lead architect (realms, token formats, SSO handoff). Decided during planning where not in `decisions.md`; revisit when a third-party identity provider (Google, Microsoft, SAML) is required.
+**Revisions:** 2026-10-12 (planning review): cross-boundary revocation is the account-level cut-off `staffdeny:acct:<accountId>` of [PADR-0007](../../../platform/docs/adr/0007-portal-to-ota-admin-sso-token.md); a later third-party password grant is verified by the platform.
 
 ## Context
 
@@ -64,14 +65,14 @@ Server actions get Next.js's built-in Origin check. Route handlers that change s
 2. The portal returns a page that **auto-submits a POST form** with the token to `https://admin.ota.example.com/sso`. The token never appears in a URL, a log or a `Referer`.
 3. The OTA admin server calls `console.auth.signIn({ grantType: "portal_token", portalToken })` through the SDK, using its first-party service credential.
 4. The OTA backend redeems the token with `GETDEL`, so it works only once. It re-reads the membership and account status (read-only), then issues a staff access token (`tid`, `stf`, `roles`) and a refresh token.
-5. **Staff refresh-token families live in Redis**, not in `platform.account_sessions`, because the OTA backend cannot write platform tables. A Redis deny-list of revoked family ids is checked by the staff-token guard. The portal's "sign out everywhere" adds the account's families to that list.
+5. **Staff refresh-token families live in Redis**, not in `platform.account_sessions`, because the OTA backend cannot write platform tables. The OTA backend revokes single families with `staffdeny:<familyId>`. The platform cannot know OTA family ids, so it writes an **account-level cut-off** instead: `staffdeny:acct:<accountId> = <epoch ms>` with a 30-day TTL, on sign out everywhere, password change or reset, MFA reset and account disable. The staff guard and the refresh endpoint refuse every family of that account created before the cut-off ([PADR-0007](../../../platform/docs/adr/0007-portal-to-ota-admin-sso-token.md) item 6, [OADR-0011](../../../ota/docs/adr/0011-console-access-staff-sessions-and-environments.md)).
 
 The OTA admin is multi-tenant, and the OTA is chosen after sign-in ([`decisions.md`](../decisions.md) §4):
 
 - Visiting `admin.ota.example.com` without a session redirects to the portal. There the user signs in (with MFA if enabled), picks one of their OTAs, and the SSO handoff above runs.
 - The OTA admin's tenant switcher links back to the portal's **Open console** for another OTA. A staff session is always bound to one tenant.
 
-The OTA admin offers only the portal-token grant. The password grant of `console.auth.signIn` stays in the contract for third-party consoles; its lockout counters live in Redis.
+The OTA admin offers only the portal-token grant. The password grant of `console.auth.signIn` stays in the contract for third-party consoles but is disabled in the MVP ([OADR-0011](../../../ota/docs/adr/0011-console-access-staff-sessions-and-environments.md)). If it is built later, the **platform** verifies the password and the TOTP code and hands the OTA backend a one-time token, as for SSO; the OTA backend never reads password hashes or MFA secrets ([ADR-0004](0004-postgresql-schema-per-tenant.md)).
 
 ### Customers on the hosted storefront (cookie mode)
 

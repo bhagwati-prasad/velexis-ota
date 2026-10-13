@@ -3,6 +3,7 @@
 **Status:** Accepted
 **Date:** 2026-10-12
 **Deciders:** Product owner (one hosted multi-tenant storefront on `<key>.ota.example.com` or a custom domain, same-origin `/api/*` through Caddy, httpOnly cookies + CSRF, Caddy on-demand TLS), lead architect (Caddy configuration, `ask` rules, edge credential, CSP)
+**Revisions:** 2026-10-12 (planning review): custom-domain examples use the reserved name `travel.example.net`; Caddy's admin API listens only on a unix socket.
 
 ## Context
 
@@ -21,7 +22,7 @@ The OTA contract resolves the tenant from `X-Api-Key` and never from the host al
 
 ```mermaid
 flowchart LR
-  B["Browser on acme.ota.example.com<br/>or travel.acme.com"] -->|HTTPS| C["Caddy"]
+  B["Browser on acme.ota.example.com<br/>or travel.example.net"] -->|HTTPS| C["Caddy"]
   C -->|"/api/* with edge headers"| O["OTA backend 127.0.0.1:4000"]
   C -->|"everything else"| F["Static files<br/>/srv/velexis/current/storefront"]
   C -.->|"first TLS handshake for an unknown host"| A["Platform backend<br/>/internal/tls/ask"]
@@ -32,6 +33,8 @@ flowchart LR
 ```caddyfile
 {
 	email ops@example.com
+	# Admin API only on a unix socket that only the caddy user can reach (never TCP 2019).
+	admin unix//run/caddy/admin.sock
 	on_demand_tls {
 		ask http://127.0.0.1:3100/internal/tls/ask
 	}
@@ -82,10 +85,10 @@ This protects the ACME rate limits and stops anyone from pointing arbitrary doma
 
 ### Custom domain lifecycle (M5)
 
-1. The OTA owner adds `travel.acme.com` in the portal. A `tenant_domains` row is created with `kind = 'custom'`, `verification_status = 'pending'` and a `verification_token`.
+1. The OTA owner adds `travel.example.net` in the portal. A `tenant_domains` row is created with `kind = 'custom'`, `verification_status = 'pending'` and a `verification_token`.
 2. The portal shows two DNS records:
-   - `CNAME travel.acme.com → acme.ota.example.com`;
-   - `TXT _velexis.travel.acme.com = <token>`.
+   - `CNAME travel.example.net → acme.ota.example.com`;
+   - `TXT _velexis.travel.example.net = <token>`.
 3. A `platform-domains` job checks DNS every 5 minutes for 72 hours. On success it sets `verified` and publishes a cache invalidation. On timeout it sets `failed`.
 4. The first HTTPS request triggers on-demand issuance through the `ask` endpoint. A daily job probes the host and records `tls_status` and `tls_expires_at`.
 5. The OTA may mark the custom domain primary. E-mail links then use it.
@@ -119,7 +122,7 @@ This protects the ACME rate limits and stops anyone from pointing arbitrary doma
 
 - **Let's Encrypt limits:** sub-domains also use on-demand certificates, one per OTA, and Let's Encrypt allows about 50 new certificates per registered domain per week. This is fine for MVP sign-up volumes.
 - The edge secret is a shared credential between Caddy and the OTA backend. It is stored in both environment files and rotated by restarting both.
-- Cookies are host-only, so a customer signed in on `acme.ota.example.com` is not signed in on `travel.acme.com`. The primary-domain redirect (below) limits this.
+- Cookies are host-only, so a customer signed in on `acme.ota.example.com` is not signed in on `travel.example.net`. The primary-domain redirect (below) limits this.
 
 ### Follow-ups
 

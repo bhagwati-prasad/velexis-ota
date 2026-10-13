@@ -10,7 +10,7 @@ Read in this order:
 
 1. [`docs/mvp/decisions.md`](docs/mvp/decisions.md): the product owner's decisions. Everything else follows them.
 2. [`docs/mvp/architecture.md`](docs/mvp/architecture.md): components, hosts and ports, data ownership, request flows, configuration, failure domains.
-3. [`docs/mvp/roadmap.md`](docs/mvp/roadmap.md) and the milestones M0–M6 in [`docs/mvp/README.md`](docs/mvp/README.md).
+3. [`docs/mvp/plans/roadmap.md`](docs/mvp/plans/roadmap.md) and the milestones M0–M6 in [`docs/mvp/README.md`](docs/mvp/README.md).
 4. The plans: [`docs/mvp/plans/`](docs/mvp/plans/) (foundation), [`platform/docs/plans/`](platform/docs/plans/) and [`ota/docs/plans/`](ota/docs/plans/) (component tasks and week-by-week plans).
 
 Then, depending on what you do:
@@ -35,9 +35,9 @@ Then, depending on what you do:
 | `ota/admin` | OTA admin at `admin.ota.example.com` (Next.js 15, Tailwind) for OTA staff: bookings console, PNR import, queues, payments, customers, markups, storefront settings, templates. |
 | `ota/sdk` | `@velexis/ota-sdk`: vanilla JavaScript ES modules with JSDoc types, no framework dependency. Its contract is [`docs/velexis-sdk/sdk/src/`](docs/velexis-sdk/sdk/src/). |
 | `ota/docs/` | OTA-specific documentation and plans. |
-| `packages/` | Shared TypeScript libraries: `config`, `logger`, `db` (Kysely, tenancy, migrations, storage), `crypto` (envelope encryption), `errors`, `api-types` (generated contract types). |
+| `packages/` | Shared TypeScript libraries: `config`, `logger`, `db` (Kysely, tenancy, migrations, storage), `crypto` (envelope encryption), `errors`, `api-types` (generated contract types), and `testing` (test support, devDependency only). |
 | `deploy/` | Single-VM deployment: Caddyfile, systemd units, VM provisioning, deploy and backup scripts, environment templates. No Docker. |
-| [`tools/`](tools/) | Developer tools: [`plan-lint`](tools/plan-lint/plan-lint.mjs) (validates the task plans), `amadeus-stub` (Amadeus test double), `e2e` (Playwright suite). |
+| [`tools/`](tools/) | Developer tools: [`plan-lint`](tools/plan-lint/plan-lint.mjs) (validates the task plans), `reference-data` (vendored reference datasets and their loader, shipped in releases), `amadeus-stub` (Amadeus test double), `e2e` (Playwright suite). |
 | [`AGENTS.md`](AGENTS.md), [`CLAUDE.md`](CLAUDE.md) | Operating manual for AI coding agents, and its short pointer. |
 
 How the components fit together:

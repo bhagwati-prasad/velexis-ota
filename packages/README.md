@@ -87,7 +87,7 @@ maskPan("4111111111111111");          // "411111******1111" (BIN + last 4 only, 
 ```
 
 - Standard fields: `app`, `env`, `requestId`, `tenantId`, `tenantKey`, `environment`, `actorType`, `actorId`, `route`, `operationId`, `status`, `durationMs`, `err`.
-- `REDACT_PATHS` is the single redaction list (passwords, tokens, secrets, card fields, `authorization`, `cookie`, edge and service headers). Adding a sensitive field means adding it here **and** to the redaction test.
+- `REDACT_PATHS` is the single redaction list (passwords, tokens, secrets, card fields, `authorization`, `cookie`, edge and service headers). pino paths are not recursive: the whole `card`, `creditCard` and `formOfPayments` objects are censored at every depth the apps log, and the `err` serializer never carries request or response bodies (X-003). Adding a sensitive field means adding it here **and** to the redaction test.
 - `pinoHttpOptions` takes `X-Request-Id` (or generates one), never logs bodies, skips `/health/*`, and logs one line per request.
 - `redactPayload` is the shared redactor of [db README §8](../docs/velexis-sdk/db/README.md) used before writing `supplier_requests`, `order_snapshot`, `staff_actions`, `idempotency_keys`, `payment_events`, `notifications`.
 
@@ -180,7 +180,7 @@ const booking = await tenantTx(tenants, "tenant_acme", async (trx) =>
   | `migrate.js tenants --dir <path> [--concurrency 4] [--max-failure-ratio 0.1] [--report file.json]` | Fan out over every tenant schema listed in `platform.tenants` |
   | `migrate.js tenant --schema tenant_<key> --dir <path> [--create]` | One schema (provisioning, tests) |
 
-  Exit codes: `0` ok, `1` error, `2` checksum mismatch, `3` failure ratio exceeded.
+  Exit codes: `0` ok, `1` error, `2` checksum mismatch, `3` failure ratio exceeded. A `--dir` that does not exist is an empty set (notice, exit 0). The tenant commands create objects with `SET LOCAL ROLE velexis_provisioner`, and the OTA worker calls the same library with `DATABASE_PROVISIONER_URL` ([ADR-0004](../docs/mvp/adr/0004-postgresql-schema-per-tenant.md)).
 - `src/generated/{platform,reference,tenant}.ts`: Kysely table types from `kysely-codegen` (`pnpm db:codegen`), committed.
 - `@velexis/db/storage`: `StorageAdapter` (`put`, `get`, `delete`, `signedUrl`) with `LocalDiskStorage` (atomic writes, mode 0600) ([ADR-0017](../docs/mvp/adr/0017-email-documents-storage.md)).
 
@@ -211,7 +211,7 @@ expectResponseToMatch("searchFlightOffers", res);     // Ajv against the OpenAPI
 
 | Package | Folder | Purpose | Task |
 |---|---|---|---|
-| `@velexis/amadeus-stub` | `tools/amadeus-stub` | Amadeus stub server (OAuth + operations, fixtures, scenarios, request validation), port 4900 | X-026 |
+| `@velexis/amadeus-stub` | `tools/amadeus-stub` | Amadeus stub server (OAuth + operations, fixtures, scenarios, request validation), port 4900; fixture recording with scrubbing and a personal-data scan | X-026, X-034 |
 | `@velexis/reference-data` | `tools/reference-data` | Vendored airport, airline, country, currency, time zone and aircraft snapshots + loader CLI | X-017, X-018 |
 | `@velexis/e2e` | `tools/e2e` | Playwright journeys (created by the component plans) | — |
 

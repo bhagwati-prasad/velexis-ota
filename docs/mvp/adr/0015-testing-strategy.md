@@ -3,6 +3,7 @@
 **Status:** Accepted
 **Date:** 2026-10-12
 **Deciders:** Lead architect. Decided during planning; revisit when CI time on a pull request exceeds 15 minutes or flaky tests exceed 1 % of runs.
+**Revisions:** 2026-10-12 (planning review): the Amadeus stub arrives in M1 (X-026, X-027), because PBE-020 and the M1 end-to-end harness use it; recording and the fixture scan are task X-034 (M2).
 
 ## Context
 
@@ -79,7 +80,7 @@ There are also two contracts that must not drift: the OpenAPI documents and the 
 
 ### Follow-ups
 
-- M0 sets up Vitest, the integration harness (database per test file, two tenant schemas) and CI. M2 adds the Amadeus stub. M3 adds Stripe fixtures and the first Playwright journey. M6 completes the end-to-end suite.
+- M0 sets up Vitest, the integration harness (database per test file, two tenant schemas) and CI. M1 adds the Amadeus stub (X-026, X-027) and the Playwright harness (PFE-014); M2 adds fixture recording and the personal-data scan (X-034). M3 adds Stripe fixtures. M6 completes the end-to-end suite.
 
 ## Alternatives considered
 

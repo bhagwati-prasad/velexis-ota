@@ -9,7 +9,7 @@ Related: [`architecture.md`](architecture.md) §3 and §7 (hosts, ports, failure
 | Resource | Start | Why | Resize when |
 |---|---|---|---|
 | vCPU | 4 | Seven Node processes, PostgreSQL, Redis and Caddy; Node is mostly I/O-bound (Amadeus and Stripe calls). | Load average above 3 for an hour on most days, or p95 API latency rising without an Amadeus cause |
-| RAM | 8 GB | The memory budget in [`architecture.md`](architecture.md) §3: PostgreSQL ~2.5 GB, Redis 0.5 GB, two APIs 768 MB each, two workers and three Next.js servers 512 MB each, ~1.4 GB for the OS and page cache. | Memory use above 70 % most of the day (ADR-0007), or any OOM kill |
+| RAM | 8 GB | The memory budget in [`architecture.md`](architecture.md) §3: PostgreSQL ~2.5 GB, Redis 0.5 GB, two APIs 768 MB each, two workers and three Next.js servers 512 MB each, about 7 GB in all, which leaves ~1 GB for Caddy, the OS and the page cache. | Memory use above 70 % most of the day (ADR-0007), or any OOM kill |
 | Disk | 160 GB SSD (ADR-0007). 100 GB is the minimum that works for the first months. | Database with its WAL and dumps, journald (4 GB cap), local document storage, five releases, two days of local backups. | Disk use above 70 % (alert at 80 %) |
 | Network | Public IPv4 (and IPv6 if offered), ports 22, 80, 443 | Let's Encrypt and storefront custom domains need a stable address. | — |
 
@@ -22,7 +22,7 @@ Pick a provider that offers snapshots and lets you resize the VM and the disk in
 | Area | Setting | Why |
 |---|---|---|
 | Updates | `unattended-upgrades` for security updates daily; no automatic reboot. Weekly `apt list --upgradable` review. | Patches without surprise restarts |
-| SSH | Keys only, no root login, `AllowUsers <admin> deploy`, `MaxAuthTries 3`. `fail2ban` on `sshd`. | PCI "access and monitoring" control ([ADR-0011](adr/0011-payments-stripe-and-airline-card.md)) |
+| SSH | Keys only, no root login, `AllowUsers <admin> deploy`, `MaxAuthTries 3`. `fail2ban` on `sshd`. The admin user also needs a second factor: a FIDO2 key (`sk-ssh-ed25519` with `verify-required`) or key plus TOTP (task X-037, M6). `deploy` is a restricted system account. | PCI 8.4.2 and 8.6 ([ADR-0027](adr/0027-pci-scope-and-vm-controls.md)) |
 | Firewall | `ufw`: deny incoming; allow 22/tcp (rate-limited), 80/tcp, 443/tcp, 443/udp. Optionally restrict 22 to the developer's address (`SSH_ALLOW_FROM`), but GitHub-hosted runners deploy over SSH from changing addresses. | Only Caddy and SSH are reachable |
 | Swap | Off (`swapoff -a`, commented in `/etc/fstab`) | Card data held in memory must never be written to disk |
 | Core dumps | `kernel.core_pattern` piped to `/bin/false`, `fs.suid_dumpable=0`, `LimitCORE=0` on every unit | Same reason |
@@ -30,7 +30,8 @@ Pick a provider that offers snapshots and lets you resize the VM and the disk in
 | Audit | `auditd` rules on `/etc/velexis`, keys, `/etc/caddy`, systemd units, `/usr/local/sbin`, sudoers, sshd | Who changed what, when |
 | File integrity | AIDE, daily check by the Ubuntu package; data and release folders excluded | PCI file-integrity monitoring |
 | Time | UTC, `chrony` | Token expiry, ticketing deadlines and logs depend on correct time |
-| Users | Apps run as `velexis` (no shell). Releases are uploaded by `deploy` (SSH key, `restrict`, sudo for `velexis-deploy` only). The developer uses the image's admin user with sudo. | Least privilege ([§4](#4-process-layout-ports-users-and-permissions)) |
+| Users | One system user per trust zone, no shell: `velexis-platform`, `velexis-ota`, `velexis-portal`, `velexis-platform-admin`, `velexis-ota-admin` ([ADR-0026](adr/0026-system-users-per-trust-zone.md), task X-033). Releases are uploaded by `deploy` (SSH key, `restrict`, sudo for `velexis-deploy` only). The developer uses the image's admin user with sudo. | Least privilege ([§4](#4-process-layout-ports-users-and-permissions)) |
+| Security logs | auditd, sshd, sudo, Caddy and app security events kept 3 months on the VM and shipped off the VM with 12-month retention; daily automated review (task X-038, M6) | PCI 10.4 and 10.5 ([ADR-0027](adr/0027-pci-scope-and-vm-controls.md)) |
 
 ## 3. Provisioning a new VM
 
@@ -44,7 +45,7 @@ Do this once per VM, and again when rebuilding after a disaster. Allow one to tw
 6. Edit `/etc/velexis/*.env`: replace every `CHANGE_ME` and the placeholder hosts with the real ones (SMTP; Stripe keys when their milestone arrives). Edit `/etc/velexis/caddy.env` (`PLATFORM_BASE_DOMAIN`, `STOREFRONT_BASE_DOMAIN`, `ACME_EMAIL`). Then `sudo systemctl restart caddy`.
 7. Set up backups ([§10](#10-backups)): age public keys, rclone remote, then `sudo systemctl start velexis-backup` and check the bucket.
 8. **Back up `/etc/velexis` now**, encrypted, to your offline password manager (it holds the master key; [§7](#7-secrets-and-the-master-key)).
-9. In GitHub, set the `production` environment secrets `DEPLOY_HOST`, `DEPLOY_USER` (`deploy`), `DEPLOY_SSH_KEY` and `DEPLOY_KNOWN_HOSTS` (`ssh-keyscan -t ed25519 <vm>`), with yourself as required reviewer.
+9. In GitHub, set the `production` environment secrets `DEPLOY_HOST`, `DEPLOY_USER` (`deploy`), `DEPLOY_SSH_KEY` and `DEPLOY_KNOWN_HOSTS` (`ssh-keyscan -t ed25519 <vm>`), with yourself as required reviewer and a deployment branch policy that allows only `main` and tags `v*`.
 10. Run the **Deploy** workflow. In M0 the result is the hello-world release: `https://platform.example.com/` shows the maintenance page with a valid certificate, `velexis-deploy --status` shows the release, and the database has the baseline schemas.
 
 ## 4. Process layout, ports, users and permissions
@@ -77,25 +78,28 @@ flowchart TB
 | `velexis-portal` | Next.js standalone | 3000 | 512 MB | 5 |
 | `velexis-platform-admin` | Next.js standalone | 3001 | 512 MB | 6 |
 | `velexis-ota-admin` | Next.js standalone | 3002 | 512 MB | 7 |
-| `postgresql`, `redis-server`, `caddy` | vendor packages | 5432, 6379, 80/443 (+2019 admin on loopback) | — | not restarted by deploys |
+| `postgresql`, `redis-server`, `caddy` | vendor packages | 5432, 6379, 80/443; Caddy's admin API only on the unix socket `/run/caddy/admin.sock` (no TCP port) | — | not restarted by deploys |
 | `velexis-backup.timer` | `/usr/local/sbin/velexis-backup` | — | — | nightly 02:30 UTC |
 
-Workers restart first so new consumers run before new producers ([ADR-0009](adr/0009-background-jobs-bullmq.md)). Every unit has `Restart=always`, sandboxing (`ProtectSystem=strict`, `PrivateTmp`, no capabilities, a system-call filter), `MemoryMax`, `LimitCORE=0`, `OnFailure=velexis-alert@%n.service`, and hides the other apps' env files and keys with `InaccessiblePaths=` ([`deploy/systemd/`](../../deploy/systemd/)).
+Workers restart first so new consumers run before new producers ([ADR-0009](adr/0009-background-jobs-bullmq.md)). Every unit has `Restart=always`, sandboxing (`ProtectSystem=strict`, `PrivateTmp`, `ProtectProc=invisible`, no capabilities, a system-call filter), `MemoryMax`, `LimitCORE=0` and `OnFailure=velexis-alert@%n.service` ([`deploy/systemd/`](../../deploy/systemd/)).
+
+**What separates the apps.** Each trust zone runs as its own user ([ADR-0026](adr/0026-system-users-per-trust-zone.md)): the platform API and worker as `velexis-platform`, the OTA API and worker as `velexis-ota`, and each Next.js app as its own user. That is the boundary: a process cannot read another user's `/proc/<pid>/environ` or `/proc/<pid>/root`, and with `ProtectProc=invisible` it does not even see the other zones' processes. Env files are `root:root 0600` and read only by systemd, and key folders belong to their zone's user. `InaccessiblePaths=` additionally hides the other zones' env files and key folders from each unit's mount namespace; it is defence in depth only, because it cannot stop a process from reading what another process of the **same** user holds, and it does nothing against root. Within a zone, the API and its worker can read each other's memory and environment; that is accepted (same code, same keys).
 
 | Path | Owner, mode | Content |
 |---|---|---|
 | `/srv/velexis/incoming/<sha>/` | `deploy`, 0750 | Upload target of the deploy workflow |
-| `/srv/velexis/releases/<sha>/` | `velexis`, read-only (`u=rX,g=rX,o=`; `storefront/` world-readable for Caddy) | One release; the last five are kept |
+| `/srv/velexis/releases/<sha>/` | `root:velexis`, read-only (`u=rX,g=rX,o=`; `storefront/` world-readable for Caddy). `velexis` is a group of all app users that only grants reading releases. | One release; the last five are kept |
 | `/srv/velexis/current` | symlink | Active release |
 | `/srv/velexis/maintenance/` | root, 0755 | Maintenance page served by Caddy when a Next.js app is down |
-| `/etc/velexis/<app>.env` | `root:velexis` 0640 (`migrator`, `backup`, `alert`: root 0600; `caddy`: `root:caddy` 0640) | Environment files |
-| `/etc/velexis/keys/` | `velexis`, 0400 per file | Master key, pepper, JWT keys, document URL key |
+| `/etc/velexis/<app>.env` | `root:root` 0600, read by systemd before it starts the unit (`caddy.env` the same, loaded through the drop-in) | Environment files |
+| `/etc/velexis/keys/platform/`, `/etc/velexis/keys/ota/` | the zone's user (`velexis-platform`, `velexis-ota`), 0500 folder, 0400 per file | Master key and pepper (identical copies in both), the zone's JWT key, the document URL key (OTA only) |
 | `/etc/velexis/backup/` | root, 0700 | age recipients, rclone config |
-| `/var/lib/velexis/storage/` | `velexis`, 0700 | Documents and exports ([ADR-0017](adr/0017-email-documents-storage.md)) |
-| `/var/cache/velexis/<app>/` | `velexis` (systemd `CacheDirectory`) | Next.js runtime cache |
+| `/var/lib/velexis/storage/` | `velexis-ota`, 0700 | Documents and exports ([ADR-0017](adr/0017-email-documents-storage.md)) |
+| `/var/lib/velexis/system/<sha>/` | root, 0755 | Root-owned snapshot of a release's units, Caddyfile and maintenance page, re-installed on rollback ([§8](#8-release-artefact-deploy-and-rollback)) |
+| `/var/cache/velexis/<app>/` | the app's user (systemd `CacheDirectory`) | Next.js runtime cache |
 | `/var/backups/velexis/` | root, 0700 | Encrypted backups before upload (two days) |
 | `/var/log/velexis/` | `root:adm` 0750 | Deploy log, migration reports, restore-drill logs |
-| `/usr/local/sbin/velexis-{deploy,backup,restore,alert}` | root, 0755 | Root-owned copies of `deploy/scripts/*.sh` |
+| `/usr/local/sbin/velexis-{deploy,backup,restore,alert,run}` | root, 0755 | Root-owned copies of `deploy/scripts/*.sh`; `velexis-run <zone> <command>` runs one-off CLI commands as the zone's user with its env files (X-033) |
 
 ## 5. PostgreSQL and Redis
 
@@ -120,9 +124,10 @@ Roles ([`deploy/postgres/bootstrap.sql`](../../deploy/postgres/bootstrap.sql), [
 
 | Role | Used by | Privileges |
 |---|---|---|
-| `velexis_migrator` | `velexis-deploy` (migrations), OTA worker (tenant provisioning) | Owns the database, `platform`, `reference` and every `tenant_<key>`. DDL only; never serves requests. `lock_timeout 5s`. |
+| `velexis_migrator` | `velexis-deploy` (migrations, tenant fan-out) only; its DSN is in the root-only `migrator.env` | Owns the database, `platform` and `reference`; member of `velexis_provisioner` (the fan-out uses `SET LOCAL ROLE`). DDL only; never serves requests. `lock_timeout 5s`. |
+| `velexis_provisioner` | OTA worker (tenant provisioning, `ota-worker.env`) | `CREATE` on the database, owns every `tenant_<key>`, nothing on `platform` or `reference` ([ADR-0004](adr/0004-postgresql-schema-per-tenant.md)). DDL only; never serves requests. |
 | `velexis_platform_app` | Platform API and worker | DML on `platform` and `reference` (default privileges), none on tenant schemas. Audit log is insert-only (platform migration). |
-| `velexis_ota_app` | OTA API and worker | DML on tenant schemas (granted at provisioning), `SELECT` on `reference`, **read-only** `SELECT` on the listed platform tables (repeatable grants file, [ADR-0021](adr/0021-migration-cli-and-repeatable-grants.md)). `search_path = pg_catalog`. |
+| `velexis_ota_app` | OTA API and worker | DML on tenant schemas (granted at provisioning), `SELECT` on `reference`, **read-only** `SELECT` on the listed platform tables and on the non-secret columns of `accounts` (repeatable grants file, [ADR-0021](adr/0021-migration-cli-and-repeatable-grants.md)); never password hashes or MFA secrets. `search_path = pg_catalog`. |
 
 Backups and restores run as the `postgres` superuser through peer authentication on the VM only.
 
@@ -155,7 +160,9 @@ Consequences to know:
 - Until the platform API exists (M1), storefront hosts cannot get certificates. The M0 hello world therefore uses `platform.example.com`.
 - If the platform API is down, **existing** certificates keep working; only new hosts wait.
 - Let's Encrypt allows about 50 new certificates per registered domain per week. Above ~30 sign-ups per week, switch to a DNS-01 wildcard certificate for `*.ota.example.com` (ADR-0018 follow-up).
-- Custom-domain owners create `CNAME travel.acme.com → acme.ota.example.com` (or A/AAAA for an apex) and the `_velexis` TXT record; the platform worker verifies them (M5).
+- Custom-domain owners create `CNAME travel.example.net → acme.ota.example.com` (or A/AAAA for an apex) and the `_velexis` TXT record; the platform worker verifies them (M5).
+- Caddy's admin API listens only on the unix socket `/run/caddy/admin.sock`, inside `/run/caddy` (mode 0700, user `caddy`, created by the `RuntimeDirectory=` of the drop-in). No app user can open it, so no app process can replace the live configuration (for example the payment-page CSP). `systemctl reload caddy` reads the socket address from the Caddyfile; changing that address needs `systemctl restart caddy`. X-022's smoke test proves a reload through the socket ([ADR-0027](adr/0027-pci-scope-and-vm-controls.md)).
+- From M6 Caddy is a build with the Coraza web application firewall and the OWASP Core Rule Set, in detection mode first and then blocking on the storefront `/api/*`, the payment pages and `api.ota.example.com` (task X-039).
 
 **Validation.** Every Caddyfile change is checked with `caddy validate` in CI and again on the VM by `velexis-deploy` (with the real `caddy.env`) before it is installed and reloaded (`systemctl reload caddy`, no dropped connections).
 
@@ -163,8 +170,8 @@ Consequences to know:
 
 | Secret | Where on the VM | Created by | Rotation |
 |---|---|---|---|
-| Master key (KEK) `master-v1.key` | `/etc/velexis/keys/`, `velexis` 0400 | `provision-vm.sh` (32 random bytes) | Add `master-v2.key`, set `MASTER_KEY_CURRENT=local:v2`, run the re-wrap job, remove v1 when unused ([ADR-0010](adr/0010-secrets-envelope-encryption.md)) |
-| API key pepper, document URL key, JWT Ed25519 keys | `/etc/velexis/keys/` | `provision-vm.sh` | JWT by `kid`; pepper not rotated in the MVP |
+| Master key (KEK) `master-v1.key` | `/etc/velexis/keys/platform/` and `/etc/velexis/keys/ota/` (identical copies, each 0400 for its zone's user) | `provision-vm.sh` (32 random bytes) | Add `master-v2.key` to both folders, set `MASTER_KEY_CURRENT=local:v2`, run both backends' `secrets:rewrap`, remove v1 when both report zero rows ([ADR-0010](adr/0010-secrets-envelope-encryption.md), runbook of X-040) |
+| API key pepper, document URL key, JWT Ed25519 keys | The zone's key folder (pepper in both, document URL key in `ota/` only) | `provision-vm.sh` | JWT by `kid`; pepper not rotated in the MVP |
 | Database and Redis passwords, edge secret, OTA admin service key | `/etc/velexis/*.env` (generated values also in `/etc/velexis/.provision-secrets`, root 0600) | `provision-vm.sh` | Change in the env files (and `ALTER ROLE` / Redis config), restart the units |
 | Stripe keys, SMTP credentials | `/etc/velexis/*.env` | The developer | Rotate in the provider's dashboard, update, restart |
 | Amadeus credentials | **Not** on the VM: encrypted in `platform.amadeus_accounts` / `supplier_connections` | Platform admin, portal | Through the UI |
@@ -175,13 +182,16 @@ Rules:
 
 - **Losing the master key loses every encrypted secret.** `/etc/velexis` is backed up nightly to a separate age key, and once by hand after provisioning.
 - Nothing secret is committed; templates hold `@@GENERATED@@` or `CHANGE_ME` values only.
-- Anyone with root or the `velexis` user can read the master key; that is the accepted single-VM limit. A KMS-backed `KeyProvider` is the follow-up ([§15](#15-moving-to-managed-postgresql-and-redis)).
+- Anyone with root, or with a backend zone's user, can read that zone's copy of the master key; that is the accepted single-VM limit. The Next.js apps cannot read any key or env file. A KMS-backed `KeyProvider` is the follow-up ([§15](#15-moving-to-managed-postgresql-and-redis)).
 
 ## 8. Release artefact, deploy and rollback
 
-Deploys are **manual** (`workflow_dispatch` of [`.github/workflows/deploy.yml`](../../.github/workflows/deploy.yml)), run by the developer only, behind the GitHub `production` environment ([ADR-0020](adr/0020-ai-agent-development-workflow.md)).
+Deploys are **manual** (`workflow_dispatch` of [`.github/workflows/deploy.yml`](../../.github/workflows/deploy.yml) from `main` or a `v*` tag), run by the developer only ([ADR-0020](adr/0020-ai-agent-development-workflow.md), [ADR-0023](adr/0023-release-artefact-and-deploy-user.md)). The workflow has two jobs, so that no dependency or build code runs next to the root-equivalent deploy key:
 
-**Build (GitHub Actions, Ubuntu 24.04 runner, Node 22):** install, lint, typecheck, unit tests, `pnpm build`, then [`pack-release.sh`](../../deploy/scripts/pack-release.sh) assembles `release/<sha>/`:
+- **build** (no secrets, no environment; Ubuntu 24.04 runner, Node 22): install (dependency install scripts only for the `pnpm.onlyBuiltDependencies` allow-list), lint, typecheck, unit tests (always), `pnpm build`, then [`pack-release.sh`](../../deploy/scripts/pack-release.sh) assembles `release/<sha>/`, which is uploaded as one tarball artefact; the tarball's SHA-256 is a job output.
+- **deploy** (GitHub `production` environment: the developer's approval, the SSH secrets, a branch policy for `main` and `v*` tags): downloads the tarball, re-checks its SHA-256 and `SHA256SUMS`, and runs `rsync` and `ssh`. It checks out no code and installs nothing.
+
+Every action is pinned to a full commit SHA. The release folder:
 
 | Folder | Content |
 |---|---|
@@ -195,20 +205,21 @@ Deploys are **manual** (`workflow_dispatch` of [`.github/workflows/deploy.yml`](
 
 Apps that do not exist yet are skipped, so the same pipeline ships the M0 hello world and the full system. Native modules (`argon2`) are built on the same OS and Node major as the VM; `velexis-deploy` refuses a release built with another Node major.
 
-**Activate (on the VM):** the workflow uploads with `rsync` to `/srv/velexis/incoming/<sha>/` as `deploy`, then runs `sudo /usr/local/sbin/velexis-deploy <sha>`, which:
+**Activate (on the VM):** the deploy job uploads with `rsync` to `/srv/velexis/incoming/<sha>/` as `deploy`, then runs `sudo /usr/local/sbin/velexis-deploy <sha>`, which:
 
 1. verifies `SHA256SUMS`, the sha in `RELEASE.json` and the Node major;
-2. installs, from the uploaded copy and before the folder is handed to `velexis`, the root-owned scripts, changed systemd units (`daemon-reload`), the maintenance page and a changed Caddyfile (validated, kept as `Caddyfile.next` until the end);
-3. moves the folder to `/srv/velexis/releases/<sha>/` and makes it read-only for `velexis`. Re-deploying a release that is already on the VM keeps the installed scripts, units and Caddyfile;
-4. runs the migrations ([§9](#9-migrations-at-deploy)) and, when the datasets changed, the reference data loader. A failure stops here: nothing was switched and the old release keeps running;
-5. switches `/srv/velexis/current` atomically (`ln -sfn` + `mv -T`);
-6. restarts workers, then APIs, then front ends, one at a time, polling `GET 127.0.0.1:<port>/health/ready` for up to 90 s each;
-7. on the first unhealthy unit, switches `current` back to the previous release, restarts the units again and exits non-zero (**automatic rollback**);
-8. reloads Caddy if its file changed, records the sha in `/var/lib/velexis/deploy-history`, and prunes all but the last five releases.
+2. checks that every `/etc/velexis/<app>.env` has every variable that the release's `deploy/env/<app>.env.example` names (an empty value is fine) and refuses the release otherwise, before changing anything. `provision-vm.sh` never rewrites env files, so a task that adds a variable comes with a human step: add it on the VM first ([`plans/roadmap.md`](plans/roadmap.md) §2). `provision-vm.sh --steps envfiles` lists missing variables too;
+3. copies the release's systemd units, Caddy drop-in, Caddyfile and maintenance page into a root-owned snapshot, `/var/lib/velexis/system/<sha>/`, then installs from the upload the root-owned scripts and, from the snapshot, changed units (`daemon-reload`), the maintenance page and a changed Caddyfile (validated, kept as `Caddyfile.next` until the end), all before the folder is handed over;
+4. moves the folder to `/srv/velexis/releases/<sha>/`, owned by `root:velexis` and read-only. Re-deploying a release that is already on the VM re-installs its units and Caddyfile from its snapshot and keeps the newest root scripts;
+5. runs the migrations ([§9](#9-migrations-at-deploy)) and, when the datasets changed, the reference data loader. A failure stops here: the running release's units are re-installed from its snapshot, nothing was switched and the old release keeps running;
+6. switches `/srv/velexis/current` atomically (`ln -sfn` + `mv -T`);
+7. restarts workers, then APIs, then front ends, one at a time, polling `GET 127.0.0.1:<port>/health/ready` for up to 90 s each;
+8. on the first unhealthy unit, re-installs the previous release's units and Caddyfile from its snapshot, switches `current` back, restarts the units and exits non-zero (**automatic rollback**);
+9. reloads Caddy if its file changed, records the sha in `/var/lib/velexis/deploy-history`, and prunes all but the last five releases and their snapshots.
 
 Each restart causes a few seconds of errors on that process; the maintenance page and the JSON `SERVICE_UNAVAILABLE` envelope cover them. That is accepted for the MVP (ADR-0007).
 
-**Manual rollback:** `sudo /usr/local/sbin/velexis-deploy --rollback` switches to the previously activated release. Migrations are not reversed: they are expand-only and the code supports schema versions N-1 and N ([`conventions.md`](conventions.md) §9). If a release must never run again, fix forward with a new commit.
+**Manual rollback:** `sudo /usr/local/sbin/velexis-deploy --rollback` re-installs the previously activated release's units, drop-in and Caddyfile from its snapshot (so the old code never runs under newer sandboxing or a newer payment-page CSP), switches to it and restarts. The root-owned scripts stay at their newest version, which is kept backward compatible. Migrations are not reversed: they are expand-only and the code supports schema versions N-1 and N ([`conventions.md`](conventions.md) §9). If a release must never run again, fix forward with a new commit.
 
 ## 9. Migrations at deploy
 
@@ -216,7 +227,7 @@ Each restart causes a few seconds of errors on that process; the maintenance pag
 |---|---|---|---|
 | `platform` | `platform/backend/migrations/platform/` (schema-qualified; `0001_baseline.sql` = `docs/velexis-sdk/db/platform.sql`; repeatable `R__ota_read_access.sql`) | `migrate.js platform` | `velexis_migrator` |
 | `reference` | `platform/backend/migrations/reference/` | `migrate.js reference` | `velexis_migrator` |
-| tenant | `ota/backend/migrations/tenant/` (unqualified; `0001_baseline.sql` = `tenant.sql`) | `migrate.js tenants` fan-out, and the OTA worker at provisioning | `velexis_migrator` |
+| tenant | `ota/backend/migrations/tenant/` (unqualified; `0001_baseline.sql` = `tenant.sql`) | `migrate.js tenants` fan-out, and the OTA worker at provisioning | `velexis_provisioner` (the fan-out connects as `velexis_migrator` and uses `SET LOCAL ROLE velexis_provisioner`) |
 
 - Each file runs in its own transaction with `lock_timeout 5s` (except `-- velexis:no-transaction` files) and is recorded with its SHA-256 in the schema's `schema_migrations` ledger. An edited, already-applied file fails the run.
 - The tenant fan-out migrates 4 schemas at a time, each under `pg_advisory_xact_lock(hashtext(schema))`, continues past a failed schema, and stops (exit code 3, deploy aborted) when more than 10 % fail. The report is in `/var/log/velexis/migrate-<sha>.json`.
@@ -236,13 +247,13 @@ Each restart causes a few seconds of errors on that process; the maintenance pag
 | `/etc/velexis` (master key, env files) | `tar` + zstd | **config** age key (a different key) |
 | Manifest | sizes, SHA-256 of each file, release, PostgreSQL version, tenant count | plain (no secrets) |
 
-The set is uploaded with `rclone` to `<remote>/daily/<date>/` (and `monthly/<yyyy-mm>/` on the 1st), verified with `rclone check`, and kept for **14 daily and 6 monthly** copies off the VM and two days locally. A marker file records the last success; the health check alerts when it is older than 26 hours.
+The set is uploaded with `rclone` to `<remote>/daily/<date>/` (and `monthly/<yyyy-mm>/` on the 1st) and verified with `rclone check`. **The bucket, not the VM, enforces retention**: lifecycle rules expire `daily/` after 14 days and `monthly/` after 6 months, and object lock (14-day default retention) protects every new object. The VM's key may only put, list and read; it has no `DeleteObject` or `DeleteObjectVersion` right, and `backup.sh` never deletes anything remotely. A root compromise of the VM can therefore not destroy the off-site copies. Local copies are kept two days. A marker file records the last success; the health check alerts when it is older than 26 hours.
 
 Setting it up (once):
 
 1. On your machine: `age-keygen -o velexis-data.key` and `age-keygen -o velexis-config.key`. Store both private keys offline (password manager plus a printed copy in a safe place).
 2. On the VM: put the two **public** keys (`age1…`) in `/etc/velexis/backup/data-recipients.txt` and `config-recipients.txt`.
-3. Create a bucket at another provider with object versioning or retention lock, and an access key limited to that bucket. Write `/etc/velexis/backup/rclone.conf` (`[offsite]`, type `s3`, provider, keys, endpoint) and set `RCLONE_REMOTE=offsite:<bucket>` in `/etc/velexis/backup.env`.
+3. Create a bucket at another provider with versioning and object lock (default retention 14 days), and lifecycle rules: `daily/` expires after 14 days, `monthly/` after 186 days, noncurrent versions after 1 day. Create an access key limited to that bucket with put, list and get rights only (no delete of objects or versions). Write `/etc/velexis/backup/rclone.conf` (`[offsite]`, type `s3`, provider, keys, endpoint) and set `RCLONE_REMOTE=offsite:<bucket>` in `/etc/velexis/backup.env`. Keep the bucket's admin credentials off the VM, in the password manager, with MFA on the provider account.
 4. `sudo systemctl start velexis-backup && journalctl -u velexis-backup -n 30`.
 
 **RPO is up to 24 hours.** Bookings made after the last dump can be rebuilt from Amadeus orders and Stripe payments. Continuous WAL archiving (pgBackRest, RPO ~5 minutes) is the first follow-up before significant live volume (ADR-0007).
@@ -250,6 +261,8 @@ Setting it up (once):
 ## 11. Restore and the restore drill
 
 [`restore.sh`](../../deploy/scripts/restore.sh) (`/usr/local/sbin/velexis-restore`) restores into a **scratch database by default**; replacing live data needs `--replace-live` and typing the hostname.
+
+**How `db --replace-live` stays safe.** It never drops the live database first. It restores into `velexis_restore_<stamp>` beside it, re-applies the database-level grants of `bootstrap.sql` (a `pg_dump` without `--create` does not carry them) and runs the sanity checks. Any failure up to here (wrong key, corrupt file, full disk, `pg_restore` error) leaves the live database untouched and the apps running. Only then does it stop the app units and, in one transaction, rename `velexis` to `velexis_before_restore_<stamp>` and the restored database to `velexis`. **Rollback:** stop the app units, rename `velexis` away and `velexis_before_restore_<stamp>` back to `velexis`, start the units. Drop the old database once the checks pass.
 
 **Full rebuild after losing the VM** (target RTO: a few hours):
 
@@ -265,12 +278,20 @@ Setting it up (once):
 
 **Restore drill** (M6, then quarterly, task X-031): on a scratch VM or the live VM, `velexis-restore drill <set> --identity <key>` restores into `velexis_drill_<date>`, prints tenant, schema, airport and last-audit figures, and drops it. Compare the figures with the manifest and record the date, duration and result in `/var/log/velexis/restore-drill-<date>.log` and the M6 launch checklist.
 
+**A scratch VM must never act as production.** The restored database still holds live Amadeus credentials (and OTA-owned Stripe keys) that the restored master key decrypts, and the workers' schedulers (`ticketing.scan`, `bookings.sync_scan`, `queues.poll`, `bookings.reconcile_scan`) would call live Amadeus at once and could issue tickets that production has since cancelled, or issue them twice. Before **any** unit starts on a scratch VM:
+
+1. Block outbound traffic: `ufw default deny outgoing`, then allow only DNS, the Ubuntu and vendor package mirrors and the backup bucket.
+2. In the restored env files, point `AMADEUS_BASE_URL_TEST` and `AMADEUS_BASE_URL_LIVE` at a black hole (`http://127.0.0.1:9`), point `SMTP_URL` at a sink, and replace every Stripe key and webhook secret with test-mode values.
+3. Mask both workers (`systemctl mask velexis-platform-worker velexis-ota-worker`); `velexis-deploy` and the health check skip masked units. Start them, if at all, only after steps 1 and 2.
+4. After the drill, check that the journal and `supplier_requests` show no Amadeus or Stripe call made from the scratch VM.
+
 ## 12. Logs
 
 | Source | Where | Retention |
 |---|---|---|
 | Velexis apps (pino JSON on stdout) | journald, `SyslogIdentifier=<unit>` | `SystemMaxUse=4G`, 30 days ([`deploy/journald/velexis.conf`](../../deploy/journald/velexis.conf)) |
 | Caddy access and error logs (JSON) | journald (`caddy`); sensitive headers and `sig`/`token` query values deleted | same |
+| Security logs: auditd, sshd, sudo, Caddy access and WAF, app security events | `/var/log/velexis/security/` (daily compressed files) and the off-site bucket's `logs/` prefix | 3 months on the VM, 12 months off the VM with object lock; hourly shipping and a daily automated review (task X-038, [ADR-0027](adr/0027-pci-scope-and-vm-controls.md)) |
 | Redis | journald | same |
 | PostgreSQL | `/var/log/postgresql/postgresql-16-main.log` | the package's logrotate rules |
 | Deploys, migration reports, restore drills | `/var/log/velexis/*.log`, `*.json` | weekly, 12 rotations ([`deploy/logrotate/velexis`](../../deploy/logrotate/velexis)) |
@@ -284,7 +305,8 @@ Everyday commands: `journalctl -u velexis-ota-api -f -o cat | jq`, `journalctl -
 |---|---|---|
 | Public liveness: `https://api.platform.example.com/health/live`, `https://api.ota.example.com/health/live`, the portal, one demo storefront | External uptime monitor (any free HTTP checker), every minute | E-mail and push to the developer |
 | A unit enters `failed` | systemd `OnFailure=velexis-alert@%n.service` → `velexis-alert` | E-mail |
-| Every unit's `/health/ready`, disk > 80 %, Redis memory > 70 % of `maxmemory`, last backup > 26 h, failed BullMQ jobs in the last hour, TLS expiry < 14 days for the named hosts, payment-page integrity | `velexis-healthcheck.timer` every 5 minutes (task X-030, M6) | E-mail |
+| Every unit's `/health/ready`, disk > 80 %, Redis memory > 70 % of `maxmemory`, last backup > 26 h, failed BullMQ jobs in the last hour, TLS expiry < 14 days for the named hosts, and daily the integrity of both payment pages (script contents and per-path headers against the inventory) | `velexis-healthcheck.timer` every 5 minutes (task X-030, M6) | E-mail |
+| Security log review: failed and accepted SSH logins, sudo use, auditd hits on keys and units, AIDE changes, WAF blocks, airline-card route error spikes, a failed log shipment | `velexis-log-review.timer` daily (task X-038, M6) | E-mail (critical events at once) |
 | Errors in code (optional) | Sentry when `SENTRY_DSN` is set, with the same redaction | Sentry |
 
 Business visibility (provisioning jobs, failed jobs, per-tenant counts, `supplier_requests` errors) comes from the platform admin and OTA admin, not from a metrics store ([ADR-0016](adr/0016-observability.md)).
@@ -307,7 +329,7 @@ Rough limits for the 4 vCPU / 8 GB start. Measure in the M6 performance sanity c
 
 The code reaches every service through configuration only ([`decisions.md`](decisions.md) §2): DSNs and URLs in env files, the `StorageAdapter`, and the `KeyProvider`. Nothing assumes `localhost`. The move is an operations change:
 
-1. **Prepare.** Create the managed PostgreSQL 16 instance in the same region as the VM, with private networking or TLS required. Create the three roles with `bootstrap.sql` (the provider's admin user replaces `postgres`). Check that the provider allows `CREATE SCHEMA` by `velexis_migrator` and `pg_stat_statements`.
+1. **Prepare.** Create the managed PostgreSQL 16 instance in the same region as the VM, with private networking or TLS required. Create the four roles with `bootstrap.sql` (the provider's admin user replaces `postgres`). Check that the provider allows `CREATE SCHEMA` by `velexis_migrator` and `pg_stat_statements`.
 2. **Rehearse.** Restore last night's dump into it (`pg_restore --no-owner --role=velexis_migrator` if ownership cannot be preserved) and point a staging copy of the apps at it. Run the restore-drill queries and the end-to-end suite.
 3. **Cut over** in a maintenance window: announce, stop the app units, take a fresh `pg_dump`, restore it to the managed instance, change `DATABASE_URL` and `DATABASE_MIGRATOR_URL` (with `?sslmode=verify-full`) in `/etc/velexis/*.env`, start the units, run the checks.
 4. **Redis** next: create a managed Redis 7 with persistence (AOF) and `noeviction`, change `REDIS_URL` (`rediss://`). Queues drain on the old one first: stop producers (APIs), let workers finish, then switch.
@@ -324,4 +346,4 @@ The code reaches every service through configuration only ([`decisions.md`](deci
 | New storefront host gets no certificate | `journalctl -u caddy --grep ask`, `curl '127.0.0.1:3100/internal/tls/ask?domain=<host>'` | Platform API up? Tenant active? Domain verified? |
 | Backup alert | `journalctl -u velexis-backup -n 50` | Fix credentials or space, `systemctl start velexis-backup` |
 | Disk above 80 % | `df -h`, `du -sh /var/lib/postgresql /var/backups/velexis /srv/velexis/releases`, `journalctl --disk-usage` | Prune local backups and old releases, resize the disk |
-| Suspected compromise | `aide --check`, `ausearch -k velexis-keys`, `last`, `journalctl -u ssh` | Rotate secrets ([§7](#7-secrets-and-the-master-key)), rebuild the VM from scripts and backups, follow the incident response plan (M6) |
+| Suspected compromise | `aide --check`, `ausearch -k velexis-keys`, `last`, `journalctl -u ssh`, the off-VM security logs | Rotate secrets ([§7](#7-secrets-and-the-master-key); master key: `docs/mvp/runbooks/master-key-rotation.md`, task X-040), rebuild the VM from scripts and backups, follow the incident response plan (M6) |

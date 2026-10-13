@@ -3,6 +3,7 @@
 **Status:** Accepted
 **Date:** 2026-10-12
 **Deciders:** Lead architect. Decided during planning; revisit when sending volume exceeds the SMTP provider's plan, or when moving storage to a managed object store.
+**Revisions:** 2026-10-12 (planning review): the MVP documents are itineraries and e-ticket receipts; invoices, credit notes and EMD receipts are post-MVP ([OADR-0013](../../../ota/docs/adr/0013-notifications-and-booking-documents.md) item 6).
 
 ## Context
 
@@ -37,7 +38,7 @@ The tenant schema has an e-mail outbox (`notifications`, with `secret_payload_ci
 
 ### Documents (PDF)
 
-- **pdfmake** generates itineraries, e-ticket receipts and invoices in the OTA worker (`ota-documents` queue) from booking data. It runs in pure JavaScript, with no headless browser and no native dependency.
+- **pdfmake** generates itineraries and e-ticket receipts in the OTA worker (`ota-documents` queue) from booking data. Invoices, credit notes and EMD receipts are post-MVP ([OADR-0013](../../../ota/docs/adr/0013-notifications-and-booking-documents.md) item 6); the same pipeline will render them. It runs in pure JavaScript, with no headless browser and no native dependency.
 - Fonts are bundled in the repository (open licence). The OTA's logo is fetched once and cached.
 - Generation is triggered by booking events (confirmed, ticketed, cancelled) and is idempotent per booking version.
 - Each document stores a `content_hash` (SHA-256) and is never regenerated in place: a new version is a new row.

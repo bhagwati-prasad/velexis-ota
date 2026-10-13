@@ -3,6 +3,7 @@
 **Status:** Accepted
 **Date:** 2026-10-12
 **Deciders:** Product owner (components, technologies, two backends), lead architect (boundaries and integration rules)
+**Revisions:** 2026-10-12 (planning review): the platform backend also reaches the Amadeus OAuth token endpoint (credential checks only) and public DNS; the queue rule lists suspend and resume.
 
 ## Context
 
@@ -16,7 +17,7 @@ This ADR fixes the responsibilities of each component and how the two backends m
 
 | Component | Plane | Owns | Talks to |
 |---|---|---|---|
-| Platform backend (`platform/backend`) | Control plane | `platform` and `reference` schemas and their migrations; portal accounts, MFA and sessions; tenants, memberships, invitations; plans, Stripe Billing subscriptions and invoices; API keys; domains and the Caddy `ask` endpoint; Amadeus and Stripe connections (encrypted); provisioning orchestration; platform audit; reference data loading | PostgreSQL (`platform`, `reference`), Redis, Stripe, SMTP, the OTA backend through queues |
+| Platform backend (`platform/backend`) | Control plane | `platform` and `reference` schemas and their migrations; portal accounts, MFA and sessions; tenants, memberships, invitations; plans, Stripe Billing subscriptions and invoices; API keys; domains and the Caddy `ask` endpoint; Amadeus and Stripe connections (encrypted); provisioning orchestration; platform audit; reference data loading | PostgreSQL (`platform`, `reference`), Redis, Stripe, SMTP, the Amadeus OAuth token endpoint (credential verification only, never flight operations; [ADR-0012](0012-amadeus-account-model.md)), public DNS resolvers (custom-domain checks), the OTA backend through queues |
 | Platform frontend (`platform/frontend`) | Control plane UI | Portal pages | Platform backend only (server side) |
 | Platform admin (`platform/admin`) | Control plane UI | Velexis staff pages | Platform backend only (server side) |
 | OTA backend (`ota/backend`) | Data plane | The OTA booking API ([OpenAPI](../../velexis-sdk/openapi/velexis-ota-booking-api.openapi.yaml)); tenant schemas, their provisioning DDL and migrations; Amadeus client; customer payments; booking workers; tenant e-mails and documents | PostgreSQL (tenant schemas read/write, `reference` and listed `platform` tables read-only), Redis, Amadeus, Stripe, SMTP |
@@ -31,7 +32,7 @@ Each backend is **one codebase with two entry points**: `main.ts` (HTTP API) and
 ### Integration rules between the backends
 
 1. **No synchronous HTTP between the backends** in the MVP. They share no in-process code except `packages/*`.
-2. **Platform → OTA: BullMQ queue `ota-tenant-ops`** (provision, migrate, and later suspend, export and delete). **OTA → platform: queue `platform-tenant-events`** (provisioned, failed, migrated, and later usage events). The message contracts live in `@velexis/api-types/jobs` ([ADR-0009](0009-background-jobs-bullmq.md)).
+2. **Platform → OTA: BullMQ queue `ota-tenant-ops`** (provision, migrate, suspend and resume; export and delete post-MVP). **OTA → platform: queue `platform-tenant-events`** (provisioned, failed, migrated, suspended, resumed; usage events post-MVP). The message contracts live in `@velexis/api-types/jobs` ([ADR-0009](0009-background-jobs-bullmq.md)).
 3. **OTA reads platform data through a read-only database role** (`velexis_ota_app` has `SELECT` on the platform tables it needs) and caches it in Redis with short TTLs. The platform backend publishes invalidations on a Redis pub/sub channel whenever it changes one of those rows ([ADR-0004](0004-postgresql-schema-per-tenant.md)).
 4. **Short-lived handoffs go through Redis**: the one-time portal token for OTA admin SSO is written by the platform backend and consumed once by the OTA backend ([ADR-0008](0008-identity-accounts-customers-sessions.md)).
 5. **The OTA backend never writes platform tables.** Anything the platform must record (provisioning results, schema versions, API key usage) is sent as a queue message or a Redis counter that the platform worker persists.

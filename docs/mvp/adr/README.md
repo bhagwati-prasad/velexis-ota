@@ -6,10 +6,10 @@ This folder holds the cross-cutting architecture decision records (ADRs) of the 
 
 | ADR | Title | Status | In one line |
 |---|---|---|---|
-| [0001](0001-record-architecture-decisions.md) | Record architecture decisions | Accepted | MADR-lite ADRs here and per component; `decisions.md` > ADRs > plans > code. |
+| [0001](0001-record-architecture-decisions.md) | Record architecture decisions | Accepted | MADR-lite ADRs here and per component (PADR-, OADR-); `decisions.md` > ADRs > plans > code; planning-review revisions in place until M0 starts. |
 | [0002](0002-monorepo-pnpm-turborepo.md) | Monorepo with pnpm workspaces and Turborepo | Accepted | One repo, pnpm 9 workspaces, Turborepo 2, `@velexis/*` package names, dependency rules. |
 | [0003](0003-six-components-two-nestjs-backends.md) | Six components and two NestJS backends | Accepted | Control plane vs data plane, API + worker processes, queues and read-only access between backends. |
-| [0004](0004-postgresql-schema-per-tenant.md) | PostgreSQL schema per tenant | Accepted | Reuse the db README design with three database roles, no per-tenant roles and one local cluster. |
+| [0004](0004-postgresql-schema-per-tenant.md) | PostgreSQL schema per tenant | Accepted | Reuse the db README design with four database roles (migrator, provisioner, two app roles), no per-tenant roles and one local cluster. |
 | [0005](0005-data-access-kysely-sql-migrations.md) | Data access with Kysely and plain SQL migrations | Accepted | Kysely on `pg`, generated table types, forward-only SQL migrations, reference DDL as `0001_baseline`. |
 | [0006](0006-contract-first-openapi.md) | Contract first with OpenAPI | Accepted | OpenAPI 3.1 documents in each backend, generated types in `@velexis/api-types`, Ajv validation, parity checks. |
 | [0007](0007-single-vm-without-docker.md) | Single VM without Docker | Accepted | Ubuntu 24.04, native services, systemd units, release symlinks, nightly encrypted off-VM backups. |
@@ -28,15 +28,22 @@ This folder holds the cross-cutting architecture decision records (ADRs) of the 
 | [0020](0020-ai-agent-development-workflow.md) | AI-agent development workflow | Accepted | Linted Markdown task plans, one task per branch and PR, developer-only merges and deploys. |
 | [0021](0021-migration-cli-and-repeatable-grants.md) | Migration CLI and repeatable grant files | Accepted | One `migrate.js` CLI for deploys, dev, provisioning and tests; idempotent `R__*.sql` grant files keep the OTA read grants out of the baselines. |
 | [0022](0022-shared-test-support-package.md) | Shared test-support package `@velexis/testing` | Accepted | Dev-only package: template-cloned test databases with two tenants, Redis, clock, Ajv response checks, Mailpit, Stripe and Amadeus stub helpers. |
-| [0023](0023-release-artefact-and-deploy-user.md) | Release artefact and deploy user | Accepted | Checksummed release folder built in CI; `deploy` user with one sudo command; root runs only root-owned scripts; per-unit `InaccessiblePaths`. |
+| [0023](0023-release-artefact-and-deploy-user.md) | Release artefact and deploy user | Accepted | Checksummed release built in a job without secrets and deployed by a separate job; `deploy` user with one sudo command; root runs only root-owned code; rollback restores the release's units and Caddyfile. |
 | [0024](0024-reference-data-sources-and-loader.md) | Reference data sources and loader | Accepted | OpenTravelData and Unicode CLDR snapshots vendored in `tools/reference-data`, loaded idempotently with the platform role; never fetched at runtime. |
+| [0025](0025-roadmap-scheduling-and-tracking.md) | Roadmap scheduling and tracking | Accepted | 30 weeks with agents, 76 without; strict milestone order; gates and launch exceptions; one ` ✅` status rule; demos split into VM and local-stack parts. |
+| [0026](0026-system-users-per-trust-zone.md) | System users per trust zone | Accepted | One OS user per backend zone and per Next.js app, per-zone key folders, env files read by systemd only; `InaccessiblePaths=` is defence in depth. |
+| [0027](0027-pci-scope-and-vm-controls.md) | PCI DSS scope and controls on the single VM | Accepted | The whole VM and the systems that change it are the CDE; every applicable requirement has a control and an owning task (SSH MFA, off-VM logs, WAF, scans). |
 
 ## Component ADRs
 
-Decisions that concern only one component group may be recorded next to it. They must not contradict the ADRs above.
+Decisions that concern only one component group are recorded next to it. They must not contradict the ADRs above. Their numbers overlap with these, so they are always named with a prefix ([ADR-0001](0001-record-architecture-decisions.md) item 2):
 
-- Platform: `platform/docs/adr/` (if present)
-- OTA: `ota/docs/adr/` (if present)
+| Prefix | Index | Holds |
+|---|---|---|
+| **PADR-NNNN** | [`platform/docs/adr/README.md`](../../../platform/docs/adr/README.md) | Platform backend, portal and platform admin decisions (18 records) |
+| **OADR-NNNN** | [`ota/docs/adr/README.md`](../../../ota/docs/adr/README.md) | OTA backend, storefront, OTA admin and SDK decisions (18 records) |
+
+A bare ADR-NNNN always means a record in this folder.
 
 ## New ADR checklist
 

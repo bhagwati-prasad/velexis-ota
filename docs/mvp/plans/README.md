@@ -9,7 +9,7 @@ Related: [`roadmap.md`](roadmap.md), [`../../../AGENTS.md`](../../../AGENTS.md) 
 | File | Style | Scope | Task ids | Answers |
 |---|---|---|---|---|
 | [`roadmap.md`](roadmap.md) | Master plan | Foundation and both groups | References all ids | When does each milestone happen, with and without agents? Which tasks run in parallel? What are the review gates, demos, go/no-go criteria, critical path and risks? |
-| [`foundation-tasks.md`](foundation-tasks.md) | Agent tasks | Monorepo, shared packages, CI, baselines, migration runner, VM, deploy, backups, monitoring | `X-001` … `X-032` | What exactly is built for the shared base, and which task provides what the components depend on? |
+| [`foundation-tasks.md`](foundation-tasks.md) | Agent tasks | Monorepo, shared packages, CI, baselines, migration runner, VM, users per trust zone, deploy, backups, monitoring, Amadeus stub, PCI controls of the VM | `X-001` … `X-040` | What exactly is built for the shared base, and which task provides what the components depend on? |
 | [`platform/docs/plans/implementation-plan.md`](../../../platform/docs/plans/implementation-plan.md) | Implementation plan | Platform backend, portal, platform admin | `PBE-`, `PFE-`, `PAD-` (referenced) | Per milestone: goal, epics, demo, exit criteria, interface with the OTA group, risks; traceability from PF features to tasks |
 | [`platform/docs/plans/agent-tasks.md`](../../../platform/docs/plans/agent-tasks.md) | Agent tasks | Platform backend, portal, platform admin | `PBE-001` … `PBE-065`, `PFE-001` … `PFE-028`, `PAD-001` … `PAD-016` | What exactly does each platform task change, and how is it proven? |
 | [`platform/docs/plans/solo-developer-plan.md`](../../../platform/docs/plans/solo-developer-plan.md) | Solo developer (week by week) | Platform group, without agents | References platform ids | In which order does one developer build the platform, week by week (31 platform weeks)? |
@@ -35,7 +35,7 @@ flowchart TD
 - **Decisions flow down.** [`decisions.md`](../decisions.md) wins over everything. The ADRs refine it, the implementation plans apply it per milestone, and the task blocks turn it into work.
 - **Task blocks are the single source of scope.** Each task is defined once, in one agent task plan. The solo plans and the roadmap reference task ids and never redefine a task.
 - **Dependencies cross files.** Component tasks depend on `X-` tasks, and some platform and OTA tasks depend on each other (for example OBE-003 on PBE-002, and OAD-016 on PFE-017). A few platform tasks carry a **Gate** that names an OTA feature (PBE-035, PBE-036, PAD-011, PFE-019).
-- **The roadmap combines them.** It schedules all 290 tasks in one calendar, maps the two solo plans' week numbers to calendar weeks, and keeps the milestone status, outside steps and change log.
+- **The roadmap combines them.** It schedules all 298 tasks in one calendar, maps the two solo plans' week numbers to calendar weeks, and keeps the milestone status, outside steps and change log.
 
 ## 3. Which file to open
 
@@ -54,19 +54,19 @@ flowchart TD
 - **Milestones.** Every plan uses M0–M6 with the meanings of [`../README.md`](../README.md#1-shared-milestones).
 - **Task format.** Task blocks follow [ADR-0020](../adr/0020-ai-agent-development-workflow.md): Component, Milestone, Depends on, Size, Read first, Files, Steps, Acceptance, Verify. Sizes are S (up to 2 h), M (up to 4 h) and L (up to 1 day) of agent and review time.
 - **Ids.** Ids are unique across the three task files. The prefix matches the component (`X`, `PBE`, `PFE`, `PAD`, `OBE`, `OFE`, `OAD`, `SDK`).
-- **Status.** A task's PR adds `- **Status:** in progress (PR #n)`. When it is merged, the heading ends with ` ✅` and the status says `done (PR #n)` ([ADR-0025](../adr/0025-roadmap-scheduling-and-tracking.md)).
+- **Status.** A task's PR adds `- **Status:** in progress (PR #n)`. In the PR's last commit it appends ` ✅` to the heading and sets `done (PR #n)`, so both hold on `main` from the merge on ([ADR-0025](../adr/0025-roadmap-scheduling-and-tracking.md) item 6, which amends [ADR-0020](../adr/0020-ai-agent-development-workflow.md); [`AGENTS.md`](../../../AGENTS.md) §4).
 - **Validation.** `node tools/plan-lint/plan-lint.mjs` runs in CI on every PR that touches a plan and must report `ERRORS: 0`.
 
 ## 5. Baseline numbers
 
-`node tools/plan-lint/plan-lint.mjs` on 2026-10-12: `tasks: 290  estimated hours: 1350`, `ERRORS: 0`, critical path 162 h over 29 tasks.
+`node tools/plan-lint/plan-lint.mjs` on 2026-10-12, after the planning review: `tasks: 298  estimated hours: 1392`, `ERRORS: 0`, critical path 162 h over 29 tasks.
 
 | Plan | Tasks | Agent-hours | Solo days |
 |---|---|---|---|
-| Foundation (`X-`) | 32 | 128 | 32 |
+| Foundation (`X-`) | 40 | 170 | 42.5 |
 | Platform (`PBE-` 65, `PFE-` 28, `PAD-` 16) | 109 | 542 | 135.5 |
 | OTA (`OBE-` 89, `OFE-` 26, `OAD-` 19, `SDK-` 15) | 149 | 680 | 170 |
-| **Total** | **290** | **1,350** | **337.5** |
+| **Total** | **298** | **1,392** | **348** |
 
 Calendars: **30 working weeks** with AI agents, **76 working weeks** without ([`roadmap.md`](roadmap.md) §1).
 

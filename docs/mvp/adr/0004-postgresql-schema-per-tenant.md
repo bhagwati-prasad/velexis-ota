@@ -3,6 +3,7 @@
 **Status:** Accepted
 **Date:** 2026-10-12
 **Deciders:** Product owner (schema per OTA, ownership), lead architect (roles and MVP simplifications)
+**Revisions:** 2026-10-12 (planning review): a fourth role, `velexis_provisioner`, takes tenant provisioning away from `velexis_migrator`; the `accounts` columns readable by the OTA role are listed explicitly and exclude every secret and hash.
 
 ## Context
 
@@ -23,7 +24,7 @@ The design assumes one NestJS app with DML on everything. The MVP has two backen
 
 | Reference design | MVP |
 |---|---|
-| One app role `velexis_app` with DML on all schemas | Three login roles, one per responsibility (below) |
+| One app role `velexis_app` with DML on all schemas | Four login roles, one per responsibility (below) |
 | Provisioning steps run by one worker that writes `platform` and the tenant schema | The platform backend writes the platform rows; the OTA worker runs `create_schema`, `run_migrations` and `seed_defaults`; results come back through a queue ([ADR-0009](0009-background-jobs-bullmq.md)) |
 | Several clusters, PgBouncer, per-tenant roles | One local PostgreSQL 16, one database `velexis`, `pg.Pool` per app without PgBouncer, **no per-tenant roles** |
 | Default sub-domain `<key>.velexis.app` | `<key>.ota.example.com` ([`decisions.md`](../decisions.md) §4) |
@@ -35,16 +36,19 @@ The `region` and `cluster` columns of `platform.tenants` stay, with one constant
 
 | Role | Used by | Privileges |
 |---|---|---|
-| `velexis_migrator` | Migration commands of both backends, OTA provisioning step | Owns `platform`, `reference` and every `tenant_<key>`. `CREATE` on the database. Runs DDL only. Never used to serve requests. |
+| `velexis_migrator` | `velexis-deploy` (platform and reference migrations, tenant fan-out) and the local migration commands only. Its DSN is in the root-only `migrator.env`; no running app has it. | Owns the database, `platform` and `reference`. Member of `velexis_provisioner`: the tenant fan-out runs each schema with `SET LOCAL ROLE velexis_provisioner`, so tenant objects keep one owner. Runs DDL only. Never used to serve requests. |
+| `velexis_provisioner` | OTA worker: tenant provisioning (`create_schema`, `run_migrations`, `seed_defaults`) | `CREATE` on the database, owner of every `tenant_<key>` it creates, nothing on `platform` or `reference`. It cannot touch `platform.accounts`, the platform audit log or the reference data, so a compromised worker stays inside the tenant schemas. Never used to serve requests. |
 | `velexis_platform_app` | Platform backend API and worker | DML on `platform`, DML on `reference` (reference data loaders). **No privileges on tenant schemas.** |
-| `velexis_ota_app` | OTA backend API and worker | DML on tenant schemas (granted per schema during provisioning, with default privileges for future tables). `SELECT` on `reference`. `SELECT` only on the platform tables it needs: `tenants`, `tenant_domains`, `api_keys`, `api_key_tenant_grants`, `tenant_memberships`, `accounts` (identity and MFA columns), `plans`, `supplier_connections`, `payment_provider_connections`, plus the shared Amadeus account tables of [ADR-0012](0012-amadeus-account-model.md). Default `search_path = pg_catalog`. |
+| `velexis_ota_app` | OTA backend API and worker | DML on tenant schemas (granted per schema during provisioning, with default privileges for future tables). `SELECT` on `reference`. `SELECT` only on the platform tables it needs: `tenants`, `tenant_domains`, `api_keys`, `api_key_tenant_grants`, `tenant_memberships`, `plans`, `supplier_connections`, `payment_provider_connections`, the shared Amadeus account tables of [ADR-0012](0012-amadeus-account-model.md), and on `accounts` only the columns `id`, `email`, `email_verified_at`, `full_name`, `locale`, `time_zone`, `mfa_enabled`, `status`, `deleted_at`, `version`. **Secrets and hashes are never granted**: not `password_hash`, `mfa_secret_ciphertext`, `encryption_key_id`, `failed_login_count`, `locked_until` or `is_platform_admin`. Default `search_path = pg_catalog`. |
 
 Passwords are in the apps' environment files on the VM ([ADR-0010](0010-secrets-envelope-encryption.md)). PostgreSQL listens on `127.0.0.1` only and requires `scram-sha-256`.
+
+The OTA backend never verifies portal passwords or TOTP codes: staff reach the OTA admin through the platform's one-time console token, and the platform enforces the MFA policy when it issues that token. If a password grant for third-party consoles is built later, the platform verifies the credentials, not the OTA backend ([ADR-0008](0008-identity-accounts-customers-sessions.md)).
 
 ### Migration ownership
 
 - `platform/backend/migrations/platform/` and `platform/backend/migrations/reference/`: schema-qualified SQL, applied once, by the platform deploy step.
-- `ota/backend/migrations/tenant/`: unqualified SQL, applied to every tenant schema by the OTA provisioning job and by the tenant fan-out on deploy.
+- `ota/backend/migrations/tenant/`: unqualified SQL, applied to every tenant schema by the OTA provisioning job (as `velexis_provisioner`) and by the tenant fan-out on deploy (as `velexis_migrator` with `SET LOCAL ROLE velexis_provisioner`).
 - `0001_baseline.sql` of each set is the corresponding file from `docs/velexis-sdk/db/`, unchanged ([ADR-0005](0005-data-access-kysely-sql-migrations.md)).
 
 ## Consequences
@@ -52,6 +56,7 @@ Passwords are in the apps' environment files on the VM ([ADR-0010](0010-secrets-
 ### Positive
 
 - The database itself enforces "the platform never writes tenant schemas" and "the OTA reads platform tables read-only".
+- A compromised OTA process (the internet-facing API that handles airline cards, or the worker) can read neither password hashes nor TOTP seeds, and cannot change platform tables or the platform audit log.
 - Each OTA can be dumped, restored or erased on its own (`pg_dump -n`, `DROP SCHEMA … CASCADE`).
 - The reference design, its DDL and its checks are reused instead of redone.
 

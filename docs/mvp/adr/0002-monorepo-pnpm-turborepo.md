@@ -3,6 +3,7 @@
 **Status:** Accepted
 **Date:** 2026-10-12
 **Deciders:** Product owner (one repository, shared libraries), lead architect (tooling)
+**Revisions:** 2026-10-12 (planning review): the table lists `@velexis/testing` ([ADR-0022](0022-shared-test-support-package.md)) and `@velexis/reference-data` ([ADR-0024](0024-reference-data-sources-and-loader.md)); 17 workspace packages.
 
 ## Context
 
@@ -29,10 +30,12 @@
    | `packages/crypto` | `@velexis/crypto` | Envelope encryption, HMAC, token hashing, key providers |
    | `packages/errors` | `@velexis/errors` | Error codes and the `AppError` class |
    | `packages/api-types` | `@velexis/api-types` | Types generated from both OpenAPI documents, plus queue message contracts |
-   | `tools/amadeus-stub` | `@velexis/amadeus-stub` | Amadeus stub server for dev and tests |
+   | `packages/testing` | `@velexis/testing` | Test support: test databases, Redis, clock, response checks, Mailpit, Stripe and Amadeus stub helpers. **devDependency only** |
+   | `tools/reference-data` | `@velexis/reference-data` | Vendored reference datasets and their loader CLI, shipped in releases |
+   | `tools/amadeus-stub` | `@velexis/amadeus-stub` | Amadeus stub server for dev and tests (devDependency only) |
    | `tools/e2e` | `@velexis/e2e` | Playwright end-to-end suite |
 
-   `tools/plan-lint` stays a plain script with no `package.json`.
+   That is 17 workspace packages. `tools/plan-lint` stays a plain script with no `package.json`.
 4. **Module format.**
    - Backends and the Node-side shared packages are TypeScript compiled by `tsc` to **CommonJS** in `dist/`, with declarations. This is the path NestJS supports best.
    - The SDK and the storefront are **ES modules**.
@@ -65,7 +68,7 @@
 
 ## Alternatives considered
 
-- **Nx.** More powerful generators and graph rules, but heavier to learn and configure. Turborepo is enough for 15 packages.
+- **Nx.** More powerful generators and graph rules, but heavier to learn and configure. Turborepo is enough for 17 packages.
 - **npm or Yarn workspaces.** pnpm is faster, stricter about phantom dependencies and has `pnpm deploy` for building self-contained app folders ([ADR-0007](0007-single-vm-without-docker.md)).
 - **Several repositories.** Cross-component changes would need coordinated releases. That is too much overhead for one developer.
 - **ESM everywhere.** Possible with NestJS 11 but less trodden. Agents make fewer mistakes on the default CommonJS setup.

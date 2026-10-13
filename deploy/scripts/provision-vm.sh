@@ -286,18 +286,15 @@ step_keys() {
 }
 
 load_or_create_secrets() {
-  if [ ! -f "$SECRETS_FILE" ]; then
-    umask 077
-    {
-      echo "MIGRATOR_DB_PASSWORD=$(gen_secret)"
-      echo "PLATFORM_DB_PASSWORD=$(gen_secret)"
-      echo "OTA_DB_PASSWORD=$(gen_secret)"
-      echo "REDIS_PASSWORD=$(gen_secret)"
-      echo "EDGE_SECRET=$(gen_secret)"
-      echo "OTA_ADMIN_SERVICE_KEY=sk_svc_$(gen_secret)"
-    } > "$SECRETS_FILE"
-    umask 022
-  fi
+  # Each generated value is created once and kept; values added in later versions of this script are appended.
+  local name
+  umask 077
+  touch "$SECRETS_FILE"
+  for name in MIGRATOR_DB_PASSWORD PROVISIONER_DB_PASSWORD PLATFORM_DB_PASSWORD OTA_DB_PASSWORD REDIS_PASSWORD EDGE_SECRET; do
+    grep -q "^${name}=" "$SECRETS_FILE" || echo "${name}=$(gen_secret)" >> "$SECRETS_FILE"
+  done
+  grep -q '^OTA_ADMIN_SERVICE_KEY=' "$SECRETS_FILE" || echo "OTA_ADMIN_SERVICE_KEY=sk_svc_$(gen_secret)" >> "$SECRETS_FILE"
+  umask 022
   # shellcheck disable=SC1090
   . "$SECRETS_FILE"
 }
@@ -309,6 +306,7 @@ step_database() {
   # Passwords go through stdin, never on a command line (visible in ps).
   {
     printf '\\set migrator_password %s\n' "$MIGRATOR_DB_PASSWORD"
+    printf '\\set provisioner_password %s\n' "$PROVISIONER_DB_PASSWORD"
     printf '\\set platform_password %s\n' "$PLATFORM_DB_PASSWORD"
     printf '\\set ota_password %s\n' "$OTA_DB_PASSWORD"
     cat "$DEPLOY_DIR/postgres/bootstrap.sql"
@@ -319,7 +317,7 @@ step_database() {
 step_envfiles() {
   log "Environment files in /etc/velexis (existing files are kept)"
   load_or_create_secrets
-  local tpl name dest owner mode
+  local tpl name dest owner mode missing
   for tpl in "$DEPLOY_DIR"/env/*.env.example; do
     name="$(basename "$tpl" .example)"
     dest="/etc/velexis/$name"
@@ -328,8 +326,14 @@ step_envfiles() {
       caddy.env) owner=root:caddy; mode=0640 ;;
       *) owner="root:$APP_USER"; mode=0640 ;;
     esac
-    if [ -f "$dest" ]; then continue; fi
+    if [ -f "$dest" ]; then
+      # Never overwritten, but drift is reported: a later release may need variables the file does not have yet.
+      missing="$(grep -oE '^[A-Z][A-Z0-9_]*=' "$tpl" | tr -d '=' | while read -r key; do grep -qE "^${key}=" "$dest" || printf '%s ' "$key"; done)"
+      [ -z "$missing" ] || warn "$dest lacks variables of its template: ${missing}(add them; velexis-deploy refuses a release until they exist)"
+      continue
+    fi
     sed -e "s/@@MIGRATOR_DB_PASSWORD@@/${MIGRATOR_DB_PASSWORD}/g" \
+        -e "s/@@PROVISIONER_DB_PASSWORD@@/${PROVISIONER_DB_PASSWORD}/g" \
         -e "s/@@PLATFORM_DB_PASSWORD@@/${PLATFORM_DB_PASSWORD}/g" \
         -e "s/@@OTA_DB_PASSWORD@@/${OTA_DB_PASSWORD}/g" \
         -e "s/@@REDIS_PASSWORD@@/${REDIS_PASSWORD}/g" \

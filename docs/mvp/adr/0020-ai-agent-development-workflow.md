@@ -3,6 +3,7 @@
 **Status:** Accepted
 **Date:** 2026-10-12
 **Deciders:** Product owner (solo developer driving AI coding agents, plain Markdown plans in two styles), lead architect (task format, branch and PR rules, review gates)
+**Revisions:** 2026-10-12 (planning review): one status rule with ` ✅` on merged task headings ([ADR-0025](0025-roadmap-scheduling-and-tracking.md) item 6); registry files and folder entries do not block parallel work; the second-agent review pass becomes a written procedure (X-036).
 
 ## Context
 
@@ -47,7 +48,7 @@ Rules:
 - **Sizes:** S at most 2 hours, M at most 4 hours, L at most 1 day of focused agent and review time. Anything bigger is split.
 - **Milestones** are the shared M0–M6 ([`../README.md`](../README.md)). Every plan uses the same ids and meanings.
 - `node tools/plan-lint/plan-lint.mjs` runs in CI on every PR that touches a plan. It checks unique ids, prefixes, required fields, dependencies, cycles and allowed file paths, and prints the critical path.
-- A task may carry an optional `- **Status:**` line (`todo`, `in progress (PR #n)`, `done (PR #n)`). plan-lint ignores extra fields.
+- **Status, one rule for all three task files** ([ADR-0025](0025-roadmap-scheduling-and-tracking.md) item 6): a task carries a `- **Status:**` line (`todo`, then `in progress (PR #n)`, then `done (PR #n)`). The task's own PR, in its last commit, sets `done (PR #n)` **and** appends ` ✅` to the task heading (`### X-012 · Title ✅`), so both become true on `main` exactly when the developer merges. The roadmap counts done tasks with `grep '^### .* ✅$'`. plan-lint ignores the Status field and accepts the ` ✅` suffix.
 
 ### Doing a task
 
@@ -65,7 +66,7 @@ Rules:
    - docs or ADRs touched;
    - security checklist;
    - open questions.
-7. **Update the plan** in the same PR (status `done (PR #n)`) and any doc the change makes stale.
+7. **Update the plan** in the same PR (status `done (PR #n)` and ` ✅` on the heading) and any doc the change makes stale.
 
 ### Gates and permissions
 
@@ -81,9 +82,15 @@ Rules:
 Several agents may work at once when:
 
 - their tasks' dependencies are all merged;
-- their **Files** lists do not overlap.
+- their **Files** lists do not overlap, apart from the exemptions below.
 
-Generated files (`packages/api-types`, `packages/db/src/generated`) are regenerated on rebase, never merged by hand.
+Exemptions (they never block parallel work):
+
+- **Generated files** (`packages/api-types/src/generated`, `packages/errors/src/generated`, `packages/db/src/generated`) are regenerated on rebase, never merged by hand.
+- **Registry files** are *rebase-merge* files: many tasks add one line or one entry to them, and the second PR rebases and keeps both additions. They are `pending-operations.ts` (both backends), each app's `config.ts`, `app.module.ts` and `worker.module.ts`, the scheduler registries (`schedulers.ts`, `scheduler.registry.ts`), `cli.ts`, `package.json` scripts and dependencies, the root and component `.env.example`, the `deploy/env/*.env.example` templates, the OpenAPI documents (one operation per task), the CI workflows (one job or step per task), and Markdown documents (each task edits its own sections). A task changes only its own entries in them.
+- **Folder entries** in a Files list (a path ending in `/`, such as `src/notifications/templates/`) mean "new files in this folder"; two tasks overlap only if they create or change the same file.
+
+Two tasks that share any other source file run one after the other. A check of the roadmap's batches (2026-10-12, 298 tasks) found eleven such pairs in eight batches. With the exemptions, a throughput simulation gives 17.8–18.0 weeks of review time for 2 to 6 agents, the same as without the overlap rule, against 19.2–19.4 weeks if every shared file blocked ([`plans/roadmap.md`](../plans/roadmap.md) §1.1).
 
 ## Consequences
 
@@ -100,7 +107,8 @@ Generated files (`packages/api-types`, `packages/db/src/generated`) are regenera
 
 ### Follow-ups
 
-- Decided during planning; revisit after M1. If review becomes the bottleneck, add an automated review pass (a second agent running the code-review checklist) before the developer's review.
+- Decided during planning; revisit after M1.
+- **Second-agent review pass.** Task X-036 (M2) writes the procedure: a fresh agent session with read-only access gets the PR diff, the task block and the security checklist, and posts its findings in the PR before the developer reviews. It is required for the deep-review PRs of M3 (money and card code) and recommended elsewhere when review becomes the bottleneck.
 
 ## Alternatives considered
 

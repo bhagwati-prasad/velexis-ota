@@ -6,20 +6,22 @@ Related: [`architecture.md`](architecture.md) (where each piece runs), [`convent
 
 **Adding a dependency** that is not on this page needs a line in the PR description saying why the listed tools are not enough. A new kind of dependency (another framework, database or service) needs an ADR.
 
+**Install scripts.** pnpm runs dependency install scripts only for the packages listed in `pnpm.onlyBuiltDependencies` of the root `package.json` (empty at M0). A task that adds a dependency whose install script is really needed (for example a native module without a prebuilt binary for Linux x64) adds it to that list in the same PR, with the reason in the PR description ([ADR-0023](adr/0023-release-artefact-and-deploy-user.md)).
+
 ## 1. Platform-wide versions
 
 | Technology | Version | Why |
 |---|---|---|
 | Node.js | **22 LTS** (22.x, `.nvmrc`) | Product owner's choice. Long-term support until April 2027, built-in `fetch`, `require(esm)`. Plan the move to Node 24 LTS after the MVP. |
 | pnpm | **9** (exact in `packageManager`) | Fast, strict workspaces; `pnpm deploy` builds self-contained app folders for the VM. |
-| Turborepo | **2** (2.x) | Task graph and local caching across 15 workspace packages. |
+| Turborepo | **2** (2.x) | Task graph and local caching across 17 workspace packages (six apps and the SDK, seven shared packages including the dev-only `@velexis/testing`, and the tools `@velexis/reference-data`, `@velexis/amadeus-stub`, `@velexis/e2e`; [ADR-0002](adr/0002-monorepo-pnpm-turborepo.md)). |
 | TypeScript | **5.6** (5.6.x) | One compiler version for apps, packages and the SDK's `checkJs`. |
 | PostgreSQL | **16** (16.x, PGDG apt) | The reference DDL was validated on 16 ([db README](../velexis-sdk/db/README.md)). |
 | Redis | **7** (7.4.x, packages.redis.io apt) | BullMQ, caches, one-time tokens, rate limits. |
 | Caddy | **2.8** (2.8.x, Caddy apt; later 2.x after reading the release notes) | Automatic HTTPS, on-demand TLS with an `ask` endpoint, simple reverse proxy ([ADR-0018](adr/0018-hosted-storefront-custom-domains.md)). |
 | Ubuntu | **24.04 LTS** | Long support. Ships systemd 255. |
 | systemd | 255 (Ubuntu's) | Process supervision, sandboxing, journald logs, timers ([ADR-0007](adr/0007-single-vm-without-docker.md)). |
-| GitHub Actions | `actions/checkout@v4`, `pnpm/action-setup@v4`, `actions/setup-node@v4` | CI and manual deploys. |
+| GitHub Actions | `actions/checkout` v4, `pnpm/action-setup` v4, `actions/setup-node` v4, `actions/cache` v4, `actions/upload-artifact` and `download-artifact` v4, each **pinned to a full commit SHA** with the tag in a comment | CI and manual deploys. Pinning keeps a moved tag from running new code next to the deploy key ([ADR-0023](adr/0023-release-artefact-and-deploy-user.md)). |
 
 ## 2. Libraries by concern
 

@@ -3,6 +3,7 @@
 **Status:** Accepted
 **Date:** 2026-10-12
 **Deciders:** Platform/DevOps engineer (foundation plan). Decided during planning; revisit when a managed database or a second cluster changes how migrations are run, or when more than one repeatable file per set is needed.
+**Revisions:** 2026-10-12 (planning review): explicit `accounts` column list without secrets or hashes; tenant objects are created as `velexis_provisioner`; a missing `--dir` is an empty set.
 
 ## Context
 
@@ -25,8 +26,10 @@
 | `migrate.js tenant --schema tenant_<key> --dir <path> [--create]` | One schema: provisioning, tests, repairs |
 
 - The DSN comes from `DATABASE_MIGRATOR_URL` only (role `velexis_migrator`). There is no `--url` flag, so DSNs never appear in process lists.
+- The tenant commands run every schema transaction with `SET LOCAL ROLE velexis_provisioner`, so tenant schemas and their objects are always owned by the provisioner role, whoever calls ([ADR-0004](0004-postgresql-schema-per-tenant.md)). The OTA worker calls the library with its own `DATABASE_PROVISIONER_URL`.
+- A `--dir` that does not exist is an empty set: a notice on stderr, nothing applied, exit `0`. CI runs `pnpm db:migrate` before the platform plan has created every folder.
 - Exit codes: `0` success, `1` error, `2` checksum mismatch of an applied file, `3` tenant failure ratio exceeded. Output is one JSON line per file to stdout; `--report` writes the per-tenant summary.
-- `pnpm db:migrate` and `pnpm db:migrate:tenants` call it with the repository paths; `velexis-deploy` calls it with the release paths; the OTA worker and `@velexis/testing` call the same library functions (`runMigrations`, `migrateTenants`, `migrateTenantSchema`).
+- `pnpm db:migrate` and `pnpm db:migrate:tenants` call it with the repository paths; `velexis-deploy` calls it with the release paths; the OTA worker (provisioner DSN) and `@velexis/testing` call the same library functions (`runMigrations`, `migrateTenants`, `migrateTenantSchema`).
 
 ### Repeatable grant files
 
@@ -36,9 +39,9 @@
 - Unlike numbered files, a repeatable file **may be edited**; the edit is re-applied on the next run.
 - The tenant set has no repeatable files: tenant privileges are granted by the provisioning step per schema.
 
-The first and only planned file is `platform/backend/migrations/platform/R__ota_read_access.sql` (task X-012). It grants `velexis_ota_app` `SELECT` on `tenants`, `tenant_domains`, `api_keys`, `api_key_tenant_grants`, `tenant_memberships`, `plans`, `supplier_connections`, `payment_provider_connections`, and column-level `SELECT` on the identity and MFA columns of `accounts`. A later platform migration that adds a table or column the OTA backend must read either grants it in that migration ([`conventions.md`](../conventions.md) §9) or extends this file in the same pull request.
+The first and only planned file is `platform/backend/migrations/platform/R__ota_read_access.sql` (task X-012). It grants `velexis_ota_app` `SELECT` on `tenants`, `tenant_domains`, `api_keys`, `api_key_tenant_grants`, `tenant_memberships`, `plans`, `supplier_connections`, `payment_provider_connections`, and column-level `SELECT` on `accounts (id, email, email_verified_at, full_name, locale, time_zone, mfa_enabled, status, deleted_at, version)`. Secrets and hashes (`password_hash`, `mfa_secret_ciphertext`, `encryption_key_id`) and the security counters and flags (`failed_login_count`, `locked_until`, `is_platform_admin`) are never granted, and the X-012 integration test proves that `velexis_ota_app` cannot select them. A later platform migration that adds a table or column the OTA backend must read either grants it in that migration ([`conventions.md`](../conventions.md) §9) or extends this file in the same pull request.
 
-Base privileges stay in [`deploy/postgres/bootstrap.sql`](../../../deploy/postgres/bootstrap.sql): schema `USAGE`, default DML privileges for `velexis_platform_app` on `platform` and `reference`, default `SELECT` for `velexis_ota_app` on `reference`.
+Base privileges stay in [`deploy/postgres/bootstrap.sql`](../../../deploy/postgres/bootstrap.sql): the four roles, `CREATE` on the database for `velexis_provisioner`, schema `USAGE`, default DML privileges for `velexis_platform_app` on `platform` and `reference`, default `SELECT` for `velexis_ota_app` on `reference`.
 
 ## Consequences
 

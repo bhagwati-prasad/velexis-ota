@@ -15,6 +15,9 @@
 #   config.tar.zst.age         /etc/velexis incl. the master key, encrypted to a DIFFERENT age key
 #   MANIFEST.txt               sizes, SHA-256 of the encrypted files, versions (no secrets)
 # Every file is encrypted with `age` to public keys whose private halves are kept OFF the VM.
+# Off-VM retention (14 daily, 6 monthly) is enforced by the bucket's lifecycle rules and object lock, not here:
+# the VM's bucket key can put, list and read, but never delete (deployment-single-vm.md §10). A root compromise
+# of the VM therefore cannot destroy the off-site copies.
 # =====================================================================================================
 set -euo pipefail
 umask 077
@@ -31,8 +34,6 @@ fi
 : "${AGE_CONFIG_RECIPIENTS_FILE:?set in /etc/velexis/backup.env}"
 : "${RCLONE_CONFIG:?set in /etc/velexis/backup.env}"
 : "${RCLONE_REMOTE:?set in /etc/velexis/backup.env}"
-: "${RETENTION_DAILY_DAYS:=14}"
-: "${RETENTION_MONTHLY_MONTHS:=6}"
 : "${RETENTION_LOCAL_DAYS:=2}"
 : "${PG_DATABASE:=velexis}"
 : "${REDIS_AOF_DIR:=/var/lib/redis/appendonlydir}"
@@ -98,12 +99,8 @@ if [ "$(date -u +%d)" = "01" ]; then
   rclone copy "$WORK" "$RCLONE_REMOTE/monthly/$MONTH" --immutable --retries 5
 fi
 
-# ---- 7. Retention ------------------------------------------------------------------------------------------
-log "retention: ${RETENTION_DAILY_DAYS}d daily, ${RETENTION_MONTHLY_MONTHS} months, ${RETENTION_LOCAL_DAYS}d local"
-rclone delete "$RCLONE_REMOTE/daily" --min-age "${RETENTION_DAILY_DAYS}d"
-rclone rmdirs "$RCLONE_REMOTE/daily" --leave-root
-rclone delete "$RCLONE_REMOTE/monthly" --min-age "$((RETENTION_MONTHLY_MONTHS * 31))d"
-rclone rmdirs "$RCLONE_REMOTE/monthly" --leave-root
+# ---- 7. Local retention only (the bucket expires remote copies itself) ---------------------------------------
+log "local retention: ${RETENTION_LOCAL_DAYS}d"
 find "$BACKUP_DIR" -mindepth 1 -maxdepth 1 -type d -mtime +"$RETENTION_LOCAL_DAYS" -exec rm -rf --one-file-system {} +
 
 date -u +%s > "$BACKUP_MARKER_FILE"

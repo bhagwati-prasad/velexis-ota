@@ -10,7 +10,10 @@
 #   velexis-restore fetch <daily/YYYY-MM-DD|monthly/YYYY-MM> <dir>   download one backup set
 #   velexis-restore db <dir> --identity <key> [--target <db>]    restore the dump into <db> (default: velexis_restore,
 #                                                                a scratch database; the live one is untouched)
-#   velexis-restore db <dir> --identity <key> --replace-live     replace the LIVE database (stops all app units)
+#   velexis-restore db <dir> --identity <key> --replace-live     replace the LIVE database: restore into a staging
+#                                                                database and check it first; only then stop the
+#                                                                apps and swap names (old one kept as
+#                                                                <db>_before_restore_<stamp> for rollback)
 #   velexis-restore storage <dir> --identity <key> [--replace-live]
 #   velexis-restore redis <dir> --identity <key>                 replace Redis data (stops Redis briefly)
 #   velexis-restore config <dir> --identity <config-key>         unpack /etc/velexis into /root/velexis-config.restore
@@ -63,11 +66,23 @@ confirm_live() {
   [ "$answer" = "$(hostname)" ] || die "aborted"
 }
 
-restore_db() { # target database name
+apply_db_grants() { # database-level ACLs of deploy/postgres/bootstrap.sql: pg_dump without --create omits them
   local db="$1"
+  psql_admin -d postgres <<SQL
+REVOKE ALL ON DATABASE "$db" FROM PUBLIC;
+GRANT CONNECT, TEMPORARY ON DATABASE "$db" TO velexis_platform_app, velexis_ota_app;
+GRANT CONNECT, TEMPORARY, CREATE ON DATABASE "$db" TO velexis_provisioner;
+GRANT ALL ON DATABASE "$db" TO velexis_migrator;
+SQL
+}
+
+restore_db() { # target database name; never the live database (see `db --replace-live`)
+  local db="$1"
+  [ "$db" != "$PG_DATABASE" ] || die "refusing to restore over the live database $db; use --replace-live"
   log "restore database into $db"
   psql_admin -d postgres -c "DROP DATABASE IF EXISTS \"$db\" WITH (FORCE)"
   psql_admin -d postgres -c "CREATE DATABASE \"$db\" OWNER velexis_migrator ENCODING 'UTF8' LC_COLLATE 'C.UTF-8' LC_CTYPE 'C.UTF-8' TEMPLATE template0"
+  apply_db_grants "$db"
   decrypt "$DIR/velexis-db.dump.age" > "/var/backups/velexis/restore-$db.dump"
   chown postgres "/var/backups/velexis/restore-$db.dump"
   runuser -u postgres -- pg_restore --exit-on-error --jobs 4 --dbname "$db" "/var/backups/velexis/restore-$db.dump"
@@ -96,11 +111,27 @@ case "$CMD" in
   db)
     if [ "$REPLACE_LIVE" -eq 1 ]; then
       confirm_live
+      stamp="$(date -u +%Y%m%d%H%M%S)"
+      staging="${PG_DATABASE}_restore_${stamp}"
+      before="${PG_DATABASE}_before_restore_${stamp}"
+      # 1. Restore and check beside the live database. Any failure here (wrong key, corrupt file, full disk,
+      #    pg_restore error) stops the script with the live database untouched and the apps running.
+      restore_db "$staging"
+      check_db "$staging"
+      # 2. Only now stop the apps and swap the names in one transaction.
       # shellcheck disable=SC2086
       systemctl stop $APP_UNITS
-      restore_db "$PG_DATABASE"
-      check_db "$PG_DATABASE"
-      log "database replaced. Start the apps with: sudo /usr/local/sbin/velexis-deploy --status, then systemctl start <units>"
+      psql_admin -d postgres <<SQL
+SELECT pg_terminate_backend(pid) FROM pg_stat_activity
+ WHERE datname IN ('$PG_DATABASE', '$staging') AND pid <> pg_backend_pid();
+BEGIN;
+ALTER DATABASE "$PG_DATABASE" RENAME TO "$before";
+ALTER DATABASE "$staging" RENAME TO "$PG_DATABASE";
+COMMIT;
+SQL
+      log "database replaced; the previous one is kept as $before."
+      log "rollback: stop the apps, rename $PG_DATABASE away and $before back to $PG_DATABASE (deployment-single-vm.md §11)."
+      log "start the apps with the Deploy workflow, or: systemctl start $APP_UNITS. Drop $before after the checks."
     else
       restore_db "${TARGET:-velexis_restore}"
       check_db "${TARGET:-velexis_restore}"

@@ -42,7 +42,8 @@ Definition of done: AGENTS.md §5. Conventions: docs/mvp/conventions.md §11–�
 
 - [ ] Docs made stale by this change are updated (README, `architecture.md` configuration matrix, `.env.example`, `deploy/env/*.env.example`)
 - [ ] New or changed decision recorded in an ADR (status `Proposed`) and the ADR index
-- [ ] Plan status set to `done (PR #n)`; `node tools/plan-lint/plan-lint.mjs` passes
+- [ ] Plan status set to `done (PR #n)` and ` ✅` appended to the task heading (both take effect on merge; ADR-0025); `node tools/plan-lint/plan-lint.mjs` passes
+- [ ] New environment variables added to `deploy/env/*.env.example` are listed under "Questions and follow-ups" as a human step: add them to `/etc/velexis` before the next deploy (`velexis-deploy` refuses a release otherwise)
 
 ## Definition of done
 
@@ -66,7 +67,8 @@ Definition of done: AGENTS.md §5. Conventions: docs/mvp/conventions.md §11–�
 - [ ] Authentication, search and payment endpoints rate limited
 - [ ] Errors leak no stack traces, SQL or raw supplier errors to customers
 - [ ] New dependencies justified here; `pnpm audit` shows no high or critical issue
-- [ ] Airline-card path or storefront payment page changes checked against the PCI controls of ADR-0011 (script inventory)
+- [ ] Airline-card path, storefront payment page, Caddyfile, systemd unit or deploy pipeline changes checked against the PCI controls of ADR-0011 and ADR-0027 (script inventory, CSP, sandboxing)
+- [ ] M3 deep-review PR (money and card code): second-agent review findings attached (procedure of X-036; optional for other PRs)
 
 ## Screenshots
 

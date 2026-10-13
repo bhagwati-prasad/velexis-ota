@@ -186,9 +186,9 @@ ota/frontend/
 ## 8. Configuration
 
 - Each app declares its configuration schema in `src/config.ts` with `@velexis/config` (typed, validated at start-up, with unit tests).
-- **Secrets come from files or the environment, never from code.** Every new variable is added to the root `.env.example` (dummy value), to the app's env template in `deploy/env/`, and to the [configuration matrix](architecture.md#6-configuration-matrix), in the same PR.
+- **Secrets come from files or the environment, never from code.** Every new variable is added to the root `.env.example` (dummy value), to the app's env template in `deploy/env/`, and to the [configuration matrix](architecture.md#6-configuration-matrix), in the same PR. The PR lists it as a human step ("add to `/etc/velexis/<app>.env` before the next deploy"), because `velexis-deploy` refuses a release whose templates name a variable the VM lacks.
 - Defaults are allowed only when they are safe in production (timeouts, page sizes). URLs, credentials and feature switches that widen access (`AIRLINE_CARD_ENABLED`) have no default except `false`.
-- Hosts are always the placeholders of [`decisions.md`](decisions.md) §4 in docs, fixtures and examples.
+- Hosts are always the placeholders of [`decisions.md`](decisions.md) §4 in docs, fixtures and examples. Any other example host uses a reserved name (RFC 2606: `example.net`, `*.example`, `*.test`), never a real registered domain; an OTA's custom domain is `travel.example.net`.
 
 ## 9. Database migrations
 
@@ -236,7 +236,7 @@ The strategy and the tools are in [ADR-0015](adr/0015-testing-strategy.md). The 
 - **Commits:** Conventional Commits.
   - `<type>(<scope>): <imperative summary>`, at most 72 characters.
   - Types: `feat`, `fix`, `docs`, `test`, `refactor`, `perf`, `build`, `ci`, `chore`.
-  - Scopes: `platform-backend`, `platform-frontend`, `platform-admin`, `ota-backend`, `ota-frontend`, `ota-admin`, `ota-sdk`, `config`, `logger`, `db`, `crypto`, `errors`, `api-types`, `deploy`, `tools`, `docs`, `plans`.
+  - Scopes: `platform-backend`, `platform-frontend`, `platform-admin`, `ota-backend`, `ota-frontend`, `ota-admin`, `ota-sdk`, `config`, `logger`, `db`, `crypto`, `errors`, `api-types`, `testing`, `reference-data`, `amadeus-stub`, `e2e`, `deploy`, `ci`, `tools`, `docs`, `plans`.
   - Footer `Task: <TASK-ID>`.
 - **One task = one PR.** Title `<type>(<scope>): <title> [<TASK-ID>]`. The PR is squash-merged by the developer after CI is green ([ADR-0020](adr/0020-ai-agent-development-workflow.md)).
 - **PR template** (`.github/pull_request_template.md`, created in M0):

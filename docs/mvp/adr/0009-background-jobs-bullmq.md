@@ -3,6 +3,7 @@
 **Status:** Accepted
 **Date:** 2026-10-12
 **Deciders:** Product owner (platform → OTA through a job queue), lead architect (BullMQ, queue layout, durability rules)
+**Revisions:** 2026-10-12 (planning review): items 3 and 5 aligned with [PADR-0001](../../../platform/docs/adr/0001-tenant-provisioning-orchestration.md), [PADR-0014](../../../platform/docs/adr/0014-tenant-suspension-and-resume.md) and [OADR-0007](../../../ota/docs/adr/0007-tenant-migration-runner-and-provisioning-worker.md): suspend and resume messages, a nullable `jobId` for deploy fan-out reports, one BullMQ job per attempt.
 
 ## Context
 
@@ -23,14 +24,14 @@ The platform side needs e-mails, Stripe Billing webhook processing, DNS checks f
 
    | Queue | Producer → consumer | Jobs |
    |---|---|---|
-   | `ota-tenant-ops` | platform → OTA | `tenant.provision`, `tenant.migrate` (M1); `tenant.export`, `tenant.delete` (post-MVP) |
-   | `platform-tenant-events` | OTA → platform | `tenant.provisioned`, `tenant.provision_failed`, `tenant.migrated`, `tenant.migration_failed` (M1); usage events (post-MVP) |
+   | `ota-tenant-ops` | platform → OTA | `tenant.provision`, `tenant.migrate` (M1); `tenant.suspend`, `tenant.resume` (sent by the platform from M1, consumed by the OTA worker from M4, [PADR-0014](../../../platform/docs/adr/0014-tenant-suspension-and-resume.md)); `tenant.export`, `tenant.delete` (post-MVP) |
+   | `platform-tenant-events` | OTA → platform | `tenant.provisioned`, `tenant.provision_failed`, `tenant.migrated`, `tenant.migration_failed` (M1); `tenant.suspended`, `tenant.resumed` (M4); usage events (post-MVP) |
 
-   Every message carries `v` (contract version), `jobId` (the `platform.provisioning_jobs.id`, `job_…`), `tenantId`, `requestedAt` and `requestId`.
+   Every message carries `v` (contract version), `jobId`, `tenantId`, `requestedAt` and `requestId`. `jobId` is the `platform.provisioning_jobs.id` (`job_…`) of the request it answers. It is `null` only in the `tenant.migrated` and `tenant.migration_failed` reports that the deploy fan-out publishes (`tenants:report-migrations`), because no job row asked for them; the platform records those against the tenant ([OADR-0007](../../../ota/docs/adr/0007-tenant-migration-runner-and-provisioning-worker.md) item 7).
 4. **Internal queues** are owned by one backend and named `<owner>-<topic>`, for example `ota-notifications`, `ota-ticketing`, `ota-booking-sync`, `ota-maintenance`, `ota-stripe-events`, `platform-emails`, `platform-stripe-events`, `platform-domains`. The component plans fix the full list.
 5. **Durability.** Redis is the transport, PostgreSQL is the record.
-   - `platform.provisioning_jobs` is the durable state of provisioning and migration requests. The platform backend inserts the row and enqueues the BullMQ job with `jobId = job_…`, so a duplicate enqueue is a no-op.
-   - A platform **reconciler** (every 5 minutes) re-enqueues rows still `queued`, or `running` past `locked_until`, whose BullMQ job is missing.
+   - `platform.provisioning_jobs` is the durable state of provisioning, migration, suspension and resume requests. The platform backend inserts the row, and each dispatch attempt enqueues one BullMQ job with the id `<job_id>-<attempt>` ([PADR-0001](../../../platform/docs/adr/0001-tenant-provisioning-orchestration.md) items 3 and 6). A duplicate enqueue of the same attempt is a no-op; a retry after a reported failure is a new attempt and therefore a new BullMQ job.
+   - A platform **reconciler** (every 5 minutes) dispatches due `queued` rows and checks `running` rows past `locked_until`: if BullMQ has no job `<job_id>-<attempt>` (or it failed without an event), the attempt counts as a retryable failure.
    - Webhook events are written to an inbox table before they are enqueued, and handlers look the event up by id ([ADR-0011](0011-payments-stripe-and-airline-card.md), [ADR-0013](0013-subscription-billing-stripe-billing.md)).
 6. **Handlers are idempotent.**
    - Provisioning steps use `IF NOT EXISTS` and `ON CONFLICT DO NOTHING` (db README §3).

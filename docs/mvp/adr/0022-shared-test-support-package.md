@@ -3,6 +3,7 @@
 **Status:** Accepted
 **Date:** 2026-10-12
 **Deciders:** Platform/DevOps engineer (foundation plan). Decided during planning; revisit when the package grows beyond test helpers, or when the two backends need test tooling that cannot be shared.
+**Revisions:** 2026-10-12 (planning review): X-027 (Amadeus stub helpers) is tagged M1; test databases also carry the `velexis_provisioner` role's database grants ([ADR-0004](0004-postgresql-schema-per-tenant.md)).
 
 ## Context
 

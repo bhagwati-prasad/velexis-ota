@@ -37,7 +37,7 @@ pnpm db:seed:reference                         # airports, airlines, countries, 
 What `dev-setup.sh` does, so you can do it by hand if needed:
 
 1. Starts PostgreSQL and Redis if they are installed but stopped.
-2. Runs [`deploy/postgres/bootstrap.sql`](../../deploy/postgres/bootstrap.sql) as the `postgres` superuser with the **development** passwords of `.env.example` (`dev_migrator`, `dev_platform`, `dev_ota`): creates the database `velexis`, the roles `velexis_migrator`, `velexis_platform_app`, `velexis_ota_app`, the `platform` and `reference` schemas and the default privileges.
+2. Runs [`deploy/postgres/bootstrap.sql`](../../deploy/postgres/bootstrap.sql) as the `postgres` superuser with the **development** passwords of `.env.example` (`dev_migrator`, `dev_provisioner`, `dev_platform`, `dev_ota`): creates the database `velexis`, the roles `velexis_migrator`, `velexis_provisioner`, `velexis_platform_app`, `velexis_ota_app`, the `platform` and `reference` schemas and the default privileges.
 3. Creates `velexis_test_admin` (`LOGIN CREATEDB`, password `dev_test_admin`) for the integration-test harness, which clones a migrated template database per test file.
 4. Sets the local Redis password to `dev_redis` (`CONFIG SET requirepass` and `CONFIG REWRITE`), matching `REDIS_URL`.
 
@@ -47,7 +47,7 @@ Per-app overrides go into `<app>/.env.local` (for example the OTA backend's `DAT
 
 ```bash
 mailpit --smtp 127.0.0.1:1025 --listen 127.0.0.1:8025 &   # or run it as a user service
-pnpm stub:amadeus &                                       # Amadeus stub on 127.0.0.1:4900 (from M2)
+pnpm stub:amadeus &                                       # Amadeus stub on 127.0.0.1:4900 (from M1)
 pnpm dev                                                  # every app in watch mode (Turborepo)
 pnpm --filter @velexis/ota-backend dev                    # or one app only
 ```
@@ -66,7 +66,7 @@ pnpm --filter @velexis/ota-backend dev                    # or one app only
 Useful database commands:
 
 ```bash
-psql postgres://velexis_migrator:dev_migrator@127.0.0.1:5432/velexis            # owner role, DDL allowed
+psql postgres://velexis_migrator:dev_migrator@127.0.0.1:5432/velexis            # owner of platform and reference, DDL allowed
 pnpm db:migrate:tenants                                                          # apply tenant migrations to every tenant schema
 pnpm --filter @velexis/db exec node dist/cli/migrate.js tenant --schema tenant_demo --dir ../../ota/backend/migrations/tenant --create
 pnpm db:codegen                                                                  # after a migration: regenerate Kysely types, commit them
@@ -82,12 +82,12 @@ To start over: `dropdb -U postgres velexis` (as the `postgres` user), then `bash
 
 ## 5. Amadeus stub
 
-[`tools/amadeus-stub`](../../tools/) (task X-026) is a small Node server that implements the Amadeus OAuth token endpoint and the flight operations of [`docs/amadeus-api/`](../amadeus-api/) from recorded, scrubbed fixtures ([ADR-0015](adr/0015-testing-strategy.md)).
+[`tools/amadeus-stub`](../../tools/) (task X-026, M1) is a small Node server that implements the Amadeus OAuth token endpoint and the flight operations of [`docs/amadeus-api/`](../amadeus-api/) from recorded, scrubbed fixtures ([ADR-0015](adr/0015-testing-strategy.md)).
 
 - Point the OTA backend at it: `AMADEUS_BASE_URL_TEST=http://127.0.0.1:4900` (already in `.env.example`). The Velexis test Amadeus account in the local database can hold any dummy client id and secret.
 - Choose a scenario per request with the header `X-Stub-Scenario` (`sold-out`, `price-changed`, `ticketing-failed`, `version-conflict`, `server-error`, `timeout`), or with magic values in end-to-end runs (destination `ZZZ` returns no offers).
 - Every request is validated against the Amadeus specification, so a malformed request from our client fails loudly.
-- Recording new fixtures against the real Amadeus test environment (`pnpm --filter @velexis/amadeus-stub record <operation>`) uses credentials from your own environment, scrubs personal data, and is **never** run in CI.
+- Recording new fixtures against the real Amadeus test environment (`pnpm --filter @velexis/amadeus-stub record <operation>`, task X-034) uses credentials from your own environment, scrubs names, documents, e-mail addresses and phone numbers, and is **never** run in CI. The stub's fixture scan (`tools/amadeus-stub/test/fixtures-scan.test.ts`) fails on any personal-data pattern left in a committed fixture.
 
 ## 6. Stripe with the Stripe CLI (from M3)
 
