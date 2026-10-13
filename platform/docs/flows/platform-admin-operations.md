@@ -118,7 +118,7 @@ Search by tenant, actor, action, target and period; export CSV (at most one year
 | Admin without MFA | Sign-in refused with `MFA_REQUIRED`; they enable MFA in the portal first. |
 | Stale page (`If-Match`) | `412 PRECONDITION_FAILED`; the page reloads the row. |
 | Step-up expired | `401 REAUTH_REQUIRED`; the page asks for a TOTP code and retries. |
-| OTA worker down during suspend | The tenant is already suspended (traffic blocked); the job waits and the reconciler re-dispatches. |
+| OTA worker down during suspend, or no OTA consumer yet | The tenant is already suspended (traffic blocked); the job waits and the reconciler re-dispatches. After the last attempt the job ends `failed` with an `ops.alert`, and the tenant stays `suspended`: only a `provision` job can set a tenant `failed` ([PADR-0001](../adr/0001-tenant-provisioning-orchestration.md) item 7). |
 | Mistaken suspension | Resume; both actions stay in the audit log. |
 | Lost access of the only admin | Developer runs `admin:grant` for another verified account with MFA, or `admin:reset-mfa` on the VM (both audited as `system` with the operator's name). |
 

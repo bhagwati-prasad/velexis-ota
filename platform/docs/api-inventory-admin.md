@@ -121,7 +121,7 @@ Both receivers answer within 2 seconds and never call Stripe inline. A database 
 
 | Operation | Method and path | Auth | Purpose | Behaviour | Tables | M |
 |---|---|---|---|---|---|---|
-| `tlsAsk` | `GET /internal/tls/ask?domain=<host>` | `internal` | Caddy on-demand TLS gate ([ADR-0018](../../docs/mvp/adr/0018-hosted-storefront-custom-domains.md)) | `200` (empty) if the host is `<key>.ota.example.com` of a tenant in `provisioning`, `active` or `suspended`, or a verified custom storefront domain of an `active` tenant whose plan has `customDomains > 0` and `F:custom_domains` on; else `404`. Cached 60 s in `tlsask:<host>`. Invalid host syntax → `404`. | `tenants`, `tenant_domains`, `plans` | M1 |
+| `tlsAsk` | `GET /internal/tls/ask?domain=<host>` | `internal` | Caddy on-demand TLS gate ([ADR-0018](../../docs/mvp/adr/0018-hosted-storefront-custom-domains.md)) | `200` (empty) if the host is `<key>.ota.example.com` of a tenant in `provisioning`, `active` or `suspended`, or a verified custom storefront domain of an `active` tenant whose plan has `customDomains > 0` and `F:custom_domains` on; else `404`. Invalid host syntax (over 253 characters, bad labels, an IP) → `404` before any lookup, never cached. A `200` is cached 60 s in Redis `tlsask:<host>`; a `404` only in a bounded in-process LRU (10 000 entries, 60 s), so random SNI names create no Redis keys ([PADR-0004](adr/0004-custom-domain-verification.md) item 6). | `tenants`, `tenant_domains`, `plans` | M1 |
 | `healthLive` | `GET /health/live` | public | Process up | `200 {status: "ok"}` | — | M0 |
 | `healthReady` | `GET /health/ready` | `internal` | Dependencies | `200` or `503` with PostgreSQL, Redis and oldest waiting job age per platform queue | — | M0 |
 

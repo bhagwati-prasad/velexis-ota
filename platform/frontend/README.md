@@ -129,6 +129,7 @@ platform/frontend/src/
 - **Polling** (setup page, credential submissions) uses a client component that calls a server action every 2 seconds and stops at a final state.
 - **Errors** map codes to messages in `lib/errors.ts`; `error.tsx` per area; raw messages from the API are never shown.
 - **External navigations** (Checkout, Customer Portal, Connect authorise URL) are `redirect()` calls in server actions with URLs returned by the API, never assembled in the browser.
+- **End-user IP and user agent.** The API's per-IP rate limits and audit rows need the visitor's address, not the portal server's. `lib/api.ts` sends on every call, including the refresh in `middleware.ts`: `X-Velexis-End-User-IP` (the right-most `X-Forwarded-For` entry, which Caddy sets; `127.0.0.1` when there is none in development), `X-Velexis-End-User-Agent` (the browser's `User-Agent`, at most 512 characters) and `X-Velexis-Bff-Key` (`PLATFORM_BFF_KEY`). A browser-supplied left-most `X-Forwarded-For` entry is never used ([PADR-0019](../docs/adr/0019-end-user-ip-forwarding-from-the-portal-and-admin.md)).
 
 ## 6. Auth cookies and session
 
@@ -151,7 +152,7 @@ Set in `next.config` `headers()` and middleware: CSP with a per-request nonce (`
 
 ## 8. Configuration
 
-See [`.env.example`](.env.example). Variables: `APP_ENV`, `LOG_LEVEL`, `PORT` (3000), `HOSTNAME` (`127.0.0.1`), `PLATFORM_API_URL`, `PUBLIC_PORTAL_URL`, `PUBLIC_OTA_ADMIN_URL`, `STOREFRONT_BASE_DOMAIN`, `SENTRY_DSN`. All read in server code through `@velexis/config`.
+See [`.env.example`](.env.example). On the VM they come from `/etc/velexis/platform-frontend.env` (template [`deploy/env/platform-frontend.env.example`](../../deploy/env/platform-frontend.env.example)). Variables: `APP_ENV`, `LOG_LEVEL`, `PORT` (3000), `HOSTNAME` (`127.0.0.1`), `PLATFORM_API_URL`, `PLATFORM_BFF_KEY` (shared with the API, PADR-0019), `PUBLIC_PORTAL_URL`, `PUBLIC_OTA_ADMIN_URL`, `STOREFRONT_BASE_DOMAIN`, `SENTRY_DSN`. All read in server code through `@velexis/config`.
 
 ## 9. Commands and tests
 

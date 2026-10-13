@@ -3,6 +3,7 @@
 **Status:** Accepted
 **Date:** 2026-10-12
 **Deciders:** Platform tech lead. Decided during planning; revisit when sign-ups approach 30 per week (wildcard certificate, ADR-0018 follow-up), or when OTAs ask for API or console hosts on their own domains.
+**Revisions:** 2026-10-12 (planning review): point 6 validates the host before any lookup and caches only positive answers in Redis, because the catch-all site lets any client put any name in a TLS handshake.
 
 ## Context
 
@@ -17,7 +18,11 @@
 3. **Resolver.** `node:dns` `Resolver` with `DNS_RESOLVERS` (public resolvers such as `1.1.1.1, 8.8.8.8`), 5 s timeout, no use of the VM's caching resolver, so a fresh record is seen quickly and a stale local cache never verifies a domain.
 4. **Window.** `verification_deadline_at = created + 72 h`. Pending domains are checked every 5 minutes (one job per domain, concurrency 4) and on "Check now" (1 per minute per domain). Past the deadline → `failed`; "Check now" restarts the window with the same token. Failed domains older than 7 days are deleted so the host name is free again.
 5. **Re-check.** Verified domains are re-checked daily; three consecutive failures → `failed`, the primary flag returns to the sub-domain, owners are e-mailed. One success resets the counter. This tolerates short DNS incidents and stops serving hosts that no longer point to Velexis.
-6. **`ask` endpoint** answers `200` for: sub-domains of tenants in `provisioning`, `active` or `suspended`; verified custom storefront domains of `active` tenants whose plan has `customDomains > 0`, with `FEATURE_CUSTOM_DOMAINS` on. Everything else, including malformed input, is `404`. Answers are cached 60 s in `tlsask:<host>`; the platform deletes that key itself whenever it changes a domain or a tenant's status (in addition to `vx:invalidate`).
+6. **`ask` endpoint** answers `200` for: sub-domains of tenants in `provisioning`, `active` or `suspended`; verified custom storefront domains of `active` tenants whose plan has `customDomains > 0`, with `FEATURE_CUSTOM_DOMAINS` on. Everything else, including malformed input, is `404`.
+   - **Input first.** The `domain` value is checked before any cache or database access: lower-cased, at most 253 characters, labels of 1–63 characters of `a-z`, `0-9` and inner `-` (punycode allowed), at least two labels, not an IP address. A failure answers `404` at once and is not cached anywhere.
+   - **Positive answers only in Redis.** A `200` is cached 60 s in `tlsask:<host>`. The platform deletes that key itself whenever it changes a domain or a tenant's status (in addition to `vx:invalidate`).
+   - **Negative answers stay in the process.** A `404` for a well-formed host goes into a bounded in-process LRU cache in the API (10 000 entries, 60 s). The `vx:invalidate` subscriber that clears `tlsask:` keys also drops matching entries from it, so a newly verified domain or a new tenant is not refused for the rest of the minute. Unknown names in TLS handshakes cost no Redis memory. Caddy's catch-all `https://` site sends every unknown SNI here, and Caddy 2.8 has no on-demand rate limit, so negative answers would otherwise fill the shared `noeviction` Redis that BullMQ needs.
+   - The flood case is bounded by the LRU size and one indexed lookup per new name. `tlsAsk` is not throttled per IP, because its only caller is Caddy on loopback.
 7. **Warm-up and probe.** One minute after verification, and daily, a TLS probe connects to `127.0.0.1:443` with the host as SNI. The first probe triggers on-demand issuance, so travellers do not wait for it; the probe records `tls_status`, `tls_expires_at`, `tls_checked_at`. Renewals are Caddy's job.
 8. **Primary.** Only verified domains; one primary storefront host per tenant (existing partial unique index). Removing or failing the primary custom domain makes the sub-domain primary again.
 9. **Uniqueness.** One tenant per host name (existing unique index). A pending claim blocks other tenants until it fails and is cleaned up, or an admin removes it.

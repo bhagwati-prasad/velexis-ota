@@ -75,10 +75,11 @@ platform/admin/src/
 - Cookies: `__Host-vxa_at` (admin access token, 15 minutes) and `__Host-vxa_rt` (refresh, 12-hour family), `HttpOnly; Secure; SameSite=Strict; Path=/`; `__Host-vxa_mfa` during sign-in. Middleware refreshes the access token (single-flighted in the process) and redirects to `/sign-in` without a session.
 - Portal sessions do not work here and admin sessions do not work in the portal: different cookies on different hosts and different token audiences ([PADR-0009](../docs/adr/0009-platform-api-surface-and-authentication.md)).
 - Security headers as the portal, with `form-action 'self'` and `X-Robots-Tag: noindex`.
+- `lib/api.ts` forwards the admin's IP and user agent on every call, as the portal does: `X-Velexis-End-User-IP` (right-most `X-Forwarded-For` entry set by Caddy, `127.0.0.1` without one), `X-Velexis-End-User-Agent` (at most 512 characters) and `X-Velexis-Bff-Key` (`PLATFORM_BFF_KEY`). Admin sign-in is throttled per admin IP, and admin audit rows record it ([PADR-0019](../docs/adr/0019-end-user-ip-forwarding-from-the-portal-and-admin.md)).
 
 ## 5. Configuration
 
-See [`.env.example`](.env.example): `APP_ENV`, `LOG_LEVEL`, `PORT` (3001), `HOSTNAME` (`127.0.0.1`), `PLATFORM_API_URL`, `PUBLIC_PLATFORM_ADMIN_URL`, `PUBLIC_PORTAL_URL` (link to enable MFA in the portal), `SENTRY_DSN`.
+See [`.env.example`](.env.example); on the VM `/etc/velexis/platform-admin.env` (template [`deploy/env/platform-admin.env.example`](../../deploy/env/platform-admin.env.example)): `APP_ENV`, `LOG_LEVEL`, `PORT` (3001), `HOSTNAME` (`127.0.0.1`), `PLATFORM_API_URL`, `PLATFORM_BFF_KEY` (shared with the API, PADR-0019), `PUBLIC_PLATFORM_ADMIN_URL`, `PUBLIC_PORTAL_URL` (link to enable MFA in the portal), `SENTRY_DSN`.
 
 ## 6. Commands and tests
 

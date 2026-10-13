@@ -3,6 +3,7 @@
 **Status:** Accepted
 **Date:** 2026-10-12
 **Deciders:** Platform tech lead. Decided during planning; revisit when provisioning needs more steps on the OTA side than one transaction, or when more than one platform worker process runs.
+**Revisions:** 2026-10-12 (planning review): the OTA worker provisions as `velexis_provisioner` ([ADR-0004](../../../docs/mvp/adr/0004-postgresql-schema-per-tenant.md) revision); point 7 makes the effect of a failure depend on the job kind, so only a `provision` job can set a tenant `failed`.
 
 ## Context
 
@@ -14,7 +15,7 @@
 
    | Steps | Runs in | Why |
    |---|---|---|
-   | `create_schema`, `run_migrations`, `seed_defaults` | OTA worker, one transaction as `velexis_migrator` | The OTA backend owns tenant schemas |
+   | `create_schema`, `run_migrations`, `seed_defaults` | OTA worker, one transaction as `velexis_provisioner` | The OTA backend owns tenant schemas |
    | `record_migrations`, `assign_amadeus_office`, `create_payment_connection`, `issue_api_keys`, `activate`, `notify` | Platform worker, after `tenant.provisioned` | They write platform tables |
 
 2. **Dispatch gate.** A `provision` job is dispatched only when the tenant is `provisioning` and its current subscription is `trialing`, `active` or manual. The job row is created with the tenant (as architecture flow (a) shows) and waits `queued` until the gate opens.
@@ -22,7 +23,15 @@
 4. **Two retry layers, one budget.** BullMQ retries transient errors inside one attempt (3 tries, 30 s exponential). The OTA worker reports only the final result of the attempt. The platform counts **attempts** (`max_attempts = 5`) and re-queues with `scheduled_at = now() + 30 s × 2^attempt` when the OTA reports `retryable = true`.
 5. **Events are idempotent and ordered by attempt.** The consumer ignores events for finished jobs and for attempts older than the current one. Post-steps are individually idempotent and logged in `provisioning_jobs.steps`; a crash resumes at the first unfinished step.
 6. **Reconciler** (every 5 minutes): dispatch due `queued` jobs whose gate is open; for `running` jobs past `locked_until`, ask BullMQ for `<job_id>-<attempt>`: waiting, active or delayed → extend the lease; missing or failed without an event → treat as a retryable failure. It never touches jobs younger than their lease.
-7. **Failure.** Non-retryable errors or an exhausted budget mark the job and the tenant `failed`, alert ops and e-mail the owners. Retries by owners (portal) or admins create a **new** job row; failed rows stay as history. A failed tenant's schema is never dropped automatically (db README §3).
+7. **Failure.** Non-retryable errors or an exhausted budget mark the **job** `failed`. What happens next depends on the job kind:
+
+   | Kind | Effect on the tenant | Notices |
+   |---|---|---|
+   | `provision` | Tenant `failed` (it was `provisioning`) | `ops.alert`, owner e-mail `tenant.provisioning_failed` |
+   | `migrate` | None; `tenants.status` and `schema_version` stay as they are | `ops.alert` |
+   | `suspend`, `resume` | None; the status switch already took effect ([PADR-0014](0014-tenant-suspension-and-resume.md)) | `ops.alert` |
+
+   Only a `provision` job ever writes `tenants.status = 'failed'`, and only from `provisioning`, so a lost or rejected `tenant.suspend` can never turn a suspended tenant into a failed one. This matters until the OTA consumer for `tenant.suspend` and `tenant.resume` exists: the OTA worker rejects unknown job names as unrecoverable, and the reconciler then counts the job as failed. Retries by owners (portal) or admins create a **new** job row; failed rows stay as history. A failed tenant's schema is never dropped automatically (db README §3).
 8. **Other job kinds** reuse the same machinery: `migrate` (admin), `suspend` and `resume` ([PADR-0014](0014-tenant-suspension-and-resume.md)). `export` and `delete` stay post-MVP.
 9. **Message contracts** live in `@velexis/api-types/jobs` with JSON Schemas: every message has `v`, `jobId`, `tenantId`, `requestedAt`, `requestId`; payloads carry ids only ([`../architecture.md`](../architecture.md) §6.1).
 

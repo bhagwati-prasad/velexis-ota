@@ -21,7 +21,7 @@ sequenceDiagram
   PA->>P: UPDATE provisioning_jobs SET status running, attempt 1, locked_until now()+15 min, step dispatch
   PA->>Q: ota-tenant-ops tenant.provision {v, jobId, tenantId, requestId} (BullMQ id job_x-1)
   OW->>P: read tenants row (read-only role)
-  OW->>T: BEGIN as velexis_migrator: advisory lock, CREATE SCHEMA, migrations 0001..N, grants to velexis_ota_app, seed defaults, COMMIT
+  OW->>T: BEGIN as velexis_provisioner: advisory lock, CREATE SCHEMA, migrations 0001..N, grants to velexis_ota_app, seed defaults, COMMIT
   OW->>Q: platform-tenant-events tenant.provisioned {schemaVersion, migrations[], steps[]}
   PW->>P: step record_migrations: upsert tenant_schema_migrations, tenants.schema_version
   PW->>P: step assign_amadeus_office: lock a free test office, supplier_connections (velexis, active)
@@ -44,7 +44,7 @@ sequenceDiagram
 
 ### 2. OTA worker (owned by the OTA plan)
 
-- One transaction as `velexis_migrator`: `pg_advisory_xact_lock(hashtext('tenant:' || schema))`, `CREATE SCHEMA IF NOT EXISTS`, `set_config('search_path', '<schema>, reference', true)`, every tenant migration not yet in the schema's `schema_migrations` (checksums verified), grants and default privileges for `velexis_ota_app`, then the seed rows (`storefront_settings`, the default markup rule, `notification_templates`) with `ON CONFLICT DO NOTHING` (db README §3 step 3).
+- One transaction as `velexis_provisioner` ([ADR-0004](../../../docs/mvp/adr/0004-postgresql-schema-per-tenant.md)): `pg_advisory_xact_lock(hashtext('tenant:' || schema))`, `CREATE SCHEMA IF NOT EXISTS`, `set_config('search_path', '<schema>, reference', true)`, every tenant migration not yet in the schema's `schema_migrations` (checksums verified), grants and default privileges for `velexis_ota_app`, then the seed rows (`storefront_settings`, the default markup rule, `notification_templates`) with `ON CONFLICT DO NOTHING` (db README §3 step 3).
 - BullMQ retries transient errors 3 times. On success it sends `tenant.provisioned`; after the last attempt, or at once for a non-retryable error (checksum mismatch, foreign objects in an existing schema), it sends `tenant.provision_failed {error: {code, message}, retryable}`.
 
 ### 3. Platform post-steps (platform worker, `platform-tenant-events` consumer)
@@ -73,8 +73,8 @@ The consumer validates the message (Ajv, `@velexis/api-types/jobs`), loads the j
 | Failure | Behaviour |
 |---|---|
 | `tenant.provision_failed` with `retryable = true` and `attempt < max_attempts` (5) | Job back to `queued`, `scheduled_at = now() + 30 s × 2^attempt`, `error` stored; the reconciler dispatches it when due (BullMQ id `<job>-<attempt+1>`). |
-| Non-retryable, or attempts exhausted | Job `failed`, tenant `failed`, audit `tenant.provisioning_failed`, e-mail to ops and to the owner ("setup failed, we are on it"). The portal shows **Retry** to owners. |
-| Lost message or OTA worker down | The reconciler (every 5 minutes) finds `running` jobs past `locked_until`. If BullMQ reports the job `waiting`, `active` or `delayed`, it extends the lease; if the job is missing or `failed` without an event, it counts as a retryable failure (rule above). |
+| Non-retryable, or attempts exhausted | Job `failed`. For a `provision` job only: tenant `failed`, audit `tenant.provisioning_failed`, e-mail to ops and to the owner ("setup failed, we are on it"), and the portal shows **Retry** to owners. A `migrate`, `suspend` or `resume` job never changes `tenants.status`; ops get an `ops.alert` ([PADR-0001](../adr/0001-tenant-provisioning-orchestration.md) item 7). |
+| Lost message or OTA worker down | The reconciler (every 5 minutes) finds `running` jobs past `locked_until`. If BullMQ reports the job `waiting`, `active` or `delayed`, it extends the lease; if the job is missing or `failed` without an event, it counts as a retryable failure (rule above). This applies to every job kind; the kind decides only the effect of the final failure. |
 | Platform post-step error (database, SMTP queue) | The event job throws; BullMQ retries it (5 attempts). Steps already done are skipped on the next run. After the last attempt, the job is marked `failed` with the step name and ops are alerted; an admin retry re-runs the post-steps only (the schema exists; the OTA run is a no-op). |
 | No free Amadeus test office | Not a failure: the tenant activates with a `pending_verification` connection; the dashboard warns and an admin assigns an office later. |
 | Owner retry | `retryProvisioning` is allowed only for a `failed` tenant: it sets the tenant back to `provisioning` and inserts a **new** `provision` job (the partial unique index allows it because the old one is `failed`). If the failure was an abandoned Checkout, it returns a new `checkoutUrl` instead and the gate waits again. |
