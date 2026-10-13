@@ -70,7 +70,8 @@ Common commands: backend `pnpm --filter @velexis/ota-backend test` and `test:int
   - A budget breach on the fixture folder exits 1 and names the file.
 - **Verify:** `pnpm --filter @velexis/ota-frontend test && pnpm --filter @velexis/ota-frontend build`
 
-### OAD-001 · Scaffold the OTA admin Next.js app with config and health routes
+### OAD-001 · Scaffold the OTA admin Next.js app with config and health routes ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-admin
 - **Milestone:** M0
 - **Depends on:** X-002, X-003
@@ -2002,10 +2003,10 @@ The console API (staff sign-in by portal token, bookings, PNR import, queues, cu
 - **Depends on:** OAD-002, OBE-059
 - **Size:** M
 - **Read first:** ota/admin/README.md §3 and §4; ota/docs/adr/0018-ota-admin-consumes-the-sdk-server-side.md (points 2, 3, 6); platform/docs/adr/0007-portal-to-ota-admin-sso-token.md (§5); docs/mvp/architecture.md §5 (c)
-- **Files:** `ota/admin/src/app/sso/route.ts`, `ota/admin/src/app/sso/route.test.ts`, `ota/admin/src/app/auth/refresh/route.ts`, `ota/admin/src/app/auth/sign-out/route.ts`, `ota/admin/src/app/signed-out/page.tsx`, `ota/admin/middleware.ts`, `ota/admin/middleware.test.ts`, `ota/admin/next.config.ts`, `ota/admin/README.md`
+- **Files:** `ota/admin/src/app/sso/route.ts`, `ota/admin/src/app/sso/route.test.ts`, `ota/admin/src/app/auth/refresh/route.ts`, `ota/admin/src/app/auth/sign-out/route.ts`, `ota/admin/src/app/signed-out/page.tsx`, `ota/admin/src/middleware.ts`, `ota/admin/src/middleware.test.ts`, `ota/admin/next.config.ts`, `ota/admin/README.md`
 - **Steps:**
   1. `POST /sso`: only `application/x-www-form-urlencoded` with `portalToken` matching `^ptk_[A-Za-z0-9]{24,64}$`; `Origin` must equal `PUBLIC_PORTAL_URL`; `console.auth.signIn({ grantType: "portal_token", portalToken })`; set the four cookies; `303 See Other` to `/bookings` (architecture flow (c), README §3 and PFE-019). Errors render a short page with "Back to the portal".
-  2. `middleware.ts` (Node.js runtime): refresh through the de-duplicated function when the access token expires within 60 s; redirect to the portal without a session; set the per-request CSP nonce header used by `next.config.ts`.
+  2. `src/middleware.ts` (Node.js runtime; next to `src/app`, because Next.js ignores a `middleware.ts` at the app root when the app uses `src/`): refresh through the de-duplicated function when the access token expires within 60 s; redirect to the portal without a session; set the per-request CSP nonce header used by `next.config.ts`.
   3. `GET /auth/refresh?next=` (validated relative `next`) and `POST /auth/sign-out` (Origin checked, `console.auth.signOut`, clear cookies, `/signed-out`). A refused refresh clears the cookies and goes to the portal.
 - **Acceptance:**
   - A foreign `Origin` on `/sso` answers 403; a token reused a second time shows the error page.

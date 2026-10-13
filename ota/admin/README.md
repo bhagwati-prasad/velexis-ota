@@ -100,16 +100,26 @@ All routes are in the `(console)` route group with the signed-in shell, except t
 | `/supplier-log` | Redacted Amadeus call log with filters | `console.supplierRequests.list` | `supplier_requests:read` |
 | `/audit` | Tenant-wide staff actions | **Later** (needs a new `console.staffActions.list`); M4 shows each booking's `recentStaffActions` | — |
 | `/portal` | Links back to the portal: API keys, domains, Amadeus, payments and Stripe, team, billing, go-live | none (links to `${PUBLIC_PORTAL_URL}/otas/<tenantId>/…`) | any |
+| `/health/live` · `/health/ready` | Liveness (`200 {status: "ok"}`) and readiness (`200` when `OTA_API_URL/health/live` answers 2xx within 2 s, else `503` with `checks.otaApi` = `timeout` or `down`), polled by `deploy.sh` on `127.0.0.1:3002` ([ADR-0016](../../docs/mvp/adr/0016-observability.md)) | none: the probe is the only request to the OTA API outside the SDK, an operational endpoint outside the contract that carries no key, token or cookie | — |
 
 ## 6. Folder tree
 
 ```
 ota/admin/
-  next.config.ts                 standalone output, headers() with CSP nonces, serverActions.bodySizeLimit "2mb"
-  middleware.ts                  Node runtime: session refresh, redirect to the portal, CSP nonce
+  next.config.ts                 standalone output traced from the repository root, security headers(),
+                                 serverActions.bodySizeLimit "2mb" (CSP nonces come with middleware.ts)
   .env.example
+  components.json                shadcn/ui settings (new-york, neutral, CSS variables, lucide)
+  postcss.config.mjs             Tailwind CSS 4 (@tailwindcss/postcss)
+  vitest.config.ts               Node by default; component tests opt into happy-dom; src/**/*.test.ts(x) only
   src/
+    middleware.ts                Node runtime: session refresh, redirect to the portal, CSP nonce. Inside src/,
+                                 next to app/: Next.js ignores a middleware.ts at the app root when src/app exists
+    config.ts                    server-only: @velexis/config schema, getConfig() validated on first use
     app/
+      layout.tsx                 root layout (html, skip link); globals.css holds the design tokens
+      health/live/route.ts       GET liveness
+      health/ready/route.ts      GET readiness: OTA_API_URL/health/live within 2 s
       sso/route.ts               POST portal token → cookies
       auth/refresh/route.ts      GET refresh fallback
       auth/sign-out/route.ts     POST sign-out
@@ -128,7 +138,6 @@ ota/admin/
     lib/errors.ts                VelexisError code → message, fieldErrors → form state
     lib/action-state.ts          ActionState type and helpers for useActionState
     lib/portal-links.ts          portal URLs for the tenant
-  test/                          Vitest + Testing Library
 ```
 
 ## 7. Data fetching and mutations
@@ -230,6 +239,10 @@ The variables match [`deploy/env/ota-admin.env.example`](../../deploy/env/ota-ad
 | `OTA_ADMIN_SERVICE_KEY` | file-provided secret | SDK `secretKey` |
 | `SENTRY_DSN` | empty | Optional error tracking ([ADR-0016](../../docs/mvp/adr/0016-observability.md)) |
 
+- **Validation** (`src/config.ts`, OAD-001): `APP_ENV` is `development`, `test` or `production`; `LOG_LEVEL` defaults to `info` and `PORT` to `3002`; the two public URLs are absolute `http(s)` URLs; `OTA_API_URL` must be an `http:` URL on the loopback interface (`127.0.0.1`, `[::1]` or `localhost`), because the backend refuses the service key on any other connection; `OTA_ADMIN_SERVICE_KEY` must match `^sk_[A-Za-z0-9_]{16,}$` (`sk_svc_…` on the VM, `sk_dev_…` locally), which also refuses the unsubstituted `@@OTA_ADMIN_SERVICE_KEY@@` placeholder; `SENTRY_DSN` is off when empty. A `ConfigError` names every bad variable, never a value.
+- **When it is read.** `getConfig()` validates on first use and caches the result; nothing reads the environment at module load, so `next build` needs no runtime variable and one build runs everywhere. `/health/ready` is the first caller after a restart: an invalid configuration answers `500` (the `ConfigError` is in the journal), so `deploy.sh` rolls the release back. In development and tests `getConfig()` first fills unset variables from `ota/admin/.env.local`, then the root `.env.local` (`loadDevEnvFiles`); with `APP_ENV` or `NODE_ENV` `production` only the environment counts.
+- **No `NEXT_PUBLIC_` variable.** `src/config.ts` imports `server-only`, and a test fails on any `NEXT_PUBLIC_*` name in the app's files or an `env` block in `next.config.ts` (OAD-001).
+
 ## 12. Local development and tests
 
 ```bash
@@ -242,9 +255,14 @@ pnpm --filter @velexis/ota-admin dev          # http://localhost:3002
 
 | Level | Where | What |
 |---|---|---|
-| Unit | `src/lib/*.test.ts` (Vitest) | Session cookie parsing, refresh de-duplication (two parallel refreshes → one SDK call), `can()` against the scope matrix, error mapping, portal links |
+| Unit | `src/config.test.ts`, `src/lib/*.test.ts` (Vitest) | Configuration (missing or invalid variables, loopback `OTA_API_URL`, the env templates, `next.config.ts`, no `NEXT_PUBLIC_` variable), session cookie parsing, refresh de-duplication (two parallel refreshes → one SDK call), `can()` against the scope matrix, error mapping, portal links |
+| Route | `src/app/**/*.test.ts` | Route handlers called directly with a fake global `fetch` and fake timers: `/health/live`, `/health/ready` (OTA API up, refused, slower than 2 s, error status) |
 | Component | `src/**/*.test.tsx` (Vitest + Testing Library) | Filters to `searchParams`, confirmation dialogs (reason required, live warning), forms rendering `fieldErrors`, permission gating |
 | Server actions | `src/app/**/actions.test.ts` | With the SDK's `fetch` option pointing at a fake: right method and parameters, `ifMatch`, idempotency key reuse, error → action state |
 | End to end | `tools/e2e/specs/ota-admin/*.e2e.ts` (Playwright + axe) | Portal → Open console → dashboard; bookings list → detail → issue and cancel with refund on stub bookings; PNR import; capture and refund in Stripe test mode; markup change visible in the next storefront search; viewer role sees no actions and no LIVE switch; SSO token reuse refused |
 
-Build: `pnpm --filter @velexis/ota-admin build` produces `.next/standalone/ota/admin/server.js` (`outputFileTracingRoot` is the repository root, as `deploy/scripts/pack-release.sh` expects), run by the `velexis-ota-admin` systemd unit on `127.0.0.1:3002` ([deployment](../../docs/mvp/deployment-single-vm.md)).
+Build: `pnpm --filter @velexis/ota-admin build` produces `.next/standalone/ota/admin/server.js` (`outputFileTracingRoot` is the repository root, as `deploy/scripts/pack-release.sh` expects), run by the `velexis-ota-admin` systemd unit on `127.0.0.1:3002` ([deployment](../../docs/mvp/deployment-single-vm.md)). The `build` script fails when that file is missing, and `src/config.test.ts` checks the tracing root against the paths in `pack-release.sh` and the unit. The app imports `@velexis/config` from its `dist/`, so build the workspace dependencies first (`pnpm build` does, through Turborepo; for one app: `pnpm turbo run build --filter=@velexis/ota-admin`). Next.js 15 pins `postcss` 8.4.31, which has high-severity advisories (source-map path traversal); the root `package.json` overrides `next>postcss` to a patched version so that `pnpm audit --prod` stays clean for the three Next.js apps. Remove the override once Next.js ships a patched `postcss`.
+
+Tests: `pnpm --filter @velexis/ota-admin test`. Vitest resolves `@/…` to `src/` and replaces `server-only` with its empty module (what Next.js server code gets); component tests start with `// @vitest-environment happy-dom` and use Testing Library.
+
+shadcn/ui is initialised (`components.json`, the CSS variables and `@theme inline` tokens in `src/app/globals.css`, shared by copy with the portal and the platform admin) without components. The first task that adds one (shadcn CLI 2.x, run in `ota/admin`) also adds the `cn()` helper in `src/lib/utils.ts` that `components.json` points to, and pins the components' dependencies to exact versions.
