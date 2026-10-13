@@ -36,11 +36,12 @@ Folder names are fixed here. They refine the suggested contexts of [`conventions
 | `PaymentConnectionsModule` | `payment-connections/` | 1 | `payment_provider_connections` | Velexis-mode rows, Connect Standard OAuth, API-key mode, Connect account events ([PADR-0011](adr/0011-stripe-connect-standard-and-api-key-connections.md)) | M1, M5 |
 | `BillingModule` | `billing/` | 1 | `plans`, `billing_customers`, `subscriptions`, `invoices` | Plans and price links, Stripe Billing gateway (customer, Checkout, Customer Portal, retrieve), subscription and invoice reads ([PADR-0002](adr/0002-stripe-billing-integration.md)) | M1 (plans, manual), M5 |
 | `SettlementsModule` | `settlements/` | 1 | `settlements`, `settlement_lines`, `tenant_payout_accounts` | Statement generation from Stripe balance transactions, approval, payout accounts ([PADR-0003](adr/0003-settlement-of-velexis-collected-payments.md)) | M5 |
-| `ReferenceModule` | `reference/` | 1 | `reference.*` | Idempotent loaders from `platform/backend/reference-data/` | M0 |
 | `ProvisioningModule` | `provisioning/` | 2 | `provisioning_jobs`, `tenant_schema_migrations` | Tenant lifecycle orchestration: create OTA, dispatch, tenant-event consumer, post-steps, reconciler, retry, migrate, suspend, resume, go-live, onboarding checklist ([PADR-0001](adr/0001-tenant-provisioning-orchestration.md), [PADR-0014](adr/0014-tenant-suspension-and-resume.md)) | M1 |
 | `BillingSyncModule` | `billing/sync/` | 3 | (through `BillingModule` repositories) | `/webhooks/stripe/billing` receiver, event processing with re-fetch, dunning, abandoned Checkout and manual-trial schedules | M5 |
 | `AdminModule` | `admin/` | 4 | — | Thin admin controllers over the services above, dashboard counts, queue inspection, platform admins | M1 |
 | `HealthModule` | `health/` | 0 | — | `/health/live`, `/health/ready` | M0 |
+
+The `reference` schema has no module here. The backend owns its migrations (`migrations/reference/`), but the data and its loader live in `tools/reference-data` and run through `pnpm db:seed:reference` ([ADR-0024](../../docs/mvp/adr/0024-reference-data-sources-and-loader.md)). Modules that need a lookup read the tables directly and never write them: billing and settlements read `reference.currencies` for minor-unit exponents.
 
 ### 2.2 Layering
 
@@ -52,7 +53,7 @@ flowchart TB
   sync --> billing
   sync --> pay
   prov --> tenants["1 Tenants"] & mem["1 Memberships"] & keys["1 ApiKeys"] & dom["1 Domains"] & sup["1 SupplierConnections"] & pay["1 PaymentConnections"] & billing["1 Billing"]
-  admin --> stl["1 Settlements"] & auth["1 Auth / Accounts"] & ref["1 Reference"]
+  admin --> stl["1 Settlements"] & auth["1 Auth / Accounts"]
   tenants & mem & keys & dom & sup & pay & billing & stl & auth --> base["0 Common, Audit, Notifications"]
 ```
 
@@ -70,8 +71,8 @@ As [`conventions.md` §2](../../docs/mvp/conventions.md#2-nestjs-backends): `*.c
 |---|---|---|
 | 1 | `helmet`, `cookie-parser` | Security headers. The API sets no cookies; the Next.js apps do. |
 | 2 | Raw body capture | Only on `/webhooks/*`, for Stripe signature checks. |
-| 3 | Request context (`nestjs-cls`) | `requestId` from `X-Request-Id` (Caddy) or new, actor, IP, user agent. |
-| 4 | Throttler (Redis storage) | Per-IP and per-account limits of [`api-inventory.md` §2](api-inventory.md#2-conventions). |
+| 3 | Request context (`nestjs-cls`) | `requestId` from `X-Request-Id` (Caddy) or new, actor, end-user IP and user agent (§3.2). |
+| 4 | Throttler (Redis storage) | Per-IP and per-account limits of [`api-inventory.md` §2](api-inventory.md#2-conventions). The IP is the end-user IP of §3.2, never the address of the portal or admin server. |
 | 5 | Auth guard by `x-scope` | `public` (none), `portal` (`PortalAuthGuard`), `platform_admin` (`AdminAuthGuard`), `internal` (`InternalOnlyGuard`: loopback source and no `X-Forwarded-For` from Caddy), `webhook` (`StripeSignatureGuard`). |
 | 6 | `TenantRoleGuard` | `@TenantRoles('owner','admin')` on `/v1/tenants/{tenantId}/…`: loads the caller's **active** membership from the database (no cache) and checks the role. Non-members get `404 NOT_FOUND`, so tenant ids cannot be probed. |
 | 7 | `RecentMfaGuard` | `@RequireRecentMfa()` on sensitive operations: the access token's `mfa_at` must be within 15 minutes, otherwise `401 REAUTH_REQUIRED`; accounts without MFA get `403 MFA_REQUIRED` ([PADR-0008](adr/0008-email-verification-and-mfa-policy.md)). |
@@ -97,6 +98,19 @@ Platform access tokens are EdDSA JWTs signed with `platform-jwt-ed25519.pem`, 15
 | `mfa_at` | Last TOTP verification in this family (epoch seconds) or absent | same |
 
 The audiences never mix: the admin guard refuses portal tokens, and the reverse. `AdminAuthGuard` also re-reads `accounts.is_platform_admin` and `status` on every request. Refresh tokens are opaque, hashed in `account_sessions`, rotated on use; families have an absolute lifetime of 30 days (portal) or 12 hours (admin) ([PADR-0009](adr/0009-platform-api-surface-and-authentication.md)).
+
+### 3.2 End-user IP and user agent
+
+The portal and the platform admin call the API from their own servers on `127.0.0.1`, so the socket address says nothing about the person. Without more, every portal user would share one rate-limit bucket and every audit row would show the portal server ([PADR-0019](adr/0019-end-user-ip-forwarding-from-the-portal-and-admin.md)).
+
+| Step | Where | What happens |
+|---|---|---|
+| 1 | Caddy | Sets `X-Forwarded-For` on the request to the portal or admin. It does not pass on a client-supplied value, because no trusted proxies are configured. |
+| 2 | Portal or admin server (`lib/api.ts`) | Takes the right-most `X-Forwarded-For` entry (Caddy's), or `127.0.0.1` when there is none (local development). Sends it on every API call as `X-Velexis-End-User-IP`, with the browser's `User-Agent` (cut to 512 characters) as `X-Velexis-End-User-Agent` and the shared key `PLATFORM_BFF_KEY` as `X-Velexis-Bff-Key`. |
+| 3 | Platform API (request context) | Honours the two end-user headers only when the socket peer is loopback, the request has no `X-Forwarded-For` (it did not come through Caddy) and `X-Velexis-Bff-Key` matches in constant time. A request with a valid key but a missing or malformed IP answers `400 VALIDATION_FAILED`. In every other case the headers are ignored and the IP is Express's `req.ip` (`trust proxy` loopback), which is the Caddy client address for public calls such as webhooks. |
+| 4 | Throttler, audit, sessions, tokens | Use only the request-context IP and user agent: throttler keys, `platform_audit_log`, `account_sessions`, `account_tokens.ip_address`. |
+
+`X-Velexis-Bff-Key` is on the logger's redaction list. A wrong key is logged as a warning (without the value) and treated like a missing one.
 
 ## 4. Data access
 
@@ -146,7 +160,7 @@ Every message: `v` (contract version, `1`), `jobId` (`job_…`, the `provisionin
 
 | Message | Direction | Extra fields | OTA worker does / platform does |
 |---|---|---|---|
-| `tenant.provision` | → OTA | — | Reads the tenant row (read-only), runs `create_schema`, `run_migrations`, `seed_defaults` in one transaction as `velexis_migrator` (db README §3), grants `velexis_ota_app`. |
+| `tenant.provision` | → OTA | — | Reads the tenant row (read-only), runs `create_schema`, `run_migrations`, `seed_defaults` in one transaction as `velexis_provisioner` (db README §3, [ADR-0004](../../docs/mvp/adr/0004-postgresql-schema-per-tenant.md)), grants `velexis_ota_app`. |
 | `tenant.migrate` | → OTA | `targetVersion` (optional) | Applies pending tenant migrations to that schema. |
 | `tenant.suspend` | → OTA | `reason` | Housekeeping only (expire open checkouts and void their authorisations, deny staff refresh). Traffic is already blocked by `tenants.status`. No-op if the tenant is no longer suspended. |
 | `tenant.resume` | → OTA | — | Re-enables tenant schedulers. No-op if the tenant is not active. |
@@ -198,7 +212,7 @@ The three new types extend the list of [`docs/mvp/architecture.md` §4](../../do
 | `staffdeny:acct:<accountId>` | Platform API | OTA API (staff guard and refresh) | 30 days | Epoch ms cut-off: staff families created before it are revoked. Written on sign out everywhere, password change or reset, MFA reset, account disable (new; refines `staffdeny:<familyId>`). |
 | `apikey:used:<keyId>` | OTA API | Platform worker (`GETDEL`) | 1 day | `{at, ip}` of the last use, flushed every 5 minutes |
 
-Platform-only keys: `vx:idem:*` (idempotency, 24 h), `mfach:<sha256>` (MFA challenge, 5 min), `mfasetup:<accountId>` (pending TOTP secret, encrypted, 10 min), `stripe:oauth:<sha256(state)>` (Connect OAuth state, 10 min), `tlsask:<host>` (ask answer, 60 s), `rl:*` (throttler). All have a TTL, as `noeviction` requires.
+Platform-only keys: `vx:idem:*` (idempotency, 24 h), `mfach:<sha256>` (MFA challenge, 5 min), `mfasetup:<accountId>` (pending TOTP secret, encrypted, 10 min), `stripe:oauth:<sha256(state)>` (Connect OAuth state, 10 min), `tlsask:<host>` (positive `ask` answer only, 60 s; negative answers stay in a bounded in-process cache, [PADR-0004](adr/0004-custom-domain-verification.md) item 6), `rl:*` (throttler). All have a TTL, as `noeviction` requires.
 
 ## 7. External services
 

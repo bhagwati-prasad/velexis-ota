@@ -3,6 +3,7 @@
 **Status:** Accepted
 **Date:** 2026-10-12
 **Deciders:** Platform tech lead. Decided during planning; revisit when a third party (not the portal or admin) must call the platform API, or when the portal moves to a separate host.
+**Revisions:** 2026-10-12 (planning review): point 10 names the IP that rate limits and audit use; the forwarding rule is [PADR-0019](0019-end-user-ip-forwarding-from-the-portal-and-admin.md).
 
 ## Context
 
@@ -28,7 +29,7 @@
 7. **Errors.** The platform document has its own `x-error-catalogue` ([`../api-inventory.md`](../api-inventory.md) §3), reusing the OTA code and status where the meaning is the same. `@velexis/errors` generates both catalogues; platform-only codes are exported from `@velexis/errors/platform`.
 8. **Idempotency.** `Idempotency-Key` is required on `createTenant` and `createCheckoutSession`, stored in Redis for 24 h per account (`vx:idem:<accountId>:<key>`, request hash + response). Other creates are naturally safe to repeat or are not replayed because they return secrets (API keys).
 9. **Concurrency.** Versioned resources return `ETag: "<version>"`; PATCH requires `If-Match` (`412 PRECONDITION_FAILED`).
-10. **Rate limits** with `@nestjs/throttler` on Redis, per IP and per account ([`../api-inventory.md`](../api-inventory.md) §2).
+10. **Rate limits** with `@nestjs/throttler` on Redis, per IP and per account ([`../api-inventory.md`](../api-inventory.md) §2). "IP" is the **end user's** IP. The portal and admin servers forward it with the user agent in `X-Velexis-End-User-IP` and `X-Velexis-End-User-Agent`, authenticated by the shared key `X-Velexis-Bff-Key`. The API honours them only from loopback and without `X-Forwarded-For`. Throttling, audit rows and session rows use that IP, never the address of the Next.js server ([PADR-0019](0019-end-user-ip-forwarding-from-the-portal-and-admin.md)).
 11. **Responses never contain secrets** except the once-only fields named in the inventory, all `no-store`. Masked forms (`last4`, client id) are used everywhere else.
 12. **Generated client.** The portal and the admin use `openapi-fetch` typed by `@velexis/api-types/platform` in `lib/api.ts` (`server-only`).
 
@@ -57,4 +58,4 @@
 ## References
 
 - [ADR-0006](../../../docs/mvp/adr/0006-contract-first-openapi.md), [ADR-0008](../../../docs/mvp/adr/0008-identity-accounts-customers-sessions.md), [ADR-0014](../../../docs/mvp/adr/0014-frontend-stack-nextjs-tailwind.md)
-- [`../api-inventory.md`](../api-inventory.md), [`../architecture.md`](../architecture.md) §3
+- [`../api-inventory.md`](../api-inventory.md), [`../architecture.md`](../architecture.md) §3, [PADR-0019](0019-end-user-ip-forwarding-from-the-portal-and-admin.md)

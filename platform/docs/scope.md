@@ -55,7 +55,7 @@ A platform admin can read every tenant's control-plane data and perform the admi
 | Payment connections: Velexis mode (M1 rows, used from M3), Connect Standard and API keys (M5) | Other PSPs (Adyen, Checkout.com, PayPal) | When an OTA brings one |
 | Stripe Billing: plans ↔ prices, Checkout, Customer Portal, webhook sync, dunning suspension (M5); manual trial before M5 (M1) | Metered per-booking usage fees, Stripe Tax | After the MVP ([ADR-0013](../../docs/mvp/adr/0013-subscription-billing-stripe-billing.md)) |
 | Monthly settlement statements for Velexis-collected payments, manual payout (M5) | Automated payouts (Stripe Connect transfers, bank API) | When settlement volume makes manual transfers a burden |
-| Platform audit log, platform e-mails, reference data loaders (M0–M1) | Bounce and complaint webhooks | After the MVP ([ADR-0017](../../docs/mvp/adr/0017-email-documents-storage.md)) |
+| Platform audit log, platform e-mails (M1); reference data loaded by the foundation loader `tools/reference-data` (M0, [ADR-0024](../../docs/mvp/adr/0024-reference-data-sources-and-loader.md)) | Bounce and complaint webhooks | After the MVP ([ADR-0017](../../docs/mvp/adr/0017-email-documents-storage.md)) |
 | Admin API for all admin pages | Admin sub-roles, impersonation | When Velexis has more than two staff |
 
 ### 2.2 Portal (`platform/frontend`)
@@ -205,4 +205,4 @@ Each feature has an id used by the plans and by test names. "AC" lines are what 
 | PF-95 | Audit | M1 | Every state change of §3 writes one `platform_audit_log` row with actor, action, target, request id and redacted before/after. The app role cannot update or delete audit rows. |
 | PF-96 | Rate limits | M1 | Limits of [`api-inventory.md`](api-inventory.md#2-conventions) on auth, key-availability, console token, domain checks; `429` with `Retry-After`. |
 | PF-97 | Platform e-mails | M1 | Templates: verify e-mail, account exists, password reset, password changed, MFA changed, invitation, welcome (OTA live), provisioning failed, (M5) payment failed, trial ending, tenant suspended or resumed, domain verified or failed, credentials verified or failed, settlement paid, Stripe disconnected. |
-| PF-98 | Reference data | M0–M1 | Loaders fill `reference` (currencies, countries, time zones, cities, airports, airlines, aircraft) idempotently from files in the repository. |
+| PF-98 | Reference data | M0 | The foundation loader `tools/reference-data` (`pnpm db:seed:reference`, [ADR-0024](../../docs/mvp/adr/0024-reference-data-sources-and-loader.md)) fills `reference` (currencies, countries, time zones, cities, airports, airlines, aircraft) idempotently from vendored files in the repository. The platform backend owns the schema's migrations and has no loader of its own. |

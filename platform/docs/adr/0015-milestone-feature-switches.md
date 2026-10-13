@@ -41,8 +41,8 @@ The solo developer merges small tasks to `main` continuously ([ADR-0020](../../.
 
 ### Follow-ups
 
-- Add the six variables to the root `.env.example`, `deploy/env/platform-api.env` and the [configuration matrix](../../../docs/mvp/architecture.md#6-configuration-matrix).
-- After M5: remove the switches.
+- Add the six variables to the root `.env.example`, [`deploy/env/platform-backend.env.example`](../../../deploy/env/platform-backend.env.example) (the template of `/etc/velexis/platform-backend.env`, read by the API and the worker) and the [configuration matrix](../../../docs/mvp/architecture.md#6-configuration-matrix) (PBE-012).
+- Remove the switches once all six have been on in production for one release (PBE-064). That happens after the launch, so PBE-064 is a named exception to the M6 go criterion "every task done" ([ADR-0025](../../../docs/mvp/adr/0025-roadmap-scheduling-and-tracking.md) item 4).
 
 ## Alternatives considered
 

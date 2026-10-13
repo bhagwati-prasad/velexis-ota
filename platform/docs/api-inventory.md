@@ -38,7 +38,7 @@ Same conventions as the OTA document ([`conventions.md` §6](../../docs/mvp/conv
 | `internal` | Loopback only, no token. |
 | `webhook` | Stripe signature on the raw body. |
 
-**Rate limits** (Redis throttler, `429 RATE_LIMITED` with `Retry-After`):
+**Rate limits** (Redis throttler, `429 RATE_LIMITED` with `Retry-After`). "Per IP" means the end user's IP. Calls from the portal and admin servers carry it in `X-Velexis-End-User-IP` with the shared key `X-Velexis-Bff-Key`; other calls use the Caddy client IP ([PADR-0019](adr/0019-end-user-ip-forwarding-from-the-portal-and-admin.md), [`architecture.md` §3.2](architecture.md#32-end-user-ip-and-user-agent)).
 
 | Endpoint group | Limit |
 |---|---|

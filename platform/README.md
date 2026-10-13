@@ -46,11 +46,11 @@ flowchart LR
 |---|---|
 | M0 | Baseline migrations of `platform` and `reference`, empty apps with health endpoints, deploy units |
 | M1 | Sign-up, e-mail verification, sign-in, MFA; create OTA; provisioning orchestration; API keys; default Velexis Amadeus test office; Velexis Stripe test connection; platform admin basics (tenants, provisioning jobs, audit) |
-| M2 | `tenants.storefront_environment` column used by the OTA backend; storefront link in the portal |
-| M3 | Nothing new on the platform beyond fixes (payments run in the OTA backend) |
-| M4 | "Open console" SSO into the OTA admin; team invitations used in earnest |
+| M2 | Cross-backend proof, gated on the OTA tenancy and storefront (OF-01): a key created in the portal works on the OTA API and stops after revocation, every cached change is announced on `vx:invalidate`, and a suspension reaches the storefront (PBE-036, PAD-011). The OTA backend starts reading `tenants.storefront_environment` (column from migration `0002`, M1). |
+| M3 | Card statement descriptor of the Velexis payment connection: the M3–M4 contract slice, the update endpoint and the portal form (PBE-037, PBE-038, PFE-016). Payments themselves run in the OTA backend. |
+| M4 | "Open console" SSO into the OTA admin; Amadeus office settings (PBE-039, PBE-040, PFE-017 … PFE-019) |
 | M5 | Stripe Billing subscriptions, the OTA's own Stripe (Connect Standard or API keys), settlements of Velexis-collected payments, the OTA's own Amadeus credentials, live Amadeus offices, custom domains with on-demand TLS, live switch |
-| M6 | Security review, rate-limit and audit review, restore drill, end-to-end journeys for the portal and admin |
+| M6 | Security review with the auth matrix and rate-limit tests, performance against the VM budget, complete end-to-end suites for the portal and admin, launch checklist and runbooks; the foundation adds monitoring and the restore drill. The milestone switches are removed after the launch (PBE-064, a named exception of [ADR-0025](../docs/mvp/adr/0025-roadmap-scheduling-and-tracking.md) item 4). |
 
 The full feature list with acceptance-level detail is in [`docs/scope.md`](docs/scope.md).
 

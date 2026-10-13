@@ -14,7 +14,7 @@ Related: [`architecture.md`](architecture.md), [`api-inventory.md`](api-inventor
 | Design (provisioning, runner, routing, security) | [`db/README.md`](../../docs/velexis-sdk/db/README.md) §3, §4, §5, §8 |
 | Platform migrations | `platform/backend/migrations/platform/0001_baseline.sql`, `0002_add_mvp_platform_deltas.sql` |
 | Reference migrations | `platform/backend/migrations/reference/0001_baseline.sql` (no delta in the MVP) |
-| Reference data files | `platform/backend/reference-data/*.csv`, loaded by `pnpm --filter @velexis/platform-backend ref:load` |
+| Reference data files and loader | `tools/reference-data/data/*.csv` (`@velexis/reference-data`), loaded by `pnpm db:seed:reference` with the `velexis_platform_app` role; the backend's `ref:load` script is only a shortcut for it ([ADR-0024](../../docs/mvp/adr/0024-reference-data-sources-and-loader.md)) |
 
 `0002` is **one expand-phase migration** that lands with the first M1 backend task. It contains every delta decided during planning, including tables first used in M5, so later milestones need no schema work for what is planned here. Empty tables cost nothing. Deltas found during implementation become `0003` and later ([`conventions.md` §9](../../docs/mvp/conventions.md#9-database-migrations)).
 
@@ -51,7 +51,7 @@ Related: [`architecture.md`](architecture.md), [`api-inventory.md`](api-inventor
 | `provisioning_jobs` | baseline + `0002` | provisioning | | M1 |
 | `platform_audit_log` | baseline (privileges in `0002`) | audit | | M1 |
 | `email_outbox` | **new** | notifications | | M1 |
-| `reference.*` (7 tables) | baseline | reference | ✓ | M0 |
+| `reference.*` (7 tables) | baseline | none: written only by the `tools/reference-data` loader (ADR-0024); billing and settlements read `currencies` | ✓ | M0 |
 
 ## 3. New tables at a glance
 
