@@ -141,8 +141,15 @@ function lineAt(sql: string, position: number): number {
   return line;
 }
 
-/** The safe part of an error: message and SQLSTATE. The detail may quote row values, so it is left out. */
-function describeFailure(error: unknown, sql: string | undefined, statement?: number): MigrationFailure {
+/**
+ * The safe part of an error: message and SQLSTATE. The detail may quote row values, so it is left out. The tenant
+ * runner (tenant-schema.ts) reports its failures the same way.
+ */
+export function describeFailure(
+  error: unknown,
+  sql: string | undefined,
+  statement?: number,
+): MigrationFailure {
   const message = error instanceof Error ? error.message : String(error);
   const code =
     error instanceof pg.DatabaseError && typeof error.code === "string" && error.code !== ""

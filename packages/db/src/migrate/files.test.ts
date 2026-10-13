@@ -403,7 +403,8 @@ describe("migrate.js without a database", () => {
   it("prints the usage and exits 1 for a missing or unknown command, a missing --dir or an unknown flag", async () => {
     const cases: Array<[string[], string]> = [
       [[], "missing command"],
-      [["tenants", "--dir", "."], 'unknown command "tenants"'],
+      // `tenants` and `tenant` exist since X-013 (src/migrate/tenants.test.ts); `seed` is not a command.
+      [["seed", "--dir", "."], 'unknown command "seed"'],
       [["platform"], "platform needs --dir <path>"],
       [["platform", "--dir", ".", "extra"], 'unexpected argument "extra"'],
       [["platform", "--dir", ".", "--force"], "Unknown option '--force'"],

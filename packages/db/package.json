@@ -35,6 +35,8 @@
     "test:int": "vitest run --config vitest.int.config.ts",
     "premigrate": "tsc -b",
     "migrate": "node dist/cli/migrate.js platform --dir ../../platform/backend/migrations/platform && node dist/cli/migrate.js reference --dir ../../platform/backend/migrations/reference",
+    "premigrate:tenants": "tsc -b",
+    "migrate:tenants": "node dist/cli/migrate.js tenants --dir ../../ota/backend/migrations/tenant",
     "clean": "tsc -b --clean"
   },
   "dependencies": {

@@ -393,8 +393,8 @@ Related: [`../decisions.md`](../decisions.md) (binding), [`../architecture.md`](
   - `pnpm db:migrate` on a developer database prints one applied line per file, then nothing on a second run.
 - **Verify:** `pnpm db:migrate && pnpm --filter @velexis/db test && pnpm --filter @velexis/db test:int`
 
-### X-013 · Add the tenant fan-out and single-schema commands to the runner
-- **Status:** todo
+### X-013 · Add the tenant fan-out and single-schema commands to the runner ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** foundation
 - **Milestone:** M0
 - **Depends on:** X-012

@@ -1,4 +1,4 @@
-// @velexis/db/migrate: the migration runner (X-011; ADR-0005 Migrations, ADR-0021, db README §4). The CLI
+// @velexis/db/migrate: the migration runner (X-011, X-013; ADR-0005 Migrations, ADR-0021, db README §4). The CLI
 // dist/cli/migrate.js, `pnpm db:migrate`, velexis-deploy, the OTA worker and @velexis/testing all use it.
 export {
   BASELINE_FILE,
@@ -56,3 +56,33 @@ export {
   type RunMigrationsOptions,
   type RunMigrationsResult,
 } from "./run-set.js";
+// The tenant set (X-013): one schema, for provisioning, tests and repairs, and the fan-out over platform.tenants.
+export {
+  migrateTenantSchema,
+  migrateTenantSchemaFiles,
+  TENANT_APP_ROLE,
+  TENANT_OWNER_ROLE,
+  TenantChecksumMismatchError,
+  TenantMigrationFailedError,
+  TenantSchemaError,
+  type MigrateTenantSchemaOptions,
+  type MigrateTenantSchemaResult,
+  type TenantMigrationFileEvent,
+  type TenantSchemaProblem,
+} from "./tenant-schema.js";
+export {
+  DEFAULT_MAX_FAILURE_RATIO,
+  DEFAULT_TENANT_CONCURRENCY,
+  failureRatio,
+  fanOutExitCode,
+  migrateTenants,
+  runWithConcurrency,
+  TENANT_TARGET_STATUSES,
+  type MigrateTenantsOptions,
+  type MigrateTenantsResult,
+  type TenantMigrationReport,
+  type TenantSchemaApplied,
+  type TenantSchemaFailure,
+  type TenantSchemaOutcome,
+  type TenantSchemaSkipped,
+} from "./tenants.js";

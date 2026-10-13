@@ -51,8 +51,8 @@ Every file starts with its phase and a one-line description:
 
 Each schema is migrated in **one transaction** of its own (ADR-0005, db README §4); only a `no-transaction` file runs outside it (Headers above):
 
-1. `SET LOCAL lock_timeout = '5s'`, `SET LOCAL statement_timeout = '10min'`;
-2. `SET LOCAL ROLE velexis_provisioner`, so every tenant object has one owner whoever connects (ADR-0021);
+1. `SET LOCAL ROLE velexis_provisioner`, so every tenant object has one owner whoever connects (ADR-0021);
+2. `SET LOCAL lock_timeout = '5s'`, `SET LOCAL statement_timeout = '10min'`;
 3. `pg_advisory_xact_lock(hashtext(schema))`;
 4. `set_config('search_path', schema || ', reference', true)`;
 5. verify the checksums of the applied files, apply the pending ones, insert their ledger rows, `COMMIT`.
@@ -65,11 +65,11 @@ A new OTA's schema is created in the same transaction (`CREATE SCHEMA … AUTHOR
 | `node dist/cli/migrate.js tenants --dir <release>/migrations/tenant` | The same fan-out, run by `velexis-deploy` after the platform and reference sets and before the apps restart |
 | `node dist/cli/migrate.js tenant --schema tenant_<key> --dir … [--create]` | One schema: provisioning, tests, repairs |
 
-The `tenants` and `tenant` commands and their library functions (`migrateTenants`, `migrateTenantSchema`) come with X-013. The OTA worker calls `migrateTenantSchema` with `DATABASE_PROVISIONER_URL` when it provisions an OTA; the CLI connects with `DATABASE_MIGRATOR_URL` only. Run `pnpm db:migrate` (platform and reference) first.
+The `tenants` and `tenant` commands call the library functions `migrateTenants` and `migrateTenantSchema` ([`packages/db/README.md`](../../../packages/db/README.md#tenant-schemas-migratetenantschema-and-migratetenants), X-013). The OTA worker calls `migrateTenantSchema` with `DATABASE_PROVISIONER_URL` when it provisions an OTA; the CLI connects with `DATABASE_MIGRATOR_URL` only. Run `pnpm db:migrate` (platform and reference) first.
 
 Every migration pull request runs `pnpm db:migrate:tenants` on a fresh schema and on one at the previous version, commits the regenerated table types (`pnpm db:codegen`) and adds or updates an integration test that uses the change ([`conventions.md` §9](../../../docs/mvp/conventions.md#9-database-migrations)).
 
 ## Tests
 
 - `packages/db/src/migrate/baselines.test.ts`: the baseline has the SHA-256 of `tenant.sql`, and the runner accepts the folder.
-- `packages/db/test/integration/baselines.int.test.ts`: applied to `tenant_alpha` on a fresh database, the set gives the 42 tables owned by `velexis_provisioner` and its ledger row; with the provisioning grants `velexis_ota_app` writes and reads a tenant table, and `velexis_platform_app` has no privilege at all on the schema. The grants and default privileges of provisioning itself are tested with `migrateTenantSchema` (X-013).
+- `packages/db/test/integration/baselines.int.test.ts`: applied to `tenant_alpha` on a fresh database, the set gives the 42 tables owned by `velexis_provisioner` and its ledger row; with the provisioning grants `velexis_ota_app` writes and reads a tenant table, and `velexis_platform_app` has no privilege at all on the schema. The grants and default privileges of provisioning itself are tested with `migrateTenantSchema` in `packages/db/test/integration/tenants.int.test.ts` (X-013).
