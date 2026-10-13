@@ -50,7 +50,8 @@ Common commands: backend `pnpm --filter @velexis/ota-backend test` and `test:int
   - Lint finds no `console.*` and no `process.env`; every request log line carries `requestId`.
 - **Verify:** `pnpm --filter @velexis/ota-backend build && pnpm --filter @velexis/ota-backend test && pnpm --filter @velexis/ota-backend test:int`
 
-### OFE-001 · Scaffold the storefront as a Vite multi-page app with Tailwind and a Caddy-like dev proxy
+### OFE-001 · Scaffold the storefront as a Vite multi-page app with Tailwind and a Caddy-like dev proxy ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-frontend
 - **Milestone:** M0
 - **Depends on:** X-001, X-019

@@ -1,0 +1,23 @@
+{
+  "name": "@velexis/ota-frontend",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Hosted multi-tenant storefront: static HTML pages, Tailwind CSS 4 and vanilla ES modules built by Vite 6 into dist/, served by Caddy for every OTA (OADR-0015).",
+  "license": "UNLICENSED",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build && node scripts/check-budgets.mjs",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "lint": "eslint ."
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "4.1.18",
+    "eslint": "9.39.5",
+    "happy-dom": "17.6.3",
+    "tailwindcss": "4.1.18",
+    "vite": "6.4.4",
+    "vitest": "3.2.7"
+  }
+}

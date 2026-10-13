@@ -42,6 +42,8 @@ flowchart LR
 ota/frontend/
   package.json                @velexis/ota-frontend; deps: @velexis/ota-sdk (workspace), tailwindcss, @tailwindcss/vite, vite
   vite.config.js              MPA inputs, Tailwind, partials plugin, dev rewrites, dev/preview proxy and headers
+  vitest.config.js            happy-dom by default; build, budget and server tests opt into Node
+  turbo.json                  `test` also depends on deploy/caddy/Caddyfile, so a CSP change re-runs test/csp.test.js
   .env.example                dev server only (§11)
   index.html  search.html  offer.html  price.html  checkout.html  confirmation.html
   bookings.html  booking.html  lookup.html  p.html  404.html
@@ -70,8 +72,9 @@ ota/frontend/
                               stepper, traveller-form, contact-form, ancillary-picker, error-summary, dialog, live-region
     styles/main.css           @import "tailwindcss"; @theme tokens; a few component classes
     styles/fonts.css          @font-face for the bundled fonts
-  test/                       Vitest + happy-dom unit tests
+  test/                       Vitest + happy-dom unit tests; test/helpers/ (scratch builds, HTTP requests)
   scripts/check-budgets.mjs   gzip size budgets for dist/ (§9)
+  scripts/vite-plugins.js     page inputs, partials, Caddy-like dev/preview routing, /api proxy, preview headers
   docs/                       page inventory, build-your-own guide
 ```
 
@@ -148,7 +151,8 @@ Branding comes from `storefront.get` (`branding.colors`, fonts, corner radius, l
 }
 ```
 
-- Pages use `bg-primary text-on-primary rounded-ui font-heading` and so on. Class names are always complete strings, so Tailwind's scanner finds them.
+- Every colour of `StorefrontBranding.colors` has a `--vx-*` property and a utility; the full mapping (for example `surface` → `--vx-panel` → `bg-panel`, `mutedText` → `--vx-muted` → `text-muted`, plus `--vx-on-secondary` for header and footer text) is the header comment of [`src/styles/main.css`](src/styles/main.css).
+- Pages use `bg-primary text-on-primary rounded-ui font-heading` and so on. Class names are always complete strings, so Tailwind's scanner finds them. The scanner reads only the pages, `partials/` and `src/` (`@source` in `main.css`), not the docs or tests.
 - `lib/theme.js` computes `--vx-on-primary` (black or white, whichever reaches 4.5:1) and falls back to the neutral palette for any colour pair below WCAG contrast; the OTA admin warns when an OTA picks such colours.
 - Fonts are chosen from the bundled list (open licences, `public/fonts/`, `font-display: swap`); a browser downloads only the families in use.
 - Logos and the favicon are same-origin asset URLs (`/api/v1/assets/<key>/ast_….png`), so `img-src 'self'` holds. Airline logos are not shown in the MVP (no external images under the CSP); results show the airline name and IATA code ([OADR-0015](../docs/adr/0015-storefront-build-urls-and-hosting.md)).
@@ -180,7 +184,7 @@ Branding comes from `storefront.get` (`branding.colors`, fonts, corner radius, l
 
 | Budget | Limit | Checked by |
 |---|---|---|
-| JavaScript per page, gzip (own code + SDK, Stripe.js excluded) | ≤ 60 KB; airline-card page ≤ 30 KB | `scripts/check-budgets.mjs` in CI |
+| JavaScript per page, gzip (own code + SDK, Stripe.js excluded): the page's scripts, module preloads and every chunk they import, statically or dynamically | ≤ 60 KB; airline-card page ≤ 30 KB | `scripts/check-budgets.mjs` after every `build` (CI included); it prints a table and exits 1 on a breach |
 | CSS, gzip (all pages share one file) | ≤ 20 KB | same |
 | HTML per page | ≤ 20 KB | same |
 | Fonts per page | ≤ 2 families, woff2, ≤ 120 KB | same |
@@ -202,9 +206,9 @@ Images carry width and height, results render 20 at a time, and search shows a s
 
 | Page | Scripts | Purpose |
 |---|---|---|
-| `/checkout/pay-card.html` | `/assets/pay-card-<hash>.js` | Page code + SDK |
+| `/checkout/pay-card.html` | `/assets/checkout-pay-card-<hash>.js` | Page code + SDK |
 | | `https://js.stripe.com/…` (Stripe.js) | Payment Element, 3-D Secure |
-| `/checkout/pay-airline.html` | `/assets/pay-airline-<hash>.js` | Page code + SDK; nothing else |
+| `/checkout/pay-airline.html` | `/assets/checkout-pay-airline-<hash>.js` | Page code + SDK; nothing else |
 | Every other page | its own `/assets/<entry>-<hash>.js` | First-party page code + SDK; no third-party script (a test fails on one) |
 
 ## 11. Local development
@@ -219,18 +223,27 @@ pnpm --filter @velexis/ota-frontend preview          # production build on 4173,
 The dev server behaves like Caddy for one tenant, the demo OTA that the backend's `dev:seed` creates on `demo.ota.example.com` ([`../backend/README.md`](../backend/README.md)):
 
 ```js
-// vite.config.js (excerpt): env = root .env.local, then ota/frontend/.env.local (loadEnv)
-const host = env.STOREFRONT_DEV_HOST ?? `demo.${env.STOREFRONT_BASE_DOMAIN}`;
-const apiProxy = {
+// scripts/vite-plugins.js (excerpt): env = root .env.local, then ota/frontend/.env.local, then the environment (loadEnv)
+const host = env.STOREFRONT_DEV_HOST || `demo.${env.STOREFRONT_BASE_DOMAIN}`;
+const apiProxy = {                                          // server.proxy and preview.proxy: { "^/api/": apiProxy }
   target: env.OTA_API_URL,                                  // http://127.0.0.1:4000
-  rewrite: (p) => p.replace(/^\/api/, ""),
-  headers: { "X-Velexis-Edge": env.VELEXIS_EDGE_SECRET,      // dev secret only
-             "X-Velexis-Host": host,
-             Origin: `https://${host}` },                    // the CSRF guard compares Origin with the host
+  rewrite: (p) => p.replace(/^\/api(?=\/)/, ""),
+  headers: { "x-velexis-edge": env.VELEXIS_EDGE_SECRET,      // dev secret only; replaces any browser copy
+             "x-velexis-host": host,
+             origin: `https://${host}` },                    // the CSRF guard compares Origin with the host
 };
-// server.proxy and preview.proxy use apiProxy; preview also sends the production CSP header;
-// a devRewrites plugin maps /p/<slug> to /p.html and unknown paths to /404.html, like Caddy.
 ```
+
+| Caddyfile storefront block | Dev server (5173) and `vite preview` (4173), `scripts/vite-plugins.js` |
+|---|---|
+| `handle /api/*`: strip `/api`, `header_up X-Velexis-Edge`, `X-Velexis-Host` | The proxy above (also `Origin`); it refuses to start without `OTA_API_URL`, `VELEXIS_EDGE_SECRET` and a host |
+| `@api_internal` (`/api/internal/*`, `/api/health/ready`) → 404 | Same, plus `/api/health/ready/`, without calling the API; paths are compared like Caddy's `path` matcher (decoded, lower case, cleaned, repeated slashes merged), and a malformed escape gets 400 |
+| `api_unavailable`: 503 `SERVICE_UNAVAILABLE` envelope while the API is down | Same envelope, `Retry-After: 30` |
+| `try_files {path} {path}.html {path}/index.html`, and `rewrite /p/* /p.html` (added to the Caddyfile by OFE-020) | Same rules (dev: page navigations only) |
+| `handle_errors 404` → `/404.html` | `404.html` with status 404 |
+| Storefront `header` block (CSP and the other headers) | `vite preview` only: `STOREFRONT_HEADERS`, a copy that `test/csp.test.js` compares with the Caddyfile. No HSTS (plain HTTP); the dev server sends no CSP (it injects HMR code). |
+
+The variables are listed in [`.env.example`](.env.example) (`STOREFRONT_DEV_PORT` and `STOREFRONT_PREVIEW_PORT` move the ports). `vite build` needs none of them.
 
 - No variable reaches the browser bundle (nothing is prefixed `VITE_`); the storefront has no runtime environment ([architecture §6](../../docs/mvp/architecture.md#6-configuration-matrix)).
 - `__Host-` cookies work on `http://localhost` in Chromium and Firefox (localhost is a secure context); Safari does not accept them there, so use Chromium or Firefox ([OADR-0006](../docs/adr/0006-storefront-cookie-sessions-and-csrf.md) point 8).
@@ -240,7 +253,8 @@ const apiProxy = {
 
 ## 12. Build and deploy
 
-- `pnpm --filter @velexis/ota-frontend build` writes `dist/`: the HTML files at their paths, hashed JS and CSS in `dist/assets/`, fonts, `404.html`. Then `scripts/check-budgets.mjs` runs.
+- `pnpm --filter @velexis/ota-frontend build` writes `dist/`: the HTML files at their paths, hashed JS and CSS in `dist/assets/`, fonts, `404.html`. Markdown notes in `public/` (such as `public/fonts/README.md`) are left out. Then `scripts/check-budgets.mjs` runs.
+- Every `*.html` file of the package is a page and a build input (`partials/`, `public/`, `src/`, `test/` and `docs/` excepted); its entry bundle is named after its path (`checkout/pay-card.html` → `assets/checkout-pay-card-<hash>.js`).
 - The same `dist/` serves every OTA. There are no build-time variables and no per-tenant builds ([OADR-0015](../docs/adr/0015-storefront-build-urls-and-hosting.md)).
 - The release artefact carries `dist/` to `/srv/velexis/current/storefront` ([ADR-0023](../../docs/mvp/adr/0023-release-artefact-and-deploy-user.md)); Caddy caches `/assets/*` for a year and revalidates HTML. Source maps are kept as CI artefacts, not deployed.
 
@@ -249,7 +263,8 @@ const apiProxy = {
 | Level | Where | What |
 |---|---|---|
 | Unit | `ota/frontend/test/*.test.js` (Vitest + happy-dom) | `lib/format` (money, local times, durations), `lib/forms` (field errors, summary focus), `lib/theme` (contrast fallback), `lib/blocks` (unknown link schemes dropped), `lib/url` (`next` validation), components (combobox keyboard, filters → query string, stepper) |
-| Configuration | `test/csp.test.js` | The preview CSP equals the CSP in `deploy/caddy/Caddyfile`, so E2E runs see production headers |
+| Configuration | `test/csp.test.js` | The preview CSP equals the CSP in `deploy/caddy/Caddyfile`, so E2E runs see production headers; the build (made with the real `vite.config.js` in a scratch folder) has no inline script or style and no development value |
+| Build tools | `test/budgets.test.js`, `test/vite-plugins.test.js` | The budget script on fixture folders (a breach exits 1 and names the file); page inputs, partials, and the dev and preview servers against a fake OTA API (proxy headers, 400, 404 and 503 answers) |
 | End to end | `tools/e2e/specs/storefront/*.e2e.ts` (Playwright + `@axe-core/playwright`) | Against `vite preview` (production build) proxied to the local OTA backend, the Amadeus stub, Mailpit, Stripe test mode |
 
 Journeys (one per main flow, [ADR-0015](../../docs/mvp/adr/0015-testing-strategy.md)):

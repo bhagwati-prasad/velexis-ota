@@ -1,0 +1,11 @@
+/*
+ * @font-face rules of the bundled, selectable storefront fonts (OADR-0015 point 8, ota/frontend/README.md §6).
+ *
+ * - Files are woff2 with an open licence in public/fonts/ (see public/fonts/README.md), referenced by absolute URL
+ *   (`url("/fonts/<family>/<file>.woff2")`), so `font-src 'self'` holds and no font becomes a data: URI.
+ * - Every rule uses `font-display: swap`; a browser downloads only the families a page uses.
+ * - The family names equal the `StorefrontSettings.branding.fonts` enum of the OTA API; test/fonts.test.js compares
+ *   the two lists (OFE-020, which adds the fonts).
+ *
+ * No font is bundled yet: until then --vx-font-body falls back to system-ui (src/styles/main.css).
+ */

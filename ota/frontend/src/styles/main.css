@@ -1,0 +1,80 @@
+/*
+ * Storefront styles: Tailwind CSS 4 with the OTA's branding as CSS custom properties (ota/frontend/README.md §6,
+ * OADR-0012, OADR-0015 point 2). lib/theme.js sets the --vx-* properties from storefront.get with
+ * style.setProperty, which the strict `style-src 'self'` CSP allows; this file only declares the neutral defaults.
+ *
+ * Branding colour (StorefrontBranding.colors)  -> custom property   -> Tailwind utilities
+ *   primary / onPrimary                         -> --vx-primary / --vx-on-primary     -> bg-primary, text-on-primary
+ *   secondary (header, footer)                  -> --vx-secondary / --vx-on-secondary -> bg-secondary, text-on-secondary
+ *   accent                                      -> --vx-accent                        -> bg-accent, text-accent
+ *   background (page)                           -> --vx-bg                            -> bg-surface
+ *   surface (cards, panels)                     -> --vx-panel                         -> bg-panel
+ *   text / mutedText                            -> --vx-text / --vx-muted             -> text-ink, text-muted
+ *   success / warning / error                   -> --vx-success / --vx-warning / --vx-error
+ *   cornerRadius                                -> --vx-radius                        -> rounded-ui
+ *   fonts.body / fonts.heading                  -> --vx-font-body / --vx-font-heading -> font-body, font-heading
+ * --vx-on-secondary has no API field: theme.js computes it, like --vx-on-primary, for 4.5:1 contrast.
+ *
+ * Class names in HTML and JS are always complete strings, so the scanner below finds them.
+ */
+@import "tailwindcss" source(none);
+@import "./fonts.css";
+
+/* Only the pages, the partials and the modules contain class names (not the docs, tests or build output). */
+@source "../../*.html";
+@source "../../account/**/*.html";
+@source "../../checkout/**/*.html";
+@source "../../partials/**/*.html";
+@source "../**/*.js";
+
+/* Neutral defaults until storefront.get answers; every pair reaches WCAG AA contrast. */
+:root {
+  --vx-primary: #1d4ed8;
+  --vx-on-primary: #ffffff;
+  --vx-secondary: #0f172a;
+  --vx-on-secondary: #ffffff;
+  --vx-accent: #0e7490;
+  --vx-bg: #ffffff;
+  --vx-panel: #f8fafc;
+  --vx-text: #0f172a;
+  --vx-muted: #475569;
+  --vx-success: #15803d;
+  --vx-warning: #b45309;
+  --vx-error: #b91c1c;
+  --vx-radius: 0.5rem;
+  --vx-font-body: "Inter", system-ui, sans-serif;
+  --vx-font-heading: var(--vx-font-body);
+}
+
+/* Tailwind utilities read the runtime variables. */
+@theme inline {
+  --color-primary: var(--vx-primary);
+  --color-on-primary: var(--vx-on-primary);
+  --color-secondary: var(--vx-secondary);
+  --color-on-secondary: var(--vx-on-secondary);
+  --color-accent: var(--vx-accent);
+  --color-surface: var(--vx-bg);
+  --color-panel: var(--vx-panel);
+  --color-ink: var(--vx-text);
+  --color-muted: var(--vx-muted);
+  --color-success: var(--vx-success);
+  --color-warning: var(--vx-warning);
+  --color-error: var(--vx-error);
+  --radius-ui: var(--vx-radius);
+  --font-body: var(--vx-font-body);
+  --font-heading: var(--vx-font-heading);
+}
+
+@layer base {
+  html {
+    background-color: var(--color-surface);
+    color: var(--color-ink);
+    font-family: var(--font-body);
+  }
+
+  h1,
+  h2,
+  h3 {
+    font-family: var(--font-heading);
+  }
+}
