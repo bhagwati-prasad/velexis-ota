@@ -16,7 +16,7 @@ What is **not** here:
 - **The JSON form.** Only the YAML is the contract. When a tool needs JSON, generate it from the YAML (for example with the Redocly CLI that X-007 installs, `redocly bundle … --ext json`) into a scratch location. It is never committed here and never edited.
 - **The frozen original.** [`docs/velexis-sdk/openapi/`](../../../docs/velexis-sdk/openapi/) keeps the original design (YAML and JSON) and is never edited again ([`decisions.md`](../../../docs/mvp/decisions.md) §3). The CI repository guard fails a pull request that changes anything under `docs/velexis-sdk/` or `docs/amadeus-api/`. Tests that must stay stable while this document grows read the 96 original operations from there (the operations-index test of X-008, the milestone test of OBE-009).
 
-Keep the file name and location. The turbo `generate` inputs point to this folder today; the Redocly config (`packages/api-types/redocly.yaml`, X-007), the generators of `@velexis/api-types`, `@velexis/errors` and the SDK route table, the backend's Ajv loader and the release folder (`ota-backend/openapi/`, [ADR-0023](../../../docs/mvp/adr/0023-release-artefact-and-deploy-user.md)) will.
+Keep the file name and location. The turbo inputs of `generate`, `contracts:lint` and `@velexis/api-types#test` and the Redocly config ([`packages/api-types/redocly.yaml`](../../../packages/api-types/redocly.yaml), X-007) point to this folder today; the generators of `@velexis/api-types`, `@velexis/errors` and the SDK route table, the backend's Ajv loader and the release folder (`ota-backend/openapi/`, [ADR-0023](../../../docs/mvp/adr/0023-release-artefact-and-deploy-user.md)) will.
 
 ## 2. The source of truth
 
@@ -52,7 +52,7 @@ The order is fixed by [ADR-0006](../../../docs/mvp/adr/0006-contract-first-opena
 6. **Tests.** Route parity (every operation has a handler or a pending entry, every handler has an operation), response conformance (Ajv in integration tests), SDK parity (every `x-sdk-method` maps to exactly one SDK method) and the contract test of the spec task, which asserts its own operations by `operationId`, never totals.
 7. **Change log.** Add a row to §6 of this page in the same PR.
 
-Until the foundation tasks add them, the two root commands find no package that defines them and do nothing: `pnpm contracts:lint` arrives with X-007, and `pnpm contracts:generate` with X-008 (types) and X-009 (errors).
+`pnpm contracts:lint` exists since X-007 ([`packages/api-types/README.md`](../../../packages/api-types/README.md)). Until the foundation tasks add it, `pnpm contracts:generate` finds no package that defines it and does nothing: it arrives with X-008 (types) and X-009 (errors).
 
 ## 4. Additive changes only
 

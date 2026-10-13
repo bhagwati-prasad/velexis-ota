@@ -227,8 +227,8 @@ Related: [`../decisions.md`](../decisions.md) (binding), [`../architecture.md`](
   - The README links ADR-0006 and AGENTS.md §6.
 - **Verify:** `cmp ota/backend/openapi/velexis-ota-booking-api.openapi.yaml docs/velexis-sdk/openapi/velexis-ota-booking-api.openapi.yaml`
 
-### X-007 · Create the @velexis/api-types package with contract linting
-- **Status:** todo
+### X-007 · Create the @velexis/api-types package with contract linting ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** foundation
 - **Milestone:** M0
 - **Depends on:** X-006

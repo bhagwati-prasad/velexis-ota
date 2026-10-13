@@ -1,0 +1,30 @@
+# Redocly CLI configuration of the Velexis OpenAPI documents (ADR-0006 "Workflow", task X-007).
+#
+# `pnpm contracts:lint` runs `node scripts/contracts-lint.mjs`, which lints every API below whose document exists
+# with the rules of this file and fails on any error. The platform document is skipped with a notice until the
+# platform plan creates it in M1. API roots are relative to this file. See README.md for the commands.
+apis:
+  ota:
+    root: ../../ota/backend/openapi/velexis-ota-booking-api.openapi.yaml
+  platform:
+    root: ../../platform/backend/openapi/velexis-platform-api.openapi.yaml
+
+# The repository rules: Redocly's `recommended` ruleset plus two explicit settings. Errors fail the lint, warnings
+# are printed only. Do not weaken a rule to get a document through (AGENTS.md §7): fix the document instead.
+#
+# Specification extensions (`x-*`) are valid anywhere OpenAPI 3.1 allows them, and the `struct` rule of
+# `recommended` accepts them, so the extensions of the OTA document (`x-sdk-method`, `x-scope`, `x-amadeus`,
+# `x-tenant-tables`, `x-platform-tables`, `x-reference-tables`, `x-error-codes`, `x-idempotent-by-design`,
+# `x-error-catalogue`, `x-tagGroups`, `x-new-tenant-tables`, `x-examples`, `x-tags`, `x-risk-personal-data-field`)
+# and the planned ones (`x-internal`, `x-edge-only`, `x-sensitive`, `x-milestone`, `x-permission`,
+# `x-sdk-exclude`) lint clean. Never add a rule that rejects them.
+extends:
+  - recommended
+rules:
+  # Route parity, the operations index and the SDK route table key on operationId (ADR-0006, ADR-0019).
+  operation-operationId-unique: error
+  # The documents keep shared schemas that no operation references yet (Amadeus error shapes, planned types).
+  no-unused-components: warn
+
+# No usage data leaves the machine or the CI runner.
+telemetry: off
