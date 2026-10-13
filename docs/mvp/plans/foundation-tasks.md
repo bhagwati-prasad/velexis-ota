@@ -661,8 +661,8 @@ Related: [`../decisions.md`](../decisions.md) (binding), [`../architecture.md`](
   - `shellcheck -S style deploy/scripts/alert.sh` is clean.
 - **Verify:** `systemd-analyze security --offline=true deploy/systemd/velexis-ota-api.service && shellcheck -S style deploy/scripts/alert.sh deploy/systemd/test/units-smoke.sh`
 
-### X-022 · Finalise the Caddyfile with an end-to-end smoke test
-- **Status:** in progress (branch claude/intelligent-bardeen-90hhu7; pending: a green run of the CI job deploy-files with the caddy-smoke.sh step for AC1 "in CI")
+### X-022 · Finalise the Caddyfile with an end-to-end smoke test ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** foundation
 - **Milestone:** M0
 - **Depends on:** X-019
