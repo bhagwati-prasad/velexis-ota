@@ -104,8 +104,10 @@ same() { # what actual expected -> PASS, or FAIL with both values
 # ---- 0. tools and ports -----------------------------------------------------------------------------------
 CADDY="${CADDY:-$(command -v caddy || true)}"
 NODE="${SMOKE_NODE:-$(command -v node || true)}"
-[ -n "$CADDY" ] && [ -x "$CADDY" ] || die "caddy not found: put Caddy $CADDY_VERSION on PATH or set CADDY (see deploy/caddy/test/README.md)"
-[ -n "$NODE" ] && [ -x "$NODE" ] || die "node not found: set SMOKE_NODE"
+if [ -z "$CADDY" ] || [ ! -x "$CADDY" ]; then
+  die "caddy not found: put Caddy $CADDY_VERSION on PATH or set CADDY (see deploy/caddy/test/README.md)"
+fi
+if [ -z "$NODE" ] || [ ! -x "$NODE" ]; then die "node not found: set SMOKE_NODE"; fi
 for tool in curl openssl awk; do command -v "$tool" >/dev/null || die "$tool is missing"; done
 version="$("$CADDY" version | awk '{ print $1 }')"
 [ "$version" = "v$CADDY_VERSION" ] || die "this test pins Caddy $CADDY_VERSION; $CADDY is $version"
