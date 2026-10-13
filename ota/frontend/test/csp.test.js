@@ -34,23 +34,35 @@ function blockAt(/** @type {string} */ text, /** @type {number} */ from, /** @ty
   throw new Error(`Caddyfile: no complete ${what} block`);
 }
 
+/** The body of the snippet `(<name>) { … }` of a Caddyfile, or undefined when there is none. */
+function snippetBody(/** @type {string} */ caddyfile, /** @type {string} */ name) {
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const start = caddyfile.search(new RegExp(`^\\(${escaped}\\)\\s*\\{`, "m"));
+  return start < 0 ? undefined : blockAt(caddyfile, start, `(${name})`);
+}
+
 /**
  * The response headers that the `(storefront)` snippet of a Caddyfile sets in its unconditional `header { … }`
- * block (deletions such as `-Server` left out). Throws when the snippet, the block or the CSP is missing, so the
- * comparison never passes by reading nothing.
+ * block (deletions such as `-Server` left out). The block is either in `(storefront)` itself or in a snippet that
+ * `(storefront)` imports at its top level (X-022 moved it to `(storefront_headers)`, which the storefront 404 page
+ * imports too). Throws when the snippet, the block or the CSP is missing, so the comparison never passes by reading
+ * nothing.
  * @param {string} caddyfile
  * @returns {Record<string, string>}
  */
 function caddyStorefrontHeaders(caddyfile) {
-  const snippet = caddyfile.search(/^\(storefront\)\s*\{/m);
-  if (snippet < 0) {
+  const storefront = snippetBody(caddyfile, "storefront");
+  if (storefront === undefined) {
     throw new Error("Caddyfile: no (storefront) snippet");
   }
-  const body = blockAt(caddyfile, snippet, "(storefront)");
-  const header = body.search(/^\s*header\s*\{/m);
-  if (header < 0) {
-    throw new Error("Caddyfile: no header { … } block in (storefront)");
+  const imported = [...storefront.matchAll(/^\t?import\s+(\S+)\s*$/gm)].map((m) => m[1] ?? "");
+  const body = [storefront, ...imported.map((name) => snippetBody(caddyfile, name) ?? "")].find(
+    (text) => text.search(/^\s*header\s*\{/m) >= 0,
+  );
+  if (body === undefined) {
+    throw new Error("Caddyfile: no header { … } block in (storefront) or a snippet it imports");
   }
+  const header = body.search(/^\s*header\s*\{/m);
   /** @type {Record<string, string>} */
   const headers = {};
   for (const raw of blockAt(body, header, "header").split("\n")) {
@@ -114,6 +126,25 @@ describe("preview CSP and the Caddyfile", () => {
     expect(() =>
       caddyStorefrontHeaders("(storefront) {\n\theader {\n\t\tX-Frame-Options DENY\n\t}\n}\n"),
     ).toThrow(/no Content-Security-Policy/);
+    expect(() => caddyStorefrontHeaders("(storefront) {\n\timport storefront_headers\n}\n")).toThrow(
+      /no header \{ … \} block/,
+    );
+    expect(() =>
+      caddyStorefrontHeaders(
+        "(storefront_headers) {\n\theader {\n\t\tX-Frame-Options DENY\n\t}\n}\n" +
+          "(storefront) {\n\timport storefront_headers\n}\n",
+      ),
+    ).toThrow(/no Content-Security-Policy/);
+  });
+
+  it("[OFE-001 AC2] reads the storefront header block from a snippet that (storefront) imports", () => {
+    const csp = "default-src 'self'";
+    expect(
+      caddyStorefrontHeaders(
+        `(storefront_headers) {\n\theader {\n\t\tContent-Security-Policy "${csp}"\n\t\t-Server\n\t}\n}\n` +
+          "(storefront) {\n\timport access_log\n\timport storefront_headers\n}\n",
+      ),
+    ).toEqual({ "Content-Security-Policy": csp });
   });
 });
 

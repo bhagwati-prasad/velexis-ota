@@ -350,7 +350,7 @@ same "without client edge headers, X-Velexis-Edge is still the edge secret [X-02
 
 # The variants (double slash, upper case, encoded slash, dot segment; sent as they are with --path-as-is) must not
 # slip past the matcher either.
-STOREFRONT_PRIVATE=(/api/internal/x /api/health/ready /api/health/details
+STOREFRONT_PRIVATE=(/api/internal/x /api/health/ready /api/health/ready/ /api/health/details
   /api//internal/x /API/Internal/x /api/internal%2Fx /api/health/live/../ready)
 for path in "${STOREFRONT_PRIVATE[@]}"; do
   fetch "$TENANT" "$path" --path-as-is -H "X-Velexis-Edge: $FORGED_EDGE"

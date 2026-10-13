@@ -237,7 +237,7 @@ const apiProxy = {                                          // server.proxy and 
 | Caddyfile storefront block | Dev server (5173) and `vite preview` (4173), `scripts/vite-plugins.js` |
 |---|---|
 | `handle /api/*`: strip `/api`, `header_up X-Velexis-Edge`, `X-Velexis-Host` | The proxy above (also `Origin`); it refuses to start without `OTA_API_URL`, `VELEXIS_EDGE_SECRET` and a host |
-| `@api_internal` (`/api/internal/*`, `/api/health/ready`) → 404 | Same, plus `/api/health/ready/`, without calling the API; paths are compared like Caddy's `path` matcher (decoded, lower case, cleaned, repeated slashes merged), and a malformed escape gets 400 |
+| `@api_private` (`/api/internal/*`, `/api/health/*` except `/api/health/live`) → 404 | Same, without calling the API; paths are compared like Caddy's `path` matcher (decoded, lower case, cleaned, repeated slashes merged), and a malformed escape gets 400 |
 | `api_unavailable`: 503 `SERVICE_UNAVAILABLE` envelope while the API is down | Same envelope, `Retry-After: 30` |
 | `try_files {path} {path}.html {path}/index.html`, and `rewrite /p/* /p.html` (added to the Caddyfile by OFE-020) | Same rules (dev: page navigations only) |
 | `handle_errors 404` → `/404.html` | `404.html` with status 404 |

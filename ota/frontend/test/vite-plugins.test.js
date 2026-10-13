@@ -323,13 +323,16 @@ describe("the dev and preview servers behave like Caddy for one tenant", () => {
     }
   });
 
-  it("[OFE-001 AC1] answers 404 for /api/internal/* and /api/health/ready without calling the API", async () => {
+  it("[OFE-001 AC1] answers 404 for /api/internal/* and /api/health/* but /api/health/live without calling the API", async () => {
     // Caddy matches the decoded, cleaned path with repeated slashes merged; so must the dev and preview servers.
     const blocked = [
       "/api/internal/tls/ask?domain=x",
       "/api/health/ready",
       "/api/Health/Ready",
       "/api/health/ready/",
+      "/api/health/details",
+      "/api/health/live/",
+      "/api/health/live/../ready",
       "/api//internal/tls/ask",
       "/api/%69nternal/tls/ask",
       "/api/internal%2Ftls/ask",
@@ -341,6 +344,12 @@ describe("the dev and preview servers behave like Caddy for one tenant", () => {
         expect((await httpRequest(`${url}${path}`)).status, `${name} ${path}`).toBe(404);
       }
       expect(upstreamRequests, name).toEqual([]);
+
+      expect((await httpRequest(`${url}/api/health/live`)).status, name).toBe(200);
+      expect(
+        upstreamRequests.map((r) => r.url),
+        name,
+      ).toEqual(["/health/live"]);
     }
   });
 

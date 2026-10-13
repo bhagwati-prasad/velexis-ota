@@ -4,7 +4,7 @@
 // - includePartials: `<!-- @include partials/… -->` in transformIndexHtml (shared markup at build time).
 // - caddyLikeServer: the dev and preview servers answer like the Caddyfile storefront block: `/p/<slug>` is served
 //   by `p.html`, `try_files {path} {path}.html {path}/index.html`, unknown paths get `404.html` with status 404, and
-//   `/api/internal/*` and `/api/health/ready` are 404.
+//   `/api/internal/*` and `/api/health/*` other than `/api/health/live` are 404.
 // - storefrontApiProxy: `/api/*` to OTA_API_URL with `/api` stripped and the edge headers Caddy adds; 503 with the
 //   SERVICE_UNAVAILABLE envelope while the OTA API is down.
 // - STOREFRONT_HEADERS: the production response headers that `vite preview` sends, copied from deploy/caddy/Caddyfile.
@@ -142,10 +142,11 @@ export function resolveStorefrontPath(pathname, roots) {
   return null;
 }
 
-// `@api_internal path /api/internal/* /api/health/ready` of the Caddyfile, tested on `caddyMatchPath(pathname)`.
-// `/api/health/ready/` is blocked too: Caddy keeps the trailing slash and Express routes it like `/health/ready`
-// (X-022 adds it to the Caddyfile).
-const BLOCKED_API = /^\/api\/(?:internal\/|health\/ready\/?$)/;
+// `@api_private` of the Caddyfile storefront block (`path /api/internal/* /api/health/*`, `not path
+// /api/health/live`), tested on `caddyMatchPath(pathname)`. Caddy keeps a trailing slash, so `/api/health/live/` is
+// blocked too.
+const BLOCKED_API = /^\/api\/(?:internal|health)\//;
+const PUBLIC_HEALTH = "/api/health/live";
 const VITE_INTERNAL = /^\/(?:@|__|node_modules\/)/;
 
 /**
@@ -177,7 +178,8 @@ function caddyRoutes({ roots, htmlOnly, notFound, headers }) {
       res.end();
       return;
     }
-    if (BLOCKED_API.test(caddyMatchPath(pathname))) {
+    const matchPath = caddyMatchPath(pathname);
+    if (BLOCKED_API.test(matchPath) && matchPath !== PUBLIC_HEALTH) {
       res.statusCode = 404;
       res.end();
       return;
