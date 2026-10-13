@@ -490,7 +490,7 @@ Related: [`../decisions.md`](../decisions.md) (binding), [`../architecture.md`](
 - **Verify:** `pnpm --filter @velexis/testing build && pnpm --filter @velexis/testing test && pnpm --filter @velexis/testing test:int`
 
 ### X-016 · Local development setup with dev-setup.sh, dev keys and the runbook
-- **Status:** todo
+- **Status:** in progress (branch claude/intelligent-bardeen-90hhu7; pending: first run of the `dev-setup` CI job on GitHub (AC1), optional macOS human step)
 - **Component:** foundation
 - **Milestone:** M0
 - **Depends on:** X-001

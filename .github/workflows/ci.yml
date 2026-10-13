@@ -1,6 +1,8 @@
 # CI for every pull request and every push to main (ADR-0015, ADR-0020).
-# Jobs: plan-lint (no install), deploy-files (shellcheck, Caddyfile, systemd units), build-test (install, format,
-# lint, typecheck, unit, contracts up to date, integration with PostgreSQL 16 + Redis 7.4 + Mailpit, build, guards).
+# Jobs: plan-lint (no install), deploy-files (shellcheck, Caddyfile, systemd units), dev-setup (docs/mvp/
+# local-development.md §2 on a clean runner: PostgreSQL 16 and Redis 7.4 from apt, dev-setup.sh and dev-keys.mjs
+# twice), build-test (install, format, lint, typecheck, unit, contracts up to date, integration with
+# PostgreSQL 16 + Redis 7.4 + Mailpit, build, guards).
 # Agents never change this file to get their own change through (AGENTS.md §7).
 # Third-party actions are pinned to full commit SHAs (tag in the comment); Dependabot proposes updates (X-019).
 name: CI
@@ -62,6 +64,183 @@ jobs:
           if echo "$out" | grep -v -E "Command /usr/(bin/node|local/sbin/velexis-[a-z]+) is not executable|velexis-alert@|caddy.service" | grep -q .; then
             exit 1
           fi
+
+  # X-016: the one-time setup of docs/mvp/local-development.md §2, up to `pnpm dev:keys`, on a clean runner with
+  # native PostgreSQL and Redis (systemd, sudo), exactly as a developer runs it. No service containers here.
+  dev-setup:
+    name: Local development setup
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: bash # -eo pipefail
+    env:
+      PG_MAJOR: "16"
+      REDIS_PIN: "6:7.4*" # packages.redis.io version string of Redis 7.4, as in provision-vm.sh
+      COREPACK_ENABLE_DOWNLOAD_PROMPT: "0"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version-file: .nvmrc # what `nvm install` reads in local-development.md §2
+
+      - name: "[X-016 AC2] shellcheck -S style dev-setup.sh"
+        run: shellcheck -S style deploy/scripts/dev-setup.sh
+
+      - name: "[X-016 AC3] dev-keys.mjs tests"
+        run: node --test tools/dev/dev-keys.test.mjs
+
+      - name: Install PostgreSQL 16 and Redis 7.4 from their apt repositories (local-development.md §1)
+        run: |
+          . /etc/os-release
+          # Only our definitions of the two vendor repositories: the runner image may ship its own.
+          { sudo grep -rlE 'apt\.postgresql\.org|packages\.redis\.io' /etc/apt/sources.list.d/ || true; } | xargs -r sudo rm -f
+          sudo install -d -m 0755 /etc/apt/keyrings
+          curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo gpg --dearmor --yes -o /etc/apt/keyrings/pgdg.gpg
+          echo "deb [signed-by=/etc/apt/keyrings/pgdg.gpg] https://apt.postgresql.org/pub/repos/apt ${VERSION_CODENAME}-pgdg main" \
+            | sudo tee /etc/apt/sources.list.d/pgdg.list
+          curl -fsSL https://packages.redis.io/gpg | sudo gpg --dearmor --yes -o /etc/apt/keyrings/redis.gpg
+          echo "deb [signed-by=/etc/apt/keyrings/redis.gpg] https://packages.redis.io/deb ${VERSION_CODENAME} main" \
+            | sudo tee /etc/apt/sources.list.d/redis.list
+          printf 'Package: redis redis-server redis-tools\nPin: version %s\nPin-Priority: 1001\n' "$REDIS_PIN" \
+            | sudo tee /etc/apt/preferences.d/velexis-redis
+          sudo apt-get update -y
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            "postgresql-${PG_MAJOR}" "postgresql-client-${PG_MAJOR}" redis-server redis-tools
+          pg_lsclusters
+          test "$(pg_lsclusters -h | awk -v v="$PG_MAJOR" '$1 == v && $2 == "main" { print $3 }')" = 5432
+          redis-server --version | grep ' v=7\.4\.'
+
+      - name: "§2: corepack enable, pnpm install, cp .env.example .env.local"
+        run: |
+          corepack enable
+          pnpm --version
+          pnpm install --frozen-lockfile
+          cp .env.example .env.local
+
+      - name: Stop PostgreSQL and Redis, so that dev-setup.sh has to start them
+        run: |
+          sudo systemctl stop postgresql redis-server
+          if pg_isready -h 127.0.0.1 -p 5432; then exit 1; fi
+          if redis-cli -h 127.0.0.1 -p 6379 ping 2>/dev/null; then exit 1; fi
+
+      - name: "[X-016 AC4] dev-setup.sh refuses to run on a host with /etc/velexis"
+        run: |
+          sudo install -d -m 0750 /etc/velexis
+          if bash deploy/scripts/dev-setup.sh > "$RUNNER_TEMP/refused.log" 2>&1; then
+            cat "$RUNNER_TEMP/refused.log"
+            echo "::error::dev-setup.sh ran on a host with /etc/velexis"
+            exit 1
+          fi
+          cat "$RUNNER_TEMP/refused.log"
+          grep -q '/etc/velexis exists' "$RUNNER_TEMP/refused.log"
+          if pg_isready -q -h 127.0.0.1 -p 5432; then
+            echo "::error::dev-setup.sh started PostgreSQL before refusing"
+            exit 1
+          fi
+          sudo rmdir /etc/velexis
+
+      - name: "§2: bash deploy/scripts/dev-setup.sh (first run)"
+        run: bash deploy/scripts/dev-setup.sh
+
+      - name: Record the database and Redis state after the first run
+        run: |
+          cat > "$RUNNER_TEMP/state.sh" <<'EOF'
+          set -euo pipefail
+          cd /
+          # Roles, memberships, the database, schema privileges and default privileges. Password hashes are left
+          # out: bootstrap.sql resets the same development passwords on every run (new salt), by design.
+          sudo -u postgres psql -X -q -At -v ON_ERROR_STOP=1 -d postgres <<'SQL'
+          SELECT rolname, rolsuper, rolinherit, rolcreaterole, rolcreatedb, rolcanlogin, rolreplication,
+                 rolbypassrls, rolconnlimit, rolconfig
+          FROM pg_roles WHERE rolname LIKE 'velexis%' ORDER BY 1;
+          SELECT r.rolname, m.rolname, am.admin_option, am.inherit_option, am.set_option
+          FROM pg_auth_members am JOIN pg_roles r ON r.oid = am.roleid JOIN pg_roles m ON m.oid = am.member
+          WHERE m.rolname LIKE 'velexis%' ORDER BY 1, 2;
+          SELECT datname, pg_get_userbyid(datdba), pg_encoding_to_char(encoding), datcollate, datctype, datacl
+          FROM pg_database WHERE datname LIKE 'velexis%' ORDER BY 1;
+          \connect velexis
+          SELECT nspname, pg_get_userbyid(nspowner), nspacl FROM pg_namespace
+          WHERE nspname IN ('public', 'platform', 'reference') ORDER BY 1;
+          SELECT pg_get_userbyid(defaclrole), defaclnamespace::regnamespace, defaclobjtype, defaclacl
+          FROM pg_default_acl ORDER BY 1, 2, 3;
+          SQL
+          sudo sha256sum /etc/redis/redis.conf
+          EOF
+          bash "$RUNNER_TEMP/state.sh" > "$RUNNER_TEMP/state-1.txt"
+          cat "$RUNNER_TEMP/state-1.txt"
+
+      - name: "[X-016 AC2] a second run of dev-setup.sh succeeds and changes nothing"
+        run: |
+          bash deploy/scripts/dev-setup.sh | tee "$RUNNER_TEMP/run-2.log"
+          grep -q 'password already set (unchanged)' "$RUNNER_TEMP/run-2.log"
+          bash "$RUNNER_TEMP/state.sh" > "$RUNNER_TEMP/state-2.txt"
+          diff -u "$RUNNER_TEMP/state-1.txt" "$RUNNER_TEMP/state-2.txt"
+
+      - name: "[X-016 AC1] the five roles exist and every login of .env.local works"
+        run: |
+          get() { sed -n "s/^$1=//p" .env.local; }
+          roles="$(cd / && sudo -u postgres psql -X -At -c "SELECT string_agg(rolname, ' ' ORDER BY rolname) FROM pg_roles WHERE rolname LIKE 'velexis%'")"
+          test "$roles" = "velexis_migrator velexis_ota_app velexis_platform_app velexis_provisioner velexis_test_admin"
+          # Each URL must log in as the role it names. The assignment (not an echo argument) makes a failed
+          # login fail the step under bash -e.
+          login() { # <url> <role>
+            local user
+            user="$(psql "$1" -X -At -c 'SELECT current_user')"
+            echo "$2: $user"
+            test "$user" = "$2"
+          }
+          login "$(get DATABASE_URL)" velexis_platform_app
+          login "$(get DATABASE_MIGRATOR_URL)" velexis_migrator
+          login "$(get DATABASE_PROVISIONER_URL)" velexis_provisioner
+          login "$(get TEST_DATABASE_ADMIN_URL)" velexis_test_admin
+          # The OTA backend's DATABASE_URL, from the ota/backend/.env.local example line of .env.example.
+          ota_url="$(sed -n 's|^#[[:space:]]*ota/backend/\.env\.local:[[:space:]]*DATABASE_URL=||p' .env.local)"
+          test -n "$ota_url"
+          login "$ota_url" velexis_ota_app
+          test "$(psql "$ota_url" -X -At -c 'SHOW search_path')" = pg_catalog
+          # The integration-test harness (ADR-0022) creates databases owned by velexis_migrator.
+          psql "$(get TEST_DATABASE_ADMIN_URL)" -X -q \
+            -c 'CREATE DATABASE velexis_ci_probe OWNER velexis_migrator' -c 'DROP DATABASE velexis_ci_probe'
+
+      - name: "[X-016 AC1] Redis needs the password of REDIS_URL, also after a restart"
+        run: |
+          # redis-cli -u sends an empty user name for redis://:password@, so the password is passed on its own.
+          password="$(sed -n 's|^REDIS_URL=redis://[^:@]*:\([^@]*\)@.*|\1|p' .env.local)"
+          test -n "$password"
+          check() {
+            local anonymous
+            anonymous="$(redis-cli -h 127.0.0.1 -p 6379 ping)"
+            echo "without a password: $anonymous"
+            case "$anonymous" in NOAUTH*) ;; *) echo "::error::Redis did not refuse a client without a password"; exit 1 ;; esac
+            test "$(REDISCLI_AUTH="$password" redis-cli -h 127.0.0.1 -p 6379 ping)" = PONG
+          }
+          check
+          sudo systemctl restart redis-server
+          for _ in $(seq 1 20); do redis-cli -h 127.0.0.1 -p 6379 ping >/dev/null 2>&1 && break; sleep 0.5; done
+          check
+
+      - name: "§2: pnpm dev:keys, twice ([X-016 AC3])"
+        run: |
+          pnpm dev:keys
+          (cd .local/keys && sha256sum -- *) > "$RUNNER_TEMP/keys-1.txt"
+          node tools/dev/dev-keys.mjs | tee "$RUNNER_TEMP/keys-2.log"
+          grep -q '0 created, 0 replaced, 5 kept' "$RUNNER_TEMP/keys-2.log"
+          (cd .local/keys && sha256sum -- *) | diff -u "$RUNNER_TEMP/keys-1.txt" -
+          ls -la .local/keys
+          test "$(stat -c %a .local/keys)" = 700
+          test "$(find .local/keys -type f | wc -l)" -eq 5
+          for f in master-v1.key api-key-pepper document-url.key platform-jwt-ed25519.pem ota-jwt-ed25519.pem; do
+            test "$(stat -c %a ".local/keys/$f")" = 600
+          done
+          openssl pkey -in .local/keys/ota-jwt-ed25519.pem -noout -text | grep 'ED25519 Private-Key'
+          # The key and storage paths of .env.local point at what dev-keys created.
+          get() { sed -n "s/^$1=//p" .env.local; }
+          test -f "$(get MASTER_KEY_DIR)/master-$(get MASTER_KEY_CURRENT | sed 's/^local://').key"
+          for var in API_KEY_PEPPER_FILE JWT_PRIVATE_KEY_FILE DOCUMENT_URL_KEY_FILE; do
+            test -f "$(get "$var")"
+          done
+          test -d "$(get STORAGE_DIR)"
 
   build-test:
     name: Build and test
@@ -129,7 +308,7 @@ jobs:
             -c "GRANT velexis_migrator TO velexis_test_admin"
 
       - name: Generate local key files
-        run: if [ -f tools/dev/dev-keys.mjs ]; then pnpm dev:keys; fi
+        run: pnpm dev:keys
 
       - name: Format
         run: pnpm format:check

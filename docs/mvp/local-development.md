@@ -10,14 +10,14 @@ Related: [`AGENTS.md`](../../AGENTS.md) §10 (command cheat sheet), [`architectu
 |---|---|---|
 | Node.js | 22 LTS (`.nvmrc`) | `nvm install` in the repository root (`brew install nvm`) |
 | pnpm | 9 (exact version in `package.json` → `packageManager`) | `corepack enable` (ships with Node 22) |
-| PostgreSQL | 16 | PGDG apt repository: `sudo apt install postgresql-16` (`brew install postgresql@16`) |
-| Redis | 7.4 | packages.redis.io apt repository: `sudo apt install redis-server` (`brew install redis`) |
+| PostgreSQL | 16 | PGDG apt repository: `sudo apt install postgresql-16` (`brew install postgresql@16`; keg-only, `dev-setup.sh` finds its `psql` itself) |
+| Redis | 7.4 | packages.redis.io apt repository, pinned to 7.4: `sudo apt install redis-server redis-tools` (`brew install redis`) |
 | Mailpit | 1.2x | `sudo bash < <(curl -sL https://raw.githubusercontent.com/axllent/mailpit/develop/install.sh)` (`brew install mailpit`) |
 | Stripe CLI | 1.x | Stripe's apt repository or the release binary (`brew install stripe/stripe-cli/stripe`); only from M3 |
 | age, jq | any | `sudo apt install age jq` (`brew install age jq`); age only for backup work |
 | Caddy | 2.8 (optional) | Only to try the Caddyfile locally |
 
-The exact commands for the vendor repositories are the same as in [`provision-vm.sh`](../../deploy/scripts/provision-vm.sh) (`step_packages`).
+The exact commands for the vendor repositories are the same as in [`provision-vm.sh`](../../deploy/scripts/provision-vm.sh) (`step_packages`); the `dev-setup` job of [`ci.yml`](../../.github/workflows/ci.yml) runs them on a clean `ubuntu-24.04` runner.
 
 ## 2. One-time setup
 
@@ -27,19 +27,24 @@ nvm install && corepack enable
 pnpm install                                   # all workspaces, exact versions from pnpm-lock.yaml
 
 cp .env.example .env.local                     # shared local values; never commit .env.local
-bash deploy/scripts/dev-setup.sh               # roles, database "velexis", test admin role (X-016)
-pnpm dev:keys                                  # .local/keys/: master key, pepper, JWT keys, document URL key
+bash deploy/scripts/dev-setup.sh               # roles, database "velexis", test admin role, Redis password (sudo on Linux)
+pnpm dev:keys                                  # .local/keys/: master key, pepper, JWT keys, document URL key; .local/storage/
 pnpm build                                     # shared packages first (apps import their dist/)
 pnpm db:migrate                                # platform + reference migrations
 pnpm db:seed:reference                         # airports, airlines, countries, currencies, time zones, aircraft
 ```
 
-What `dev-setup.sh` does, so you can do it by hand if needed:
+Run both scripts as your normal user. They are idempotent: a second run changes nothing, so re-run them whenever something looks wrong. The `dev-setup` job of [`ci.yml`](../../.github/workflows/ci.yml) runs this section up to `pnpm dev:keys` on a clean `ubuntu-24.04` runner, twice, on every pull request.
 
-1. Starts PostgreSQL and Redis if they are installed but stopped.
-2. Runs [`deploy/postgres/bootstrap.sql`](../../deploy/postgres/bootstrap.sql) as the `postgres` superuser with the **development** passwords of `.env.example` (`dev_migrator`, `dev_provisioner`, `dev_platform`, `dev_ota`): creates the database `velexis`, the roles `velexis_migrator`, `velexis_provisioner`, `velexis_platform_app`, `velexis_ota_app`, the `platform` and `reference` schemas and the default privileges.
-3. Creates `velexis_test_admin` (`LOGIN CREATEDB`, password `dev_test_admin`) for the integration-test harness, which clones a migrated template database per test file.
-4. Sets the local Redis password to `dev_redis` (`CONFIG SET requirepass` and `CONFIG REWRITE`), matching `REDIS_URL`.
+What [`dev-setup.sh`](../../deploy/scripts/dev-setup.sh) does, so you can do it by hand if needed. It first refuses to run when `/etc/velexis` exists: that folder marks a production host, which [`provision-vm.sh`](../../deploy/scripts/provision-vm.sh) sets up with generated secrets. Then, in order:
+
+1. Starts PostgreSQL and Redis if they are installed but stopped (`systemctl start postgresql` and `redis-server` with sudo on Ubuntu, `service …` without systemd, `brew services start postgresql@16` and `redis` on macOS).
+2. Runs [`deploy/postgres/bootstrap.sql`](../../deploy/postgres/bootstrap.sql) as the PostgreSQL superuser (`sudo -u postgres psql` on Linux, your own user with Homebrew) with the **development** passwords of `.env.example` (`dev_migrator`, `dev_provisioner`, `dev_platform`, `dev_ota`), passed as `\set` lines on stdin: creates the database `velexis`, the roles `velexis_migrator`, `velexis_provisioner`, `velexis_platform_app`, `velexis_ota_app`, the `platform` and `reference` schemas and the default privileges. The passwords are reset on every run.
+3. Creates `velexis_test_admin` (`LOGIN CREATEDB`, password `dev_test_admin`, member of `velexis_migrator`) for the integration-test harness, which clones a migrated template database per test file ([ADR-0022](adr/0022-shared-test-support-package.md)).
+4. If Redis answers without a password, sets it to `dev_redis` (`CONFIG SET requirepass`, then `CONFIG REWRITE` so it survives a restart), matching `REDIS_URL`. A Redis that already has a password is left alone; if the rewrite is refused, it warns and you add `requirepass dev_redis` to `redis.conf` yourself.
+5. Logs in over TCP as every role of `.env.example`, checks that Redis needs the `REDIS_URL` password, and prints a summary. It exits with an error if a check fails.
+
+What [`pnpm dev:keys`](../../tools/dev/README.md) does: it creates `.local/keys/` (mode `0700`) with the five key files of [ADR-0010](adr/0010-secrets-envelope-encryption.md) (`master-v1.key`, `api-key-pepper`, `document-url.key`, `platform-jwt-ed25519.pem`, `ota-jwt-ed25519.pem`, each `0600`) and `.local/storage/`. It never overwrites an existing file unless you pass `--force`. The key and storage paths of `.env.example` are relative to the repository root, where `.local/` is.
 
 Per-app overrides go into `<app>/.env.local` (for example the OTA backend's `DATABASE_URL` with the `velexis_ota_app` role and its own `JWT_PRIVATE_KEY_FILE`). The precedence is: real environment, then `<app>/.env.local`, then the root `.env.local` (`@velexis/config`, task X-002).
 
@@ -72,7 +77,7 @@ pnpm --filter @velexis/db exec node dist/cli/migrate.js tenant --schema tenant_d
 pnpm db:codegen                                                                  # after a migration: regenerate Kysely types, commit them
 ```
 
-To start over: `dropdb -U postgres velexis` (as the `postgres` user), then `bash deploy/scripts/dev-setup.sh && pnpm db:migrate && pnpm db:seed:reference`.
+To start over: `sudo -u postgres dropdb --force velexis` (macOS: `dropdb --force velexis`), then `bash deploy/scripts/dev-setup.sh && pnpm db:migrate && pnpm db:seed:reference`.
 
 ## 4. E-mail with Mailpit
 
@@ -111,6 +116,7 @@ stripe listen --forward-to localhost:3100/webhooks/stripe/billing        # platf
 | End-to-end | `pnpm test:e2e` | the whole stack built and running, Mailpit, the stub, Stripe CLI for payment journeys |
 | Types and lint | `pnpm typecheck`, `pnpm lint`, `pnpm format:check` | nothing running |
 | Plans | `pnpm plan:lint` | nothing |
+| Local setup scripts | `node --test tools/dev/dev-keys.test.mjs`, `shellcheck -S style deploy/scripts/dev-setup.sh` | nothing (the `dev-setup` CI job also runs §2 on a clean runner) |
 
 Integration tests build one migrated template database per run (platform, reference, `tenant_alpha`, `tenant_beta`) as `velexis_test_admin`, then clone it per test file, so tests never touch your `velexis` development data.
 
@@ -130,7 +136,13 @@ Running Caddy locally with real host names needs local DNS entries and `local_ce
 | `password authentication failed for user "velexis_…"` | Roles created with other passwords | Re-run `dev-setup.sh` (it resets the development passwords) |
 | `permission denied for table …` as the OTA role | Platform read grants not applied, or the table is not on the read list | `pnpm db:migrate` (applies `R__ota_read_access.sql`); the OTA backend may only read the tables of ADR-0004 |
 | `relation "bookings" does not exist` in the OTA backend | Query ran outside `tenantTx` (the OTA role's `search_path` is `pg_catalog`) | Use `tenantTx`; never set `search_path` yourself |
-| `NOAUTH Authentication required` from Redis | Local Redis has no password yet | `dev-setup.sh` step 4, or remove the password from `REDIS_URL` |
+| `NOAUTH Authentication required` from Redis | The client sends no password (Redis has `dev_redis` since `dev-setup.sh`) | Check `REDIS_URL` in `.env.local`; with redis-cli use `REDISCLI_AUTH=dev_redis redis-cli` |
+| `WRONGPASS` from `redis-cli -u "$REDIS_URL"` | redis-cli sends an empty user name for `redis://:password@`; the apps do not | `REDISCLI_AUTH=dev_redis redis-cli` instead of `-u` |
+| `dev-setup.sh` warns that Redis refused `CONFIG REWRITE` | Redis runs without a writable configuration file | Add `requirepass dev_redis` to `redis.conf` and restart Redis, or the password is gone after the next restart |
+| `dev-setup.sh` warns that Redis has another password | Your Redis had a password before | Put that password in `REDIS_URL` in `.env.local`, or set Redis's password to `dev_redis` |
+| `ERROR: /etc/velexis exists` from `dev-setup.sh` | The machine looks like a production host | Never run it there; on a development machine remove the stray folder |
+| `invalid LC_COLLATE locale name: "C.UTF-8"` from `dev-setup.sh` on macOS | `bootstrap.sql` creates the database with the `C.UTF-8` locale, which macOS may lack (not yet verified on macOS) | Create the database first, then re-run: `createdb -O velexis_migrator -E UTF8 --locale=C -T template0 velexis` (upper/lower case of non-ASCII letters then differ from the VM) |
+| Key file `… is readable by others` or missing at start-up | `.local/keys/` not created, or a file's mode was changed | `pnpm dev:keys` (creates missing files and tightens loose modes; `--force` replaces all keys and invalidates local encrypted data) |
 | `OOM command not allowed when used memory > 'maxmemory'` | A cache key without a TTL filled Redis | Find it with `redis-cli --bigkeys`; every cache key needs a TTL |
 | Integration tests hang at start | PostgreSQL or Redis not running, or `TEST_DATABASE_ADMIN_URL` wrong | `pg_isready`, `redis-cli ping`, check `.env.local` |
 | Stale types after an OpenAPI or migration change | Generated files not rebuilt | `pnpm contracts:generate`, `pnpm db:codegen`, `pnpm build` |
