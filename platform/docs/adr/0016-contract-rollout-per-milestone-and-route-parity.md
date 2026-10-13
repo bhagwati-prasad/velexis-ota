@@ -3,6 +3,7 @@
 **Status:** Accepted
 **Date:** 2026-10-12
 **Deciders:** Platform delivery lead. Decided during planning; revisit when the pending-operations list is empty at the M5 exit, or if the OTA plan needs to change a `tenant.*` message in a way that is not backward compatible.
+**Revisions:** 2026-10-12 (planning review): the M1 admin slice is split in two tasks (PBE-007 and PBE-066), because 47 operations did not fit one task; seven tasks now edit the document.
 
 ## Context
 
@@ -21,7 +22,8 @@ Two smaller questions were also open:
    |---|---|---|
    | M1 identity, plans, internal | PBE-005 | Auth, account, `listPlans`, `tlsAsk`, health |
    | M1 tenants, team, keys, reads | PBE-006 | Tenants and lifecycle (not `goLive`), team (not `createConsoleToken`), API keys, M1 reads of domains, connections and subscription |
-   | M1 admin | PBE-007 | Every admin operation marked M1 |
+   | M1 admin, part 1 | PBE-007 | Admin auth and dashboard, tenants, provisioning jobs and queues (21 operations) |
+   | M1 admin, part 2 | PBE-066 | Plans and subscriptions, Amadeus accounts and offices, accounts, platform admins and audit (26 operations) |
    | M3–M4 | PBE-037 | `updatePaymentConnection`, `createConsoleToken`, `updateAmadeusConnection` |
    | M5 portal | PBE-041 | `goLive`, custom domains, own Amadeus, Stripe Connect and API keys, payout account, settlements, Checkout, Customer Portal, invoices |
    | M5 admin and webhooks | PBE-042 | Every admin operation marked M5, both Stripe webhook receivers |
@@ -46,7 +48,7 @@ Two smaller questions were also open:
 ### Negative
 
 - The pending list is one more file to keep in step; a task that forgets to remove its entries fails the parity test (which is the intent).
-- The document is edited by six tasks. They are ordered by dependencies (PBE-005 → PBE-006 → PBE-007 → PBE-037 → PBE-041 → PBE-042) so that two agents never edit it at the same time.
+- The document is edited by seven tasks. They are ordered by dependencies (PBE-005 → PBE-006 → PBE-007 → PBE-066 → PBE-037 → PBE-041 → PBE-042) so that two agents never edit it at the same time.
 
 ### Follow-ups
 
