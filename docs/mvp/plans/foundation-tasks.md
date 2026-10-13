@@ -111,8 +111,8 @@ Related: [`../decisions.md`](../decisions.md) (binding), [`../architecture.md`](
   - `pnpm lint` passes with `n/no-process-env` active for every package except this one.
 - **Verify:** `pnpm --filter @velexis/config build && pnpm --filter @velexis/config test && pnpm --filter @velexis/config lint`
 
-### X-003 · Create @velexis/logger with the central redaction list
-- **Status:** todo
+### X-003 · Create @velexis/logger with the central redaction list ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** foundation
 - **Milestone:** M0
 - **Depends on:** X-001
