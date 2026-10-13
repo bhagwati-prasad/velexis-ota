@@ -10,8 +10,9 @@ Related: [`implementation-plan.md`](implementation-plan.md), [`agent-tasks.md`](
 |---|---|
 | People | One developer, no agents, five working days a week |
 | Effort per task size | S = ½ day, M = 1 day, L = 2 days, including tests, docs and self-review against the definition of done |
-| Platform work | 109 tasks = 135.5 days (M0 2.5, M1 76.5, M2 1.5, M3 1.5, M4 4, M5 42, M6 7.5) |
-| Buffer | 11.5 days inside platform weeks (Weeks 1, 12, 17, 29, 31) |
+| Platform work | 110 tasks = 138 days (M0 2.5, M1 79, M2 1.5, M3 1.5, M4 4, M5 42, M6 7.5, of which PBE-064's 1 day falls after the launch) |
+| Buffer | 10 days inside platform weeks (Weeks 1, 17, 29, 31) |
+| Planning-review shift | The planning review split PBE-007 into PBE-007 and PBE-066 (2 more days) and resized PBE-035 from S to M (½ day more, taken from Week 12's buffer). Every task from PBE-008 in Week 3 to PAD-010 in Week 16 therefore starts two working days later than its week shows. Week 17's buffer drops from five to three days, and the M1 exit week does not move. |
 | Length | **31 platform weeks**, of which three (Weeks 18–20) are split weeks holding only 7.5 platform days |
 | Start | Week 1 starts when the foundation tasks `X-001` to `X-016` are merged (the foundation's own weekly plan schedules them) |
 | Week numbers | Platform-plan weeks. The roadmap maps them to calendar weeks; between Weeks 17 and 21 it places several OTA-only weeks |
@@ -24,7 +25,7 @@ Related: [`implementation-plan.md`](implementation-plan.md), [`agent-tasks.md`](
 |---|---|---|---|---|
 | 1 | M0 → M1 | Scaffolds, job contracts, migration `0002` | PBE-001, PFE-001, PAD-001, PBE-004, PBE-002 | Runs after foundation M0; OTA scaffolds may sit in the same calendar weeks |
 | 2 | M1 | Data proven, first contract slices | PBE-003, PBE-005, PBE-006 | Platform only |
-| 3 | M1 | Admin contract, HTTP pipeline, audit | PBE-007, PBE-008, PBE-010 | Platform only |
+| 3 | M1 | Admin contract (two slices), HTTP pipeline, audit; two days spill into Week 4 (§1) | PBE-007, PBE-066, PBE-008, PBE-010 | Platform only |
 | 4 | M1 | Redis, queues, guards, outbox start | PBE-009, PBE-012, PBE-011 (1/2) | Platform only |
 | 5 | M1 | Sign-up and sign-in API, portal client | PBE-011 (2/2), PBE-013, PBE-014, PFE-002 (1/2) | Platform only |
 | 6 | M1 | MFA, portal shell and sign-up pages | PFE-002 (2/2), PBE-015, PFE-003, PFE-005 | Platform only |
@@ -38,7 +39,7 @@ Related: [`implementation-plan.md`](implementation-plan.md), [`agent-tasks.md`](
 | 14 | M1 | Admin tenants, lifecycle, jobs | PBE-029, PBE-030, PBE-031, PAD-003, PAD-004 (1/2) | Platform only |
 | 15 | M1 | Admin pages, accounts and audit API | PAD-004 (2/2), PAD-005, PAD-006, PBE-032 | Platform only |
 | 16 | M1 (checkpoint M1d) | Plans, pool, accounts pages, admin journeys | PBE-033, PAD-007, PAD-008, PAD-009, PAD-010 | Platform only |
-| 17 | M1 exit | Buffer, deploy, M1 demo | — (buffer) | Platform only |
+| 17 | M1 exit | Shift absorbed, buffer, deploy, M1 demo | — (two days absorb the shift of Weeks 3–16, three days buffer) | Platform only |
 | 18 | M2 | Cross-backend proof | PBE-036, PAD-011 | **Split week** inside OTA M2: 1.5 platform days, 3.5 OTA days; needs OF-01 |
 | 19 | M3 | Statement descriptor | PBE-037, PBE-038, PFE-016 | **Split week** inside OTA M3: 1.5 platform days, 3.5 OTA days |
 | 20 | M4 | Console SSO, Amadeus settings | PBE-039, PBE-040, PFE-017, PFE-018, PFE-019 | **Split week** inside OTA M4: 4 platform days, 1 OTA day; needs OF-09 |
@@ -52,7 +53,7 @@ Related: [`implementation-plan.md`](implementation-plan.md), [`agent-tasks.md`](
 | 28 | M5 | Settlement UI, go-live | PFE-025, PAD-013, PBE-061, PFE-026 | Overlap with OTA M5 (live environment) |
 | 29 | M5 exit | M5 journeys, buffer | PFE-027, PAD-015 | OTA M5 must be done before switches go on |
 | 30 | M6 | Security review, performance, runbooks | PBE-062, PBE-063, PBE-065, PFE-028 (1/2) | **Overlap:** shared hardening (OTA M6, X-029 … X-032) |
-| 31 | M6 exit | E2E suites, switch removal, launch | PFE-028 (2/2), PAD-016, PBE-064 | Shared launch week |
+| 31 | M6 exit | E2E suites, launch | PFE-028 (2/2), PAD-016 (PBE-064 runs after the launch) | Shared launch week |
 
 ```mermaid
 timeline
@@ -80,7 +81,7 @@ timeline
 
 | Day | Work | Done when |
 |---|---|---|
-| Monday | **PBE-001** (M): package, three entry points, `config.ts`, health module, integration test; fix the reference-data rows in the platform docs | `pnpm --filter @velexis/platform-backend build` and `test:int` pass; `/health/ready` answers 503 with Redis stopped |
+| Monday | **PBE-001** (M): package, three entry points, `config.ts`, health module, integration test; the `ref:load` shortcut for `pnpm db:seed:reference` | `pnpm --filter @velexis/platform-backend build` and `test:int` pass; `/health/ready` answers 503 with Redis stopped |
 | Tuesday | **PFE-001** (M): portal package, Tailwind, shadcn/ui, config, health routes | `.next/standalone` builds; health tests pass |
 | Wednesday | Morning **PAD-001** (S): admin package with `noindex`. Afternoon: **M0 check**, run `deploy/scripts/pack-release.sh` locally and confirm the three apps are in the release; start **PBE-004** (queue names, message schemas) | Release contains `dist/main.js`, `dist/worker.js`, `dist/cli.js` and both standalone outputs |
 | Thursday | Morning: finish **PBE-004** (fixtures, `validateJob`, type tests). Afternoon: start **PBE-002**, concatenate the three SQL blocks into `0002_add_mvp_platform_deltas.sql` | `pnpm --filter @velexis/api-types test` passes |
@@ -108,8 +109,8 @@ Each week lists its goal, the tasks in order with their days, the deliverables, 
 
 ### Week 3 — M1: admin contract, HTTP pipeline, audit
 
-- **Tasks:** PBE-007 (2 days), PBE-008 (2 days), PBE-010 (1 day).
-- **Deliverables:** the M1 contract complete (98 operations); validation interceptor, error filter, ids, `createTestApp()`, the route parity test with every M1 operation pending; `AuditService` and the platform redaction paths.
+- **Tasks:** PBE-007 (2 days), PBE-066 (2 days), PBE-008 (first day). PBE-008's second day and PBE-010 (1 day) run on Monday and Tuesday of Week 4, and every later M1 week starts two days late until Week 17 absorbs it (§1).
+- **Deliverables:** the M1 contract complete (98 operations, the admin part in two slices of 21 and 26); validation interceptor, error filter, ids, `createTestApp()`, the route parity test with every M1 operation pending; `AuditService` and the platform redaction paths.
 - **Demo:** a request with an unknown field answers `VALIDATION_FAILED` without echoing the value; the parity test fails when a fake route is added.
 - **Overlap:** none.
 
@@ -171,7 +172,7 @@ Each week lists its goal, the tasks in order with their days, the deliverables, 
 
 ### Week 12 — M1 checkpoint M1b: real provisioning and the end-to-end harness
 
-- **Tasks:** PFE-012 (1 day), PFE-013 (1 day), PBE-034 (1 day), PBE-035 (½ day), PFE-014 (1 day); ½ day buffer.
+- **Tasks:** PFE-012 (1 day), PFE-013 (1 day), PBE-034 (1 day), PBE-035 (1 day: the cross-backend harness, the provisioning test and the CI step after `Build`), PFE-014 (1 day).
 - **Deliverables:** team and invitation pages; read-only domains, Amadeus, payments and billing pages; daily purge and `dev:seed`; the cross-backend provisioning test in CI; `tools/e2e` with the smoke spec and the nightly workflow.
 - **Demo (M1b):** an OTA created in the portal becomes active through the **real** OTA worker; `psql` shows `tenant_acme` with the same migrations as the platform mirror.
 - **Overlap:** gate of PBE-035, OF-11 merged. If it is late, do Week 13's PBE-028 and PAD-002 first and come back to PBE-035.
@@ -206,7 +207,7 @@ Each week lists its goal, the tasks in order with their days, the deliverables, 
 
 ### Week 17 — M1 exit: buffer, deploy and demo
 
-- **Work:** catch up on any slipped task; run the full M1 exit list of [`implementation-plan.md`](implementation-plan.md#m1--platform-core); deploy the release to the VM with the Deploy workflow; grant the first admin with `node dist/cli.js admin:grant`; check the backups (X-024).
+- **Work:** the first two days finish the work shifted from Weeks 3–16 (§1); then catch up on any slipped task; run the full M1 exit list of [`implementation-plan.md`](implementation-plan.md#m1--platform-core); deploy the release to the VM with the Deploy workflow; grant the first admin with `node dist/cli.js admin:grant`; check the backups (X-024).
 - **Demo:** the M1 demo script of the implementation plan, on the real hosts `https://platform.example.com` and `https://admin.platform.example.com`.
 - **Overlap:** none. After this week the roadmap moves to OTA M2 for several weeks.
 
@@ -303,8 +304,8 @@ Each week lists its goal, the tasks in order with their days, the deliverables, 
 
 ### Week 31 — M6 exit: suites, switch removal and launch
 
-- **Tasks:** PFE-028 (last ½ day), PAD-016 (1 day), PBE-064 (1 day, only if the switches have been on in production for one release; otherwise it moves to the first week after launch); 2½ days of buffer for launch.
-- **Deliverables:** three green nightly runs of the portal and admin projects; switches removed (or scheduled); the launch checklist completed with the developer.
+- **Tasks:** PFE-028 (last ½ day), PAD-016 (1 day); 3½ days of buffer for launch. PBE-064 (1 day) is not in this week: the switches stay off until their outside approvals, so it runs after the launch, in the first release after all six have been on in production for one release ([ADR-0025](../../../docs/mvp/adr/0025-roadmap-scheduling-and-tracking.md) item 4).
+- **Deliverables:** three green nightly runs of the portal and admin projects; the launch checklist completed with the developer; PBE-064 scheduled after the launch.
 - **Demo:** launch.
 - **Overlap:** shared launch week with the OTA group.
 
@@ -312,7 +313,7 @@ Each week lists its goal, the tasks in order with their days, the deliverables, 
 
 | Rule | Why |
 |---|---|
-| Buffer is 11.5 days: ½ day in Weeks 1 and 12, all of Week 17, 3 days in Week 29, 2½ days in Week 31 | Placed at milestone exits, where integration surprises appear |
+| Buffer is 10 days: ½ day in Week 1, 3 days in Week 17 (after absorbing the two-day shift of Weeks 3–16), 3 days in Week 29, 3½ days in Week 31 | Placed at milestone exits, where integration surprises appear |
 | A task more than one day late moves the next task of the same epic, never a task of another epic that is on time | Keeps checkpoints demonstrable |
 | When a cross-group gate (OF-11, OF-01, OF-09, OF-12) is not met, do the next task without the gate and return to the gated one; never write a fake of the OTA side outside the test doubles of PADR-0017 | Keeps the platform moving without hiding integration risk |
 | If a week slips by more than two days, re-plan on Friday: move the lowest-value task of the milestone (for example a non-critical admin page) after the exit demo, never a test or a security step | The exit criteria stay honest |

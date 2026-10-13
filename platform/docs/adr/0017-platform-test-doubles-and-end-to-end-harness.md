@@ -3,6 +3,7 @@
 **Status:** Accepted
 **Date:** 2026-10-12
 **Deciders:** Platform delivery lead. Decided during planning; revisit when the OTA worker starts in under five seconds in tests (then the fake may go), or when the nightly end-to-end run takes more than 30 minutes.
+**Revisions:** 2026-10-12 (planning review): point 2 places `test:xb` after the CI `Build` step.
 
 ## Context
 
@@ -21,6 +22,8 @@ Some journeys need Stripe's test mode over the network (Checkout, Customer Porta
    - console token redemption (M4, PFE-019).
 
    Each such task starts with a **gate** step naming the OTA feature it needs (OF-11, OF-01, OF-09 in [`../../../ota/docs/scope.md`](../../../ota/docs/scope.md)). If the gate is not met, the agent stops and reports instead of faking it.
+
+   `test:xb` starts the **built** OTA worker and API (`ota/backend/dist/`). In CI it therefore runs as its own step after the `Build` step: `pnpm test` and `pnpm test:int` build only each package's dependencies (`^build`), and `ota/backend` is not a dependency of `platform/backend`.
 3. **The platform plan creates `tools/e2e` in M1.** PFE-014 creates `@velexis/e2e` with the `portal` and `platform-admin` Playwright projects, the stack starter, Mailpit and TOTP helpers, the axe helper and `.github/workflows/e2e.yml` (nightly, on demand, and on pull requests labelled `e2e`). The OTA plan adds its `storefront` and `ota-admin` projects to the same configuration. This brings platform-only journeys forward; it does not change the tool, the location or the cadence of ADR-0015, and the first full-stack booking journey stays in M3.
 4. **Stripe network journeys are a separate project.** Journeys that drive Stripe Checkout or the Customer Portal run in the Playwright project `portal-stripe`, executed only by the nightly job when the Stripe test secrets are configured. Pull-request CI uses signed fixture events ([X-028](../../../docs/mvp/plans/foundation-tasks.md)) and a mocked Stripe client. No test is skipped with `.skip`; the project is simply not selected.
 5. **Test data for end-to-end runs** is arranged through the public APIs where possible, and otherwise through `tools/e2e/support/seed.ts`, which uses `@velexis/testing` builders against the end-to-end database (for example a draft settlement, which needs Stripe balance transactions in real life).
