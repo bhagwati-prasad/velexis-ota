@@ -39,6 +39,9 @@ ota/sdk/
   package.json             "type": "module", exports, "sideEffects": false, no dependencies
   tsconfig.json            checkJs project (src/), noEmit
   tsconfig.build.json      declaration-only emit to dist/types/
+  vitest.config.js         Node by default; cookie-mode tests opt into happy-dom; unit + contract tests
+  turbo.json               the outputs of `generate` (none until SDK-002 writes the route table)
+  CHANGELOG.md             kept by hand (§9)
   src/
     index.js               public entry: createVelexisClient, VERSION, re-exports        (mirrors index.d.ts)
     shared.js              error classes, isVelexisError, Page, shared typedefs          (mirrors shared.d.ts)
@@ -74,6 +77,7 @@ ota/sdk/
     contract/              tsc project against the contract + runtime parity test
     smoke/                 against a running OTA backend wired to the Amadeus stub
     fixtures/              response bodies, validated against the OpenAPI document
+    helpers/fake-fetch.js  queue of canned answers; records method, URL, headers and body of every request
   docs/
     extensions.md          options, methods and behaviour the contract does not describe
     types-and-builds.md    JSDoc typing, contract test, route table, bundles, size budget
@@ -192,7 +196,7 @@ The additions are specified in [`../docs/api-changes.md`](../docs/api-changes.md
 The details, with the `tsconfig` files and the route-table format, are in [`docs/types-and-builds.md`](docs/types-and-builds.md).
 
 - **Where types come from.** Schema types come only from the generated OTA types (`@velexis/api-types`), the module the contract itself imports ([ADR-0006](../../docs/mvp/adr/0006-contract-first-openapi.md)). Each public module declares the same aliases as its `.d.ts` counterpart (`/** @typedef {import("./types.js").Schemas["FlightOffer"]} FlightOffer */`). Namespace types such as `FlightsApi` are **inferred from the factories** (`ReturnType<typeof createFlightsApi>`), so each method's JSDoc is written once. Overloads use `@overload`; `Page<T>` is a small class with `@template T`.
-- **Checking.** `pnpm --filter @velexis/ota-sdk typecheck` runs `tsc` with `allowJs`, `checkJs`, `strict`, `noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`, `noEmit`, `types: []` (no Node globals). A type error fails CI like in TypeScript code.
+- **Checking.** `pnpm --filter @velexis/ota-sdk typecheck` runs `tsc` with `allowJs`, `checkJs`, `strict`, `noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`, `noEmit`, `types: []` (no Node globals). A type error fails CI like in TypeScript code. `test/unit/typecheck.test.js` reads `tsconfig.json` as `tsc` does and compiles small JavaScript fixtures with its options, so turning off `checkJs`, a strict option or `types: []` fails a test instead of silently passing the check.
 - **Emitting.** `tsc -p tsconfig.build.json` (`emitDeclarationOnly`) writes `dist/types/*.d.ts`, one file per source module.
 - **Contract test** (`test/contract/`, every PR):
   1. a `tsc --noEmit` project maps `velexis-contract` to [`docs/velexis-sdk/sdk/src/index.d.ts`](../../docs/velexis-sdk/sdk/src/index.d.ts), `@velexis/ota-sdk` to `dist/types/index.d.ts`, and `@velexis/api-types` to the generated package for both sides;
@@ -213,7 +217,7 @@ The contract files under `docs/velexis-sdk/sdk/src/` are never edited; additions
 | `dist/velexis-sdk.iife.js` + `.map` | IIFE exposing `window.Velexis` | Plain HTML pages: `<script src="/vendor/velexis-sdk.iife.js"></script>`, then `Velexis.createVelexisClient(…)` |
 | `dist/types/*.d.ts` | Declarations | Consumers' type checking |
 
-- `package.json` `exports`: `"."` → `{ types, development: "./src/index.js", import: "./dist/velexis-sdk.mjs" }`, `"./iife"` → the IIFE; `"sideEffects": false`. ESM only, no CommonJS build.
+- `package.json` `exports`: `"."` → `{ types, development: "./src/index.js", import: "./dist/velexis-sdk.mjs" }`, `"./iife"` → the IIFE; `"sideEffects": false`. ESM only, no CommonJS build. Until SDK-007 adds the bundles, `"."` points at `./src/index.js` and `build` runs only `tsc -p tsconfig.build.json` (the declarations).
 - **Size budget:** `scripts/check-size.mjs` fails when the ESM bundle exceeds **25 KB** min+gzip. If `console` ever pushes past it, it moves to a separate entry, `@velexis/ota-sdk/console` (the ADR-0019 follow-up).
 - **Published types are self-contained:** for npm the build copies the OTA part of `@velexis/api-types` into `dist/types/` and rewrites the specifier ([OADR-0016](../docs/adr/0016-sdk-packaging-and-type-contract.md)).
 
@@ -228,15 +232,16 @@ The contract files under `docs/velexis-sdk/sdk/src/` are never edited; additions
 | End to end | `tools/e2e/specs/storefront/` | Playwright | Cookie mode through the real storefront journeys ([storefront testing](../frontend/README.md#13-testing)) |
 
 - **Fixtures** in `test/fixtures/` are response bodies validated against the working OpenAPI document with the shared Ajv helper of `@velexis/testing`, so the fake responses cannot drift from the contract.
+- **Fake fetch** (`test/helpers/fake-fetch.js`): `createFakeFetch(answers)` returns `{ fetch, requests, enqueue, remaining, lastRequest }`; tests pass `fake.fetch` as the client's `fetch` option. Answers are used in call order: a canned `{ status, headers, body, delayMs, error }` (an object body is sent as JSON), a ready `Response`, or a function of the recorded request. Every call is recorded with `method`, `url`, `path`, `searchParams`, `headers` (lower-case names), `body`, `json` (the body parsed when it is JSON), `signal` and `init`. `delayMs` runs on `setTimeout`, so fake timers drive it, and `Infinity` waits for an abort; an aborted signal rejects with its reason, as `fetch` does. `errorResponse(status, code, extra)` builds the API's error envelope with `X-Request-Id`, and `networkError()` a failed `fetch`. A call with no answer left rejects with the request named, so a test cannot pass on a missing answer. It behaves the same in Node and in happy-dom, whose `Headers` keep the caller's name case (both are tested).
 - Tests never use the real network or sleep; they follow [ADR-0015](../../docs/mvp/adr/0015-testing-strategy.md) and [conventions §10](../../docs/mvp/conventions.md#10-testing).
 
-Commands (`pnpm --filter @velexis/ota-sdk <script>`): `generate` (route table and assertions from `ota/backend/openapi/`; CI fails on a diff), `typecheck`, `test` (unit + contract), `test:smoke`, `build` (bundles, declarations, size check).
+Commands (`pnpm --filter @velexis/ota-sdk <script>`): `generate` (route table and assertions from `ota/backend/openapi/`; CI fails on a diff), `typecheck`, `test` (unit + contract), `test:smoke`, `build` (bundles, declarations, size check), `lint`, `clean`. Until SDK-002 `generate` only prints a note, until SDK-007 `build` emits only the declarations, and SDK-014 adds `test:smoke`. `typecheck` and `build` read the types of the built `@velexis/api-types`: Turborepo builds it first; for a single package run `pnpm --filter @velexis/api-types build` once.
 
 ## 9. Versioning, publishing and what is deferred
 
 **Versioning.** Semantic versioning. `0.x` while the SDK lives only in the workspace (`workspace:*` in the storefront and the OTA admin). `1.0.0` is the first npm release at M6. A change that the contract test would reject is a major version; new methods and options are minor; fixes are patches. `CHANGELOG.md` is kept by hand. A method that will be removed is marked `@deprecated` in JSDoc for at least one minor release first.
 
-**Publishing (M6 launch checklist).** A manual GitHub Actions workflow publishes `@velexis/ota-sdk` to npm with provenance, after build, contract test and size check, from a tag `sdk-vX.Y.Z`. The IIFE is then available at versioned CDN URLs that mirror npm (for example `https://cdn.jsdelivr.net/npm/@velexis/ota-sdk@1.0.0/dist/velexis-sdk.iife.js`); the release notes give its SRI hash, and the guide recommends self-hosting the file.
+**Publishing (M6 launch checklist).** A manual GitHub Actions workflow publishes `@velexis/ota-sdk` to npm with provenance, after build, contract test and size check, from a tag `sdk-vX.Y.Z`. The IIFE is then available at versioned CDN URLs that mirror npm (for example `https://cdn.jsdelivr.net/npm/@velexis/ota-sdk@1.0.0/dist/velexis-sdk.iife.js`); the release notes give its SRI hash, and the guide recommends self-hosting the file. Until then `package.json` says `"private": true`, so nothing is published by accident; SDK-015 removes it.
 
 **Deferred (post-MVP):**
 

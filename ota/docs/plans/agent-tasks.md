@@ -91,7 +91,8 @@ Common commands: backend `pnpm --filter @velexis/ota-backend test` and `test:int
   - A lint rule or test fails on any `NEXT_PUBLIC_` variable in the app.
 - **Verify:** `pnpm --filter @velexis/ota-admin test && pnpm --filter @velexis/ota-admin build && test -f ota/admin/.next/standalone/ota/admin/server.js`
 
-### SDK-001 · Scaffold the SDK package with checkJs, version and test setup
+### SDK-001 · Scaffold the SDK package with checkJs, version and test setup ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-sdk
 - **Milestone:** M0
 - **Depends on:** X-001, X-008

@@ -1,0 +1,28 @@
+{
+  "name": "@velexis/ota-sdk",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Velexis OTA JavaScript SDK: vanilla ES2022 modules with JSDoc types checked by tsc --checkJs and no runtime dependencies, one method per OpenAPI operation of the OTA booking API (ADR-0019, OADR-0016).",
+  "license": "UNLICENSED",
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": "./src/index.js",
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "generate": "echo 'ota-sdk: no route table yet; SDK-002 adds scripts/generate-operations.mjs'",
+    "typecheck": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.build.json",
+    "lint": "eslint .",
+    "test": "vitest run",
+    "clean": "rm -rf dist coverage"
+  },
+  "devDependencies": {
+    "@velexis/api-types": "workspace:*",
+    "esbuild": "0.25.12",
+    "happy-dom": "17.6.3",
+    "typescript": "5.6.3",
+    "vitest": "3.2.7"
+  }
+}

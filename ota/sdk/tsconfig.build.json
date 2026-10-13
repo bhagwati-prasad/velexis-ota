@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "display": "@velexis/ota-sdk: declaration-only emit of src/ to dist/types/, one .d.ts per module (OADR-0016 point 7, ota/sdk/docs/types-and-builds.md §3).",
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "declaration": true,
+    "emitDeclarationOnly": true,
+    "declarationMap": true,
+    "rootDir": "src",
+    "outDir": "dist/types"
+  },
+  "include": ["src/**/*.js"]
+}
