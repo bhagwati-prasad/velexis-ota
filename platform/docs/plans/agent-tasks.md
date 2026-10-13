@@ -458,7 +458,7 @@ Common commands: backend `pnpm --filter @velexis/platform-backend test`, `test:i
 ### PBE-020 · Implement the Velexis Amadeus accounts and office pool admin endpoints
 - **Component:** platform-backend
 - **Milestone:** M1
-- **Depends on:** PBE-007, PBE-010, PBE-011, PBE-012
+- **Depends on:** PBE-066, PBE-010, PBE-011, PBE-012, X-027
 - **Size:** L
 - **Read first:** platform/docs/flows/amadeus-connection.md §A, §B, failure handling; platform/docs/adr/0012-amadeus-office-pool.md; docs/mvp/adr/0012-amadeus-account-model.md; platform/docs/api-inventory-admin.md §1 and §5; platform/docs/scope.md PF-90
 - **Files:** `platform/backend/src/supplier-connections/supplier-connections.module.ts`, `platform/backend/src/supplier-connections/amadeus-accounts.service.ts`, `platform/backend/src/supplier-connections/amadeus-accounts.repository.ts`, `platform/backend/src/supplier-connections/amadeus-offices.service.ts`, `platform/backend/src/supplier-connections/amadeus-offices.repository.ts`, `platform/backend/src/supplier-connections/supplier-connections.repository.ts`, `platform/backend/src/supplier-connections/amadeus-oauth.gateway.ts`, `platform/backend/src/supplier-connections/verification.processor.ts`, `platform/backend/src/supplier-connections/pool-level.scheduler.ts`, `platform/backend/src/admin/admin.module.ts`, `platform/backend/src/admin/admin-amadeus.controller.ts`, `platform/backend/test/integration/supplier-connections/amadeus-accounts.int.test.ts`, `platform/backend/test/integration/supplier-connections/amadeus-offices.int.test.ts`, `platform/backend/test/contract/pending-operations.ts`
@@ -518,16 +518,17 @@ Common commands: backend `pnpm --filter @velexis/platform-backend test`, `test:i
 - **Depends on:** PBE-022
 - **Size:** L
 - **Read first:** platform/docs/flows/provisioning.md §4 and failure handling; platform/docs/adr/0001-tenant-provisioning-orchestration.md (items 4, 6, 7 and follow-ups); platform/docs/scope.md PF-11; platform/docs/api-inventory.md §7 (`getProvisioning`, `retryProvisioning`, `revealInitialKeys`)
-- **Files:** `platform/backend/src/provisioning/reconciler.scheduler.ts`, `platform/backend/src/provisioning/reconciler.test.ts`, `platform/backend/src/provisioning/failure-handler.ts`, `platform/backend/src/provisioning/purge-reveals.scheduler.ts`, `platform/backend/src/provisioning/lifecycle.controller.ts`, `platform/backend/src/provisioning/lifecycle.service.ts`, `platform/backend/src/provisioning/tenant-events.processor.ts`, `platform/backend/test/integration/provisioning/failures.int.test.ts`, `platform/backend/test/integration/provisioning/reveal.int.test.ts`, `platform/backend/test/contract/pending-operations.ts`
+- **Files:** `platform/backend/src/provisioning/reconciler.scheduler.ts`, `platform/backend/src/provisioning/reconciler.test.ts`, `platform/backend/src/provisioning/failure-handler.ts`, `platform/backend/src/provisioning/failure-handler.test.ts`, `platform/backend/src/provisioning/purge-reveals.scheduler.ts`, `platform/backend/src/provisioning/lifecycle.controller.ts`, `platform/backend/src/provisioning/lifecycle.service.ts`, `platform/backend/src/provisioning/tenant-events.processor.ts`, `platform/backend/test/integration/provisioning/failures.int.test.ts`, `platform/backend/test/integration/provisioning/reveal.int.test.ts`, `platform/backend/test/contract/pending-operations.ts`
 - **Steps:**
-  1. `tenant.provision_failed`: `retryable` and `attempt < max_attempts` puts the job back to `queued` with `scheduled_at = now() + 30 s × 2^attempt` and the error; otherwise the job and the tenant become `failed`, audit `tenant.provisioning_failed`, `ops.alert` and `tenant.provisioning_failed` e-mails. A post-step error that exhausts BullMQ's attempts marks the job `failed` with the step name.
-  2. `provisioning.reconcile` (every 5 minutes): dispatch due `queued` jobs whose gate is open; for `running` jobs past `locked_until`, look up `bullmqJobId(jobId, attempt)` in BullMQ: `waiting`, `active` or `delayed` extends the lease; missing or failed without an event counts as a retryable failure. Send one `ops.alert` when a job stays `running` across two leases (PADR-0001 follow-up). Never touch jobs younger than their lease.
+  1. `failure-handler.ts`, one entry point for every job kind: a retryable failure with `attempt < max_attempts` puts the job back to `queued` with `scheduled_at = now() + 30 s × 2^attempt` and the error; otherwise the job becomes `failed`, and the effect depends on the kind (PADR-0001 item 7). A `provision` job also sets the tenant `failed` (conditional on `status = 'provisioning'`), audits `tenant.provisioning_failed` and sends the `ops.alert` and `tenant.provisioning_failed` e-mails. A `migrate`, `suspend` or `resume` job never changes `tenants.status` and sends only `ops.alert`. `tenant.provision_failed` events go through it. A post-step error that exhausts BullMQ's attempts marks the job `failed` with the step name.
+  2. `provisioning.reconcile` (every 5 minutes): dispatch due `queued` jobs whose gate is open; for `running` jobs past `locked_until`, look up `bullmqJobId(jobId, attempt)` in BullMQ: `waiting`, `active` or `delayed` extends the lease; missing or failed without an event counts as a retryable failure of that job and goes through `failure-handler.ts`, whatever its kind. Send one `ops.alert` when a job stays `running` across two leases (PADR-0001 follow-up). Never touch jobs younger than their lease.
   3. `getProvisioning` (member): tenant status, job steps, attempts, error, `initialKeysAvailable`. `retryProvisioning` (owner): only for a `failed` tenant (`409 PROVISIONING_NOT_RETRYABLE`), sets it back to `provisioning`, inserts a new `provision` job and dispatches it, audit.
   4. `revealInitialKeys` (owner): decrypts `reveal_ciphertext`, answers with `no-store`, and in the same update sets `revealed_at`, `revealed_by_account_id` and erases the ciphertext; afterwards, or 24 hours after `finished_at`, `410 KEYS_ALREADY_REVEALED`. `provisioning.purge_reveals` (hourly) erases unrevealed ciphertext older than 24 hours.
 - **Acceptance:**
   - The progress endpoint shows the steps and `active` once done [PF-11 AC1].
   - After 5 retryable failures from the fake worker the tenant is `failed`; an owner retry creates a new job and the tenant becomes active [PF-11 AC2].
   - With a `silent` fake worker and the clock moved past the lease, the reconciler re-dispatches as attempt 2.
+  - Unit test of `failure-handler.ts`: an exhausted `suspend`, `resume` or `migrate` job leaves `tenants.status` unchanged and sends only `ops.alert`; only an exhausted `provision` job of a `provisioning` tenant sets the tenant `failed`.
   - The keys are revealed once; a second reveal and a reveal after 24 hours answer 410 [PF-11 AC3].
 - **Verify:** `pnpm --filter @velexis/platform-backend test && pnpm --filter @velexis/platform-backend test:int -- provisioning`
 
@@ -589,16 +590,17 @@ Common commands: backend `pnpm --filter @velexis/platform-backend test`, `test:i
 - **Depends on:** PBE-022
 - **Size:** M
 - **Read first:** platform/docs/api-inventory-resources.md §2–§4 (list rows); platform/docs/api-inventory-admin.md §9 (`tlsAsk`); docs/mvp/adr/0018-hosted-storefront-custom-domains.md; platform/docs/adr/0004-custom-domain-verification.md (`ask` rules); platform/docs/scope.md PF-40, PF-42
-- **Files:** `platform/backend/src/domains/domains.controller.ts`, `platform/backend/src/domains/domains.service.ts`, `platform/backend/src/domains/tls-ask.controller.ts`, `platform/backend/src/domains/tls-ask.service.ts`, `platform/backend/src/domains/tls-ask.service.test.ts`, `platform/backend/src/supplier-connections/connections.controller.ts`, `platform/backend/src/payment-connections/payment-connections.controller.ts`, `platform/backend/src/common/redis/invalidation.subscriber.ts`, `platform/backend/test/integration/domains/tls-ask.int.test.ts`, `platform/backend/test/integration/connections/connection-reads.int.test.ts`, `platform/backend/test/contract/pending-operations.ts`
+- **Files:** `platform/backend/src/domains/domains.controller.ts`, `platform/backend/src/domains/domains.service.ts`, `platform/backend/src/domains/tls-ask.controller.ts`, `platform/backend/src/domains/tls-ask.service.ts`, `platform/backend/src/domains/tls-ask.service.test.ts`, `platform/backend/src/domains/tls-ask.negative-cache.ts`, `platform/backend/src/supplier-connections/connections.controller.ts`, `platform/backend/src/payment-connections/payment-connections.controller.ts`, `platform/backend/src/common/redis/invalidation.subscriber.ts`, `platform/backend/test/integration/domains/tls-ask.int.test.ts`, `platform/backend/test/integration/connections/connection-reads.int.test.ts`, `platform/backend/test/contract/pending-operations.ts`
 - **Steps:**
   1. `listDomains` (member): sub-domain and custom domains with DNS records, deadline, last check and TLS fields.
   2. `listAmadeusConnections` and `listPaymentConnections` (owner, admin, finance): test and live rows mapped without any ciphertext column; `pendingSubmission` stays `null` until M5.
-  3. `tlsAsk` (`internal`): `200` for `<key>.<STOREFRONT_BASE_DOMAIN>` of a tenant in `provisioning`, `active` or `suspended`, or for a verified custom storefront domain of an `active` tenant whose plan has `customDomains > 0` while `FEATURE_CUSTOM_DOMAINS` is on; `404` otherwise and for invalid host syntax. Cache each answer 60 s in `tlsask:<host>`.
-  4. `invalidation.subscriber.ts`: the API process subscribes to `vx:invalidate` and deletes `tlsask:<host>` on `domain` events and the tenant's hosts on `tenant` events.
+  3. `tlsAsk` (`internal`): `200` for `<key>.<STOREFRONT_BASE_DOMAIN>` of a tenant in `provisioning`, `active` or `suspended`, or for a verified custom storefront domain of an `active` tenant whose plan has `customDomains > 0` while `FEATURE_CUSTOM_DOMAINS` is on; `404` otherwise. Order (PADR-0004 item 6): first the host syntax check (lower-cased, at most 253 characters, labels of 1–63 characters of `a-z`, `0-9` and inner `-`, at least two labels, not an IP), which answers `404` with no cache or database access; then Redis `tlsask:<host>` (60 s, **positive answers only**); then `tls-ask.negative-cache.ts`, a bounded in-process LRU (10 000 entries, 60 s) for `404`s of well-formed hosts; then the database.
+  4. `invalidation.subscriber.ts`: the API process subscribes to `vx:invalidate` and, on `domain` events and for the tenant's hosts on `tenant` events, deletes both the `tlsask:<host>` key and the matching negative-cache entries.
 - **Acceptance:**
   - `ask` answers 200 for the sub-domain of an active, provisioning or suspended tenant and 404 for a failed one [PF-40 AC1, PF-42 AC1].
   - A pending custom domain, a plan without custom domains, or the switch off gives 404; a request with `X-Forwarded-For` gives 404.
-  - A cached answer is dropped by a `domain` invalidation within one second.
+  - A cached answer is dropped by a `domain` invalidation within one second, and a host refused a moment before is accepted right after its domain is verified.
+  - 10 000 asks for random well-formed unknown hosts create no `tlsask:` key (`SCAN` in the integration test), and the negative cache never holds more than 10 000 entries; a 300-character host answers 404 without a database query.
   - A `viewer` gets 403 on the connection lists; responses contain no field ending in `Ciphertext`.
 - **Verify:** `pnpm --filter @velexis/platform-backend test && pnpm --filter @velexis/platform-backend test:int -- domains connections`
 
@@ -640,7 +642,7 @@ Common commands: backend `pnpm --filter @velexis/platform-backend test`, `test:i
 ### PBE-030 · Implement suspend, resume, migrate and connection status
 - **Component:** platform-backend
 - **Milestone:** M1
-- **Depends on:** PBE-029, PBE-019
+- **Depends on:** PBE-029, PBE-019, PBE-023
 - **Size:** M
 - **Read first:** platform/docs/adr/0014-tenant-suspension-and-resume.md; platform/docs/flows/provisioning.md §5; platform/docs/api-inventory-admin.md §3; platform/docs/scope.md PF-82; platform/docs/architecture.md §6.1
 - **Files:** `platform/backend/src/provisioning/suspension.service.ts`, `platform/backend/src/provisioning/migrate.service.ts`, `platform/backend/src/provisioning/tenant-events.processor.ts`, `platform/backend/src/admin/admin-tenants.controller.ts`, `platform/backend/test/integration/provisioning/suspension.int.test.ts`, `platform/backend/test/integration/provisioning/migrate.int.test.ts`, `platform/backend/test/contract/pending-operations.ts`
@@ -649,12 +651,13 @@ Common commands: backend `pnpm --filter @velexis/platform-backend test`, `test:i
   2. `adminMigrateTenant` (`targetVersion?`): a `migrate` job dispatched as `tenant.migrate`; `CONFLICT` when a migrate job is active or the tenant has no schema yet.
   3. Event handling: `tenant.suspended` and `tenant.resumed` mark their job `succeeded`; `tenant.migrated` mirrors `tenant_schema_migrations` and `schema_version` (also when `jobId` is `null`, from the deploy fan-out); `tenant.migration_failed` marks the job `failed` and sends `ops.alert`.
   4. `adminSetConnectionStatus` (**reason**): `active` or `disabled` for the `amadeus` or `payment` connection of an environment; audit; `connection` invalidation.
-  5. Until the OTA consumer for `tenant.suspend` exists (PADR-0014 follow-up, OTA plan), the job may end `failed` without changing the tenant status; the status switch is the effect. The admin shows the job state.
+  5. Until the OTA consumer for `tenant.suspend` and `tenant.resume` exists (OBE-074, M4), the real OTA worker rejects these jobs as unknown names. The reconciler (PBE-023) retries them, then marks them `failed` with an `ops.alert`, and the tenant keeps its status because `failure-handler.ts` never changes `tenants.status` for these kinds (PADR-0001 item 7). The status switch is the effect. The admin shows the job state.
 - **Acceptance:**
   - Suspend sets the status, writes one audit row with `actor_type = 'platform_admin'`, publishes the `tenant` invalidation, sends `tenant.suspend` and e-mails the owners [PF-82].
   - Resume of a `billing` suspension without a valid subscription answers 409; of an `admin` suspension it succeeds.
   - A fan-out `tenant.migrated` with `jobId: null` updates the mirror and `schema_version`.
   - Disabling the test Amadeus connection publishes `{type: "connection", tenantId}`.
+  - With a `silent` fake worker, a suspend job ends `failed` after the reconciler's attempts (FakeClock past each lease) and the tenant stays `suspended`; the same holds for a resume job and an `active` tenant [PADR-0001 item 7].
 - **Verify:** `pnpm --filter @velexis/platform-backend test:int -- provisioning admin`
 
 ### PBE-031 · Implement admin provisioning jobs and queue inspection
@@ -714,7 +717,7 @@ Common commands: backend `pnpm --filter @velexis/platform-backend test`, `test:i
 ### PBE-034 · Add the daily purge and the dev:seed command
 - **Component:** platform-backend
 - **Milestone:** M1
-- **Depends on:** PBE-020, PBE-023, PBE-026
+- **Depends on:** PBE-020, PBE-023, PBE-026, X-026
 - **Size:** M
 - **Read first:** platform/docs/architecture.md §5 (`purge.daily`); platform/backend/README.md §5 (`dev:seed`); platform/docs/flows/amadeus-connection.md §A (item 4)
 - **Files:** `platform/backend/src/common/purge.scheduler.ts`, `platform/backend/src/common/purge.repository.ts`, `platform/backend/src/dev/dev-seed.command.ts`, `platform/backend/src/cli.ts`, `platform/backend/package.json`, `platform/backend/test/integration/common/purge.int.test.ts`, `platform/backend/test/integration/dev/dev-seed.int.test.ts`, `platform/backend/README.md`
@@ -730,17 +733,17 @@ Common commands: backend `pnpm --filter @velexis/platform-backend test`, `test:i
 - **Component:** platform-backend
 - **Milestone:** M1
 - **Depends on:** PBE-023, PBE-034
-- **Size:** S
+- **Size:** M
 - **Read first:** platform/docs/flows/provisioning.md ("Tests that prove it"); platform/docs/adr/0017-platform-test-doubles-and-end-to-end-harness.md (item 2); ota/docs/adr/0007-tenant-migration-runner-and-provisioning-worker.md
 - **Files:** `platform/backend/test/cross-backend/provisioning.xb.test.ts`, `platform/backend/test/cross-backend/stack.ts`, `platform/backend/vitest.xb.config.ts`, `platform/backend/package.json`, `.github/workflows/ci.yml`
 - **Steps:**
   1. **Gate:** the OTA provisioning worker (OTA feature OF-11) and the OTA worker build (`ota/backend/dist/worker.js`) are merged. If not, stop and report.
-  2. `stack.ts` starts the platform API and worker and the OTA worker against one `createTestDatabase()` database and one Redis database, with `DATABASE_MIGRATOR_URL` for the OTA worker.
+  2. `stack.ts` starts the platform API and worker and the OTA worker against one `createTestDatabase()` database and one Redis database, with `DATABASE_PROVISIONER_URL` (role `velexis_provisioner`, ADR-0004) for the OTA worker. `PBE-036` and `PFE-019` reuse it.
   3. The test signs up and verifies an account through the API (token from Mailpit), creates an OTA, polls `getProvisioning` until `active` (at most 60 seconds), and asserts: `tenant_<key>` exists with the same migrations as `platform.tenant_schema_migrations`, one test office is assigned and two test keys exist.
-  4. Add the script `test:xb` and a step in the CI `build-test` job that runs it after `test:int`.
+  4. Add the script `test:xb` and a step in the CI `build-test` job that runs it **after the `Build` step**. `pnpm test:int` only builds each package's dependencies (`^build`), so `ota/backend/dist/worker.js` exists only after `pnpm build`.
 - **Acceptance:**
   - A new OTA becomes `active` through the real OTA worker within 60 seconds, with matching ledgers, one office and two keys.
-  - The test runs in CI.
+  - The test runs in CI after the `Build` step, and fails clearly (not by timeout) when `ota/backend/dist/worker.js` is missing.
 - **Verify:** `pnpm --filter @velexis/ota-backend build && pnpm --filter @velexis/platform-backend test:xb`
 
 ### PFE-002 · Add the API client, session cookies and middleware to the portal
@@ -748,10 +751,10 @@ Common commands: backend `pnpm --filter @velexis/platform-backend test`, `test:i
 - **Milestone:** M1
 - **Depends on:** PFE-001, PBE-005
 - **Size:** L
-- **Read first:** platform/frontend/README.md §5, §6, §7; docs/mvp/conventions.md §3; docs/mvp/adr/0014-frontend-stack-nextjs-tailwind.md; platform/docs/api-inventory.md §3 (error catalogue)
-- **Files:** `platform/frontend/src/lib/api.ts`, `platform/frontend/src/lib/session.ts`, `platform/frontend/src/lib/session.test.ts`, `platform/frontend/src/lib/errors.ts`, `platform/frontend/src/lib/errors.test.ts`, `platform/frontend/src/lib/strings.ts`, `platform/frontend/src/lib/csp.ts`, `platform/frontend/src/middleware.ts`, `platform/frontend/src/middleware.test.ts`, `platform/frontend/package.json`
+- **Read first:** platform/frontend/README.md §5, §6, §7; docs/mvp/conventions.md §3; docs/mvp/adr/0014-frontend-stack-nextjs-tailwind.md; platform/docs/api-inventory.md §3 (error catalogue); platform/docs/adr/0019-end-user-ip-forwarding-from-the-portal-and-admin.md
+- **Files:** `platform/frontend/src/lib/api.ts`, `platform/frontend/src/lib/session.ts`, `platform/frontend/src/lib/session.test.ts`, `platform/frontend/src/lib/errors.ts`, `platform/frontend/src/lib/errors.test.ts`, `platform/frontend/src/lib/strings.ts`, `platform/frontend/src/lib/csp.ts`, `platform/frontend/src/middleware.ts`, `platform/frontend/src/middleware.test.ts`, `platform/frontend/src/lib/end-user.ts`, `platform/frontend/src/lib/end-user.test.ts`, `platform/frontend/src/lib/config.ts`, `platform/frontend/.env.example`, `deploy/env/platform-frontend.env.example`, `platform/frontend/package.json`
 - **Steps:**
-  1. `lib/api.ts` (`server-only`): `openapi-fetch` typed by `@velexis/api-types/platform`, base `PLATFORM_API_URL`, bearer from `__Host-vxp_at`, `cache: "no-store"`, forwards `X-Request-Id`; returns `{data}` or `{error: {code, fieldErrors, details}}`.
+  1. `lib/api.ts` (`server-only`): `openapi-fetch` typed by `@velexis/api-types/platform`, base `PLATFORM_API_URL`, bearer from `__Host-vxp_at`, `cache: "no-store"`, forwards `X-Request-Id`; returns `{data}` or `{error: {code, fieldErrors, details}}`. Every call, including the refresh in `middleware.ts`, adds the headers of `lib/end-user.ts` (README §5, PADR-0019): `X-Velexis-End-User-IP` (right-most `X-Forwarded-For` entry, `127.0.0.1` without one), `X-Velexis-End-User-Agent` (at most 512 characters) and `X-Velexis-Bff-Key` from the new config variable `PLATFORM_BFF_KEY` (added to `.env.example` and `deploy/env/platform-frontend.env.example` as `@@PLATFORM_BFF_KEY@@`).
   2. `lib/session.ts` (`server-only`): read and write the cookies of README §6 (`HttpOnly; Secure; SameSite=Lax; Path=/`, `__Host-` prefix; `SameSite=Strict` for MFA, reset and invitation cookies); `refresh()` single-flighted in-process by refresh-token hash for 10 seconds.
   3. `middleware.ts`: refresh an expired access token before rendering; send unauthenticated `(app)` requests to `/sign-in?next=<relative path>` (absolute or protocol-relative `next` values are dropped) and unverified accounts to `/verify-pending`; set the nonce-based CSP of README §7 from `lib/csp.ts`, with `form-action 'self'` plus the origin of `PUBLIC_OTA_ADMIN_URL`.
   4. `lib/errors.ts` maps every `PlatformErrorCode` to a user message in `lib/strings.ts`; the test fails when a code of the generated catalogue has no message.
@@ -760,6 +763,7 @@ Common commands: backend `pnpm --filter @velexis/platform-backend test`, `test:i
   - `next=https://evil.example/x` and `next=//evil.example` are ignored.
   - Every platform error code has a message.
   - A test scanning `src/` fails if a file with `"use client"` imports `lib/api` or `lib/session`.
+  - `lib/end-user.ts` takes the right-most `X-Forwarded-For` entry and ignores a browser-supplied left-most one, falls back to `127.0.0.1`, cuts the user agent to 512 characters; every mocked API call carries the three headers [PADR-0019].
 - **Verify:** `pnpm --filter @velexis/platform-frontend test && pnpm --filter @velexis/platform-frontend typecheck`
 
 ### PFE-003 · Add the portal app shell and shared components
@@ -954,7 +958,7 @@ Common commands: backend `pnpm --filter @velexis/platform-backend test`, `test:i
 ### PFE-014 · Create the tools/e2e Playwright harness
 - **Component:** platform-frontend
 - **Milestone:** M1
-- **Depends on:** PBE-001, PFE-001, PAD-001, X-025
+- **Depends on:** PBE-001, PFE-001, PAD-001, X-025, X-026
 - **Size:** M
 - **Read first:** platform/docs/adr/0017-platform-test-doubles-and-end-to-end-harness.md; docs/mvp/adr/0015-testing-strategy.md (End-to-end, CI); docs/mvp/local-development.md; packages/testing/README.md (`mailpit`)
 - **Files:** `tools/e2e/package.json`, `tools/e2e/tsconfig.json`, `tools/e2e/playwright.config.ts`, `tools/e2e/support/stack.ts`, `tools/e2e/support/seed.ts`, `tools/e2e/support/mailpit.ts`, `tools/e2e/support/totp.ts`, `tools/e2e/support/a11y.ts`, `tools/e2e/support/fixtures.ts`, `tools/e2e/specs/smoke.e2e.ts`, `tools/e2e/README.md`, `.github/workflows/e2e.yml`
@@ -992,10 +996,10 @@ Common commands: backend `pnpm --filter @velexis/platform-backend test`, `test:i
 - **Milestone:** M1
 - **Depends on:** PAD-001, PBE-028
 - **Size:** L
-- **Read first:** platform/admin/README.md §2 (sign-in routes) and §4; platform/docs/adr/0006-platform-admin-access-and-audit.md; platform/docs/adr/0009-platform-api-surface-and-authentication.md; docs/mvp/conventions.md §3
-- **Files:** `platform/admin/src/lib/api.ts`, `platform/admin/src/lib/session.ts`, `platform/admin/src/lib/session.test.ts`, `platform/admin/src/lib/errors.ts`, `platform/admin/src/lib/strings.ts`, `platform/admin/src/middleware.ts`, `platform/admin/src/app/(auth)/sign-in/page.tsx`, `platform/admin/src/app/(auth)/sign-in/actions.ts`, `platform/admin/src/app/(auth)/sign-in/mfa/page.tsx`, `platform/admin/src/app/(auth)/sign-in/mfa/actions.ts`, `platform/admin/src/app/sign-out/route.ts`, `platform/admin/src/app/(auth)/sign-in/sign-in.test.tsx`
+- **Read first:** platform/admin/README.md §2 (sign-in routes) and §4; platform/docs/adr/0006-platform-admin-access-and-audit.md; platform/docs/adr/0009-platform-api-surface-and-authentication.md; platform/docs/adr/0019-end-user-ip-forwarding-from-the-portal-and-admin.md; docs/mvp/conventions.md §3
+- **Files:** `platform/admin/src/lib/api.ts`, `platform/admin/src/lib/end-user.ts`, `platform/admin/src/lib/end-user.test.ts`, `platform/admin/src/lib/config.ts`, `platform/admin/.env.example`, `deploy/env/platform-admin.env.example`, `platform/admin/src/lib/session.ts`, `platform/admin/src/lib/session.test.ts`, `platform/admin/src/lib/errors.ts`, `platform/admin/src/lib/strings.ts`, `platform/admin/src/middleware.ts`, `platform/admin/src/app/(auth)/sign-in/page.tsx`, `platform/admin/src/app/(auth)/sign-in/actions.ts`, `platform/admin/src/app/(auth)/sign-in/mfa/page.tsx`, `platform/admin/src/app/(auth)/sign-in/mfa/actions.ts`, `platform/admin/src/app/sign-out/route.ts`, `platform/admin/src/app/(auth)/sign-in/sign-in.test.tsx`
 - **Steps:**
-  1. `lib/api.ts` and `lib/session.ts` (`server-only`) as in the portal, with the cookies `__Host-vxa_at`, `__Host-vxa_rt`, `__Host-vxa_mfa` (`HttpOnly; Secure; SameSite=Strict; Path=/`) and single-flighted refresh.
+  1. `lib/api.ts` and `lib/session.ts` (`server-only`) as in the portal, with the cookies `__Host-vxa_at`, `__Host-vxa_rt`, `__Host-vxa_mfa` (`HttpOnly; Secure; SameSite=Strict; Path=/`), single-flighted refresh, and the three end-user headers of PFE-002 on every call (`lib/end-user.ts`, `PLATFORM_BFF_KEY` added to `.env.example` and `deploy/env/platform-admin.env.example`; PADR-0019).
   2. `middleware.ts`: redirect to `/sign-in` without a session; refresh expired access tokens; CSP with a nonce and `form-action 'self'`; `X-Robots-Tag: noindex`.
   3. `/sign-in` (`adminSignIn`) then `/sign-in/mfa` (`adminVerifyMfa` with a code or recovery code); `MFA_REQUIRED` explains that MFA must be enabled in the portal and links to `PUBLIC_PORTAL_URL/account/security`; `/sign-out` (POST, `Origin` checked).
   4. `lib/errors.ts` covers every platform error code (test as in PFE-002).
@@ -1003,6 +1007,7 @@ Common commands: backend `pnpm --filter @velexis/platform-backend test`, `test:i
   - Sign-in requires the TOTP step every time; the access cookie is `SameSite=Strict` [PF-80].
   - Without a session every `(app)` route redirects to `/sign-in`.
   - Five parallel requests with an expired token cause one refresh.
+  - Every mocked API call, the sign-in calls included, carries `X-Velexis-End-User-IP` from the right-most `X-Forwarded-For` entry, `X-Velexis-End-User-Agent` and `X-Velexis-Bff-Key` [PADR-0019].
 - **Verify:** `pnpm --filter @velexis/platform-admin test && pnpm --filter @velexis/platform-admin typecheck`
 
 ### PAD-003 · Add the admin shell, reason and step-up dialogs and data tables
@@ -1122,7 +1127,7 @@ Common commands: backend `pnpm --filter @velexis/platform-backend test`, `test:i
 ### PAD-010 · Write the platform admin M1 end-to-end journeys
 - **Component:** platform-admin
 - **Milestone:** M1
-- **Depends on:** PFE-014, PAD-005, PAD-006, PAD-007, PAD-008, PAD-009
+- **Depends on:** PFE-014, PFE-010, PFE-013, PAD-005, PAD-006, PAD-007, PAD-008, PAD-009
 - **Size:** M
 - **Read first:** platform/admin/README.md §6; platform/docs/flows/platform-admin-operations.md ("Tests that prove it"); tools/e2e/README.md
 - **Files:** `tools/e2e/specs/admin-signin.e2e.ts`, `tools/e2e/specs/admin-tenant-lifecycle.e2e.ts`, `tools/e2e/specs/admin-amadeus-pool.e2e.ts`, `tools/e2e/specs/admin-audit.e2e.ts`
@@ -1177,7 +1182,7 @@ The OTA group builds checkout, Stripe payments on the Velexis account and the ai
 ### PBE-037 · Add the M3 and M4 operations to the OpenAPI document
 - **Component:** platform-backend
 - **Milestone:** M3
-- **Depends on:** PBE-007
+- **Depends on:** PBE-066
 - **Size:** S
 - **Read first:** platform/docs/api-inventory-resources.md §3 and §4 (`updateAmadeusConnection`, `updatePaymentConnection`); platform/docs/api-inventory.md §8 (`createConsoleToken`); platform/docs/adr/0007-portal-to-ota-admin-sso-token.md; platform/docs/adr/0016-contract-rollout-per-milestone-and-route-parity.md
 - **Files:** `platform/backend/openapi/velexis-platform-api.openapi.yaml`, `packages/api-types/src/generated/platform.ts`, `packages/api-types/src/generated/operations.ts`, `platform/backend/test/contract/pending-operations.ts`
@@ -1853,7 +1858,7 @@ M5 work is merged behind the `FEATURE_*` switches (PADR-0015). The switches are 
 - **Files:** `platform/docs/security-review.md`, `platform/backend/test/integration/security/auth-matrix.int.test.ts`, `platform/backend/test/integration/security/rate-limits.int.test.ts`, `platform/backend/test/integration/security/secrets-at-rest.int.test.ts`, `platform/backend/test/contract/pending-operations.ts`
 - **Steps:**
   1. `auth-matrix.int.test.ts`, generated from the operations index: for every operation, the expected answer for no token, a portal token, an admin token, a non-member (404 on tenant paths) and each of the five roles (scope §1.2). The test fails when an operation has no row.
-  2. `rate-limits.int.test.ts`: one test per row of the api-inventory §2 table (`429` with `Retry-After`).
+  2. `rate-limits.int.test.ts`: one test per row of the api-inventory §2 table (`429` with `Retry-After`); the per-IP rows run as the portal and admin servers do, with the BFF key and forwarded end-user IPs (PADR-0019), and prove that one IP's lockout does not throttle another.
   3. `secrets-at-rest.int.test.ts`: run the main flows (sign-up, MFA, keys, own credentials, Connect, payout account, invitations), then scan every `text` and `jsonb` column of the platform schema, the captured logs and the BullMQ job data for key patterns (`sk_test_`, `sk_live_`, `rk_`, `whsec_`, `ptk_`, IBAN-shaped strings, TOTP secrets, invitation and reset tokens); expect none outside the ciphertext columns.
   4. Assert that `pending-operations.ts` is empty (M5 exit, PADR-0016).
   5. Write `platform/docs/security-review.md`: the checklist of conventions §12 for each platform module, `pnpm audit` results (no high or critical), the CSP and cookie flags of both Next.js apps, the decision on making MFA mandatory for owners (PADR-0008 follow-up), and every finding as a new task id in this plan.
@@ -1887,7 +1892,7 @@ M5 work is merged behind the `FEATURE_*` switches (PADR-0015). The switches are 
 - **Read first:** platform/docs/adr/0015-milestone-feature-switches.md (item 5 and follow-ups); platform/backend/README.md §3
 - **Files:** `platform/backend/src/config.ts`, `platform/backend/src/common/features.ts`, `platform/backend/src/common/auth/feature.guard.ts`, `platform/backend/src/common/queues/scheduler.registry.ts`, `platform/backend/openapi/velexis-platform-api.openapi.yaml`, `platform/frontend/src/components/side-nav.tsx`, `platform/admin/src/components/admin-shell.tsx`, `.env.example`, `deploy/env/platform-backend.env.example`, `deploy/env/platform-worker.env.example`, `docs/mvp/architecture.md`, `platform/backend/README.md`, `platform/docs/adr/0015-milestone-feature-switches.md`
 - **Steps:**
-  1. **Gate:** all six switches have been on in production for at least one release (the developer confirms in the PR). If not, stop and report.
+  1. **Gate:** all six switches have been on in production for at least one release (the developer confirms in the PR). If not, stop and report. The switches stay off until their outside approvals, which the launch does not wait for, so this task runs after the launch: it is a named exception to the M6 go criterion "every task done" ([ADR-0025](../../../docs/mvp/adr/0025-roadmap-scheduling-and-tracking.md) items 4 and 5; roadmap "After launch").
   2. Remove the six `FEATURE_*` variables from config, env templates and the configuration matrix; `FeatureGuard` keeps only the plan checks (`limits` and `features` of the plan), and `x-feature` tags that were pure milestone switches are removed from the document.
   3. `getMe.features` and `adminGetMe.features` keep their shape for one more release and always report `true`; simplify the portal and admin navigation that read them. Mark the PADR-0015 follow-up done.
 - **Acceptance:**
@@ -1950,7 +1955,7 @@ The full graph is printed by `node tools/plan-lint/plan-lint.mjs --graph platfor
 ```mermaid
 flowchart LR
   X["Foundation X-001…X-028"] --> M0["M0 scaffolds<br/>PBE-001, PFE-001, PAD-001"]
-  M0 --> C1["M1 contract and data<br/>PBE-002…PBE-008"]
+  M0 --> C1["M1 contract and data<br/>PBE-002…PBE-008, PBE-066"]
   C1 --> S1["M1 services<br/>PBE-009…PBE-012"]
   S1 --> ID["Identity<br/>PBE-013…PBE-016"]
   ID --> LC["OTA lifecycle and provisioning<br/>PBE-017…PBE-024, PBE-035"]
@@ -1961,7 +1966,7 @@ flowchart LR
   PFE --> M24["M2–M4<br/>PBE-036…PBE-040, PFE-016…PFE-019, PAD-011"]
   PAD --> M24
   M24 --> M5["M5<br/>PBE-041…PBE-061, PFE-020…PFE-027, PAD-012…PAD-015"]
-  M5 --> M6["M6<br/>PBE-062…PBE-065, PFE-028, PAD-016"]
+  M5 --> M6["M6<br/>PBE-062…PBE-065, PFE-028, PAD-016<br/>(PBE-064 after launch)"]
   OTA(["OTA plan gates<br/>OF-11 (M1), OF-01 (M2), OF-09 (M4)"]) -.-> LC
   OTA -.-> M24
 ```

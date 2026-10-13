@@ -8,8 +8,8 @@ Related: [`../scope.md`](../scope.md) (features PF-01 … PF-98), [`../architect
 
 | Item | Value |
 |---|---|
-| Agent tasks | 109: 65 backend (`PBE-`), 28 portal (`PFE-`), 16 admin (`PAD-`) |
-| Estimate | 542 agent-hours by the plan-lint sizes (S 2 h, M 4 h, L 8 h, review included); about 135 developer-days without agents (S ½ day, M 1 day, L 2 days) |
+| Agent tasks | 110: 66 backend (`PBE-`), 28 portal (`PFE-`), 16 admin (`PAD-`) |
+| Estimate | 552 agent-hours by the plan-lint sizes (S 2 h, M 4 h, L 8 h, review included); about 138 developer-days without agents (S ½ day, M 1 day, L 2 days) |
 | Foundation dependencies | `X-001` … `X-028` ([`foundation-tasks.md`](../../../docs/mvp/plans/foundation-tasks.md)); the platform never re-does them |
 | Validation | `node tools/plan-lint/plan-lint.mjs docs/mvp/plans/foundation-tasks.md platform/docs/plans/agent-tasks.md` (0 errors) |
 | Reference material reused | Baseline DDL [`platform.sql`](../../../docs/velexis-sdk/db/platform.sql) and [`reference.sql`](../../../docs/velexis-sdk/db/reference.sql) as `0001`, the exact `0002` SQL in [`../data-model-migration-0002.md`](../data-model-migration-0002.md) (parts 1–3), the OTA contract's `ConsoleApiKeyScope`, `StaffPermission`, error envelope and `consoleSignIn` grant in [`velexis-ota-booking-api.openapi.yaml`](../../../docs/velexis-sdk/openapi/velexis-ota-booking-api.openapi.yaml) |
@@ -19,14 +19,14 @@ Rules that shape the order of the tasks:
 - **Contract first, in slices.** The platform OpenAPI document is written at the start of each milestone that adds operations (M1, M3–M4, M5), before any implementation of that milestone. A route parity test with a pending list keeps CI green and must be empty at the M5 exit ([PADR-0016](../adr/0016-contract-rollout-per-milestone-and-route-parity.md)).
 - **One migration for all planned deltas.** Migration `0002` lands in M1 with every delta of [`../data-model.md`](../data-model.md) §4, including tables first used in M5; two tasks own it (PBE-002 writes it, PBE-003 proves its constraints and privileges).
 - **Backend first, then the screens that use it.** Each portal or admin task depends on the backend task of its endpoints. Every user-facing feature has a component test and an end-to-end journey.
-- **M5 behind switches.** M5 code merges continuously behind the six `FEATURE_*` switches of [PADR-0015](../adr/0015-milestone-feature-switches.md); the switches are turned on when the outside steps (legal review, Stripe Connect approval, Amadeus live contracts) are done, and removed in M6.
+- **M5 behind switches.** M5 code merges continuously behind the six `FEATURE_*` switches of [PADR-0015](../adr/0015-milestone-feature-switches.md); the switches are turned on when the outside steps (legal review, Stripe Connect approval, Amadeus live contracts) are done, and removed by PBE-064 one release after all six are on, which is after the launch ([ADR-0025](../../../docs/mvp/adr/0025-roadmap-scheduling-and-tracking.md) item 4).
 - **Cross-group work is gated, not faked.** Platform integration tests use a fake OTA worker; the few tasks that need the real OTA side start with a gate naming the OTA feature id ([PADR-0017](../adr/0017-platform-test-doubles-and-end-to-end-harness.md)).
 
 ## 2. Epics
 
 | Epic | Name | What it delivers | Tasks |
 |---|---|---|---|
-| E1 | Scaffolds and contracts | The three apps, the platform OpenAPI document in slices, the `tenant.*` job messages and invalidation events, the HTTP pipeline and route parity | PBE-001, PFE-001, PAD-001, PBE-004 … PBE-008, PBE-037, PBE-041, PBE-042 |
+| E1 | Scaffolds and contracts | The three apps, the platform OpenAPI document in slices, the `tenant.*` job messages and invalidation events, the HTTP pipeline and route parity | PBE-001, PFE-001, PAD-001, PBE-004 … PBE-008, PBE-066, PBE-037, PBE-041, PBE-042 |
 | E2 | Platform data | Migration `0002` and the proof of its constraints and privileges | PBE-002, PBE-003 |
 | E3 | Backend services | Redis keys, BullMQ queues and schedulers, idempotency, rate limits, audit, e-mail outbox, tokens, guards, milestone switches, purge, dev seed | PBE-009 … PBE-012, PBE-034 |
 | E4 | Identity | Sign-up, verification, sign-in, lockout, refresh rotation, MFA, step-up, reset, profile, sessions | PBE-013 … PBE-016, PFE-002, PFE-005 … PFE-007 |
@@ -46,18 +46,18 @@ Rules that shape the order of the tasks:
 | Milestone | Platform goal | Tasks | Agent-hours | Solo days | What the OTA group does in the same milestone |
 |---|---|---|---|---|---|
 | M0 Foundations | Three apps scaffolded and in the release | 3 | 10 | 2.5 | Foundation work is shared (`X-` tasks); OTA scaffolds |
-| M1 Platform core | Sign-up to active OTA, keys, team, admin basics | 57 | 306 | 76.5 | OTA backend scaffold and the provisioning worker (OF-11) |
+| M1 Platform core | Sign-up to active OTA, keys, team, admin basics | 58 | 316 | 79 | OTA backend scaffold and the provisioning worker (OF-11) |
 | M2 Search & price | Platform data proven on the OTA side | 2 | 6 | 1.5 | Tenancy, Amadeus client, shopping, SDK, storefront (OF-01, OF-02) |
 | M3 Book & pay | Card statement descriptor | 3 | 6 | 1.5 | Checkout, customer auth, Stripe and airline-card payments, orders, e-mails (OF-03 … OF-08) |
 | M4 OTA admin | Console SSO, Amadeus office settings | 5 | 16 | 4 | OTA admin, console, settings (OF-09, OF-10) |
 | M5 Monetisation & self-service | Billing, own Stripe, settlements, own Amadeus, custom domains, go-live | 33 | 168 | 42 | Gateways that follow the account mode and credential source (OF-12), Connect webhooks, live environment |
-| M6 Hardening & launch | Security review, performance, full end-to-end suite, runbooks, switch removal | 6 | 30 | 7.5 | PCI controls of the airline-card flow, OTA end-to-end suite; foundation monitoring and restore drill |
-| **Total** | | **109** | **542** | **135.5** | |
+| M6 Hardening & launch | Security review, performance, full end-to-end suite, runbooks; switch removal after the launch (PBE-064) | 6 | 30 | 7.5 | PCI controls of the airline-card flow, OTA end-to-end suite; foundation monitoring and restore drill |
+| **Total** | | **110** | **552** | **138** | |
 
 ```mermaid
 flowchart LR
   F["Foundation<br/>X-001…X-023"] --> M0["M0<br/>3 scaffolds"]
-  M0 --> M1["M1 platform core<br/>57 tasks"]
+  M0 --> M1["M1 platform core<br/>58 tasks"]
   OF11(["OTA OF-11<br/>provisioning worker"]) -. gate PBE-035 .-> M1
   M1 --> M2["M2<br/>2 tasks"]
   OF01(["OTA OF-01<br/>tenancy + storefront"]) -. gate PBE-036, PAD-011 .-> M2
@@ -66,7 +66,7 @@ flowchart LR
   OF09(["OTA OF-09<br/>OTA admin SSO"]) -. gate PFE-019 .-> M4
   M4 --> M5["M5<br/>33 tasks, behind switches"]
   OF12(["OTA OF-12<br/>own Stripe and Amadeus"]) -. needed to switch on .-> M5
-  M5 --> M6["M6<br/>6 tasks"]
+  M5 --> M6["M6<br/>6 tasks<br/>(PBE-064 after launch)"]
 ```
 
 ## 4. Milestones in detail
@@ -75,7 +75,7 @@ flowchart LR
 
 **Goal.** The platform backend, portal and platform admin exist as workspace packages that build, start, answer health checks and are packed into the release by the foundation pipeline.
 
-**Scope.** E1 (scaffolds only): PBE-001, PFE-001, PAD-001. Everything else of M0 (monorepo, shared packages, baselines, migration runner, CI, VM, Caddy, deploy) is foundation work, `X-001` to `X-023`. Reference data is loaded by the foundation loader ([ADR-0024](../../../docs/mvp/adr/0024-reference-data-sources-and-loader.md)); PBE-001 aligns the backend README and the `ref:load` script with it.
+**Scope.** E1 (scaffolds only): PBE-001, PFE-001, PAD-001. Everything else of M0 (monorepo, shared packages, baselines, migration runner, CI, VM, Caddy, deploy) is foundation work, `X-001` to `X-023`. Reference data is loaded by the foundation loader `tools/reference-data` ([ADR-0024](../../../docs/mvp/adr/0024-reference-data-sources-and-loader.md)); the backend has no loader of its own, and PBE-001 only adds the `ref:load` shortcut for `pnpm db:seed:reference`.
 
 **Demo.** `pnpm build` builds the three apps; started locally they answer `/health/live`, and `/health/ready` reports PostgreSQL and Redis; the release built by `pack-release.sh` contains `dist/main.js`, `dist/worker.js`, `dist/cli.js` and the two Next.js standalone outputs.
 
@@ -101,7 +101,7 @@ flowchart LR
 
 | Epic | Tasks |
 |---|---|
-| E1 contracts and pipeline | PBE-004 (job messages), PBE-005 … PBE-007 (M1 contract slices), PBE-008 (pipeline, parity) |
+| E1 contracts and pipeline | PBE-004 (job messages), PBE-005 … PBE-007 and PBE-066 (M1 contract slices), PBE-008 (pipeline, parity) |
 | E2 data | PBE-002, PBE-003 |
 | E3 services | PBE-009 … PBE-012, PBE-034 |
 | E4 identity | PBE-013 … PBE-016, PFE-002, PFE-005 … PFE-007 |
@@ -115,7 +115,7 @@ Internal checkpoints keep this long milestone reviewable:
 
 | Checkpoint | Tasks done | Shows |
 |---|---|---|
-| M1a backend core | PBE-002 … PBE-016 | Contract, data, pipeline, identity API with Mailpit e-mails |
+| M1a backend core | PBE-002 … PBE-016, PBE-066 | Contract, data, pipeline, identity API with Mailpit e-mails |
 | M1b OTA lifecycle | PBE-017 … PBE-027, PBE-034, PBE-035 | Create OTA to active through the fake worker, then the real one |
 | M1c portal | PFE-002 … PFE-015 | The whole portal journey in a browser |
 | M1d admin | PBE-028 … PBE-033, PAD-002 … PAD-010 | Staff operations in a browser |
@@ -137,7 +137,7 @@ Internal checkpoints keep this long milestone reviewable:
 | Needs from the OTA group | For | When |
 |---|---|---|
 | OTA backend scaffold and the `tenant.provision` consumer (OF-11), consuming PBE-004's messages | PBE-035, PFE-015 (gated) | Before checkpoint M1b ends |
-| The `tenant.suspend` / `tenant.resume` consumer ([PADR-0014](../adr/0014-tenant-suspension-and-resume.md) follow-up) | Clean completion of suspend jobs | M4/M5 in the OTA plan; until then the job may end `failed` while the status switch still blocks traffic (PBE-030 step 5) |
+| The `tenant.suspend` / `tenant.resume` consumer ([PADR-0014](../adr/0014-tenant-suspension-and-resume.md) follow-up, OBE-074) | Clean completion of suspend jobs | M4 in the OTA plan; until then the job ends `failed` after the reconciler's attempts while the status switch still blocks traffic, and the tenant stays `suspended` (PBE-023, PBE-030 step 5, [PADR-0001](../adr/0001-tenant-provisioning-orchestration.md) item 7) |
 
 | Gives to the OTA group | Task |
 |---|---|
@@ -150,7 +150,7 @@ Internal checkpoints keep this long milestone reviewable:
 
 | Risk | Mitigation |
 |---|---|
-| M1 is the largest milestone (57 tasks, about 15 developer-weeks) and could hide slippage | Four checkpoints with their own demos; the critical path printed by plan-lint is reviewed weekly |
+| M1 is the largest milestone (58 tasks, about 16 developer-weeks) and could hide slippage | Four checkpoints with their own demos; the critical path printed by plan-lint is reviewed weekly |
 | The OTA provisioning worker arrives late | The fake OTA worker lets every platform task finish; only PBE-035 and PFE-015 wait; the combined roadmap schedules OF-11 before checkpoint M1b |
 | Authentication mistakes (token audiences, refresh reuse, lockout, MFA bypass) | Guards and token service unit-tested in PBE-012; every endpoint integration-tested for auth failure; full auth matrix in PBE-062 |
 | Secrets or tokens leak into logs, queues or audit rows | Redaction paths with tests (PBE-010), outbox secrets encrypted and purged (PBE-011), ids-only job payloads validated by schema (PBE-004), secret scan in PBE-062 |
@@ -269,14 +269,15 @@ The platform gives every row and column these features read (all created by `000
 
 ### M6 — Hardening & launch
 
-**Goal.** The platform is reviewed for security, measured against the VM budget, covered by a nightly end-to-end suite, documented for operations, and launched; the milestone switches are removed once they have been on for one release.
+**Goal.** The platform is reviewed for security, measured against the VM budget, covered by a nightly end-to-end suite, documented for operations, and launched. The milestone switches are removed after the launch, once all six have been on in production for one release (PBE-064).
 
-**Scope.** E14: PBE-062 (security review, auth matrix, rate limits, secret scan), PBE-063 (performance and memory), PBE-064 (switch removal, gated), PBE-065 (launch checklist and runbooks), PFE-028 and PAD-016 (complete end-to-end suites with accessibility and header checks). Foundation tasks X-029 … X-032 (uptime monitoring, on-VM checks, restore drill, managed-services proof) run in the same milestone.
+**Scope.** E14: PBE-062 (security review, auth matrix, rate limits, secret scan), PBE-063 (performance and memory), PBE-064 (switch removal, gated, after the launch), PBE-065 (launch checklist and runbooks), PFE-028 and PAD-016 (complete end-to-end suites with accessibility and header checks). Foundation tasks X-029 … X-032 (uptime monitoring, on-VM checks, restore drill, managed-services proof) run in the same milestone.
 
 **Demo.** Walk through `platform/docs/security-review.md` and `platform/docs/performance.md`; show three consecutive green nightly runs of the portal and admin projects; walk through the launch checklist on the VM with the developer.
 
 **Exit criteria.**
-- The six tasks are done; the security review lists no open high finding.
+- PBE-062, PBE-063, PBE-065, PFE-028 and PAD-016 are done; the security review lists no open high finding.
+- PBE-064 stays open at launch. It is a named exception to the go criterion "every task of the milestone is done" ([ADR-0025](../../../docs/mvp/adr/0025-roadmap-scheduling-and-tracking.md) item 4, roadmap go criterion 1), because the switches stay off until their outside approvals and the launch does not wait for them (item 5). It runs in the first release after all six switches have been on in production for one release.
 - p95 targets and memory budgets are met or have tasks.
 - Every launch checklist item is checked by its owner.
 
@@ -286,7 +287,7 @@ The platform gives every row and column these features read (all created by `000
 
 | Risk | Mitigation |
 |---|---|
-| Switches removed before they have run in production | PBE-064 starts with a gate confirmed by the developer |
+| Switches removed before they have run in production | PBE-064 starts with a gate confirmed by the developer and is scheduled after the launch |
 | The 8 GB VM is too small under load | PBE-063 measures RSS and latency against the budget of [`architecture.md`](../../../docs/mvp/architecture.md) §3; findings become tasks before launch |
 | Flaky end-to-end tests block the launch | Three consecutive green nightly runs required; Stripe journeys isolated in their own project |
 
@@ -327,7 +328,7 @@ Every feature of [`../scope.md`](../scope.md) §3, the data-model deltas and the
 | PF-30 API keys | M1, M5 | E6 | PBE-021, PFE-011, PFE-015, PBE-036; live keys: PBE-061, PFE-026 |
 | PF-40 Sub-domain | M1 | E11 | PBE-018, PBE-027, PFE-013 |
 | PF-41 Custom domains | M5 | E11 | PBE-049, PBE-050, PBE-051, PFE-022, PFE-027 |
-| PF-42 TLS ask | M1 | E11 | PBE-027 (Caddy side: X-022) |
+| PF-42 TLS ask | M1 | E11 | PBE-027 (positive answers in Redis, negative in a bounded in-process cache, [PADR-0004](../adr/0004-custom-domain-verification.md) item 6; Caddy side: X-022) |
 | PF-50 Shared test office | M1 | E8 | PBE-020, PBE-022, PFE-013, PAD-010 |
 | PF-51 Live office | M5 | E8 | PBE-054, PFE-023, PAD-014, PAD-015 |
 | PF-52 Own Amadeus credentials | M5 | E8 | PBE-052, PBE-053, PFE-023 |
@@ -357,11 +358,11 @@ Every feature of [`../scope.md`](../scope.md) §3, the data-model deltas and the
 | PF-91 Settlements (admin) | M5 | E9 | PBE-060, PAD-013, PAD-015 |
 | PF-92 Domains (admin) | M5 | E11 | PBE-051, PAD-014, PAD-015 |
 | PF-95 Audit | M1 | E3 | PBE-010, every state-changing task, PBE-032, PBE-062 |
-| PF-96 Rate limits | M1 | E3 | PBE-009 (limits), each endpoint task (applies them), PBE-062 (one test per limit) |
+| PF-96 Rate limits | M1 | E3 | PBE-008 (end-user IP, [PADR-0019](../adr/0019-end-user-ip-forwarding-from-the-portal-and-admin.md)), PFE-002 and PAD-002 (forward it), PBE-009 (limits), each endpoint task (applies them), PBE-062 (one test per limit) |
 | PF-97 Platform e-mails | M1, M5 | E3 | PBE-011 (outbox and M1 templates); M5 templates in PBE-046, PBE-047, PBE-050, PBE-052, PBE-054, PBE-056, PBE-058, PBE-060 |
-| PF-98 Reference data | M0 | — | X-017, X-018 (foundation, [ADR-0024](../../../docs/mvp/adr/0024-reference-data-sources-and-loader.md)); PBE-001 aligns the backend |
+| PF-98 Reference data | M0 | — | X-017, X-018 (foundation, [ADR-0024](../../../docs/mvp/adr/0024-reference-data-sources-and-loader.md)); PBE-001 adds the `ref:load` shortcut |
 | Migration `0002` ([`../data-model.md`](../data-model.md) §4.1–§4.8) | M1 | E2 | PBE-002 (file, parity with the documents, codegen), PBE-003 (constraints, privileges) |
-| Platform OpenAPI document | M1, M3, M5 | E1 | PBE-005, PBE-006, PBE-007, PBE-037, PBE-041, PBE-042 |
+| Platform OpenAPI document | M1, M3, M5 | E1 | PBE-005, PBE-006, PBE-007, PBE-066, PBE-037, PBE-041, PBE-042 |
 | Job messages and invalidation events | M1 | E1 | PBE-004 |
 | Milestone switches ([PADR-0015](../adr/0015-milestone-feature-switches.md)) | M1, M6 | E3 | PBE-012, PBE-064 |
 | Security, performance, operations | M6 | E14 | PBE-062, PBE-063, PBE-065, PFE-028, PAD-016 |
@@ -375,8 +376,12 @@ Every feature of [`../scope.md`](../scope.md) §3, the data-model deltas and the
 | Contract rollout | The platform OpenAPI document grows in milestone slices; route parity with a pending list; the platform owns the `tenant.*` messages; `adminDownloadSettlementLines` for the CSV path | [PADR-0016](../adr/0016-contract-rollout-per-milestone-and-route-parity.md) |
 | Test doubles and end-to-end | Fake OTA worker in platform integration tests; gated cross-backend tests; `tools/e2e` created by PFE-014 in M1; Stripe journeys nightly only | [PADR-0017](../adr/0017-platform-test-doubles-and-end-to-end-harness.md) |
 | Onboarding checklist | Exact done rule per item; "storefront opened" is done once the storefront can be opened | [PADR-0018](../adr/0018-onboarding-checklist-computation.md) |
-| Reference data | The foundation loader of ADR-0024 is the only loader; the backend's `ref:load` delegates to `pnpm db:seed:reference` and the platform docs are corrected | PBE-001 |
+| Reference data | The foundation loader of ADR-0024 is the only loader; the backend's `ref:load` delegates to `pnpm db:seed:reference`; the backend README, architecture §2.1 and data-model §1 were corrected during the planning review | PBE-001 |
 | Switches in the admin | `adminGetMe` returns the same `features` object as `getMe`, because admins cannot call the portal-scoped endpoint | PBE-007, PBE-028 |
-| Suspension before the OTA consumer exists | The status switch is the effect; a suspend job without an answer may end `failed` until the OTA plan delivers the consumer | PBE-030 |
+| M1 admin contract | Split in two L tasks (PBE-007, PBE-066), 21 and 26 operations, so each fits the L size | [PADR-0016](../adr/0016-contract-rollout-per-milestone-and-route-parity.md) |
+| End-user IP | The portal and admin servers forward the visitor's IP and user agent with a shared key; rate limits, audit and sessions use it | [PADR-0019](../adr/0019-end-user-ip-forwarding-from-the-portal-and-admin.md), PBE-008, PBE-009, PFE-002, PAD-002 |
+| TLS `ask` cache | Host syntax checked first; only positive answers cached in Redis; negative answers in a bounded in-process cache | [PADR-0004](../adr/0004-custom-domain-verification.md) item 6, PBE-027 |
+| Switch removal | PBE-064 keeps its M6 tag and runs after the launch as a named exception | [ADR-0025](../../../docs/mvp/adr/0025-roadmap-scheduling-and-tracking.md) item 4 |
+| Suspension before the OTA consumer exists | The status switch is the effect; a suspend job without an answer ends `failed` until the OTA plan delivers the consumer (OBE-074), and only `provision` jobs can set a tenant `failed` | PBE-023, PBE-030, [PADR-0001](../adr/0001-tenant-provisioning-orchestration.md) item 7 |
 
 **After the MVP** (recorded so nobody plans them now): office time zone stored with `amadeus_offices` for ticketing deadlines (OTA [OADR-0008](../../../ota/docs/adr/0008-ticketing-policy.md) follow-up); hosting keys and `api_key_tenant_grants`; automated payouts; bounce and complaint webhooks; WebAuthn; self-service e-mail change; a daily Stripe drift check if event gaps appear.
