@@ -1,0 +1,105 @@
+# Dependabot version updates (ADR-0002 item 7, ADR-0023, task X-019). Policy and review steps: tools/ci/README.md.
+#
+# npm: one weekly run at the workspace root (pnpm-workspace.yaml covers every package), minor and patch updates
+# only, in four groups. Every package.json keeps exact versions ("increase" rewrites the pinned version), and
+# tools/ci/check-package-json.mjs fails CI on a range. A new major, or a new minor where docs/mvp/tech-stack.md
+# pins one (TypeScript 5.6, kysely 0.28, Tailwind CSS 4.1, ...), is a tech-stack change made by hand in its own
+# pull request, never by Dependabot.
+#
+# github-actions: one weekly grouped pull request that moves the full-commit-SHA pins of every workflow. The tag
+# stays as the last thing in the comment after the SHA (`uses: owner/action@<sha> # v4.2.0`): Dependabot rewrites
+# the comment only when it ends with the old tag.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "05:00"
+      timezone: Etc/UTC
+    versioning-strategy: increase
+    open-pull-requests-limit: 10
+    commit-message:
+      prefix: build
+      include: scope
+    # A dependency goes to the first group it matches, so @next/eslint-plugin-next and @types/react move with
+    # Next.js and React, not with the tooling or the types.
+    groups:
+      nestjs:
+        patterns: ["@nestjs/*", "nestjs-*"]
+        update-types: [minor, patch]
+      next-react:
+        patterns: [next, "@next/*", react, react-dom, "@types/react", "@types/react-dom"]
+        update-types: [minor, patch]
+      tooling:
+        patterns:
+          - eslint
+          - "@eslint/*"
+          - "eslint-*"
+          - typescript-eslint
+          - "@typescript-eslint/*"
+          - globals
+          - prettier
+          - turbo
+          - typescript
+          - vitest
+          - "@vitest/*"
+        update-types: [minor, patch]
+      types:
+        patterns: ["@types/*"]
+        update-types: [minor, patch]
+    ignore:
+      # Minor and patch only: no major update of any dependency.
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
+      # The lines docs/mvp/tech-stack.md pins (§1, §2). Keep this list in step with that page.
+      - dependency-name: typescript # TypeScript 5.6.x: patches only
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+      - dependency-name: "@types/node" # Node.js 22
+        update-types: ["version-update:semver-major"]
+      - dependency-name: next # Next.js 15
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "@next/*" # follows Next.js 15
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "@nestjs/*" # NestJS 11
+        update-types: ["version-update:semver-major"]
+      # The minor lines tech-stack.md §2 pins: patches only. For a 0.x package Dependabot counts 0.28 -> 0.29 as
+      # a minor update, although it may break the API.
+      - dependency-name: kysely # 0.28.x
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+      - dependency-name: kysely-codegen # 0.18.x
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+      - dependency-name: openapi-fetch # 0.13.x
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+      - dependency-name: esbuild # 0.25.x
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+      - dependency-name: pdfmake # 0.2.x
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+      - dependency-name: handlebars # 4.7.x
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+      - dependency-name: cookie-parser # 1.4.x
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+      - dependency-name: tailwindcss # Tailwind CSS 4.1.x
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+      - dependency-name: "@tailwindcss/*" # follows Tailwind CSS 4.1.x
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "05:00"
+      timezone: Etc/UTC
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: ci
+      include: scope
+    groups:
+      github-actions:
+        patterns: ["*"]
+    ignore:
+      # docs/mvp/tech-stack.md §1 pins the v4 line of every action; a new major is a reviewed change by hand.
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]

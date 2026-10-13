@@ -576,7 +576,7 @@ Related: [`../decisions.md`](../decisions.md) (binding), [`../architecture.md`](
 - **Verify:** `pnpm --filter @velexis/reference-data build && pnpm db:seed:reference && pnpm --filter @velexis/reference-data test:int`
 
 ### X-019 · Make CI green and add the repository guards and Dependabot
-- **Status:** todo
+- **Status:** in progress (branch claude/intelligent-bardeen-90hhu7; pending: a GitHub CI run with all three jobs green on the PR and on `main` (AC1), GitHub accepting `dependabot.yml` (AC4), Turborepo cache hits on a re-run of the same commit (step 4), human step: protect `main` (step 5))
 - **Component:** foundation
 - **Milestone:** M0
 - **Depends on:** X-001

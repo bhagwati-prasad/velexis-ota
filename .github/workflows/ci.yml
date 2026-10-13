@@ -1,10 +1,13 @@
 # CI for every pull request and every push to main (ADR-0015, ADR-0020).
 # Jobs: plan-lint (no install), deploy-files (shellcheck, Caddyfile, systemd units), dev-setup (docs/mvp/
 # local-development.md §2 on a clean runner: PostgreSQL 16 and Redis 7.4 from apt, dev-setup.sh and dev-keys.mjs
-# twice), build-test (install, format, lint, typecheck, unit, contracts up to date, integration with
-# PostgreSQL 16 + Redis 7.4 + Mailpit, build, guards).
-# Agents never change this file to get their own change through (AGENTS.md §7).
-# Third-party actions are pinned to full commit SHAs (tag in the comment); Dependabot proposes updates (X-019).
+# twice), build-test (repository guards and tools/ci/check-package-json.mjs before the install, then install, the
+# tools/ci tests, format, lint, typecheck, unit, contracts up to date, integration with PostgreSQL 16 + Redis 7.4 +
+# Mailpit, build, release dry run).
+# Agents never change this file to get their own change through (AGENTS.md §7). What each guard enforces and how to
+# run it locally: tools/ci/README.md.
+# Third-party actions are pinned to full commit SHAs with the tag as the last thing in the comment, so Dependabot
+# (.github/dependabot.yml) can move both; check-package-json.mjs fails on any other pin (ADR-0023, X-019).
 name: CI
 
 on:
@@ -30,8 +33,11 @@ jobs:
     name: Plan lint
     runs-on: ubuntu-24.04
     timeout-minutes: 5
+    # Plain Node only: this job never runs `pnpm install` (X-019).
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version-file: .nvmrc
@@ -47,6 +53,8 @@ jobs:
       CADDY_SHA512: "b8bec15d14fb033562af9f207850027bcbaa1f891edc9efe00d38bf39e1bf9944f8b6b8eba041ddd4c171cd70c905174c704d705be2f23bc678fe1eaf37a2485"
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
       - name: shellcheck deploy scripts
         run: shellcheck -S style deploy/scripts/*.sh
       - name: Validate the Caddyfile with Caddy ${{ env.CADDY_VERSION }}
@@ -80,6 +88,8 @@ jobs:
       COREPACK_ENABLE_DOWNLOAD_PROMPT: "0"
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version-file: .nvmrc # what `nvm install` reads in local-development.md §2
@@ -281,12 +291,46 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 2 # the PR merge commit and its base parent, for the guards below
+          persist-credentials: false
 
-      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0; pnpm version from package.json "packageManager"
+      # Guards first: they need no dependencies, so a broken rule fails in seconds (tools/ci/README.md).
+      - name: Repository guards
+        run: |
+          # Session-level search_path changes are forbidden outside packages/db (ADR-0004): SET [SESSION] search_path
+          # and its function form set_config('search_path', ..., false). tenantTx uses set_config(..., true).
+          if grep -rnEi --include='*.ts' --include='*.tsx' --include='*.mts' --include='*.cts' \
+               --include='*.js' --include='*.mjs' --include='*.cjs' --include='*.sql' \
+               --exclude-dir=node_modules --exclude-dir=dist --exclude-dir=.next --exclude-dir=.turbo \
+               -e 'set[[:space:]]+(session[[:space:]]+)?"?search_path' \
+               -e 'set_config[[:space:]]*\([[:space:]]*.search_path.[[:space:]]*,.*,[[:space:]]*false[[:space:]]*\)' \
+               platform ota packages tools 2>/dev/null \
+               | grep -v '^packages/db/'; then
+            echo "::error::Session-level SET search_path outside packages/db"; exit 1
+          fi
+          # Baselines stay byte-for-byte copies of the reference DDL (ADR-0005).
+          for pair in "platform/backend/migrations/platform/0001_baseline.sql docs/velexis-sdk/db/platform.sql" \
+                      "platform/backend/migrations/reference/0001_baseline.sql docs/velexis-sdk/db/reference.sql" \
+                      "ota/backend/migrations/tenant/0001_baseline.sql docs/velexis-sdk/db/tenant.sql"; do
+            read -r baseline reference <<< "$pair"
+            if [ -f "$baseline" ]; then cmp "$baseline" "$reference" || { echo "::error::$baseline differs from $reference"; exit 1; }; fi
+          done
+          # Reference material is never edited in a pull request.
+          if [ "${GITHUB_EVENT_NAME:-}" = "pull_request" ]; then
+            if git diff --name-only HEAD^1 HEAD | grep -E '^docs/(velexis-sdk|amadeus-api)/'; then
+              echo "::error::docs/velexis-sdk and docs/amadeus-api are reference material and must not change"; exit 1
+            fi
+          fi
+
+      # The pnpm version comes from package.json "packageManager".
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version-file: .nvmrc
           cache: pnpm
+
+      # Exact versions, dev-only test packages, no package depending on an app, SHA-pinned actions (X-019).
+      - name: Check the package.json files and the action pins
+        run: node tools/ci/check-package-json.mjs
 
       - name: Install
         run: pnpm install --frozen-lockfile
@@ -309,6 +353,12 @@ jobs:
 
       - name: Generate local key files
         run: pnpm dev:keys
+
+      # The scripts in tools/ci have no package.json, so Turborepo does not lint or test them.
+      - name: Lint and test the CI checks
+        run: |
+          pnpm exec eslint tools/ci
+          node --test tools/ci/*.test.mjs
 
       - name: Format
         run: pnpm format:check
@@ -339,24 +389,3 @@ jobs:
         run: |
           RELEASE_SHA="${GITHUB_SHA}" bash deploy/scripts/pack-release.sh /tmp/release
           (cd "/tmp/release/${GITHUB_SHA}" && sha256sum --quiet -c SHA256SUMS)
-
-      - name: Repository guards
-        run: |
-          # Session-level search_path changes are forbidden outside packages/db (ADR-0004).
-          if grep -rnEi --include='*.ts' --include='*.sql' 'set[[:space:]]+(session[[:space:]]+)?search_path' platform ota packages tools 2>/dev/null \
-               | grep -v '^packages/db/'; then
-            echo "::error::Session-level SET search_path outside packages/db"; exit 1
-          fi
-          # Baselines stay byte-for-byte copies of the reference DDL (ADR-0005).
-          for pair in "platform/backend/migrations/platform/0001_baseline.sql docs/velexis-sdk/db/platform.sql" \
-                      "platform/backend/migrations/reference/0001_baseline.sql docs/velexis-sdk/db/reference.sql" \
-                      "ota/backend/migrations/tenant/0001_baseline.sql docs/velexis-sdk/db/tenant.sql"; do
-            set -- $pair
-            if [ -f "$1" ]; then cmp "$1" "$2" || { echo "::error::$1 differs from $2"; exit 1; }; fi
-          done
-          # Reference material is never edited in a pull request.
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            if git diff --name-only HEAD^1 HEAD | grep -E '^docs/(velexis-sdk|amadeus-api)/'; then
-              echo "::error::docs/velexis-sdk and docs/amadeus-api are reference material and must not change"; exit 1
-            fi
-          fi
