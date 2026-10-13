@@ -489,8 +489,8 @@ Related: [`../decisions.md`](../decisions.md) (binding), [`../architecture.md`](
   - `schemas-sql.test.ts` fails when `bootstrap.sql` and `schemas.sql` differ, and passes on the committed files.
 - **Verify:** `pnpm --filter @velexis/testing build && pnpm --filter @velexis/testing test && pnpm --filter @velexis/testing test:int`
 
-### X-016 · Local development setup with dev-setup.sh, dev keys and the runbook
-- **Status:** in progress (branch claude/intelligent-bardeen-90hhu7; pending: first run of the `dev-setup` CI job on GitHub (AC1), optional macOS human step)
+### X-016 · Local development setup with dev-setup.sh, dev keys and the runbook ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** foundation
 - **Milestone:** M0
 - **Depends on:** X-001
@@ -636,7 +636,7 @@ Related: [`../decisions.md`](../decisions.md) (binding), [`../architecture.md`](
 - **Verify:** `shellcheck -S style deploy/scripts/provision-vm.sh deploy/scripts/check-vm.sh && sudo bash deploy/scripts/check-vm.sh`
 
 ### X-021 · Finalise the systemd units and the failure alert
-- **Status:** in progress (branch claude/intelligent-bardeen-90hhu7; pending: a green run of the CI job systemd-units for AC3, the throwaway-VM repeat of steps 2–3 (human step))
+- **Status:** in progress (branch claude/intelligent-bardeen-90hhu7; pending: the throwaway-VM repeat of steps 2–3 (human step))
 - **Component:** foundation
 - **Milestone:** M0
 - **Depends on:** X-001
