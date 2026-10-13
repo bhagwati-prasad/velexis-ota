@@ -22,12 +22,12 @@ Common commands: backend `pnpm --filter @velexis/platform-backend test`, `test:i
 | Milestone | Tasks | Demo at the end |
 |---|---|---|
 | M0 Foundations | PBE-001, PFE-001, PAD-001 | The three platform apps build, start and answer `/health/live`; the release contains them. |
-| M1 Platform core | PBE-002 … PBE-035, PFE-002 … PFE-015, PAD-002 … PAD-010 | Sign up, verify, MFA, create an OTA that becomes active through the real OTA worker, reveal test keys, manage keys and team; staff sign in to the admin, see the tenant, its job and office, suspend and resume it. |
+| M1 Platform core | PBE-002 … PBE-035, PBE-066, PFE-002 … PFE-015, PAD-002 … PAD-010 | Sign up, verify, MFA, create an OTA that becomes active through the real OTA worker, reveal test keys, manage keys and team; staff sign in to the admin, see the tenant, its job and office, suspend and resume it. |
 | M2 Search & price | PBE-036, PAD-011 | A key created in the portal works on the OTA API and stops working after revocation; a suspension reaches the storefront. |
 | M3 Book & pay | PBE-037, PBE-038, PFE-016 | Owners edit the card statement descriptor of the Velexis payment connection. |
 | M4 OTA admin | PBE-039, PBE-040, PFE-017 … PFE-019 | "Open console" signs a member into the OTA admin; Amadeus office settings are editable. |
 | M5 Monetisation & self-service | PBE-041 … PBE-061, PFE-020 … PFE-027, PAD-012 … PAD-015 | Checkout and Customer Portal, own Stripe (Connect or keys), payout account and settlements, own Amadeus credentials and live office, custom domains with TLS, go-live. |
-| M6 Hardening & launch | PBE-062 … PBE-065, PFE-028, PAD-016 | Security review closed, performance measured, end-to-end suite green nightly, launch checklist ready, switches removed. |
+| M6 Hardening & launch | PBE-062 … PBE-065, PFE-028, PAD-016 | Security review closed, performance measured, end-to-end suite green nightly, launch checklist ready. The switches are removed after the launch: PBE-064 is a named exception to "every M6 task done" ([ADR-0025](../../../docs/mvp/adr/0025-roadmap-scheduling-and-tracking.md) item 4). |
 
 ## M0 — Foundations
 
@@ -37,18 +37,19 @@ Common commands: backend `pnpm --filter @velexis/platform-backend test`, `test:i
 - **Depends on:** X-002, X-003, X-009, X-010
 - **Size:** M
 - **Read first:** platform/backend/README.md §1, §2, §5; platform/docs/architecture.md §1 and §2.1; docs/mvp/conventions.md §2 and §8; docs/mvp/tech-stack.md §2 and §3 (Platform backend); docs/mvp/adr/0024-reference-data-sources-and-loader.md (Loader)
-- **Files:** `platform/backend/package.json`, `platform/backend/nest-cli.json`, `platform/backend/tsconfig.json`, `platform/backend/tsconfig.build.json`, `platform/backend/vitest.config.ts`, `platform/backend/vitest.int.config.ts`, `platform/backend/src/main.ts`, `platform/backend/src/worker.ts`, `platform/backend/src/cli.ts`, `platform/backend/src/app.module.ts`, `platform/backend/src/worker.module.ts`, `platform/backend/src/config.ts`, `platform/backend/src/config.test.ts`, `platform/backend/src/health/health.module.ts`, `platform/backend/src/health/health.controller.ts`, `platform/backend/src/health/health.service.ts`, `platform/backend/test/integration/health/health.int.test.ts`, `platform/backend/README.md`, `platform/docs/architecture.md`, `platform/docs/data-model.md`
+- **Files:** `platform/backend/package.json`, `platform/backend/nest-cli.json`, `platform/backend/tsconfig.json`, `platform/backend/tsconfig.build.json`, `platform/backend/vitest.config.ts`, `platform/backend/vitest.int.config.ts`, `platform/backend/src/main.ts`, `platform/backend/src/worker.ts`, `platform/backend/src/cli.ts`, `platform/backend/src/app.module.ts`, `platform/backend/src/worker.module.ts`, `platform/backend/src/config.ts`, `platform/backend/src/config.test.ts`, `platform/backend/src/health/health.module.ts`, `platform/backend/src/health/health.controller.ts`, `platform/backend/src/health/health.service.ts`, `platform/backend/test/integration/health/health.int.test.ts`
 - **Steps:**
   1. Create `@velexis/platform-backend` (private, CommonJS output) with the exact versions of tech-stack §2: `@nestjs/core`, `@nestjs/common`, `@nestjs/platform-express` 11, `@nestjs/config`, `nestjs-pino`, `pino-http`, `nestjs-cls`, `ioredis`, and the workspace packages `@velexis/config`, `@velexis/logger`, `@velexis/db`, `@velexis/errors`. Scripts: `build` (three entry points `dist/main.js`, `dist/worker.js`, `dist/cli.js`), `dev` (runs `dev:api` and `dev:worker`), `test`, `test:int`, `typecheck`, `lint`, `clean`.
   2. Write `src/config.ts` with `defineConfig`: `APP_ENV`, `LOG_LEVEL`, `PORT` (3100), `HEALTH_PORT` (3101, worker), `TRUST_PROXY` (`loopback`), `DATABASE_URL`, `REDIS_URL`. Call `loadDevEnvFiles` outside production. Later tasks extend this schema.
   3. `main.ts`: bind to `127.0.0.1:PORT`, set Express `trust proxy` from `TRUST_PROXY`, use `nestjs-pino` with the `@velexis/logger` HTTP options, `nestjs-cls` with `requestId` taken from `X-Request-Id` or generated, and shutdown hooks. `worker.ts`: a Nest application context plus a small `node:http` server on `HEALTH_PORT`. `cli.ts`: a command dispatcher with `help` (PBE-028 and PBE-034 add commands).
   4. `HealthModule`: `GET /health/live` answers `200 {status: "ok"}`; `GET /health/ready` checks PostgreSQL (`SELECT 1` on a `createPool` pool) and Redis (`PING`) and answers `200` or `503` with the status of each dependency. The worker serves the same two paths.
-  5. Align with ADR-0024 (cross-cutting, it wins): the backend has no `reference-data/` folder and no own loader. Add a `ref:load` script that runs `pnpm --dir ../.. db:seed:reference`, and fix the `ReferenceModule` row of `platform/docs/architecture.md` §2.1, the "Reference data files" row of `platform/docs/data-model.md` §1 and README §2 and §5 to point to `tools/reference-data`.
+  5. Add the package script `ref:load`, which runs `pnpm --dir ../.. db:seed:reference` (README §5). The backend has no `reference-data/` folder and no loader of its own: the datasets and the loader are `tools/reference-data` (ADR-0024, X-017, X-018), and the platform docs already say so.
 - **Acceptance:**
   - `pnpm --filter @velexis/platform-backend build` produces `dist/main.js`, `dist/worker.js` and `dist/cli.js`.
   - With PostgreSQL and Redis running, `/health/ready` answers 200 on 3100 and 3101; with Redis unreachable it answers 503 naming `redis` (integration test).
   - Starting without `DATABASE_URL` exits non-zero with a `ConfigError` that names the variable (unit test of `config.ts`).
   - Every request log line carries `requestId`; lint finds no `console.*` and no `process.env`.
+  - `src/` has no `reference/` loader and the package has no `reference-data/` folder; `ref:load` only calls the root `db:seed:reference`.
 - **Verify:** `pnpm --filter @velexis/platform-backend build && pnpm --filter @velexis/platform-backend test && pnpm --filter @velexis/platform-backend test:int`
 
 ### PFE-001 · Scaffold the portal Next.js app with Tailwind, shadcn/ui and health routes
@@ -181,44 +182,61 @@ Common commands: backend `pnpm --filter @velexis/platform-backend test`, `test:i
   - No response schema of the 27 operations has a property whose name ends in `Ciphertext` or `Hash` (checked by grepping the generated `platform.ts` in the PR).
 - **Verify:** `pnpm contracts:lint && pnpm contracts:generate && git diff --exit-code packages/api-types/src/generated`
 
-### PBE-007 · Add the M1 platform admin operations to the OpenAPI document
+### PBE-007 · Add the M1 admin auth, dashboard, tenant, job and queue operations to the OpenAPI document
 - **Component:** platform-backend
 - **Milestone:** M1
 - **Depends on:** PBE-006
 - **Size:** L
-- **Read first:** platform/docs/api-inventory-admin.md §1–§5 and §7 (M1 rows); platform/docs/adr/0006-platform-admin-access-and-audit.md; platform/admin/README.md §2
+- **Read first:** platform/docs/api-inventory-admin.md §1–§3 (M1 rows); platform/docs/adr/0006-platform-admin-access-and-audit.md; platform/docs/adr/0016-contract-rollout-per-milestone-and-route-parity.md (slices); platform/admin/README.md §2
 - **Files:** `platform/backend/openapi/velexis-platform-api.openapi.yaml`, `packages/api-types/src/generated/platform.ts`, `packages/api-types/src/generated/operations.ts`, `platform/docs/api-inventory-admin.md`
 - **Steps:**
   1. Admin auth and dashboard: `adminSignIn`, `adminVerifyMfa`, `adminRefresh`, `adminStepUp`, `adminSignOut`, `adminGetMe`, `adminGetDashboard` (M5 counters present and nullable). `adminGetMe` also returns the `features` object of `getMe`, because the admin cannot call the portal-scoped `getMe` and PADR-0015 item 3 makes the backend the only source of the switches; note this addition in `platform/docs/api-inventory-admin.md` §2.
   2. Tenants, jobs and queues: `adminListTenants`, `adminGetTenant`, `adminUpdateTenant`, `adminSuspendTenant`, `adminResumeTenant`, `adminMigrateTenant`, `adminSetConnectionStatus`, `adminListProvisioningJobs`, `adminGetProvisioningJob`, `adminRetryProvisioningJob`, `adminCancelProvisioningJob`, `adminListQueues`, `adminListFailedQueueJobs`, `adminRetryQueueJob`.
-  3. Plans and subscriptions (M1 rows): `adminListPlans`, `adminCreatePlan`, `adminUpdatePlan` (without the Stripe id fields, which PBE-042 adds), `adminListSubscriptions`, `adminGetSubscription`, `adminUpdateManualSubscription`.
-  4. Amadeus (M1 rows): `adminListAmadeusAccounts`, `adminCreateAmadeusAccount`, `adminUpdateAmadeusAccount`, `adminVerifyAmadeusAccount`, `adminListAmadeusOffices`, `adminAddAmadeusOffices`, `adminUpdateAmadeusOffice`, `adminAssignAmadeusOffice`, `adminRetireAmadeusOffice`.
-  5. Accounts, admins and audit: `adminListAccounts`, `adminGetAccount`, `adminDisableAccount`, `adminEnableAccount`, `adminUnlockAccount`, `adminResetAccountMfa`, `adminListAdmins`, `adminGrantAdmin`, `adminRevokeAdmin`, `adminListAudit`, `adminExportAudit` (`text/csv`). Every operation has `x-scope: platform_admin` except the public sign-in steps; **reason** actions have a required `reason` (5–500 characters) and `x-reason-required: true`; MFA↑ actions have `x-mfa-step-up: true`.
-  6. Lint, regenerate and commit.
+  3. Every operation has `x-scope: platform_admin` except the public sign-in steps; **reason** actions have a required `reason` (5–500 characters) and `x-reason-required: true`; MFA↑ actions have `x-mfa-step-up: true`.
+  4. Lint, regenerate and commit. The other M1 admin operations follow in PBE-066, so the two slices never edit the document at the same time (PADR-0016).
 - **Acceptance:**
-  - `pnpm contracts:lint` is clean and the operations index has 47 more platform operations.
+  - `pnpm contracts:lint` is clean and the operations index has 21 more platform operations.
   - Every operation path starting with `/v1/admin/` has `x-scope: platform_admin` except `adminSignIn`, `adminVerifyMfa` and `adminRefresh` (checked by a small script in the PR or by PBE-008's parity test).
+  - `adminSuspendTenant`, `adminResumeTenant`, `adminSetConnectionStatus` and `adminCancelProvisioningJob` require `reason`.
+- **Verify:** `pnpm contracts:lint && pnpm contracts:generate && git diff --exit-code packages/api-types/src/generated`
+
+### PBE-066 · Add the M1 admin plan, Amadeus, account, admin and audit operations to the OpenAPI document
+- **Component:** platform-backend
+- **Milestone:** M1
+- **Depends on:** PBE-007
+- **Size:** L
+- **Read first:** platform/docs/api-inventory-admin.md §4, §5 and §7 (M1 rows); platform/docs/adr/0006-platform-admin-access-and-audit.md; platform/docs/adr/0012-amadeus-office-pool.md; platform/docs/adr/0016-contract-rollout-per-milestone-and-route-parity.md (slices); platform/admin/README.md §2
+- **Files:** `platform/backend/openapi/velexis-platform-api.openapi.yaml`, `packages/api-types/src/generated/platform.ts`, `packages/api-types/src/generated/operations.ts`
+- **Steps:**
+  1. Plans and subscriptions (M1 rows): `adminListPlans`, `adminCreatePlan`, `adminUpdatePlan` (without the Stripe id fields, which PBE-042 adds), `adminListSubscriptions`, `adminGetSubscription`, `adminUpdateManualSubscription`.
+  2. Amadeus (M1 rows): `adminListAmadeusAccounts`, `adminCreateAmadeusAccount`, `adminUpdateAmadeusAccount`, `adminVerifyAmadeusAccount`, `adminListAmadeusOffices`, `adminAddAmadeusOffices`, `adminUpdateAmadeusOffice`, `adminAssignAmadeusOffice`, `adminRetireAmadeusOffice`.
+  3. Accounts, admins and audit: `adminListAccounts`, `adminGetAccount`, `adminDisableAccount`, `adminEnableAccount`, `adminUnlockAccount`, `adminResetAccountMfa`, `adminListAdmins`, `adminGrantAdmin`, `adminRevokeAdmin`, `adminListAudit`, `adminExportAudit` (`text/csv`).
+  4. Apply the same `x-scope: platform_admin`, `reason` / `x-reason-required` and `x-mfa-step-up` rules as PBE-007, then lint, regenerate and commit.
+- **Acceptance:**
+  - `pnpm contracts:lint` is clean and the operations index has 26 more platform operations (47 M1 admin operations with PBE-007).
+  - `adminExportAudit` documents a `text/csv` response; `adminCreateAmadeusAccount`, `adminGrantAdmin` and `adminResetAccountMfa` carry `x-mfa-step-up: true`; no response schema of the 26 operations has a property ending in `Secret`, `Ciphertext` or `Hash`.
 - **Verify:** `pnpm contracts:lint && pnpm contracts:generate && git diff --exit-code packages/api-types/src/generated`
 
 ### PBE-008 · Build the HTTP pipeline with request context, error filter, OpenAPI validation and route parity
 - **Component:** platform-backend
 - **Milestone:** M1
-- **Depends on:** PBE-001, PBE-007, X-005, X-015
+- **Depends on:** PBE-001, PBE-066, X-005, X-015
 - **Size:** L
-- **Read first:** platform/docs/architecture.md §3; platform/docs/adr/0016-contract-rollout-per-milestone-and-route-parity.md; docs/mvp/conventions.md §2 and §6; docs/mvp/adr/0006-contract-first-openapi.md (Runtime validation, Checks in CI); packages/testing/README.md
-- **Files:** `platform/backend/src/common/common.module.ts`, `platform/backend/src/common/http/openapi-operation.decorator.ts`, `platform/backend/src/common/http/openapi-validation.interceptor.ts`, `platform/backend/src/common/http/openapi-validation.interceptor.test.ts`, `platform/backend/src/common/http/error.filter.ts`, `platform/backend/src/common/http/error.filter.test.ts`, `platform/backend/src/common/http/request-context.ts`, `platform/backend/src/common/http/raw-body.ts`, `platform/backend/src/common/clock.ts`, `platform/backend/src/common/ids.ts`, `platform/backend/src/common/ids.test.ts`, `platform/backend/src/main.ts`, `platform/backend/test/contract/route-parity.contract.test.ts`, `platform/backend/test/contract/pending-operations.ts`, `platform/backend/test/support/app.ts`
+- **Read first:** platform/docs/architecture.md §3 and §3.2; platform/docs/adr/0016-contract-rollout-per-milestone-and-route-parity.md; platform/docs/adr/0019-end-user-ip-forwarding-from-the-portal-and-admin.md; docs/mvp/conventions.md §2 and §6; docs/mvp/adr/0006-contract-first-openapi.md (Runtime validation, Checks in CI); packages/testing/README.md
+- **Files:** `platform/backend/src/common/common.module.ts`, `platform/backend/src/common/http/openapi-operation.decorator.ts`, `platform/backend/src/common/http/openapi-validation.interceptor.ts`, `platform/backend/src/common/http/openapi-validation.interceptor.test.ts`, `platform/backend/src/common/http/error.filter.ts`, `platform/backend/src/common/http/error.filter.test.ts`, `platform/backend/src/common/http/request-context.ts`, `platform/backend/src/common/http/end-user.ts`, `platform/backend/src/common/http/end-user.test.ts`, `platform/backend/src/common/http/raw-body.ts`, `platform/backend/src/common/clock.ts`, `platform/backend/src/common/ids.ts`, `platform/backend/src/common/ids.test.ts`, `platform/backend/src/main.ts`, `platform/backend/test/contract/route-parity.contract.test.ts`, `platform/backend/test/contract/pending-operations.ts`, `platform/backend/test/support/app.ts`, `platform/backend/test/integration/common/request-context.int.test.ts`, `platform/backend/src/config.ts`, `packages/logger/src/redact-paths.ts`, `packages/logger/src/redaction.test.ts`, `.env.example`, `deploy/env/platform-backend.env.example`, `deploy/scripts/provision-vm.sh`, `docs/mvp/architecture.md`
 - **Steps:**
   1. `@OpenApiOperation(operationId)` stores metadata on a handler. `OpenApiValidationInterceptor` compiles Ajv 2020 + `ajv-formats` validators for path, query, headers and body of each operation from the YAML at start-up (unknown `operationId` fails the start), and throws `AppError("VALIDATION_FAILED", { fieldErrors })` whose messages never contain the rejected value.
   2. `ErrorFilter` uses `toErrorEnvelope` from `@velexis/errors`, sets `X-Request-Id`, logs unknown errors with their stack, and never returns the stack.
-  3. `request-context.ts`: the `nestjs-cls` store `{requestId, ip, userAgent, actor?}`; `raw-body.ts`: keep the raw body only for `/webhooks/*` (Express `verify` callback); add `helmet` and `cookie-parser` in `main.ts`.
+  3. `request-context.ts`: the `nestjs-cls` store `{requestId, ip, userAgent, actor?}`. `end-user.ts` fills `ip` and `userAgent` as architecture §3.2 and PADR-0019 say: the `X-Velexis-End-User-IP` and `X-Velexis-End-User-Agent` headers count only when the socket peer is loopback, there is no `X-Forwarded-For`, and `X-Velexis-Bff-Key` equals `PLATFORM_BFF_KEY` (new required config variable, compared in constant time). A valid key with a missing or invalid IP answers `400 VALIDATION_FAILED`; otherwise `req.ip` and `User-Agent` are used. Add `PLATFORM_BFF_KEY` to the root `.env.example`, `deploy/env/platform-backend.env.example` (`@@PLATFORM_BFF_KEY@@`, generated once by `provision-vm.sh` like `OTA_ADMIN_SERVICE_KEY`) and the configuration matrix, and `x-velexis-bff-key` to the logger's redaction paths. `raw-body.ts`: keep the raw body only for `/webhooks/*` (Express `verify` callback); add `helmet` and `cookie-parser` in `main.ts`.
   4. `Clock` (injectable `now()`) and `IdGenerator.new(prefix)` on `newId` of `@velexis/crypto`, for the prefixes of api-inventory §2.
-  5. Route parity test as PADR-0016 item 2. Seed `pending-operations.ts` with every operation of PBE-005 to PBE-007 except `healthLive` and `healthReady`, each with the id of the task in this plan that implements it.
+  5. Route parity test as PADR-0016 item 2. Seed `pending-operations.ts` with every operation of PBE-005, PBE-006, PBE-007 and PBE-066 except `healthLive` and `healthReady`, each with the id of the task in this plan that implements it.
   6. `test/support/app.ts`: `createTestApp({ overrides })` boots the Nest app on `createTestDatabase()` and `useRedis()` and returns `{ app, http (supertest), db, redis, clock, close }`. Every later integration test uses it.
 - **Acceptance:**
   - A body with an unknown property answers `400 VALIDATION_FAILED` with `fieldErrors[].field` and without the submitted value (unit test with a `password` field).
   - A thrown `TypeError` becomes `500 INTERNAL_ERROR` with the `requestId` and no stack in the body.
   - The parity test passes, and fails when a test controller binds an operation that is not in the document.
   - `IdGenerator.new("ten")` matches `^ten_[0-9A-HJKMNP-TV-Z]{26}$`.
+  - With a valid `X-Velexis-Bff-Key` from loopback and no `X-Forwarded-For`, the request context holds the forwarded IP and user agent. With a wrong key, or with `X-Forwarded-For` present, both headers are ignored and `req.ip` is used. A valid key without a valid IP answers `400 VALIDATION_FAILED` (integration test) [PADR-0019].
 - **Verify:** `pnpm --filter @velexis/platform-backend test && pnpm --filter @velexis/platform-backend test:int`
 
 ### PBE-009 · Add Redis, BullMQ queues, the invalidation publisher, idempotency and rate limits
@@ -233,11 +251,12 @@ Common commands: backend `pnpm --filter @velexis/platform-backend test`, `test:i
   2. `InvalidationPublisher.publishAfterCommit(trx, event)` collects events during a platform transaction and publishes them on `vx:invalidate` only after commit, validated with `validateInvalidation`; `publish(event)` for non-transactional use.
   3. `@nestjs/bullmq` with prefix `vx`, the eight queues of architecture §5, defaults `attempts: 5`, exponential backoff from 30 s, failed jobs kept 30 days. `scheduler.registry.ts` registers `upsertJobScheduler` entries at worker start and skips a scheduler whose feature switch is off.
   4. Idempotency interceptor for operations with `x-idempotent`: `Idempotency-Key` required (400 when missing); Redis key `vx:idem:<accountId>:<key>` holds a hash of the body and the response for 24 h; same key and body replays status and body; another body answers `409 IDEMPOTENCY_KEY_REUSED`; a concurrent duplicate waits on a 10-second lock; `no-store` responses are never stored; Redis down answers `503 SERVICE_UNAVAILABLE`.
-  5. `@nestjs/throttler` with Redis storage and one named throttler per row of the rate-limit table of api-inventory §2; `429 RATE_LIMITED` with `Retry-After`.
+  5. `@nestjs/throttler` with Redis storage and one named throttler per row of the rate-limit table of api-inventory §2; `429 RATE_LIMITED` with `Retry-After`. The per-IP tracker is the request-context IP of PBE-008 (the end user's IP, PADR-0019), never `req.ip`.
 - **Acceptance:**
   - Two concurrent identical idempotent requests to a test-only controller cause one side effect and identical responses; a changed body with the same key answers 409.
   - An invalidation published in a transaction that rolls back is never delivered; after a commit a subscriber receives it.
   - A test-only route with the sign-up throttler answers 429 with `Retry-After` on the sixth call from one IP within an hour.
+  - Two clients sending the valid BFF key with different `X-Velexis-End-User-IP` values get separate buckets: after one of them is throttled, the other still passes [PADR-0019].
   - The registry registers no scheduler for a disabled feature.
 - **Verify:** `pnpm --filter @velexis/platform-backend test && pnpm --filter @velexis/platform-backend test:int -- common`
 
