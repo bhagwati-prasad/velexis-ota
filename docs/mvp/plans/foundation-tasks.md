@@ -272,8 +272,8 @@ Related: [`../decisions.md`](../decisions.md) (binding), [`../architecture.md`](
   - A type test compiles `components["schemas"]["Money"]` and fails on a misspelt schema name (`// @ts-expect-error`).
 - **Verify:** `pnpm contracts:generate && pnpm --filter @velexis/api-types build && pnpm --filter @velexis/api-types test && git diff --exit-code packages/api-types`
 
-### X-009 · Generate @velexis/errors from the error catalogues
-- **Status:** todo
+### X-009 · Generate @velexis/errors from the error catalogues ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** foundation
 - **Milestone:** M0
 - **Depends on:** X-008

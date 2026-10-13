@@ -164,7 +164,7 @@ ota/frontend/
 
 - **One envelope** for both APIs, as in the OTA document: `{ "error": { "code", "message", "status", "requestId", "details", "fieldErrors", "supplier" } }`.
 - **Codes come from the document's `x-error-catalogue`.** `@velexis/errors` is generated from it, so `new AppError("PRICE_CHANGED", { details })` only compiles with a listed code, and the HTTP status comes from the catalogue. A new code is added to the document first.
-- `VALIDATION_FAILED` carries `fieldErrors: [{ field, code, message }]`. Messages never echo the rejected value (it may be a card number or a password).
+- `VALIDATION_FAILED` carries `fieldErrors: [{ path, code, message }]` (the document's `FieldError` schema: `path` is a JSON pointer into the request). Messages never echo the rejected value (it may be a card number or a password).
 - **Unknown exceptions** become `500 INTERNAL_ERROR` with a generic message and the `requestId`. The stack is logged, never returned.
 - **Supplier errors** are mapped inside the Amadeus client to `SUPPLIER_*`, `SOLD_OUT`, `PRICE_CHANGED`, `TRAVELER_DATA_INVALID` and similar codes. The raw `supplier` issue appears only in console scope.
 - The platform API reuses the generic codes (`VALIDATION_FAILED`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `CONFLICT`, `RATE_LIMITED`, `INTERNAL_ERROR`) and adds its own in its own catalogue.

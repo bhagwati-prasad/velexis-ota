@@ -144,11 +144,12 @@ One error model for both APIs ([conventions §6](../docs/mvp/conventions.md#6-er
 import { AppError, isAppError, toErrorEnvelope, httpStatusFor, type ErrorCode } from "@velexis/errors";
 
 throw new AppError("PRICE_CHANGED", { details: { newTotal } });        // only catalogue codes compile
-throw new AppError("VALIDATION_FAILED", { fieldErrors: [{ field: "email", code: "format", message: "Invalid e-mail" }] });
+throw new AppError("VALIDATION_FAILED", { fieldErrors: [{ path: "/email", code: "format", message: "Invalid e-mail" }] });
 const { status, body } = toErrorEnvelope(err, requestId, { exposeSupplier: false }); // unknown -> 500 INTERNAL_ERROR
 ```
 
 - `src/generated/catalogue.ts` is generated from the `x-error-catalogue` of both documents (code, status, description, source `ota` | `platform`).
+- `fieldErrors` items are the document's `FieldError` schema: `path` (a JSON pointer into the request), `code`, `message`. Only the codes of `FIELD_ERROR_CODES` carry them ([`errors/README.md`](errors/README.md#which-codes-carry-fielderrors)).
 - Pure TypeScript, no NestJS dependency. Each backend wraps it in its own exception filter; the Next.js apps map codes to messages.
 
 ## `@velexis/db`

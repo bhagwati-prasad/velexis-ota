@@ -41,6 +41,16 @@
       ],
       "outputs": ["coverage/**"]
     },
+    "@velexis/errors#test": {
+      "dependsOn": ["^build"],
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "!.env*",
+        "$TURBO_ROOT$/ota/backend/openapi/**",
+        "$TURBO_ROOT$/platform/backend/openapi/**"
+      ],
+      "outputs": ["coverage/**"]
+    },
     "test:int": {
       "dependsOn": ["^build"],
       "cache": false,
