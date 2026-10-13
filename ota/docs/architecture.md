@@ -102,13 +102,13 @@ Every request passes the same chain. The order matters: tenant and caller are kn
 | Caller | Recognised by | Tenant from | Environment from | Scope |
 |---|---|---|---|---|
 | Storefront edge | `X-Velexis-Edge` equals `VELEXIS_EDGE_SECRET` | `X-Velexis-Host` → verified `tenant_domains` row (purpose `storefront`) or `<key>.ota.example.com` | `tenants.storefront_environment` | customer |
-| OTA admin server | `X-Api-Key` equals `OTA_ADMIN_SERVICE_KEY`, from `127.0.0.1` | Staff token `tid` (redeemed portal token on sign-in) | `X-Velexis-Environment` (live needs a live tenant and a live-capable role) | console |
+| OTA admin server | `X-Api-Key` equals `OTA_ADMIN_SERVICE_KEY` on a direct loopback connection: socket peer on loopback and no `X-Forwarded-For` / `X-Forwarded-Host` (so never through Caddy) | Staff token `tid` (redeemed portal token on sign-in) | `X-Velexis-Environment` (live needs a live tenant and a live-capable role) | console |
 | Publishable key | `X-Api-Key` `pk_…` (prefix → Redis → HMAC compare) | The key's tenant | The key | customer, origin allow-list |
 | Secret key | `X-Api-Key` `sk_…` | The key's tenant | The key | customer, or console per key scopes |
 | Stripe | Path `/webhooks/stripe/…` + signature | Event metadata or connection | Path or event | webhook only |
 | Public download | Path `/v1/files/…` (signature) or `/v1/assets/{tenantKey}/…` | Signed key or tenant key | — | none |
 
-The edge secret and the service key are checked **before** any platform lookup, so an attacker cannot use them to probe keys. A request with both an edge header and an API key is refused (`400 INVALID_REQUEST`).
+The edge secret and the service key are checked **before** any platform lookup, so an attacker cannot use them to probe keys. A request with both an edge header and an API key is refused (`400 INVALID_REQUEST`). Caddy proxies `api.ota.example.com` and the storefront `/api/*` to `127.0.0.1:4000`, so the loopback address alone proves nothing; the absent `X-Forwarded-For` (which Caddy always sets) is what marks a direct call, as in the platform's `InternalOnlyGuard` ([OADR-0009](adr/0009-caller-and-tenant-resolution.md) rule 1.2). The service caller must also send `X-Velexis-End-User-IP` and `X-Velexis-End-User-Agent` (the staff member's, forwarded by the OTA admin), which become the request-context IP and user agent.
 
 ### 3.2 Tokens
 
@@ -185,7 +185,7 @@ BullMQ prefix `vx`, defaults of [ADR-0009](../../docs/mvp/adr/0009-background-jo
 
 ## 7. Redis keys
 
-Shared keys follow the [cross-cutting table](../../docs/mvp/architecture.md#redis-keys-shared-between-the-backends) and [platform §6.4](../../platform/docs/architecture.md#64-redis-keys-shared-with-the-ota-backend). Every key has a TTL, because Redis runs with `noeviction`.
+Shared keys follow the [cross-cutting table](../../docs/mvp/architecture.md#redis-keys-shared-between-the-backends) and [platform §6.4](../../platform/docs/architecture.md#64-redis-keys-shared-with-the-ota-backend). Every key has a TTL, because Redis runs with `noeviction`. Every key that holds tenant data starts with `t:<tenantId>:<env>:` ([db README §5](../../docs/velexis-sdk/db/README.md)); the only tenant-related keys without it are the shared ones of those two tables. All keys are built in `redis.keys.ts`, and its test fails on a tenant-data builder without the prefix (OBE-002).
 
 | Key | TTL | Purpose |
 |---|---|---|
@@ -195,23 +195,23 @@ Shared keys follow the [cross-cutting table](../../docs/mvp/architecture.md#redi
 | `amadeus:tokenlock:<credId>:<env>` | 10 s | Single flight for token refresh |
 | `amadeus:badcred:<credId>` | 5 min | Credentials refused by Amadeus: calls answer `424` without retrying the token request |
 | `rl:amadeus:cred:<credId>:<env>`, `rl:amadeus:ten:<tenantId>:<env>` | 2 s | Token buckets |
-| `t:<tenantId>:<env>:sf:<locale>` | 5 min | `storefront.get` response cache |
+| `t:<tenantId>:<env>:sf:<locale>` | 5 min | Caller-independent part of `storefront.get` (asset ids, airline-card flag); asset URLs and `airline_card` are added per request for the caller ([OADR-0012](adr/0012-storefront-settings-assets-and-pages.md) point 7) |
 | `t:<tenantId>:<env>:search:<sha256>` | 30 s | Single flight for identical concurrent searches |
-| `cxq:<bookingId>` | 10 min | Cancellation quote (contract) |
-| `t:<tenantId>:ac:chk:<checkoutId>` | 2 h | Airline-card attempts of one checkout (max 3) |
+| `t:<tenantId>:<env>:cxq:<bookingId>` | 10 min | Cancellation quote (the contract text calls it `cxq:{bookingId}`; the OTA keeps it under the tenant prefix) |
+| `t:<tenantId>:<env>:ac:chk:<checkoutId>` | 2 h | Airline-card attempts of one checkout (max 3) |
 | `staffsess:<familyId>`, `staffdeny:<familyId>` | family lifetime | Staff refresh families and revocations |
 | `staffdeny:acct:<accountId>` (read) | 30 days | Platform's cross-boundary revocation ([PADR-0007](../../platform/docs/adr/0007-portal-to-ota-admin-sso-token.md)) |
 | `staffdeny:tenant:<tenantId>` | 30 days | Written on `tenant.suspend`: staff families of the tenant created before it are refused |
 | `ptk:<sha256>` (GETDEL) | 60 s | Portal token for staff SSO |
 | `apikey:used:<keyId>` (write) | 1 day | Last use, flushed by the platform worker |
-| `authfail:<tenantId>:<sha256(email)>` | 15 min | Customer sign-in lockout counter |
+| `t:<tenantId>:<env>:authfail:<sha256(email)>` | 15 min | Customer sign-in lockout counter |
 | `rl:*` | window | Throttler storage |
 
 ## 8. Rate limits
 
 | Route | Limit | Reason |
 |---|---|---|
-| `auth.signIn`, `console.auth.signIn` | 10 per minute per IP; lockout after 5 failures per identity for 15 min | [ADR-0008](../../docs/mvp/adr/0008-identity-accounts-customers-sessions.md) |
+| `auth.signIn`, `console.auth.signIn` | 10 per minute per end-user IP; lockout after 5 failures per identity for 15 min | [ADR-0008](../../docs/mvp/adr/0008-identity-accounts-customers-sessions.md) |
 | `auth.signUp`, `auth.requestPasswordReset`, `auth.resendVerification` | 5 per hour per IP, 3 per hour per e-mail | Abuse and e-mail cost |
 | `flights.search`, `flights.upsell`, `flights.price` | 30 per minute per IP (edge, `pk_`), plus the Amadeus buckets | Shared Amadeus quota |
 | `bookings.lookup` | 5 failures per 15 min per IP and per reference | Contract |
@@ -220,7 +220,7 @@ Shared keys follow the [cross-cutting table](../../docs/mvp/architecture.md#redi
 | Console operations | 600 per minute per staff session or key | Runaway scripts |
 | `/v1/assets/*`, `/v1/files/*` | 120 per minute per IP | Scraping |
 
-Server-side callers forward the visitor with `X-Velexis-End-User-IP`, as the contract says; the edge uses Caddy's client IP.
+"IP" is the request-context IP: Caddy's client address for the edge and public calls; `X-Velexis-End-User-IP` for secret-key servers, as the contract says, and for the OTA admin's service caller, which must send it ([OADR-0011](adr/0011-console-access-staff-sessions-and-environments.md) points 8–9). Without that header every OTA's staff sign-ins would share the admin server's `127.0.0.1` bucket.
 
 ## 9. Security notes specific to the OTA backend
 

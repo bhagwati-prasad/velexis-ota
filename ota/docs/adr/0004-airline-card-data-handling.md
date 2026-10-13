@@ -44,7 +44,7 @@ The airline charges its own fare: the Amadeus total of the order, plus the airli
 
 ### 6. Abuse defence
 
-- Limits: 5 per minute per IP, 3 attempts per checkout (`t:<tenantId>:ac:chk:<checkoutId>`), 60 per hour per tenant; without Redis the route answers `503` rather than run unlimited.
+- Limits: 5 per minute per IP, 3 attempts per checkout (`t:<tenantId>:<env>:ac:chk:<checkoutId>`), 60 per hour per tenant; without Redis the route answers `503` rather than run unlimited.
 - Three declines on a checkout lock it (`403 PAYMENT_ATTEMPTS_EXCEEDED`) and alert the OTA (`staff.airline_card_alert`) and Velexis ops (`OPS_ALERT_EMAIL`). A tenant passing 20 declines in an hour has the method suspended for an hour (Redis flag) and ops are alerted.
 
 ### 7. Timeouts

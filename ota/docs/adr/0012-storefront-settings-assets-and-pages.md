@@ -3,6 +3,7 @@
 **Status:** Accepted
 **Date:** 2026-10-12
 **Deciders:** OTA backend tech lead. Decided during planning; revisit when OTAs ask for custom CSS or richer page layouts, or when an image processing library is added to the stack.
+**Revisions:** 2026-10-12 (planning review): point 7 caches only the caller-independent part of `storefront.get`, because point 3 and the airline-card method make the response differ per caller.
 
 ## Context
 
@@ -19,7 +20,7 @@ The hosted storefront is one static build for every OTA; branding, locales, curr
 4. **Theme.** Colours (`#RRGGBB`), a corner-radius style and fonts chosen from the fonts bundled with the storefront build (open licences, served from the storefront origin). The storefront applies them as CSS custom properties set with `style.setProperty`, never by injecting CSS text. `customCssUrl` is always `null` in the MVP.
 5. **Content pages** live in `storefront_pages` (one row per slug and locale) and are written in a **Markdown subset**: headings 2–4, paragraphs, bold, italic, bullet and numbered lists, links (`https:`, `mailto:`, `tel:`, relative `/p/<slug>`), and images referencing `page_image` assets. The server validates on save (`422` with the line) and parses on read into a block tree (`storefront.getPage` returns `blocks`), which the storefront renders with `createElement` and `textContent`. One small parser in the backend (no Markdown library that emits HTML).
 6. **Legal links** in settings can point to an external URL or to a page slug; a linked page cannot be deleted. Sign-up records `terms_version` and `privacy_version` in `customer_consents`.
-7. **Caching.** `storefront.get` and pages are cached in Redis per tenant, environment and locale for 5 minutes and deleted on every settings or page change; the storefront keeps its own 5-minute `sessionStorage` copy, so a change is visible within about 5 minutes.
+7. **Caching.** `storefront.get` and pages are cached in Redis per tenant, environment and locale for 5 minutes (`t:<tenantId>:<env>:sf:<locale>`) and deleted on every settings or page change. Because `storefront.get` differs per caller (point 3, and `airline_card` in `payment.supportedMethods` and `payment.airlineCard` for the edge only, [OADR-0017](0017-airline-card-form-isolation.md) point 7), the cache holds only the caller-independent part: asset references as ids and the airline-card availability as a flag. The mapper adds the asset URLs and the airline-card fields for the caller on every request, so whichever caller fills the cache first never decides what the others get. A test makes a `pk_` call and then an edge call on one cache fill and checks both answers; the storefront keeps its own 5-minute `sessionStorage` copy, so a change is visible within about 5 minutes.
 8. **Test mode banner** is not a setting: the storefront shows it whenever `environment = test`.
 
 ## Consequences
@@ -29,6 +30,7 @@ The hosted storefront is one static build for every OTA; branding, locales, curr
 - The CSP of the hosted storefront stays strict; brand assets cannot carry script or style injection.
 - OTAs get a branded storefront and legal pages without writing HTML or hosting files.
 - One static build still serves every OTA.
+- One cache entry per tenant, environment and locale serves both caller kinds without leaking one caller's view to the other.
 
 ### Negative
 
@@ -46,6 +48,7 @@ The hosted storefront is one static build for every OTA; branding, locales, curr
 - **External logo URLs.** Break the CSP and leak visitor IPs to third parties.
 - **Sanitised HTML pages.** A sanitiser is one more dependency and still needs `innerHTML` in the storefront.
 - **Custom CSS uploads.** CSS can restyle or hide elements of the payment page, which the PCI controls of ADR-0011 must keep stable.
+- **The caller kind in the cache key** (`…:sf:<edge|key>:<locale>`). Also correct, but doubles the entries and the keys every settings change must delete; the per-request decoration is a few lines in the mapper.
 
 ## References
 

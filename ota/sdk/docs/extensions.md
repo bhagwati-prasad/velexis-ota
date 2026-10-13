@@ -81,7 +81,7 @@ These need no SDK code (they come with the generated types), but storefront and 
 | `PaymentCreateRequest.method`, `Payment.method` | `airline_card` | [`api-changes.md`](../../docs/api-changes.md) §3.1 |
 | `Payment.provider` | `airline` | §3.1 |
 | `PaymentNextAction.type` | `airline_card_form` | §3.1 |
-| `StorefrontPaymentConfig` | `accountMode`, `merchantName`, `statementDescriptor`, `airlineCard`, `supportedMethods` + `airline_card` | §4 |
+| `StorefrontPaymentConfig` | `accountMode`, `merchantName`, `statementDescriptor`, `airlineCard`, `supportedMethods` + `airline_card` (both airline-card fields only for the hosted storefront's edge calls; key callers never see them) | §4 |
 | `StaffPermission` | `settings:read`, `settings:write`, `payments:read`, `payments:capture`, `payments:refund` | part 2 §1 |
 | `ConsoleStaffSession` | `environments: ["test"] \| ["test", "live"]` | §5 |
 | `BookingLookupResult.bookingToken` | nullable (`null` in cookie mode) | §2.2 |

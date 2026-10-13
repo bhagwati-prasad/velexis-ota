@@ -8,8 +8,8 @@ Related: [`../scope.md`](../scope.md) (features OF-01 … OF-12, the 96 operatio
 
 | Item | Value |
 |---|---|
-| Agent tasks | 149: 89 backend (`OBE-`), 26 storefront (`OFE-`), 19 OTA admin (`OAD-`), 15 SDK (`SDK-`) |
-| Estimate | 680 agent-hours by the plan-lint sizes (S 2 h, M 4 h, L 8 h, review included); 170 developer-days without agents (S ½ day, M 1 day, L 2 days) |
+| Agent tasks | 151: 91 backend (`OBE-`), 26 storefront (`OFE-`), 19 OTA admin (`OAD-`), 15 SDK (`SDK-`) |
+| Estimate | 684 agent-hours by the plan-lint sizes (S 2 h, M 4 h, L 8 h, review included); 171 developer-days without agents (S ½ day, M 1 day, L 2 days) |
 | Foundation dependencies | `X-001` … `X-030` ([`foundation-tasks.md`](../../../docs/mvp/plans/foundation-tasks.md)); the OTA plan never re-does them and adds the 11 Amadeus stub operations X-026 leaves to it |
 | Platform dependencies | PBE-002, PBE-004, PBE-034, PFE-014, PFE-017, PBE-053, PBE-055, PBE-057, PBE-061 (named in **Depends on**); the platform gates PBE-035, PBE-036, PAD-011 and PFE-019 on OTA features |
 | Validation | `node tools/plan-lint/plan-lint.mjs docs/mvp/plans/foundation-tasks.md platform/docs/plans/agent-tasks.md ota/docs/plans/agent-tasks.md` (0 errors) |
@@ -17,7 +17,7 @@ Related: [`../scope.md`](../scope.md) (features OF-01 … OF-12, the 96 operatio
 
 Rules that shape the order of the tasks:
 
-- **Contract first, per milestone.** Each milestone that changes the OTA contract starts with a spec task: OBE-009 (M2: edge and cookie mode, `x-milestone`), OBE-029 (M3: airline card, payment account modes), OBE-058 (M4: console settings, payments, permissions, public pages and assets), OBE-076 (M5: Connect webhooks, billing notice). Operations without a handler are listed in `pending-operations.ts` and answer `501`; the list holds only `deferred` operations after M4 ([ADR-0006](../../../docs/mvp/adr/0006-contract-first-openapi.md)).
+- **Contract first, per milestone.** Each milestone that changes the OTA contract starts with a spec task: OBE-009 (M2: edge and cookie mode, `x-milestone`), OBE-029 (M3: airline card, payment account modes), OBE-058, OBE-090 and OBE-091 (M4: console permissions and settings; console payments, health and the M5 webhooks; with the public endpoints), OBE-076 (M5: billing notice). Operations without a handler are listed in `pending-operations.ts` and answer `501`; the list holds only `deferred` operations and the two M5 webhooks after M4, and only `deferred` ones after M5 ([ADR-0006](../../../docs/mvp/adr/0006-contract-first-openapi.md)).
 - **One tenant migration for all deltas.** `0002_add_mvp_tenant_deltas.sql` lands once, in M2 before the first shopping endpoint (OBE-008), copied verbatim from the data-model document with a test that keeps the two identical ([`../data-model.md`](../data-model.md) §1).
 - **Backend, then SDK, then pages.** Every storefront or OTA admin task depends on the backend task of its operations and on the SDK namespace that exposes them. The SDK is the only way to the API for both UIs ([`decisions.md`](../../../docs/mvp/decisions.md) §1).
 - **Proof tasks close each milestone.** OBE-026 (M2), OBE-057 (M3), OBE-075 (M4) and OBE-083 (M5) prove the OTA features of [`../scope.md`](../scope.md) §4 with integration tests; OFE-008, OFE-017 … OFE-019, OFE-022, OAD-016, OAD-017 prove them in a browser.
@@ -27,7 +27,7 @@ Rules that shape the order of the tasks:
 
 | Epic | Name | What it delivers | Tasks |
 |---|---|---|---|
-| OE1 | Scaffolds and contracts | The four OTA packages, the OpenAPI extensions per milestone, generated types and error codes, route parity with the `501` list | OBE-001, OFE-001, OAD-001, SDK-001, OBE-009, OBE-010, OBE-029, OBE-058, OBE-076 |
+| OE1 | Scaffolds and contracts | The four OTA packages, the OpenAPI extensions per milestone, generated types and error codes, route parity with the `501` list | OBE-001, OFE-001, OAD-001, SDK-001, OBE-009, OBE-010, OBE-029, OBE-058, OBE-090, OBE-091, OBE-076 |
 | OE2 | Tenant lifecycle | Provisioning worker, tenant migrations and the deploy report, seeds, `dev:seed`, migration `0002`, suspend and resume | OBE-002 … OBE-008, OBE-074 |
 | OE3 | Tenancy and request pipeline | Caller and tenant resolution, platform caches and invalidation, scope and CSRF guards, rate limits, idempotency, isolation proof | OBE-011 … OBE-014, OBE-026 |
 | OE4 | Amadeus integration | Connection resolver, tokens, buckets, timeouts, error mapping, `supplier_requests`, the 11 stub operations, fixtures, own credentials | OBE-017 … OBE-019, OBE-027, OBE-041, OBE-079 |
@@ -54,10 +54,10 @@ Some tasks belong to two epics (for example OBE-079 in OE4 and OE15); the table 
 | M1 Platform core | Provisioning worker (OF-11) | 6 | 26 | 6.5 | Sign-up to active OTA, keys, team, admin basics; PBE-035 gated on OF-11 |
 | M2 Search & price | Tenancy, Amadeus, shopping, SDK core, storefront search to price (OF-01, OF-02) | 34 | 158 | 39.5 | Cross-backend proof of keys and invalidation (PBE-036, PAD-011), gated on OF-01 |
 | M3 Book & pay | Checkout, cookie accounts, Stripe, airline card (test), orders, tickets, e-mails, bookings, cancel (OF-03 … OF-08) | 43 | 222 | 55.5 | Statement descriptor (PBE-037, PBE-038, PFE-016) |
-| M4 OTA admin | Console API, `console` SDK, OTA admin, settings, content pages (OF-09, OF-10) | 39 | 176 | 44 | Console token and Open console (PBE-039, PFE-017 … PFE-019), gated on OF-09 |
+| M4 OTA admin | Console API, `console` SDK, OTA admin, settings, content pages (OF-09, OF-10) | 41 | 180 | 45 | Console token and Open console (PBE-039, PFE-017 … PFE-019), gated on OF-09 |
 | M5 Monetisation & self-service | Gateways and resolver that follow the platform's data, custom domains, live (OF-12) | 11 | 38 | 9.5 | Billing, own Stripe, settlements, own Amadeus, domains, go-live |
 | M6 Hardening & launch | Security review, PCI evidence, airline-card live gate, erasure, performance, runbooks, SDK 1.0.0 | 12 | 46 | 11.5 | Platform security review, performance, suites, switch removal; foundation monitoring and restore drill |
-| **Total** | | **149** | **680** | **170** | |
+| **Total** | | **151** | **684** | **171** | |
 
 ```mermaid
 flowchart LR
@@ -100,7 +100,7 @@ The critical path printed by plan-lint runs through the foundation database task
 
 | Risk | Mitigation |
 |---|---|
-| Entry points or output folders differ from what the units and the release expect | OBE-001 builds `dist/main.js`, `dist/worker.js`, `dist/cli.js`; OFE-001 builds `dist/`; OAD-001 builds `.next/standalone`, as [ADR-0023](../../../docs/mvp/adr/0023-release-artefact-and-deploy-user.md) and the units name them |
+| Entry points or output folders differ from what the units and the release expect | OBE-001 builds `dist/main.js`, `dist/worker.js`, `dist/cli.js`; OFE-001 builds `dist/`; OAD-001 builds `.next/standalone/ota/admin/server.js` (`outputFileTracingRoot` = repository root, the path `pack-release.sh` checks), as [ADR-0023](../../../docs/mvp/adr/0023-release-artefact-and-deploy-user.md) and the units name them |
 | The storefront build injects inline code that the CSP blocks only in production | OFE-001 disables the module-preload polyfill and asset inlining, greps `dist/` and compares the preview CSP with the Caddyfile |
 
 ### M1 — Platform core
@@ -114,7 +114,7 @@ The critical path printed by plan-lint runs through the foundation database task
 **Exit criteria.**
 - OF-11 AC1 and AC2 are proven by OBE-005's integration tests; failure classification is proven by OBE-006.
 - The platform's cross-backend test PBE-035 passes with the real OTA worker.
-- `tenants:report-migrations` publishes deploy fan-out results with `jobId = null`.
+- `tenants:report-migrations` publishes deploy fan-out results with `jobId = null`, and `velexis-deploy` runs it after the fan-out (OBE-007, `deploy.test.sh`).
 
 **Dependencies on the platform group.**
 
@@ -249,7 +249,7 @@ The critical path printed by plan-lint runs through the foundation database task
 
 | Epic | Tasks |
 |---|---|
-| OE1 contract | OBE-058 |
+| OE1 contract | OBE-058, OBE-090, OBE-091 |
 | OE10 console API | OBE-059 … OBE-068, OBE-075 |
 | OE11 settings | OBE-069 … OBE-073 |
 | OE2 suspend and resume | OBE-074 |
@@ -394,16 +394,16 @@ Every feature of [`../scope.md`](../scope.md) §4, every part of §2, the contra
 | §2.2 Storefront: pages M2–M4, English UI, currencies, branding, test banner | M2 – M5 | OE13 | OFE-001 … OFE-021; accessibility and budgets: OFE-024 |
 | §2.3 OTA admin: SSO, test/live, every listed area | M4, M5 | OE14 | OAD-001 … OAD-018 |
 | §2.4 SDK: core, cookie and token mode, namespaces, bundles, contract check, npm (M6) | M2 – M6 | OE12 | SDK-001 … SDK-015 |
-| §3 Deferred operations answer `501` and keep their SDK method | M2 → M4 | OE1, OE12 | OBE-009 (`x-milestone`), OBE-010 (`pending-operations.ts`), OBE-075 (only `deferred` left), SDK-005, SDK-008, SDK-010, SDK-011 |
+| §3 Deferred operations answer `501` and keep their SDK method | M2 → M4 | OE1, OE12 | OBE-009 (`x-milestone`), OBE-010 (`pending-operations.ts`), OBE-075 (only `deferred` and the two M5 webhooks left at M4), OBE-078 (only `deferred` at M5), SDK-005, SDK-008, SDK-010, SDK-011 |
 | §3 Parts switched off answer `403 FEATURE_DISABLED` | M2 – M4 | — | async search OBE-021; traveller changes OBE-048; airline card OBE-050, OBE-051; password grant OBE-059; console card payment OBE-062, OBE-063; `pay_later` OBE-070 |
 | §1.3 Roles and permissions | M4 | OE10 | OBE-058 (`StaffPermission`, `x-permission`), OBE-060 (`roles.ts`), OBE-075, OAD-002 (`can()`), OAD-017 |
 | Account deletion and 30-day erasure | M3, M6 | OE6 | OBE-035, OBE-087 |
 | Tenant migration `0002` ([`../data-model.md`](../data-model.md) §3, [exact SQL](../data-model-migration-0002.md)) | M2 | OE2 | OBE-008 (file, parity test, all §3 tests, codegen); used by OBE-016, OBE-042, OBE-050, OBE-070 … OBE-072 |
 | API changes part 1 ([`../api-changes.md`](../api-changes.md)) §2, §5, §6 | M2 | OE1 | OBE-009 |
 | API changes part 1 §3, §4 | M3 | OE1 | OBE-029 |
-| API changes part 2 ([`../api-changes-console-and-internal.md`](../api-changes-console-and-internal.md)) §1–§4, §5 (health) | M4 | OE1 | OBE-058 |
+| API changes part 2 ([`../api-changes-console-and-internal.md`](../api-changes-console-and-internal.md)) §1–§4, §5 (health; the M5 webhooks documented early) | M4 | OE1 | OBE-058, OBE-090, OBE-091 |
 | API changes part 2 §5 (Velexis webhooks, file download) | M3 | OE7, OE9 | OBE-039, OBE-054 |
-| API changes part 2 §5 (Connect and connection webhooks), billing notice | M5 | OE15 | OBE-076, OBE-078, OBE-082 |
+| API changes part 2 §5 (Connect and connection webhooks: implemented), billing notice | M5 | OE15 | OBE-078 (webhooks), OBE-076, OBE-082 (billing notice) |
 | Workers and schedulers ([`../architecture.md`](../architecture.md) §6) | M2 – M4 | OE5, OE8 | OBE-024 (framework, `offers.purge`), OBE-040, OBE-043, OBE-044, OBE-045, OBE-030 (`notifications.sweep`), OBE-056 (`checkouts.expire`, `retention.daily`), OBE-065 (`queues.poll`), OBE-025 (queue ages) |
 | Amadeus stub operations left by X-026 | M2, M3 | OE4 | OBE-019 (price, upsell, availability), OBE-041 (orders, issue, management, by-reference, queue) |
 | OADR-0001 / OADR-0003 follow-ups (fixtures, error table, booking queue, load test) | M2 | OE4 | OBE-027, OBE-028 |
@@ -467,9 +467,9 @@ Every MVP operation of [`../scope.md`](../scope.md) §3 (77 contract operations 
 | `console.settings.assets.list`, `.upload`, `.delete` | OBE-071 | SDK-012 | OAD-014 |
 | `console.settings.pages.*` (5) | OBE-072 | SDK-012 | OAD-015 |
 | `console.settings.templates.*` (5) | OBE-073 | SDK-012 | OAD-015 |
-| Internal: `healthLive`, `healthReady` | OBE-001, OBE-025 (documented OBE-058) | — | — |
+| Internal: `healthLive`, `healthReady` | OBE-001, OBE-025 (documented OBE-090) | — | — |
 | Internal: `receiveStripeVelexisWebhook` | OBE-039 | — | — |
-| Internal: `receiveStripeConnectWebhook`, `receiveStripeConnectionWebhook` | OBE-078 (documented OBE-076) | — | — |
+| Internal: `receiveStripeConnectWebhook`, `receiveStripeConnectionWebhook` | OBE-078 (documented OBE-090) | — | — |
 | `downloadFile`, `getPublicAsset` (`x-sdk-exclude`) | OBE-054, OBE-071 | — | OFE-015 (downloads), OFE-003 and OFE-020 (images) |
 | The 19 deferred operations | `501` through OBE-010 | SDK-005, SDK-008, SDK-010, SDK-011 | — |
 
@@ -481,17 +481,21 @@ None of these changes a decision of [`decisions.md`](../../../docs/mvp/decisions
 
 | Topic | Alignment | Where |
 |---|---|---|
-| Contract rollout | The OTA document grows in four milestone slices (OBE-009, OBE-029, OBE-058, OBE-076); unimplemented operations are listed with their task id in `pending-operations.ts` and answer `501`, as ADR-0006 asks; the SDK's parity test uses a parallel `pending-namespaces.js` until M4 | OBE-010, SDK-006, SDK-013 |
+| Contract rollout | The OTA document grows in four milestone slices (M2 OBE-009; M3 OBE-029; M4 OBE-058, OBE-090, OBE-091, which complete it at 135 operations; M5 OBE-076, one field); spec tasks regenerate the SDK route table and list new methods of an implemented namespace as pending SDK methods; unimplemented operations are listed with their task id in `pending-operations.ts` and answer `501`, as ADR-0006 asks; the SDK's parity test uses a parallel `pending-namespaces.js` until M4 | OBE-010, SDK-006, SDK-013 |
 | Amadeus types | Eight of the nine Amadeus files are Swagger 2.0; the generator converts them in memory with `swagger2openapi` (a generation-time devDependency, justified in the PR as tech-stack.md asks; not a new kind of dependency) before `openapi-typescript` | OBE-017 |
 | Amadeus stub | The OTA plan adds the 11 operations that X-026 leaves unstubbed, shopping in M2 and orders in M3, with the scenarios the flows name and in-memory orders for reconciliation tests | OBE-019, OBE-041 |
 | Template seeds | Seeds write template rows only for code defaults that exist; tenants provisioned before M3 use the code fallback of OADR-0013, so no backfill is ever needed | OBE-004, OBE-030, OBE-055 |
 | `dev:seed` | The OTA `dev:seed` of the backend README writes the demo tenant's platform rows through the migrator DSN in development only (refused when `APP_ENV=production`) and then calls the real provisioning function; the runtime rule "the OTA backend never writes platform tables" is unchanged | OBE-007 |
 | Service key | The `X-Velexis-Environment` parameter lands in the M2 contract slice (api-changes §1 order), but the service-key branch of the caller guard is built in M4 with the first console operations | OBE-009, OBE-060 |
-| SSO landing page | `/sso` answers `303` to `/bookings`, as architecture flow (c) and platform task PFE-019 expect; the OTA admin README §3 (which says `/`) is corrected in the same task | OAD-003 |
+| SSO landing page | `/sso` answers `303 See Other` to `/bookings`, as architecture flow (c), platform task PFE-019 and the OTA admin README §3 say | OAD-003 |
 | Billing notice in the OTA admin | The platform's `tenants.billing_notice` reaches the OTA admin as the additive, nullable `ConsoleStaffSession.tenant.billingNotice`, because the admin reads only through the SDK (OADR-0018) | OBE-076, OBE-082, OAD-018 |
 | Suspend and resume | The OTA consumer of `tenant.suspend` and `tenant.resume` lands in M4, inside the "M4/M5" window the platform plan expects | OBE-074 |
 | Stripe in end-to-end tests | Journeys that need Stripe test mode run in a nightly-only `storefront-stripe` project, mirroring the platform's `portal-stripe` (PADR-0017); other journeys use the airline-card path in test or seeded bookings | OFE-017, OAD-017 |
 | Caddy follow-ups | The path-specific CSP of the airline-card page and the `/p/*` rewrite are added to `deploy/caddy/Caddyfile` by the storefront tasks that need them, each with a `caddy-smoke.sh` assertion | OFE-014, OFE-020 |
-| Payment-page integrity | The storefront build emits `dist/payment-page-inventory.json`, the file X-030's daily check compares with the live pages | OFE-023 |
+| Payment-page integrity | The storefront build emits `dist/payment-page-inventory.json` for every page of the origin (any script there could imitate the card form, OADR-0017 point 8), the file X-030's daily check compares with the live pages | OFE-023 |
+| Service caller | The service key counts only on a direct loopback connection without `X-Forwarded-For` (Caddy reaches the API from `127.0.0.1` too), and the OTA admin forwards the staff member's IP and user agent for throttling and audit (OADR-0009, OADR-0011) | OBE-060, OAD-002, OBE-084 |
+| Stripe webhook tenants | Each webhook endpoint resolves the tenant by its own rule; metadata and `livemode` are cross-checked (OADR-0010 point 4) | OBE-039, OBE-078 |
+| `storefront.get` cache | Only the caller-independent part is cached; asset URLs and the edge-only airline-card fields are added per request (OADR-0012 point 7) | OBE-016, OBE-050 |
+| Deploy fan-out report | `velexis-deploy` runs `tenants:report-migrations` through `velexis-run ota` right after the fan-out, with the release paths of `deploy.sh` (OADR-0007 item 7) | OBE-007 |
 | No OTA milestone switches | M5 behaviour follows platform data (`account_mode`, `credential_source`, verified domains, `storefront_environment`), so the OTA backend needs no `FEATURE_*` switches; the platform's switches gate the data | OBE-077 … OBE-081 |
 | Airline card at launch | Built and tested in M3 for the test environment; production keeps `AIRLINE_CARD_ENABLED=false` until the go-live runbook of OBE-086 is fully checked, which may be after launch | OBE-050, OBE-086 |

@@ -3,6 +3,7 @@
 **Status:** Accepted
 **Date:** 2026-10-12
 **Deciders:** OTA backend tech lead. Decided during planning; revisit when tenant count makes the deploy fan-out slower than 10 minutes, when per-tenant roles are introduced, or when a second database cluster is added.
+**Revisions:** 2026-10-12 (planning review): item 7 names the release paths `deploy.sh` uses and the `velexis-run` step that OBE-007 adds to it.
 
 ## Context
 
@@ -23,7 +24,7 @@ The OTA backend owns every tenant schema and its migrations ([`decisions.md`](..
    | Checksum mismatch, schema with tables but no ledger ("foreign content"), invalid schema name, tenant not in `provisioning` | no (`UnrecoverableError`) |
 
    A schema is never dropped by the worker.
-7. **Deploy fan-out** is run by `velexis-deploy` with the shared CLI (`migrate.js tenants`, concurrency 4, failure ratio 0.1, report file), then `ota-backend/dist/cli.js tenants:report-migrations --report <file>` publishes one `tenant.migrated` / `tenant.migration_failed` per schema with `jobId = null`. Workers restart before APIs. The code supports schema versions N-1 and N.
+7. **Deploy fan-out** is run by `velexis-deploy` before the switch, with the shared CLI (`migrate.js tenants --dir "$REL/migrations/tenant"`, concurrency 4, failure ratio 0.1, report `/var/lib/velexis/migrate-<sha>.json`, copied to `/var/log/velexis/`). Right after it, still before the switch, `velexis-run ota node "$REL/ota-backend/dist/cli.js" tenants:report-migrations --report /var/lib/velexis/migrate-<sha>.json` publishes one `tenant.migrated` / `tenant.migration_failed` per schema with `jobId = null` and the schema's full ledger. `velexis-run` ([ADR-0026](../../../docs/mvp/adr/0026-system-users-per-trust-zone.md) item 6) runs it as the OTA zone user with `ota-backend.env` and `ota-worker.env` (for `REDIS_URL`), never with the migrator DSN. A failed report stops the deploy like a failed migration; re-running it repeats both steps safely. OBE-007 adds the step to `deploy/scripts/deploy.sh` and its test. Workers restart before APIs. The code supports schema versions N-1 and N.
 8. **Housekeeping messages** `tenant.suspend` and `tenant.resume` are handled by the same consumer: expire open checkouts and void their authorisations, write or delete `staffdeny:tenant:<tenantId>`, and answer `tenant.suspended` / `tenant.resumed` ([PADR-0014](../../../platform/docs/adr/0014-tenant-suspension-and-resume.md)).
 9. **Local and test use.** `@velexis/testing` provisions `tenant_alpha` and `tenant_beta` through the same function the consumer uses, so tests exercise the real provisioning path.
 

@@ -199,7 +199,7 @@ The details, with the `tsconfig` files and the route-table format, are in [`docs
   2. generated per-method assertions: the contract's parameters must be assignable to the SDK's, and the SDK's awaited result to the contract's (explicit checks, because TypeScript compares method parameters bivariantly);
   3. hand-written assertions for `createVelexisClient`, `VelexisClient`, the options, `RequestOptions`, `Page<T>`, every error class and `isVelexisError`;
   4. **approved deviations** in `test/contract/deviations.ts`, each naming its ADR; today only the three auth responses that are `AuthSessionResult | AuthSessionInfo` because of cookie mode ([OADR-0006](../docs/adr/0006-storefront-cookie-sessions-and-csrf.md));
-  5. a runtime **parity test**: the set of `x-sdk-method` names in the working OpenAPI document equals the set of methods on a client instance.
+  5. a runtime **parity test**: the set of `x-sdk-method` names in the working OpenAPI document equals the set of methods on a client instance. Until the M4 exit, `test/contract/pending-namespaces.js` lists what the document already has but the SDK does not yet: whole namespaces, or single methods of an implemented namespace (for example `storefront.listPages` between OBE-091 and SDK-012), each with the SDK task that adds it. SDK-013 empties the list.
 
 The contract files under `docs/velexis-sdk/sdk/src/` are never edited; additions go to the OpenAPI document and [`docs/extensions.md`](docs/extensions.md).
 

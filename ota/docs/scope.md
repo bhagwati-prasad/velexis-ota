@@ -24,7 +24,7 @@ Related: [`architecture.md`](architecture.md), [platform scope](../../platform/d
 | Third-party server | `sk_…` scoped `storefront` | Customer scope |
 | Custom console | `sk_…` scoped `console` + staff token | Console scope, staff permissions |
 | Automation job | `sk_…` scoped `console:automation` + explicit permissions, header `X-Velexis-Scope: console` | Console scope, the key's permissions only, audited as the key |
-| OTA admin server | First-party service key from `127.0.0.1` + staff token + `X-Velexis-Environment` | Console scope ([ADR-0008](../../docs/mvp/adr/0008-identity-accounts-customers-sessions.md)) |
+| OTA admin server | First-party service key on a direct loopback connection (never through Caddy) + staff token + `X-Velexis-Environment` + the staff member's forwarded IP and user agent | Console scope ([ADR-0008](../../docs/mvp/adr/0008-identity-accounts-customers-sessions.md)) |
 | Stripe | Webhook signature | Webhook endpoints only |
 
 Hosting keys (`hk_`) and `storefront.resolve` are **later**, as in the [platform scope](../../platform/docs/scope.md).

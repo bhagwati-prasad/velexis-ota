@@ -195,12 +195,13 @@ Response: the `201 CheckoutCompletion` of `checkout.complete` (booking normally 
 | `accountId` | description | `connect_standard`: `acct_…` (Stripe.js `stripeAccount`); otherwise `null` |
 | `merchantName` | **new**, string | `velexis`: "Velexis on behalf of <OTA name>" (legal text confirmed by the ADR-0011 legal follow-up); otherwise the OTA name |
 | `statementDescriptor` | **new**, string or null | `velexis`: `statement_descriptor_suffix` of the connection; otherwise `null` |
-| `supportedMethods` | items enum adds `airline_card` | Added when the airline card is enabled for the tenant and environment and `AIRLINE_CARD_ENABLED` is on |
-| `airlineCard` | **new**, object or null | `{enabled, cardBrands: StorefrontCardBrand[], chargedBy: "airline", notice}`; `notice` is the localised text "The airline charges your card. The price is the airline's price." |
+| `supportedMethods` | items enum adds `airline_card` | Added **only for the storefront edge** (the completion operation is `x-edge-only`), when the airline card is enabled for the tenant and environment and `AIRLINE_CARD_ENABLED` is on; `pk_` and `sk_` callers never get it |
+| `airlineCard` | **new**, object or null | Edge only, under the same conditions: `{enabled, cardBrands: StorefrontCardBrand[], chargedBy: "airline", notice}`; `notice` is the localised text "The airline charges your card. The price is the airline's price." Always `null` for key callers |
 
 - Tables: `storefront_settings` (`accepted_card_brands`, `airline_card_enabled_test/live`), platform `payment_provider_connections` (read-only), `tenants` (name).
 - Errors: none new. No active payment connection and no airline card → `payment` stays as today and checkout answers `424 PAYMENT_PROVIDER_NOT_CONFIGURED`.
 - M3 implements `velexis` only; the other two values appear when the platform creates such connections in M5, with no OTA code switch ([OADR-0010](adr/0010-stripe-gateway-and-payment-webhooks.md)).
+- The response differs per caller (asset URLs, `airline_card`), so the backend caches only the caller-independent part of `storefront.get` and adds the caller-specific fields on each request ([OADR-0012](adr/0012-storefront-settings-assets-and-pages.md) point 7).
 
 ## 5. (f) OTA admin first-party service credential
 
@@ -216,7 +217,8 @@ VelexisEnvironment:
   schema: { type: string, enum: [test, live] }
 ```
 
-- The service key travels in `X-Api-Key` (the SDK's `secretKey`); the `apiKey` scheme description names it. It is accepted only from `127.0.0.1`, only on console operations, and only with a staff token whose `tid` is the tenant (except `consoleSignIn` with `grantType = portal_token`).
+- The service key travels in `X-Api-Key` (the SDK's `secretKey`); the `apiKey` scheme description names it. It is accepted only on a direct loopback connection that did not come through Caddy (socket peer on loopback **and** no `X-Forwarded-For` or `X-Forwarded-Host`, which Caddy adds to every proxied request), only on console operations, and only with a staff token whose `tid` is the tenant (except `consoleSignIn` with `grantType = portal_token`). Sent to `api.ota.example.com` it is an unknown key (`401 INVALID_API_KEY`); sent through a storefront's `/api/*` it meets the edge header (`400 INVALID_REQUEST`) ([OADR-0009](adr/0009-caller-and-tenant-resolution.md) rule 1.2).
+- The existing `CustomerEndUserIp` (`X-Velexis-End-User-IP`) and `CustomerEndUserAgent` (`X-Velexis-End-User-Agent`) header parameters are added to every console operation. With the service key they are **required** (a missing or malformed IP answers `400 VALIDATION_FAILED`): the OTA admin sends the staff member's address (the right-most `X-Forwarded-For` entry Caddy gave it) and user agent, and the backend uses them for the `console.auth.signIn` throttle (10 per minute per end-user IP), the lockout and `staff_actions`. For secret keys they keep the contract's meaning; other callers' values are ignored.
 - Errors: `403 ENVIRONMENT_NOT_ALLOWED` (new): `live` asked while the tenant is not live, or by a test-only role; `400 VALIDATION_FAILED` when the header is missing with the service key.
 - `ConsoleStaffSession` gains `environments: ["test"] | ["test", "live"]`, so the OTA admin can show the switch.
 

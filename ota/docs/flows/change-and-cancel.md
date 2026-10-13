@@ -48,7 +48,7 @@ sequenceDiagram
   B->>O: bookings.quoteCancellation {bookingId}
   O->>A: Flight Order Management GET ?fareRules=refunds
   O->>D: refresh order_snapshot, tickets
-  O->>R: cxq:{bookingId} (10 min)
+  O->>R: t:{tenantId}:{env}:cxq:{bookingId} (10 min)
   O-->>B: mode release | void | request_only | not_allowed, estimatedRefund
   T->>B: confirm, reason
   B->>O: bookings.cancel {expectedRefund, reasonCode} (If-Match, Idempotency-Key)

@@ -142,7 +142,7 @@ Run from the repository root (`pnpm --filter @velexis/ota-backend <script>`) or 
 | `pnpm --filter @velexis/ota-backend amadeus:types` | Regenerate `src/amadeus/generated/` from `docs/amadeus-api/*.json` |
 | `pnpm stub:amadeus` | Start the Amadeus stub on `127.0.0.1:4900` |
 | `pnpm --filter @velexis/ota-backend dev:seed` | Development only (refused when `APP_ENV=production`): provisions `tenant_demo` through the real provisioning function, with storefront host `demo.ota.example.com`, a test Amadeus connection to the stub and test API keys printed once (needs the platform's `dev:seed` first) |
-| `node dist/cli.js tenants:report-migrations --report <file>` | Deploy step: publish `tenant.migrated` / `tenant.migration_failed` per schema |
+| `node dist/cli.js tenants:report-migrations --report <file>` | Deploy step after the tenant fan-out: publish `tenant.migrated` / `tenant.migration_failed` per schema (`velexis-deploy` runs it through `velexis-run ota` with the release's `cli.js` and `/var/lib/velexis/migrate-<sha>.json`) |
 | `node dist/cli.js amadeus:ping --tenant <key> --env test` | Token request and one cheap read for a tenant's connection (support) |
 | `stripe listen --forward-to localhost:4000/webhooks/stripe/velexis/test` | Forward test payment events |
 
@@ -180,5 +180,5 @@ Test names end with the plan's task id and criterion (`… [OBE-031 AC2]`). The 
 ## 9. Deploy
 
 - Release folder `ota-backend/` with `dist/`, `migrations/tenant/`, `openapi/` and production dependencies (`pnpm deploy --prod`), per [ADR-0023](../../docs/mvp/adr/0023-release-artefact-and-deploy-user.md).
-- Deploy order: platform and reference migrations → tenant fan-out (`migrate.js tenants`, then `tenants:report-migrations`) → restart `velexis-ota-worker`, then `velexis-ota-api` → `/health/ready` checks ([`../docs/flows/tenant-provisioning-worker.md`](../docs/flows/tenant-provisioning-worker.md) §4).
+- Deploy order: platform and reference migrations → tenant fan-out (`migrate.js tenants --dir "$REL/migrations/tenant"`, then `velexis-run ota node "$REL/ota-backend/dist/cli.js" tenants:report-migrations`, both before the switch) → restart `velexis-ota-worker`, then `velexis-ota-api` → `/health/ready` checks ([`../docs/flows/tenant-provisioning-worker.md`](../docs/flows/tenant-provisioning-worker.md) §4).
 - Both units run with `MemoryMax`, `LimitCORE=0` and no swap on the VM, so card data in memory never reaches disk ([ADR-0011](../../docs/mvp/adr/0011-payments-stripe-and-airline-card.md) §C).

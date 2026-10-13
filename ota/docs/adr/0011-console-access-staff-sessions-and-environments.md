@@ -3,6 +3,7 @@
 **Status:** Accepted
 **Date:** 2026-10-12
 **Deciders:** OTA backend tech lead. Decided during planning; revisit when third-party consoles need the password grant, when admin sub-roles are requested, or when raw Amadeus writes are needed by support.
+**Revisions:** 2026-10-12 (planning review): point 4 uses the "direct loopback, not through Caddy" test of OADR-0009; points 8 and 9 use the staff member's forwarded IP and user agent instead of the admin server's.
 
 ## Context
 
@@ -13,12 +14,12 @@
 1. **Grants.** Only `portal_token` in the MVP. The `password` grant answers `403 FEATURE_DISABLED` (`details.feature = "passwordGrant"`).
 2. **Staff sessions.** Access JWT 15 minutes (`typ: staff`, `sub: stf_…`, `tid`, `roles`, `sid`); refresh token rotating in a Redis family `staffsess:<familyId>` with an **absolute lifetime of 12 hours** (a working day; re-entry through the portal is one click). Reuse of a rotated token revokes the family.
 3. **Revocation checks** on every console request and refresh: the family exists and is not in `staffdeny:<familyId>`; its creation time is after `staffdeny:acct:<accountId>` and `staffdeny:tenant:<tenantId>`; the cached membership is `active` and its role is the token's role (a role change forces a new sign-in within 60 s through the `membership` invalidation).
-4. **Service key rules.** Accepted only from `127.0.0.1`, only on console operations, only with a staff token whose `tid` is the tenant (except the sign-in itself). Calls from a custom console use a secret key scoped `console` with a staff token, or `console:automation` keys with explicit permissions, as the contract defines.
+4. **Service key rules.** Accepted only on a direct loopback connection that did not come through Caddy (no `X-Forwarded-For` or `X-Forwarded-Host`, [OADR-0009](0009-caller-and-tenant-resolution.md) rule 1.2), only on console operations, only with a staff token whose `tid` is the tenant (except the sign-in itself). Calls from a custom console use a secret key scoped `console` with a staff token, or `console:automation` keys with explicit permissions, as the contract defines.
 5. **Environments.** The OTA admin sends `X-Velexis-Environment`. `live` requires the tenant's `storefront_environment = live` (an active live Amadeus connection exists by then) and a role in `owner`, `admin`, `agent`, `finance`; `viewer` is limited to test. Otherwise `403 ENVIRONMENT_NOT_ALLOWED`. `ConsoleStaffSession.environments` tells the admin which to offer.
 6. **New permissions** `settings:read`, `settings:write`, `payments:read`, `payments:capture`, `payments:refund` with the role matrix of [`../scope.md`](../scope.md) §1.3. Settings writes are owner and admin only, because markups, fees and templates change revenue and customer communication.
 7. **Raw Amadeus access is read-only** in the MVP: the eight read operations (`amadeus:read`) are built; the four writes (`createFlightOrders`, `issueFlightOrder`, `patchFlightOrder`, `cancelFlightOrder`) answer `501 NOT_IMPLEMENTED`. Bookings are changed through `console.bookings.*`, which keeps payments, tickets, events and documents consistent.
-8. **Audit.** Every console call, including reads of sensitive data and denied attempts, writes one `staff_actions` row with actor, role, action, target, reason, redacted before/after, request id, IP and user agent.
-9. **Rate limit**: 600 requests per minute per staff session or key.
+8. **Audit.** Every console call, including reads of sensitive data and denied attempts, writes one `staff_actions` row with actor, role, action, target, reason, redacted before/after, request id, IP and user agent. For the OTA admin these are the staff member's: the admin forwards `X-Velexis-End-User-IP` (the right-most `X-Forwarded-For` entry set by Caddy) and `X-Velexis-End-User-Agent` on every SDK call, and the backend honours them only for the service caller ([OADR-0009](0009-caller-and-tenant-resolution.md) point 8). Without them every row would show `127.0.0.1`.
+9. **Rate limits**: 600 requests per minute per staff session or key; `console.auth.signIn` 10 per minute per end-user IP (the forwarded one for the service caller), so the sign-ins of all OTAs, which all arrive from the admin server, never share one bucket that a single client could exhaust.
 
 ## Consequences
 

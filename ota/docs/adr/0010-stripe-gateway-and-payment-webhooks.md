@@ -3,6 +3,7 @@
 **Status:** Accepted
 **Date:** 2026-10-12
 **Deciders:** OTA backend tech lead. Decided during planning; revisit when a second payment provider is added, when Stripe disputes need handling in the OTA admin, or when the legal review of Velexis-collected payments changes the default mode (ADR-0011 follow-up).
+**Revisions:** 2026-10-12 (planning review): point 4 binds the tenant to the endpoint, cross-checks metadata and `livemode`, and acknowledges mismatches without effect.
 
 ## Context
 
@@ -23,7 +24,15 @@
 3. **Idempotency keys** (Stripe `Idempotency-Key`): `pi:create:<pay_id>`, `pi:update:<pay_id>:<version>`, `pi:capture:<pay_id>:<amount>`, `pi:cancel:<pay_id>`, `refund:<rfd_id>`.
 4. **Webhook receivers** (`payments/webhooks/*.controller.ts`, raw body):
    - verify the signature with the secret of the endpoint (`velexis/{test,live}`: environment secrets; `connect/{test,live}`: Connect secrets; `c/<ppc_id>`: that connection's encrypted webhook secret);
-   - find the tenant (`metadata.velexis_tenant_id`, or `event.account` → connection, or the path's connection id) and the payment (`metadata.payment_id`, then `provider_payment_id`);
+   - find the tenant **by the endpoint's own rule**, never by trying sources in turn:
+
+     | Endpoint | Tenant from | Why |
+     |---|---|---|
+     | `velexis/{environment}` | `metadata.velexis_tenant_id` | Only Velexis creates PaymentIntents on its own account, so the metadata is ours |
+     | `connect/{environment}` | `event.account` → the `connect_standard` connection with that `account_reference`, only | The OTA controls its connected account and can write any metadata |
+     | `c/<ppc_id>` | The path's connection, only | The OTA owns that account and, in `api_keys` mode, even knows the signing secret |
+
+   - cross-check: wherever `metadata.velexis_tenant_id` or `metadata.velexis_environment` is present it must equal the resolved tenant and environment, and `event.livemode` must match the path's environment (or the connection's for `c/`). The payment (`metadata.payment_id`, then `provider_payment_id`) is looked up only inside the resolved tenant, and its `provider_payment_id`, when set, must equal the event's object. Any mismatch is logged as a security event (no payload) and acknowledged with `200` without writing a `payment_events` row or raising a staff alert, so one OTA's signed events can never write into another tenant's schema;
    - in one tenant transaction insert a `payment_events` row (`source = webhook`, `type = webhook.<event type>`, `provider_event_id`, redacted payload); a unique violation means a duplicate;
    - answer `200`, then enqueue `stripe.event {tenantId, paymentEventId}` with job id = Stripe event id;
    - an unknown tenant or payment is logged and acknowledged with `200`.
@@ -48,7 +57,7 @@
 
 ### Follow-ups
 
-- M5: Connect and API-key endpoints, tests with fixtures for each mode.
+- M5: Connect and API-key endpoints, tests with fixtures for each mode, including forged metadata naming another tenant and a `livemode` mismatch on the Connect and `c/` endpoints (OBE-078); the `livemode` check of the `velexis` endpoint is tested in M3 (OBE-039).
 - Dispute handling screens after launch.
 
 ## Alternatives considered
@@ -56,6 +65,7 @@
 - **Trust webhook bodies.** Simpler, but event order is not guaranteed and bodies can be stale.
 - **An inbox table separate from `payment_events`.** The baseline table already has the unique provider event id that ADR-0011 names.
 - **Create the PaymentIntent before the row.** A fast webhook could arrive for a payment the backend does not know yet.
+- **One resolution order for every endpoint** (metadata, then `event.account`, then the path). The first version of point 4. Rejected in the planning review: on the Connect and `c/` endpoints the OTA writes the metadata, so it could route its signed events into another tenant.
 
 ## References
 

@@ -22,13 +22,14 @@ Related: [`docs/routes.md`](docs/routes.md) (every route: SDK calls, permissions
 ```mermaid
 flowchart LR
   U["Staff browser<br/>admin.ota.example.com"] -->|"HTML, RSC payloads, server actions<br/>cookies: __Host-vx_staff_*"| N["OTA admin (Next.js server)<br/>127.0.0.1:3002"]
-  N -->|"SDK console.*<br/>X-Api-Key: service key<br/>Authorization: Bearer staff token<br/>X-Velexis-Environment"| O["OTA API<br/>127.0.0.1:4000"]
+  N -->|"SDK console.*<br/>X-Api-Key: service key<br/>Authorization: Bearer staff token<br/>X-Velexis-Environment<br/>X-Velexis-End-User-IP / -Agent"| O["OTA API<br/>127.0.0.1:4000"]
   P["Portal<br/>platform.example.com"] -.->|"POST portalToken to /sso"| N
   N -.->|"no session: redirect"| P
 ```
 
 - Pages are **React Server Components** that call the SDK during rendering. Mutations are **Server Actions**. Client components are leaves for interactivity (filters, dialogs, form state) and never import the SDK or session code ([conventions §3](../../docs/mvp/conventions.md#3-nextjs-apps-portal-platform-admin-ota-admin)).
-- The OTA backend accepts the service key only from `127.0.0.1`, only on console operations, and only with a staff token of the same tenant ([OADR-0011](../docs/adr/0011-console-access-staff-sessions-and-environments.md)). So the admin can never call customer-scope operations such as `flights.search`; staff shopping uses the read-only `console.amadeus.*` calls.
+- The OTA backend accepts the service key only on a direct loopback connection that did not come through Caddy (no `X-Forwarded-For` or `X-Forwarded-Host`; Caddy sets both on every proxied request), only on console operations, and only with a staff token of the same tenant ([OADR-0009](../docs/adr/0009-caller-and-tenant-resolution.md) rule 1.2, [OADR-0011](../docs/adr/0011-console-access-staff-sessions-and-environments.md)). The same key sent to `api.ota.example.com` or a storefront's `/api/*` is refused.
+- Because every call comes from this server, the admin forwards the staff member's address on every SDK call: `X-Velexis-End-User-IP` is the right-most `X-Forwarded-For` entry of the incoming request (set by Caddy; `127.0.0.1` in local development) and `X-Velexis-End-User-Agent` is the browser's `User-Agent` cut to 512 characters. The backend honours them only for the service caller and uses them for the sign-in throttle, the lockout and `staff_actions`, so one staff member cannot exhaust a bucket shared by every OTA. So the admin can never call customer-scope operations such as `flights.search`; staff shopping uses the read-only `console.amadeus.*` calls.
 - The backend enforces every permission and writes a `staff_actions` row for every call; the admin hides what a role cannot do, for clarity only.
 
 ## 3. Sign-in: SSO from the portal
@@ -46,10 +47,10 @@ sequenceDiagram
   A->>A: Origin must be PUBLIC_PORTAL_URL
   A->>O: console.auth.signIn({ grantType: "portal_token", portalToken })
   O-->>A: staff session: tokens, staff, tenant, permissions, environments
-  A-->>S: Set-Cookie __Host-vx_staff_at, __Host-vx_staff_rt, __Host-vx_env; 303 to /
+  A-->>S: Set-Cookie __Host-vx_staff_at, __Host-vx_staff_rt, __Host-vx_env; 303 See Other to /bookings
 ```
 
-- **`POST /sso`** is a route handler. It accepts only `application/x-www-form-urlencoded` with `portalToken` matching `^ptk_[A-Za-z0-9]{24,64}$`, checks `Origin` against `PUBLIC_PORTAL_URL` (login-CSRF defence), calls the SDK, sets the cookies and answers `303 See Other` to `/`. Errors (`401 PORTAL_TOKEN_INVALID`, `403 STAFF_MEMBERSHIP_INACTIVE`, `403 TENANT_SUSPENDED`) render a short page with "Back to the portal".
+- **`POST /sso`** is a route handler. It accepts only `application/x-www-form-urlencoded` with `portalToken` matching `^ptk_[A-Za-z0-9]{24,64}$`, checks `Origin` against `PUBLIC_PORTAL_URL` (login-CSRF defence), calls the SDK, sets the cookies and answers `303 See Other` to `/bookings` (as architecture flow (c) and platform task PFE-019 expect). Errors (`401 PORTAL_TOKEN_INVALID`, `403 STAFF_MEMBERSHIP_INACTIVE`, `403 TENANT_SUSPENDED`) render a short page with "Back to the portal".
 - **No session** (no cookies, or refresh refused): middleware redirects to `${PUBLIC_PORTAL_URL}/console?tenant=<tenantId>` when the tenant is known from the expired cookie, else `${PUBLIC_PORTAL_URL}/console` ([PADR-0007](../../platform/docs/adr/0007-portal-to-ota-admin-sso-token.md) §5).
 - **Switch OTA**: the header's tenant menu links to the portal's console page; a new SSO replaces the session.
 - **Sign out**: `POST /auth/sign-out` (route handler, Origin checked) calls `console.auth.signOut`, clears the cookies and shows `/signed-out` with a link back to the portal. "Sign out everywhere" belongs to the portal, which revokes staff sessions through `staffdeny:acct:*`.
@@ -146,6 +147,7 @@ export const getConsole = cache(async () => {
     accessToken: s.accessToken,                           // no refreshToken here (§4)
     sessionKind: "staff",
     environment: s.environment,                           // "test" | "live"
+    headers: await endUserHeaders(),                      // X-Velexis-End-User-IP / -Agent from next/headers (§2)
   }).console;
 });
 
@@ -224,7 +226,7 @@ The variables match [`deploy/env/ota-admin.env.example`](../../deploy/env/ota-ad
 | `APP_ENV`, `LOG_LEVEL`, `PORT` | `production`, `info`, `3002` | Runtime |
 | `PUBLIC_OTA_ADMIN_URL` | `https://admin.ota.example.com` | Absolute links, Origin checks |
 | `PUBLIC_PORTAL_URL` | `https://platform.example.com` | SSO Origin check, redirects and portal links |
-| `OTA_API_URL` | `http://127.0.0.1:4000` | SDK `baseUrl` (loopback, so the service key is accepted) |
+| `OTA_API_URL` | `http://127.0.0.1:4000` | SDK `baseUrl`: a direct loopback connection, never a Caddy host, so the service key is accepted |
 | `OTA_ADMIN_SERVICE_KEY` | file-provided secret | SDK `secretKey` |
 | `SENTRY_DSN` | empty | Optional error tracking ([ADR-0016](../../docs/mvp/adr/0016-observability.md)) |
 
@@ -245,4 +247,4 @@ pnpm --filter @velexis/ota-admin dev          # http://localhost:3002
 | Server actions | `src/app/**/actions.test.ts` | With the SDK's `fetch` option pointing at a fake: right method and parameters, `ifMatch`, idempotency key reuse, error → action state |
 | End to end | `tools/e2e/specs/ota-admin/*.e2e.ts` (Playwright + axe) | Portal → Open console → dashboard; bookings list → detail → issue and cancel with refund on stub bookings; PNR import; capture and refund in Stripe test mode; markup change visible in the next storefront search; viewer role sees no actions and no LIVE switch; SSO token reuse refused |
 
-Build: `pnpm --filter @velexis/ota-admin build` produces `.next/standalone`, run by the `velexis-ota-admin` systemd unit on `127.0.0.1:3002` ([deployment](../../docs/mvp/deployment-single-vm.md)).
+Build: `pnpm --filter @velexis/ota-admin build` produces `.next/standalone/ota/admin/server.js` (`outputFileTracingRoot` is the repository root, as `deploy/scripts/pack-release.sh` expects), run by the `velexis-ota-admin` systemd unit on `127.0.0.1:3002` ([deployment](../../docs/mvp/deployment-single-vm.md)).

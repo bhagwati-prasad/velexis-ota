@@ -10,8 +10,8 @@ Related: [`implementation-plan.md`](implementation-plan.md), [`agent-tasks.md`](
 |---|---|
 | People | One developer, no agents, five working days a week |
 | Effort per task size | S = ½ day, M = 1 day, L = 2 days, including tests, docs and self-review against the definition of done (the same rule as the platform plan) |
-| OTA work | 149 tasks = 170 days (M0 3.5, M1 6.5, M2 39.5, M3 55.5, M4 44, M5 9.5, M6 11.5) |
-| Buffer and demos | 17 days inside OTA weeks (mostly at milestone exits: Weeks 1, 12, 24, 33, 36, 40) |
+| OTA work | 151 tasks = 171 days (M0 3.5, M1 6.5, M2 39.5, M3 55.5, M4 45, M5 9.5, M6 11.5). One of them, OBE-007 (1 day, M1), runs in the calendar week of platform Week 17, so the OTA weeks hold 170 task days |
+| Buffer and demos | 17 days inside OTA weeks (mostly at milestone exits: Weeks 1, 4, 12, 24, 33, 36, 40) |
 | Length | **40 OTA weeks** holding 187 OTA days: 35 full weeks and 5 split weeks (Weeks 3, 12, 24, 34, 37) that share a calendar week with platform work |
 | Start | Week 1 starts when the foundation tasks `X-001` to `X-016` are merged, like platform Week 1 |
 | Week numbers | OTA-plan weeks. The roadmap maps them to calendar weeks. The **Overlap** column names the platform weeks (platform-plan numbering) that sit in the same calendar window, and the gates between the groups |
@@ -25,7 +25,8 @@ Related: [`implementation-plan.md`](implementation-plan.md), [`agent-tasks.md`](
 | 1 | M0 | Four OTA scaffolds in the release | OBE-001, OFE-001, OAD-001, SDK-001 | 5 | Calendar window of platform Week 1; both start after foundation M0 |
 | 2 | M1 | Queues, seeds, `tenant.provision` | OBE-002, OBE-003, OBE-004, OBE-005 | 5 | Placed between platform Weeks 9 and 12 (the roadmap puts it around platform Weeks 10–11) |
 | 3 | M1 | `tenant.migrate`, OF-11 merged | OBE-006 | 1.5 (split) | **Split week** next to platform Week 11; gate of PBE-035 (platform Week 12) |
-| 4 | M2 | `dev:seed`, `0002`, contract slice, pipeline | OBE-007, OBE-008, OBE-009, OBE-010 | 5 | OTA-only week after platform Week 17 (needs PBE-034 from platform Week 12) |
+| — | M1 | Deploy report and `dev:seed` | OBE-007 | 1 (inside platform Week 17) | Done in the calendar week of platform Week 17, the platform M1 buffer week, after PBE-034 (platform Week 12) and **before the M1 exit**, as the roadmap and ADR-0025 schedule it |
+| 4 | M2 | `0002`, contract slice, pipeline | OBE-008, OBE-009, OBE-010 | 4 + 1 buffer | OTA-only week after platform Week 17; the roadmap uses the free day for X-034 |
 | 5 | M2 | Callers, tenants, guards, idempotency | OBE-011, OBE-012, OBE-013, OBE-014 | 5 | OTA-only |
 | 6 | M2 | Reference, `storefront.get`, Amadeus client | OBE-015, OBE-016, OBE-017, OBE-018 | 5 | OTA-only |
 | 7 | M2 | Stub shopping, pricing engine, search, offers | OBE-019, OBE-020, OBE-021, OBE-022 | 5 | OTA-only |
@@ -46,12 +47,12 @@ Related: [`implementation-plan.md`](implementation-plan.md), [`agent-tasks.md`](
 | 22 | M3 | Documents, e-mails, cookie-mode proof | OBE-053, OBE-054, OBE-055, OBE-057 | 5 | OTA-only |
 | 23 | M3 | Bookings pages, lookup, Stripe and airline journeys | OFE-015, OFE-016, OFE-017, OFE-018 | 5 | OTA-only |
 | 24 | M3 exit | Account journeys, deploy, M3 demo | OFE-019 | 3.5 (split) | **= platform Week 19** (1.5 platform days: PBE-037, PBE-038, PFE-016) |
-| 25 | M4 | Console contract, staff SSO, access rules | OBE-058, OBE-059, OBE-060 | 5 | OTA-only week between platform Weeks 19 and 20 |
-| 26 | M4 | Console bookings, issue, cancel, PNR import | OBE-061, OBE-062, OBE-063, OBE-064 | 5 | OTA-only |
-| 27 | M4 | Queues, customers, raw reads, payments, suspend | OBE-065, OBE-066, OBE-067, OBE-068, OBE-074 | 5 | OTA-only |
-| 28 | M4 | Settings API: rules, storefront, assets, pages | OBE-069, OBE-070, OBE-071, OBE-072 | 5 | OTA-only |
-| 29 | M4 | Templates, console proof, SDK console | OBE-073, OBE-075, SDK-011, SDK-012, SDK-013 | 5 | OTA-only |
-| 30 | M4 | SDK smoke, admin foundations, dashboard | SDK-014, OAD-002, OAD-003, OAD-004, OAD-005 | 5 | OTA-only |
+| 25 | M4 | Console contract slices, staff SSO | OBE-058, OBE-090, OBE-091, OBE-059 | 5 | OTA-only week between platform Weeks 19 and 20 |
+| 26 | M4 | Access rules, console bookings, issue, cancel | OBE-060, OBE-061, OBE-062, OBE-063 | 5 | OTA-only |
+| 27 | M4 | PNR import, queues, customers, raw reads, payments | OBE-064, OBE-065, OBE-066, OBE-067, OBE-068 | 5 | OTA-only |
+| 28 | M4 | Suspend; settings API: rules, storefront, assets, templates | OBE-074, OBE-069, OBE-070, OBE-071, OBE-073 | 5 | OTA-only |
+| 29 | M4 | Content pages, console proof, SDK console | OBE-072, OBE-075, SDK-011, SDK-012 | 5 | OTA-only |
+| 30 | M4 | SDK parity and smoke, admin foundations, dashboard | SDK-013, SDK-014, OAD-002, OAD-003, OAD-004, OAD-005 | 5 | OTA-only |
 | 31 | M4 | Bookings in the admin, actions, PNR and queues | OAD-006, OAD-007, OAD-008, OAD-009 | 5 | OTA-only |
 | 32 | M4 | Shopping, payments, customers, markups, content pages | OAD-010, OAD-011, OAD-012, OAD-013, OFE-020 | 5 | OTA-only |
 | 33 | M4 | Storefront settings, assets, pages, templates; buffer | OAD-014, OAD-015 | 5 | OTA-only |
@@ -69,6 +70,7 @@ timeline
   section Next to platform M0-M1
     Week 1 : M0 scaffolds
     Weeks 2-3 : M1 provisioning worker (around platform Weeks 10-11)
+    OBE-007 : M1 deploy report and dev seed (in platform Week 17, before the M1 exit)
   section OTA-led, after platform M1 exit
     Weeks 4-12 : M2 search and price (Week 12 = platform Week 18)
     Weeks 13-24 : M3 book and pay (Week 24 = platform Week 19)
@@ -120,14 +122,21 @@ Each week lists its goal, the tasks in order with their days, the deliverables, 
 - **Tasks:** OBE-006 (1 day: `tenant.migrate`, failure classes); ½ day: run the platform's cross-backend test PBE-035 locally if it exists, otherwise prepare the OTA worker build it will use.
 - **Deliverables:** OF-11 complete; the worker build used by the platform's `stack.ts`.
 - **Demo:** a forced lock timeout reported as retryable; an edited migration reported as non-retryable.
-- **Overlap:** the remaining 3.5 days of this calendar week are platform days (platform Week 11). OF-11 must be merged before platform Week 12 (PBE-035). OBE-007 waits for PBE-034 and is done in Week 4.
+- **Overlap:** the remaining 3.5 days of this calendar week are platform days (platform Week 11). OF-11 must be merged before platform Week 12 (PBE-035). OBE-007 cannot be done here: it needs PBE-034, which lands in platform Week 12.
 
-### Week 4 — M2: demo tenant, migration 0002, contract slice and pipeline
+### Between Weeks 3 and 4 — M1: OBE-007 inside platform Week 17 (1 OTA day)
 
-- **Tasks:** OBE-007 (1, the M1 task left over: deploy report and `dev:seed`), OBE-008 (1), OBE-009 (1), OBE-010 (2).
-- **Deliverables:** `tenant_demo` on `demo.ota.example.com` with test keys; `0002` applied by provisioning and the fan-out; the M2 contract slice; the HTTP pipeline with route parity.
+- **Tasks:** OBE-007 (1): `tenants:report-migrations`, its `velexis-deploy` step after the tenant fan-out, and `dev:seed`.
+- **Why here:** it is an M1 task and the M1 exit checks `tenants:report-migrations`; it needs PBE-034 (platform Week 12). Platform Week 17 is the platform M1 buffer week, so the day comes from that buffer ([roadmap](../../../docs/mvp/plans/roadmap.md) C27, [ADR-0025](../../../docs/mvp/adr/0025-roadmap-scheduling-and-tracking.md)). Doing it in Week 4 would put an M1 task after the M1 exit.
+- **Deliverables:** the deploy fan-out reported on `platform-tenant-events`; `tenant_demo` on `demo.ota.example.com` with test keys.
+- **Demo:** run `velexis-deploy` in its test harness and see the report step after the fan-out; `dev:seed` twice leaves one demo tenant.
+
+### Week 4 — M2: migration 0002, contract slice and pipeline
+
+- **Tasks:** OBE-008 (1), OBE-009 (1), OBE-010 (2); 1 day buffer (the roadmap schedules the foundation task X-034 on it).
+- **Deliverables:** `0002` applied by provisioning and the fan-out (and reported by the OBE-007 step); the M2 contract slice; the HTTP pipeline with route parity.
 - **Demo:** every not-yet-built operation answers `501 NOT_IMPLEMENTED` with its milestone; a body with an unknown field answers 400 without echoing the value.
-- **Overlap:** first OTA-only week after the platform M1 exit (platform Week 17); needs PBE-034 (platform Week 12).
+- **Overlap:** first OTA-only week after the platform M1 exit (platform Week 17); OBE-007 is already merged.
 
 ### Week 5 — M2: callers, tenants, guards and idempotency
 
@@ -269,45 +278,45 @@ Each week lists its goal, the tasks in order with their days, the deliverables, 
 - **Demo:** the M3 demo of the implementation plan.
 - **Overlap:** **this is platform Week 19**: its 1.5 platform days run PBE-037, PBE-038 and PFE-016 (the statement descriptor that OBE-038 already sends).
 
-### Week 25 — M4: console contract, staff SSO and access rules
+### Week 25 — M4: console contract slices and staff SSO
 
-- **Tasks:** OBE-058 (2), OBE-059 (2), OBE-060 (1).
-- **Deliverables:** the M4 contract slice; staff sign-in by portal token, staff sessions with deny checks; service key, environments, permissions and `staff_actions`.
-- **Demo:** redeem a portal token (written to Redis by the test, as PBE-039 will) once; a viewer asking for live gets `ENVIRONMENT_NOT_ALLOWED`.
+- **Tasks:** OBE-058 (2), OBE-090 (½), OBE-091 (½), OBE-059 (2).
+- **Deliverables:** the M4 contract in three slices (permissions and settings; payments, health and the M5 webhooks; pages and assets), 135 operations in the document; staff sign-in by portal token, staff sessions with deny checks.
+- **Demo:** redeem a portal token (written to Redis by the test, as PBE-039 will) once; a second redemption fails.
 - **Overlap:** OTA-only week between platform Weeks 19 and 20.
 
-### Week 26 — M4: console bookings, issue, cancel and PNR import
+### Week 26 — M4: access rules, console bookings, issue and cancel
 
-- **Tasks:** OBE-061 (1), OBE-062 (1), OBE-063 (2), OBE-064 (1).
-- **Deliverables:** console bookings list, detail, retrieve, patch, resync, notes, issue with capture, cancel with refunds, PNR lookup and import.
-- **Demo:** issue a manual-review booking by `curl` with a staff token; import a PNR of the tenant's office and fail for another office.
+- **Tasks:** OBE-060 (1), OBE-061 (1), OBE-062 (1), OBE-063 (2).
+- **Deliverables:** service key (direct loopback only), forwarded end-user IP, environments, permissions and `staff_actions`; console bookings list, detail, retrieve, patch, resync, notes, issue with capture, cancel with refunds.
+- **Demo:** a viewer asking for live gets `ENVIRONMENT_NOT_ALLOWED`; the service key with an `X-Forwarded-For` header is refused; issue a manual-review booking by `curl` with a staff token.
 - **Overlap:** OTA-only.
 
-### Week 27 — M4: queues, customers, raw reads, payments and suspend
+### Week 27 — M4: PNR import, queues, customers, raw reads and payments
 
-- **Tasks:** OBE-065 (1), OBE-066 (1), OBE-067 (1), OBE-068 (1), OBE-074 (1).
-- **Deliverables:** queues with the poller and orphan detection, customers and the supplier log, raw Amadeus reads, console payments, the suspend and resume consumer.
-- **Demo:** a queue snapshot with an orphan PNR; a partial refund; suspending the tenant expires an open checkout.
+- **Tasks:** OBE-064 (1), OBE-065 (1), OBE-066 (1), OBE-067 (1), OBE-068 (1).
+- **Deliverables:** PNR lookup and import, queues with the poller and orphan detection, customers and the supplier log, raw Amadeus reads, console payments.
+- **Demo:** import a PNR of the tenant's office and fail for another office; a queue snapshot with an orphan PNR; a partial refund.
 - **Overlap:** OTA-only.
 
-### Week 28 — M4: settings API
+### Week 28 — M4: suspend and the settings API
 
-- **Tasks:** OBE-069 (1), OBE-070 (1), OBE-071 (1), OBE-072 (2).
-- **Deliverables:** markup and fee rules, storefront settings, assets with the public download, content pages with the Markdown-subset parser.
-- **Demo:** upload a logo and see it served with the immutable headers; a page with `<script>` refused at its line.
+- **Tasks:** OBE-074 (1), OBE-069 (1), OBE-070 (1), OBE-071 (1), OBE-073 (1).
+- **Deliverables:** the suspend and resume consumer; markup and fee rules, storefront settings, assets with the public download, template settings.
+- **Demo:** suspending the tenant expires an open checkout; upload a logo and see it served with the immutable headers.
 - **Overlap:** OTA-only.
 
-### Week 29 — M4: templates, console proof and the SDK console namespace
+### Week 29 — M4: content pages, console proof and the SDK console namespace
 
-- **Tasks:** OBE-073 (1), OBE-075 (1), SDK-011 (1), SDK-012 (1), SDK-013 (½); ½ day buffer.
-- **Deliverables:** template settings; the permission matrix, audit and office isolation proven; the full `console` namespace; the SDK parity list empty.
-- **Demo:** the permission matrix test output; `pending-operations.ts` holding only deferred operations and the two M5 webhooks.
+- **Tasks:** OBE-072 (2), OBE-075 (1), SDK-011 (1), SDK-012 (1).
+- **Deliverables:** content pages with the Markdown-subset parser and the public page endpoints; the permission matrix, audit and office isolation proven, with the M4 totals (135 operations, 128 SDK methods); the full `console` namespace and the storefront page methods.
+- **Demo:** a page with `<script>` refused at its line; the permission matrix test output; `pending-operations.ts` holding only deferred operations and the two M5 webhooks.
 - **Overlap:** OTA-only.
 
-### Week 30 — M4: SDK smoke tests, admin foundations and dashboard
+### Week 30 — M4: SDK parity and smoke tests, admin foundations and dashboard
 
-- **Tasks:** SDK-014 (1), OAD-002 (1), OAD-003 (1), OAD-004 (1), OAD-005 (½); ½ day buffer.
-- **Deliverables:** nightly SDK smoke tests; the OTA admin's server-side SDK client, sessions with refresh de-duplication, SSO handlers, middleware, shell and dashboard.
+- **Tasks:** SDK-013 (½), SDK-014 (1), OAD-002 (1), OAD-003 (1), OAD-004 (1), OAD-005 (½).
+- **Deliverables:** the SDK parity list empty and the bundle size recorded; nightly SDK smoke tests; the OTA admin's server-side SDK client, sessions with refresh de-duplication, SSO handlers, middleware, shell and dashboard.
 - **Demo:** post a portal token to `/sso` (minted by a test helper) and land on the dashboard with permission-based navigation.
 - **Overlap:** OTA-only.
 
@@ -385,7 +394,7 @@ Each week lists its goal, the tasks in order with their days, the deliverables, 
 
 | Rule | Why |
 |---|---|
-| Buffer is 17 days: 1½ in Week 1, ½ in Weeks 2, 3, 11, 23, 29, 30, 35 (demo), 37 and 38, 2½ in Weeks 12 and 24, 2 in Week 33, 1 in Week 36, 3 in Week 40 | Placed at milestone exits and before cross-group gates, where integration surprises appear |
+| Buffer is 17 days: 1½ in Week 1, ½ in Weeks 2, 3, 11, 23, 35 (demo), 37 and 38, 1 in Week 4, 2½ in Weeks 12 and 24, 2 in Week 33, 1 in Week 36, 3 in Week 40 | Placed at milestone exits and before cross-group gates, where integration surprises appear |
 | A week that slips moves its unfinished tasks to the next week of the same milestone and uses that milestone's buffer; when the buffer is gone, the developer re-plans the rest of the milestone in the Friday note | Keeps the plan honest without silent drift |
 | Gated weeks (3, 12, 24, 34, 37) are never skipped: if the other side is late, do the next OTA task without the gate and come back; never fake the platform side | The gates protect the platform's PBE-035, PBE-036, PAD-011, PFE-019 and the M5 switches |
 | Human steps (OBE-027 recordings and the Amadeus question, OBE-086 penetration test and ASV scan, SDK-015 npm organisation) are started early: ask Amadeus in Week 6, book the penetration test during M5 | External lead times are the most likely cause of delay |
@@ -398,7 +407,8 @@ Each week lists its goal, the tasks in order with their days, the deliverables, 
 |---|---|---|---|
 | 1 | 5 | Platform Week 1 (both after foundation M0) | none |
 | 2–3 | 6.5 | Between platform Weeks 9 and 12 (around Weeks 10–11) | OF-11 merged before platform Week 12 (PBE-035) |
-| 4–11 | 40 | OTA-only weeks after platform Week 17 | needs PBE-034, PFE-014 (platform Week 12) |
+| — (OBE-007) | 1 | **Platform Week 17** (platform M1 buffer week) | needs PBE-034 (platform Week 12); merged before the M1 exit |
+| 4–11 | 40 | OTA-only weeks after platform Week 17 | needs PFE-014 (platform Week 12) |
 | 12 | 3.5 | **Platform Week 18** (split) | OF-01 for PBE-036 and PAD-011 |
 | 13–23 | 55 | OTA-only weeks between platform Weeks 18 and 19 | none |
 | 24 | 3.5 | **Platform Week 19** (split) | none (statement descriptor already read by OBE-038) |

@@ -9,7 +9,7 @@ Related: [`implementation-plan.md`](implementation-plan.md) (milestones, epics, 
 1. **Pick** the lowest-milestone task whose **Depends on** tasks are all done (their headings end with ` ✅`) and that nobody has claimed (no open PR, no branch `task/<ID>-*`). Prefer the critical path that `node tools/plan-lint/plan-lint.mjs` prints. Dependencies may be `X-` (foundation) or `PBE-`/`PFE-` (platform) tasks; never fake the other group's side ([AGENTS.md](../../../AGENTS.md) §3).
 2. **Claim** it by adding `- **Status:** in progress (PR #n)` under its heading in your PR. plan-lint ignores the extra field.
 3. **Finish** it in one branch and one PR (`task/<ID>-<slug>`, [conventions §11](../../../docs/mvp/conventions.md#11-git-workflow)). When the PR is merged, append ` ✅` to the heading (for example `### OBE-012 · Resolve the tenant … ✅`) and set the status line to `done (PR #n)`.
-4. **Contract first.** An operation is added to `ota/backend/openapi/velexis-ota-booking-api.openapi.yaml` by a spec task before any handler uses it. Until its handler exists it is listed in `ota/backend/src/common/http/pending-operations.ts` (answers `501 NOT_IMPLEMENTED`); the implementing task removes its entries. At the M4 exit only operations with `x-milestone: deferred` remain ([ADR-0006](../../../docs/mvp/adr/0006-contract-first-openapi.md), [`../scope.md`](../scope.md) §3).
+4. **Contract first.** An operation is added to `ota/backend/openapi/velexis-ota-booking-api.openapi.yaml` by a spec task before any handler uses it. Until its handler exists it is listed in `ota/backend/src/common/http/pending-operations.ts` (answers `501 NOT_IMPLEMENTED`); the implementing task removes its entries. At the M4 exit only operations with `x-milestone: deferred` remain, plus the two M5 webhooks that OBE-090 documents ahead of their handler (OBE-078); at the M5 exit only `deferred` ones. A spec task that adds an operation with an `x-sdk-method` also regenerates the SDK route table `ota/sdk/src/internal/operations.js` (the CI check of SDK-002 fails on a stale file) and, when the method's namespace is no longer pending, lists the method in `ota/sdk/test/contract/pending-namespaces.js` with the SDK task that adds it ([ADR-0006](../../../docs/mvp/adr/0006-contract-first-openapi.md), [`../scope.md`](../scope.md) §3).
 5. **Tests** end their names with the task and criterion, for example `it("rejects a staff token of another tenant [OBE-060 AC2]")`. Integration tests use a database from `@velexis/testing` with `tenant_alpha` and `tenant_beta`; every tenant repository gets a two-tenant isolation test ([conventions §10](../../../docs/mvp/conventions.md#10-testing)).
 6. **New variables** go into `src/config.ts`, the root `.env.example`, the component `.env.example`, `deploy/env/` and the [configuration matrix](../../../docs/mvp/architecture.md#6-configuration-matrix) in the same PR ([conventions §8](../../../docs/mvp/conventions.md#8-configuration)).
 7. **After editing this file**, run `node tools/plan-lint/plan-lint.mjs docs/mvp/plans/foundation-tasks.md platform/docs/plans/agent-tasks.md ota/docs/plans/agent-tasks.md` and fix every error. Work found during a task becomes a new task here (next free id of its component).
@@ -24,7 +24,7 @@ Common commands: backend `pnpm --filter @velexis/ota-backend test` and `test:int
 | M1 Platform core | OBE-002 … OBE-007 | A tenant created in the portal is provisioned by the real OTA worker: schema, migrations, grants and seeds in one transaction, reported on `platform-tenant-events` (OF-11). |
 | M2 Search & price | OBE-008 … OBE-028, SDK-002 … SDK-007, OFE-002 … OFE-008 | On `demo.ota.example.com` (dev) a traveller searches, filters, opens an offer, picks a branded fare and prices it against the Amadeus stub; a suspended tenant shows "temporarily unavailable" (OF-01, OF-02). |
 | M3 Book & pay | OBE-029 … OBE-057, SDK-008 … SDK-010, OFE-009 … OFE-019 | Guest and customer bookings paid by Stripe (3-D Secure) or by airline card (test), tickets, e-mails and PDFs, my bookings, guest lookup, change contacts, cancel with refund (OF-03 … OF-08). |
-| M4 OTA admin | OBE-058 … OBE-075, SDK-011 … SDK-014, OAD-002 … OAD-017, OFE-020 | "Open console" in the portal lands in the OTA admin; staff issue, cancel, import a PNR, read queues, capture and refund, change markups, branding, pages and templates (OF-09, OF-10). |
+| M4 OTA admin | OBE-058 … OBE-075, OBE-090, OBE-091, SDK-011 … SDK-014, OAD-002 … OAD-017, OFE-020 | "Open console" in the portal lands in the OTA admin; staff issue, cancel, import a PNR, read queues, capture and refund, change markups, branding, pages and templates (OF-09, OF-10). |
 | M5 Monetisation & self-service | OBE-076 … OBE-083, OAD-018, OFE-021, OFE-022 | The same code serves an OTA on its own Stripe (Connect or keys) and its own Amadeus credentials, a custom domain, and the live environment after go-live (OF-12). |
 | M6 Hardening & launch | OBE-084 … OBE-089, OFE-023 … OFE-026, OAD-019, SDK-015 | Security review and PCI evidence closed, airline card live-ready, erasure job, performance measured, nightly suites green, SDK 1.0.0 published. |
 
@@ -75,19 +75,19 @@ Common commands: backend `pnpm --filter @velexis/ota-backend test` and `test:int
 - **Milestone:** M0
 - **Depends on:** X-002, X-003
 - **Size:** M
-- **Read first:** ota/admin/README.md §1, §6, §10, §11; docs/mvp/conventions.md §3; docs/mvp/adr/0014-frontend-stack-nextjs-tailwind.md; docs/mvp/tech-stack.md §3 (OTA admin); deploy/env/ota-admin.env.example
+- **Read first:** ota/admin/README.md §1, §6, §10, §11; docs/mvp/conventions.md §3; docs/mvp/adr/0014-frontend-stack-nextjs-tailwind.md; docs/mvp/tech-stack.md §3 (OTA admin); deploy/env/ota-admin.env.example; deploy/scripts/pack-release.sh (Next.js standalone check); deploy/systemd/velexis-ota-admin.service
 - **Files:** `ota/admin/package.json`, `ota/admin/next.config.ts`, `ota/admin/tsconfig.json`, `ota/admin/vitest.config.ts`, `ota/admin/.env.example`, `ota/admin/postcss.config.mjs`, `ota/admin/src/config.ts`, `ota/admin/src/config.test.ts`, `ota/admin/src/app/layout.tsx`, `ota/admin/src/app/globals.css`, `ota/admin/src/app/health/live/route.ts`, `ota/admin/src/app/health/ready/route.ts`, `ota/admin/src/app/health/health.test.ts`, `ota/admin/components.json`, `deploy/env/ota-admin.env.example`
 - **Steps:**
-  1. Create `@velexis/ota-admin` (private) with exact Next.js 15, React 19, Tailwind 4 (`@tailwindcss/postcss`), `lucide-react`, `zod`, `server-only`, and Vitest with Testing Library. `next.config.ts`: `output: "standalone"`, `poweredByHeader: false`, `serverActions.bodySizeLimit: "2mb"`, security headers (`frame-ancestors 'none'`, `Referrer-Policy: strict-origin-when-cross-origin`); the CSP nonce comes later with the middleware (OAD-003).
+  1. Create `@velexis/ota-admin` (private) with exact Next.js 15, React 19, Tailwind 4 (`@tailwindcss/postcss`), `lucide-react`, `zod`, `server-only`, and Vitest with Testing Library. `next.config.ts`: `output: "standalone"`, `outputFileTracingRoot` set to the repository root (two levels up from `ota/admin`; workspace packages are traced and the server lands at `.next/standalone/ota/admin/server.js`, the path that `deploy/scripts/pack-release.sh` and the `velexis-ota-admin` unit expect), `poweredByHeader: false`, `serverActions.bodySizeLimit: "2mb"`, security headers (`frame-ancestors 'none'`, `Referrer-Policy: strict-origin-when-cross-origin`); the CSP nonce comes later with the middleware (OAD-003).
   2. `src/config.ts` with `@velexis/config`: `APP_ENV`, `LOG_LEVEL`, `PORT` (3002), `PUBLIC_OTA_ADMIN_URL`, `PUBLIC_PORTAL_URL`, `OTA_API_URL`, `OTA_ADMIN_SERVICE_KEY`, `SENTRY_DSN` (optional); `import "server-only"`. No `NEXT_PUBLIC_` variable.
   3. Initialise shadcn/ui (`components.json`, CSS variables in `globals.css`) without adding components yet.
   4. Route handlers `/health/live` (200 `{status: "ok"}`) and `/health/ready` (200 when `OTA_API_URL/health/live` answers within 2 s, else 503).
 - **Acceptance:**
-  - `pnpm --filter @velexis/ota-admin build` produces `.next/standalone/server.js`.
+  - `pnpm --filter @velexis/ota-admin build` produces `ota/admin/.next/standalone/ota/admin/server.js` (nested because of `outputFileTracingRoot`); a test or script asserts that path, and `deploy/scripts/pack-release.sh` packs the app without "missing … server.js".
   - Missing `OTA_ADMIN_SERVICE_KEY` fails `config.ts` with a `ConfigError` naming it (unit test).
   - `/health/ready` answers 503 when the OTA API is unreachable (route test with a fake fetch).
   - A lint rule or test fails on any `NEXT_PUBLIC_` variable in the app.
-- **Verify:** `pnpm --filter @velexis/ota-admin test && pnpm --filter @velexis/ota-admin build`
+- **Verify:** `pnpm --filter @velexis/ota-admin test && pnpm --filter @velexis/ota-admin build && test -f ota/admin/.next/standalone/ota/admin/server.js`
 
 ### SDK-001 · Scaffold the SDK package with checkJs, version and test setup
 - **Component:** ota-sdk
@@ -120,11 +120,11 @@ The OTA side of M1 is the provisioning worker (OF-11): the platform's `tenant.pr
 - **Files:** `ota/backend/src/common/redis/redis.module.ts`, `ota/backend/src/common/redis/redis.keys.ts`, `ota/backend/src/common/redis/redis.keys.test.ts`, `ota/backend/src/common/queues/queues.module.ts`, `ota/backend/src/common/queues/queue-names.ts`, `ota/backend/src/common/queues/job-validation.ts`, `ota/backend/src/common/queues/job-validation.test.ts`, `packages/api-types/src/jobs/queues.ts`, `ota/backend/package.json`, `ota/backend/test/integration/common/queues.int.test.ts`
 - **Steps:**
   1. Add exact `bullmq` 5 and `@nestjs/bullmq` 11. `RedisModule` provides one `ioredis` client per process (`REDIS_URL`), with `maxRetriesPerRequest: null` for BullMQ connections.
-  2. `redis.keys.ts`: builders for every key of architecture §7 (`tenant(id)`, `host(name)`, `apiKey(prefix)`, `conn(kind, tenantId, env)`, `amadeusToken(credId, env)`, `sf(tenantId, env, locale)`, …) so no module writes a key string by hand; each builder returns the key and its TTL. A unit test asserts every builder has a TTL (Redis runs with `noeviction`).
+  2. `redis.keys.ts`: builders for every key of architecture §7 (`tenant(id)`, `host(name)`, `apiKey(prefix)`, `conn(kind, tenantId, env)`, `amadeusToken(credId, env)`, `sf(tenantId, env, locale)`, …) so no module writes a key string by hand; each builder returns the key and its TTL and is tagged with its kind: `tenant` (tenant data: `sf`, `search`, `cxq`, `acChk`, `authfail`), `shared` (the keys of the cross-cutting table in docs/mvp/architecture.md and platform §6.4) or `credential`. Tenant builders take `(tenantId, env, …)` and always return `t:<tenantId>:<env>:…`. A unit test asserts every builder has a TTL (Redis runs with `noeviction`) and every `tenant` builder's key starts with `t:<tenantId>:<env>:`; a source scan in the same test fails when a file other than `redis.keys.ts` passes a string or template literal key to the Redis client.
   3. Append the OTA queue names to `OTA_QUEUES` in `packages/api-types/src/jobs/queues.ts` (`ota-stripe-events`, `ota-payments`, `ota-bookings`, `ota-ticketing`, `ota-notifications`, `ota-documents`, `ota-maintenance`), as PBE-004 asks. `queue-names.ts` re-exports them with their concurrency (architecture §6) and the defaults of ADR-0009 (`attempts: 5`, exponential backoff from 30 s, failed jobs kept 30 days, prefix `vx`).
   4. `job-validation.ts` wraps `validateJob` from `@velexis/api-types/jobs`: an invalid payload throws BullMQ's `UnrecoverableError` and is logged without the payload.
 - **Acceptance:**
-  - Every key builder has a TTL; a test lists the builders and fails on a new one without TTL.
+  - Every key builder has a TTL; a test lists the builders and fails on a new one without TTL, or on a tenant-data builder whose key does not start with `t:<tenantId>:<env>:`.
   - A `tenant.provision` fixture from PBE-004 validates; one with an extra field is refused as unrecoverable (integration test with a real queue).
   - `@velexis/api-types` tests still pass with the extended `OTA_QUEUES`.
 - **Verify:** `pnpm --filter @velexis/api-types test && pnpm --filter @velexis/ota-backend test && pnpm --filter @velexis/ota-backend test:int -- common`
@@ -201,23 +201,26 @@ The OTA side of M1 is the provisioning worker (OF-11): the platform's `tenant.pr
   - `tenant.migrate` on a schema at N-1 applies the pending file and reports the full ledger.
 - **Verify:** `pnpm --filter @velexis/ota-backend test && pnpm --filter @velexis/ota-backend test:int -- provisioning`
 
-### OBE-007 · Add the tenants:report-migrations and dev:seed commands
+### OBE-007 · Add the tenants:report-migrations and dev:seed commands and run the report at deploy
 - **Component:** ota-backend
 - **Milestone:** M1
-- **Depends on:** OBE-006, PBE-034, X-005
+- **Depends on:** OBE-006, PBE-034, X-005, X-023, X-033
 - **Size:** M
-- **Read first:** ota/docs/flows/tenant-provisioning-worker.md §4; ota/backend/README.md §5 and §6; platform/backend/README.md §5 (`dev:seed`); platform/docs/adr/0005-api-key-format-and-hashing.md; docs/mvp/local-development.md
-- **Files:** `ota/backend/src/cli.ts`, `ota/backend/src/provisioning/report-migrations.command.ts`, `ota/backend/src/provisioning/report-migrations.command.test.ts`, `ota/backend/src/dev/dev-seed.command.ts`, `ota/backend/package.json`, `ota/backend/test/integration/dev/dev-seed.int.test.ts`, `ota/backend/README.md`, `docs/mvp/local-development.md`
+- **Read first:** ota/docs/flows/tenant-provisioning-worker.md §4; ota/docs/adr/0007-tenant-migration-runner-and-provisioning-worker.md (item 7); ota/backend/README.md §5 and §6; platform/backend/README.md §5 (`dev:seed`); platform/docs/adr/0005-api-key-format-and-hashing.md; docs/mvp/local-development.md; deploy/scripts/deploy.sh (section 2, migrations); docs/mvp/adr/0026-system-users-per-trust-zone.md (item 6, `velexis-run`); docs/mvp/deployment-single-vm.md §8 and §9
+- **Files:** `ota/backend/src/cli.ts`, `ota/backend/src/provisioning/report-migrations.command.ts`, `ota/backend/src/provisioning/report-migrations.command.test.ts`, `ota/backend/src/dev/dev-seed.command.ts`, `ota/backend/package.json`, `ota/backend/test/integration/dev/dev-seed.int.test.ts`, `ota/backend/README.md`, `docs/mvp/local-development.md`, `deploy/scripts/deploy.sh`, `deploy/scripts/test/deploy.test.sh`, `docs/mvp/deployment-single-vm.md`
 - **Steps:**
-  1. `tenants:report-migrations --report <file>`: read the JSON report of `migrate.js tenants` (X-013) and publish one `tenant.migrated` or `tenant.migration_failed` per schema with `jobId = null`. Exit 1 on an unreadable report.
+  1. `tenants:report-migrations --report <file>`: read the JSON report of `migrate.js tenants` (X-013) and publish one `tenant.migrated` or `tenant.migration_failed` per schema named in it (`applied` and `failed`) with `jobId = null`. The tenant id comes from `platform.tenants` (read-only role) and each `tenant.migrated` carries the schema's full ledger read from its `schema_migrations`, so a repeated run re-sends a correct mirror. Exit 1 on an unreadable report or when Redis refuses the events.
   2. `dev:seed` (script `pnpm --filter @velexis/ota-backend dev:seed`): refused with exit 1 when `APP_ENV=production`. It needs the platform `dev:seed` (PBE-034) first. As a **development-only exception** to "the OTA backend never writes platform tables", it uses `DATABASE_MIGRATOR_URL` to insert, idempotently, the demo tenant (`demo`, status `provisioning`), its sub-domain `demo.<STOREFRONT_BASE_DOMAIN>`, a test supplier connection on the platform's Velexis test account and office, a `velexis` test payment connection, and a `pk_test` and an `sk_test` key hashed with the shared pepper (X-005 helpers, PADR-0005 format).
   3. It then calls `provisionTenant` directly (the real provisioning function), sets the tenant `active`, and prints the two raw keys once.
-  4. Document both commands in the README and the local development runbook.
+  4. **Deploy wiring.** In `deploy/scripts/deploy.sh`, section 2, right after the tenant fan-out and before the switch: when `$REL/ota-backend/dist/cli.js` exists, make the fan-out report `/var/lib/velexis/migrate-$SHA.json` readable (mode `0644`; it holds schema names, versions and error texts, no secrets) and run `velexis-run ota node "$REL/ota-backend/dist/cli.js" tenants:report-migrations --report "/var/lib/velexis/migrate-$SHA.json"`. The X-033 wrapper runs it as the OTA zone user with `/etc/velexis/ota-backend.env` and `/etc/velexis/ota-worker.env` loaded (`REDIS_URL`, the read-only database DSN), never with the migrator DSN. A failure stops the deploy like a failed migration (`restore_running_system_files`; the previous release keeps running on N-1-compatible schemas); re-running the deploy repeats the fan-out (nothing applied twice) and the report.
+  5. Add `deploy.test.sh` cases with a fake `velexis-run` that records its arguments: the report runs after the fan-out and before the switch with the release's own `cli.js` and the report path of this sha; a failing report leaves the previous release current; a release without `ota-backend/` skips the step. Update `deployment-single-vm.md` §8 (step 5) and §9 with the step.
+  6. Document both commands in the README and the local development runbook.
 - **Acceptance:**
-  - A report with 3 applied and 1 failed schema publishes 4 valid events with `jobId: null` (unit test with a fake queue).
+  - A report with 3 applied and 1 failed schema publishes 4 valid events with `jobId: null` (unit test with a fake queue); a second run with the same report publishes the same 4 events.
   - `dev:seed` twice leaves one tenant, one schema and two keys; the printed `sk_test` authenticates once OBE-011 exists (asserted later by OBE-026).
   - With `APP_ENV=production` it exits 1 without writing anything.
-- **Verify:** `pnpm --filter @velexis/ota-backend test && pnpm --filter @velexis/ota-backend test:int -- dev`
+  - `deploy.test.sh` passes with the cases of step 5; `shellcheck -S style` is clean for `deploy.sh`.
+- **Verify:** `pnpm --filter @velexis/ota-backend test && pnpm --filter @velexis/ota-backend test:int -- dev && bash deploy/scripts/test/deploy.test.sh && shellcheck -S style deploy/scripts/deploy.sh`
 
 ## M2 — Search & price
 
@@ -252,10 +255,10 @@ The OTA backend gets its contract extensions, request pipeline, tenancy, Amadeus
   1. Document the vendor extensions `x-edge-only`, `x-internal`, `x-sdk-exclude`, `x-milestone`, `x-permission` in `info.description` (api-changes §1).
   2. Add `x-milestone` to all 96 operations from scope §3: `M2`, `M3` or `M4` for the 77 MVP operations, `deferred` for the 19 others.
   3. Apply §2 exactly: security schemes `storefrontEdge` (`x-internal`), `customerCookie`, `bookingCookie`; parameter `CsrfToken`; header `Set-Cookie`; `storefrontEdge` alternatives on every `customer`/`both` operation; `CsrfToken` on state-changing ones; `signIn`, `refreshSession`, `changePassword` 200 → `oneOf [AuthSessionResult, AuthSessionInfo]`; `AuthRefreshRequest.refreshToken` optional; `BookingLookupResult.bookingToken` nullable; `StorefrontHostHeader` description.
-  4. Apply §5: parameter `VelexisEnvironment` on every `x-scope: console` operation and `ConsoleStaffSession.environments`.
+  4. Apply §5: parameter `VelexisEnvironment` on every `x-scope: console` operation and `ConsoleStaffSession.environments`; the existing `CustomerEndUserIp` and `CustomerEndUserAgent` header parameters on every console operation too, with descriptions saying they are honoured for secret keys and for the OTA admin's service caller.
   5. Add `CSRF_TOKEN_INVALID` (403) and `NOT_IMPLEMENTED` (501) to `x-error-catalogue`.
   6. Extend `packages/api-types/scripts/generate.mjs` so the operations index also carries `milestone`, `edgeOnly` and `permission`. Run `pnpm contracts:lint` and `pnpm contracts:generate`; record the change in the README's change log.
-  7. `openapi-extensions.contract.test.ts`: every operation has `x-milestone`; counts are 77 MVP and 19 deferred; every customer-scope operation accepts `storefrontEdge`; every console operation has `VelexisEnvironment`.
+  7. `openapi-extensions.contract.test.ts`: every operation has `x-milestone` (`M0` … `M5` or `deferred`); the 96 operations of the original document (operationIds read from `docs/velexis-sdk/openapi/`) keep the milestones of scope §3, 77 MVP and 19 deferred, so operations added by later spec tasks never change these counts; every customer-scope operation accepts `storefrontEdge`; every console operation has `VelexisEnvironment`. Later spec tasks add assertions for their own operations by operationId, never totals (OBE-075 checks the M4 totals once).
 - **Acceptance:**
   - `pnpm contracts:lint` reports zero errors; regeneration twice leaves no diff.
   - The contract test passes; the original under `docs/velexis-sdk/` is unchanged (`git diff --exit-code docs/velexis-sdk`).
@@ -381,13 +384,14 @@ The OTA backend gets its contract extensions, request pipeline, tenancy, Amadeus
 - **Files:** `ota/backend/src/storefront/storefront.module.ts`, `ota/backend/src/storefront/storefront.controller.ts`, `ota/backend/src/storefront/storefront.service.ts`, `ota/backend/src/storefront/storefront.repository.ts`, `ota/backend/src/storefront/storefront.mapper.ts`, `ota/backend/src/storefront/storefront.mapper.test.ts`, `ota/backend/src/common/http/cookie-writer.ts`, `ota/backend/src/common/http/cookie-writer.test.ts`, `ota/backend/src/common/http/pending-operations.ts`, `ota/backend/test/integration/storefront/storefront.int.test.ts`
 - **Steps:**
   1. `storefront.get` (`getStorefront`): map `storefront_settings` (with the `0002` columns), tenant name and `environment` into `StorefrontConfig`; `features.savedTravelers = false`; `payment.supportedMethods = []` until OBE-038 fills the payment configuration.
-  2. Cache the mapped config in `t:<tenantId>:<env>:sf:<locale>` for 5 minutes; settings changes delete it (OBE-070).
+  2. Cache only the caller-independent config in `t:<tenantId>:<env>:sf:<locale>` for 5 minutes (asset references as ids, the airline-card availability as a flag); settings changes delete it (OBE-070). `storefront.mapper.ts` adds the caller-specific parts on every request: asset URLs as same-origin `/api/v1/assets/…` paths for the edge and absolute `PUBLIC_OTA_API_URL` URLs for key callers (OADR-0012 point 3), and, from OBE-050, `airline_card` and `airlineCard` for the edge only.
   3. `cookie-writer.ts`: writes `__Host-` cookies only in edge mode, with `Secure`, `SameSite=Lax`, `Path=/`, no `Domain`, and `HttpOnly` except for `__Host-vx_csrf`. `storefront.get` in edge mode sets `__Host-vx_csrf` (256-bit base64url) when missing or malformed and answers `Cache-Control: private`.
   4. Remove `getStorefront` from `pending-operations.ts`.
 - **Acceptance:**
   - An edge call without the CSRF cookie gets `Set-Cookie: __Host-vx_csrf=…; Secure; SameSite=Lax; Path=/` and no `HttpOnly`; a key call never gets `Set-Cookie`.
   - The response validates against `StorefrontConfig` and contains no internal column (`booking_queue_number`, `ops_alert_email`).
   - A second call within 5 minutes reads no settings row (cache hit asserted).
+  - A `pk_` call followed by an edge call for the same tenant and locale (one cache fill) returns absolute asset URLs to the key and relative `/api/v1/assets/…` paths to the edge, and the reverse order gives the same answers.
 - **Verify:** `pnpm --filter @velexis/ota-backend test && pnpm --filter @velexis/ota-backend test:int -- storefront`
 
 ### OBE-017 · Build the Amadeus connection resolver and token provider
@@ -678,7 +682,7 @@ The OTA backend gets its contract extensions, request pipeline, tenancy, Amadeus
   1. A `tsc --noEmit` project maps `velexis-contract` to `docs/velexis-sdk/sdk/src/index.d.ts`, `@velexis/ota-sdk` to `dist/types/index.d.ts` and `@velexis/api-types` to the generated package.
   2. The generator also writes `methods.generated.ts`: per method, the contract's `Parameters` assignable to the SDK's and the SDK's awaited return assignable to the contract's. `client.contract.ts` holds the hand-written assertions (client, options, `RequestOptions`, `Page<T>`, error classes, `isVelexisError`).
   3. `deviations.ts` lists approved deviations with their ADR; the only entry is the cookie-mode auth union of OADR-0006.
-  4. `parity.test.js`: the set of `x-sdk-method` names equals the set of client methods, except namespaces listed in `pending-namespaces.js` (`auth`, `account`, `checkout`, `bookings` until M3; `console` until M4; each with its task id). SDK-013 empties the list.
+  4. `parity.test.js`: the set of `x-sdk-method` names equals the set of client methods, except entries listed in `pending-namespaces.js`. An entry is a namespace (`auth`, `account`, `checkout`, `bookings` until M3; `console` until M4) or a single method of a namespace that is already implemented (for example `storefront.listPages`, added by OBE-091), each with its task id. SDK-013 empties the list.
 - **Acceptance:**
   - The contract project compiles for the M2 namespaces; narrowing a parameter type of `flights.search` makes it fail.
   - Removing a method from `flights.js` makes the parity test fail.
@@ -834,17 +838,18 @@ Checkout, customer accounts in cookies, Stripe on the Velexis account, the airli
 - **Depends on:** OBE-009
 - **Size:** M
 - **Read first:** ota/docs/api-changes.md §3, §4, §6; ota/docs/adr/0004-airline-card-data-handling.md (point 1); ota/sdk/docs/extensions.md §3.1, §4, §5; docs/mvp/adr/0006-contract-first-openapi.md (Workflow)
-- **Files:** `ota/backend/openapi/velexis-ota-booking-api.openapi.yaml`, `ota/backend/openapi/README.md`, `packages/api-types/src/generated/ota.ts`, `packages/api-types/src/generated/operations.ts`, `packages/errors/src/generated/catalogue.ts`, `ota/backend/src/common/http/pending-operations.ts`, `ota/backend/test/contract/openapi-extensions.contract.test.ts`
+- **Files:** `ota/backend/openapi/velexis-ota-booking-api.openapi.yaml`, `ota/backend/openapi/README.md`, `packages/api-types/src/generated/ota.ts`, `packages/api-types/src/generated/operations.ts`, `packages/errors/src/generated/catalogue.ts`, `ota/backend/src/common/http/pending-operations.ts`, `ota/backend/test/contract/openapi-extensions.contract.test.ts`, `ota/sdk/src/internal/operations.js`
 - **Steps:**
   1. Apply §3.1: `PaymentCreateRequest.method` and `Payment.method` add `airline_card`; `Payment.provider` adds `airline`; `PaymentNextAction.type` adds `airline_card_form`; descriptions of `clientSecret`, `providerPublicKey`, `providerPaymentId` say "always null for airline payments".
   2. Add `completeCheckoutWithAirlineCard` exactly as §3.2 (`x-sdk-method: checkout.completeWithAirlineCard`, `x-scope: customer`, `x-edge-only: true`, `x-milestone: M3`, required `Idempotency-Key`, `CsrfToken`, `x-amadeus`, `x-tenant-tables`) and the `AirlineCardCompletionRequest` schema with `x-sensitive: true` on `card`.
   3. Apply §4 to `StorefrontPaymentConfig`: `accountMode`, `merchantName`, `statementDescriptor`, `airlineCard`, `supportedMethods` adds `airline_card`, descriptions of `publishableKey` and `accountId`.
-  4. Add `PAYMENT_ATTEMPTS_EXCEEDED` (403) to the catalogue. Lint, regenerate, add the new operation to `pending-operations.ts` (task OBE-051), extend the contract test (the new operation is edge-only and never has an `sk_`-only security entry).
+  4. Add `PAYMENT_ATTEMPTS_EXCEEDED` (403) to the catalogue. Lint, regenerate, add the new operation to `pending-operations.ts` (task OBE-051), extend the contract test (the new operation is edge-only and never has an `sk_`-only security entry). Run `pnpm --filter @velexis/ota-sdk generate` so the SDK route table has the new entry and SDK-002's CI check stays green; `checkout` is still a pending namespace, so the SDK parity test passes until SDK-009 adds the method.
 - **Acceptance:**
   - `pnpm contracts:lint` is clean; the operations index has 97 operations and the new one has `edgeOnly: true`.
   - Generated types contain `AirlineCardCompletionRequest` and `StorefrontPaymentConfig.accountMode`.
   - The route parity test passes with the new pending entry.
-- **Verify:** `pnpm contracts:lint && pnpm contracts:generate && pnpm --filter @velexis/ota-backend test -- contract`
+  - `pnpm --filter @velexis/ota-sdk generate` leaves no diff and the SDK tests pass.
+- **Verify:** `pnpm contracts:lint && pnpm contracts:generate && pnpm --filter @velexis/ota-backend test -- contract && pnpm --filter @velexis/ota-sdk generate && git diff --exit-code ota/sdk/src/internal/operations.js && pnpm --filter @velexis/ota-sdk test`
 
 ### OBE-030 · Add the notifications outbox, template registry, renderer, mailer and sweep
 - **Component:** ota-backend
@@ -909,7 +914,7 @@ Checkout, customer accounts in cookies, Stripe on the Velexis account, the airli
 - **Read first:** ota/docs/flows/my-bookings-and-guest-lookup.md §1, §3 (steps 3, 6, 7), §4; ota/docs/api-changes.md §2.2 (`signIn`, `refreshSession`, `signOut`); ota/docs/adr/0006-storefront-cookie-sessions-and-csrf.md (points 4, 5); ota/docs/architecture.md §8
 - **Files:** `ota/backend/src/identity/auth.controller.ts`, `ota/backend/src/identity/sign-in.service.ts`, `ota/backend/src/identity/sign-in.service.test.ts`, `ota/backend/src/identity/lockout.ts`, `ota/backend/src/identity/sessions.service.ts`, `ota/backend/src/common/http/pending-operations.ts`, `ota/backend/test/integration/identity/sign-in.int.test.ts`
 - **Steps:**
-  1. `auth.signIn`: Argon2id verification; 10 per minute per IP; 5 failures per identity lock it for 15 minutes (`authfail:<tenantId>:<sha256(email)>`, `423 ACCOUNT_LOCKED`); edge mode sets the cookies, rotates the CSRF cookie and returns `AuthSessionInfo`; bearer mode returns `AuthSessionResult`.
+  1. `auth.signIn`: Argon2id verification; 10 per minute per IP; 5 failures per identity lock it for 15 minutes (`t:<tenantId>:<env>:authfail:<sha256(email)>`, `423 ACCOUNT_LOCKED`); edge mode sets the cookies, rotates the CSRF cookie and returns `AuthSessionInfo`; bearer mode returns `AuthSessionResult`.
   2. `auth.refresh`: edge mode reads `__Host-vx_rt` and refuses a body token (`400 INVALID_REQUEST`); rotation; reuse answers `401 REFRESH_TOKEN_REUSED`, revokes the family and clears the cookies.
   3. `auth.signOut` (current session or `scope: all`) clears the cookies; `auth.getSession` returns `AuthSessionInfo` from the access token.
   4. Remove the four operations from `pending-operations.ts`.
@@ -1013,16 +1018,17 @@ Checkout, customer accounts in cookies, Stripe on the Velexis account, the airli
 - **Depends on:** OBE-038, X-028
 - **Size:** L
 - **Read first:** ota/docs/adr/0010-stripe-gateway-and-payment-webhooks.md (points 4–5); ota/docs/api-changes-console-and-internal.md §5; docs/mvp/architecture.md §5 (d); packages/testing/README.md (`stripe`)
-- **Files:** `ota/backend/src/payments/webhooks/stripe-velexis-webhook.controller.ts`, `ota/backend/src/payments/webhooks/webhook-receiver.service.ts`, `ota/backend/src/payments/webhooks/webhook-receiver.service.test.ts`, `ota/backend/src/payments/stripe-events.processor.ts`, `ota/backend/src/payments/payment-state.ts`, `ota/backend/src/payments/payment-state.test.ts`, `ota/backend/openapi/velexis-ota-booking-api.openapi.yaml`, `ota/backend/src/config.ts`, `ota/backend/test/integration/payments/webhooks.int.test.ts`
+- **Files:** `ota/backend/src/payments/webhooks/stripe-velexis-webhook.controller.ts`, `ota/backend/src/payments/webhooks/webhook-receiver.service.ts`, `ota/backend/src/payments/webhooks/webhook-receiver.service.test.ts`, `ota/backend/src/payments/stripe-events.processor.ts`, `ota/backend/src/payments/payment-state.ts`, `ota/backend/src/payments/payment-state.test.ts`, `ota/backend/openapi/velexis-ota-booking-api.openapi.yaml`, `ota/backend/test/contract/openapi-extensions.contract.test.ts`, `ota/backend/src/config.ts`, `ota/backend/test/integration/payments/webhooks.int.test.ts`
 - **Steps:**
-  1. Document `receiveStripeVelexisWebhook` (`POST /webhooks/stripe/velexis/{environment}`, tag `Internal`, `x-internal: true`, `x-milestone: M3`) in the OpenAPI document, then implement it. Config `STRIPE_WEBHOOK_SECRET_VELEXIS_TEST`, `_LIVE`.
-  2. Verify the signature on the raw body (`400` on failure); find the tenant from `metadata.velexis_tenant_id` and the payment from `metadata.payment_id`, then `provider_payment_id`; insert a `payment_events` row (`source = webhook`, `type = webhook.<type>`, `provider_event_id`, redacted payload) in a tenant transaction; a unique violation is a duplicate; answer 200; enqueue `stripe.event {tenantId, paymentEventId}` with the Stripe event id as job id. Unknown tenant or payment: log and acknowledge.
+  1. Document `receiveStripeVelexisWebhook` (`POST /webhooks/stripe/velexis/{environment}`, tag `Internal`, `x-internal: true`, `x-milestone: M3`) in the OpenAPI document, then implement it; the contract test asserts this operation's extensions (internal, M3, no `x-sdk-method`, no API-key security) by operationId. Config `STRIPE_WEBHOOK_SECRET_VELEXIS_TEST`, `_LIVE`.
+  2. Verify the signature on the raw body (`400` on failure); check `event.livemode` against the path's environment and `metadata.velexis_environment` (a mismatch is logged as a security event and acknowledged with `200` without effect); find the tenant from `metadata.velexis_tenant_id` (only Velexis creates PaymentIntents on this account, OADR-0010 point 4) and the payment from `metadata.payment_id`, then `provider_payment_id`, inside that tenant only (a payment whose `provider_payment_id` differs from the event's object is a security event); insert a `payment_events` row (`source = webhook`, `type = webhook.<type>`, `provider_event_id`, redacted payload) in a tenant transaction; a unique violation is a duplicate; answer 200; enqueue `stripe.event {tenantId, paymentEventId}` with the Stripe event id as job id. Unknown tenant or payment: log and acknowledge.
   3. `stripe-events.processor.ts` re-fetches the PaymentIntent, charge or refund and applies the state with the payment `version`: `amount_capturable_updated` (authorized), `succeeded` (captured), `payment_failed`, `canceled`, `charge.refunded` and `charge.refund.updated` (refund rows), `charge.dispute.created` (staff alert only). Other types are stored and ignored.
 - **Acceptance:**
   - A signed fixture is stored once and processed once; the same event delivered twice creates one row and one job.
   - A payload changed after signing answers 400; an event with an unknown tenant answers 200 and writes nothing.
+  - A signed `livemode: true` event on `/velexis/test` answers 200, writes nothing and logs a security event.
   - The processor applies Stripe's re-fetched state even when the event body is stale (fixture with an old status).
-- **Verify:** `pnpm --filter @velexis/ota-backend test -- payments && pnpm --filter @velexis/ota-backend test:int -- payments`
+- **Verify:** `pnpm --filter @velexis/ota-backend test -- payments && pnpm --filter @velexis/ota-backend test -- contract && pnpm --filter @velexis/ota-backend test:int -- payments`
 
 ### OBE-040 · Add the payments queue: voids, capture retries, refunds and the authorisation watch
 - **Component:** ota-backend
@@ -1190,7 +1196,7 @@ Checkout, customer accounts in cookies, Stripe on the Velexis account, the airli
 - **Files:** `ota/backend/src/bookings/cancellation.service.ts`, `ota/backend/src/bookings/cancellation-mode.ts`, `ota/backend/src/bookings/cancellation-mode.test.ts`, `ota/backend/src/bookings/customer-bookings.controller.ts`, `ota/backend/src/common/http/pending-operations.ts`, `ota/backend/test/integration/bookings/cancel.int.test.ts`
 - **Steps:**
   1. `cancellation-mode.ts` (pure): `release` (nothing ticketed), `void` (every ticket issued today in the OTA's time zone), `request_only` (ticketed outside the void window), `not_allowed` (flown, cancelled, pending, within 3 hours of departure, self-service off). Refund estimate keeps non-refundable fees and applies `cancellation` fee rules.
-  2. `bookings.quoteCancellation`: Management GET with refund fare rules, refresh snapshot and tickets, cache the quote in `cxq:<bookingId>` (10 minutes).
+  2. `bookings.quoteCancellation`: Management GET with refund fare rules, refresh snapshot and tickets, cache the quote in `t:<tenantId>:<env>:cxq:<bookingId>` (10 minutes; the contract text says `cxq:{bookingId}`, the OTA keeps every tenant-data key under `t:<tenantId>:<env>:`).
   3. `bookings.cancel` (`If-Match`, `Idempotency-Key`, `expectedRefund` else `409 REFUND_AMOUNT_CHANGED`): `release`/`void` → Management DELETE, booking `cancelled` (`cancelled_by = customer`), segments and tickets updated, events, outbox `booking.cancelled`; money step once: Stripe not captured → void, captured → `refunds` row and `refund.submit`, airline card → `payment_events` `airline.void_expected` only. Amadeus refusal → `request_only` (`202`). `request_only` → event, `booking.cancellation_requested`, staff alert, `202`. Timeout on DELETE → `504`, booking flagged, GET within 15 minutes, replay until decided.
   4. Remove both operations from `pending-operations.ts`.
 - **Acceptance:**
@@ -1205,15 +1211,15 @@ Checkout, customer accounts in cookies, Stripe on the Velexis account, the airli
 - **Depends on:** OBE-038
 - **Size:** M
 - **Read first:** ota/docs/adr/0004-airline-card-data-handling.md (points 1, 2, 4, 5); ota/docs/api-changes.md §3.1; ota/docs/flows/checkout-airline-card.md §1 and §3 (steps 1–2); ota/docs/data-model.md §3.1–§3.2; ota/docs/architecture.md §9 (redaction additions)
-- **Files:** `ota/backend/src/payments/airline-card/airline-card.gateway.ts`, `ota/backend/src/payments/airline-card/sensitive-card.ts`, `ota/backend/src/payments/airline-card/sensitive-card.test.ts`, `ota/backend/src/payments/payments.service.ts`, `ota/backend/src/checkout/pricing-mode.ts`, `ota/backend/src/checkout/pricing-mode.test.ts`, `ota/backend/src/storefront/storefront.mapper.ts`, `ota/backend/src/config.ts`, `packages/logger/src/redaction.ts`, `packages/logger/src/redaction.test.ts`, `ota/backend/test/integration/payments/airline-card-payment.int.test.ts`
+- **Files:** `ota/backend/src/payments/airline-card/airline-card.gateway.ts`, `ota/backend/src/payments/airline-card/sensitive-card.ts`, `ota/backend/src/payments/airline-card/sensitive-card.test.ts`, `ota/backend/src/payments/payments.service.ts`, `ota/backend/src/checkout/pricing-mode.ts`, `ota/backend/src/checkout/pricing-mode.test.ts`, `ota/backend/src/storefront/storefront.mapper.ts`, `ota/backend/src/config.ts`, `packages/logger/src/redact-paths.ts`, `packages/logger/src/redaction.test.ts`, `ota/backend/test/integration/payments/airline-card-payment.int.test.ts`
 - **Steps:**
   1. Config `AIRLINE_CARD_ENABLED` (default `false`). `createPayment {method: "airline_card"}` is refused with `403 FEATURE_DISABLED` (`details.feature = "airlineCard"`) unless the switch and `storefront_settings.airline_card_enabled_<env>` are on, and with `403 SCOPE_NOT_ALLOWED` unless the caller is the edge.
   2. It sets `checkouts.pricing_mode = 'net'`, recomputes totals as the Amadeus total plus Amadeus-priced extras (engine bypassed, OADR-0005 point 9), cancels other active payments of the checkout and inserts `payments` (`provider = airline`, `method = airline_card`, `capture_method = automatic`, `requires_payment_method`, `nextAction.type = airline_card_form`); no provider call. Choosing `card` again restores `markup_rules`.
   3. `updatePayment {card: {brand, bin}}` quotes the Amadeus card fee for that brand and BIN.
   4. `SensitiveCard`: private fields; `toJSON`, `toString` and `util.inspect.custom` return `"[redacted card]"`; readers `last4()`, `bin()`, `brand()`; `toAmadeusCreditCard()` returns the full values for the Amadeus body only.
-  5. Add `holderName`, `expiryMonth`, `expiryYear`, the `card` object, `x-velexis-edge`, `x-csrf-token`, `x-booking-token` and `stripe-signature` to the central redaction list with tests. `storefront.get` lists `airline_card` in `supportedMethods` and fills `airlineCard` only when both switches are on.
+  5. Add `holderName`, `expiryMonth`, `expiryYear`, the `card` object, `x-velexis-edge`, `x-csrf-token`, `x-booking-token` and `stripe-signature` to the central redaction list `REDACT_PATHS` in `packages/logger/src/redact-paths.ts` (X-003; no second list), with tests in `redaction.test.ts`. `storefront.get` lists `airline_card` in `supportedMethods` and fills `airlineCard` only when both switches are on **and the caller is the edge** (the operation is edge-only, so `pk_` and `sk_` callers never see the method); this is decided per request by `storefront.mapper.ts`, never stored in the shared cache (OBE-016).
 - **Acceptance:**
-  - With the switch off, the method is absent from `storefront.get` and `createPayment` answers 403 [OF-05 AC3].
+  - With the switch off, the method is absent from `storefront.get` and `createPayment` answers 403 [OF-05 AC3]; with it on, a `pk_` call followed by an edge call (one cache fill) shows `airline_card` to the edge only.
   - A key caller gets `403 SCOPE_NOT_ALLOWED` [OF-05 AC2 groundwork].
   - `JSON.stringify`, template strings and `util.inspect` of a `SensitiveCard` never show the number; the redaction test covers every new path.
 - **Verify:** `pnpm --filter @velexis/logger test && pnpm --filter @velexis/ota-backend test -- payments && pnpm --filter @velexis/ota-backend test:int -- payments`
@@ -1226,7 +1232,7 @@ Checkout, customer accounts in cookies, Stripe on the Velexis account, the airli
 - **Read first:** ota/docs/api-changes.md §3.2; ota/docs/architecture-booking.md §3 and §5.1 (point 4); ota/docs/adr/0004-airline-card-data-handling.md (points 2, 3, 5–7); ota/docs/flows/checkout-airline-card.md §2–§4
 - **Files:** `ota/backend/src/payments/airline-card/airline-card-completion.controller.ts`, `ota/backend/src/payments/airline-card/airline-card-completion.service.ts`, `ota/backend/src/payments/airline-card/card-validation.ts`, `ota/backend/src/payments/airline-card/card-validation.test.ts`, `ota/backend/src/payments/airline-card/abuse-limits.ts`, `ota/backend/src/bookings/booking-orchestrator.service.ts`, `ota/backend/src/bookings/reconcile.service.ts`, `ota/backend/src/main.ts`, `ota/backend/src/common/http/pending-operations.ts`, `ota/backend/test/integration/payments/airline-card-completion.int.test.ts`
 - **Steps:**
-  1. Route `POST /v1/checkouts/{checkoutId}/airline-card-completion` with its own 10 KB JSON parser, excluded from `pino-http` body serialisers and Sentry breadcrumbs; Ajv errors carry paths only. Checks: edge only, kill switch and tenant setting, Redis available (else 503), limits (5 per minute per IP, 3 attempts per checkout in `t:<tenantId>:ac:chk:<checkoutId>`, 60 per hour per tenant), Luhn, expiry not past, brand in `accepted_card_brands`.
+  1. Route `POST /v1/checkouts/{checkoutId}/airline-card-completion` with its own 10 KB JSON parser, excluded from `pino-http` body serialisers and Sentry breadcrumbs; Ajv errors carry paths only. Checks: edge only, kill switch and tenant setting, Redis available (else 503), limits (5 per minute per IP, 3 attempts per checkout in `t:<tenantId>:<env>:ac:chk:<checkoutId>`, 60 per hour per tenant), Luhn, expiry not past, brand in `accepted_card_brands`.
   2. Idempotency with the `hashInput` hook replacing `card` by `{brand, last4}`; the SDK and the handler never retry.
   3. Orchestration as OBE-042 with `issue = true` and `formOfPayments: [{creditCard: {brand, holder (upper case), number, expiryDate "YYYY-MM", securityCode, flightOfferIds}}]`, `paymentOperationContext.interactionCondition = ECOMMERCE`; the redacted request (last 4, no security code) is built from `SensitiveCard` **before** the call and passed to the client; the reference is cleared in `finally`.
   4. Record: booking `ticketed`, `pricing_mode = net`, `markup_amount = 0`; payment `captured` with brand, BIN, last 4; `payment_events` `airline.charged`. Decline → booking `failed`, payment `failed`, attempt counted, `402 PAYMENT_DECLINED`; third decline → `403 PAYMENT_ATTEMPTS_EXCEEDED`, `staff.airline_card_alert` and an ops alert; 20 declines per tenant per hour suspend the method for an hour (Redis flag). Order without tickets → `ticketing_status = manual_review`, `201` with a warning.
@@ -1276,16 +1282,16 @@ Checkout, customer accounts in cookies, Stripe on the Velexis account, the airli
 - **Depends on:** OBE-053, OBE-047
 - **Size:** M
 - **Read first:** ota/docs/adr/0013-notifications-and-booking-documents.md (point 9); ota/docs/api-changes-console-and-internal.md §5 (`downloadFile`); ota/docs/flows/ticketing-and-documents.md §3 (step 8), §7; docs/velexis-sdk/openapi/velexis-ota-booking-api.openapi.yaml (grep `operationId: listBookingDocuments`, `getBookingDocumentDownloadUrl`)
-- **Files:** `ota/backend/src/documents/documents.controller.ts`, `ota/backend/src/documents/files.controller.ts`, `ota/backend/src/documents/signed-url.ts`, `ota/backend/src/documents/signed-url.test.ts`, `ota/backend/openapi/velexis-ota-booking-api.openapi.yaml`, `ota/backend/src/config.ts`, `ota/backend/src/common/http/pending-operations.ts`, `ota/backend/test/integration/documents/download.int.test.ts`
+- **Files:** `ota/backend/src/documents/documents.controller.ts`, `ota/backend/src/documents/files.controller.ts`, `ota/backend/src/documents/signed-url.ts`, `ota/backend/src/documents/signed-url.test.ts`, `ota/backend/openapi/velexis-ota-booking-api.openapi.yaml`, `ota/backend/test/contract/openapi-extensions.contract.test.ts`, `ota/backend/src/config.ts`, `ota/backend/src/common/http/pending-operations.ts`, `ota/backend/test/integration/documents/download.int.test.ts`
 - **Steps:**
-  1. Document `downloadFile` (`GET /v1/files/{storageKey}`, `x-sdk-exclude`, `security: []`, `x-milestone: M3`) in the OpenAPI document; config `DOCUMENT_URL_KEY_FILE`.
+  1. Document `downloadFile` (`GET /v1/files/{storageKey}`, `x-sdk-exclude`, `security: []`, `x-milestone: M3`) in the OpenAPI document; the contract test asserts these extensions by operationId (the baseline counts of OBE-009 are unaffected). Config `DOCUMENT_URL_KEY_FILE`.
   2. `bookings.listDocuments` (ready documents only) and `bookings.getDocumentDownloadUrl`: a 5-minute HMAC-SHA-256 URL, same-origin `/api/v1/files/…` for the edge and `PUBLIC_OTA_API_URL/v1/files/…` for key callers; `409 DOCUMENT_NOT_READY` while rendering.
   3. `/v1/files/{storageKey}?exp=…&sig=…`: verify signature and expiry (`403`), re-check that the key's tenant is the request's tenant (`404` otherwise), stream with `Content-Disposition: attachment`, 120 per minute per IP.
   4. Remove both SDK operations from `pending-operations.ts`.
 - **Acceptance:**
   - Expired or tampered signatures answer 403; another tenant's key answers 404.
   - The edge receives a same-origin path, a key caller an absolute URL on `api.ota.example.com`.
-- **Verify:** `pnpm --filter @velexis/ota-backend test -- documents && pnpm --filter @velexis/ota-backend test:int -- documents`
+- **Verify:** `pnpm --filter @velexis/ota-backend test -- documents && pnpm --filter @velexis/ota-backend test -- contract && pnpm --filter @velexis/ota-backend test:int -- documents`
 
 ### OBE-055 · Write the booking and staff e-mail templates with attachments
 - **Component:** ota-backend
@@ -1390,7 +1396,7 @@ Checkout, customer accounts in cookies, Stripe on the Velexis account, the airli
 ### OFE-009 · Build the authentication pages and the account menu
 - **Component:** ota-frontend
 - **Milestone:** M3
-- **Depends on:** OFE-003, SDK-008, OBE-034
+- **Depends on:** OFE-003, SDK-008, OBE-032, OBE-034
 - **Size:** M
 - **Read first:** ota/frontend/docs/pages-account.md §1 and §5; ota/frontend/README.md §8 (Authentication row), §10 (tokens in URLs, redirects); ota/docs/flows/my-bookings-and-guest-lookup.md §3–§4; docs/velexis-sdk/sdk/docs/B1.md
 - **Files:** `ota/frontend/account/sign-in.html`, `ota/frontend/account/sign-up.html`, `ota/frontend/account/verify.html`, `ota/frontend/account/forgot-password.html`, `ota/frontend/account/reset-password.html`, `ota/frontend/src/pages/account-sign-in.js`, `ota/frontend/src/pages/account-sign-up.js`, `ota/frontend/src/pages/account-verify.js`, `ota/frontend/src/pages/account-forgot-password.js`, `ota/frontend/src/pages/account-reset-password.js`, `ota/frontend/src/lib/session.js`, `ota/frontend/test/auth-pages.test.js`
@@ -1458,7 +1464,7 @@ Checkout, customer accounts in cookies, Stripe on the Velexis account, the airli
 ### OFE-013 · Build the complete and confirmation pages
 - **Component:** ota-frontend
 - **Milestone:** M3
-- **Depends on:** OFE-012, SDK-010, OBE-042
+- **Depends on:** OFE-012, SDK-010, OBE-042, OBE-046, OBE-047
 - **Size:** M
 - **Read first:** ota/frontend/docs/pages.md §10 and §11; docs/velexis-sdk/sdk/docs/B3.md §2.7 (stable idempotency key); ota/docs/flows/checkout-stripe.md §3
 - **Files:** `ota/frontend/checkout/complete.html`, `ota/frontend/src/pages/checkout-complete.js`, `ota/frontend/confirmation.html`, `ota/frontend/src/pages/confirmation.js`, `ota/frontend/test/complete-page.test.js`, `ota/frontend/test/confirmation-page.test.js`
@@ -1479,15 +1485,15 @@ Checkout, customer accounts in cookies, Stripe on the Velexis account, the airli
 - **Read first:** ota/docs/adr/0017-airline-card-form-isolation.md (whole); ota/frontend/docs/pages.md §9; ota/docs/flows/checkout-airline-card.md §3; deploy/caddy/Caddyfile (storefront block); deploy/caddy/test/caddy-smoke.sh
 - **Files:** `ota/frontend/checkout/pay-airline.html`, `ota/frontend/src/pages/checkout-pay-airline.js`, `ota/frontend/src/lib/card-brand.js`, `ota/frontend/test/card-brand.test.js`, `ota/frontend/test/pay-airline.test.js`, `ota/frontend/vite.config.js`, `deploy/caddy/Caddyfile`, `deploy/caddy/test/caddy-smoke.sh`
 - **Steps:**
-  1. Own page and entry bundle importing only the SDK and the few `lib/` helpers it needs (budget 30 KB gzip); static header and footer partials; no third-party code, font or image.
+  1. Own page and entry bundle importing only the SDK and the few `lib/` helpers it needs (budget 30 KB gzip); static header and footer partials; no third-party code, font or image. The page takes its state only from the URL (`checkoutId`, `paymentId`) and the API (`checkout.get`, `storefront.get` called fresh), never from `sessionStorage` or `localStorage`, which other pages of the origin can write.
   2. Inputs without `name` attributes, `autocomplete` `cc-name`, `cc-number`, `cc-exp-month`, `cc-exp-year`, `cc-csc`, `inputmode="numeric"`; form `method="post"` without `action`; `<noscript>` notice.
   3. After six digits: brand detected locally (`card-brand.js`) and `checkout.updatePayment({ paymentId, card: { brand, bin } })`. On Pay: read the inputs into one local object passed straight to `checkout.completeWithAirlineCard` with a new idempotency key per submit and 90 s; never write values to storage, cookies, the URL, `history.state`, events or the console; clear inputs on success, decline, error and `pagehide`.
   4. States of `pages.md` §9; `504` → `/confirmation.html?booking=…&pending=1`, never re-sending the card.
-  5. Caddyfile: a path-specific CSP for `/checkout/pay-airline.html` and `/checkout/pay-airline` without Stripe hosts (OADR-0017 point 3), mirrored in the `vite preview` headers; extend `caddy-smoke.sh` to assert it.
+  5. Caddyfile: for `/checkout/pay-airline.html` and `/checkout/pay-airline`, the path-specific CSP without Stripe hosts, `Cross-Origin-Opener-Policy: same-origin` and `Cache-Control: no-store` (OADR-0017 point 3); add `worker-src 'none'` to the general storefront CSP, and make sure no other storefront path sends `Cross-Origin-Opener-Policy: same-origin`, so a window opened from any other page lands in a new browsing context group and its opener gets no handle on the card page. Mirror the headers in the `vite preview` config; extend `caddy-smoke.sh` to assert all of them.
 - **Acceptance:**
   - The built page references only its own bundle; the bundle is within 30 KB gzip (budget script).
   - Unit tests prove the inputs are empty after success, decline and `pagehide`, and that no storage API is called.
-  - `caddy-smoke.sh` passes with the stricter header on that path and the general CSP elsewhere.
+  - `caddy-smoke.sh` passes with the stricter CSP, COOP `same-origin` and `no-store` on that path, the general CSP (with `worker-src 'none'`) elsewhere, and no COOP `same-origin` on any other storefront path.
 - **Verify:** `pnpm --filter @velexis/ota-frontend test && pnpm --filter @velexis/ota-frontend build && bash deploy/caddy/test/caddy-smoke.sh`
 
 ### OFE-015 · Build my bookings and the booking detail page
@@ -1526,7 +1532,7 @@ Checkout, customer accounts in cookies, Stripe on the Velexis account, the airli
 ### OFE-017 · Write the guest Stripe checkout journey
 - **Component:** ota-frontend
 - **Milestone:** M3
-- **Depends on:** OFE-013, OFE-008, OBE-055
+- **Depends on:** OFE-013, OFE-015, OFE-008, OBE-047, OBE-055
 - **Size:** M
 - **Read first:** ota/frontend/README.md §13 (journey 2); ota/docs/flows/checkout-stripe.md §6; docs/mvp/local-development.md §6 (Stripe CLI); tools/e2e/README.md
 - **Files:** `tools/e2e/specs/storefront/checkout-stripe.e2e.ts`, `tools/e2e/playwright.config.ts`, `tools/e2e/support/stack.ts`, `tools/e2e/support/stripe.ts`, `.github/workflows/e2e.yml`
@@ -1549,7 +1555,7 @@ Checkout, customer accounts in cookies, Stripe on the Velexis account, the airli
 - **Steps:**
   1. Stack with `AIRLINE_CARD_ENABLED=true` and the tenant's test switch on (seed). Journey: price → checkout → airline card → notice and the airline's price → test PAN `4111 1111 1111 1111` → confirmation with tickets.
   2. Decline with `4000 0000 0000 0002` three times: declined, then "Too many attempts". A `timeout` scenario goes to the pending confirmation without resubmitting.
-  3. `card-leak-guards.ts`: after each path, the PAN, its last 12 digits and the CVV are absent from `localStorage`, `sessionStorage`, IndexedDB, cookies, the URL and `history.state`; the inputs are empty after leaving the page; the page made no third-party request.
+  3. `card-leak-guards.ts`: after each path, the PAN, its last 12 digits and the CVV are absent from `localStorage`, `sessionStorage`, IndexedDB, cookies, the URL and `history.state`; the inputs are empty after leaving the page; the page made no third-party request; a script on `/checkout/pay-card.html` that opens the card page with `window.open` gets no access to its document (the handle reports `closed`), because of COOP `same-origin` (OADR-0017 point 3).
 - **Acceptance:**
   - Success, decline, attempt limit and timeout pass with every leak guard green [OF-05 AC1, AC2].
 - **Verify:** `E2E_WITH_OTA=1 pnpm test:e2e -- --project=storefront specs/storefront/checkout-airline-card.e2e.ts`
@@ -1557,7 +1563,7 @@ Checkout, customer accounts in cookies, Stripe on the Velexis account, the airli
 ### OFE-019 · Write the account, bookings and keyboard-only journeys
 - **Component:** ota-frontend
 - **Milestone:** M3
-- **Depends on:** OFE-016, OFE-010, OFE-017
+- **Depends on:** OFE-016, OFE-010, OFE-014, OFE-017
 - **Size:** M
 - **Read first:** ota/frontend/README.md §8 and §13 (journeys 4, 5); ota/docs/flows/my-bookings-and-guest-lookup.md §7; ota/docs/flows/change-and-cancel.md §7
 - **Files:** `tools/e2e/specs/storefront/account-bookings.e2e.ts`, `tools/e2e/specs/storefront/keyboard-checkout.e2e.ts`, `tools/e2e/support/ota.ts`
@@ -1573,24 +1579,55 @@ Checkout, customer accounts in cookies, Stripe on the Velexis account, the airli
 
 The console API (staff sign-in by portal token, bookings, PNR import, queues, customers, supplier log, raw Amadeus reads, payments, settings), the `console` SDK namespace, the OTA admin app and the storefront content pages. Platform task PFE-019 is gated on OF-09 (OBE-059, OAD-003, OAD-016).
 
-### OBE-058 · Spec-first: console settings, payments, permissions, public pages and assets
+### OBE-058 · Spec-first: console permissions and settings operations
 - **Component:** ota-backend
 - **Milestone:** M4
 - **Depends on:** OBE-029
 - **Size:** L
-- **Read first:** ota/docs/api-changes-console-and-internal.md §1–§6; ota/docs/api-changes.md §5 and §6 (`ENVIRONMENT_NOT_ALLOWED`, `TEMPLATE_INVALID`, `ASSET_INVALID`); ota/docs/adr/0015-storefront-build-urls-and-hosting.md (Follow-ups: font enum); ota/docs/adr/0018-ota-admin-consumes-the-sdk-server-side.md (Follow-ups: `consoleCardPayment`); ota/docs/scope.md §1.3
-- **Files:** `ota/backend/openapi/velexis-ota-booking-api.openapi.yaml`, `ota/backend/openapi/README.md`, `packages/api-types/src/generated/ota.ts`, `packages/api-types/src/generated/operations.ts`, `packages/errors/src/generated/catalogue.ts`, `ota/backend/src/common/http/pending-operations.ts`, `ota/backend/test/contract/openapi-extensions.contract.test.ts`, `ota/sdk/docs/extensions.md`
+- **Read first:** ota/docs/api-changes-console-and-internal.md §1, §2.1–§2.3, §2.6, §6; ota/docs/api-changes.md §5 and §6 (`ENVIRONMENT_NOT_ALLOWED`, `TEMPLATE_INVALID`); ota/docs/adr/0015-storefront-build-urls-and-hosting.md (Follow-ups: font enum); ota/docs/adr/0018-ota-admin-consumes-the-sdk-server-side.md (Follow-ups: `consoleCardPayment`); ota/docs/scope.md §1.3
+- **Files:** `ota/backend/openapi/velexis-ota-booking-api.openapi.yaml`, `ota/backend/openapi/README.md`, `packages/api-types/src/generated/ota.ts`, `packages/api-types/src/generated/operations.ts`, `packages/errors/src/generated/catalogue.ts`, `ota/backend/src/common/http/pending-operations.ts`, `ota/backend/test/contract/console-settings.contract.test.ts`, `ota/sdk/src/internal/operations.js`, `ota/sdk/docs/extensions.md`
 - **Steps:**
-  1. `StaffPermission` gains `settings:read`, `settings:write`, `payments:read`, `payments:capture`, `payments:refund` (description with the role matrix of scope §1.3); add `x-permission` to every console operation (existing and new).
-  2. Add the 25 settings operations (§2.1–§2.6) with their schemas (`MarkupRule`, `MarkupRuleInput`, `FeeRule`, `PricingRuleScope`, `StorefrontSettings` with `branding.fonts` as an enum of the bundled font names, `StorefrontPage`, `StorefrontAsset` with multipart upload, `NotificationTemplate`), the 4 console payment operations (§3, `ConsolePayment`), the public `listStorefrontPages`, `getStorefrontPage` (§4.1, page `blocks`) and `getPublicAsset` (§4.2, `x-sdk-exclude`). Every new operation has `x-milestone: M4`.
-  3. Document `healthLive`, `healthReady` (`x-internal`, M0) under the `Internal` tag (§5); the M5 webhooks come with OBE-076.
-  4. Add `ENVIRONMENT_NOT_ALLOWED` (403), `TEMPLATE_INVALID` (422), `ASSET_INVALID` (422); state in `consolePatchBooking` and `consoleIssueBooking` that `creditCard` in `formOfPayments` answers `403 FEATURE_DISABLED` (`details.feature = "consoleCardPayment"`).
-  5. Lint, regenerate, add the new operations to `pending-operations.ts` with their implementing task ids, align `ota/sdk/docs/extensions.md` §3.2–§3.3; the contract test asserts the totals (135 operations, 128 with `x-sdk-method`) and that every console operation has `x-permission`.
+  1. `StaffPermission` gains `settings:read`, `settings:write`, `payments:read`, `payments:capture`, `payments:refund` (description with the role matrix of scope §1.3); add `x-permission` to every existing console operation and to the new ones of this task. OBE-090 and OBE-091 add the remaining console operations with their own `x-permission`.
+  2. Add the 17 settings operations of §2.1–§2.3 and §2.6 (markup rules, fee rules, storefront settings, templates) with their schemas (`MarkupRule`, `MarkupRuleInput`, `FeeRule`, `PricingRuleScope`, `StorefrontSettings` with `branding.fonts` as an enum of the bundled font names, `NotificationTemplate`). Every new operation has `x-milestone: M4`.
+  3. Add `ENVIRONMENT_NOT_ALLOWED` (403) and `TEMPLATE_INVALID` (422); state in `consolePatchBooking` and `consoleIssueBooking` that `creditCard` in `formOfPayments` answers `403 FEATURE_DISABLED` (`details.feature = "consoleCardPayment"`).
+  4. Lint, regenerate the contract packages and the SDK route table (`pnpm --filter @velexis/ota-sdk generate`; `console` is still a pending namespace), add the new operations to `pending-operations.ts` with their implementing task ids (OBE-069, OBE-070, OBE-073), align the settings rows of `ota/sdk/docs/extensions.md` §3.2. `console-settings.contract.test.ts` asserts the 17 operationIds with their milestone and permission, and that every console operation in the document has `x-permission`.
 - **Acceptance:**
-  - `pnpm contracts:lint` is clean and the counts match api-changes part 2 §6.
+  - `pnpm contracts:lint` is clean; the 17 operations match api-changes part 2 §2.1–§2.3 and §2.6.
   - The font enum equals the list of fonts the storefront bundles (a contract test compares it with `ota/frontend/src/styles/fonts.css` once OFE-020 exists; until then with a constant in the test).
-  - The route parity test passes with the new pending entries.
-- **Verify:** `pnpm contracts:lint && pnpm contracts:generate && pnpm --filter @velexis/ota-backend test -- contract`
+  - The route parity test passes with the new pending entries; `pnpm --filter @velexis/ota-sdk generate` leaves no diff and the SDK tests pass.
+- **Verify:** `pnpm contracts:lint && pnpm contracts:generate && pnpm --filter @velexis/ota-backend test -- contract && pnpm --filter @velexis/ota-sdk generate && git diff --exit-code ota/sdk/src/internal/operations.js && pnpm --filter @velexis/ota-sdk test`
+
+### OBE-090 · Spec-first: console payments and the internal health and Stripe webhook endpoints
+- **Component:** ota-backend
+- **Milestone:** M4
+- **Depends on:** OBE-058
+- **Size:** S
+- **Read first:** ota/docs/api-changes-console-and-internal.md §3, §5, §6; ota/sdk/docs/extensions.md §3.3; ota/docs/adr/0010-stripe-gateway-and-payment-webhooks.md (point 4); ota/docs/adr/0011-console-access-staff-sessions-and-environments.md (point 6)
+- **Files:** `ota/backend/openapi/velexis-ota-booking-api.openapi.yaml`, `ota/backend/openapi/README.md`, `packages/api-types/src/generated/ota.ts`, `packages/api-types/src/generated/operations.ts`, `ota/backend/src/common/http/pending-operations.ts`, `ota/backend/test/contract/console-payments.contract.test.ts`, `ota/sdk/src/internal/operations.js`, `ota/sdk/docs/extensions.md`
+- **Steps:**
+  1. Add the 4 console payment operations of §3 (`ConsolePayment`) with `x-permission` `payments:read`, `payments:capture` or `payments:refund` and `x-milestone: M4`.
+  2. Document under the `Internal` tag (`x-internal: true`): `healthLive` and `healthReady` (`x-milestone: M0`, already served by OBE-001 and OBE-025), and the two M5 webhooks `receiveStripeConnectWebhook` and `receiveStripeConnectionWebhook` (`x-milestone: M5`, with the per-endpoint tenant rules of OADR-0010 point 4 in their descriptions). The webhooks are documented here, ahead of their handler, so the M4 document is complete (135 operations); OBE-076 only adds the billing notice.
+  3. Lint, regenerate the contract packages and the SDK route table, add the payment operations (task OBE-068) and the two webhooks (task OBE-078) to `pending-operations.ts`, align `extensions.md` §3.3. `console-payments.contract.test.ts` asserts the 8 operationIds and their extensions.
+- **Acceptance:**
+  - `pnpm contracts:lint` is clean; the route parity test passes with the new pending entries and without pending entries for the two health routes.
+  - `pnpm --filter @velexis/ota-sdk generate` leaves no diff and the SDK tests pass.
+- **Verify:** `pnpm contracts:lint && pnpm contracts:generate && pnpm --filter @velexis/ota-backend test -- contract && pnpm --filter @velexis/ota-sdk generate && git diff --exit-code ota/sdk/src/internal/operations.js && pnpm --filter @velexis/ota-sdk test`
+
+### OBE-091 · Spec-first: content pages, storefront assets and their public endpoints
+- **Component:** ota-backend
+- **Milestone:** M4
+- **Depends on:** OBE-058
+- **Size:** S
+- **Read first:** ota/docs/api-changes-console-and-internal.md §2.4, §2.5, §4, §6; ota/docs/api-changes.md §6 (`ASSET_INVALID`); ota/docs/adr/0012-storefront-settings-assets-and-pages.md (points 2, 3, 5); ota/sdk/docs/extensions.md §3.1–§3.2; this plan's SDK-006 (pending list format)
+- **Files:** `ota/backend/openapi/velexis-ota-booking-api.openapi.yaml`, `ota/backend/openapi/README.md`, `packages/api-types/src/generated/ota.ts`, `packages/api-types/src/generated/operations.ts`, `packages/errors/src/generated/catalogue.ts`, `ota/backend/src/common/http/pending-operations.ts`, `ota/backend/test/contract/storefront-content.contract.test.ts`, `ota/sdk/src/internal/operations.js`, `ota/sdk/test/contract/pending-namespaces.js`, `ota/sdk/docs/extensions.md`
+- **Steps:**
+  1. Add the 8 console page and asset operations of §2.4–§2.5 (`StorefrontPage`, `StorefrontAsset` with multipart upload) with `x-permission` `settings:read` or `settings:write`, the public `listStorefrontPages` and `getStorefrontPage` (§4.1, page `blocks`, `x-sdk-method` `storefront.listPages` and `storefront.getPage`) and `getPublicAsset` (§4.2, `x-sdk-exclude`). Every new operation has `x-milestone: M4`. Add `ASSET_INVALID` (422).
+  2. Lint, regenerate the contract packages and the SDK route table, add the new operations to `pending-operations.ts` (tasks OBE-071 and OBE-072), align `extensions.md` §3.1 and the pages and assets rows of §3.2. `storefront-content.contract.test.ts` asserts the 11 operationIds and their extensions.
+  3. SDK parity: the `storefront` namespace is implemented since SDK-005 and no longer pending, so add `storefront.listPages` and `storefront.getPage` to `pending-namespaces.js` as method entries with task SDK-012, which removes them.
+- **Acceptance:**
+  - `pnpm contracts:lint` is clean; the route parity test passes with the new pending entries.
+  - The SDK parity test passes on this PR (two pending method entries); `pnpm --filter @velexis/ota-sdk generate` leaves no diff.
+- **Verify:** `pnpm contracts:lint && pnpm contracts:generate && pnpm --filter @velexis/ota-backend test -- contract && pnpm --filter @velexis/ota-sdk generate && git diff --exit-code ota/sdk/src/internal/operations.js && pnpm --filter @velexis/ota-sdk test`
 
 ### OBE-059 · Implement staff sign-in by portal token and staff sessions in Redis
 - **Component:** ota-backend
@@ -1615,15 +1652,17 @@ The console API (staff sign-in by portal token, bookings, PNR import, queues, cu
 - **Milestone:** M4
 - **Depends on:** OBE-059
 - **Size:** M
-- **Read first:** ota/docs/adr/0011-console-access-staff-sessions-and-environments.md (points 4–6, 8, 9); ota/docs/adr/0009-caller-and-tenant-resolution.md (point 1.2); ota/docs/api-changes.md §5; docs/velexis-sdk/db/README.md §8 (`staff_actions`); ota/docs/scope.md §1.2 (automation keys)
+- **Read first:** ota/docs/adr/0011-console-access-staff-sessions-and-environments.md (points 4–6, 8, 9); ota/docs/adr/0009-caller-and-tenant-resolution.md (point 1.2); platform/docs/architecture.md §3.2 (the same end-user forwarding on the platform side); deploy/caddy/Caddyfile (`api_common`, storefront `/api/*`); ota/docs/api-changes.md §5; docs/velexis-sdk/db/README.md §8 (`staff_actions`); ota/docs/scope.md §1.2 (automation keys)
 - **Files:** `ota/backend/src/common/auth/caller.guard.ts`, `ota/backend/src/common/auth/scope.guard.ts`, `ota/backend/src/common/auth/permission.guard.ts`, `ota/backend/src/common/auth/permission.guard.test.ts`, `ota/backend/src/console/console.module.ts`, `ota/backend/src/console/staff-actions.writer.ts`, `ota/backend/src/console/staff-actions.writer.test.ts`, `ota/backend/src/common/auth/roles.ts`, `ota/backend/src/config.ts`, `ota/backend/test/integration/console/console-access.int.test.ts`
 - **Steps:**
-  1. `CallerGuard` gains the service branch before keys: `X-Api-Key` equal to `OTA_ADMIN_SERVICE_KEY` (constant time) from socket peer `127.0.0.1` → `service`; accepted only on console operations and only with a staff token of the tenant (except `consoleSignIn`); `X-Velexis-Environment` required (400 without), `live` only for a live tenant and a non-viewer role (`403 ENVIRONMENT_NOT_ALLOWED`).
+  1. `CallerGuard` gains the service branch before keys: `X-Api-Key` equal to `OTA_ADMIN_SERVICE_KEY` (constant time), socket peer (`req.socket.remoteAddress`, never `req.ip`) on loopback, **and no `X-Forwarded-For` or `X-Forwarded-Host` header** → `service`. Caddy sets both on every proxied request (`api.ota.example.com` and the storefront `/api/*`), so a request that came through Caddy is never a service request, whatever key it carries (OADR-0009 rule 1.2, the same test as the platform's `InternalOnlyGuard`); it falls through to the key rules and gets `401 INVALID_API_KEY`, logged as a security event without the value. The service caller is accepted only on console operations and only with a staff token of the tenant (except `consoleSignIn`); `X-Velexis-Environment` required (400 without), `live` only for a live tenant and a non-viewer role (`403 ENVIRONMENT_NOT_ALLOWED`).
   2. `roles.ts` holds the role → permission matrix of scope §1.3; `PermissionGuard` reads `x-permission` from the operations index and answers `403 FORBIDDEN` with `details.requiredPermission`. `sk_` keys scoped `console` need a staff token; `console:automation` keys use their own permissions with `X-Velexis-Scope: console`, audited as the key.
   3. `staff-actions.writer.ts`: one row per console call (also denied ones with `outcome = denied`): actor, role, action, target, reason, redacted before/after, request id, IP, user agent; written in the use case's transaction or, for reads and denials, in its own short transaction.
-  4. Rate limit: 600 per minute per staff session or key.
+  4. End-user context for the service caller: honour `X-Velexis-End-User-IP` (required, valid IPv4 or IPv6, else `400 VALIDATION_FAILED`) and `X-Velexis-End-User-Agent` (cut to 512 characters) only when the caller is `service`; they become the request-context IP and user agent used by the throttler (`console.auth.signIn` 10 per minute per end-user IP), the staff sign-in lockout and `staff_actions`. For every other caller the headers follow the contract (secret keys) or are ignored.
+  5. Rate limit: 600 per minute per staff session or key.
 - **Acceptance:**
-  - The service key from a non-loopback address, on a customer operation, or without a staff token is refused.
+  - The service key with an `X-Forwarded-For` header (as Caddy sends it), from a non-loopback address, on a customer operation, or without a staff token is refused.
+  - Eleven `console.auth.signIn` attempts in a minute from one end-user IP through the service caller get `429` on the eleventh, while a different end-user IP is still served; `staff_actions` rows carry the forwarded IP and user agent, not `127.0.0.1`.
   - A viewer asking for `live` gets `403 ENVIRONMENT_NOT_ALLOWED`; an agent calling a settings write gets `403 FORBIDDEN` with the permission in `details`, and a `denied` row is written.
   - `staff_actions` rows contain no token and no full document number (redaction test).
 - **Verify:** `pnpm --filter @velexis/ota-backend test && pnpm --filter @velexis/ota-backend test:int -- console`
@@ -1746,7 +1785,7 @@ The console API (staff sign-in by portal token, bookings, PNR import, queues, cu
 ### OBE-068 · Implement console payments list, get, capture and refund
 - **Component:** ota-backend
 - **Milestone:** M4
-- **Depends on:** OBE-060, OBE-040
+- **Depends on:** OBE-060, OBE-040, OBE-090
 - **Size:** M
 - **Read first:** ota/docs/api-changes-console-and-internal.md §3; ota/docs/flows/console-operations.md §3 (step 5); ota/docs/adr/0010-stripe-gateway-and-payment-webhooks.md (point 3)
 - **Files:** `ota/backend/src/console/console-payments.controller.ts`, `ota/backend/src/console/console-payments.service.ts`, `ota/backend/src/console/console-payments.service.test.ts`, `ota/backend/src/payments/payments.repository.ts`, `ota/backend/src/common/http/pending-operations.ts`, `ota/backend/test/integration/console/payments.int.test.ts`
@@ -1797,7 +1836,7 @@ The console API (staff sign-in by portal token, bookings, PNR import, queues, cu
 ### OBE-071 · Implement asset upload, list, delete and public download
 - **Component:** ota-backend
 - **Milestone:** M4
-- **Depends on:** OBE-070
+- **Depends on:** OBE-070, OBE-091
 - **Size:** M
 - **Read first:** ota/docs/api-changes-console-and-internal.md §2.5 and §4.2; ota/docs/adr/0012-storefront-settings-assets-and-pages.md (points 2, 3); docs/mvp/adr/0018-hosted-storefront-custom-domains.md (CSP)
 - **Files:** `ota/backend/src/settings/assets.controller.ts`, `ota/backend/src/settings/assets.service.ts`, `ota/backend/src/settings/image-sniffer.ts`, `ota/backend/src/settings/image-sniffer.test.ts`, `ota/backend/src/storefront/public-assets.controller.ts`, `ota/backend/src/storefront/storefront.mapper.ts`, `ota/backend/src/main.ts`, `ota/backend/src/common/http/pending-operations.ts`, `ota/backend/test/integration/settings/assets.int.test.ts`
@@ -1867,15 +1906,15 @@ The console API (staff sign-in by portal token, bookings, PNR import, queues, cu
 - **Depends on:** OBE-063, OBE-064, OBE-065, OBE-066, OBE-067, OBE-068, OBE-069, OBE-070, OBE-071, OBE-072, OBE-073
 - **Size:** M
 - **Read first:** ota/docs/scope.md §1.3 and §4 (OF-09); ota/docs/flows/console-operations.md §6; docs/mvp/adr/0006-contract-first-openapi.md (route parity at the end of M4)
-- **Files:** `ota/backend/test/integration/m4/permission-matrix.int.test.ts`, `ota/backend/test/integration/m4/staff-actions.int.test.ts`, `ota/backend/test/integration/m4/office-isolation.int.test.ts`, `ota/backend/test/contract/route-parity.contract.test.ts`
+- **Files:** `ota/backend/test/integration/m4/permission-matrix.int.test.ts`, `ota/backend/test/integration/m4/staff-actions.int.test.ts`, `ota/backend/test/integration/m4/office-isolation.int.test.ts`, `ota/backend/test/contract/route-parity.contract.test.ts`, `ota/backend/test/contract/openapi-extensions.contract.test.ts`
 - **Steps:**
   1. Table-driven test over every console operation and the five roles: allowed or `403 FORBIDDEN` exactly as scope §1.3 says; viewers limited to test.
   2. Every console call (success and denied) writes exactly one `staff_actions` row with redacted before and after.
   3. Two tenants on the shared Amadeus account: imports, queue reads and raw calls for the other tenant's office are refused.
-  4. Route parity: `pending-operations.ts` now holds only operations with `x-milestone: deferred` (19) plus the M5 webhooks (documented by OBE-076); the test asserts it.
+  4. Route parity: `pending-operations.ts` now holds only operations with `x-milestone: deferred` (19) plus the two M5 webhooks (documented by OBE-090, implemented by OBE-078); the test asserts it. `openapi-extensions.contract.test.ts` asserts the M4 totals of api-changes part 2 §6 once: 135 operations, 128 with `x-sdk-method`.
 - **Acceptance:**
   - Every console call writes `staff_actions` [OF-09 AC1]; permissions follow scope §1.3 [OF-09 AC2]; PNR import accepts only the tenant's offices [OF-09 AC3].
-  - The parity assertion of step 4 passes.
+  - The parity and totals assertions of step 4 pass.
 - **Verify:** `pnpm --filter @velexis/ota-backend test -- contract && pnpm --filter @velexis/ota-backend test:int -- m4`
 
 ### SDK-011 · Write the console namespace for auth, bookings, queues, customers, supplier log and raw Amadeus
@@ -1897,14 +1936,14 @@ The console API (staff sign-in by portal token, bookings, PNR import, queues, cu
 ### SDK-012 · Write console settings and payments, multipart upload and storefront pages
 - **Component:** ota-sdk
 - **Milestone:** M4
-- **Depends on:** SDK-011
+- **Depends on:** SDK-011, OBE-090, OBE-091
 - **Size:** M
 - **Read first:** ota/sdk/docs/extensions.md §3.1–§3.3; ota/docs/api-changes-console-and-internal.md §2–§4; ota/sdk/README.md §5.3 (Bodies)
-- **Files:** `ota/sdk/src/namespaces/console.js`, `ota/sdk/src/namespaces/storefront.js`, `ota/sdk/src/internal/http.js`, `ota/sdk/test/unit/namespaces-console-settings.test.js`, `ota/sdk/test/unit/multipart.test.js`, `ota/sdk/docs/extensions.md`
+- **Files:** `ota/sdk/src/namespaces/console.js`, `ota/sdk/src/namespaces/storefront.js`, `ota/sdk/src/internal/http.js`, `ota/sdk/test/unit/namespaces-console-settings.test.js`, `ota/sdk/test/unit/multipart.test.js`, `ota/sdk/test/contract/pending-namespaces.js`, `ota/sdk/docs/extensions.md`
 - **Steps:**
   1. `console.settings.markupRules.*`, `.feeRules.*`, `.storefront.get/update`, `.pages.*`, `.assets.list/upload/delete`, `.templates.list/get/put/preview/reset` (25) and `console.payments.list/get/capture/refund` (4), with JSDoc.
   2. `console.settings.assets.upload` builds `multipart/form-data` from a `Blob` or `File` and `kind`; the `Content-Type` boundary is left to `fetch`.
-  3. `storefront.listPages` and `storefront.getPage`.
+  3. `storefront.listPages` and `storefront.getPage`; remove their two method entries (OBE-091) from `pending-namespaces.js`.
 - **Acceptance:**
   - The multipart request carries the file and `kind` parts and an idempotency key.
   - Every new method hits the right method and path (route-table test).
@@ -1944,15 +1983,16 @@ The console API (staff sign-in by portal token, bookings, PNR import, queues, cu
 - **Milestone:** M4
 - **Depends on:** OAD-001, SDK-011
 - **Size:** M
-- **Read first:** ota/docs/adr/0018-ota-admin-consumes-the-sdk-server-side.md (points 1–5, 10); ota/admin/README.md §4, §6 (`lib/`), §7, §8; docs/mvp/conventions.md §3
+- **Read first:** ota/docs/adr/0018-ota-admin-consumes-the-sdk-server-side.md (points 1–5, 10); ota/docs/adr/0011-console-access-staff-sessions-and-environments.md (points 4, 8, 9); ota/admin/README.md §4, §6 (`lib/`), §7, §8; docs/mvp/conventions.md §3
 - **Files:** `ota/admin/src/lib/velexis.ts`, `ota/admin/src/lib/session.ts`, `ota/admin/src/lib/session.test.ts`, `ota/admin/src/lib/refresh-dedup.ts`, `ota/admin/src/lib/refresh-dedup.test.ts`, `ota/admin/src/lib/permissions.ts`, `ota/admin/src/lib/permissions.test.ts`, `ota/admin/src/lib/errors.ts`, `ota/admin/src/lib/errors.test.ts`, `ota/admin/src/lib/action-state.ts`, `ota/admin/package.json`
 - **Steps:**
-  1. Workspace dependency `@velexis/ota-sdk`. `lib/velexis.ts` (`import "server-only"`): `getConsole()` with React `cache`, building a server-mode client per request (`secretKey` = `OTA_ADMIN_SERVICE_KEY`, `baseUrl` = `OTA_API_URL`, staff `accessToken`, `sessionKind: "staff"`, `environment` from the session, `onResponse` logging one line without bodies); `getStaff()` = `console.auth.me` once per request.
+  1. Workspace dependency `@velexis/ota-sdk`. `lib/velexis.ts` (`import "server-only"`): `getConsole()` with React `cache`, building a server-mode client per request (`secretKey` = `OTA_ADMIN_SERVICE_KEY`, `baseUrl` = `OTA_API_URL`, staff `accessToken`, `sessionKind: "staff"`, `environment` from the session, `onResponse` logging one line without bodies, and `headers` with `X-Velexis-End-User-IP` (the right-most `X-Forwarded-For` entry, which Caddy sets, or `127.0.0.1` when there is none in local development) and `X-Velexis-End-User-Agent` (the browser's `User-Agent`, cut to 512 characters), read with `next/headers`, so the backend's sign-in throttle, lockout and `staff_actions` see the staff member's address, not the admin server's); `getStaff()` = `console.auth.me` once per request.
   2. `lib/session.ts`: read and write `__Host-vx_staff_at`, `__Host-vx_staff_rt`, `__Host-vx_env`, `__Host-vx_tenant` (`HttpOnly; Secure; SameSite=Lax; Path=/`); `requireStaff(permission)` for server actions; redirect to `${PUBLIC_PORTAL_URL}/console?tenant=<id>` without a session.
   3. `lib/refresh-dedup.ts`: one in-process map from `sha256(refreshToken)` to the refresh promise and its result, kept 30 s, so parallel requests with the same old token get the same new tokens.
   4. `lib/permissions.ts` (`can(profile, permission)` from the scope matrix), `lib/errors.ts` (VelexisError code → message, `fieldErrors` → form state, `requestId` shown), `lib/action-state.ts`.
 - **Acceptance:**
   - Two parallel refreshes with the same token make one SDK call and both receive the new tokens (unit test).
+  - Every SDK request carries `X-Velexis-End-User-IP` taken from the right-most `X-Forwarded-For` entry and `X-Velexis-End-User-Agent`; a client-supplied left-most entry is never used (unit test with a fake `fetch`).
   - `can()` matches scope §1.3 for all five roles (table test); client components cannot import `lib/velexis.ts` (`server-only` build error asserted by a test fixture).
 - **Verify:** `pnpm --filter @velexis/ota-admin test && pnpm --filter @velexis/ota-admin build`
 
@@ -1964,7 +2004,7 @@ The console API (staff sign-in by portal token, bookings, PNR import, queues, cu
 - **Read first:** ota/admin/README.md §3 and §4; ota/docs/adr/0018-ota-admin-consumes-the-sdk-server-side.md (points 2, 3, 6); platform/docs/adr/0007-portal-to-ota-admin-sso-token.md (§5); docs/mvp/architecture.md §5 (c)
 - **Files:** `ota/admin/src/app/sso/route.ts`, `ota/admin/src/app/sso/route.test.ts`, `ota/admin/src/app/auth/refresh/route.ts`, `ota/admin/src/app/auth/sign-out/route.ts`, `ota/admin/src/app/signed-out/page.tsx`, `ota/admin/middleware.ts`, `ota/admin/middleware.test.ts`, `ota/admin/next.config.ts`, `ota/admin/README.md`
 - **Steps:**
-  1. `POST /sso`: only `application/x-www-form-urlencoded` with `portalToken` matching `^ptk_[A-Za-z0-9]{24,64}$`; `Origin` must equal `PUBLIC_PORTAL_URL`; `console.auth.signIn({ grantType: "portal_token", portalToken })`; set the four cookies; `303` to `/bookings` (architecture flow (c) and PFE-019; fix README §3, which says `/`). Errors render a short page with "Back to the portal".
+  1. `POST /sso`: only `application/x-www-form-urlencoded` with `portalToken` matching `^ptk_[A-Za-z0-9]{24,64}$`; `Origin` must equal `PUBLIC_PORTAL_URL`; `console.auth.signIn({ grantType: "portal_token", portalToken })`; set the four cookies; `303 See Other` to `/bookings` (architecture flow (c), README §3 and PFE-019). Errors render a short page with "Back to the portal".
   2. `middleware.ts` (Node.js runtime): refresh through the de-duplicated function when the access token expires within 60 s; redirect to the portal without a session; set the per-request CSP nonce header used by `next.config.ts`.
   3. `GET /auth/refresh?next=` (validated relative `next`) and `POST /auth/sign-out` (Origin checked, `console.auth.signOut`, clear cookies, `/signed-out`). A refused refresh clears the cookies and goes to the portal.
 - **Acceptance:**
@@ -2210,17 +2250,16 @@ The console API (staff sign-in by portal token, bookings, PNR import, queues, cu
 
 The platform turns on own Stripe, own Amadeus credentials, custom domains and go-live. The OTA code follows the data (`account_mode`, `credential_source`, verified domains, `storefront_environment`) with no per-tenant code path (OF-12).
 
-### OBE-076 · Spec-first: Connect and connection webhooks and the billing notice
+### OBE-076 · Spec-first: the billing notice in the console session
 - **Component:** ota-backend
 - **Milestone:** M5
 - **Depends on:** OBE-058
 - **Size:** S
-- **Read first:** ota/docs/api-changes-console-and-internal.md §5 (`receiveStripeConnectWebhook`, `receiveStripeConnectionWebhook`); platform/docs/data-model.md (grep `billing_notice`); platform/docs/plans/implementation-plan.md §4 (M5 dependencies on the OTA group)
-- **Files:** `ota/backend/openapi/velexis-ota-booking-api.openapi.yaml`, `ota/backend/openapi/README.md`, `ota/docs/api-changes-console-and-internal.md`, `packages/api-types/src/generated/ota.ts`, `ota/backend/src/common/http/pending-operations.ts`
+- **Read first:** platform/docs/data-model.md (grep `billing_notice`); platform/docs/plans/implementation-plan.md §4 (M5 dependencies on the OTA group); ota/docs/api-changes-console-and-internal.md §3 and §5 (the M5 webhooks are already documented by OBE-090)
+- **Files:** `ota/backend/openapi/velexis-ota-booking-api.openapi.yaml`, `ota/backend/openapi/README.md`, `ota/docs/api-changes-console-and-internal.md`, `packages/api-types/src/generated/ota.ts`
 - **Steps:**
-  1. Document `receiveStripeConnectWebhook` (`POST /webhooks/stripe/connect/{environment}`) and `receiveStripeConnectionWebhook` (`POST /webhooks/stripe/c/{connectionId}`) as `x-internal`, `x-milestone: M5`.
-  2. Add the optional, nullable field `tenant.billingNotice` (`past_due`, `trial_ending`) to `ConsoleStaffSession` (additive), so the OTA admin can show the platform's billing banner; describe it in part 2 of the API changes (new §3.1).
-  3. Lint, regenerate, add the two webhooks to `pending-operations.ts` (task OBE-078).
+  1. Add the optional, nullable field `tenant.billingNotice` (`past_due`, `trial_ending`) to `ConsoleStaffSession` (additive), so the OTA admin can show the platform's billing banner; describe it in part 2 of the API changes (new §3.1).
+  2. Lint and regenerate; record the change in the README's change log. The Connect and connection webhooks need no spec change here: OBE-090 documented them in M4 and OBE-078 implements them.
 - **Acceptance:**
   - `pnpm contracts:lint` is clean; the SDK contract test still passes (the change is additive).
 - **Verify:** `pnpm contracts:lint && pnpm contracts:generate && pnpm --filter @velexis/ota-backend test -- contract && pnpm --filter @velexis/ota-sdk test`
@@ -2244,17 +2283,19 @@ The platform turns on own Stripe, own Amadeus credentials, custom domains and go
 ### OBE-078 · Receive Connect and per-connection Stripe webhooks
 - **Component:** ota-backend
 - **Milestone:** M5
-- **Depends on:** OBE-077
+- **Depends on:** OBE-077, OBE-090
 - **Size:** M
 - **Read first:** ota/docs/adr/0010-stripe-gateway-and-payment-webhooks.md (point 4); docs/mvp/architecture.md §5 (d) table; ota/docs/api-changes-console-and-internal.md §5
 - **Files:** `ota/backend/src/payments/webhooks/stripe-connect-webhook.controller.ts`, `ota/backend/src/payments/webhooks/stripe-connection-webhook.controller.ts`, `ota/backend/src/payments/webhooks/webhook-receiver.service.ts`, `ota/backend/src/config.ts`, `deploy/env/ota-backend.env.example`, `ota/backend/src/common/http/pending-operations.ts`, `ota/backend/test/integration/payments/connect-webhooks.int.test.ts`
 - **Steps:**
-  1. Config `STRIPE_WEBHOOK_SECRET_CONNECT_TEST`, `_LIVE`. `/webhooks/stripe/connect/{environment}`: verify with the Connect secret; tenant from `event.account` → `payment_provider_connections.account_reference`.
-  2. `/webhooks/stripe/c/{connectionId}`: verify with that connection's encrypted webhook secret; tenant from the connection.
-  3. Both reuse the receiver of OBE-039 (store, acknowledge, enqueue, re-fetch with the right mode). Remove both from `pending-operations.ts`.
+  1. Config `STRIPE_WEBHOOK_SECRET_CONNECT_TEST`, `_LIVE`. `/webhooks/stripe/connect/{environment}`: verify with the Connect secret; tenant **only** from `event.account` → `payment_provider_connections.account_reference` of a `connect_standard` connection.
+  2. `/webhooks/stripe/c/{connectionId}`: verify with that connection's encrypted webhook secret; tenant **only** from the path's connection (`api_keys` mode).
+  3. On both endpoints the OTA controls the Stripe account and can write any metadata, so metadata never selects the tenant: `metadata.velexis_tenant_id` and `metadata.velexis_environment`, when present, must equal the resolved tenant and environment; `event.livemode` must match the path's environment (Connect) or the connection's environment (`c/`); the payment is looked up only inside the resolved tenant and its `provider_payment_id` must match the event's object. Any mismatch is logged as a security event (no payload) and acknowledged with `200` without writing anything (OADR-0010 point 4).
+  4. Both reuse the receiver of OBE-039 (store, acknowledge, enqueue, re-fetch with the right mode). Remove both from `pending-operations.ts`.
 - **Acceptance:**
   - Signed fixtures for both endpoints are stored and processed once; a fixture signed with another connection's secret answers 400.
   - An event for an unknown `acct_` is acknowledged with 200 and ignored.
+  - Forged metadata: a correctly signed Connect event from tenant A's account, and a `c/<ppc_id>` event of tenant A, each carrying `metadata.velexis_tenant_id` of tenant B, write no `payment_events` row in either schema, raise no staff alert and log a security event; a `livemode` mismatch behaves the same.
 - **Verify:** `pnpm --filter @velexis/ota-backend test:int -- payments`
 
 ### OBE-079 · Use OTA-owned Amadeus credentials and the releasing-office rule
@@ -2390,18 +2431,18 @@ Security review, the PCI controls of the airline-card flow and the gate for live
 - **Depends on:** OBE-075, OBE-083, OBE-052
 - **Size:** L
 - **Read first:** docs/mvp/conventions.md §12; ota/docs/architecture.md §8 and §9; docs/mvp/adr/0011-payments-stripe-and-airline-card.md (C); docs/mvp/adr/0016-observability.md (redaction); platform/docs/plans/agent-tasks.md (PBE-062, for the shared format)
-- **Files:** `ota/docs/security-review.md`, `ota/backend/test/integration/m6/auth-matrix.int.test.ts`, `ota/backend/test/integration/m6/rate-limits.int.test.ts`, `ota/backend/test/integration/m6/headers.int.test.ts`, `ota/backend/test/contract/redaction-coverage.contract.test.ts`
+- **Files:** `ota/docs/security-review.md`, `deploy/caddy/test/caddy-smoke.sh`, `ota/backend/test/integration/m6/auth-matrix.int.test.ts`, `ota/backend/test/integration/m6/rate-limits.int.test.ts`, `ota/backend/test/integration/m6/headers.int.test.ts`, `ota/backend/test/contract/redaction-coverage.contract.test.ts`
 - **Steps:**
-  1. Auth matrix: every operation of the operations index called with no credential, a wrong-tenant credential, a wrong-scope credential (edge, `pk_`, `sk_` storefront, `sk_` console, service key) and the right one; the result must match `x-scope`, `x-edge-only` and `x-permission`.
-  2. One test per rate limit of architecture §8; response headers (`helmet`, `Cache-Control` on personal data, `nosniff` on files and assets).
+  1. Auth matrix: every operation of the operations index called with no credential, a wrong-tenant credential, a wrong-scope credential (edge, `pk_`, `sk_` storefront, `sk_` console, service key) and the right one; the result must match `x-scope`, `x-edge-only` and `x-permission`. Service key through Caddy: the service key with the `X-Forwarded-For` and `X-Forwarded-Host` headers that Caddy adds, as on `api.ota.example.com`, answers `401`, and with the edge headers as well, as through the storefront `/api/*`, answers `400`; `caddy-smoke.sh` asserts with an echo upstream that both routes really add `X-Forwarded-For` and drop a client-supplied `X-Velexis-Edge`.
+  2. One test per rate limit of architecture §8, including `console.auth.signIn` per forwarded end-user IP through the service caller (two end-user IPs do not share a bucket, and a missing `X-Velexis-End-User-IP` with the service key answers 400); response headers (`helmet`, `Cache-Control` on personal data, `nosniff` on files and assets).
   3. Redaction coverage: every schema property marked `x-sensitive` or named in the central list is redacted in logs, `supplier_requests`, `staff_actions`, `idempotency_keys`, `payment_events` and `notifications`.
   4. Run `pnpm audit --prod` and a secret scan of the repository; write `ota/docs/security-review.md` (scope, method, findings with severity and status). Every high finding is fixed in this task or becomes a task in this plan before launch.
 - **Acceptance:**
   - The auth matrix, rate-limit, header and redaction tests pass.
   - `security-review.md` lists no open high finding; `pnpm audit --prod` shows no high or critical issue.
-- **Verify:** `pnpm --filter @velexis/ota-backend test -- contract && pnpm --filter @velexis/ota-backend test:int -- m6 && pnpm audit --prod`
+- **Verify:** `pnpm --filter @velexis/ota-backend test -- contract && pnpm --filter @velexis/ota-backend test:int -- m6 && bash deploy/caddy/test/caddy-smoke.sh && pnpm audit --prod`
 
-### OFE-023 · Publish the payment-page script inventory for the daily integrity check
+### OFE-023 · Publish the storefront script inventory for the daily integrity check
 - **Component:** ota-frontend
 - **Milestone:** M6
 - **Depends on:** OFE-014
@@ -2409,10 +2450,10 @@ Security review, the PCI controls of the airline-card flow and the gate for live
 - **Read first:** docs/mvp/plans/foundation-tasks.md (X-030 step 1, payment page check); ota/frontend/README.md §10 (script inventory); ota/docs/adr/0017-airline-card-form-isolation.md (point 8)
 - **Files:** `ota/frontend/scripts/payment-page-inventory.mjs`, `ota/frontend/test/payment-page-inventory.test.js`, `ota/frontend/package.json`, `ota/frontend/README.md`
 - **Steps:**
-  1. After `vite build`, `payment-page-inventory.mjs` writes `dist/payment-page-inventory.json`: for `/checkout/pay-card.html` and `/checkout/pay-airline.html`, the ordered `<script src>` list (hashed bundle paths and the Stripe.js URL), the SHA-256 of each first-party script, and the expected security headers (CSP strings from the Caddyfile).
-  2. The healthcheck of X-030 compares the live pages with this file; document the purpose of each script in README §10.
+  1. After `vite build`, `payment-page-inventory.mjs` writes `dist/payment-page-inventory.json` for **every** HTML page of the build, not only the two payment pages: any script on the storefront origin could draw a look-alike card form or reach the card page, so all of them are in the PCI DSS 6.4.3 inventory (OADR-0017 point 8). Per page: the ordered `<script src>` list (hashed bundle paths, and the Stripe.js URL on `/checkout/pay-card.html`), the SHA-256 of each first-party script, and the expected security headers (CSP strings, and COOP and `Cache-Control` on the card page, from the Caddyfile). The two payment pages are flagged `payment: true`.
+  2. The healthcheck of X-030 compares the live pages with this file (it fetches the two payment pages today; extending it to every page listed is a request to X-030's owner, recorded in the OTA ADR index); document the purpose of each script, Stripe.js included with its justification, in README §10.
 - **Acceptance:**
-  - The inventory lists exactly two scripts for the card page and one for the airline-card page; a test fails if a third script appears.
+  - The inventory lists every built page; exactly two scripts for the card page and one for the airline-card page, and no third-party script on any other page; a test fails if a third-party script or an unlisted page appears.
   - The file is part of the release artefact (`dist/`).
 - **Verify:** `pnpm --filter @velexis/ota-frontend build && pnpm --filter @velexis/ota-frontend test`
 
@@ -2425,7 +2466,7 @@ Security review, the PCI controls of the airline-card flow and the gate for live
 - **Files:** `ota/docs/pci/README.md`, `ota/docs/pci/data-flow.md`, `ota/docs/pci/script-inventory.md`, `ota/docs/pci/incident-response.md`, `ota/docs/pci/responsibility-matrix.md`, `ota/docs/README.md`
 - **Steps:**
   1. `data-flow.md`: a Mermaid diagram of the card from the storefront page through Caddy, the OTA API process and the Amadeus client, with what exists where (memory only) and the controls of ADR-0011 §C mapped to code, tests and VM settings (`LimitCORE=0`, no swap, `auditd`, AIDE).
-  2. `script-inventory.md` (from OFE-023), `incident-response.md` (detection, containment, Stripe and Amadeus contacts, OTA notification), `responsibility-matrix.md` (Velexis versus OTA for each PCI DSS v4.0.1 requirement relevant to SAQ D for service providers).
+  2. `script-inventory.md` (from OFE-023: every storefront page, Stripe.js with its justification, and the residual risk of OADR-0017: a script on any page of the origin could imitate the card form; COOP, `frame-ancestors 'none'` and `worker-src 'none'` stop it from reading the real one), `incident-response.md` (detection, containment, Stripe and Amadeus contacts, OTA notification), `responsibility-matrix.md` (Velexis versus OTA for each PCI DSS v4.0.1 requirement relevant to SAQ D for service providers).
   3. Link the pack from the OTA docs index.
 - **Acceptance:**
   - Every control row of ADR-0011 §C points to a test, a file or a VM check that exists.
@@ -2574,6 +2615,7 @@ Security review, the PCI controls of the airline-card flow and the gate for live
 | OBE-002 | PBE-004 | `tenant.*` job and invalidation schemas |
 | OBE-003, OBE-012 | PBE-002 | Platform `0002` columns (`storefront_environment`, Amadeus accounts and offices, payment `account_mode`) and their read grants |
 | OBE-007 | PBE-034 | The platform `dev:seed` creates the Velexis test Amadeus account and offices |
+| OBE-007 | X-023, X-033 | `deploy.sh` with its `deploy.test.sh`, and the `velexis-run` wrapper that runs `tenants:report-migrations` as the OTA zone user after the fan-out |
 | OFE-008, OAD-016 | PFE-014 | The `tools/e2e` harness |
 | OAD-016 | PFE-017 | The portal's "Open console" hand-off |
 | OBE-083 | PBE-053, PBE-055, PBE-057, PBE-061 | Own Amadeus credentials, Connect, API-key connections, go-live |

@@ -3,6 +3,7 @@
 **Status:** Accepted
 **Date:** 2026-10-12
 **Deciders:** OTA frontend and SDK tech lead. Decided during planning; revisit when the OTA admin runs as more than one process, when the post-MVP `@velexis/ota-sdk/next` helpers ship, or when an OTA asks for a tenant-wide audit view or staff-assisted bookings.
+**Revisions:** 2026-10-12 (planning review): point 1 forwards the staff member's IP and user agent on every call; the service key is accepted only on a direct loopback connection.
 
 ## Context
 
@@ -17,7 +18,7 @@
 
 - SSO by portal token;
 - 15-minute staff access tokens and rotating refresh tokens in 12-hour Redis families, where **reusing a rotated refresh token revokes the family**;
-- the service key accepted only from `127.0.0.1`, only on console operations, only with a staff token of the tenant;
+- the service key accepted only on a direct loopback connection that did not come through Caddy, only on console operations, only with a staff token of the tenant ([OADR-0009](0009-caller-and-tenant-resolution.md) rule 1.2);
 - `X-Velexis-Environment` chosen per request.
 
 Next.js adds constraints. Server components cannot set cookies. One browser can trigger several server requests at the same moment (navigation, prefetches, parallel server actions). Middleware runs on every request.
@@ -33,7 +34,7 @@ Open points:
 
 ## Decision
 
-1. **One way to the API.** All OTA API access goes through `@velexis/ota-sdk` (`console` namespace) in `server-only` modules (`lib/velexis.ts`, `lib/session.ts`). No `fetch` to the OTA API anywhere else, no SDK import in client components. A client is created per request (React `cache`) in server mode: `secretKey` = `OTA_ADMIN_SERVICE_KEY`, `baseUrl` = `OTA_API_URL` (loopback), the staff `accessToken`, `sessionKind: "staff"`, and `environment` from the session.
+1. **One way to the API.** All OTA API access goes through `@velexis/ota-sdk` (`console` namespace) in `server-only` modules (`lib/velexis.ts`, `lib/session.ts`). No `fetch` to the OTA API anywhere else, no SDK import in client components. A client is created per request (React `cache`) in server mode: `secretKey` = `OTA_ADMIN_SERVICE_KEY`, `baseUrl` = `OTA_API_URL` (a direct loopback connection, never a Caddy host), the staff `accessToken`, `sessionKind: "staff"`, `environment` from the session, and `headers` with `X-Velexis-End-User-IP` (the right-most `X-Forwarded-For` entry of the incoming request, which Caddy sets; `127.0.0.1` in local development) and `X-Velexis-End-User-Agent` (the browser's `User-Agent`, at most 512 characters). The backend uses them for the sign-in throttle, the lockout and `staff_actions` ([OADR-0011](0011-console-access-staff-sessions-and-environments.md) points 8–9).
 2. **Cookies.** `__Host-vx_staff_at` (access, 15 min), `__Host-vx_staff_rt` (refresh, remaining family lifetime), `__Host-vx_env` (`test` or `live`) and `__Host-vx_tenant` (tenant id for the redirect back to the portal). All are `HttpOnly; Secure; SameSite=Lax; Path=/`. `Lax` because the session starts with a cross-site POST from the portal. `POST /sso` and `POST /auth/sign-out` check `Origin` (`PUBLIC_PORTAL_URL` for `/sso`); server actions rely on Next.js's Origin check.
 3. **Refresh only where cookies can be written, and once per token.**
    - Middleware (Node.js runtime) refreshes when the access token expires within 60 s.

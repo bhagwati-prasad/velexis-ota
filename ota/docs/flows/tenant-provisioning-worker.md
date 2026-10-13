@@ -61,11 +61,11 @@ sequenceDiagram
 
 ## 4. Deploy fan-out
 
-On every deploy, `velexis-deploy` runs, after the platform and reference migrations ([ADR-0021](../../../docs/mvp/adr/0021-migration-cli-and-repeatable-grants.md)):
+On every deploy, `velexis-deploy` ([`deploy/scripts/deploy.sh`](../../../deploy/scripts/deploy.sh), section 2) runs, after the platform and reference migrations and before the `current` switch ([ADR-0021](../../../docs/mvp/adr/0021-migration-cli-and-repeatable-grants.md)). `$REL` is the new release folder `/srv/velexis/releases/<sha>`:
 
-1. `node …/migrate.js tenants --dir ota-backend/migrations/tenant --concurrency 4 --max-failure-ratio 0.1 --report /var/lib/velexis/deploy/tenant-migrations.json`: every schema of a tenant in `provisioning`, `active` or `suspended`, each in its own transaction with its advisory lock; failures are recorded and the run continues; exit code `3` halts the deploy above 10 % failures.
-2. `node ota-backend/dist/cli.js tenants:report-migrations --report /var/lib/velexis/deploy/tenant-migrations.json`: publishes one `tenant.migrated` or `tenant.migration_failed` event per schema with `jobId = null`, so the platform ledger mirror stays right.
-3. Then the apps restart (workers first). The new code works with schema versions N-1 and N, because some schemas may still be on N-1 after a failure.
+1. `node dist/cli/migrate.js tenants --dir "$REL/migrations/tenant" --concurrency 4 --max-failure-ratio 0.1 --report /var/lib/velexis/migrate-<sha>.json` (from `$REL/db`, with the migrator DSN): every schema of a tenant in `provisioning`, `active` or `suspended`, each in its own transaction with its advisory lock; failures are recorded and the run continues; exit code `3` halts the deploy above 10 % failures. The report is also copied to `/var/log/velexis/migrate-<sha>.json`.
+2. `velexis-run ota node "$REL/ota-backend/dist/cli.js" tenants:report-migrations --report /var/lib/velexis/migrate-<sha>.json`: as the OTA zone user with `/etc/velexis/ota-backend.env` and `ota-worker.env` (`REDIS_URL`), publishes one `tenant.migrated` (with the schema's full ledger) or `tenant.migration_failed` event per schema with `jobId = null`, so the platform ledger mirror and `tenants.schema_version` stay right. A failure stops the deploy like a failed migration; re-running the deploy repeats both steps (nothing is applied twice). OBE-007 adds this step to `deploy.sh`.
+3. Then `current` is switched and the apps restart (workers first). The new code works with schema versions N-1 and N, because some schemas may still be on N-1 after a failure.
 
 ## 5. Failure handling
 

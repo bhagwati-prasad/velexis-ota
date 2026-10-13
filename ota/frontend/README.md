@@ -191,20 +191,21 @@ Images carry width and height, results render 20 at a time, and search shows a s
 
 ## 10. Security
 
-- **CSP** comes from Caddy for every storefront host ([`deploy/caddy/Caddyfile`](../../deploy/caddy/Caddyfile)): `default-src 'self'`, scripts from self and Stripe only, `style-src 'self'`, `img-src 'self' data:`, `font-src 'self'`, `connect-src 'self' https://api.stripe.com`, Stripe frames only, `frame-ancestors 'none'`. The build therefore has **no inline scripts or styles**: Vite's module-preload polyfill is off and `build.assetsInlineLimit` is 0, so no font becomes a `data:` URI.
+- **CSP** comes from Caddy for every storefront host ([`deploy/caddy/Caddyfile`](../../deploy/caddy/Caddyfile)): `default-src 'self'`, scripts from self and Stripe only, `style-src 'self'`, `img-src 'self' data:`, `font-src 'self'`, `connect-src 'self' https://api.stripe.com`, Stripe frames only, `worker-src 'none'` (no service worker can be registered on the origin), `frame-ancestors 'none'`. The build therefore has **no inline scripts or styles**: Vite's module-preload polyfill is off and `build.assetsInlineLimit` is 0, so no font becomes a `data:` URI.
 - **No tokens in JavaScript.** Cookie mode only; the SDK throws if a key or token is passed. The only JS-readable cookie is `__Host-vx_csrf`, which is not a credential. `sessionStorage` and `localStorage` hold only the public configuration and the currency choice.
 - **No `innerHTML` with data**; content pages arrive as parsed blocks and are built with `createElement`. Links in blocks are re-checked in the browser (`https:`, `mailto:`, `tel:`, relative `/p/…` only); external ones get `rel="noopener noreferrer"`.
 - **Redirects**: a `next` parameter must be a relative path starting with a single `/`; anything else goes to `/`.
 - **Tokens in URLs**: verification and reset tokens are read once and removed from the address bar with `history.replaceState`; the referrer policy is `strict-origin-when-cross-origin`.
 - **Stripe** ([flow](../docs/flows/checkout-stripe.md)): Stripe.js is a static `<script>` tag from `https://js.stripe.com` in `checkout/pay-card.html` only, never bundled or self-hosted; the Payment Element keeps card data inside Stripe's iframes; `stripeAccount` is set in Connect mode; the Appearance API takes the OTA colours.
-- **Airline card** ([OADR-0017](../docs/adr/0017-airline-card-form-isolation.md)): its own page and entry bundle, no third-party script, card inputs without `name` attributes (a submit without JavaScript sends nothing), values only in the inputs until the single `checkout.completeWithAirlineCard` call, inputs cleared on success, error and `pagehide`, never stored, logged or put in a URL; the SDK never retries the call.
-- **Payment-page script inventory** (ADR-0011 §C, checked daily from M6):
+- **Airline card** ([OADR-0017](../docs/adr/0017-airline-card-form-isolation.md)): its own page and entry bundle, no third-party script, card inputs without `name` attributes (a submit without JavaScript sends nothing), values only in the inputs until the single `checkout.completeWithAirlineCard` call, inputs cleared on success, error and `pagehide`, never stored, logged or put in a URL; the SDK never retries the call. The page alone gets the stricter CSP, `Cross-Origin-Opener-Policy: same-origin` and `Cache-Control: no-store`; no other page sends COOP `same-origin`, so a window opened from any other page (Stripe.js on the card page included) gets no handle on it. It reads nothing from `sessionStorage` or `localStorage`: ids from its URL, the rest from the API. Residual risk: a script on any page of this origin could still draw a look-alike card form, so the whole origin is in the PCI script inventory (OADR-0017 point 8).
+- **Script inventory** (ADR-0011 §C, PCI DSS 6.4.3, checked daily from M6). `dist/payment-page-inventory.json` (OFE-023) lists **every** built page with its scripts, hashes and headers, because every script on the origin matters to the card page; the payment pages are:
 
 | Page | Scripts | Purpose |
 |---|---|---|
 | `/checkout/pay-card.html` | `/assets/pay-card-<hash>.js` | Page code + SDK |
 | | `https://js.stripe.com/…` (Stripe.js) | Payment Element, 3-D Secure |
 | `/checkout/pay-airline.html` | `/assets/pay-airline-<hash>.js` | Page code + SDK; nothing else |
+| Every other page | its own `/assets/<entry>-<hash>.js` | First-party page code + SDK; no third-party script (a test fails on one) |
 
 ## 11. Local development
 

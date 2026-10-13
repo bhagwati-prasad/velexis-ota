@@ -192,12 +192,12 @@ Documented under the tag `Internal` with `x-internal: true`; no SDK methods; blo
 |---|---|---|---|---|
 | `healthLive` | `GET /health/live` | Uptime monitor, deploy script | M0 | Public on `api.ota.example.com` only; `200 {status: "ok"}` |
 | `healthReady` | `GET /health/ready` | Deploy script, on-VM check | M0 | Blocked publicly (and `/api/health/ready` on storefront hosts); PostgreSQL, Redis, oldest waiting job per queue |
-| `receiveStripeVelexisWebhook` | `POST /webhooks/stripe/velexis/{environment}` | Stripe (Velexis account) | M3 | Raw body, `Stripe-Signature` verified with `STRIPE_WEBHOOK_SECRET_VELEXIS_<ENV>`; tenant from `metadata.velexis_tenant_id` |
-| `receiveStripeConnectWebhook` | `POST /webhooks/stripe/connect/{environment}` | Stripe Connect endpoint | M5 | Tenant from `event.account` → `payment_provider_connections.account_reference` |
-| `receiveStripeConnectionWebhook` | `POST /webhooks/stripe/c/{connectionId}` | The OTA's own Stripe account (API-key mode) | M5 | Verified with that connection's encrypted webhook secret |
+| `receiveStripeVelexisWebhook` | `POST /webhooks/stripe/velexis/{environment}` | Stripe (Velexis account) | M3 | Raw body, `Stripe-Signature` verified with `STRIPE_WEBHOOK_SECRET_VELEXIS_<ENV>`; tenant from `metadata.velexis_tenant_id` (only Velexis creates PaymentIntents on this account) |
+| `receiveStripeConnectWebhook` | `POST /webhooks/stripe/connect/{environment}` | Stripe Connect endpoint | M5 (documented in M4 by OBE-090) | Tenant **only** from `event.account` → `payment_provider_connections.account_reference`; metadata never selects the tenant |
+| `receiveStripeConnectionWebhook` | `POST /webhooks/stripe/c/{connectionId}` | The OTA's own Stripe account (API-key mode) | M5 (documented in M4 by OBE-090) | Verified with that connection's encrypted webhook secret; tenant **only** from the path's connection |
 | `downloadFile` | `GET /v1/files/{storageKey}?exp=…&sig=…` | Browsers following `bookings.getDocumentDownloadUrl` | M3 | `x-sdk-exclude`; HMAC-SHA-256 with `document-url.key`, valid 5 minutes; re-checks the tenant ([ADR-0017](../../docs/mvp/adr/0017-email-documents-storage.md)) |
 
-Webhook answers: `200` once the event is stored as a `payment_events` row (or is a known duplicate, or has no known tenant: logged and acknowledged); `400` on a bad signature. Processing happens in `ota-stripe-events` ([OADR-0010](adr/0010-stripe-gateway-and-payment-webhooks.md)).
+Webhook answers: `200` once the event is stored as a `payment_events` row (or is a known duplicate, or has no known tenant: logged and acknowledged); `400` on a bad signature. On every endpoint, `metadata.velexis_tenant_id` and `metadata.velexis_environment`, when present, must match the tenant and environment the endpoint resolved, `event.livemode` must match the environment, and the payment is looked up only inside that tenant; a mismatch is logged as a security event and acknowledged with `200` without effect. Processing happens in `ota-stripe-events` ([OADR-0010](adr/0010-stripe-gateway-and-payment-webhooks.md)).
 
 **No Caddy `ask` endpoint in the OTA backend.** On-demand TLS for custom domains asks the **platform** backend (`GET 127.0.0.1:3100/internal/tls/ask`), which owns `tenant_domains` ([ADR-0018](../../docs/mvp/adr/0018-hosted-storefront-custom-domains.md), [PADR-0004](../../platform/docs/adr/0004-custom-domain-verification.md)). The OTA backend only resolves verified hosts for edge requests. Adding a second `ask` here would split one rule across two owners.
 
@@ -215,4 +215,4 @@ Webhook answers: `200` once the event is stored as a `payment_events` row (or is
 | Public asset, file download | 2 | none (`x-sdk-exclude`) | M3, M4 |
 | Health, webhooks | 5 | none (`x-internal`) | M0, M3, M5 |
 
-After the changes the document has 96 + 39 = **135 operations**, of which 128 have an `x-sdk-method` (96 + 32).
+After the changes the document has 96 + 39 = **135 operations**, of which 128 have an `x-sdk-method` (96 + 32). They arrive in M3 (OBE-029: 1, OBE-039: 1, OBE-054: 1) and M4 (OBE-058: 17 settings operations; OBE-090: 4 console payments, the 2 health endpoints and the 2 M5 webhooks, documented ahead of their handler; OBE-091: 8 page and asset operations and the 3 public ones). So the M4 document is complete at 135 operations; the M5 spec task OBE-076 adds only the billing notice field, and `pending-operations.ts` holds the 19 deferred operations and the two M5 webhooks at the M4 exit.
