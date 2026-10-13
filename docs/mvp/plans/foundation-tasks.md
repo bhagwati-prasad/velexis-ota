@@ -250,8 +250,8 @@ Related: [`../decisions.md`](../decisions.md) (binding), [`../architecture.md`](
   - A deliberately broken copy of the OTA document (a duplicated `operationId`) makes the command fail.
 - **Verify:** `pnpm install && pnpm contracts:lint`
 
-### X-008 · Generate @velexis/api-types from the OpenAPI documents
-- **Status:** todo
+### X-008 · Generate @velexis/api-types from the OpenAPI documents ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** foundation
 - **Milestone:** M0
 - **Depends on:** X-007

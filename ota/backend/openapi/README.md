@@ -52,7 +52,7 @@ The order is fixed by [ADR-0006](../../../docs/mvp/adr/0006-contract-first-opena
 6. **Tests.** Route parity (every operation has a handler or a pending entry, every handler has an operation), response conformance (Ajv in integration tests), SDK parity (every `x-sdk-method` maps to exactly one SDK method) and the contract test of the spec task, which asserts its own operations by `operationId`, never totals.
 7. **Change log.** Add a row to §6 of this page in the same PR.
 
-`pnpm contracts:lint` exists since X-007 ([`packages/api-types/README.md`](../../../packages/api-types/README.md)). Until the foundation tasks add it, `pnpm contracts:generate` finds no package that defines it and does nothing: it arrives with X-008 (types) and X-009 (errors).
+`pnpm contracts:lint` exists since X-007 and `pnpm contracts:generate` since X-008 (types and the operations index, [`packages/api-types/README.md`](../../../packages/api-types/README.md)); X-009 adds the `@velexis/errors` generator to it.
 
 ## 4. Additive changes only
 

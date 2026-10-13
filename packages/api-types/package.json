@@ -2,19 +2,49 @@
   "name": "@velexis/api-types",
   "version": "0.0.0",
   "private": true,
-  "description": "Contract types generated from the OTA and platform OpenAPI documents, and the Redocly lint of those documents (ADR-0006).",
+  "description": "Contract types generated from the OTA and platform OpenAPI documents, the operations index, the queue message envelope, and the Redocly lint of those documents (ADR-0006, ADR-0009).",
   "license": "UNLICENSED",
   "type": "commonjs",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./platform": {
+      "types": "./dist/platform.d.ts",
+      "default": "./dist/platform.js"
+    },
+    "./operations": {
+      "types": "./dist/operations.d.ts",
+      "default": "./dist/operations.js"
+    },
+    "./jobs": {
+      "types": "./dist/jobs/index.d.ts",
+      "default": "./dist/jobs/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "!dist/**/*.test.*",
+    "!dist/tsconfig.tsbuildinfo"
+  ],
   "scripts": {
+    "generate": "node scripts/generate.mjs",
     "contracts:lint": "node scripts/contracts-lint.mjs",
+    "build": "tsc -b",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "test": "vitest run",
-    "clean": "rm -rf dist coverage"
+    "clean": "tsc -b --clean"
   },
   "devDependencies": {
     "@redocly/cli": "1.34.20",
     "@types/node": "22.20.5",
+    "ajv": "8.20.0",
+    "ajv-formats": "3.0.1",
     "openapi-typescript": "7.13.0",
     "typescript": "5.6.3",
     "vitest": "3.2.7",
