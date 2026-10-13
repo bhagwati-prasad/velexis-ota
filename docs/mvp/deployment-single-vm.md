@@ -17,15 +17,15 @@ Pick a provider that offers snapshots and lets you resize the VM and the disk in
 
 ## 2. OS hardening
 
-[`provision-vm.sh`](../../deploy/scripts/provision-vm.sh) applies all of this; the table is the checklist to review it against.
+[`provision-vm.sh`](../../deploy/scripts/provision-vm.sh) applies all of this; the table is the checklist to review it against, and [`check-vm.sh`](../../deploy/scripts/check-vm.sh) checks the result on the VM ([§3](#3-provisioning-a-new-vm)).
 
 | Area | Setting | Why |
 |---|---|---|
 | Updates | `unattended-upgrades` for security updates daily; no automatic reboot. Weekly `apt list --upgradable` review. | Patches without surprise restarts |
-| SSH | Keys only, no root login, `AllowUsers <admin> deploy`, `MaxAuthTries 3`. `fail2ban` on `sshd`. The admin user also needs a second factor: a FIDO2 key (`sk-ssh-ed25519` with `verify-required`) or key plus TOTP (task X-037, M6). `deploy` is a restricted system account. | PCI 8.4.2 and 8.6 ([ADR-0027](adr/0027-pci-scope-and-vm-controls.md)) |
+| SSH | Keys only, no root login, `AllowUsers <admin> deploy`, `MaxAuthTries 3`, in `/etc/ssh/sshd_config.d/00-velexis.conf`: sshd keeps the first value it reads, and `00-` sorts before cloud-init's `50-cloud-init.conf`, which enables password logins on some providers' images. `fail2ban` on `sshd`. The admin user also needs a second factor: a FIDO2 key (`sk-ssh-ed25519` with `verify-required`) or key plus TOTP (task X-037, M6). `deploy` is a restricted system account. | PCI 8.4.2 and 8.6 ([ADR-0027](adr/0027-pci-scope-and-vm-controls.md)) |
 | Firewall | `ufw`: deny incoming; allow 22/tcp (rate-limited), 80/tcp, 443/tcp, 443/udp. Optionally restrict 22 to the developer's address (`SSH_ALLOW_FROM`), but GitHub-hosted runners deploy over SSH from changing addresses. | Only Caddy and SSH are reachable |
 | Swap | Off (`swapoff -a`, commented in `/etc/fstab`) | Card data held in memory must never be written to disk |
-| Core dumps | `kernel.core_pattern` piped to `/bin/false`, `fs.suid_dumpable=0`, `LimitCORE=0` on every unit | Same reason |
+| Core dumps | `kernel.core_pattern` piped to `/bin/false`, `fs.suid_dumpable=0`, `LimitCORE=0` on every unit. `apport.service` (package `apport-core-dump-handler`, part of the Ubuntu cloud image) is masked, because it rewrites `kernel.core_pattern` at every boot. | Same reason |
 | Kernel | `kptr_restrict`, `dmesg_restrict`, `rp_filter`, no ICMP redirects, `vm.overcommit_memory=1` and THP off for Redis | Standard hardening plus Redis guidance |
 | Audit | `auditd` rules on `/etc/velexis`, keys, `/etc/caddy`, systemd units, `/usr/local/sbin`, sudoers, sshd | Who changed what, when |
 | File integrity | AIDE, daily check by the Ubuntu package; data and release folders excluded | PCI file-integrity monitoring |
@@ -37,16 +37,53 @@ Pick a provider that offers snapshots and lets you resize the VM and the disk in
 
 Do this once per VM, and again when rebuilding after a disaster. Allow one to two hours.
 
-1. Create the VM (Ubuntu 24.04 LTS, sizes in [§1](#1-vm-sizing)) with your SSH key for the admin user. Note its IPv4/IPv6 address.
+1. Create the VM (Ubuntu 24.04 LTS, sizes in [§1](#1-vm-sizing)) with your SSH key for the admin user. Note its IPv4/IPv6 address. The admin user must be a sudo user other than `root` with your key in `~/.ssh/authorized_keys` (`ubuntu` on most cloud images). If the provider only gives you `root`, create that user first: `provision-vm.sh` forbids root logins over SSH, so it refuses to run while `ADMIN_USER` does not exist or has no key, instead of locking you out.
 2. Create DNS records (A and AAAA) pointing at the VM for every host of [`decisions.md`](decisions.md) §4: `platform.example.com`, `admin.platform.example.com`, `api.platform.example.com`, `admin.ota.example.com`, `api.ota.example.com` and the wildcard `*.ota.example.com`.
 3. Generate the deploy key pair on your machine (`ssh-keygen -t ed25519 -f velexis-deploy -C github-actions`). Keep the private key for the GitHub `production` environment secret `DEPLOY_SSH_KEY`.
 4. Copy the files: `scp -r deploy/ velexis-deploy.pub ubuntu@<vm>:/tmp/`.
-5. Run `sudo DEPLOY_SSH_PUBKEY_FILE=/tmp/velexis-deploy.pub ADMIN_USER=ubuntu bash /tmp/deploy/scripts/provision-vm.sh`. It is idempotent; re-run it after fixing any error.
+5. Run `sudo DEPLOY_SSH_PUBKEY_FILE=/tmp/velexis-deploy.pub ADMIN_USER=ubuntu bash /tmp/deploy/scripts/provision-vm.sh`, then `sudo bash /tmp/deploy/scripts/check-vm.sh`: every line must read `PASS`. The provisioning script is idempotent; re-run it after fixing any error:
+   - A re-run never overwrites a key file, an env file or `/etc/velexis/.provision-secrets`, and rewrites the deploy key only when `DEPLOY_SSH_PUBKEY_FILE` holds a different one. It must be the `.pub` file: the script refuses anything but one OpenSSH public key, without printing it.
+   - It restarts PostgreSQL, Redis, Caddy and journald only when their configuration changed or they are not running. Its `packages` step, however, runs `apt-get upgrade`, and a package upgrade restarts its own service. On the production VM, re-run only the steps you need (`--steps …` without `packages`) unless a short interruption is acceptable.
+   - It re-installs the units and root-owned scripts of the `deploy/` folder it runs from. Later runs therefore start from the deploy folder of the active release or a newer one (`sudo bash /srv/velexis/current/deploy/scripts/provision-vm.sh --steps …`), never from an older copy.
+   - Its own messages (steps, warnings, errors; never a value) are appended to `/var/log/velexis/provision.log`.
 6. Edit `/etc/velexis/*.env`: replace every `CHANGE_ME` and the placeholder hosts with the real ones (SMTP; Stripe keys when their milestone arrives). Edit `/etc/velexis/caddy.env` (`PLATFORM_BASE_DOMAIN`, `STOREFRONT_BASE_DOMAIN`, `ACME_EMAIL`). Then `sudo systemctl restart caddy`.
 7. Set up backups ([§10](#10-backups)): age public keys, rclone remote, then `sudo systemctl start velexis-backup` and check the bucket.
 8. **Back up `/etc/velexis` now**, encrypted, to your offline password manager (it holds the master key; [§7](#7-secrets-and-the-master-key)).
 9. In GitHub, set the `production` environment secrets `DEPLOY_HOST`, `DEPLOY_USER` (`deploy`), `DEPLOY_SSH_KEY` and `DEPLOY_KNOWN_HOSTS` (`ssh-keyscan -t ed25519 <vm>`), with yourself as required reviewer and a deployment branch policy that allows only `main` and tags `v*`.
 10. Run the **Deploy** workflow. In M0 the result is the hello-world release: `https://platform.example.com/` shows the maintenance page with a valid certificate, `velexis-deploy --status` shows the release, and the database has the baseline schemas.
+
+**What `check-vm.sh` checks.** It is read-only (it writes no file and changes no setting) and prints one `PASS` or `FAIL` line per item, then a total; it exits 0 only when everything passes. `--only <group,…>` runs some groups, `--templates <folder>` compares the env files with another release's templates (for example `/srv/velexis/current/deploy/env`).
+
+| Group | Items |
+|---|---|
+| `system` | Ubuntu 24.04, time zone UTC, no swap (`swapon --show` empty, no swap line in `/etc/fstab`), no core dumps (`kernel.core_pattern`, `fs.suid_dumpable`, `apport.service` masked), unattended upgrades, the AIDE database |
+| `services` | `postgresql` (and the cluster `postgresql@16-main`), `redis-server`, `caddy`, `velexis-backup.timer`, `fail2ban`, `auditd` and `chrony` active and enabled; Node.js 22 |
+| `firewall` | `ufw` active, incoming denied by default, only 22, 80 and 443 allowed |
+| `ssh` | `sshd -T`: no password or keyboard-interactive authentication, no root login, public keys allowed |
+| `database` | PostgreSQL 16 with `conf.d/velexis.conf` in effect and on loopback only, the database owned by `velexis_migrator`, the four roles (login, not superuser), `velexis_ota_app`'s `search_path` `pg_catalog` |
+| `redis` | Redis 7.4 on loopback only, clients without the password refused, `maxmemory 512mb` with `maxmemory-policy noeviction`, AOF on |
+| `caddy` | Caddy 2.8, `caddy validate` with `caddy.env` as the `caddy` user, no admin API on TCP (no `:2019` in `ss -ltn`), `/run/caddy` `0700 caddy` with `admin.sock` |
+| `users` | the five zone users (no shell, locked), the group `velexis` with exactly them, the locked `deploy` user whose keys carry `restrict` |
+| `files` | the owners and modes of [§4](#4-process-layout-ports-users-and-permissions): key folders `0500` and key files `0400` per zone, identical master-key and pepper copies, env files and `.provision-secrets` `root:root 0600`, `/srv/velexis` with read-only releases, the root-owned scripts and the sudoers rule |
+| `envfiles` | every `/etc/velexis/<app>.env` has every variable of its `deploy/env/<app>.env.example` (an empty value is fine; missing ones are listed by name), and the edge secret and the OTA admin service key are the same in the files that share them |
+
+It never prints a value: env files are compared by variable name, the shared values and key copies are compared without output, the Redis password reaches `redis-cli` through its environment, and `caddy validate` messages are shown with every value of `caddy.env` replaced by `<redacted>` (bash's own errors about a malformed line of that file are dropped, because they would quote part of a value). Run it after provisioning, after editing anything in `/etc/velexis`, and when a deploy is refused for missing variables. [`deploy/scripts/test/check-vm.test.sh`](../../deploy/scripts/test/check-vm.test.sh) tests it, with fake system tools, against the layout `provision-vm.sh` creates.
+
+**Rehearsal on a throwaway VM.** Before the production VM, and whenever `provision-vm.sh` changes a lot, run it twice on a throwaway Ubuntu 24.04 VM (never the production VM; at least 4 GB of RAM, because `velexis.conf` gives PostgreSQL 1.5 GB of shared buffers) and keep both outputs. Both `check-vm.sh` runs must show only `PASS`, and the second provisioning run must change no generated file:
+
+```bash
+scp -r deploy/ velexis-deploy.pub ubuntu@<throwaway-vm>:/tmp/
+ssh ubuntu@<throwaway-vm>
+sudo DEPLOY_SSH_PUBKEY_FILE=/tmp/velexis-deploy.pub ADMIN_USER=ubuntu bash /tmp/deploy/scripts/provision-vm.sh 2>&1 | tee ~/provision-1.txt
+sudo bash /tmp/deploy/scripts/check-vm.sh | tee ~/check-1.txt
+fp() { sudo find /etc/velexis /home/deploy/.ssh /etc/redis/velexis.conf -type f -printf '%p %i %T@ %C@ %s %m %u:%g\n' | sort; }
+fp > ~/fp-1.txt
+sudo DEPLOY_SSH_PUBKEY_FILE=/tmp/velexis-deploy.pub ADMIN_USER=ubuntu bash /tmp/deploy/scripts/provision-vm.sh 2>&1 | tee ~/provision-2.txt
+sudo bash /tmp/deploy/scripts/check-vm.sh | tee ~/check-2.txt
+fp > ~/fp-2.txt && diff ~/fp-1.txt ~/fp-2.txt && echo "second run changed no generated file"
+```
+
+The fingerprints hold paths, inodes, modification and change times, sizes, modes and owners, never contents: a rewritten file gets a new time or inode. Delete the VM afterwards; its generated keys and passwords are never reused.
 
 ## 4. Process layout, ports, users and permissions
 
@@ -101,7 +138,7 @@ Workers restart first so new consumers run before new producers ([ADR-0009](adr/
 | `/var/lib/velexis-migrate/` | systemd (`StateDirectory=` of the transient migration unit; a link into `/var/lib/private/`, root 0700) | The tenant fan-out report while the migration runs; `velexis-deploy` moves it to `/var/lib/velexis/` and `/var/log/velexis/` |
 | `/var/cache/velexis/<app>/` | the app's user (systemd `CacheDirectory`) | Next.js runtime cache |
 | `/var/backups/velexis/` | root, 0700 | Encrypted backups before upload (two days) |
-| `/var/log/velexis/` | `root:adm` 0750 | Deploy log, migration reports, restore-drill logs |
+| `/var/log/velexis/` | `root:adm` 0750 | Deploy log, `provision.log` (the runs of `provision-vm.sh`), migration reports, restore-drill logs |
 | `/usr/local/sbin/velexis-{deploy,backup,restore,alert,run}` | root, 0755 | Root-owned copies of `deploy/scripts/*.sh`; `velexis-run <zone> <command>` (`run-as.sh`) runs one-off CLI commands as the zone's user, with the env files, folder and sandbox of the zone's installed unit; the exit code is the command's |
 
 ## 5. PostgreSQL and Redis
@@ -120,7 +157,7 @@ Installed from the PGDG repository, configured by [`deploy/postgres/velexis.conf
 | `wal_level`, `wal_compression` | `replica`, `zstd` | WAL archiving (pgBackRest) can be added later without a restart |
 | `random_page_cost`, `effective_io_concurrency` | 1.1, 200 | SSD |
 | `idle_in_transaction_session_timeout` | 5 min (app roles 60 s) | No transaction stays open across a slow external call |
-| Logging | slow statements ≥ 500 ms, lock waits, DDL; **never** bound parameter values | Personal data stays out of logs |
+| Logging | slow statements ≥ 500 ms, lock waits, DDL; **never** bound parameter values. `ALTER ROLE … PASSWORD` is DDL, so a password is set only in a session with `log_statement = none` (and `pg_stat_statements.track_utility = off`): `provision-vm.sh` does this, and so must a manual rotation ([§7](#7-secrets-and-the-master-key)). | Personal data and passwords stay out of logs |
 | `pg_stat_statements` | on | Find slow queries without extra tooling |
 
 Roles ([`deploy/postgres/bootstrap.sql`](../../deploy/postgres/bootstrap.sql), [ADR-0004](adr/0004-postgresql-schema-per-tenant.md)):
@@ -175,7 +212,7 @@ Consequences to know:
 |---|---|---|---|
 | Master key (KEK) `master-v1.key` | `/etc/velexis/keys/platform/` and `/etc/velexis/keys/ota/` (identical copies, each 0400 for its zone's user) | `provision-vm.sh` (32 random bytes) | Add `master-v2.key` to both folders, set `MASTER_KEY_CURRENT=local:v2`, run both backends' `secrets:rewrap`, remove v1 when both report zero rows ([ADR-0010](adr/0010-secrets-envelope-encryption.md), runbook of X-040) |
 | API key pepper, document URL key, JWT Ed25519 keys | The zone's key folder (pepper in both, document URL key in `ota/` only) | `provision-vm.sh` | JWT by `kid`; pepper not rotated in the MVP |
-| Database and Redis passwords, edge secret, OTA admin service key | `/etc/velexis/*.env` (generated values also in `/etc/velexis/.provision-secrets`, root 0600) | `provision-vm.sh` | Change in the env files (and `ALTER ROLE` / Redis config), restart the units |
+| Database and Redis passwords, edge secret, OTA admin service key | `/etc/velexis/*.env` (generated values also in `/etc/velexis/.provision-secrets`, root 0600) | `provision-vm.sh` | Change the value in `.provision-secrets` **first**: every `provision-vm.sh` run sets the role passwords and the Redis password from it again. Then change it in the env files, apply it (`provision-vm.sh --steps database` for the role passwords, in a session that logs nothing; `--steps redis` for Redis), restart the units and run `check-vm.sh`. A manual change uses `\password <role>` in a `psql` session started with `PGOPTIONS='-c log_statement=none -c pg_stat_statements.track_utility=off'`, never a typed `ALTER ROLE … PASSWORD`, which psql would also keep in its history file |
 | Stripe keys, SMTP credentials | `/etc/velexis/*.env` | The developer | Rotate in the provider's dashboard, update, restart |
 | Amadeus credentials | **Not** on the VM: encrypted in `platform.amadeus_accounts` / `supplier_connections` | Platform admin, portal | Through the UI |
 | age **private** keys (backups) | **Never on the VM** | The developer, offline | Generate a new pair, replace the recipients file |

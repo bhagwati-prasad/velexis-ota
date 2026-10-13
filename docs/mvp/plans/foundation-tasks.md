@@ -606,7 +606,7 @@ Related: [`../decisions.md`](../decisions.md) (binding), [`../architecture.md`](
 - **Verify:** `node tools/ci/check-package-json.mjs && node tools/plan-lint/plan-lint.mjs`
 
 ### X-020 · Finalise provision-vm.sh and provision the VM
-- **Status:** todo
+- **Status:** in progress (branch claude/intelligent-bardeen-90hhu7; pending: human step 3, two provision-vm.sh runs on a throwaway VM with only-PASS check-vm.sh outputs (AC2); human step 4, check-vm.sh on the production VM (AC5), the only place the Verify's `sudo bash deploy/scripts/check-vm.sh` can pass; step 5 after those runs)
 - **Component:** foundation
 - **Milestone:** M0
 - **Depends on:** X-021, X-022, X-033

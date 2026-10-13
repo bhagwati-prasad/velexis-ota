@@ -2,7 +2,7 @@
 # App, Caddy and Redis logs live in journald (deploy/journald/velexis.conf). PostgreSQL's own log file
 # is rotated by the postgresql-common package.
 
-# Deploy, migration-report and backup logs written by deploy.sh and backup.sh.
+# Deploy, provisioning, migration-report and backup logs written by deploy.sh, provision-vm.sh and backup.sh.
 /var/log/velexis/*.log /var/log/velexis/*.json {
 	weekly
 	rotate 12

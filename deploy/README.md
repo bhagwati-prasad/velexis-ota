@@ -49,7 +49,8 @@ flowchart LR
 | `scripts/deploy.sh` | `/usr/local/sbin/velexis-deploy` (root, 0755) | `provision-vm.sh`, then each deploy re-installs it | The only command the `deploy` user may run with sudo. |
 | `scripts/backup.sh`, `restore.sh`, `alert.sh` | `/usr/local/sbin/velexis-backup`, `velexis-restore`, `velexis-alert` | `provision-vm.sh`, `deploy.sh` | Root-owned copies, so no app user can change code that root runs. |
 | `scripts/run-as.sh` | `/usr/local/sbin/velexis-run` | `provision-vm.sh`, `deploy.sh` | `velexis-run <zone> <command…>`: a one-off command as the zone's user, with the identity, env files, folder and sandbox of the zone's installed unit ([ADR-0026](../docs/mvp/adr/0026-system-users-per-trust-zone.md)). |
-| `scripts/provision-vm.sh` | not installed | the developer, once per VM | Run from a copy of `deploy/` on the VM. Idempotent. |
+| `scripts/provision-vm.sh` | not installed | the developer, once per VM | Run from a copy of `deploy/` on the VM. Idempotent; logs its runs to `/var/log/velexis/provision.log`. |
+| `scripts/check-vm.sh` | not installed | the developer, after provisioning and after changes in `/etc/velexis` | Read-only: one `PASS` or `FAIL` per item of [`deployment-single-vm.md`](../docs/mvp/deployment-single-vm.md) §3 (services, firewall, SSH, roles, Redis, Caddy, users, owners and modes, env files against their templates). Prints no value. |
 | `scripts/pack-release.sh` | not installed | CI (`.github/workflows/deploy.yml`) | Builds the release folder. |
 | `env/<name>.env.example` | `/etc/velexis/<name>.env` (`root:root 0600`) | `provision-vm.sh` (only if missing) | `@@...@@` values are generated; `CHANGE_ME` values are filled in by the developer. systemd reads the files as root, so no app user can open any of them. |
 | `postgres/velexis.conf` | `/etc/postgresql/16/main/conf.d/velexis.conf` | `provision-vm.sh` | Tuning for 8 GB. |
@@ -121,7 +122,8 @@ Commands on the VM:
 
 | Check | Command |
 |---|---|
-| Shell scripts | `shellcheck -S style deploy/scripts/*.sh deploy/systemd/test/*.sh deploy/caddy/test/*.sh` |
+| Shell scripts | `shellcheck -S style deploy/scripts/*.sh deploy/scripts/test/*.sh deploy/systemd/test/*.sh deploy/caddy/test/*.sh` |
+| `check-vm.sh` and the env file checks of `provision-vm.sh` | `sudo bash deploy/scripts/test/check-vm.test.sh` (root, Ubuntu 24.04, no services: `provision-vm.sh --steps users,keys,envfiles` under a temporary `VELEXIS_ROOT`, then `check-vm.sh` with fake system tools; never on a provisioned VM) |
 | Users, keys and env files | `sudo env SMOKE_NODE="$(command -v node)" bash deploy/systemd/test/units-smoke.sh` runs `provision-vm.sh --steps users,keys,envfiles` under a temporary `VELEXIS_ROOT` and checks the user boundary on the host even without systemd (steps 1 to 3; it then stops with a `FAIL` where systemd is not PID 1) |
 | Caddyfile | `VELEXIS_EDGE_SECRET=x caddy validate --config deploy/caddy/Caddyfile --adapter caddyfile` |
 | Caddyfile end to end | `bash deploy/caddy/test/caddy-smoke.sh` (Caddy 2.8.4 and Node 22, no root; [`caddy/test/README.md`](caddy/test/README.md)) |
