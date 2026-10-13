@@ -153,7 +153,7 @@ Redis is a transport and cache. PostgreSQL holds every durable record; the provi
 |---|---|
 | `platform.example.com`, `admin.platform.example.com`, `admin.ota.example.com` | Reverse proxy to 3000, 3001, 3002. Maintenance page on 502/503/504. Optional IP allow-list for the platform admin. |
 | `api.platform.example.com`, `api.ota.example.com` | Reverse proxy to 3100, 4000. `/internal/*` and `/health/*` (except `/health/live`) answer 404. Client copies of the edge headers are removed. JSON `SERVICE_UNAVAILABLE` envelope on 502/503/504. 1 MB body limit. |
-| `*.ota.example.com` | Hosted storefront: static files from `/srv/velexis/current/storefront`, `/api/*` proxied to 4000 with `X-Velexis-Edge` and `X-Velexis-Host` set by Caddy, strict CSP, immutable caching for `/assets/*` |
+| `*.ota.example.com` | Hosted storefront: static files from `/srv/velexis/current/storefront`, `/api/*` proxied to 4000 with `X-Velexis-Edge` and `X-Velexis-Host` set by Caddy (`/api/internal/*` and `/api/health/*` except `/api/health/live` answer 404), strict CSP, immutable caching for `/assets/*` |
 | any other host (`https://`) | Same storefront block for **verified custom domains** |
 
 **Certificates.** The five named hosts get certificates at start-up (Let's Encrypt, ZeroSSL as fallback). Storefront hosts use **on-demand TLS**: on the first TLS handshake for an unknown name Caddy calls `GET http://127.0.0.1:3100/internal/tls/ask?domain=<host>`, and obtains a certificate only on `200` ([ADR-0018](adr/0018-hosted-storefront-custom-domains.md)). The platform API answers `200` for `<key>.ota.example.com` of a provisioning, active or suspended tenant, and for verified custom domains of active tenants whose plan allows them.
@@ -167,7 +167,7 @@ Consequences to know:
 - Caddy's admin API listens only on the unix socket `/run/caddy/admin.sock`, inside `/run/caddy` (mode 0700, user `caddy`, created by the `RuntimeDirectory=` of the drop-in). No app user can open it, so no app process can replace the live configuration (for example the payment-page CSP). `systemctl reload caddy` reads the socket address from the Caddyfile; changing that address needs `systemctl restart caddy`. X-022's smoke test proves a reload through the socket ([ADR-0027](adr/0027-pci-scope-and-vm-controls.md)).
 - From M6 Caddy is a build with the Coraza web application firewall and the OWASP Core Rule Set, in detection mode first and then blocking on the storefront `/api/*`, the payment pages and `api.ota.example.com` (task X-039).
 
-**Validation.** Every Caddyfile change is checked with `caddy validate` in CI and again on the VM by `velexis-deploy` (with the real `caddy.env`) before it is installed and reloaded (`systemctl reload caddy`, no dropped connections).
+**Validation.** In CI every Caddyfile change is checked with `caddy validate` and run end to end by [`deploy/caddy/test/caddy-smoke.sh`](../../deploy/caddy/test/README.md). On the VM `velexis-deploy` runs `caddy validate` again (with the real `caddy.env`) before the file is installed and reloaded (`systemctl reload caddy`, no dropped connections).
 
 ## 7. Secrets and the master key
 

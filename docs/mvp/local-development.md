@@ -124,9 +124,10 @@ Integration tests build one migrated template database per run (platform, refere
 
 ```bash
 VELEXIS_EDGE_SECRET=dev_edge_secret_change_me caddy validate --config deploy/caddy/Caddyfile --adapter caddyfile
+bash deploy/caddy/test/caddy-smoke.sh   # Caddy 2.8.4 and Node 22; no root, no DNS entries
 ```
 
-Running Caddy locally with real host names needs local DNS entries and `local_certs`; it is rarely worth it. The storefront's Vite proxy already mimics the edge headers.
+The smoke test runs the real Caddyfile on `127.0.0.1:8443` with Caddy's local CA, `*.localhost` host names and an echo server in place of the apps, and checks the edge headers, blocked paths, on-demand TLS, maintenance page and admin socket ([`deploy/caddy/test/README.md`](../../deploy/caddy/test/README.md)). For day-to-day storefront work you do not need Caddy: the storefront's Vite proxy already mimics the edge headers.
 
 ## 9. Troubleshooting
 

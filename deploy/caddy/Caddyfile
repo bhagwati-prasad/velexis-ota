@@ -8,8 +8,11 @@
 #   PLATFORM_BASE_DOMAIN   platform.example.com  -> portal, admin.<..>, api.<..>
 #   STOREFRONT_BASE_DOMAIN ota.example.com       -> admin.<..>, api.<..>, <key>.<..> storefronts
 #   ACME_EMAIL, VELEXIS_EDGE_SECRET
+# VELEXIS_ROOT is for the smoke test only: a prefix for the /srv/velexis folders below. It is never set on the VM,
+# where it expands to nothing.
 # Every app listens on 127.0.0.1 only; Caddy is the only public process (ports 80 and 443).
 # Validate before installing: caddy validate --config deploy/caddy/Caddyfile --adapter caddyfile
+# Test end to end (local CA, test ports, an echo upstream): bash deploy/caddy/test/caddy-smoke.sh
 # =====================================================================================================
 {
 	email {$ACME_EMAIL:ops@example.com}
@@ -53,6 +56,8 @@
 	}
 }
 
+# Security headers. A `header` block that deletes a header (-Server) is deferred, and deferred headers are not
+# applied to responses written by handle_errors: every handle_errors block below imports its headers again.
 (security_headers) {
 	header {
 		Strict-Transport-Security "max-age=31536000"
@@ -74,7 +79,8 @@
 # works before the first release and during a rollback.
 (maintenance_page) {
 	handle_errors 502 503 504 {
-		root * /srv/velexis/maintenance
+		import security_headers
+		root * {$VELEXIS_ROOT}/srv/velexis/maintenance
 		rewrite * /index.html
 		header Cache-Control "no-store"
 		header Retry-After "30"
@@ -87,6 +93,7 @@
 # While an API restarts or is down, clients get the standard error envelope (SERVICE_UNAVAILABLE).
 (api_unavailable) {
 	handle_errors 502 503 504 {
+		import security_headers
 		header Content-Type "application/json"
 		header Cache-Control "no-store"
 		header Retry-After "30"
@@ -121,12 +128,8 @@
 	import api_unavailable
 }
 
-# The hosted multi-tenant storefront: static files + same-origin /api proxy (ADR-0018).
-(storefront) {
-	import access_log
-	import request_id
-	encode zstd gzip
-
+# Storefront headers: strict CSP (ADR-0018). Deferred like security_headers, so the 404 page imports them again.
+(storefront_headers) {
 	header {
 		Strict-Transport-Security "max-age=31536000"
 		Content-Security-Policy "default-src 'self'; script-src 'self' https://js.stripe.com https://*.js.stripe.com; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self' https://api.stripe.com; frame-src https://js.stripe.com https://*.js.stripe.com https://hooks.stripe.com; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'"
@@ -135,9 +138,24 @@
 		Permissions-Policy "camera=(), microphone=(), geolocation=()"
 		-Server
 	}
+}
 
-	@api_internal path /api/internal/* /api/health/ready
-	respond @api_internal 404
+# The hosted multi-tenant storefront: static files + same-origin /api proxy (ADR-0018).
+(storefront) {
+	import access_log
+	import storefront_headers
+	import request_id
+	encode zstd gzip
+
+	# Internal endpoints and readiness details of the OTA API are never public, as on the API hosts. This must be
+	# a handle of its own before `handle /api/*`: a plain `respond` sorts after `handle` and would never run.
+	@api_private {
+		path /api/internal/* /api/health/*
+		not path /api/health/live
+	}
+	handle @api_private {
+		respond 404
+	}
 
 	handle /api/* {
 		request_body {
@@ -152,7 +170,7 @@
 	}
 
 	handle {
-		root * /srv/velexis/current/storefront
+		root * {$VELEXIS_ROOT}/srv/velexis/current/storefront
 		# Vite puts hashed assets under /assets/; everything else (HTML) is revalidated on each load.
 		@hashed path /assets/*
 		header @hashed Cache-Control "public, max-age=31536000, immutable"
@@ -163,7 +181,8 @@
 	}
 
 	handle_errors 404 {
-		root * /srv/velexis/current/storefront
+		import storefront_headers
+		root * {$VELEXIS_ROOT}/srv/velexis/current/storefront
 		rewrite * /404.html
 		file_server {
 			status 404
