@@ -150,8 +150,8 @@ Related: [`../decisions.md`](../decisions.md) (binding), [`../architecture.md`](
   - The README states the rule "a new sensitive field = a new path here plus a test".
 - **Verify:** `pnpm --filter @velexis/logger build && pnpm --filter @velexis/logger test`
 
-### X-004 · Create @velexis/crypto with envelope encryption and key providers
-- **Status:** todo
+### X-004 · Create @velexis/crypto with envelope encryption and key providers ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** foundation
 - **Milestone:** M0
 - **Depends on:** X-001
