@@ -470,6 +470,7 @@ Every Node app reads its configuration through `@velexis/config`, which validate
 |---|---|---|---|---|---|---|---|
 | `APP_ENV`, `LOG_LEVEL`, `PORT` | ✓ | ✓ | ✓ | ✓ | ✓ | | `production`, `info`, ports from §3 |
 | `HEALTH_PORT` | worker | | | worker | | | 3101, 4001 |
+| `TRUST_PROXY` | | | | API | | | Express `trust proxy`, default `loopback` (Caddy on the VM); presets, addresses or CIDR ranges only |
 | `DATABASE_URL` | ✓ | | | ✓ | | | Role `velexis_platform_app` / `velexis_ota_app` |
 | `DATABASE_MIGRATOR_URL` | deploy only | | | deploy only | | | Role `velexis_migrator` (`migrator.env`, root only; local `pnpm db:migrate`) |
 | `DATABASE_PROVISIONER_URL` | | | | worker | | | Role `velexis_provisioner`: tenant schemas only ([ADR-0004](adr/0004-postgresql-schema-per-tenant.md)) |

@@ -31,6 +31,7 @@ Common commands: backend `pnpm --filter @velexis/ota-backend test` and `test:int
 ## M0 — Foundations
 
 ### OBE-001 · Scaffold the OTA backend with API, worker and CLI entry points
+- **Status:** in progress (branch claude/intelligent-bardeen-90hhu7; pending: a decision on AC3, which names `DATABASE_MIGRATOR_URL` as the worker's DSN while ADR-0004, the configuration matrix and `deploy/env/ota-worker.env.example` give the worker `DATABASE_PROVISIONER_URL` and no app the migrator DSN; the branch follows the ADR)
 - **Component:** ota-backend
 - **Milestone:** M0
 - **Depends on:** X-002, X-003, X-009, X-010

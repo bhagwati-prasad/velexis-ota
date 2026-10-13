@@ -12,9 +12,10 @@ Related: [`../docs/scope.md`](../docs/scope.md), [`../docs/api-changes.md`](../d
 | Framework | NestJS 11 (Express 5), `nestjs-pino`, `nestjs-cls`, `@nestjs/bullmq`, `@nestjs/throttler`, `helmet`, `cookie-parser` |
 | Data | Tenant schemas `tenant_<key>` (DML, role `velexis_ota_app`), `reference` (read), selected `platform` tables (read-only, cached), through `@velexis/db` (Kysely) |
 | Processes | API `dist/main.js` on `127.0.0.1:4000`; worker `dist/worker.js` with health on `127.0.0.1:4001`; CLI `dist/cli.js` |
+| Health ([ADR-0016](../../docs/mvp/adr/0016-observability.md)) | `GET /health/live` → `200 {"status":"ok"}`; `GET /health/ready` → `200` or `503` with `{"status":"ok"\|"unavailable","checks":{"postgres":…,"redis":…}}` (`ok`, `down` or `timeout` each, at most 2 s); on the API port and on the worker's health port, never cached, never logged |
 | Public hosts | `https://api.ota.example.com` and `/api/*` on every storefront host (`<key>.ota.example.com`, verified custom domains); `/internal/*` and `/health/ready` blocked publicly |
 | Contract | `openapi/velexis-ota-booking-api.openapi.yaml` (copied in M0 by X-006, extended per [`../docs/api-changes.md`](../docs/api-changes.md)) |
-| systemd units | `velexis-ota-api.service`, `velexis-ota-worker.service` ([ADR-0007](../../docs/mvp/adr/0007-single-vm-without-docker.md)); env files `/etc/velexis/ota-backend.env` (both) and `/etc/velexis/ota-worker.env` (worker only, migrator DSN) |
+| systemd units | `velexis-ota-api.service`, `velexis-ota-worker.service` ([ADR-0007](../../docs/mvp/adr/0007-single-vm-without-docker.md)); env files `/etc/velexis/ota-backend.env` (both) and `/etc/velexis/ota-worker.env` (worker only, provisioner DSN) |
 
 ## 2. Folder tree
 
@@ -36,13 +37,14 @@ ota/backend/
 │   ├── worker.ts                   BullMQ processors and schedulers, health server on HEALTH_PORT
 │   ├── cli.ts                      dev:seed, tenants:report-migrations, amadeus:ping
 │   ├── app.module.ts, worker.module.ts
-│   ├── config.ts                   @velexis/config schema of every variable of §3
+│   ├── config.ts                   @velexis/config schemas of §3: one for the API, one for the worker
 │   ├── common/
 │   │   ├── auth/                   caller, tenant, scope, customer, staff, booking-token, csrf guards; decorators
 │   │   ├── http/                   request context, OpenAPI validation and idempotency interceptors, error filter, cookie writer
 │   │   ├── redis/                  ioredis client, key helpers, rate-limit storage
 │   │   ├── queues/                 queue names, producers, @velexis/api-types/jobs validation
-│   │   └── clock.ts, ids.ts        injectable Clock and prefixed-ULID generator
+│   │   ├── clock.ts, ids.ts        injectable Clock and prefixed-ULID generator (newId, IdGenerator)
+│   │   └── common.module.ts        global module providing Clock and IdGenerator to both processes
 │   ├── tenancy/                    caller resolver, platform read repository, caches, vx:invalidate subscriber, tenant context
 │   ├── identity/                   customer auth (cookie + bearer), sessions, password reset, verification; staff auth (portal token), staff sessions
 │   ├── account/                    profile, deletion
@@ -62,8 +64,9 @@ ota/backend/
 │   ├── settings/                   markup rules, fee rules, storefront settings, pages, assets upload, notification templates
 │   ├── provisioning/               tenant-ops.processor.ts, seeds/, tenant-events.producer.ts, suspend/resume housekeeping
 │   ├── jobs/                       schedulers.ts (upsertJobScheduler), fan-out, retention.processor.ts
-│   └── health/
+│   └── health/                     /health/live and /health/ready: HealthController (API), HealthServer (worker port)
 └── test/
+    ├── helpers/                    log sink, loopback ports, one-shot HTTP exchange, fake Redis, nestjs-pino test reset
     ├── builders/                   checkouts, bookings, payments, offers, staff tokens
     ├── fixtures/stripe/            signed Stripe event fixtures (X-028)
     ├── integration/<module>/*.int.test.ts
@@ -74,7 +77,7 @@ Each module follows [`conventions.md` §2](../../docs/mvp/conventions.md#layout-
 
 ## 3. Environment variables
 
-Loaded and validated by `src/config.ts`; the process refuses to start on a missing or invalid value. On the VM they come from `/etc/velexis/ota-backend.env` and, for the worker only, `/etc/velexis/ota-worker.env` ([`deploy/env/`](../../deploy/env/)); locally from `.env.local` based on [`.env.example`](.env.example) and the root `.env.example`. "New" marks variables this document adds to the [configuration matrix](../../docs/mvp/architecture.md#6-configuration-matrix); the task that first reads one adds it there, to the root `.env.example` and to `deploy/env/` ([`conventions.md` §8](../../docs/mvp/conventions.md#8-configuration)).
+Loaded and validated by `src/config.ts`; the process refuses to start on a missing or invalid value (one `ConfigError` line naming every bad variable, never a value, and exit code 1). The API and the worker validate separate schemas: a variable marked "API" or "worker" is read, required and present in the configuration of that process only, so the API's configuration never holds the provisioner DSN, even when it is set, and neither process has `DATABASE_MIGRATOR_URL`. On the VM they come from `/etc/velexis/ota-backend.env` and, for the worker only, `/etc/velexis/ota-worker.env` ([`deploy/env/`](../../deploy/env/)); locally from `.env.local` based on [`.env.example`](.env.example) and the root `.env.example`. "New" marks variables this document adds to the [configuration matrix](../../docs/mvp/architecture.md#6-configuration-matrix); the task that first reads one adds it there, to the root `.env.example` and to `deploy/env/` ([`conventions.md` §8](../../docs/mvp/conventions.md#8-configuration)).
 
 | Variable | Required | Example (placeholder) | Purpose | Since |
 |---|---|---|---|---|
@@ -82,9 +85,9 @@ Loaded and validated by `src/config.ts`; the process refuses to start on a missi
 | `LOG_LEVEL` | no (`info`) | `info` | pino level | M0 |
 | `PORT` | API | `4000` | API port (127.0.0.1) | M0 |
 | `HEALTH_PORT` | worker | `4001` | Worker health port | M0 |
-| `TRUST_PROXY` | no (`loopback`) | `loopback` | Client IPs from Caddy (new) | M2 |
+| `TRUST_PROXY` | API, no (`loopback`) | `loopback` | Express `trust proxy`: client IPs from Caddy. Presets (`loopback`, `linklocal`, `uniquelocal`), addresses or CIDR ranges; `true`, `*` and hop counts are refused (new) | M0 |
 | `DATABASE_URL` | yes | `postgres://velexis_ota_app:…@127.0.0.1:5432/velexis` | App role | M0 |
-| `DATABASE_MIGRATOR_URL` | worker | `postgres://velexis_migrator:…@127.0.0.1:5432/velexis` | Provisioning and tenant migrations | M1 |
+| `DATABASE_PROVISIONER_URL` | worker | `postgres://velexis_provisioner:…@127.0.0.1:5432/velexis` | Tenant provisioning as `velexis_provisioner` (tenant schemas only, [ADR-0004](../../docs/mvp/adr/0004-postgresql-schema-per-tenant.md)); `/etc/velexis/ota-worker.env`, which the API unit cannot read. `DATABASE_MIGRATOR_URL` (`velexis_migrator`) is for deploys and the local migration commands only, never for this app | M0 |
 | `REDIS_URL` | yes | `redis://:…@127.0.0.1:6379/0` | Caches, tokens, rate limits, queues | M0 |
 | `MASTER_KEY_DIR`, `MASTER_KEY_CURRENT` | yes | `/etc/velexis/keys/ota`, `local:v1` | Envelope encryption ([ADR-0010](../../docs/mvp/adr/0010-secrets-envelope-encryption.md)); the OTA zone's key folder ([ADR-0026](../../docs/mvp/adr/0026-system-users-per-trust-zone.md)) | M2 |
 | `API_KEY_PEPPER_FILE` | yes | `/etc/velexis/keys/ota/api-key-pepper` | HMAC pepper of API keys (an identical copy of the platform's) | M2 |
@@ -131,12 +134,16 @@ The API process only produces jobs; every processor and scheduler runs in the wo
 
 Run from the repository root (`pnpm --filter @velexis/ota-backend <script>`) or with the root shortcuts of [`AGENTS.md`](../../AGENTS.md#10-commands-cheat-sheet).
 
+The build is plain `tsc` (one TypeScript version for the whole repository, [tech stack](../../docs/mvp/tech-stack.md) §1); the Nest CLI is not a dependency. `nest-cli.json` describes the layout (`src/`, entry `main`, `tsconfig.build.json`) for anyone who runs it with `pnpm dlx @nestjs/cli@11`.
+
 | Command | Does |
 |---|---|
-| `pnpm --filter @velexis/ota-backend dev` | API and worker in watch mode (`dev:api` + `dev:worker`) |
-| `pnpm --filter @velexis/ota-backend build` | `dist/main.js`, `dist/worker.js`, `dist/cli.js` |
+| `pnpm --filter @velexis/ota-backend dev` | API and worker in watch mode: one build, then `dev:tsc` (`tsc --watch` into `dist/`), `dev:api` and `dev:worker` (`node --watch` on `dist/main.js` and `dist/worker.js`) in parallel |
+| `pnpm --filter @velexis/ota-backend build` | `dist/main.js`, `dist/worker.js`, `dist/cli.js` (`tsc -p tsconfig.build.json`, CommonJS with source maps; the script fails if an entry point is missing) |
 | `pnpm --filter @velexis/ota-backend test` | Unit and contract tests (Vitest) |
 | `pnpm --filter @velexis/ota-backend test:int` | Integration tests (PostgreSQL 16, Redis 7, Mailpit; the Amadeus stub starts in-process) |
+| `pnpm --filter @velexis/ota-backend typecheck` / `lint` / `clean` | `tsc --noEmit` over `src/` and `test/` / ESLint / remove `dist/` and `coverage/` |
+| `node dist/cli.js help` | List the CLI commands (`--help`, `-h`); no command or an unknown one exits 1 |
 | `pnpm db:migrate:tenants` | Apply `migrations/tenant` to every tenant schema (fan-out, `DATABASE_MIGRATOR_URL`) |
 | `pnpm db:codegen` | Regenerate Kysely types after a migration |
 | `pnpm contracts:lint` / `pnpm contracts:generate` | Lint the OpenAPI document / regenerate `@velexis/api-types` and `@velexis/errors` |
@@ -177,6 +184,14 @@ Point the backend at it with `AMADEUS_BASE_URL_TEST=http://127.0.0.1:4900`. Reco
 | End to end | `tools/e2e/specs/` | Storefront search → book → pay (Stripe test card, airline card in test) → e-mail; OTA admin issue and cancel |
 
 Test names end with the plan's task id and criterion (`… [OBE-031 AC2]`). The PAN-absence test of [`../docs/flows/checkout-airline-card.md`](../docs/flows/checkout-airline-card.md) §7 runs in every CI build.
+
+How the suites run (`vitest.config.ts`, `vitest.int.config.ts`):
+
+- **Decorator metadata.** NestJS injects constructor dependencies by their TypeScript types, which esbuild (Vite's default transform) does not emit. Both Vitest configurations compile the package's TypeScript with the TypeScript compiler and the options of `tsconfig.json` instead, so tests run the same decorator output as the `tsc` build.
+- **In-process apps.** Tests start the API and the worker with `startApi({ env, logDestination })` and `startWorker({ env, logDestination })` from `src/main.ts` and `src/worker.ts`, or build a test root module around `AppModule.forRoot(config, { logger })` (Supertest). `test/helpers/log-sink.ts` captures the log lines so tests can assert that a request line carries `requestId` and that no body, token or password is logged. `createApiApp` flushes Nest's start-up log buffer as soon as the pino logger is in place, so Nest's own lines (the exception handler's error lines included) reach the sink after `init()` too, not only after `listen()`.
+- **Integration environment.** `test/integration/env.ts` reads `DATABASE_URL`, `REDIS_URL` and `DATABASE_PROVISIONER_URL` through `@velexis/config` (the CI job environment, or the root and app `.env.local` files). The health suite binds the units' ports `127.0.0.1:4000` and `127.0.0.1:4001`, so integration files run one after the other.
+- **Outages.** The shared PostgreSQL and Redis are never stopped by a test. A dependency that is down is a free loopback port where nothing listens (`test/helpers/ports.ts`); a Redis that comes back is `test/helpers/fake-redis.ts`, a minimal RESP server started on that port.
+- **nestjs-pino outside requests.** Every `PinoLogger` of a process writes to the first application's logger outside a request. One process runs one application on the VM; a test that starts several and asserts out-of-request lines calls `useNextApplicationLoggerOutsideRequests()` (`test/helpers/nest-pino.ts`) before starting the one it watches.
 
 ## 9. Deploy
 

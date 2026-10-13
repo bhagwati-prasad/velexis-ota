@@ -57,6 +57,7 @@
       "passThroughEnv": [
         "DATABASE_URL",
         "DATABASE_MIGRATOR_URL",
+        "DATABASE_PROVISIONER_URL",
         "TEST_DATABASE_ADMIN_URL",
         "REDIS_URL",
         "SMTP_URL",

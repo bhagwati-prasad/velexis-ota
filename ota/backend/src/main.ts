@@ -1,0 +1,62 @@
+// dist/main.js: the OTA booking API (unit velexis-ota-api, 127.0.0.1:4000). Caddy proxies api.ota.example.com and
+// every storefront's /api/* to it; nothing else may reach it, so it binds the loopback interface only.
+//
+// Start-up: validate the configuration (a ConfigError names every bad variable and the process exits 1), build the
+// module graph, listen. systemd's SIGTERM closes the application through Nest's shutdown hooks.
+import type { NestExpressApplication } from "@nestjs/platform-express";
+import type { EnvSource } from "@velexis/config";
+import { createLogger } from "@velexis/logger";
+import type { DestinationStream } from "pino";
+import { AppModule, createApiApp, createApiLogger } from "./app.module";
+import { API_APP, loadApiConfig, type ApiConfig } from "./config";
+
+/** The interface the API listens on. Never a public address: Caddy is the only client. */
+export const API_HOST = "127.0.0.1";
+
+export interface StartApiOptions {
+  /** The variables to validate instead of the process environment (tests). No `.env.local` file is read then. */
+  readonly env?: EnvSource;
+  /** Where log lines go instead of stdout (tests). */
+  readonly logDestination?: DestinationStream;
+}
+
+/**
+ * Starts the API on `127.0.0.1:PORT`. Resolves to the listening application, or to `undefined` after logging why it
+ * could not start: an invalid configuration (`api.config_invalid` with the `ConfigError`, which names variables and
+ * never values) or a failure while building the module graph or binding the port (`api.start_failed`).
+ */
+export async function startApi(options: StartApiOptions = {}): Promise<NestExpressApplication | undefined> {
+  let config: ApiConfig;
+  try {
+    config = loadApiConfig(options.env);
+  } catch (error) {
+    // LOG_LEVEL and APP_ENV are not validated yet: a fatal line always passes, and `env` is unknown.
+    createLogger({ app: API_APP, env: "unknown", destination: options.logDestination }).fatal(
+      { err: error },
+      "api.config_invalid",
+    );
+    return undefined;
+  }
+
+  const logger = createApiLogger(config, options.logDestination);
+  let app: NestExpressApplication | undefined;
+  try {
+    app = await createApiApp(config, AppModule.forRoot(config, { logger }));
+    await app.listen(config.PORT, API_HOST);
+    logger.info({ host: API_HOST, port: config.PORT }, "api.listening");
+    return app;
+  } catch (error) {
+    logger.fatal({ err: error }, "api.start_failed");
+    await app?.close().catch(() => undefined);
+    return undefined;
+  }
+}
+
+if (require.main === module) {
+  void startApi().then((app) => {
+    if (app === undefined) {
+      // Pending log lines are flushed on exit; nothing else may keep a half-started process alive.
+      process.exit(1);
+    }
+  });
+}
