@@ -1,0 +1,50 @@
+{
+  "name": "@velexis/db",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Data access and tenancy: pg pools with per-pool type parsers, platformDb, tenantTx (schema per tenant, ADR-0004), the migration runner and the StorageAdapter (ADR-0005, ADR-0017).",
+  "license": "UNLICENSED",
+  "type": "commonjs",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./migrate": {
+      "types": "./dist/migrate/index.d.ts",
+      "default": "./dist/migrate/index.js"
+    },
+    "./storage": {
+      "types": "./dist/storage/index.d.ts",
+      "default": "./dist/storage/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "!dist/**/*.test.*",
+    "!dist/tsconfig.tsbuildinfo"
+  ],
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p test",
+    "lint": "eslint .",
+    "test": "vitest run",
+    "test:int": "vitest run --config vitest.int.config.ts",
+    "clean": "tsc -b --clean"
+  },
+  "dependencies": {
+    "@velexis/logger": "workspace:*",
+    "kysely": "0.28.17",
+    "pg": "8.23.1"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.5",
+    "@types/pg": "8.23.1",
+    "@velexis/config": "workspace:*",
+    "typescript": "5.6.3",
+    "vitest": "3.2.7"
+  }
+}

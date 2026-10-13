@@ -296,8 +296,8 @@ Related: [`../decisions.md`](../decisions.md) (binding), [`../architecture.md`](
   - Regeneration is deterministic: the generated file shows no diff after a second run.
 - **Verify:** `pnpm contracts:generate && pnpm --filter @velexis/errors build && pnpm --filter @velexis/errors test`
 
-### X-010 · Create @velexis/db with pools, platformDb and tenantTx
-- **Status:** todo
+### X-010 · Create @velexis/db with pools, platformDb and tenantTx ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** foundation
 - **Milestone:** M0
 - **Depends on:** X-002, X-003, X-016

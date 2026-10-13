@@ -161,15 +161,15 @@ import { createPool, createPlatformDb, createTenantDb, tenantTx, assertTenantSch
 import { runMigrations, migrateTenants, migrateTenantSchema } from "@velexis/db/migrate";
 import { createStorage, type StorageAdapter } from "@velexis/db/storage";
 
-const pool = createPool(config.DATABASE_URL, { max: 20, applicationName: "ota-api" });
-const tenants = createTenantDb(pool);
+const pool = createPool(config.DATABASE_URL, { max: 20, applicationName: "ota-api", logger });
+const tenants = createTenantDb(pool, { appEnv: config.APP_ENV });
 const booking = await tenantTx(tenants, "tenant_acme", async (trx) =>
   trx.selectFrom("bookings").selectAll().where("id", "=", id).executeTakeFirst(), { statementTimeoutMs: 5000 });
 ```
 
-- `tenantTx` opens a transaction, runs `SELECT set_config('search_path', $1 || ', reference', true)` with a validated schema name (`^tenant_[a-z][a-z0-9_]{1,39}$`), sets `statement_timeout`, then runs the callback. It is the **only** way to reach tenant tables.
+- `tenantTx` opens a transaction, runs `SELECT set_config('search_path', $1, true)` with `$1 = '<schema>, reference'` and a validated schema name (`^tenant_[a-z][a-z0-9_]{1,39}$`), sets `statement_timeout`, then runs the callback. It is the **only** way to reach tenant tables.
 - Type parsers: `numeric` and `int8` stay strings, `timestamptz` becomes `Date`, `jsonb` is parsed.
-- Leak guard: in development and test a pool `release` hook asserts that `search_path` is back to `pg_catalog`.
+- Leak guard: outside production, the first statement of every `tenantTx` asserts that the connection's `search_path` is still the role default (`pg_catalog`), so a session-level `SET search_path` anywhere throws `SearchPathLeakError` ([`packages/db/README.md`](db/README.md)).
 - Migration runner: versioned files `NNNN_name.sql` with SHA-256 checksums in a `schema_migrations` ledger per schema, `-- velexis:phase` and `-- velexis:no-transaction` headers, `lock_timeout` 5 s, tenant fan-out with an advisory lock per schema and bounded concurrency, plus idempotent repeatable files `R__name.sql` for the platform set ([ADR-0021](../docs/mvp/adr/0021-migration-cli-and-repeatable-grants.md)).
 - CLI `dist/cli/migrate.js` (used by `pnpm db:migrate`, `pnpm db:migrate:tenants` and `velexis-deploy`):
 
