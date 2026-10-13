@@ -181,8 +181,8 @@ Related: [`../decisions.md`](../decisions.md) (binding), [`../architecture.md`](
   - `package.json` lists no third-party crypto library.
 - **Verify:** `pnpm --filter @velexis/crypto build && pnpm --filter @velexis/crypto test`
 
-### X-005 · Add token, hashing, signed-URL and id helpers to @velexis/crypto
-- **Status:** todo
+### X-005 · Add token, hashing, signed-URL and id helpers to @velexis/crypto ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** foundation
 - **Milestone:** M0
 - **Depends on:** X-004

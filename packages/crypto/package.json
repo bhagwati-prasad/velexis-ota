@@ -2,7 +2,7 @@
   "name": "@velexis/crypto",
   "version": "0.0.0",
   "private": true,
-  "description": "Envelope encryption of secrets at rest (AES-256-GCM, per-value data keys wrapped by a key-encryption key) with Node's built-in crypto only (ADR-0010).",
+  "description": "Envelope encryption of secrets at rest (AES-256-GCM, per-value data keys wrapped by a key-encryption key, ADR-0010), plus token, API key hash, signed-URL and prefixed ULID id helpers. Cryptography uses Node's built-in crypto only.",
   "license": "UNLICENSED",
   "type": "commonjs",
   "main": "./dist/index.js",
@@ -25,6 +25,9 @@
     "lint": "eslint .",
     "test": "vitest run",
     "clean": "tsc -b --clean"
+  },
+  "dependencies": {
+    "ulid": "3.0.2"
   },
   "devDependencies": {
     "@types/node": "22.20.5",

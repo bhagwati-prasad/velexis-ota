@@ -1,8 +1,8 @@
 # @velexis/crypto
 
-Envelope encryption for secrets at rest, as decided in [ADR-0010](../../docs/mvp/adr/0010-secrets-envelope-encryption.md): Amadeus and Stripe credentials, MFA secrets, and the tenant `*_ciphertext` columns ([db README §8](../../docs/velexis-sdk/db/README.md)). It uses Node's built-in `crypto` only. It has no third-party crypto library and no runtime dependency (a test checks `package.json`).
+Envelope encryption for secrets at rest, as decided in [ADR-0010](../../docs/mvp/adr/0010-secrets-envelope-encryption.md): Amadeus and Stripe credentials, MFA secrets, and the tenant `*_ciphertext` columns ([db README §8](../../docs/velexis-sdk/db/README.md)). It also holds the token, hashing, signed-URL and id helpers (see [Tokens, hashes, signed URLs and ids](#tokens-hashes-signed-urls-and-ids)). All cryptography uses Node's built-in `crypto`. There is no third-party crypto library (a test checks `package.json`). The only runtime dependency is `ulid` (tech-stack §2), which formats ids.
 
-Used by both backends: the platform backend encrypts credentials and MFA secrets, and the OTA backend decrypts credentials inside its supplier and payment gateway modules and encrypts and decrypts the tenant columns. The Next.js apps never import this package and have no keys. Token, hashing, signed-URL and id helpers are added by X-005.
+Used by both backends: the platform backend encrypts credentials and MFA secrets, and the OTA backend decrypts credentials inside its supplier and payment gateway modules and encrypts and decrypts the tenant columns. The Next.js apps never import this package and have no keys.
 
 ## Usage
 
@@ -83,10 +83,50 @@ A random 96-bit IV per wrap keeps one KEK safe for far more data keys than the M
 
 Implement `KeyProvider` with the KMS (`currentKekId()` returns the KMS key id; `unwrap` rejects with `DecryptionError` for an unauthentic key and lets outages through as ordinary errors). Then re-wrap every value with `rewrapValue`. During the move, the provider passed to `rewrapValue` must still unwrap the `local:v<N>` ids, for example by choosing the KMS or the key files by KEK id prefix. If the KMS returns wrapped keys that are not 60 bytes, a new envelope version comes first (see the envelope format above). The data and the schema stay as they are ([`deployment-single-vm.md`](../../docs/mvp/deployment-single-vm.md) §15). With a remote KMS, one unwrap per decryption may need caching (ADR-0010, Consequences).
 
+## Tokens, hashes, signed URLs and ids
+
+```ts
+import { generateToken, sha256Hex, hashApiKey, verifyApiKey, timingSafeEqualStr,
+         signUrl, verifySignedUrl, newId } from "@velexis/crypto";
+
+const { token, hash } = generateToken("rt");          // "rt_<43 base64url chars>"; store only `hash`
+const lookup = sha256Hex(presentedToken);             // find the row or Redis key by hash
+
+const keyHash = hashApiKey(fullKey, pepper);          // api_keys.key_hash; pepper = readKeyFile(API_KEY_PEPPER_FILE)
+verifyApiKey(presentedKey, pepper, row.key_hash);     // true or false, constant time
+
+const expiresAt = new Date(clock.now().getTime() + 5 * 60_000);       // valid 5 minutes (ADR-0017)
+const url = signUrl(`/v1/files/${storageKey}`, { expiresAt, key: documentUrlKey });
+const check = verifySignedUrl(req.originalUrl, { key: documentUrlKey, now: clock.now() });
+// !check.valid: answer 403 whatever check.reason is; otherwise serve check.path
+
+newId("bkg");                                         // "bkg_01J…": 26 Crockford base32 characters
+```
+
+| Export | What it does |
+|---|---|
+| `generateToken(prefix, bytes = 32)` | A fresh token `"<prefix>_<base64url>"` of `bytes` CSPRNG bytes (16 to 256; default 256 bits) and `hash = sha256Hex(token)`. The prefix is 2 to 8 lower-case letters (`rt`, `vt`, `pr`). For refresh, verification, reset, invitation and booking access tokens ([ADR-0008](../../docs/mvp/adr/0008-identity-accounts-customers-sessions.md), [db README §8](../../docs/velexis-sdk/db/README.md)); with the default 32 bytes they fit the OTA contract's `rt_`, `vt_` and `pr_` patterns. Only the hash is stored; the token is shown or sent once. Not for portal SSO tokens (`ptk_`, [PADR-0007](../../platform/docs/adr/0007-portal-to-ota-admin-sso-token.md)) or API keys ([PADR-0005](../../platform/docs/adr/0005-api-key-format-and-hashing.md)): those are base62, and the `-` and `_` of base64url break their patterns. |
+| `sha256Hex(data)` | SHA-256 of a string (UTF-8) or Buffer as 64 lower-case hex characters. |
+| `hmacSha256(key, data)` | HMAC-SHA-256 as 64 lower-case hex characters. An empty key throws. |
+| `hashApiKey(fullKey, pepper)` | `hex(HMAC-SHA-256(pepper, fullKey))`, the `key_hash` of [PADR-0005](../../platform/docs/adr/0005-api-key-format-and-hashing.md) item 3. `pepper` is the decoded `api-key-pepper` file and must be at least 32 bytes (`API_KEY_PEPPER_MIN_BYTES`). |
+| `verifyApiKey(fullKey, pepper, expectedHex)` | Recomputes the HMAC and compares it with `crypto.timingSafeEqual`. A presented key that is not a non-empty string, or a stored hash that is not 64 lower-case hex characters, gives `false`; a bad pepper throws. |
+| `timingSafeEqualStr(a, b)` | Constant-time equality for strings of any lengths (SHA-256 of both, then `timingSafeEqual`). Non-strings compare unequal. For shared secrets such as service keys and CSRF values. |
+| `signUrl(path, { expiresAt, key })` | Returns `"<path>?exp=<unix>&sig=<sig>"` with `sig = base64url(HMAC-SHA-256(key, "<path>?exp=<unix>"))` ([ADR-0017](../../docs/mvp/adr/0017-email-documents-storage.md), Signed URLs). `exp` is `expiresAt` rounded down to seconds. `key` is the decoded `document-url.key` (at least 32 bytes). |
+| `verifySignedUrl(url, { key, now })` | `{ valid: true, path, expiresAt }` or `{ valid: false, reason }` with `reason` `malformed`, `signature` or `expired`. The signature is compared in constant time, and the link is valid up to and including `exp`. `now` comes from the injected clock, so tests are deterministic. |
+| `newId(prefix, now?)` | `"<prefix>_<ULID>"` with a fresh 80-bit random part from Node's CSPRNG for every id. The prefix must match `^[a-z]{2,4}$`. `now` (default: the current time) sets the time-sortable timestamp part. |
+| `IdPrefix<P>` | `P` when it is a literal of 2 to 4 lower-case letters, otherwise `never`, so `newId("BKG")` does not compile. Unions of literals keep their valid members. An app's own generator keeps the check with `new<P extends string>(prefix: IdPrefix<P>) { return newId(prefix); }`. |
+
+Rules for callers:
+
+- **Ids are never monotonic.** `srch_`, `off_`, `prc_`, `chk_` and `pay_` ids grant guest access on their own, and their secret is the 80 random bits ([db README §2.1](../../docs/velexis-sdk/db/README.md)). Never use the `ulid` package's `monotonicFactory` (it increments the random part within one millisecond) or another id generator.
+- **Tokens and API keys are never logged** and never stored in clear. Hash a presented token with `sha256Hex` and look it up by hash.
+- **Signed paths** are `/`-separated segments of `A-Z a-z 0-9 - . _ ~`, none of them empty, `.` or `..`. Such a path needs no percent-encoding, so the server sees exactly the string that was signed. Storage keys are generated by the application and fit this rule. The query of a signed URL must be exactly `exp=<unix>&sig=<sig>`; extra parameters make it `malformed`.
+- **Only the path and `exp` are signed, not the host**, so the same link works same-origin under `/api` on the hosted storefront (Caddy strips the prefix) and on the API host. Map every `valid: false` to the same `403`; `reason` is for logs and metrics.
+
 ## Scripts
 
 | Command | Does |
 |---|---|
 | `pnpm --filter @velexis/crypto build` | `tsc -b` to `dist/` (CommonJS and `.d.ts`) |
-| `pnpm --filter @velexis/crypto test` | Unit tests (Vitest): round trip, tampering, AAD, rotation, key files, and no third-party crypto |
+| `pnpm --filter @velexis/crypto test` | Unit tests (Vitest): round trip, tampering, AAD, rotation, key files and no third-party crypto; HMAC and SHA-256 test vectors, API key verification, tokens, signed URLs and ids |
 | `pnpm --filter @velexis/crypto typecheck` / `lint` | `tsc --noEmit` / ESLint |
