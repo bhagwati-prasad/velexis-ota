@@ -1,0 +1,24 @@
+{
+  "name": "@velexis/reference-data",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Vendored reference datasets (currencies, countries, time zones, cities, airports, airlines, aircraft) from OpenTravelData and Unicode CLDR, and their fetch and validation scripts (ADR-0024).",
+  "license": "UNLICENSED",
+  "type": "commonjs",
+  "files": [
+    "dist",
+    "data",
+    "SOURCES.md"
+  ],
+  "scripts": {
+    "fetch": "node scripts/fetch.mjs",
+    "check": "node scripts/fetch.mjs --check",
+    "validate": "node scripts/validate.mjs",
+    "lint": "eslint .",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "eslint": "9.39.5",
+    "vitest": "3.2.7"
+  }
+}

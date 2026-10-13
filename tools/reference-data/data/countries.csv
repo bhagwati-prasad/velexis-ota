@@ -1,0 +1,251 @@
+code,alpha3,numeric_code,name,official_name,continent_code,currency_code,calling_code,is_eu
+AD,AND,020,Andorra,,EU,EUR,376,false
+AE,ARE,784,United Arab Emirates,,AS,AED,971,false
+AF,AFG,004,Afghanistan,,AS,AFN,93,false
+AG,ATG,028,Antigua & Barbuda,,NA,XCD,1,false
+AI,AIA,660,Anguilla,,NA,XCD,1,false
+AL,ALB,008,Albania,,EU,ALL,355,false
+AM,ARM,051,Armenia,,AS,AMD,374,false
+AO,AGO,024,Angola,,AF,AOA,244,false
+AQ,ATA,010,Antarctica,,AN,,,false
+AR,ARG,032,Argentina,,SA,ARS,54,false
+AS,ASM,016,American Samoa,,OC,USD,1,false
+AT,AUT,040,Austria,,EU,EUR,43,true
+AU,AUS,036,Australia,,OC,AUD,61,false
+AW,ABW,533,Aruba,,NA,AWG,297,false
+AX,ALA,248,Åland Islands,,EU,EUR,358,false
+AZ,AZE,031,Azerbaijan,,AS,AZN,994,false
+BA,BIH,070,Bosnia & Herzegovina,,EU,BAM,387,false
+BB,BRB,052,Barbados,,NA,BBD,1,false
+BD,BGD,050,Bangladesh,,AS,BDT,880,false
+BE,BEL,056,Belgium,,EU,EUR,32,true
+BF,BFA,854,Burkina Faso,,AF,XOF,226,false
+BG,BGR,100,Bulgaria,,EU,EUR,359,true
+BH,BHR,048,Bahrain,,AS,BHD,973,false
+BI,BDI,108,Burundi,,AF,BIF,257,false
+BJ,BEN,204,Benin,,AF,XOF,229,false
+BL,BLM,652,St. Barthélemy,,NA,EUR,590,false
+BM,BMU,060,Bermuda,,NA,BMD,1,false
+BN,BRN,096,Brunei,,AS,BND,673,false
+BO,BOL,068,Bolivia,,SA,BOB,591,false
+BQ,BES,535,Caribbean Netherlands,,NA,USD,599,false
+BR,BRA,076,Brazil,,SA,BRL,55,false
+BS,BHS,044,Bahamas,,NA,BSD,1,false
+BT,BTN,064,Bhutan,,AS,BTN,975,false
+BV,BVT,074,Bouvet Island,,AN,NOK,,false
+BW,BWA,072,Botswana,,AF,BWP,267,false
+BY,BLR,112,Belarus,,EU,BYN,375,false
+BZ,BLZ,084,Belize,,NA,BZD,501,false
+CA,CAN,124,Canada,,NA,CAD,1,false
+CC,CCK,166,Cocos (Keeling) Islands,,AS,AUD,61,false
+CD,COD,180,Congo - Kinshasa,,AF,CDF,243,false
+CF,CAF,140,Central African Republic,,AF,XAF,236,false
+CG,COG,178,Congo - Brazzaville,,AF,XAF,242,false
+CH,CHE,756,Switzerland,,EU,CHF,41,false
+CI,CIV,384,Côte d’Ivoire,,AF,XOF,225,false
+CK,COK,184,Cook Islands,,OC,NZD,682,false
+CL,CHL,152,Chile,,SA,CLP,56,false
+CM,CMR,120,Cameroon,,AF,XAF,237,false
+CN,CHN,156,China,,AS,CNY,86,false
+CO,COL,170,Colombia,,SA,COP,57,false
+CR,CRI,188,Costa Rica,,NA,CRC,506,false
+CU,CUB,192,Cuba,,NA,CUP,53,false
+CV,CPV,132,Cape Verde,,AF,CVE,238,false
+CW,CUW,531,Curaçao,,NA,XCG,599,false
+CX,CXR,162,Christmas Island,,OC,AUD,61,false
+CY,CYP,196,Cyprus,,EU,EUR,357,true
+CZ,CZE,203,Czechia,,EU,CZK,420,true
+DE,DEU,276,Germany,,EU,EUR,49,true
+DJ,DJI,262,Djibouti,,AF,DJF,253,false
+DK,DNK,208,Denmark,,EU,DKK,45,true
+DM,DMA,212,Dominica,,NA,XCD,1,false
+DO,DOM,214,Dominican Republic,,NA,DOP,1,false
+DZ,DZA,012,Algeria,,AF,DZD,213,false
+EC,ECU,218,Ecuador,,SA,USD,593,false
+EE,EST,233,Estonia,,EU,EUR,372,true
+EG,EGY,818,Egypt,,AF,EGP,20,false
+EH,ESH,732,Western Sahara,,AF,MAD,212,false
+ER,ERI,232,Eritrea,,AF,ERN,291,false
+ES,ESP,724,Spain,,EU,EUR,34,true
+ET,ETH,231,Ethiopia,,AF,ETB,251,false
+FI,FIN,246,Finland,,EU,EUR,358,true
+FJ,FJI,242,Fiji,,OC,FJD,679,false
+FK,FLK,238,Falkland Islands,,SA,FKP,500,false
+FM,FSM,583,Micronesia,,OC,USD,691,false
+FO,FRO,234,Faroe Islands,,EU,DKK,298,false
+FR,FRA,250,France,,EU,EUR,33,true
+GA,GAB,266,Gabon,,AF,XAF,241,false
+GB,GBR,826,United Kingdom,,EU,GBP,44,false
+GD,GRD,308,Grenada,,NA,XCD,1,false
+GE,GEO,268,Georgia,,AS,GEL,995,false
+GF,GUF,254,French Guiana,,SA,EUR,594,false
+GG,GGY,831,Guernsey,,EU,GBP,44,false
+GH,GHA,288,Ghana,,AF,GHS,233,false
+GI,GIB,292,Gibraltar,,EU,GIP,350,false
+GL,GRL,304,Greenland,,NA,DKK,299,false
+GM,GMB,270,Gambia,,AF,GMD,220,false
+GN,GIN,324,Guinea,,AF,GNF,224,false
+GP,GLP,312,Guadeloupe,,NA,EUR,590,false
+GQ,GNQ,226,Equatorial Guinea,,AF,XAF,240,false
+GR,GRC,300,Greece,,EU,EUR,30,true
+GS,SGS,239,South Georgia & South Sandwich Islands,,AN,GBP,,false
+GT,GTM,320,Guatemala,,NA,GTQ,502,false
+GU,GUM,316,Guam,,OC,USD,1,false
+GW,GNB,624,Guinea-Bissau,,AF,XOF,245,false
+GY,GUY,328,Guyana,,SA,GYD,592,false
+HK,HKG,344,Hong Kong SAR China,,AS,HKD,852,false
+HM,HMD,334,Heard & McDonald Islands,,AN,AUD,,false
+HN,HND,340,Honduras,,NA,HNL,504,false
+HR,HRV,191,Croatia,,EU,EUR,385,true
+HT,HTI,332,Haiti,,NA,HTG,509,false
+HU,HUN,348,Hungary,,EU,HUF,36,true
+ID,IDN,360,Indonesia,,AS,IDR,62,false
+IE,IRL,372,Ireland,,EU,EUR,353,true
+IL,ISR,376,Israel,,AS,ILS,972,false
+IM,IMN,833,Isle of Man,,EU,GBP,44,false
+IN,IND,356,India,,AS,INR,91,false
+IO,IOT,086,British Indian Ocean Territory,,AS,USD,246,false
+IQ,IRQ,368,Iraq,,AS,IQD,964,false
+IR,IRN,364,Iran,,AS,IRR,98,false
+IS,ISL,352,Iceland,,EU,ISK,354,false
+IT,ITA,380,Italy,,EU,EUR,39,true
+JE,JEY,832,Jersey,,EU,GBP,44,false
+JM,JAM,388,Jamaica,,NA,JMD,1,false
+JO,JOR,400,Jordan,,AS,JOD,962,false
+JP,JPN,392,Japan,,AS,JPY,81,false
+KE,KEN,404,Kenya,,AF,KES,254,false
+KG,KGZ,417,Kyrgyzstan,,AS,KGS,996,false
+KH,KHM,116,Cambodia,,AS,KHR,855,false
+KI,KIR,296,Kiribati,,OC,AUD,686,false
+KM,COM,174,Comoros,,AF,KMF,269,false
+KN,KNA,659,St. Kitts & Nevis,,NA,XCD,1,false
+KP,PRK,408,North Korea,,AS,KPW,850,false
+KR,KOR,410,South Korea,,AS,KRW,82,false
+KW,KWT,414,Kuwait,,AS,KWD,965,false
+KY,CYM,136,Cayman Islands,,NA,KYD,1,false
+KZ,KAZ,398,Kazakhstan,,AS,KZT,7,false
+LA,LAO,418,Laos,,AS,LAK,856,false
+LB,LBN,422,Lebanon,,AS,LBP,961,false
+LC,LCA,662,St. Lucia,,NA,XCD,1,false
+LI,LIE,438,Liechtenstein,,EU,CHF,423,false
+LK,LKA,144,Sri Lanka,,AS,LKR,94,false
+LR,LBR,430,Liberia,,AF,LRD,231,false
+LS,LSO,426,Lesotho,,AF,ZAR,266,false
+LT,LTU,440,Lithuania,,EU,EUR,370,true
+LU,LUX,442,Luxembourg,,EU,EUR,352,true
+LV,LVA,428,Latvia,,EU,EUR,371,true
+LY,LBY,434,Libya,,AF,LYD,218,false
+MA,MAR,504,Morocco,,AF,MAD,212,false
+MC,MCO,492,Monaco,,EU,EUR,377,false
+MD,MDA,498,Moldova,,EU,MDL,373,false
+ME,MNE,499,Montenegro,,EU,EUR,382,false
+MF,MAF,663,St. Martin,,NA,EUR,590,false
+MG,MDG,450,Madagascar,,AF,MGA,261,false
+MH,MHL,584,Marshall Islands,,OC,USD,692,false
+MK,MKD,807,North Macedonia,,EU,MKD,389,false
+ML,MLI,466,Mali,,AF,XOF,223,false
+MM,MMR,104,Myanmar (Burma),,AS,MMK,95,false
+MN,MNG,496,Mongolia,,AS,MNT,976,false
+MO,MAC,446,Macao SAR China,,AS,MOP,853,false
+MP,MNP,580,Northern Mariana Islands,,OC,USD,1,false
+MQ,MTQ,474,Martinique,,NA,EUR,596,false
+MR,MRT,478,Mauritania,,AF,MRU,222,false
+MS,MSR,500,Montserrat,,NA,XCD,1,false
+MT,MLT,470,Malta,,EU,EUR,356,true
+MU,MUS,480,Mauritius,,AF,MUR,230,false
+MV,MDV,462,Maldives,,AS,MVR,960,false
+MW,MWI,454,Malawi,,AF,MWK,265,false
+MX,MEX,484,Mexico,,NA,MXN,52,false
+MY,MYS,458,Malaysia,,AS,MYR,60,false
+MZ,MOZ,508,Mozambique,,AF,MZN,258,false
+NA,NAM,516,Namibia,,AF,NAD,264,false
+NC,NCL,540,New Caledonia,,OC,XPF,687,false
+NE,NER,562,Niger,,AF,XOF,227,false
+NF,NFK,574,Norfolk Island,,OC,AUD,672,false
+NG,NGA,566,Nigeria,,AF,NGN,234,false
+NI,NIC,558,Nicaragua,,NA,NIO,505,false
+NL,NLD,528,Netherlands,,EU,EUR,31,true
+NO,NOR,578,Norway,,EU,NOK,47,false
+NP,NPL,524,Nepal,,AS,NPR,977,false
+NR,NRU,520,Nauru,,OC,AUD,674,false
+NU,NIU,570,Niue,,OC,NZD,683,false
+NZ,NZL,554,New Zealand,,OC,NZD,64,false
+OM,OMN,512,Oman,,AS,OMR,968,false
+PA,PAN,591,Panama,,NA,PAB,507,false
+PE,PER,604,Peru,,SA,PEN,51,false
+PF,PYF,258,French Polynesia,,OC,XPF,689,false
+PG,PNG,598,Papua New Guinea,,OC,PGK,675,false
+PH,PHL,608,Philippines,,AS,PHP,63,false
+PK,PAK,586,Pakistan,,AS,PKR,92,false
+PL,POL,616,Poland,,EU,PLN,48,true
+PM,SPM,666,St. Pierre & Miquelon,,NA,EUR,508,false
+PN,PCN,612,Pitcairn Islands,,OC,NZD,870,false
+PR,PRI,630,Puerto Rico,,NA,USD,1,false
+PS,PSE,275,Palestinian Territories,,AS,ILS,970,false
+PT,PRT,620,Portugal,,EU,EUR,351,true
+PW,PLW,585,Palau,,OC,USD,680,false
+PY,PRY,600,Paraguay,,SA,PYG,595,false
+QA,QAT,634,Qatar,,AS,QAR,974,false
+RE,REU,638,Réunion,,AF,EUR,262,false
+RO,ROU,642,Romania,,EU,RON,40,true
+RS,SRB,688,Serbia,,EU,RSD,381,false
+RU,RUS,643,Russia,,EU,RUB,7,false
+RW,RWA,646,Rwanda,,AF,RWF,250,false
+SA,SAU,682,Saudi Arabia,,AS,SAR,966,false
+SB,SLB,090,Solomon Islands,,OC,SBD,677,false
+SC,SYC,690,Seychelles,,AF,SCR,248,false
+SD,SDN,729,Sudan,,AF,SDG,249,false
+SE,SWE,752,Sweden,,EU,SEK,46,true
+SG,SGP,702,Singapore,,AS,SGD,65,false
+SH,SHN,654,St. Helena,,AF,SHP,290,false
+SI,SVN,705,Slovenia,,EU,EUR,386,true
+SJ,SJM,744,Svalbard & Jan Mayen,,EU,NOK,47,false
+SK,SVK,703,Slovakia,,EU,EUR,421,true
+SL,SLE,694,Sierra Leone,,AF,SLE,232,false
+SM,SMR,674,San Marino,,EU,EUR,378,false
+SN,SEN,686,Senegal,,AF,XOF,221,false
+SO,SOM,706,Somalia,,AF,SOS,252,false
+SR,SUR,740,Suriname,,SA,SRD,597,false
+SS,SSD,728,South Sudan,,AF,SSP,211,false
+ST,STP,678,São Tomé & Príncipe,,AF,STN,239,false
+SV,SLV,222,El Salvador,,NA,USD,503,false
+SX,SXM,534,Sint Maarten,,NA,XCG,599,false
+SY,SYR,760,Syria,,AS,SYP,963,false
+SZ,SWZ,748,Eswatini,,AF,SZL,268,false
+TC,TCA,796,Turks & Caicos Islands,,NA,USD,1,false
+TD,TCD,148,Chad,,AF,XAF,235,false
+TF,ATF,260,French Southern Territories,,AN,EUR,,false
+TG,TGO,768,Togo,,AF,XOF,228,false
+TH,THA,764,Thailand,,AS,THB,66,false
+TJ,TJK,762,Tajikistan,,AS,TJS,992,false
+TK,TKL,772,Tokelau,,OC,NZD,690,false
+TL,TLS,626,Timor-Leste,,OC,USD,670,false
+TM,TKM,795,Turkmenistan,,AS,TMT,993,false
+TN,TUN,788,Tunisia,,AF,TND,216,false
+TO,TON,776,Tonga,,OC,TOP,676,false
+TR,TUR,792,Türkiye,,AS,TRY,90,false
+TT,TTO,780,Trinidad & Tobago,,NA,TTD,1,false
+TV,TUV,798,Tuvalu,,OC,AUD,688,false
+TW,TWN,158,Taiwan,,AS,TWD,886,false
+TZ,TZA,834,Tanzania,,AF,TZS,255,false
+UA,UKR,804,Ukraine,,EU,UAH,380,false
+UG,UGA,800,Uganda,,AF,UGX,256,false
+UM,UMI,581,U.S. Outlying Islands,,OC,USD,1,false
+US,USA,840,United States,,NA,USD,1,false
+UY,URY,858,Uruguay,,SA,UYU,598,false
+UZ,UZB,860,Uzbekistan,,AS,UZS,998,false
+VA,VAT,336,Vatican City,,EU,EUR,379,false
+VC,VCT,670,St. Vincent & Grenadines,,NA,XCD,1,false
+VE,VEN,862,Venezuela,,SA,VES,58,false
+VG,VGB,092,British Virgin Islands,,NA,USD,1,false
+VI,VIR,850,U.S. Virgin Islands,,NA,USD,1,false
+VN,VNM,704,Vietnam,,AS,VND,84,false
+VU,VUT,548,Vanuatu,,OC,VUV,678,false
+WF,WLF,876,Wallis & Futuna,,OC,XPF,681,false
+WS,WSM,882,Samoa,,OC,WST,685,false
+XK,,,Kosovo,,EU,EUR,,false
+YE,YEM,887,Yemen,,AS,YER,967,false
+YT,MYT,175,Mayotte,,AF,EUR,262,false
+ZA,ZAF,710,South Africa,,AF,ZAR,27,false
+ZM,ZMB,894,Zambia,,AF,ZMW,260,false
+ZW,ZWE,716,Zimbabwe,,AF,ZWG,263,false

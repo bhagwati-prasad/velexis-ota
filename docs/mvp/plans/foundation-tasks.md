@@ -519,8 +519,8 @@ Related: [`../decisions.md`](../decisions.md) (binding), [`../architecture.md`](
   - The script refuses to run on a host with `/etc/velexis`.
 - **Verify:** `shellcheck -S style deploy/scripts/dev-setup.sh && bash deploy/scripts/dev-setup.sh && node tools/dev/dev-keys.mjs && ls -l .local/keys`
 
-### X-017 · Vendor the reference datasets
-- **Status:** todo
+### X-017 · Vendor the reference datasets ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** foundation
 - **Milestone:** M0
 - **Depends on:** X-001
