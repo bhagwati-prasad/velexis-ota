@@ -693,7 +693,7 @@ Related: [`../decisions.md`](../decisions.md) (binding), [`../architecture.md`](
 - **Verify:** `bash deploy/caddy/test/caddy-smoke.sh`
 
 ### X-023 · Build the release pipeline and deploy the hello world
-- **Status:** in progress (branch claude/intelligent-bardeen-90hhu7; pending: a GitHub CI run with `deploy.test.sh` green in the `deploy-files` job (AC1, the CI half); human step 5, the `production` environment and the first **Deploy** from `main`, which needs X-013 integrated first because the M0 release carries the tenant migrations and `migrate.js tenants` (AC2); human step 6, the hello-world record: certificate and maintenance page, `velexis-deploy --status`, the ledgers with the baselines and `R__ota_read_access` as `velexis_migrator` (AC3); a second **Deploy** of the same sha that changes nothing (AC4))
+- **Status:** in progress (branch claude/intelligent-bardeen-90hhu7; pending: a GitHub CI run with `deploy.test.sh` green in the `deploy-files` job (AC1, the CI half); human step 5, the `production` environment and the first **Deploy** from `main` (AC2; X-013, which the M0 release needs for `migrate.js tenants`, is now integrated on this branch); human step 6, the hello-world record: certificate and maintenance page, `velexis-deploy --status`, the ledgers with the baselines and `R__ota_read_access` as `velexis_migrator` (AC3); a second **Deploy** of the same sha that changes nothing (AC4))
 - **Component:** foundation
 - **Milestone:** M0
 - **Depends on:** X-012, X-020, X-022
