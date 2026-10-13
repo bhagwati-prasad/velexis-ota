@@ -2,11 +2,14 @@
 # =====================================================================================================
 # pack-release.sh — assemble one self-contained release folder from a BUILT workspace (runs in CI).
 #
-# TEMPLATE: finalised by task X-023. Used by .github/workflows/deploy.yml after `pnpm build`.
+# Used by the build job of .github/workflows/deploy.yml after `pnpm build` (task X-023), and as a dry run by ci.yml.
 # Usage:   bash deploy/scripts/pack-release.sh [out-root]        -> <out-root>/<git-sha>/  (default: release/)
+# SHA256SUMS lists every regular file; velexis-deploy (deploy.sh) refuses an upload with a changed, missing or
+# unlisted file, so nothing may be added to the folder after this script.
 #
-# Layout of a release (docs/mvp/deployment-single-vm.md §8). Apps that do not exist yet are skipped, so
-# the M0 "hello world" release only holds the migrations, the migration CLI, a placeholder storefront and deploy/.
+# Layout of a release (docs/mvp/deployment-single-vm.md §8). Apps that do not exist yet are skipped, so the
+# same script packs the M0 "hello world" (migrations, the migration CLI, the apps scaffolded so far, the storefront
+# or its placeholder page, deploy/) and the full system.
 #   RELEASE.json            sha, ref, build time, Node version, list of apps
 #   SHA256SUMS              checksums of every file (verified by deploy.sh before anything runs)
 #   deploy/                 copy of deploy/ (units, Caddyfile, scripts; deploy.sh installs them as root)

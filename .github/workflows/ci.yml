@@ -1,10 +1,11 @@
 # CI for every pull request and every push to main (ADR-0015, ADR-0020).
-# Jobs: plan-lint (no install), deploy-files (shellcheck, Caddyfile validation and its end-to-end smoke test, systemd
-# units and their sandbox exposure), systemd-units (the real units run a stand-in app under systemd; a failure alert
-# reaches Mailpit), dev-setup (docs/mvp/local-development.md §2 on a clean runner: PostgreSQL 16 and Redis 7.4 from
-# apt, dev-setup.sh and dev-keys.mjs twice), build-test (repository guards and tools/ci/check-package-json.mjs before
-# the install, then install, the tools/ci tests, format, lint, typecheck, unit, contracts up to date, integration
-# with PostgreSQL 16 + Redis 7.4 + Mailpit, build, release dry run).
+# Jobs: plan-lint (no install), deploy-files (shellcheck, Caddyfile validation and its end-to-end smoke test, the
+# velexis-deploy test with a fake systemctl, systemd units and their sandbox exposure), systemd-units (the real
+# units run a stand-in app under systemd; a failure alert reaches Mailpit), dev-setup (docs/mvp/local-development.md
+# §2 on a clean runner: PostgreSQL 16 and Redis 7.4 from apt, dev-setup.sh and dev-keys.mjs twice), build-test
+# (repository guards and tools/ci/check-package-json.mjs before the install, then install, the tools/ci tests,
+# format, lint, typecheck, unit, contracts up to date, integration with PostgreSQL 16 + Redis 7.4 + Mailpit, build,
+# release dry run).
 # Agents never change this file to get their own change through (AGENTS.md §7). What each guard enforces and how to
 # run it locally: tools/ci/README.md.
 # Third-party actions are pinned to full commit SHAs with the tag as the last thing in the comment, so Dependabot
@@ -58,9 +59,9 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          node-version-file: .nvmrc # the echo upstream of the Caddyfile smoke test
+          node-version-file: .nvmrc # the echo upstream of the Caddyfile smoke test and the fake apps of deploy.test.sh
       - name: shellcheck deploy scripts
-        run: shellcheck -S style deploy/scripts/*.sh deploy/systemd/test/*.sh deploy/caddy/test/*.sh
+        run: shellcheck -S style deploy/scripts/*.sh deploy/scripts/test/*.sh deploy/systemd/test/*.sh deploy/caddy/test/*.sh
       - name: Validate the Caddyfile with Caddy ${{ env.CADDY_VERSION }}
         run: |
           curl -fsSL -o /tmp/caddy.tgz "https://github.com/caddyserver/caddy/releases/download/v${CADDY_VERSION}/caddy_${CADDY_VERSION}_linux_amd64.tar.gz"
@@ -71,6 +72,9 @@ jobs:
       - name: Caddyfile smoke test (local CA, test ports, echo upstream)
         # X-022: the real Caddyfile with a test global options block; see the header of caddy-smoke.sh.
         run: CADDY=/tmp/caddy bash deploy/caddy/test/caddy-smoke.sh
+      - name: velexis-deploy test (temporary VM root, fake systemctl and apps, no root)
+        # X-023: deploy.sh against fake releases (happy path, refusals, rollbacks, pruning); see deploy.test.sh's header.
+        run: bash deploy/scripts/test/deploy.test.sh
       - name: Verify systemd units
         run: |
           # Off the VM only the missing /usr/bin/node and helper paths are reported; anything else fails.
