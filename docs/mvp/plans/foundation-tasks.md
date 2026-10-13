@@ -365,8 +365,8 @@ Related: [`../decisions.md`](../decisions.md) (binding), [`../architecture.md`](
   - `migrate.js platform --dir <missing folder>` prints a notice on stderr, applies nothing and exits 0 (unit test in `files.test.ts`).
 - **Verify:** `pnpm --filter @velexis/db build && pnpm --filter @velexis/db test && pnpm --filter @velexis/db test:int`
 
-### X-012 · Add the baseline migrations and the OTA read grants
-- **Status:** todo
+### X-012 · Add the baseline migrations and the OTA read grants ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** foundation
 - **Milestone:** M0
 - **Depends on:** X-011

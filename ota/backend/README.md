@@ -27,6 +27,7 @@ ota/backend/
 │   ├── velexis-ota-booking-api.openapi.yaml    source of truth (ADR-0006)
 │   └── README.md                                how to change it (X-006)
 ├── migrations/
+│   ├── README.md                                naming, headers, expand/contract, how to run (X-012)
 │   └── tenant/
 │       ├── 0001_baseline.sql                    byte copy of docs/velexis-sdk/db/tenant.sql
 │       └── 0002_add_mvp_tenant_deltas.sql       ../docs/data-model-migration-0002.md

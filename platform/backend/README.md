@@ -26,9 +26,11 @@ platform/backend/
 ├── openapi/
 │   └── velexis-platform-api.openapi.yaml       source of truth for every endpoint (ADR-0006)
 ├── migrations/
+│   ├── README.md                               naming, headers, expand/contract, how to run (X-012)
 │   ├── platform/
 │   │   ├── 0001_baseline.sql                   byte copy of docs/velexis-sdk/db/platform.sql
-│   │   └── 0002_add_mvp_platform_deltas.sql    ../docs/data-model-migration-0002*.md
+│   │   ├── 0002_add_mvp_platform_deltas.sql    ../docs/data-model-migration-0002*.md
+│   │   └── R__ota_read_access.sql              repeatable: SELECT grants of velexis_ota_app (ADR-0021)
 │   └── reference/
 │       └── 0001_baseline.sql                   byte copy of docs/velexis-sdk/db/reference.sql
 ├── src/
