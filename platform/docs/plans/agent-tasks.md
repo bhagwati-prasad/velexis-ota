@@ -72,7 +72,8 @@ Common commands: backend `pnpm --filter @velexis/platform-backend test`, `test:i
   - No `NEXT_PUBLIC_` variable exists; the config test refuses a missing `PLATFORM_API_URL`.
 - **Verify:** `pnpm --filter @velexis/platform-frontend build && pnpm --filter @velexis/platform-frontend test && pnpm --filter @velexis/platform-frontend lint`
 
-### PAD-001 · Scaffold the platform admin Next.js app with health routes
+### PAD-001 · Scaffold the platform admin Next.js app with health routes ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-admin
 - **Milestone:** M0
 - **Depends on:** X-002, X-003

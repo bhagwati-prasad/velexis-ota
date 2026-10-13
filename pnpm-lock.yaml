@@ -202,6 +202,58 @@ importers:
         specifier: 3.2.7
         version: 3.2.7(@types/node@22.20.5)(happy-dom@17.6.3)(jiti@2.7.0)(lightningcss@1.30.2)(yaml@2.9.1)
 
+  platform/admin:
+    dependencies:
+      '@tanstack/react-table':
+        specifier: 8.21.3
+        version: 8.21.3(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
+      '@velexis/config':
+        specifier: workspace:*
+        version: link:../../packages/config
+      lucide-react:
+        specifier: 1.48.0
+        version: 1.48.0(react@19.2.8)
+      next:
+        specifier: 15.5.27
+        version: 15.5.27(@opentelemetry/api@1.9.0)(@types/node@22.20.5)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
+      openapi-fetch:
+        specifier: 0.13.8
+        version: 0.13.8
+      react:
+        specifier: 19.2.8
+        version: 19.2.8
+      react-dom:
+        specifier: 19.2.8
+        version: 19.2.8(react@19.2.8)
+      server-only:
+        specifier: 0.0.1
+        version: 0.0.1
+      zod:
+        specifier: 3.25.76
+        version: 3.25.76
+    devDependencies:
+      '@tailwindcss/postcss':
+        specifier: 4.1.18
+        version: 4.1.18
+      '@types/node':
+        specifier: 22.20.5
+        version: 22.20.5
+      '@types/react':
+        specifier: 19.2.18
+        version: 19.2.18
+      '@types/react-dom':
+        specifier: 19.2.7
+        version: 19.2.7(@types/react@19.2.18)
+      tailwindcss:
+        specifier: 4.1.18
+        version: 4.1.18
+      typescript:
+        specifier: 5.6.3
+        version: 5.6.3
+      vitest:
+        specifier: 3.2.7
+        version: 3.2.7(@types/node@22.20.5)(happy-dom@17.6.3)(jiti@2.7.0)(lightningcss@1.30.2)(yaml@2.9.1)
+
   platform/frontend:
     dependencies:
       '@radix-ui/react-slot':
@@ -1117,6 +1169,17 @@ packages:
 
   '@tailwindcss/postcss@4.1.18':
     resolution: {integrity: sha512-Ce0GFnzAOuPyfV5SxjXGn0CubwGcuDB0zcdaPuCSzAa/2vII24JTkH+I6jcbXLb1ctjZMZZI6OjDaLPJQL1S0g==}
+
+  '@tanstack/react-table@8.21.3':
+    resolution: {integrity: sha512-5nNMTSETP4ykGegmVkhjcS8tTLW6Vl4axfEGQN3v0zdHYbK4UfoqfPChclTrJ4EoK9QynqAu9oUf8VEmrpZ5Ww==}
+    engines: {node: '>=12'}
+    peerDependencies:
+      react: '>=16.8'
+      react-dom: '>=16.8'
+
+  '@tanstack/table-core@8.21.3':
+    resolution: {integrity: sha512-ldZXEhOBb8Is7xLs01fR3YEc3DERiz5silj8tnGkFZytt1abEvl/GhUmCE0PMLaMPTa3Jk4HbKmRlHmu+gCftg==}
+    engines: {node: '>=12'}
 
   '@testing-library/dom@10.4.2':
     resolution: {integrity: sha512-yzr2S9HyAIdhz2/6qHgbs665Q7PKVcDF05vsOlHPxG1mo36gKVesdYVeDLnXgfjJ03CrKRk08knc6+E/9m8v2Q==}
@@ -3629,6 +3692,14 @@ snapshots:
       '@tailwindcss/oxide': 4.1.18
       postcss: 8.5.30
       tailwindcss: 4.1.18
+
+  '@tanstack/react-table@8.21.3(react-dom@19.2.8(react@19.2.8))(react@19.2.8)':
+    dependencies:
+      '@tanstack/table-core': 8.21.3
+      react: 19.2.8
+      react-dom: 19.2.8(react@19.2.8)
+
+  '@tanstack/table-core@8.21.3': {}
 
   '@testing-library/dom@10.4.2':
     dependencies:
