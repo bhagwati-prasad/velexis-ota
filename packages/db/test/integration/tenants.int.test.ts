@@ -2,10 +2,14 @@
 // README §3 and §4): migrateTenantSchema and `migrate.js tenant` for one schema, migrateTenants and
 // `migrate.js tenants` for the fan-out over platform.tenants.
 //
-// Every test gets a fresh database `velexis_dbtest_<random>`, created as TEST_DATABASE_ADMIN_URL and bootstrapped
-// like deploy/postgres/bootstrap.sql: the database section (psql variables there) is mirrored below, the statements
-// after `\connect :db_name` are read from bootstrap.sql itself. The platform and reference baselines of the
-// repository are applied with runMigrations, and a plan is added for the tenant rows. The CLI runs as
+// Every test gets a fresh database `velexis_dbtest_<random>`, created as TEST_DATABASE_ADMIN_URL as a copy of
+// one template `velexis_dbtest_tpl_<random>` that this file builds once (beforeAll). The template is bootstrapped
+// like deploy/postgres/bootstrap.sql: the database section (psql variables there) is mirrored below, the
+// statements after `\connect :db_name` are read from bootstrap.sql itself. The platform and reference baselines of
+// the repository are applied with runMigrations, and a plan is added for the tenant rows. PostgreSQL copies
+// everything inside a database to its clone, but not the database ACL, so every clone gets the database grants
+// again. A clone takes a fraction of a second, where bootstrapping and migrating a database from template0 took
+// more than Vitest's 10 s hook timeout while the other integration test files ran in parallel. The CLI runs as
 // velexis_migrator (DATABASE_MIGRATOR_URL with the database name swapped, as velexis-deploy does); provisioning
 // runs the library with the DATABASE_PROVISIONER_URL of the root .env.example, as the OTA worker does. The app
 // roles log in with the development DSNs of ota/backend/.env.example and platform/backend/.env.example (dummy values
@@ -16,7 +20,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { defineConfig, env, loadDevEnvFiles } from "@velexis/config";
 import pg from "pg";
-import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { runMigrateCli } from "../../src/cli/migrate.js";
 import { sql, type Kysely, type TenantDatabase } from "../../src/index.js";
 import {
@@ -136,16 +140,34 @@ interface TestDatabase {
   drop(): Promise<void>;
 }
 
-/** A database bootstrapped like bootstrap.sql, with the repository's platform and reference sets applied. */
-async function createTestDatabase(): Promise<TestDatabase> {
-  const urls = testUrls();
-  const name = `velexis_dbtest_${randomBytes(6).toString("hex")}`;
+/**
+ * The databases this file created and has not dropped yet. afterAll drops what is left, also the database of a
+ * beforeEach that Vitest gave up on: its setup goes on after the hook's timeout and still creates the database.
+ */
+const liveDatabases = new Set<string>();
+/** Every setup started by beforeAll or beforeEach; afterAll waits for them to settle before it drops. */
+const setups: Promise<unknown>[] = [];
+
+async function dropDatabase(admin: string, name: string): Promise<void> {
+  await withClient(admin, async (client) => {
+    await client.query(`DROP DATABASE IF EXISTS ${pg.escapeIdentifier(name)} WITH (FORCE)`);
+  });
+  liveDatabases.delete(name);
+}
+
+/**
+ * Creates `name` owned by velexis_migrator, as a copy of `template`, with the database-level grants of
+ * bootstrap.sql. A clone needs them again: PostgreSQL does not copy the database ACL.
+ */
+async function createDatabase(admin: string, name: string, template: string): Promise<void> {
   const database = pg.escapeIdentifier(name);
-  await withClient(urls.admin, async (client) => {
-    await client.query(
-      `CREATE DATABASE ${database} OWNER velexis_migrator ENCODING 'UTF8' ` +
-        `LC_COLLATE 'C.UTF-8' LC_CTYPE 'C.UTF-8' TEMPLATE template0`,
-    );
+  const options =
+    template === "template0"
+      ? "ENCODING 'UTF8' LC_COLLATE 'C.UTF-8' LC_CTYPE 'C.UTF-8' TEMPLATE template0"
+      : `TEMPLATE ${pg.escapeIdentifier(template)}`;
+  liveDatabases.add(name);
+  await withClient(admin, async (client) => {
+    await client.query(`CREATE DATABASE ${database} OWNER velexis_migrator ${options}`);
     await client.query(`REVOKE ALL ON DATABASE ${database} FROM PUBLIC`);
     await client.query(
       `GRANT CONNECT, TEMPORARY ON DATABASE ${database} TO velexis_platform_app, velexis_ota_app`,
@@ -153,6 +175,56 @@ async function createTestDatabase(): Promise<TestDatabase> {
     await client.query(`GRANT CONNECT, TEMPORARY, CREATE ON DATABASE ${database} TO velexis_provisioner`);
     await client.query(`GRANT ALL ON DATABASE ${database} TO velexis_migrator`);
   });
+}
+
+/**
+ * The template of this file's test databases: a database bootstrapped like bootstrap.sql, with the repository's
+ * platform and reference sets applied and the plan of the tenant rows. Every connection to it is closed when this
+ * returns, so that CREATE DATABASE … TEMPLATE can copy it.
+ */
+async function createTemplateDatabase(): Promise<string> {
+  const urls = testUrls();
+  const name = `velexis_dbtest_tpl_${randomBytes(6).toString("hex")}`;
+  await createDatabase(urls.admin, name, "template0");
+  try {
+    const statements = await bootstrapDatabaseStatements();
+    await withClient(withDatabase(urls.admin, name), async (admin) => {
+      await admin.query("BEGIN");
+      await admin.query("SET LOCAL ROLE velexis_migrator");
+      for (const statement of statements) {
+        await admin.query(statement);
+      }
+      await admin.query("COMMIT");
+    });
+    for (const set of ["platform", "reference"] as const) {
+      await runMigrations({
+        set,
+        dir: join(REPO, "platform", "backend", "migrations", set),
+        url: withDatabase(urls.migrator, name),
+      });
+    }
+    const platformUrl = await roleUrl(
+      "platform/backend/.env.example",
+      "DATABASE_URL",
+      "velexis_platform_app",
+      urls.admin,
+      name,
+    );
+    await withClient(platformUrl, async (client) => {
+      await client.query("INSERT INTO platform.plans (code, name) VALUES ('starter', 'Starter')");
+    });
+  } catch (error) {
+    await dropDatabase(urls.admin, name);
+    throw error;
+  }
+  return name;
+}
+
+/** A copy of the template: bootstrapped like bootstrap.sql, with the platform and reference sets applied. */
+async function createTestDatabase(template: string): Promise<TestDatabase> {
+  const urls = testUrls();
+  const name = `velexis_dbtest_${randomBytes(6).toString("hex")}`;
+  await createDatabase(urls.admin, name, template);
   const adminUrl = withDatabase(urls.admin, name);
   const admin = new pg.Client({ connectionString: adminUrl, application_name: "velexis-db-int-test" });
   admin.on("error", () => undefined);
@@ -172,31 +244,11 @@ async function createTestDatabase(): Promise<TestDatabase> {
     query: async (text, values) => (await admin.query(text, values)).rows,
     drop: async () => {
       await admin.end().catch(() => undefined);
-      await withClient(
-        urls.admin,
-        async (client) => void (await client.query(`DROP DATABASE IF EXISTS ${database} WITH (FORCE)`)),
-      );
+      await dropDatabase(urls.admin, name);
     },
   };
   try {
     await admin.connect();
-    const statements = await bootstrapDatabaseStatements();
-    await admin.query("BEGIN");
-    await admin.query("SET LOCAL ROLE velexis_migrator");
-    for (const statement of statements) {
-      await admin.query(statement);
-    }
-    await admin.query("COMMIT");
-    for (const set of ["platform", "reference"] as const) {
-      await runMigrations({
-        set,
-        dir: join(REPO, "platform", "backend", "migrations", set),
-        url: db.migratorUrl,
-      });
-    }
-    await withClient(db.platformUrl, async (client) => {
-      await client.query("INSERT INTO platform.plans (code, name) VALUES ('starter', 'Starter')");
-    });
   } catch (error) {
     await db.drop();
     throw error;
@@ -204,20 +256,41 @@ async function createTestDatabase(): Promise<TestDatabase> {
   return db;
 }
 
+let template: string;
 let db: TestDatabase;
 const folders: string[] = [];
 
+// Timeouts. Bootstrapping and migrating a database from template0 takes about 0.7 s on an idle server, but it
+// took more than Vitest's 10 s default hook timeout while turbo ran the integration test files of every package in
+// parallel against the same server (a slowdown of 15x and more). It now runs once per file, with 60 s. A clone
+// (CREATE DATABASE … TEMPLATE, then the grants) takes 0.1 to 0.4 s on an idle server; the same slowdown would bring
+// it close to the default, so beforeEach gets 30 s.
+beforeAll(async () => {
+  const setup = createTemplateDatabase();
+  setups.push(setup);
+  template = await setup;
+}, 60_000);
+
 beforeEach(async () => {
-  db = await createTestDatabase();
-});
+  const setup = createTestDatabase(template);
+  setups.push(setup);
+  db = await setup;
+}, 30_000);
 
 afterEach(async () => {
   await db?.drop();
 });
 
+// Drops what this file created and has not dropped yet: the template, and the database of a setup that outlived
+// its hook's timeout (waited for first, so that it cannot create its database after this ran).
 afterAll(async () => {
+  await Promise.allSettled(setups);
+  const { admin } = testUrls();
+  for (const name of [...liveDatabases].reverse()) {
+    await dropDatabase(admin, name);
+  }
   await Promise.all(folders.map((dir) => rm(dir, { recursive: true, force: true })));
-});
+}, 60_000);
 
 async function scratchFolder(): Promise<string> {
   const dir = await mkdtemp(join(tmpdir(), "velexis-tenants-int-"));
