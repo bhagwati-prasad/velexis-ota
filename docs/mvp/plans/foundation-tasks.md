@@ -756,7 +756,7 @@ Related: [`../decisions.md`](../decisions.md) (binding), [`../architecture.md`](
 ## M1 Platform core
 
 ### X-024 · Finalise backups and run the first off-VM backup
-- **Status:** todo
+- **Status:** in progress (branch claude/intelligent-bardeen-90hhu7; pending: human step 3, the bucket, the age keys and the rclone remote on the VM and the first `systemctl start velexis-backup`: the set in `<remote>/daily/<date>/` with `rclone check` and the marker file (AC2), no private age key on the VM (AC3), a delete refused by the bucket (AC4); step 4, the VM's duration and sizes in §10)
 - **Component:** foundation
 - **Milestone:** M1
 - **Depends on:** X-023
