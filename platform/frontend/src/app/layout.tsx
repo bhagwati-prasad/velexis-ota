@@ -3,6 +3,13 @@ import type { ReactNode } from "react";
 
 import "./globals.css";
 
+/**
+ * Every page renders per request: the Content-Security-Policy of `middleware.ts` carries a fresh nonce, and
+ * Next.js can only put that nonce on the inline scripts of a page it renders for the request. A prerendered page
+ * would keep scripts without it, which the policy blocks (README §7).
+ */
+export const dynamic = "force-dynamic";
+
 export const metadata: Metadata = {
   title: { default: "Velexis", template: "%s · Velexis" },
   description: "Create and run your own online travel agency with Velexis.",

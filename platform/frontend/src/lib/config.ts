@@ -24,6 +24,13 @@ const DOMAIN_NAME =
 const HTTP_URL = { protocols: ["http:", "https:"] } as const;
 
 /**
+ * The first-party key shared with the platform API (PADR-0019): at least 32 characters of `[A-Za-z0-9_-]`
+ * (`provision-vm.sh` generates 64 hex characters, `.env.example` has a dummy value). It refuses an empty value and
+ * the unsubstituted `@@PLATFORM_BFF_KEY@@` placeholder of the deploy template.
+ */
+const BFF_KEY = /^[A-Za-z0-9_-]{32,}$/;
+
+/**
  * The portal's configuration (README §8, configuration matrix in docs/mvp/architecture.md §6). Every variable is
  * read on the server only; the portal has no browser-exposed variables. Later tasks add their entries here.
  */
@@ -34,6 +41,11 @@ export const PORTAL_CONFIG_SCHEMA = {
   HOSTNAME: env.string({ pattern: BIND_HOST, default: "127.0.0.1" }),
   /** Platform API base URL, called from server code only (loopback on the VM). */
   PLATFORM_API_URL: env.url(HTTP_URL),
+  /**
+   * Sent as `X-Velexis-Bff-Key` on every API call, so the API believes the forwarded end-user IP and user agent
+   * (PADR-0019). A secret: never logged, never sent anywhere but `PLATFORM_API_URL`.
+   */
+  PLATFORM_BFF_KEY: env.string({ pattern: BFF_KEY }),
   PUBLIC_PORTAL_URL: env.url(HTTP_URL),
   PUBLIC_OTA_ADMIN_URL: env.url(HTTP_URL),
   /** Storefront parent domain: an OTA's sub-domain is `<key>.<STOREFRONT_BASE_DOMAIN>`. */

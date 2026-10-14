@@ -754,7 +754,8 @@ Common commands: backend `pnpm --filter @velexis/platform-backend test`, `test:i
   - The test runs in CI after the `Build` step, and fails clearly (not by timeout) when `ota/backend/dist/worker.js` is missing.
 - **Verify:** `pnpm --filter @velexis/ota-backend build && pnpm --filter @velexis/platform-backend test:xb`
 
-### PFE-002 · Add the API client, session cookies and middleware to the portal
+### PFE-002 · Add the API client, session cookies and middleware to the portal ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-frontend
 - **Milestone:** M1
 - **Depends on:** PFE-001, PBE-005

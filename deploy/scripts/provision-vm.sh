@@ -57,7 +57,7 @@ SUDOERS_DIR="$VELEXIS_ROOT/etc/sudoers.d"
 SECRETS_FILE="$ETC/.provision-secrets"   # generated passwords, root 0600, reused on every run
 LOG_FILE=""                              # $LOGS/provision.log once the folder exists
 # The generated values: names in .provision-secrets and @@NAME@@ placeholders in deploy/env and deploy/redis.
-SECRET_NAMES="MIGRATOR_DB_PASSWORD PROVISIONER_DB_PASSWORD PLATFORM_DB_PASSWORD OTA_DB_PASSWORD REDIS_PASSWORD EDGE_SECRET OTA_ADMIN_SERVICE_KEY"
+SECRET_NAMES="MIGRATOR_DB_PASSWORD PROVISIONER_DB_PASSWORD PLATFORM_DB_PASSWORD OTA_DB_PASSWORD REDIS_PASSWORD EDGE_SECRET OTA_ADMIN_SERVICE_KEY PLATFORM_BFF_KEY"
 
 # One system user per trust zone (ADR-0026). An API and its worker share their zone's user.
 PLATFORM_USER=velexis-platform             # velexis-platform-api, velexis-platform-worker; keys/platform
@@ -499,6 +499,8 @@ load_or_create_secrets() {
     grep -q "^${name}=" "$SECRETS_FILE" || echo "${name}=$(gen_secret)" >> "$SECRETS_FILE"
   done
   grep -q '^OTA_ADMIN_SERVICE_KEY=' "$SECRETS_FILE" || echo "OTA_ADMIN_SERVICE_KEY=sk_svc_$(gen_secret)" >> "$SECRETS_FILE"
+  # Shared by the platform API, the portal and the platform admin; at least 32 random bytes (PADR-0019).
+  grep -q '^PLATFORM_BFF_KEY=' "$SECRETS_FILE" || echo "PLATFORM_BFF_KEY=$(openssl rand -hex 32)" >> "$SECRETS_FILE"
   umask 022
   # shellcheck disable=SC1090
   . "$SECRETS_FILE"

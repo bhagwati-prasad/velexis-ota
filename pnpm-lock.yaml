@@ -531,9 +531,15 @@ importers:
       '@radix-ui/react-slot':
         specifier: 1.3.3
         version: 1.3.3(@types/react@19.2.18)(react@19.2.8)
+      '@velexis/api-types':
+        specifier: workspace:*
+        version: link:../../packages/api-types
       '@velexis/config':
         specifier: workspace:*
         version: link:../../packages/config
+      '@velexis/errors':
+        specifier: workspace:*
+        version: link:../../packages/errors
       class-variance-authority:
         specifier: 0.7.1
         version: 0.7.1

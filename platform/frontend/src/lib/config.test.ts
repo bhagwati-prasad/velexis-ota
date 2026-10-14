@@ -19,11 +19,15 @@ const DEVELOPMENT = {
   PORT: "3000",
   HOSTNAME: "127.0.0.1",
   PLATFORM_API_URL: "http://127.0.0.1:3100",
+  PLATFORM_BFF_KEY: "dev_bff_key_change_me_0123456789abcdef",
   PUBLIC_PORTAL_URL: "http://localhost:3000",
   PUBLIC_OTA_ADMIN_URL: "http://localhost:3002",
   STOREFRONT_BASE_DOMAIN: "ota.example.com",
   SENTRY_DSN: "",
 } as const;
+
+/** What provision-vm.sh puts in place of @@PLATFORM_BFF_KEY@@ on the VM: 32 random bytes as hex (dummy here). */
+const GENERATED_BFF_KEY = "0123456789abcdef".repeat(4);
 
 function configError(source: Record<string, string | undefined>): ConfigError {
   try {
@@ -66,6 +70,7 @@ describe("parseConfig", () => {
     const config = parseConfig({
       APP_ENV: "test",
       PLATFORM_API_URL: DEVELOPMENT.PLATFORM_API_URL,
+      PLATFORM_BFF_KEY: DEVELOPMENT.PLATFORM_BFF_KEY,
       PUBLIC_PORTAL_URL: DEVELOPMENT.PUBLIC_PORTAL_URL,
       PUBLIC_OTA_ADMIN_URL: DEVELOPMENT.PUBLIC_OTA_ADMIN_URL,
       STOREFRONT_BASE_DOMAIN: DEVELOPMENT.STOREFRONT_BASE_DOMAIN,
@@ -77,6 +82,7 @@ describe("parseConfig", () => {
       PORT: 3000,
       HOSTNAME: "127.0.0.1",
       PLATFORM_API_URL: "http://127.0.0.1:3100",
+      PLATFORM_BFF_KEY: "dev_bff_key_change_me_0123456789abcdef",
       PUBLIC_PORTAL_URL: "http://localhost:3000",
       PUBLIC_OTA_ADMIN_URL: "http://localhost:3002",
       STOREFRONT_BASE_DOMAIN: "ota.example.com",
@@ -155,14 +161,44 @@ describe("parseConfig", () => {
 
     expect(config.APP_ENV).toBe("development");
     expect(config.PLATFORM_API_URL).toBe("http://127.0.0.1:3100");
+    expect(config.PLATFORM_BFF_KEY).toBe("dev_bff_key_change_me_0123456789abcdef");
   });
 
-  it("accepts the VM template with the PORT and HOSTNAME of the systemd unit", () => {
+  it("accepts the VM template with the PORT and HOSTNAME of the systemd unit and the generated key", () => {
     const template = readEnvFile(join(REPO_ROOT, "deploy/env/platform-frontend.env.example"));
-    const config = parseConfig({ ...template, PORT: "3000", HOSTNAME: "127.0.0.1" });
+    const config = parseConfig({
+      ...template,
+      PORT: "3000",
+      HOSTNAME: "127.0.0.1",
+      PLATFORM_BFF_KEY: GENERATED_BFF_KEY,
+    });
 
+    expect(template.PLATFORM_BFF_KEY).toBe("@@PLATFORM_BFF_KEY@@");
     expect(config.APP_ENV).toBe("production");
     expect(config.PUBLIC_PORTAL_URL).toBe("https://platform.example.com");
+    expect(config.PLATFORM_BFF_KEY).toBe(GENERATED_BFF_KEY);
+  });
+
+  it("requires PLATFORM_BFF_KEY (PADR-0019)", () => {
+    const error = configError({ ...DEVELOPMENT, PLATFORM_BFF_KEY: undefined });
+
+    expect(error.problems).toEqual([{ variable: "PLATFORM_BFF_KEY", reason: "is required but missing" }]);
+  });
+
+  it("refuses an empty, short or unsubstituted PLATFORM_BFF_KEY without echoing it", () => {
+    for (const value of [
+      "",
+      "@@PLATFORM_BFF_KEY@@",
+      "short_key_value_31_characters_x",
+      "key with spaces 0123456789abcdef0123",
+    ]) {
+      const error = configError({ ...DEVELOPMENT, PLATFORM_BFF_KEY: value });
+
+      expect(error.problems.map((problem) => problem.variable)).toEqual(["PLATFORM_BFF_KEY"]);
+      if (value !== "") {
+        expect(error.message).not.toContain(value);
+      }
+    }
   });
 });
 

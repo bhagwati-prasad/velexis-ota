@@ -98,10 +98,12 @@ platform/frontend/src/
   lib/utils.ts                          cn(): class-name merge helper used by the shadcn/ui copies
   lib/api.ts                            openapi-fetch client, bearer from cookies, server-only
   lib/session.ts                        cookie read/write, single-flight refresh, server-only
+  lib/end-user.ts                       end-user IP, user agent and BFF key headers (PADR-0019), server-only
   lib/errors.ts                         API error code → user message
+  lib/csp.ts                            nonce and Content-Security-Policy of every response
   lib/roles.ts                          role matrix for navigation (mirrors the backend)
-  lib/strings.ts                        UI strings (English)
-  middleware.ts                         auth redirects, access token refresh, unverified redirect
+  lib/strings.ts                        UI strings (English), including one message per error code
+  middleware.ts                         access token refresh, auth and unverified redirects, CSP (Node.js runtime)
 ```
 
 ## 4. Components
@@ -133,7 +135,15 @@ platform/frontend/src/
 - **Polling** (setup page, credential submissions) uses a client component that calls a server action every 2 seconds and stops at a final state.
 - **Errors** map codes to messages in `lib/errors.ts`; `error.tsx` per area; raw messages from the API are never shown.
 - **External navigations** (Checkout, Customer Portal, Connect authorise URL) are `redirect()` calls in server actions with URLs returned by the API, never assembled in the browser.
-- **End-user IP and user agent.** The API's per-IP rate limits and audit rows need the visitor's address, not the portal server's. `lib/api.ts` sends on every call, including the refresh in `middleware.ts`: `X-Velexis-End-User-IP` (the right-most `X-Forwarded-For` entry, which Caddy sets; `127.0.0.1` when there is none in development), `X-Velexis-End-User-Agent` (the browser's `User-Agent`, at most 512 characters) and `X-Velexis-Bff-Key` (`PLATFORM_BFF_KEY`). A browser-supplied left-most `X-Forwarded-For` entry is never used ([PADR-0019](../docs/adr/0019-end-user-ip-forwarding-from-the-portal-and-admin.md)).
+- **The API client** (`lib/api.ts`, `server-only`). `platformApi()` returns the client for the request being rendered: `openapi-fetch` typed by `@velexis/api-types/platform`, base URL `PLATFORM_API_URL`, `Authorization: Bearer` from `__Host-vxp_at` (none without a session), the request's `X-Request-Id` when it is valid (Caddy sets one on every request; `middleware.ts` creates one in development), `cache: "no-store"`, and `redirect: "manual"` so the bearer token never follows a redirect. `createPlatformApi({ baseUrl, bffKey, requestHeaders, accessToken? })` builds the same client from explicit values; `middleware.ts` uses it for the refresh. Every method (`GET`, `POST`, `PUT`, `PATCH`, `DELETE`) takes the path and options of `openapi-fetch` (a caller's `baseUrl`, `fetch`, `Request`, `cache` and `redirect` are dropped, so the token only ever goes to `PLATFORM_API_URL` and nothing is cached) and answers `{ data }` or `{ error }`, never throws: `error` is `{ code, status, fieldErrors, details, requestId?, retryAfterSeconds? }`, where `code` is always a code of the platform catalogue (an answer without a valid envelope becomes `SERVICE_UNAVAILABLE` for 502, 503 and 504 or an unreachable API, and `INTERNAL_ERROR` otherwise). The API's `message` and the `message` of each field error are dropped on purpose, so a page can only show the portal's own text.
+
+  ```ts
+  const api = await platformApi();
+  const me = await api.GET("/v1/me");                   // typed by the platform document
+  if (me.error) return { message: errorMessage(me.error) };
+  const updated = await api.PATCH("/v1/me", { body: { fullName }, params: { header: { "If-Match": etag } } });
+  ```
+- **End-user IP and user agent.** The API's per-IP rate limits and audit rows need the visitor's address, not the portal server's. `lib/api.ts` sends on every call, including the refresh in `middleware.ts`: `X-Velexis-End-User-IP` (the right-most `X-Forwarded-For` entry, which Caddy sets; `127.0.0.1` when there is none in development), `X-Velexis-End-User-Agent` (the browser's `User-Agent`, at most 512 characters) and `X-Velexis-Bff-Key` (`PLATFORM_BFF_KEY`). A browser-supplied left-most `X-Forwarded-For` entry is never used ([PADR-0019](../docs/adr/0019-end-user-ip-forwarding-from-the-portal-and-admin.md)). The headers are set after the caller's own headers, so a caller cannot replace them. The address is passed on as Caddy wrote it; the API answers a malformed one with `400 VALIDATION_FAILED`, so a proxy misconfiguration shows at once.
 
 ## 6. Auth cookies and session
 
@@ -145,14 +155,31 @@ platform/frontend/src/
 | `__Host-vxp_reset`, `__Host-vxp_invite` | Reset or invitation token moved out of the URL | 15 minutes | same, `SameSite=Strict` |
 | `__Host-vxp_next` | Validated relative return path | 15 minutes | same |
 
-- `middleware.ts` refreshes an expired access token before rendering. Refresh is **single-flighted** inside the one portal process (in-memory map keyed by the refresh token hash, 10 s), so parallel requests never present a rotated token twice and trip reuse detection.
-- Unauthenticated `(app)` requests redirect to `/sign-in?next=…`; unverified accounts go to `/verify-pending`.
+`lib/session.ts` (`server-only`) owns the names and attributes. `sessionCookies(session)` gives both session cookies of a `PortalSession`, each living as long as its token (`accessTokenExpiresAt`, at most 15 minutes; `refreshTokenExpiresAt`, the refresh token's idle expiry and never after the family's 30 days); `mfaChallengeCookie`, `passwordResetCookie`, `invitationCookie` and `nextPathCookie` give the flow cookies; `writeCookies(sink, writes)` writes them to `cookies()` (actions, route handlers) or `NextResponse#cookies` (middleware), and `setSession()` / `clearSession()` do it for the session in one call. Cookies are deleted by `clearedCookie(name)`: an empty value with the same attributes and `Max-Age=0`, because a browser ignores a `__Host-` deletion without `Secure` (which `cookies().delete()` would send).
+
+- `middleware.ts` refreshes an access token that is missing, unreadable or expires within 30 seconds before rendering, when a refresh token is there. It reads `exp` and `ev` from the token without checking the signature (the API checks it on every call; a forged cookie gets no further than pages whose calls answer 401). The new tokens are set on the response **and** replace the old ones in the request's own `Cookie` header, so the page rendered for that request already uses them; an expired access token is never passed on to a page.
+- Refresh is **single-flighted** inside the one portal process (`refresh()`, an in-memory map keyed by the SHA-256 of the refresh token): every request that presents the same refresh token while the call is pending, or within 10 seconds after it succeeded or failed for good, gets the same outcome without a second call, so parallel requests never present a rotated token twice and trip reuse detection. The middleware runs in the Node.js runtime (`export const config = { runtime: "nodejs" }`), in the portal process itself, which is what makes the map shared by all requests.
+- `REFRESH_TOKEN_INVALID`, `REFRESH_TOKEN_REUSED`, `VALIDATION_FAILED` and `UNAUTHENTICATED` end the session: both cookies are deleted. A failure that may pass (rate limit, API unavailable) keeps the cookies and is not remembered, so the next request tries again; the request itself continues without a session.
+- Unauthenticated requests for the `(app)` area (`/dashboard`, `/otas`, `/console`, `/account` and below) get `303` to `PUBLIC_PORTAL_URL/sign-in?next=<path and query>`; an account whose token says `ev: false` gets `303` to `/verify-pending`. Other paths (public pages, the `(auth)` pages, route handlers outside `(app)`) pass with or without a session.
+- **`next` is a relative path only.** `safeNextPath()` keeps a value only when it starts with a single `/`, has no backslash or control character, is at most 2 048 characters long, and resolves to the portal's own origin; `https://evil.example/x`, `//evil.example`, `/\evil.example` and the like are dropped. The middleware applies it to the `next` it writes, `nextPathCookie()` to the value it stores, and the sign-in pages to the value they redirect to.
 - Server actions rely on Next.js's Origin check; route handlers that change state check `Origin` against `PUBLIC_PORTAL_URL` explicitly.
 - No `NEXT_PUBLIC_` variable holds a key or token. Client components never import `lib/api.ts` or `lib/session.ts`.
 
 ## 7. Security headers
 
 Set in `next.config` `headers()` and middleware: CSP with a per-request nonce (`script-src 'self' 'nonce-…'`, `connect-src 'self'`, `img-src 'self' data:`, `form-action 'self'` plus the origin of `PUBLIC_OTA_ADMIN_URL` (`https://admin.ota.example.com` in production), `frame-ancestors 'none'`, `base-uri 'self'`, `object-src 'none'`), `Referrer-Policy: strict-origin-when-cross-origin` (`no-referrer` on token pages), `X-Content-Type-Options: nosniff`, `Permissions-Policy` minimal. Stripe pages are reached by navigation, never framed.
+
+The policy of `lib/csp.ts`, set by `middleware.ts` on every response it handles (pages, server actions, route handlers, redirects) with a fresh 128-bit nonce:
+
+```text
+default-src 'self'; script-src 'self' 'nonce-<nonce>'; style-src 'self' 'unsafe-inline'; img-src 'self' data:;
+font-src 'self'; connect-src 'self'; form-action 'self' <origin of PUBLIC_OTA_ADMIN_URL>; frame-ancestors 'none';
+base-uri 'self'; object-src 'none'
+```
+
+- The middleware also puts the policy and the nonce (`x-nonce`) on the request headers; Next.js reads the nonce from there and adds it to every script it renders. A server component that renders its own `<script>` reads `x-nonce` from `headers()`.
+- **Every page is rendered per request** (`export const dynamic = "force-dynamic"` in the root layout): a prerendered page would keep inline scripts without the nonce, and the policy would block them.
+- `'unsafe-eval'` is added to `script-src` only when `APP_ENV=development`, because `next dev` evaluates modules with `eval`. Inline styles are allowed (`style` attributes of components such as Radix); inline scripts never are.
 
 | Header | Value | Where |
 |---|---|---|
@@ -167,7 +194,7 @@ Set in `next.config` `headers()` and middleware: CSP with a per-request nonce (`
 
 See [`.env.example`](.env.example). On the VM they come from `/etc/velexis/platform-frontend.env` (template [`deploy/env/platform-frontend.env.example`](../../deploy/env/platform-frontend.env.example)). Variables: `APP_ENV`, `LOG_LEVEL`, `PORT` (3000), `HOSTNAME` (`127.0.0.1`), `PLATFORM_API_URL`, `PLATFORM_BFF_KEY` (shared with the API, PADR-0019), `PUBLIC_PORTAL_URL`, `PUBLIC_OTA_ADMIN_URL`, `STOREFRONT_BASE_DOMAIN`, `SENTRY_DSN`. All read in server code through `@velexis/config`.
 
-`src/lib/config.ts` (`import "server-only"`) declares the schema `PORTAL_CONFIG_SCHEMA`; later tasks add their entries there (`PLATFORM_BFF_KEY` comes with PFE-002).
+`src/lib/config.ts` (`import "server-only"`) declares the schema `PORTAL_CONFIG_SCHEMA`; later tasks add their entries there.
 
 | Variable | Rule | Default |
 |---|---|---|
@@ -176,6 +203,7 @@ See [`.env.example`](.env.example). On the VM they come from `/etc/velexis/platf
 | `PORT` | 1–65535 | `3000` |
 | `HOSTNAME` | host name or IP literal to bind | `127.0.0.1` |
 | `PLATFORM_API_URL` | absolute `http:` or `https:` URL | required |
+| `PLATFORM_BFF_KEY` | at least 32 characters of `A–Z a–z 0–9 _ -`; the same value as the platform API and the platform admin. `provision-vm.sh` generates it (64 hex characters) in place of the template's `@@PLATFORM_BFF_KEY@@`, which is refused as a value. A secret: never logged, only sent to `PLATFORM_API_URL` as `X-Velexis-Bff-Key` ([PADR-0019](../docs/adr/0019-end-user-ip-forwarding-from-the-portal-and-admin.md)). | required |
 | `PUBLIC_PORTAL_URL`, `PUBLIC_OTA_ADMIN_URL` | absolute `http:` or `https:` URL; `https:` when `APP_ENV=production` | required |
 | `STOREFRONT_BASE_DOMAIN` | lower-case DNS name with at least two labels (`ota.example.com`) | required |
 | `SENTRY_DSN` | `https:` URL; unset or empty switches error tracking off | optional |
@@ -192,7 +220,7 @@ See [`.env.example`](.env.example). On the VM they come from `/etc/velexis/platf
 | `pnpm --filter @velexis/platform-frontend dev` | Next.js dev server on `127.0.0.1:3000` (needs the platform API on 3100; configuration from the root `.env.local`, §8) |
 | `pnpm --filter @velexis/platform-frontend build` | Standalone build: `.next/standalone/platform/frontend/server.js` plus `.next/static` (`outputFileTracingRoot` is the repository root, as `deploy/scripts/pack-release.sh` expects) |
 | `pnpm --filter @velexis/platform-frontend start` | Local smoke run of the production build with `next start` on `127.0.0.1:3000` (Next.js warns that standalone output is meant for `server.js`; the VM runs `node platform/frontend/server.js` from the release, unit `velexis-portal.service`) |
-| `pnpm --filter @velexis/platform-frontend test` | Vitest in Node: configuration and route handler tests (`src/**/*.test.ts`), with `fetch` mocked and fake timers. Testing Library for client components and form states arrives with the first client components (PFE-003). |
+| `pnpm --filter @velexis/platform-frontend test` | Vitest in Node: configuration, route handler, API client, session, middleware and error-message tests (`src/**/*.test.ts`), with `fetch` mocked and fake timers. Testing Library for client components and form states arrives with the first client components (PFE-003). |
 | `pnpm --filter @velexis/platform-frontend lint` / `typecheck` | ESLint with the root flat config (Next.js rules included) / `tsc --noEmit` (strict, path alias `@/*` → `src/*`) |
 | `pnpm test:e2e -- --project=portal` | Playwright journeys in `tools/e2e` |
 
@@ -201,6 +229,13 @@ See [`.env.example`](.env.example). On the VM they come from `/etc/velexis/platf
 **postcss override.** Next.js 15 pins `postcss` 8.4.31, which has high-severity advisories (source-map path traversal). The root `package.json` overrides `next>postcss` to the patched version already used by Vite, so `pnpm audit --prod` stays clean for all three Next.js apps. Remove the override once Next.js ships a patched `postcss`.
 
 **Tests in Node.** `server-only` throws outside the `react-server` export condition, which only Next.js sets, so `vitest.config.ts` maps it to the package's own empty module. The `@/` alias matches `tsconfig.json`.
+
+**What the API, session and middleware tests prove** (PFE-002). `fetch` is a Vitest mock; the tests build `NextRequest`s and read what `NextResponse.next({ request })` hands to the page from its `x-middleware-request-*` headers.
+
+- `src/lib/session.test.ts`: five parallel refreshes of one token make one call; the outcome is reused for 10 seconds after it settled, a pending call stays shared however long it takes, failures that may pass are forgotten; the cookie names and attributes (`Set-Cookie` lines as Next.js writes them); `safeNextPath` drops absolute, protocol-relative and malformed values; and a scan of `src/` fails when a `"use client"` module imports `lib/api` or `lib/session`, directly, by type only, dynamically or through other local modules (a `"use server"` module ends the search), with fixtures proving each case is caught.
+- `src/middleware.test.ts`: five parallel requests with an expired access token cause one refresh call and all five see the new tokens; redirects to `/sign-in?next=…` and `/verify-pending`; cookies deleted only when the refresh token is dead; the exact policy, a new nonce per request, `'unsafe-eval'` only in development; the matcher skips static files and the health routes.
+- `src/lib/end-user.test.ts` and `src/lib/api.test.ts`: the right-most `X-Forwarded-For` entry, the `127.0.0.1` fallback, the 512-character user agent, the three headers on every mocked call (a caller cannot replace them), the bearer token, `no-store`, no redirect following (a caller cannot change the base URL, cache mode or redirect handling), and the normalised `{ data }` / `{ error }` answers.
+- `src/lib/errors.test.ts`: every code of `PLATFORM_ERROR_CODES` (generated from the platform document into `@velexis/errors`) has a message, and no message exists for another code, so a new code in the document fails the test until `lib/strings.ts` has its text.
 
 **Adding a shadcn/ui component.** From `platform/frontend`, run the CLI pinned to the 2.x line of [`tech-stack.md`](../../docs/mvp/tech-stack.md), for example `pnpm dlx shadcn@2.10.0 add dialog`. `components.json` sends the copy to `src/components/ui/` with the `new-york` style, CSS variables and lucide icons. The CLI adds the component's dependencies with `^` ranges: make them exact in `package.json` before committing (`tools/ci/check-package-json.mjs` fails otherwise), and copy the change to the platform admin and the OTA admin when the design tokens in `globals.css` change ([ADR-0014](../../docs/mvp/adr/0014-frontend-stack-nextjs-tailwind.md)).
 
