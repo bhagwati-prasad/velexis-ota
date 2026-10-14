@@ -4,7 +4,7 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import { ESLint } from "eslint";
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import { APP_DIR } from "./config";
 
 const REPO_ROOT = join(APP_DIR, "..", "..");
@@ -32,6 +32,13 @@ describe("lint rules of the OTA backend", () => {
     ruleFilter: ({ ruleId }) => RULES.some((rule) => rule === ruleId),
     overrideConfig: { languageOptions: { parserOptions: { projectService: false, project: null } } },
   });
+
+  // Loading the root config with its plugins and parser is most of the work (about 1 s here, 10 s under a full
+  // parallel `pnpm test`). It happens once, in this hook with its own timeout, as in the platform backend's
+  // package.test.ts, so the first test below measures only its own lint and a loaded machine cannot time it out.
+  beforeAll(async () => {
+    await eslint.calculateConfigForFile(join(APP_DIR, "src/main.ts"));
+  }, 60_000);
 
   it("reports console.* and process.env in this package's code", async () => {
     const [result] = await eslint.lintText(
