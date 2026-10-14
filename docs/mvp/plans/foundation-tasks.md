@@ -432,8 +432,8 @@ Related: [`../decisions.md`](../decisions.md) (binding), [`../architecture.md`](
   - Re-running applies nothing.
 - **Verify:** `pnpm --filter @velexis/db build && pnpm --filter @velexis/db test:int`
 
-### X-014 · Generate Kysely table types with pnpm db:codegen
-- **Status:** todo
+### X-014 · Generate Kysely table types with pnpm db:codegen ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** foundation
 - **Milestone:** M0
 - **Depends on:** X-013

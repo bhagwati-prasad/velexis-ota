@@ -2,6 +2,7 @@
 // set with set_config(..., true), the parameterised form of SET LOCAL. tenantTx is the only way in.
 import { Kysely, PostgresDialect, sql, type Transaction } from "kysely";
 import type pg from "pg";
+import type { TenantDatabase } from "./generated/tenant.js";
 import { assertTenantSchema } from "./tenant-schema.js";
 
 /** `statement_timeout` of a tenant transaction unless the caller passes another one. */
@@ -58,9 +59,10 @@ declare const tenantTables: unique symbol;
 
 /**
  * An opaque handle on a pool for tenant transactions, created by `createTenantDb`. It has no query methods:
- * tenant tables are reachable only inside `tenantTx`, never through an unscoped Kysely instance.
+ * tenant tables are reachable only inside `tenantTx`, never through an unscoped Kysely instance. `DB` defaults to
+ * the generated `TenantDatabase` (`pnpm db:codegen`, X-014).
  */
-export class TenantDb<DB> {
+export class TenantDb<DB = TenantDatabase> {
   /** Type-only: the tenant table types, so handles of different databases do not mix. Never set. */
   declare readonly [tenantTables]?: DB;
   readonly #kysely: Kysely<DB>;
@@ -84,8 +86,15 @@ export class TenantDb<DB> {
 /**
  * Creates the tenant database handle over `pool` (the OTA backend's pool, role `velexis_ota_app`). The pool
  * stays the caller's: end it with `pool.end()` at shutdown.
+ *
+ * `DB` defaults to the generated `TenantDatabase`: the tenant tables and the reference tables by unqualified
+ * name, and the reference tables as `reference.<table>`, which is what the `search_path` of `tenantTx`
+ * (`<schema>, reference`) resolves. Platform tables are not part of it.
  */
-export function createTenantDb<DB>(pool: pg.Pool, options: CreateTenantDbOptions = {}): TenantDb<DB> {
+export function createTenantDb<DB = TenantDatabase>(
+  pool: pg.Pool,
+  options: CreateTenantDbOptions = {},
+): TenantDb<DB> {
   return newTenantDb<DB>(pool, options.appEnv !== "production");
 }
 

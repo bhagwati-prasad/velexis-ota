@@ -37,6 +37,8 @@
     "migrate": "node dist/cli/migrate.js platform --dir ../../platform/backend/migrations/platform && node dist/cli/migrate.js reference --dir ../../platform/backend/migrations/reference",
     "premigrate:tenants": "tsc -b",
     "migrate:tenants": "node dist/cli/migrate.js tenants --dir ../../ota/backend/migrations/tenant",
+    "precodegen": "tsc -b",
+    "codegen": "node scripts/codegen.mjs",
     "clean": "tsc -b --clean"
   },
   "dependencies": {
@@ -48,6 +50,7 @@
   "devDependencies": {
     "@types/node": "22.20.5",
     "@types/pg": "8.23.1",
+    "kysely-codegen": "0.18.5",
     "typescript": "5.6.3",
     "vitest": "3.2.7"
   }
