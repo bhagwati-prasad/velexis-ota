@@ -847,8 +847,8 @@ Related: [`../decisions.md`](../decisions.md) (binding), [`../architecture.md`](
   - `stop()` frees the port, so the same test can run twice in one process.
 - **Verify:** `pnpm --filter @velexis/testing test:int`
 
-### X-035 · Report remaining work and done markers in plan-lint
-- **Status:** todo
+### X-035 · Report remaining work and done markers in plan-lint ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** foundation
 - **Milestone:** M1
 - **Depends on:** X-001

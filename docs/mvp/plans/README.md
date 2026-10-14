@@ -2,7 +2,7 @@
 
 This page lists every plan file of the Velexis MVP, says which question each one answers, and shows how they relate. There is one master roadmap, one foundation task plan, and three plans for each component group (platform and OTA): an implementation plan, an agent task plan and a solo developer plan. All plans use the shared milestones M0–M6 of [`../README.md`](../README.md#1-shared-milestones) and follow [`../decisions.md`](../decisions.md). The two plan styles (agent tasks and week by week) come from [ADR-0020](../adr/0020-ai-agent-development-workflow.md). How they are combined into one calendar is recorded in [ADR-0025](../adr/0025-roadmap-scheduling-and-tracking.md).
 
-Related: [`roadmap.md`](roadmap.md), [`../../../AGENTS.md`](../../../AGENTS.md) (how agents pick and finish tasks), [`../../../tools/plan-lint/plan-lint.mjs`](../../../tools/plan-lint/plan-lint.mjs) (validation), [`../README.md`](../README.md) (all MVP documents).
+Related: [`roadmap.md`](roadmap.md), [`../../../AGENTS.md`](../../../AGENTS.md) (how agents pick and finish tasks), [`../../../tools/plan-lint/plan-lint.mjs`](../../../tools/plan-lint/plan-lint.mjs) (validation and progress, [README](../../../tools/plan-lint/README.md)), [`../README.md`](../README.md) (all MVP documents).
 
 ## 1. The plan files
 
@@ -45,6 +45,7 @@ flowchart TD
 | Hand a task to an agent | The task block in its agent task plan, plus [`AGENTS.md`](../../../AGENTS.md) §3–§5 |
 | Know why a task exists, or what a milestone must prove | The group's implementation plan (§4 milestones, §6 traceability) |
 | Check dependencies or the critical path | `node tools/plan-lint/plan-lint.mjs --graph` |
+| See progress, or which tasks are ready to pick | `node tools/plan-lint/plan-lint.mjs` (second block), `node tools/plan-lint/plan-lint.mjs --remaining` |
 | See the risks and outside steps | [`roadmap.md`](roadmap.md) §3 and §4.4; the risk tables of each implementation plan |
 | Start the project today | [`roadmap.md`](roadmap.md) §4.1 and §4.2 |
 | See totals per component and milestone | [`roadmap.md`](roadmap.md) §5 |
@@ -54,8 +55,9 @@ flowchart TD
 - **Milestones.** Every plan uses M0–M6 with the meanings of [`../README.md`](../README.md#1-shared-milestones).
 - **Task format.** Task blocks follow [ADR-0020](../adr/0020-ai-agent-development-workflow.md): Component, Milestone, Depends on, Size, Read first, Files, Steps, Acceptance, Verify. Sizes are S (up to 2 h), M (up to 4 h) and L (up to 1 day) of agent and review time.
 - **Ids.** Ids are unique across the three task files. The prefix matches the component (`X`, `PBE`, `PFE`, `PAD`, `OBE`, `OFE`, `OAD`, `SDK`).
-- **Status.** A task's PR adds `- **Status:** in progress (PR #n)`. In the PR's last commit it appends ` ✅` to the heading and sets `done (PR #n)`, so both hold on `main` from the merge on ([ADR-0025](../adr/0025-roadmap-scheduling-and-tracking.md) item 6, which amends [ADR-0020](../adr/0020-ai-agent-development-workflow.md); [`AGENTS.md`](../../../AGENTS.md) §4).
+- **Status.** A task's PR adds `- **Status:** in progress (PR #n)`. In the PR's last commit it appends ` ✅` to the heading and sets `done (PR #n)`, so both hold on `main` from the merge on ([ADR-0025](../adr/0025-roadmap-scheduling-and-tracking.md) item 6, which amends [ADR-0020](../adr/0020-ai-agent-development-workflow.md); [`AGENTS.md`](../../../AGENTS.md) §4). When a task has a Status line, plan-lint reports a ` ✅` without a done status, and a done status without ` ✅`, as errors.
 - **Validation.** `node tools/plan-lint/plan-lint.mjs` runs in CI on every PR that touches a plan and must report `ERRORS: 0`.
+- **Progress.** The second block of `node tools/plan-lint/plan-lint.mjs` counts the done markers: done and total tasks and hours per milestone and per file, the remaining hours, and the critical path of the tasks without ` ✅`. `node tools/plan-lint/plan-lint.mjs --remaining` lists the ready tasks of the lowest open milestone, critical path first ([`tools/plan-lint/README.md`](../../../tools/plan-lint/README.md)).
 
 ## 5. Baseline numbers
 
