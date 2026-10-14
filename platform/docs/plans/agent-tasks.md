@@ -169,7 +169,8 @@ Common commands: backend `pnpm --filter @velexis/platform-backend test`, `test:i
   - A second `pnpm contracts:generate` gives no diff.
 - **Verify:** `pnpm contracts:lint && pnpm contracts:generate && git diff --exit-code packages/api-types/src/generated packages/errors/src/generated`
 
-### PBE-006 · Add tenant, team, API key and M1 resource operations to the OpenAPI document
+### PBE-006 · Add tenant, team, API key and M1 resource operations to the OpenAPI document ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-backend
 - **Milestone:** M1
 - **Depends on:** PBE-005

@@ -33,7 +33,7 @@ The document grows in **milestone slices**, each written before the implementati
 | Slice | Task | Operations | State |
 |---|---|---|---|
 | M1 identity, plans, internal | PBE-005 | Auth (api-inventory §4, 11), account (§5, 9), `listPlans` (§6), `tlsAsk`, `healthLive`, `healthReady` (admin §9): 24 | Done |
-| M1 tenants, team, keys, reads | PBE-006 | 27 | Planned |
+| M1 tenants, team, keys, reads | PBE-006 | Tenants (api-inventory §7 without `goLive`, 9), team (§8 without `createConsoleToken`, 9), API keys (api-inventory-resources §1, 5), `listDomains`, `listAmadeusConnections`, `listPaymentConnections`, `getSubscription`: 27 | Done |
 | M1 admin, part 1 | PBE-007 | 21 | Planned |
 | M1 admin, part 2 | PBE-066 | 26 | Planned |
 | M3–M4 | PBE-037 | 3 | Planned |
@@ -47,6 +47,19 @@ Notes on the PBE-005 slice:
 - The health answers are the ones `HealthService` gives since PBE-001; `HealthReady.queues` (the oldest waiting job per platform queue, api-inventory-admin §9) is optional until the queues exist.
 - `resendVerification` sends a new link and leaves the earlier unexpired links valid, as [PADR-0008](../../docs/adr/0008-email-verification-and-mfa-policy.md) item 3 decides. Step 4 of PBE-013 in the plan says the older tokens are consumed; the ADR wins.
 - Passwords are bounded only in length (1–256): the password rules answer `422 PASSWORD_TOO_WEAK` from the service, so a short password must pass the schema (PBE-013).
+
+Notes on the PBE-006 slice:
+
+- **Conditional step-up.** `createApiKey` and `rollApiKey` need a step-up only for a live secret key, and `updateMember` only when it grants `owner` (the inventory's "live secret keys MFA↑" and "granting owner: MFA↑"). `x-mfa-step-up: true` would put `RecentMfaGuard` on every call, so these operations do not carry it: the service checks the case, and the operations list `REAUTH_REQUIRED` and `MFA_REQUIRED` in their errors.
+- **Roles** of `portal: owner, admin` rows are not an extension: `TenantRoleGuard` reads them from `memberships/tenant-roles.ts` (PADR-0009 item 5), and each operation's description names them. Non-members get `404 NOT_FOUND`, members with another role `403 FORBIDDEN`.
+- `createTenant` already has its M5 shape: `planCode` and `billingInterval` in the request, `checkoutUrl` (always present, `null` before M5) and the optional `checkoutError` in the answer, with an example of each case, so the Ajv example check covers the M5 answers too. It is the only idempotent operation of the slice and also answers `503 SERVICE_UNAVAILABLE` while the idempotency store is down (PBE-009). A malformed key answers `400`; `409 TENANT_KEY_UNAVAILABLE` is for a reserved or used key, as the error catalogue says.
+- `checkTenantKey` accepts any key of 1–64 characters, because a key that breaks the rules answers `200` with `reason: invalid`, not `400`.
+- `Tenant` has `billingNotice` (`tenants.billing_notice`) in addition to the inventory's fields, because the portal dashboard shows the billing banner to every member (PFE-010) and only owners and finance members may call `getSubscription`. api-inventory §7 lists it.
+- `updateApiKey`, `rollApiKey` and `revokeApiKey` answer `409 TENANT_NOT_ACTIVE` too, as `createApiKey` does: [PADR-0014](../../docs/adr/0014-tenant-suspension-and-resume.md) item 5 makes a suspended OTA's keys read-only. api-inventory-resources §1 lists it.
+- **Keys shown once.** `revealInitialKeys`, `createApiKey` and `rollApiKey` answer the full key in `key` (schema `ApiKeySecret`) with `NoStore`. The generic secret check of the contract test cannot key on the name `key` (the OTA key of `Tenant` has the same name), so it follows references to `ApiKeySecret` instead, and the slice test also names these three operations.
+- **API key scopes** are strings with a light pattern, not an enum: the service validates them against the generated OTA `ConsoleApiKeyScope` and `StaffPermission` types (PADR-0005 item 6), and the contract test checks that every value of both OTA enums matches the pattern.
+- Lists that stay short answer `{data}` only, as the inventory says: the caller's OTAs, members and invitations (bounded by the staff seats), API keys, domains and connections. Cursor pagination starts with the admin lists (PBE-007).
+- `AmadeusConnection.ticketingDefaults` has the closed shape of the baseline comment, `{ticketingAgreement: {option, delay}, automatedProcess, issue}` with every property optional (an empty object until set), and a `monitoredQueues` item is `{officeId, queueId, category}`. The M4 update (PBE-037) writes them with the same schemas and may only add optional properties.
 
 ## 3. Conventions
 
@@ -107,18 +120,23 @@ OpenAPI 3.1 allows `x-*` keys everywhere, and Redocly's `recommended` rules acce
 
 - `[PBE-005 AC2]` the operations index lists the 24 operations of the PBE-005 slice with their method, path, scope and `internal`, and `PlatformErrorCode` holds `REAUTH_REQUIRED`, `TENANT_KEY_UNAVAILABLE` and `LIVE_PRECONDITIONS_UNMET` (a type annotation and the generated catalogue);
 - the slice matches the inventory rows (method, path, scope, `MFA↑`, `Idem`, `F:`), documents `no-store` on exactly the seven secret-bearing answers, and documents the health answers `HealthService` gives;
+- `[PBE-006 AC1]` the operations index lists the 27 operations of the PBE-006 slice with their method, path and scope, none of them in the PBE-005 slice, and they match the inventory rows (method, path, scope, `Idem`, `F:`, unconditional and conditional `MFA↑`);
+- `[PBE-006 AC2]` `createTenant` is the slice's only `x-idempotent` operation, and exactly `revealInitialKeys`, `createApiKey` and `rollApiKey` answer a `key` with `no-store`;
+- `[PBE-006 AC3]` no response schema of the slice, and no property of the generated `@velexis/api-types/platform`, has a name ending in `Ciphertext` or `Hash` (in any case); the response checker refuses an API key answer with a `keyHash`;
+- the eleven shared schemas of PBE-006 step 4 exist, are closed, and have no property ending in `secret`, `ciphertext`, `hash`, `password` or `token`;
+- the API key scope pattern accepts every OTA `ConsoleApiKeyScope` and `StaffPermission`, and the onboarding item ids are those of PADR-0018 in its order;
 - the catalogue holds exactly the codes of api-inventory §3 with their statuses, a shared code has the OTA status, and the envelope and `Money` have the OTA shape;
-- on **every** operation of the document, so the later slices are held to the same rules: an `x-scope` of the list, `x-internal` on internal and webhook operations, `security: []` where no bearer token applies, `X-Request-Id` on every response, an `x-platform-tables` list, the `IdempotencyKey` parameter exactly on the `x-idempotent` operations, closed request bodies, `no-store` on every 2xx answer with a secret property, error examples whose code and status agree with the catalogue and with `x-error-codes`, and every response example valid for the Ajv checker of `@velexis/testing` that the integration tests use (strict mode, so a misspelt keyword fails).
+- on **every** operation of the document, so the later slices are held to the same rules: an `x-scope` of the list, `x-internal` on internal and webhook operations, `security: []` where no bearer token applies, `X-Request-Id` on every response, an `x-platform-tables` list, the `IdempotencyKey` parameter exactly on the `x-idempotent` operations, closed request bodies, `no-store` on every 2xx answer with a secret property or a reference to `ApiKeySecret` (a key shown once is answered as `key`, a name it shares with the OTA key of `Tenant`), error examples whose code and status agree with the catalogue and with `x-error-codes`, and every response example valid for the Ajv checker of `@velexis/testing` that the integration tests use (strict mode, so a misspelt keyword fails).
 
 The slice tests name their operations and never count the document, so later slices only add tests of their own. The lint is covered by `[X-007 AC1]` of `@velexis/api-types`, which lints both documents, and the generated files by `[X-008 AC1]` and `[X-009 AC4]`.
 
 ## 7. Lint status
 
-The document lints with **0 errors and 7 warnings**, all expected:
+The document lints with **0 errors and 5 warnings**, all expected:
 
 - `no-server-example.com` on `https://api.platform.example.com`: the placeholder host of every platform document until the domains are chosen;
 - `operation-4xx-response` on `healthLive`, which has no 4xx answer;
-- `no-unused-components` on the parameters `IdempotencyKey`, `Cursor`, `Limit`, `TenantId` and the schema `Page`: shared conventions of PBE-005 that the next slices use (`createTenant`, the tenant lists).
+- `no-unused-components` on the parameters `Cursor`, `Limit` and the schema `Page`: shared conventions of PBE-005 that the paginated admin lists use (PBE-007). PBE-006 brought `IdempotencyKey` and `TenantId` into use.
 
 Fix a warning when a task touches that part anyway; never silence one or relax a rule ([`packages/api-types/README.md`](../../../packages/api-types/README.md#the-rules)).
 
@@ -129,3 +147,4 @@ Every task that changes the document adds one row, newest last. "Breaking" names
 | Task | Milestone | Change | Operations | Breaking |
 |---|---|---|---|---|
 | PBE-005 | M1 | Created: `info`, server, `portalBearer` and `adminBearer`, the OTA error envelope, `Money`, `Page`, the shared parameters and headers, `x-error-catalogue` (52 codes of api-inventory §3), and the identity, plans and internal slice | 24 | no |
+| PBE-006 | M1 | Tenants and lifecycle, team and invitations, API keys, and the M1 reads of domains, connections and the subscription; tags `Tenants`, `Team`, `API keys`, `Domains`, `Connections`, `Billing`; parameters `MemberId`, `InvitationId`, `ApiKeyId`; shared error responses of tenant resources | 27 | no |

@@ -71,6 +71,31 @@ tags:
       change, TOTP set-up and recovery codes, and the account's sessions.
   - name: Plans
     description: The public plan catalogue (`BillingModule`) shown on the pricing page and in the create-OTA wizard.
+  - name: Tenants
+    description: >-
+      OTAs and their lifecycle (`TenantsModule`, `ProvisioningModule`): the key check and the create-OTA wizard, the
+      caller's OTAs, the OTA profile, the setup progress with its retry and the one-time reveal of the test keys, and
+      the onboarding checklist. Tenant resources live under `/v1/tenants/{tenantId}/…` and answer `404 NOT_FOUND` to
+      non-members.
+  - name: Team
+    description: >-
+      The people of an OTA (`MembershipsModule`): members and their roles (the role matrix of platform/docs/scope.md
+      §1.2), invitations by e-mail, and the public lookup and acceptance of an invitation.
+  - name: API keys
+    description: >-
+      The OTA's publishable and secret keys for the OTA booking API (`ApiKeysModule`, PADR-0005): list, create (shown
+      once), rename or change origins, roll and revoke. Only the HMAC of a key is stored.
+  - name: Domains
+    description: >-
+      The OTA's storefront hosts (`DomainsModule`, PADR-0004): the Velexis sub-domain from M1, custom domains with DNS
+      verification from M5.
+  - name: Connections
+    description: >-
+      The OTA's Amadeus connections (`SupplierConnectionsModule`) and Stripe payment connections
+      (`PaymentConnectionsModule`) per environment, always without secrets.
+  - name: Billing
+    description: >-
+      The OTA's subscription to a Velexis plan (`BillingModule`); Checkout and the Customer Portal follow in M5.
   - name: Internal
     description: >-
       Operations outside the portal and admin surface (`x-internal: true`): Caddy's on-demand TLS gate and the health
@@ -1321,6 +1346,2238 @@ paths:
           $ref: '#/components/responses/RateLimited'
         '500':
           $ref: '#/components/responses/InternalError'
+  /v1/tenants/key-availability:
+    get:
+      operationId: checkTenantKey
+      summary: Check whether an OTA key is available
+      description: >-
+        The live key check of the create-OTA wizard, called while the person types. The key is checked against the key
+        rules (`^[a-z][a-z0-9]{2,29}$`, also a DNS label), the reserved list of the sign-up flow (`platform`, `admin`,
+        `api`, `www`, `test`, …) and every tenant row in any status, because a deleted or failed OTA keeps its key.
+        `available: false` comes with `reason`: `invalid`, `reserved` or `taken`. `storefrontHost` is the host the key
+        gets, `<key>.<STOREFRONT_BASE_DOMAIN>`. Reads only; `createTenant` checks the key again, because the key can be
+        taken between the check and the submit. 30 checks per account per minute.
+      tags:
+        - Tenants
+      security:
+        - portalBearer: []
+      x-scope: portal
+      x-error-codes:
+        - VALIDATION_FAILED
+        - UNAUTHENTICATED
+        - TOKEN_EXPIRED
+        - EMAIL_NOT_VERIFIED
+        - RATE_LIMITED
+        - INTERNAL_ERROR
+      x-platform-tables:
+        - tenants
+      parameters:
+        - name: key
+          in: query
+          required: true
+          description: >-
+            The key to check, as typed. Any text of 1–64 characters is checked; one that breaks the key rules answers
+            `available: false` with `reason: invalid`, not a `400`.
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 64
+          example: acme
+      responses:
+        '200':
+          description: The result of the check.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/KeyAvailability'
+              examples:
+                available:
+                  summary: The key is free
+                  value:
+                    key: acme
+                    available: true
+                    storefrontHost: acme.ota.example.com
+                taken:
+                  summary: Another OTA uses the key
+                  value:
+                    key: nordic
+                    available: false
+                    reason: taken
+                    storefrontHost: nordic.ota.example.com
+        '400':
+          $ref: '#/components/responses/ValidationFailed'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/EmailNotVerified'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /v1/tenants:
+    get:
+      operationId: listTenants
+      summary: List my OTAs
+      description: >-
+        The OTAs in which the account has an active membership, in any status (`provisioning`, `active`, `suspended`,
+        `failed`), oldest first, with the caller's role, the plan and the storefront URL of the primary host. The list
+        is short (one entry per membership), so it is not paginated. Works before the e-mail address is verified, so
+        the portal can show an empty dashboard.
+      tags:
+        - Tenants
+      security:
+        - portalBearer: []
+      x-scope: portal_unverified
+      x-error-codes:
+        - UNAUTHENTICATED
+        - TOKEN_EXPIRED
+        - RATE_LIMITED
+        - INTERNAL_ERROR
+      x-platform-tables:
+        - tenant_memberships
+        - tenants
+        - tenant_domains
+      responses:
+        '200':
+          description: The caller's OTAs.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TenantList'
+              example:
+                data:
+                  - id: ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F
+                    key: acme
+                    name: Acme Travel
+                    status: active
+                    role: owner
+                    planCode: early_access
+                    storefrontUrl: https://acme.ota.example.com/
+                    storefrontEnvironment: test
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    post:
+      operationId: createTenant
+      summary: Create an OTA
+      description: >-
+        Creates an OTA and starts its setup (platform/docs/flows/signup-and-create-ota.md). The account must be verified
+        and active and may own at most `MAX_TENANTS_PER_ACCOUNT` OTAs that are not `failed` (`422 UNPROCESSABLE`,
+        `details.reason = tenant_limit`). The key must follow the key rules (else `400`) and be neither reserved nor
+        used by any tenant row (`409 TENANT_KEY_UNAVAILABLE`, also when a concurrent request took it first).
+
+
+        **One transaction** inserts the tenant (`provisioning`, storefront environment `test`), the caller's `owner`
+        membership, the subscription, the verified primary sub-domain `<key>.<STOREFRONT_BASE_DOMAIN>`, a queued
+        `provision` job and an audit row. **Before M5** (`FEATURE_STRIPE_BILLING` off) the plan is always
+        `early_access`, whatever the request says: the subscription is a manual trial (`trialing`, `trial_ends_at =
+        now + plans.trial_days`), the job is dispatched to the OTA worker at once and `checkoutUrl` is `null`. **From
+        M5** `planCode` must name a public, active plan with a Stripe price for `billingInterval` (`422
+        PLAN_NOT_AVAILABLE`); the subscription starts `incomplete`, the job waits for Checkout, and the answer carries
+        the Stripe Checkout URL. When Stripe fails, the OTA and its job stay created, `checkoutUrl` is `null` and
+        `checkoutError` says why; the setup page offers to continue to payment later.
+
+
+        **Idempotent** (`Idempotency-Key`, 24 hours): a retry with the same key and body replays the `202`, another
+        body answers `409 IDEMPOTENCY_KEY_REUSED`, and while the idempotency store (Redis) is down the call answers `503
+        SERVICE_UNAVAILABLE` before writing anything. The setup progresses in `getProvisioning`.
+      tags:
+        - Tenants
+      security:
+        - portalBearer: []
+      x-scope: portal
+      x-idempotent: true
+      x-error-codes:
+        - VALIDATION_FAILED
+        - UNAUTHENTICATED
+        - TOKEN_EXPIRED
+        - EMAIL_NOT_VERIFIED
+        - TENANT_KEY_UNAVAILABLE
+        - IDEMPOTENCY_KEY_REUSED
+        - PLAN_NOT_AVAILABLE
+        - UNPROCESSABLE
+        - RATE_LIMITED
+        - INTERNAL_ERROR
+        - SERVICE_UNAVAILABLE
+      x-platform-tables:
+        - accounts
+        - plans
+        - tenants
+        - tenant_memberships
+        - subscriptions
+        - tenant_domains
+        - provisioning_jobs
+        - billing_customers
+        - platform_audit_log
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateTenantRequest'
+            example:
+              key: acme
+              name: Acme Travel
+              countryCode: 'NO'
+              defaultCurrency: EUR
+              timeZone: Europe/Oslo
+      responses:
+        '202':
+          description: >-
+            Accepted. The OTA exists in `provisioning`; its setup job runs (before M5) or waits for Checkout (M5).
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TenantCreated'
+              examples:
+                manualTrial:
+                  summary: Before M5, a manual trial on early_access; setup starts at once
+                  value:
+                    tenant:
+                      id: ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F
+                      key: acme
+                      name: Acme Travel
+                      legalName: null
+                      status: provisioning
+                      suspensionReason: null
+                      billingNotice: null
+                      planCode: early_access
+                      defaultCurrency: EUR
+                      countryCode: 'NO'
+                      timeZone: Europe/Oslo
+                      supportEmail: null
+                      storefrontEnvironment: test
+                      liveEnabledAt: null
+                      primaryHost: acme.ota.example.com
+                      schemaVersion: null
+                      createdAt: '2026-10-14T08:20:11Z'
+                      activatedAt: null
+                      version: 1
+                      myRole: owner
+                    provisioningJob:
+                      id: job_01JA2ZC3D7F1H5K9M3P7R1T5V9
+                      status: running
+                    checkoutUrl: null
+                checkout:
+                  summary: From M5, a paid plan; the setup waits for the Stripe Checkout
+                  value:
+                    tenant:
+                      id: ten_01JB3K4M8P2R6T0W4Y8A2C6E0G
+                      key: nordic
+                      name: Nordic Fares
+                      legalName: null
+                      status: provisioning
+                      suspensionReason: null
+                      billingNotice: null
+                      planCode: starter
+                      defaultCurrency: EUR
+                      countryCode: SE
+                      timeZone: Europe/Stockholm
+                      supportEmail: null
+                      storefrontEnvironment: test
+                      liveEnabledAt: null
+                      primaryHost: nordic.ota.example.com
+                      schemaVersion: null
+                      createdAt: '2027-03-02T10:15:00Z'
+                      activatedAt: null
+                      version: 1
+                      myRole: owner
+                    provisioningJob:
+                      id: job_01JB3K4N9Q3S7V1X5Z9B3D7F1H
+                      status: queued
+                    checkoutUrl: https://checkout.stripe.com/c/pay/cs_test_a1B2c3D4e5F6g7H8i9J0k1L2m3N4
+                checkoutFailed:
+                  summary: From M5, Stripe failed; the OTA exists and the payment can start later
+                  value:
+                    tenant:
+                      id: ten_01JB3K4M8P2R6T0W4Y8A2C6E0G
+                      key: nordic
+                      name: Nordic Fares
+                      legalName: null
+                      status: provisioning
+                      suspensionReason: null
+                      billingNotice: null
+                      planCode: starter
+                      defaultCurrency: EUR
+                      countryCode: SE
+                      timeZone: Europe/Stockholm
+                      supportEmail: null
+                      storefrontEnvironment: test
+                      liveEnabledAt: null
+                      primaryHost: nordic.ota.example.com
+                      schemaVersion: null
+                      createdAt: '2027-03-02T10:15:00Z'
+                      activatedAt: null
+                      version: 1
+                      myRole: owner
+                    provisioningJob:
+                      id: job_01JB3K4N9Q3S7V1X5Z9B3D7F1H
+                      status: queued
+                    checkoutUrl: null
+                    checkoutError:
+                      code: PROVIDER_ERROR
+                      message: The payment page could not be opened; continue to payment from the setup page.
+        '400':
+          $ref: '#/components/responses/ValidationFailed'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/EmailNotVerified'
+        '409':
+          description: >-
+            The key is reserved or used by another OTA, or the `Idempotency-Key` was used with another body. Possible
+            codes: TENANT_KEY_UNAVAILABLE, IDEMPOTENCY_KEY_REUSED.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                TENANT_KEY_UNAVAILABLE:
+                  $ref: '#/components/examples/TENANT_KEY_UNAVAILABLE'
+                IDEMPOTENCY_KEY_REUSED:
+                  $ref: '#/components/examples/IDEMPOTENCY_KEY_REUSED'
+        '422':
+          description: >-
+            The plan cannot be chosen with this billing interval, or the account owns as many OTAs as allowed. Possible
+            codes: PLAN_NOT_AVAILABLE, UNPROCESSABLE.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                PLAN_NOT_AVAILABLE:
+                  $ref: '#/components/examples/PLAN_NOT_AVAILABLE'
+                UNPROCESSABLE:
+                  summary: The account owns as many OTAs as allowed
+                  value:
+                    error:
+                      code: UNPROCESSABLE
+                      message: The request breaks a business rule.
+                      status: 422
+                      requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+                      details:
+                        reason: tenant_limit
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+  /v1/tenants/{tenantId}:
+    parameters:
+      - $ref: '#/components/parameters/TenantId'
+    get:
+      operationId: getTenant
+      summary: Get an OTA
+      description: >-
+        The OTA overview for any member (every role): profile, status with the suspension reason, the billing notice
+        that billing sync copies onto the tenant (`past_due`, `trial_ending`), plan, storefront environment and primary
+        host, tenant schema version, and the caller's role in `myRole`. Callers without an active membership get `404
+        NOT_FOUND`, so tenant ids cannot be probed. The `ETag` is the version that `updateTenant` needs in `If-Match`.
+      tags:
+        - Tenants
+      security:
+        - portalBearer: []
+      x-scope: portal
+      x-error-codes:
+        - VALIDATION_FAILED
+        - UNAUTHENTICATED
+        - TOKEN_EXPIRED
+        - EMAIL_NOT_VERIFIED
+        - NOT_FOUND
+        - RATE_LIMITED
+        - INTERNAL_ERROR
+      x-platform-tables:
+        - tenant_memberships
+        - tenants
+        - tenant_domains
+      responses:
+        '200':
+          description: The OTA.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+            ETag:
+              $ref: '#/components/headers/ETag'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Tenant'
+              examples:
+                tenant:
+                  $ref: '#/components/examples/Tenant'
+        '400':
+          $ref: '#/components/responses/ValidationFailed'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/EmailNotVerified'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    patch:
+      operationId: updateTenant
+      summary: Update the OTA profile
+      description: >-
+        Owners and admins change the name, legal name, support e-mail, country or time zone; `null` clears the legal
+        name or the support e-mail. The key and the default currency never change (they are not in the schema).
+        `If-Match` carries the `ETag` of `getTenant`; a stale version answers `412 PRECONDITION_FAILED`. Only an
+        `active` OTA can be edited (`409 TENANT_NOT_ACTIVE` with `details.status`). Writes an audit row and, after
+        commit, publishes a `tenant` invalidation so the OTA backend reloads the row.
+      tags:
+        - Tenants
+      security:
+        - portalBearer: []
+      x-scope: portal
+      x-error-codes:
+        - VALIDATION_FAILED
+        - UNAUTHENTICATED
+        - TOKEN_EXPIRED
+        - EMAIL_NOT_VERIFIED
+        - FORBIDDEN
+        - NOT_FOUND
+        - TENANT_NOT_ACTIVE
+        - PRECONDITION_FAILED
+        - RATE_LIMITED
+        - INTERNAL_ERROR
+      x-platform-tables:
+        - tenant_memberships
+        - tenants
+        - tenant_domains
+        - platform_audit_log
+      parameters:
+        - $ref: '#/components/parameters/IfMatch'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateTenantRequest'
+            example:
+              legalName: Acme Travel AS
+              supportEmail: support@acme-travel.example.com
+      responses:
+        '200':
+          description: The updated OTA, with its new version in `ETag`.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+            ETag:
+              $ref: '#/components/headers/ETag'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Tenant'
+              examples:
+                tenant:
+                  $ref: '#/components/examples/Tenant'
+        '400':
+          $ref: '#/components/responses/ValidationFailed'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/TenantRoleForbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/TenantNotActive'
+        '412':
+          $ref: '#/components/responses/PreconditionFailed'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /v1/tenants/{tenantId}/provisioning:
+    parameters:
+      - $ref: '#/components/parameters/TenantId'
+    get:
+      operationId: getProvisioning
+      summary: Get the setup progress of an OTA
+      description: >-
+        The tenant status and its latest `provision` job: status, current step, the finished steps of the OTA worker
+        and of the platform post-steps, attempts and the last error. The portal's setup page polls it every 2 seconds
+        until the tenant is `active` or `failed`. `initialKeysAvailable` is true while the test keys issued at setup
+        wait for their one-time reveal (`revealInitialKeys`): after the setup and before the reveal, at most 24 hours.
+        Any member may read it.
+      tags:
+        - Tenants
+      security:
+        - portalBearer: []
+      x-scope: portal
+      x-error-codes:
+        - VALIDATION_FAILED
+        - UNAUTHENTICATED
+        - TOKEN_EXPIRED
+        - EMAIL_NOT_VERIFIED
+        - NOT_FOUND
+        - RATE_LIMITED
+        - INTERNAL_ERROR
+      x-platform-tables:
+        - tenant_memberships
+        - tenants
+        - provisioning_jobs
+      responses:
+        '200':
+          description: The setup progress.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProvisioningStatus'
+              examples:
+                running:
+                  summary: The OTA worker built the schema; the platform post-steps run
+                  value:
+                    tenantStatus: provisioning
+                    job:
+                      id: job_01JA2ZC3D7F1H5K9M3P7R1T5V9
+                      kind: provision
+                      status: running
+                      step: assign_amadeus_office
+                      steps:
+                        - step: create_schema
+                          status: succeeded
+                          startedAt: '2026-10-14T08:20:12Z'
+                          finishedAt: '2026-10-14T08:20:12Z'
+                        - step: run_migrations
+                          status: succeeded
+                          startedAt: '2026-10-14T08:20:12Z'
+                          finishedAt: '2026-10-14T08:20:14Z'
+                        - step: seed_defaults
+                          status: succeeded
+                          startedAt: '2026-10-14T08:20:14Z'
+                          finishedAt: '2026-10-14T08:20:14Z'
+                        - step: record_migrations
+                          status: succeeded
+                          startedAt: '2026-10-14T08:20:15Z'
+                          finishedAt: '2026-10-14T08:20:15Z'
+                      attempt: 1
+                      maxAttempts: 5
+                      error: null
+                    initialKeysAvailable: false
+                active:
+                  summary: The setup finished; the test keys wait for their reveal
+                  value:
+                    tenantStatus: active
+                    job:
+                      id: job_01JA2ZC3D7F1H5K9M3P7R1T5V9
+                      kind: provision
+                      status: succeeded
+                      step: notify
+                      steps:
+                        - step: create_schema
+                          status: succeeded
+                          startedAt: '2026-10-14T08:20:12Z'
+                          finishedAt: '2026-10-14T08:20:12Z'
+                        - step: run_migrations
+                          status: succeeded
+                          startedAt: '2026-10-14T08:20:12Z'
+                          finishedAt: '2026-10-14T08:20:14Z'
+                        - step: seed_defaults
+                          status: succeeded
+                          startedAt: '2026-10-14T08:20:14Z'
+                          finishedAt: '2026-10-14T08:20:14Z'
+                        - step: record_migrations
+                          status: succeeded
+                          startedAt: '2026-10-14T08:20:15Z'
+                          finishedAt: '2026-10-14T08:20:15Z'
+                        - step: assign_amadeus_office
+                          status: succeeded
+                          startedAt: '2026-10-14T08:20:15Z'
+                          finishedAt: '2026-10-14T08:20:15Z'
+                        - step: create_payment_connection
+                          status: succeeded
+                          startedAt: '2026-10-14T08:20:15Z'
+                          finishedAt: '2026-10-14T08:20:15Z'
+                        - step: issue_api_keys
+                          status: succeeded
+                          startedAt: '2026-10-14T08:20:15Z'
+                          finishedAt: '2026-10-14T08:20:16Z'
+                        - step: activate
+                          status: succeeded
+                          startedAt: '2026-10-14T08:20:16Z'
+                          finishedAt: '2026-10-14T08:20:16Z'
+                        - step: notify
+                          status: succeeded
+                          startedAt: '2026-10-14T08:20:16Z'
+                          finishedAt: '2026-10-14T08:20:16Z'
+                      attempt: 1
+                      maxAttempts: 5
+                      error: null
+                    initialKeysAvailable: true
+        '400':
+          $ref: '#/components/responses/ValidationFailed'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/EmailNotVerified'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /v1/tenants/{tenantId}/provisioning/retry:
+    parameters:
+      - $ref: '#/components/parameters/TenantId'
+    post:
+      operationId: retryProvisioning
+      summary: Retry a failed setup
+      description: >-
+        Owners only. Allowed only for a `failed` tenant (`409 PROVISIONING_NOT_RETRYABLE` otherwise): the tenant goes
+        back to `provisioning` and a **new** `provision` job is inserted and dispatched; the failed job stays as
+        history. From M5, a tenant that failed because its Checkout was abandoned gets a new Checkout instead: the
+        answer carries `checkoutUrl` and the job waits for the payment. Writes an audit row.
+      tags:
+        - Tenants
+      security:
+        - portalBearer: []
+      x-scope: portal
+      x-error-codes:
+        - VALIDATION_FAILED
+        - UNAUTHENTICATED
+        - TOKEN_EXPIRED
+        - EMAIL_NOT_VERIFIED
+        - FORBIDDEN
+        - NOT_FOUND
+        - PROVISIONING_NOT_RETRYABLE
+        - RATE_LIMITED
+        - INTERNAL_ERROR
+      x-platform-tables:
+        - tenant_memberships
+        - tenants
+        - subscriptions
+        - provisioning_jobs
+        - billing_customers
+        - platform_audit_log
+      responses:
+        '202':
+          description: Accepted. The new setup job runs (or waits for Checkout, M5).
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProvisioningRetried'
+              example:
+                job:
+                  id: job_01JB3K8Q3S7V1X5Z9B3D7F1H5K
+                  kind: provision
+                  status: running
+                  step: dispatch
+                  steps: []
+                  attempt: 1
+                  maxAttempts: 5
+                  error: null
+                checkoutUrl: null
+        '400':
+          $ref: '#/components/responses/ValidationFailed'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/TenantRoleForbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: 'Only a failed setup can be retried. Possible codes: PROVISIONING_NOT_RETRYABLE.'
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                PROVISIONING_NOT_RETRYABLE:
+                  $ref: '#/components/examples/PROVISIONING_NOT_RETRYABLE'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /v1/tenants/{tenantId}/initial-keys/reveal:
+    parameters:
+      - $ref: '#/components/parameters/TenantId'
+    post:
+      operationId: revealInitialKeys
+      summary: Reveal the test API keys issued at setup, once
+      description: >-
+        Owners only. The setup issues a publishable and a secret **test** key (`pk_test_…` without origins,
+        `sk_test_…` scoped `storefront`) and keeps the two raw keys envelope-encrypted for a single reveal (PADR-0001,
+        PADR-0005).
+        This call decrypts them, answers them once with `Cache-Control: no-store`, and in the same update records who
+        revealed them and erases the ciphertext. After the reveal, or 24 hours after the setup finished, the answer is
+        `410 KEYS_ALREADY_REVEALED`; from then on owners create or roll keys on the API keys page. The keys are never
+        logged and never stored for a replay. Writes an audit row (never the keys).
+      tags:
+        - Tenants
+      security:
+        - portalBearer: []
+      x-scope: portal
+      x-error-codes:
+        - VALIDATION_FAILED
+        - UNAUTHENTICATED
+        - TOKEN_EXPIRED
+        - EMAIL_NOT_VERIFIED
+        - FORBIDDEN
+        - NOT_FOUND
+        - KEYS_ALREADY_REVEALED
+        - RATE_LIMITED
+        - INTERNAL_ERROR
+      x-platform-tables:
+        - tenant_memberships
+        - provisioning_jobs
+        - platform_audit_log
+      responses:
+        '200':
+          description: The two test keys, shown once.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+            Cache-Control:
+              $ref: '#/components/headers/NoStore'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InitialKeys'
+              example:
+                keys:
+                  - id: key_01JA2ZD8E2G6J0K4N8Q2S6W0Y4
+                    kind: publishable
+                    environment: test
+                    prefix: pk_test_Zy98Xw
+                    key: pk_test_Zy98Xw76Vu54Ts32Rq10Po98Nm76Lk54Ji32Hg10
+                  - id: key_01JA2ZD8E2G6J0K4N8Q2S6W0Y5
+                    kind: secret
+                    environment: test
+                    prefix: sk_test_Ab12Cd
+                    key: sk_test_Ab12Cd34Ef56Gh78Ij90Kl12Mn34Op56Qr78St90
+        '400':
+          $ref: '#/components/responses/ValidationFailed'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/TenantRoleForbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '410':
+          description: >-
+            The keys were revealed already, or the 24 hours to reveal them passed; create a new key instead. Possible
+            codes: KEYS_ALREADY_REVEALED.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                KEYS_ALREADY_REVEALED:
+                  $ref: '#/components/examples/KEYS_ALREADY_REVEALED'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /v1/tenants/{tenantId}/onboarding:
+    parameters:
+      - $ref: '#/components/parameters/TenantId'
+    get:
+      operationId: getOnboarding
+      summary: Get the onboarding checklist of an OTA
+      description: >-
+        The checklist of PADR-0018, computed on every call from platform tables and never stored; reading it writes
+        nothing. The items come in this order: `email_verified`, `mfa_enabled`, `ota_active`, `api_key`,
+        `storefront_open`, `amadeus_test`, `team_invited` (M1), then `plan_chosen`, `custom_domain`, `payments_ready`,
+        `live_requested` (M5), each M5 item only while its milestone switch is on. The account items are computed for
+        the caller. Every item has a link (`href`): a portal path, or the storefront URL for `storefront_open`. Any
+        member may read it.
+      tags:
+        - Tenants
+      security:
+        - portalBearer: []
+      x-scope: portal
+      x-error-codes:
+        - VALIDATION_FAILED
+        - UNAUTHENTICATED
+        - TOKEN_EXPIRED
+        - EMAIL_NOT_VERIFIED
+        - NOT_FOUND
+        - RATE_LIMITED
+        - INTERNAL_ERROR
+      x-platform-tables:
+        - accounts
+        - tenants
+        - tenant_memberships
+        - tenant_invitations
+        - provisioning_jobs
+        - api_keys
+        - tenant_domains
+        - supplier_connections
+        - payment_provider_connections
+        - tenant_payout_accounts
+        - subscriptions
+      responses:
+        '200':
+          description: The checklist.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OnboardingChecklist'
+              example:
+                items:
+                  - id: email_verified
+                    label: Verify your e-mail
+                    done: true
+                    href: /verify-pending
+                    milestone: M1
+                  - id: mfa_enabled
+                    label: Turn on two-factor sign-in
+                    done: false
+                    href: /account/security
+                    milestone: M1
+                  - id: ota_active
+                    label: OTA set up
+                    done: true
+                    href: /otas/ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F/setup
+                    milestone: M1
+                  - id: api_key
+                    label: Get your API keys
+                    done: false
+                    href: /otas/ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F/api-keys
+                    milestone: M1
+                  - id: storefront_open
+                    label: Open your storefront
+                    done: true
+                    href: https://acme.ota.example.com/
+                    milestone: M1
+                  - id: amadeus_test
+                    label: Amadeus test office active
+                    done: true
+                    href: /otas/ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F/amadeus
+                    milestone: M1
+                  - id: team_invited
+                    label: Invite your team
+                    done: false
+                    href: /otas/ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F/team
+                    milestone: M1
+        '400':
+          $ref: '#/components/responses/ValidationFailed'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/EmailNotVerified'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /v1/tenants/{tenantId}/members:
+    parameters:
+      - $ref: '#/components/parameters/TenantId'
+    get:
+      operationId: listMembers
+      summary: List the members of an OTA
+      description: >-
+        The active members of the OTA (one per account), oldest first, with name, e-mail address, role, whether the
+        account has MFA on, and the `version` that `updateMember` needs in `If-Match`. The list is bounded by the plan's
+        staff seats, so it is not paginated. Any member may read it.
+      tags:
+        - Team
+      security:
+        - portalBearer: []
+      x-scope: portal
+      x-error-codes:
+        - VALIDATION_FAILED
+        - UNAUTHENTICATED
+        - TOKEN_EXPIRED
+        - EMAIL_NOT_VERIFIED
+        - NOT_FOUND
+        - RATE_LIMITED
+        - INTERNAL_ERROR
+      x-platform-tables:
+        - tenant_memberships
+        - accounts
+      responses:
+        '200':
+          description: The members.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MemberList'
+              example:
+                data:
+                  - id: stf_01JA2ZA1C5E9G3J7K2M6P0R4T8
+                    accountId: acc_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+                    fullName: Anna Berg
+                    email: anna.berg@example.com
+                    role: owner
+                    status: active
+                    mfaEnabled: true
+                    createdAt: '2026-10-14T08:20:11Z'
+                    version: 1
+                  - id: stf_01JB3K7P2R6T0W4Y8A2C6E0G4J
+                    accountId: acc_01JB3K6M0P4R8T2W6Y0A4C8E2G
+                    fullName: Jonas Dahl
+                    email: jonas.dahl@example.com
+                    role: agent
+                    status: active
+                    mfaEnabled: false
+                    createdAt: '2026-10-15T11:02:45Z'
+                    version: 1
+        '400':
+          $ref: '#/components/responses/ValidationFailed'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/EmailNotVerified'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /v1/tenants/{tenantId}/members/{memberId}:
+    parameters:
+      - $ref: '#/components/parameters/TenantId'
+      - $ref: '#/components/parameters/MemberId'
+    patch:
+      operationId: updateMember
+      summary: Change a member's role
+      description: >-
+        Owners and admins change roles with the role matrix of platform/docs/scope.md §1.2: admins may set `agent`,
+        `finance` or `viewer` on members who are neither owners nor admins; only owners grant or remove `owner` and
+        `admin` (`403 FORBIDDEN` otherwise). **Granting `owner` needs a TOTP step-up** within 15 minutes (`401
+        REAUTH_REQUIRED`, or `403 MFA_REQUIRED` without MFA); the other changes do not, so the operation carries no
+        `x-mfa-step-up`. The last active owner cannot be demoted (`409 LAST_OWNER`). `If-Match` carries the member's
+        `version`; a stale one answers `412 PRECONDITION_FAILED`. Writes an audit row and, after commit, publishes a
+        `membership` invalidation, so the OTA admin applies the new role within seconds.
+      tags:
+        - Team
+      security:
+        - portalBearer: []
+      x-scope: portal
+      x-error-codes:
+        - VALIDATION_FAILED
+        - UNAUTHENTICATED
+        - TOKEN_EXPIRED
+        - REAUTH_REQUIRED
+        - EMAIL_NOT_VERIFIED
+        - FORBIDDEN
+        - MFA_REQUIRED
+        - NOT_FOUND
+        - LAST_OWNER
+        - PRECONDITION_FAILED
+        - RATE_LIMITED
+        - INTERNAL_ERROR
+      x-platform-tables:
+        - tenant_memberships
+        - accounts
+        - platform_audit_log
+      parameters:
+        - $ref: '#/components/parameters/IfMatch'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateMemberRequest'
+            example:
+              role: finance
+      responses:
+        '200':
+          description: The member with the new role, and its new version in `ETag`.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+            ETag:
+              $ref: '#/components/headers/ETag'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Member'
+              example:
+                id: stf_01JB3K7P2R6T0W4Y8A2C6E0G4J
+                accountId: acc_01JB3K6M0P4R8T2W6Y0A4C8E2G
+                fullName: Jonas Dahl
+                email: jonas.dahl@example.com
+                role: finance
+                status: active
+                mfaEnabled: false
+                createdAt: '2026-10-15T11:02:45Z'
+                version: 2
+        '400':
+          $ref: '#/components/responses/ValidationFailed'
+        '401':
+          $ref: '#/components/responses/StepUpUnauthorized'
+        '403':
+          $ref: '#/components/responses/TenantRoleOrStepUpForbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/LastOwner'
+        '412':
+          $ref: '#/components/responses/PreconditionFailed'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    delete:
+      operationId: removeMember
+      summary: Remove a member, or leave the OTA
+      description: >-
+        Owners and admins remove members within the role matrix (only owners remove owners and admins), and any member
+        may remove themself to leave the OTA; other callers get `403 FORBIDDEN`. The membership becomes `removed` and
+        the row stays, because its `stf_` id is referenced by value in the OTA's staff actions. The last active owner
+        can neither be removed nor leave (`409 LAST_OWNER`). Writes an audit row and, after commit, publishes a
+        `membership` invalidation, so the member's OTA admin sessions end within seconds.
+      tags:
+        - Team
+      security:
+        - portalBearer: []
+      x-scope: portal
+      x-error-codes:
+        - VALIDATION_FAILED
+        - UNAUTHENTICATED
+        - TOKEN_EXPIRED
+        - EMAIL_NOT_VERIFIED
+        - FORBIDDEN
+        - NOT_FOUND
+        - LAST_OWNER
+        - RATE_LIMITED
+        - INTERNAL_ERROR
+      x-platform-tables:
+        - tenant_memberships
+        - platform_audit_log
+      responses:
+        '204':
+          description: The member is removed (or the caller left the OTA).
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+        '400':
+          $ref: '#/components/responses/ValidationFailed'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/TenantRoleForbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/LastOwner'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /v1/tenants/{tenantId}/invitations:
+    parameters:
+      - $ref: '#/components/parameters/TenantId'
+    get:
+      operationId: listInvitations
+      summary: List the pending invitations of an OTA
+      description: >-
+        Owners and admins see the invitations that are still `pending`, newest first, with the invited address, the
+        role, who invited and when the link expires. Pending invitations count against the plan's staff seats, so the
+        list is short and not paginated. The invitation token is never answered.
+      tags:
+        - Team
+      security:
+        - portalBearer: []
+      x-scope: portal
+      x-error-codes:
+        - VALIDATION_FAILED
+        - UNAUTHENTICATED
+        - TOKEN_EXPIRED
+        - EMAIL_NOT_VERIFIED
+        - FORBIDDEN
+        - NOT_FOUND
+        - RATE_LIMITED
+        - INTERNAL_ERROR
+      x-platform-tables:
+        - tenant_memberships
+        - tenant_invitations
+        - accounts
+      responses:
+        '200':
+          description: The pending invitations.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InvitationList'
+              example:
+                data:
+                  - id: ivt_01JA2ZF4H8K2M6P0R4T8W2Y6A0
+                    email: jo@acme-travel.example.com
+                    role: agent
+                    status: pending
+                    invitedBy:
+                      accountId: acc_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+                      fullName: Anna Berg
+                    expiresAt: '2026-10-21T09:00:00Z'
+                    createdAt: '2026-10-14T09:00:00Z'
+        '400':
+          $ref: '#/components/responses/ValidationFailed'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/TenantRoleForbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    post:
+      operationId: createInvitation
+      summary: Invite a person by e-mail
+      description: >-
+        Owners and admins invite an e-mail address with a role; only owners invite owners or admins (`403 FORBIDDEN`).
+        The address must not belong to an active member (`409 ALREADY_MEMBER`) or have a pending invitation (`409
+        INVITATION_PENDING`), and active members plus pending invitations must stay below the plan's `staffSeats` (`422
+        PLAN_LIMIT_REACHED` with `details.limit` and `details.used`). The invitation stores only the SHA-256 of a
+        256-bit token and expires in 7 days; the link with the token travels encrypted in the e-mail outbox and is
+        never answered or logged. Writes an audit row.
+      tags:
+        - Team
+      security:
+        - portalBearer: []
+      x-scope: portal
+      x-error-codes:
+        - VALIDATION_FAILED
+        - UNAUTHENTICATED
+        - TOKEN_EXPIRED
+        - EMAIL_NOT_VERIFIED
+        - FORBIDDEN
+        - NOT_FOUND
+        - ALREADY_MEMBER
+        - INVITATION_PENDING
+        - PLAN_LIMIT_REACHED
+        - RATE_LIMITED
+        - INTERNAL_ERROR
+      x-platform-tables:
+        - tenant_memberships
+        - tenant_invitations
+        - accounts
+        - tenants
+        - plans
+        - email_outbox
+        - platform_audit_log
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateInvitationRequest'
+            example:
+              email: jo@acme-travel.example.com
+              role: agent
+      responses:
+        '201':
+          description: The invitation; the e-mail with the link is queued.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Invitation'
+              examples:
+                invitation:
+                  $ref: '#/components/examples/Invitation'
+        '400':
+          $ref: '#/components/responses/ValidationFailed'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/TenantRoleForbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: >-
+            The person is already a member, or an invitation for the address is pending. Possible codes: ALREADY_MEMBER,
+            INVITATION_PENDING.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                ALREADY_MEMBER:
+                  $ref: '#/components/examples/ALREADY_MEMBER'
+                INVITATION_PENDING:
+                  $ref: '#/components/examples/INVITATION_PENDING'
+        '422':
+          $ref: '#/components/responses/PlanLimitReached'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /v1/tenants/{tenantId}/invitations/{invitationId}:
+    parameters:
+      - $ref: '#/components/parameters/TenantId'
+      - $ref: '#/components/parameters/InvitationId'
+    delete:
+      operationId: revokeInvitation
+      summary: Revoke an invitation
+      description: >-
+        Owners and admins revoke a `pending` invitation; its link stops working at once and it no longer counts against
+        the staff seats. An invitation that is not pending answers `409 CONFLICT` (`details.reason = not_pending`).
+        Writes an audit row.
+      tags:
+        - Team
+      security:
+        - portalBearer: []
+      x-scope: portal
+      x-error-codes:
+        - VALIDATION_FAILED
+        - UNAUTHENTICATED
+        - TOKEN_EXPIRED
+        - EMAIL_NOT_VERIFIED
+        - FORBIDDEN
+        - NOT_FOUND
+        - CONFLICT
+        - RATE_LIMITED
+        - INTERNAL_ERROR
+      x-platform-tables:
+        - tenant_memberships
+        - tenant_invitations
+        - platform_audit_log
+      responses:
+        '204':
+          description: The invitation is revoked.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+        '400':
+          $ref: '#/components/responses/ValidationFailed'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/TenantRoleForbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/InvitationNotPending'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /v1/tenants/{tenantId}/invitations/{invitationId}/resend:
+    parameters:
+      - $ref: '#/components/parameters/TenantId'
+      - $ref: '#/components/parameters/InvitationId'
+    post:
+      operationId: resendInvitation
+      summary: Send an invitation again
+      description: >-
+        Owners and admins resend a `pending` invitation: it gets a new token and 7 more days, the e-mail with the new
+        link is queued, and the old link stops working. An invitation that is not pending answers `409 CONFLICT`
+        (`details.reason = not_pending`).
+      tags:
+        - Team
+      security:
+        - portalBearer: []
+      x-scope: portal
+      x-error-codes:
+        - VALIDATION_FAILED
+        - UNAUTHENTICATED
+        - TOKEN_EXPIRED
+        - EMAIL_NOT_VERIFIED
+        - FORBIDDEN
+        - NOT_FOUND
+        - CONFLICT
+        - RATE_LIMITED
+        - INTERNAL_ERROR
+      x-platform-tables:
+        - tenant_memberships
+        - tenant_invitations
+        - email_outbox
+      responses:
+        '202':
+          description: Accepted; the e-mail with the new link is queued.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+        '400':
+          $ref: '#/components/responses/ValidationFailed'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/TenantRoleForbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/InvitationNotPending'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /v1/invitations/lookup:
+    post:
+      operationId: lookupInvitation
+      summary: Show an invitation before accepting it
+      description: >-
+        The accept page shows the OTA, the role, the invited address, the inviter and the expiry before the person signs
+        in or signs up. The token is sent in the body, never in a URL (the portal moves it from the link into a
+        short-lived httpOnly cookie and cleans the address bar). An unknown, used, revoked or expired token answers
+        `400 INVITATION_INVALID`. Reads only. 20 lookups per end-user IP per hour.
+      tags:
+        - Team
+      security: []
+      x-scope: public
+      x-error-codes:
+        - VALIDATION_FAILED
+        - INVITATION_INVALID
+        - RATE_LIMITED
+        - INTERNAL_ERROR
+      x-platform-tables:
+        - tenant_invitations
+        - tenants
+        - accounts
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InvitationTokenRequest'
+            example:
+              token: Iv7mQ2xK9wT4bN8cR1pL6yH3dF0sJ5aG7eU2iO9rZ4k
+      responses:
+        '200':
+          description: The invitation's details.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InvitationPreview'
+              example:
+                tenantName: Acme Travel
+                role: agent
+                email: jo@acme-travel.example.com
+                inviterName: Anna Berg
+                expiresAt: '2026-10-21T09:00:00Z'
+        '400':
+          $ref: '#/components/responses/InvitationInvalid'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /v1/invitations/accept:
+    post:
+      operationId: acceptInvitation
+      summary: Accept an invitation and join the OTA
+      description: >-
+        The signed-in, verified account joins the OTA with the invited role. The invitation must be `pending` and
+        unexpired (`400 INVITATION_INVALID`), and the account's verified e-mail address must equal the invited address,
+        compared case-insensitively (`403 INVITATION_EMAIL_MISMATCH`). An active member gets `409 ALREADY_MEMBER`. In
+        one transaction it inserts the membership, or re-activates a `removed` one with the new role, marks the
+        invitation `accepted` and writes an audit row; after commit it publishes a `membership` invalidation.
+      tags:
+        - Team
+      security:
+        - portalBearer: []
+      x-scope: portal
+      x-error-codes:
+        - VALIDATION_FAILED
+        - INVITATION_INVALID
+        - UNAUTHENTICATED
+        - TOKEN_EXPIRED
+        - EMAIL_NOT_VERIFIED
+        - INVITATION_EMAIL_MISMATCH
+        - ALREADY_MEMBER
+        - RATE_LIMITED
+        - INTERNAL_ERROR
+      x-platform-tables:
+        - tenant_invitations
+        - tenant_memberships
+        - accounts
+        - tenants
+        - tenant_domains
+        - platform_audit_log
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InvitationTokenRequest'
+            example:
+              token: Iv7mQ2xK9wT4bN8cR1pL6yH3dF0sJ5aG7eU2iO9rZ4k
+      responses:
+        '200':
+          description: The new membership and the OTA it belongs to.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InvitationAccepted'
+              example:
+                membership:
+                  id: stf_01JB3K7P2R6T0W4Y8A2C6E0G4J
+                  accountId: acc_01JB3K6M0P4R8T2W6Y0A4C8E2G
+                  fullName: Jo Lund
+                  email: jo@acme-travel.example.com
+                  role: agent
+                  status: active
+                  mfaEnabled: false
+                  createdAt: '2026-10-15T11:02:45Z'
+                  version: 1
+                tenant:
+                  id: ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F
+                  key: acme
+                  name: Acme Travel
+                  status: active
+                  role: agent
+                  planCode: early_access
+                  storefrontUrl: https://acme.ota.example.com/
+                  storefrontEnvironment: test
+        '400':
+          $ref: '#/components/responses/InvitationInvalid'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          description: >-
+            The e-mail address is not verified, or the invitation was sent to another address. Possible codes:
+            EMAIL_NOT_VERIFIED, INVITATION_EMAIL_MISMATCH.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                EMAIL_NOT_VERIFIED:
+                  $ref: '#/components/examples/EMAIL_NOT_VERIFIED'
+                INVITATION_EMAIL_MISMATCH:
+                  $ref: '#/components/examples/INVITATION_EMAIL_MISMATCH'
+        '409':
+          description: 'The account is already a member of this OTA. Possible codes: ALREADY_MEMBER.'
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                ALREADY_MEMBER:
+                  $ref: '#/components/examples/ALREADY_MEMBER'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /v1/tenants/{tenantId}/api-keys:
+    parameters:
+      - $ref: '#/components/parameters/TenantId'
+    get:
+      operationId: listApiKeys
+      summary: List the API keys of an OTA
+      description: >-
+        Owners and admins see the OTA's publishable (`pk_`) and secret (`sk_`) keys, newest first: name, kind,
+        environment, the visible `prefix` (the first 14 characters) and `last4`, origins or scopes, who created the key
+        (`null` for the keys issued at setup), and the last use, which the platform worker copies from Redis every 5
+        minutes. Revoked keys appear only with `includeRevoked=true`. The full key is never answered here: it is shown
+        once by `createApiKey` and `rollApiKey`, and only its HMAC is stored (PADR-0005).
+      tags:
+        - API keys
+      security:
+        - portalBearer: []
+      x-scope: portal
+      x-error-codes:
+        - VALIDATION_FAILED
+        - UNAUTHENTICATED
+        - TOKEN_EXPIRED
+        - EMAIL_NOT_VERIFIED
+        - FORBIDDEN
+        - NOT_FOUND
+        - RATE_LIMITED
+        - INTERNAL_ERROR
+      x-platform-tables:
+        - tenant_memberships
+        - api_keys
+        - accounts
+      parameters:
+        - name: environment
+          in: query
+          required: false
+          description: Only the keys of this environment; both when absent.
+          schema:
+            $ref: '#/components/schemas/Environment'
+        - name: includeRevoked
+          in: query
+          required: false
+          description: Also list revoked keys.
+          schema:
+            type: boolean
+            default: false
+      responses:
+        '200':
+          description: The API keys.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiKeyList'
+              example:
+                data:
+                  - id: key_01JB3KA2C6E0G4J8M2P6S0V4X8
+                    name: Storefront production
+                    kind: secret
+                    environment: test
+                    prefix: sk_test_Qw34Er
+                    last4: Df90
+                    allowedOrigins: []
+                    scopes:
+                      - storefront
+                    createdAt: '2026-10-15T09:30:00Z'
+                    createdBy:
+                      accountId: acc_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+                      fullName: Anna Berg
+                    lastUsedAt: '2026-10-15T10:05:00Z'
+                    expiresAt: null
+                    revokedAt: null
+                  - id: key_01JA2ZD8E2G6J0K4N8Q2S6W0Y4
+                    name: Initial test key (publishable)
+                    kind: publishable
+                    environment: test
+                    prefix: pk_test_Zy98Xw
+                    last4: Hg10
+                    allowedOrigins:
+                      - https://www.acme-travel.example.com
+                      - http://localhost:5173
+                    scopes: []
+                    createdAt: '2026-10-14T08:20:16Z'
+                    createdBy: null
+                    lastUsedAt: null
+                    expiresAt: null
+                    revokedAt: null
+        '400':
+          $ref: '#/components/responses/ValidationFailed'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/TenantRoleForbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    post:
+      operationId: createApiKey
+      summary: Create an API key, shown once
+      description: >-
+        Owners and admins create a key of an `active` OTA (`409 TENANT_NOT_ACTIVE` otherwise). The key is
+        `<pk|sk>_<environment>_` plus 40 base62 characters from the CSPRNG; the platform stores its prefix, `last4` and
+        HMAC-SHA-256 with the server pepper, never the key itself (PADR-0005). The answer carries the full key **once**,
+        with `Cache-Control: no-store`; it is never logged and never stored for a replay.
+
+
+        **Rules.** A publishable key takes `allowedOrigins` (exact `https://host[:port]` origins;
+        `http://localhost:<port>` and `http://127.0.0.1:<port>` only on test keys; no wildcards, paths or trailing
+        slashes; at most 20) and no scopes. A secret key takes `scopes` from the OTA contract's `ConsoleApiKeyScope` and
+        `StaffPermission`, checked by the service against the generated OTA types (PADR-0005 item 6): default
+        `["storefront"]`; `storefront` excludes the console scopes; `console:automation` needs at least one permission,
+        and permissions are allowed only with it. A broken rule answers `400 VALIDATION_FAILED` with field errors.
+        Kind, environment and scopes never change later; roll the key instead. Keys that are neither revoked nor
+        expired count against the plan's `apiKeys` limit (`422 PLAN_LIMIT_REACHED`). `live` keys exist only once the
+        OTA is live (`422 LIVE_MODE_NOT_ENABLED`), and a **live secret key needs a TOTP step-up** within 15 minutes
+        (`401 REAUTH_REQUIRED`, or `403 MFA_REQUIRED` without MFA); test keys do not, so the operation carries no
+        `x-mfa-step-up`. Writes an audit row with the prefix, kind, environment and scopes, never the key.
+      tags:
+        - API keys
+      security:
+        - portalBearer: []
+      x-scope: portal
+      x-error-codes:
+        - VALIDATION_FAILED
+        - UNAUTHENTICATED
+        - TOKEN_EXPIRED
+        - REAUTH_REQUIRED
+        - EMAIL_NOT_VERIFIED
+        - FORBIDDEN
+        - MFA_REQUIRED
+        - NOT_FOUND
+        - TENANT_NOT_ACTIVE
+        - PLAN_LIMIT_REACHED
+        - LIVE_MODE_NOT_ENABLED
+        - RATE_LIMITED
+        - INTERNAL_ERROR
+      x-platform-tables:
+        - tenant_memberships
+        - tenants
+        - plans
+        - api_keys
+        - platform_audit_log
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateApiKeyRequest'
+            examples:
+              secret:
+                summary: A secret key for a storefront deployment
+                value:
+                  name: Storefront production
+                  kind: secret
+                  environment: test
+                  scopes:
+                    - storefront
+              publishable:
+                summary: A publishable key for a browser frontend
+                value:
+                  name: Website
+                  kind: publishable
+                  environment: test
+                  allowedOrigins:
+                    - https://www.acme-travel.example.com
+      responses:
+        '201':
+          description: The key's settings and the full key, shown once.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+            Cache-Control:
+              $ref: '#/components/headers/NoStore'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiKeyCreated'
+              example:
+                apiKey:
+                  id: key_01JB3KA2C6E0G4J8M2P6S0V4X8
+                  name: Storefront production
+                  kind: secret
+                  environment: test
+                  prefix: sk_test_Qw34Er
+                  last4: Df90
+                  allowedOrigins: []
+                  scopes:
+                    - storefront
+                  createdAt: '2026-10-15T09:30:00Z'
+                  createdBy:
+                    accountId: acc_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+                    fullName: Anna Berg
+                  lastUsedAt: null
+                  expiresAt: null
+                  revokedAt: null
+                key: sk_test_Qw34Er56Ty78Ui90Op12As34Df56Gh78Jk12Df90
+        '400':
+          $ref: '#/components/responses/ValidationFailed'
+        '401':
+          $ref: '#/components/responses/StepUpUnauthorized'
+        '403':
+          $ref: '#/components/responses/TenantRoleOrStepUpForbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/TenantNotActive'
+        '422':
+          description: >-
+            The plan's API key limit is reached, or a live key was asked for before the OTA is live. Possible codes:
+            PLAN_LIMIT_REACHED, LIVE_MODE_NOT_ENABLED.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                PLAN_LIMIT_REACHED:
+                  $ref: '#/components/examples/PLAN_LIMIT_REACHED'
+                LIVE_MODE_NOT_ENABLED:
+                  $ref: '#/components/examples/LIVE_MODE_NOT_ENABLED'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /v1/tenants/{tenantId}/api-keys/{keyId}:
+    parameters:
+      - $ref: '#/components/parameters/TenantId'
+      - $ref: '#/components/parameters/ApiKeyId'
+    patch:
+      operationId: updateApiKey
+      summary: Rename an API key or change its origins
+      description: >-
+        Owners and admins change the name, or the allowed origins of a publishable key (the origin rules of
+        `createApiKey`; a secret key has no origins). Kind, environment and scopes never change: roll the key for new
+        scopes. A revoked key answers `409 CONFLICT` (`details.reason = revoked`); a tenant that is not `active` answers
+        `409 TENANT_NOT_ACTIVE`, because a suspended OTA's keys are read-only (PADR-0014 item 5). Writes an audit row
+        and, after commit, publishes an `api_key` invalidation with the prefix, so the OTA backend drops its cached
+        copy.
+      tags:
+        - API keys
+      security:
+        - portalBearer: []
+      x-scope: portal
+      x-error-codes:
+        - VALIDATION_FAILED
+        - UNAUTHENTICATED
+        - TOKEN_EXPIRED
+        - EMAIL_NOT_VERIFIED
+        - FORBIDDEN
+        - NOT_FOUND
+        - CONFLICT
+        - TENANT_NOT_ACTIVE
+        - RATE_LIMITED
+        - INTERNAL_ERROR
+      x-platform-tables:
+        - tenant_memberships
+        - tenants
+        - api_keys
+        - platform_audit_log
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateApiKeyRequest'
+            example:
+              allowedOrigins:
+                - https://www.acme-travel.example.com
+                - https://book.acme-travel.example.com
+      responses:
+        '200':
+          description: The updated key.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiKey'
+              examples:
+                apiKey:
+                  $ref: '#/components/examples/PublishableApiKey'
+        '400':
+          $ref: '#/components/responses/ValidationFailed'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/TenantRoleForbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/ApiKeyConflict'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /v1/tenants/{tenantId}/api-keys/{keyId}/roll:
+    parameters:
+      - $ref: '#/components/parameters/TenantId'
+      - $ref: '#/components/parameters/ApiKeyId'
+    post:
+      operationId: rollApiKey
+      summary: Replace an API key with a new one, shown once
+      description: >-
+        Owners and admins create a new key with the same name, kind, environment, origins and scopes, answered once
+        with `Cache-Control: no-store` (never logged, never stored for a replay), and set the old key's `expiresAt` to
+        now or 1 hour, 24 hours or 7 days ahead, so deployments can switch without downtime. A revoked key answers `409
+        CONFLICT` (`details.reason = revoked`) and a tenant that is not `active` `409 TENANT_NOT_ACTIVE`. While the old
+        key keeps working (`expireOldIn` other than `now`) both count against the plan's `apiKeys` limit (`422
+        PLAN_LIMIT_REACHED`). Rolling a **live secret key needs a TOTP step-up**, as in `createApiKey`. Writes an audit
+        row and, after commit, publishes an `api_key` invalidation for the old prefix.
+      tags:
+        - API keys
+      security:
+        - portalBearer: []
+      x-scope: portal
+      x-error-codes:
+        - VALIDATION_FAILED
+        - UNAUTHENTICATED
+        - TOKEN_EXPIRED
+        - REAUTH_REQUIRED
+        - EMAIL_NOT_VERIFIED
+        - FORBIDDEN
+        - MFA_REQUIRED
+        - NOT_FOUND
+        - CONFLICT
+        - TENANT_NOT_ACTIVE
+        - PLAN_LIMIT_REACHED
+        - RATE_LIMITED
+        - INTERNAL_ERROR
+      x-platform-tables:
+        - tenant_memberships
+        - tenants
+        - plans
+        - api_keys
+        - platform_audit_log
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RollApiKeyRequest'
+            example:
+              expireOldIn: 24h
+      responses:
+        '201':
+          description: The new key, shown once, and when the old one stops working.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+            Cache-Control:
+              $ref: '#/components/headers/NoStore'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiKeyRolled'
+              example:
+                apiKey:
+                  id: key_01JB3KB7D1F5H9K3N7Q1T5W9Y3
+                  name: Storefront production
+                  kind: secret
+                  environment: test
+                  prefix: sk_test_Mn56Bv
+                  last4: Pq21
+                  allowedOrigins: []
+                  scopes:
+                    - storefront
+                  createdAt: '2026-10-16T07:45:00Z'
+                  createdBy:
+                    accountId: acc_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+                    fullName: Anna Berg
+                  lastUsedAt: null
+                  expiresAt: null
+                  revokedAt: null
+                key: sk_test_Mn56Bv78Cx90Za12Sd34Fg56Hj78Kl90Qw12Pq21
+                previous:
+                  id: key_01JB3KA2C6E0G4J8M2P6S0V4X8
+                  expiresAt: '2026-10-17T07:45:00Z'
+        '400':
+          $ref: '#/components/responses/ValidationFailed'
+        '401':
+          $ref: '#/components/responses/StepUpUnauthorized'
+        '403':
+          $ref: '#/components/responses/TenantRoleOrStepUpForbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/ApiKeyConflict'
+        '422':
+          $ref: '#/components/responses/PlanLimitReached'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /v1/tenants/{tenantId}/api-keys/{keyId}/revoke:
+    parameters:
+      - $ref: '#/components/parameters/TenantId'
+      - $ref: '#/components/parameters/ApiKeyId'
+    post:
+      operationId: revokeApiKey
+      summary: Revoke an API key now
+      description: >-
+        Owners and admins revoke a key at once: `revokedAt` and the revoking account are set, and after commit an
+        `api_key` invalidation with the prefix makes the OTA backend refuse the key within seconds (its 60-second cache
+        bounds the delay if the message is lost). Keys are never deleted, because the audit trail refers to them. A key
+        revoked already answers `409 CONFLICT` (`details.reason = revoked`); a tenant that is not `active` answers `409
+        TENANT_NOT_ACTIVE` (PADR-0014 item 5). Writes an audit row.
+      tags:
+        - API keys
+      security:
+        - portalBearer: []
+      x-scope: portal
+      x-error-codes:
+        - VALIDATION_FAILED
+        - UNAUTHENTICATED
+        - TOKEN_EXPIRED
+        - EMAIL_NOT_VERIFIED
+        - FORBIDDEN
+        - NOT_FOUND
+        - CONFLICT
+        - TENANT_NOT_ACTIVE
+        - RATE_LIMITED
+        - INTERNAL_ERROR
+      x-platform-tables:
+        - tenant_memberships
+        - tenants
+        - api_keys
+        - platform_audit_log
+      responses:
+        '200':
+          description: The revoked key.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiKey'
+              example:
+                id: key_01JB3KA2C6E0G4J8M2P6S0V4X8
+                name: Storefront production
+                kind: secret
+                environment: test
+                prefix: sk_test_Qw34Er
+                last4: Df90
+                allowedOrigins: []
+                scopes:
+                  - storefront
+                createdAt: '2026-10-15T09:30:00Z'
+                createdBy:
+                  accountId: acc_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+                  fullName: Anna Berg
+                lastUsedAt: '2026-10-16T07:40:00Z'
+                expiresAt: null
+                revokedAt: '2026-10-16T07:46:30Z'
+        '400':
+          $ref: '#/components/responses/ValidationFailed'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/TenantRoleForbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/ApiKeyConflict'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /v1/tenants/{tenantId}/domains:
+    parameters:
+      - $ref: '#/components/parameters/TenantId'
+    get:
+      operationId: listDomains
+      summary: List the storefront domains of an OTA
+      description: >-
+        The Velexis sub-domain `<key>.<STOREFRONT_BASE_DOMAIN>`, created verified and primary with the OTA, and from M5
+        the custom storefront domains, primary first. A custom domain lists the DNS records to create (PADR-0004 item
+        2): the `TXT` record `_velexis.<host>` with its verification value, plus either a `CNAME` to the sub-domain or
+        `A`/`AAAA` records to the storefront addresses (for an apex domain); verification accepts either. The
+        sub-domain needs no record (`dnsRecords` is empty). Any member may read it.
+      tags:
+        - Domains
+      security:
+        - portalBearer: []
+      x-scope: portal
+      x-error-codes:
+        - VALIDATION_FAILED
+        - UNAUTHENTICATED
+        - TOKEN_EXPIRED
+        - EMAIL_NOT_VERIFIED
+        - NOT_FOUND
+        - RATE_LIMITED
+        - INTERNAL_ERROR
+      x-platform-tables:
+        - tenant_memberships
+        - tenants
+        - tenant_domains
+      responses:
+        '200':
+          description: The domains.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DomainList'
+              example:
+                data:
+                  - id: dom_01JA2Z7Q4M9R2T6V0X3Z8B1D6G
+                    hostname: acme.ota.example.com
+                    kind: subdomain
+                    purpose: storefront
+                    isPrimary: true
+                    verificationStatus: verified
+                    dnsRecords: []
+                    verificationDeadlineAt: null
+                    lastCheckedAt: null
+                    lastCheckError: null
+                    tlsStatus: issued
+                    tlsExpiresAt: '2027-01-12T08:21:00Z'
+                    createdAt: '2026-10-14T08:20:11Z'
+                  - id: dom_01JB3K5N9Q3S7W1Y5A9C3E7G1J
+                    hostname: travel.acme-travel.example.com
+                    kind: custom
+                    purpose: storefront
+                    isPrimary: false
+                    verificationStatus: pending
+                    dnsRecords:
+                      - type: TXT
+                        name: _velexis.travel.acme-travel.example.com
+                        value: vx-verify-K7Q4M2XP9TRWH5ZDB3NV8QKE1MZT6RYC
+                      - type: CNAME
+                        name: travel.acme-travel.example.com
+                        value: acme.ota.example.com
+                      - type: A
+                        name: travel.acme-travel.example.com
+                        value: 203.0.113.10
+                      - type: AAAA
+                        name: travel.acme-travel.example.com
+                        value: 2001:db8::10
+                    verificationDeadlineAt: '2026-11-21T10:00:00Z'
+                    lastCheckedAt: '2026-11-18T10:05:00Z'
+                    lastCheckError: The TXT record _velexis.travel.acme-travel.example.com was not found.
+                    tlsStatus: pending
+                    tlsExpiresAt: null
+                    createdAt: '2026-11-18T10:00:00Z'
+        '400':
+          $ref: '#/components/responses/ValidationFailed'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/EmailNotVerified'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /v1/tenants/{tenantId}/amadeus-connections:
+    parameters:
+      - $ref: '#/components/parameters/TenantId'
+    get:
+      operationId: listAmadeusConnections
+      summary: List the Amadeus connections of an OTA
+      description: >-
+        Owners, admins and finance members see the `test` and, once requested, `live` Amadeus connection: whose
+        credentials it uses (`velexis`: the Velexis account through an assigned office; `tenant`: the OTA's own, M5),
+        its status, office ids and defaults, ticketing defaults and monitored queues, and the last verification. The
+        OTA's own `clientId` is shown; a client secret or any ciphertext never is. `pendingSubmission` is the latest
+        submission of own credentials while it is open or after it failed (M5); it is `null` until then. Each entry
+        carries the `version` for the M4 update.
+      tags:
+        - Connections
+      security:
+        - portalBearer: []
+      x-scope: portal
+      x-error-codes:
+        - VALIDATION_FAILED
+        - UNAUTHENTICATED
+        - TOKEN_EXPIRED
+        - EMAIL_NOT_VERIFIED
+        - FORBIDDEN
+        - NOT_FOUND
+        - RATE_LIMITED
+        - INTERNAL_ERROR
+      x-platform-tables:
+        - tenant_memberships
+        - supplier_connections
+        - credential_submissions
+      responses:
+        '200':
+          description: The Amadeus connections.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AmadeusConnectionList'
+              example:
+                data:
+                  - id: sc_01JA2ZB9C3E7G1J5M9Q3S7V1X5
+                    environment: test
+                    credentialSource: velexis
+                    status: active
+                    officeIds:
+                      - NCE1A0955
+                    defaultOfficeId: NCE1A0955
+                    queuingOfficeId: NCE1A0955
+                    ownerOfficeId: NCE1A0955
+                    clientId: null
+                    ticketingDefaults: {}
+                    monitoredQueues: []
+                    lastVerifiedAt: '2026-10-14T08:20:15Z'
+                    lastError: null
+                    pendingSubmission: null
+                    version: 1
+        '400':
+          $ref: '#/components/responses/ValidationFailed'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/TenantRoleForbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /v1/tenants/{tenantId}/payment-connections:
+    parameters:
+      - $ref: '#/components/parameters/TenantId'
+    get:
+      operationId: listPaymentConnections
+      summary: List the payment connections of an OTA
+      description: >-
+        Owners, admins and finance members see the Stripe connection of each environment: the account mode (`velexis`:
+        the Velexis Stripe account, settled monthly; `connect_standard` or `api_keys`: the OTA's own account, M5), its
+        status, the connected account id and Stripe publishable key where the mode has them, the card statement
+        descriptor suffix, the Connect capabilities, and for `api_keys` mode the webhook URL to configure in Stripe. A
+        secret key, a webhook secret or any ciphertext is never answered. `pendingSubmission` is the latest submission
+        of own Stripe keys while it is open or after it failed (M5); it is `null` until then.
+      tags:
+        - Connections
+      security:
+        - portalBearer: []
+      x-scope: portal
+      x-error-codes:
+        - VALIDATION_FAILED
+        - UNAUTHENTICATED
+        - TOKEN_EXPIRED
+        - EMAIL_NOT_VERIFIED
+        - FORBIDDEN
+        - NOT_FOUND
+        - RATE_LIMITED
+        - INTERNAL_ERROR
+      x-platform-tables:
+        - tenant_memberships
+        - payment_provider_connections
+        - credential_submissions
+      responses:
+        '200':
+          description: The payment connections.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaymentConnectionList'
+              example:
+                data:
+                  - id: ppc_01JA2ZBA4D8F2H6K0N4Q8S2V6X
+                    environment: test
+                    provider: stripe
+                    accountMode: velexis
+                    status: active
+                    accountReference: null
+                    publishableKey: null
+                    statementDescriptorSuffix: ACME TRAVEL
+                    capabilities: {}
+                    connectedAt: null
+                    disconnectedAt: null
+                    webhookUrl: null
+                    pendingSubmission: null
+                    version: 1
+        '400':
+          $ref: '#/components/responses/ValidationFailed'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/TenantRoleForbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /v1/tenants/{tenantId}/subscription:
+    parameters:
+      - $ref: '#/components/parameters/TenantId'
+    get:
+      operationId: getSubscription
+      summary: Get the subscription of an OTA
+      description: >-
+        Owners and finance members see the OTA's subscription: the current one, or after a cancellation the canceled
+        one. It shows the plan, status, billing provider (`manual` for the trial before M5, `stripe` from M5), interval,
+        trial end, current period end and scheduled cancellation. `banner` is what the portal shows: `past_due` or
+        `trial_ending` from the billing notice that billing sync keeps on the tenant, `canceled` for a canceled
+        subscription, otherwise `null`. `canManageInStripe` is true only for a Stripe subscription, whose plan, card
+        and cancellation are managed in the Stripe Customer Portal (M5). An OTA without a subscription answers `404
+        NOT_FOUND`.
+      tags:
+        - Billing
+      security:
+        - portalBearer: []
+      x-scope: portal
+      x-error-codes:
+        - VALIDATION_FAILED
+        - UNAUTHENTICATED
+        - TOKEN_EXPIRED
+        - EMAIL_NOT_VERIFIED
+        - FORBIDDEN
+        - NOT_FOUND
+        - RATE_LIMITED
+        - INTERNAL_ERROR
+      x-platform-tables:
+        - tenant_memberships
+        - tenants
+        - subscriptions
+        - plans
+      responses:
+        '200':
+          description: The subscription.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Subscription'
+              example:
+                id: sub_01JA2Z7R5N0S3V7X1Z4B9D2F6H
+                planCode: early_access
+                planName: Early access
+                status: trialing
+                billingProvider: manual
+                billingInterval: month
+                trialEndsAt: '2027-01-12T08:20:11Z'
+                currentPeriodEnd: null
+                cancelAtPeriodEnd: false
+                banner: null
+                canManageInStripe: false
+        '400':
+          $ref: '#/components/responses/ValidationFailed'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/TenantRoleForbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
   /internal/tls/ask:
     get:
       operationId: tlsAsk
@@ -1549,6 +3806,33 @@ components:
         type: string
         pattern: ^ten_[0-9A-HJKMNP-TV-Z]{26}$
       example: ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F
+    MemberId:
+      name: memberId
+      in: path
+      required: true
+      description: The membership (`id` of `listMembers`, the staff id `stf_…`).
+      schema:
+        type: string
+        pattern: ^stf_[0-9A-HJKMNP-TV-Z]{26}$
+      example: stf_01JB3K7P2R6T0W4Y8A2C6E0G4J
+    InvitationId:
+      name: invitationId
+      in: path
+      required: true
+      description: The invitation (`id` of `listInvitations`).
+      schema:
+        type: string
+        pattern: ^ivt_[0-9A-HJKMNP-TV-Z]{26}$
+      example: ivt_01JA2ZF4H8K2M6P0R4T8W2Y6A0
+    ApiKeyId:
+      name: keyId
+      in: path
+      required: true
+      description: The API key (`id` of `listApiKeys`, never the key or its prefix).
+      schema:
+        type: string
+        pattern: ^key_[0-9A-HJKMNP-TV-Z]{26}$
+      example: key_01JB3KA2C6E0G4J8M2P6S0V4X8
   responses:
     ValidationFailed:
       description: 'The request body, query or headers failed validation; see fieldErrors. Possible codes: VALIDATION_FAILED.'
@@ -1672,6 +3956,167 @@ components:
           examples:
             INTERNAL_ERROR:
               $ref: '#/components/examples/INTERNAL_ERROR'
+    TenantRoleForbidden:
+      description: >-
+        The e-mail address is not verified, or the caller's role in the OTA does not allow the operation. Possible
+        codes: EMAIL_NOT_VERIFIED, FORBIDDEN.
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/X-Request-Id'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            EMAIL_NOT_VERIFIED:
+              $ref: '#/components/examples/EMAIL_NOT_VERIFIED'
+            FORBIDDEN:
+              $ref: '#/components/examples/FORBIDDEN'
+    TenantRoleOrStepUpForbidden:
+      description: >-
+        The e-mail address is not verified, the caller's role in the OTA does not allow the operation, or the operation
+        needs a step-up and MFA is not enabled. Possible codes: EMAIL_NOT_VERIFIED, FORBIDDEN, MFA_REQUIRED.
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/X-Request-Id'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            EMAIL_NOT_VERIFIED:
+              $ref: '#/components/examples/EMAIL_NOT_VERIFIED'
+            FORBIDDEN:
+              $ref: '#/components/examples/FORBIDDEN'
+            MFA_REQUIRED:
+              $ref: '#/components/examples/MFA_REQUIRED'
+    TenantNotActive:
+      description: >-
+        The OTA is not active: it is being set up, suspended or failed (`details.status`). Possible codes:
+        TENANT_NOT_ACTIVE.
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/X-Request-Id'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            TENANT_NOT_ACTIVE:
+              $ref: '#/components/examples/TENANT_NOT_ACTIVE'
+    ApiKeyConflict:
+      description: >-
+        The key is revoked (`details.reason = revoked`), or the OTA is not active, so its keys are read-only. Possible
+        codes: CONFLICT, TENANT_NOT_ACTIVE.
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/X-Request-Id'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            CONFLICT:
+              summary: The key is revoked
+              value:
+                error:
+                  code: CONFLICT
+                  message: The request conflicts with the current state of the resource.
+                  status: 409
+                  requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+                  details:
+                    reason: revoked
+            TENANT_NOT_ACTIVE:
+              $ref: '#/components/examples/TENANT_NOT_ACTIVE'
+    LastOwner:
+      description: 'The change would leave the OTA without an active owner. Possible codes: LAST_OWNER.'
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/X-Request-Id'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            LAST_OWNER:
+              $ref: '#/components/examples/LAST_OWNER'
+    InvitationNotPending:
+      description: >-
+        The invitation is not pending any more: it was accepted, revoked or expired (`details.reason = not_pending`).
+        Possible codes: CONFLICT.
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/X-Request-Id'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            CONFLICT:
+              summary: The invitation is not pending
+              value:
+                error:
+                  code: CONFLICT
+                  message: The request conflicts with the current state of the resource.
+                  status: 409
+                  requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+                  details:
+                    reason: not_pending
+    InvitationInvalid:
+      description: >-
+        The body failed validation, or the invitation is unknown, already used, revoked or expired. Possible codes:
+        VALIDATION_FAILED, INVITATION_INVALID.
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/X-Request-Id'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            VALIDATION_FAILED:
+              $ref: '#/components/examples/VALIDATION_FAILED'
+            INVITATION_INVALID:
+              $ref: '#/components/examples/INVITATION_INVALID'
+    PreconditionFailed:
+      description: '`If-Match` is not the current version; reload and try again. Possible codes: PRECONDITION_FAILED.'
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/X-Request-Id'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            PRECONDITION_FAILED:
+              $ref: '#/components/examples/PRECONDITION_FAILED'
+    PlanLimitReached:
+      description: >-
+        The plan's limit is reached (`details.limit` and `details.used`). Possible codes: PLAN_LIMIT_REACHED.
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/X-Request-Id'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            PLAN_LIMIT_REACHED:
+              $ref: '#/components/examples/PLAN_LIMIT_REACHED'
+    ServiceUnavailable:
+      description: >-
+        A dependency the operation needs (PostgreSQL, or Redis for the idempotency store) is unavailable; nothing was
+        written. Retry later. Possible codes: SERVICE_UNAVAILABLE.
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/X-Request-Id'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            SERVICE_UNAVAILABLE:
+              $ref: '#/components/examples/SERVICE_UNAVAILABLE'
   examples:
     PortalSession:
       summary: Signed in
@@ -1749,6 +4194,59 @@ components:
           - Q6MS-3PJV-5HCY-0DWR
           - T1XE-7KAZ-4NBG-9SQM
           - H8VC-2YRD-6WMP-3JKF
+    Tenant:
+      summary: An active OTA seen by its owner
+      value:
+        id: ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F
+        key: acme
+        name: Acme Travel
+        legalName: Acme Travel AS
+        status: active
+        suspensionReason: null
+        billingNotice: null
+        planCode: early_access
+        defaultCurrency: EUR
+        countryCode: 'NO'
+        timeZone: Europe/Oslo
+        supportEmail: support@acme-travel.example.com
+        storefrontEnvironment: test
+        liveEnabledAt: null
+        primaryHost: acme.ota.example.com
+        schemaVersion: '0001_baseline'
+        createdAt: '2026-10-14T08:20:11Z'
+        activatedAt: '2026-10-14T08:20:16Z'
+        version: 3
+        myRole: owner
+    Invitation:
+      summary: A pending invitation
+      value:
+        id: ivt_01JA2ZF4H8K2M6P0R4T8W2Y6A0
+        email: jo@acme-travel.example.com
+        role: agent
+        status: pending
+        invitedBy:
+          accountId: acc_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+          fullName: Anna Berg
+        expiresAt: '2026-10-21T09:00:00Z'
+        createdAt: '2026-10-14T09:00:00Z'
+    PublishableApiKey:
+      summary: A publishable test key with two origins
+      value:
+        id: key_01JA2ZD8E2G6J0K4N8Q2S6W0Y4
+        name: Website
+        kind: publishable
+        environment: test
+        prefix: pk_test_Zy98Xw
+        last4: Hg10
+        allowedOrigins:
+          - https://www.acme-travel.example.com
+          - https://book.acme-travel.example.com
+        scopes: []
+        createdAt: '2026-10-14T08:20:16Z'
+        createdBy: null
+        lastUsedAt: '2026-10-15T18:12:09Z'
+        expiresAt: null
+        revokedAt: null
     VALIDATION_FAILED:
       summary: VALIDATION_FAILED
       value:
@@ -1783,6 +4281,14 @@ components:
         error:
           code: MFA_SETUP_EXPIRED
           message: The pending two-factor set-up expired; start the set-up again.
+          status: 400
+          requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+    INVITATION_INVALID:
+      summary: INVITATION_INVALID
+      value:
+        error:
+          code: INVITATION_INVALID
+          message: The invitation is unknown, already used, revoked or expired.
           status: 400
           requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
     UNAUTHENTICATED:
@@ -1873,6 +4379,22 @@ components:
           message: Turn on two-factor authentication first.
           status: 403
           requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+    FORBIDDEN:
+      summary: FORBIDDEN
+      value:
+        error:
+          code: FORBIDDEN
+          message: The caller is authenticated but not allowed to perform this operation on this resource.
+          status: 403
+          requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+    INVITATION_EMAIL_MISMATCH:
+      summary: INVITATION_EMAIL_MISMATCH
+      value:
+        error:
+          code: INVITATION_EMAIL_MISMATCH
+          message: The invitation was sent to another e-mail address.
+          status: 403
+          requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
     NOT_FOUND:
       summary: NOT_FOUND
       value:
@@ -1881,6 +4403,64 @@ components:
           message: The resource does not exist or is not visible to the caller.
           status: 404
           requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+    IDEMPOTENCY_KEY_REUSED:
+      summary: IDEMPOTENCY_KEY_REUSED
+      value:
+        error:
+          code: IDEMPOTENCY_KEY_REUSED
+          message: The Idempotency-Key was already used with a different request body.
+          status: 409
+          requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+    TENANT_KEY_UNAVAILABLE:
+      summary: TENANT_KEY_UNAVAILABLE
+      value:
+        error:
+          code: TENANT_KEY_UNAVAILABLE
+          message: The OTA key is taken, reserved or was used before.
+          status: 409
+          requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+    TENANT_NOT_ACTIVE:
+      summary: TENANT_NOT_ACTIVE
+      value:
+        error:
+          code: TENANT_NOT_ACTIVE
+          message: The OTA is not active; it is being set up, suspended or failed.
+          status: 409
+          requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+          details:
+            status: suspended
+    PROVISIONING_NOT_RETRYABLE:
+      summary: PROVISIONING_NOT_RETRYABLE
+      value:
+        error:
+          code: PROVISIONING_NOT_RETRYABLE
+          message: Only a failed setup can be retried.
+          status: 409
+          requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+    LAST_OWNER:
+      summary: LAST_OWNER
+      value:
+        error:
+          code: LAST_OWNER
+          message: An OTA must keep at least one active owner.
+          status: 409
+          requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+    ALREADY_MEMBER:
+      summary: ALREADY_MEMBER
+      value:
+        error:
+          code: ALREADY_MEMBER
+          message: The person is already a member of this OTA.
+          status: 409
+          requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+    INVITATION_PENDING:
+      summary: INVITATION_PENDING
+      value:
+        error:
+          code: INVITATION_PENDING
+          message: An invitation for this e-mail address is already pending.
+          status: 409
+          requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
     MFA_ALREADY_ENABLED:
       summary: MFA_ALREADY_ENABLED
       value:
@@ -1888,6 +4468,14 @@ components:
           code: MFA_ALREADY_ENABLED
           message: Two-factor authentication is already on.
           status: 409
+          requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+    KEYS_ALREADY_REVEALED:
+      summary: KEYS_ALREADY_REVEALED
+      value:
+        error:
+          code: KEYS_ALREADY_REVEALED
+          message: The initial keys were already revealed, or the 24-hour window to reveal them passed.
+          status: 410
           requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
     PRECONDITION_FAILED:
       summary: PRECONDITION_FAILED
@@ -1913,6 +4501,33 @@ components:
           message: The current password is wrong.
           status: 422
           requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+    PLAN_NOT_AVAILABLE:
+      summary: PLAN_NOT_AVAILABLE
+      value:
+        error:
+          code: PLAN_NOT_AVAILABLE
+          message: The plan is not available with this billing interval.
+          status: 422
+          requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+    PLAN_LIMIT_REACHED:
+      summary: PLAN_LIMIT_REACHED
+      value:
+        error:
+          code: PLAN_LIMIT_REACHED
+          message: The plan's limit is reached.
+          status: 422
+          requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+          details:
+            limit: 10
+            used: 10
+    LIVE_MODE_NOT_ENABLED:
+      summary: LIVE_MODE_NOT_ENABLED
+      value:
+        error:
+          code: LIVE_MODE_NOT_ENABLED
+          message: The OTA must be live first.
+          status: 422
+          requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
     ACCOUNT_LOCKED:
       summary: ACCOUNT_LOCKED
       value:
@@ -1936,6 +4551,14 @@ components:
           code: INTERNAL_ERROR
           message: Unexpected error; quote the requestId to support.
           status: 500
+          requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+    SERVICE_UNAVAILABLE:
+      summary: SERVICE_UNAVAILABLE
+      value:
+        error:
+          code: SERVICE_UNAVAILABLE
+          message: Velexis is temporarily unavailable; try again later.
+          status: 503
           requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
   schemas:
     ErrorResponse:
@@ -2682,6 +5305,1515 @@ components:
       enum:
         - ok
         - down
+    TenantId:
+      type: string
+      description: OTA id (`ten_` + ULID).
+      pattern: ^ten_[0-9A-HJKMNP-TV-Z]{26}$
+      examples:
+        - ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F
+    TenantKey:
+      type: string
+      description: >-
+        The OTA's key: lower-case letters and digits, starting with a letter, 3–30 characters. It is also a DNS label:
+        the storefront host is `<key>.<STOREFRONT_BASE_DOMAIN>` and the tenant schema `tenant_<key>`. Never changes.
+      pattern: ^[a-z][a-z0-9]{2,29}$
+      examples:
+        - acme
+    TenantName:
+      type: string
+      description: Display name of the OTA.
+      minLength: 1
+      maxLength: 100
+      examples:
+        - Acme Travel
+    LegalName:
+      type: string
+      description: Legal entity name of the OTA, used on invoices.
+      minLength: 1
+      maxLength: 200
+      examples:
+        - Acme Travel AS
+    CountryCode:
+      type: string
+      description: ISO 3166-1 alpha-2 country code (checked against the reference countries).
+      pattern: ^[A-Z]{2}$
+      examples:
+        - 'NO'
+    CurrencyCode:
+      type: string
+      description: ISO 4217 currency code (checked against the reference currencies).
+      pattern: ^[A-Z]{3}$
+      examples:
+        - EUR
+    PlanCode:
+      type: string
+      description: Code of a plan, as `listPlans` answers it.
+      pattern: ^[a-z][a-z0-9_]{1,39}$
+      examples:
+        - early_access
+    BillingInterval:
+      type: string
+      description: Billing period of a subscription.
+      enum:
+        - month
+        - year
+    Environment:
+      type: string
+      description: >-
+        `test` (Amadeus test system, Stripe test mode, test keys) or `live` (production, from go-live in M5).
+      enum:
+        - test
+        - live
+    SuspensionReason:
+      type:
+        - string
+        - 'null'
+      description: >-
+        Why the OTA is suspended (PADR-0014): `billing` (set by billing sync, resumed on payment), `abuse`, `request`
+        or `admin` (set by a platform admin); `null` unless suspended.
+      enum:
+        - billing
+        - abuse
+        - request
+        - admin
+        - null
+    BillingNotice:
+      type:
+        - string
+        - 'null'
+      description: >-
+        The billing banner state that billing sync keeps on the tenant row for the portal and the OTA admin
+        (ADR-0013): `past_due` while a payment failed, `trial_ending` before the trial ends; `null` otherwise.
+      enum:
+        - past_due
+        - trial_ending
+        - null
+    Tenant:
+      type: object
+      description: >-
+        An OTA as its members see it. Never holds a secret: keys, connections and the subscription have their own
+        operations.
+      additionalProperties: false
+      required:
+        - id
+        - key
+        - name
+        - legalName
+        - status
+        - suspensionReason
+        - billingNotice
+        - planCode
+        - defaultCurrency
+        - countryCode
+        - timeZone
+        - supportEmail
+        - storefrontEnvironment
+        - liveEnabledAt
+        - primaryHost
+        - schemaVersion
+        - createdAt
+        - activatedAt
+        - version
+        - myRole
+      properties:
+        id:
+          $ref: '#/components/schemas/TenantId'
+        key:
+          $ref: '#/components/schemas/TenantKey'
+        name:
+          type: string
+          description: Display name of the OTA.
+        legalName:
+          type:
+            - string
+            - 'null'
+          description: Legal entity name; `null` until set.
+        status:
+          $ref: '#/components/schemas/TenantStatus'
+        suspensionReason:
+          $ref: '#/components/schemas/SuspensionReason'
+        billingNotice:
+          $ref: '#/components/schemas/BillingNotice'
+        planCode:
+          $ref: '#/components/schemas/PlanCode'
+        defaultCurrency:
+          $ref: '#/components/schemas/CurrencyCode'
+        countryCode:
+          type:
+            - string
+            - 'null'
+          pattern: ^[A-Z]{2}$
+          description: Country where the OTA is registered (ISO 3166-1 alpha-2).
+        timeZone:
+          $ref: '#/components/schemas/TimeZone'
+        supportEmail:
+          type:
+            - string
+            - 'null'
+          format: email
+          maxLength: 254
+          description: Business support address of the OTA; `null` until set.
+        storefrontEnvironment:
+          $ref: '#/components/schemas/Environment'
+        liveEnabledAt:
+          type:
+            - string
+            - 'null'
+          format: date-time
+          description: When the storefront went live (M5); `null` before.
+        primaryHost:
+          type: string
+          format: hostname
+          description: >-
+            The primary storefront host, used in links and e-mails (the sub-domain until a custom domain is made
+            primary).
+        schemaVersion:
+          type:
+            - string
+            - 'null'
+          pattern: ^[0-9]{4,14}(_[a-z0-9_]+)?$
+          description: The latest tenant migration applied to the OTA's schema; `null` until the setup records it.
+        createdAt:
+          type: string
+          format: date-time
+        activatedAt:
+          type:
+            - string
+            - 'null'
+          format: date-time
+          description: When the setup finished; `null` before.
+        version:
+          type: integer
+          minimum: 1
+          description: Optimistic-locking version; the `ETag` of the response carries it.
+        myRole:
+          $ref: '#/components/schemas/TenantRole'
+    TenantSummary:
+      type: object
+      description: One OTA of the caller in a list.
+      additionalProperties: false
+      required:
+        - id
+        - key
+        - name
+        - status
+        - role
+        - planCode
+        - storefrontUrl
+        - storefrontEnvironment
+      properties:
+        id:
+          $ref: '#/components/schemas/TenantId'
+        key:
+          $ref: '#/components/schemas/TenantKey'
+        name:
+          type: string
+        status:
+          $ref: '#/components/schemas/TenantStatus'
+        role:
+          $ref: '#/components/schemas/TenantRole'
+        planCode:
+          $ref: '#/components/schemas/PlanCode'
+        storefrontUrl:
+          type: string
+          format: uri
+          description: '`https://<primary host>/`.'
+        storefrontEnvironment:
+          $ref: '#/components/schemas/Environment'
+    TenantList:
+      type: object
+      additionalProperties: false
+      required:
+        - data
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/TenantSummary'
+    KeyAvailability:
+      type: object
+      description: Whether a key can be used for a new OTA.
+      additionalProperties: false
+      required:
+        - key
+        - available
+        - storefrontHost
+      properties:
+        key:
+          type: string
+          description: The key as checked.
+        available:
+          type: boolean
+        reason:
+          type: string
+          description: >-
+            Why the key is not available (only when `available` is false): `invalid` (breaks the key rules),
+            `reserved` (on the reserved list) or `taken` (used by an OTA in any status).
+          enum:
+            - invalid
+            - reserved
+            - taken
+        storefrontHost:
+          type: string
+          description: The storefront host the key gets, `<key>.<STOREFRONT_BASE_DOMAIN>`.
+    CreateTenantRequest:
+      type: object
+      description: >-
+        The new OTA. `planCode` and `billingInterval` matter from M5; before it the plan is always `early_access`.
+      additionalProperties: false
+      required:
+        - key
+        - name
+        - countryCode
+        - defaultCurrency
+        - timeZone
+      properties:
+        key:
+          $ref: '#/components/schemas/TenantKey'
+        name:
+          $ref: '#/components/schemas/TenantName'
+        countryCode:
+          $ref: '#/components/schemas/CountryCode'
+        defaultCurrency:
+          $ref: '#/components/schemas/CurrencyCode'
+        timeZone:
+          $ref: '#/components/schemas/TimeZone'
+        planCode:
+          $ref: '#/components/schemas/PlanCode'
+        billingInterval:
+          $ref: '#/components/schemas/BillingInterval'
+    TenantCreated:
+      type: object
+      description: >-
+        The new OTA, its setup job and, from M5, the Stripe Checkout URL. `checkoutError` is present only when Stripe
+        failed after the OTA was created.
+      additionalProperties: false
+      required:
+        - tenant
+        - provisioningJob
+        - checkoutUrl
+      properties:
+        tenant:
+          $ref: '#/components/schemas/Tenant'
+        provisioningJob:
+          type: object
+          description: The setup job; follow it with `getProvisioning`.
+          additionalProperties: false
+          required:
+            - id
+            - status
+          properties:
+            id:
+              $ref: '#/components/schemas/ProvisioningJobId'
+            status:
+              $ref: '#/components/schemas/ProvisioningJobStatus'
+        checkoutUrl:
+          type:
+            - string
+            - 'null'
+          format: uri
+          description: >-
+            The Stripe Checkout page to send the browser to (M5); `null` before M5 and when Checkout could not be
+            created.
+        checkoutError:
+          $ref: '#/components/schemas/CheckoutError'
+    CheckoutError:
+      type: object
+      description: Why no Checkout Session was created (M5); the OTA and its job exist, and payment can start later.
+      additionalProperties: false
+      required:
+        - code
+        - message
+      properties:
+        code:
+          type: string
+          pattern: ^[A-Z][A-Z0-9_]+$
+          description: An error code of the catalogue, for example `PROVIDER_ERROR`.
+        message:
+          type: string
+          description: A message safe to show.
+    UpdateTenantRequest:
+      type: object
+      description: The fields to change; at least one. `null` clears the legal name or the support e-mail.
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        name:
+          $ref: '#/components/schemas/TenantName'
+        legalName:
+          oneOf:
+            - $ref: '#/components/schemas/LegalName'
+            - type: 'null'
+        supportEmail:
+          oneOf:
+            - $ref: '#/components/schemas/EmailAddress'
+            - type: 'null'
+        countryCode:
+          $ref: '#/components/schemas/CountryCode'
+        timeZone:
+          $ref: '#/components/schemas/TimeZone'
+    ProvisioningJobId:
+      type: string
+      description: Tenant job id (`job_` + ULID).
+      pattern: ^job_[0-9A-HJKMNP-TV-Z]{26}$
+      examples:
+        - job_01JA2ZC3D7F1H5K9M3P7R1T5V9
+    ProvisioningJobStatus:
+      type: string
+      description: >-
+        `queued` (waiting for dispatch or its gate, such as Checkout in M5), `running` (dispatched), `succeeded`,
+        `failed`, `canceled`.
+      enum:
+        - queued
+        - running
+        - succeeded
+        - failed
+        - canceled
+    ProvisioningJob:
+      type: object
+      description: A tenant lifecycle job (PADR-0001); the portal shows the latest `provision` job.
+      additionalProperties: false
+      required:
+        - id
+        - kind
+        - status
+        - step
+        - steps
+        - attempt
+        - maxAttempts
+        - error
+      properties:
+        id:
+          $ref: '#/components/schemas/ProvisioningJobId'
+        kind:
+          type: string
+          description: The job kind; the setup is `provision`.
+          enum:
+            - provision
+            - migrate
+            - suspend
+            - resume
+        status:
+          $ref: '#/components/schemas/ProvisioningJobStatus'
+        step:
+          type:
+            - string
+            - 'null'
+          pattern: ^[a-z][a-z0-9_]{0,63}$
+          description: >-
+            The current or last step, for example `dispatch` or `assign_amadeus_office`; `null` before dispatch.
+        steps:
+          type: array
+          description: The finished steps of the OTA worker and of the platform post-steps, in order.
+          items:
+            $ref: '#/components/schemas/ProvisioningStep'
+        attempt:
+          type: integer
+          minimum: 0
+          description: Attempts dispatched so far.
+        maxAttempts:
+          type: integer
+          minimum: 1
+          description: The attempt budget (5).
+        error:
+          type:
+            - string
+            - 'null'
+          maxLength: 1000
+          description: The last error, a short message without secrets; `null` when there is none.
+    ProvisioningStep:
+      type: object
+      description: One finished step of a job.
+      additionalProperties: false
+      required:
+        - step
+        - status
+        - startedAt
+        - finishedAt
+      properties:
+        step:
+          type: string
+          pattern: ^[a-z][a-z0-9_]{0,63}$
+          description: >-
+            The step name: `create_schema`, `run_migrations`, `seed_defaults` (OTA worker), then `record_migrations`,
+            `assign_amadeus_office`, `create_payment_connection`, `issue_api_keys`, `activate`, `notify` (platform).
+        status:
+          type: string
+          enum:
+            - succeeded
+            - failed
+            - skipped
+        startedAt:
+          type: string
+          format: date-time
+        finishedAt:
+          type: string
+          format: date-time
+        error:
+          $ref: '#/components/schemas/ProvisioningStepError'
+    ProvisioningStepError:
+      type: object
+      description: Why a step failed; a stable code and a short message without values or secrets.
+      additionalProperties: false
+      required:
+        - code
+        - message
+      properties:
+        code:
+          type: string
+          minLength: 1
+          maxLength: 64
+          description: For example `LOCK_TIMEOUT`, `CHECKSUM_MISMATCH` or a SQLSTATE.
+        message:
+          type: string
+          maxLength: 1000
+    ProvisioningStatus:
+      type: object
+      description: The setup progress of an OTA.
+      additionalProperties: false
+      required:
+        - tenantStatus
+        - job
+        - initialKeysAvailable
+      properties:
+        tenantStatus:
+          $ref: '#/components/schemas/TenantStatus'
+        job:
+          $ref: '#/components/schemas/ProvisioningJob'
+        initialKeysAvailable:
+          type: boolean
+          description: True while the test keys issued at setup can still be revealed once (`revealInitialKeys`).
+    ProvisioningRetried:
+      type: object
+      description: The new setup job and, from M5, the Checkout URL when the earlier Checkout was abandoned.
+      additionalProperties: false
+      required:
+        - job
+        - checkoutUrl
+      properties:
+        job:
+          $ref: '#/components/schemas/ProvisioningJob'
+        checkoutUrl:
+          type:
+            - string
+            - 'null'
+          format: uri
+          description: The new Stripe Checkout page (M5), or `null` when the setup runs without payment.
+    InitialKeys:
+      type: object
+      description: The test keys issued at setup, shown once.
+      additionalProperties: false
+      required:
+        - keys
+      properties:
+        keys:
+          type: array
+          minItems: 1
+          items:
+            $ref: '#/components/schemas/InitialKey'
+    InitialKey:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - kind
+        - environment
+        - prefix
+        - key
+      properties:
+        id:
+          $ref: '#/components/schemas/ApiKeyId'
+        kind:
+          $ref: '#/components/schemas/ApiKeyKind'
+        environment:
+          $ref: '#/components/schemas/Environment'
+        prefix:
+          $ref: '#/components/schemas/ApiKeyPrefix'
+        key:
+          $ref: '#/components/schemas/ApiKeySecret'
+    OnboardingChecklist:
+      type: object
+      description: The onboarding checklist of PADR-0018, computed on every call.
+      additionalProperties: false
+      required:
+        - items
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/OnboardingItem'
+    OnboardingItem:
+      type: object
+      description: One checklist item.
+      additionalProperties: false
+      required:
+        - id
+        - label
+        - done
+        - href
+        - milestone
+      properties:
+        id:
+          type: string
+          description: The item (PADR-0018), in this order.
+          enum:
+            - email_verified
+            - mfa_enabled
+            - ota_active
+            - api_key
+            - storefront_open
+            - amadeus_test
+            - team_invited
+            - plan_chosen
+            - custom_domain
+            - payments_ready
+            - live_requested
+        label:
+          type: string
+          description: The text the portal shows.
+        done:
+          type: boolean
+        href:
+          type: string
+          format: uri-reference
+          description: A portal path, or the storefront URL for `storefront_open`.
+        milestone:
+          type: string
+          description: The milestone that brings the item; `M5` items appear only while their switch is on.
+          enum:
+            - M1
+            - M5
+    MembershipId:
+      type: string
+      description: Membership id, the staff id of the OTA admin (`stf_` + ULID).
+      pattern: ^stf_[0-9A-HJKMNP-TV-Z]{26}$
+      examples:
+        - stf_01JA2ZA1C5E9G3J7K2M6P0R4T8
+    Member:
+      type: object
+      description: A member of an OTA.
+      additionalProperties: false
+      required:
+        - id
+        - accountId
+        - fullName
+        - email
+        - role
+        - status
+        - mfaEnabled
+        - createdAt
+        - version
+      properties:
+        id:
+          $ref: '#/components/schemas/MembershipId'
+        accountId:
+          $ref: '#/components/schemas/AccountId'
+        fullName:
+          type: string
+        email:
+          $ref: '#/components/schemas/EmailAddress'
+        role:
+          $ref: '#/components/schemas/TenantRole'
+        status:
+          type: string
+          description: The membership state; `listMembers` answers active members only.
+          enum:
+            - active
+            - suspended
+            - removed
+        mfaEnabled:
+          type: boolean
+          description: Whether the member's account has MFA on.
+        createdAt:
+          type: string
+          format: date-time
+          description: When the person joined.
+        version:
+          type: integer
+          minimum: 1
+          description: Optimistic-locking version; send it in `If-Match` to `updateMember`.
+    MemberList:
+      type: object
+      additionalProperties: false
+      required:
+        - data
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Member'
+    UpdateMemberRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - role
+      properties:
+        role:
+          $ref: '#/components/schemas/TenantRole'
+    AccountReference:
+      type: object
+      description: An account named in a resource, for example who invited a person or created a key.
+      additionalProperties: false
+      required:
+        - accountId
+        - fullName
+      properties:
+        accountId:
+          $ref: '#/components/schemas/AccountId'
+        fullName:
+          type: string
+    Invitation:
+      type: object
+      description: An invitation to join an OTA. The token is never answered; only its hash is stored.
+      additionalProperties: false
+      required:
+        - id
+        - email
+        - role
+        - status
+        - invitedBy
+        - expiresAt
+        - createdAt
+      properties:
+        id:
+          type: string
+          pattern: ^ivt_[0-9A-HJKMNP-TV-Z]{26}$
+        email:
+          $ref: '#/components/schemas/EmailAddress'
+        role:
+          $ref: '#/components/schemas/TenantRole'
+        status:
+          type: string
+          enum:
+            - pending
+            - accepted
+            - revoked
+            - expired
+        invitedBy:
+          description: Who sent the invitation; `null` when that account no longer exists.
+          oneOf:
+            - $ref: '#/components/schemas/AccountReference'
+            - type: 'null'
+        expiresAt:
+          type: string
+          format: date-time
+        createdAt:
+          type: string
+          format: date-time
+    InvitationList:
+      type: object
+      additionalProperties: false
+      required:
+        - data
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Invitation'
+    CreateInvitationRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - email
+        - role
+      properties:
+        email:
+          $ref: '#/components/schemas/EmailAddress'
+        role:
+          $ref: '#/components/schemas/TenantRole'
+    InvitationTokenRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - token
+      properties:
+        token:
+          $ref: '#/components/schemas/OpaqueToken'
+    InvitationPreview:
+      type: object
+      description: What the accept page shows before the person signs in.
+      additionalProperties: false
+      required:
+        - tenantName
+        - role
+        - email
+        - inviterName
+        - expiresAt
+      properties:
+        tenantName:
+          type: string
+        role:
+          $ref: '#/components/schemas/TenantRole'
+        email:
+          $ref: '#/components/schemas/EmailAddress'
+        inviterName:
+          type:
+            - string
+            - 'null'
+          description: The inviter's name; `null` when that account no longer exists.
+        expiresAt:
+          type: string
+          format: date-time
+    InvitationAccepted:
+      type: object
+      additionalProperties: false
+      required:
+        - membership
+        - tenant
+      properties:
+        membership:
+          $ref: '#/components/schemas/Member'
+        tenant:
+          $ref: '#/components/schemas/TenantSummary'
+    ApiKeyId:
+      type: string
+      description: API key id (`key_` + ULID).
+      pattern: ^key_[0-9A-HJKMNP-TV-Z]{26}$
+      examples:
+        - key_01JA2ZD8E2G6J0K4N8Q2S6W0Y4
+    ApiKeyKind:
+      type: string
+      description: '`publishable` (`pk_`, safe in a browser, customer scope only) or `secret` (`sk_`, server only).'
+      enum:
+        - publishable
+        - secret
+    ApiKeyPrefix:
+      type: string
+      description: The first 14 characters of the key, shown in the portal and used as the lookup key.
+      pattern: ^(pk|sk)_(test|live)_[A-Za-z0-9]{6}$
+      examples:
+        - sk_test_Ab12Cd
+    ApiKeySecret:
+      type: string
+      description: >-
+        The full key, `<pk|sk>_<environment>_` plus 40 base62 characters (PADR-0005). Answered once, with
+        `Cache-Control: no-store`; never stored in clear and never logged.
+      pattern: ^(pk|sk)_(test|live)_[A-Za-z0-9]{40}$
+    ApiKeyOrigin:
+      type: string
+      description: >-
+        An exact browser origin `scheme://host[:port]`: `https`, or `http://localhost:<port>` and
+        `http://127.0.0.1:<port>` on test keys; no wildcard, path or trailing slash (checked by the service).
+      maxLength: 300
+      pattern: ^https?://[^/?#\s]+$
+      examples:
+        - https://www.acme-travel.example.com
+    ApiKeyScope:
+      type: string
+      description: >-
+        A `ConsoleApiKeyScope` (`storefront`, `console`, `console:automation`) or `StaffPermission` (`bookings:read`,
+        …) value of the OTA contract. The service checks the values and their combination against the generated OTA
+        types, so a new OTA permission needs no platform change (PADR-0005 item 6).
+      minLength: 1
+      maxLength: 64
+      pattern: ^[a-z][a-z_]*(:[a-z_]+)?$
+      examples:
+        - storefront
+    ApiKey:
+      type: object
+      description: An API key without the key itself; only its HMAC is stored.
+      additionalProperties: false
+      required:
+        - id
+        - name
+        - kind
+        - environment
+        - prefix
+        - last4
+        - allowedOrigins
+        - scopes
+        - createdAt
+        - createdBy
+        - lastUsedAt
+        - expiresAt
+        - revokedAt
+      properties:
+        id:
+          $ref: '#/components/schemas/ApiKeyId'
+        name:
+          type: string
+        kind:
+          $ref: '#/components/schemas/ApiKeyKind'
+        environment:
+          $ref: '#/components/schemas/Environment'
+        prefix:
+          $ref: '#/components/schemas/ApiKeyPrefix'
+        last4:
+          type: string
+          pattern: ^[A-Za-z0-9]{4}$
+          description: The last 4 characters of the key.
+        allowedOrigins:
+          type: array
+          description: Browser origins of a publishable key; always empty for a secret key.
+          items:
+            $ref: '#/components/schemas/ApiKeyOrigin'
+        scopes:
+          type: array
+          description: Scopes of a secret key; always empty for a publishable key.
+          items:
+            $ref: '#/components/schemas/ApiKeyScope'
+        createdAt:
+          type: string
+          format: date-time
+        createdBy:
+          description: Who created the key; `null` for the keys issued at setup.
+          oneOf:
+            - $ref: '#/components/schemas/AccountReference'
+            - type: 'null'
+        lastUsedAt:
+          type:
+            - string
+            - 'null'
+          format: date-time
+          description: The last authenticated request, up to 5 minutes stale; `null` before the first.
+        expiresAt:
+          type:
+            - string
+            - 'null'
+          format: date-time
+          description: When the key stops working (set by its creator or by a roll); `null` for no expiry.
+        revokedAt:
+          type:
+            - string
+            - 'null'
+          format: date-time
+          description: When the key was revoked; `null` while it is not.
+    ApiKeyList:
+      type: object
+      additionalProperties: false
+      required:
+        - data
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/ApiKey'
+    CreateApiKeyRequest:
+      type: object
+      description: >-
+        A new key. `allowedOrigins` applies to publishable keys and `scopes` to secret keys (default `["storefront"]`);
+        the service refuses the other combination with `VALIDATION_FAILED`.
+      additionalProperties: false
+      required:
+        - name
+        - kind
+        - environment
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+        kind:
+          $ref: '#/components/schemas/ApiKeyKind'
+        environment:
+          $ref: '#/components/schemas/Environment'
+        allowedOrigins:
+          type: array
+          maxItems: 20
+          uniqueItems: true
+          items:
+            $ref: '#/components/schemas/ApiKeyOrigin'
+        scopes:
+          type: array
+          maxItems: 32
+          uniqueItems: true
+          items:
+            $ref: '#/components/schemas/ApiKeyScope'
+        expiresAt:
+          type: string
+          format: date-time
+          description: Optional expiry, in the future.
+    ApiKeyCreated:
+      type: object
+      description: The new key's settings and the full key, shown once.
+      additionalProperties: false
+      required:
+        - apiKey
+        - key
+      properties:
+        apiKey:
+          $ref: '#/components/schemas/ApiKey'
+        key:
+          $ref: '#/components/schemas/ApiKeySecret'
+    UpdateApiKeyRequest:
+      type: object
+      description: The fields to change; at least one. Kind, environment and scopes never change.
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+        allowedOrigins:
+          type: array
+          description: The new origins of a publishable key (replaces the list).
+          maxItems: 20
+          uniqueItems: true
+          items:
+            $ref: '#/components/schemas/ApiKeyOrigin'
+    RollApiKeyRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - expireOldIn
+      properties:
+        expireOldIn:
+          type: string
+          description: When the old key stops working.
+          enum:
+            - now
+            - 1h
+            - 24h
+            - 7d
+    ApiKeyRolled:
+      type: object
+      description: The new key, shown once, and the old key's new expiry.
+      additionalProperties: false
+      required:
+        - apiKey
+        - key
+        - previous
+      properties:
+        apiKey:
+          $ref: '#/components/schemas/ApiKey'
+        key:
+          $ref: '#/components/schemas/ApiKeySecret'
+        previous:
+          type: object
+          additionalProperties: false
+          required:
+            - id
+            - expiresAt
+          properties:
+            id:
+              $ref: '#/components/schemas/ApiKeyId'
+            expiresAt:
+              type: string
+              format: date-time
+    Domain:
+      type: object
+      description: A storefront host of the OTA (PADR-0004).
+      additionalProperties: false
+      required:
+        - id
+        - hostname
+        - kind
+        - purpose
+        - isPrimary
+        - verificationStatus
+        - dnsRecords
+        - verificationDeadlineAt
+        - lastCheckedAt
+        - lastCheckError
+        - tlsStatus
+        - tlsExpiresAt
+        - createdAt
+      properties:
+        id:
+          type: string
+          pattern: ^dom_[0-9A-HJKMNP-TV-Z]{26}$
+        hostname:
+          type: string
+          format: hostname
+          description: The host name, lower case.
+        kind:
+          type: string
+          description: '`subdomain` (`<key>.<STOREFRONT_BASE_DOMAIN>`, Velexis owns the zone) or `custom` (M5).'
+          enum:
+            - subdomain
+            - custom
+        purpose:
+          type: string
+          description: What the host serves; only `storefront` in the MVP.
+          enum:
+            - storefront
+            - api
+            - console
+        isPrimary:
+          type: boolean
+          description: The primary host, used in links and e-mails.
+        verificationStatus:
+          type: string
+          enum:
+            - pending
+            - verified
+            - failed
+        dnsRecords:
+          type: array
+          description: The DNS records to create for a custom domain; empty for the sub-domain.
+          items:
+            $ref: '#/components/schemas/DnsRecord'
+        verificationDeadlineAt:
+          type:
+            - string
+            - 'null'
+          format: date-time
+          description: End of the 72-hour verification window of a custom domain; `null` for the sub-domain.
+        lastCheckedAt:
+          type:
+            - string
+            - 'null'
+          format: date-time
+        lastCheckError:
+          type:
+            - string
+            - 'null'
+          maxLength: 500
+          description: What the last DNS check found missing, safe to show.
+        tlsStatus:
+          type: string
+          enum:
+            - pending
+            - issued
+            - failed
+            - expired
+        tlsExpiresAt:
+          type:
+            - string
+            - 'null'
+          format: date-time
+        createdAt:
+          type: string
+          format: date-time
+    DnsRecord:
+      type: object
+      description: >-
+        One DNS record for a custom domain: the `TXT` ownership record, and either the `CNAME` or the `A`/`AAAA`
+        routing records.
+      additionalProperties: false
+      required:
+        - type
+        - name
+        - value
+      properties:
+        type:
+          type: string
+          enum:
+            - TXT
+            - CNAME
+            - A
+            - AAAA
+        name:
+          type: string
+          description: The record name (fully qualified).
+        value:
+          type: string
+          description: The record value.
+    DomainList:
+      type: object
+      additionalProperties: false
+      required:
+        - data
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Domain'
+    AmadeusOfficeId:
+      type: string
+      description: An Amadeus office id (9 characters).
+      pattern: ^[A-Z0-9]{9}$
+      examples:
+        - NCE1A0955
+    PendingCredentialSubmission:
+      type: object
+      description: >-
+        The latest submission of the OTA's own credentials (M5, PADR-0010), while it is open or after it failed. Never
+        holds the submitted secret.
+      additionalProperties: false
+      required:
+        - id
+        - status
+        - errorCode
+      properties:
+        id:
+          type: string
+          pattern: ^crs_[0-9A-HJKMNP-TV-Z]{26}$
+        status:
+          type: string
+          enum:
+            - pending
+            - verifying
+            - failed
+        errorCode:
+          type:
+            - string
+            - 'null'
+          description: Why the verification failed, for example `AMADEUS_CREDENTIALS_INVALID`; `null` unless `failed`.
+    AmadeusTicketingDefaults:
+      type: object
+      description: >-
+        Defaults the OTA backend applies when it creates a flight order (`supplier_connections.ticketing_defaults`);
+        empty until set. The update arrives in M4 (`updateAmadeusConnection`).
+      additionalProperties: false
+      properties:
+        ticketingAgreement:
+          type: object
+          description: The Amadeus `ticketingAgreement` of new orders.
+          additionalProperties: false
+          required:
+            - option
+          properties:
+            option:
+              type: string
+              enum:
+                - CONFIRM
+                - DELAY_TO_QUEUE
+                - DELAY_TO_CANCEL
+            delay:
+              type: string
+              pattern: ^[0-9]{1,3}D$
+              description: Days before the automatic process, for example `2D`.
+        automatedProcess:
+          type: array
+          description: The Amadeus `automatedProcess` entries of new orders.
+          items:
+            $ref: '#/components/schemas/AmadeusAutomatedProcessDefault'
+        issue:
+          type: boolean
+          description: Whether new orders are issued at once.
+    AmadeusAutomatedProcessDefault:
+      type: object
+      description: One Amadeus `automatedProcess` entry (the OTA contract's `AmadeusAutomatedProcess`).
+      additionalProperties: false
+      required:
+        - code
+      properties:
+        code:
+          type: string
+          enum:
+            - IMMEDIATE
+            - DELAYED
+            - ERROR
+        queue:
+          type: object
+          additionalProperties: false
+          properties:
+            number:
+              type: string
+              pattern: ^[0-9]{1,3}$
+            category:
+              type: string
+              pattern: ^[0-9]{1,3}$
+        officeId:
+          $ref: '#/components/schemas/AmadeusOfficeId'
+        delay:
+          type: string
+          pattern: ^[0-9]{1,3}D$
+        text:
+          type: string
+          maxLength: 200
+    AmadeusMonitoredQueue:
+      type: object
+      description: An Amadeus queue that the OTA backend polls into its queue snapshots.
+      additionalProperties: false
+      required:
+        - officeId
+        - queueId
+        - category
+      properties:
+        officeId:
+          $ref: '#/components/schemas/AmadeusOfficeId'
+        queueId:
+          type: integer
+          minimum: 0
+          description: Queue number.
+        category:
+          type: integer
+          minimum: 0
+          maximum: 254
+          description: Queue category.
+    AmadeusConnection:
+      type: object
+      description: >-
+        The Amadeus connection of one environment. Never holds a client secret or any ciphertext.
+      additionalProperties: false
+      required:
+        - id
+        - environment
+        - credentialSource
+        - status
+        - officeIds
+        - defaultOfficeId
+        - queuingOfficeId
+        - ownerOfficeId
+        - clientId
+        - ticketingDefaults
+        - monitoredQueues
+        - lastVerifiedAt
+        - lastError
+        - pendingSubmission
+        - version
+      properties:
+        id:
+          type: string
+          pattern: ^sc_[0-9A-HJKMNP-TV-Z]{26}$
+        environment:
+          $ref: '#/components/schemas/Environment'
+        credentialSource:
+          type: string
+          description: >-
+            `velexis`: the Velexis Amadeus account through offices assigned from the pool; `tenant`: the OTA's own
+            credentials (M5).
+          enum:
+            - velexis
+            - tenant
+        status:
+          type: string
+          description: >-
+            `pending_verification` (no office yet, or credentials not verified), `active`, `invalid_credentials`,
+            `disabled`.
+          enum:
+            - pending_verification
+            - active
+            - invalid_credentials
+            - disabled
+        officeIds:
+          type: array
+          description: The office ids the connection may act for.
+          items:
+            $ref: '#/components/schemas/AmadeusOfficeId'
+        defaultOfficeId:
+          description: The office used when the caller names none.
+          oneOf:
+            - $ref: '#/components/schemas/AmadeusOfficeId'
+            - type: 'null'
+        queuingOfficeId:
+          description: The default `queuingOfficeId` of new flight orders.
+          oneOf:
+            - $ref: '#/components/schemas/AmadeusOfficeId'
+            - type: 'null'
+        ownerOfficeId:
+          description: The default `ownerOfficeId` of new flight orders.
+          oneOf:
+            - $ref: '#/components/schemas/AmadeusOfficeId'
+            - type: 'null'
+        clientId:
+          type:
+            - string
+            - 'null'
+          description: The client id of the OTA's own credentials (not a secret); `null` for `velexis`.
+        ticketingDefaults:
+          $ref: '#/components/schemas/AmadeusTicketingDefaults'
+        monitoredQueues:
+          type: array
+          items:
+            $ref: '#/components/schemas/AmadeusMonitoredQueue'
+        lastVerifiedAt:
+          type:
+            - string
+            - 'null'
+          format: date-time
+        lastError:
+          type:
+            - string
+            - 'null'
+          maxLength: 500
+          description: The last verification error (HTTP status and Amadeus code), never a secret or a provider body.
+        pendingSubmission:
+          oneOf:
+            - $ref: '#/components/schemas/PendingCredentialSubmission'
+            - type: 'null'
+        version:
+          type: integer
+          minimum: 1
+          description: Optimistic-locking version for the M4 update.
+    AmadeusConnectionList:
+      type: object
+      additionalProperties: false
+      required:
+        - data
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/AmadeusConnection'
+    PaymentCapabilities:
+      type: object
+      description: >-
+        The connected Stripe account's state from `account.updated` (Connect Standard, M5); empty in `velexis` mode.
+      additionalProperties: false
+      properties:
+        chargesEnabled:
+          type: boolean
+        payoutsEnabled:
+          type: boolean
+        detailsSubmitted:
+          type: boolean
+    PaymentConnection:
+      type: object
+      description: >-
+        The Stripe connection of one environment. Never holds a secret key, a webhook secret or any ciphertext.
+      additionalProperties: false
+      required:
+        - id
+        - environment
+        - provider
+        - accountMode
+        - status
+        - accountReference
+        - publishableKey
+        - statementDescriptorSuffix
+        - capabilities
+        - connectedAt
+        - disconnectedAt
+        - webhookUrl
+        - pendingSubmission
+        - version
+      properties:
+        id:
+          type: string
+          pattern: ^ppc_[0-9A-HJKMNP-TV-Z]{26}$
+        environment:
+          $ref: '#/components/schemas/Environment'
+        provider:
+          type: string
+          enum:
+            - stripe
+        accountMode:
+          type: string
+          description: >-
+            `velexis`: the Velexis Stripe account, settled monthly (default); `connect_standard`: the OTA's account
+            through Connect; `api_keys`: the OTA's account through its own keys (both M5).
+          enum:
+            - velexis
+            - connect_standard
+            - api_keys
+        status:
+          type: string
+          description: '`pending` (the account cannot charge yet), `active`, `disabled`, `error`.'
+          enum:
+            - pending
+            - active
+            - disabled
+            - error
+        accountReference:
+          type:
+            - string
+            - 'null'
+          pattern: ^acct_[A-Za-z0-9]+$
+          description: The OTA's Stripe account id; `null` in `velexis` mode.
+        publishableKey:
+          type:
+            - string
+            - 'null'
+          pattern: ^pk_(test|live)_[A-Za-z0-9]+$
+          description: The OTA's Stripe publishable key (`api_keys` mode); `null` otherwise.
+        statementDescriptorSuffix:
+          type:
+            - string
+            - 'null'
+          pattern: ^[A-Za-z0-9][A-Za-z0-9 .&-]{1,21}$
+          description: The card statement suffix with the OTA's brand (`velexis` mode).
+        capabilities:
+          $ref: '#/components/schemas/PaymentCapabilities'
+        connectedAt:
+          type:
+            - string
+            - 'null'
+          format: date-time
+          description: When the OTA's own account was connected.
+        disconnectedAt:
+          type:
+            - string
+            - 'null'
+          format: date-time
+          description: When the OTA's own account was disconnected.
+        webhookUrl:
+          type:
+            - string
+            - 'null'
+          format: uri
+          description: The webhook URL to configure in the OTA's Stripe account (`api_keys` mode); `null` otherwise.
+        pendingSubmission:
+          oneOf:
+            - $ref: '#/components/schemas/PendingCredentialSubmission'
+            - type: 'null'
+        version:
+          type: integer
+          minimum: 1
+          description: Optimistic-locking version for the M3 update.
+    PaymentConnectionList:
+      type: object
+      additionalProperties: false
+      required:
+        - data
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/PaymentConnection'
+    Subscription:
+      type: object
+      description: The OTA's subscription to a Velexis plan.
+      additionalProperties: false
+      required:
+        - id
+        - planCode
+        - planName
+        - status
+        - billingProvider
+        - billingInterval
+        - trialEndsAt
+        - currentPeriodEnd
+        - cancelAtPeriodEnd
+        - banner
+        - canManageInStripe
+      properties:
+        id:
+          type: string
+          pattern: ^sub_[0-9A-HJKMNP-TV-Z]{26}$
+        planCode:
+          $ref: '#/components/schemas/PlanCode'
+        planName:
+          type: string
+        status:
+          type: string
+          description: >-
+            Stripe's subscription statuses; manual subscriptions use `trialing`, `past_due` and `canceled` only.
+          enum:
+            - trialing
+            - active
+            - past_due
+            - paused
+            - canceled
+            - incomplete
+            - incomplete_expired
+            - unpaid
+        billingProvider:
+          type: string
+          description: '`manual` (the trial before M5) or `stripe`.'
+          enum:
+            - stripe
+            - manual
+        billingInterval:
+          $ref: '#/components/schemas/BillingInterval'
+        trialEndsAt:
+          type:
+            - string
+            - 'null'
+          format: date-time
+        currentPeriodEnd:
+          type:
+            - string
+            - 'null'
+          format: date-time
+        cancelAtPeriodEnd:
+          type: boolean
+        banner:
+          type:
+            - string
+            - 'null'
+          description: The billing banner of the portal; `null` when there is none.
+          enum:
+            - past_due
+            - trial_ending
+            - canceled
+            - null
+        canManageInStripe:
+          type: boolean
+          description: True for a Stripe subscription, managed in the Stripe Customer Portal (M5).
 x-error-catalogue:
   VALIDATION_FAILED:
     status: 400

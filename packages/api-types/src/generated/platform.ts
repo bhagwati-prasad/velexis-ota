@@ -410,6 +410,610 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/tenants/key-availability": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Check whether an OTA key is available
+         * @description The live key check of the create-OTA wizard, called while the person types. The key is checked against the key rules (`^[a-z][a-z0-9]{2,29}$`, also a DNS label), the reserved list of the sign-up flow (`platform`, `admin`, `api`, `www`, `test`, …) and every tenant row in any status, because a deleted or failed OTA keeps its key. `available: false` comes with `reason`: `invalid`, `reserved` or `taken`. `storefrontHost` is the host the key gets, `<key>.<STOREFRONT_BASE_DOMAIN>`. Reads only; `createTenant` checks the key again, because the key can be taken between the check and the submit. 30 checks per account per minute.
+         */
+        get: operations["checkTenantKey"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/tenants": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List my OTAs
+         * @description The OTAs in which the account has an active membership, in any status (`provisioning`, `active`, `suspended`, `failed`), oldest first, with the caller's role, the plan and the storefront URL of the primary host. The list is short (one entry per membership), so it is not paginated. Works before the e-mail address is verified, so the portal can show an empty dashboard.
+         */
+        get: operations["listTenants"];
+        put?: never;
+        /**
+         * Create an OTA
+         * @description Creates an OTA and starts its setup (platform/docs/flows/signup-and-create-ota.md). The account must be verified and active and may own at most `MAX_TENANTS_PER_ACCOUNT` OTAs that are not `failed` (`422 UNPROCESSABLE`, `details.reason = tenant_limit`). The key must follow the key rules (else `400`) and be neither reserved nor used by any tenant row (`409 TENANT_KEY_UNAVAILABLE`, also when a concurrent request took it first).
+         *
+         *     **One transaction** inserts the tenant (`provisioning`, storefront environment `test`), the caller's `owner` membership, the subscription, the verified primary sub-domain `<key>.<STOREFRONT_BASE_DOMAIN>`, a queued `provision` job and an audit row. **Before M5** (`FEATURE_STRIPE_BILLING` off) the plan is always `early_access`, whatever the request says: the subscription is a manual trial (`trialing`, `trial_ends_at = now + plans.trial_days`), the job is dispatched to the OTA worker at once and `checkoutUrl` is `null`. **From M5** `planCode` must name a public, active plan with a Stripe price for `billingInterval` (`422 PLAN_NOT_AVAILABLE`); the subscription starts `incomplete`, the job waits for Checkout, and the answer carries the Stripe Checkout URL. When Stripe fails, the OTA and its job stay created, `checkoutUrl` is `null` and `checkoutError` says why; the setup page offers to continue to payment later.
+         *
+         *     **Idempotent** (`Idempotency-Key`, 24 hours): a retry with the same key and body replays the `202`, another body answers `409 IDEMPOTENCY_KEY_REUSED`, and while the idempotency store (Redis) is down the call answers `503 SERVICE_UNAVAILABLE` before writing anything. The setup progresses in `getProvisioning`.
+         */
+        post: operations["createTenant"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/tenants/{tenantId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The OTA; callers without an active membership get `404 NOT_FOUND`.
+                 * @example ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F
+                 */
+                tenantId: components["parameters"]["TenantId"];
+            };
+            cookie?: never;
+        };
+        /**
+         * Get an OTA
+         * @description The OTA overview for any member (every role): profile, status with the suspension reason, the billing notice that billing sync copies onto the tenant (`past_due`, `trial_ending`), plan, storefront environment and primary host, tenant schema version, and the caller's role in `myRole`. Callers without an active membership get `404 NOT_FOUND`, so tenant ids cannot be probed. The `ETag` is the version that `updateTenant` needs in `If-Match`.
+         */
+        get: operations["getTenant"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Update the OTA profile
+         * @description Owners and admins change the name, legal name, support e-mail, country or time zone; `null` clears the legal name or the support e-mail. The key and the default currency never change (they are not in the schema). `If-Match` carries the `ETag` of `getTenant`; a stale version answers `412 PRECONDITION_FAILED`. Only an `active` OTA can be edited (`409 TENANT_NOT_ACTIVE` with `details.status`). Writes an audit row and, after commit, publishes a `tenant` invalidation so the OTA backend reloads the row.
+         */
+        patch: operations["updateTenant"];
+        trace?: never;
+    };
+    "/v1/tenants/{tenantId}/provisioning": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The OTA; callers without an active membership get `404 NOT_FOUND`.
+                 * @example ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F
+                 */
+                tenantId: components["parameters"]["TenantId"];
+            };
+            cookie?: never;
+        };
+        /**
+         * Get the setup progress of an OTA
+         * @description The tenant status and its latest `provision` job: status, current step, the finished steps of the OTA worker and of the platform post-steps, attempts and the last error. The portal's setup page polls it every 2 seconds until the tenant is `active` or `failed`. `initialKeysAvailable` is true while the test keys issued at setup wait for their one-time reveal (`revealInitialKeys`): after the setup and before the reveal, at most 24 hours. Any member may read it.
+         */
+        get: operations["getProvisioning"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/tenants/{tenantId}/provisioning/retry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The OTA; callers without an active membership get `404 NOT_FOUND`.
+                 * @example ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F
+                 */
+                tenantId: components["parameters"]["TenantId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Retry a failed setup
+         * @description Owners only. Allowed only for a `failed` tenant (`409 PROVISIONING_NOT_RETRYABLE` otherwise): the tenant goes back to `provisioning` and a **new** `provision` job is inserted and dispatched; the failed job stays as history. From M5, a tenant that failed because its Checkout was abandoned gets a new Checkout instead: the answer carries `checkoutUrl` and the job waits for the payment. Writes an audit row.
+         */
+        post: operations["retryProvisioning"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/tenants/{tenantId}/initial-keys/reveal": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The OTA; callers without an active membership get `404 NOT_FOUND`.
+                 * @example ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F
+                 */
+                tenantId: components["parameters"]["TenantId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Reveal the test API keys issued at setup, once
+         * @description Owners only. The setup issues a publishable and a secret **test** key (`pk_test_…` without origins, `sk_test_…` scoped `storefront`) and keeps the two raw keys envelope-encrypted for a single reveal (PADR-0001, PADR-0005). This call decrypts them, answers them once with `Cache-Control: no-store`, and in the same update records who revealed them and erases the ciphertext. After the reveal, or 24 hours after the setup finished, the answer is `410 KEYS_ALREADY_REVEALED`; from then on owners create or roll keys on the API keys page. The keys are never logged and never stored for a replay. Writes an audit row (never the keys).
+         */
+        post: operations["revealInitialKeys"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/tenants/{tenantId}/onboarding": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The OTA; callers without an active membership get `404 NOT_FOUND`.
+                 * @example ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F
+                 */
+                tenantId: components["parameters"]["TenantId"];
+            };
+            cookie?: never;
+        };
+        /**
+         * Get the onboarding checklist of an OTA
+         * @description The checklist of PADR-0018, computed on every call from platform tables and never stored; reading it writes nothing. The items come in this order: `email_verified`, `mfa_enabled`, `ota_active`, `api_key`, `storefront_open`, `amadeus_test`, `team_invited` (M1), then `plan_chosen`, `custom_domain`, `payments_ready`, `live_requested` (M5), each M5 item only while its milestone switch is on. The account items are computed for the caller. Every item has a link (`href`): a portal path, or the storefront URL for `storefront_open`. Any member may read it.
+         */
+        get: operations["getOnboarding"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/tenants/{tenantId}/members": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The OTA; callers without an active membership get `404 NOT_FOUND`.
+                 * @example ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F
+                 */
+                tenantId: components["parameters"]["TenantId"];
+            };
+            cookie?: never;
+        };
+        /**
+         * List the members of an OTA
+         * @description The active members of the OTA (one per account), oldest first, with name, e-mail address, role, whether the account has MFA on, and the `version` that `updateMember` needs in `If-Match`. The list is bounded by the plan's staff seats, so it is not paginated. Any member may read it.
+         */
+        get: operations["listMembers"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/tenants/{tenantId}/members/{memberId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The OTA; callers without an active membership get `404 NOT_FOUND`.
+                 * @example ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F
+                 */
+                tenantId: components["parameters"]["TenantId"];
+                /**
+                 * @description The membership (`id` of `listMembers`, the staff id `stf_…`).
+                 * @example stf_01JB3K7P2R6T0W4Y8A2C6E0G4J
+                 */
+                memberId: components["parameters"]["MemberId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Remove a member, or leave the OTA
+         * @description Owners and admins remove members within the role matrix (only owners remove owners and admins), and any member may remove themself to leave the OTA; other callers get `403 FORBIDDEN`. The membership becomes `removed` and the row stays, because its `stf_` id is referenced by value in the OTA's staff actions. The last active owner can neither be removed nor leave (`409 LAST_OWNER`). Writes an audit row and, after commit, publishes a `membership` invalidation, so the member's OTA admin sessions end within seconds.
+         */
+        delete: operations["removeMember"];
+        options?: never;
+        head?: never;
+        /**
+         * Change a member's role
+         * @description Owners and admins change roles with the role matrix of platform/docs/scope.md §1.2: admins may set `agent`, `finance` or `viewer` on members who are neither owners nor admins; only owners grant or remove `owner` and `admin` (`403 FORBIDDEN` otherwise). **Granting `owner` needs a TOTP step-up** within 15 minutes (`401 REAUTH_REQUIRED`, or `403 MFA_REQUIRED` without MFA); the other changes do not, so the operation carries no `x-mfa-step-up`. The last active owner cannot be demoted (`409 LAST_OWNER`). `If-Match` carries the member's `version`; a stale one answers `412 PRECONDITION_FAILED`. Writes an audit row and, after commit, publishes a `membership` invalidation, so the OTA admin applies the new role within seconds.
+         */
+        patch: operations["updateMember"];
+        trace?: never;
+    };
+    "/v1/tenants/{tenantId}/invitations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The OTA; callers without an active membership get `404 NOT_FOUND`.
+                 * @example ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F
+                 */
+                tenantId: components["parameters"]["TenantId"];
+            };
+            cookie?: never;
+        };
+        /**
+         * List the pending invitations of an OTA
+         * @description Owners and admins see the invitations that are still `pending`, newest first, with the invited address, the role, who invited and when the link expires. Pending invitations count against the plan's staff seats, so the list is short and not paginated. The invitation token is never answered.
+         */
+        get: operations["listInvitations"];
+        put?: never;
+        /**
+         * Invite a person by e-mail
+         * @description Owners and admins invite an e-mail address with a role; only owners invite owners or admins (`403 FORBIDDEN`). The address must not belong to an active member (`409 ALREADY_MEMBER`) or have a pending invitation (`409 INVITATION_PENDING`), and active members plus pending invitations must stay below the plan's `staffSeats` (`422 PLAN_LIMIT_REACHED` with `details.limit` and `details.used`). The invitation stores only the SHA-256 of a 256-bit token and expires in 7 days; the link with the token travels encrypted in the e-mail outbox and is never answered or logged. Writes an audit row.
+         */
+        post: operations["createInvitation"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/tenants/{tenantId}/invitations/{invitationId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The OTA; callers without an active membership get `404 NOT_FOUND`.
+                 * @example ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F
+                 */
+                tenantId: components["parameters"]["TenantId"];
+                /**
+                 * @description The invitation (`id` of `listInvitations`).
+                 * @example ivt_01JA2ZF4H8K2M6P0R4T8W2Y6A0
+                 */
+                invitationId: components["parameters"]["InvitationId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Revoke an invitation
+         * @description Owners and admins revoke a `pending` invitation; its link stops working at once and it no longer counts against the staff seats. An invitation that is not pending answers `409 CONFLICT` (`details.reason = not_pending`). Writes an audit row.
+         */
+        delete: operations["revokeInvitation"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/tenants/{tenantId}/invitations/{invitationId}/resend": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The OTA; callers without an active membership get `404 NOT_FOUND`.
+                 * @example ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F
+                 */
+                tenantId: components["parameters"]["TenantId"];
+                /**
+                 * @description The invitation (`id` of `listInvitations`).
+                 * @example ivt_01JA2ZF4H8K2M6P0R4T8W2Y6A0
+                 */
+                invitationId: components["parameters"]["InvitationId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Send an invitation again
+         * @description Owners and admins resend a `pending` invitation: it gets a new token and 7 more days, the e-mail with the new link is queued, and the old link stops working. An invitation that is not pending answers `409 CONFLICT` (`details.reason = not_pending`).
+         */
+        post: operations["resendInvitation"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/invitations/lookup": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Show an invitation before accepting it
+         * @description The accept page shows the OTA, the role, the invited address, the inviter and the expiry before the person signs in or signs up. The token is sent in the body, never in a URL (the portal moves it from the link into a short-lived httpOnly cookie and cleans the address bar). An unknown, used, revoked or expired token answers `400 INVITATION_INVALID`. Reads only. 20 lookups per end-user IP per hour.
+         */
+        post: operations["lookupInvitation"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/invitations/accept": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Accept an invitation and join the OTA
+         * @description The signed-in, verified account joins the OTA with the invited role. The invitation must be `pending` and unexpired (`400 INVITATION_INVALID`), and the account's verified e-mail address must equal the invited address, compared case-insensitively (`403 INVITATION_EMAIL_MISMATCH`). An active member gets `409 ALREADY_MEMBER`. In one transaction it inserts the membership, or re-activates a `removed` one with the new role, marks the invitation `accepted` and writes an audit row; after commit it publishes a `membership` invalidation.
+         */
+        post: operations["acceptInvitation"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/tenants/{tenantId}/api-keys": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The OTA; callers without an active membership get `404 NOT_FOUND`.
+                 * @example ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F
+                 */
+                tenantId: components["parameters"]["TenantId"];
+            };
+            cookie?: never;
+        };
+        /**
+         * List the API keys of an OTA
+         * @description Owners and admins see the OTA's publishable (`pk_`) and secret (`sk_`) keys, newest first: name, kind, environment, the visible `prefix` (the first 14 characters) and `last4`, origins or scopes, who created the key (`null` for the keys issued at setup), and the last use, which the platform worker copies from Redis every 5 minutes. Revoked keys appear only with `includeRevoked=true`. The full key is never answered here: it is shown once by `createApiKey` and `rollApiKey`, and only its HMAC is stored (PADR-0005).
+         */
+        get: operations["listApiKeys"];
+        put?: never;
+        /**
+         * Create an API key, shown once
+         * @description Owners and admins create a key of an `active` OTA (`409 TENANT_NOT_ACTIVE` otherwise). The key is `<pk|sk>_<environment>_` plus 40 base62 characters from the CSPRNG; the platform stores its prefix, `last4` and HMAC-SHA-256 with the server pepper, never the key itself (PADR-0005). The answer carries the full key **once**, with `Cache-Control: no-store`; it is never logged and never stored for a replay.
+         *
+         *     **Rules.** A publishable key takes `allowedOrigins` (exact `https://host[:port]` origins; `http://localhost:<port>` and `http://127.0.0.1:<port>` only on test keys; no wildcards, paths or trailing slashes; at most 20) and no scopes. A secret key takes `scopes` from the OTA contract's `ConsoleApiKeyScope` and `StaffPermission`, checked by the service against the generated OTA types (PADR-0005 item 6): default `["storefront"]`; `storefront` excludes the console scopes; `console:automation` needs at least one permission, and permissions are allowed only with it. A broken rule answers `400 VALIDATION_FAILED` with field errors. Kind, environment and scopes never change later; roll the key instead. Keys that are neither revoked nor expired count against the plan's `apiKeys` limit (`422 PLAN_LIMIT_REACHED`). `live` keys exist only once the OTA is live (`422 LIVE_MODE_NOT_ENABLED`), and a **live secret key needs a TOTP step-up** within 15 minutes (`401 REAUTH_REQUIRED`, or `403 MFA_REQUIRED` without MFA); test keys do not, so the operation carries no `x-mfa-step-up`. Writes an audit row with the prefix, kind, environment and scopes, never the key.
+         */
+        post: operations["createApiKey"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/tenants/{tenantId}/api-keys/{keyId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The OTA; callers without an active membership get `404 NOT_FOUND`.
+                 * @example ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F
+                 */
+                tenantId: components["parameters"]["TenantId"];
+                /**
+                 * @description The API key (`id` of `listApiKeys`, never the key or its prefix).
+                 * @example key_01JB3KA2C6E0G4J8M2P6S0V4X8
+                 */
+                keyId: components["parameters"]["ApiKeyId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Rename an API key or change its origins
+         * @description Owners and admins change the name, or the allowed origins of a publishable key (the origin rules of `createApiKey`; a secret key has no origins). Kind, environment and scopes never change: roll the key for new scopes. A revoked key answers `409 CONFLICT` (`details.reason = revoked`); a tenant that is not `active` answers `409 TENANT_NOT_ACTIVE`, because a suspended OTA's keys are read-only (PADR-0014 item 5). Writes an audit row and, after commit, publishes an `api_key` invalidation with the prefix, so the OTA backend drops its cached copy.
+         */
+        patch: operations["updateApiKey"];
+        trace?: never;
+    };
+    "/v1/tenants/{tenantId}/api-keys/{keyId}/roll": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The OTA; callers without an active membership get `404 NOT_FOUND`.
+                 * @example ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F
+                 */
+                tenantId: components["parameters"]["TenantId"];
+                /**
+                 * @description The API key (`id` of `listApiKeys`, never the key or its prefix).
+                 * @example key_01JB3KA2C6E0G4J8M2P6S0V4X8
+                 */
+                keyId: components["parameters"]["ApiKeyId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Replace an API key with a new one, shown once
+         * @description Owners and admins create a new key with the same name, kind, environment, origins and scopes, answered once with `Cache-Control: no-store` (never logged, never stored for a replay), and set the old key's `expiresAt` to now or 1 hour, 24 hours or 7 days ahead, so deployments can switch without downtime. A revoked key answers `409 CONFLICT` (`details.reason = revoked`) and a tenant that is not `active` `409 TENANT_NOT_ACTIVE`. While the old key keeps working (`expireOldIn` other than `now`) both count against the plan's `apiKeys` limit (`422 PLAN_LIMIT_REACHED`). Rolling a **live secret key needs a TOTP step-up**, as in `createApiKey`. Writes an audit row and, after commit, publishes an `api_key` invalidation for the old prefix.
+         */
+        post: operations["rollApiKey"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/tenants/{tenantId}/api-keys/{keyId}/revoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The OTA; callers without an active membership get `404 NOT_FOUND`.
+                 * @example ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F
+                 */
+                tenantId: components["parameters"]["TenantId"];
+                /**
+                 * @description The API key (`id` of `listApiKeys`, never the key or its prefix).
+                 * @example key_01JB3KA2C6E0G4J8M2P6S0V4X8
+                 */
+                keyId: components["parameters"]["ApiKeyId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Revoke an API key now
+         * @description Owners and admins revoke a key at once: `revokedAt` and the revoking account are set, and after commit an `api_key` invalidation with the prefix makes the OTA backend refuse the key within seconds (its 60-second cache bounds the delay if the message is lost). Keys are never deleted, because the audit trail refers to them. A key revoked already answers `409 CONFLICT` (`details.reason = revoked`); a tenant that is not `active` answers `409 TENANT_NOT_ACTIVE` (PADR-0014 item 5). Writes an audit row.
+         */
+        post: operations["revokeApiKey"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/tenants/{tenantId}/domains": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The OTA; callers without an active membership get `404 NOT_FOUND`.
+                 * @example ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F
+                 */
+                tenantId: components["parameters"]["TenantId"];
+            };
+            cookie?: never;
+        };
+        /**
+         * List the storefront domains of an OTA
+         * @description The Velexis sub-domain `<key>.<STOREFRONT_BASE_DOMAIN>`, created verified and primary with the OTA, and from M5 the custom storefront domains, primary first. A custom domain lists the DNS records to create (PADR-0004 item 2): the `TXT` record `_velexis.<host>` with its verification value, plus either a `CNAME` to the sub-domain or `A`/`AAAA` records to the storefront addresses (for an apex domain); verification accepts either. The sub-domain needs no record (`dnsRecords` is empty). Any member may read it.
+         */
+        get: operations["listDomains"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/tenants/{tenantId}/amadeus-connections": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The OTA; callers without an active membership get `404 NOT_FOUND`.
+                 * @example ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F
+                 */
+                tenantId: components["parameters"]["TenantId"];
+            };
+            cookie?: never;
+        };
+        /**
+         * List the Amadeus connections of an OTA
+         * @description Owners, admins and finance members see the `test` and, once requested, `live` Amadeus connection: whose credentials it uses (`velexis`: the Velexis account through an assigned office; `tenant`: the OTA's own, M5), its status, office ids and defaults, ticketing defaults and monitored queues, and the last verification. The OTA's own `clientId` is shown; a client secret or any ciphertext never is. `pendingSubmission` is the latest submission of own credentials while it is open or after it failed (M5); it is `null` until then. Each entry carries the `version` for the M4 update.
+         */
+        get: operations["listAmadeusConnections"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/tenants/{tenantId}/payment-connections": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The OTA; callers without an active membership get `404 NOT_FOUND`.
+                 * @example ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F
+                 */
+                tenantId: components["parameters"]["TenantId"];
+            };
+            cookie?: never;
+        };
+        /**
+         * List the payment connections of an OTA
+         * @description Owners, admins and finance members see the Stripe connection of each environment: the account mode (`velexis`: the Velexis Stripe account, settled monthly; `connect_standard` or `api_keys`: the OTA's own account, M5), its status, the connected account id and Stripe publishable key where the mode has them, the card statement descriptor suffix, the Connect capabilities, and for `api_keys` mode the webhook URL to configure in Stripe. A secret key, a webhook secret or any ciphertext is never answered. `pendingSubmission` is the latest submission of own Stripe keys while it is open or after it failed (M5); it is `null` until then.
+         */
+        get: operations["listPaymentConnections"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/tenants/{tenantId}/subscription": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The OTA; callers without an active membership get `404 NOT_FOUND`.
+                 * @example ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F
+                 */
+                tenantId: components["parameters"]["TenantId"];
+            };
+            cookie?: never;
+        };
+        /**
+         * Get the subscription of an OTA
+         * @description Owners and finance members see the OTA's subscription: the current one, or after a cancellation the canceled one. It shows the plan, status, billing provider (`manual` for the trial before M5, `stripe` from M5), interval, trial end, current period end and scheduled cancellation. `banner` is what the portal shows: `past_due` or `trial_ending` from the billing notice that billing sync keeps on the tenant, `canceled` for a canceled subscription, otherwise `null`. `canManageInStripe` is true only for a Stripe subscription, whose plan, card and cancellation are managed in the Stripe Customer Portal (M5). An OTA without a subscription answers `404 NOT_FOUND`.
+         */
+        get: operations["getSubscription"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/internal/tls/ask": {
         parameters: {
             query?: never;
@@ -800,6 +1404,673 @@ export interface components {
         };
         /** @enum {string} */
         DependencyStatus: "ok" | "down";
+        /**
+         * @description OTA id (`ten_` + ULID).
+         * @example ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F
+         */
+        TenantId: string;
+        /**
+         * @description The OTA's key: lower-case letters and digits, starting with a letter, 3–30 characters. It is also a DNS label: the storefront host is `<key>.<STOREFRONT_BASE_DOMAIN>` and the tenant schema `tenant_<key>`. Never changes.
+         * @example acme
+         */
+        TenantKey: string;
+        /**
+         * @description Display name of the OTA.
+         * @example Acme Travel
+         */
+        TenantName: string;
+        /**
+         * @description Legal entity name of the OTA, used on invoices.
+         * @example Acme Travel AS
+         */
+        LegalName: string;
+        /**
+         * @description ISO 3166-1 alpha-2 country code (checked against the reference countries).
+         * @example NO
+         */
+        CountryCode: string;
+        /**
+         * @description ISO 4217 currency code (checked against the reference currencies).
+         * @example EUR
+         */
+        CurrencyCode: string;
+        /**
+         * @description Code of a plan, as `listPlans` answers it.
+         * @example early_access
+         */
+        PlanCode: string;
+        /**
+         * @description Billing period of a subscription.
+         * @enum {string}
+         */
+        BillingInterval: "month" | "year";
+        /**
+         * @description `test` (Amadeus test system, Stripe test mode, test keys) or `live` (production, from go-live in M5).
+         * @enum {string}
+         */
+        Environment: "test" | "live";
+        /**
+         * @description Why the OTA is suspended (PADR-0014): `billing` (set by billing sync, resumed on payment), `abuse`, `request` or `admin` (set by a platform admin); `null` unless suspended.
+         * @enum {string|null}
+         */
+        SuspensionReason: "billing" | "abuse" | "request" | "admin" | null;
+        /**
+         * @description The billing banner state that billing sync keeps on the tenant row for the portal and the OTA admin (ADR-0013): `past_due` while a payment failed, `trial_ending` before the trial ends; `null` otherwise.
+         * @enum {string|null}
+         */
+        BillingNotice: "past_due" | "trial_ending" | null;
+        /** @description An OTA as its members see it. Never holds a secret: keys, connections and the subscription have their own operations. */
+        Tenant: {
+            id: components["schemas"]["TenantId"];
+            key: components["schemas"]["TenantKey"];
+            /** @description Display name of the OTA. */
+            name: string;
+            /** @description Legal entity name; `null` until set. */
+            legalName: string | null;
+            status: components["schemas"]["TenantStatus"];
+            suspensionReason: components["schemas"]["SuspensionReason"];
+            billingNotice: components["schemas"]["BillingNotice"];
+            planCode: components["schemas"]["PlanCode"];
+            defaultCurrency: components["schemas"]["CurrencyCode"];
+            /** @description Country where the OTA is registered (ISO 3166-1 alpha-2). */
+            countryCode: string | null;
+            timeZone: components["schemas"]["TimeZone"];
+            /**
+             * Format: email
+             * @description Business support address of the OTA; `null` until set.
+             */
+            supportEmail: string | null;
+            storefrontEnvironment: components["schemas"]["Environment"];
+            /**
+             * Format: date-time
+             * @description When the storefront went live (M5); `null` before.
+             */
+            liveEnabledAt: string | null;
+            /**
+             * Format: hostname
+             * @description The primary storefront host, used in links and e-mails (the sub-domain until a custom domain is made primary).
+             */
+            primaryHost: string;
+            /** @description The latest tenant migration applied to the OTA's schema; `null` until the setup records it. */
+            schemaVersion: string | null;
+            /** Format: date-time */
+            createdAt: string;
+            /**
+             * Format: date-time
+             * @description When the setup finished; `null` before.
+             */
+            activatedAt: string | null;
+            /** @description Optimistic-locking version; the `ETag` of the response carries it. */
+            version: number;
+            myRole: components["schemas"]["TenantRole"];
+        };
+        /** @description One OTA of the caller in a list. */
+        TenantSummary: {
+            id: components["schemas"]["TenantId"];
+            key: components["schemas"]["TenantKey"];
+            name: string;
+            status: components["schemas"]["TenantStatus"];
+            role: components["schemas"]["TenantRole"];
+            planCode: components["schemas"]["PlanCode"];
+            /**
+             * Format: uri
+             * @description `https://<primary host>/`.
+             */
+            storefrontUrl: string;
+            storefrontEnvironment: components["schemas"]["Environment"];
+        };
+        TenantList: {
+            data: components["schemas"]["TenantSummary"][];
+        };
+        /** @description Whether a key can be used for a new OTA. */
+        KeyAvailability: {
+            /** @description The key as checked. */
+            key: string;
+            available: boolean;
+            /**
+             * @description Why the key is not available (only when `available` is false): `invalid` (breaks the key rules), `reserved` (on the reserved list) or `taken` (used by an OTA in any status).
+             * @enum {string}
+             */
+            reason?: "invalid" | "reserved" | "taken";
+            /** @description The storefront host the key gets, `<key>.<STOREFRONT_BASE_DOMAIN>`. */
+            storefrontHost: string;
+        };
+        /** @description The new OTA. `planCode` and `billingInterval` matter from M5; before it the plan is always `early_access`. */
+        CreateTenantRequest: {
+            key: components["schemas"]["TenantKey"];
+            name: components["schemas"]["TenantName"];
+            countryCode: components["schemas"]["CountryCode"];
+            defaultCurrency: components["schemas"]["CurrencyCode"];
+            timeZone: components["schemas"]["TimeZone"];
+            planCode?: components["schemas"]["PlanCode"];
+            billingInterval?: components["schemas"]["BillingInterval"];
+        };
+        /** @description The new OTA, its setup job and, from M5, the Stripe Checkout URL. `checkoutError` is present only when Stripe failed after the OTA was created. */
+        TenantCreated: {
+            tenant: components["schemas"]["Tenant"];
+            /** @description The setup job; follow it with `getProvisioning`. */
+            provisioningJob: {
+                id: components["schemas"]["ProvisioningJobId"];
+                status: components["schemas"]["ProvisioningJobStatus"];
+            };
+            /**
+             * Format: uri
+             * @description The Stripe Checkout page to send the browser to (M5); `null` before M5 and when Checkout could not be created.
+             */
+            checkoutUrl: string | null;
+            checkoutError?: components["schemas"]["CheckoutError"];
+        };
+        /** @description Why no Checkout Session was created (M5); the OTA and its job exist, and payment can start later. */
+        CheckoutError: {
+            /** @description An error code of the catalogue, for example `PROVIDER_ERROR`. */
+            code: string;
+            /** @description A message safe to show. */
+            message: string;
+        };
+        /** @description The fields to change; at least one. `null` clears the legal name or the support e-mail. */
+        UpdateTenantRequest: {
+            name?: components["schemas"]["TenantName"];
+            legalName?: components["schemas"]["LegalName"] | null;
+            supportEmail?: components["schemas"]["EmailAddress"] | null;
+            countryCode?: components["schemas"]["CountryCode"];
+            timeZone?: components["schemas"]["TimeZone"];
+        };
+        /**
+         * @description Tenant job id (`job_` + ULID).
+         * @example job_01JA2ZC3D7F1H5K9M3P7R1T5V9
+         */
+        ProvisioningJobId: string;
+        /**
+         * @description `queued` (waiting for dispatch or its gate, such as Checkout in M5), `running` (dispatched), `succeeded`, `failed`, `canceled`.
+         * @enum {string}
+         */
+        ProvisioningJobStatus: "queued" | "running" | "succeeded" | "failed" | "canceled";
+        /** @description A tenant lifecycle job (PADR-0001); the portal shows the latest `provision` job. */
+        ProvisioningJob: {
+            id: components["schemas"]["ProvisioningJobId"];
+            /**
+             * @description The job kind; the setup is `provision`.
+             * @enum {string}
+             */
+            kind: "provision" | "migrate" | "suspend" | "resume";
+            status: components["schemas"]["ProvisioningJobStatus"];
+            /** @description The current or last step, for example `dispatch` or `assign_amadeus_office`; `null` before dispatch. */
+            step: string | null;
+            /** @description The finished steps of the OTA worker and of the platform post-steps, in order. */
+            steps: components["schemas"]["ProvisioningStep"][];
+            /** @description Attempts dispatched so far. */
+            attempt: number;
+            /** @description The attempt budget (5). */
+            maxAttempts: number;
+            /** @description The last error, a short message without secrets; `null` when there is none. */
+            error: string | null;
+        };
+        /** @description One finished step of a job. */
+        ProvisioningStep: {
+            /** @description The step name: `create_schema`, `run_migrations`, `seed_defaults` (OTA worker), then `record_migrations`, `assign_amadeus_office`, `create_payment_connection`, `issue_api_keys`, `activate`, `notify` (platform). */
+            step: string;
+            /** @enum {string} */
+            status: "succeeded" | "failed" | "skipped";
+            /** Format: date-time */
+            startedAt: string;
+            /** Format: date-time */
+            finishedAt: string;
+            error?: components["schemas"]["ProvisioningStepError"];
+        };
+        /** @description Why a step failed; a stable code and a short message without values or secrets. */
+        ProvisioningStepError: {
+            /** @description For example `LOCK_TIMEOUT`, `CHECKSUM_MISMATCH` or a SQLSTATE. */
+            code: string;
+            message: string;
+        };
+        /** @description The setup progress of an OTA. */
+        ProvisioningStatus: {
+            tenantStatus: components["schemas"]["TenantStatus"];
+            job: components["schemas"]["ProvisioningJob"];
+            /** @description True while the test keys issued at setup can still be revealed once (`revealInitialKeys`). */
+            initialKeysAvailable: boolean;
+        };
+        /** @description The new setup job and, from M5, the Checkout URL when the earlier Checkout was abandoned. */
+        ProvisioningRetried: {
+            job: components["schemas"]["ProvisioningJob"];
+            /**
+             * Format: uri
+             * @description The new Stripe Checkout page (M5), or `null` when the setup runs without payment.
+             */
+            checkoutUrl: string | null;
+        };
+        /** @description The test keys issued at setup, shown once. */
+        InitialKeys: {
+            keys: components["schemas"]["InitialKey"][];
+        };
+        InitialKey: {
+            id: components["schemas"]["ApiKeyId"];
+            kind: components["schemas"]["ApiKeyKind"];
+            environment: components["schemas"]["Environment"];
+            prefix: components["schemas"]["ApiKeyPrefix"];
+            key: components["schemas"]["ApiKeySecret"];
+        };
+        /** @description The onboarding checklist of PADR-0018, computed on every call. */
+        OnboardingChecklist: {
+            items: components["schemas"]["OnboardingItem"][];
+        };
+        /** @description One checklist item. */
+        OnboardingItem: {
+            /**
+             * @description The item (PADR-0018), in this order.
+             * @enum {string}
+             */
+            id: "email_verified" | "mfa_enabled" | "ota_active" | "api_key" | "storefront_open" | "amadeus_test" | "team_invited" | "plan_chosen" | "custom_domain" | "payments_ready" | "live_requested";
+            /** @description The text the portal shows. */
+            label: string;
+            done: boolean;
+            /**
+             * Format: uri-reference
+             * @description A portal path, or the storefront URL for `storefront_open`.
+             */
+            href: string;
+            /**
+             * @description The milestone that brings the item; `M5` items appear only while their switch is on.
+             * @enum {string}
+             */
+            milestone: "M1" | "M5";
+        };
+        /**
+         * @description Membership id, the staff id of the OTA admin (`stf_` + ULID).
+         * @example stf_01JA2ZA1C5E9G3J7K2M6P0R4T8
+         */
+        MembershipId: string;
+        /** @description A member of an OTA. */
+        Member: {
+            id: components["schemas"]["MembershipId"];
+            accountId: components["schemas"]["AccountId"];
+            fullName: string;
+            email: components["schemas"]["EmailAddress"];
+            role: components["schemas"]["TenantRole"];
+            /**
+             * @description The membership state; `listMembers` answers active members only.
+             * @enum {string}
+             */
+            status: "active" | "suspended" | "removed";
+            /** @description Whether the member's account has MFA on. */
+            mfaEnabled: boolean;
+            /**
+             * Format: date-time
+             * @description When the person joined.
+             */
+            createdAt: string;
+            /** @description Optimistic-locking version; send it in `If-Match` to `updateMember`. */
+            version: number;
+        };
+        MemberList: {
+            data: components["schemas"]["Member"][];
+        };
+        UpdateMemberRequest: {
+            role: components["schemas"]["TenantRole"];
+        };
+        /** @description An account named in a resource, for example who invited a person or created a key. */
+        AccountReference: {
+            accountId: components["schemas"]["AccountId"];
+            fullName: string;
+        };
+        /** @description An invitation to join an OTA. The token is never answered; only its hash is stored. */
+        Invitation: {
+            id: string;
+            email: components["schemas"]["EmailAddress"];
+            role: components["schemas"]["TenantRole"];
+            /** @enum {string} */
+            status: "pending" | "accepted" | "revoked" | "expired";
+            /** @description Who sent the invitation; `null` when that account no longer exists. */
+            invitedBy: components["schemas"]["AccountReference"] | null;
+            /** Format: date-time */
+            expiresAt: string;
+            /** Format: date-time */
+            createdAt: string;
+        };
+        InvitationList: {
+            data: components["schemas"]["Invitation"][];
+        };
+        CreateInvitationRequest: {
+            email: components["schemas"]["EmailAddress"];
+            role: components["schemas"]["TenantRole"];
+        };
+        InvitationTokenRequest: {
+            token: components["schemas"]["OpaqueToken"];
+        };
+        /** @description What the accept page shows before the person signs in. */
+        InvitationPreview: {
+            tenantName: string;
+            role: components["schemas"]["TenantRole"];
+            email: components["schemas"]["EmailAddress"];
+            /** @description The inviter's name; `null` when that account no longer exists. */
+            inviterName: string | null;
+            /** Format: date-time */
+            expiresAt: string;
+        };
+        InvitationAccepted: {
+            membership: components["schemas"]["Member"];
+            tenant: components["schemas"]["TenantSummary"];
+        };
+        /**
+         * @description API key id (`key_` + ULID).
+         * @example key_01JA2ZD8E2G6J0K4N8Q2S6W0Y4
+         */
+        ApiKeyId: string;
+        /**
+         * @description `publishable` (`pk_`, safe in a browser, customer scope only) or `secret` (`sk_`, server only).
+         * @enum {string}
+         */
+        ApiKeyKind: "publishable" | "secret";
+        /**
+         * @description The first 14 characters of the key, shown in the portal and used as the lookup key.
+         * @example sk_test_Ab12Cd
+         */
+        ApiKeyPrefix: string;
+        /** @description The full key, `<pk|sk>_<environment>_` plus 40 base62 characters (PADR-0005). Answered once, with `Cache-Control: no-store`; never stored in clear and never logged. */
+        ApiKeySecret: string;
+        /**
+         * @description An exact browser origin `scheme://host[:port]`: `https`, or `http://localhost:<port>` and `http://127.0.0.1:<port>` on test keys; no wildcard, path or trailing slash (checked by the service).
+         * @example https://www.acme-travel.example.com
+         */
+        ApiKeyOrigin: string;
+        /**
+         * @description A `ConsoleApiKeyScope` (`storefront`, `console`, `console:automation`) or `StaffPermission` (`bookings:read`, …) value of the OTA contract. The service checks the values and their combination against the generated OTA types, so a new OTA permission needs no platform change (PADR-0005 item 6).
+         * @example storefront
+         */
+        ApiKeyScope: string;
+        /** @description An API key without the key itself; only its HMAC is stored. */
+        ApiKey: {
+            id: components["schemas"]["ApiKeyId"];
+            name: string;
+            kind: components["schemas"]["ApiKeyKind"];
+            environment: components["schemas"]["Environment"];
+            prefix: components["schemas"]["ApiKeyPrefix"];
+            /** @description The last 4 characters of the key. */
+            last4: string;
+            /** @description Browser origins of a publishable key; always empty for a secret key. */
+            allowedOrigins: components["schemas"]["ApiKeyOrigin"][];
+            /** @description Scopes of a secret key; always empty for a publishable key. */
+            scopes: components["schemas"]["ApiKeyScope"][];
+            /** Format: date-time */
+            createdAt: string;
+            /** @description Who created the key; `null` for the keys issued at setup. */
+            createdBy: components["schemas"]["AccountReference"] | null;
+            /**
+             * Format: date-time
+             * @description The last authenticated request, up to 5 minutes stale; `null` before the first.
+             */
+            lastUsedAt: string | null;
+            /**
+             * Format: date-time
+             * @description When the key stops working (set by its creator or by a roll); `null` for no expiry.
+             */
+            expiresAt: string | null;
+            /**
+             * Format: date-time
+             * @description When the key was revoked; `null` while it is not.
+             */
+            revokedAt: string | null;
+        };
+        ApiKeyList: {
+            data: components["schemas"]["ApiKey"][];
+        };
+        /** @description A new key. `allowedOrigins` applies to publishable keys and `scopes` to secret keys (default `["storefront"]`); the service refuses the other combination with `VALIDATION_FAILED`. */
+        CreateApiKeyRequest: {
+            name: string;
+            kind: components["schemas"]["ApiKeyKind"];
+            environment: components["schemas"]["Environment"];
+            allowedOrigins?: components["schemas"]["ApiKeyOrigin"][];
+            scopes?: components["schemas"]["ApiKeyScope"][];
+            /**
+             * Format: date-time
+             * @description Optional expiry, in the future.
+             */
+            expiresAt?: string;
+        };
+        /** @description The new key's settings and the full key, shown once. */
+        ApiKeyCreated: {
+            apiKey: components["schemas"]["ApiKey"];
+            key: components["schemas"]["ApiKeySecret"];
+        };
+        /** @description The fields to change; at least one. Kind, environment and scopes never change. */
+        UpdateApiKeyRequest: {
+            name?: string;
+            /** @description The new origins of a publishable key (replaces the list). */
+            allowedOrigins?: components["schemas"]["ApiKeyOrigin"][];
+        };
+        RollApiKeyRequest: {
+            /**
+             * @description When the old key stops working.
+             * @enum {string}
+             */
+            expireOldIn: "now" | "1h" | "24h" | "7d";
+        };
+        /** @description The new key, shown once, and the old key's new expiry. */
+        ApiKeyRolled: {
+            apiKey: components["schemas"]["ApiKey"];
+            key: components["schemas"]["ApiKeySecret"];
+            previous: {
+                id: components["schemas"]["ApiKeyId"];
+                /** Format: date-time */
+                expiresAt: string;
+            };
+        };
+        /** @description A storefront host of the OTA (PADR-0004). */
+        Domain: {
+            id: string;
+            /**
+             * Format: hostname
+             * @description The host name, lower case.
+             */
+            hostname: string;
+            /**
+             * @description `subdomain` (`<key>.<STOREFRONT_BASE_DOMAIN>`, Velexis owns the zone) or `custom` (M5).
+             * @enum {string}
+             */
+            kind: "subdomain" | "custom";
+            /**
+             * @description What the host serves; only `storefront` in the MVP.
+             * @enum {string}
+             */
+            purpose: "storefront" | "api" | "console";
+            /** @description The primary host, used in links and e-mails. */
+            isPrimary: boolean;
+            /** @enum {string} */
+            verificationStatus: "pending" | "verified" | "failed";
+            /** @description The DNS records to create for a custom domain; empty for the sub-domain. */
+            dnsRecords: components["schemas"]["DnsRecord"][];
+            /**
+             * Format: date-time
+             * @description End of the 72-hour verification window of a custom domain; `null` for the sub-domain.
+             */
+            verificationDeadlineAt: string | null;
+            /** Format: date-time */
+            lastCheckedAt: string | null;
+            /** @description What the last DNS check found missing, safe to show. */
+            lastCheckError: string | null;
+            /** @enum {string} */
+            tlsStatus: "pending" | "issued" | "failed" | "expired";
+            /** Format: date-time */
+            tlsExpiresAt: string | null;
+            /** Format: date-time */
+            createdAt: string;
+        };
+        /** @description One DNS record for a custom domain: the `TXT` ownership record, and either the `CNAME` or the `A`/`AAAA` routing records. */
+        DnsRecord: {
+            /** @enum {string} */
+            type: "TXT" | "CNAME" | "A" | "AAAA";
+            /** @description The record name (fully qualified). */
+            name: string;
+            /** @description The record value. */
+            value: string;
+        };
+        DomainList: {
+            data: components["schemas"]["Domain"][];
+        };
+        /**
+         * @description An Amadeus office id (9 characters).
+         * @example NCE1A0955
+         */
+        AmadeusOfficeId: string;
+        /** @description The latest submission of the OTA's own credentials (M5, PADR-0010), while it is open or after it failed. Never holds the submitted secret. */
+        PendingCredentialSubmission: {
+            id: string;
+            /** @enum {string} */
+            status: "pending" | "verifying" | "failed";
+            /** @description Why the verification failed, for example `AMADEUS_CREDENTIALS_INVALID`; `null` unless `failed`. */
+            errorCode: string | null;
+        };
+        /** @description Defaults the OTA backend applies when it creates a flight order (`supplier_connections.ticketing_defaults`); empty until set. The update arrives in M4 (`updateAmadeusConnection`). */
+        AmadeusTicketingDefaults: {
+            /** @description The Amadeus `ticketingAgreement` of new orders. */
+            ticketingAgreement?: {
+                /** @enum {string} */
+                option: "CONFIRM" | "DELAY_TO_QUEUE" | "DELAY_TO_CANCEL";
+                /** @description Days before the automatic process, for example `2D`. */
+                delay?: string;
+            };
+            /** @description The Amadeus `automatedProcess` entries of new orders. */
+            automatedProcess?: components["schemas"]["AmadeusAutomatedProcessDefault"][];
+            /** @description Whether new orders are issued at once. */
+            issue?: boolean;
+        };
+        /** @description One Amadeus `automatedProcess` entry (the OTA contract's `AmadeusAutomatedProcess`). */
+        AmadeusAutomatedProcessDefault: {
+            /** @enum {string} */
+            code: "IMMEDIATE" | "DELAYED" | "ERROR";
+            queue?: {
+                number?: string;
+                category?: string;
+            };
+            officeId?: components["schemas"]["AmadeusOfficeId"];
+            delay?: string;
+            text?: string;
+        };
+        /** @description An Amadeus queue that the OTA backend polls into its queue snapshots. */
+        AmadeusMonitoredQueue: {
+            officeId: components["schemas"]["AmadeusOfficeId"];
+            /** @description Queue number. */
+            queueId: number;
+            /** @description Queue category. */
+            category: number;
+        };
+        /** @description The Amadeus connection of one environment. Never holds a client secret or any ciphertext. */
+        AmadeusConnection: {
+            id: string;
+            environment: components["schemas"]["Environment"];
+            /**
+             * @description `velexis`: the Velexis Amadeus account through offices assigned from the pool; `tenant`: the OTA's own credentials (M5).
+             * @enum {string}
+             */
+            credentialSource: "velexis" | "tenant";
+            /**
+             * @description `pending_verification` (no office yet, or credentials not verified), `active`, `invalid_credentials`, `disabled`.
+             * @enum {string}
+             */
+            status: "pending_verification" | "active" | "invalid_credentials" | "disabled";
+            /** @description The office ids the connection may act for. */
+            officeIds: components["schemas"]["AmadeusOfficeId"][];
+            /** @description The office used when the caller names none. */
+            defaultOfficeId: components["schemas"]["AmadeusOfficeId"] | null;
+            /** @description The default `queuingOfficeId` of new flight orders. */
+            queuingOfficeId: components["schemas"]["AmadeusOfficeId"] | null;
+            /** @description The default `ownerOfficeId` of new flight orders. */
+            ownerOfficeId: components["schemas"]["AmadeusOfficeId"] | null;
+            /** @description The client id of the OTA's own credentials (not a secret); `null` for `velexis`. */
+            clientId: string | null;
+            ticketingDefaults: components["schemas"]["AmadeusTicketingDefaults"];
+            monitoredQueues: components["schemas"]["AmadeusMonitoredQueue"][];
+            /** Format: date-time */
+            lastVerifiedAt: string | null;
+            /** @description The last verification error (HTTP status and Amadeus code), never a secret or a provider body. */
+            lastError: string | null;
+            pendingSubmission: components["schemas"]["PendingCredentialSubmission"] | null;
+            /** @description Optimistic-locking version for the M4 update. */
+            version: number;
+        };
+        AmadeusConnectionList: {
+            data: components["schemas"]["AmadeusConnection"][];
+        };
+        /** @description The connected Stripe account's state from `account.updated` (Connect Standard, M5); empty in `velexis` mode. */
+        PaymentCapabilities: {
+            chargesEnabled?: boolean;
+            payoutsEnabled?: boolean;
+            detailsSubmitted?: boolean;
+        };
+        /** @description The Stripe connection of one environment. Never holds a secret key, a webhook secret or any ciphertext. */
+        PaymentConnection: {
+            id: string;
+            environment: components["schemas"]["Environment"];
+            /** @enum {string} */
+            provider: "stripe";
+            /**
+             * @description `velexis`: the Velexis Stripe account, settled monthly (default); `connect_standard`: the OTA's account through Connect; `api_keys`: the OTA's account through its own keys (both M5).
+             * @enum {string}
+             */
+            accountMode: "velexis" | "connect_standard" | "api_keys";
+            /**
+             * @description `pending` (the account cannot charge yet), `active`, `disabled`, `error`.
+             * @enum {string}
+             */
+            status: "pending" | "active" | "disabled" | "error";
+            /** @description The OTA's Stripe account id; `null` in `velexis` mode. */
+            accountReference: string | null;
+            /** @description The OTA's Stripe publishable key (`api_keys` mode); `null` otherwise. */
+            publishableKey: string | null;
+            /** @description The card statement suffix with the OTA's brand (`velexis` mode). */
+            statementDescriptorSuffix: string | null;
+            capabilities: components["schemas"]["PaymentCapabilities"];
+            /**
+             * Format: date-time
+             * @description When the OTA's own account was connected.
+             */
+            connectedAt: string | null;
+            /**
+             * Format: date-time
+             * @description When the OTA's own account was disconnected.
+             */
+            disconnectedAt: string | null;
+            /**
+             * Format: uri
+             * @description The webhook URL to configure in the OTA's Stripe account (`api_keys` mode); `null` otherwise.
+             */
+            webhookUrl: string | null;
+            pendingSubmission: components["schemas"]["PendingCredentialSubmission"] | null;
+            /** @description Optimistic-locking version for the M3 update. */
+            version: number;
+        };
+        PaymentConnectionList: {
+            data: components["schemas"]["PaymentConnection"][];
+        };
+        /** @description The OTA's subscription to a Velexis plan. */
+        Subscription: {
+            id: string;
+            planCode: components["schemas"]["PlanCode"];
+            planName: string;
+            /**
+             * @description Stripe's subscription statuses; manual subscriptions use `trialing`, `past_due` and `canceled` only.
+             * @enum {string}
+             */
+            status: "trialing" | "active" | "past_due" | "paused" | "canceled" | "incomplete" | "incomplete_expired" | "unpaid";
+            /**
+             * @description `manual` (the trial before M5) or `stripe`.
+             * @enum {string}
+             */
+            billingProvider: "stripe" | "manual";
+            billingInterval: components["schemas"]["BillingInterval"];
+            /** Format: date-time */
+            trialEndsAt: string | null;
+            /** Format: date-time */
+            currentPeriodEnd: string | null;
+            cancelAtPeriodEnd: boolean;
+            /**
+             * @description The billing banner of the portal; `null` when there is none.
+             * @enum {string|null}
+             */
+            banner: "past_due" | "trial_ending" | "canceled" | null;
+            /** @description True for a Stripe subscription, managed in the Stripe Customer Portal (M5). */
+            canManageInStripe: boolean;
+        };
     };
     responses: {
         /** @description The request body, query or headers failed validation; see fieldErrors. Possible codes: VALIDATION_FAILED. */
@@ -893,6 +2164,106 @@ export interface components {
                 "application/json": components["schemas"]["ErrorResponse"];
             };
         };
+        /** @description The e-mail address is not verified, or the caller's role in the OTA does not allow the operation. Possible codes: EMAIL_NOT_VERIFIED, FORBIDDEN. */
+        TenantRoleForbidden: {
+            headers: {
+                "X-Request-Id": components["headers"]["X-Request-Id"];
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["ErrorResponse"];
+            };
+        };
+        /** @description The e-mail address is not verified, the caller's role in the OTA does not allow the operation, or the operation needs a step-up and MFA is not enabled. Possible codes: EMAIL_NOT_VERIFIED, FORBIDDEN, MFA_REQUIRED. */
+        TenantRoleOrStepUpForbidden: {
+            headers: {
+                "X-Request-Id": components["headers"]["X-Request-Id"];
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["ErrorResponse"];
+            };
+        };
+        /** @description The OTA is not active: it is being set up, suspended or failed (`details.status`). Possible codes: TENANT_NOT_ACTIVE. */
+        TenantNotActive: {
+            headers: {
+                "X-Request-Id": components["headers"]["X-Request-Id"];
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["ErrorResponse"];
+            };
+        };
+        /** @description The key is revoked (`details.reason = revoked`), or the OTA is not active, so its keys are read-only. Possible codes: CONFLICT, TENANT_NOT_ACTIVE. */
+        ApiKeyConflict: {
+            headers: {
+                "X-Request-Id": components["headers"]["X-Request-Id"];
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["ErrorResponse"];
+            };
+        };
+        /** @description The change would leave the OTA without an active owner. Possible codes: LAST_OWNER. */
+        LastOwner: {
+            headers: {
+                "X-Request-Id": components["headers"]["X-Request-Id"];
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["ErrorResponse"];
+            };
+        };
+        /** @description The invitation is not pending any more: it was accepted, revoked or expired (`details.reason = not_pending`). Possible codes: CONFLICT. */
+        InvitationNotPending: {
+            headers: {
+                "X-Request-Id": components["headers"]["X-Request-Id"];
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["ErrorResponse"];
+            };
+        };
+        /** @description The body failed validation, or the invitation is unknown, already used, revoked or expired. Possible codes: VALIDATION_FAILED, INVITATION_INVALID. */
+        InvitationInvalid: {
+            headers: {
+                "X-Request-Id": components["headers"]["X-Request-Id"];
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["ErrorResponse"];
+            };
+        };
+        /** @description `If-Match` is not the current version; reload and try again. Possible codes: PRECONDITION_FAILED. */
+        PreconditionFailed: {
+            headers: {
+                "X-Request-Id": components["headers"]["X-Request-Id"];
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["ErrorResponse"];
+            };
+        };
+        /** @description The plan's limit is reached (`details.limit` and `details.used`). Possible codes: PLAN_LIMIT_REACHED. */
+        PlanLimitReached: {
+            headers: {
+                "X-Request-Id": components["headers"]["X-Request-Id"];
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["ErrorResponse"];
+            };
+        };
+        /** @description A dependency the operation needs (PostgreSQL, or Redis for the idempotency store) is unavailable; nothing was written. Retry later. Possible codes: SERVICE_UNAVAILABLE. */
+        ServiceUnavailable: {
+            headers: {
+                "X-Request-Id": components["headers"]["X-Request-Id"];
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["ErrorResponse"];
+            };
+        };
     };
     parameters: {
         /** @description Client-generated unique key (a UUID v4) that makes the request safe to retry for 24 hours. The same key with another body answers `409 IDEMPOTENCY_KEY_REUSED`. */
@@ -911,6 +2282,21 @@ export interface components {
          * @example ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F
          */
         TenantId: string;
+        /**
+         * @description The membership (`id` of `listMembers`, the staff id `stf_…`).
+         * @example stf_01JB3K7P2R6T0W4Y8A2C6E0G4J
+         */
+        MemberId: string;
+        /**
+         * @description The invitation (`id` of `listInvitations`).
+         * @example ivt_01JA2ZF4H8K2M6P0R4T8W2Y6A0
+         */
+        InvitationId: string;
+        /**
+         * @description The API key (`id` of `listApiKeys`, never the key or its prefix).
+         * @example key_01JB3KA2C6E0G4J8M2P6S0V4X8
+         */
+        ApiKeyId: string;
     };
     requestBodies: never;
     headers: {
@@ -1769,6 +3155,1535 @@ export interface operations {
                     "application/json": components["schemas"]["PlanList"];
                 };
             };
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    checkTenantKey: {
+        parameters: {
+            query: {
+                /**
+                 * @description The key to check, as typed. Any text of 1–64 characters is checked; one that breaks the key rules answers `available: false` with `reason: invalid`, not a `400`.
+                 * @example acme
+                 */
+                key: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The result of the check. */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["KeyAvailability"];
+                };
+            };
+            400: components["responses"]["ValidationFailed"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["EmailNotVerified"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    listTenants: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The caller's OTAs. */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "data": [
+                     *         {
+                     *           "id": "ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F",
+                     *           "key": "acme",
+                     *           "name": "Acme Travel",
+                     *           "status": "active",
+                     *           "role": "owner",
+                     *           "planCode": "early_access",
+                     *           "storefrontUrl": "https://acme.ota.example.com/",
+                     *           "storefrontEnvironment": "test"
+                     *         }
+                     *       ]
+                     *     }
+                     */
+                    "application/json": components["schemas"]["TenantList"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    createTenant: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Client-generated unique key (a UUID v4) that makes the request safe to retry for 24 hours. The same key with another body answers `409 IDEMPOTENCY_KEY_REUSED`. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                /**
+                 * @example {
+                 *       "key": "acme",
+                 *       "name": "Acme Travel",
+                 *       "countryCode": "NO",
+                 *       "defaultCurrency": "EUR",
+                 *       "timeZone": "Europe/Oslo"
+                 *     }
+                 */
+                "application/json": components["schemas"]["CreateTenantRequest"];
+            };
+        };
+        responses: {
+            /** @description Accepted. The OTA exists in `provisioning`; its setup job runs (before M5) or waits for Checkout (M5). */
+            202: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TenantCreated"];
+                };
+            };
+            400: components["responses"]["ValidationFailed"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["EmailNotVerified"];
+            /** @description The key is reserved or used by another OTA, or the `Idempotency-Key` was used with another body. Possible codes: TENANT_KEY_UNAVAILABLE, IDEMPOTENCY_KEY_REUSED. */
+            409: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The plan cannot be chosen with this billing interval, or the account owns as many OTAs as allowed. Possible codes: PLAN_NOT_AVAILABLE, UNPROCESSABLE. */
+            422: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["ServiceUnavailable"];
+        };
+    };
+    getTenant: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The OTA; callers without an active membership get `404 NOT_FOUND`.
+                 * @example ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F
+                 */
+                tenantId: components["parameters"]["TenantId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The OTA. */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    ETag: components["headers"]["ETag"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Tenant"];
+                };
+            };
+            400: components["responses"]["ValidationFailed"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["EmailNotVerified"];
+            404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    updateTenant: {
+        parameters: {
+            query?: never;
+            header: {
+                /**
+                 * @description The `ETag` of the version being changed; a stale version answers `412 PRECONDITION_FAILED`.
+                 * @example "3"
+                 */
+                "If-Match": components["parameters"]["IfMatch"];
+            };
+            path: {
+                /**
+                 * @description The OTA; callers without an active membership get `404 NOT_FOUND`.
+                 * @example ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F
+                 */
+                tenantId: components["parameters"]["TenantId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                /**
+                 * @example {
+                 *       "legalName": "Acme Travel AS",
+                 *       "supportEmail": "support@acme-travel.example.com"
+                 *     }
+                 */
+                "application/json": components["schemas"]["UpdateTenantRequest"];
+            };
+        };
+        responses: {
+            /** @description The updated OTA, with its new version in `ETag`. */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    ETag: components["headers"]["ETag"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Tenant"];
+                };
+            };
+            400: components["responses"]["ValidationFailed"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["TenantRoleForbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["TenantNotActive"];
+            412: components["responses"]["PreconditionFailed"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getProvisioning: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The OTA; callers without an active membership get `404 NOT_FOUND`.
+                 * @example ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F
+                 */
+                tenantId: components["parameters"]["TenantId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The setup progress. */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProvisioningStatus"];
+                };
+            };
+            400: components["responses"]["ValidationFailed"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["EmailNotVerified"];
+            404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    retryProvisioning: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The OTA; callers without an active membership get `404 NOT_FOUND`.
+                 * @example ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F
+                 */
+                tenantId: components["parameters"]["TenantId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Accepted. The new setup job runs (or waits for Checkout, M5). */
+            202: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "job": {
+                     *         "id": "job_01JB3K8Q3S7V1X5Z9B3D7F1H5K",
+                     *         "kind": "provision",
+                     *         "status": "running",
+                     *         "step": "dispatch",
+                     *         "steps": [],
+                     *         "attempt": 1,
+                     *         "maxAttempts": 5,
+                     *         "error": null
+                     *       },
+                     *       "checkoutUrl": null
+                     *     }
+                     */
+                    "application/json": components["schemas"]["ProvisioningRetried"];
+                };
+            };
+            400: components["responses"]["ValidationFailed"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["TenantRoleForbidden"];
+            404: components["responses"]["NotFound"];
+            /** @description Only a failed setup can be retried. Possible codes: PROVISIONING_NOT_RETRYABLE. */
+            409: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    revealInitialKeys: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The OTA; callers without an active membership get `404 NOT_FOUND`.
+                 * @example ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F
+                 */
+                tenantId: components["parameters"]["TenantId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The two test keys, shown once. */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    "Cache-Control": components["headers"]["NoStore"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "keys": [
+                     *         {
+                     *           "id": "key_01JA2ZD8E2G6J0K4N8Q2S6W0Y4",
+                     *           "kind": "publishable",
+                     *           "environment": "test",
+                     *           "prefix": "pk_test_Zy98Xw",
+                     *           "key": "pk_test_Zy98Xw76Vu54Ts32Rq10Po98Nm76Lk54Ji32Hg10"
+                     *         },
+                     *         {
+                     *           "id": "key_01JA2ZD8E2G6J0K4N8Q2S6W0Y5",
+                     *           "kind": "secret",
+                     *           "environment": "test",
+                     *           "prefix": "sk_test_Ab12Cd",
+                     *           "key": "sk_test_Ab12Cd34Ef56Gh78Ij90Kl12Mn34Op56Qr78St90"
+                     *         }
+                     *       ]
+                     *     }
+                     */
+                    "application/json": components["schemas"]["InitialKeys"];
+                };
+            };
+            400: components["responses"]["ValidationFailed"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["TenantRoleForbidden"];
+            404: components["responses"]["NotFound"];
+            /** @description The keys were revealed already, or the 24 hours to reveal them passed; create a new key instead. Possible codes: KEYS_ALREADY_REVEALED. */
+            410: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getOnboarding: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The OTA; callers without an active membership get `404 NOT_FOUND`.
+                 * @example ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F
+                 */
+                tenantId: components["parameters"]["TenantId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The checklist. */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "items": [
+                     *         {
+                     *           "id": "email_verified",
+                     *           "label": "Verify your e-mail",
+                     *           "done": true,
+                     *           "href": "/verify-pending",
+                     *           "milestone": "M1"
+                     *         },
+                     *         {
+                     *           "id": "mfa_enabled",
+                     *           "label": "Turn on two-factor sign-in",
+                     *           "done": false,
+                     *           "href": "/account/security",
+                     *           "milestone": "M1"
+                     *         },
+                     *         {
+                     *           "id": "ota_active",
+                     *           "label": "OTA set up",
+                     *           "done": true,
+                     *           "href": "/otas/ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F/setup",
+                     *           "milestone": "M1"
+                     *         },
+                     *         {
+                     *           "id": "api_key",
+                     *           "label": "Get your API keys",
+                     *           "done": false,
+                     *           "href": "/otas/ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F/api-keys",
+                     *           "milestone": "M1"
+                     *         },
+                     *         {
+                     *           "id": "storefront_open",
+                     *           "label": "Open your storefront",
+                     *           "done": true,
+                     *           "href": "https://acme.ota.example.com/",
+                     *           "milestone": "M1"
+                     *         },
+                     *         {
+                     *           "id": "amadeus_test",
+                     *           "label": "Amadeus test office active",
+                     *           "done": true,
+                     *           "href": "/otas/ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F/amadeus",
+                     *           "milestone": "M1"
+                     *         },
+                     *         {
+                     *           "id": "team_invited",
+                     *           "label": "Invite your team",
+                     *           "done": false,
+                     *           "href": "/otas/ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F/team",
+                     *           "milestone": "M1"
+                     *         }
+                     *       ]
+                     *     }
+                     */
+                    "application/json": components["schemas"]["OnboardingChecklist"];
+                };
+            };
+            400: components["responses"]["ValidationFailed"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["EmailNotVerified"];
+            404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    listMembers: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The OTA; callers without an active membership get `404 NOT_FOUND`.
+                 * @example ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F
+                 */
+                tenantId: components["parameters"]["TenantId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The members. */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "data": [
+                     *         {
+                     *           "id": "stf_01JA2ZA1C5E9G3J7K2M6P0R4T8",
+                     *           "accountId": "acc_01JA2Z9W5K7Q3M8N4P6R2T0V1X",
+                     *           "fullName": "Anna Berg",
+                     *           "email": "anna.berg@example.com",
+                     *           "role": "owner",
+                     *           "status": "active",
+                     *           "mfaEnabled": true,
+                     *           "createdAt": "2026-10-14T08:20:11Z",
+                     *           "version": 1
+                     *         },
+                     *         {
+                     *           "id": "stf_01JB3K7P2R6T0W4Y8A2C6E0G4J",
+                     *           "accountId": "acc_01JB3K6M0P4R8T2W6Y0A4C8E2G",
+                     *           "fullName": "Jonas Dahl",
+                     *           "email": "jonas.dahl@example.com",
+                     *           "role": "agent",
+                     *           "status": "active",
+                     *           "mfaEnabled": false,
+                     *           "createdAt": "2026-10-15T11:02:45Z",
+                     *           "version": 1
+                     *         }
+                     *       ]
+                     *     }
+                     */
+                    "application/json": components["schemas"]["MemberList"];
+                };
+            };
+            400: components["responses"]["ValidationFailed"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["EmailNotVerified"];
+            404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    removeMember: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The OTA; callers without an active membership get `404 NOT_FOUND`.
+                 * @example ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F
+                 */
+                tenantId: components["parameters"]["TenantId"];
+                /**
+                 * @description The membership (`id` of `listMembers`, the staff id `stf_…`).
+                 * @example stf_01JB3K7P2R6T0W4Y8A2C6E0G4J
+                 */
+                memberId: components["parameters"]["MemberId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The member is removed (or the caller left the OTA). */
+            204: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["ValidationFailed"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["TenantRoleForbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["LastOwner"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    updateMember: {
+        parameters: {
+            query?: never;
+            header: {
+                /**
+                 * @description The `ETag` of the version being changed; a stale version answers `412 PRECONDITION_FAILED`.
+                 * @example "3"
+                 */
+                "If-Match": components["parameters"]["IfMatch"];
+            };
+            path: {
+                /**
+                 * @description The OTA; callers without an active membership get `404 NOT_FOUND`.
+                 * @example ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F
+                 */
+                tenantId: components["parameters"]["TenantId"];
+                /**
+                 * @description The membership (`id` of `listMembers`, the staff id `stf_…`).
+                 * @example stf_01JB3K7P2R6T0W4Y8A2C6E0G4J
+                 */
+                memberId: components["parameters"]["MemberId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                /**
+                 * @example {
+                 *       "role": "finance"
+                 *     }
+                 */
+                "application/json": components["schemas"]["UpdateMemberRequest"];
+            };
+        };
+        responses: {
+            /** @description The member with the new role, and its new version in `ETag`. */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    ETag: components["headers"]["ETag"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "id": "stf_01JB3K7P2R6T0W4Y8A2C6E0G4J",
+                     *       "accountId": "acc_01JB3K6M0P4R8T2W6Y0A4C8E2G",
+                     *       "fullName": "Jonas Dahl",
+                     *       "email": "jonas.dahl@example.com",
+                     *       "role": "finance",
+                     *       "status": "active",
+                     *       "mfaEnabled": false,
+                     *       "createdAt": "2026-10-15T11:02:45Z",
+                     *       "version": 2
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Member"];
+                };
+            };
+            400: components["responses"]["ValidationFailed"];
+            401: components["responses"]["StepUpUnauthorized"];
+            403: components["responses"]["TenantRoleOrStepUpForbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["LastOwner"];
+            412: components["responses"]["PreconditionFailed"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    listInvitations: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The OTA; callers without an active membership get `404 NOT_FOUND`.
+                 * @example ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F
+                 */
+                tenantId: components["parameters"]["TenantId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The pending invitations. */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "data": [
+                     *         {
+                     *           "id": "ivt_01JA2ZF4H8K2M6P0R4T8W2Y6A0",
+                     *           "email": "jo@acme-travel.example.com",
+                     *           "role": "agent",
+                     *           "status": "pending",
+                     *           "invitedBy": {
+                     *             "accountId": "acc_01JA2Z9W5K7Q3M8N4P6R2T0V1X",
+                     *             "fullName": "Anna Berg"
+                     *           },
+                     *           "expiresAt": "2026-10-21T09:00:00Z",
+                     *           "createdAt": "2026-10-14T09:00:00Z"
+                     *         }
+                     *       ]
+                     *     }
+                     */
+                    "application/json": components["schemas"]["InvitationList"];
+                };
+            };
+            400: components["responses"]["ValidationFailed"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["TenantRoleForbidden"];
+            404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    createInvitation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The OTA; callers without an active membership get `404 NOT_FOUND`.
+                 * @example ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F
+                 */
+                tenantId: components["parameters"]["TenantId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                /**
+                 * @example {
+                 *       "email": "jo@acme-travel.example.com",
+                 *       "role": "agent"
+                 *     }
+                 */
+                "application/json": components["schemas"]["CreateInvitationRequest"];
+            };
+        };
+        responses: {
+            /** @description The invitation; the e-mail with the link is queued. */
+            201: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Invitation"];
+                };
+            };
+            400: components["responses"]["ValidationFailed"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["TenantRoleForbidden"];
+            404: components["responses"]["NotFound"];
+            /** @description The person is already a member, or an invitation for the address is pending. Possible codes: ALREADY_MEMBER, INVITATION_PENDING. */
+            409: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            422: components["responses"]["PlanLimitReached"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    revokeInvitation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The OTA; callers without an active membership get `404 NOT_FOUND`.
+                 * @example ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F
+                 */
+                tenantId: components["parameters"]["TenantId"];
+                /**
+                 * @description The invitation (`id` of `listInvitations`).
+                 * @example ivt_01JA2ZF4H8K2M6P0R4T8W2Y6A0
+                 */
+                invitationId: components["parameters"]["InvitationId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The invitation is revoked. */
+            204: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["ValidationFailed"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["TenantRoleForbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["InvitationNotPending"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    resendInvitation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The OTA; callers without an active membership get `404 NOT_FOUND`.
+                 * @example ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F
+                 */
+                tenantId: components["parameters"]["TenantId"];
+                /**
+                 * @description The invitation (`id` of `listInvitations`).
+                 * @example ivt_01JA2ZF4H8K2M6P0R4T8W2Y6A0
+                 */
+                invitationId: components["parameters"]["InvitationId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Accepted; the e-mail with the new link is queued. */
+            202: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["ValidationFailed"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["TenantRoleForbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["InvitationNotPending"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    lookupInvitation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                /**
+                 * @example {
+                 *       "token": "Iv7mQ2xK9wT4bN8cR1pL6yH3dF0sJ5aG7eU2iO9rZ4k"
+                 *     }
+                 */
+                "application/json": components["schemas"]["InvitationTokenRequest"];
+            };
+        };
+        responses: {
+            /** @description The invitation's details. */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "tenantName": "Acme Travel",
+                     *       "role": "agent",
+                     *       "email": "jo@acme-travel.example.com",
+                     *       "inviterName": "Anna Berg",
+                     *       "expiresAt": "2026-10-21T09:00:00Z"
+                     *     }
+                     */
+                    "application/json": components["schemas"]["InvitationPreview"];
+                };
+            };
+            400: components["responses"]["InvitationInvalid"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    acceptInvitation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                /**
+                 * @example {
+                 *       "token": "Iv7mQ2xK9wT4bN8cR1pL6yH3dF0sJ5aG7eU2iO9rZ4k"
+                 *     }
+                 */
+                "application/json": components["schemas"]["InvitationTokenRequest"];
+            };
+        };
+        responses: {
+            /** @description The new membership and the OTA it belongs to. */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "membership": {
+                     *         "id": "stf_01JB3K7P2R6T0W4Y8A2C6E0G4J",
+                     *         "accountId": "acc_01JB3K6M0P4R8T2W6Y0A4C8E2G",
+                     *         "fullName": "Jo Lund",
+                     *         "email": "jo@acme-travel.example.com",
+                     *         "role": "agent",
+                     *         "status": "active",
+                     *         "mfaEnabled": false,
+                     *         "createdAt": "2026-10-15T11:02:45Z",
+                     *         "version": 1
+                     *       },
+                     *       "tenant": {
+                     *         "id": "ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F",
+                     *         "key": "acme",
+                     *         "name": "Acme Travel",
+                     *         "status": "active",
+                     *         "role": "agent",
+                     *         "planCode": "early_access",
+                     *         "storefrontUrl": "https://acme.ota.example.com/",
+                     *         "storefrontEnvironment": "test"
+                     *       }
+                     *     }
+                     */
+                    "application/json": components["schemas"]["InvitationAccepted"];
+                };
+            };
+            400: components["responses"]["InvitationInvalid"];
+            401: components["responses"]["Unauthenticated"];
+            /** @description The e-mail address is not verified, or the invitation was sent to another address. Possible codes: EMAIL_NOT_VERIFIED, INVITATION_EMAIL_MISMATCH. */
+            403: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The account is already a member of this OTA. Possible codes: ALREADY_MEMBER. */
+            409: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    listApiKeys: {
+        parameters: {
+            query?: {
+                /** @description Only the keys of this environment; both when absent. */
+                environment?: components["schemas"]["Environment"];
+                /** @description Also list revoked keys. */
+                includeRevoked?: boolean;
+            };
+            header?: never;
+            path: {
+                /**
+                 * @description The OTA; callers without an active membership get `404 NOT_FOUND`.
+                 * @example ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F
+                 */
+                tenantId: components["parameters"]["TenantId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The API keys. */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "data": [
+                     *         {
+                     *           "id": "key_01JB3KA2C6E0G4J8M2P6S0V4X8",
+                     *           "name": "Storefront production",
+                     *           "kind": "secret",
+                     *           "environment": "test",
+                     *           "prefix": "sk_test_Qw34Er",
+                     *           "last4": "Df90",
+                     *           "allowedOrigins": [],
+                     *           "scopes": [
+                     *             "storefront"
+                     *           ],
+                     *           "createdAt": "2026-10-15T09:30:00Z",
+                     *           "createdBy": {
+                     *             "accountId": "acc_01JA2Z9W5K7Q3M8N4P6R2T0V1X",
+                     *             "fullName": "Anna Berg"
+                     *           },
+                     *           "lastUsedAt": "2026-10-15T10:05:00Z",
+                     *           "expiresAt": null,
+                     *           "revokedAt": null
+                     *         },
+                     *         {
+                     *           "id": "key_01JA2ZD8E2G6J0K4N8Q2S6W0Y4",
+                     *           "name": "Initial test key (publishable)",
+                     *           "kind": "publishable",
+                     *           "environment": "test",
+                     *           "prefix": "pk_test_Zy98Xw",
+                     *           "last4": "Hg10",
+                     *           "allowedOrigins": [
+                     *             "https://www.acme-travel.example.com",
+                     *             "http://localhost:5173"
+                     *           ],
+                     *           "scopes": [],
+                     *           "createdAt": "2026-10-14T08:20:16Z",
+                     *           "createdBy": null,
+                     *           "lastUsedAt": null,
+                     *           "expiresAt": null,
+                     *           "revokedAt": null
+                     *         }
+                     *       ]
+                     *     }
+                     */
+                    "application/json": components["schemas"]["ApiKeyList"];
+                };
+            };
+            400: components["responses"]["ValidationFailed"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["TenantRoleForbidden"];
+            404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    createApiKey: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The OTA; callers without an active membership get `404 NOT_FOUND`.
+                 * @example ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F
+                 */
+                tenantId: components["parameters"]["TenantId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateApiKeyRequest"];
+            };
+        };
+        responses: {
+            /** @description The key's settings and the full key, shown once. */
+            201: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    "Cache-Control": components["headers"]["NoStore"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "apiKey": {
+                     *         "id": "key_01JB3KA2C6E0G4J8M2P6S0V4X8",
+                     *         "name": "Storefront production",
+                     *         "kind": "secret",
+                     *         "environment": "test",
+                     *         "prefix": "sk_test_Qw34Er",
+                     *         "last4": "Df90",
+                     *         "allowedOrigins": [],
+                     *         "scopes": [
+                     *           "storefront"
+                     *         ],
+                     *         "createdAt": "2026-10-15T09:30:00Z",
+                     *         "createdBy": {
+                     *           "accountId": "acc_01JA2Z9W5K7Q3M8N4P6R2T0V1X",
+                     *           "fullName": "Anna Berg"
+                     *         },
+                     *         "lastUsedAt": null,
+                     *         "expiresAt": null,
+                     *         "revokedAt": null
+                     *       },
+                     *       "key": "sk_test_Qw34Er56Ty78Ui90Op12As34Df56Gh78Jk12Df90"
+                     *     }
+                     */
+                    "application/json": components["schemas"]["ApiKeyCreated"];
+                };
+            };
+            400: components["responses"]["ValidationFailed"];
+            401: components["responses"]["StepUpUnauthorized"];
+            403: components["responses"]["TenantRoleOrStepUpForbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["TenantNotActive"];
+            /** @description The plan's API key limit is reached, or a live key was asked for before the OTA is live. Possible codes: PLAN_LIMIT_REACHED, LIVE_MODE_NOT_ENABLED. */
+            422: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    updateApiKey: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The OTA; callers without an active membership get `404 NOT_FOUND`.
+                 * @example ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F
+                 */
+                tenantId: components["parameters"]["TenantId"];
+                /**
+                 * @description The API key (`id` of `listApiKeys`, never the key or its prefix).
+                 * @example key_01JB3KA2C6E0G4J8M2P6S0V4X8
+                 */
+                keyId: components["parameters"]["ApiKeyId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                /**
+                 * @example {
+                 *       "allowedOrigins": [
+                 *         "https://www.acme-travel.example.com",
+                 *         "https://book.acme-travel.example.com"
+                 *       ]
+                 *     }
+                 */
+                "application/json": components["schemas"]["UpdateApiKeyRequest"];
+            };
+        };
+        responses: {
+            /** @description The updated key. */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiKey"];
+                };
+            };
+            400: components["responses"]["ValidationFailed"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["TenantRoleForbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["ApiKeyConflict"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    rollApiKey: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The OTA; callers without an active membership get `404 NOT_FOUND`.
+                 * @example ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F
+                 */
+                tenantId: components["parameters"]["TenantId"];
+                /**
+                 * @description The API key (`id` of `listApiKeys`, never the key or its prefix).
+                 * @example key_01JB3KA2C6E0G4J8M2P6S0V4X8
+                 */
+                keyId: components["parameters"]["ApiKeyId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                /**
+                 * @example {
+                 *       "expireOldIn": "24h"
+                 *     }
+                 */
+                "application/json": components["schemas"]["RollApiKeyRequest"];
+            };
+        };
+        responses: {
+            /** @description The new key, shown once, and when the old one stops working. */
+            201: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    "Cache-Control": components["headers"]["NoStore"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "apiKey": {
+                     *         "id": "key_01JB3KB7D1F5H9K3N7Q1T5W9Y3",
+                     *         "name": "Storefront production",
+                     *         "kind": "secret",
+                     *         "environment": "test",
+                     *         "prefix": "sk_test_Mn56Bv",
+                     *         "last4": "Pq21",
+                     *         "allowedOrigins": [],
+                     *         "scopes": [
+                     *           "storefront"
+                     *         ],
+                     *         "createdAt": "2026-10-16T07:45:00Z",
+                     *         "createdBy": {
+                     *           "accountId": "acc_01JA2Z9W5K7Q3M8N4P6R2T0V1X",
+                     *           "fullName": "Anna Berg"
+                     *         },
+                     *         "lastUsedAt": null,
+                     *         "expiresAt": null,
+                     *         "revokedAt": null
+                     *       },
+                     *       "key": "sk_test_Mn56Bv78Cx90Za12Sd34Fg56Hj78Kl90Qw12Pq21",
+                     *       "previous": {
+                     *         "id": "key_01JB3KA2C6E0G4J8M2P6S0V4X8",
+                     *         "expiresAt": "2026-10-17T07:45:00Z"
+                     *       }
+                     *     }
+                     */
+                    "application/json": components["schemas"]["ApiKeyRolled"];
+                };
+            };
+            400: components["responses"]["ValidationFailed"];
+            401: components["responses"]["StepUpUnauthorized"];
+            403: components["responses"]["TenantRoleOrStepUpForbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["ApiKeyConflict"];
+            422: components["responses"]["PlanLimitReached"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    revokeApiKey: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The OTA; callers without an active membership get `404 NOT_FOUND`.
+                 * @example ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F
+                 */
+                tenantId: components["parameters"]["TenantId"];
+                /**
+                 * @description The API key (`id` of `listApiKeys`, never the key or its prefix).
+                 * @example key_01JB3KA2C6E0G4J8M2P6S0V4X8
+                 */
+                keyId: components["parameters"]["ApiKeyId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The revoked key. */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "id": "key_01JB3KA2C6E0G4J8M2P6S0V4X8",
+                     *       "name": "Storefront production",
+                     *       "kind": "secret",
+                     *       "environment": "test",
+                     *       "prefix": "sk_test_Qw34Er",
+                     *       "last4": "Df90",
+                     *       "allowedOrigins": [],
+                     *       "scopes": [
+                     *         "storefront"
+                     *       ],
+                     *       "createdAt": "2026-10-15T09:30:00Z",
+                     *       "createdBy": {
+                     *         "accountId": "acc_01JA2Z9W5K7Q3M8N4P6R2T0V1X",
+                     *         "fullName": "Anna Berg"
+                     *       },
+                     *       "lastUsedAt": "2026-10-16T07:40:00Z",
+                     *       "expiresAt": null,
+                     *       "revokedAt": "2026-10-16T07:46:30Z"
+                     *     }
+                     */
+                    "application/json": components["schemas"]["ApiKey"];
+                };
+            };
+            400: components["responses"]["ValidationFailed"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["TenantRoleForbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["ApiKeyConflict"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    listDomains: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The OTA; callers without an active membership get `404 NOT_FOUND`.
+                 * @example ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F
+                 */
+                tenantId: components["parameters"]["TenantId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The domains. */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "data": [
+                     *         {
+                     *           "id": "dom_01JA2Z7Q4M9R2T6V0X3Z8B1D6G",
+                     *           "hostname": "acme.ota.example.com",
+                     *           "kind": "subdomain",
+                     *           "purpose": "storefront",
+                     *           "isPrimary": true,
+                     *           "verificationStatus": "verified",
+                     *           "dnsRecords": [],
+                     *           "verificationDeadlineAt": null,
+                     *           "lastCheckedAt": null,
+                     *           "lastCheckError": null,
+                     *           "tlsStatus": "issued",
+                     *           "tlsExpiresAt": "2027-01-12T08:21:00Z",
+                     *           "createdAt": "2026-10-14T08:20:11Z"
+                     *         },
+                     *         {
+                     *           "id": "dom_01JB3K5N9Q3S7W1Y5A9C3E7G1J",
+                     *           "hostname": "travel.acme-travel.example.com",
+                     *           "kind": "custom",
+                     *           "purpose": "storefront",
+                     *           "isPrimary": false,
+                     *           "verificationStatus": "pending",
+                     *           "dnsRecords": [
+                     *             {
+                     *               "type": "TXT",
+                     *               "name": "_velexis.travel.acme-travel.example.com",
+                     *               "value": "vx-verify-K7Q4M2XP9TRWH5ZDB3NV8QKE1MZT6RYC"
+                     *             },
+                     *             {
+                     *               "type": "CNAME",
+                     *               "name": "travel.acme-travel.example.com",
+                     *               "value": "acme.ota.example.com"
+                     *             },
+                     *             {
+                     *               "type": "A",
+                     *               "name": "travel.acme-travel.example.com",
+                     *               "value": "203.0.113.10"
+                     *             },
+                     *             {
+                     *               "type": "AAAA",
+                     *               "name": "travel.acme-travel.example.com",
+                     *               "value": "2001:db8::10"
+                     *             }
+                     *           ],
+                     *           "verificationDeadlineAt": "2026-11-21T10:00:00Z",
+                     *           "lastCheckedAt": "2026-11-18T10:05:00Z",
+                     *           "lastCheckError": "The TXT record _velexis.travel.acme-travel.example.com was not found.",
+                     *           "tlsStatus": "pending",
+                     *           "tlsExpiresAt": null,
+                     *           "createdAt": "2026-11-18T10:00:00Z"
+                     *         }
+                     *       ]
+                     *     }
+                     */
+                    "application/json": components["schemas"]["DomainList"];
+                };
+            };
+            400: components["responses"]["ValidationFailed"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["EmailNotVerified"];
+            404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    listAmadeusConnections: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The OTA; callers without an active membership get `404 NOT_FOUND`.
+                 * @example ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F
+                 */
+                tenantId: components["parameters"]["TenantId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The Amadeus connections. */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "data": [
+                     *         {
+                     *           "id": "sc_01JA2ZB9C3E7G1J5M9Q3S7V1X5",
+                     *           "environment": "test",
+                     *           "credentialSource": "velexis",
+                     *           "status": "active",
+                     *           "officeIds": [
+                     *             "NCE1A0955"
+                     *           ],
+                     *           "defaultOfficeId": "NCE1A0955",
+                     *           "queuingOfficeId": "NCE1A0955",
+                     *           "ownerOfficeId": "NCE1A0955",
+                     *           "clientId": null,
+                     *           "ticketingDefaults": {},
+                     *           "monitoredQueues": [],
+                     *           "lastVerifiedAt": "2026-10-14T08:20:15Z",
+                     *           "lastError": null,
+                     *           "pendingSubmission": null,
+                     *           "version": 1
+                     *         }
+                     *       ]
+                     *     }
+                     */
+                    "application/json": components["schemas"]["AmadeusConnectionList"];
+                };
+            };
+            400: components["responses"]["ValidationFailed"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["TenantRoleForbidden"];
+            404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    listPaymentConnections: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The OTA; callers without an active membership get `404 NOT_FOUND`.
+                 * @example ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F
+                 */
+                tenantId: components["parameters"]["TenantId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The payment connections. */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "data": [
+                     *         {
+                     *           "id": "ppc_01JA2ZBA4D8F2H6K0N4Q8S2V6X",
+                     *           "environment": "test",
+                     *           "provider": "stripe",
+                     *           "accountMode": "velexis",
+                     *           "status": "active",
+                     *           "accountReference": null,
+                     *           "publishableKey": null,
+                     *           "statementDescriptorSuffix": "ACME TRAVEL",
+                     *           "capabilities": {},
+                     *           "connectedAt": null,
+                     *           "disconnectedAt": null,
+                     *           "webhookUrl": null,
+                     *           "pendingSubmission": null,
+                     *           "version": 1
+                     *         }
+                     *       ]
+                     *     }
+                     */
+                    "application/json": components["schemas"]["PaymentConnectionList"];
+                };
+            };
+            400: components["responses"]["ValidationFailed"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["TenantRoleForbidden"];
+            404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getSubscription: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The OTA; callers without an active membership get `404 NOT_FOUND`.
+                 * @example ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F
+                 */
+                tenantId: components["parameters"]["TenantId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The subscription. */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "id": "sub_01JA2Z7R5N0S3V7X1Z4B9D2F6H",
+                     *       "planCode": "early_access",
+                     *       "planName": "Early access",
+                     *       "status": "trialing",
+                     *       "billingProvider": "manual",
+                     *       "billingInterval": "month",
+                     *       "trialEndsAt": "2027-01-12T08:20:11Z",
+                     *       "currentPeriodEnd": null,
+                     *       "cancelAtPeriodEnd": false,
+                     *       "banner": null,
+                     *       "canManageInStripe": false
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Subscription"];
+                };
+            };
+            400: components["responses"]["ValidationFailed"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["TenantRoleForbidden"];
+            404: components["responses"]["NotFound"];
             429: components["responses"]["RateLimited"];
             500: components["responses"]["InternalError"];
         };

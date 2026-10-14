@@ -1,8 +1,9 @@
 // Contract tests of the platform OpenAPI document, openapi/velexis-platform-api.openapi.yaml (ADR-0006, PADR-0016).
 //
-// PBE-005 wrote its first slice (identity, plans, internal: 24 operations, the conventions and the error catalogue).
-// The tests of that slice name its operations by operationId and never count the document, so the later slices
-// (PBE-006, PBE-007, PBE-066, PBE-037, PBE-041, PBE-042) only add operations. The convention checks run on every
+// PBE-005 wrote its first slice (identity, plans, internal: 24 operations, the conventions and the error catalogue)
+// and PBE-006 the second (tenants, team, API keys and the M1 reads: 27 operations). The tests of a slice name its
+// operations by operationId and never count the document, so the later slices (PBE-007, PBE-066, PBE-037,
+// PBE-041, PBE-042) only add operations and tests of their own. The convention checks run on every
 // operation of the document: x-scope, X-Request-Id on every response, x-platform-tables, Idempotency-Key exactly on
 // x-idempotent operations, closed request bodies, `Cache-Control: no-store` on secret-bearing responses, error
 // examples that agree with x-error-codes and the catalogue, and examples that validate with the Ajv checker of
@@ -22,7 +23,10 @@ const REPO_ROOT = join(APP_DIR, "..", "..");
 const PLATFORM_DOCUMENT = join(APP_DIR, "openapi", "velexis-platform-api.openapi.yaml");
 const OTA_DOCUMENT = join(REPO_ROOT, "ota", "backend", "openapi", "velexis-ota-booking-api.openapi.yaml");
 const INVENTORY = join(REPO_ROOT, "platform", "docs", "api-inventory.md");
+const INVENTORY_RESOURCES = join(REPO_ROOT, "platform", "docs", "api-inventory-resources.md");
 const INVENTORY_ADMIN = join(REPO_ROOT, "platform", "docs", "api-inventory-admin.md");
+const ONBOARDING_ADR = join(REPO_ROOT, "platform", "docs", "adr", "0018-onboarding-checklist-computation.md");
+const GENERATED_PLATFORM_TYPES = join(REPO_ROOT, "packages", "api-types", "src", "generated", "platform.ts");
 
 const HTTP_METHODS = ["get", "put", "post", "delete", "options", "head", "patch", "trace"] as const;
 
@@ -39,6 +43,12 @@ const SECRET_PROPERTIES = new Set([
   "otpauthUrl",
   "recoveryCodes",
 ]);
+
+/**
+ * Schemas that hold a secret whatever the property is called: an API key shown once is answered as `key`, a name the
+ * OTA key of `Tenant` shares, so the no-store check follows the reference rather than the name.
+ */
+const SECRET_SCHEMAS = new Set(["#/components/schemas/ApiKeySecret"]);
 
 type Json = Record<string, unknown>;
 
@@ -178,6 +188,201 @@ const SLICE_NO_STORE = [
   "regenerateRecoveryCodes",
 ] as const satisfies readonly PlatformOperationId[];
 
+/** The tenant path prefix that api-inventory-resources.md writes as `…`. */
+const TENANT_PATH = "/v1/tenants/{tenantId}";
+
+/**
+ * The PBE-006 slice: api-inventory §7 without `goLive` (9), §8 without `createConsoleToken` (9), the API keys of
+ * api-inventory-resources §1 (5) and the M1 reads of §2, §3, §4 and §6 (4).
+ */
+const SLICE_PBE006: readonly SliceOperation[] = [
+  {
+    operationId: "checkTenantKey",
+    method: "get",
+    path: "/v1/tenants/key-availability",
+    scope: "portal",
+    internal: false,
+  },
+  { operationId: "createTenant", method: "post", path: "/v1/tenants", scope: "portal", internal: false },
+  {
+    operationId: "listTenants",
+    method: "get",
+    path: "/v1/tenants",
+    scope: "portal_unverified",
+    internal: false,
+  },
+  { operationId: "getTenant", method: "get", path: TENANT_PATH, scope: "portal", internal: false },
+  { operationId: "updateTenant", method: "patch", path: TENANT_PATH, scope: "portal", internal: false },
+  {
+    operationId: "getProvisioning",
+    method: "get",
+    path: `${TENANT_PATH}/provisioning`,
+    scope: "portal",
+    internal: false,
+  },
+  {
+    operationId: "retryProvisioning",
+    method: "post",
+    path: `${TENANT_PATH}/provisioning/retry`,
+    scope: "portal",
+    internal: false,
+  },
+  {
+    operationId: "revealInitialKeys",
+    method: "post",
+    path: `${TENANT_PATH}/initial-keys/reveal`,
+    scope: "portal",
+    internal: false,
+  },
+  {
+    operationId: "getOnboarding",
+    method: "get",
+    path: `${TENANT_PATH}/onboarding`,
+    scope: "portal",
+    internal: false,
+  },
+  {
+    operationId: "listMembers",
+    method: "get",
+    path: `${TENANT_PATH}/members`,
+    scope: "portal",
+    internal: false,
+  },
+  {
+    operationId: "updateMember",
+    method: "patch",
+    path: `${TENANT_PATH}/members/{memberId}`,
+    scope: "portal",
+    internal: false,
+  },
+  {
+    operationId: "removeMember",
+    method: "delete",
+    path: `${TENANT_PATH}/members/{memberId}`,
+    scope: "portal",
+    internal: false,
+  },
+  {
+    operationId: "listInvitations",
+    method: "get",
+    path: `${TENANT_PATH}/invitations`,
+    scope: "portal",
+    internal: false,
+  },
+  {
+    operationId: "createInvitation",
+    method: "post",
+    path: `${TENANT_PATH}/invitations`,
+    scope: "portal",
+    internal: false,
+  },
+  {
+    operationId: "resendInvitation",
+    method: "post",
+    path: `${TENANT_PATH}/invitations/{invitationId}/resend`,
+    scope: "portal",
+    internal: false,
+  },
+  {
+    operationId: "revokeInvitation",
+    method: "delete",
+    path: `${TENANT_PATH}/invitations/{invitationId}`,
+    scope: "portal",
+    internal: false,
+  },
+  {
+    operationId: "lookupInvitation",
+    method: "post",
+    path: "/v1/invitations/lookup",
+    scope: "public",
+    internal: false,
+  },
+  {
+    operationId: "acceptInvitation",
+    method: "post",
+    path: "/v1/invitations/accept",
+    scope: "portal",
+    internal: false,
+  },
+  {
+    operationId: "listApiKeys",
+    method: "get",
+    path: `${TENANT_PATH}/api-keys`,
+    scope: "portal",
+    internal: false,
+  },
+  {
+    operationId: "createApiKey",
+    method: "post",
+    path: `${TENANT_PATH}/api-keys`,
+    scope: "portal",
+    internal: false,
+  },
+  {
+    operationId: "updateApiKey",
+    method: "patch",
+    path: `${TENANT_PATH}/api-keys/{keyId}`,
+    scope: "portal",
+    internal: false,
+  },
+  {
+    operationId: "rollApiKey",
+    method: "post",
+    path: `${TENANT_PATH}/api-keys/{keyId}/roll`,
+    scope: "portal",
+    internal: false,
+  },
+  {
+    operationId: "revokeApiKey",
+    method: "post",
+    path: `${TENANT_PATH}/api-keys/{keyId}/revoke`,
+    scope: "portal",
+    internal: false,
+  },
+  {
+    operationId: "listDomains",
+    method: "get",
+    path: `${TENANT_PATH}/domains`,
+    scope: "portal",
+    internal: false,
+  },
+  {
+    operationId: "listAmadeusConnections",
+    method: "get",
+    path: `${TENANT_PATH}/amadeus-connections`,
+    scope: "portal",
+    internal: false,
+  },
+  {
+    operationId: "listPaymentConnections",
+    method: "get",
+    path: `${TENANT_PATH}/payment-connections`,
+    scope: "portal",
+    internal: false,
+  },
+  {
+    operationId: "getSubscription",
+    method: "get",
+    path: `${TENANT_PATH}/subscription`,
+    scope: "portal",
+    internal: false,
+  },
+];
+
+/** The PBE-006 operations whose 2xx answer carries a key shown once and so documents `Cache-Control: no-store`. */
+const SLICE_PBE006_NO_STORE = [
+  "revealInitialKeys",
+  "createApiKey",
+  "rollApiKey",
+] as const satisfies readonly PlatformOperationId[];
+
+/** The PBE-006 operations that need a step-up only in some cases (a live secret key, granting `owner`). */
+const SLICE_PBE006_CONDITIONAL_STEP_UP = [
+  "updateMember",
+  "createApiKey",
+  "rollApiKey",
+] as const satisfies readonly PlatformOperationId[];
+
 const isObject = (value: unknown): value is Json =>
   value !== null && typeof value === "object" && !Array.isArray(value);
 
@@ -289,6 +494,31 @@ function propertyNames(
   for (const keyword of ["items", "additionalProperties"]) {
     if (isObject(resolved[keyword])) {
       propertyNames(document, resolved[keyword], found, seen);
+    }
+  }
+  return found;
+}
+
+/** Every local `$ref` a schema reaches, through `$ref`s and the subschemas of any keyword (examples left out). */
+function referencesOf(document: Json, schema: unknown, found = new Set<string>()): Set<string> {
+  if (Array.isArray(schema)) {
+    schema.forEach((item) => referencesOf(document, item, found));
+    return found;
+  }
+  if (!isObject(schema)) {
+    return found;
+  }
+  const ref = schema["$ref"];
+  if (typeof ref === "string") {
+    if (!found.has(ref)) {
+      found.add(ref);
+      referencesOf(document, resolve(document, schema), found);
+    }
+    return found;
+  }
+  for (const [keyword, child] of Object.entries(schema)) {
+    if (keyword !== "example" && keyword !== "examples") {
+      referencesOf(document, child, found);
     }
   }
   return found;
@@ -445,6 +675,235 @@ describe("the identity, plans and internal slice (PBE-005)", () => {
   });
 });
 
+/** The auth marks of an inventory row: its Auth cell split at commas and semicolons, without backticks. */
+function authMarks(auth: string): string[] {
+  return auth
+    .replaceAll("`", "")
+    .split(/[,;]\s*/)
+    .map((mark) => mark.trim());
+}
+
+/** The `x-scope` an inventory Auth cell stands for: `portal*` is `portal_unverified`, `portal: roles` is `portal`. */
+function scopeOf(marks: readonly string[]): string | undefined {
+  const [first = ""] = marks;
+  if (first === "portal*") {
+    return "portal_unverified";
+  }
+  return first.startsWith("portal") ? "portal" : first;
+}
+
+describe("the tenants, team, API keys and M1 reads slice (PBE-006)", () => {
+  it("lists the 27 operations of the slice in the operations index, each with an x-scope [PBE-006 AC1]", () => {
+    expect(SLICE_PBE006).toHaveLength(27);
+    const ids = new Set(SLICE_PBE006.map((entry) => entry.operationId));
+    expect(ids.size).toBe(27);
+    // 27 more operations: none of them belongs to the PBE-005 slice.
+    expect(SLICE.filter((entry) => ids.has(entry.operationId))).toEqual([]);
+    for (const entry of SLICE_PBE006) {
+      expect(platformOperations).toContainEqual(expect.objectContaining({ ...entry, sdkMethod: null }));
+      expect([entry.operationId, operation(entry.operationId).spec["x-scope"]]).toEqual([
+        entry.operationId,
+        entry.scope,
+      ]);
+    }
+  });
+
+  it("documents each slice operation with the method, path, scope and flags of the API inventory [PBE-006 AC1]", () => {
+    const rows = new Map([...inventoryRows(INVENTORY), ...inventoryRows(INVENTORY_RESOURCES)]);
+    const authOf = (operationId: string): string => {
+      const auth = rows.get(operationId)?.[2] ?? "";
+      // `rollApiKey` is authorised "as `createApiKey`".
+      const same = /^as `([a-z][A-Za-z]+)`$/.exec(auth)?.[1];
+      return same === undefined ? auth : authOf(same);
+    };
+    for (const entry of SLICE_PBE006) {
+      const row = rows.get(entry.operationId);
+      expect(row, entry.operationId).toBeDefined();
+      const [, route = ""] = row ?? [];
+      const [method = "", path = ""] = route.replaceAll("`", "").split(" ");
+      expect([entry.operationId, entry.method, entry.path]).toEqual([
+        entry.operationId,
+        method.toLowerCase(),
+        (path.split("?")[0] ?? "").replace(/^…/, TENANT_PATH),
+      ]);
+
+      const auth = authOf(entry.operationId);
+      const marks = authMarks(auth);
+      const spec = operation(entry.operationId).spec;
+      expect([entry.operationId, spec["x-scope"]]).toEqual([entry.operationId, scopeOf(marks)]);
+      expect([entry.operationId, spec["x-idempotent"] === true]).toEqual([
+        entry.operationId,
+        marks.includes("Idem"),
+      ]);
+      expect([entry.operationId, "x-feature" in spec]).toEqual([
+        entry.operationId,
+        marks.some((mark) => mark.startsWith("F:")),
+      ]);
+      expect([entry.operationId, spec["x-reason-required"], spec["x-internal"]]).toEqual([
+        entry.operationId,
+        undefined,
+        undefined,
+      ]);
+      // A step-up for every call is `x-mfa-step-up`; one for some calls only ("live secret keys MFA↑",
+      // "granting owner: MFA↑") is enforced by the service and shows in the error codes instead.
+      expect([entry.operationId, spec["x-mfa-step-up"] === true]).toEqual([
+        entry.operationId,
+        marks.includes("MFA↑"),
+      ]);
+      const conditional = auth.includes("MFA↑") && !marks.includes("MFA↑");
+      expect([entry.operationId, conditional]).toEqual([
+        entry.operationId,
+        (SLICE_PBE006_CONDITIONAL_STEP_UP as readonly string[]).includes(entry.operationId),
+      ]);
+      if (conditional) {
+        expect([entry.operationId, spec["x-error-codes"]]).toEqual([
+          entry.operationId,
+          expect.arrayContaining(["REAUTH_REQUIRED", "MFA_REQUIRED"]),
+        ]);
+      }
+    }
+  });
+
+  it("makes createTenant idempotent and documents no-store on the answers of createApiKey, rollApiKey and revealInitialKeys [PBE-006 AC2]", () => {
+    expect(operation("createTenant").spec["x-idempotent"]).toBe(true);
+    expect(
+      SLICE_PBE006.filter((entry) => operation(entry.operationId).spec["x-idempotent"] === true),
+    ).toEqual([expect.objectContaining({ operationId: "createTenant" })]);
+
+    const noStore = SLICE_PBE006.filter((entry) =>
+      responsesOf(platform, operation(entry.operationId)).some(
+        ([status, response]) =>
+          status.startsWith("2") &&
+          objectAt(objectAt(response, "headers"), "Cache-Control")["$ref"] === "#/components/headers/NoStore",
+      ),
+    ).map((entry) => entry.operationId);
+    expect([...noStore].sort()).toEqual([...SLICE_PBE006_NO_STORE].sort());
+
+    // Each of them answers the full key, and every 2xx answer of the three documents no-store.
+    for (const operationId of SLICE_PBE006_NO_STORE) {
+      for (const [status, response] of responsesOf(platform, operation(operationId))) {
+        if (status.startsWith("2")) {
+          const header = resolve(platform, objectAt(response, "headers")["Cache-Control"]);
+          expect([operationId, status, objectAt(header, "schema")["const"]]).toEqual([
+            operationId,
+            status,
+            "no-store",
+          ]);
+          expect([operationId, propertyNames(platform, jsonMedia(response)?.["schema"]).has("key")]).toEqual([
+            operationId,
+            true,
+          ]);
+        }
+      }
+    }
+  });
+
+  it("answers no property ending in Ciphertext or Hash in any response of the slice [PBE-006 AC3]", () => {
+    const leaky = (name: string): boolean => /(ciphertext|hash)$/i.test(name);
+    // The walker sees nested and referenced properties, so the check cannot pass by not looking.
+    const probe = { type: "object", properties: { apiKey: { $ref: "#/components/schemas/ApiKey" } } };
+    expect(propertyNames(platform, probe)).toContain("lastUsedAt");
+    expect([
+      ...propertyNames(platform, { properties: { a: { items: { properties: { keyHash: {} } } } } }),
+    ]).toEqual(["a", "keyHash"]);
+
+    for (const { operationId } of SLICE_PBE006) {
+      for (const [status, response] of responsesOf(platform, operation(operationId))) {
+        const names = [...propertyNames(platform, jsonMedia(response)?.["schema"])];
+        expect([operationId, status, names.filter(leaky)]).toEqual([operationId, status, []]);
+      }
+    }
+  });
+
+  it("generates no property ending in Ciphertext or Hash in @velexis/api-types/platform [PBE-006 AC3]", () => {
+    const generated = readFileSync(GENERATED_PLATFORM_TYPES, "utf8");
+    expect(generated).toContain("revealInitialKeys");
+    // A property line of openapi-typescript, with or without `readonly`, quotes or `?`, in any case.
+    const property = /^\s*(?:readonly\s+)?"?[A-Za-z0-9_]*(?:ciphertext|hash)"?\??:/gim;
+    expect("    keyHash: string;\n    readonly secretCiphertext?: string;\n".match(property)).toHaveLength(2);
+    expect(generated.match(property) ?? []).toEqual([]);
+  });
+
+  it("defines the shared schemas of step 4, none with a property for a secret, ciphertext or hash", () => {
+    const schemas = objectAt(objectAt(platform, "components"), "schemas");
+    const shared = [
+      "Tenant",
+      "TenantSummary",
+      "ProvisioningStatus",
+      "OnboardingItem",
+      "Member",
+      "Invitation",
+      "ApiKey",
+      "Domain",
+      "AmadeusConnection",
+      "PaymentConnection",
+      "Subscription",
+    ];
+    for (const name of shared) {
+      expect([
+        name,
+        objectAt(schemas, name)["type"],
+        objectAt(schemas, name)["additionalProperties"],
+      ]).toEqual([name, "object", false]);
+      const names = [...propertyNames(platform, { $ref: `#/components/schemas/${name}` })];
+      expect([
+        name,
+        names.filter((property) => /(secret|ciphertext|hash|password|token)$/i.test(property)),
+      ]).toEqual([name, []]);
+    }
+    expect(propertyNames(platform, { $ref: "#/components/schemas/Domain" })).toContain("dnsRecords");
+  });
+
+  it("refuses an API key answer that leaks a hash, and keeps the M5 fields of createTenant", () => {
+    const [, created = {}] =
+      responsesOf(platform, operation("createApiKey")).find(([status]) => status === "201") ?? [];
+    const [body] = examplesOf(platform, jsonMedia(created) ?? {});
+    expect(checker.check("createApiKey", { status: 201, body })).toEqual([]);
+    const leaky = {
+      ...(isObject(body) ? body : {}),
+      apiKey: { ...objectAt(body, "apiKey"), keyHash: "0".repeat(64) },
+    };
+    expect(checker.check("createApiKey", { status: 201, body: leaky })).toEqual([
+      expect.objectContaining({ path: "/apiKey/keyHash", keyword: "additionalProperties" }),
+    ]);
+
+    const schemas = objectAt(objectAt(platform, "components"), "schemas");
+    expect(Object.keys(objectAt(objectAt(schemas, "CreateTenantRequest"), "properties"))).toEqual(
+      expect.arrayContaining(["planCode", "billingInterval"]),
+    );
+    const createdTenant = objectAt(schemas, "TenantCreated");
+    expect(createdTenant["required"]).toContain("checkoutUrl");
+    expect(createdTenant["required"]).not.toContain("checkoutError");
+    expect(objectAt(objectAt(createdTenant, "properties"), "checkoutUrl")["type"]).toEqual([
+      "string",
+      "null",
+    ]);
+  });
+
+  it("accepts every ConsoleApiKeyScope and StaffPermission of the OTA contract as an API key scope", () => {
+    // The service validates scopes against the generated OTA types (PADR-0005 item 6); the schema must never
+    // refuse one of them first.
+    const otaSchemas = objectAt(objectAt(ota, "components"), "schemas");
+    const values = ["ConsoleApiKeyScope", "StaffPermission"].flatMap((name) => {
+      const list: unknown = objectAt(otaSchemas, name)["enum"];
+      return Array.isArray(list) ? list.map(String) : [];
+    });
+    expect(values).toEqual(expect.arrayContaining(["storefront", "console:automation", "bookings:issue"]));
+    const scope = objectAt(objectAt(objectAt(platform, "components"), "schemas"), "ApiKeyScope");
+    expect(scope["enum"]).toBeUndefined();
+    const pattern = new RegExp(String(scope["pattern"]), "u");
+    expect(values.filter((value) => !pattern.test(value))).toEqual([]);
+  });
+
+  it("lists the onboarding items of PADR-0018 in its order", () => {
+    const adr = readFileSync(ONBOARDING_ADR, "utf8");
+    const ids = [...adr.matchAll(/^\| `([a-z_]+)` \|/gm)].map(([, id]) => id);
+    expect(ids).toHaveLength(11);
+    const item = objectAt(objectAt(objectAt(platform, "components"), "schemas"), "OnboardingItem");
+    expect(objectAt(objectAt(item, "properties"), "id")["enum"]).toEqual(ids);
+  });
+});
+
 describe("the error catalogue", () => {
   it("lists every code of api-inventory §3 with its status", () => {
     const catalogue = objectAt(platform, "x-error-catalogue");
@@ -555,15 +1014,20 @@ describe("the conventions of every operation", () => {
   });
 
   it("documents Cache-Control: no-store on every 2xx answer that carries a secret", () => {
+    // The reference walker sees a secret schema behind nested references, so the check cannot pass by not looking.
+    expect([...referencesOf(platform, { $ref: "#/components/schemas/ApiKeyRolled" })]).toEqual(
+      expect.arrayContaining([...SECRET_SCHEMAS]),
+    );
     for (const op of operations) {
       for (const [status, response] of responsesOf(platform, op)) {
         const media = jsonMedia(response);
         if (!status.startsWith("2") || media === undefined) {
           continue;
         }
-        const secrets = [...propertyNames(platform, media["schema"])].filter((name) =>
-          SECRET_PROPERTIES.has(name),
-        );
+        const secrets = [
+          ...[...propertyNames(platform, media["schema"])].filter((name) => SECRET_PROPERTIES.has(name)),
+          ...[...referencesOf(platform, media["schema"])].filter((ref) => SECRET_SCHEMAS.has(ref)),
+        ];
         if (secrets.length > 0) {
           const header = resolve(platform, objectAt(response, "headers")["Cache-Control"]);
           expect([op.operationId, status, objectAt(header, "schema")["const"]]).toEqual([
