@@ -6,7 +6,7 @@ Related: [`flows/platform-admin-operations.md`](flows/platform-admin-operations.
 
 ## 1. Rules for every admin endpoint
 
-- Auth `admin`: an access token with audience `platform_admin`, issued only after password **and** TOTP; the guard re-reads `is_platform_admin` and `status` on every call.
+- Auth `admin`: an access token with audience `platform_admin`, issued only after password **and** TOTP; the guard re-reads `is_platform_admin` and `status` on every call, and the token of an account that is no longer an active platform admin answers `401 UNAUTHENTICATED`.
 - Every admin call that changes state writes `platform_audit_log` with `actor_type = 'platform_admin'`, in the same transaction. Reads of sensitive data (payout account reveal, audit export) are audited too.
 - Actions marked **reason** require `{reason}` (5–500 characters), stored in the audit `details`.
 - Actions marked MFA↑ require a TOTP step-up within the last 15 minutes (`POST /v1/admin/auth/step-up`).
@@ -21,8 +21,14 @@ Related: [`flows/platform-admin-operations.md`](flows/platform-admin-operations.
 | `adminRefresh` | `POST /v1/admin/auth/refresh` (public) | Rotate | `{refreshToken}` → `AdminSession` | `account_sessions` | `REFRESH_TOKEN_INVALID`, `REFRESH_TOKEN_REUSED` | M1 |
 | `adminStepUp` | `POST /v1/admin/auth/step-up` | Fresh TOTP | `{code}` → `AdminSession` | `account_sessions` | `MFA_CODE_INVALID` | M1 |
 | `adminSignOut` | `POST /v1/admin/auth/sign-out` | Sign out | `{refreshToken}` → `204` | `account_sessions` | — | M1 |
-| `adminGetMe` | `GET /v1/admin/me` | Current admin | → `{id, email, fullName}` | `accounts` | — | M1 |
+| `adminGetMe` | `GET /v1/admin/me` | Current admin and milestone switches | → `{id, email, fullName, features}` (`features` as in `getMe`) | `accounts` | — | M1 |
 | `adminGetDashboard` | `GET /v1/admin/dashboard` | Counters | → `{tenantsByStatus, provisioningFailed24h, jobsFailedByQueue, officePool: [{environment, available, assigned}], domainsPending (M5), settlementsToReview (M5), stripeEventsFailed (M5), subscriptionsPastDue (M5)}` | several, read-only; BullMQ counts | — | M1 |
+
+`AdminSession` = `{accessToken, accessTokenExpiresAt, refreshToken, refreshTokenExpiresAt, admin: {id, email, fullName, features}}`. Tokens appear only there; the admin server moves them into its own cookies at once.
+
+`adminGetMe` (and `AdminSession.admin`) also answers `features`, the milestone switches of `getMe` ([part 1](api-inventory.md) §5): the admin cannot call the portal-scoped `getMe`, and [PADR-0015](adr/0015-milestone-feature-switches.md) item 3 makes the backend the only source of the switches, so the admin hides the M5 areas from this answer (added by PBE-007).
+
+The M5 counters of `adminGetDashboard` are always present and `null` while their switch is off: `domainsPending` (`custom_domains`), `settlementsToReview` (`settlements`), `stripeEventsFailed` (`stripe_billing` or `own_stripe`) and `subscriptionsPastDue` (`stripe_billing`).
 
 ## 3. Tenants, provisioning jobs, queues
 

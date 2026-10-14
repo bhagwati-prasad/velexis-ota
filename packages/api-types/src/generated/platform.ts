@@ -1014,6 +1014,491 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/admin/auth/sign-in": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Sign in to the platform admin with e-mail and password
+         * @description The password step of the admin sign-in (PADR-0006 item 2). Checks the lock-out, then the password, then that the account is an active, verified platform admin. A wrong e-mail address, a wrong password and an account that is not an active platform admin all give the same `401 INVALID_CREDENTIALS` in the same time. A platform admin without MFA gets `403 MFA_REQUIRED`, only after a correct password, and turns MFA on in the portal first. Five consecutive failures lock the account for 15 minutes (`423 ACCOUNT_LOCKED` with `Retry-After`), as on the portal. 10 sign-ins per end-user IP per minute.
+         *
+         *     The answer is always an MFA challenge: a TOTP or recovery code is required on **every** admin sign-in, and `adminVerifyMfa` completes it within 5 minutes. A challenge of the portal's `signIn` is never accepted by `adminVerifyMfa`, nor this one by the portal's `verifyMfa`.
+         */
+        post: operations["adminSignIn"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/auth/mfa/verify": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Complete an admin sign-in with a TOTP or recovery code
+         * @description Completes the challenge of `adminSignIn` with a TOTP code (6 digits, ±1 time step, each code accepted once) or with one unused recovery code, which is then used up. A challenge allows 5 attempts and lives 5 minutes; after that, for an unknown token, or for a challenge of the portal's `signIn`, the answer is `401 MFA_CHALLENGE_INVALID` and the admin signs in again. 10 attempts per account per 10 minutes.
+         *
+         *     Success creates a refresh family with `audience = 'platform_admin'`, a 12-hour absolute lifetime and `mfa_verified_at` set, so the access token carries `mfa_at`; each refresh token expires after 2 idle hours. Writes an audit row. The admin server moves the tokens into its own httpOnly cookies at once.
+         */
+        post: operations["adminVerifyMfa"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/auth/refresh": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Rotate the admin refresh token
+         * @description Exchanges an admin refresh token for a new access token and a new refresh token of the same family; the presented token is used up. Presenting a token that was already rotated revokes the whole family (`401 REFRESH_TOKEN_REUSED`). An unknown, revoked or idle-expired token, a family past its 12-hour absolute lifetime, and any portal refresh token answer `401 REFRESH_TOKEN_INVALID`: only `platform_admin` families refresh here, and admin families never refresh through the portal's `refreshSession`. The new access token copies `mfa_at` from the family.
+         */
+        post: operations["adminRefresh"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/auth/step-up": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Confirm a sensitive admin action with a fresh TOTP code
+         * @description Admin operations marked `x-mfa-step-up` need a TOTP verification within the last 15 minutes (`401 REAUTH_REQUIRED` otherwise). A valid code answers a new access token of the same family with `mfa_at` set to now and updates the family's `mfa_verified_at`. The session also carries a new refresh token of the family, which replaces the current one as on `adminRefresh`. A code already used in the same 30-second step is refused (`401 MFA_CODE_INVALID`). 10 attempts per account per 10 minutes.
+         */
+        post: operations["adminStepUp"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/auth/sign-out": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Sign out of the platform admin
+         * @description Revokes the admin refresh family of the given refresh token. A token that is unknown, already revoked, of a portal family or of another account changes nothing, and the answer is still `204`. The access token stays valid until it expires (15 minutes at most); the admin server deletes its cookies at once.
+         */
+        post: operations["adminSignOut"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/me": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get the signed-in platform admin
+         * @description The signed-in platform admin (id, e-mail address and name) and the milestone switches of PADR-0015 in `features`, the same object as in the portal's `getMe`. The admin cannot call the portal-scoped `getMe`, and the backend is the only source of the switches (PADR-0015 item 3), so the admin hides the M5 areas from this answer.
+         */
+        get: operations["adminGetMe"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/dashboard": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get the counters of the admin dashboard
+         * @description The counters of the admin home page, read-only: OTAs by status, tenant jobs that ended `failed` in the last 24 hours, failed BullMQ jobs per platform queue, and the Velexis Amadeus office pool per environment (the page warns below 3 available offices). Each count links to its filtered list in the admin. The failed job counts come from BullMQ, so, like the queue operations, the dashboard answers `503 SERVICE_UNAVAILABLE` while Redis is unreachable.
+         *
+         *     The M5 counters are always present and `null` while their milestone switch is off: `domainsPending` (pending custom domains, `custom_domains`), `settlementsToReview` (draft settlements, `settlements`), `stripeEventsFailed` (failed Stripe events, `stripe_billing` or `own_stripe`) and `subscriptionsPastDue` (`stripe_billing`).
+         */
+        get: operations["adminGetDashboard"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/tenants": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Search every OTA
+         * @description Every OTA in any status, newest first, cursor-paginated. `q` matches part of the key, the name or the e-mail address of an active owner, case-insensitively; `status` and `planCode` filter. `ownerEmail` is the e-mail address of the oldest active owner, `null` only when no active owner is left.
+         */
+        get: operations["adminListTenants"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/tenants/{tenantId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The OTA (`id` of `adminListTenants`); an unknown id answers `404 NOT_FOUND`.
+                 * @example ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F
+                 */
+                tenantId: components["parameters"]["AdminTenantId"];
+            };
+            cookie?: never;
+        };
+        /**
+         * Get the control-plane view of an OTA
+         * @description Everything the tenant detail page shows, from platform tables only: the OTA with its internal notes, the active members and the pending invitations, the current subscription (`null` when there is none), the Amadeus and payment connections of each environment, the domains, the last 20 tenant jobs and the last 50 audit rows of the OTA (both newest first). Secrets are never included: the connections are the masked shapes of the portal, and no property holds a secret, a ciphertext, a hash or a token. Admin endpoints never read the tenant schema (PADR-0006 item 8). The `ETag` is the version that `adminUpdateTenant` needs in `If-Match`.
+         */
+        get: operations["adminGetTenant"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Edit the internal notes or the legal name of an OTA
+         * @description Changes the internal notes (stored in `tenants.metadata.notes`, never shown to the OTA) or the legal name; `null` clears either. Works in every tenant status. `If-Match` carries the `ETag` of `adminGetTenant`; a stale version answers `412 PRECONDITION_FAILED`. Writes an audit row and, after commit, publishes a `tenant` invalidation.
+         */
+        patch: operations["adminUpdateTenant"];
+        trace?: never;
+    };
+    "/v1/admin/tenants/{tenantId}/suspend": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The OTA (`id` of `adminListTenants`); an unknown id answers `404 NOT_FOUND`.
+                 * @example ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F
+                 */
+                tenantId: components["parameters"]["AdminTenantId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Suspend an OTA
+         * @description Suspends an `active` OTA (PADR-0014) for `abuse`, `request` or `admin`, with a written `reason` of 5–500 characters that the audit row keeps; `billing` suspensions are set only by billing sync. One transaction sets the status `suspended`, `suspended_at`, `suspension_reason` and a new version, inserts a `suspend` job and writes the audit row. After commit it publishes a `tenant` invalidation, so the storefront and the OTA API answer `TENANT_SUSPENDED` within 60 seconds, dispatches `tenant.suspend` to the OTA worker and e-mails the owners. Any other status answers `409 CONFLICT` (`details.reason = not_active`). Data is never deleted.
+         */
+        post: operations["adminSuspendTenant"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/tenants/{tenantId}/resume": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The OTA (`id` of `adminListTenants`); an unknown id answers `404 NOT_FOUND`.
+                 * @example ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F
+                 */
+                tenantId: components["parameters"]["AdminTenantId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Resume a suspended OTA
+         * @description Resumes a `suspended` OTA (PADR-0014 item 4), with a written `reason` of 5–500 characters that the audit row keeps. A `billing` suspension resumes here only while the current subscription is `trialing` or `active` (billing sync also resumes it on its own when the payment arrives). One transaction sets the status `active`, clears the suspension fields, inserts a `resume` job and writes the audit row; after commit a `tenant` invalidation, the `tenant.resume` dispatch and an e-mail to the owners. `409 CONFLICT` when the OTA is not suspended (`details.reason = not_suspended`), or is suspended for billing without a `trialing` or `active` subscription (`details.reason = subscription_not_active`).
+         */
+        post: operations["adminResumeTenant"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/tenants/{tenantId}/migrate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The OTA (`id` of `adminListTenants`); an unknown id answers `404 NOT_FOUND`.
+                 * @example ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F
+                 */
+                tenantId: components["parameters"]["AdminTenantId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Re-run the tenant migrations of an OTA
+         * @description Applies the pending tenant migrations to one OTA's schema, for example after a failed deploy fan-out: inserts a `migrate` job and dispatches `tenant.migrate` to the OTA worker, with `targetVersion` when given (else every pending migration). The answer arrives as `tenant.migrated` or `tenant.migration_failed` and shows on the job; a failure never changes the tenant status (PADR-0001 item 7). `409 CONFLICT` when a `migrate` job of the OTA is queued or running (`details.reason = migrate_job_active`) or the OTA has no schema yet, its `schemaVersion` being `null` (`details.reason = schema_missing`). Writes an audit row.
+         */
+        post: operations["adminMigrateTenant"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/tenants/{tenantId}/connections/{kind}/{environment}/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The OTA (`id` of `adminListTenants`); an unknown id answers `404 NOT_FOUND`.
+                 * @example ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F
+                 */
+                tenantId: components["parameters"]["AdminTenantId"];
+                /**
+                 * @description `amadeus` (the supplier connection, `supplier_connections`) or `payment` (the Stripe connection, `payment_provider_connections`).
+                 * @example amadeus
+                 */
+                kind: "amadeus" | "payment";
+                /**
+                 * @description The environment of the connection.
+                 * @example test
+                 */
+                environment: components["schemas"]["Environment"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Disable or re-enable a connection of an OTA
+         * @description Sets the Amadeus or payment connection of one environment to `disabled` or back to `active`, with a written `reason` of 5–500 characters that the audit row keeps. A disabled connection stops the OTA's supplier or payment calls in that environment; for example, staff disable the Amadeus connection of an abusive OTA while its paid bookings settle (PADR-0014). `404 NOT_FOUND` when the OTA has no such connection; `409 CONFLICT` when the connection cannot take the status, for example `active` on a connection that is not `disabled` (`details.reason = not_disabled`). Writes an audit row and, after commit, publishes a `connection` invalidation, so the OTA backend reloads the connection. The answer is the masked connection, as the portal lists it.
+         */
+        post: operations["adminSetConnectionStatus"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/provisioning-jobs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the tenant jobs
+         * @description The tenant lifecycle jobs of every OTA (`provision`, `migrate`, `suspend`, `resume`; PADR-0001), newest first, cursor-paginated, with filters on `status`, `kind` and `tenantId`. `step` is the current or last step and `error` the last error, a short message without secrets.
+         */
+        get: operations["adminListProvisioningJobs"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/provisioning-jobs/{jobId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The tenant job (`id` of `adminListProvisioningJobs`); an unknown id answers `404 NOT_FOUND`.
+                 * @example job_01JB3K9R4T8W2Y6A0C4E8G2J6M
+                 */
+                jobId: components["parameters"]["ProvisioningJobId"];
+            };
+            cookie?: never;
+        };
+        /**
+         * Get a tenant job with its step log
+         * @description One job with its step log (the steps of the OTA worker and the platform post-steps), its input `payload` (ids and options only), its `result` (never a ciphertext: the reveal-once test keys of a `provision` job are never answered), its lease (`lockedUntil`) and the BullMQ state of its current attempt, the job `<jobId>-<attempt>` on `ota-tenant-ops`. `bullmqState` is `null` before the first dispatch and `unknown` when BullMQ no longer holds that job.
+         */
+        get: operations["adminGetProvisioningJob"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/provisioning-jobs/{jobId}/retry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The tenant job (`id` of `adminListProvisioningJobs`); an unknown id answers `404 NOT_FOUND`.
+                 * @example job_01JB3K9R4T8W2Y6A0C4E8G2J6M
+                 */
+                jobId: components["parameters"]["ProvisioningJobId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Retry a failed tenant job
+         * @description Inserts a **new** job of the same kind and payload for a `failed` job and dispatches it; the failed row stays as history (PADR-0001 item 7). Retrying a failed `provision` job also sets the OTA from `failed` back to `provisioning`; when its schema already exists, the OTA run is a no-op and only the platform post-steps run again. `409 PROVISIONING_NOT_RETRYABLE` when the job is not `failed`, when a job of the same kind is already queued or running for the OTA, or for a `provision` job of an OTA that is not `failed`. Writes an audit row.
+         */
+        post: operations["adminRetryProvisioningJob"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/provisioning-jobs/{jobId}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The tenant job (`id` of `adminListProvisioningJobs`); an unknown id answers `404 NOT_FOUND`.
+                 * @example job_01JB3K9R4T8W2Y6A0C4E8G2J6M
+                 */
+                jobId: components["parameters"]["ProvisioningJobId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Cancel a queued tenant job
+         * @description Cancels a `queued` job that was never dispatched or waits for its next attempt (for example a `provision` job waiting for its Checkout gate), with a written `reason` of 5–500 characters that the audit row keeps. The job becomes `canceled` and nothing more is sent to the OTA worker; the tenant status does not change. A `running` or finished job answers `409 CONFLICT` (`details.reason = not_queued`).
+         */
+        post: operations["adminCancelProvisioningJob"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/queues": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get the health of every queue
+         * @description Read-only BullMQ counts of every queue of both backends: the platform queues (`PLATFORM_QUEUES` of `@velexis/api-types/jobs`, `owner: platform`), then the OTA queues (`OTA_QUEUES`, `owner: ota`), among them `ota-tenant-ops`, which the platform produces and the OTA worker consumes. `oldestWaitingSeconds` is the age of the oldest waiting job, `null` when none waits. Reads Redis only (prefix `vx`); `503 SERVICE_UNAVAILABLE` while it is unreachable.
+         */
+        get: operations["adminListQueues"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/queues/{queue}/failed": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description A queue of `PLATFORM_QUEUES` or `OTA_QUEUES` (`@velexis/api-types/jobs`). Another name of the form `<owner>-<topic>` answers `404 NOT_FOUND`; a value of any other form fails validation (`400 VALIDATION_FAILED`).
+                 * @example platform-emails
+                 */
+                queue: components["parameters"]["QueueName"];
+            };
+            cookie?: never;
+        };
+        /**
+         * List the failed jobs of a queue
+         * @description The failed jobs of one queue of either backend, most recent failure first, at most `limit`: the BullMQ job id, the job name, the failure reason, the attempts made, the failure time and the job data, which holds ids only (queue messages never carry secrets, tokens or card data, platform/docs/architecture.md §5). An unknown queue answers `404 NOT_FOUND`; `503 SERVICE_UNAVAILABLE` while Redis is unreachable.
+         */
+        get: operations["adminListFailedQueueJobs"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/queues/{queue}/jobs/{jobId}/retry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description A queue of `PLATFORM_QUEUES` or `OTA_QUEUES` (`@velexis/api-types/jobs`). Another name of the form `<owner>-<topic>` answers `404 NOT_FOUND`; a value of any other form fails validation (`400 VALIDATION_FAILED`).
+                 * @example platform-emails
+                 */
+                queue: components["parameters"]["QueueName"];
+                /**
+                 * @description The BullMQ job id (`id` of `adminListFailedQueueJobs`): a number BullMQ assigned, or a custom id such as `<jobId>-<attempt>` of a tenant job or a Stripe event id.
+                 * @example 1843
+                 */
+                jobId: components["parameters"]["QueueJobId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Retry a failed job of a platform queue
+         * @description Moves one failed job of a **platform** queue back to waiting, so the platform worker runs it again with a new attempt budget. OTA queues (`ota-*`, `ota-tenant-ops` included) are view-only here (`403 FORBIDDEN`, `details.reason = ota_queue`): the OTA admin or the developer retries them. An unknown queue, or no failed job with this id in it, answers `404 NOT_FOUND`; `503 SERVICE_UNAVAILABLE` while Redis is unreachable. Writes an audit row.
+         */
+        post: operations["adminRetryQueueJob"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/internal/tls/ask": {
         parameters: {
             query?: never;
@@ -2071,6 +2556,383 @@ export interface components {
             /** @description True for a Stripe subscription, managed in the Stripe Customer Portal (M5). */
             canManageInStripe: boolean;
         };
+        /** @description The password step of an admin sign-in succeeded; send a TOTP or recovery code to adminVerifyMfa. Every admin sign-in needs this second step. */
+        AdminMfaChallenge: {
+            /** @description The admin challenge (5 minutes, 5 attempts); never accepted by the portal's verifyMfa. */
+            mfaChallengeToken: string;
+            /** @description Seconds until the challenge expires (300). */
+            expiresIn: number;
+        };
+        /** @description The tokens of a platform admin session and the signed-in admin. Tokens appear only in these responses; the admin server keeps them in its own httpOnly cookies and never hands them to browser JavaScript. */
+        AdminSession: {
+            /** @description The admin access token (EdDSA JWT, audience `platform_admin`, 15 minutes). */
+            accessToken: string;
+            /** Format: date-time */
+            accessTokenExpiresAt: string;
+            /** @description The opaque admin refresh token; single use, rotated by adminRefresh. */
+            refreshToken: string;
+            /**
+             * Format: date-time
+             * @description When this refresh token stops working: 2 idle hours, and never after the family's 12-hour absolute end.
+             */
+            refreshTokenExpiresAt: string;
+            admin: components["schemas"]["AdminMe"];
+        };
+        /** @description The signed-in platform admin and the milestone switches of PADR-0015 (the `features` of the portal's getMe), which the admin reads to hide the M5 areas. */
+        AdminMe: {
+            id: components["schemas"]["AccountId"];
+            email: components["schemas"]["EmailAddress"];
+            fullName: string;
+            features: components["schemas"]["MilestoneFeatures"];
+        };
+        /** @description The counters of the admin home page. The M5 counters are always present and `null` while their milestone switch is off (PADR-0015). */
+        AdminDashboard: {
+            /** @description The number of OTAs in each status, zero included. */
+            tenantsByStatus: {
+                provisioning: number;
+                active: number;
+                suspended: number;
+                failed: number;
+            };
+            /** @description Tenant jobs of any kind that ended `failed` in the last 24 hours. */
+            provisioningFailed24h: number;
+            /** @description Failed BullMQ jobs per platform queue (`PLATFORM_QUEUES` of `@velexis/api-types/jobs`), keyed by queue name, zero included. */
+            jobsFailedByQueue: {
+                [key: string]: number;
+            };
+            /** @description The Velexis Amadeus office pool of each environment that has a Velexis Amadeus account (PADR-0012); the admin warns below 3 available offices. */
+            officePool: components["schemas"]["OfficePoolLevel"][];
+            /** @description Custom domains waiting for DNS verification (M5); `null` while `custom_domains` is off. */
+            domainsPending: number | null;
+            /** @description Draft settlements to review (M5); `null` while `settlements` is off. */
+            settlementsToReview: number | null;
+            /** @description Stripe events whose processing failed (M5); `null` while `stripe_billing` and `own_stripe` are both off. */
+            stripeEventsFailed: number | null;
+            /** @description Subscriptions in `past_due` (M5); `null` while `stripe_billing` is off. */
+            subscriptionsPastDue: number | null;
+        };
+        /** @description The offices of the Velexis Amadeus account of one environment, by status. */
+        OfficePoolLevel: {
+            environment: components["schemas"]["Environment"];
+            /** @description Offices free to assign. */
+            available: number;
+            /** @description Offices assigned to an OTA. */
+            assigned: number;
+        };
+        /** @description One OTA in the admin search. */
+        AdminTenantSummary: {
+            id: components["schemas"]["TenantId"];
+            key: components["schemas"]["TenantKey"];
+            name: string;
+            status: components["schemas"]["TenantStatus"];
+            planCode: components["schemas"]["PlanCode"];
+            /**
+             * Format: email
+             * @description The e-mail address of the oldest active owner; `null` only when no active owner is left.
+             */
+            ownerEmail: string | null;
+            /** Format: date-time */
+            createdAt: string;
+            /**
+             * Format: date-time
+             * @description When the setup finished; `null` before.
+             */
+            activatedAt: string | null;
+        };
+        AdminTenantList: {
+            data: components["schemas"]["AdminTenantSummary"][];
+            page: components["schemas"]["Page"];
+        };
+        /** @description An OTA as Velexis staff see it: the portal's `Tenant` without the caller's role, plus the suspension time and the internal notes. Never holds a secret. */
+        AdminTenant: {
+            id: components["schemas"]["TenantId"];
+            key: components["schemas"]["TenantKey"];
+            /** @description Display name of the OTA. */
+            name: string;
+            /** @description Legal entity name; `null` until set. */
+            legalName: string | null;
+            status: components["schemas"]["TenantStatus"];
+            suspensionReason: components["schemas"]["SuspensionReason"];
+            /**
+             * Format: date-time
+             * @description When the OTA was suspended; `null` unless suspended.
+             */
+            suspendedAt: string | null;
+            billingNotice: components["schemas"]["BillingNotice"];
+            planCode: components["schemas"]["PlanCode"];
+            defaultCurrency: components["schemas"]["CurrencyCode"];
+            /** @description Country where the OTA is registered (ISO 3166-1 alpha-2). */
+            countryCode: string | null;
+            timeZone: components["schemas"]["TimeZone"];
+            /**
+             * Format: email
+             * @description Business support address of the OTA; `null` until set.
+             */
+            supportEmail: string | null;
+            storefrontEnvironment: components["schemas"]["Environment"];
+            /**
+             * Format: date-time
+             * @description When the storefront went live (M5); `null` before.
+             */
+            liveEnabledAt: string | null;
+            /**
+             * Format: hostname
+             * @description The primary storefront host.
+             */
+            primaryHost: string;
+            /** @description The latest tenant migration applied to the OTA's schema; `null` until the setup records it. */
+            schemaVersion: string | null;
+            /** @description Internal notes of Velexis staff (`tenants.metadata.notes`); never shown to the OTA. */
+            notes: string | null;
+            /** Format: date-time */
+            createdAt: string;
+            /**
+             * Format: date-time
+             * @description When the setup finished; `null` before.
+             */
+            activatedAt: string | null;
+            /** @description Optimistic-locking version; the `ETag` of adminGetTenant carries it. */
+            version: number;
+        };
+        /** @description The control-plane view of one OTA. Connections are the masked shapes of the portal; nothing holds a secret, a ciphertext, a hash or a token. */
+        AdminTenantDetail: {
+            tenant: components["schemas"]["AdminTenant"];
+            /** @description The active members, oldest first. */
+            members: components["schemas"]["Member"][];
+            /** @description The pending invitations, newest first. */
+            invitations: components["schemas"]["Invitation"][];
+            /** @description The current subscription, or after a cancellation the canceled one; `null` when there is none. */
+            subscription: components["schemas"]["Subscription"] | null;
+            amadeusConnections: components["schemas"]["AmadeusConnection"][];
+            paymentConnections: components["schemas"]["PaymentConnection"][];
+            domains: components["schemas"]["Domain"][];
+            /** @description The last 20 tenant jobs, newest first. */
+            recentJobs: components["schemas"]["AdminProvisioningJob"][];
+            /** @description The last 50 audit rows of the OTA, newest first. */
+            recentAudit: components["schemas"]["AuditEntry"][];
+        };
+        /** @description The fields to change; at least one. `null` clears the notes or the legal name. */
+        UpdateAdminTenantRequest: {
+            notes?: string | null;
+            legalName?: components["schemas"]["LegalName"] | null;
+        };
+        /**
+         * @description Why a Velexis staff member takes the action (PADR-0006 item 5), kept in the `details` of the audit row.
+         * @example Card testing from the storefront reported by Stripe on 2026-10-20.
+         */
+        AdminReason: string;
+        AdminReasonRequest: {
+            reason: components["schemas"]["AdminReason"];
+        };
+        SuspendTenantRequest: {
+            /**
+             * @description The suspension reason stored on the tenant (PADR-0014 item 1). `billing` is set only by billing sync, so it is not accepted here.
+             * @enum {string}
+             */
+            suspensionReason: "abuse" | "request" | "admin";
+            reason: components["schemas"]["AdminReason"];
+        };
+        /** @description The OTA after a suspend or resume, and the job that carries the OTA worker's part. */
+        TenantLifecycleAccepted: {
+            tenant: components["schemas"]["AdminTenant"];
+            job: components["schemas"]["AdminProvisioningJob"];
+        };
+        /**
+         * @description A tenant migration version: the file name of a numbered tenant migration without `.sql` (the `TENANT_MIGRATION_VERSION_PATTERN` of `@velexis/api-types/jobs`).
+         * @example 0001_baseline
+         */
+        TenantMigrationVersion: string;
+        MigrateTenantRequest: {
+            targetVersion?: components["schemas"]["TenantMigrationVersion"];
+        };
+        SetConnectionStatusRequest: {
+            /**
+             * @description `disabled` stops the connection; `active` re-enables a disabled one.
+             * @enum {string}
+             */
+            status: "active" | "disabled";
+            reason: components["schemas"]["AdminReason"];
+        };
+        /** @description The masked connection after the change, as the portal lists it. */
+        AdminConnection: components["schemas"]["AmadeusConnection"] | components["schemas"]["PaymentConnection"];
+        /**
+         * @description The kind of a tenant job (PADR-0001 item 8): `provision` (the setup), `migrate`, `suspend`, `resume`.
+         * @enum {string}
+         */
+        ProvisioningJobKind: "provision" | "migrate" | "suspend" | "resume";
+        /** @description A tenant job in the admin lists. */
+        AdminProvisioningJob: {
+            id: components["schemas"]["ProvisioningJobId"];
+            tenantId: components["schemas"]["TenantId"];
+            tenantKey: components["schemas"]["TenantKey"];
+            kind: components["schemas"]["ProvisioningJobKind"];
+            status: components["schemas"]["ProvisioningJobStatus"];
+            /** @description The current or last step, for example `dispatch` or `run_migrations`; `null` before dispatch. */
+            step: string | null;
+            /** @description Attempts dispatched so far. */
+            attempt: number;
+            /** @description The attempt budget (5). */
+            maxAttempts: number;
+            /** @description The last error, a short message without secrets; `null` when there is none. */
+            error: string | null;
+            /**
+             * Format: date-time
+             * @description The earliest start of the next attempt (the retry backoff).
+             */
+            scheduledAt: string;
+            /**
+             * Format: date-time
+             * @description The first dispatch; `null` before it.
+             */
+            startedAt: string | null;
+            /**
+             * Format: date-time
+             * @description When the job reached `succeeded`, `failed` or `canceled`.
+             */
+            finishedAt: string | null;
+        };
+        AdminProvisioningJobList: {
+            data: components["schemas"]["AdminProvisioningJob"][];
+            page: components["schemas"]["Page"];
+        };
+        /** @description The job an admin action created or changed. */
+        AdminProvisioningJobResult: {
+            job: components["schemas"]["AdminProvisioningJob"];
+        };
+        /**
+         * @description The BullMQ state of the job's current attempt (`<jobId>-<attempt>` on `ota-tenant-ops`): `unknown` when BullMQ no longer holds it; `null` before the first dispatch.
+         * @enum {string|null}
+         */
+        BullmqJobState: "waiting" | "prioritized" | "waiting-children" | "delayed" | "active" | "completed" | "failed" | "unknown" | null;
+        /** @description A tenant job with its step log, input, result, lease and BullMQ state. `result` never holds a ciphertext: the reveal-once keys of a `provision` job are never answered. */
+        AdminProvisioningJobDetail: {
+            id: components["schemas"]["ProvisioningJobId"];
+            tenantId: components["schemas"]["TenantId"];
+            tenantKey: components["schemas"]["TenantKey"];
+            kind: components["schemas"]["ProvisioningJobKind"];
+            status: components["schemas"]["ProvisioningJobStatus"];
+            /** @description The current or last step; `null` before dispatch. */
+            step: string | null;
+            /** @description Attempts dispatched so far. */
+            attempt: number;
+            /** @description The attempt budget (5). */
+            maxAttempts: number;
+            /** @description The last error, a short message without secrets; `null` when there is none. */
+            error: string | null;
+            /**
+             * Format: date-time
+             * @description The earliest start of the next attempt (the retry backoff).
+             */
+            scheduledAt: string;
+            /**
+             * Format: date-time
+             * @description The first dispatch; `null` before it.
+             */
+            startedAt: string | null;
+            /**
+             * Format: date-time
+             * @description When the job reached `succeeded`, `failed` or `canceled`.
+             */
+            finishedAt: string | null;
+            /** @description The finished steps of the OTA worker and of the platform post-steps, in order. */
+            steps: components["schemas"]["ProvisioningStep"][];
+            /** @description The job input, ids and options only (for example `targetVersion` or the suspension reason). */
+            payload: {
+                [key: string]: unknown;
+            };
+            /** @description The job output (for example the ids of the API keys issued at setup); `null` until it ends. */
+            result: {
+                [key: string]: unknown;
+            } | null;
+            /**
+             * Format: date-time
+             * @description The end of the current lease of a `running` job (15 minutes per dispatch); `null` otherwise.
+             */
+            lockedUntil: string | null;
+            bullmqState: components["schemas"]["BullmqJobState"];
+        };
+        /**
+         * @description A BullMQ queue of either backend, named `<owner>-<topic>` (ADR-0009 item 4): `PLATFORM_QUEUES` and `OTA_QUEUES` of `@velexis/api-types/jobs`.
+         * @example platform-emails
+         */
+        QueueName: string;
+        /** @description The BullMQ counts of one queue. */
+        QueueCounts: {
+            name: components["schemas"]["QueueName"];
+            /**
+             * @description The backend whose worker consumes the queue. Only `platform` queues can be retried from the admin.
+             * @enum {string}
+             */
+            owner: "platform" | "ota";
+            waiting: number;
+            active: number;
+            delayed: number;
+            /** @description Failed jobs kept by BullMQ (30 days). */
+            failed: number;
+            /** @description Seconds since the oldest waiting job was added; `null` when none waits. */
+            oldestWaitingSeconds: number | null;
+        };
+        QueueList: {
+            data: components["schemas"]["QueueCounts"][];
+        };
+        /** @description One failed BullMQ job. Its data holds ids only; queue messages never carry secrets. */
+        FailedQueueJob: {
+            /** @description The BullMQ job id. */
+            id: string;
+            /** @description The job name, for example `email.send` or `tenant.provision`. */
+            name: string;
+            /** @description The error of the last attempt as the processor reported it. */
+            failedReason: string | null;
+            attemptsMade: number;
+            /**
+             * Format: date-time
+             * @description When the last attempt failed.
+             */
+            failedAt: string | null;
+            /** @description The job data (ids only). */
+            data: {
+                [key: string]: unknown;
+            };
+        };
+        FailedQueueJobList: {
+            data: components["schemas"]["FailedQueueJob"][];
+        };
+        /** @description One row of `platform_audit_log` (PADR-0006, Audit). `details` holds the before and after values and the reason, passed through the shared redactor: never a secret, a token or a bank number. */
+        AuditEntry: {
+            /** @description The audit row id, a decimal string (the table's identity column). */
+            id: string;
+            /** @description The OTA concerned; `null` for account-level rows. */
+            tenantId: string | null;
+            /** @description The OTA key at the time of the action. */
+            tenantKey: string | null;
+            /**
+             * @description Who acted.
+             * @enum {string}
+             */
+            actorType: "account" | "platform_admin" | "api_key" | "system";
+            /** @description The acting account; `null` for `system` and `api_key` rows. */
+            actorAccountId: string | null;
+            /** @description A snapshot of the actor (e-mail address, key prefix or job name). */
+            actorLabel: string | null;
+            /** @description The dotted action, for example `tenant.suspended` or `api_key.revoked`. */
+            action: string;
+            /** @description The kind of object acted on, for example `tenant` or `api_key`. */
+            targetType: string | null;
+            /** @description The id of the object acted on. */
+            targetId: string | null;
+            /** @description The `X-Request-Id` of the request. */
+            requestId: string | null;
+            /** @description The end user's IP address (PADR-0019). */
+            ipAddress: string | null;
+            /** @description The end user's browser. */
+            userAgent: string | null;
+            /** @description Before and after values and the reason, redacted. */
+            details: {
+                [key: string]: unknown;
+            };
+            /** Format: date-time */
+            createdAt: string;
+        };
     };
     responses: {
         /** @description The request body, query or headers failed validation; see fieldErrors. Possible codes: VALIDATION_FAILED. */
@@ -2254,8 +3116,18 @@ export interface components {
                 "application/json": components["schemas"]["ErrorResponse"];
             };
         };
-        /** @description A dependency the operation needs (PostgreSQL, or Redis for the idempotency store) is unavailable; nothing was written. Retry later. Possible codes: SERVICE_UNAVAILABLE. */
+        /** @description A dependency the operation needs (PostgreSQL, or Redis for the idempotency store or the BullMQ queues) is unavailable; nothing was written. Retry later. Possible codes: SERVICE_UNAVAILABLE. */
         ServiceUnavailable: {
+            headers: {
+                "X-Request-Id": components["headers"]["X-Request-Id"];
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["ErrorResponse"];
+            };
+        };
+        /** @description No valid platform admin access token was sent: none, an expired one, a portal token, or the token of an account that is no longer an active platform admin (the guard re-reads the account on every request). Possible codes: UNAUTHENTICATED, TOKEN_EXPIRED. */
+        AdminUnauthenticated: {
             headers: {
                 "X-Request-Id": components["headers"]["X-Request-Id"];
                 [name: string]: unknown;
@@ -2297,6 +3169,26 @@ export interface components {
          * @example key_01JB3KA2C6E0G4J8M2P6S0V4X8
          */
         ApiKeyId: string;
+        /**
+         * @description The OTA (`id` of `adminListTenants`); an unknown id answers `404 NOT_FOUND`.
+         * @example ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F
+         */
+        AdminTenantId: string;
+        /**
+         * @description The tenant job (`id` of `adminListProvisioningJobs`); an unknown id answers `404 NOT_FOUND`.
+         * @example job_01JB3K9R4T8W2Y6A0C4E8G2J6M
+         */
+        ProvisioningJobId: string;
+        /**
+         * @description A queue of `PLATFORM_QUEUES` or `OTA_QUEUES` (`@velexis/api-types/jobs`). Another name of the form `<owner>-<topic>` answers `404 NOT_FOUND`; a value of any other form fails validation (`400 VALIDATION_FAILED`).
+         * @example platform-emails
+         */
+        QueueName: components["schemas"]["QueueName"];
+        /**
+         * @description The BullMQ job id (`id` of `adminListFailedQueueJobs`): a number BullMQ assigned, or a custom id such as `<jobId>-<attempt>` of a tenant job or a Stripe event id.
+         * @example 1843
+         */
+        QueueJobId: string;
     };
     requestBodies: never;
     headers: {
@@ -4686,6 +5578,1247 @@ export interface operations {
             404: components["responses"]["NotFound"];
             429: components["responses"]["RateLimited"];
             500: components["responses"]["InternalError"];
+        };
+    };
+    adminSignIn: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                /**
+                 * @example {
+                 *       "email": "lena.holm@velexis.example.com",
+                 *       "password": "Harbour-Lantern-2026"
+                 *     }
+                 */
+                "application/json": components["schemas"]["SignInRequest"];
+            };
+        };
+        responses: {
+            /** @description The password is right; complete the sign-in with adminVerifyMfa. */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    "Cache-Control": components["headers"]["NoStore"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "mfaChallengeToken": "Ma3kT8wQ1zR6xL4nB9hY2dF7sG5jA0eU3iO8mK1cP4v",
+                     *       "expiresIn": 300
+                     *     }
+                     */
+                    "application/json": components["schemas"]["AdminMfaChallenge"];
+                };
+            };
+            400: components["responses"]["ValidationFailed"];
+            /** @description Wrong e-mail address or password, or the account is not an active platform admin (the same answer for all). Possible codes: INVALID_CREDENTIALS. */
+            401: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The password is right, but the platform admin has no MFA; turn it on in the portal first. Possible codes: MFA_REQUIRED. */
+            403: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Too many failed sign-ins; wait for `Retry-After` seconds. Possible codes: ACCOUNT_LOCKED. */
+            423: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    "Retry-After": components["headers"]["Retry-After"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    adminVerifyMfa: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["VerifyMfaRequest"];
+            };
+        };
+        responses: {
+            /** @description Signed in to the platform admin. */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    "Cache-Control": components["headers"]["NoStore"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminSession"];
+                };
+            };
+            400: components["responses"]["ValidationFailed"];
+            /** @description The challenge is unknown, expired, used up or not an admin challenge, or the code is wrong. Possible codes: MFA_CHALLENGE_INVALID, MFA_CODE_INVALID. */
+            401: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    adminRefresh: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                /**
+                 * @example {
+                 *       "refreshToken": "Ar7pK2xW9mQ4vT8cN1bZ6hY3dF0sJ5aG2eU7iO4rL9q"
+                 *     }
+                 */
+                "application/json": components["schemas"]["RefreshSessionRequest"];
+            };
+        };
+        responses: {
+            /** @description New tokens of the same admin family. */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    "Cache-Control": components["headers"]["NoStore"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminSession"];
+                };
+            };
+            400: components["responses"]["ValidationFailed"];
+            /** @description The refresh token cannot be used; sign in again. Possible codes: REFRESH_TOKEN_INVALID, REFRESH_TOKEN_REUSED. */
+            401: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    adminStepUp: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                /**
+                 * @example {
+                 *       "code": "583104"
+                 *     }
+                 */
+                "application/json": components["schemas"]["TotpCodeRequest"];
+            };
+        };
+        responses: {
+            /** @description A new session of the same family, with `mfa_at` now. */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    "Cache-Control": components["headers"]["NoStore"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminSession"];
+                };
+            };
+            400: components["responses"]["ValidationFailed"];
+            /** @description No valid admin access token, or the code is wrong. Possible codes: UNAUTHENTICATED, TOKEN_EXPIRED, MFA_CODE_INVALID. */
+            401: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    adminSignOut: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                /**
+                 * @example {
+                 *       "refreshToken": "Ar7pK2xW9mQ4vT8cN1bZ6hY3dF0sJ5aG2eU7iO4rL9q"
+                 *     }
+                 */
+                "application/json": components["schemas"]["SignOutRequest"];
+            };
+        };
+        responses: {
+            /** @description Signed out. */
+            204: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["ValidationFailed"];
+            401: components["responses"]["AdminUnauthenticated"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    adminGetMe: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The signed-in platform admin. */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminMe"];
+                };
+            };
+            401: components["responses"]["AdminUnauthenticated"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    adminGetDashboard: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The dashboard counters. */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminDashboard"];
+                };
+            };
+            401: components["responses"]["AdminUnauthenticated"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["ServiceUnavailable"];
+        };
+    };
+    adminListTenants: {
+        parameters: {
+            query?: {
+                /**
+                 * @description Part of the key, the name or an owner's e-mail address; case-insensitive.
+                 * @example acme
+                 */
+                q?: string;
+                /** @description Only OTAs in this status. */
+                status?: components["schemas"]["TenantStatus"];
+                /** @description Only OTAs on this plan. */
+                planCode?: components["schemas"]["PlanCode"];
+                /** @description Opaque cursor from `page.nextCursor` of the previous page. */
+                cursor?: components["parameters"]["Cursor"];
+                /** @description Page size. */
+                limit?: components["parameters"]["Limit"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of OTAs. */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "data": [
+                     *         {
+                     *           "id": "ten_01JB3K4M8P2R6T0W4Y8A2C6E0G",
+                     *           "key": "nordic",
+                     *           "name": "Nordic Fares",
+                     *           "status": "failed",
+                     *           "planCode": "early_access",
+                     *           "ownerEmail": "mikael.lind@nordic-fares.example.com",
+                     *           "createdAt": "2026-10-16T13:40:02Z",
+                     *           "activatedAt": null
+                     *         },
+                     *         {
+                     *           "id": "ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F",
+                     *           "key": "acme",
+                     *           "name": "Acme Travel",
+                     *           "status": "active",
+                     *           "planCode": "early_access",
+                     *           "ownerEmail": "anna.berg@example.com",
+                     *           "createdAt": "2026-10-14T08:20:11Z",
+                     *           "activatedAt": "2026-10-14T08:20:16Z"
+                     *         }
+                     *       ],
+                     *       "page": {
+                     *         "nextCursor": "eyJjcmVhdGVkQXQiOiIyMDI2LTEwLTE0VDA4OjIwOjExWiJ9",
+                     *         "limit": 2
+                     *       }
+                     *     }
+                     */
+                    "application/json": components["schemas"]["AdminTenantList"];
+                };
+            };
+            400: components["responses"]["ValidationFailed"];
+            401: components["responses"]["AdminUnauthenticated"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    adminGetTenant: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The OTA (`id` of `adminListTenants`); an unknown id answers `404 NOT_FOUND`.
+                 * @example ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F
+                 */
+                tenantId: components["parameters"]["AdminTenantId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The OTA and its control-plane records. */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    ETag: components["headers"]["ETag"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "tenant": {
+                     *         "id": "ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F",
+                     *         "key": "acme",
+                     *         "name": "Acme Travel",
+                     *         "legalName": "Acme Travel AS",
+                     *         "status": "active",
+                     *         "suspensionReason": null,
+                     *         "suspendedAt": null,
+                     *         "billingNotice": null,
+                     *         "planCode": "early_access",
+                     *         "defaultCurrency": "EUR",
+                     *         "countryCode": "NO",
+                     *         "timeZone": "Europe/Oslo",
+                     *         "supportEmail": "support@acme-travel.example.com",
+                     *         "storefrontEnvironment": "test",
+                     *         "liveEnabledAt": null,
+                     *         "primaryHost": "acme.ota.example.com",
+                     *         "schemaVersion": "0001_baseline",
+                     *         "notes": "Pilot customer; contact Anna for anything urgent.",
+                     *         "createdAt": "2026-10-14T08:20:11Z",
+                     *         "activatedAt": "2026-10-14T08:20:16Z",
+                     *         "version": 3
+                     *       },
+                     *       "members": [
+                     *         {
+                     *           "id": "stf_01JA2ZA1C5E9G3J7K2M6P0R4T8",
+                     *           "accountId": "acc_01JA2Z9W5K7Q3M8N4P6R2T0V1X",
+                     *           "fullName": "Anna Berg",
+                     *           "email": "anna.berg@example.com",
+                     *           "role": "owner",
+                     *           "status": "active",
+                     *           "mfaEnabled": true,
+                     *           "createdAt": "2026-10-14T08:20:11Z",
+                     *           "version": 1
+                     *         }
+                     *       ],
+                     *       "invitations": [
+                     *         {
+                     *           "id": "ivt_01JA2ZF4H8K2M6P0R4T8W2Y6A0",
+                     *           "email": "jo@acme-travel.example.com",
+                     *           "role": "agent",
+                     *           "status": "pending",
+                     *           "invitedBy": {
+                     *             "accountId": "acc_01JA2Z9W5K7Q3M8N4P6R2T0V1X",
+                     *             "fullName": "Anna Berg"
+                     *           },
+                     *           "expiresAt": "2026-10-21T09:00:00Z",
+                     *           "createdAt": "2026-10-14T09:00:00Z"
+                     *         }
+                     *       ],
+                     *       "subscription": {
+                     *         "id": "sub_01JA2Z7R5N0S3V7X1Z4B9D2F6H",
+                     *         "planCode": "early_access",
+                     *         "planName": "Early access",
+                     *         "status": "trialing",
+                     *         "billingProvider": "manual",
+                     *         "billingInterval": "month",
+                     *         "trialEndsAt": "2027-01-12T08:20:11Z",
+                     *         "currentPeriodEnd": null,
+                     *         "cancelAtPeriodEnd": false,
+                     *         "banner": null,
+                     *         "canManageInStripe": false
+                     *       },
+                     *       "amadeusConnections": [
+                     *         {
+                     *           "id": "sc_01JA2ZB9C3E7G1J5M9Q3S7V1X5",
+                     *           "environment": "test",
+                     *           "credentialSource": "velexis",
+                     *           "status": "active",
+                     *           "officeIds": [
+                     *             "NCE1A0955"
+                     *           ],
+                     *           "defaultOfficeId": "NCE1A0955",
+                     *           "queuingOfficeId": "NCE1A0955",
+                     *           "ownerOfficeId": "NCE1A0955",
+                     *           "clientId": null,
+                     *           "ticketingDefaults": {},
+                     *           "monitoredQueues": [],
+                     *           "lastVerifiedAt": "2026-10-14T08:20:15Z",
+                     *           "lastError": null,
+                     *           "pendingSubmission": null,
+                     *           "version": 1
+                     *         }
+                     *       ],
+                     *       "paymentConnections": [
+                     *         {
+                     *           "id": "ppc_01JA2ZBA4D8F2H6K0N4Q8S2V6X",
+                     *           "environment": "test",
+                     *           "provider": "stripe",
+                     *           "accountMode": "velexis",
+                     *           "status": "active",
+                     *           "accountReference": null,
+                     *           "publishableKey": null,
+                     *           "statementDescriptorSuffix": "ACME TRAVEL",
+                     *           "capabilities": {},
+                     *           "connectedAt": null,
+                     *           "disconnectedAt": null,
+                     *           "webhookUrl": null,
+                     *           "pendingSubmission": null,
+                     *           "version": 1
+                     *         }
+                     *       ],
+                     *       "domains": [
+                     *         {
+                     *           "id": "dom_01JA2Z7Q4M9R2T6V0X3Z8B1D6G",
+                     *           "hostname": "acme.ota.example.com",
+                     *           "kind": "subdomain",
+                     *           "purpose": "storefront",
+                     *           "isPrimary": true,
+                     *           "verificationStatus": "verified",
+                     *           "dnsRecords": [],
+                     *           "verificationDeadlineAt": null,
+                     *           "lastCheckedAt": null,
+                     *           "lastCheckError": null,
+                     *           "tlsStatus": "issued",
+                     *           "tlsExpiresAt": "2027-01-12T08:21:00Z",
+                     *           "createdAt": "2026-10-14T08:20:11Z"
+                     *         }
+                     *       ],
+                     *       "recentJobs": [
+                     *         {
+                     *           "id": "job_01JA2ZC3D7F1H5K9M3P7R1T5V9",
+                     *           "tenantId": "ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F",
+                     *           "tenantKey": "acme",
+                     *           "kind": "provision",
+                     *           "status": "succeeded",
+                     *           "step": "notify",
+                     *           "attempt": 1,
+                     *           "maxAttempts": 5,
+                     *           "error": null,
+                     *           "scheduledAt": "2026-10-14T08:20:11Z",
+                     *           "startedAt": "2026-10-14T08:20:12Z",
+                     *           "finishedAt": "2026-10-14T08:20:16Z"
+                     *         }
+                     *       ],
+                     *       "recentAudit": [
+                     *         {
+                     *           "id": "1042",
+                     *           "tenantId": "ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F",
+                     *           "tenantKey": "acme",
+                     *           "actorType": "account",
+                     *           "actorAccountId": "acc_01JA2Z9W5K7Q3M8N4P6R2T0V1X",
+                     *           "actorLabel": "anna.berg@example.com",
+                     *           "action": "invitation.created",
+                     *           "targetType": "invitation",
+                     *           "targetId": "ivt_01JA2ZF4H8K2M6P0R4T8W2Y6A0",
+                     *           "requestId": "req_01JA2ZF4H8K2M6P0R4T8W2Y6A1",
+                     *           "ipAddress": "198.51.100.23",
+                     *           "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_6) AppleWebKit/605.1.15",
+                     *           "details": {
+                     *             "email": "jo@acme-travel.example.com",
+                     *             "role": "agent"
+                     *           },
+                     *           "createdAt": "2026-10-14T09:00:00Z"
+                     *         }
+                     *       ]
+                     *     }
+                     */
+                    "application/json": components["schemas"]["AdminTenantDetail"];
+                };
+            };
+            400: components["responses"]["ValidationFailed"];
+            401: components["responses"]["AdminUnauthenticated"];
+            404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    adminUpdateTenant: {
+        parameters: {
+            query?: never;
+            header: {
+                /**
+                 * @description The `ETag` of the version being changed; a stale version answers `412 PRECONDITION_FAILED`.
+                 * @example "3"
+                 */
+                "If-Match": components["parameters"]["IfMatch"];
+            };
+            path: {
+                /**
+                 * @description The OTA (`id` of `adminListTenants`); an unknown id answers `404 NOT_FOUND`.
+                 * @example ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F
+                 */
+                tenantId: components["parameters"]["AdminTenantId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                /**
+                 * @example {
+                 *       "notes": "Pilot customer; contact Anna for anything urgent."
+                 *     }
+                 */
+                "application/json": components["schemas"]["UpdateAdminTenantRequest"];
+            };
+        };
+        responses: {
+            /** @description The updated OTA, with its new version in `ETag`. */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    ETag: components["headers"]["ETag"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminTenant"];
+                };
+            };
+            400: components["responses"]["ValidationFailed"];
+            401: components["responses"]["AdminUnauthenticated"];
+            404: components["responses"]["NotFound"];
+            412: components["responses"]["PreconditionFailed"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    adminSuspendTenant: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The OTA (`id` of `adminListTenants`); an unknown id answers `404 NOT_FOUND`.
+                 * @example ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F
+                 */
+                tenantId: components["parameters"]["AdminTenantId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                /**
+                 * @example {
+                 *       "suspensionReason": "abuse",
+                 *       "reason": "Card testing from the storefront reported by Stripe on 2026-10-20."
+                 *     }
+                 */
+                "application/json": components["schemas"]["SuspendTenantRequest"];
+            };
+        };
+        responses: {
+            /** @description Accepted. The OTA is suspended at once; the `suspend` job carries the OTA worker's housekeeping. */
+            202: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TenantLifecycleAccepted"];
+                };
+            };
+            400: components["responses"]["ValidationFailed"];
+            401: components["responses"]["AdminUnauthenticated"];
+            404: components["responses"]["NotFound"];
+            /** @description Only an active OTA can be suspended (`details.reason = not_active`). Possible codes: CONFLICT. */
+            409: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    adminResumeTenant: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The OTA (`id` of `adminListTenants`); an unknown id answers `404 NOT_FOUND`.
+                 * @example ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F
+                 */
+                tenantId: components["parameters"]["AdminTenantId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                /**
+                 * @example {
+                 *       "reason": "The OTA removed the test scripts; Stripe confirmed no further reports."
+                 *     }
+                 */
+                "application/json": components["schemas"]["AdminReasonRequest"];
+            };
+        };
+        responses: {
+            /** @description Accepted. The OTA is active again at once; the `resume` job re-enables the OTA worker's schedulers. */
+            202: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TenantLifecycleAccepted"];
+                };
+            };
+            400: components["responses"]["ValidationFailed"];
+            401: components["responses"]["AdminUnauthenticated"];
+            404: components["responses"]["NotFound"];
+            /** @description The OTA is not suspended, or a billing suspension has no `trialing` or `active` subscription to resume with (`details.reason`). Possible codes: CONFLICT. */
+            409: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    adminMigrateTenant: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The OTA (`id` of `adminListTenants`); an unknown id answers `404 NOT_FOUND`.
+                 * @example ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F
+                 */
+                tenantId: components["parameters"]["AdminTenantId"];
+            };
+            cookie?: never;
+        };
+        /** @description Optional. An empty object, or no body, migrates to the latest version. */
+        requestBody?: {
+            content: {
+                /**
+                 * @example {
+                 *       "targetVersion": "0002_add_ticketing_queue"
+                 *     }
+                 */
+                "application/json": components["schemas"]["MigrateTenantRequest"];
+            };
+        };
+        responses: {
+            /** @description Accepted. The `migrate` job is dispatched to the OTA worker. */
+            202: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "job": {
+                     *         "id": "job_01JC5N3Q7S1V5X9Z3B7D1F5H9K",
+                     *         "tenantId": "ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F",
+                     *         "tenantKey": "acme",
+                     *         "kind": "migrate",
+                     *         "status": "running",
+                     *         "step": "dispatch",
+                     *         "attempt": 1,
+                     *         "maxAttempts": 5,
+                     *         "error": null,
+                     *         "scheduledAt": "2026-10-22T07:05:00Z",
+                     *         "startedAt": "2026-10-22T07:05:00Z",
+                     *         "finishedAt": null
+                     *       }
+                     *     }
+                     */
+                    "application/json": components["schemas"]["AdminProvisioningJobResult"];
+                };
+            };
+            400: components["responses"]["ValidationFailed"];
+            401: components["responses"]["AdminUnauthenticated"];
+            404: components["responses"]["NotFound"];
+            /** @description A `migrate` job of the OTA is queued or running, or the OTA has no schema yet (`details.reason`). Possible codes: CONFLICT. */
+            409: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    adminSetConnectionStatus: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The OTA (`id` of `adminListTenants`); an unknown id answers `404 NOT_FOUND`.
+                 * @example ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F
+                 */
+                tenantId: components["parameters"]["AdminTenantId"];
+                /**
+                 * @description `amadeus` (the supplier connection, `supplier_connections`) or `payment` (the Stripe connection, `payment_provider_connections`).
+                 * @example amadeus
+                 */
+                kind: "amadeus" | "payment";
+                /**
+                 * @description The environment of the connection.
+                 * @example test
+                 */
+                environment: components["schemas"]["Environment"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                /**
+                 * @example {
+                 *       "status": "disabled",
+                 *       "reason": "Stop new Amadeus searches while the abuse case is reviewed."
+                 *     }
+                 */
+                "application/json": components["schemas"]["SetConnectionStatusRequest"];
+            };
+        };
+        responses: {
+            /** @description The connection with its new status. */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminConnection"];
+                };
+            };
+            400: components["responses"]["ValidationFailed"];
+            401: components["responses"]["AdminUnauthenticated"];
+            404: components["responses"]["NotFound"];
+            /** @description The connection cannot take this status (`details.reason`). Possible codes: CONFLICT. */
+            409: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    adminListProvisioningJobs: {
+        parameters: {
+            query?: {
+                /** @description Only jobs in this status. */
+                status?: components["schemas"]["ProvisioningJobStatus"];
+                /** @description Only jobs of this kind. */
+                kind?: components["schemas"]["ProvisioningJobKind"];
+                /** @description Only the jobs of this OTA. */
+                tenantId?: components["schemas"]["TenantId"];
+                /** @description Opaque cursor from `page.nextCursor` of the previous page. */
+                cursor?: components["parameters"]["Cursor"];
+                /** @description Page size. */
+                limit?: components["parameters"]["Limit"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of jobs. */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "data": [
+                     *         {
+                     *           "id": "job_01JB3K9R4T8W2Y6A0C4E8G2J6M",
+                     *           "tenantId": "ten_01JB3K4M8P2R6T0W4Y8A2C6E0G",
+                     *           "tenantKey": "nordic",
+                     *           "kind": "provision",
+                     *           "status": "failed",
+                     *           "step": "run_migrations",
+                     *           "attempt": 5,
+                     *           "maxAttempts": 5,
+                     *           "error": "LOCK_TIMEOUT: the tenant schema lock was not granted within 30 seconds.",
+                     *           "scheduledAt": "2026-10-16T14:31:12Z",
+                     *           "startedAt": "2026-10-16T13:40:03Z",
+                     *           "finishedAt": "2026-10-16T14:31:44Z"
+                     *         }
+                     *       ],
+                     *       "page": {
+                     *         "nextCursor": null,
+                     *         "limit": 50
+                     *       }
+                     *     }
+                     */
+                    "application/json": components["schemas"]["AdminProvisioningJobList"];
+                };
+            };
+            400: components["responses"]["ValidationFailed"];
+            401: components["responses"]["AdminUnauthenticated"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    adminGetProvisioningJob: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The tenant job (`id` of `adminListProvisioningJobs`); an unknown id answers `404 NOT_FOUND`.
+                 * @example job_01JB3K9R4T8W2Y6A0C4E8G2J6M
+                 */
+                jobId: components["parameters"]["ProvisioningJobId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The job. */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "id": "job_01JB3K9R4T8W2Y6A0C4E8G2J6M",
+                     *       "tenantId": "ten_01JB3K4M8P2R6T0W4Y8A2C6E0G",
+                     *       "tenantKey": "nordic",
+                     *       "kind": "provision",
+                     *       "status": "failed",
+                     *       "step": "run_migrations",
+                     *       "attempt": 5,
+                     *       "maxAttempts": 5,
+                     *       "error": "LOCK_TIMEOUT: the tenant schema lock was not granted within 30 seconds.",
+                     *       "scheduledAt": "2026-10-16T14:31:12Z",
+                     *       "startedAt": "2026-10-16T13:40:03Z",
+                     *       "finishedAt": "2026-10-16T14:31:44Z",
+                     *       "steps": [
+                     *         {
+                     *           "step": "create_schema",
+                     *           "status": "succeeded",
+                     *           "startedAt": "2026-10-16T14:31:13Z",
+                     *           "finishedAt": "2026-10-16T14:31:13Z"
+                     *         },
+                     *         {
+                     *           "step": "run_migrations",
+                     *           "status": "failed",
+                     *           "startedAt": "2026-10-16T14:31:13Z",
+                     *           "finishedAt": "2026-10-16T14:31:44Z",
+                     *           "error": {
+                     *             "code": "LOCK_TIMEOUT",
+                     *             "message": "The tenant schema lock was not granted within 30 seconds."
+                     *           }
+                     *         }
+                     *       ],
+                     *       "payload": {},
+                     *       "result": null,
+                     *       "lockedUntil": null,
+                     *       "bullmqState": "failed"
+                     *     }
+                     */
+                    "application/json": components["schemas"]["AdminProvisioningJobDetail"];
+                };
+            };
+            400: components["responses"]["ValidationFailed"];
+            401: components["responses"]["AdminUnauthenticated"];
+            404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    adminRetryProvisioningJob: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The tenant job (`id` of `adminListProvisioningJobs`); an unknown id answers `404 NOT_FOUND`.
+                 * @example job_01JB3K9R4T8W2Y6A0C4E8G2J6M
+                 */
+                jobId: components["parameters"]["ProvisioningJobId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Accepted. The new job is dispatched (or waits for its gate, PADR-0001 item 2). */
+            202: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "job": {
+                     *         "id": "job_01JC6P4R8T2W6Y0A4C8E2G6J0M",
+                     *         "tenantId": "ten_01JB3K4M8P2R6T0W4Y8A2C6E0G",
+                     *         "tenantKey": "nordic",
+                     *         "kind": "provision",
+                     *         "status": "running",
+                     *         "step": "dispatch",
+                     *         "attempt": 1,
+                     *         "maxAttempts": 5,
+                     *         "error": null,
+                     *         "scheduledAt": "2026-10-17T09:12:40Z",
+                     *         "startedAt": "2026-10-17T09:12:40Z",
+                     *         "finishedAt": null
+                     *       }
+                     *     }
+                     */
+                    "application/json": components["schemas"]["AdminProvisioningJobResult"];
+                };
+            };
+            400: components["responses"]["ValidationFailed"];
+            401: components["responses"]["AdminUnauthenticated"];
+            404: components["responses"]["NotFound"];
+            /** @description The job is not `failed`, a job of its kind is queued or running for the OTA, or the OTA of a `provision` job is not `failed`. Possible codes: PROVISIONING_NOT_RETRYABLE. */
+            409: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    adminCancelProvisioningJob: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The tenant job (`id` of `adminListProvisioningJobs`); an unknown id answers `404 NOT_FOUND`.
+                 * @example job_01JB3K9R4T8W2Y6A0C4E8G2J6M
+                 */
+                jobId: components["parameters"]["ProvisioningJobId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                /**
+                 * @example {
+                 *       "reason": "The owner asked to stop the setup; the OTA will be created again under another key."
+                 *     }
+                 */
+                "application/json": components["schemas"]["AdminReasonRequest"];
+            };
+        };
+        responses: {
+            /** @description The canceled job. */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "job": {
+                     *         "id": "job_01JC7Q5S9V3X7Z1B5D9F3H7K1N",
+                     *         "tenantId": "ten_01JC7Q5R8T2W6Y0A4C8E2G6J0M",
+                     *         "tenantKey": "skyways",
+                     *         "kind": "provision",
+                     *         "status": "canceled",
+                     *         "step": null,
+                     *         "attempt": 0,
+                     *         "maxAttempts": 5,
+                     *         "error": null,
+                     *         "scheduledAt": "2027-03-04T10:00:00Z",
+                     *         "startedAt": null,
+                     *         "finishedAt": "2027-03-05T08:30:12Z"
+                     *       }
+                     *     }
+                     */
+                    "application/json": components["schemas"]["AdminProvisioningJobResult"];
+                };
+            };
+            400: components["responses"]["ValidationFailed"];
+            401: components["responses"]["AdminUnauthenticated"];
+            404: components["responses"]["NotFound"];
+            /** @description Only a queued job can be canceled (`details.reason = not_queued`). Possible codes: CONFLICT. */
+            409: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    adminListQueues: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The queues. */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "data": [
+                     *         {
+                     *           "name": "platform-tenant-events",
+                     *           "owner": "platform",
+                     *           "waiting": 0,
+                     *           "active": 0,
+                     *           "delayed": 0,
+                     *           "failed": 0,
+                     *           "oldestWaitingSeconds": null
+                     *         },
+                     *         {
+                     *           "name": "platform-emails",
+                     *           "owner": "platform",
+                     *           "waiting": 3,
+                     *           "active": 1,
+                     *           "delayed": 0,
+                     *           "failed": 2,
+                     *           "oldestWaitingSeconds": 4
+                     *         },
+                     *         {
+                     *           "name": "ota-tenant-ops",
+                     *           "owner": "ota",
+                     *           "waiting": 0,
+                     *           "active": 0,
+                     *           "delayed": 1,
+                     *           "failed": 1,
+                     *           "oldestWaitingSeconds": null
+                     *         }
+                     *       ]
+                     *     }
+                     */
+                    "application/json": components["schemas"]["QueueList"];
+                };
+            };
+            401: components["responses"]["AdminUnauthenticated"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["ServiceUnavailable"];
+        };
+    };
+    adminListFailedQueueJobs: {
+        parameters: {
+            query?: {
+                /** @description Page size. */
+                limit?: components["parameters"]["Limit"];
+            };
+            header?: never;
+            path: {
+                /**
+                 * @description A queue of `PLATFORM_QUEUES` or `OTA_QUEUES` (`@velexis/api-types/jobs`). Another name of the form `<owner>-<topic>` answers `404 NOT_FOUND`; a value of any other form fails validation (`400 VALIDATION_FAILED`).
+                 * @example platform-emails
+                 */
+                queue: components["parameters"]["QueueName"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The failed jobs. */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "data": [
+                     *         {
+                     *           "id": "1843",
+                     *           "name": "email.send",
+                     *           "failedReason": "SMTP 451: temporary local problem, try again later",
+                     *           "attemptsMade": 5,
+                     *           "failedAt": "2026-10-21T22:14:09Z",
+                     *           "data": {
+                     *             "emailId": "eml_01JC3M7P1R5T9W3Y7A1C5E9G3J"
+                     *           }
+                     *         }
+                     *       ]
+                     *     }
+                     */
+                    "application/json": components["schemas"]["FailedQueueJobList"];
+                };
+            };
+            400: components["responses"]["ValidationFailed"];
+            401: components["responses"]["AdminUnauthenticated"];
+            404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["ServiceUnavailable"];
+        };
+    };
+    adminRetryQueueJob: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description A queue of `PLATFORM_QUEUES` or `OTA_QUEUES` (`@velexis/api-types/jobs`). Another name of the form `<owner>-<topic>` answers `404 NOT_FOUND`; a value of any other form fails validation (`400 VALIDATION_FAILED`).
+                 * @example platform-emails
+                 */
+                queue: components["parameters"]["QueueName"];
+                /**
+                 * @description The BullMQ job id (`id` of `adminListFailedQueueJobs`): a number BullMQ assigned, or a custom id such as `<jobId>-<attempt>` of a tenant job or a Stripe event id.
+                 * @example 1843
+                 */
+                jobId: components["parameters"]["QueueJobId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Accepted. The job waits for the platform worker again. */
+            202: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["ValidationFailed"];
+            401: components["responses"]["AdminUnauthenticated"];
+            /** @description OTA queues are view-only in the platform admin (`details.reason = ota_queue`). Possible codes: FORBIDDEN. */
+            403: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["ServiceUnavailable"];
         };
     };
     tlsAsk: {

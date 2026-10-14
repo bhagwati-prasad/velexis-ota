@@ -190,7 +190,8 @@ Common commands: backend `pnpm --filter @velexis/platform-backend test`, `test:i
   - No response schema of the 27 operations has a property whose name ends in `Ciphertext` or `Hash` (checked by grepping the generated `platform.ts` in the PR).
 - **Verify:** `pnpm contracts:lint && pnpm contracts:generate && git diff --exit-code packages/api-types/src/generated`
 
-### PBE-007 · Add the M1 admin auth, dashboard, tenant, job and queue operations to the OpenAPI document
+### PBE-007 · Add the M1 admin auth, dashboard, tenant, job and queue operations to the OpenAPI document ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-backend
 - **Milestone:** M1
 - **Depends on:** PBE-006

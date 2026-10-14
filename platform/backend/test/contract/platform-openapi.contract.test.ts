@@ -1,16 +1,27 @@
 // Contract tests of the platform OpenAPI document, openapi/velexis-platform-api.openapi.yaml (ADR-0006, PADR-0016).
 //
-// PBE-005 wrote its first slice (identity, plans, internal: 24 operations, the conventions and the error catalogue)
-// and PBE-006 the second (tenants, team, API keys and the M1 reads: 27 operations). The tests of a slice name its
-// operations by operationId and never count the document, so the later slices (PBE-007, PBE-066, PBE-037,
-// PBE-041, PBE-042) only add operations and tests of their own. The convention checks run on every
-// operation of the document: x-scope, X-Request-Id on every response, x-platform-tables, Idempotency-Key exactly on
-// x-idempotent operations, closed request bodies, `Cache-Control: no-store` on secret-bearing responses, error
-// examples that agree with x-error-codes and the catalogue, and examples that validate with the Ajv checker of
-// @velexis/testing that the integration tests use. `pnpm contracts:lint` (Redocly, X-007) and the generators' tests
-// (X-008, X-009) cover the lint and the generated files.
+// PBE-005 wrote its first slice (identity, plans, internal: 24 operations, the conventions and the error catalogue),
+// PBE-006 the second (tenants, team, API keys and the M1 reads: 27 operations) and PBE-007 the first admin slice
+// (admin auth and dashboard, tenants, provisioning jobs and queues: 21 operations). The tests of a slice name its
+// operations by operationId and never count the document, so the later slices (PBE-066, PBE-037, PBE-041,
+// PBE-042) only add operations and tests of their own. The convention checks run on every operation of the
+// document: x-scope and the matching security scheme, `platform_admin` on every `/v1/admin/` path but the public
+// sign-in steps, X-Request-Id on every response, x-platform-tables, Idempotency-Key exactly on x-idempotent
+// operations, a 5–500 character `reason` exactly on x-reason-required operations, closed request bodies,
+// `Cache-Control: no-store` on secret-bearing responses, error examples that agree with x-error-codes and the
+// catalogue, and examples that validate with the Ajv checker of @velexis/testing that the integration tests use.
+// `pnpm contracts:lint` (Redocly, X-007) and the generators' tests (X-008, X-009) cover the lint and the generated
+// files.
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import {
+  OTA_QUEUES,
+  PLATFORM_QUEUES,
+  TENANT_MIGRATION_VERSION_PATTERN,
+  TENANT_OPS_JOB_NAMES,
+  TENANT_SUSPENSION_REASONS,
+  bullmqJobId,
+} from "@velexis/api-types/jobs";
 import { platformOperations, type PlatformOperationId } from "@velexis/api-types/operations";
 import { ERROR_CATALOGUE, PLATFORM_ERROR_CODES, type PlatformErrorCode } from "@velexis/errors";
 import { createResponseChecker, type ResponseChecker } from "@velexis/testing";
@@ -382,6 +393,182 @@ const SLICE_PBE006_CONDITIONAL_STEP_UP = [
   "createApiKey",
   "rollApiKey",
 ] as const satisfies readonly PlatformOperationId[];
+
+/** The admin tenant path prefix. */
+const ADMIN_TENANT_PATH = "/v1/admin/tenants/{tenantId}";
+
+/**
+ * The PBE-007 slice: api-inventory-admin §2 (admin auth and dashboard, 7) and §3 (tenants, provisioning jobs and
+ * queues, 14). Only the password, MFA and refresh steps of the admin sign-in are `public`.
+ */
+const SLICE_PBE007: readonly SliceOperation[] = [
+  {
+    operationId: "adminSignIn",
+    method: "post",
+    path: "/v1/admin/auth/sign-in",
+    scope: "public",
+    internal: false,
+  },
+  {
+    operationId: "adminVerifyMfa",
+    method: "post",
+    path: "/v1/admin/auth/mfa/verify",
+    scope: "public",
+    internal: false,
+  },
+  {
+    operationId: "adminRefresh",
+    method: "post",
+    path: "/v1/admin/auth/refresh",
+    scope: "public",
+    internal: false,
+  },
+  {
+    operationId: "adminStepUp",
+    method: "post",
+    path: "/v1/admin/auth/step-up",
+    scope: "platform_admin",
+    internal: false,
+  },
+  {
+    operationId: "adminSignOut",
+    method: "post",
+    path: "/v1/admin/auth/sign-out",
+    scope: "platform_admin",
+    internal: false,
+  },
+  {
+    operationId: "adminGetMe",
+    method: "get",
+    path: "/v1/admin/me",
+    scope: "platform_admin",
+    internal: false,
+  },
+  {
+    operationId: "adminGetDashboard",
+    method: "get",
+    path: "/v1/admin/dashboard",
+    scope: "platform_admin",
+    internal: false,
+  },
+  {
+    operationId: "adminListTenants",
+    method: "get",
+    path: "/v1/admin/tenants",
+    scope: "platform_admin",
+    internal: false,
+  },
+  {
+    operationId: "adminGetTenant",
+    method: "get",
+    path: ADMIN_TENANT_PATH,
+    scope: "platform_admin",
+    internal: false,
+  },
+  {
+    operationId: "adminUpdateTenant",
+    method: "patch",
+    path: ADMIN_TENANT_PATH,
+    scope: "platform_admin",
+    internal: false,
+  },
+  {
+    operationId: "adminSuspendTenant",
+    method: "post",
+    path: `${ADMIN_TENANT_PATH}/suspend`,
+    scope: "platform_admin",
+    internal: false,
+  },
+  {
+    operationId: "adminResumeTenant",
+    method: "post",
+    path: `${ADMIN_TENANT_PATH}/resume`,
+    scope: "platform_admin",
+    internal: false,
+  },
+  {
+    operationId: "adminMigrateTenant",
+    method: "post",
+    path: `${ADMIN_TENANT_PATH}/migrate`,
+    scope: "platform_admin",
+    internal: false,
+  },
+  {
+    operationId: "adminSetConnectionStatus",
+    method: "post",
+    path: `${ADMIN_TENANT_PATH}/connections/{kind}/{environment}/status`,
+    scope: "platform_admin",
+    internal: false,
+  },
+  {
+    operationId: "adminListProvisioningJobs",
+    method: "get",
+    path: "/v1/admin/provisioning-jobs",
+    scope: "platform_admin",
+    internal: false,
+  },
+  {
+    operationId: "adminGetProvisioningJob",
+    method: "get",
+    path: "/v1/admin/provisioning-jobs/{jobId}",
+    scope: "platform_admin",
+    internal: false,
+  },
+  {
+    operationId: "adminRetryProvisioningJob",
+    method: "post",
+    path: "/v1/admin/provisioning-jobs/{jobId}/retry",
+    scope: "platform_admin",
+    internal: false,
+  },
+  {
+    operationId: "adminCancelProvisioningJob",
+    method: "post",
+    path: "/v1/admin/provisioning-jobs/{jobId}/cancel",
+    scope: "platform_admin",
+    internal: false,
+  },
+  {
+    operationId: "adminListQueues",
+    method: "get",
+    path: "/v1/admin/queues",
+    scope: "platform_admin",
+    internal: false,
+  },
+  {
+    operationId: "adminListFailedQueueJobs",
+    method: "get",
+    path: "/v1/admin/queues/{queue}/failed",
+    scope: "platform_admin",
+    internal: false,
+  },
+  {
+    operationId: "adminRetryQueueJob",
+    method: "post",
+    path: "/v1/admin/queues/{queue}/jobs/{jobId}/retry",
+    scope: "platform_admin",
+    internal: false,
+  },
+];
+
+/** The PBE-007 operations marked **reason** in api-inventory-admin §3. */
+const SLICE_PBE007_REASON = [
+  "adminSuspendTenant",
+  "adminResumeTenant",
+  "adminSetConnectionStatus",
+  "adminCancelProvisioningJob",
+] as const satisfies readonly PlatformOperationId[];
+
+/** The PBE-007 operations whose 2xx answer carries admin tokens or an admin MFA challenge. */
+const SLICE_PBE007_NO_STORE = [
+  "adminSignIn",
+  "adminVerifyMfa",
+  "adminRefresh",
+  "adminStepUp",
+] as const satisfies readonly PlatformOperationId[];
+
+/** The only `/v1/admin/` operations without an admin token: the steps that obtain one (PADR-0006 item 1). */
+const ADMIN_PUBLIC_OPERATIONS = ["adminSignIn", "adminVerifyMfa", "adminRefresh"] as const;
 
 const isObject = (value: unknown): value is Json =>
   value !== null && typeof value === "object" && !Array.isArray(value);
@@ -904,6 +1091,318 @@ describe("the tenants, team, API keys and M1 reads slice (PBE-006)", () => {
   });
 });
 
+/** The JSON request body schema of an operation, `$ref`s of the request body resolved. */
+function requestSchemaOf(operationId: string): unknown {
+  const body = resolve(platform, operation(operationId).spec["requestBody"]);
+  return objectAt(objectAt(body, "content"), "application/json")["schema"];
+}
+
+/**
+ * The Ajv checker of @velexis/testing applied to request bodies: a document whose operations answer their request
+ * body schema, so a body is checked exactly as the integration tests check a response (Ajv 2020, strict).
+ */
+function requestBodyChecker(operationIds: readonly string[]): ResponseChecker {
+  const paths = Object.fromEntries(
+    operationIds.map((operationId) => [
+      `/${operationId}`,
+      {
+        post: {
+          operationId,
+          responses: {
+            "200": {
+              description: `The request body of ${operationId}.`,
+              content: { "application/json": { schema: requestSchemaOf(operationId) } },
+            },
+          },
+        },
+      },
+    ]),
+  );
+  const document = { openapi: "3.1.0", paths, components: platform["components"] };
+  return createResponseChecker(structuredClone(document), { label: "platform requests" });
+}
+
+/** The marks of an api-inventory-admin row: `(public)` in the route cell, **reason** and MFA↑ in either cell. */
+function adminRowMarks(row: readonly string[]): { scope: string; reason: boolean; stepUp: boolean } {
+  const [, route = "", purpose = ""] = row;
+  return {
+    scope: route.includes("(public)") ? "public" : "platform_admin",
+    reason: purpose.includes("**reason**"),
+    stepUp: route.includes("MFA↑") || purpose.includes("MFA↑"),
+  };
+}
+
+describe("the admin auth, dashboard, tenants, jobs and queues slice (PBE-007)", () => {
+  it("lists the 21 operations of the slice in the operations index, each with an x-scope [PBE-007 AC1]", () => {
+    expect(SLICE_PBE007).toHaveLength(21);
+    const ids = new Set(SLICE_PBE007.map((entry) => entry.operationId));
+    expect(ids.size).toBe(21);
+    // 21 more operations: none of them belongs to an earlier slice.
+    expect([...SLICE, ...SLICE_PBE006].filter((entry) => ids.has(entry.operationId))).toEqual([]);
+    for (const entry of SLICE_PBE007) {
+      expect(platformOperations).toContainEqual(expect.objectContaining({ ...entry, sdkMethod: null }));
+      expect([entry.operationId, operation(entry.operationId).spec["x-scope"]]).toEqual([
+        entry.operationId,
+        entry.scope,
+      ]);
+    }
+  });
+
+  it("documents each slice operation with the method, path, scope and marks of api-inventory-admin [PBE-007 AC1]", () => {
+    const rows = inventoryRows(INVENTORY_ADMIN);
+    for (const entry of SLICE_PBE007) {
+      const row = rows.get(entry.operationId);
+      expect(row, entry.operationId).toBeDefined();
+      const [, route = ""] = row ?? [];
+      const [method = "", path = ""] = (/`([^`]+)`/.exec(route)?.[1] ?? "").split(" ");
+      expect([entry.operationId, entry.method, entry.path]).toEqual([
+        entry.operationId,
+        method.toLowerCase(),
+        path.split("?")[0],
+      ]);
+
+      const marks = adminRowMarks(row ?? []);
+      const spec = operation(entry.operationId).spec;
+      expect([entry.operationId, spec["x-scope"]]).toEqual([entry.operationId, marks.scope]);
+      expect([entry.operationId, spec["x-reason-required"] === true]).toEqual([
+        entry.operationId,
+        marks.reason,
+      ]);
+      expect([entry.operationId, spec["x-mfa-step-up"] === true]).toEqual([entry.operationId, marks.stepUp]);
+      expect([entry.operationId, spec["x-idempotent"], spec["x-feature"], spec["x-internal"]]).toEqual([
+        entry.operationId,
+        undefined,
+        undefined,
+        undefined,
+      ]);
+    }
+  });
+
+  it("gives every /v1/admin/ operation x-scope platform_admin and the admin bearer, except the three sign-in steps [PBE-007 AC2]", () => {
+    const admin = operations.filter((op) => op.path.startsWith("/v1/admin/"));
+    // The check sees the whole slice, so it cannot pass by not looking.
+    expect(admin.map((op) => op.operationId)).toEqual(
+      expect.arrayContaining(SLICE_PBE007.map((entry) => entry.operationId)),
+    );
+    for (const op of admin) {
+      const isPublic = (ADMIN_PUBLIC_OPERATIONS as readonly string[]).includes(op.operationId);
+      expect([op.operationId, op.spec["x-scope"], op.spec["security"]]).toEqual([
+        op.operationId,
+        isPublic ? "public" : "platform_admin",
+        isPublic ? [] : [{ adminBearer: [] }],
+      ]);
+    }
+    // Every platform_admin operation lives under /v1/admin/.
+    for (const op of operations.filter((candidate) => candidate.spec["x-scope"] === "platform_admin")) {
+      expect([op.operationId, op.path.startsWith("/v1/admin/")]).toEqual([op.operationId, true]);
+    }
+  });
+
+  it("requires a reason of 5–500 characters on adminSuspendTenant, adminResumeTenant, adminSetConnectionStatus and adminCancelProvisioningJob [PBE-007 AC3]", () => {
+    expect(
+      SLICE_PBE007.filter((entry) => operation(entry.operationId).spec["x-reason-required"] === true).map(
+        (entry) => entry.operationId,
+      ),
+    ).toEqual([...SLICE_PBE007_REASON]);
+
+    const bodies: Record<(typeof SLICE_PBE007_REASON)[number], Json> = {
+      adminSuspendTenant: { suspensionReason: "abuse" },
+      adminResumeTenant: {},
+      adminSetConnectionStatus: { status: "disabled" },
+      adminCancelProvisioningJob: {},
+    };
+    const requests = requestBodyChecker(SLICE_PBE007_REASON);
+    for (const operationId of SLICE_PBE007_REASON) {
+      const body = bodies[operationId];
+      const check = (reason?: string) =>
+        requests.check(operationId, { status: 200, body: reason === undefined ? body : { ...body, reason } });
+      expect([operationId, operation(operationId).spec["requestBody"]]).toEqual([
+        operationId,
+        expect.objectContaining({ required: true }),
+      ]);
+      expect([operationId, check("Abuse")]).toEqual([operationId, []]);
+      expect([operationId, check("x".repeat(500))]).toEqual([operationId, []]);
+      expect([operationId, check()]).toEqual([
+        operationId,
+        [expect.objectContaining({ keyword: "required" })],
+      ]);
+      expect([operationId, check("Spam")]).toEqual([
+        operationId,
+        [expect.objectContaining({ path: "/reason", keyword: "minLength" })],
+      ]);
+      expect([operationId, check("x".repeat(501))]).toEqual([
+        operationId,
+        [expect.objectContaining({ path: "/reason", keyword: "maxLength" })],
+      ]);
+    }
+    // A billing suspension is set only by billing sync (PADR-0014 item 1).
+    expect(
+      requests.check("adminSuspendTenant", {
+        status: 200,
+        body: { suspensionReason: "billing", reason: "Unpaid invoice" },
+      }),
+    ).toEqual([expect.objectContaining({ path: "/suspensionReason", keyword: "enum" })]);
+  });
+
+  it("answers adminGetMe with the features of getMe, also inside AdminSession, and notes it in the inventory", () => {
+    const schemas = objectAt(objectAt(platform, "components"), "schemas");
+    const features = objectAt(objectAt(schemas, "Account"), "properties")["features"];
+    expect(objectAt(objectAt(schemas, "AdminMe"), "properties")["features"]).toEqual(features);
+    expect(objectAt(schemas, "AdminMe")["required"]).toEqual(["id", "email", "fullName", "features"]);
+    expect(objectAt(objectAt(schemas, "AdminSession"), "properties")["admin"]).toEqual({
+      $ref: "#/components/schemas/AdminMe",
+    });
+
+    const [, , , exchange = ""] = inventoryRows(INVENTORY_ADMIN).get("adminGetMe") ?? [];
+    expect(exchange).toContain("features");
+  });
+
+  it("documents no-store exactly on the slice answers with admin tokens or an MFA challenge", () => {
+    const noStore = SLICE_PBE007.filter((entry) =>
+      responsesOf(platform, operation(entry.operationId)).some(
+        ([status, response]) =>
+          status.startsWith("2") &&
+          objectAt(objectAt(response, "headers"), "Cache-Control")["$ref"] === "#/components/headers/NoStore",
+      ),
+    ).map((entry) => entry.operationId);
+    expect(noStore).toEqual([...SLICE_PBE007_NO_STORE]);
+  });
+
+  it("keeps the M5 counters of the dashboard present and nullable", () => {
+    const [, , , exchange = ""] = inventoryRows(INVENTORY_ADMIN).get("adminGetDashboard") ?? [];
+    const flat = exchange.replace(/\[[^\]]*\]/g, "");
+    const names = [...flat.matchAll(/(?:\{|,\s*)([a-z][A-Za-z0-9]*)/g)].map(([, name = ""]) => name);
+    const m5 = [...flat.matchAll(/([a-z][A-Za-z0-9]*) \(M5\)/g)].map(([, name = ""]) => name);
+    expect(m5).toEqual([
+      "domainsPending",
+      "settlementsToReview",
+      "stripeEventsFailed",
+      "subscriptionsPastDue",
+    ]);
+
+    const dashboard = objectAt(objectAt(objectAt(platform, "components"), "schemas"), "AdminDashboard");
+    expect(dashboard["required"]).toEqual(names);
+    for (const name of m5) {
+      expect([name, objectAt(objectAt(dashboard, "properties"), name)["type"]]).toEqual([
+        name,
+        ["integer", "null"],
+      ]);
+    }
+    const [, ok = {}] =
+      responsesOf(platform, operation("adminGetDashboard")).find(([status]) => status === "200") ?? [];
+    const [beforeM5] = examplesOf(platform, jsonMedia(ok) ?? {});
+    const counters = isObject(beforeM5) ? beforeM5 : {};
+    expect(m5.map((name) => counters[name])).toEqual([null, null, null, null]);
+    expect(checker.check("adminGetDashboard", { status: 200, body: beforeM5 })).toEqual([]);
+    const withoutCounter = { ...counters };
+    delete withoutCounter["settlementsToReview"];
+    expect(checker.check("adminGetDashboard", { status: 200, body: withoutCounter })).toEqual([
+      expect.objectContaining({ keyword: "required" }),
+    ]);
+  });
+
+  it("answers no property ending in Secret, Ciphertext or Hash in any response of the slice", () => {
+    const leaky = (name: string): boolean => /(secret|ciphertext|hash)$/i.test(name);
+    // The tenant detail reaches the masked connections, so the walk covers the shapes most likely to leak.
+    expect(propertyNames(platform, { $ref: "#/components/schemas/AdminTenantDetail" })).toContain(
+      "pendingSubmission",
+    );
+    for (const { operationId } of SLICE_PBE007) {
+      for (const [status, response] of responsesOf(platform, operation(operationId))) {
+        const names = [...propertyNames(platform, jsonMedia(response)?.["schema"])];
+        expect([operationId, status, names.filter(leaky)]).toEqual([operationId, status, []]);
+      }
+    }
+    // The tenant detail refuses a connection answer that leaks a ciphertext.
+    const [, ok = {}] =
+      responsesOf(platform, operation("adminGetTenant")).find(([status]) => status === "200") ?? [];
+    const [detail] = examplesOf(platform, jsonMedia(ok) ?? {});
+    const body = isObject(detail) ? detail : {};
+    const connections: unknown = body["amadeusConnections"];
+    const [first] = Array.isArray(connections) ? (connections as unknown[]) : [];
+    expect(checker.check("adminGetTenant", { status: 200, body })).toEqual([]);
+    const leakyDetail = {
+      ...body,
+      amadeusConnections: [{ ...(isObject(first) ? first : {}), clientSecretCiphertext: "AAAA" }],
+    };
+    expect(checker.check("adminGetTenant", { status: 200, body: leakyDetail })).toEqual([
+      expect.objectContaining({ path: "/amadeusConnections/0/clientSecretCiphertext" }),
+    ]);
+  });
+
+  it("lists the queue names of @velexis/api-types/jobs in its examples, with the OTA queues owned by ota", () => {
+    const pattern = new RegExp(
+      String(objectAt(objectAt(objectAt(platform, "components"), "schemas"), "QueueName")["pattern"]),
+      "u",
+    );
+    for (const name of [...PLATFORM_QUEUES, ...OTA_QUEUES]) {
+      expect([name, pattern.test(name)]).toEqual([name, true]);
+    }
+    const [, ok = {}] =
+      responsesOf(platform, operation("adminListQueues")).find(([status]) => status === "200") ?? [];
+    const [example] = examplesOf(platform, jsonMedia(ok) ?? {});
+    const data: unknown = isObject(example) ? example["data"] : undefined;
+    const known: readonly string[] = [...PLATFORM_QUEUES, ...OTA_QUEUES];
+    expect(Array.isArray(data) && data.length > 0).toBe(true);
+    for (const queue of Array.isArray(data) ? (data as unknown[]) : []) {
+      const name = isObject(queue) ? String(queue["name"]) : "";
+      const owner = (OTA_QUEUES as readonly string[]).includes(name) ? "ota" : "platform";
+      expect([name, known.includes(name), isObject(queue) ? queue["owner"] : undefined]).toEqual([
+        name,
+        true,
+        owner,
+      ]);
+    }
+    const [, dashboard = {}] =
+      responsesOf(platform, operation("adminGetDashboard")).find(([status]) => status === "200") ?? [];
+    for (const body of examplesOf(platform, jsonMedia(dashboard) ?? {})) {
+      expect(Object.keys(objectAt(body, "jobsFailedByQueue"))).toEqual([...PLATFORM_QUEUES]);
+    }
+  });
+
+  it("follows @velexis/api-types/jobs for migration versions, suspension reasons, job kinds and tenant job ids", () => {
+    const schemas = objectAt(objectAt(platform, "components"), "schemas");
+    // targetVersion goes into tenant.migrate unchanged, and schemaVersion mirrors the same migration ledger.
+    expect(objectAt(schemas, "TenantMigrationVersion")["pattern"]).toBe(TENANT_MIGRATION_VERSION_PATTERN);
+    const tenantProperties = objectAt(objectAt(schemas, "AdminTenant"), "properties");
+    expect(objectAt(tenantProperties, "schemaVersion")["pattern"]).toBe(TENANT_MIGRATION_VERSION_PATTERN);
+    // An admin suspends for any reason of tenant.suspend but billing, which billing sync sets (PADR-0014 item 1).
+    const suspendProperties = objectAt(objectAt(schemas, "SuspendTenantRequest"), "properties");
+    expect(objectAt(suspendProperties, "suspensionReason")["enum"]).toEqual(
+      TENANT_SUSPENSION_REASONS.filter((reason) => reason !== "billing"),
+    );
+    // Every job kind is dispatched as the tenant.<kind> message of ota-tenant-ops.
+    expect(objectAt(schemas, "ProvisioningJobKind")["enum"]).toEqual(
+      TENANT_OPS_JOB_NAMES.map((name) => name.replace(/^tenant\./u, "")),
+    );
+    // A failed attempt of a tenant job is addressable by its BullMQ id, so adminRetryQueueJob reaches its 403.
+    const parameters = objectAt(objectAt(platform, "components"), "parameters");
+    const jobIdPattern = new RegExp(
+      String(objectAt(objectAt(parameters, "QueueJobId"), "schema")["pattern"]),
+      "u",
+    );
+    expect(jobIdPattern.test(bullmqJobId("job_01JB3K9R4T8W2Y6A0C4E8G2J6M", 5))).toBe(true);
+    expect(jobIdPattern.test("1843")).toBe(true);
+  });
+
+  it("answers 503 SERVICE_UNAVAILABLE on every slice operation that reads BullMQ", () => {
+    const readsBullmq = [
+      "adminGetDashboard",
+      "adminListQueues",
+      "adminListFailedQueueJobs",
+      "adminRetryQueueJob",
+    ] as const satisfies readonly PlatformOperationId[];
+    for (const operationId of readsBullmq) {
+      const statuses = responsesOf(platform, operation(operationId)).map(([status]) => status);
+      expect([operationId, operation(operationId).spec["x-error-codes"], statuses]).toEqual([
+        operationId,
+        expect.arrayContaining(["SERVICE_UNAVAILABLE"]),
+        expect.arrayContaining(["503"]),
+      ]);
+    }
+  });
+});
+
 describe("the error catalogue", () => {
   it("lists every code of api-inventory §3 with its status", () => {
     const catalogue = objectAt(platform, "x-error-catalogue");
@@ -969,6 +1468,50 @@ describe("the conventions of every operation", () => {
       }
       if (spec["x-scope"] === "public" || spec["x-scope"] === "internal" || spec["x-scope"] === "webhook") {
         expect([operationId, spec["security"]]).toEqual([operationId, []]);
+      }
+    }
+  });
+
+  it("asks the bearer of its surface: adminBearer on platform_admin operations, portalBearer on portal ones", () => {
+    const bearers: Record<string, unknown> = {
+      platform_admin: [{ adminBearer: [] }],
+      portal: [{ portalBearer: [] }],
+      portal_unverified: [{ portalBearer: [] }],
+    };
+    for (const { operationId, spec } of operations) {
+      const scope = String(spec["x-scope"]);
+      if (scope in bearers) {
+        expect([operationId, spec["security"]]).toEqual([operationId, bearers[scope]]);
+      }
+    }
+  });
+
+  it("requires a reason of 5–500 characters exactly on the x-reason-required operations", () => {
+    const reason = objectAt(objectAt(objectAt(platform, "components"), "schemas"), "AdminReason");
+    expect([reason["type"], reason["minLength"], reason["maxLength"]]).toEqual(["string", 5, 500]);
+    for (const { operationId, spec } of operations) {
+      const body = resolve(platform, spec["requestBody"]);
+      const schema = resolve(platform, requestSchemaOf(operationId));
+      const required: unknown = isObject(schema) ? schema["required"] : undefined;
+      const takesReason =
+        Array.isArray(required) &&
+        required.includes("reason") &&
+        objectAt(objectAt(schema, "properties"), "reason")["$ref"] === "#/components/schemas/AdminReason";
+      expect([operationId, takesReason]).toEqual([operationId, spec["x-reason-required"] === true]);
+      if (takesReason) {
+        // The body itself is required, so a request without one cannot skip the reason.
+        expect([operationId, isObject(body) ? body["required"] : undefined]).toEqual([operationId, true]);
+      }
+    }
+  });
+
+  it("answers REAUTH_REQUIRED on every x-mfa-step-up operation", () => {
+    for (const { operationId, spec } of operations) {
+      if (spec["x-mfa-step-up"] === true) {
+        expect([operationId, spec["x-error-codes"]]).toEqual([
+          operationId,
+          expect.arrayContaining(["REAUTH_REQUIRED"]),
+        ]);
       }
     }
   });
