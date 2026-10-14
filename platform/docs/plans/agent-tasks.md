@@ -776,7 +776,8 @@ Common commands: backend `pnpm --filter @velexis/platform-backend test`, `test:i
   - `lib/end-user.ts` takes the right-most `X-Forwarded-For` entry and ignores a browser-supplied left-most one, falls back to `127.0.0.1`, cuts the user agent to 512 characters; every mocked API call carries the three headers [PADR-0019].
 - **Verify:** `pnpm --filter @velexis/platform-frontend test && pnpm --filter @velexis/platform-frontend typecheck`
 
-### PFE-003 · Add the portal app shell and shared components
+### PFE-003 · Add the portal app shell and shared components ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-frontend
 - **Milestone:** M1
 - **Depends on:** PFE-002

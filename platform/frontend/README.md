@@ -80,7 +80,8 @@ platform/frontend/src/
     (marketing)/page.tsx, pricing/page.tsx, legal/…
     (auth)/sign-up/…, sign-in/…, sign-in/mfa/…, forgot-password/…, reset-password/…, invitations/accept/…, verify-pending/…
     verify-email/route.ts
-    (app)/layout.tsx                    signed-in shell: sidebar, OTA switcher, banners
+    (app)/layout.tsx                    signed-in shell: loads getMe once, renders AppShell around the page
+    (app)/step-up-actions.ts            the stepUp server action of StepUpDialog (README §5)
     (app)/dashboard/page.tsx
     (app)/otas/new/page.tsx, actions.ts, wizard-*.tsx
     (app)/otas/[tenantId]/layout.tsx    loads the tenant and the caller's role once
@@ -92,7 +93,8 @@ platform/frontend/src/
     health/live/route.ts, health/ready/route.ts
     layout.tsx                          root layout: lang="en", skip link to #main-content, globals.css
     globals.css                         Tailwind CSS 4 entry and the design tokens (@theme)
-  components/ui/                        shadcn/ui copies (button.tsx first; components.json configures the CLI)
+  components/ui/                        shadcn/ui copies: alert, alert-dialog, badge, button, dialog, dropdown-menu, input,
+                                        label, sonner (the CLI's toast), table, tabs (components.json configures the CLI)
   components/                           app components (below)
   lib/config.ts                         configuration schema and getConfig(), server-only (§8)
   lib/utils.ts                          cn(): class-name merge helper used by the shadcn/ui copies
@@ -101,7 +103,7 @@ platform/frontend/src/
   lib/end-user.ts                       end-user IP, user agent and BFF key headers (PADR-0019), server-only
   lib/errors.ts                         API error code → user message
   lib/csp.ts                            nonce and Content-Security-Policy of every response
-  lib/roles.ts                          role matrix for navigation (mirrors the backend)
+  lib/roles.ts                          role matrix of scope §1.2 and the navigation it allows (mirrors the backend)
   lib/strings.ts                        UI strings (English), including one message per error code
   middleware.ts                         access token refresh, auth and unverified redirects, CSP (Node.js runtime)
 ```
@@ -127,10 +129,22 @@ platform/frontend/src/
 | `FormField`, `FormErrorSummary` | Labels, `aria-describedby` errors, focus on the summary |
 | `Money`, `DateTime` | `Intl` formatting |
 
+How the shared components behave (PFE-003; `src/components/`):
+
+- **Shell.** `(app)/layout.tsx` calls `getMe` once per request and renders `AppShell` (a server component): the sidebar with `OtaSwitcher` and `SideNav`, a header with the account and a "Sign out" form posting to `/sign-out`, the toaster, and the page inside `<main id="main-content">` (pages inside the shell render no `<main>` of their own). `getMe` answering `UNAUTHENTICATED` or `TOKEN_EXPIRED` redirects to `/sign-in`, an unverified account to `/verify-pending`; any other failure shows the message of its code instead of the shell. Only the memberships and the switches reach the browser components.
+- **Navigation.** `lib/roles.ts` holds the matrix of [scope §1.2](../docs/scope.md) (`PORTAL_ACTIONS`, `can(role, action)`) and the entries of an OTA with the action each needs: overview and domains for every member; API keys, team (team management) and settings for owners and admins; Amadeus and payments (the connection settings) for owners, admins and finance; billing for owners and finance; payout account and settlements for owners and finance while `features.settlements` is on; go-live for owners while `features.liveSwitch` is on. `SideNav` reads the OTA from the path (`/otas/<tenantId>/…`) and marks the current page with `aria-current="page"`; outside an OTA it shows the account entries only. `OtaSwitcher` lists every membership (set-up page while an OTA is `provisioning` or `failed`), "All OTAs" and "Create an OTA".
+- **`TenantBanner`** takes the tenant of `getTenant` and the caller's role: suspended (reason of PADR-0014; the billing link only for roles that see billing), `past_due`, `trial_ending` and "Test mode". Suspended and `past_due` are alerts, the others status messages.
+- **`StatusBadge kind status`** names each status in words with a tone; the kinds and statuses are typed from the platform document (settlements from [`data-model.md`](../docs/data-model.md) until M5), and a status the portal does not know yet still renders.
+- **Step-up.** An action whose API call answers `REAUTH_REQUIRED` returns `{ stepUp: true }` in its state (`StepUpRequired` of `(app)/step-up-actions.ts`). The form uses `useStepUpAction(action, initialState)` instead of `useActionState` and renders the returned `stepUpDialog` next to its `<form action={dispatch}>`: the dialog asks for the TOTP code, the `stepUp` action calls `POST /v1/auth/step-up` and stores the new session in the cookies, and the original action runs again with the same `FormData`, now with the new access token. A wrong code stays in the dialog with the message at the field; cancelling keeps the state.
+- **Shown once.** `SecretRevealPanel` renders the values an action returned with `CopyField`s and the warning that they cannot be shown again; "I have stored it" removes them from the page (`onDismiss` lets the caller drop its copy). The values live in React state only; the fields have no `name` (a form never submits them) and no autocomplete, and copying writes to the clipboard on request only.
+- **Forms.** `FormField` (server or client) renders a visible label, an optional hint and the error, both linked to the control with `aria-describedby`, and `aria-invalid` on error; its control id is `fieldId(name)` unless given, and a render prop takes other controls (select, textarea). `FormErrorSummary` takes the focus when it gets a new errors array and links each entry to its field.
+- **`ConfirmDialog`** is an alert dialog (focus on "Cancel", Escape cancels, no close on an outside click) that calls `onConfirm` and closes. **`DataTable`** is the shadcn data table on TanStack Table with a caption (visually hidden by default), `scope="col"` headers and an empty message; its columns live in a client module next to the page.
+- **`Money`** formats the decimal string of `{ amount, currency }` with `Intl.NumberFormat` (the string goes to `Intl` as it is, never through a float; every digit of the amount is kept), **`DateTime`** an ISO instant with `Intl.DateTimeFormat` in an explicit time zone (UTC by default) inside `<time dateTime>`; both use the portal's `en` locale, so the server and the browser render the same text.
+
 ## 5. Data fetching and mutations
 
 - **Reads** happen in server components through `lib/api.ts`, with `cache: "no-store"`. `otas/[tenantId]/layout.tsx` loads the tenant and the caller's role once per request and passes them down.
-- **Mutations** are server actions (`actions.ts` next to the page): validate with Zod, call the API, map `fieldErrors` to the form, return state for `useActionState`, then `revalidatePath` or `redirect`. Actions that answer `REAUTH_REQUIRED` return a `stepUp` state; the `StepUpDialog` calls the `stepUp` action and re-submits.
+- **Mutations** are server actions (`actions.ts` next to the page): validate with Zod, call the API, map `fieldErrors` to the form, return state for `useActionState`, then `revalidatePath` or `redirect`. Actions that answer `REAUTH_REQUIRED` return a `stepUp` state (`{ stepUp: true }`); the `StepUpDialog` of `useStepUpAction` calls the `stepUp` action and re-submits (§4).
 - **Secrets shown once** (API keys, initial keys, recovery codes, MFA set-up secret) are returned by the action and rendered by a client component in memory only; they are never put in cookies, URLs, `localStorage` or the Next.js cache.
 - **Polling** (setup page, credential submissions) uses a client component that calls a server action every 2 seconds and stops at a final state.
 - **Errors** map codes to messages in `lib/errors.ts`; `error.tsx` per area; raw messages from the API are never shown.
@@ -220,7 +234,7 @@ See [`.env.example`](.env.example). On the VM they come from `/etc/velexis/platf
 | `pnpm --filter @velexis/platform-frontend dev` | Next.js dev server on `127.0.0.1:3000` (needs the platform API on 3100; configuration from the root `.env.local`, §8) |
 | `pnpm --filter @velexis/platform-frontend build` | Standalone build: `.next/standalone/platform/frontend/server.js` plus `.next/static` (`outputFileTracingRoot` is the repository root, as `deploy/scripts/pack-release.sh` expects) |
 | `pnpm --filter @velexis/platform-frontend start` | Local smoke run of the production build with `next start` on `127.0.0.1:3000` (Next.js warns that standalone output is meant for `server.js`; the VM runs `node platform/frontend/server.js` from the release, unit `velexis-portal.service`) |
-| `pnpm --filter @velexis/platform-frontend test` | Vitest in Node: configuration, route handler, API client, session, middleware and error-message tests (`src/**/*.test.ts`), with `fetch` mocked and fake timers. Testing Library for client components and form states arrives with the first client components (PFE-003). |
+| `pnpm --filter @velexis/platform-frontend test` | Vitest: configuration, route handler, API client, session, middleware, error-message and role tests in Node (`src/**/*.test.ts`), with `fetch` mocked and fake timers; component tests (`src/**/*.test.tsx`) with Testing Library in happy-dom. |
 | `pnpm --filter @velexis/platform-frontend lint` / `typecheck` | ESLint with the root flat config (Next.js rules included) / `tsc --noEmit` (strict, path alias `@/*` → `src/*`) |
 | `pnpm test:e2e -- --project=portal` | Playwright journeys in `tools/e2e` |
 
@@ -230,6 +244,13 @@ See [`.env.example`](.env.example). On the VM they come from `/etc/velexis/platf
 
 **Tests in Node.** `server-only` throws outside the `react-server` export condition, which only Next.js sets, so `vitest.config.ts` maps it to the package's own empty module. The `@/` alias matches `tsconfig.json`.
 
+**Component tests.** A `*.test.tsx` file starts with `// @vitest-environment happy-dom` and uses `@testing-library/react` (with `cleanup()` in `afterEach`: Vitest globals are off); `vitest.config.ts` compiles JSX with the React 19 runtime, because `tsconfig.json` keeps it for Next.js. Server modules are reached through mocks of `next/headers` (`cookies()`), `next/navigation` (`usePathname`, `redirect`) and `platformApi()`, so a server action runs for real inside a component test.
+
+**What the shell and component tests prove** (PFE-003).
+
+- `src/lib/roles.test.ts`: the matrix equals scope §1.2 row by row; the navigation of each of the five roles with the M5 switches off and on (a viewer has no API keys, team, billing, Amadeus or payments entry; finance has billing); the switches hide settlements, payout account and go-live; the OTA of a path, the most specific current entry, and where an OTA in set-up opens.
+- `src/components/components.test.tsx`: `SideNav` per role and the current page; `OtaSwitcher` items; the `(app)` layout calls `getMe` once, redirects an ended session and an unverified account, and shows the message of other failures; `StepUpDialog` asks for a code on `{ stepUp: true }`, posts it to `/v1/auth/step-up`, writes the new tokens as httpOnly cookies and only then re-submits the same `FormData`, keeps a wrong code in the dialog, and does not re-submit when cancelled; `SecretRevealPanel` writes nothing to `localStorage`, `sessionStorage`, `document.cookie` or the history, and its fields never join a form submission; every `FormField` error is in the control's `aria-describedby` with `aria-invalid`; `FormErrorSummary` takes the focus; `Money` keeps every digit of large and precise amounts; `DateTime`, `StatusBadge`, `TenantBanner`, `ConfirmDialog` and `DataTable`.
+
 **What the API, session and middleware tests prove** (PFE-002). `fetch` is a Vitest mock; the tests build `NextRequest`s and read what `NextResponse.next({ request })` hands to the page from its `x-middleware-request-*` headers.
 
 - `src/lib/session.test.ts`: five parallel refreshes of one token make one call; the outcome is reused for 10 seconds after it settled, a pending call stays shared however long it takes, failures that may pass are forgotten; the cookie names and attributes (`Set-Cookie` lines as Next.js writes them); `safeNextPath` drops absolute, protocol-relative and malformed values; and a scan of `src/` fails when a `"use client"` module imports `lib/api` or `lib/session`, directly, by type only, dynamically or through other local modules (a `"use server"` module ends the search), with fixtures proving each case is caught.
@@ -238,5 +259,7 @@ See [`.env.example`](.env.example). On the VM they come from `/etc/velexis/platf
 - `src/lib/errors.test.ts`: every code of `PLATFORM_ERROR_CODES` (generated from the platform document into `@velexis/errors`) has a message, and no message exists for another code, so a new code in the document fails the test until `lib/strings.ts` has its text.
 
 **Adding a shadcn/ui component.** From `platform/frontend`, run the CLI pinned to the 2.x line of [`tech-stack.md`](../../docs/mvp/tech-stack.md), for example `pnpm dlx shadcn@2.10.0 add dialog`. `components.json` sends the copy to `src/components/ui/` with the `new-york` style, CSS variables and lucide icons. The CLI adds the component's dependencies with `^` ranges: make them exact in `package.json` before committing (`tools/ci/check-package-json.mjs` fails otherwise), and copy the change to the platform admin and the OTA admin when the design tokens in `globals.css` change ([ADR-0014](../../docs/mvp/adr/0014-frontend-stack-nextjs-tailwind.md)).
+
+The copies of PFE-003 are the `new-york-v4` registry files of the `shadcn@2.10.0` tag, formatted by Prettier, with three changes: `alert-dialog.tsx` imports `buttonVariants` from `@/components/ui/button`; `dropdown-menu.tsx` passes `checked` only when it is set (`exactOptionalPropertyTypes`); and `sonner.tsx` fixes the light theme instead of reading `next-themes` (the portal has no dark theme). With Tailwind CSS 4 the CLI refuses `add toast` ("deprecated, use sonner"), so the toast is `sonner` and `AppShell` mounts its `Toaster`. The animation utilities of the copies (`animate-in`, `fade-in-0`, …) come from `tw-animate-css`, which the portal does not load, so dialogs and menus open without animation.
 
 End-to-end journeys (with axe checks): sign-up → verify (Mailpit) → sign-in with MFA → create OTA → active (M1); API key create and revoke (M1); invitation accept and role change (M1); open console lands in the OTA admin (M4); Checkout with Stripe test mode and the Customer Portal link (M5); custom domain pending view (M5).
