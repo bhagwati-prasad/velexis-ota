@@ -113,7 +113,8 @@ Common commands: backend `pnpm --filter @velexis/platform-backend test`, `test:i
   - The generated types contain `platform.amadeus_accounts`, `platform.email_outbox`, `platform.settlements` and `accounts.terms_version`; a second `pnpm db:codegen` gives no diff.
 - **Verify:** `pnpm db:migrate && pnpm db:codegen && git diff --exit-code packages/db/src/generated && pnpm --filter @velexis/platform-backend test && pnpm --filter @velexis/platform-backend test:int -- migrations`
 
-### PBE-003 · Prove the 0002 constraints and privileges with integration tests
+### PBE-003 · Prove the 0002 constraints and privileges with integration tests ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-backend
 - **Milestone:** M1
 - **Depends on:** PBE-002, X-015
