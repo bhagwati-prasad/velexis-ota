@@ -394,6 +394,9 @@ importers:
       '@types/pg':
         specifier: 8.23.1
         version: 8.23.1
+      '@velexis/amadeus-stub':
+        specifier: workspace:*
+        version: link:../../tools/amadeus-stub
       nodemailer:
         specifier: 6.10.1
         version: 6.10.1

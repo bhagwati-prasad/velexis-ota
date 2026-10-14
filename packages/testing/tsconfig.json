@@ -9,5 +9,10 @@
     "types": ["node"]
   },
   "include": ["src/**/*.ts"],
-  "references": [{ "path": "../api-types" }, { "path": "../config" }, { "path": "../db" }]
+  "references": [
+    { "path": "../api-types" },
+    { "path": "../config" },
+    { "path": "../db" },
+    { "path": "../../tools/amadeus-stub" }
+  ]
 }

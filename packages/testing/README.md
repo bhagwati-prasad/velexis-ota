@@ -7,7 +7,8 @@ Shared test support for every package and app ([ADR-0022](../../docs/mvp/adr/002
 - **`FakeClock`**, the clock tests inject instead of the backends' `Clock`;
 - **`defineBuilder`**, typed factories for test rows and payloads;
 - **`expectResponseToMatch`**, the OpenAPI response check of every integration test that calls an endpoint ([ADR-0006](../../docs/mvp/adr/0006-contract-first-openapi.md));
-- **Mailpit** (`@velexis/testing/mailpit`): `waitForMessage`, `uniqueEmail` and `extractLinks` over Mailpit's API, for the e-mails the code under test sends ([ADR-0015](../../docs/mvp/adr/0015-testing-strategy.md) "E-mail", [ADR-0017](../../docs/mvp/adr/0017-email-documents-storage.md)).
+- **Mailpit** (`@velexis/testing/mailpit`): `waitForMessage`, `uniqueEmail` and `extractLinks` over Mailpit's API, for the e-mails the code under test sends ([ADR-0015](../../docs/mvp/adr/0015-testing-strategy.md) "E-mail", [ADR-0017](../../docs/mvp/adr/0017-email-documents-storage.md));
+- **Amadeus stub** (`@velexis/testing/amadeus`): `startAmadeusStub` runs the stub of [`tools/amadeus-stub`](../../tools/amadeus-stub/README.md) in the test's own process on a free port, and `stubScenario` builds the header that picks a scenario ([ADR-0022](../../docs/mvp/adr/0022-shared-test-support-package.md) item 5).
 
 > **devDependency only.** List `@velexis/testing` under `devDependencies`, never under `dependencies` or `peerDependencies` ([ADR-0022](../../docs/mvp/adr/0022-shared-test-support-package.md) item 2). [`tools/ci/check-package-json.mjs`](../../tools/ci/check-package-json.mjs) fails CI otherwise (X-019), and `pnpm deploy --prod` would leave it out of a release anyway. Nothing in an app's `src/` outside its tests may import it.
 
@@ -15,7 +16,7 @@ Shared test support for every package and app ([ADR-0022](../../docs/mvp/adr/002
 |---|---|---|
 | Test databases, Redis, `FakeClock`, builders, `expectResponseToMatch`, the Vitest global setup, [`deploy/postgres/schemas.sql`](../../deploy/postgres/schemas.sql) | [X-015](../../docs/mvp/plans/foundation-tasks.md) | Done (this page) |
 | `@velexis/testing/mailpit` | [X-025](../../docs/mvp/plans/foundation-tasks.md) | Done (this page) |
-| `@velexis/testing/amadeus` (starts `tools/amadeus-stub` in-process) | X-027 | Not yet |
+| `@velexis/testing/amadeus` (starts `tools/amadeus-stub` in-process) | [X-027](../../docs/mvp/plans/foundation-tasks.md) | Done (this page) |
 | `@velexis/testing/stripe` (signed webhook events) | X-028 | Not yet |
 
 ## Use it in a package or app
@@ -240,6 +241,44 @@ Other failures throw a `MailpitError` that names the call and the cause: Mailpit
 
 `waitForMessage` waits in real time: it keeps the real `setTimeout` and `performance.now` from when the module loads, so a test that turned on `vi.useFakeTimers()` does not stall it. Mailpit tags every message sent to a `+` address with the part after the `+` (plus-address tags); the UUID tags of `uniqueEmail` are harmless.
 
+## Amadeus stub: `@velexis/testing/amadeus`
+
+Tests never call Amadeus ([ADR-0015](../../docs/mvp/adr/0015-testing-strategy.md) "Amadeus stub server"). They start the stub of [`tools/amadeus-stub`](../../tools/amadeus-stub/README.md) (`@velexis/amadeus-stub`) in their own process, on a free port of `127.0.0.1`, and point the code under test at it. The stub validates every request against the Amadeus specifications, issues tokens and answers from fixtures; its README lists the routes, scenarios and error codes.
+
+```ts
+import { startAmadeusStub, stubScenario, type AmadeusStub } from "@velexis/testing/amadeus";
+
+let stub: AmadeusStub;
+beforeAll(async () => {
+  stub = await startAmadeusStub();                                 // http://127.0.0.1:<free port>, well under 1 s
+  app = await startApi({ env: { AMADEUS_BASE_URL_TEST: stub.url } });
+});
+afterAll(async () => {
+  await app.close();
+  await stub.stop();                                               // frees the port
+});
+
+it("maps an Amadeus server error", async () => {
+  // The OTA backend's Amadeus client forwards X-Stub-Scenario outside production (OBE-018).
+  await request(app.server).post("/v1/flight-searches").set(stubScenario("server-error")).send(simpleSearch);
+  expect(stub.requests().at(-1)).toMatchObject({ operation: "getFlightOffers", scenario: "server-error", status: 500 });
+});
+```
+
+| Export | Does |
+|---|---|
+| `startAmadeusStub({ port = 0, defaultScenario, credentials, clock, timers })` | Starts the stub (`createStubServer` of `@velexis/amadeus-stub`) and resolves when it listens. `port: 0` (the default) picks a free port, so test files run in parallel. The other options go to the stub unchanged: `defaultScenario` (default `success`), `credentials` (only this `{ clientId, clientSecret }` gets a token; default any non-empty pair), `clock` (token expiry and `receivedAt`; the `FakeClock` above fits) and `timers` (the `timeout` scenario's 30 s hold, so a test fires it itself) |
+| `stub.url`, `stub.port` | `http://127.0.0.1:<port>`: the value of `AMADEUS_BASE_URL_TEST` for the code under test (any dummy client id and secret works) |
+| `stub.requests()` | The recorded requests, oldest first, at most the last 1000 (`AmadeusStubRequest`): `method`, `path` (no query string), `query`, `headers` (lower-case names; `authorization`, `proxy-authorization` and `cookie` are `[REDACTED]`), `operation` (`oauth2Token`, the `AmadeusClient` method name such as `getFlightOffers`, or `undefined` for a 404), `scenario`, `status` (`undefined` while held or when the client went away), `receivedAt`, `durationMs`. Bodies are never recorded, so a client secret or a token never lands in a test's output. `stub.clearRequests()` empties it |
+| `stub.setDefaultScenario(name)` | The scenario of every request without the header from now on, token requests included; `"success"` goes back to normal |
+| `stub.stop()` | Stops listening, drops the responses the `timeout` scenario holds and every open connection, and resolves when the port is free. Idempotent. Call it in `afterAll`; a stub left running keeps its port until the worker exits |
+| `stubScenario(name)` | `{ "X-Stub-Scenario": name }` for `fetch` headers or Supertest's `.set()`. `name` is the stub's `StubScenario` (`success`, `server-error`, `rate-limited`, `timeout`; the OTA plan adds more with the operations that use them), so a misspelt name does not compile, and throws a `TypeError` at run time |
+| `STUB_SCENARIOS`, `SCENARIO_HEADER`, `OAUTH_TOKEN_PATH`, `TOKEN_OPERATION`, `TOKEN_EXPIRES_IN`, `TIMEOUT_HOLD_MS`, `NO_OFFERS_DESTINATION`, and the types `StubScenario`, `StubCredentials`, `StubClock`, `StubTimers` | Re-exported from the stub, so a package that uses `@velexis/testing/amadeus` does not list `@velexis/amadeus-stub` itself |
+
+Each stub has its own tokens, request log and default scenario: a token of one stub is `401` (code 38190) at another, as a revoked token would be at Amadeus. A header beats the default scenario, so `stubScenario("success")` lets one request opt out of `setDefaultScenario("rate-limited")`. Code under test that does not forward the header (the platform's credential check of PBE-020, for example) is driven with `setDefaultScenario` instead.
+
+`@velexis/amadeus-stub` is a **devDependency** of this package ([ADR-0022](../../docs/mvp/adr/0022-shared-test-support-package.md) item 2; [`tools/ci/check-package-json.mjs`](../../tools/ci/check-package-json.mjs) enforces it), like `@velexis/testing` is of its users. pnpm installs the dev dependencies of every workspace package, so `@velexis/testing/amadeus` finds the stub through this package's own `node_modules`. Turborepo builds the stub before this package (`^build`). The stub loads the specifications of `docs/amadeus-api/` once per process, on the first `startAmadeusStub`.
+
 ## Environment
 
 | Variable | Used by | From |
@@ -258,7 +297,7 @@ All are read through [`@velexis/config`](../config/README.md); values are never 
 |---|---|
 | `pnpm --filter @velexis/testing build` | `tsc -b` to `dist/` |
 | `pnpm --filter @velexis/testing test` | Unit tests (no PostgreSQL, Redis or Mailpit): the response check on the OTA document and on fixtures, `schemas.sql`, roles, clock, builders, Redis indexes, the Mailpit client against a fake Mailpit and a fake timer |
-| `pnpm --filter @velexis/testing test:int` | Integration tests on PostgreSQL 16, Redis 7 and Mailpit (`vitest.int.config.ts`, with the package's own global setup) |
+| `pnpm --filter @velexis/testing test:int` | Integration tests on PostgreSQL 16, Redis 7, Mailpit and the in-process Amadeus stub (`vitest.int.config.ts`, with the package's own global setup). Build the workspace first (`pnpm build`): the tests load `@velexis/db` and `@velexis/amadeus-stub` from their `dist/` (`pnpm test:int` at the root builds them through Turborepo) |
 | `pnpm --filter @velexis/testing typecheck` / `lint` | `tsc --noEmit` (sources and `test/`) / ESLint |
 
 `turbo.json` gives this package's `test` task its own inputs (`@velexis/testing#test`): the OpenAPI documents, `redocly.yaml`, `deploy/postgres/*.sql`, the `.env.example` files and the migration folders, so a change there reruns the tests instead of replaying a cached pass.
@@ -273,7 +312,7 @@ All are read through [`@velexis/config`](../config/README.md); values are never 
 | AC4: `expectResponseToMatch("getBooking", { status: 200, body: { foo: 1 } })` fails naming the missing required properties | [`openapi-response.test.ts`](src/openapi-response.test.ts): every `required` property of `Booking` is named as `/<property>: required property is missing`; the document's own `BookingExample` passes |
 | AC5: `schemas-sql.test.ts` fails when the files differ and passes on the committed files | [`schemas-sql.test.ts`](src/schemas-sql.test.ts): the committed files, then changed, dropped and added statements, comments, whitespace and meta-commands |
 
-The integration config runs the files in parallel in at least two forked workers. The barrier waits at most 60 s for the other file, so run the two `test-database` files together (`pnpm test:int` does).
+The integration config runs the files in parallel in four forked workers, always four (`minForks` = `maxForks`): each file gets a fresh fork, and when a file ends Tinypool starts a new fork only while there are fewer forks than `minForks` or than queued files, busy forks included. With `minForks: 2`, the fast files could end while two files waited for their queued partners (two busy forks, two queued files), so no fork was started until the waiting files gave up (found with X-027's sixth file). The barrier waits at most 60 s for the other file, so run the two `test-database` files together (`pnpm test:int` does).
 
 ## Tests of X-025
 
@@ -285,6 +324,15 @@ The integration config runs the files in parallel in at least two forked workers
 
 The unit tests ([`mailpit.test.ts`](src/mailpit.test.ts)) also cover the exact recipient and subject matching over Mailpit's substring search, the query and path of each call, credentials and `--webroot` in the URL, the errors for a Mailpit that is down, slow or not Mailpit, `uniqueEmail`'s labels, `extractLinks` on every way of writing a link, `waitForMessage` under `vi.useFakeTimers()`, and the `./mailpit` export. Like the `test-database` files, run the two `mailpit` files together: each waits at most 60 s for the other (`pnpm test:int` does).
 
+## Tests of X-027
+
+| Acceptance criterion | Test |
+|---|---|
+| AC1: an integration test starts the stub on a random port, gets a token, runs a search with and without `stubScenario("server-error")`, and asserts on `requests()` | [`amadeus.int.test.ts`](test/integration/amadeus.int.test.ts) `starts the stub on a random port, gets a token and searches with and without stubScenario("server-error"), asserting on requests()`: `startAmadeusStub()` on port 0, a client-credentials token, `GET /v2/shopping/flight-offers` answered `200` with two offers (`max=2`), the same search with `stubScenario("server-error")` answered `500` code 141, and `requests()` holding the three requests with method, path, query, redacted `authorization`, the scenario header, operation, scenario and status, and neither the token nor the client secret |
+| AC2: `stop()` frees the port, so the same test can run twice in one process | [`amadeus.int.test.ts`](test/integration/amadeus.int.test.ts) `stop() frees the port, so the same test runs twice in one process`: runs the AC1 steps, holds a token request with the `timeout` scenario, stops (twice: idempotent), sees the held request dropped, nothing listening and the port free (a plain `net` server listens on it), then runs the AC1 steps again on a new stub on **that** port, where the first stub's token is `401` code 38190, and stops it too |
+
+The same file also checks `setDefaultScenario` (token requests included, and the header winning), that `defaultScenario`, `credentials`, `clock` (token expiry on a `FakeClock`, code 38192) and `timers` (a manual timer fires the 30 s hold, `504`) reach the stub, `stubScenario` for every scenario (a misspelt name fails `tsc` through `@ts-expect-error`, and throws at run time), the `./amadeus` export, the re-exported names, and that the stub is a devDependency only.
+
 ## Dependencies
 
 | Package | Version | Why |
@@ -295,4 +343,5 @@ The unit tests ([`mailpit.test.ts`](src/mailpit.test.ts)) also cover the exact r
 | `ajv`, `ajv-formats` | 8.20.0, 3.0.1 | Response validation ([`tech-stack.md`](../../docs/mvp/tech-stack.md) §2, ADR-0006) |
 | `yaml` | 2.9.1 | Parsing the OpenAPI documents |
 | `vitest` | 3.2.7 (peer and dev) | `inject` for the template's name. A peer, so the test files and this package share one Vitest; it is ESM-only, so this CommonJS package loads it with `import()` |
+| `@velexis/amadeus-stub` | workspace (dev) | The Amadeus stub that `@velexis/testing/amadeus` starts ([ADR-0022](../../docs/mvp/adr/0022-shared-test-support-package.md) item 5); a devDependency only (item 2) |
 | `nodemailer`, `@types/nodemailer` | 6.10.1, 6.4.24 (dev) | Sending the e-mails of this package's Mailpit integration tests, as the backends send theirs ([`tech-stack.md`](../../docs/mvp/tech-stack.md): `nodemailer` 6.x). `@velexis/testing/mailpit` itself needs no library: Node's `fetch` |

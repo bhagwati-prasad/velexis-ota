@@ -828,8 +828,8 @@ Related: [`../decisions.md`](../decisions.md) (binding), [`../architecture.md`](
   - The server starts in under 1 s, and `pnpm stub:amadeus` serves on 127.0.0.1:4900.
 - **Verify:** `pnpm --filter @velexis/amadeus-stub build && pnpm --filter @velexis/amadeus-stub test`
 
-### X-027 · Add the Amadeus stub client to @velexis/testing
-- **Status:** todo
+### X-027 · Add the Amadeus stub client to @velexis/testing ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** foundation
 - **Milestone:** M1
 - **Depends on:** X-026, X-015
