@@ -150,7 +150,8 @@ The OTA side of M1 is the provisioning worker (OF-11): the platform's `tenant.pr
   - A tenant row with a malformed `schema_name` is refused before any tenant SQL.
 - **Verify:** `pnpm --filter @velexis/ota-backend test:int -- tenancy`
 
-### OBE-004 · Write the provisioning seeds for settings, the default markup rule and template defaults
+### OBE-004 · Write the provisioning seeds for settings, the default markup rule and template defaults ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-backend
 - **Milestone:** M1
 - **Depends on:** OBE-001, X-014

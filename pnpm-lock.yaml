@@ -163,6 +163,9 @@ importers:
       '@types/supertest':
         specifier: 7.2.1
         version: 7.2.1
+      '@velexis/testing':
+        specifier: workspace:*
+        version: link:../../packages/testing
       eslint:
         specifier: 9.39.5
         version: 9.39.5(jiti@2.7.0)
