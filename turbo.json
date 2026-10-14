@@ -90,6 +90,20 @@
       ],
       "outputs": ["coverage/**"]
     },
+    "@velexis/e2e#test": {
+      "dependsOn": ["^build"],
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "!.env*",
+        "$TURBO_ROOT$/.github/workflows/e2e.yml",
+        "$TURBO_ROOT$/.env.example",
+        "$TURBO_ROOT$/platform/backend/.env.example",
+        "$TURBO_ROOT$/platform/frontend/.env.example",
+        "$TURBO_ROOT$/platform/admin/.env.example",
+        "$TURBO_ROOT$/ota/backend/.env.example"
+      ],
+      "outputs": ["coverage/**"]
+    },
     "test:int": {
       "dependsOn": ["^build"],
       "cache": false,

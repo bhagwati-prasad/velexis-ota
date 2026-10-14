@@ -113,7 +113,7 @@ stripe listen --forward-to localhost:3100/webhooks/stripe/billing        # platf
 |---|---|---|
 | Unit, contract, UI | `pnpm test` (or `pnpm --filter <pkg> test -- <pattern>`) | nothing running |
 | Integration | `pnpm test:int` | PostgreSQL, Redis, Mailpit; the Amadeus stub is started in-process by the tests |
-| End-to-end | `pnpm test:e2e` | the whole stack built and running, Mailpit, the stub, Stripe CLI for payment journeys |
+| End-to-end | `pnpm test:e2e` | the apps built (the harness starts them, with `E2E_WITH_OTA=1` also the stub and the OTA worker, on a fresh database), PostgreSQL, Redis, Mailpit, Playwright's Chromium, Stripe CLI for payment journeys; [`tools/e2e/README.md`](../../tools/e2e/README.md) |
 | Types and lint | `pnpm typecheck`, `pnpm lint`, `pnpm format:check` | nothing running |
 | Plans | `pnpm plan:lint` | nothing |
 | Local setup scripts | `node --test tools/dev/dev-keys.test.mjs`, `shellcheck -S style deploy/scripts/dev-setup.sh` | nothing (the `dev-setup` CI job also runs §2 on a clean runner) |

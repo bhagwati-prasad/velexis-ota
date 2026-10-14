@@ -964,7 +964,8 @@ Common commands: backend `pnpm --filter @velexis/platform-backend test`, `test:i
   - A viewer gets the not-allowed page on `/amadeus`, `/payments` and `/billing`; the billing page shows the trial end [PF-75].
 - **Verify:** `pnpm --filter @velexis/platform-frontend test`
 
-### PFE-014 · Create the tools/e2e Playwright harness
+### PFE-014 · Create the tools/e2e Playwright harness ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-frontend
 - **Milestone:** M1
 - **Depends on:** PBE-001, PFE-001, PAD-001, X-025, X-026
