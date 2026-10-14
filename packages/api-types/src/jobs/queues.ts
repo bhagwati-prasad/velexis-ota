@@ -1,5 +1,6 @@
 // Queue names, the BullMQ prefix and the BullMQ job id of a dispatch attempt (ADR-0009 items 1, 3 and 4,
-// PADR-0001 item 3, platform/docs/architecture.md §5 and §6.1). Task PBE-004.
+// PADR-0001 item 3, platform/docs/architecture.md §5 and §6.1, ota/docs/architecture.md §6). Task PBE-004; OBE-002
+// appends the OTA's own queues to `OTA_QUEUES`.
 //
 // Every queue belongs to the backend whose worker consumes it, and its name starts with that owner
 // (`<owner>-<topic>`, ADR-0009 item 4): `ota-tenant-ops` is consumed by the OTA worker, `platform-tenant-events`
@@ -34,10 +35,20 @@ export const PLATFORM_QUEUES = Object.freeze([
 ] as const);
 
 /**
- * The queues consumed by the OTA worker, starting with `ota-tenant-ops`. The OTA plan appends its own queue
- * names here (OBE-002); the platform admin shows them read-only.
+ * The queues consumed by the OTA worker, in the order of ota/docs/architecture.md §6: `ota-tenant-ops`, which the
+ * platform produces, then the OTA's own queues, which its API, schedulers and webhook receivers produce (OBE-002).
+ * The platform admin shows them read-only.
  */
-export const OTA_QUEUES = Object.freeze([OTA_TENANT_OPS] as const);
+export const OTA_QUEUES = Object.freeze([
+  OTA_TENANT_OPS,
+  "ota-stripe-events",
+  "ota-payments",
+  "ota-bookings",
+  "ota-ticketing",
+  "ota-notifications",
+  "ota-documents",
+  "ota-maintenance",
+] as const);
 
 /** A queue consumed by the platform worker. */
 export type PlatformQueueName = (typeof PLATFORM_QUEUES)[number];

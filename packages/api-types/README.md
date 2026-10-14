@@ -11,7 +11,7 @@ Related: [`packages/README.md`](../README.md#velexisapi-types) (public API sketc
 | `redocly.yaml` and `pnpm contracts:lint` | X-007 | Done (this page) |
 | Generated types, operations index, `./jobs` envelope, `pnpm contracts:generate`, `build` | [X-008](../../docs/mvp/plans/foundation-tasks.md) | Done (this page) |
 | Platform types and platform operations | PBE-005 and the later platform slices ([PADR-0016](../../platform/docs/adr/0016-contract-rollout-per-milestone-and-route-parity.md)) | PBE-005 slice generated (24 operations, [`platform/backend/openapi/README.md`](../../platform/backend/openapi/README.md)); the later slices add theirs |
-| Queue names, `tenant.*` messages, `vx:invalidate` events, `validateJob` and the fixtures in `./jobs` | PBE-004 (OTA queue names: OBE-002) | Done (this page); OBE-002 appends the OTA queue names to `OTA_QUEUES` |
+| Queue names, `tenant.*` messages, `vx:invalidate` events, `validateJob` and the fixtures in `./jobs` | PBE-004 (OTA queue names: OBE-002) | Done (this page), with the OTA queue names in `OTA_QUEUES` (OBE-002) |
 
 ## What is generated, and from where
 
@@ -171,11 +171,11 @@ parseBullmqJobId("job_01HZX-2");                                               /
 | `OTA_TENANT_OPS` | `ota-tenant-ops` (platform → OTA worker) | ADR-0009 item 3 |
 | `PLATFORM_TENANT_EVENTS` | `platform-tenant-events` (OTA worker → platform) | ADR-0009 item 3 |
 | `PLATFORM_QUEUES` | the seven queues the platform worker consumes: `platform-tenant-events`, `platform-emails`, `platform-stripe-events`, `platform-domains`, `platform-connections`, `platform-settlements`, `platform-maintenance` | [platform architecture §5](../../platform/docs/architecture.md#5-worker-queues-and-schedules) |
-| `OTA_QUEUES` | the queues the OTA worker consumes, starting with `ota-tenant-ops`; the OTA plan appends its own (OBE-002) | ADR-0009 item 4 |
+| `OTA_QUEUES` | the eight queues the OTA worker consumes: `ota-tenant-ops` (produced by the platform), then the OTA's own `ota-stripe-events`, `ota-payments`, `ota-bookings`, `ota-ticketing`, `ota-notifications`, `ota-documents`, `ota-maintenance` (OBE-002; their concurrency and job defaults are in `ota/backend/src/common/queues/queue-names.ts`) | ADR-0009 item 4, [OTA architecture §6](../../ota/docs/architecture.md#6-workers-queues-and-schedulers) |
 | `bullmqJobId(jobId, attempt)` | `<jobId>-<attempt>`: one BullMQ job per dispatch attempt; throws a `TypeError` on a job id that is not letters, digits and `_`, or an attempt that is not a positive integer | [PADR-0001](../../platform/docs/adr/0001-tenant-provisioning-orchestration.md) item 3 |
 | `parseBullmqJobId(id)` | `{ jobId, attempt }` of an id written by `bullmqJobId`, otherwise `null` (stale attempts, reconciler) | PADR-0001 items 5 and 6 |
 
-Every queue belongs to the backend whose worker consumes it and is named after it (`<owner>-<topic>`, ADR-0009 item 4), so each name is in exactly one of the two lists. Together they hold the eight queues of platform architecture §5: `ota-tenant-ops` is in `OTA_QUEUES` although the platform produces it, because the OTA worker consumes it and the admin queue view shows `ota-*` queues read-only (PBE-031).
+Every queue belongs to the backend whose worker consumes it and is named after it (`<owner>-<topic>`, ADR-0009 item 4), so each name is in exactly one of the two lists. Together they hold the eight queues of platform architecture §5 and the OTA's internal queues: `ota-tenant-ops` is in `OTA_QUEUES` although the platform produces it, because the OTA worker consumes it and the admin queue view shows `ota-*` queues read-only (PBE-031).
 
 ## `tenant.*` messages (`src/jobs/tenant-ops.ts`, `src/jobs/tenant-events.ts`)
 

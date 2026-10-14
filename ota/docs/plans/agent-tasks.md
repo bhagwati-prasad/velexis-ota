@@ -115,7 +115,8 @@ Common commands: backend `pnpm --filter @velexis/ota-backend test` and `test:int
 
 The OTA side of M1 is the provisioning worker (OF-11): the platform's `tenant.provision` job turns into a complete tenant schema. Platform task PBE-035 is gated on it.
 
-### OBE-002 · Add the Redis client, queue names and job validation to the OTA backend
+### OBE-002 · Add the Redis client, queue names and job validation to the OTA backend ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-backend
 - **Milestone:** M1
 - **Depends on:** OBE-001, PBE-004
