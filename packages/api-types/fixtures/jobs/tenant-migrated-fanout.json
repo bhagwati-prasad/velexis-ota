@@ -1,0 +1,20 @@
+{
+  "v": 1,
+  "name": "tenant.migrated",
+  "jobId": null,
+  "tenantId": "ten_01M2D1M9E05ZG209YQM1HZCT6C",
+  "requestedAt": "2026-10-14T02:15:07.003Z",
+  "requestId": "deploy-c3a3730c5f84",
+  "payload": {
+    "schemaVersion": "0001_baseline",
+    "migrations": [
+      {
+        "version": "0001_baseline",
+        "checksum": "cfa4d48672d69c947e5e96c0906d2b55c0df213c9cb38b72f30824ff9ae048cc",
+        "phase": "expand",
+        "appliedAt": "2026-09-13T11:02:41.226Z",
+        "durationMs": 398
+      }
+    ]
+  }
+}

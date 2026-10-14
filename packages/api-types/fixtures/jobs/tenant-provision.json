@@ -1,0 +1,9 @@
+{
+  "v": 1,
+  "name": "tenant.provision",
+  "jobId": "job_01M4T9HVE0355QAKGD2AVSQWH2",
+  "tenantId": "ten_01M4T9E68084G7ZWYRD6Z1RV0W",
+  "requestedAt": "2026-10-13T09:30:00.000Z",
+  "requestId": "6f1c2b7e-0d4a-4c9e-8b3f-2a5d9e7c1b40",
+  "payload": {}
+}

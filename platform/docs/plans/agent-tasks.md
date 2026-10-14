@@ -129,7 +129,8 @@ Common commands: backend `pnpm --filter @velexis/platform-backend test`, `test:i
   - The privilege matrix of step 3 holds on a fresh test database.
 - **Verify:** `pnpm --filter @velexis/platform-backend test:int -- migrations`
 
-### PBE-004 · Define the tenant job messages and invalidation events in @velexis/api-types/jobs
+### PBE-004 · Define the tenant job messages and invalidation events in @velexis/api-types/jobs ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-backend
 - **Milestone:** M1
 - **Depends on:** X-008

@@ -2,7 +2,7 @@
   "name": "@velexis/api-types",
   "version": "0.0.0",
   "private": true,
-  "description": "Contract types generated from the OTA and platform OpenAPI documents, the operations index, the queue message envelope, and the Redocly lint of those documents (ADR-0006, ADR-0009).",
+  "description": "Contract types generated from the OTA and platform OpenAPI documents, the operations index, the cross-backend queue messages and invalidation events with their Ajv validators, and the Redocly lint of those documents (ADR-0006, ADR-0009).",
   "license": "UNLICENSED",
   "type": "commonjs",
   "main": "./dist/index.js",
@@ -24,10 +24,12 @@
       "types": "./dist/jobs/index.d.ts",
       "default": "./dist/jobs/index.js"
     },
+    "./fixtures/jobs/*.json": "./fixtures/jobs/*.json",
     "./package.json": "./package.json"
   },
   "files": [
     "dist",
+    "fixtures",
     "!dist/**/*.test.*",
     "!dist/tsconfig.tsbuildinfo"
   ],
@@ -40,11 +42,13 @@
     "test": "vitest run",
     "clean": "tsc -b --clean"
   },
+  "dependencies": {
+    "ajv": "8.20.0",
+    "ajv-formats": "3.0.1"
+  },
   "devDependencies": {
     "@redocly/cli": "1.34.20",
     "@types/node": "22.20.5",
-    "ajv": "8.20.0",
-    "ajv-formats": "3.0.1",
     "openapi-typescript": "7.13.0",
     "typescript": "5.6.3",
     "vitest": "3.2.7",

@@ -1,6 +1,8 @@
-// @velexis/api-types/jobs: the contracts of the cross-backend queue messages (ADR-0009 item 3, PADR-0001 item 9).
-// X-008 provides the envelope and its JSON Schema. The platform plan adds the queue names, the `tenant.*`
-// messages, the `vx:invalidate` events and the Ajv validator here (PBE-004); see packages/api-types/README.md.
+// @velexis/api-types/jobs: the contracts of the cross-backend queue messages and cache invalidation events
+// (ADR-0009 item 3, PADR-0001 item 9, PADR-0016 item 3, platform/docs/architecture.md §5 and §6).
+// X-008 provides the envelope and its JSON Schema; PBE-004 adds the queue names, the `tenant.*` messages of both
+// queues, the `vx:invalidate` events and their Ajv validators. The shared fixtures are published as
+// `@velexis/api-types/fixtures/jobs/*.json`. See packages/api-types/README.md.
 export {
   JOB_CONTRACT_VERSION,
   JOB_SCHEMA_DIALECT,
@@ -14,3 +16,102 @@ export {
   type JsonSchema,
   type JobMessageSchemaOptions,
 } from "./envelope.js";
+
+export {
+  BULLMQ_PREFIX,
+  OTA_TENANT_OPS,
+  PLATFORM_TENANT_EVENTS,
+  PLATFORM_QUEUES,
+  OTA_QUEUES,
+  bullmqJobId,
+  parseBullmqJobId,
+  type PlatformQueueName,
+  type OtaQueueName,
+  type QueueName,
+} from "./queues.js";
+
+export {
+  TENANT_MIGRATION_VERSION_PATTERN,
+  TENANT_SUSPENSION_REASONS,
+  TENANT_OPS_JOB_NAMES,
+  TENANT_OPS_JOB_SCHEMAS,
+  tenantProvisionJobSchema,
+  tenantMigrateJobSchema,
+  tenantSuspendJobSchema,
+  tenantResumeJobSchema,
+  type TenantJobEnvelope,
+  type TenantSuspensionReason,
+  type TenantMigratePayload,
+  type TenantSuspendPayload,
+  type TenantProvisionJob,
+  type TenantMigrateJob,
+  type TenantSuspendJob,
+  type TenantResumeJob,
+  type TenantOpsJob,
+  type TenantOpsJobName,
+} from "./tenant-ops.js";
+
+export {
+  TENANT_SCHEMA_NAME_PATTERN,
+  TENANT_MIGRATION_PHASES,
+  OTA_PROVISIONING_STEPS,
+  PROVISIONING_STEP_STATUSES,
+  TENANT_EVENT_NAMES,
+  TENANT_EVENT_SCHEMAS,
+  tenantProvisionedEventSchema,
+  tenantProvisionFailedEventSchema,
+  tenantMigratedEventSchema,
+  tenantMigrationFailedEventSchema,
+  tenantSuspendedEventSchema,
+  tenantResumedEventSchema,
+  type TenantReportEnvelope,
+  type TenantMigrationPhase,
+  type OtaProvisioningStep,
+  type ProvisioningStepStatus,
+  type TenantJobError,
+  type TenantMigrationRecord,
+  type ProvisioningStepRecord,
+  type TenantProvisionedPayload,
+  type TenantProvisionFailedPayload,
+  type TenantMigratedPayload,
+  type TenantMigrationFailedPayload,
+  type TenantProvisionedEvent,
+  type TenantProvisionFailedEvent,
+  type TenantMigratedEvent,
+  type TenantMigrationFailedEvent,
+  type TenantSuspendedEvent,
+  type TenantResumedEvent,
+  type TenantEvent,
+  type TenantEventName,
+} from "./tenant-events.js";
+
+export {
+  INVALIDATION_CHANNEL,
+  INVALIDATION_CONTRACT_VERSION,
+  INVALIDATION_TYPES,
+  INVALIDATION_EVENT_SCHEMA,
+  INVALIDATION_EVENT_SCHEMAS,
+  type TenantInvalidation,
+  type DomainInvalidation,
+  type ApiKeyInvalidation,
+  type ConnectionInvalidation,
+  type MembershipInvalidation,
+  type AccountInvalidation,
+  type AmadeusAccountInvalidation,
+  type PlanInvalidation,
+  type InvalidationEvent,
+  type InvalidationType,
+} from "./invalidation.js";
+
+export {
+  TENANT_JOB_SCHEMAS,
+  isTenantJobName,
+  isInvalidationType,
+  validateJob,
+  validateInvalidation,
+  MessageValidationError,
+  type TenantJobName,
+  type TenantJobMessage,
+  type TenantJobMessageMap,
+  type MessageValidationIssue,
+} from "./validate.js";

@@ -1,0 +1,33 @@
+{
+  "v": 1,
+  "name": "tenant.provision_failed",
+  "jobId": "job_01M4T9HVE0355QAKGD2AVSQWH2",
+  "tenantId": "ten_01M4T9E68084G7ZWYRD6Z1RV0W",
+  "requestedAt": "2026-10-13T09:31:35.208Z",
+  "requestId": "6f1c2b7e-0d4a-4c9e-8b3f-2a5d9e7c1b40",
+  "payload": {
+    "error": {
+      "code": "LOCK_TIMEOUT",
+      "message": "canceling statement due to lock timeout"
+    },
+    "retryable": true,
+    "steps": [
+      {
+        "step": "create_schema",
+        "status": "succeeded",
+        "startedAt": "2026-10-13T09:31:30.101Z",
+        "finishedAt": "2026-10-13T09:31:30.152Z"
+      },
+      {
+        "step": "run_migrations",
+        "status": "failed",
+        "startedAt": "2026-10-13T09:31:30.152Z",
+        "finishedAt": "2026-10-13T09:31:35.160Z",
+        "error": {
+          "code": "LOCK_TIMEOUT",
+          "message": "canceling statement due to lock timeout"
+        }
+      }
+    ]
+  }
+}

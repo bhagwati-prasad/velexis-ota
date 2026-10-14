@@ -1,0 +1,41 @@
+{
+  "v": 1,
+  "name": "tenant.provisioned",
+  "jobId": "job_01M4T9HVE0355QAKGD2AVSQWH2",
+  "tenantId": "ten_01M4T9E68084G7ZWYRD6Z1RV0W",
+  "requestedAt": "2026-10-13T09:30:04.512Z",
+  "requestId": "6f1c2b7e-0d4a-4c9e-8b3f-2a5d9e7c1b40",
+  "payload": {
+    "schemaName": "tenant_acme",
+    "schemaVersion": "0001_baseline",
+    "migrations": [
+      {
+        "version": "0001_baseline",
+        "checksum": "cfa4d48672d69c947e5e96c0906d2b55c0df213c9cb38b72f30824ff9ae048cc",
+        "phase": "expand",
+        "appliedAt": "2026-10-13T09:30:03.871Z",
+        "durationMs": 412
+      }
+    ],
+    "steps": [
+      {
+        "step": "create_schema",
+        "status": "succeeded",
+        "startedAt": "2026-10-13T09:30:03.402Z",
+        "finishedAt": "2026-10-13T09:30:03.459Z"
+      },
+      {
+        "step": "run_migrations",
+        "status": "succeeded",
+        "startedAt": "2026-10-13T09:30:03.459Z",
+        "finishedAt": "2026-10-13T09:30:03.871Z"
+      },
+      {
+        "step": "seed_defaults",
+        "status": "succeeded",
+        "startedAt": "2026-10-13T09:30:03.871Z",
+        "finishedAt": "2026-10-13T09:30:03.940Z"
+      }
+    ]
+  }
+}
