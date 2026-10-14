@@ -804,8 +804,8 @@ Related: [`../decisions.md`](../decisions.md) (binding), [`../architecture.md`](
   - Two parallel test files using `uniqueEmail` never see each other's messages.
 - **Verify:** `pnpm --filter @velexis/testing test && pnpm --filter @velexis/testing test:int`
 
-### X-026 · Build the Amadeus stub server skeleton
-- **Status:** todo
+### X-026 · Build the Amadeus stub server skeleton ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** foundation
 - **Milestone:** M1
 - **Depends on:** X-001

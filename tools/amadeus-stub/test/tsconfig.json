@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "display": "Type-checks the tests of @velexis/amadeus-stub (pnpm typecheck); emits nothing.",
+  "extends": "../../../tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "incremental": false,
+    "types": ["node"]
+  },
+  "include": ["**/*.ts", "../src/**/*.ts"]
+}
