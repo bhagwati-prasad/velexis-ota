@@ -1,0 +1,2841 @@
+openapi: 3.1.0
+info:
+  title: Velexis Platform API
+  version: 1.0.0
+  summary: >-
+    Control-plane API of Velexis behind the portal and the platform admin: accounts, OTAs, team, API keys, plans and
+    billing, plus Caddy's TLS gate and the Stripe webhook receivers.
+  description: >-
+    The platform backend (`@velexis/platform-backend`, `127.0.0.1:3100`) owns the `platform` schema: portal accounts,
+    OTAs (tenants), memberships, API keys, domains, connections, plans and subscriptions. The **portal** and the
+    **platform admin** call it from their Next.js servers with `Authorization: Bearer`; no browser calls it and there is
+    no CORS configuration (PADR-0009 item 3). Stripe calls the webhook receivers and Caddy the internal TLS gate. The
+    source of every operation is the platform API inventory (`platform/docs/api-inventory.md`,
+    `api-inventory-resources.md`, `api-inventory-admin.md`); the document grows in milestone slices, each written
+    before the implementation tasks of its milestone (PADR-0016).
+
+
+    **Who may call (`x-scope`).** `public`: no token, rate limited. `portal_unverified`: a portal access token; the
+    e-mail address need not be verified (the account, MFA set-up, sessions and sign-out, PADR-0008 item 2).
+    `portal`: a portal access token of a verified, active account, otherwise `403 EMAIL_NOT_VERIFIED`.
+    `platform_admin`: a platform admin access token (`/v1/admin/…`). `internal`: loopback only and without
+    `X-Forwarded-For`, no token; any other caller gets `404`. `webhook`: a Stripe signature on the raw body. Portal and
+    admin tokens carry different audiences (`portal`, `platform_admin`) and are never accepted on the other surface.
+    Tenant resources live under `/v1/tenants/{tenantId}/…` and answer `404 NOT_FOUND` to non-members.
+
+
+    **Conventions** (the same as the OTA booking API). JSON in camelCase; ids are prefixed ULIDs (`acc_`, `ten_`,
+    `stf_`, `ivt_`, `key_`, `dom_`, …); money is `{amount: decimal string, currency}`, never a number; times are ISO
+    8601 in UTC with `Z`. Lists use cursor pagination: `?limit=50&cursor=…` answers `{data, page: {nextCursor, limit}}`
+    (default 50, maximum 200). Versioned resources answer `ETag: "<version>"`; their PATCH requires `If-Match`, and a
+    stale version answers `412 PRECONDITION_FAILED`. Operations marked `x-idempotent` require an `Idempotency-Key`
+    and replay the stored response for 24 hours. Responses that carry a secret (tokens, the TOTP secret, recovery
+    codes, keys shown once) document `Cache-Control: no-store` and are never stored for replay. Every response
+    carries `X-Request-Id`. Errors use the envelope `{error: {code, message, status, requestId, details?,
+    fieldErrors?}}` with a code of `x-error-catalogue`; messages are safe to show and never echo a submitted value.
+
+
+    **End-user IP.** The portal and admin servers send the person's IP and user agent on every call in
+    `X-Velexis-End-User-IP` and `X-Velexis-End-User-Agent`, authenticated by the shared key `X-Velexis-Bff-Key`. The
+    API honours them only from loopback without `X-Forwarded-For`; rate limits, sessions and audit rows use that IP
+    (PADR-0019). The request context handles these headers for every operation, so they are not repeated as
+    operation parameters.
+
+
+    **Extensions.** `x-scope` (above, on every operation); `x-internal: true` (outside the portal and admin surface:
+    internal endpoints, health checks and webhook receivers); `x-idempotent: true` (`Idempotency-Key` required);
+    `x-mfa-step-up: true` (a TOTP step-up within 15 minutes, else `401 REAUTH_REQUIRED`, or `403 MFA_REQUIRED` without
+    MFA); `x-feature: <switch>` (a milestone switch of PADR-0015, `403 FEATURE_DISABLED` when off);
+    `x-reason-required: true` (admin actions with a required `reason`, 5–500 characters, kept in the audit row);
+    `x-error-codes` (the catalogue codes an operation answers); `x-platform-tables` (the `platform` tables it reads or
+    writes); `x-error-catalogue` (root: every error code with its HTTP status and default message).
+  contact:
+    name: Velexis platform team
+  license:
+    name: Proprietary
+    identifier: LicenseRef-Proprietary
+servers:
+  - url: https://api.platform.example.com
+    description: >-
+      Production, through Caddy. The portal and admin servers call it as `PLATFORM_API_URL`
+      (`http://127.0.0.1:3100` on the VM and locally).
+tags:
+  - name: Auth
+    description: >-
+      Portal identity (`AuthModule`): sign-up with e-mail verification, sign-in with optional TOTP MFA, rotating
+      refresh tokens, sign-out of one or every session, password reset and the MFA step-up of sensitive actions. The
+      tokens appear only in these responses; the portal server moves them into httpOnly cookies at once.
+  - name: Account
+    description: >-
+      The signed-in account (`AccountsModule`, `/v1/me`): profile, memberships and milestone switches, password
+      change, TOTP set-up and recovery codes, and the account's sessions.
+  - name: Plans
+    description: The public plan catalogue (`BillingModule`) shown on the pricing page and in the create-OTA wizard.
+  - name: Internal
+    description: >-
+      Operations outside the portal and admin surface (`x-internal: true`): Caddy's on-demand TLS gate and the health
+      checks. `/internal/*` and `/health/ready` answer only loopback callers without `X-Forwarded-For`.
+paths:
+  /v1/auth/sign-up:
+    post:
+      operationId: signUp
+      summary: Create a portal account
+      description: >-
+        Creates an account in `pending_verification` and e-mails a verification link that works once within 24 hours.
+        The answer is the same `202` whether or not the address is registered: an existing address gets an "account
+        exists" e-mail with sign-in and reset links instead, so the response reveals nothing (PADR-0008 item 1).
+
+
+        **Rules.** The e-mail address is trimmed and compared lower-cased. The password needs at least 10 characters
+        and must not be in the breached-password list (`422 PASSWORD_TOO_WEAK`); it is stored as an Argon2id hash.
+        `acceptTerms` must be `true`, and `termsVersion` names the terms the person accepted (kept with the time of
+        acceptance). 5 sign-ups per end-user IP per hour.
+      tags:
+        - Auth
+      security: []
+      x-scope: public
+      x-error-codes:
+        - VALIDATION_FAILED
+        - PASSWORD_TOO_WEAK
+        - RATE_LIMITED
+        - INTERNAL_ERROR
+      x-platform-tables:
+        - accounts
+        - account_tokens
+        - email_outbox
+        - platform_audit_log
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SignUpRequest'
+            example:
+              email: anna.berg@example.com
+              password: Northern-Lights-2026
+              fullName: Anna Berg
+              acceptTerms: true
+              termsVersion: '2026-10-01'
+      responses:
+        '202':
+          description: Accepted. A verification e-mail (new address) or an "account exists" e-mail is queued.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SignUpAccepted'
+              example:
+                status: verification_sent
+        '400':
+          $ref: '#/components/responses/ValidationFailed'
+        '422':
+          $ref: '#/components/responses/PasswordTooWeak'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /v1/auth/verify-email:
+    post:
+      operationId: verifyEmail
+      summary: Verify the e-mail address
+      description: >-
+        Consumes a verification token from the e-mail link. An unused, unexpired token sets `email_verified_at`,
+        makes the account `active` and is used up; a used, unknown or expired token answers `400
+        VERIFICATION_TOKEN_INVALID`. The portal calls it from a server-side page that redirects to a clean URL with
+        `Referrer-Policy: no-referrer`, so the token never stays in the address bar (PADR-0008 item 4).
+      tags:
+        - Auth
+      security: []
+      x-scope: public
+      x-error-codes:
+        - VALIDATION_FAILED
+        - VERIFICATION_TOKEN_INVALID
+        - RATE_LIMITED
+        - INTERNAL_ERROR
+      x-platform-tables:
+        - account_tokens
+        - accounts
+        - platform_audit_log
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VerifyEmailRequest'
+            example:
+              token: Vf3kQ9mZ2xT7bN4cR8wL1pY6hD5sJ0aE2gU9iO3qK7v
+      responses:
+        '200':
+          description: The address is verified and the account is active.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmailVerified'
+              example:
+                accountId: acc_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+                email: anna.berg@example.com
+                emailVerified: true
+        '400':
+          description: >-
+            The body failed validation, or the token is unknown, already used or expired. Possible codes:
+            VALIDATION_FAILED, VERIFICATION_TOKEN_INVALID.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                VALIDATION_FAILED:
+                  $ref: '#/components/examples/VALIDATION_FAILED'
+                VERIFICATION_TOKEN_INVALID:
+                  $ref: '#/components/examples/VERIFICATION_TOKEN_INVALID'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /v1/auth/resend-verification:
+    post:
+      operationId: resendVerification
+      summary: Send a new verification e-mail
+      description: >-
+        Always answers `202` with no body, so the answer reveals nothing about the address. For an unverified account
+        it e-mails a new link (24 hours, single use). Earlier links that have not expired keep working, because people
+        often click the first e-mail (PADR-0008 item 3). 3 e-mails per address and 10 calls per end-user IP per hour.
+      tags:
+        - Auth
+      security: []
+      x-scope: public
+      x-error-codes:
+        - VALIDATION_FAILED
+        - RATE_LIMITED
+        - INTERNAL_ERROR
+      x-platform-tables:
+        - accounts
+        - account_tokens
+        - email_outbox
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ResendVerificationRequest'
+            example:
+              email: anna.berg@example.com
+      responses:
+        '202':
+          description: Accepted; a new link is e-mailed when the address belongs to an unverified account.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+        '400':
+          $ref: '#/components/responses/ValidationFailed'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /v1/auth/sign-in:
+    post:
+      operationId: signIn
+      summary: Sign in to the portal with e-mail and password
+      description: >-
+        Checks the lock-out, then the password, then the account status. A wrong e-mail address and a wrong password
+        give the same `401 INVALID_CREDENTIALS` in the same time. Five consecutive failures lock the account for 15
+        minutes (`423 ACCOUNT_LOCKED` with `Retry-After`). A disabled account answers `403 ACCOUNT_DISABLED`, and only
+        after a correct password. 10 sign-ins per end-user IP per minute.
+
+
+        **Without MFA** the answer is a `PortalSession`: a new refresh family (`audience = portal`, 30 days absolute,
+        refresh token idle expiry 7 days) and a 15-minute access token. **With MFA** the answer is an `MfaChallenge`
+        whose token completes the sign-in through `verifyMfa` within 5 minutes. An account whose e-mail address is not
+        verified may sign in; its token reaches only the `portal_unverified` operations.
+      tags:
+        - Auth
+      security: []
+      x-scope: public
+      x-error-codes:
+        - VALIDATION_FAILED
+        - INVALID_CREDENTIALS
+        - ACCOUNT_DISABLED
+        - ACCOUNT_LOCKED
+        - RATE_LIMITED
+        - INTERNAL_ERROR
+      x-platform-tables:
+        - accounts
+        - account_sessions
+        - platform_audit_log
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SignInRequest'
+            example:
+              email: anna.berg@example.com
+              password: Northern-Lights-2026
+      responses:
+        '200':
+          description: Signed in (`PortalSession`), or a second factor is needed (`MfaChallenge`).
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+            Cache-Control:
+              $ref: '#/components/headers/NoStore'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SignInResult'
+              examples:
+                session:
+                  $ref: '#/components/examples/PortalSession'
+                mfaChallenge:
+                  summary: MFA is enabled; complete the sign-in with verifyMfa
+                  value:
+                    mfaRequired: true
+                    mfaChallengeToken: Mc8vR2kP5wQ9zT3xL7nB4hY1dF6sG0jA8eU2iO5mK3c
+                    expiresIn: 300
+        '400':
+          $ref: '#/components/responses/ValidationFailed'
+        '401':
+          description: 'Wrong e-mail address or password (the same answer for both). Possible codes: INVALID_CREDENTIALS.'
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                INVALID_CREDENTIALS:
+                  $ref: '#/components/examples/INVALID_CREDENTIALS'
+        '403':
+          description: 'The password is correct but Velexis disabled the account. Possible codes: ACCOUNT_DISABLED.'
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                ACCOUNT_DISABLED:
+                  $ref: '#/components/examples/ACCOUNT_DISABLED'
+        '423':
+          description: 'Too many failed sign-ins; wait for `Retry-After` seconds. Possible codes: ACCOUNT_LOCKED.'
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+            Retry-After:
+              $ref: '#/components/headers/Retry-After'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                ACCOUNT_LOCKED:
+                  $ref: '#/components/examples/ACCOUNT_LOCKED'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /v1/auth/mfa/verify:
+    post:
+      operationId: verifyMfa
+      summary: Complete an MFA sign-in challenge
+      description: >-
+        Completes the challenge of `signIn` with a TOTP code (6 digits, ±1 time step, each code accepted once) or with
+        one unused recovery code, which is then used up. A challenge allows 5 attempts and lives 5 minutes; after that,
+        or for an unknown token, the answer is `401 MFA_CHALLENGE_INVALID` and the person signs in again. 10 attempts
+        per account per 10 minutes. Success creates the refresh family with `mfa_verified_at` set, so the access token
+        carries `mfa_at`.
+      tags:
+        - Auth
+      security: []
+      x-scope: public
+      x-error-codes:
+        - VALIDATION_FAILED
+        - MFA_CHALLENGE_INVALID
+        - MFA_CODE_INVALID
+        - RATE_LIMITED
+        - INTERNAL_ERROR
+      x-platform-tables:
+        - account_sessions
+        - account_recovery_codes
+        - platform_audit_log
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VerifyMfaRequest'
+            examples:
+              totp:
+                summary: With a code of the authenticator app
+                value:
+                  mfaChallengeToken: Mc8vR2kP5wQ9zT3xL7nB4hY1dF6sG0jA8eU2iO5mK3c
+                  code: '492039'
+              recoveryCode:
+                summary: With a recovery code
+                value:
+                  mfaChallengeToken: Mc8vR2kP5wQ9zT3xL7nB4hY1dF6sG0jA8eU2iO5mK3c
+                  recoveryCode: 7KQ4-M2XP-9TRW-H5ZD
+      responses:
+        '200':
+          description: Signed in.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+            Cache-Control:
+              $ref: '#/components/headers/NoStore'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PortalSession'
+              examples:
+                session:
+                  $ref: '#/components/examples/PortalSession'
+        '400':
+          $ref: '#/components/responses/ValidationFailed'
+        '401':
+          description: >-
+            The challenge is unknown, expired or used up, or the code is wrong. Possible codes: MFA_CHALLENGE_INVALID,
+            MFA_CODE_INVALID.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                MFA_CHALLENGE_INVALID:
+                  $ref: '#/components/examples/MFA_CHALLENGE_INVALID'
+                MFA_CODE_INVALID:
+                  $ref: '#/components/examples/MFA_CODE_INVALID'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /v1/auth/refresh:
+    post:
+      operationId: refreshSession
+      summary: Rotate the refresh token
+      description: >-
+        Exchanges a refresh token for a new access token and a new refresh token of the same family; the presented
+        token is used up. Presenting a token that was already rotated revokes the whole family (`401
+        REFRESH_TOKEN_REUSED`). An unknown, revoked or expired token, or a family past its absolute lifetime, answers
+        `401 REFRESH_TOKEN_INVALID`. Only portal families are accepted here; admin families refresh through the admin
+        surface. The new access token copies `mfa_at` from the family.
+      tags:
+        - Auth
+      security: []
+      x-scope: public
+      x-error-codes:
+        - VALIDATION_FAILED
+        - REFRESH_TOKEN_INVALID
+        - REFRESH_TOKEN_REUSED
+        - RATE_LIMITED
+        - INTERNAL_ERROR
+      x-platform-tables:
+        - account_sessions
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RefreshSessionRequest'
+            example:
+              refreshToken: Rf5nW8qL2xK7vT4cB9mZ1pH6yD3sJ0aG8eU5iO2rQ4w
+      responses:
+        '200':
+          description: New tokens of the same family.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+            Cache-Control:
+              $ref: '#/components/headers/NoStore'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PortalSession'
+              examples:
+                session:
+                  $ref: '#/components/examples/PortalSession'
+        '400':
+          $ref: '#/components/responses/ValidationFailed'
+        '401':
+          description: >-
+            The refresh token cannot be used; sign in again. Possible codes: REFRESH_TOKEN_INVALID,
+            REFRESH_TOKEN_REUSED.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                REFRESH_TOKEN_INVALID:
+                  $ref: '#/components/examples/REFRESH_TOKEN_INVALID'
+                REFRESH_TOKEN_REUSED:
+                  $ref: '#/components/examples/REFRESH_TOKEN_REUSED'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /v1/auth/sign-out:
+    post:
+      operationId: signOut
+      summary: Sign out of the current session
+      description: >-
+        Revokes the refresh family of the given refresh token. A token that is unknown, already revoked or of another
+        account changes nothing, and the answer is still `204`. The access token stays valid until it expires (15
+        minutes at most); the portal server deletes its cookies at once.
+      tags:
+        - Auth
+      security:
+        - portalBearer: []
+      x-scope: portal_unverified
+      x-error-codes:
+        - VALIDATION_FAILED
+        - UNAUTHENTICATED
+        - TOKEN_EXPIRED
+        - RATE_LIMITED
+        - INTERNAL_ERROR
+      x-platform-tables:
+        - account_sessions
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SignOutRequest'
+            example:
+              refreshToken: Rf5nW8qL2xK7vT4cB9mZ1pH6yD3sJ0aG8eU5iO2rQ4w
+      responses:
+        '204':
+          description: Signed out.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+        '400':
+          $ref: '#/components/responses/ValidationFailed'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /v1/auth/sign-out-everywhere:
+    post:
+      operationId: signOutEverywhere
+      summary: Sign out of every session
+      description: >-
+        Revokes every refresh family of the account, portal and platform admin alike, and writes the Redis cut-off
+        `staffdeny:acct:<accountId>` (30 days) that makes the OTA backend revoke the account's OTA admin staff sessions
+        too. Publishes an `account` invalidation and writes an audit row.
+      tags:
+        - Auth
+      security:
+        - portalBearer: []
+      x-scope: portal_unverified
+      x-error-codes:
+        - UNAUTHENTICATED
+        - TOKEN_EXPIRED
+        - RATE_LIMITED
+        - INTERNAL_ERROR
+      x-platform-tables:
+        - account_sessions
+        - platform_audit_log
+      responses:
+        '204':
+          description: Every session of the account is revoked.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /v1/auth/password-reset:
+    post:
+      operationId: requestPasswordReset
+      summary: E-mail a password reset link
+      description: >-
+        Always answers `202` with no body. For an active account it creates a reset token (1 hour, single use) and
+        e-mails the link; for any other address nothing happens. 3 e-mails per address and 10 calls per end-user IP
+        per hour.
+      tags:
+        - Auth
+      security: []
+      x-scope: public
+      x-error-codes:
+        - VALIDATION_FAILED
+        - RATE_LIMITED
+        - INTERNAL_ERROR
+      x-platform-tables:
+        - accounts
+        - account_tokens
+        - email_outbox
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PasswordResetRequest'
+            example:
+              email: anna.berg@example.com
+      responses:
+        '202':
+          description: Accepted; a reset link is e-mailed when the address belongs to an active account.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+        '400':
+          $ref: '#/components/responses/ValidationFailed'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /v1/auth/password-reset/confirm:
+    post:
+      operationId: confirmPasswordReset
+      summary: Set a new password with a reset token
+      description: >-
+        Checks the reset token (unused, unexpired), applies the password rules, stores the new Argon2id hash and uses
+        the token up. Every session of the account is revoked, `staffdeny:acct:<accountId>` is written, the account is
+        e-mailed, an `account` invalidation is published and an audit row is written.
+      tags:
+        - Auth
+      security: []
+      x-scope: public
+      x-error-codes:
+        - VALIDATION_FAILED
+        - PASSWORD_RESET_TOKEN_INVALID
+        - PASSWORD_TOO_WEAK
+        - RATE_LIMITED
+        - INTERNAL_ERROR
+      x-platform-tables:
+        - account_tokens
+        - accounts
+        - account_sessions
+        - email_outbox
+        - platform_audit_log
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PasswordResetConfirmRequest'
+            example:
+              token: Pr2xL9qW5mT8vK3cN7bZ4hY1dF6sJ0aG2eU8iO5rQ1k
+              newPassword: Silver-Fjord-Morning-7
+      responses:
+        '204':
+          description: The password is changed and every session is revoked.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+        '400':
+          description: >-
+            The body failed validation, or the reset token is unknown, already used or expired. Possible codes:
+            VALIDATION_FAILED, PASSWORD_RESET_TOKEN_INVALID.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                VALIDATION_FAILED:
+                  $ref: '#/components/examples/VALIDATION_FAILED'
+                PASSWORD_RESET_TOKEN_INVALID:
+                  $ref: '#/components/examples/PASSWORD_RESET_TOKEN_INVALID'
+        '422':
+          $ref: '#/components/responses/PasswordTooWeak'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /v1/auth/step-up:
+    post:
+      operationId: stepUp
+      summary: Confirm a sensitive action with a fresh TOTP code
+      description: >-
+        Sensitive operations (`x-mfa-step-up`) need a TOTP verification within the last 15 minutes. A valid code
+        answers a new access token of the same family with `mfa_at` set to now, and updates the family's
+        `mfa_verified_at`. The session also carries a new refresh token of the family, which replaces the current one
+        as on `refreshSession`. A code already used in the same 30-second step is refused. An account without MFA gets
+        `403 MFA_REQUIRED`.
+      tags:
+        - Auth
+      security:
+        - portalBearer: []
+      x-scope: portal
+      x-error-codes:
+        - VALIDATION_FAILED
+        - UNAUTHENTICATED
+        - TOKEN_EXPIRED
+        - MFA_CODE_INVALID
+        - EMAIL_NOT_VERIFIED
+        - MFA_REQUIRED
+        - RATE_LIMITED
+        - INTERNAL_ERROR
+      x-platform-tables:
+        - account_sessions
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TotpCodeRequest'
+            example:
+              code: '492039'
+      responses:
+        '200':
+          description: A new session of the same family, with `mfa_at` now.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+            Cache-Control:
+              $ref: '#/components/headers/NoStore'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PortalSession'
+              examples:
+                session:
+                  $ref: '#/components/examples/PortalSession'
+        '400':
+          $ref: '#/components/responses/ValidationFailed'
+        '401':
+          description: >-
+            No valid access token, or the code is wrong. Possible codes: UNAUTHENTICATED, TOKEN_EXPIRED,
+            MFA_CODE_INVALID.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                UNAUTHENTICATED:
+                  $ref: '#/components/examples/UNAUTHENTICATED'
+                TOKEN_EXPIRED:
+                  $ref: '#/components/examples/TOKEN_EXPIRED'
+                MFA_CODE_INVALID:
+                  $ref: '#/components/examples/MFA_CODE_INVALID'
+        '403':
+          $ref: '#/components/responses/StepUpForbidden'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /v1/me:
+    get:
+      operationId: getMe
+      summary: Get the signed-in account
+      description: >-
+        The account, its active memberships with the OTA's key, name, status and the member's role, and the milestone
+        switches of PADR-0015 in `features`. The portal and the admin hide what a switch turns off; the backend stays
+        the only source of the switches. Works before the e-mail address is verified.
+      tags:
+        - Account
+      security:
+        - portalBearer: []
+      x-scope: portal_unverified
+      x-error-codes:
+        - UNAUTHENTICATED
+        - TOKEN_EXPIRED
+        - RATE_LIMITED
+        - INTERNAL_ERROR
+      x-platform-tables:
+        - accounts
+        - tenant_memberships
+        - tenants
+      responses:
+        '200':
+          description: The account.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+            ETag:
+              $ref: '#/components/headers/ETag'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Account'
+              examples:
+                account:
+                  $ref: '#/components/examples/Account'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    patch:
+      operationId: updateMe
+      summary: Update the profile
+      description: >-
+        Changes the name, locale or time zone. `If-Match` carries the `ETag` of `getMe`; a stale version answers `412
+        PRECONDITION_FAILED`. The e-mail address cannot be changed here (PADR-0008 item 5). Writes an audit row.
+      tags:
+        - Account
+      security:
+        - portalBearer: []
+      x-scope: portal_unverified
+      x-error-codes:
+        - VALIDATION_FAILED
+        - UNAUTHENTICATED
+        - TOKEN_EXPIRED
+        - PRECONDITION_FAILED
+        - RATE_LIMITED
+        - INTERNAL_ERROR
+      x-platform-tables:
+        - accounts
+        - platform_audit_log
+      parameters:
+        - $ref: '#/components/parameters/IfMatch'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateMeRequest'
+            example:
+              fullName: Anna Berg-Lund
+              timeZone: Europe/Oslo
+      responses:
+        '200':
+          description: The updated account, with its new version in `ETag`.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+            ETag:
+              $ref: '#/components/headers/ETag'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Account'
+              examples:
+                account:
+                  $ref: '#/components/examples/Account'
+        '400':
+          $ref: '#/components/responses/ValidationFailed'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '412':
+          description: '`If-Match` is not the current version; reload and try again. Possible codes: PRECONDITION_FAILED.'
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                PRECONDITION_FAILED:
+                  $ref: '#/components/examples/PRECONDITION_FAILED'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /v1/me/password:
+    post:
+      operationId: changePassword
+      summary: Change the password
+      description: >-
+        Checks the current password (`422 CURRENT_PASSWORD_INCORRECT`) and the password rules for the new one (`422
+        PASSWORD_TOO_WEAK`). Revokes every other session of the account and writes `staffdeny:acct:<accountId>`, so OTA
+        admin sessions end too; the current session stays signed in. E-mails the account and writes an audit row.
+      tags:
+        - Account
+      security:
+        - portalBearer: []
+      x-scope: portal
+      x-error-codes:
+        - VALIDATION_FAILED
+        - UNAUTHENTICATED
+        - TOKEN_EXPIRED
+        - EMAIL_NOT_VERIFIED
+        - CURRENT_PASSWORD_INCORRECT
+        - PASSWORD_TOO_WEAK
+        - RATE_LIMITED
+        - INTERNAL_ERROR
+      x-platform-tables:
+        - accounts
+        - account_sessions
+        - email_outbox
+        - platform_audit_log
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChangePasswordRequest'
+            example:
+              currentPassword: Northern-Lights-2026
+              newPassword: Silver-Fjord-Morning-7
+      responses:
+        '204':
+          description: The password is changed; the other sessions are revoked.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+        '400':
+          $ref: '#/components/responses/ValidationFailed'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/EmailNotVerified'
+        '422':
+          description: >-
+            The current password is wrong, or the new one breaks the password rules. Possible codes:
+            CURRENT_PASSWORD_INCORRECT, PASSWORD_TOO_WEAK.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                CURRENT_PASSWORD_INCORRECT:
+                  $ref: '#/components/examples/CURRENT_PASSWORD_INCORRECT'
+                PASSWORD_TOO_WEAK:
+                  $ref: '#/components/examples/PASSWORD_TOO_WEAK'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /v1/me/mfa/setup:
+    post:
+      operationId: startMfaSetup
+      summary: Start the TOTP set-up
+      description: >-
+        Creates a pending TOTP secret (SHA-1, 6 digits, 30 seconds) that lives envelope-encrypted in Redis for 10
+        minutes and replaces any earlier pending one. The portal shows the secret and the `otpauth://` URI as a QR
+        code; `enableMfa` confirms it with a code. Answers `409 MFA_ALREADY_ENABLED` while MFA is on.
+      tags:
+        - Account
+      security:
+        - portalBearer: []
+      x-scope: portal_unverified
+      x-error-codes:
+        - UNAUTHENTICATED
+        - TOKEN_EXPIRED
+        - MFA_ALREADY_ENABLED
+        - RATE_LIMITED
+        - INTERNAL_ERROR
+      x-platform-tables: []
+      responses:
+        '200':
+          description: The pending secret, shown once.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+            Cache-Control:
+              $ref: '#/components/headers/NoStore'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MfaSetup'
+              example:
+                secret: JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP
+                otpauthUrl: >-
+                  otpauth://totp/Velexis:anna.berg%40example.com?secret=JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP&issuer=Velexis&algorithm=SHA1&digits=6&period=30
+                expiresIn: 600
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '409':
+          description: 'MFA is already enabled. Possible codes: MFA_ALREADY_ENABLED.'
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                MFA_ALREADY_ENABLED:
+                  $ref: '#/components/examples/MFA_ALREADY_ENABLED'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /v1/me/mfa/enable:
+    post:
+      operationId: enableMfa
+      summary: Confirm the TOTP set-up and enable MFA
+      description: >-
+        A valid code for the pending secret moves it into the account (envelope-encrypted), enables MFA and creates ten
+        recovery codes, answered once and stored only as SHA-256 hashes. An expired or missing set-up answers `400
+        MFA_SETUP_EXPIRED`. E-mails the account, publishes an `account` invalidation and writes an audit row.
+      tags:
+        - Account
+      security:
+        - portalBearer: []
+      x-scope: portal_unverified
+      x-error-codes:
+        - VALIDATION_FAILED
+        - MFA_SETUP_EXPIRED
+        - UNAUTHENTICATED
+        - TOKEN_EXPIRED
+        - MFA_CODE_INVALID
+        - RATE_LIMITED
+        - INTERNAL_ERROR
+      x-platform-tables:
+        - accounts
+        - account_recovery_codes
+        - email_outbox
+        - platform_audit_log
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TotpCodeRequest'
+            example:
+              code: '492039'
+      responses:
+        '200':
+          description: MFA is enabled; the ten recovery codes are shown once.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+            Cache-Control:
+              $ref: '#/components/headers/NoStore'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecoveryCodes'
+              examples:
+                recoveryCodes:
+                  $ref: '#/components/examples/RecoveryCodes'
+        '400':
+          description: >-
+            The body failed validation, or the pending set-up expired; start again. Possible codes: VALIDATION_FAILED,
+            MFA_SETUP_EXPIRED.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                VALIDATION_FAILED:
+                  $ref: '#/components/examples/VALIDATION_FAILED'
+                MFA_SETUP_EXPIRED:
+                  $ref: '#/components/examples/MFA_SETUP_EXPIRED'
+        '401':
+          description: >-
+            No valid access token, or the code is wrong. Possible codes: UNAUTHENTICATED, TOKEN_EXPIRED,
+            MFA_CODE_INVALID.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                UNAUTHENTICATED:
+                  $ref: '#/components/examples/UNAUTHENTICATED'
+                TOKEN_EXPIRED:
+                  $ref: '#/components/examples/TOKEN_EXPIRED'
+                MFA_CODE_INVALID:
+                  $ref: '#/components/examples/MFA_CODE_INVALID'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /v1/me/mfa/disable:
+    post:
+      operationId: disableMfa
+      summary: Turn MFA off
+      description: >-
+        Needs a step-up within 15 minutes (`x-mfa-step-up`). Removes the TOTP secret and every recovery code, e-mails
+        the account and writes an audit row. Platform admins cannot turn MFA off (`403 FORBIDDEN`, `details.reason =
+        platform_admin`).
+      tags:
+        - Account
+      security:
+        - portalBearer: []
+      x-scope: portal
+      x-mfa-step-up: true
+      x-error-codes:
+        - UNAUTHENTICATED
+        - TOKEN_EXPIRED
+        - REAUTH_REQUIRED
+        - EMAIL_NOT_VERIFIED
+        - MFA_REQUIRED
+        - FORBIDDEN
+        - RATE_LIMITED
+        - INTERNAL_ERROR
+      x-platform-tables:
+        - accounts
+        - account_recovery_codes
+        - email_outbox
+        - platform_audit_log
+      responses:
+        '204':
+          description: MFA is off.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+        '401':
+          $ref: '#/components/responses/StepUpUnauthorized'
+        '403':
+          description: >-
+            The e-mail address is not verified, MFA is not enabled, or the account is a platform admin. Possible codes:
+            EMAIL_NOT_VERIFIED, MFA_REQUIRED, FORBIDDEN.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                EMAIL_NOT_VERIFIED:
+                  $ref: '#/components/examples/EMAIL_NOT_VERIFIED'
+                MFA_REQUIRED:
+                  $ref: '#/components/examples/MFA_REQUIRED'
+                FORBIDDEN:
+                  summary: A platform admin cannot turn MFA off
+                  value:
+                    error:
+                      code: FORBIDDEN
+                      message: The caller is authenticated but not allowed to perform this operation on this resource.
+                      status: 403
+                      requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+                      details:
+                        reason: platform_admin
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /v1/me/mfa/recovery-codes:
+    post:
+      operationId: regenerateRecoveryCodes
+      summary: Replace the recovery codes
+      description: >-
+        Needs a step-up within 15 minutes (`x-mfa-step-up`). Replaces every recovery code with ten new ones, answered
+        once and stored only as SHA-256 hashes. E-mails the account and writes an audit row.
+      tags:
+        - Account
+      security:
+        - portalBearer: []
+      x-scope: portal
+      x-mfa-step-up: true
+      x-error-codes:
+        - UNAUTHENTICATED
+        - TOKEN_EXPIRED
+        - REAUTH_REQUIRED
+        - EMAIL_NOT_VERIFIED
+        - MFA_REQUIRED
+        - RATE_LIMITED
+        - INTERNAL_ERROR
+      x-platform-tables:
+        - account_recovery_codes
+        - email_outbox
+        - platform_audit_log
+      responses:
+        '200':
+          description: The ten new recovery codes, shown once; the old ones no longer work.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+            Cache-Control:
+              $ref: '#/components/headers/NoStore'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecoveryCodes'
+              examples:
+                recoveryCodes:
+                  $ref: '#/components/examples/RecoveryCodes'
+        '401':
+          $ref: '#/components/responses/StepUpUnauthorized'
+        '403':
+          $ref: '#/components/responses/StepUpForbidden'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /v1/me/sessions:
+    get:
+      operationId: listSessions
+      summary: List the account's active sessions
+      description: >-
+        One entry per active refresh family, portal and platform admin, newest first, with the user agent and IP of
+        the sign-in and the last use. `current` marks the family of the calling access token.
+      tags:
+        - Account
+      security:
+        - portalBearer: []
+      x-scope: portal_unverified
+      x-error-codes:
+        - UNAUTHENTICATED
+        - TOKEN_EXPIRED
+        - RATE_LIMITED
+        - INTERNAL_ERROR
+      x-platform-tables:
+        - account_sessions
+      responses:
+        '200':
+          description: The active sessions.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccountSessionList'
+              example:
+                data:
+                  - familyId: asn_01JA2ZB4N8Q6R1T5V9X3Z7C2E6
+                    audience: portal
+                    userAgent: Mozilla/5.0 (Macintosh; Intel Mac OS X 14_6) AppleWebKit/605.1.15 Safari/605.1.15
+                    ipAddress: 203.0.113.24
+                    createdAt: '2026-10-12T08:14:03Z'
+                    lastUsedAt: '2026-10-14T07:52:41Z'
+                    current: true
+                  - familyId: asn_01J9XK2M5P8R3T6V1X4Z7B0D3F
+                    audience: portal
+                    userAgent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) Firefox/131.0
+                    ipAddress: 2001:db8::7
+                    createdAt: '2026-10-02T17:40:00Z'
+                    lastUsedAt: null
+                    current: false
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /v1/me/sessions/{familyId}:
+    delete:
+      operationId: revokeSession
+      summary: Revoke one session
+      description: >-
+        Revokes one refresh family of the account; its refresh token stops working at once. A family of another
+        account, or one already revoked, answers `404 NOT_FOUND`. Writes an audit row.
+      tags:
+        - Account
+      security:
+        - portalBearer: []
+      x-scope: portal_unverified
+      x-error-codes:
+        - VALIDATION_FAILED
+        - UNAUTHENTICATED
+        - TOKEN_EXPIRED
+        - NOT_FOUND
+        - RATE_LIMITED
+        - INTERNAL_ERROR
+      x-platform-tables:
+        - account_sessions
+        - platform_audit_log
+      parameters:
+        - name: familyId
+          in: path
+          required: true
+          description: The `familyId` of a session from `listSessions`.
+          schema:
+            $ref: '#/components/schemas/SessionFamilyId'
+      responses:
+        '204':
+          description: The session is revoked.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+        '400':
+          $ref: '#/components/responses/ValidationFailed'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /v1/plans:
+    get:
+      operationId: listPlans
+      summary: List the public plans
+      description: >-
+        The public, active plans in `sort_order`, for the pricing page and the create-OTA wizard. `checkoutAvailable`
+        says per billing interval whether the plan has a Stripe price, so Checkout can start; before M5 only the
+        `early_access` plan is offered and Checkout is never available.
+      tags:
+        - Plans
+      security: []
+      x-scope: public
+      x-error-codes:
+        - RATE_LIMITED
+        - INTERNAL_ERROR
+      x-platform-tables:
+        - plans
+      responses:
+        '200':
+          description: The public plans.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PlanList'
+              example:
+                data:
+                  - code: early_access
+                    name: Early access
+                    description: Free plan for OTAs created before paid plans open. Test mode only.
+                    monthlyPrice:
+                      amount: '0.00'
+                      currency: EUR
+                    annualPrice: null
+                    trialDays: 90
+                    limits:
+                      staffSeats: 5
+                      apiKeys: 10
+                      customDomains: 0
+                      liveMode: false
+                    features: {}
+                    checkoutAvailable:
+                      month: false
+                      year: false
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /internal/tls/ask:
+    get:
+      operationId: tlsAsk
+      summary: Decide whether Caddy may obtain a certificate for a host
+      description: >-
+        Caddy's on-demand TLS `ask` endpoint (ADR-0018, PADR-0004 item 6). Answers `200` with no body when the host is
+        `<key>.<STOREFRONT_BASE_DOMAIN>` of an OTA in `provisioning`, `active` or `suspended`, or a verified custom
+        storefront domain of an `active` OTA whose plan has `customDomains > 0` while the `custom_domains` switch is
+        on; `404` for every other host.
+
+
+        **Order.** First the host syntax (lower-cased, at most 253 characters, labels of 1–63 characters of `a-z`, `0-9`
+        and inner `-`, at least two labels, not an IP address): a malformed or missing host answers `404` before any
+        lookup and is never cached. That is why `domain` carries no schema constraint that would turn it into a `400`.
+        Then Redis `tlsask:<host>` (positive answers only, 60 seconds), then a bounded in-process cache of `404`s
+        (10 000 hosts, 60 seconds), then the database. Loopback only, without `X-Forwarded-For`; Caddy blocks
+        `/internal/*` on the public hosts.
+      tags:
+        - Internal
+      security: []
+      x-scope: internal
+      x-internal: true
+      x-error-codes:
+        - NOT_FOUND
+        - INTERNAL_ERROR
+      x-platform-tables:
+        - tenants
+        - tenant_domains
+        - plans
+      parameters:
+        - name: domain
+          in: query
+          required: false
+          description: >-
+            The host name of the TLS handshake (SNI), as Caddy sends it. Caddy always sends it; a missing or malformed
+            value answers `404`.
+          schema:
+            type: string
+          example: acme.ota.example.com
+      responses:
+        '200':
+          description: Caddy may obtain or renew a certificate for this host.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /health/live:
+    get:
+      operationId: healthLive
+      summary: Liveness of the API process
+      description: >-
+        `200 {status: "ok"}` while the process serves requests; it checks nothing else. Reachable on the public host
+        for the uptime monitor (Caddy answers `404` for every other `/health/*` path there). Writes no request log
+        line. The worker serves the same answer on `127.0.0.1:3101`.
+      tags:
+        - Internal
+      security: []
+      x-scope: public
+      x-internal: true
+      x-error-codes: []
+      x-platform-tables: []
+      responses:
+        '200':
+          description: The process is up.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+            Cache-Control:
+              $ref: '#/components/headers/NoStoreHealth'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthLive'
+              example:
+                status: ok
+  /health/ready:
+    get:
+      operationId: healthReady
+      summary: Readiness of the API process and its dependencies
+      description: >-
+        Runs `SELECT 1` on PostgreSQL and `PING` on Redis in parallel, each within 2 seconds, and answers `200` when
+        both are `ok`, otherwise `503` with `unavailable` and `down` for each failed dependency. The cause is logged,
+        never answered. `deploy.sh` and the on-VM checks poll it on `127.0.0.1:3100`; it is loopback only, without
+        `X-Forwarded-For` (`404` otherwise). Writes no request log line. The worker serves the same report on
+        `127.0.0.1:3101`.
+      tags:
+        - Internal
+      security: []
+      x-scope: internal
+      x-internal: true
+      x-error-codes:
+        - NOT_FOUND
+      x-platform-tables: []
+      responses:
+        '200':
+          description: Every dependency answers.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+            Cache-Control:
+              $ref: '#/components/headers/NoStoreHealth'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthReady'
+              example:
+                status: ok
+                checks:
+                  postgres: ok
+                  redis: ok
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          description: At least one dependency is down.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+            Cache-Control:
+              $ref: '#/components/headers/NoStoreHealth'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthReady'
+              example:
+                status: unavailable
+                checks:
+                  postgres: ok
+                  redis: down
+components:
+  securitySchemes:
+    portalBearer:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: >-
+        Portal access token: an EdDSA JWT for 15 minutes with `aud` `portal`, `sub` the account id, `sid` the refresh
+        family, `ev` (e-mail verified), `amr` and, after a TOTP verification, `mfa_at`. Issued by signIn, verifyMfa,
+        refreshSession and stepUp; sent only by the portal server.
+    adminBearer:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: >-
+        Platform admin access token: an EdDSA JWT for 15 minutes with `aud` `platform_admin`, issued only after the
+        password and a TOTP code, from a refresh family of 12 hours at most. Sent only by the platform admin server.
+        The guard re-reads `is_platform_admin` and the account status on every request.
+  headers:
+    X-Request-Id:
+      description: Request identifier; quote it to support.
+      schema:
+        type: string
+    ETag:
+      description: The resource version as a quoted string; send it back in `If-Match`.
+      schema:
+        type: string
+        pattern: ^"[0-9]+"$
+        examples:
+          - '"3"'
+    Retry-After:
+      description: Seconds to wait before retrying.
+      schema:
+        type: integer
+        minimum: 1
+    NoStore:
+      description: >-
+        Always `no-store`: the body carries a secret (tokens, the TOTP secret, recovery codes or a key shown once).
+        Never cached, and never stored for an idempotent replay.
+      schema:
+        type: string
+        const: no-store
+    NoStoreHealth:
+      description: 'Always `no-store`: health answers are never cached.'
+      schema:
+        type: string
+        const: no-store
+  parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: >-
+        Client-generated unique key (a UUID v4) that makes the request safe to retry for 24 hours. The same key with
+        another body answers `409 IDEMPOTENCY_KEY_REUSED`.
+      schema:
+        type: string
+        minLength: 16
+        maxLength: 128
+        pattern: ^[A-Za-z0-9_-]+$
+    IfMatch:
+      name: If-Match
+      in: header
+      required: true
+      description: The `ETag` of the version being changed; a stale version answers `412 PRECONDITION_FAILED`.
+      schema:
+        type: string
+        pattern: ^"[0-9]+"$
+      example: '"3"'
+    Cursor:
+      name: cursor
+      in: query
+      required: false
+      description: Opaque cursor from `page.nextCursor` of the previous page.
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 512
+    Limit:
+      name: limit
+      in: query
+      required: false
+      description: Page size.
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 200
+        default: 50
+    TenantId:
+      name: tenantId
+      in: path
+      required: true
+      description: The OTA; callers without an active membership get `404 NOT_FOUND`.
+      schema:
+        type: string
+        pattern: ^ten_[0-9A-HJKMNP-TV-Z]{26}$
+      example: ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F
+  responses:
+    ValidationFailed:
+      description: 'The request body, query or headers failed validation; see fieldErrors. Possible codes: VALIDATION_FAILED.'
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/X-Request-Id'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            VALIDATION_FAILED:
+              $ref: '#/components/examples/VALIDATION_FAILED'
+    Unauthenticated:
+      description: 'No valid portal access token was sent. Possible codes: UNAUTHENTICATED, TOKEN_EXPIRED.'
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/X-Request-Id'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            UNAUTHENTICATED:
+              $ref: '#/components/examples/UNAUTHENTICATED'
+            TOKEN_EXPIRED:
+              $ref: '#/components/examples/TOKEN_EXPIRED'
+    StepUpUnauthorized:
+      description: >-
+        No valid access token, or no TOTP step-up within the last 15 minutes (call stepUp, then retry). Possible codes:
+        UNAUTHENTICATED, TOKEN_EXPIRED, REAUTH_REQUIRED.
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/X-Request-Id'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            UNAUTHENTICATED:
+              $ref: '#/components/examples/UNAUTHENTICATED'
+            TOKEN_EXPIRED:
+              $ref: '#/components/examples/TOKEN_EXPIRED'
+            REAUTH_REQUIRED:
+              $ref: '#/components/examples/REAUTH_REQUIRED'
+    EmailNotVerified:
+      description: 'The account''s e-mail address is not verified yet. Possible codes: EMAIL_NOT_VERIFIED.'
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/X-Request-Id'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            EMAIL_NOT_VERIFIED:
+              $ref: '#/components/examples/EMAIL_NOT_VERIFIED'
+    StepUpForbidden:
+      description: >-
+        The e-mail address is not verified, or MFA is not enabled, so no step-up is possible. Possible codes:
+        EMAIL_NOT_VERIFIED, MFA_REQUIRED.
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/X-Request-Id'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            EMAIL_NOT_VERIFIED:
+              $ref: '#/components/examples/EMAIL_NOT_VERIFIED'
+            MFA_REQUIRED:
+              $ref: '#/components/examples/MFA_REQUIRED'
+    NotFound:
+      description: 'Not found, or not visible to the caller. Possible codes: NOT_FOUND.'
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/X-Request-Id'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            NOT_FOUND:
+              $ref: '#/components/examples/NOT_FOUND'
+    PasswordTooWeak:
+      description: 'The password breaks the password rules. Possible codes: PASSWORD_TOO_WEAK.'
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/X-Request-Id'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            PASSWORD_TOO_WEAK:
+              $ref: '#/components/examples/PASSWORD_TOO_WEAK'
+    RateLimited:
+      description: 'Too many requests; retry after `Retry-After` seconds. Possible codes: RATE_LIMITED.'
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/X-Request-Id'
+        Retry-After:
+          $ref: '#/components/headers/Retry-After'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            RATE_LIMITED:
+              $ref: '#/components/examples/RATE_LIMITED'
+    InternalError:
+      description: 'Unexpected error; quote the requestId to support. Possible codes: INTERNAL_ERROR.'
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/X-Request-Id'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            INTERNAL_ERROR:
+              $ref: '#/components/examples/INTERNAL_ERROR'
+  examples:
+    PortalSession:
+      summary: Signed in
+      value:
+        accessToken: >-
+          eyJhbGciOiJFZERTQSIsImtpZCI6InBsYXRmb3JtLTIwMjYtMTAifQ.eyJzdWIiOiJhY2NfMDFKQTJaOVc1SzdRM004TjRQNlIyVDBWMVgifQ.c2lnbmF0dXJl
+        accessTokenExpiresAt: '2026-10-14T08:29:03Z'
+        refreshToken: Rf5nW8qL2xK7vT4cB9mZ1pH6yD3sJ0aG8eU5iO2rQ4w
+        refreshTokenExpiresAt: '2026-10-21T08:14:03Z'
+        account:
+          id: acc_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+          email: anna.berg@example.com
+          emailVerified: true
+          fullName: Anna Berg
+          locale: en
+          timeZone: Europe/Oslo
+          mfaEnabled: true
+          mfaEnabledAt: '2026-10-03T09:12:44Z'
+          isPlatformAdmin: false
+          createdAt: '2026-10-01T10:02:17Z'
+          version: 3
+          memberships:
+            - membershipId: stf_01JA2ZA1C5E9G3J7K2M6P0R4T8
+              tenantId: ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F
+              tenantKey: acme
+              tenantName: Acme Travel
+              tenantStatus: active
+              role: owner
+          features:
+            stripeBilling: false
+            ownStripe: false
+            settlements: false
+            ownAmadeus: false
+            customDomains: false
+            liveSwitch: false
+    Account:
+      summary: An owner of one OTA
+      value:
+        id: acc_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+        email: anna.berg@example.com
+        emailVerified: true
+        fullName: Anna Berg
+        locale: en
+        timeZone: Europe/Oslo
+        mfaEnabled: true
+        mfaEnabledAt: '2026-10-03T09:12:44Z'
+        isPlatformAdmin: false
+        createdAt: '2026-10-01T10:02:17Z'
+        version: 3
+        memberships:
+          - membershipId: stf_01JA2ZA1C5E9G3J7K2M6P0R4T8
+            tenantId: ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F
+            tenantKey: acme
+            tenantName: Acme Travel
+            tenantStatus: active
+            role: owner
+        features:
+          stripeBilling: false
+          ownStripe: false
+          settlements: false
+          ownAmadeus: false
+          customDomains: false
+          liveSwitch: false
+    RecoveryCodes:
+      summary: Ten recovery codes, shown once
+      value:
+        recoveryCodes:
+          - 7KQ4-M2XP-9TRW-H5ZD
+          - B3NV-8QKE-1MZT-6RYC
+          - X0PD-4HWA-7GJS-2NKQ
+          - M9ER-5TCB-3VYX-8PHZ
+          - 2WKF-6NDQ-0RJM-4ATS
+          - J7YH-1BXC-9QPE-5MVK
+          - 4DZG-8RNW-2KTA-7XEB
+          - Q6MS-3PJV-5HCY-0DWR
+          - T1XE-7KAZ-4NBG-9SQM
+          - H8VC-2YRD-6WMP-3JKF
+    VALIDATION_FAILED:
+      summary: VALIDATION_FAILED
+      value:
+        error:
+          code: VALIDATION_FAILED
+          message: The request body, query or headers failed validation; see fieldErrors.
+          status: 400
+          requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+          fieldErrors:
+            - path: /email
+              code: format
+              message: Enter a valid e-mail address.
+    VERIFICATION_TOKEN_INVALID:
+      summary: VERIFICATION_TOKEN_INVALID
+      value:
+        error:
+          code: VERIFICATION_TOKEN_INVALID
+          message: The e-mail verification link is unknown, already used or expired.
+          status: 400
+          requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+    PASSWORD_RESET_TOKEN_INVALID:
+      summary: PASSWORD_RESET_TOKEN_INVALID
+      value:
+        error:
+          code: PASSWORD_RESET_TOKEN_INVALID
+          message: The password reset link is unknown, already used or expired.
+          status: 400
+          requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+    MFA_SETUP_EXPIRED:
+      summary: MFA_SETUP_EXPIRED
+      value:
+        error:
+          code: MFA_SETUP_EXPIRED
+          message: The pending two-factor set-up expired; start the set-up again.
+          status: 400
+          requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+    UNAUTHENTICATED:
+      summary: UNAUTHENTICATED
+      value:
+        error:
+          code: UNAUTHENTICATED
+          message: No valid access token was sent for an operation that needs one.
+          status: 401
+          requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+    TOKEN_EXPIRED:
+      summary: TOKEN_EXPIRED
+      value:
+        error:
+          code: TOKEN_EXPIRED
+          message: The access token expired; refresh the session.
+          status: 401
+          requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+    INVALID_CREDENTIALS:
+      summary: INVALID_CREDENTIALS
+      value:
+        error:
+          code: INVALID_CREDENTIALS
+          message: E-mail address or password is wrong.
+          status: 401
+          requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+    REFRESH_TOKEN_INVALID:
+      summary: REFRESH_TOKEN_INVALID
+      value:
+        error:
+          code: REFRESH_TOKEN_INVALID
+          message: The session expired or was revoked; sign in again.
+          status: 401
+          requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+    REFRESH_TOKEN_REUSED:
+      summary: REFRESH_TOKEN_REUSED
+      value:
+        error:
+          code: REFRESH_TOKEN_REUSED
+          message: The session was ended for safety because its refresh token was used twice; sign in again.
+          status: 401
+          requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+    MFA_CHALLENGE_INVALID:
+      summary: MFA_CHALLENGE_INVALID
+      value:
+        error:
+          code: MFA_CHALLENGE_INVALID
+          message: The two-factor sign-in expired or had too many attempts; sign in again.
+          status: 401
+          requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+    MFA_CODE_INVALID:
+      summary: MFA_CODE_INVALID
+      value:
+        error:
+          code: MFA_CODE_INVALID
+          message: The authentication code or recovery code is wrong.
+          status: 401
+          requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+    REAUTH_REQUIRED:
+      summary: REAUTH_REQUIRED
+      value:
+        error:
+          code: REAUTH_REQUIRED
+          message: This action needs a fresh code from your authenticator app.
+          status: 401
+          requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+    EMAIL_NOT_VERIFIED:
+      summary: EMAIL_NOT_VERIFIED
+      value:
+        error:
+          code: EMAIL_NOT_VERIFIED
+          message: Verify your e-mail address first.
+          status: 403
+          requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+    ACCOUNT_DISABLED:
+      summary: ACCOUNT_DISABLED
+      value:
+        error:
+          code: ACCOUNT_DISABLED
+          message: This account is disabled; contact Velexis support.
+          status: 403
+          requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+    MFA_REQUIRED:
+      summary: MFA_REQUIRED
+      value:
+        error:
+          code: MFA_REQUIRED
+          message: Turn on two-factor authentication first.
+          status: 403
+          requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+    NOT_FOUND:
+      summary: NOT_FOUND
+      value:
+        error:
+          code: NOT_FOUND
+          message: The resource does not exist or is not visible to the caller.
+          status: 404
+          requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+    MFA_ALREADY_ENABLED:
+      summary: MFA_ALREADY_ENABLED
+      value:
+        error:
+          code: MFA_ALREADY_ENABLED
+          message: Two-factor authentication is already on.
+          status: 409
+          requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+    PRECONDITION_FAILED:
+      summary: PRECONDITION_FAILED
+      value:
+        error:
+          code: PRECONDITION_FAILED
+          message: Someone else changed this in the meantime; reload and try again.
+          status: 412
+          requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+    PASSWORD_TOO_WEAK:
+      summary: PASSWORD_TOO_WEAK
+      value:
+        error:
+          code: PASSWORD_TOO_WEAK
+          message: The password needs at least 10 characters and must not be a common or breached password.
+          status: 422
+          requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+    CURRENT_PASSWORD_INCORRECT:
+      summary: CURRENT_PASSWORD_INCORRECT
+      value:
+        error:
+          code: CURRENT_PASSWORD_INCORRECT
+          message: The current password is wrong.
+          status: 422
+          requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+    ACCOUNT_LOCKED:
+      summary: ACCOUNT_LOCKED
+      value:
+        error:
+          code: ACCOUNT_LOCKED
+          message: Too many failed sign-ins; try again in a few minutes.
+          status: 423
+          requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+    RATE_LIMITED:
+      summary: RATE_LIMITED
+      value:
+        error:
+          code: RATE_LIMITED
+          message: Too many requests; try again after the time in Retry-After.
+          status: 429
+          requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+    INTERNAL_ERROR:
+      summary: INTERNAL_ERROR
+      value:
+        error:
+          code: INTERNAL_ERROR
+          message: Unexpected error; quote the requestId to support.
+          status: 500
+          requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+  schemas:
+    ErrorResponse:
+      type: object
+      description: The error envelope of every non-2xx answer, the same shape as in the OTA booking API (conventions §6).
+      additionalProperties: false
+      required:
+        - error
+      properties:
+        error:
+          $ref: '#/components/schemas/Error'
+    Error:
+      type: object
+      description: >-
+        One error. The OTA booking API's `Error` without its console-only `supplier` field, which the platform API
+        never sends (PADR-0009 item 6).
+      additionalProperties: false
+      required:
+        - code
+        - message
+        - status
+        - requestId
+      properties:
+        code:
+          type: string
+          pattern: ^[A-Z][A-Z0-9_]+$
+          description: Public error code (see x-error-catalogue).
+        message:
+          type: string
+          description: Human-readable message, safe to show; never echoes a submitted value.
+        status:
+          type: integer
+          description: HTTP status.
+        requestId:
+          type: string
+        details:
+          type: object
+          additionalProperties: true
+          description: >-
+            Code-specific structured details, for example `reason` for FORBIDDEN, CONFLICT and UNPROCESSABLE, `status`
+            for TENANT_NOT_ACTIVE, `limit` and `used` for PLAN_LIMIT_REACHED, `missing` for LIVE_PRECONDITIONS_UNMET,
+            `feature` for FEATURE_DISABLED and `provider` for PROVIDER_ERROR.
+        fieldErrors:
+          type: array
+          items:
+            $ref: '#/components/schemas/FieldError'
+    FieldError:
+      type: object
+      description: One failed field of a request.
+      additionalProperties: false
+      required:
+        - path
+        - code
+      properties:
+        path:
+          type: string
+          description: JSON pointer into the request.
+        code:
+          type: string
+        message:
+          type: string
+    Money:
+      type: object
+      description: An amount of money; `amount` is a decimal string, never a number (conventions §1).
+      additionalProperties: false
+      required:
+        - amount
+        - currency
+      properties:
+        amount:
+          type: string
+          pattern: ^-?[0-9]+(\.[0-9]{1,4})?$
+          examples:
+            - '49.00'
+        currency:
+          type: string
+          pattern: ^[A-Z]{3}$
+          examples:
+            - EUR
+    Page:
+      type: object
+      description: The page of a cursor-paginated list, next to its `data`.
+      additionalProperties: false
+      required:
+        - nextCursor
+        - limit
+      properties:
+        nextCursor:
+          type:
+            - string
+            - 'null'
+          description: Cursor of the next page for the `cursor` parameter; null on the last page.
+        limit:
+          type: integer
+          minimum: 1
+          maximum: 200
+          description: The page size used.
+    EmailAddress:
+      type: string
+      format: email
+      maxLength: 254
+      examples:
+        - anna.berg@example.com
+    Password:
+      type: string
+      description: >-
+        A password. The schema only bounds its length; the rules (at least 10 characters, not breached) are checked by
+        the service and answer `422 PASSWORD_TOO_WEAK`. Never logged, never echoed in an error.
+      minLength: 1
+      maxLength: 256
+      writeOnly: true
+    OpaqueToken:
+      type: string
+      description: An opaque single-use or refresh token as Velexis issued it; never logged.
+      minLength: 1
+      maxLength: 512
+    TotpCode:
+      type: string
+      description: The 6-digit code of the authenticator app.
+      pattern: ^[0-9]{6}$
+      examples:
+        - '492039'
+    Locale:
+      type: string
+      description: BCP 47 language tag of the portal UI.
+      maxLength: 35
+      pattern: ^[a-z]{2,3}(-[A-Za-z0-9]{2,8})*$
+      examples:
+        - en
+        - en-GB
+    TimeZone:
+      type: string
+      description: IANA time zone name.
+      minLength: 1
+      maxLength: 64
+      pattern: ^[A-Za-z][A-Za-z0-9_+-]*(/[A-Za-z0-9_+-]+)*$
+      examples:
+        - Europe/Oslo
+        - UTC
+    AccountId:
+      type: string
+      description: Account id (`acc_` + ULID).
+      pattern: ^acc_[0-9A-HJKMNP-TV-Z]{26}$
+      examples:
+        - acc_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+    SessionFamilyId:
+      type: string
+      description: Opaque id of a refresh family (one sign-in and its rotations).
+      minLength: 1
+      maxLength: 64
+      pattern: ^[A-Za-z0-9_-]+$
+      examples:
+        - asn_01JA2ZB4N8Q6R1T5V9X3Z7C2E6
+    TenantStatus:
+      type: string
+      description: >-
+        Lifecycle of an OTA: `provisioning` (created, schema not ready), `active`, `suspended`, `failed` (setup failed
+        or Checkout abandoned).
+      enum:
+        - provisioning
+        - active
+        - suspended
+        - failed
+    TenantRole:
+      type: string
+      description: Role of a member in an OTA (the role matrix of platform/docs/scope.md §1.2).
+      enum:
+        - owner
+        - admin
+        - agent
+        - finance
+        - viewer
+    SignUpRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - email
+        - password
+        - fullName
+        - acceptTerms
+        - termsVersion
+      properties:
+        email:
+          $ref: '#/components/schemas/EmailAddress'
+        password:
+          $ref: '#/components/schemas/Password'
+        fullName:
+          type: string
+          minLength: 1
+          maxLength: 200
+        acceptTerms:
+          type: boolean
+          const: true
+          description: The person accepts the terms of service and the privacy notice.
+        termsVersion:
+          type: string
+          minLength: 1
+          maxLength: 32
+          description: The version of the terms shown on the sign-up page.
+          examples:
+            - '2026-10-01'
+    SignUpAccepted:
+      type: object
+      additionalProperties: false
+      required:
+        - status
+      properties:
+        status:
+          type: string
+          const: verification_sent
+          description: Always `verification_sent`, whether or not the address was registered.
+    VerifyEmailRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - token
+      properties:
+        token:
+          $ref: '#/components/schemas/OpaqueToken'
+    EmailVerified:
+      type: object
+      additionalProperties: false
+      required:
+        - accountId
+        - email
+        - emailVerified
+      properties:
+        accountId:
+          $ref: '#/components/schemas/AccountId'
+        email:
+          $ref: '#/components/schemas/EmailAddress'
+        emailVerified:
+          type: boolean
+          const: true
+    ResendVerificationRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - email
+      properties:
+        email:
+          $ref: '#/components/schemas/EmailAddress'
+    SignInRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - email
+        - password
+      properties:
+        email:
+          $ref: '#/components/schemas/EmailAddress'
+        password:
+          $ref: '#/components/schemas/Password'
+    SignInResult:
+      description: A session when the account has no MFA, otherwise an MFA challenge for verifyMfa.
+      oneOf:
+        - $ref: '#/components/schemas/PortalSession'
+        - $ref: '#/components/schemas/MfaChallenge'
+    PortalSession:
+      type: object
+      description: >-
+        The tokens of a portal session and the account. Tokens appear only in these responses; the portal server keeps
+        them in httpOnly cookies and never hands them to browser JavaScript.
+      additionalProperties: false
+      required:
+        - accessToken
+        - accessTokenExpiresAt
+        - refreshToken
+        - refreshTokenExpiresAt
+        - account
+      properties:
+        accessToken:
+          type: string
+          description: The portal access token (EdDSA JWT, 15 minutes).
+        accessTokenExpiresAt:
+          type: string
+          format: date-time
+        refreshToken:
+          type: string
+          description: The opaque refresh token; single use, rotated by refreshSession.
+        refreshTokenExpiresAt:
+          type: string
+          format: date-time
+          description: When this refresh token stops working (idle expiry, never after the family's absolute end).
+        account:
+          $ref: '#/components/schemas/Account'
+    MfaChallenge:
+      type: object
+      description: The password was right and the account has MFA; send a code to verifyMfa.
+      additionalProperties: false
+      required:
+        - mfaRequired
+        - mfaChallengeToken
+        - expiresIn
+      properties:
+        mfaRequired:
+          type: boolean
+          const: true
+        mfaChallengeToken:
+          type: string
+          description: The challenge (5 minutes, 5 attempts).
+        expiresIn:
+          type: integer
+          minimum: 1
+          description: Seconds until the challenge expires (300).
+    VerifyMfaRequest:
+      description: The challenge token with either a TOTP code or one recovery code.
+      oneOf:
+        - $ref: '#/components/schemas/VerifyMfaWithCode'
+        - $ref: '#/components/schemas/VerifyMfaWithRecoveryCode'
+    VerifyMfaWithCode:
+      type: object
+      additionalProperties: false
+      required:
+        - mfaChallengeToken
+        - code
+      properties:
+        mfaChallengeToken:
+          $ref: '#/components/schemas/OpaqueToken'
+        code:
+          $ref: '#/components/schemas/TotpCode'
+    VerifyMfaWithRecoveryCode:
+      type: object
+      additionalProperties: false
+      required:
+        - mfaChallengeToken
+        - recoveryCode
+      properties:
+        mfaChallengeToken:
+          $ref: '#/components/schemas/OpaqueToken'
+        recoveryCode:
+          type: string
+          description: >-
+            One recovery code as shown (four groups of four Crockford base32 characters); upper or lower case, with or
+            without the dashes and spaces.
+          minLength: 16
+          maxLength: 24
+          pattern: ^[0-9A-Za-z -]+$
+    RefreshSessionRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - refreshToken
+      properties:
+        refreshToken:
+          $ref: '#/components/schemas/OpaqueToken'
+    SignOutRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - refreshToken
+      properties:
+        refreshToken:
+          $ref: '#/components/schemas/OpaqueToken'
+    PasswordResetRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - email
+      properties:
+        email:
+          $ref: '#/components/schemas/EmailAddress'
+    PasswordResetConfirmRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - token
+        - newPassword
+      properties:
+        token:
+          $ref: '#/components/schemas/OpaqueToken'
+        newPassword:
+          $ref: '#/components/schemas/Password'
+    TotpCodeRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - code
+      properties:
+        code:
+          $ref: '#/components/schemas/TotpCode'
+    Account:
+      type: object
+      description: The signed-in account with its memberships and the milestone switches.
+      additionalProperties: false
+      required:
+        - id
+        - email
+        - emailVerified
+        - fullName
+        - locale
+        - timeZone
+        - mfaEnabled
+        - mfaEnabledAt
+        - isPlatformAdmin
+        - createdAt
+        - version
+        - memberships
+        - features
+      properties:
+        id:
+          $ref: '#/components/schemas/AccountId'
+        email:
+          $ref: '#/components/schemas/EmailAddress'
+        emailVerified:
+          type: boolean
+        fullName:
+          type: string
+        locale:
+          $ref: '#/components/schemas/Locale'
+        timeZone:
+          $ref: '#/components/schemas/TimeZone'
+        mfaEnabled:
+          type: boolean
+        mfaEnabledAt:
+          type:
+            - string
+            - 'null'
+          format: date-time
+        isPlatformAdmin:
+          type: boolean
+        createdAt:
+          type: string
+          format: date-time
+        version:
+          type: integer
+          minimum: 1
+          description: Optimistic-locking version; the `ETag` of the response carries it.
+        memberships:
+          type: array
+          description: The active memberships, one per OTA.
+          items:
+            $ref: '#/components/schemas/AccountMembership'
+        features:
+          $ref: '#/components/schemas/MilestoneFeatures'
+    AccountMembership:
+      type: object
+      additionalProperties: false
+      required:
+        - membershipId
+        - tenantId
+        - tenantKey
+        - tenantName
+        - tenantStatus
+        - role
+      properties:
+        membershipId:
+          type: string
+          pattern: ^stf_[0-9A-HJKMNP-TV-Z]{26}$
+        tenantId:
+          type: string
+          pattern: ^ten_[0-9A-HJKMNP-TV-Z]{26}$
+        tenantKey:
+          type: string
+          pattern: ^[a-z][a-z0-9]{2,29}$
+          description: The OTA's key; its storefront host is `<key>.<STOREFRONT_BASE_DOMAIN>`.
+        tenantName:
+          type: string
+        tenantStatus:
+          $ref: '#/components/schemas/TenantStatus'
+        role:
+          $ref: '#/components/schemas/TenantRole'
+    MilestoneFeatures:
+      type: object
+      description: >-
+        The milestone switches of PADR-0015 (`FEATURE_*` of the platform backend). The portal and the admin hide what a
+        switch turns off; the backend refuses it with `403 FEATURE_DISABLED`.
+      additionalProperties: false
+      required:
+        - stripeBilling
+        - ownStripe
+        - settlements
+        - ownAmadeus
+        - customDomains
+        - liveSwitch
+      properties:
+        stripeBilling:
+          type: boolean
+        ownStripe:
+          type: boolean
+        settlements:
+          type: boolean
+        ownAmadeus:
+          type: boolean
+        customDomains:
+          type: boolean
+        liveSwitch:
+          type: boolean
+    UpdateMeRequest:
+      type: object
+      description: The fields to change; at least one.
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        fullName:
+          type: string
+          minLength: 1
+          maxLength: 200
+        locale:
+          $ref: '#/components/schemas/Locale'
+        timeZone:
+          $ref: '#/components/schemas/TimeZone'
+    ChangePasswordRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - currentPassword
+        - newPassword
+      properties:
+        currentPassword:
+          $ref: '#/components/schemas/Password'
+        newPassword:
+          $ref: '#/components/schemas/Password'
+    MfaSetup:
+      type: object
+      description: A pending TOTP secret, shown once; confirm it with enableMfa within `expiresIn` seconds.
+      additionalProperties: false
+      required:
+        - secret
+        - otpauthUrl
+        - expiresIn
+      properties:
+        secret:
+          type: string
+          description: The TOTP secret in base32, for manual entry.
+          pattern: ^[A-Z2-7]+=*$
+        otpauthUrl:
+          type: string
+          format: uri
+          pattern: ^otpauth://totp/
+          description: The `otpauth://` URI for the QR code.
+        expiresIn:
+          type: integer
+          minimum: 1
+          description: Seconds until the pending secret expires (600).
+    RecoveryCodes:
+      type: object
+      description: Ten single-use recovery codes, shown once; only their SHA-256 hashes are stored.
+      additionalProperties: false
+      required:
+        - recoveryCodes
+      properties:
+        recoveryCodes:
+          type: array
+          minItems: 10
+          maxItems: 10
+          items:
+            type: string
+            description: Four groups of four Crockford base32 characters (80 bits).
+            pattern: ^[0-9A-HJKMNP-TV-Z]{4}-[0-9A-HJKMNP-TV-Z]{4}-[0-9A-HJKMNP-TV-Z]{4}-[0-9A-HJKMNP-TV-Z]{4}$
+    AccountSession:
+      type: object
+      description: One active refresh family of the account.
+      additionalProperties: false
+      required:
+        - familyId
+        - audience
+        - userAgent
+        - ipAddress
+        - createdAt
+        - lastUsedAt
+        - current
+      properties:
+        familyId:
+          $ref: '#/components/schemas/SessionFamilyId'
+        audience:
+          type: string
+          enum:
+            - portal
+            - platform_admin
+          description: The surface the session signs in to.
+        userAgent:
+          type:
+            - string
+            - 'null'
+          maxLength: 512
+          description: The end user's browser at sign-in.
+        ipAddress:
+          type:
+            - string
+            - 'null'
+          maxLength: 45
+          description: The end user's IP address at sign-in (IPv4 or IPv6).
+        createdAt:
+          type: string
+          format: date-time
+          description: Sign-in time.
+        lastUsedAt:
+          type:
+            - string
+            - 'null'
+          format: date-time
+          description: Last refresh; null before the first one.
+        current:
+          type: boolean
+          description: True for the family of the calling access token.
+    AccountSessionList:
+      type: object
+      additionalProperties: false
+      required:
+        - data
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/AccountSession'
+    Plan:
+      type: object
+      description: A public, active plan.
+      additionalProperties: false
+      required:
+        - code
+        - name
+        - description
+        - monthlyPrice
+        - annualPrice
+        - trialDays
+        - limits
+        - features
+        - checkoutAvailable
+      properties:
+        code:
+          type: string
+          pattern: ^[a-z][a-z0-9_]{1,39}$
+          examples:
+            - early_access
+        name:
+          type: string
+        description:
+          type:
+            - string
+            - 'null'
+        monthlyPrice:
+          $ref: '#/components/schemas/Money'
+        annualPrice:
+          description: The yearly price, or null when the plan has no annual option.
+          oneOf:
+            - $ref: '#/components/schemas/Money'
+            - type: 'null'
+        trialDays:
+          type: integer
+          minimum: 0
+          maximum: 365
+          description: Free trial days on the first subscription of an OTA.
+        limits:
+          $ref: '#/components/schemas/PlanLimits'
+        features:
+          type: object
+          description: Feature flags the plan unlocks, by name.
+          additionalProperties:
+            type: boolean
+        checkoutAvailable:
+          type: object
+          description: Whether Stripe Checkout can start for each billing interval (the plan has a Stripe price for it).
+          additionalProperties: false
+          required:
+            - month
+            - year
+          properties:
+            month:
+              type: boolean
+            year:
+              type: boolean
+    PlanLimits:
+      type: object
+      description: The quotas of a plan.
+      additionalProperties: false
+      required:
+        - staffSeats
+        - apiKeys
+        - customDomains
+        - liveMode
+      properties:
+        staffSeats:
+          type: integer
+          minimum: 0
+          description: Active members plus pending invitations.
+        apiKeys:
+          type: integer
+          minimum: 0
+          description: API keys that are neither revoked nor expired.
+        customDomains:
+          type: integer
+          minimum: 0
+          description: Custom storefront domains; 0 means none.
+        liveMode:
+          type: boolean
+          description: Whether the OTA may go live.
+    PlanList:
+      type: object
+      additionalProperties: false
+      required:
+        - data
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Plan'
+    HealthLive:
+      type: object
+      additionalProperties: false
+      required:
+        - status
+      properties:
+        status:
+          type: string
+          const: ok
+    HealthReady:
+      type: object
+      description: >-
+        The readiness report. The age of the oldest waiting job per platform queue (ADR-0016, api-inventory-admin §9)
+        joins it as the optional `queues` once the platform queues exist; until then the report has no `queues`.
+      additionalProperties: false
+      required:
+        - status
+        - checks
+      properties:
+        status:
+          type: string
+          enum:
+            - ok
+            - unavailable
+        checks:
+          type: object
+          additionalProperties: false
+          required:
+            - postgres
+            - redis
+          properties:
+            postgres:
+              $ref: '#/components/schemas/DependencyStatus'
+            redis:
+              $ref: '#/components/schemas/DependencyStatus'
+        queues:
+          type: object
+          description: Seconds since the oldest waiting job of each platform queue was added; null when none waits.
+          additionalProperties:
+            type:
+              - integer
+              - 'null'
+            minimum: 0
+    DependencyStatus:
+      type: string
+      enum:
+        - ok
+        - down
+x-error-catalogue:
+  VALIDATION_FAILED:
+    status: 400
+    description: The request body, query or headers failed validation; see fieldErrors.
+  VERIFICATION_TOKEN_INVALID:
+    status: 400
+    description: The e-mail verification link is unknown, already used or expired.
+  PASSWORD_RESET_TOKEN_INVALID:
+    status: 400
+    description: The password reset link is unknown, already used or expired.
+  INVITATION_INVALID:
+    status: 400
+    description: The invitation is unknown, already used, revoked or expired.
+  CONNECT_STATE_INVALID:
+    status: 400
+    description: The Stripe connection request is unknown, already used or expired; start again.
+  MFA_SETUP_EXPIRED:
+    status: 400
+    description: The pending two-factor set-up expired; start the set-up again.
+  WEBHOOK_SIGNATURE_INVALID:
+    status: 400
+    description: The webhook signature could not be verified.
+  UNAUTHENTICATED:
+    status: 401
+    description: No valid access token was sent for an operation that needs one.
+  TOKEN_EXPIRED:
+    status: 401
+    description: The access token expired; refresh the session.
+  INVALID_CREDENTIALS:
+    status: 401
+    description: E-mail address or password is wrong.
+  REFRESH_TOKEN_INVALID:
+    status: 401
+    description: The session expired or was revoked; sign in again.
+  REFRESH_TOKEN_REUSED:
+    status: 401
+    description: The session was ended for safety because its refresh token was used twice; sign in again.
+  MFA_CHALLENGE_INVALID:
+    status: 401
+    description: The two-factor sign-in expired or had too many attempts; sign in again.
+  MFA_CODE_INVALID:
+    status: 401
+    description: The authentication code or recovery code is wrong.
+  REAUTH_REQUIRED:
+    status: 401
+    description: This action needs a fresh code from your authenticator app.
+  FORBIDDEN:
+    status: 403
+    description: The caller is authenticated but not allowed to perform this operation on this resource.
+  EMAIL_NOT_VERIFIED:
+    status: 403
+    description: Verify your e-mail address first.
+  ACCOUNT_DISABLED:
+    status: 403
+    description: This account is disabled; contact Velexis support.
+  MFA_REQUIRED:
+    status: 403
+    description: Turn on two-factor authentication first.
+  INVITATION_EMAIL_MISMATCH:
+    status: 403
+    description: The invitation was sent to another e-mail address.
+  FEATURE_DISABLED:
+    status: 403
+    description: The feature is not available yet, or the plan does not include it.
+  NOT_FOUND:
+    status: 404
+    description: The resource does not exist or is not visible to the caller.
+  CONFLICT:
+    status: 409
+    description: The request conflicts with the current state of the resource.
+  IDEMPOTENCY_KEY_REUSED:
+    status: 409
+    description: The Idempotency-Key was already used with a different request body.
+  TENANT_KEY_UNAVAILABLE:
+    status: 409
+    description: The OTA key is taken, reserved or was used before.
+  TENANT_NOT_ACTIVE:
+    status: 409
+    description: The OTA is not active; it is being set up, suspended or failed.
+  PROVISIONING_NOT_RETRYABLE:
+    status: 409
+    description: Only a failed setup can be retried.
+  LAST_OWNER:
+    status: 409
+    description: An OTA must keep at least one active owner.
+  ALREADY_MEMBER:
+    status: 409
+    description: The person is already a member of this OTA.
+  INVITATION_PENDING:
+    status: 409
+    description: An invitation for this e-mail address is already pending.
+  DOMAIN_TAKEN:
+    status: 409
+    description: The host name is used by another OTA.
+  DOMAIN_NOT_VERIFIED:
+    status: 409
+    description: Verify the domain first.
+  AMADEUS_OFFICE_UNAVAILABLE:
+    status: 409
+    description: The Amadeus office is not available, or no free office is left.
+  STRIPE_ACCOUNT_ALREADY_CONNECTED:
+    status: 409
+    description: The Stripe account is already connected to another OTA.
+  SETTLEMENT_STATE_INVALID:
+    status: 409
+    description: The statement does not allow this action in its current status.
+  MFA_ALREADY_ENABLED:
+    status: 409
+    description: Two-factor authentication is already on.
+  KEYS_ALREADY_REVEALED:
+    status: 410
+    description: The initial keys were already revealed, or the 24-hour window to reveal them passed.
+  PRECONDITION_FAILED:
+    status: 412
+    description: Someone else changed this in the meantime; reload and try again.
+  PASSWORD_TOO_WEAK:
+    status: 422
+    description: The password needs at least 10 characters and must not be a common or breached password.
+  CURRENT_PASSWORD_INCORRECT:
+    status: 422
+    description: The current password is wrong.
+  PLAN_NOT_AVAILABLE:
+    status: 422
+    description: The plan is not available with this billing interval.
+  PLAN_LIMIT_REACHED:
+    status: 422
+    description: The plan's limit is reached.
+  LIVE_MODE_NOT_ENABLED:
+    status: 422
+    description: The OTA must be live first.
+  LIVE_PRECONDITIONS_UNMET:
+    status: 422
+    description: The OTA cannot go live yet; some requirements are missing.
+  DOMAIN_INVALID:
+    status: 422
+    description: Enter a valid public host name that does not belong to Velexis.
+  PAYOUT_ACCOUNT_REQUIRED:
+    status: 422
+    description: Live payments collected by Velexis need a verified payout account.
+  UNPROCESSABLE:
+    status: 422
+    description: The request breaks a business rule.
+  ACCOUNT_LOCKED:
+    status: 423
+    description: Too many failed sign-ins; try again in a few minutes.
+  RATE_LIMITED:
+    status: 429
+    description: Too many requests; try again after the time in Retry-After.
+  INTERNAL_ERROR:
+    status: 500
+    description: Unexpected error; quote the requestId to support.
+  PROVIDER_ERROR:
+    status: 502
+    description: An external service (Stripe, Amadeus or DNS) failed; try again later.
+  SERVICE_UNAVAILABLE:
+    status: 503
+    description: Velexis is temporarily unavailable; try again later.

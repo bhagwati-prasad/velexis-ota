@@ -148,7 +148,8 @@ Common commands: backend `pnpm --filter @velexis/platform-backend test`, `test:i
   - Type tests: the event union narrows on `name`; a `tenant.provisioned` without `schemaVersion` does not compile (`// @ts-expect-error`).
 - **Verify:** `pnpm --filter @velexis/api-types build && pnpm --filter @velexis/api-types test`
 
-### PBE-005 · Write the platform OpenAPI document with conventions, error catalogue, identity and plan operations
+### PBE-005 · Write the platform OpenAPI document with conventions, error catalogue, identity and plan operations ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-backend
 - **Milestone:** M1
 - **Depends on:** X-007, X-008, X-009

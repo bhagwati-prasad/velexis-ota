@@ -491,6 +491,9 @@ importers:
       '@types/node':
         specifier: 22.20.5
         version: 22.20.5
+      '@velexis/api-types':
+        specifier: workspace:*
+        version: link:../../packages/api-types
       '@velexis/testing':
         specifier: workspace:*
         version: link:../../packages/testing
@@ -503,6 +506,9 @@ importers:
       vitest:
         specifier: 3.2.7
         version: 3.2.7(@types/node@22.20.5)(happy-dom@17.6.3)(jiti@2.7.0)(lightningcss@1.30.2)(yaml@2.9.1)
+      yaml:
+        specifier: 2.9.1
+        version: 2.9.1
 
   platform/frontend:
     dependencies:

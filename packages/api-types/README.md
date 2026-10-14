@@ -10,7 +10,7 @@ Related: [`packages/README.md`](../README.md#velexisapi-types) (public API sketc
 |---|---|---|
 | `redocly.yaml` and `pnpm contracts:lint` | X-007 | Done (this page) |
 | Generated types, operations index, `./jobs` envelope, `pnpm contracts:generate`, `build` | [X-008](../../docs/mvp/plans/foundation-tasks.md) | Done (this page) |
-| Platform types and platform operations | PBE-005 and the later platform slices ([PADR-0016](../../platform/docs/adr/0016-contract-rollout-per-milestone-and-route-parity.md)) | An empty placeholder until the platform document exists (M1) |
+| Platform types and platform operations | PBE-005 and the later platform slices ([PADR-0016](../../platform/docs/adr/0016-contract-rollout-per-milestone-and-route-parity.md)) | PBE-005 slice generated (24 operations, [`platform/backend/openapi/README.md`](../../platform/backend/openapi/README.md)); the later slices add theirs |
 | Queue names, `tenant.*` messages, `vx:invalidate` events, `validateJob` in `./jobs` | PBE-004 (OTA queue names: OBE-002) | Not yet: `./jobs` has the envelope only |
 
 ## What is generated, and from where

@@ -25,6 +25,7 @@ platform/backend/
 ├── vitest.config.ts, vitest.int.config.ts       unit and integration tests, compiled by tsc (decorator metadata)
 ├── .env.example
 ├── openapi/
+│   ├── README.md                               slices, conventions, x- extensions, how to change it (PBE-005)
 │   └── velexis-platform-api.openapi.yaml       source of truth for every endpoint (ADR-0006)
 ├── migrations/
 │   ├── README.md                               naming, headers, expand/contract, how to run (X-012)
@@ -69,7 +70,7 @@ platform/backend/
     ├── builders/                   test data builders (accounts, tenants, plans, …)
     ├── fixtures/stripe/            signed Stripe event fixtures (Billing and Connect)
     ├── integration/<module>/*.int.test.ts
-    └── contract/                   route parity, jobs schemas, baseline checksums, error catalogue
+    └── contract/                   OpenAPI document and error catalogue, route parity, jobs schemas, baseline checksums
 ```
 
 There is no reference-data folder and no reference loader in this package. The vendored datasets and their loader live in `tools/reference-data` (`@velexis/reference-data`) and run through `pnpm db:seed:reference` with this backend's database role ([ADR-0024](../../docs/mvp/adr/0024-reference-data-sources-and-loader.md)). The backend owns the `reference` migrations and only reads the tables.
@@ -162,7 +163,7 @@ Run from the repository root (`pnpm --filter @velexis/platform-backend <script>`
 
 ## 7. OpenAPI document
 
-- Location: `openapi/velexis-platform-api.openapi.yaml` (OpenAPI 3.1), as [ADR-0006](../../docs/mvp/adr/0006-contract-first-openapi.md) names it. The first M1 backend task creates it from [`../docs/api-inventory.md`](../docs/api-inventory.md) and its two companion parts, with the error catalogue, `x-scope` on every operation and `x-internal: true` on webhooks and internal endpoints.
+- Location: `openapi/velexis-platform-api.openapi.yaml` (OpenAPI 3.1), as [ADR-0006](../../docs/mvp/adr/0006-contract-first-openapi.md) names it. The first M1 backend task (PBE-005) created it from [`../docs/api-inventory.md`](../docs/api-inventory.md) and its two companion parts, with the error catalogue, `x-scope` on every operation and `x-internal: true` on webhooks and internal endpoints. [`openapi/README.md`](openapi/README.md) explains its slices, conventions, extensions and contract test, and how to change it.
 - Every endpoint change starts in the document; `pnpm contracts:generate` updates the types; controllers bind to `operationId`s; the route parity test fails on drift.
 - Queue message contracts are not in this document: they live in `@velexis/api-types/jobs` ([`../docs/architecture.md`](../docs/architecture.md) §6.1).
 
