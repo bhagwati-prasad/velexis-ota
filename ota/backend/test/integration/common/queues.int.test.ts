@@ -23,7 +23,11 @@ import {
   OTA_QUEUE,
   otaWorkerOptions,
 } from "../../../src/common/queues/queue-names";
-import { QueuesModule } from "../../../src/common/queues/queues.module";
+import {
+  BULLMQ_STARTUP_SETTLE_MS,
+  QueuesModule,
+  settleBullmqStartup,
+} from "../../../src/common/queues/queues.module";
 import { redisKeys } from "../../../src/common/redis/redis.keys";
 import {
   REDIS_BULLMQ_CONNECTION,
@@ -305,5 +309,43 @@ describe("RedisModule shutdown", () => {
       [REDIS_CONNECTION_NAMES.bullmq, REDIS_CONNECTION_NAMES.commands].sort(),
     );
     expect(sink.text()).not.toContain(password);
+  });
+
+  it("closes right after the start, while the queues and the worker still connect, without an unhandled rejection", async () => {
+    const unhandled: unknown[] = [];
+    const record = (reason: unknown): void => void unhandled.push(reason);
+    process.on("unhandledRejection", record);
+    try {
+      for (const url of [redis.url, `redis://:dummy@127.0.0.1:${await freePort()}/0`]) {
+        sink = new MemorySink();
+        app = await startApp(url, sink);
+        const started = performance.now();
+
+        // BullMQ is still setting up its connections (OBE-005: BullmqStartupSettler waits for that first).
+        await app.close();
+        app = undefined;
+
+        expect(performance.now() - started).toBeLessThan(BULLMQ_STARTUP_SETTLE_MS + 1000);
+      }
+      // Late set-up failures would surface within a few event-loop turns of the close.
+      await new Promise((resolveWait) => setTimeout(resolveWait, 200));
+    } finally {
+      process.off("unhandledRejection", record);
+    }
+
+    expect(unhandled).toEqual([]);
+  });
+});
+
+describe("settleBullmqStartup", () => {
+  it("returns when every set-up has settled, rejected ones included, or after the time limit", async () => {
+    const ready = { waitUntilReady: () => Promise.resolve() };
+    const failing = { waitUntilReady: () => Promise.reject(new Error("WRONGPASS")) };
+    const hanging = { waitUntilReady: () => new Promise<void>(() => undefined) };
+
+    await expect(settleBullmqStartup([ready, failing], 60_000)).resolves.toBeUndefined();
+    const started = performance.now();
+    await expect(settleBullmqStartup([ready, hanging], 50)).resolves.toBeUndefined();
+    expect(performance.now() - started).toBeGreaterThanOrEqual(45);
   });
 });

@@ -18,6 +18,7 @@ import { defineConfig, env, loadDevEnvFiles } from "@velexis/config";
 import pg from "pg";
 import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
 import { runMigrateCli } from "../../src/cli/migrate.js";
+import { sql, type Kysely, type TenantDatabase } from "../../src/index.js";
 import {
   BASELINE_FILE,
   migrateTenants,
@@ -754,6 +755,207 @@ describe("migrateTenantSchema and migrate.js tenant on PostgreSQL", () => {
     });
     expect(await ledger("tenant_twice")).toHaveLength(1);
     expect(await ownersOf("tenant_twice")).toEqual([PROVISIONER]);
+  });
+});
+
+describe("migrateTenantSchema beforeCommit on PostgreSQL (OADR-0007 item 2)", () => {
+  interface TransactionFacts {
+    readonly role: string;
+    readonly search_path: string;
+    readonly lock_timeout: string;
+    readonly advisory_locks: number;
+    readonly xid: string;
+  }
+
+  /** What a beforeCommit callback records about the transaction it runs in. */
+  const transactionFacts = sql<TransactionFacts>`SELECT current_user::text AS role,
+    current_setting('search_path') AS search_path, current_setting('lock_timeout') AS lock_timeout,
+    (SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND pid = pg_backend_pid() AND granted)::int
+      AS advisory_locks,
+    pg_current_xact_id()::xid::text AS xid`;
+
+  /** The ids of the transactions that wrote the ledger rows of `schema`. */
+  async function ledgerXids(schema: string): Promise<string[]> {
+    const rows = await db.query<{ xid: string }>(
+      `SELECT DISTINCT xmin::text AS xid FROM ${pg.escapeIdentifier(schema)}.schema_migrations`,
+    );
+    return rows.map((row) => row.xid);
+  }
+
+  it("runs in the transaction of the files, after them and before COMMIT, as velexis_provisioner under the lock", async () => {
+    const seen: Array<{
+      created: boolean;
+      schema: string;
+      facts: TransactionFacts | undefined;
+      emails: string[];
+    }> = [];
+    const migrate = () =>
+      migrateTenantSchema({
+        schema: "tenant_hooked",
+        dir: TENANT_DIR,
+        url: db.provisionerUrl,
+        create: true,
+        beforeCommit: async ({ schema, created, db: trx }) => {
+          // The baseline's tables resolve unqualified through the transaction's search_path.
+          await trx
+            .insertInto("customers")
+            .values({
+              id: `cus_01J9ZK3V5Q8X2M4N6P7R9S1T${seen.length === 0 ? "4Y" : "5Z"}`,
+              email: `hook${seen.length}@example.com`,
+              first_name: "Hook",
+              last_name: "Seed",
+            })
+            .execute();
+          const { rows } = await transactionFacts.execute(trx);
+          const customers = await trx.selectFrom("customers").select("email").orderBy("email").execute();
+          seen.push({ created, schema, facts: rows[0], emails: customers.map((row) => row.email) });
+        },
+      });
+
+    const first = await migrate();
+
+    expect(first).toMatchObject({ created: true, upToDate: 0 });
+    expect(first.applied.map((event) => event.id)).toEqual(["0001_baseline"]);
+    expect(seen).toEqual([
+      {
+        created: true,
+        schema: "tenant_hooked",
+        facts: {
+          role: PROVISIONER,
+          search_path: "tenant_hooked, reference",
+          lock_timeout: "5s",
+          advisory_locks: 1,
+          xid: expect.stringMatching(/^\d+$/),
+        },
+        emails: ["hook0@example.com"],
+      },
+    ]);
+    // The baseline's ledger row was written by the transaction the callback ran in, and both committed.
+    expect(await ledgerXids("tenant_hooked")).toEqual([seen[0]?.facts?.xid]);
+    const committed = await asOtaApp(
+      "tenant_hooked",
+      async (client) => (await client.query("SELECT email FROM customers")).rows,
+    );
+    expect(committed).toEqual([{ email: "hook0@example.com" }]);
+
+    // A re-run applies nothing, still reaches the callback, and reports the schema as existing.
+    const second = await migrate();
+    expect(second).toMatchObject({ created: false, applied: [], upToDate: 1 });
+    expect(seen.map(({ created, emails }) => [created, emails])).toEqual([
+      [true, ["hook0@example.com"]],
+      [false, ["hook0@example.com", "hook1@example.com"]],
+    ]);
+    expect(await runnerSessions()).toBe(0);
+  });
+
+  it("rolls the whole transaction back when it throws: a schema being created does not exist, a pending file is not applied", async () => {
+    const crash = new Error("crash injected before COMMIT");
+    const failing = async ({ db: trx }: { db: Kysely<TenantDatabase> }): Promise<void> => {
+      await trx
+        .insertInto("customers")
+        .values({
+          id: "cus_01J9ZK3V5Q8X2M4N6P7R9S1T4Y",
+          email: "a@example.com",
+          first_name: "A",
+          last_name: "B",
+        })
+        .execute();
+      throw crash;
+    };
+    const dir = await tenantFolder({}, "repository");
+
+    await expect(
+      migrateTenantSchema({
+        schema: "tenant_crashed",
+        dir,
+        url: db.provisionerUrl,
+        create: true,
+        beforeCommit: failing,
+      }),
+    ).rejects.toBe(crash);
+    expect(await schemaExists("tenant_crashed")).toBe(false);
+
+    // On an existing schema, the pending file goes with the rest: ledger and tables stay as they were.
+    await migrateTenantSchema({ schema: "tenant_crashed", dir, url: db.provisionerUrl, create: true });
+    const before = await ledger("tenant_crashed");
+    await writeFile(
+      join(dir, "0002_create_notes.sql"),
+      expand("Create the notes", "CREATE TABLE notes (id text);"),
+    );
+    const events: TenantMigrationFileEvent[] = [];
+    await expect(
+      migrateTenantSchema({
+        schema: "tenant_crashed",
+        dir,
+        url: db.provisionerUrl,
+        beforeCommit: failing,
+        onFile: (event) => events.push(event),
+      }),
+    ).rejects.toBe(crash);
+    expect(await ledger("tenant_crashed")).toEqual(before);
+    expect(await tablesOf("tenant_crashed")).not.toContain("notes");
+    expect(await db.query("SELECT count(*)::int AS customers FROM tenant_crashed.customers")).toEqual([
+      { customers: 0 },
+    ]);
+    // No applied event names the rolled-back file.
+    expect(events).toEqual([]);
+    expect(await runnerSessions()).toBe(0);
+  });
+
+  it("refuses transaction control from the callback, and the run then rolls back", async () => {
+    const refused: unknown[] = [];
+    await expect(
+      migrateTenantSchema({
+        schema: "tenant_control",
+        dir: await tenantFolder(),
+        url: db.provisionerUrl,
+        create: true,
+        beforeCommit: async ({ db: trx }) => {
+          refused.push(
+            await trx
+              .transaction()
+              .execute(() => Promise.resolve())
+              .catch((error: unknown) => error),
+          );
+          await sql`COMMIT`.execute(trx);
+        },
+      }),
+    ).rejects.toThrow(/BEGIN, COMMIT, ROLLBACK and the other transaction statements are refused/);
+    expect(refused).toEqual([expect.objectContaining({ name: "TypeError" })]);
+    expect(await schemaExists("tenant_control")).toBe(false);
+  });
+
+  it("runs once, in the last transaction, after a no-transaction file and the files after it", async () => {
+    const order: string[] = [];
+    const dir = await tenantFolder({
+      [LOYALTY_FILE]: LOYALTY_SQL,
+      [LOYALTY_INDEX_FILE]: LOYALTY_INDEX_SQL,
+      "0004_create_notes.sql": expand("Create the notes", "CREATE TABLE notes (id text);"),
+    });
+
+    const result = await migrateTenantSchema({
+      schema: "tenant_segments",
+      dir,
+      url: db.provisionerUrl,
+      create: true,
+      onFile: (event) => order.push(event.id),
+      beforeCommit: async ({ created, db: trx }) => {
+        const { rows } = await sql<{
+          notes: string | null;
+        }>`SELECT to_regclass('notes')::text AS notes`.execute(trx);
+        order.push(`beforeCommit created=${String(created)} notes=${String(rows[0]?.notes)}`);
+      },
+    });
+
+    expect(result.created).toBe(true);
+    // Events are emitted after each transaction commits; the callback runs before the last COMMIT.
+    expect(order).toEqual([
+      "0001_baseline",
+      "0002_add_loyalty_cards",
+      "0003_index_loyalty_cards",
+      "beforeCommit created=true notes=notes",
+      "0004_create_notes",
+    ]);
   });
 });
 

@@ -67,6 +67,7 @@ export {
   TenantSchemaError,
   type MigrateTenantSchemaOptions,
   type MigrateTenantSchemaResult,
+  type TenantBeforeCommitContext,
   type TenantMigrationFileEvent,
   type TenantSchemaProblem,
 } from "./tenant-schema.js";

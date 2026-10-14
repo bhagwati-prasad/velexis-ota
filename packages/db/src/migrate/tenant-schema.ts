@@ -2,9 +2,13 @@
 // one transaction per schema as velexis_provisioner, under an advisory lock on the schema name, with the
 // search_path set for the transaction only. With `create: true` it is the `create_schema` + `run_migrations` step
 // of OTA provisioning: the schema, its grants for velexis_ota_app and every file commit together or not at all.
+// `beforeCommit` lets the OTA worker add its `seed_defaults` step to that same transaction (OADR-0007 item 2).
 import { performance } from "node:perf_hooks";
+import { Kysely, PostgresDialect, type PostgresPoolClient } from "kysely";
 import pg from "pg";
+import type { TenantDatabase } from "../generated/tenant.js";
 import { assertTenantSchema } from "../tenant-schema.js";
+import { createTypeParsers } from "../type-parsers.js";
 import {
   MIGRATE_EXIT_CODES,
   MigrationError,
@@ -83,6 +87,30 @@ export interface MigrateTenantSchemaOptions {
   readonly create?: boolean | undefined;
   /** Called for every file applied, failed or changed, after its transaction committed or failed. */
   readonly onFile?: ((event: TenantMigrationFileEvent) => void) | undefined;
+  /**
+   * Runs in the schema's last transaction, after the grants and every pending file with its ledger row, right before
+   * `COMMIT` (OADR-0007 item 2: OTA provisioning seeds the schema here). It also runs when nothing is pending, so a
+   * re-run reaches it again. It gets the runner's connection as `db`, with the transaction's role, timeouts,
+   * advisory lock and `search_path`. When it throws, the transaction is rolled back (a schema it was creating
+   * included) and its error is rethrown as it is. Not called when the folder does not exist or the run failed before.
+   */
+  readonly beforeCommit?: ((context: TenantBeforeCommitContext) => Promise<void>) | undefined;
+}
+
+/** What `beforeCommit` gets: the runner's open transaction on the tenant schema. */
+export interface TenantBeforeCommitContext {
+  /** The tenant schema, e.g. `tenant_acme`. */
+  readonly schema: string;
+  /** True when this run created the schema (`create: true` on a schema that did not exist). */
+  readonly created: boolean;
+  /**
+   * Kysely on the runner's connection, inside the transaction: tenant tables resolve unqualified through its
+   * `search_path` (`schema, reference`), as in `tenantTx`, and rows are parsed as `createPool` parses them. The
+   * runner owns the transaction: `transaction()`, `startTransaction()` and any `BEGIN`, `COMMIT`, `ROLLBACK` (or
+   * `END`, `ABORT`, `PREPARE TRANSACTION`) are refused with a `TypeError`; savepoints are fine. `destroy()` leaves
+   * the connection open.
+   */
+  readonly db: Kysely<TenantDatabase>;
 }
 
 export interface MigrateTenantSchemaResult {
@@ -205,6 +233,51 @@ async function rollback(client: Queryable): Promise<void> {
 }
 
 /**
+ * Statements that would end the runner's transaction or open another: after leading comments, `BEGIN`,
+ * `START TRANSACTION`, `COMMIT` (also `COMMIT PREPARED`), `END`, `ABORT`, `PREPARE TRANSACTION` and `ROLLBACK`
+ * (also `ROLLBACK PREPARED`), but not `ROLLBACK [WORK | TRANSACTION] TO [SAVEPOINT]`. Inside a transaction
+ * PostgreSQL only warns about a second `BEGIN`, and an early `COMMIT` or `ROLLBACK` would let the runner report files
+ * that did not commit with the rest.
+ */
+export const TRANSACTION_CONTROL_STATEMENT =
+  /^(?:\s|--[^\n]*(?:\n|$)|\/\*[\s\S]*?\*\/)*(?:begin|start\s+transaction|commit|end|abort|prepare\s+transaction|rollback(?!\s+(?:(?:work|transaction)\s+)?to\b))\b/i;
+
+/**
+ * Kysely on `client`, a connection already inside the runner's transaction: the pool of its dialect hands out that
+ * one connection and never ends it. Every statement goes through the extended query protocol, which takes one
+ * statement per query, and transaction control (`TRANSACTION_CONTROL_STATEMENT`) is refused with a `TypeError`
+ * before it is sent, so the callback can neither commit, roll back nor nest the transaction.
+ */
+export function transactionKysely<DB>(client: Queryable): Kysely<DB> {
+  const query = (text: unknown, parameters?: readonly unknown[]): Promise<pg.QueryResult> => {
+    if (typeof text !== "string") {
+      return Promise.reject(new TypeError("beforeCommit: streaming with a cursor is not supported"));
+    }
+    if (TRANSACTION_CONTROL_STATEMENT.test(text)) {
+      return Promise.reject(
+        new TypeError(
+          "beforeCommit runs inside the migration runner's transaction: BEGIN, COMMIT, ROLLBACK and the other " +
+            "transaction statements are refused (savepoints are fine)",
+        ),
+      );
+    }
+    // `queryMode` is a pg option that @types/pg does not declare.
+    const config: pg.QueryConfig & { readonly queryMode: "extended" } = {
+      text,
+      values: [...(parameters ?? [])],
+      queryMode: "extended",
+    };
+    return client.query(config);
+  };
+  const connection = { query, release: () => undefined } as unknown as PostgresPoolClient;
+  return new Kysely<DB>({
+    dialect: new PostgresDialect({
+      pool: { connect: () => Promise.resolve(connection), end: () => Promise.resolve() },
+    }),
+  });
+}
+
+/**
  * Opens a tenant transaction: `SET LOCAL ROLE velexis_provisioner`, `SET LOCAL lock_timeout = '5s'`,
  * `SET LOCAL statement_timeout = '10min'`, `pg_advisory_xact_lock(hashtext(schema))`, then
  * `set_config('search_path', schema || ', reference', true)`. The schema name is a bound parameter.
@@ -279,19 +352,30 @@ interface SegmentResult {
   readonly next: MigrationFile | undefined;
 }
 
+/** The callbacks of a run and whether an earlier transaction of it created the schema. */
+interface SegmentHooks {
+  readonly onFile: MigrateTenantSchemaOptions["onFile"];
+  readonly beforeCommit: MigrateTenantSchemaOptions["beforeCommit"];
+  /** True when an earlier transaction of this run created the schema (`beforeCommit` reports it). */
+  readonly createdEarlier: boolean;
+}
+
 /**
  * One tenant transaction: checks the schema (with `create`, creates it), grants `velexis_ota_app` its privileges
  * (with `create`, or on a schema without a ledger), verifies the checksums, then applies the pending numbered files
- * up to the first `no-transaction` file and records each in the schema's own ledger. The baseline creates that ledger, so its row is written right after it runs. Events are emitted after
- * `COMMIT`, so an `applied` event never names a file that was rolled back.
+ * up to the first `no-transaction` file and records each in the schema's own ledger. The baseline creates that
+ * ledger, so its row is written right after it runs. When no `no-transaction` file follows, this is the run's last
+ * transaction and `beforeCommit` runs before `COMMIT`. Events are emitted after `COMMIT`, so an `applied` event
+ * never names a file that was rolled back.
  */
 async function runTenantTransaction(
   client: Queryable,
   files: MigrationFiles,
   schema: string,
   create: boolean,
-  onFile: MigrateTenantSchemaOptions["onFile"],
+  hooks: SegmentHooks,
 ): Promise<SegmentResult> {
+  const { onFile, beforeCommit } = hooks;
   const identifier = pg.escapeIdentifier(schema);
   await beginTenantTransaction(client, schema);
   let created = false;
@@ -364,6 +448,18 @@ async function runTenantTransaction(
       throw new TenantMigrationFailedError(schema, file, failure, error);
     }
     applied.push(event(schema, file, "applied", { executionMs }));
+  }
+  if (next === undefined && beforeCommit !== undefined) {
+    try {
+      await beforeCommit({
+        schema,
+        created: created || hooks.createdEarlier,
+        db: transactionKysely<TenantDatabase>(client),
+      });
+    } catch (error) {
+      await rollback(client);
+      throw error;
+    }
   }
   try {
     await client.query("COMMIT");
@@ -439,7 +535,7 @@ export async function migrateTenantSchemaFiles(
   files: MigrationFiles,
   options: Omit<MigrateTenantSchemaOptions, "dir">,
 ): Promise<MigrateTenantSchemaResult> {
-  const { schema, url, onFile } = options;
+  const { schema, url, onFile, beforeCommit } = options;
   const create = options.create === true;
   assertTenantSchema(schema);
   if (files.set !== "tenant") {
@@ -462,12 +558,21 @@ export async function migrateTenantSchemaFiles(
     });
   }
 
-  const client = new pg.Client({ connectionString: url, application_name: "velexis-migrate-tenant" });
+  // The pools' type parsers, so `beforeCommit` reads rows as the apps do (numeric[] as strings, for example).
+  const client = new pg.Client({
+    connectionString: url,
+    application_name: "velexis-migrate-tenant",
+    types: createTypeParsers(),
+  });
   // A connection dropped between queries emits 'error'; the next query rejects, so only keep it from crashing.
   client.on("error", () => undefined);
   await client.connect();
   try {
-    const first = await runTenantTransaction(client, files, schema, create, onFile);
+    const first = await runTenantTransaction(client, files, schema, create, {
+      onFile,
+      beforeCommit,
+      createdEarlier: false,
+    });
     const applied: TenantMigrationFileEvent[] = [...first.applied];
     let next = first.next;
     while (next !== undefined) {
@@ -488,7 +593,11 @@ export async function migrateTenantSchemaFiles(
       }
       // The files after it run in a new transaction, which finds the schema and re-reads the ledger under the
       // lock; only the first transaction creates the schema and grants.
-      const segment = await runTenantTransaction(client, files, schema, false, onFile);
+      const segment = await runTenantTransaction(client, files, schema, false, {
+        onFile,
+        beforeCommit,
+        createdEarlier: first.created,
+      });
       applied.push(...segment.applied);
       next = segment.next;
     }
@@ -520,10 +629,12 @@ export async function migrateTenantSchemaFiles(
  *    DML on every table and default privileges for later tables and sequences. An empty orphan schema of the
  *    provisioner (no ledger) gets the same grants with or without `create`, as its baseline is applied;
  * 4. verifies the checksums of the applied files (`TenantChecksumMismatchError`, exit code 2), applies the pending
- *    files and inserts their rows into the schema's own `schema_migrations`, then commits. A failing file rolls
- *    the whole transaction back (`TenantMigrationFailedError`, exit code 1), the new schema included;
+ *    files and inserts their rows into the schema's own `schema_migrations`, runs `beforeCommit` when given, then
+ *    commits. A failing file rolls the whole transaction back (`TenantMigrationFailedError`, exit code 1), the new
+ *    schema included, and so does an error thrown by `beforeCommit` (rethrown as it is);
  * 5. a `-- velexis:no-transaction` file ends the transaction: it runs on a dedicated connection with a session
- *    `search_path`, which is closed afterwards, and the remaining files continue in a new transaction.
+ *    `search_path`, which is closed afterwards, and the remaining files continue in a new transaction (where
+ *    `beforeCommit` then runs).
  *
  * Results are not mirrored to `platform.tenant_schema_migrations`: the OTA worker publishes them (PADR-0001).
  */

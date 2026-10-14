@@ -171,7 +171,8 @@ The OTA side of M1 is the provisioning worker (OF-11): the platform's `tenant.pr
   - With a template file present in a test fixture directory, one `notification_templates` row is seeded per key.
 - **Verify:** `pnpm --filter @velexis/ota-backend test:int -- provisioning`
 
-### OBE-005 · Implement the tenant.provision consumer in one migrator transaction
+### OBE-005 · Implement the tenant.provision consumer in one migrator transaction ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-backend
 - **Milestone:** M1
 - **Depends on:** OBE-002, OBE-003, OBE-004, X-013, X-015
