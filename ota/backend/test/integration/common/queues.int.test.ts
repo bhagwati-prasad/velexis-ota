@@ -11,7 +11,7 @@ import provisionFixture from "@velexis/api-types/fixtures/jobs/tenant-provision.
 import { bullmqJobId } from "@velexis/api-types/jobs";
 import { createLogger } from "@velexis/logger";
 import { useRedis, type TestRedis } from "@velexis/testing";
-import { UnrecoverableError, type Job, type Queue, type Worker } from "bullmq";
+import { Queue, UnrecoverableError, type Job, type Worker } from "bullmq";
 import type { Redis } from "ioredis";
 import { InjectPinoLogger, LoggerModule, Logger as NestPinoLogger, PinoLogger } from "nestjs-pino";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
@@ -30,6 +30,9 @@ import {
 } from "../../../src/common/queues/queues.module";
 import { redisKeys } from "../../../src/common/redis/redis.keys";
 import {
+  bullmqConnectionOptions,
+  closeRedisConnection,
+  createRedisConnection,
   REDIS_BULLMQ_CONNECTION,
   REDIS_CLIENT,
   REDIS_CONNECTION_NAMES,
@@ -334,6 +337,51 @@ describe("RedisModule shutdown", () => {
     }
 
     expect(unhandled).toEqual([]);
+  });
+
+  it("closes the BullMQ connection after a reconnection attempt in flight, without an unhandled rejection", async () => {
+    const unhandled: unknown[] = [];
+    const record = (reason: unknown): void => void unhandled.push(reason);
+    process.on("unhandledRejection", record);
+    const silent = { warn: (): void => undefined, info: (): void => undefined };
+    const connection = createRedisConnection(
+      `redis://:dummy@127.0.0.1:${await freePort()}/0`,
+      bullmqConnectionOptions(),
+      silent,
+    );
+    const reconnecting = new Promise<void>((resolveEvent) => connection.once("reconnecting", resolveEvent));
+    // Every queue of the process on the one connection; the first one connects it (lazyConnect).
+    const queues = OTA_BACKEND_QUEUES.map((name) => new Queue(name, { connection, prefix: BULLMQ_PREFIX }));
+    for (const opened of queues) {
+      opened.on("error", () => undefined);
+    }
+    const attempts: string[] = [];
+    let statusAfterClose: string;
+    try {
+      // Nothing listens on the port: the first attempt fails, and the reconnection starts 200 ms later.
+      await reconnecting;
+      while (connection.status !== "connecting") {
+        await new Promise((resolveTurn) => setImmediate(resolveTurn));
+      }
+      // As at shutdown: BullMQ closes the queues (which removes their listeners), then RedisModule the connection.
+      await Promise.all(queues.map((opened) => opened.close()));
+      expect(connection.status).toBe("connecting");
+
+      await closeRedisConnection(connection);
+
+      statusAfterClose = connection.status;
+      // Late rejections surface within a few event-loop turns. No reconnection follows: the next one would start
+      // 400 ms after the failed attempt.
+      connection.on("connecting", () => attempts.push("connecting"));
+      await new Promise((resolveWait) => setTimeout(resolveWait, 600));
+    } finally {
+      process.off("unhandledRejection", record);
+      connection.disconnect();
+    }
+
+    expect(unhandled).toEqual([]);
+    expect(statusAfterClose).toBe("reconnecting");
+    expect(attempts).toEqual([]);
   });
 });
 

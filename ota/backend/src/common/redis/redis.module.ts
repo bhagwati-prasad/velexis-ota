@@ -102,13 +102,51 @@ export function createRedisConnection(url: string, options: RedisOptions, logger
 const QUIT_TIMEOUT_MS = 2000;
 
 /**
+ * Resolves with the client's status when the connection attempt in flight has ended: the client is `ready`, waits to
+ * reconnect, or has ended. At most `CONNECT_TIMEOUT_MS` plus a margin: ioredis gives up an attempt that takes longer.
+ */
+async function attemptEnded(client: Redis): Promise<Redis["status"]> {
+  const events = ["ready", "reconnecting", "end"] as const;
+  let finish: () => void = ignore;
+  const ended = new Promise<void>((resolveAttempt) => {
+    finish = resolveAttempt;
+  });
+  const timer = setTimeout(finish, CONNECT_TIMEOUT_MS + 500);
+  for (const event of events) {
+    client.once(event, finish);
+  }
+  try {
+    await ended;
+  } finally {
+    clearTimeout(timer);
+    for (const event of events) {
+      client.off(event, finish);
+    }
+  }
+  return client.status;
+}
+
+/**
  * Closes a client. A ready connection gets `QUIT`, so pending replies are delivered first, for at most 2 s (a busy
  * BullMQ connection must not hold the shutdown); any other connection, or one that has not quit by then, is closed
  * at once: a client that never connected (`lazyConnect`) or that is waiting for an unreachable Redis has nothing to
  * deliver. No reconnection follows. (ioredis leaves a client that was waiting to reconnect in status `reconnecting`
  * without emitting `end`, but with no socket and no reconnection timer left.)
+ *
+ * A client with a connection attempt in flight (`connecting`, or `connect` during AUTH and the ready check) is
+ * closed when that attempt has ended. Closing it during the attempt would emit `end`, and BullMQ 5 rejects every
+ * queue or worker set-up that still waits on the shared connection with the outage's last error once it sees `end`.
+ * The queues and workers have closed by then and removed their listeners, so each rejection would be unhandled and
+ * stop the process (OBE-005; nine of them when the worker shuts down while Redis is unreachable and a reconnection
+ * is under way). An attempt that ends `ready` gets one event-loop turn first, so that the commands other listeners
+ * of `ready` send (BullMQ's version check) go out before `QUIT`.
  */
 export async function closeRedisConnection(client: Redis): Promise<void> {
+  if (client.status === "connecting" || client.status === "connect") {
+    if ((await attemptEnded(client)) === "ready") {
+      await new Promise((resolveTurn) => setImmediate(resolveTurn));
+    }
+  }
   if (client.status === "ready") {
     let timer: NodeJS.Timeout | undefined;
     const timeout = new Promise<void>((resolveTimeout) => {
