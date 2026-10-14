@@ -133,7 +133,8 @@ The OTA side of M1 is the provisioning worker (OF-11): the platform's `tenant.pr
   - `@velexis/api-types` tests still pass with the extended `OTA_QUEUES`.
 - **Verify:** `pnpm --filter @velexis/api-types test && pnpm --filter @velexis/ota-backend test && pnpm --filter @velexis/ota-backend test:int -- common`
 
-### OBE-003 · Add the read-only platform repository for tenants
+### OBE-003 · Add the read-only platform repository for tenants ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-backend
 - **Milestone:** M1
 - **Depends on:** OBE-001, X-014, PBE-002
