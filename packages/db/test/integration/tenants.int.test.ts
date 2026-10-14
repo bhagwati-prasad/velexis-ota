@@ -148,9 +148,30 @@ const liveDatabases = new Set<string>();
 /** Every setup started by beforeAll or beforeEach; afterAll waits for them to settle before it drops. */
 const setups: Promise<unknown>[] = [];
 
+/** How often dropDatabase tries; the pause before retry n is n times DROP_RETRY_DELAY_MS (4.5 s in all). */
+const DROP_ATTEMPTS = 10;
+const DROP_RETRY_DELAY_MS = 100;
+
+/**
+ * DROP DATABASE … WITH (FORCE), retried while a session that velexis_test_admin may not terminate is on the
+ * database (42501): an autovacuum worker, which visits the template during the file's run, or an app role's session
+ * that is still exiting; or while a session did not exit in time (55006). Both end by themselves, as in
+ * @velexis/testing's dropDatabase.
+ */
 async function dropDatabase(admin: string, name: string): Promise<void> {
   await withClient(admin, async (client) => {
-    await client.query(`DROP DATABASE IF EXISTS ${pg.escapeIdentifier(name)} WITH (FORCE)`);
+    for (let attempt = 1; ; attempt += 1) {
+      try {
+        await client.query(`DROP DATABASE IF EXISTS ${pg.escapeIdentifier(name)} WITH (FORCE)`);
+        return;
+      } catch (error) {
+        const code = (error as { code?: unknown }).code;
+        if (attempt >= DROP_ATTEMPTS || (code !== "42501" && code !== "55006")) {
+          throw error;
+        }
+      }
+      await new Promise((resolveWait) => setTimeout(resolveWait, DROP_RETRY_DELAY_MS * attempt));
+    }
   });
   liveDatabases.delete(name);
 }
