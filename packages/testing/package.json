@@ -2,7 +2,7 @@
   "name": "@velexis/testing",
   "version": "0.0.0",
   "private": true,
-  "description": "Test support only, never a runtime dependency (ADR-0022): migrated template databases cloned per test file, per-worker Redis databases, FakeClock, builders and OpenAPI response checks with Ajv.",
+  "description": "Test support only, never a runtime dependency (ADR-0022): migrated template databases cloned per test file, per-worker Redis databases, FakeClock, builders, OpenAPI response checks with Ajv and Mailpit helpers.",
   "license": "UNLICENSED",
   "type": "commonjs",
   "main": "./dist/index.js",
@@ -15,6 +15,10 @@
     "./vitest-global-setup": {
       "types": "./dist/vitest-global-setup.d.ts",
       "default": "./dist/vitest-global-setup.js"
+    },
+    "./mailpit": {
+      "types": "./dist/mailpit.d.ts",
+      "default": "./dist/mailpit.js"
     },
     "./package.json": "./package.json"
   },
@@ -46,7 +50,9 @@
   },
   "devDependencies": {
     "@types/node": "22.20.5",
+    "@types/nodemailer": "6.4.24",
     "@types/pg": "8.23.1",
+    "nodemailer": "6.10.1",
     "typescript": "5.6.3",
     "vitest": "3.2.7"
   }

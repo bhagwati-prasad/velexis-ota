@@ -782,8 +782,8 @@ Related: [`../decisions.md`](../decisions.md) (binding), [`../architecture.md`](
   - A delete with the VM's bucket key is refused by the bucket (human step, output in the PR).
 - **Verify:** `bash deploy/scripts/test/backup-restore.test.sh && shellcheck -S style deploy/scripts/backup.sh deploy/scripts/restore.sh`
 
-### X-025 · Add Mailpit helpers to @velexis/testing
-- **Status:** todo
+### X-025 · Add Mailpit helpers to @velexis/testing ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** foundation
 - **Milestone:** M1
 - **Depends on:** X-015

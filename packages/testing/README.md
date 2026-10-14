@@ -6,14 +6,15 @@ Shared test support for every package and app ([ADR-0022](../../docs/mvp/adr/002
 - **Redis**: one database per Vitest worker, emptied when a file starts;
 - **`FakeClock`**, the clock tests inject instead of the backends' `Clock`;
 - **`defineBuilder`**, typed factories for test rows and payloads;
-- **`expectResponseToMatch`**, the OpenAPI response check of every integration test that calls an endpoint ([ADR-0006](../../docs/mvp/adr/0006-contract-first-openapi.md)).
+- **`expectResponseToMatch`**, the OpenAPI response check of every integration test that calls an endpoint ([ADR-0006](../../docs/mvp/adr/0006-contract-first-openapi.md));
+- **Mailpit** (`@velexis/testing/mailpit`): `waitForMessage`, `uniqueEmail` and `extractLinks` over Mailpit's API, for the e-mails the code under test sends ([ADR-0015](../../docs/mvp/adr/0015-testing-strategy.md) "E-mail", [ADR-0017](../../docs/mvp/adr/0017-email-documents-storage.md)).
 
 > **devDependency only.** List `@velexis/testing` under `devDependencies`, never under `dependencies` or `peerDependencies` ([ADR-0022](../../docs/mvp/adr/0022-shared-test-support-package.md) item 2). [`tools/ci/check-package-json.mjs`](../../tools/ci/check-package-json.mjs) fails CI otherwise (X-019), and `pnpm deploy --prod` would leave it out of a release anyway. Nothing in an app's `src/` outside its tests may import it.
 
 | Part | Task | State |
 |---|---|---|
 | Test databases, Redis, `FakeClock`, builders, `expectResponseToMatch`, the Vitest global setup, [`deploy/postgres/schemas.sql`](../../deploy/postgres/schemas.sql) | [X-015](../../docs/mvp/plans/foundation-tasks.md) | Done (this page) |
-| `@velexis/testing/mailpit` | X-025 | Not yet |
+| `@velexis/testing/mailpit` | [X-025](../../docs/mvp/plans/foundation-tasks.md) | Done (this page) |
 | `@velexis/testing/amadeus` (starts `tools/amadeus-stub` in-process) | X-027 | Not yet |
 | `@velexis/testing/stripe` (signed webhook events) | X-028 | Not yet |
 
@@ -193,23 +194,71 @@ How it validates:
 
 **Known document issue:** the Amadeus schemas of the OTA document declare local date-times such as `2026-11-01T10:00:00` (no offset, as Amadeus sends them) as `format: date-time`, which RFC 3339 and ajv-formats reject. Twelve examples of the document fail for that reason (`getFlightOffer`, `priceFlightOffers`, `getPricedOffer`, `consoleFindBookingByRecordLocator`, `consoleListQueue`, …), and so will real responses with those fields. The fix belongs in the document, not in this check.
 
+## Mailpit: `@velexis/testing/mailpit`
+
+Development and CI send e-mail to [Mailpit](https://mailpit.axllent.org/) (SMTP on `127.0.0.1:1025`, UI and API on `:8025`; [`local-development.md`](../../docs/mvp/local-development.md) §4). Integration and end-to-end tests read what the code under test sent through Mailpit's API v1 at `MAILPIT_API_URL`, with `fetch` only ([ADR-0015](../../docs/mvp/adr/0015-testing-strategy.md) "E-mail"):
+
+```ts
+import { extractLinks, mailpit, uniqueEmail } from "@velexis/testing/mailpit";
+
+it("sends the verification e-mail", async () => {
+  const email = uniqueEmail("signup");                                  // signup+<uuid>@example.com
+  await request(app.server).post("/v1/auth/sign-up").send({ email, password });
+  const message = await mailpit.waitForMessage({ to: email, subject: /Verify/ });
+  const [link] = extractLinks(message).filter((url) => url.includes("/verify-email"));
+  expect(link).toBeDefined();
+});
+```
+
+**One recipient per test.** Test files run in parallel against one Mailpit, and other runs (another checkout, another agent, the end-to-end suite) may share it. Every test sends to its own `uniqueEmail(label)` address and looks for mail by that address only, so it never reads another test's e-mail. Nothing in a test empties Mailpit: `clear()` would delete the other files' mail while they wait for it.
+
+| Export | Does |
+|---|---|
+| `mailpit.waitForMessage({ to, subject, timeoutMs = 5000 })` (also exported as `waitForMessage`) | Checks Mailpit at once, then every 100 ms, until a message to `to` with `subject` is there, and returns the newest such message in full (`get`). No fixed sleep: it returns as soon as the message is there. After `timeoutMs` it throws a `MailpitTimeoutError` that lists the messages to `to` it did see (subject, time and ID; never the content) |
+| `mailpit.search({ to, subject })` | `GET /api/v1/search?query=…`: the matching messages (headers and a snippet), the newest first, at most 50 |
+| `mailpit.get(id)` | `GET /api/v1/message/{id}`: the whole message, with `Text` and `HTML` (Mailpit marks it read) |
+| `mailpit.clear()` | `DELETE /api/v1/messages`: **every** message in that Mailpit. For a manual reset or a suite that runs alone, never in a test file that runs next to others |
+| `uniqueEmail(label)` | `label+<uuid>@example.com`. The label (1 to 27 of `a-z`, `0-9`, `.`, `_`, `-`, starting and ending with a letter or a digit, no `..`; lower case, so a backend that lower-cases addresses keeps them equal) shows in Mailpit's UI what the address was for. `example.com` is reserved (RFC 2606) |
+| `extractLinks(message)` | The `href`s of the `<a>` elements of the HTML part (character references such as `&amp;` decoded), then the `http(s)` URLs of the text part (without the `.`, `,`, `)` … that end a sentence), each once, in that order |
+| `createMailpitClient({ apiUrl, fetch, timer })` | A client for another Mailpit; `fetch` and `timer` are for unit tests |
+
+How it matches:
+
+- **`to`** is a recipient in the To header, compared in full and case-insensitively. Mailpit's own `to:` search matches a substring (`to:a@example.com` also finds `aa@example.com`), so the client sends `to:"…"` to narrow the list and then keeps the exact matches. Cc and Bcc recipients are not searched; `waitForMessage` requires `to`. Each check of `waitForMessage` reads the newest 50 messages to `to` only, which a `uniqueEmail` address never exceeds.
+- **`subject`**: a string must equal the decoded subject; a `RegExp` must match it (the `g` and `y` flags are ignored, so a pattern reused across checks still matches). A string goes to Mailpit as `subject:"…"` (its longest part without a double quote); a `RegExp` is matched in the client only, so `search` needs `to` or a string `subject`.
+- Messages are `MailpitMessageSummary` (search) and `MailpitMessage` (get), with Mailpit's field names (`ID`, `MessageID`, `From`, `To`, `Subject`, `Created`, `Text`, `HTML`, …). The lists Mailpit sends as `null` when empty (`To`, `Cc`, `Bcc`, `ReplyTo`, `Tags`) are empty arrays.
+
+A timeout reads:
+
+```text
+waitForMessage: no message to signup+0d3c…@example.com with a subject matching /Verify/ arrived within 5000 ms (Mailpit at http://127.0.0.1:8025, 51 checks).
+Messages to that address it did see (1):
+  - "Welcome to Velexis", received 2026-10-14T06:37:57.896Z, ID ZVXC4iXLkfGYhmpVxh7K2w
+```
+
+Other failures throw a `MailpitError` that names the call and the cause: Mailpit not running (`ECONNREFUSED`, with a pointer to `local-development.md` §4), no answer within 5 s, an error status, or an answer that is not Mailpit's (`MAILPIT_API_URL` pointing at the SMTP port, for example). A user and password in `MAILPIT_API_URL` (Mailpit's `--ui-auth-file`) are sent as a Basic `Authorization` header and never appear in `apiUrl` or in an error; a path (`--webroot`) is kept.
+
+`waitForMessage` waits in real time: it keeps the real `setTimeout` and `performance.now` from when the module loads, so a test that turned on `vi.useFakeTimers()` does not stall it. Mailpit tags every message sent to a `+` address with the part after the `+` (plus-address tags); the UUID tags of `uniqueEmail` are harmless.
+
 ## Environment
 
 | Variable | Used by | From |
 |---|---|---|
 | `TEST_DATABASE_ADMIN_URL` | the global setup, `createTestDatabase`, `drop()` | the environment (CI services), else the `.env.local` files of the package under test and of the repository root (`loadDevEnvFiles`, never in production) |
 | `REDIS_URL` | `useRedis` | the same |
+| `MAILPIT_API_URL` | `mailpit` and `waitForMessage`, read on first use (`http://127.0.0.1:8025` in the root `.env.example`) | the same |
+| `SMTP_URL` | this package's Mailpit integration tests, which send with nodemailer (`smtp://127.0.0.1:1025`) | the same |
 | `VITEST_POOL_ID` | `useRedis` | set by Vitest in every worker |
 
-All are read through [`@velexis/config`](../config/README.md); values are never printed. Turborepo passes the first two through to `pnpm test:int` (`turbo.json`). The role passwords are not variables: see the table above.
+All are read through [`@velexis/config`](../config/README.md); values are never printed. Turborepo passes all but `VITEST_POOL_ID` through to `pnpm test:int` (`turbo.json`). The role passwords are not variables: see the table above.
 
 ## Commands
 
 | Command | Does |
 |---|---|
 | `pnpm --filter @velexis/testing build` | `tsc -b` to `dist/` |
-| `pnpm --filter @velexis/testing test` | Unit tests (no PostgreSQL or Redis): the response check on the OTA document and on fixtures, `schemas.sql`, roles, clock, builders, Redis indexes |
-| `pnpm --filter @velexis/testing test:int` | Integration tests on PostgreSQL 16 and Redis 7 (`vitest.int.config.ts`, with the package's own global setup) |
+| `pnpm --filter @velexis/testing test` | Unit tests (no PostgreSQL, Redis or Mailpit): the response check on the OTA document and on fixtures, `schemas.sql`, roles, clock, builders, Redis indexes, the Mailpit client against a fake Mailpit and a fake timer |
+| `pnpm --filter @velexis/testing test:int` | Integration tests on PostgreSQL 16, Redis 7 and Mailpit (`vitest.int.config.ts`, with the package's own global setup) |
 | `pnpm --filter @velexis/testing typecheck` / `lint` | `tsc --noEmit` (sources and `test/`) / ESLint |
 
 `turbo.json` gives this package's `test` task its own inputs (`@velexis/testing#test`): the OpenAPI documents, `redocly.yaml`, `deploy/postgres/*.sql`, the `.env.example` files and the migration folders, so a change there reruns the tests instead of replaying a cached pass.
@@ -226,6 +275,16 @@ All are read through [`@velexis/config`](../config/README.md); values are never 
 
 The integration config runs the files in parallel in at least two forked workers. The barrier waits at most 60 s for the other file, so run the two `test-database` files together (`pnpm test:int` does).
 
+## Tests of X-025
+
+| Acceptance criterion | Test |
+|---|---|
+| AC1: an integration test sends one e-mail with `nodemailer` to Mailpit and finds it with `waitForMessage` by recipient and subject regex, with its verification link extracted | [`mailpit.int.test.ts`](test/integration/mailpit.int.test.ts) `finds an e-mail sent with nodemailer by recipient and subject regex, with its link`: nodemailer to `SMTP_URL`, `waitForMessage({ to: uniqueEmail("verify"), subject: /^Verify your e-mail/ })` returns the e-mail with nodemailer's Message-ID, and `extractLinks` gives the link of the HTML and text parts once; `search` and `get` find the same e-mail |
+| AC2: `waitForMessage` for a recipient that never gets mail fails after the timeout with a readable message | [`mailpit.int.test.ts`](test/integration/mailpit.int.test.ts): `fails after the timeout with a readable message for a recipient that never gets mail` (a `MailpitTimeoutError` after 300 ms, not before, with the message above) and `lists the messages to the recipient that it did see when none has the subject`; [`mailpit.test.ts`](src/mailpit.test.ts) checks the exact message, the 100 ms polling, the default 5 s and the last wait cut to the deadline on a fake timer |
+| AC3: two parallel test files using `uniqueEmail` never see each other's messages | [`mailpit.int.test.ts`](test/integration/mailpit.int.test.ts) and [`mailpit-parallel.int.test.ts`](test/integration/mailpit-parallel.int.test.ts): each file sends to its own `uniqueEmail("parallel")` address with the **same** subject, waits until the other file's e-mail is in Mailpit too (the subject carries the run id, so Mailpit is the meeting point and the files provably run at the same time; [`mailpit-isolation.ts`](test/integration/mailpit-isolation.ts)), and then finds only its own e-mail by its address, with `waitForMessage` and `search` |
+
+The unit tests ([`mailpit.test.ts`](src/mailpit.test.ts)) also cover the exact recipient and subject matching over Mailpit's substring search, the query and path of each call, credentials and `--webroot` in the URL, the errors for a Mailpit that is down, slow or not Mailpit, `uniqueEmail`'s labels, `extractLinks` on every way of writing a link, `waitForMessage` under `vi.useFakeTimers()`, and the `./mailpit` export. Like the `test-database` files, run the two `mailpit` files together: each waits at most 60 s for the other (`pnpm test:int` does).
+
 ## Dependencies
 
 | Package | Version | Why |
@@ -236,3 +295,4 @@ The integration config runs the files in parallel in at least two forked workers
 | `ajv`, `ajv-formats` | 8.20.0, 3.0.1 | Response validation ([`tech-stack.md`](../../docs/mvp/tech-stack.md) §2, ADR-0006) |
 | `yaml` | 2.9.1 | Parsing the OpenAPI documents |
 | `vitest` | 3.2.7 (peer and dev) | `inject` for the template's name. A peer, so the test files and this package share one Vitest; it is ESM-only, so this CommonJS package loads it with `import()` |
+| `nodemailer`, `@types/nodemailer` | 6.10.1, 6.4.24 (dev) | Sending the e-mails of this package's Mailpit integration tests, as the backends send theirs ([`tech-stack.md`](../../docs/mvp/tech-stack.md): `nodemailer` 6.x). `@velexis/testing/mailpit` itself needs no library: Node's `fetch` |
