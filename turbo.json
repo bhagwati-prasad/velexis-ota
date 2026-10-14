@@ -51,6 +51,11 @@
       ],
       "outputs": ["coverage/**"]
     },
+    "@velexis/platform-backend#test": {
+      "dependsOn": ["^build"],
+      "inputs": ["$TURBO_DEFAULT$", "!.env*", "$TURBO_ROOT$/platform/docs/data-model-migration-0002*.md"],
+      "outputs": ["coverage/**"]
+    },
     "@velexis/testing#test": {
       "dependsOn": ["^build"],
       "inputs": [

@@ -93,7 +93,8 @@ Common commands: backend `pnpm --filter @velexis/platform-backend test`, `test:i
 
 ## M1 — Platform core
 
-### PBE-002 · Add migration 0002 with the MVP platform deltas
+### PBE-002 · Add migration 0002 with the MVP platform deltas ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-backend
 - **Milestone:** M1
 - **Depends on:** X-012, X-014, X-015, PBE-001

@@ -104,9 +104,10 @@ describe("createTestDatabase", () => {
       { name: "tenant_alpha", owner: "velexis_provisioner" },
       { name: "tenant_beta", owner: "velexis_provisioner" },
     ]);
-    // Every set was applied by the real runner: its ledger records the baseline (and the repeatable OTA grants).
+    // Every set was applied by the real runner: its ledger records the baseline (and the repeatable OTA grants), and
+    // the platform set the MVP deltas of migration 0002 (PBE-002).
     const ledgers: Record<string, string[]> = {
-      platform: ["0001_baseline", "R__ota_read_access"],
+      platform: ["0001_baseline", "0002_add_mvp_platform_deltas", "R__ota_read_access"],
       reference: ["0001_baseline"],
       tenant_alpha: ["0001_baseline"],
       tenant_beta: ["0001_baseline"],

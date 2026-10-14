@@ -1,5 +1,6 @@
-// Vitest for the platform backend (README §8): unit and contract tests next to the code (`src/**/*.test.ts`). The
-// integration tests (`test/integration`, PostgreSQL and Redis) run with vitest.int.config.ts through `pnpm test:int`.
+// Vitest for the platform backend (README §8): unit tests next to the code (`src/**/*.test.ts`) and contract tests
+// (`test/contract/**/*.test.ts`: migration files, route parity, …), none of which needs a service. The integration
+// tests (`test/integration`, PostgreSQL and Redis) run with vitest.int.config.ts through `pnpm test:int`.
 //
 // NestJS resolves constructor dependencies from TypeScript's decorator metadata (`emitDecoratorMetadata`). esbuild,
 // Vite's default TypeScript transform, does not emit it, so the plugin below compiles the package's TypeScript files
@@ -62,7 +63,7 @@ export default defineConfig({
   plugins: [typescriptWithDecoratorMetadata()],
   test: {
     name: "@velexis/platform-backend",
-    include: ["src/**/*.test.ts"],
+    include: ["src/**/*.test.ts", "test/contract/**/*.test.ts"],
     environment: "node",
     restoreMocks: true,
     unstubEnvs: true,

@@ -98,8 +98,10 @@ describe("the baseline migrations", () => {
     it(`the runner reads ${dir}: the baseline, phase expand, with the checksum of ${source} [X-012 AC1]`, async () => {
       const files = await readMigrationFiles(resolve(REPO, dir), set);
       expect(files.exists).toBe(true);
+      // The baseline comes first; the platform set continues with the MVP deltas of 0002 (PBE-002).
       expect(files.numbered.map((file) => [file.id, file.kind, file.phase, file.noTransaction])).toEqual([
         ["0001_baseline", "numbered", "expand", false],
+        ...(set === "platform" ? [["0002_add_mvp_platform_deltas", "numbered", "expand", false]] : []),
       ]);
       expect(files.numbered[0]?.checksum).toBe(sha256(await readFile(resolve(REFERENCE_DDL, source))));
       expect(files.repeatable.map((file) => [file.id, file.phase])).toEqual(

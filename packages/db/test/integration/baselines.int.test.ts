@@ -6,7 +6,9 @@
 // mirrored below; the statements after `\connect :db_name` (base schemas, USAGE, default privileges) are read
 // from bootstrap.sql itself and run as velexis_migrator. Then, in beforeAll:
 //   - the platform and reference sets are applied as `pnpm db:migrate` applies them: the commands of the
-//     `migrate` script of packages/db/package.json, through runMigrateCli, as velexis_migrator;
+//     `migrate` script of packages/db/package.json, through runMigrateCli, as velexis_migrator. The platform folder
+//     also holds 0002_add_mvp_platform_deltas.sql (PBE-002), so its 11 tables and its two OTA grants
+//     (amadeus_accounts, amadeus_offices) are expected next to the baseline's;
 //   - the tenant set is applied to tenant_alpha through the runner library (readMigrationFiles, recordMigration)
 //     in one provisioning transaction as velexis_provisioner (db README §3; migrateTenantSchema of X-013 replaces
 //     this helper);
@@ -49,6 +51,30 @@ const OTA_READABLE_TABLES = [
   "tenant_memberships",
   "tenants",
 ];
+/**
+ * What migration 0002 (PBE-002) changes here: the tables it creates (platform/docs/data-model.md §3), the two of them
+ * it grants to velexis_ota_app itself (the rest of ADR-0004's list, "the shared Amadeus account tables of ADR-0012";
+ * data-model.md §4.8), and the append-only audit log.
+ */
+const MIGRATION_0002 = {
+  file: "0002_add_mvp_platform_deltas.sql",
+  tables: [
+    "account_recovery_codes",
+    "account_tokens",
+    "amadeus_accounts",
+    "amadeus_offices",
+    "billing_customers",
+    "credential_submissions",
+    "email_outbox",
+    "settlement_lines",
+    "settlements",
+    "stripe_events",
+    "tenant_payout_accounts",
+  ],
+  otaReadableTables: ["amadeus_accounts", "amadeus_offices"],
+  /** Tables on which 0002 revokes UPDATE, DELETE and TRUNCATE from velexis_platform_app (data-model.md §4.7). */
+  appendOnlyTables: ["platform_audit_log"],
+};
 /** ADR-0004: the only platform.accounts columns velexis_ota_app may read, in table order. */
 const OTA_READABLE_ACCOUNT_COLUMNS = [
   "id",
@@ -345,10 +371,14 @@ async function tablesOf(schema: string): Promise<string[]> {
   return rows.map((row) => row.table);
 }
 
+/** The tables a DDL file creates, sorted (without the schema prefix). */
+function createdTables(ddl: string): string[] {
+  return [...ddl.matchAll(/^CREATE TABLE (?:[a-z]+\.)?([a-z_]+) \(/gm)].map((match) => match[1] ?? "").sort();
+}
+
 /** The tables a reference DDL file creates, sorted (without the schema prefix). */
 async function ddlTables(file: string): Promise<string[]> {
-  const ddl = await readFile(join(REFERENCE_DDL, file), "utf8");
-  return [...ddl.matchAll(/^CREATE TABLE (?:[a-z]+\.)?([a-z_]+) \(/gm)].map((match) => match[1] ?? "").sort();
+  return createdTables(await readFile(join(REFERENCE_DDL, file), "utf8"));
 }
 
 const denied = (table: string) => ({ code: "42501", message: `permission denied for table ${table}` });
@@ -359,7 +389,14 @@ describe("the baselines and the OTA read grants on PostgreSQL", () => {
     const referenceTables = await ddlTables("reference.sql");
     expect(platformTables).toHaveLength(16);
     expect(referenceTables).toHaveLength(7);
-    expect(await tablesOf("platform")).toEqual([...platformTables, "schema_migrations"].sort());
+    // The platform set continues with 0002 (PBE-002), which creates 11 more tables.
+    const migrationTables = createdTables(
+      await readFile(join(REPO, "platform/backend/migrations/platform", MIGRATION_0002.file), "utf8"),
+    );
+    expect(migrationTables).toEqual(MIGRATION_0002.tables);
+    expect(await tablesOf("platform")).toEqual(
+      [...platformTables, ...migrationTables, "schema_migrations"].sort(),
+    );
     expect(await tablesOf("reference")).toEqual([...referenceTables, "schema_migrations"].sort());
 
     for (const set of ["platform", "reference"] as const) {
@@ -436,8 +473,9 @@ describe("the baselines and the OTA read grants on PostgreSQL", () => {
     for (const table of OTA_READABLE_TABLES) {
       await expect(ota.query(`SELECT * FROM platform.${table}`)).resolves.toBeDefined();
     }
-    const { rows: plans } = await ota.query("SELECT code FROM platform.plans");
-    expect(plans).toEqual([{ code: "starter" }]);
+    // `early_access` is the plan migration 0002 seeds (PBE-002); `starter` was added in beforeAll.
+    const { rows: plans } = await ota.query("SELECT code FROM platform.plans ORDER BY code");
+    expect(plans).toEqual([{ code: "early_access" }, { code: "starter" }]);
     const { rows: tenants } = await ota.query("SELECT key, schema_name, status FROM platform.tenants");
     expect(tenants).toEqual([{ key: "alpha", schema_name: TENANT, status: "provisioning" }]);
 
@@ -464,7 +502,13 @@ describe("the baselines and the OTA read grants on PostgreSQL", () => {
         "CROSS JOIN LATERAL aclexplode(c.relacl) a " +
         "WHERE c.relnamespace = 'platform'::regnamespace AND a.grantee = 'velexis_ota_app'::regrole ORDER BY 1, 2",
     );
-    expect(tableGrants).toEqual(OTA_READABLE_TABLES.map((table) => ({ table, privilege: "SELECT" })));
+    // ADR-0004's list: the eight baseline tables of R__ota_read_access.sql, and the shared Amadeus account tables of
+    // ADR-0012, which migration 0002 grants itself.
+    expect(tableGrants).toEqual(
+      [...OTA_READABLE_TABLES, ...MIGRATION_0002.otaReadableTables]
+        .sort()
+        .map((table) => ({ table, privilege: "SELECT" })),
+    );
 
     const columnGrants = await catalog(
       "SELECT c.relname AS table, att.attname AS column, a.privilege_type AS privilege FROM pg_attribute att " +
@@ -561,7 +605,8 @@ describe("the baselines and the OTA read grants on PostgreSQL", () => {
         "AND NOT a.attisdropped AND a.attgenerated = '' AND a.attidentity = '' ORDER BY c.relname, a.attnum",
     );
     expect(targets.map((target) => target.table)).toEqual(await tablesOf("platform"));
-    expect(targets).toHaveLength(17);
+    // 16 baseline tables, the ledger and the 11 tables of migration 0002.
+    expect(targets).toHaveLength(17 + MIGRATION_0002.tables.length);
     for (const { table, column } of targets) {
       const update =
         `UPDATE platform.${pg.escapeIdentifier(table)} ` +
@@ -570,8 +615,15 @@ describe("the baselines and the OTA read grants on PostgreSQL", () => {
       await expect(
         ota.query(`DELETE FROM platform.${pg.escapeIdentifier(table)} WHERE false`),
       ).rejects.toMatchObject(denied(table));
-      // The same statement is valid: the platform role runs it.
-      await expect(platformApp.query(update)).resolves.toMatchObject({ rowCount: 0 });
+      if (MIGRATION_0002.appendOnlyTables.includes(table)) {
+        // Migration 0002 makes the audit log append-only for the platform role too (PADR-0006), so the same
+        // statement is shown valid as the owner (velexis_test_admin is a member of velexis_migrator).
+        await expect(platformApp.query(update)).rejects.toMatchObject(denied(table));
+        await expect(clients().admin.query(update)).resolves.toMatchObject({ rowCount: 0 });
+      } else {
+        // The same statement is valid: the platform role runs it.
+        await expect(platformApp.query(update)).resolves.toMatchObject({ rowCount: 0 });
+      }
     }
 
     const writes = await catalog(
@@ -663,6 +715,7 @@ describe("the baselines and the OTA read grants on PostgreSQL", () => {
       firstMigrate.flatMap((run) => run.events.map((event) => [event.set, event.file, event.status])),
     ).toEqual([
       ["platform", "0001_baseline.sql", "applied"],
+      ["platform", MIGRATION_0002.file, "applied"],
       ["platform", "R__ota_read_access.sql", "applied"],
       ["reference", "0001_baseline.sql", "applied"],
     ]);

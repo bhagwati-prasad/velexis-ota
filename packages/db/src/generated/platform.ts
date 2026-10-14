@@ -28,15 +28,46 @@ export type Numeric = ColumnType<string, string, string>;
 
 export type Timestamp = ColumnType<Date, Date | string, Date | string>;
 
+export interface PlatformAccountRecoveryCodes {
+  /**
+   * Account that owns the code.
+   */
+  account_id: string;
+  /**
+   * SHA-256 of the normalised recovery code.
+   */
+  code_hash: string;
+  /**
+   * When the code set was generated.
+   */
+  created_at: Generated<Timestamp>;
+  /**
+   * When the code was used (NULL = unused).
+   */
+  used_at: Timestamp | null;
+}
+
 export interface PlatformAccountSessions {
   account_id: string;
   active_tenant_id: string | null;
+  /**
+   * Which app the refresh token belongs to: portal or platform_admin; never interchangeable.
+   */
+  audience: Generated<string>;
   created_at: Generated<Timestamp>;
   expires_at: Timestamp;
+  /**
+   * Absolute end of the rotation family (30 days portal, 12 hours admin).
+   */
+  family_expires_at: Timestamp | null;
   family_id: string;
   id: string;
   ip_address: string | null;
   last_used_at: Timestamp | null;
+  /**
+   * Last TOTP verification in this family; becomes the mfa_at claim for step-up checks.
+   */
+  mfa_verified_at: Timestamp | null;
   refresh_token_hash: string;
   replaced_by_id: string | null;
   revoke_reason: string | null;
@@ -44,6 +75,49 @@ export interface PlatformAccountSessions {
   rotated_at: Timestamp | null;
   updated_at: Generated<Timestamp>;
   user_agent: string | null;
+}
+
+export interface PlatformAccountTokens {
+  /**
+   * Account the token acts on.
+   */
+  account_id: string;
+  /**
+   * When the token was used (NULL = unused); a token works once.
+   */
+  consumed_at: Timestamp | null;
+  /**
+   * Row creation time.
+   */
+  created_at: Generated<Timestamp>;
+  /**
+   * Address the token was sent to (the address being verified).
+   */
+  email: string;
+  /**
+   * Expiry of the token.
+   */
+  expires_at: Timestamp;
+  /**
+   * Token row id (atk_ + ULID).
+   */
+  id: string;
+  /**
+   * Client IP of the request that created the token.
+   */
+  ip_address: string | null;
+  /**
+   * email_verification or password_reset.
+   */
+  purpose: string;
+  /**
+   * SHA-256 of the 256-bit token sent by e-mail (the token itself is never stored).
+   */
+  token_hash: string;
+  /**
+   * Last modification time.
+   */
+  updated_at: Generated<Timestamp>;
 }
 
 export interface PlatformAccounts {
@@ -61,11 +135,137 @@ export interface PlatformAccounts {
   locale: Generated<string>;
   locked_until: Timestamp | null;
   mfa_enabled: Generated<boolean>;
+  /**
+   * When TOTP MFA was last enabled (NULL when disabled).
+   */
+  mfa_enabled_at: Timestamp | null;
   mfa_secret_ciphertext: Buffer | null;
+  /**
+   * Last password change or reset; staff sessions created before it are denied.
+   */
+  password_changed_at: Timestamp | null;
   password_hash: string | null;
   status: Generated<string>;
+  /**
+   * When the person accepted the portal terms at sign-up.
+   */
+  terms_accepted_at: Timestamp | null;
+  /**
+   * Version label of the accepted terms, e.g. 2026-10.
+   */
+  terms_version: string | null;
   time_zone: Generated<string>;
   updated_at: Generated<Timestamp>;
+  version: Generated<number>;
+}
+
+export interface PlatformAmadeusAccounts {
+  /**
+   * Amadeus API host (https), or the loopback stub in development.
+   */
+  base_url: string;
+  /**
+   * OAuth2 client id issued by Amadeus to Velexis.
+   */
+  client_id: string;
+  /**
+   * Envelope-encrypted OAuth2 client secret.
+   */
+  client_secret_ciphertext: Buffer;
+  /**
+   * Row creation time.
+   */
+  created_at: Generated<Timestamp>;
+  /**
+   * Platform admin who configured it.
+   */
+  created_by_account_id: string | null;
+  /**
+   * KEK id that wraps the data key of the secret.
+   */
+  encryption_key_id: string;
+  /**
+   * test or live.
+   */
+  environment: string;
+  /**
+   * Account id (ama_ + ULID).
+   */
+  id: string;
+  /**
+   * Last verification error (no secrets).
+   */
+  last_error: string | null;
+  /**
+   * Last successful OAuth token request.
+   */
+  last_verified_at: Timestamp | null;
+  /**
+   * Label shown in the platform admin.
+   */
+  name: string;
+  /**
+   * Credential health after the last verification.
+   */
+  status: Generated<string>;
+  /**
+   * Last modification time.
+   */
+  updated_at: Generated<Timestamp>;
+  /**
+   * Optimistic-locking counter.
+   */
+  version: Generated<number>;
+}
+
+export interface PlatformAmadeusOffices {
+  /**
+   * Shared account the office belongs to (gives the environment).
+   */
+  amadeus_account_id: string;
+  /**
+   * When the office was assigned.
+   */
+  assigned_at: Timestamp | null;
+  /**
+   * Tenant using the office (set while assigned or releasing).
+   */
+  assigned_tenant_id: string | null;
+  /**
+   * When the office was added to the pool.
+   */
+  created_at: Generated<Timestamp>;
+  /**
+   * Pool entry id (amo_ + ULID).
+   */
+  id: string;
+  /**
+   * Admin notes (commercial onboarding, ticketing agreements).
+   */
+  notes: string | null;
+  /**
+   * Amadeus office id, e.g. NCE1A0955.
+   */
+  office_id: string;
+  /**
+   * When the tenant stopped using it (start of releasing).
+   */
+  release_requested_at: Timestamp | null;
+  /**
+   * When a platform admin returned it to the pool.
+   */
+  released_at: Timestamp | null;
+  /**
+   * available, assigned, releasing (tenant moved away, old orders may still use it) or retired.
+   */
+  status: Generated<string>;
+  /**
+   * Last modification time.
+   */
+  updated_at: Generated<Timestamp>;
+  /**
+   * Optimistic-locking counter.
+   */
   version: Generated<number>;
 }
 
@@ -99,13 +299,190 @@ export interface PlatformApiKeys {
   updated_at: Generated<Timestamp>;
 }
 
+export interface PlatformBillingCustomers {
+  /**
+   * Invoice e-mail last synced from Stripe.
+   */
+  billing_email: string | null;
+  /**
+   * Row creation time.
+   */
+  created_at: Generated<Timestamp>;
+  /**
+   * Whether the customer lives in Stripe live mode.
+   */
+  livemode: boolean;
+  /**
+   * Billing provider (stripe).
+   */
+  provider: Generated<string>;
+  /**
+   * Stripe Customer id (cus_).
+   */
+  provider_customer_id: string;
+  /**
+   * Billed tenant.
+   */
+  tenant_id: string;
+  /**
+   * Last modification time.
+   */
+  updated_at: Generated<Timestamp>;
+}
+
+export interface PlatformCredentialSubmissions {
+  /**
+   * Verification attempts made.
+   */
+  attempts: Generated<number>;
+  /**
+   * Submission time.
+   */
+  created_at: Generated<Timestamp>;
+  /**
+   * KEK id that wraps the data keys.
+   */
+  encryption_key_id: string | null;
+  /**
+   * Environment of the target connection.
+   */
+  environment: string;
+  /**
+   * Verification error code shown to the OTA, e.g. AMADEUS_CREDENTIALS_INVALID.
+   */
+  error_code: string | null;
+  /**
+   * Sanitised verification error (no secrets, no raw provider body).
+   */
+  error_message: string | null;
+  /**
+   * When the submission reached a final status.
+   */
+  finished_at: Timestamp | null;
+  /**
+   * Submission id (crs_ + ULID).
+   */
+  id: string;
+  /**
+   * amadeus (own Amadeus credentials) or stripe_api_keys (own Stripe keys).
+   */
+  kind: string;
+  /**
+   * Non-secret fields: clientId, baseUrl, officeIds, default/queuing/owner office, or publishableKey.
+   */
+  public_data: Generated<Json>;
+  /**
+   * Envelope-encrypted Amadeus client secret or Stripe secret key (NULL once finished).
+   */
+  secret_ciphertext: Buffer | null;
+  /**
+   * pending, verifying, applied, failed or superseded (a newer submission replaced it).
+   */
+  status: Generated<string>;
+  /**
+   * Owner or admin who entered the credentials.
+   */
+  submitted_by_account_id: string | null;
+  /**
+   * Tenant whose connection the submission would replace.
+   */
+  tenant_id: string;
+  /**
+   * Last modification time.
+   */
+  updated_at: Generated<Timestamp>;
+  /**
+   * Envelope-encrypted Stripe webhook signing secret (stripe_api_keys only; NULL once finished).
+   */
+  webhook_secret_ciphertext: Buffer | null;
+}
+
+export interface PlatformEmailOutbox {
+  /**
+   * Recipient account when there is one.
+   */
+  account_id: string | null;
+  /**
+   * Send attempts.
+   */
+  attempts: Generated<number>;
+  /**
+   * Row creation time.
+   */
+  created_at: Generated<Timestamp>;
+  /**
+   * Non-secret template variables from the template allow-list.
+   */
+  data: Generated<Json>;
+  /**
+   * KEK id that wraps the data key.
+   */
+  encryption_key_id: string | null;
+  /**
+   * E-mail id (eml_ + ULID); the only field in the platform-emails job.
+   */
+  id: string;
+  /**
+   * Last SMTP error (no secrets).
+   */
+  last_error: string | null;
+  /**
+   * Template locale (en in the MVP).
+   */
+  locale: Generated<string>;
+  /**
+   * Message id returned by the SMTP server.
+   */
+  provider_message_id: string | null;
+  /**
+   * Envelope-encrypted secret variables (links with tokens); erased at sent, failed or canceled.
+   */
+  secret_payload_ciphertext: Buffer | null;
+  /**
+   * When secret_payload_ciphertext was erased.
+   */
+  secrets_purged_at: Timestamp | null;
+  /**
+   * When the SMTP server accepted the message.
+   */
+  sent_at: Timestamp | null;
+  /**
+   * pending, sending, sent, failed or canceled.
+   */
+  status: Generated<string>;
+  /**
+   * Template key, e.g. auth.verify_email, tenant.welcome.
+   */
+  template: string;
+  /**
+   * OTA the e-mail is about.
+   */
+  tenant_id: string | null;
+  /**
+   * Recipient address (portal account or OTA billing contact, never a traveller).
+   */
+  to_email: string;
+  /**
+   * Last modification time.
+   */
+  updated_at: Generated<Timestamp>;
+}
+
 export interface PlatformInvoices {
   amount_due: Generated<Numeric>;
   amount_paid: Generated<Numeric>;
   created_at: Generated<Timestamp>;
   currency: string;
   due_at: Timestamp | null;
+  /**
+   * Stripe-hosted invoice page.
+   */
+  hosted_invoice_url: string | null;
   id: string;
+  /**
+   * Stripe-hosted invoice PDF (pdf_storage_key stays NULL in the MVP).
+   */
+  invoice_pdf_url: string | null;
   issued_at: Timestamp | null;
   line_items: Generated<Json>;
   number: string;
@@ -114,6 +491,10 @@ export interface PlatformInvoices {
   period_end: Timestamp | null;
   period_start: Timestamp | null;
   provider_invoice_id: string | null;
+  /**
+   * Last re-fetch of the invoice from Stripe.
+   */
+  provider_synced_at: Timestamp | null;
   status: Generated<string>;
   subscription_id: string | null;
   subtotal: Generated<Numeric>;
@@ -124,17 +505,45 @@ export interface PlatformInvoices {
 }
 
 export interface PlatformPaymentProviderConnections {
+  /**
+   * velexis = Velexis Stripe account (default, settled monthly); connect_standard = OTA account through Connect OAuth; api_keys = OTA account through its own keys.
+   */
+  account_mode: Generated<string>;
   account_reference: string | null;
+  /**
+   * Connected account state from Stripe: {chargesEnabled, payoutsEnabled, detailsSubmitted}.
+   */
+  capabilities: Generated<Json>;
   capture_mode: Generated<string>;
+  /**
+   * When the current OTA-owned account was connected.
+   */
+  connected_at: Timestamp | null;
   created_at: Generated<Timestamp>;
+  /**
+   * Account that set up the current mode (NULL = provisioning).
+   */
+  created_by_account_id: string | null;
+  /**
+   * When the OTA deauthorised Velexis in Stripe (status disabled).
+   */
+  disconnected_at: Timestamp | null;
   encryption_key_id: string | null;
   environment: string;
   id: string;
   is_default: Generated<boolean>;
+  /**
+   * Last verification or provider error (no secrets).
+   */
+  last_error: string | null;
   last_verified_at: Timestamp | null;
   provider: string;
   publishable_key: string | null;
   secret_ciphertext: Buffer | null;
+  /**
+   * Card statement suffix with the OTA brand (velexis mode).
+   */
+  statement_descriptor_suffix: string | null;
   status: Generated<string>;
   supported_methods: Generated<string[]>;
   tenant_id: string;
@@ -157,7 +566,27 @@ export interface PlatformPlans {
   monthly_price: Generated<Numeric>;
   name: string;
   per_booking_fee: Generated<Numeric>;
+  /**
+   * Velexis fee in basis points on net captured volume of velexis-mode payments, deducted in settlements.
+   */
+  settlement_fee_bps: Generated<number>;
   sort_order: Generated<number>;
+  /**
+   * Stripe recurring Price for monthly billing.
+   */
+  stripe_price_id_month: string | null;
+  /**
+   * Stripe recurring Price for annual billing.
+   */
+  stripe_price_id_year: string | null;
+  /**
+   * Stripe Product of the plan (set by a platform admin).
+   */
+  stripe_product_id: string | null;
+  /**
+   * Free trial days on the first subscription of a tenant (Checkout and manual trials).
+   */
+  trial_days: Generated<number>;
   updated_at: Generated<Timestamp>;
 }
 
@@ -191,6 +620,22 @@ export interface PlatformProvisioningJobs {
   payload: Generated<Json>;
   requested_by_account_id: string | null;
   result: Json | null;
+  /**
+   * Envelope-encrypted raw test API keys issued at provisioning, for one reveal; erased on reveal or after 24 h.
+   */
+  reveal_ciphertext: Buffer | null;
+  /**
+   * KEK id that wraps the data key of reveal_ciphertext.
+   */
+  reveal_encryption_key_id: string | null;
+  /**
+   * When the keys were revealed (the ciphertext is erased in the same update).
+   */
+  revealed_at: Timestamp | null;
+  /**
+   * Owner who revealed the keys.
+   */
+  revealed_by_account_id: string | null;
   scheduled_at: Generated<Timestamp>;
   started_at: Timestamp | null;
   status: Generated<string>;
@@ -235,19 +680,288 @@ export interface PlatformSchemaMigrations {
   updated_at: Generated<Timestamp>;
 }
 
+export interface PlatformSettlementLines {
+  /**
+   * Signed amount in the statement currency (refunds and disputes negative).
+   */
+  amount: Numeric;
+  /**
+   * Stripe balance transaction (txn_); NULL for adjustments and carry-forwards.
+   */
+  balance_transaction_id: string | null;
+  /**
+   * Tenant checkout id from metadata.checkout_id, by value.
+   */
+  checkout_id: string | null;
+  /**
+   * Row creation time.
+   */
+  created_at: Generated<Timestamp>;
+  /**
+   * Platform admin who added a manual adjustment.
+   */
+  created_by_account_id: string | null;
+  /**
+   * Human-readable line text (no card data).
+   */
+  description: string | null;
+  /**
+   * Line id (sln_ + ULID).
+   */
+  id: string;
+  /**
+   * charge, refund, dispute, dispute_reversal, adjustment or carry_forward.
+   */
+  line_type: string;
+  /**
+   * Balance transaction creation time.
+   */
+  occurred_at: Timestamp;
+  /**
+   * Amount in the charge currency when it differs from the statement currency.
+   */
+  original_amount: Numeric | null;
+  /**
+   * Charge currency when converted.
+   */
+  original_currency: string | null;
+  /**
+   * Stripe PaymentIntent (pi_) of the charge.
+   */
+  payment_intent_id: string | null;
+  /**
+   * Statement the line belongs to.
+   */
+  settlement_id: string;
+  /**
+   * Stripe source object: charge, refund or dispute id.
+   */
+  source_id: string | null;
+  /**
+   * Stripe fee of the balance transaction (positive = cost).
+   */
+  stripe_fee: Generated<Numeric>;
+  /**
+   * Tenant (from metadata.velexis_tenant_id), repeated for queries.
+   */
+  tenant_id: string;
+  /**
+   * Tenant payment id from metadata.payment_id (pay_), by value.
+   */
+  velexis_payment_id: string | null;
+}
+
+export interface PlatformSettlements {
+  /**
+   * Manual adjustments and the carried-forward balance of earlier statements (signed).
+   */
+  adjustments_amount: Generated<Numeric>;
+  /**
+   * When a platform admin approved it.
+   */
+  approved_at: Timestamp | null;
+  /**
+   * Approving platform admin.
+   */
+  approved_by_account_id: string | null;
+  /**
+   * Statement that absorbed this negative or zero balance.
+   */
+  carried_to_id: string | null;
+  /**
+   * Row creation time.
+   */
+  created_at: Generated<Timestamp>;
+  /**
+   * Currency of the Velexis Stripe balance the transactions settled in.
+   */
+  currency: string;
+  /**
+   * Disputed amounts and dispute fees minus reinstated amounts.
+   */
+  disputes_amount: Generated<Numeric>;
+  /**
+   * live in production; test statements exist only in development.
+   */
+  environment: Generated<string>;
+  /**
+   * Snapshot of plans.settlement_fee_bps at generation.
+   */
+  fee_bps: Generated<number>;
+  /**
+   * When the draft was (re)generated.
+   */
+  generated_at: Generated<Timestamp>;
+  /**
+   * Sum of captured charges.
+   */
+  gross_amount: Generated<Numeric>;
+  /**
+   * Statement id (stl_ + ULID).
+   */
+  id: string;
+  /**
+   * Number of settlement_lines.
+   */
+  line_count: Generated<number>;
+  /**
+   * Amount owed to the tenant (CHECK keeps the formula).
+   */
+  net_amount: Generated<Numeric>;
+  /**
+   * Admin notes shown to the tenant.
+   */
+  notes: string | null;
+  /**
+   * Date of the bank transfer.
+   */
+  paid_at: Timestamp | null;
+  /**
+   * Platform admin who recorded the payment.
+   */
+  paid_by_account_id: string | null;
+  /**
+   * Bank transfer reference.
+   */
+  payout_reference: string | null;
+  /**
+   * Exclusive end of the period.
+   */
+  period_end: Timestamp;
+  /**
+   * Inclusive start of the period (first day of the month, 00:00 UTC).
+   */
+  period_start: Timestamp;
+  /**
+   * Sum of refunds (positive number).
+   */
+  refunds_amount: Generated<Numeric>;
+  /**
+   * draft, approved (to pay), paid, carried_forward (net <= 0) or void (drafts only).
+   */
+  status: Generated<string>;
+  /**
+   * Stripe processing fees of the period.
+   */
+  stripe_fees_amount: Generated<Numeric>;
+  /**
+   * Tenant the funds belong to.
+   */
+  tenant_id: string;
+  /**
+   * Last modification time.
+   */
+  updated_at: Generated<Timestamp>;
+  /**
+   * Velexis fee: fee_bps of (gross - refunds), never below 0.
+   */
+  velexis_fees_amount: Generated<Numeric>;
+  /**
+   * Optimistic-locking counter.
+   */
+  version: Generated<number>;
+  /**
+   * Why the draft was voided.
+   */
+  void_reason: string | null;
+  /**
+   * When a draft was voided.
+   */
+  voided_at: Timestamp | null;
+}
+
+export interface PlatformStripeEvents {
+  /**
+   * Connected account id (acct_) for Connect events.
+   */
+  account: string | null;
+  /**
+   * Stripe API version of the event payload.
+   */
+  api_version: string | null;
+  /**
+   * Processing attempts.
+   */
+  attempts: Generated<number>;
+  /**
+   * Receiving endpoint: billing or connect_accounts.
+   */
+  endpoint: string;
+  /**
+   * Stripe event id (evt_).
+   */
+  id: string;
+  /**
+   * Last processing error (no secrets).
+   */
+  last_error: string | null;
+  /**
+   * Stripe livemode flag of the event.
+   */
+  livemode: boolean;
+  /**
+   * Id of data.object; handlers re-fetch it from Stripe.
+   */
+  object_id: string | null;
+  /**
+   * Type of data.object (subscription, invoice, checkout.session, account).
+   */
+  object_type: string | null;
+  /**
+   * When processing finished.
+   */
+  processed_at: Timestamp | null;
+  /**
+   * When the webhook was received.
+   */
+  received_at: Generated<Timestamp>;
+  /**
+   * received, processing, processed, ignored or failed.
+   */
+  status: Generated<string>;
+  /**
+   * Event creation time at Stripe.
+   */
+  stripe_created_at: Timestamp;
+  /**
+   * Tenant the event was resolved to (NULL if unknown).
+   */
+  tenant_id: string | null;
+  /**
+   * Stripe event type, e.g. customer.subscription.updated.
+   */
+  type: string;
+  /**
+   * Last modification time.
+   */
+  updated_at: Generated<Timestamp>;
+}
+
 export interface PlatformSubscriptions {
   billing_email: string | null;
   billing_interval: Generated<string>;
   billing_provider: Generated<string>;
   cancel_at_period_end: Generated<boolean>;
   canceled_at: Timestamp | null;
+  /**
+   * Stripe Checkout Session that created the subscription.
+   */
+  checkout_session_id: string | null;
   created_at: Generated<Timestamp>;
   current_period_end: Timestamp | null;
   current_period_start: Timestamp | null;
   id: string;
   plan_code: string;
   provider_customer_id: string | null;
+  /**
+   * Stripe Price currently subscribed (maps to plan and interval).
+   */
+  provider_price_id: string | null;
   provider_subscription_id: string | null;
+  /**
+   * Last re-fetch of the subscription from Stripe.
+   */
+  provider_synced_at: Timestamp | null;
   status: string;
   tenant_id: string;
   trial_ends_at: Timestamp | null;
@@ -256,13 +970,21 @@ export interface PlatformSubscriptions {
 }
 
 export interface PlatformSupplierConnections {
-  base_url: string;
-  client_id: string;
-  client_secret_ciphertext: Buffer;
+  /**
+   * Shared account used when credential_source = velexis (same environment, composite FK).
+   */
+  amadeus_account_id: string | null;
+  base_url: string | null;
+  client_id: string | null;
+  client_secret_ciphertext: Buffer | null;
   created_at: Generated<Timestamp>;
   created_by_account_id: string | null;
+  /**
+   * velexis = Velexis shared account through assigned offices; tenant = the OTA's own credentials.
+   */
+  credential_source: string;
   default_office_id: string | null;
-  encryption_key_id: string;
+  encryption_key_id: string | null;
   environment: string;
   id: string;
   last_error: string | null;
@@ -280,16 +1002,40 @@ export interface PlatformSupplierConnections {
 }
 
 export interface PlatformTenantDomains {
+  /**
+   * Consecutive failed daily re-checks of a verified domain; 3 sets it to failed.
+   */
+  check_failures: Generated<number>;
   created_at: Generated<Timestamp>;
+  /**
+   * Account that added the domain (NULL for the provisioned sub-domain).
+   */
+  created_by_account_id: string | null;
   hostname: string;
   id: string;
   is_primary: Generated<boolean>;
   kind: string;
+  /**
+   * Short reason of the last failed check (no secrets), shown in the portal.
+   */
+  last_check_error: string | null;
+  /**
+   * Last DNS check (verification or daily re-check).
+   */
+  last_checked_at: Timestamp | null;
   purpose: Generated<string>;
   tenant_id: string;
+  /**
+   * Last TLS probe of the host.
+   */
+  tls_checked_at: Timestamp | null;
   tls_expires_at: Timestamp | null;
   tls_status: Generated<string>;
   updated_at: Generated<Timestamp>;
+  /**
+   * End of the 72-hour DNS verification window of a pending custom domain.
+   */
+  verification_deadline_at: Timestamp | null;
   verification_status: Generated<string>;
   verification_token: string | null;
   verified_at: Timestamp | null;
@@ -324,6 +1070,73 @@ export interface PlatformTenantMemberships {
   version: Generated<number>;
 }
 
+export interface PlatformTenantPayoutAccounts {
+  /**
+   * Legal name on the bank account.
+   */
+  account_holder_name: string;
+  /**
+   * Envelope-encrypted JSON of the bank identifiers.
+   */
+  bank_details_ciphertext: Buffer;
+  /**
+   * Country of the bank.
+   */
+  country_code: string;
+  /**
+   * Row creation time.
+   */
+  created_at: Generated<Timestamp>;
+  /**
+   * Currency of the bank account.
+   */
+  currency: string;
+  /**
+   * KEK id that wraps the data key.
+   */
+  encryption_key_id: string;
+  /**
+   * Last 4 characters of the IBAN or account number, for display.
+   */
+  last4: string;
+  /**
+   * Reason of a rejection.
+   */
+  review_note: string | null;
+  /**
+   * Review time.
+   */
+  reviewed_at: Timestamp | null;
+  /**
+   * Platform admin who reviewed it.
+   */
+  reviewed_by_account_id: string | null;
+  /**
+   * iban (IBAN + BIC) or local (account and routing numbers).
+   */
+  scheme: string;
+  /**
+   * pending_review until a platform admin verifies it; changes reset it.
+   */
+  status: Generated<string>;
+  /**
+   * Tenant being paid.
+   */
+  tenant_id: string;
+  /**
+   * Last modification time.
+   */
+  updated_at: Generated<Timestamp>;
+  /**
+   * Owner who last changed it.
+   */
+  updated_by_account_id: string | null;
+  /**
+   * Optimistic-locking counter.
+   */
+  version: Generated<number>;
+}
+
 export interface PlatformTenantSchemaMigrations {
   checksum: string;
   created_at: Generated<Timestamp>;
@@ -342,6 +1155,10 @@ export interface PlatformTenantSchemaMigrations {
 
 export interface PlatformTenants {
   activated_at: Timestamp | null;
+  /**
+   * Billing banner for the portal and the OTA admin (past_due, trial_ending), set by billing sync; NULL = none.
+   */
+  billing_notice: string | null;
   cluster: Generated<string>;
   country_code: string | null;
   created_at: Generated<Timestamp>;
@@ -352,6 +1169,14 @@ export interface PlatformTenants {
   id: string;
   key: string;
   legal_name: string | null;
+  /**
+   * When the owner switched the storefront to live.
+   */
+  live_enabled_at: Timestamp | null;
+  /**
+   * Owner who switched the storefront to live.
+   */
+  live_enabled_by_account_id: string | null;
   metadata: Generated<Json>;
   name: string;
   plan_code: string;
@@ -359,6 +1184,10 @@ export interface PlatformTenants {
   schema_name: Generated<string | null>;
   schema_version: string | null;
   status: Generated<string>;
+  /**
+   * Environment of the hosted storefront and edge requests: test until the OTA goes live.
+   */
+  storefront_environment: Generated<string>;
   support_email: string | null;
   suspended_at: Timestamp | null;
   suspension_reason: string | null;
@@ -373,21 +1202,32 @@ export interface PlatformTenants {
  * `PlatformDatabase & ReferenceDatabase` unless told otherwise.
  */
 export interface PlatformDatabase {
+  "platform.account_recovery_codes": PlatformAccountRecoveryCodes;
   "platform.account_sessions": PlatformAccountSessions;
+  "platform.account_tokens": PlatformAccountTokens;
   "platform.accounts": PlatformAccounts;
+  "platform.amadeus_accounts": PlatformAmadeusAccounts;
+  "platform.amadeus_offices": PlatformAmadeusOffices;
   "platform.api_key_tenant_grants": PlatformApiKeyTenantGrants;
   "platform.api_keys": PlatformApiKeys;
+  "platform.billing_customers": PlatformBillingCustomers;
+  "platform.credential_submissions": PlatformCredentialSubmissions;
+  "platform.email_outbox": PlatformEmailOutbox;
   "platform.invoices": PlatformInvoices;
   "platform.payment_provider_connections": PlatformPaymentProviderConnections;
   "platform.plans": PlatformPlans;
   "platform.platform_audit_log": PlatformPlatformAuditLog;
   "platform.provisioning_jobs": PlatformProvisioningJobs;
   "platform.schema_migrations": PlatformSchemaMigrations;
+  "platform.settlement_lines": PlatformSettlementLines;
+  "platform.settlements": PlatformSettlements;
+  "platform.stripe_events": PlatformStripeEvents;
   "platform.subscriptions": PlatformSubscriptions;
   "platform.supplier_connections": PlatformSupplierConnections;
   "platform.tenant_domains": PlatformTenantDomains;
   "platform.tenant_invitations": PlatformTenantInvitations;
   "platform.tenant_memberships": PlatformTenantMemberships;
+  "platform.tenant_payout_accounts": PlatformTenantPayoutAccounts;
   "platform.tenant_schema_migrations": PlatformTenantSchemaMigrations;
   "platform.tenants": PlatformTenants;
 }
