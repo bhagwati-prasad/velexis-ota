@@ -51,6 +51,23 @@
       ],
       "outputs": ["coverage/**"]
     },
+    "@velexis/testing#test": {
+      "dependsOn": ["^build"],
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "!.env*",
+        "$TURBO_ROOT$/ota/backend/openapi/**",
+        "$TURBO_ROOT$/platform/backend/openapi/**",
+        "$TURBO_ROOT$/packages/api-types/redocly.yaml",
+        "$TURBO_ROOT$/deploy/postgres/*.sql",
+        "$TURBO_ROOT$/.env.example",
+        "$TURBO_ROOT$/ota/backend/.env.example",
+        "$TURBO_ROOT$/platform/backend/.env.example",
+        "$TURBO_ROOT$/platform/backend/migrations/**",
+        "$TURBO_ROOT$/ota/backend/migrations/**"
+      ],
+      "outputs": ["coverage/**"]
+    },
     "test:int": {
       "dependsOn": ["^build"],
       "cache": false,

@@ -195,9 +195,9 @@ import { mailpit } from "@velexis/testing/mailpit";
 import { signedStripeEvent } from "@velexis/testing/stripe";
 import { startAmadeusStub, stubScenario } from "@velexis/testing/amadeus";
 
-const db = await createTestDatabase({ tenants: ["tenant_alpha", "tenant_beta"] }); // clone of a migrated template
+const db = await createTestDatabase();                // clone of the run's migrated template, tenant_alpha and tenant_beta
 afterAll(() => db.drop());
-const redis = await useRedis();                       // per-worker DB index, FLUSHDB between files
+const redis = await useRedis();                       // per-worker DB index, FLUSHDB when the file starts; redis.close()
 const msg = await mailpit.waitForMessage({ to: "a@example.com", subject: /Verify/ });
 const { payload, header } = signedStripeEvent("payment_intent.succeeded", data, whsec);
 const stub = await startAmadeusStub({ port: 0 });     // in-process tools/amadeus-stub; stub.url for AMADEUS_BASE_URL_TEST
@@ -207,6 +207,7 @@ expectResponseToMatch("searchFlightOffers", res);     // Ajv against the OpenAPI
 
 - `globalSetup` (`@velexis/testing/vitest-global-setup`) migrates one template database per run (platform, reference, `tenant_alpha`, `tenant_beta`) with the real migration runner; each test file clones it with `CREATE DATABASE … TEMPLATE`, so files run in parallel on isolated data.
 - Uses `TEST_DATABASE_ADMIN_URL`, `REDIS_URL`, `MAILPIT_API_URL` from the environment (root `.env.example`, CI services).
+- Details, the role logins of `db.urlFor(role)` and the response check: [`testing/README.md`](testing/README.md).
 
 ## Tools that are workspace packages (`tools/*`)
 

@@ -456,8 +456,8 @@ Related: [`../decisions.md`](../decisions.md) (binding), [`../architecture.md`](
   - Columns of type `numeric(12,2)` are typed `string`.
 - **Verify:** `pnpm db:codegen && pnpm --filter @velexis/db typecheck && pnpm --filter @velexis/db test && git diff --exit-code packages/db/src/generated`
 
-### X-015 · Create @velexis/testing with test databases, Redis, clock and response checks
-- **Status:** todo
+### X-015 · Create @velexis/testing with test databases, Redis, clock and response checks ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** foundation
 - **Milestone:** M0
 - **Depends on:** X-013, X-008
