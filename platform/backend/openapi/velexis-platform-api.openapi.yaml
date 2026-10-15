@@ -118,6 +118,24 @@ tags:
     description: >-
       The BullMQ queues of both backends: counts, failed jobs with their id-only payloads, and retry of failed
       platform jobs (OTA queues are view-only).
+  - name: Admin billing
+    description: >-
+      Plans and the subscriptions of every OTA (`AdminModule`, `BillingModule`): create, edit and retire plans, list
+      the subscriptions with their invoices and Stripe events, and edit the manual trials of the OTAs created before
+      M5. The Stripe prices of a plan are linked in M5 (PBE-042).
+  - name: Admin Amadeus
+    description: >-
+      The Velexis Amadeus accounts and their office pool (`SupplierConnectionsModule`, ADR-0012, PADR-0012): enter,
+      rotate and verify the shared credentials of each environment, add offices in bulk, assign them to OTAs and
+      retire them. A client secret is never answered.
+  - name: Admin accounts
+    description: >-
+      Account support and the platform admins (`AdminModule`, PADR-0006): search and detail, disable and enable,
+      unlock, the MFA reset after an identity check, and granting and revoking platform admin rights.
+  - name: Admin audit
+    description: >-
+      The platform audit log (`AuditModule`, PADR-0006): search and CSV export. The table is append-only by database
+      privilege.
   - name: Internal
     description: >-
       Operations outside the portal and admin surface (`x-internal: true`): Caddy's on-demand TLS gate and the health
@@ -5384,6 +5402,2312 @@ paths:
           $ref: '#/components/responses/InternalError'
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
+  /v1/admin/plans:
+    get:
+      operationId: adminListPlans
+      summary: List every plan with its Stripe link state
+      description: >-
+        Every plan, public or not and active or retired, in `sortOrder` then `code` order, with the fields the
+        pricing page does not show: visibility, the active flag, the settlement fee, the Stripe product and price ids
+        (`null` until PBE-042 links them in M5), the price warnings of the last comparison with Stripe (empty while no
+        price is linked) and the number of OTAs on the plan. The list is short, so it is not paginated. The `version`
+        of each plan is what `adminUpdatePlan` needs in `If-Match`.
+      tags:
+        - Admin billing
+      security:
+        - adminBearer: []
+      x-scope: platform_admin
+      x-error-codes:
+        - UNAUTHENTICATED
+        - TOKEN_EXPIRED
+        - RATE_LIMITED
+        - INTERNAL_ERROR
+      x-platform-tables:
+        - plans
+        - tenants
+      responses:
+        '200':
+          description: Every plan.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminPlanList'
+              example:
+                data:
+                  - code: early_access
+                    name: Early access
+                    description: Free plan for OTAs created before paid plans open. Test mode only.
+                    currency: EUR
+                    monthlyPrice:
+                      amount: '0.00'
+                      currency: EUR
+                    annualPrice: null
+                    trialDays: 90
+                    limits:
+                      staffSeats: 5
+                      apiKeys: 10
+                      customDomains: 0
+                      liveMode: false
+                    features: {}
+                    checkoutAvailable:
+                      month: false
+                      year: false
+                    isPublic: true
+                    isActive: true
+                    sortOrder: 0
+                    settlementFeeBps: 0
+                    stripeProductId: null
+                    stripePriceIdMonth: null
+                    stripePriceIdYear: null
+                    priceWarnings: []
+                    tenantCount: 17
+                    version: 1
+                    createdAt: '2026-10-01T00:00:00Z'
+                    updatedAt: '2026-10-01T00:00:00Z'
+                  - code: growth
+                    name: Growth
+                    description: For OTAs selling live with up to 15 staff.
+                    currency: EUR
+                    monthlyPrice:
+                      amount: '149.00'
+                      currency: EUR
+                    annualPrice:
+                      amount: '1490.00'
+                      currency: EUR
+                    trialDays: 14
+                    limits:
+                      staffSeats: 15
+                      apiKeys: 25
+                      customDomains: 1
+                      liveMode: true
+                    features:
+                      queues: true
+                    checkoutAvailable:
+                      month: false
+                      year: false
+                    isPublic: false
+                    isActive: true
+                    sortOrder: 20
+                    settlementFeeBps: 150
+                    stripeProductId: null
+                    stripePriceIdMonth: null
+                    stripePriceIdYear: null
+                    priceWarnings: []
+                    tenantCount: 0
+                    version: 2
+                    createdAt: '2026-10-18T09:30:00Z'
+                    updatedAt: '2026-10-19T11:02:41Z'
+        '401':
+          $ref: '#/components/responses/AdminUnauthenticated'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    post:
+      operationId: adminCreatePlan
+      summary: Create a plan
+      description: >-
+        Adds a plan, active from the start. `code` is the plan's natural key and never changes, nor does `currency`;
+        both prices are in that currency (another currency answers `400 VALIDATION_FAILED`), and a plan without
+        `annualPrice` has no yearly option. `limits` are the quotas the backends enforce and `features` the flags the
+        plan unlocks. The Stripe product and prices are linked later with `adminUpdatePlan` (M5). A code that is
+        already used answers `409 CONFLICT` (`details.reason = code_taken`). Writes an audit row.
+      tags:
+        - Admin billing
+      security:
+        - adminBearer: []
+      x-scope: platform_admin
+      x-error-codes:
+        - VALIDATION_FAILED
+        - UNAUTHENTICATED
+        - TOKEN_EXPIRED
+        - CONFLICT
+        - RATE_LIMITED
+        - INTERNAL_ERROR
+      x-platform-tables:
+        - plans
+        - platform_audit_log
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreatePlanRequest'
+            example:
+              code: growth
+              name: Growth
+              description: For OTAs selling live with up to 15 staff.
+              currency: EUR
+              monthlyPrice:
+                amount: '149.00'
+                currency: EUR
+              annualPrice:
+                amount: '1490.00'
+                currency: EUR
+              limits:
+                staffSeats: 15
+                apiKeys: 25
+                customDomains: 1
+                liveMode: true
+              features:
+                queues: true
+              isPublic: false
+              trialDays: 14
+              settlementFeeBps: 150
+              sortOrder: 20
+      responses:
+        '201':
+          description: The new plan, with its version in `ETag`.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+            ETag:
+              $ref: '#/components/headers/ETag'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminPlan'
+              examples:
+                plan:
+                  $ref: '#/components/examples/AdminPlan'
+        '400':
+          $ref: '#/components/responses/ValidationFailed'
+        '401':
+          $ref: '#/components/responses/AdminUnauthenticated'
+        '409':
+          description: 'A plan with this code exists (`details.reason = code_taken`). Possible codes: CONFLICT.'
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                CONFLICT:
+                  summary: The plan code is taken
+                  value:
+                    error:
+                      code: CONFLICT
+                      message: The request conflicts with the current state of the resource.
+                      status: 409
+                      requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+                      details:
+                        reason: code_taken
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /v1/admin/plans/{planCode}:
+    parameters:
+      - $ref: '#/components/parameters/AdminPlanCode'
+    patch:
+      operationId: adminUpdatePlan
+      summary: Edit or retire a plan
+      description: >-
+        Changes any field of a plan except `code` and `currency`: names, prices (in the plan's currency), limits,
+        features, visibility, trial days, settlement fee and order. `isActive: false` retires the plan: it leaves the
+        pricing page and the wizard, and existing subscriptions keep it. `annualPrice: null` removes the yearly
+        option. `If-Match` carries the plan's `version`; a stale version answers `412 PRECONDITION_FAILED`. Writes an
+        audit row with the before and after values and, after commit, publishes a `plan` invalidation (`{type:
+        "plan", code}`) when `limits` or `features` change, so both backends reload the quotas.
+
+
+        The Stripe product and price ids are not part of this M1 request: PBE-042 adds `stripeProductId`,
+        `stripePriceIdMonth` and `stripePriceIdYear` with the price comparison (`priceWarnings`) and its `502
+        PROVIDER_ERROR` in M5.
+      tags:
+        - Admin billing
+      security:
+        - adminBearer: []
+      x-scope: platform_admin
+      x-error-codes:
+        - VALIDATION_FAILED
+        - UNAUTHENTICATED
+        - TOKEN_EXPIRED
+        - NOT_FOUND
+        - PRECONDITION_FAILED
+        - RATE_LIMITED
+        - INTERNAL_ERROR
+      x-platform-tables:
+        - plans
+        - tenants
+        - platform_audit_log
+      parameters:
+        - $ref: '#/components/parameters/IfMatch'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdatePlanRequest'
+            examples:
+              limits:
+                summary: Raise the staff seats
+                value:
+                  limits:
+                    staffSeats: 20
+                    apiKeys: 25
+                    customDomains: 1
+                    liveMode: true
+              retire:
+                summary: Retire the plan
+                value:
+                  isActive: false
+      responses:
+        '200':
+          description: The updated plan, with its new version in `ETag`.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+            ETag:
+              $ref: '#/components/headers/ETag'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminPlan'
+              examples:
+                plan:
+                  $ref: '#/components/examples/AdminPlan'
+        '400':
+          $ref: '#/components/responses/ValidationFailed'
+        '401':
+          $ref: '#/components/responses/AdminUnauthenticated'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '412':
+          $ref: '#/components/responses/PreconditionFailed'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /v1/admin/subscriptions:
+    get:
+      operationId: adminListSubscriptions
+      summary: List the subscriptions of every OTA
+      description: >-
+        Every subscription row, current or ended, newest first, cursor-paginated, with filters on `status`, `provider`
+        (`manual` for the trials before M5, `stripe`) and `planCode`. Each row names its OTA. Stripe ids are
+        references for the Stripe dashboard, never secrets.
+      tags:
+        - Admin billing
+      security:
+        - adminBearer: []
+      x-scope: platform_admin
+      x-error-codes:
+        - VALIDATION_FAILED
+        - UNAUTHENTICATED
+        - TOKEN_EXPIRED
+        - RATE_LIMITED
+        - INTERNAL_ERROR
+      x-platform-tables:
+        - subscriptions
+        - tenants
+        - plans
+      parameters:
+        - name: status
+          in: query
+          required: false
+          description: Only subscriptions in this status.
+          schema:
+            $ref: '#/components/schemas/SubscriptionStatus'
+        - name: provider
+          in: query
+          required: false
+          description: Only subscriptions billed this way.
+          schema:
+            $ref: '#/components/schemas/BillingProvider'
+        - name: planCode
+          in: query
+          required: false
+          description: Only subscriptions to this plan.
+          schema:
+            $ref: '#/components/schemas/PlanCode'
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: One page of subscriptions.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminSubscriptionList'
+              example:
+                data:
+                  - id: sub_01JA2Z7R5N0S3V7X1Z4B9D2F6H
+                    tenantId: ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F
+                    tenantKey: acme
+                    tenantName: Acme Travel
+                    planCode: early_access
+                    planName: Early access
+                    status: trialing
+                    billingProvider: manual
+                    billingInterval: month
+                    trialEndsAt: '2027-01-12T08:20:11Z'
+                    currentPeriodStart: null
+                    currentPeriodEnd: null
+                    cancelAtPeriodEnd: false
+                    canceledAt: null
+                    providerCustomerId: null
+                    providerSubscriptionId: null
+                    createdAt: '2026-10-14T08:20:11Z'
+                    version: 1
+                page:
+                  nextCursor: null
+                  limit: 50
+        '400':
+          $ref: '#/components/responses/ValidationFailed'
+        '401':
+          $ref: '#/components/responses/AdminUnauthenticated'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /v1/admin/subscriptions/{subscriptionId}:
+    parameters:
+      - $ref: '#/components/parameters/SubscriptionId'
+    get:
+      operationId: adminGetSubscription
+      summary: Get a subscription with its invoices and Stripe events
+      description: >-
+        One subscription with its invoices and the Stripe events of its OTA, each newest first and at most 50. Both
+        lists stay empty before M5, when every subscription is a manual trial. Invoice amounts are `Money`; the
+        hosted invoice links point to Stripe. The `ETag` is the version that `adminUpdateManualSubscription` needs in
+        `If-Match`.
+      tags:
+        - Admin billing
+      security:
+        - adminBearer: []
+      x-scope: platform_admin
+      x-error-codes:
+        - VALIDATION_FAILED
+        - UNAUTHENTICATED
+        - TOKEN_EXPIRED
+        - NOT_FOUND
+        - RATE_LIMITED
+        - INTERNAL_ERROR
+      x-platform-tables:
+        - subscriptions
+        - tenants
+        - plans
+        - invoices
+        - stripe_events
+      responses:
+        '200':
+          description: The subscription and its history.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+            ETag:
+              $ref: '#/components/headers/ETag'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminSubscriptionDetail'
+              examples:
+                manual:
+                  summary: A manual trial before M5
+                  value:
+                    subscription:
+                      id: sub_01JA2Z7R5N0S3V7X1Z4B9D2F6H
+                      tenantId: ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F
+                      tenantKey: acme
+                      tenantName: Acme Travel
+                      planCode: early_access
+                      planName: Early access
+                      status: trialing
+                      billingProvider: manual
+                      billingInterval: month
+                      trialEndsAt: '2027-01-12T08:20:11Z'
+                      currentPeriodStart: null
+                      currentPeriodEnd: null
+                      cancelAtPeriodEnd: false
+                      canceledAt: null
+                      providerCustomerId: null
+                      providerSubscriptionId: null
+                      createdAt: '2026-10-14T08:20:11Z'
+                      version: 1
+                    invoices: []
+                    events: []
+                stripe:
+                  summary: A Stripe subscription from M5
+                  value:
+                    subscription:
+                      id: sub_01JE4N7P1R5T9W3Y7A1C5E9G3J
+                      tenantId: ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F
+                      tenantKey: acme
+                      tenantName: Acme Travel
+                      planCode: growth
+                      planName: Growth
+                      status: active
+                      billingProvider: stripe
+                      billingInterval: month
+                      trialEndsAt: null
+                      currentPeriodStart: '2027-03-01T00:00:00Z'
+                      currentPeriodEnd: '2027-04-01T00:00:00Z'
+                      cancelAtPeriodEnd: false
+                      canceledAt: null
+                      providerCustomerId: cus_Qx7Lm2Np9Rt4Vw
+                      providerSubscriptionId: sub_1QxLm2Np9Rt4VwY6Za8Bc0De
+                      createdAt: '2027-02-01T10:12:40Z'
+                      version: 4
+                    invoices:
+                      - id: inv_01JE4N8Q2S6V0X4Z8B2D6F0H4K
+                        tenantId: ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F
+                        subscriptionId: sub_01JE4N7P1R5T9W3Y7A1C5E9G3J
+                        number: VX-2027-000312
+                        status: paid
+                        subtotal:
+                          amount: '149.00'
+                          currency: EUR
+                        taxAmount:
+                          amount: '0.00'
+                          currency: EUR
+                        total:
+                          amount: '149.00'
+                          currency: EUR
+                        amountPaid:
+                          amount: '149.00'
+                          currency: EUR
+                        amountDue:
+                          amount: '0.00'
+                          currency: EUR
+                        periodStart: '2027-03-01T00:00:00Z'
+                        periodEnd: '2027-04-01T00:00:00Z'
+                        issuedAt: '2027-03-01T01:04:12Z'
+                        dueAt: null
+                        paidAt: '2027-03-01T01:04:15Z'
+                        hostedInvoiceUrl: https://invoice.stripe.com/i/acct_1Velexis/test_YWNjdF8xVmVsZXhpcw
+                        invoicePdfUrl: https://pay.stripe.com/invoice/acct_1Velexis/test_YWNjdF8xVmVsZXhpcw/pdf
+                        providerInvoiceId: in_1QyMn3Oq0Su5Wx
+                        createdAt: '2027-03-01T01:04:13Z'
+                    events:
+                      - id: evt_1QyMn3Oq0Su5WxZ7Ab9Cd1Ef
+                        endpoint: billing
+                        type: invoice.paid
+                        status: processed
+                        attempts: 1
+                        lastError: null
+                        tenantId: ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F
+                        receivedAt: '2027-03-01T01:04:16Z'
+                        processedAt: '2027-03-01T01:04:18Z'
+        '400':
+          $ref: '#/components/responses/ValidationFailed'
+        '401':
+          $ref: '#/components/responses/AdminUnauthenticated'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    patch:
+      operationId: adminUpdateManualSubscription
+      summary: Edit a manual subscription
+      description: >-
+        Changes a **manual** subscription (the trials before M5): its plan, its trial end, or its status (`trialing`
+        or `canceled`), with a written `reason` of 5–500 characters that the audit row keeps. At least one change
+        comes with the reason. A change of plan also sets `tenants.plan_code` and, after commit, publishes a `tenant`
+        invalidation; `canceled` sets `canceled_at`. `If-Match` carries the subscription's `version`; a stale version
+        answers `412 PRECONDITION_FAILED`.
+
+
+        `409 CONFLICT` when the subscription is billed by Stripe (`details.reason = stripe_billed`; Stripe
+        subscriptions change in the Customer Portal or with `adminResyncSubscription` in M5), or when `trialing` would
+        give the OTA a second current subscription (`details.reason = current_exists`). A `planCode` that names no
+        active plan answers `422 UNPROCESSABLE` (`details.reason = plan_not_active`); plans that are not public are
+        allowed.
+      tags:
+        - Admin billing
+      security:
+        - adminBearer: []
+      x-scope: platform_admin
+      x-reason-required: true
+      x-error-codes:
+        - VALIDATION_FAILED
+        - UNAUTHENTICATED
+        - TOKEN_EXPIRED
+        - NOT_FOUND
+        - CONFLICT
+        - PRECONDITION_FAILED
+        - UNPROCESSABLE
+        - RATE_LIMITED
+        - INTERNAL_ERROR
+      x-platform-tables:
+        - subscriptions
+        - tenants
+        - plans
+        - platform_audit_log
+      parameters:
+        - $ref: '#/components/parameters/IfMatch'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateManualSubscriptionRequest'
+            example:
+              trialEndsAt: '2027-02-12T08:20:11Z'
+              reason: Pilot extended by one month as agreed with Anna Berg on 2026-12-20.
+      responses:
+        '200':
+          description: The updated subscription, with its new version in `ETag`.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+            ETag:
+              $ref: '#/components/headers/ETag'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminSubscription'
+              example:
+                id: sub_01JA2Z7R5N0S3V7X1Z4B9D2F6H
+                tenantId: ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F
+                tenantKey: acme
+                tenantName: Acme Travel
+                planCode: early_access
+                planName: Early access
+                status: trialing
+                billingProvider: manual
+                billingInterval: month
+                trialEndsAt: '2027-02-12T08:20:11Z'
+                currentPeriodStart: null
+                currentPeriodEnd: null
+                cancelAtPeriodEnd: false
+                canceledAt: null
+                providerCustomerId: null
+                providerSubscriptionId: null
+                createdAt: '2026-10-14T08:20:11Z'
+                version: 2
+        '400':
+          $ref: '#/components/responses/ValidationFailed'
+        '401':
+          $ref: '#/components/responses/AdminUnauthenticated'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: >-
+            The subscription is billed by Stripe, or the change would give the OTA a second current subscription
+            (`details.reason`). Possible codes: CONFLICT.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                CONFLICT:
+                  summary: The subscription is billed by Stripe
+                  value:
+                    error:
+                      code: CONFLICT
+                      message: The request conflicts with the current state of the resource.
+                      status: 409
+                      requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+                      details:
+                        reason: stripe_billed
+        '412':
+          $ref: '#/components/responses/PreconditionFailed'
+        '422':
+          description: 'The plan is unknown or retired (`details.reason = plan_not_active`). Possible codes: UNPROCESSABLE.'
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                UNPROCESSABLE:
+                  summary: No active plan has this code
+                  value:
+                    error:
+                      code: UNPROCESSABLE
+                      message: The request breaks a business rule.
+                      status: 422
+                      requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+                      details:
+                        reason: plan_not_active
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /v1/admin/amadeus-accounts:
+    get:
+      operationId: adminListAmadeusAccounts
+      summary: List the Velexis Amadeus accounts
+      description: >-
+        The shared Velexis Amadeus accounts, at most one per environment (ADR-0012), with their verification state
+        and the number of pool offices in each status. Never a client secret or its ciphertext: `clientId` is not a
+        secret. The `version` of each account is what `adminUpdateAmadeusAccount` needs in `If-Match`.
+      tags:
+        - Admin Amadeus
+      security:
+        - adminBearer: []
+      x-scope: platform_admin
+      x-error-codes:
+        - UNAUTHENTICATED
+        - TOKEN_EXPIRED
+        - RATE_LIMITED
+        - INTERNAL_ERROR
+      x-platform-tables:
+        - amadeus_accounts
+        - amadeus_offices
+      responses:
+        '200':
+          description: The accounts.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminAmadeusAccountList'
+              example:
+                data:
+                  - id: ama_01JA2Y8K3M7P1R5T9W3Z7C1F5H
+                    name: Velexis test
+                    environment: test
+                    baseUrl: https://test.travel.api.amadeus.com
+                    clientId: Vx7tK2mQ9pL4wR8nZ3cB6hY1dF5sJ0aG
+                    status: active
+                    lastVerifiedAt: '2026-10-20T06:00:04Z'
+                    lastError: null
+                    officeCounts:
+                      available: 6
+                      assigned: 17
+                      releasing: 0
+                      retired: 1
+                    createdAt: '2026-10-02T09:15:00Z'
+                    version: 3
+        '401':
+          $ref: '#/components/responses/AdminUnauthenticated'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    post:
+      operationId: adminCreateAmadeusAccount
+      summary: Enter the shared Amadeus credentials of an environment
+      description: >-
+        Stores the Velexis Amadeus credentials of one environment (ADR-0012, PADR-0012). Needs a TOTP step-up within
+        the last 15 minutes (PADR-0006 item 4). The client secret is envelope-encrypted with the associated data
+        `platform.amadeus_accounts.client_secret_ciphertext:<id>`, never logged and never answered. The account starts
+        `pending_verification`; after commit the job `amadeus_account.verify` on `platform-connections` requests an
+        OAuth token and sets `active` or `invalid_credentials`. `baseUrl` is an `https` host, or the loopback Amadeus
+        stub in development. An environment that already has an account answers `409 CONFLICT` (`details.reason =
+        environment_exists`): rotate its secret with `adminUpdateAmadeusAccount` instead. Writes an audit row without
+        the secret.
+      tags:
+        - Admin Amadeus
+      security:
+        - adminBearer: []
+      x-scope: platform_admin
+      x-mfa-step-up: true
+      x-error-codes:
+        - VALIDATION_FAILED
+        - UNAUTHENTICATED
+        - TOKEN_EXPIRED
+        - REAUTH_REQUIRED
+        - CONFLICT
+        - RATE_LIMITED
+        - INTERNAL_ERROR
+      x-platform-tables:
+        - amadeus_accounts
+        - amadeus_offices
+        - platform_audit_log
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateAmadeusAccountRequest'
+            example:
+              name: Velexis test
+              environment: test
+              baseUrl: https://test.travel.api.amadeus.com
+              clientId: Vx7tK2mQ9pL4wR8nZ3cB6hY1dF5sJ0aG
+              clientSecret: example-client-secret-not-real
+      responses:
+        '201':
+          description: The account, waiting for its verification, with its version in `ETag`.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+            ETag:
+              $ref: '#/components/headers/ETag'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminAmadeusAccount'
+              example:
+                id: ama_01JA2Y8K3M7P1R5T9W3Z7C1F5H
+                name: Velexis test
+                environment: test
+                baseUrl: https://test.travel.api.amadeus.com
+                clientId: Vx7tK2mQ9pL4wR8nZ3cB6hY1dF5sJ0aG
+                status: pending_verification
+                lastVerifiedAt: null
+                lastError: null
+                officeCounts:
+                  available: 0
+                  assigned: 0
+                  releasing: 0
+                  retired: 0
+                createdAt: '2026-10-02T09:15:00Z'
+                version: 1
+        '400':
+          $ref: '#/components/responses/ValidationFailed'
+        '401':
+          $ref: '#/components/responses/AdminStepUpUnauthorized'
+        '409':
+          description: >-
+            The environment already has a Velexis Amadeus account (`details.reason = environment_exists`). Possible
+            codes: CONFLICT.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                CONFLICT:
+                  summary: The environment has an account
+                  value:
+                    error:
+                      code: CONFLICT
+                      message: The request conflicts with the current state of the resource.
+                      status: 409
+                      requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+                      details:
+                        reason: environment_exists
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /v1/admin/amadeus-accounts/{accountId}:
+    parameters:
+      - $ref: '#/components/parameters/AmadeusAccountId'
+    patch:
+      operationId: adminUpdateAmadeusAccount
+      summary: Rename, rotate or disable a Velexis Amadeus account
+      description: >-
+        Renames the account, changes its host or client id, rotates its client secret, or disables it (`status:
+        disabled`). A change of `clientSecret`, `clientId` or `baseUrl` needs a TOTP step-up within the last 15
+        minutes (PADR-0006 item 4: rotating the shared credentials). The host counts too, because the verification
+        job and the OTA backend send the stored secret to it: without the step-up, a stolen admin session could point
+        the account at another host and receive the secret. The service checks these cases, so the operation is not
+        marked `x-mfa-step-up` and answers `401 REAUTH_REQUIRED` only then; a new name or `status: disabled` needs no
+        step-up. A new host, client id or secret sets the account `pending_verification` and runs the verification
+        job again; the new secret is encrypted as on creation. A successful verification makes a
+        disabled account `active` again. `If-Match` carries the account's `version`; a stale version answers `412
+        PRECONDITION_FAILED`. Writes an audit row without the secret and, after commit, publishes an `amadeus_account`
+        invalidation, so the OTA backend drops its cached account; office assignments are unaffected (PADR-0012 item
+        7).
+      tags:
+        - Admin Amadeus
+      security:
+        - adminBearer: []
+      x-scope: platform_admin
+      x-error-codes:
+        - VALIDATION_FAILED
+        - UNAUTHENTICATED
+        - TOKEN_EXPIRED
+        - REAUTH_REQUIRED
+        - NOT_FOUND
+        - PRECONDITION_FAILED
+        - RATE_LIMITED
+        - INTERNAL_ERROR
+      x-platform-tables:
+        - amadeus_accounts
+        - amadeus_offices
+        - platform_audit_log
+      parameters:
+        - $ref: '#/components/parameters/IfMatch'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateAmadeusAccountRequest'
+            examples:
+              rotate:
+                summary: Rotate the client secret (step-up)
+                value:
+                  clientSecret: example-rotated-secret-not-real
+              disable:
+                summary: Disable the account
+                value:
+                  status: disabled
+      responses:
+        '200':
+          description: The updated account, with its new version in `ETag`.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+            ETag:
+              $ref: '#/components/headers/ETag'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminAmadeusAccount'
+              example:
+                id: ama_01JA2Y8K3M7P1R5T9W3Z7C1F5H
+                name: Velexis test
+                environment: test
+                baseUrl: https://test.travel.api.amadeus.com
+                clientId: Vx7tK2mQ9pL4wR8nZ3cB6hY1dF5sJ0aG
+                status: pending_verification
+                lastVerifiedAt: '2026-10-20T06:00:04Z'
+                lastError: null
+                officeCounts:
+                  available: 6
+                  assigned: 17
+                  releasing: 0
+                  retired: 1
+                createdAt: '2026-10-02T09:15:00Z'
+                version: 4
+        '400':
+          $ref: '#/components/responses/ValidationFailed'
+        '401':
+          $ref: '#/components/responses/AdminStepUpUnauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '412':
+          $ref: '#/components/responses/PreconditionFailed'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /v1/admin/amadeus-accounts/{accountId}/verify:
+    parameters:
+      - $ref: '#/components/parameters/AmadeusAccountId'
+    post:
+      operationId: adminVerifyAmadeusAccount
+      summary: Verify a Velexis Amadeus account again
+      description: >-
+        Enqueues the job `amadeus_account.verify` on `platform-connections`, which requests an OAuth token with the
+        stored credentials (10-second timeout, token discarded) and sets the account `active` or
+        `invalid_credentials` with a short `lastError` (the HTTP status and the Amadeus error code, never the
+        provider's body). The answer comes before the job runs; reload the account to see the result. Writes an audit
+        row. `503 SERVICE_UNAVAILABLE` while Redis is unreachable, because the job is the whole effect.
+      tags:
+        - Admin Amadeus
+      security:
+        - adminBearer: []
+      x-scope: platform_admin
+      x-error-codes:
+        - VALIDATION_FAILED
+        - UNAUTHENTICATED
+        - TOKEN_EXPIRED
+        - NOT_FOUND
+        - RATE_LIMITED
+        - INTERNAL_ERROR
+        - SERVICE_UNAVAILABLE
+      x-platform-tables:
+        - amadeus_accounts
+        - platform_audit_log
+      responses:
+        '202':
+          description: Accepted. The verification job is queued.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+        '400':
+          $ref: '#/components/responses/ValidationFailed'
+        '401':
+          $ref: '#/components/responses/AdminUnauthenticated'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+  /v1/admin/amadeus-offices:
+    get:
+      operationId: adminListAmadeusOffices
+      summary: List the Amadeus office pool
+      description: >-
+        The offices of the Velexis Amadeus accounts (PADR-0012), oldest first, cursor-paginated, with filters on the
+        account, the environment and the status (`available`, `assigned`, `releasing`, `retired`). An `assigned` or
+        `releasing` office names its OTA. The `version` of each office is what `adminUpdateAmadeusOffice` needs in
+        `If-Match`.
+      tags:
+        - Admin Amadeus
+      security:
+        - adminBearer: []
+      x-scope: platform_admin
+      x-error-codes:
+        - VALIDATION_FAILED
+        - UNAUTHENTICATED
+        - TOKEN_EXPIRED
+        - RATE_LIMITED
+        - INTERNAL_ERROR
+      x-platform-tables:
+        - amadeus_offices
+        - amadeus_accounts
+        - tenants
+      parameters:
+        - name: accountId
+          in: query
+          required: false
+          description: Only the offices of this Velexis Amadeus account.
+          schema:
+            $ref: '#/components/schemas/AmadeusAccountId'
+        - name: environment
+          in: query
+          required: false
+          description: Only the offices of the account of this environment.
+          schema:
+            $ref: '#/components/schemas/Environment'
+        - name: status
+          in: query
+          required: false
+          description: Only offices in this status.
+          schema:
+            $ref: '#/components/schemas/AmadeusOfficeStatus'
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: One page of offices.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminAmadeusOfficeList'
+              example:
+                data:
+                  - id: amo_01JA2Y9N4Q8S2V6X0Z4B8D2G6J
+                    amadeusAccountId: ama_01JA2Y8K3M7P1R5T9W3Z7C1F5H
+                    officeId: NCE1A0955
+                    environment: test
+                    status: assigned
+                    assignedTenant:
+                      id: ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F
+                      key: acme
+                    assignedAt: '2026-10-14T08:20:15Z'
+                    releaseRequestedAt: null
+                    releasedAt: null
+                    notes: null
+                    createdAt: '2026-10-02T09:20:00Z'
+                    version: 2
+                  - id: amo_01JC8R6T0W4Y8A2C6E0G4J8M2P
+                    amadeusAccountId: ama_01JA2Y8K3M7P1R5T9W3Z7C1F5H
+                    officeId: PAR1A0001
+                    environment: test
+                    status: available
+                    assignedTenant: null
+                    assignedAt: null
+                    releaseRequestedAt: null
+                    releasedAt: null
+                    notes: Ordered with the October batch.
+                    createdAt: '2026-10-22T10:05:00Z'
+                    version: 1
+                page:
+                  nextCursor: eyJjcmVhdGVkQXQiOiIyMDI2LTEwLTIyVDEwOjA1OjAwWiJ9
+                  limit: 2
+        '400':
+          $ref: '#/components/responses/ValidationFailed'
+        '401':
+          $ref: '#/components/responses/AdminUnauthenticated'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    post:
+      operationId: adminAddAmadeusOffices
+      summary: Add offices to the pool in bulk
+      description: >-
+        Adds the office ids ordered from Amadeus to the pool of one Velexis Amadeus account, `available` at once. Each
+        id has 9 letters or digits and is upper-cased first. An id that the account's pool already holds, or that
+        repeats an earlier id of the request, is skipped: `skipped` lists each such entry, upper-cased and in request
+        order, so the answer is `201` even when nothing new was added. `created` follows the request order too.
+        `notes` (for example the order reference) goes on every created office. An unknown account answers `404
+        NOT_FOUND`. Writes one audit row with the created and skipped ids.
+      tags:
+        - Admin Amadeus
+      security:
+        - adminBearer: []
+      x-scope: platform_admin
+      x-error-codes:
+        - VALIDATION_FAILED
+        - UNAUTHENTICATED
+        - TOKEN_EXPIRED
+        - NOT_FOUND
+        - RATE_LIMITED
+        - INTERNAL_ERROR
+      x-platform-tables:
+        - amadeus_offices
+        - amadeus_accounts
+        - platform_audit_log
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AddAmadeusOfficesRequest'
+            example:
+              amadeusAccountId: ama_01JA2Y8K3M7P1R5T9W3Z7C1F5H
+              officeIds:
+                - NCE1A0955
+                - PAR1A0001
+                - par1a0001
+                - PAR1A0002
+              notes: Ordered with the October batch.
+      responses:
+        '201':
+          description: >-
+            The created offices and the skipped ids: here `NCE1A0955` was already in the pool and `par1a0001` repeats
+            `PAR1A0001`.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AmadeusOfficesAdded'
+              example:
+                created:
+                  - id: amo_01JC8R6T0W4Y8A2C6E0G4J8M2P
+                    amadeusAccountId: ama_01JA2Y8K3M7P1R5T9W3Z7C1F5H
+                    officeId: PAR1A0001
+                    environment: test
+                    status: available
+                    assignedTenant: null
+                    assignedAt: null
+                    releaseRequestedAt: null
+                    releasedAt: null
+                    notes: Ordered with the October batch.
+                    createdAt: '2026-10-22T10:05:00Z'
+                    version: 1
+                  - id: amo_01JC8R6T0W4Y8A2C6E0G4J8M3Q
+                    amadeusAccountId: ama_01JA2Y8K3M7P1R5T9W3Z7C1F5H
+                    officeId: PAR1A0002
+                    environment: test
+                    status: available
+                    assignedTenant: null
+                    assignedAt: null
+                    releaseRequestedAt: null
+                    releasedAt: null
+                    notes: Ordered with the October batch.
+                    createdAt: '2026-10-22T10:05:00Z'
+                    version: 1
+                skipped:
+                  - NCE1A0955
+                  - PAR1A0001
+        '400':
+          $ref: '#/components/responses/ValidationFailed'
+        '401':
+          $ref: '#/components/responses/AdminUnauthenticated'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /v1/admin/amadeus-offices/{officeRowId}:
+    parameters:
+      - $ref: '#/components/parameters/AmadeusOfficeRowId'
+    patch:
+      operationId: adminUpdateAmadeusOffice
+      summary: Edit the notes of an office
+      description: >-
+        Replaces the admin notes of an office (commercial onboarding, ticketing agreements; PADR-0012 item 3); `null`
+        clears them. Works in every office status. `If-Match` carries the office's `version`; a stale version answers
+        `412 PRECONDITION_FAILED`. Writes an audit row.
+      tags:
+        - Admin Amadeus
+      security:
+        - adminBearer: []
+      x-scope: platform_admin
+      x-error-codes:
+        - VALIDATION_FAILED
+        - UNAUTHENTICATED
+        - TOKEN_EXPIRED
+        - NOT_FOUND
+        - PRECONDITION_FAILED
+        - RATE_LIMITED
+        - INTERNAL_ERROR
+      x-platform-tables:
+        - amadeus_offices
+        - amadeus_accounts
+        - tenants
+        - platform_audit_log
+      parameters:
+        - $ref: '#/components/parameters/IfMatch'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateAmadeusOfficeRequest'
+            example:
+              notes: Live onboarding signed on 2027-03-02; ticketing agreement TA-118.
+      responses:
+        '200':
+          description: The office, with its new version in `ETag`.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+            ETag:
+              $ref: '#/components/headers/ETag'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminAmadeusOffice'
+              examples:
+                office:
+                  $ref: '#/components/examples/AdminAmadeusOffice'
+        '400':
+          $ref: '#/components/responses/ValidationFailed'
+        '401':
+          $ref: '#/components/responses/AdminUnauthenticated'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '412':
+          $ref: '#/components/responses/PreconditionFailed'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /v1/admin/amadeus-offices/{officeRowId}/assign:
+    parameters:
+      - $ref: '#/components/parameters/AmadeusOfficeRowId'
+    post:
+      operationId: adminAssignAmadeusOffice
+      summary: Assign an office to an OTA
+      description: >-
+        Assigns an `available` office to an OTA and creates or completes the OTA's `velexis` Amadeus connection of the
+        office's environment: `office_ids` is the office, the default, queuing and owner offices are set to it, and
+        the connection becomes `active` (PADR-0012). This is how an admin serves an OTA whose provisioning found the
+        pool empty, and, from M5, assigns a live office after the commercial onboarding; the owners are then
+        e-mailed. The office row is locked and its status re-checked, so two concurrent assignments of one office
+        give one success and one `409 AMADEUS_OFFICE_UNAVAILABLE`.
+
+
+        `409 AMADEUS_OFFICE_UNAVAILABLE` when the office is not `available`. `409 CONFLICT` when the OTA uses its own
+        credentials in that environment (`details.reason = tenant_credentials`) or already has an assigned office of
+        that account (`details.reason = office_already_assigned`). An unknown office or OTA answers `404 NOT_FOUND`.
+        Writes an audit row and, after commit, publishes the `connection` and `amadeus_account` invalidations.
+      tags:
+        - Admin Amadeus
+      security:
+        - adminBearer: []
+      x-scope: platform_admin
+      x-error-codes:
+        - VALIDATION_FAILED
+        - UNAUTHENTICATED
+        - TOKEN_EXPIRED
+        - NOT_FOUND
+        - CONFLICT
+        - AMADEUS_OFFICE_UNAVAILABLE
+        - RATE_LIMITED
+        - INTERNAL_ERROR
+      x-platform-tables:
+        - amadeus_offices
+        - amadeus_accounts
+        - supplier_connections
+        - tenants
+        - tenant_memberships
+        - accounts
+        - email_outbox
+        - platform_audit_log
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AssignAmadeusOfficeRequest'
+            example:
+              tenantId: ten_01JB3K4M8P2R6T0W4Y8A2C6E0G
+      responses:
+        '200':
+          description: The assigned office and the OTA's connection.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AmadeusOfficeAssigned'
+              example:
+                office:
+                  id: amo_01JC8R6T0W4Y8A2C6E0G4J8M2P
+                  amadeusAccountId: ama_01JA2Y8K3M7P1R5T9W3Z7C1F5H
+                  officeId: PAR1A0001
+                  environment: test
+                  status: assigned
+                  assignedTenant:
+                    id: ten_01JB3K4M8P2R6T0W4Y8A2C6E0G
+                    key: nordic
+                  assignedAt: '2026-10-22T10:12:30Z'
+                  releaseRequestedAt: null
+                  releasedAt: null
+                  notes: Ordered with the October batch.
+                  createdAt: '2026-10-22T10:05:00Z'
+                  version: 2
+                connection:
+                  id: sc_01JC9S7V1X5Z9B3D7F1H5K9N3Q
+                  environment: test
+                  credentialSource: velexis
+                  status: active
+                  officeIds:
+                    - PAR1A0001
+                  defaultOfficeId: PAR1A0001
+                  queuingOfficeId: PAR1A0001
+                  ownerOfficeId: PAR1A0001
+                  clientId: null
+                  ticketingDefaults: {}
+                  monitoredQueues: []
+                  lastVerifiedAt: null
+                  lastError: null
+                  pendingSubmission: null
+                  version: 2
+        '400':
+          $ref: '#/components/responses/ValidationFailed'
+        '401':
+          $ref: '#/components/responses/AdminUnauthenticated'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: >-
+            The office is not available, or the OTA uses its own credentials or already has an assigned office
+            (`details.reason`). Possible codes: AMADEUS_OFFICE_UNAVAILABLE, CONFLICT.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                AMADEUS_OFFICE_UNAVAILABLE:
+                  $ref: '#/components/examples/AMADEUS_OFFICE_UNAVAILABLE'
+                CONFLICT:
+                  summary: The OTA already has an assigned office there
+                  value:
+                    error:
+                      code: CONFLICT
+                      message: The request conflicts with the current state of the resource.
+                      status: 409
+                      requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+                      details:
+                        reason: office_already_assigned
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /v1/admin/amadeus-offices/{officeRowId}/retire:
+    parameters:
+      - $ref: '#/components/parameters/AmadeusOfficeRowId'
+    post:
+      operationId: adminRetireAmadeusOffice
+      summary: Retire an office
+      description: >-
+        Takes an `available` office out of use for good (`retired`, PADR-0012 item 1), with a written `reason` of
+        5–500 characters that the audit row keeps. An office in any other status answers `409 CONFLICT`
+        (`details.reason = not_available`): an assigned office is released first (`adminReleaseAmadeusOffice`, M5).
+      tags:
+        - Admin Amadeus
+      security:
+        - adminBearer: []
+      x-scope: platform_admin
+      x-reason-required: true
+      x-error-codes:
+        - VALIDATION_FAILED
+        - UNAUTHENTICATED
+        - TOKEN_EXPIRED
+        - NOT_FOUND
+        - CONFLICT
+        - RATE_LIMITED
+        - INTERNAL_ERROR
+      x-platform-tables:
+        - amadeus_offices
+        - amadeus_accounts
+        - platform_audit_log
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AdminReasonRequest'
+            example:
+              reason: Amadeus closed this office id at the end of the contract year.
+      responses:
+        '200':
+          description: The retired office.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminAmadeusOffice'
+              example:
+                id: amo_01JC8R6T0W4Y8A2C6E0G4J8M3Q
+                amadeusAccountId: ama_01JA2Y8K3M7P1R5T9W3Z7C1F5H
+                officeId: PAR1A0002
+                environment: test
+                status: retired
+                assignedTenant: null
+                assignedAt: null
+                releaseRequestedAt: null
+                releasedAt: null
+                notes: Ordered with the October batch.
+                createdAt: '2026-10-22T10:05:00Z'
+                version: 2
+        '400':
+          $ref: '#/components/responses/ValidationFailed'
+        '401':
+          $ref: '#/components/responses/AdminUnauthenticated'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: 'Only an available office can be retired (`details.reason = not_available`). Possible codes: CONFLICT.'
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                CONFLICT:
+                  summary: The office is assigned, releasing or retired
+                  value:
+                    error:
+                      code: CONFLICT
+                      message: The request conflicts with the current state of the resource.
+                      status: 409
+                      requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+                      details:
+                        reason: not_available
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /v1/admin/accounts:
+    get:
+      operationId: adminListAccounts
+      summary: Search the accounts
+      description: >-
+        Every account of the portal and the admin, newest first, cursor-paginated. `q` matches part of the e-mail
+        address or the name, case-insensitively; `status` filters. Never a password hash, an MFA secret or a token.
+      tags:
+        - Admin accounts
+      security:
+        - adminBearer: []
+      x-scope: platform_admin
+      x-error-codes:
+        - VALIDATION_FAILED
+        - UNAUTHENTICATED
+        - TOKEN_EXPIRED
+        - RATE_LIMITED
+        - INTERNAL_ERROR
+      x-platform-tables:
+        - accounts
+      parameters:
+        - name: q
+          in: query
+          required: false
+          description: Part of the e-mail address or the name; case-insensitive.
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 254
+          example: berg
+        - name: status
+          in: query
+          required: false
+          description: Only accounts in this status.
+          schema:
+            $ref: '#/components/schemas/AccountStatus'
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: One page of accounts.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminAccountList'
+              example:
+                data:
+                  - id: acc_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+                    email: anna.berg@example.com
+                    fullName: Anna Berg
+                    status: active
+                    mfaEnabled: true
+                    isPlatformAdmin: false
+                    lastLoginAt: '2026-10-21T07:58:12Z'
+                    createdAt: '2026-10-01T10:02:17Z'
+                page:
+                  nextCursor: null
+                  limit: 50
+        '400':
+          $ref: '#/components/responses/ValidationFailed'
+        '401':
+          $ref: '#/components/responses/AdminUnauthenticated'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /v1/admin/accounts/{accountId}:
+    parameters:
+      - $ref: '#/components/parameters/AdminAccountId'
+    get:
+      operationId: adminGetAccount
+      summary: Get an account for support
+      description: >-
+        One account with its active memberships, the number of its active sessions (refresh families of the portal
+        and the admin that are neither revoked nor expired) and its last 50 audit rows, those it acted in and those
+        that target it, newest first. Never a password hash, an MFA secret, a recovery code or a token.
+      tags:
+        - Admin accounts
+      security:
+        - adminBearer: []
+      x-scope: platform_admin
+      x-error-codes:
+        - VALIDATION_FAILED
+        - UNAUTHENTICATED
+        - TOKEN_EXPIRED
+        - NOT_FOUND
+        - RATE_LIMITED
+        - INTERNAL_ERROR
+      x-platform-tables:
+        - accounts
+        - tenant_memberships
+        - tenants
+        - account_sessions
+        - platform_audit_log
+      responses:
+        '200':
+          description: The account.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminAccountDetail'
+              example:
+                account:
+                  id: acc_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+                  email: anna.berg@example.com
+                  emailVerified: true
+                  fullName: Anna Berg
+                  locale: en
+                  timeZone: Europe/Oslo
+                  status: active
+                  mfaEnabled: true
+                  mfaEnabledAt: '2026-10-03T09:12:44Z'
+                  isPlatformAdmin: false
+                  failedLoginCount: 0
+                  lockedUntil: null
+                  lastLoginAt: '2026-10-21T07:58:12Z'
+                  createdAt: '2026-10-01T10:02:17Z'
+                  version: 3
+                memberships:
+                  - membershipId: stf_01JA2ZA1C5E9G3J7K2M6P0R4T8
+                    tenantId: ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F
+                    tenantKey: acme
+                    tenantName: Acme Travel
+                    tenantStatus: active
+                    role: owner
+                activeSessions: 2
+                recentAudit:
+                  - id: '1042'
+                    tenantId: ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F
+                    tenantKey: acme
+                    actorType: account
+                    actorAccountId: acc_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+                    actorLabel: anna.berg@example.com
+                    action: invitation.created
+                    targetType: invitation
+                    targetId: ivt_01JA2ZF4H8K2M6P0R4T8W2Y6A0
+                    requestId: req_01JA2ZF4H8K2M6P0R4T8W2Y6A1
+                    ipAddress: 198.51.100.23
+                    userAgent: Mozilla/5.0 (Macintosh; Intel Mac OS X 14_6) AppleWebKit/605.1.15
+                    details:
+                      email: jo@acme-travel.example.com
+                      role: agent
+                    createdAt: '2026-10-14T09:00:00Z'
+        '400':
+          $ref: '#/components/responses/ValidationFailed'
+        '401':
+          $ref: '#/components/responses/AdminUnauthenticated'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /v1/admin/accounts/{accountId}/disable:
+    parameters:
+      - $ref: '#/components/parameters/AdminAccountId'
+    post:
+      operationId: adminDisableAccount
+      summary: Disable an account
+      description: >-
+        Blocks an account (`disabled`), with a written `reason` of 5–500 characters that the audit row keeps. One
+        transaction sets the status and revokes every session of the account (portal and admin); after commit it
+        writes the cut-off `staffdeny:acct:<id>` in Redis, so the OTA admin refuses the account's staff sessions at
+        once, and publishes an `account` invalidation. The account's sign-ins then answer `403 ACCOUNT_DISABLED`. `403
+        FORBIDDEN` for the caller's own account (`details.reason = self`) or the last active platform admin
+        (`details.reason = last_admin`); `409 CONFLICT` when the account is already `disabled` or `deleted`
+        (`details.reason = not_enabled`).
+      tags:
+        - Admin accounts
+      security:
+        - adminBearer: []
+      x-scope: platform_admin
+      x-reason-required: true
+      x-error-codes:
+        - VALIDATION_FAILED
+        - UNAUTHENTICATED
+        - TOKEN_EXPIRED
+        - FORBIDDEN
+        - NOT_FOUND
+        - CONFLICT
+        - RATE_LIMITED
+        - INTERNAL_ERROR
+      x-platform-tables:
+        - accounts
+        - account_sessions
+        - platform_audit_log
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AdminReasonRequest'
+            example:
+              reason: Account used for card testing on two storefronts; see ticket SUP-412.
+      responses:
+        '200':
+          description: The disabled account.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminAccount'
+              example:
+                id: acc_01JB3K2H6K0N4Q8S2V6X0Z4B8D
+                email: mikael.lind@nordic-fares.example.com
+                emailVerified: true
+                fullName: Mikael Lind
+                locale: en
+                timeZone: Europe/Stockholm
+                status: disabled
+                mfaEnabled: false
+                mfaEnabledAt: null
+                isPlatformAdmin: false
+                failedLoginCount: 0
+                lockedUntil: null
+                lastLoginAt: '2026-10-16T13:38:50Z'
+                createdAt: '2026-10-16T13:35:02Z'
+                version: 4
+        '400':
+          $ref: '#/components/responses/ValidationFailed'
+        '401':
+          $ref: '#/components/responses/AdminUnauthenticated'
+        '403':
+          $ref: '#/components/responses/AdminSelfOrLastAdminForbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: 'The account is already disabled or deleted (`details.reason = not_enabled`). Possible codes: CONFLICT.'
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                CONFLICT:
+                  summary: The account is already disabled
+                  value:
+                    error:
+                      code: CONFLICT
+                      message: The request conflicts with the current state of the resource.
+                      status: 409
+                      requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+                      details:
+                        reason: not_enabled
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /v1/admin/accounts/{accountId}/enable:
+    parameters:
+      - $ref: '#/components/parameters/AdminAccountId'
+    post:
+      operationId: adminEnableAccount
+      summary: Enable a disabled account
+      description: >-
+        Unblocks a `disabled` account, with a written `reason` of 5–500 characters that the audit row keeps: the
+        status goes back to `active`, or to `pending_verification` when the e-mail address was never verified. The
+        revoked sessions stay revoked; the person signs in again. After commit it publishes an `account`
+        invalidation. `409 CONFLICT` when the account is not `disabled` (`details.reason =
+        not_disabled`).
+      tags:
+        - Admin accounts
+      security:
+        - adminBearer: []
+      x-scope: platform_admin
+      x-reason-required: true
+      x-error-codes:
+        - VALIDATION_FAILED
+        - UNAUTHENTICATED
+        - TOKEN_EXPIRED
+        - NOT_FOUND
+        - CONFLICT
+        - RATE_LIMITED
+        - INTERNAL_ERROR
+      x-platform-tables:
+        - accounts
+        - platform_audit_log
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AdminReasonRequest'
+            example:
+              reason: Identity confirmed by phone; the card testing came from a leaked password.
+      responses:
+        '200':
+          description: The enabled account.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminAccount'
+              example:
+                id: acc_01JB3K2H6K0N4Q8S2V6X0Z4B8D
+                email: mikael.lind@nordic-fares.example.com
+                emailVerified: true
+                fullName: Mikael Lind
+                locale: en
+                timeZone: Europe/Stockholm
+                status: active
+                mfaEnabled: false
+                mfaEnabledAt: null
+                isPlatformAdmin: false
+                failedLoginCount: 0
+                lockedUntil: null
+                lastLoginAt: '2026-10-16T13:38:50Z'
+                createdAt: '2026-10-16T13:35:02Z'
+                version: 5
+        '400':
+          $ref: '#/components/responses/ValidationFailed'
+        '401':
+          $ref: '#/components/responses/AdminUnauthenticated'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: 'Only a disabled account can be enabled (`details.reason = not_disabled`). Possible codes: CONFLICT.'
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                CONFLICT:
+                  summary: The account is not disabled
+                  value:
+                    error:
+                      code: CONFLICT
+                      message: The request conflicts with the current state of the resource.
+                      status: 409
+                      requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+                      details:
+                        reason: not_disabled
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /v1/admin/accounts/{accountId}/unlock:
+    parameters:
+      - $ref: '#/components/parameters/AdminAccountId'
+    post:
+      operationId: adminUnlockAccount
+      summary: Clear the sign-in lockout of an account
+      description: >-
+        Ends the lockout after too many failed sign-ins at once: clears `locked_until` and the failed sign-in count,
+        so the next sign-in with the right password works. An account that is not locked keeps its state; the answer
+        is the account either way. Writes an audit row.
+      tags:
+        - Admin accounts
+      security:
+        - adminBearer: []
+      x-scope: platform_admin
+      x-error-codes:
+        - VALIDATION_FAILED
+        - UNAUTHENTICATED
+        - TOKEN_EXPIRED
+        - NOT_FOUND
+        - RATE_LIMITED
+        - INTERNAL_ERROR
+      x-platform-tables:
+        - accounts
+        - platform_audit_log
+      responses:
+        '200':
+          description: The account, no longer locked.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminAccount'
+              examples:
+                account:
+                  $ref: '#/components/examples/AdminAccount'
+        '400':
+          $ref: '#/components/responses/ValidationFailed'
+        '401':
+          $ref: '#/components/responses/AdminUnauthenticated'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /v1/admin/accounts/{accountId}/reset-mfa:
+    parameters:
+      - $ref: '#/components/parameters/AdminAccountId'
+    post:
+      operationId: adminResetAccountMfa
+      summary: Turn off the MFA of an account after an identity check
+      description: >-
+        The support case of a person who lost their authenticator, after an identity check done outside the system;
+        the written `reason` of 5–500 characters records how, and the audit row keeps it. Needs a TOTP step-up within
+        the last 15 minutes (PADR-0006 item 4). One transaction turns MFA off, erases the TOTP secret, deletes the
+        recovery codes and revokes every session; after commit it writes `staffdeny:acct:<id>`, publishes an `account`
+        invalidation and e-mails the person (`auth.mfa_changed`). A platform admin cannot be the target (`403
+        FORBIDDEN`, `details.reason = platform_admin`): another admin first revokes the admin rights, or the developer
+        runs `admin:reset-mfa` on the VM (PADR-0006 item 6). `409 CONFLICT` when the account has no MFA
+        (`details.reason = mfa_not_enabled`).
+      tags:
+        - Admin accounts
+      security:
+        - adminBearer: []
+      x-scope: platform_admin
+      x-reason-required: true
+      x-mfa-step-up: true
+      x-error-codes:
+        - VALIDATION_FAILED
+        - UNAUTHENTICATED
+        - TOKEN_EXPIRED
+        - REAUTH_REQUIRED
+        - FORBIDDEN
+        - NOT_FOUND
+        - CONFLICT
+        - RATE_LIMITED
+        - INTERNAL_ERROR
+      x-platform-tables:
+        - accounts
+        - account_recovery_codes
+        - account_sessions
+        - email_outbox
+        - platform_audit_log
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AdminReasonRequest'
+            example:
+              reason: Lost phone; identity confirmed on a video call with the passport on 2026-10-21 (SUP-431).
+      responses:
+        '200':
+          description: The account, without MFA.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminAccount'
+              example:
+                id: acc_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+                email: anna.berg@example.com
+                emailVerified: true
+                fullName: Anna Berg
+                locale: en
+                timeZone: Europe/Oslo
+                status: active
+                mfaEnabled: false
+                mfaEnabledAt: null
+                isPlatformAdmin: false
+                failedLoginCount: 0
+                lockedUntil: null
+                lastLoginAt: '2026-10-21T07:58:12Z'
+                createdAt: '2026-10-01T10:02:17Z'
+                version: 4
+        '400':
+          $ref: '#/components/responses/ValidationFailed'
+        '401':
+          $ref: '#/components/responses/AdminStepUpUnauthorized'
+        '403':
+          description: >-
+            The account is a platform admin (`details.reason = platform_admin`); revoke the admin rights first.
+            Possible codes: FORBIDDEN.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                FORBIDDEN:
+                  summary: The account is a platform admin
+                  value:
+                    error:
+                      code: FORBIDDEN
+                      message: The caller is authenticated but not allowed to perform this operation on this resource.
+                      status: 403
+                      requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+                      details:
+                        reason: platform_admin
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: 'The account has no MFA to reset (`details.reason = mfa_not_enabled`). Possible codes: CONFLICT.'
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                CONFLICT:
+                  summary: The account has no MFA
+                  value:
+                    error:
+                      code: CONFLICT
+                      message: The request conflicts with the current state of the resource.
+                      status: 409
+                      requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+                      details:
+                        reason: mfa_not_enabled
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /v1/admin/admins:
+    get:
+      operationId: adminListAdmins
+      summary: List the platform admins
+      description: >-
+        Every account with `is_platform_admin = true`, by name. The list is short, so it is not paginated.
+      tags:
+        - Admin accounts
+      security:
+        - adminBearer: []
+      x-scope: platform_admin
+      x-error-codes:
+        - UNAUTHENTICATED
+        - TOKEN_EXPIRED
+        - RATE_LIMITED
+        - INTERNAL_ERROR
+      x-platform-tables:
+        - accounts
+      responses:
+        '200':
+          description: The platform admins.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PlatformAdminList'
+              example:
+                data:
+                  - accountId: acc_01JA2YQ3M7R1T5W9Z3C7F1H5K9
+                    email: lena.holm@velexis.example.com
+                    fullName: Lena Holm
+                    mfaEnabled: true
+                    lastLoginAt: '2026-10-22T07:41:03Z'
+        '401':
+          $ref: '#/components/responses/AdminUnauthenticated'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    post:
+      operationId: adminGrantAdmin
+      summary: Grant platform admin rights
+      description: >-
+        Makes an existing account a platform admin, with a written `reason` of 5–500 characters that the audit row
+        keeps. Needs a TOTP step-up within the last 15 minutes (PADR-0006 item 4). The account must be `active`, with a
+        verified e-mail address and MFA enabled, because every admin sign-in asks for a TOTP code: otherwise `422
+        UNPROCESSABLE` with `details.reason` `account_not_active`, `email_not_verified` or `mfa_not_enabled`. No account
+        with the e-mail address answers `404 NOT_FOUND`; an account that is already a platform admin answers `409
+        CONFLICT` (`details.reason = already_admin`). The new admin signs in on the admin host; portal sessions are
+        unaffected.
+      tags:
+        - Admin accounts
+      security:
+        - adminBearer: []
+      x-scope: platform_admin
+      x-reason-required: true
+      x-mfa-step-up: true
+      x-error-codes:
+        - VALIDATION_FAILED
+        - UNAUTHENTICATED
+        - TOKEN_EXPIRED
+        - REAUTH_REQUIRED
+        - NOT_FOUND
+        - CONFLICT
+        - UNPROCESSABLE
+        - RATE_LIMITED
+        - INTERNAL_ERROR
+      x-platform-tables:
+        - accounts
+        - platform_audit_log
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GrantAdminRequest'
+            example:
+              email: jonas.dahl@velexis.example.com
+              reason: Jonas joins support on 2026-11-01 and covers the admin on-call rota.
+      responses:
+        '201':
+          description: The new platform admin.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PlatformAdmin'
+              example:
+                accountId: acc_01JB0F5G9J3M7Q1T5W9Z3C7F1H
+                email: jonas.dahl@velexis.example.com
+                fullName: Jonas Dahl
+                mfaEnabled: true
+                lastLoginAt: '2026-10-28T08:02:19Z'
+        '400':
+          $ref: '#/components/responses/ValidationFailed'
+        '401':
+          $ref: '#/components/responses/AdminStepUpUnauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: 'The account is already a platform admin (`details.reason = already_admin`). Possible codes: CONFLICT.'
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                CONFLICT:
+                  summary: Already a platform admin
+                  value:
+                    error:
+                      code: CONFLICT
+                      message: The request conflicts with the current state of the resource.
+                      status: 409
+                      requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+                      details:
+                        reason: already_admin
+        '422':
+          description: >-
+            The account is not active, its e-mail address is not verified, or it has no MFA (`details.reason`).
+            Possible codes: UNPROCESSABLE.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                UNPROCESSABLE:
+                  summary: The account has no MFA
+                  value:
+                    error:
+                      code: UNPROCESSABLE
+                      message: The request breaks a business rule.
+                      status: 422
+                      requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+                      details:
+                        reason: mfa_not_enabled
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /v1/admin/admins/{accountId}:
+    parameters:
+      - $ref: '#/components/parameters/AdminAccountId'
+    delete:
+      operationId: adminRevokeAdmin
+      summary: Revoke platform admin rights
+      description: >-
+        Takes the platform admin rights away from an account. Needs a TOTP step-up within the last 15 minutes
+        (PADR-0006 item 4). One transaction clears `is_platform_admin` and revokes the account's admin sessions;
+        because the admin guard re-reads the account on every request, its admin tokens stop working at once
+        (PADR-0006 item 3). Portal sessions are unaffected. The optional `reason` goes into the audit row. `403
+        FORBIDDEN` for the caller's own account (`details.reason = self`) or the last active platform admin
+        (`details.reason = last_admin`); an account that is not a platform admin answers `404 NOT_FOUND`.
+      tags:
+        - Admin accounts
+      security:
+        - adminBearer: []
+      x-scope: platform_admin
+      x-mfa-step-up: true
+      x-error-codes:
+        - VALIDATION_FAILED
+        - UNAUTHENTICATED
+        - TOKEN_EXPIRED
+        - REAUTH_REQUIRED
+        - FORBIDDEN
+        - NOT_FOUND
+        - RATE_LIMITED
+        - INTERNAL_ERROR
+      x-platform-tables:
+        - accounts
+        - account_sessions
+        - platform_audit_log
+      parameters:
+        - name: reason
+          in: query
+          required: false
+          description: >-
+            Why the rights are revoked (5–500 characters), kept in the audit row. Optional: PADR-0006 item 5 does not
+            require a reason for a revocation.
+          schema:
+            $ref: '#/components/schemas/AdminReason'
+          example: Left the support team on 2027-01-31.
+      responses:
+        '204':
+          description: The account is no longer a platform admin.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+        '400':
+          $ref: '#/components/responses/ValidationFailed'
+        '401':
+          $ref: '#/components/responses/AdminStepUpUnauthorized'
+        '403':
+          $ref: '#/components/responses/AdminSelfOrLastAdminForbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /v1/admin/audit-log:
+    get:
+      operationId: adminListAudit
+      summary: Search the platform audit log
+      description: >-
+        The rows of `platform_audit_log` (PADR-0006, Audit), newest first, cursor-paginated, filtered by OTA, acting
+        account, actor type, action, target and period (`from` inclusive, `to` exclusive; `from` after `to` answers
+        `400 VALIDATION_FAILED`). `action` matches the dotted action exactly, as the admin's filter lists it. The
+        `details` were redacted when the row was written: never a secret, a token or a bank number.
+      tags:
+        - Admin audit
+      security:
+        - adminBearer: []
+      x-scope: platform_admin
+      x-error-codes:
+        - VALIDATION_FAILED
+        - UNAUTHENTICATED
+        - TOKEN_EXPIRED
+        - RATE_LIMITED
+        - INTERNAL_ERROR
+      x-platform-tables:
+        - platform_audit_log
+      parameters:
+        - $ref: '#/components/parameters/AuditTenantId'
+        - $ref: '#/components/parameters/AuditActorAccountId'
+        - $ref: '#/components/parameters/AuditActorType'
+        - $ref: '#/components/parameters/AuditAction'
+        - $ref: '#/components/parameters/AuditTargetType'
+        - $ref: '#/components/parameters/AuditTargetId'
+        - name: from
+          in: query
+          required: false
+          description: Only rows written at or after this time.
+          schema:
+            type: string
+            format: date-time
+          example: '2026-10-01T00:00:00Z'
+        - name: to
+          in: query
+          required: false
+          description: Only rows written before this time.
+          schema:
+            type: string
+            format: date-time
+          example: '2026-11-01T00:00:00Z'
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: One page of audit rows.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuditEntryList'
+              example:
+                data:
+                  - id: '1187'
+                    tenantId: ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F
+                    tenantKey: acme
+                    actorType: platform_admin
+                    actorAccountId: acc_01JA2YQ3M7R1T5W9Z3C7F1H5K9
+                    actorLabel: lena.holm@velexis.example.com
+                    action: tenant.suspended
+                    targetType: tenant
+                    targetId: ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F
+                    requestId: req_01JC4M2P6R0T4W8Y2A6C0E4G8K
+                    ipAddress: 203.0.113.7
+                    userAgent: Mozilla/5.0 (X11; Linux x86_64) Gecko/20100101 Firefox/131.0
+                    details:
+                      reason: Card testing from the storefront reported by Stripe on 2026-10-20.
+                      before:
+                        status: active
+                      after:
+                        status: suspended
+                        suspensionReason: abuse
+                    createdAt: '2026-10-20T07:33:05Z'
+                page:
+                  nextCursor: eyJpZCI6IjExODcifQ
+                  limit: 1
+        '400':
+          $ref: '#/components/responses/ValidationFailed'
+        '401':
+          $ref: '#/components/responses/AdminUnauthenticated'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /v1/admin/audit-log.csv:
+    get:
+      operationId: adminExportAudit
+      summary: Export the platform audit log as CSV
+      description: >-
+        The rows of `adminListAudit` with the same filters, as a CSV file to download: UTF-8, comma-separated, quoted
+        as RFC 4180 says, with one header row and these columns: `id`, `createdAt`, `tenantId`, `tenantKey`,
+        `actorType`, `actorAccountId`, `actorLabel`, `action`, `targetType`, `targetId`, `requestId`, `ipAddress`,
+        `userAgent`, `details` (the redacted JSON); an empty cell is a `null`. A cell that starts with `=`, `+`, `-`,
+        `@`, a tab or a carriage return gets a leading `'` (the OWASP rule against CSV injection), so a spreadsheet
+        never runs it as a formula. The period is required and at most one year (`from` inclusive, `to`
+        exclusive; a longer or reversed period answers `400 VALIDATION_FAILED`), and the file holds at most 100 000
+        rows, newest first: narrow the filters when the limit is reached. The answer is streamed.
+
+
+        The export is a sensitive read: it writes an audit row with the filters (PADR-0006, Audit item 2). The file
+        holds e-mail and IP addresses, so it is never cached.
+      tags:
+        - Admin audit
+      security:
+        - adminBearer: []
+      x-scope: platform_admin
+      x-error-codes:
+        - VALIDATION_FAILED
+        - UNAUTHENTICATED
+        - TOKEN_EXPIRED
+        - RATE_LIMITED
+        - INTERNAL_ERROR
+      x-platform-tables:
+        - platform_audit_log
+      parameters:
+        - $ref: '#/components/parameters/AuditTenantId'
+        - $ref: '#/components/parameters/AuditActorAccountId'
+        - $ref: '#/components/parameters/AuditActorType'
+        - $ref: '#/components/parameters/AuditAction'
+        - $ref: '#/components/parameters/AuditTargetType'
+        - $ref: '#/components/parameters/AuditTargetId'
+        - name: from
+          in: query
+          required: true
+          description: The start of the period (inclusive); at most one year before `to`.
+          schema:
+            type: string
+            format: date-time
+          example: '2026-10-01T00:00:00Z'
+        - name: to
+          in: query
+          required: true
+          description: The end of the period (exclusive).
+          schema:
+            type: string
+            format: date-time
+          example: '2026-11-01T00:00:00Z'
+      responses:
+        '200':
+          description: The CSV file.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+            Cache-Control:
+              $ref: '#/components/headers/NoStoreExport'
+            Content-Disposition:
+              description: 'Always an attachment named after the period, `velexis-audit-<from date>-<to date>.csv`.'
+              required: true
+              schema:
+                type: string
+                pattern: ^attachment; filename="velexis-audit-[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{4}-[0-9]{2}-[0-9]{2}\.csv"$
+                examples:
+                  - attachment; filename="velexis-audit-2026-10-01-2026-11-01.csv"
+          content:
+            text/csv:
+              schema:
+                type: string
+                description: The CSV text, header row first.
+              example: |
+                id,createdAt,tenantId,tenantKey,actorType,actorAccountId,actorLabel,action,targetType,targetId,requestId,ipAddress,userAgent,details
+                1187,2026-10-20T07:33:05Z,ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F,acme,platform_admin,acc_01JA2YQ3M7R1T5W9Z3C7F1H5K9,lena.holm@velexis.example.com,tenant.suspended,tenant,ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F,req_01JC4M2P6R0T4W8Y2A6C0E4G8K,203.0.113.7,Mozilla/5.0 (X11; Linux x86_64) Gecko/20100101 Firefox/131.0,"{""reason"":""Card testing from the storefront reported by Stripe on 2026-10-20."",""before"":{""status"":""active""},""after"":{""status"":""suspended"",""suspensionReason"":""abuse""}}"
+                1042,2026-10-14T09:00:00Z,ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F,acme,account,acc_01JA2Z9W5K7Q3M8N4P6R2T0V1X,anna.berg@example.com,invitation.created,invitation,ivt_01JA2ZF4H8K2M6P0R4T8W2Y6A0,req_01JA2ZF4H8K2M6P0R4T8W2Y6A1,198.51.100.23,Mozilla/5.0 (Macintosh; Intel Mac OS X 14_6) AppleWebKit/605.1.15,"{""email"":""jo@acme-travel.example.com"",""role"":""agent""}"
+        '400':
+          $ref: '#/components/responses/ValidationFailed'
+        '401':
+          $ref: '#/components/responses/AdminUnauthenticated'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
   /internal/tls/ask:
     get:
       operationId: tlsAsk
@@ -5564,6 +7888,13 @@ components:
       schema:
         type: string
         const: no-store
+    NoStoreExport:
+      description: >-
+        Always `no-store`: the export holds personal data (e-mail and IP addresses) and is never cached by the admin
+        server, a proxy or the browser.
+      schema:
+        type: string
+        const: no-store
   parameters:
     IdempotencyKey:
       name: Idempotency-Key
@@ -5683,6 +8014,104 @@ components:
         maxLength: 255
         pattern: ^[A-Za-z0-9_.:-]+$
       example: '1843'
+    AdminPlanCode:
+      name: planCode
+      in: path
+      required: true
+      description: The plan (`code` of `adminListPlans`); an unknown code answers `404 NOT_FOUND`.
+      schema:
+        $ref: '#/components/schemas/PlanCode'
+      example: growth
+    SubscriptionId:
+      name: subscriptionId
+      in: path
+      required: true
+      description: The subscription (`id` of `adminListSubscriptions`); an unknown id answers `404 NOT_FOUND`.
+      schema:
+        type: string
+        pattern: ^sub_[0-9A-HJKMNP-TV-Z]{26}$
+      example: sub_01JA2Z7R5N0S3V7X1Z4B9D2F6H
+    AmadeusAccountId:
+      name: accountId
+      in: path
+      required: true
+      description: >-
+        The Velexis Amadeus account (`id` of `adminListAmadeusAccounts`); an unknown id answers `404 NOT_FOUND`.
+      schema:
+        $ref: '#/components/schemas/AmadeusAccountId'
+      example: ama_01JA2Y8K3M7P1R5T9W3Z7C1F5H
+    AmadeusOfficeRowId:
+      name: officeRowId
+      in: path
+      required: true
+      description: >-
+        The pool entry (`id` of `adminListAmadeusOffices`, `amo_…`), not the 9-character Amadeus office id; an unknown
+        id answers `404 NOT_FOUND`.
+      schema:
+        type: string
+        pattern: ^amo_[0-9A-HJKMNP-TV-Z]{26}$
+      example: amo_01JC8R6T0W4Y8A2C6E0G4J8M2P
+    AdminAccountId:
+      name: accountId
+      in: path
+      required: true
+      description: The account (`id` of `adminListAccounts`); an unknown id answers `404 NOT_FOUND`.
+      schema:
+        $ref: '#/components/schemas/AccountId'
+      example: acc_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+    AuditTenantId:
+      name: tenantId
+      in: query
+      required: false
+      description: Only the rows of this OTA.
+      schema:
+        $ref: '#/components/schemas/TenantId'
+    AuditActorAccountId:
+      name: actorAccountId
+      in: query
+      required: false
+      description: Only the rows of this acting account.
+      schema:
+        $ref: '#/components/schemas/AccountId'
+    AuditActorType:
+      name: actorType
+      in: query
+      required: false
+      description: Only the rows of this kind of actor.
+      schema:
+        $ref: '#/components/schemas/AuditActorType'
+    AuditAction:
+      name: action
+      in: query
+      required: false
+      description: Only the rows of this dotted action, matched exactly.
+      schema:
+        type: string
+        maxLength: 100
+        pattern: ^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$
+      example: tenant.suspended
+    AuditTargetType:
+      name: targetType
+      in: query
+      required: false
+      description: Only the rows about this kind of object, for example `tenant` or `api_key`.
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 64
+        pattern: ^[a-z][a-z0-9_]*$
+      example: tenant
+    AuditTargetId:
+      name: targetId
+      in: query
+      required: false
+      description: Only the rows about this object id.
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 128
+        pattern: ^[A-Za-z0-9_.:@-]+$
+      example: ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F
   responses:
     ValidationFailed:
       description: 'The request body, query or headers failed validation; see fieldErrors. Possible codes: VALIDATION_FAILED.'
@@ -5984,6 +8413,46 @@ components:
               $ref: '#/components/examples/UNAUTHENTICATED'
             TOKEN_EXPIRED:
               $ref: '#/components/examples/TOKEN_EXPIRED'
+    AdminStepUpUnauthorized:
+      description: >-
+        No valid platform admin access token, or no TOTP step-up within the last 15 minutes (call adminStepUp, then
+        retry). Possible codes: UNAUTHENTICATED, TOKEN_EXPIRED, REAUTH_REQUIRED.
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/X-Request-Id'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            UNAUTHENTICATED:
+              $ref: '#/components/examples/UNAUTHENTICATED'
+            TOKEN_EXPIRED:
+              $ref: '#/components/examples/TOKEN_EXPIRED'
+            REAUTH_REQUIRED:
+              $ref: '#/components/examples/REAUTH_REQUIRED'
+    AdminSelfOrLastAdminForbidden:
+      description: >-
+        The action would lock Velexis out of its admin: it targets the caller's own account (`details.reason = self`)
+        or the last active platform admin (`details.reason = last_admin`). Possible codes: FORBIDDEN.
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/X-Request-Id'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            FORBIDDEN:
+              summary: The last active platform admin
+              value:
+                error:
+                  code: FORBIDDEN
+                  message: The caller is authenticated but not allowed to perform this operation on this resource.
+                  status: 403
+                  requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+                  details:
+                    reason: last_admin
   examples:
     PortalSession:
       summary: Signed in
@@ -6246,6 +8715,77 @@ components:
           scheduledAt: '2026-10-21T10:02:47Z'
           startedAt: '2026-10-21T10:02:47Z'
           finishedAt: null
+    AdminPlan:
+      summary: A private plan for live OTAs
+      value:
+        code: growth
+        name: Growth
+        description: For OTAs selling live with up to 15 staff.
+        currency: EUR
+        monthlyPrice:
+          amount: '149.00'
+          currency: EUR
+        annualPrice:
+          amount: '1490.00'
+          currency: EUR
+        trialDays: 14
+        limits:
+          staffSeats: 15
+          apiKeys: 25
+          customDomains: 1
+          liveMode: true
+        features:
+          queues: true
+        checkoutAvailable:
+          month: false
+          year: false
+        isPublic: false
+        isActive: true
+        sortOrder: 20
+        settlementFeeBps: 150
+        stripeProductId: null
+        stripePriceIdMonth: null
+        stripePriceIdYear: null
+        priceWarnings: []
+        tenantCount: 0
+        version: 1
+        createdAt: '2026-10-18T09:30:00Z'
+        updatedAt: '2026-10-18T09:30:00Z'
+    AdminAmadeusOffice:
+      summary: An assigned test office with notes
+      value:
+        id: amo_01JA2Y9N4Q8S2V6X0Z4B8D2G6J
+        amadeusAccountId: ama_01JA2Y8K3M7P1R5T9W3Z7C1F5H
+        officeId: NCE1A0955
+        environment: test
+        status: assigned
+        assignedTenant:
+          id: ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F
+          key: acme
+        assignedAt: '2026-10-14T08:20:15Z'
+        releaseRequestedAt: null
+        releasedAt: null
+        notes: Live onboarding signed on 2027-03-02; ticketing agreement TA-118.
+        createdAt: '2026-10-02T09:20:00Z'
+        version: 3
+    AdminAccount:
+      summary: An active owner account
+      value:
+        id: acc_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+        email: anna.berg@example.com
+        emailVerified: true
+        fullName: Anna Berg
+        locale: en
+        timeZone: Europe/Oslo
+        status: active
+        mfaEnabled: true
+        mfaEnabledAt: '2026-10-03T09:12:44Z'
+        isPlatformAdmin: false
+        failedLoginCount: 0
+        lockedUntil: null
+        lastLoginAt: '2026-10-21T07:58:12Z'
+        createdAt: '2026-10-01T10:02:17Z'
+        version: 4
     VALIDATION_FAILED:
       summary: VALIDATION_FAILED
       value:
@@ -6458,6 +8998,14 @@ components:
         error:
           code: INVITATION_PENDING
           message: An invitation for this e-mail address is already pending.
+          status: 409
+          requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+    AMADEUS_OFFICE_UNAVAILABLE:
+      summary: AMADEUS_OFFICE_UNAVAILABLE
+      value:
+        error:
+          code: AMADEUS_OFFICE_UNAVAILABLE
+          message: The Amadeus office is not available, or no free office is left.
           status: 409
           requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
     MFA_ALREADY_ENABLED:
@@ -9648,13 +12196,7 @@ components:
             - 'null'
           description: The OTA key at the time of the action.
         actorType:
-          type: string
-          description: Who acted.
-          enum:
-            - account
-            - platform_admin
-            - api_key
-            - system
+          $ref: '#/components/schemas/AuditActorType'
         actorAccountId:
           type:
             - string
@@ -9704,6 +12246,1191 @@ components:
         createdAt:
           type: string
           format: date-time
+    AuditActorType:
+      type: string
+      description: >-
+        Who acted: `account` (a portal user), `platform_admin` (Velexis staff in the admin), `api_key` or `system` (a
+        job or a CLI command run on the VM).
+      enum:
+        - account
+        - platform_admin
+        - api_key
+        - system
+    AuditEntryList:
+      type: object
+      additionalProperties: false
+      required:
+        - data
+        - page
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/AuditEntry'
+        page:
+          $ref: '#/components/schemas/Page'
+    PlanPrice:
+      type: object
+      description: >-
+        A plan price in a request: a `Money` whose amount is not negative and has at most two decimals (the
+        `numeric(12,2)` prices of `platform.plans`). Its currency must be the plan's currency, which the service
+        checks (`400 VALIDATION_FAILED`).
+      additionalProperties: false
+      required:
+        - amount
+        - currency
+      properties:
+        amount:
+          type: string
+          pattern: ^[0-9]{1,10}(\.[0-9]{1,2})?$
+          examples:
+            - '149.00'
+        currency:
+          $ref: '#/components/schemas/CurrencyCode'
+    PlanFeatures:
+      type: object
+      description: The feature flags the plan unlocks, by name (`plans.features`); the whole object is replaced.
+      maxProperties: 50
+      propertyNames:
+        type: string
+        pattern: ^[a-z][A-Za-z0-9]{0,63}$
+      additionalProperties:
+        type: boolean
+    PlanPriceWarning:
+      type: object
+      description: >-
+        One difference between a plan and a linked Stripe price (subscription-billing flow §A): the amount, the
+        currency or the interval differ, or the price is inactive. Warnings never block saving.
+      additionalProperties: false
+      required:
+        - field
+        - expected
+        - actual
+      properties:
+        field:
+          type: string
+          pattern: ^[a-z][A-Za-z]*(\.[a-z][A-Za-z]*)?$
+          description: >-
+            The linked price and the attribute that differs, for example `stripePriceIdMonth.amount` or
+            `stripePriceIdYear.active`.
+        expected:
+          type:
+            - string
+            - 'null'
+          description: The value the plan implies.
+        actual:
+          type:
+            - string
+            - 'null'
+          description: The value Stripe answered.
+    AdminPlan:
+      type: object
+      description: >-
+        A plan as Velexis staff see it: the fields of `Plan`, plus the currency, the visibility, the active flag, the
+        order, the settlement fee, the Stripe link state and the number of OTAs on it. The Stripe ids stay `null` and
+        `priceWarnings` empty until PBE-042 links prices in M5.
+      additionalProperties: false
+      required:
+        - code
+        - name
+        - description
+        - currency
+        - monthlyPrice
+        - annualPrice
+        - trialDays
+        - limits
+        - features
+        - checkoutAvailable
+        - isPublic
+        - isActive
+        - sortOrder
+        - settlementFeeBps
+        - stripeProductId
+        - stripePriceIdMonth
+        - stripePriceIdYear
+        - priceWarnings
+        - tenantCount
+        - version
+        - createdAt
+        - updatedAt
+      properties:
+        code:
+          $ref: '#/components/schemas/PlanCode'
+        name:
+          type: string
+        description:
+          type:
+            - string
+            - 'null'
+        currency:
+          $ref: '#/components/schemas/CurrencyCode'
+        monthlyPrice:
+          $ref: '#/components/schemas/Money'
+        annualPrice:
+          description: The yearly price, or null when the plan has no annual option.
+          oneOf:
+            - $ref: '#/components/schemas/Money'
+            - type: 'null'
+        trialDays:
+          type: integer
+          minimum: 0
+          maximum: 365
+          description: Free trial days on the first subscription of an OTA.
+        limits:
+          $ref: '#/components/schemas/PlanLimits'
+        features:
+          type: object
+          description: Feature flags the plan unlocks, by name.
+          additionalProperties:
+            type: boolean
+        checkoutAvailable:
+          type: object
+          description: Whether Stripe Checkout can start for each billing interval (the plan has a Stripe price for it).
+          additionalProperties: false
+          required:
+            - month
+            - year
+          properties:
+            month:
+              type: boolean
+            year:
+              type: boolean
+        isPublic:
+          type: boolean
+          description: Whether the plan is offered on the pricing page and in the create-OTA wizard.
+        isActive:
+          type: boolean
+          description: False for a retired plan, kept for its existing subscriptions only.
+        sortOrder:
+          type: integer
+          description: The order on the pricing page, lowest first.
+        settlementFeeBps:
+          type: integer
+          minimum: 0
+          maximum: 10000
+          description: >-
+            The Velexis fee in basis points on the net captured volume of `velexis`-mode payments, deducted in the
+            settlements (M5).
+        stripeProductId:
+          type:
+            - string
+            - 'null'
+          pattern: ^prod_[A-Za-z0-9]+$
+          description: The Stripe Product of the plan; `null` until linked (M5).
+        stripePriceIdMonth:
+          type:
+            - string
+            - 'null'
+          pattern: ^price_[A-Za-z0-9]+$
+          description: The recurring Stripe Price of monthly billing; `null` until linked (M5).
+        stripePriceIdYear:
+          type:
+            - string
+            - 'null'
+          pattern: ^price_[A-Za-z0-9]+$
+          description: The recurring Stripe Price of yearly billing; `null` until linked (M5).
+        priceWarnings:
+          type: array
+          description: The differences found by the last comparison with Stripe; empty while no price is linked.
+          items:
+            $ref: '#/components/schemas/PlanPriceWarning'
+        tenantCount:
+          type: integer
+          minimum: 0
+          description: The OTAs on the plan (`tenants.plan_code`), in any status.
+        version:
+          type: integer
+          minimum: 1
+          description: Optimistic-locking version; send it in `If-Match` to `adminUpdatePlan`.
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    AdminPlanList:
+      type: object
+      additionalProperties: false
+      required:
+        - data
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/AdminPlan'
+    CreatePlanRequest:
+      type: object
+      description: >-
+        A new plan. Only `annualPrice` is optional (no yearly option without it). `code` and `currency` never change
+        afterwards.
+      additionalProperties: false
+      required:
+        - code
+        - name
+        - description
+        - currency
+        - monthlyPrice
+        - limits
+        - features
+        - isPublic
+        - trialDays
+        - settlementFeeBps
+        - sortOrder
+      properties:
+        code:
+          $ref: '#/components/schemas/PlanCode'
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+        description:
+          oneOf:
+            - type: string
+              minLength: 1
+              maxLength: 2000
+            - type: 'null'
+        currency:
+          $ref: '#/components/schemas/CurrencyCode'
+        monthlyPrice:
+          $ref: '#/components/schemas/PlanPrice'
+        annualPrice:
+          $ref: '#/components/schemas/PlanPrice'
+        limits:
+          $ref: '#/components/schemas/PlanLimits'
+        features:
+          $ref: '#/components/schemas/PlanFeatures'
+        isPublic:
+          type: boolean
+        trialDays:
+          type: integer
+          minimum: 0
+          maximum: 365
+        settlementFeeBps:
+          type: integer
+          minimum: 0
+          maximum: 10000
+        sortOrder:
+          type: integer
+          minimum: 0
+          maximum: 10000
+    UpdatePlanRequest:
+      type: object
+      description: >-
+        The fields to change; at least one. Never `code` or `currency`. `annualPrice: null` removes the yearly option
+        and `isActive: false` retires the plan. PBE-042 adds the Stripe product and price ids in M5.
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+        description:
+          oneOf:
+            - type: string
+              minLength: 1
+              maxLength: 2000
+            - type: 'null'
+        monthlyPrice:
+          $ref: '#/components/schemas/PlanPrice'
+        annualPrice:
+          oneOf:
+            - $ref: '#/components/schemas/PlanPrice'
+            - type: 'null'
+        limits:
+          $ref: '#/components/schemas/PlanLimits'
+        features:
+          $ref: '#/components/schemas/PlanFeatures'
+        isPublic:
+          type: boolean
+        isActive:
+          type: boolean
+        trialDays:
+          type: integer
+          minimum: 0
+          maximum: 365
+        settlementFeeBps:
+          type: integer
+          minimum: 0
+          maximum: 10000
+        sortOrder:
+          type: integer
+          minimum: 0
+          maximum: 10000
+    SubscriptionStatus:
+      type: string
+      description: >-
+        Stripe's subscription statuses (`subscriptions.status`); manual subscriptions use `trialing`, `past_due` and
+        `canceled` only.
+      enum:
+        - trialing
+        - active
+        - past_due
+        - paused
+        - canceled
+        - incomplete
+        - incomplete_expired
+        - unpaid
+    BillingProvider:
+      type: string
+      description: '`manual` (the trials before M5) or `stripe`.'
+      enum:
+        - stripe
+        - manual
+    AdminSubscription:
+      type: object
+      description: >-
+        A subscription row as Velexis staff see it, with its OTA. The Stripe ids are references for the Stripe
+        dashboard, never secrets; they are `null` on manual subscriptions.
+      additionalProperties: false
+      required:
+        - id
+        - tenantId
+        - tenantKey
+        - tenantName
+        - planCode
+        - planName
+        - status
+        - billingProvider
+        - billingInterval
+        - trialEndsAt
+        - currentPeriodStart
+        - currentPeriodEnd
+        - cancelAtPeriodEnd
+        - canceledAt
+        - providerCustomerId
+        - providerSubscriptionId
+        - createdAt
+        - version
+      properties:
+        id:
+          type: string
+          pattern: ^sub_[0-9A-HJKMNP-TV-Z]{26}$
+        tenantId:
+          $ref: '#/components/schemas/TenantId'
+        tenantKey:
+          $ref: '#/components/schemas/TenantKey'
+        tenantName:
+          type: string
+        planCode:
+          $ref: '#/components/schemas/PlanCode'
+        planName:
+          type: string
+        status:
+          $ref: '#/components/schemas/SubscriptionStatus'
+        billingProvider:
+          $ref: '#/components/schemas/BillingProvider'
+        billingInterval:
+          $ref: '#/components/schemas/BillingInterval'
+        trialEndsAt:
+          type:
+            - string
+            - 'null'
+          format: date-time
+        currentPeriodStart:
+          type:
+            - string
+            - 'null'
+          format: date-time
+        currentPeriodEnd:
+          type:
+            - string
+            - 'null'
+          format: date-time
+        cancelAtPeriodEnd:
+          type: boolean
+        canceledAt:
+          type:
+            - string
+            - 'null'
+          format: date-time
+        providerCustomerId:
+          type:
+            - string
+            - 'null'
+          pattern: ^cus_[A-Za-z0-9]+$
+          description: The Stripe Customer; `null` on manual subscriptions.
+        providerSubscriptionId:
+          type:
+            - string
+            - 'null'
+          pattern: ^sub_[A-Za-z0-9]+$
+          description: The Stripe Subscription; `null` on manual subscriptions.
+        createdAt:
+          type: string
+          format: date-time
+        version:
+          type: integer
+          minimum: 1
+          description: Optimistic-locking version; send it in `If-Match` to `adminUpdateManualSubscription`.
+    AdminSubscriptionList:
+      type: object
+      additionalProperties: false
+      required:
+        - data
+        - page
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/AdminSubscription'
+        page:
+          $ref: '#/components/schemas/Page'
+    AdminInvoice:
+      type: object
+      description: >-
+        A Velexis invoice of an OTA, synchronised from Stripe (M5). Amounts are `Money` in the invoice currency; the
+        links point to the Stripe-hosted page and PDF.
+      additionalProperties: false
+      required:
+        - id
+        - tenantId
+        - subscriptionId
+        - number
+        - status
+        - subtotal
+        - taxAmount
+        - total
+        - amountPaid
+        - amountDue
+        - periodStart
+        - periodEnd
+        - issuedAt
+        - dueAt
+        - paidAt
+        - hostedInvoiceUrl
+        - invoicePdfUrl
+        - providerInvoiceId
+        - createdAt
+      properties:
+        id:
+          type: string
+          pattern: ^inv_[0-9A-HJKMNP-TV-Z]{26}$
+        tenantId:
+          $ref: '#/components/schemas/TenantId'
+        subscriptionId:
+          type:
+            - string
+            - 'null'
+          pattern: ^sub_[0-9A-HJKMNP-TV-Z]{26}$
+        number:
+          type: string
+          description: The legal invoice number.
+        status:
+          type: string
+          enum:
+            - draft
+            - open
+            - paid
+            - void
+            - uncollectible
+        subtotal:
+          $ref: '#/components/schemas/Money'
+        taxAmount:
+          $ref: '#/components/schemas/Money'
+        total:
+          $ref: '#/components/schemas/Money'
+        amountPaid:
+          $ref: '#/components/schemas/Money'
+        amountDue:
+          $ref: '#/components/schemas/Money'
+        periodStart:
+          type:
+            - string
+            - 'null'
+          format: date-time
+        periodEnd:
+          type:
+            - string
+            - 'null'
+          format: date-time
+        issuedAt:
+          type:
+            - string
+            - 'null'
+          format: date-time
+        dueAt:
+          type:
+            - string
+            - 'null'
+          format: date-time
+        paidAt:
+          type:
+            - string
+            - 'null'
+          format: date-time
+        hostedInvoiceUrl:
+          type:
+            - string
+            - 'null'
+          format: uri
+        invoicePdfUrl:
+          type:
+            - string
+            - 'null'
+          format: uri
+        providerInvoiceId:
+          type:
+            - string
+            - 'null'
+          pattern: ^in_[A-Za-z0-9]+$
+          description: The Stripe Invoice.
+        createdAt:
+          type: string
+          format: date-time
+    AdminStripeEvent:
+      type: object
+      description: >-
+        One event of the Stripe webhook inbox (`stripe_events`, M5): its type, processing state and last error. The
+        payload is never stored or answered; the worker re-fetches the object from Stripe.
+      additionalProperties: false
+      required:
+        - id
+        - endpoint
+        - type
+        - status
+        - attempts
+        - lastError
+        - tenantId
+        - receivedAt
+        - processedAt
+      properties:
+        id:
+          type: string
+          pattern: ^evt_[A-Za-z0-9]+$
+          description: The Stripe event id.
+        endpoint:
+          type: string
+          description: The receiver that got it.
+          enum:
+            - billing
+            - connect_accounts
+        type:
+          type: string
+          pattern: ^[a-z_]+(\.[a-z_]+)+$
+          description: The Stripe event type, for example `invoice.paid`.
+        status:
+          type: string
+          enum:
+            - received
+            - processing
+            - processed
+            - ignored
+            - failed
+        attempts:
+          type: integer
+          minimum: 0
+        lastError:
+          type:
+            - string
+            - 'null'
+          maxLength: 1000
+          description: The last processing error, a short message without secrets.
+        tenantId:
+          type:
+            - string
+            - 'null'
+          pattern: ^ten_[0-9A-HJKMNP-TV-Z]{26}$
+        receivedAt:
+          type: string
+          format: date-time
+        processedAt:
+          type:
+            - string
+            - 'null'
+          format: date-time
+    AdminSubscriptionDetail:
+      type: object
+      description: A subscription with its invoices and the Stripe events of its OTA; both lists are empty before M5.
+      additionalProperties: false
+      required:
+        - subscription
+        - invoices
+        - events
+      properties:
+        subscription:
+          $ref: '#/components/schemas/AdminSubscription'
+        invoices:
+          type: array
+          description: The invoices of the subscription, newest first (at most 50).
+          maxItems: 50
+          items:
+            $ref: '#/components/schemas/AdminInvoice'
+        events:
+          type: array
+          description: The Stripe events of the subscription's OTA, newest first (at most 50).
+          maxItems: 50
+          items:
+            $ref: '#/components/schemas/AdminStripeEvent'
+    UpdateManualSubscriptionRequest:
+      type: object
+      description: >-
+        At least one change (`planCode`, `trialEndsAt` or `status`) and the required reason, so a body holds at least
+        two properties.
+      additionalProperties: false
+      minProperties: 2
+      required:
+        - reason
+      properties:
+        planCode:
+          $ref: '#/components/schemas/PlanCode'
+        trialEndsAt:
+          type: string
+          format: date-time
+          description: The new end of the trial.
+        status:
+          type: string
+          description: '`canceled` ends the manual subscription; `trialing` reopens one.'
+          enum:
+            - trialing
+            - canceled
+        reason:
+          $ref: '#/components/schemas/AdminReason'
+    AmadeusAccountId:
+      type: string
+      description: Velexis Amadeus account id (`ama_` + ULID).
+      pattern: ^ama_[0-9A-HJKMNP-TV-Z]{26}$
+      examples:
+        - ama_01JA2Y8K3M7P1R5T9W3Z7C1F5H
+    AmadeusAccountStatus:
+      type: string
+      description: >-
+        The credential health after the last verification: `pending_verification` (new or changed credentials),
+        `active`, `invalid_credentials` (Amadeus refused the token request), `disabled` (by an admin).
+      enum:
+        - pending_verification
+        - active
+        - invalid_credentials
+        - disabled
+    AmadeusBaseUrl:
+      type: string
+      description: >-
+        The Amadeus API host: an `https` URL, or the loopback Amadeus stub (`http://127.0.0.1:<port>`) in development;
+        the service refuses the stub in production.
+      format: uri
+      maxLength: 300
+      pattern: ^(https://[^\s/?#]+(/[^\s?#]*)?|http://127\.0\.0\.1(:[0-9]{1,5})?)$
+      examples:
+        - https://test.travel.api.amadeus.com
+    AmadeusClientSecret:
+      type: string
+      description: >-
+        The OAuth2 client secret Amadeus issued to Velexis. Write-only: envelope-encrypted at once, never logged and
+        never answered.
+      minLength: 1
+      maxLength: 512
+      writeOnly: true
+    AmadeusOfficeCounts:
+      type: object
+      description: The offices of the account's pool in each status.
+      additionalProperties: false
+      required:
+        - available
+        - assigned
+        - releasing
+        - retired
+      properties:
+        available:
+          type: integer
+          minimum: 0
+        assigned:
+          type: integer
+          minimum: 0
+        releasing:
+          type: integer
+          minimum: 0
+        retired:
+          type: integer
+          minimum: 0
+    AdminAmadeusAccount:
+      type: object
+      description: >-
+        A Velexis Amadeus account (one per environment). Never holds the client secret or its ciphertext; `clientId`
+        is not a secret.
+      additionalProperties: false
+      required:
+        - id
+        - name
+        - environment
+        - baseUrl
+        - clientId
+        - status
+        - lastVerifiedAt
+        - lastError
+        - officeCounts
+        - createdAt
+        - version
+      properties:
+        id:
+          $ref: '#/components/schemas/AmadeusAccountId'
+        name:
+          type: string
+          description: The label shown in the admin.
+        environment:
+          $ref: '#/components/schemas/Environment'
+        baseUrl:
+          $ref: '#/components/schemas/AmadeusBaseUrl'
+        clientId:
+          type: string
+          description: The OAuth2 client id Amadeus issued to Velexis.
+        status:
+          $ref: '#/components/schemas/AmadeusAccountStatus'
+        lastVerifiedAt:
+          type:
+            - string
+            - 'null'
+          format: date-time
+          description: The last successful token request.
+        lastError:
+          type:
+            - string
+            - 'null'
+          maxLength: 500
+          description: The last verification error (HTTP status and Amadeus code), never a secret or a provider body.
+        officeCounts:
+          $ref: '#/components/schemas/AmadeusOfficeCounts'
+        createdAt:
+          type: string
+          format: date-time
+        version:
+          type: integer
+          minimum: 1
+          description: Optimistic-locking version; send it in `If-Match` to `adminUpdateAmadeusAccount`.
+    AdminAmadeusAccountList:
+      type: object
+      additionalProperties: false
+      required:
+        - data
+      properties:
+        data:
+          type: array
+          maxItems: 2
+          items:
+            $ref: '#/components/schemas/AdminAmadeusAccount'
+    CreateAmadeusAccountRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - name
+        - environment
+        - baseUrl
+        - clientId
+        - clientSecret
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+        environment:
+          $ref: '#/components/schemas/Environment'
+        baseUrl:
+          $ref: '#/components/schemas/AmadeusBaseUrl'
+        clientId:
+          type: string
+          minLength: 1
+          maxLength: 200
+          pattern: ^\S+$
+        clientSecret:
+          $ref: '#/components/schemas/AmadeusClientSecret'
+    UpdateAmadeusAccountRequest:
+      type: object
+      description: >-
+        The fields to change; at least one. A new `baseUrl`, `clientId` or `clientSecret` needs a step-up; `status`
+        only takes `disabled`, and a successful verification makes the account `active` again.
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+        baseUrl:
+          $ref: '#/components/schemas/AmadeusBaseUrl'
+        clientId:
+          type: string
+          minLength: 1
+          maxLength: 200
+          pattern: ^\S+$
+        clientSecret:
+          $ref: '#/components/schemas/AmadeusClientSecret'
+        status:
+          type: string
+          enum:
+            - disabled
+    AmadeusOfficeStatus:
+      type: string
+      description: >-
+        An office of the pool (PADR-0012 item 1): `available`, `assigned` to an OTA, `releasing` (the OTA moved to its
+        own credentials and old orders may still use it), or `retired`.
+      enum:
+        - available
+        - assigned
+        - releasing
+        - retired
+    TenantReference:
+      type: object
+      description: An OTA named in another resource.
+      additionalProperties: false
+      required:
+        - id
+        - key
+      properties:
+        id:
+          $ref: '#/components/schemas/TenantId'
+        key:
+          $ref: '#/components/schemas/TenantKey'
+    AdminAmadeusOffice:
+      type: object
+      description: One office of a Velexis Amadeus account's pool.
+      additionalProperties: false
+      required:
+        - id
+        - amadeusAccountId
+        - officeId
+        - environment
+        - status
+        - assignedTenant
+        - assignedAt
+        - releaseRequestedAt
+        - releasedAt
+        - notes
+        - createdAt
+        - version
+      properties:
+        id:
+          type: string
+          pattern: ^amo_[0-9A-HJKMNP-TV-Z]{26}$
+          description: The pool entry id (`amo_` + ULID).
+        amadeusAccountId:
+          $ref: '#/components/schemas/AmadeusAccountId'
+        officeId:
+          $ref: '#/components/schemas/AmadeusOfficeId'
+        environment:
+          $ref: '#/components/schemas/Environment'
+        status:
+          $ref: '#/components/schemas/AmadeusOfficeStatus'
+        assignedTenant:
+          description: The OTA using the office while `assigned` or `releasing`; `null` otherwise.
+          oneOf:
+            - $ref: '#/components/schemas/TenantReference'
+            - type: 'null'
+        assignedAt:
+          type:
+            - string
+            - 'null'
+          format: date-time
+        releaseRequestedAt:
+          type:
+            - string
+            - 'null'
+          format: date-time
+          description: When the OTA stopped using the office (the start of `releasing`).
+        releasedAt:
+          type:
+            - string
+            - 'null'
+          format: date-time
+          description: When an admin last returned the office to the pool.
+        notes:
+          type:
+            - string
+            - 'null'
+          maxLength: 2000
+          description: Admin notes (commercial onboarding, ticketing agreements).
+        createdAt:
+          type: string
+          format: date-time
+          description: When the office was added to the pool.
+        version:
+          type: integer
+          minimum: 1
+          description: Optimistic-locking version; send it in `If-Match` to `adminUpdateAmadeusOffice`.
+    AdminAmadeusOfficeList:
+      type: object
+      additionalProperties: false
+      required:
+        - data
+        - page
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/AdminAmadeusOffice'
+        page:
+          $ref: '#/components/schemas/Page'
+    AddAmadeusOfficesRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - amadeusAccountId
+        - officeIds
+      properties:
+        amadeusAccountId:
+          $ref: '#/components/schemas/AmadeusAccountId'
+        officeIds:
+          type: array
+          description: >-
+            The Amadeus office ids, 9 letters or digits each; upper-cased by the service, and repeats are skipped
+            rather than refused.
+          minItems: 1
+          maxItems: 500
+          items:
+            type: string
+            pattern: ^[A-Za-z0-9]{9}$
+        notes:
+          type: string
+          minLength: 1
+          maxLength: 2000
+          description: Notes for every created office, for example the order reference.
+    AmadeusOfficesAdded:
+      type: object
+      description: >-
+        The offices created, and the upper-cased ids skipped because the pool already held them or they repeat an
+        earlier id of the request: one entry per skipped request entry, both lists in request order.
+      additionalProperties: false
+      required:
+        - created
+        - skipped
+      properties:
+        created:
+          type: array
+          items:
+            $ref: '#/components/schemas/AdminAmadeusOffice'
+        skipped:
+          type: array
+          items:
+            $ref: '#/components/schemas/AmadeusOfficeId'
+    UpdateAmadeusOfficeRequest:
+      type: object
+      description: The new notes; `null` clears them.
+      additionalProperties: false
+      required:
+        - notes
+      properties:
+        notes:
+          oneOf:
+            - type: string
+              maxLength: 2000
+            - type: 'null'
+    AssignAmadeusOfficeRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - tenantId
+      properties:
+        tenantId:
+          $ref: '#/components/schemas/TenantId'
+    AmadeusOfficeAssigned:
+      type: object
+      description: The assigned office and the OTA's masked Amadeus connection of its environment.
+      additionalProperties: false
+      required:
+        - office
+        - connection
+      properties:
+        office:
+          $ref: '#/components/schemas/AdminAmadeusOffice'
+        connection:
+          $ref: '#/components/schemas/AmadeusConnection'
+    AccountStatus:
+      type: string
+      description: >-
+        The lifecycle of an account: `pending_verification` (e-mail address not verified), `active`, `locked`,
+        `disabled` (by Velexis staff), `deleted` (erased).
+      enum:
+        - pending_verification
+        - active
+        - locked
+        - disabled
+        - deleted
+    AdminAccountSummary:
+      type: object
+      description: One account in the admin search.
+      additionalProperties: false
+      required:
+        - id
+        - email
+        - fullName
+        - status
+        - mfaEnabled
+        - isPlatformAdmin
+        - lastLoginAt
+        - createdAt
+      properties:
+        id:
+          $ref: '#/components/schemas/AccountId'
+        email:
+          $ref: '#/components/schemas/EmailAddress'
+        fullName:
+          type: string
+        status:
+          $ref: '#/components/schemas/AccountStatus'
+        mfaEnabled:
+          type: boolean
+        isPlatformAdmin:
+          type: boolean
+        lastLoginAt:
+          type:
+            - string
+            - 'null'
+          format: date-time
+        createdAt:
+          type: string
+          format: date-time
+    AdminAccountList:
+      type: object
+      additionalProperties: false
+      required:
+        - data
+        - page
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/AdminAccountSummary'
+        page:
+          $ref: '#/components/schemas/Page'
+    AdminAccount:
+      type: object
+      description: >-
+        An account as Velexis support sees it. Never holds the password hash, the MFA secret, recovery codes or
+        tokens.
+      additionalProperties: false
+      required:
+        - id
+        - email
+        - emailVerified
+        - fullName
+        - locale
+        - timeZone
+        - status
+        - mfaEnabled
+        - mfaEnabledAt
+        - isPlatformAdmin
+        - failedLoginCount
+        - lockedUntil
+        - lastLoginAt
+        - createdAt
+        - version
+      properties:
+        id:
+          $ref: '#/components/schemas/AccountId'
+        email:
+          $ref: '#/components/schemas/EmailAddress'
+        emailVerified:
+          type: boolean
+        fullName:
+          type: string
+        locale:
+          $ref: '#/components/schemas/Locale'
+        timeZone:
+          $ref: '#/components/schemas/TimeZone'
+        status:
+          $ref: '#/components/schemas/AccountStatus'
+        mfaEnabled:
+          type: boolean
+        mfaEnabledAt:
+          type:
+            - string
+            - 'null'
+          format: date-time
+        isPlatformAdmin:
+          type: boolean
+        failedLoginCount:
+          type: integer
+          minimum: 0
+          description: Consecutive failed sign-ins; five lock the account for 15 minutes.
+        lockedUntil:
+          type:
+            - string
+            - 'null'
+          format: date-time
+          description: The end of the current lockout; `null` when not locked.
+        lastLoginAt:
+          type:
+            - string
+            - 'null'
+          format: date-time
+        createdAt:
+          type: string
+          format: date-time
+        version:
+          type: integer
+          minimum: 1
+          description: Optimistic-locking version.
+    AdminAccountDetail:
+      type: object
+      description: An account with its memberships, its active session count and its recent audit rows.
+      additionalProperties: false
+      required:
+        - account
+        - memberships
+        - activeSessions
+        - recentAudit
+      properties:
+        account:
+          $ref: '#/components/schemas/AdminAccount'
+        memberships:
+          type: array
+          description: The active memberships, one per OTA.
+          items:
+            $ref: '#/components/schemas/AccountMembership'
+        activeSessions:
+          type: integer
+          minimum: 0
+          description: The refresh families of the portal and the admin that are neither revoked nor expired.
+        recentAudit:
+          type: array
+          description: The last 50 audit rows the account acted in or that target it, newest first.
+          maxItems: 50
+          items:
+            $ref: '#/components/schemas/AuditEntry'
+    PlatformAdmin:
+      type: object
+      description: A platform admin.
+      additionalProperties: false
+      required:
+        - accountId
+        - email
+        - fullName
+        - mfaEnabled
+        - lastLoginAt
+      properties:
+        accountId:
+          $ref: '#/components/schemas/AccountId'
+        email:
+          $ref: '#/components/schemas/EmailAddress'
+        fullName:
+          type: string
+        mfaEnabled:
+          type: boolean
+          description: Always true for an admin who can sign in (PADR-0006 item 2).
+        lastLoginAt:
+          type:
+            - string
+            - 'null'
+          format: date-time
+    PlatformAdminList:
+      type: object
+      additionalProperties: false
+      required:
+        - data
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/PlatformAdmin'
+    GrantAdminRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - email
+        - reason
+      properties:
+        email:
+          $ref: '#/components/schemas/EmailAddress'
+        reason:
+          $ref: '#/components/schemas/AdminReason'
 x-error-catalogue:
   VALIDATION_FAILED:
     status: 400

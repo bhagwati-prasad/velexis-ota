@@ -1,17 +1,19 @@
 // Contract tests of the platform OpenAPI document, openapi/velexis-platform-api.openapi.yaml (ADR-0006, PADR-0016).
 //
 // PBE-005 wrote its first slice (identity, plans, internal: 24 operations, the conventions and the error catalogue),
-// PBE-006 the second (tenants, team, API keys and the M1 reads: 27 operations) and PBE-007 the first admin slice
-// (admin auth and dashboard, tenants, provisioning jobs and queues: 21 operations). The tests of a slice name its
-// operations by operationId and never count the document, so the later slices (PBE-066, PBE-037, PBE-041,
+// PBE-006 the second (tenants, team, API keys and the M1 reads: 27 operations), PBE-007 the first admin slice
+// (admin auth and dashboard, tenants, provisioning jobs and queues: 21 operations) and PBE-066 the second (plans and
+// subscriptions, Amadeus accounts and offices, accounts, platform admins and audit: 26 operations). The tests of a
+// slice name its operations by operationId and never count the document, so the later slices (PBE-037, PBE-041,
 // PBE-042) only add operations and tests of their own. The convention checks run on every operation of the
 // document: x-scope and the matching security scheme, `platform_admin` on every `/v1/admin/` path but the public
 // sign-in steps, X-Request-Id on every response, x-platform-tables, Idempotency-Key exactly on x-idempotent
 // operations, a 5–500 character `reason` exactly on x-reason-required operations, closed request bodies,
 // `Cache-Control: no-store` on secret-bearing responses, error examples that agree with x-error-codes and the
-// catalogue, and examples that validate with the Ajv checker of @velexis/testing that the integration tests use.
-// `pnpm contracts:lint` (Redocly, X-007) and the generators' tests (X-008, X-009) cover the lint and the generated
-// files.
+// catalogue, and examples that validate with the Ajv checker of @velexis/testing that the integration tests use
+// (a body that is not JSON, such as the audit CSV export, only where NON_JSON_RESPONSES lists it, and its slice test
+// checks it). `pnpm contracts:lint` (Redocly, X-007) and the generators' tests (X-008, X-009) cover the lint and the
+// generated files.
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
@@ -36,6 +38,7 @@ const OTA_DOCUMENT = join(REPO_ROOT, "ota", "backend", "openapi", "velexis-ota-b
 const INVENTORY = join(REPO_ROOT, "platform", "docs", "api-inventory.md");
 const INVENTORY_RESOURCES = join(REPO_ROOT, "platform", "docs", "api-inventory-resources.md");
 const INVENTORY_ADMIN = join(REPO_ROOT, "platform", "docs", "api-inventory-admin.md");
+const PLATFORM_MIGRATIONS = join(APP_DIR, "migrations", "platform");
 const ONBOARDING_ADR = join(REPO_ROOT, "platform", "docs", "adr", "0018-onboarding-checklist-computation.md");
 const GENERATED_PLATFORM_TYPES = join(REPO_ROOT, "packages", "api-types", "src", "generated", "platform.ts");
 
@@ -569,6 +572,118 @@ const SLICE_PBE007_NO_STORE = [
 
 /** The only `/v1/admin/` operations without an admin token: the steps that obtain one (PADR-0006 item 1). */
 const ADMIN_PUBLIC_OPERATIONS = ["adminSignIn", "adminVerifyMfa", "adminRefresh"] as const;
+
+/** One PBE-066 operation: every one of them is `platform_admin`. */
+interface AdminSliceOperation {
+  readonly operationId: PlatformOperationId;
+  readonly method: string;
+  readonly path: string;
+}
+
+/**
+ * The PBE-066 slice: the M1 rows of api-inventory-admin §4 (plans and subscriptions, 6), §5 (Amadeus accounts and
+ * offices, 9) and §7 (accounts, platform admins and audit, 11).
+ */
+const SLICE_PBE066: readonly AdminSliceOperation[] = [
+  { operationId: "adminListPlans", method: "get", path: "/v1/admin/plans" },
+  { operationId: "adminCreatePlan", method: "post", path: "/v1/admin/plans" },
+  { operationId: "adminUpdatePlan", method: "patch", path: "/v1/admin/plans/{planCode}" },
+  { operationId: "adminListSubscriptions", method: "get", path: "/v1/admin/subscriptions" },
+  { operationId: "adminGetSubscription", method: "get", path: "/v1/admin/subscriptions/{subscriptionId}" },
+  {
+    operationId: "adminUpdateManualSubscription",
+    method: "patch",
+    path: "/v1/admin/subscriptions/{subscriptionId}",
+  },
+  { operationId: "adminListAmadeusAccounts", method: "get", path: "/v1/admin/amadeus-accounts" },
+  { operationId: "adminCreateAmadeusAccount", method: "post", path: "/v1/admin/amadeus-accounts" },
+  {
+    operationId: "adminUpdateAmadeusAccount",
+    method: "patch",
+    path: "/v1/admin/amadeus-accounts/{accountId}",
+  },
+  {
+    operationId: "adminVerifyAmadeusAccount",
+    method: "post",
+    path: "/v1/admin/amadeus-accounts/{accountId}/verify",
+  },
+  { operationId: "adminListAmadeusOffices", method: "get", path: "/v1/admin/amadeus-offices" },
+  { operationId: "adminAddAmadeusOffices", method: "post", path: "/v1/admin/amadeus-offices" },
+  {
+    operationId: "adminUpdateAmadeusOffice",
+    method: "patch",
+    path: "/v1/admin/amadeus-offices/{officeRowId}",
+  },
+  {
+    operationId: "adminAssignAmadeusOffice",
+    method: "post",
+    path: "/v1/admin/amadeus-offices/{officeRowId}/assign",
+  },
+  {
+    operationId: "adminRetireAmadeusOffice",
+    method: "post",
+    path: "/v1/admin/amadeus-offices/{officeRowId}/retire",
+  },
+  { operationId: "adminListAccounts", method: "get", path: "/v1/admin/accounts" },
+  { operationId: "adminGetAccount", method: "get", path: "/v1/admin/accounts/{accountId}" },
+  { operationId: "adminDisableAccount", method: "post", path: "/v1/admin/accounts/{accountId}/disable" },
+  { operationId: "adminEnableAccount", method: "post", path: "/v1/admin/accounts/{accountId}/enable" },
+  { operationId: "adminUnlockAccount", method: "post", path: "/v1/admin/accounts/{accountId}/unlock" },
+  { operationId: "adminResetAccountMfa", method: "post", path: "/v1/admin/accounts/{accountId}/reset-mfa" },
+  { operationId: "adminListAdmins", method: "get", path: "/v1/admin/admins" },
+  { operationId: "adminGrantAdmin", method: "post", path: "/v1/admin/admins" },
+  { operationId: "adminRevokeAdmin", method: "delete", path: "/v1/admin/admins/{accountId}" },
+  { operationId: "adminListAudit", method: "get", path: "/v1/admin/audit-log" },
+  { operationId: "adminExportAudit", method: "get", path: "/v1/admin/audit-log.csv" },
+];
+
+/** The PBE-066 operations marked **reason** in api-inventory-admin §4, §5 and §7. */
+const SLICE_PBE066_REASON = [
+  "adminUpdateManualSubscription",
+  "adminRetireAmadeusOffice",
+  "adminDisableAccount",
+  "adminEnableAccount",
+  "adminResetAccountMfa",
+  "adminGrantAdmin",
+] as const satisfies readonly PlatformOperationId[];
+
+/** The PBE-066 operations marked MFA↑ for every call (PADR-0006 item 4). */
+const SLICE_PBE066_STEP_UP = [
+  "adminCreateAmadeusAccount",
+  "adminResetAccountMfa",
+  "adminGrantAdmin",
+  "adminRevokeAdmin",
+] as const satisfies readonly PlatformOperationId[];
+
+/** The PBE-066 operation that needs a step-up only in some calls: "MFA↑ when the secret changes". */
+const SLICE_PBE066_CONDITIONAL_STEP_UP = ["adminUpdateAmadeusAccount"] as const;
+
+/** The columns of the audit CSV export, in file order. */
+const AUDIT_CSV_COLUMNS = [
+  "id",
+  "createdAt",
+  "tenantId",
+  "tenantKey",
+  "actorType",
+  "actorAccountId",
+  "actorLabel",
+  "action",
+  "targetType",
+  "targetId",
+  "requestId",
+  "ipAddress",
+  "userAgent",
+  "details",
+] as const;
+
+/**
+ * The responses whose body is not JSON, by operation and status. The Ajv checker of @velexis/testing refuses to check
+ * them ("check its body another way"), so the slice test of each checks it instead; any other non-JSON response fails
+ * the example check of every operation.
+ */
+const NON_JSON_RESPONSES: Readonly<Record<string, Readonly<Record<string, readonly string[]>>>> = {
+  adminExportAudit: { "200": ["text/csv"] },
+};
 
 const isObject = (value: unknown): value is Json =>
   value !== null && typeof value === "object" && !Array.isArray(value);
@@ -1403,6 +1518,565 @@ describe("the admin auth, dashboard, tenants, jobs and queues slice (PBE-007)", 
   });
 });
 
+/** One operation of an api-inventory-admin row of §4, §5 or §7. */
+interface AdminInventoryRow {
+  readonly method: string;
+  readonly path: string;
+  /** The names of the query of the route cell (`?q=&status=` gives `q`, `status`). */
+  readonly query: readonly string[];
+  readonly reason: boolean;
+  /** MFA↑ on every call. */
+  readonly stepUp: boolean;
+  /** MFA↑ in some calls only ("MFA↑ when the secret changes"). */
+  readonly conditionalStepUp: boolean;
+  readonly exchange: string;
+  readonly milestone: string;
+}
+
+/**
+ * The rows of api-inventory-admin §4, §5 and §7 by operationId. One row may name two operations
+ * (`adminDisableAccount` / `adminEnableAccount` with `POST …/disable` / `enable`): the second route replaces the last
+ * segment of the first path.
+ */
+function adminSectionRows(): Map<string, AdminInventoryRow> {
+  const text = readFileSync(INVENTORY_ADMIN, "utf8");
+  const sections = ["## 4. ", "## 5. ", "## 7. "].map((heading) => {
+    const start = text.indexOf(heading);
+    expect([heading, start >= 0]).toEqual([heading, true]);
+    return text.slice(start, text.indexOf("\n## ", start + 1));
+  });
+  const rows = new Map<string, AdminInventoryRow>();
+  for (const line of sections.join("\n").split("\n")) {
+    // A pipe escaped as `\|` (`"trialing" \| "canceled"`) belongs to its cell.
+    const cells = line.split(/(?<!\\)\|/u).map((cell) => cell.trim().replaceAll("\\|", "|"));
+    const [, first = "", route = "", purpose = "", exchange = "", , , milestone = ""] = cells;
+    if (cells.length < 9 || !first.startsWith("`")) {
+      continue;
+    }
+    const ids = [...first.matchAll(/`([a-z][A-Za-z]+)`/g)].map(([, id = ""]) => id);
+    const routes = [...route.matchAll(/`([^`]+)`/g)].map(([, value = ""]) => value);
+    const [method = "", target = ""] = (routes[0] ?? "").split(" ");
+    const [basePath = "", query = ""] = target.split("?");
+    const marks = `${route} ${purpose}`;
+    ids.forEach((id, index) => {
+      rows.set(id, {
+        method: method.toLowerCase(),
+        path: index === 0 ? basePath : basePath.replace(/[^/]+$/, routes[index] ?? ""),
+        query: [...query.matchAll(/([A-Za-z]+)=/g)].map(([, name = ""]) => name),
+        reason: purpose.includes("**reason**"),
+        stepUp: /MFA↑(?! when)/u.test(marks),
+        conditionalStepUp: /MFA↑ when/u.test(marks),
+        exchange,
+        milestone,
+      });
+    });
+  }
+  return rows;
+}
+
+/** The cells of one RFC 4180 CSV line: quoted cells may hold commas and doubled quotes. */
+function csvCells(line: string): string[] {
+  const cells: string[] = [];
+  let cell = "";
+  let quoted = false;
+  for (let index = 0; index < line.length; index += 1) {
+    const character = line.charAt(index);
+    if (quoted && character === '"' && line.charAt(index + 1) === '"') {
+      cell += '"';
+      index += 1;
+    } else if (character === '"') {
+      quoted = !quoted;
+    } else if (character === "," && !quoted) {
+      cells.push(cell);
+      cell = "";
+    } else {
+      cell += character;
+    }
+  }
+  cells.push(cell);
+  return cells;
+}
+
+/** The parameters of an operation (its own, not the path item's), `$ref`s resolved. */
+function parametersOf(operationId: string): Json[] {
+  const list: unknown = operation(operationId).spec["parameters"];
+  return (Array.isArray(list) ? (list as unknown[]) : []).map((parameter) => {
+    const resolved = resolve(platform, parameter);
+    return isObject(resolved) ? resolved : {};
+  });
+}
+
+/** The 2xx response of an operation with that status. */
+function successOf(operationId: string, status: string): Json {
+  const [, response = {}] =
+    responsesOf(platform, operation(operationId)).find(([candidate]) => candidate === status) ?? [];
+  return response;
+}
+
+describe("the admin plans, Amadeus, accounts, admins and audit slice (PBE-066)", () => {
+  it("lists the 26 operations of the slice in the operations index, each with x-scope platform_admin [PBE-066 AC1]", () => {
+    expect(SLICE_PBE066).toHaveLength(26);
+    const ids = new Set(SLICE_PBE066.map((entry) => entry.operationId));
+    expect(ids.size).toBe(26);
+    // 26 more operations: none of them belongs to an earlier slice.
+    expect(
+      [...SLICE, ...SLICE_PBE006, ...SLICE_PBE007].filter((entry) => ids.has(entry.operationId)),
+    ).toEqual([]);
+    for (const entry of SLICE_PBE066) {
+      expect(platformOperations).toContainEqual(
+        expect.objectContaining({ ...entry, scope: "platform_admin", internal: false, sdkMethod: null }),
+      );
+      expect([entry.operationId, operation(entry.operationId).spec["x-scope"]]).toEqual([
+        entry.operationId,
+        "platform_admin",
+      ]);
+    }
+    // With the PBE-007 slice, the 47 M1 admin operations, every one under /v1/admin/.
+    const admin = new Set([...SLICE_PBE007, ...SLICE_PBE066].map((entry) => entry.operationId));
+    expect(admin.size).toBe(47);
+    for (const operationId of admin) {
+      expect([operationId, operation(operationId).path.startsWith("/v1/admin/")]).toEqual([
+        operationId,
+        true,
+      ]);
+    }
+  });
+
+  it("documents each slice operation with the method, path, query and marks of the M1 rows of api-inventory-admin §4, §5 and §7 [PBE-066 AC1]", () => {
+    const rows = adminSectionRows();
+    // The slice is exactly the M1 rows of the three sections; the M5 rows follow in PBE-042.
+    const m1 = [...rows]
+      .filter(([, row]) => row.milestone.startsWith("M1"))
+      .map(([operationId]) => operationId);
+    expect([...m1].sort()).toEqual(SLICE_PBE066.map((entry) => entry.operationId).sort());
+    for (const entry of SLICE_PBE066) {
+      const row = rows.get(entry.operationId);
+      expect(row, entry.operationId).toBeDefined();
+      expect([entry.operationId, entry.method, entry.path]).toEqual([
+        entry.operationId,
+        row?.method,
+        row?.path,
+      ]);
+      const query = parametersOf(entry.operationId)
+        .filter((parameter) => parameter["in"] === "query")
+        .map((parameter) => parameter["name"]);
+      expect([entry.operationId, query]).toEqual([
+        entry.operationId,
+        expect.arrayContaining([...(row?.query ?? [])]),
+      ]);
+
+      const spec = operation(entry.operationId).spec;
+      expect([entry.operationId, spec["x-reason-required"] === true]).toEqual([
+        entry.operationId,
+        row?.reason,
+      ]);
+      expect([entry.operationId, spec["x-mfa-step-up"] === true]).toEqual([entry.operationId, row?.stepUp]);
+      expect([entry.operationId, spec["x-idempotent"], spec["x-feature"], spec["x-internal"]]).toEqual([
+        entry.operationId,
+        undefined,
+        undefined,
+        undefined,
+      ]);
+      // A step-up in some calls only is enforced by the service and shows in the error codes instead.
+      expect([entry.operationId, row?.conditionalStepUp]).toEqual([
+        entry.operationId,
+        (SLICE_PBE066_CONDITIONAL_STEP_UP as readonly string[]).includes(entry.operationId),
+      ]);
+      if (row?.conditionalStepUp === true) {
+        expect([entry.operationId, spec["x-error-codes"]]).toEqual([
+          entry.operationId,
+          expect.arrayContaining(["REAUTH_REQUIRED"]),
+        ]);
+      }
+    }
+  });
+
+  it("documents a text/csv answer for adminExportAudit whose rows are audit entries [PBE-066 AC2]", () => {
+    const op = operation("adminExportAudit");
+    const ok = successOf("adminExportAudit", "200");
+    const content = objectAt(ok, "content");
+    expect(Object.keys(content)).toEqual(["text/csv"]);
+    const media = objectAt(content, "text/csv");
+    expect(objectAt(media, "schema")["type"]).toBe("string");
+
+    // Never cached, and downloaded as a file named after the period.
+    const headers = objectAt(ok, "headers");
+    expect(objectAt(resolve(platform, headers["Cache-Control"]), "schema")["const"]).toBe("no-store");
+    const disposition = objectAt(objectAt(headers, "Content-Disposition"), "schema");
+    const filenames: unknown = disposition["examples"];
+    expect(Array.isArray(filenames) && filenames.length > 0).toBe(true);
+    for (const filename of Array.isArray(filenames) ? (filenames as unknown[]) : []) {
+      expect(new RegExp(String(disposition["pattern"]), "u").test(String(filename))).toBe(true);
+    }
+
+    // The header row names the columns: the properties of AuditEntry, which the description lists too.
+    const [header = "", ...lines] = String(media["example"]).trimEnd().split("\n");
+    expect(csvCells(header)).toEqual([...AUDIT_CSV_COLUMNS]);
+    const entry = objectAt(objectAt(objectAt(platform, "components"), "schemas"), "AuditEntry");
+    expect([...AUDIT_CSV_COLUMNS].sort()).toEqual(Object.keys(objectAt(entry, "properties")).sort());
+    for (const column of AUDIT_CSV_COLUMNS) {
+      expect([column, String(op.spec["description"]).includes(`\`${column}\``)]).toEqual([column, true]);
+    }
+
+    // Each example row is an audit entry: an empty cell is null and `details` is the JSON object.
+    expect(lines.length).toBeGreaterThan(0);
+    const data = lines.map((line) => {
+      const cells = csvCells(line);
+      expect(cells).toHaveLength(AUDIT_CSV_COLUMNS.length);
+      const row: Json = Object.fromEntries(
+        AUDIT_CSV_COLUMNS.map((column, index) => [column, cells[index] === "" ? null : cells[index]]),
+      );
+      return { ...row, details: JSON.parse(String(row["details"])) as unknown };
+    });
+    const page = { nextCursor: null, limit: 50 };
+    expect(checker.check("adminListAudit", { status: 200, body: { data, page } })).toEqual([]);
+    // No example cell could run as a formula in a spreadsheet: the description's rule against CSV injection.
+    expect(String(op.spec["description"])).toContain(
+      "A cell that starts with `=`, `+`, `-`, `@`, a tab or a carriage return gets a leading `'`",
+    );
+    for (const cell of lines.flatMap((line) => csvCells(line))) {
+      expect([cell, /^[=+\-@\t\r]/u.test(cell)]).toEqual([cell, false]);
+    }
+
+    // The response checker reads JSON only, so it refuses the CSV instead of passing it.
+    expect(() => checker.check("adminExportAudit", { status: 200, body: media["example"] })).toThrow(
+      /no JSON content \(text\/csv\)/,
+    );
+    expect(NON_JSON_RESPONSES).toEqual({ adminExportAudit: { "200": ["text/csv"] } });
+    // The inventory names the same representation.
+    expect(adminSectionRows().get("adminExportAudit")?.exchange).toContain("text/csv");
+  });
+
+  it("filters the audit export like the audit search, with a required period and without the cursor", () => {
+    const search = parametersOf("adminListAudit");
+    expect(search.map((parameter) => parameter["name"])).toEqual(expect.arrayContaining(["cursor", "limit"]));
+    const filters = search.filter(
+      (parameter) => parameter["name"] !== "cursor" && parameter["name"] !== "limit",
+    );
+    const exported = parametersOf("adminExportAudit");
+    expect(exported.map((parameter) => parameter["name"])).toEqual(
+      filters.map((parameter) => parameter["name"]),
+    );
+    expect(filters.filter((parameter) => parameter["required"] === true)).toEqual([]);
+    expect(
+      exported.filter((parameter) => parameter["required"] === true).map((parameter) => parameter["name"]),
+    ).toEqual(["from", "to"]);
+    // A range over one year is the service's VALIDATION_FAILED.
+    expect(operation("adminExportAudit").spec["x-error-codes"]).toContain("VALIDATION_FAILED");
+  });
+
+  it("marks adminCreateAmadeusAccount, adminGrantAdmin and adminResetAccountMfa x-mfa-step-up [PBE-066 AC2]", () => {
+    for (const operationId of [
+      "adminCreateAmadeusAccount",
+      "adminGrantAdmin",
+      "adminResetAccountMfa",
+    ] as const) {
+      expect([operationId, operation(operationId).spec["x-mfa-step-up"]]).toEqual([operationId, true]);
+    }
+    // Exactly the MFA↑ rows of the slice, adminRevokeAdmin included (PADR-0006 item 4).
+    expect(
+      SLICE_PBE066.filter((entry) => operation(entry.operationId).spec["x-mfa-step-up"] === true).map(
+        (entry) => entry.operationId,
+      ),
+    ).toEqual([...SLICE_PBE066_STEP_UP]);
+    // Each, and the conditional adminUpdateAmadeusAccount, answers 401 REAUTH_REQUIRED without a fresh step-up.
+    // Every platform admin has MFA (PADR-0006 item 2), so none answers 403 MFA_REQUIRED.
+    for (const operationId of [...SLICE_PBE066_STEP_UP, ...SLICE_PBE066_CONDITIONAL_STEP_UP]) {
+      const [, unauthorized = {}] =
+        responsesOf(platform, operation(operationId)).find(([status]) => status === "401") ?? [];
+      const codes = examplesOf(platform, jsonMedia(unauthorized) ?? {}).map(
+        (example) => objectAt(example, "error")["code"],
+      );
+      expect([operationId, codes]).toEqual([
+        operationId,
+        ["UNAUTHENTICATED", "TOKEN_EXPIRED", "REAUTH_REQUIRED"],
+      ]);
+      expect([operationId, operation(operationId).spec["x-error-codes"]]).toEqual([
+        operationId,
+        expect.not.arrayContaining(["MFA_REQUIRED"]),
+      ]);
+    }
+    expect(operation("adminUpdateAmadeusAccount").spec["x-mfa-step-up"]).toBeUndefined();
+    // Its step-up covers every credential field, the host included: the stored secret is sent to that host, so a
+    // new baseUrl without a step-up would hand the secret to whoever runs it (PADR-0006 item 4).
+    const update = objectAt(
+      objectAt(objectAt(platform, "components"), "schemas"),
+      "UpdateAmadeusAccountRequest",
+    );
+    expect(Object.keys(objectAt(update, "properties"))).toEqual(
+      expect.arrayContaining(["baseUrl", "clientId", "clientSecret"]),
+    );
+    expect(String(operation("adminUpdateAmadeusAccount").spec["description"])).toContain(
+      "A change of `clientSecret`, `clientId` or `baseUrl` needs a TOTP step-up",
+    );
+  });
+
+  it("answers no property ending in Secret, Ciphertext or Hash in any response of the slice [PBE-066 AC2]", () => {
+    const leaky = (name: string): boolean => /(secret|ciphertext|hash)$/i.test(name);
+    // The walk reaches the masked connection of an assignment and the account shapes, so it cannot pass by not looking.
+    expect(propertyNames(platform, { $ref: "#/components/schemas/AmadeusOfficeAssigned" })).toContain(
+      "pendingSubmission",
+    );
+    expect(propertyNames(platform, { $ref: "#/components/schemas/AdminAmadeusAccount" })).toContain(
+      "clientId",
+    );
+    // The Amadeus client secret is a request property only, and write-only.
+    expect(propertyNames(platform, requestSchemaOf("adminCreateAmadeusAccount"))).toContain("clientSecret");
+    const secret = objectAt(objectAt(objectAt(platform, "components"), "schemas"), "AmadeusClientSecret");
+    expect(secret["writeOnly"]).toBe(true);
+
+    for (const { operationId } of SLICE_PBE066) {
+      for (const [status, response] of responsesOf(platform, operation(operationId))) {
+        const names = [...propertyNames(platform, jsonMedia(response)?.["schema"])];
+        expect([operationId, status, names.filter(leaky)]).toEqual([operationId, status, []]);
+      }
+    }
+
+    // The checker refuses an Amadeus account answer with the secret's ciphertext, and an account with a hash.
+    const [account] = examplesOf(platform, jsonMedia(successOf("adminCreateAmadeusAccount", "201")) ?? {});
+    const created = isObject(account) ? account : {};
+    expect(checker.check("adminCreateAmadeusAccount", { status: 201, body: created })).toEqual([]);
+    expect(
+      checker.check("adminCreateAmadeusAccount", {
+        status: 201,
+        body: { ...created, clientSecretCiphertext: "AAAA" },
+      }),
+    ).toEqual([
+      expect.objectContaining({ path: "/clientSecretCiphertext", keyword: "additionalProperties" }),
+    ]);
+    const [detail] = examplesOf(platform, jsonMedia(successOf("adminGetAccount", "200")) ?? {});
+    const body = isObject(detail) ? detail : {};
+    expect(checker.check("adminGetAccount", { status: 200, body })).toEqual([]);
+    expect(
+      checker.check("adminGetAccount", {
+        status: 200,
+        body: { ...body, account: { ...objectAt(body, "account"), passwordHash: "not-a-hash" } },
+      }),
+    ).toEqual([expect.objectContaining({ path: "/account/passwordHash", keyword: "additionalProperties" })]);
+  });
+
+  it("requires a reason of 5–500 characters on the six reason actions, and takes an optional one on adminRevokeAdmin", () => {
+    expect(
+      SLICE_PBE066.filter((entry) => operation(entry.operationId).spec["x-reason-required"] === true).map(
+        (entry) => entry.operationId,
+      ),
+    ).toEqual([...SLICE_PBE066_REASON]);
+
+    const bodies: Record<(typeof SLICE_PBE066_REASON)[number], Json> = {
+      adminUpdateManualSubscription: { trialEndsAt: "2027-02-12T08:20:11Z" },
+      adminRetireAmadeusOffice: {},
+      adminDisableAccount: {},
+      adminEnableAccount: {},
+      adminResetAccountMfa: {},
+      adminGrantAdmin: { email: "jonas.dahl@velexis.example.com" },
+    };
+    const requests = requestBodyChecker(SLICE_PBE066_REASON);
+    for (const operationId of SLICE_PBE066_REASON) {
+      const body = bodies[operationId];
+      const check = (reason?: string) =>
+        requests.check(operationId, { status: 200, body: reason === undefined ? body : { ...body, reason } });
+      expect([operationId, operation(operationId).spec["requestBody"]]).toEqual([
+        operationId,
+        expect.objectContaining({ required: true }),
+      ]);
+      expect([operationId, check("Abuse")]).toEqual([operationId, []]);
+      expect([operationId, check("x".repeat(500))]).toEqual([operationId, []]);
+      expect([operationId, check()]).toEqual([
+        operationId,
+        expect.arrayContaining([expect.objectContaining({ path: "/reason", keyword: "required" })]),
+      ]);
+      expect([operationId, check("Spam")]).toEqual([
+        operationId,
+        [expect.objectContaining({ path: "/reason", keyword: "minLength" })],
+      ]);
+      expect([operationId, check("x".repeat(501))]).toEqual([
+        operationId,
+        [expect.objectContaining({ path: "/reason", keyword: "maxLength" })],
+      ]);
+    }
+    // A manual subscription edit names at least one change besides the reason.
+    expect(
+      requests.check("adminUpdateManualSubscription", { status: 200, body: { reason: "Extend the pilot" } }),
+    ).toEqual([expect.objectContaining({ keyword: "minProperties" })]);
+
+    // A revocation has no body and takes an optional reason in the query: PADR-0006 item 5 does not require one.
+    expect(operation("adminRevokeAdmin").spec["requestBody"]).toBeUndefined();
+    expect(parametersOf("adminRevokeAdmin")).toContainEqual(
+      expect.objectContaining({
+        name: "reason",
+        in: "query",
+        required: false,
+        schema: { $ref: "#/components/schemas/AdminReason" },
+      }),
+    );
+  });
+
+  it("answers AdminPlan as Plan plus the admin fields, and keeps code, currency and the Stripe ids out of adminUpdatePlan", () => {
+    const rows = adminSectionRows();
+    const schemas = objectAt(objectAt(platform, "components"), "schemas");
+    const plan = objectAt(objectAt(schemas, "Plan"), "properties");
+    const adminPlan = objectAt(objectAt(schemas, "AdminPlan"), "properties");
+    // `…Plan`: every field of the public plan, with the same schema apart from annotations.
+    for (const [name, schema] of Object.entries(plan)) {
+      expect([name, shape(resolve(platform, adminPlan[name]))]).toEqual([
+        name,
+        shape(resolve(platform, schema)),
+      ]);
+    }
+    const extra = /AdminPlan \{…Plan, ([^}]+)\}/u.exec(rows.get("adminListPlans")?.exchange ?? "")?.[1] ?? "";
+    const names = extra.split(", ").map((name) => name.replace("[]", ""));
+    expect(names).toHaveLength(8);
+    for (const name of names) {
+      expect([name, name in adminPlan]).toEqual([name, true]);
+    }
+    expect(objectAt(schemas, "AdminPlan")["required"]).toEqual(Object.keys(adminPlan));
+
+    // The create body has the inventory's fields, only annualPrice optional.
+    const fields = (/`\{([^}]+)\}`/u.exec(rows.get("adminCreatePlan")?.exchange ?? "")?.[1] ?? "").split(
+      ", ",
+    );
+    expect(fields).toHaveLength(12);
+    const create = objectAt(schemas, "CreatePlanRequest");
+    expect(Object.keys(objectAt(create, "properties"))).toEqual(
+      fields.map((field) => field.replace("?", "")),
+    );
+    expect(create["required"]).toEqual(fields.filter((field) => !field.endsWith("?")));
+
+    // The update takes any field but code and currency, and retires with isActive; PBE-042 adds the Stripe ids.
+    const update = Object.keys(objectAt(objectAt(schemas, "UpdatePlanRequest"), "properties"));
+    expect([...update].sort()).toEqual(
+      [
+        ...fields
+          .map((field) => field.replace("?", ""))
+          .filter((field) => field !== "code" && field !== "currency"),
+        "isActive",
+      ].sort(),
+    );
+    expect(update.filter((name) => name.startsWith("stripe"))).toEqual([]);
+  });
+
+  it("follows the CHECK constraints of migrations 0001 and 0002 for the statuses of the slice", () => {
+    const baseline = readFileSync(join(PLATFORM_MIGRATIONS, "0001_baseline.sql"), "utf8");
+    const deltas = readFileSync(join(PLATFORM_MIGRATIONS, "0002_add_mvp_platform_deltas.sql"), "utf8");
+    const values = (sql: string, anchor: RegExp): string[] => {
+      const list = anchor.exec(sql)?.[1];
+      expect([String(anchor), list === undefined]).toEqual([String(anchor), false]);
+      return [...(list ?? "").matchAll(/'([^']+)'/g)].map(([, value = ""]) => value);
+    };
+    const schemas = objectAt(objectAt(platform, "components"), "schemas");
+    const enumOf = (name: string, property?: string): unknown =>
+      property === undefined
+        ? objectAt(schemas, name)["enum"]
+        : objectAt(objectAt(objectAt(schemas, name), "properties"), property)["enum"];
+    const checks: Array<[string, unknown, string[]]> = [
+      [
+        "AmadeusAccountStatus",
+        enumOf("AmadeusAccountStatus"),
+        values(deltas, /CREATE TABLE platform\.amadeus_accounts \([\s\S]*?CHECK \(status IN \(([^)]*)\)\)/u),
+      ],
+      [
+        "AmadeusOfficeStatus",
+        enumOf("AmadeusOfficeStatus"),
+        values(deltas, /CREATE TABLE platform\.amadeus_offices \([\s\S]*?CHECK \(status IN \(([^)]*)\)\)/u),
+      ],
+      [
+        "SubscriptionStatus",
+        enumOf("SubscriptionStatus"),
+        values(deltas, /subscriptions_status_ck\s+CHECK \(status IN \(([^)]*)\)\)/u),
+      ],
+      [
+        "BillingProvider",
+        enumOf("BillingProvider"),
+        values(baseline, /CHECK \(billing_provider IN \(([^)]*)\)\)/u),
+      ],
+      [
+        "AccountStatus",
+        enumOf("AccountStatus"),
+        values(baseline, /CREATE TABLE platform\.accounts \([\s\S]*?CHECK \(status IN \(([^)]*)\)\)/u),
+      ],
+      ["AuditActorType", enumOf("AuditActorType"), values(baseline, /CHECK \(actor_type IN \(([^)]*)\)\)/u)],
+      [
+        "AdminInvoice.status",
+        enumOf("AdminInvoice", "status"),
+        values(baseline, /CREATE TABLE platform\.invoices \([\s\S]*?CHECK \(status IN \(([^)]*)\)\)/u),
+      ],
+      [
+        "AdminStripeEvent.endpoint",
+        enumOf("AdminStripeEvent", "endpoint"),
+        values(deltas, /CHECK \(endpoint IN \(([^)]*)\)\)/u),
+      ],
+      [
+        "AdminStripeEvent.status",
+        enumOf("AdminStripeEvent", "status"),
+        values(deltas, /CREATE TABLE platform\.stripe_events \([\s\S]*?CHECK \(status IN \(([^)]*)\)\)/u),
+      ],
+    ];
+    for (const [name, documented, constraint] of checks) {
+      expect([name, documented]).toEqual([name, constraint]);
+    }
+    // The audit search filters on the same actor types as the audit rows.
+    const entry = objectAt(objectAt(schemas, "AuditEntry"), "properties");
+    expect(entry["actorType"]).toEqual({ $ref: "#/components/schemas/AuditActorType" });
+  });
+
+  it("paginates the long lists, answers the short ones whole, and takes If-Match on every versioned PATCH", () => {
+    const refs = (operationId: string): unknown[] => {
+      const list: unknown = operation(operationId).spec["parameters"];
+      return (Array.isArray(list) ? (list as unknown[]) : []).map((parameter) =>
+        isObject(parameter) ? parameter["$ref"] : undefined,
+      );
+    };
+    const okSchema = (operationId: string): Json => {
+      const schema = resolve(platform, jsonMedia(successOf(operationId, "200"))?.["schema"]);
+      return isObject(schema) ? schema : {};
+    };
+    const paginated = [
+      "adminListSubscriptions",
+      "adminListAmadeusOffices",
+      "adminListAccounts",
+      "adminListAudit",
+    ] as const satisfies readonly PlatformOperationId[];
+    for (const operationId of paginated) {
+      expect([operationId, refs(operationId)]).toEqual([
+        operationId,
+        expect.arrayContaining(["#/components/parameters/Cursor", "#/components/parameters/Limit"]),
+      ]);
+      expect([operationId, okSchema(operationId)["required"]]).toEqual([operationId, ["data", "page"]]);
+    }
+    const whole = [
+      "adminListPlans",
+      "adminListAmadeusAccounts",
+      "adminListAdmins",
+    ] as const satisfies readonly PlatformOperationId[];
+    for (const operationId of whole) {
+      expect([operationId, refs(operationId)]).toEqual([operationId, []]);
+      expect([operationId, okSchema(operationId)["required"]]).toEqual([operationId, ["data"]]);
+    }
+    const versioned = [
+      "adminUpdatePlan",
+      "adminUpdateManualSubscription",
+      "adminUpdateAmadeusAccount",
+      "adminUpdateAmadeusOffice",
+    ] as const satisfies readonly PlatformOperationId[];
+    for (const operationId of versioned) {
+      const statuses = responsesOf(platform, operation(operationId)).map(([status]) => status);
+      expect([operationId, refs(operationId), statuses]).toEqual([
+        operationId,
+        ["#/components/parameters/IfMatch"],
+        expect.arrayContaining(["200", "412"]),
+      ]);
+      expect([operationId, objectAt(objectAt(successOf(operationId, "200"), "headers"), "ETag")]).toEqual([
+        operationId,
+        { $ref: "#/components/headers/ETag" },
+      ]);
+      expect([operationId, propertyNames(platform, okSchema(operationId)).has("version")]).toEqual([
+        operationId,
+        true,
+      ]);
+    }
+  });
+});
+
 describe("the error catalogue", () => {
   it("lists every code of api-inventory §3 with its status", () => {
     const catalogue = objectAt(platform, "x-error-catalogue");
@@ -1625,6 +2299,16 @@ describe("the conventions of every operation", () => {
     for (const op of operations) {
       for (const [status, response] of responsesOf(platform, op)) {
         const media = jsonMedia(response);
+        const types = Object.keys(objectAt(response, "content"));
+        if (media === undefined && types.length > 0) {
+          // A body that is not JSON: only the representations of NON_JSON_RESPONSES, checked by their slice test.
+          expect([op.operationId, status, types]).toEqual([
+            op.operationId,
+            status,
+            NON_JSON_RESPONSES[op.operationId]?.[status] ?? [],
+          ]);
+          continue;
+        }
         for (const body of media === undefined ? [undefined] : examplesOf(platform, media)) {
           expect([
             op.operationId,

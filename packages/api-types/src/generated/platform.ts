@@ -1499,6 +1499,532 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/admin/plans": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List every plan with its Stripe link state
+         * @description Every plan, public or not and active or retired, in `sortOrder` then `code` order, with the fields the pricing page does not show: visibility, the active flag, the settlement fee, the Stripe product and price ids (`null` until PBE-042 links them in M5), the price warnings of the last comparison with Stripe (empty while no price is linked) and the number of OTAs on the plan. The list is short, so it is not paginated. The `version` of each plan is what `adminUpdatePlan` needs in `If-Match`.
+         */
+        get: operations["adminListPlans"];
+        put?: never;
+        /**
+         * Create a plan
+         * @description Adds a plan, active from the start. `code` is the plan's natural key and never changes, nor does `currency`; both prices are in that currency (another currency answers `400 VALIDATION_FAILED`), and a plan without `annualPrice` has no yearly option. `limits` are the quotas the backends enforce and `features` the flags the plan unlocks. The Stripe product and prices are linked later with `adminUpdatePlan` (M5). A code that is already used answers `409 CONFLICT` (`details.reason = code_taken`). Writes an audit row.
+         */
+        post: operations["adminCreatePlan"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/plans/{planCode}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The plan (`code` of `adminListPlans`); an unknown code answers `404 NOT_FOUND`.
+                 * @example growth
+                 */
+                planCode: components["parameters"]["AdminPlanCode"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Edit or retire a plan
+         * @description Changes any field of a plan except `code` and `currency`: names, prices (in the plan's currency), limits, features, visibility, trial days, settlement fee and order. `isActive: false` retires the plan: it leaves the pricing page and the wizard, and existing subscriptions keep it. `annualPrice: null` removes the yearly option. `If-Match` carries the plan's `version`; a stale version answers `412 PRECONDITION_FAILED`. Writes an audit row with the before and after values and, after commit, publishes a `plan` invalidation (`{type: "plan", code}`) when `limits` or `features` change, so both backends reload the quotas.
+         *
+         *     The Stripe product and price ids are not part of this M1 request: PBE-042 adds `stripeProductId`, `stripePriceIdMonth` and `stripePriceIdYear` with the price comparison (`priceWarnings`) and its `502 PROVIDER_ERROR` in M5.
+         */
+        patch: operations["adminUpdatePlan"];
+        trace?: never;
+    };
+    "/v1/admin/subscriptions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the subscriptions of every OTA
+         * @description Every subscription row, current or ended, newest first, cursor-paginated, with filters on `status`, `provider` (`manual` for the trials before M5, `stripe`) and `planCode`. Each row names its OTA. Stripe ids are references for the Stripe dashboard, never secrets.
+         */
+        get: operations["adminListSubscriptions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/subscriptions/{subscriptionId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The subscription (`id` of `adminListSubscriptions`); an unknown id answers `404 NOT_FOUND`.
+                 * @example sub_01JA2Z7R5N0S3V7X1Z4B9D2F6H
+                 */
+                subscriptionId: components["parameters"]["SubscriptionId"];
+            };
+            cookie?: never;
+        };
+        /**
+         * Get a subscription with its invoices and Stripe events
+         * @description One subscription with its invoices and the Stripe events of its OTA, each newest first and at most 50. Both lists stay empty before M5, when every subscription is a manual trial. Invoice amounts are `Money`; the hosted invoice links point to Stripe. The `ETag` is the version that `adminUpdateManualSubscription` needs in `If-Match`.
+         */
+        get: operations["adminGetSubscription"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Edit a manual subscription
+         * @description Changes a **manual** subscription (the trials before M5): its plan, its trial end, or its status (`trialing` or `canceled`), with a written `reason` of 5–500 characters that the audit row keeps. At least one change comes with the reason. A change of plan also sets `tenants.plan_code` and, after commit, publishes a `tenant` invalidation; `canceled` sets `canceled_at`. `If-Match` carries the subscription's `version`; a stale version answers `412 PRECONDITION_FAILED`.
+         *
+         *     `409 CONFLICT` when the subscription is billed by Stripe (`details.reason = stripe_billed`; Stripe subscriptions change in the Customer Portal or with `adminResyncSubscription` in M5), or when `trialing` would give the OTA a second current subscription (`details.reason = current_exists`). A `planCode` that names no active plan answers `422 UNPROCESSABLE` (`details.reason = plan_not_active`); plans that are not public are allowed.
+         */
+        patch: operations["adminUpdateManualSubscription"];
+        trace?: never;
+    };
+    "/v1/admin/amadeus-accounts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the Velexis Amadeus accounts
+         * @description The shared Velexis Amadeus accounts, at most one per environment (ADR-0012), with their verification state and the number of pool offices in each status. Never a client secret or its ciphertext: `clientId` is not a secret. The `version` of each account is what `adminUpdateAmadeusAccount` needs in `If-Match`.
+         */
+        get: operations["adminListAmadeusAccounts"];
+        put?: never;
+        /**
+         * Enter the shared Amadeus credentials of an environment
+         * @description Stores the Velexis Amadeus credentials of one environment (ADR-0012, PADR-0012). Needs a TOTP step-up within the last 15 minutes (PADR-0006 item 4). The client secret is envelope-encrypted with the associated data `platform.amadeus_accounts.client_secret_ciphertext:<id>`, never logged and never answered. The account starts `pending_verification`; after commit the job `amadeus_account.verify` on `platform-connections` requests an OAuth token and sets `active` or `invalid_credentials`. `baseUrl` is an `https` host, or the loopback Amadeus stub in development. An environment that already has an account answers `409 CONFLICT` (`details.reason = environment_exists`): rotate its secret with `adminUpdateAmadeusAccount` instead. Writes an audit row without the secret.
+         */
+        post: operations["adminCreateAmadeusAccount"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/amadeus-accounts/{accountId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The Velexis Amadeus account (`id` of `adminListAmadeusAccounts`); an unknown id answers `404 NOT_FOUND`.
+                 * @example ama_01JA2Y8K3M7P1R5T9W3Z7C1F5H
+                 */
+                accountId: components["parameters"]["AmadeusAccountId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Rename, rotate or disable a Velexis Amadeus account
+         * @description Renames the account, changes its host or client id, rotates its client secret, or disables it (`status: disabled`). A change of `clientSecret`, `clientId` or `baseUrl` needs a TOTP step-up within the last 15 minutes (PADR-0006 item 4: rotating the shared credentials). The host counts too, because the verification job and the OTA backend send the stored secret to it: without the step-up, a stolen admin session could point the account at another host and receive the secret. The service checks these cases, so the operation is not marked `x-mfa-step-up` and answers `401 REAUTH_REQUIRED` only then; a new name or `status: disabled` needs no step-up. A new host, client id or secret sets the account `pending_verification` and runs the verification job again; the new secret is encrypted as on creation. A successful verification makes a disabled account `active` again. `If-Match` carries the account's `version`; a stale version answers `412 PRECONDITION_FAILED`. Writes an audit row without the secret and, after commit, publishes an `amadeus_account` invalidation, so the OTA backend drops its cached account; office assignments are unaffected (PADR-0012 item 7).
+         */
+        patch: operations["adminUpdateAmadeusAccount"];
+        trace?: never;
+    };
+    "/v1/admin/amadeus-accounts/{accountId}/verify": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The Velexis Amadeus account (`id` of `adminListAmadeusAccounts`); an unknown id answers `404 NOT_FOUND`.
+                 * @example ama_01JA2Y8K3M7P1R5T9W3Z7C1F5H
+                 */
+                accountId: components["parameters"]["AmadeusAccountId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Verify a Velexis Amadeus account again
+         * @description Enqueues the job `amadeus_account.verify` on `platform-connections`, which requests an OAuth token with the stored credentials (10-second timeout, token discarded) and sets the account `active` or `invalid_credentials` with a short `lastError` (the HTTP status and the Amadeus error code, never the provider's body). The answer comes before the job runs; reload the account to see the result. Writes an audit row. `503 SERVICE_UNAVAILABLE` while Redis is unreachable, because the job is the whole effect.
+         */
+        post: operations["adminVerifyAmadeusAccount"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/amadeus-offices": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the Amadeus office pool
+         * @description The offices of the Velexis Amadeus accounts (PADR-0012), oldest first, cursor-paginated, with filters on the account, the environment and the status (`available`, `assigned`, `releasing`, `retired`). An `assigned` or `releasing` office names its OTA. The `version` of each office is what `adminUpdateAmadeusOffice` needs in `If-Match`.
+         */
+        get: operations["adminListAmadeusOffices"];
+        put?: never;
+        /**
+         * Add offices to the pool in bulk
+         * @description Adds the office ids ordered from Amadeus to the pool of one Velexis Amadeus account, `available` at once. Each id has 9 letters or digits and is upper-cased first. An id that the account's pool already holds, or that repeats an earlier id of the request, is skipped: `skipped` lists each such entry, upper-cased and in request order, so the answer is `201` even when nothing new was added. `created` follows the request order too. `notes` (for example the order reference) goes on every created office. An unknown account answers `404 NOT_FOUND`. Writes one audit row with the created and skipped ids.
+         */
+        post: operations["adminAddAmadeusOffices"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/amadeus-offices/{officeRowId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The pool entry (`id` of `adminListAmadeusOffices`, `amo_…`), not the 9-character Amadeus office id; an unknown id answers `404 NOT_FOUND`.
+                 * @example amo_01JC8R6T0W4Y8A2C6E0G4J8M2P
+                 */
+                officeRowId: components["parameters"]["AmadeusOfficeRowId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Edit the notes of an office
+         * @description Replaces the admin notes of an office (commercial onboarding, ticketing agreements; PADR-0012 item 3); `null` clears them. Works in every office status. `If-Match` carries the office's `version`; a stale version answers `412 PRECONDITION_FAILED`. Writes an audit row.
+         */
+        patch: operations["adminUpdateAmadeusOffice"];
+        trace?: never;
+    };
+    "/v1/admin/amadeus-offices/{officeRowId}/assign": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The pool entry (`id` of `adminListAmadeusOffices`, `amo_…`), not the 9-character Amadeus office id; an unknown id answers `404 NOT_FOUND`.
+                 * @example amo_01JC8R6T0W4Y8A2C6E0G4J8M2P
+                 */
+                officeRowId: components["parameters"]["AmadeusOfficeRowId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Assign an office to an OTA
+         * @description Assigns an `available` office to an OTA and creates or completes the OTA's `velexis` Amadeus connection of the office's environment: `office_ids` is the office, the default, queuing and owner offices are set to it, and the connection becomes `active` (PADR-0012). This is how an admin serves an OTA whose provisioning found the pool empty, and, from M5, assigns a live office after the commercial onboarding; the owners are then e-mailed. The office row is locked and its status re-checked, so two concurrent assignments of one office give one success and one `409 AMADEUS_OFFICE_UNAVAILABLE`.
+         *
+         *     `409 AMADEUS_OFFICE_UNAVAILABLE` when the office is not `available`. `409 CONFLICT` when the OTA uses its own credentials in that environment (`details.reason = tenant_credentials`) or already has an assigned office of that account (`details.reason = office_already_assigned`). An unknown office or OTA answers `404 NOT_FOUND`. Writes an audit row and, after commit, publishes the `connection` and `amadeus_account` invalidations.
+         */
+        post: operations["adminAssignAmadeusOffice"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/amadeus-offices/{officeRowId}/retire": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The pool entry (`id` of `adminListAmadeusOffices`, `amo_…`), not the 9-character Amadeus office id; an unknown id answers `404 NOT_FOUND`.
+                 * @example amo_01JC8R6T0W4Y8A2C6E0G4J8M2P
+                 */
+                officeRowId: components["parameters"]["AmadeusOfficeRowId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Retire an office
+         * @description Takes an `available` office out of use for good (`retired`, PADR-0012 item 1), with a written `reason` of 5–500 characters that the audit row keeps. An office in any other status answers `409 CONFLICT` (`details.reason = not_available`): an assigned office is released first (`adminReleaseAmadeusOffice`, M5).
+         */
+        post: operations["adminRetireAmadeusOffice"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/accounts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Search the accounts
+         * @description Every account of the portal and the admin, newest first, cursor-paginated. `q` matches part of the e-mail address or the name, case-insensitively; `status` filters. Never a password hash, an MFA secret or a token.
+         */
+        get: operations["adminListAccounts"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/accounts/{accountId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The account (`id` of `adminListAccounts`); an unknown id answers `404 NOT_FOUND`.
+                 * @example acc_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+                 */
+                accountId: components["parameters"]["AdminAccountId"];
+            };
+            cookie?: never;
+        };
+        /**
+         * Get an account for support
+         * @description One account with its active memberships, the number of its active sessions (refresh families of the portal and the admin that are neither revoked nor expired) and its last 50 audit rows, those it acted in and those that target it, newest first. Never a password hash, an MFA secret, a recovery code or a token.
+         */
+        get: operations["adminGetAccount"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/accounts/{accountId}/disable": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The account (`id` of `adminListAccounts`); an unknown id answers `404 NOT_FOUND`.
+                 * @example acc_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+                 */
+                accountId: components["parameters"]["AdminAccountId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Disable an account
+         * @description Blocks an account (`disabled`), with a written `reason` of 5–500 characters that the audit row keeps. One transaction sets the status and revokes every session of the account (portal and admin); after commit it writes the cut-off `staffdeny:acct:<id>` in Redis, so the OTA admin refuses the account's staff sessions at once, and publishes an `account` invalidation. The account's sign-ins then answer `403 ACCOUNT_DISABLED`. `403 FORBIDDEN` for the caller's own account (`details.reason = self`) or the last active platform admin (`details.reason = last_admin`); `409 CONFLICT` when the account is already `disabled` or `deleted` (`details.reason = not_enabled`).
+         */
+        post: operations["adminDisableAccount"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/accounts/{accountId}/enable": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The account (`id` of `adminListAccounts`); an unknown id answers `404 NOT_FOUND`.
+                 * @example acc_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+                 */
+                accountId: components["parameters"]["AdminAccountId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Enable a disabled account
+         * @description Unblocks a `disabled` account, with a written `reason` of 5–500 characters that the audit row keeps: the status goes back to `active`, or to `pending_verification` when the e-mail address was never verified. The revoked sessions stay revoked; the person signs in again. After commit it publishes an `account` invalidation. `409 CONFLICT` when the account is not `disabled` (`details.reason = not_disabled`).
+         */
+        post: operations["adminEnableAccount"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/accounts/{accountId}/unlock": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The account (`id` of `adminListAccounts`); an unknown id answers `404 NOT_FOUND`.
+                 * @example acc_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+                 */
+                accountId: components["parameters"]["AdminAccountId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Clear the sign-in lockout of an account
+         * @description Ends the lockout after too many failed sign-ins at once: clears `locked_until` and the failed sign-in count, so the next sign-in with the right password works. An account that is not locked keeps its state; the answer is the account either way. Writes an audit row.
+         */
+        post: operations["adminUnlockAccount"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/accounts/{accountId}/reset-mfa": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The account (`id` of `adminListAccounts`); an unknown id answers `404 NOT_FOUND`.
+                 * @example acc_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+                 */
+                accountId: components["parameters"]["AdminAccountId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Turn off the MFA of an account after an identity check
+         * @description The support case of a person who lost their authenticator, after an identity check done outside the system; the written `reason` of 5–500 characters records how, and the audit row keeps it. Needs a TOTP step-up within the last 15 minutes (PADR-0006 item 4). One transaction turns MFA off, erases the TOTP secret, deletes the recovery codes and revokes every session; after commit it writes `staffdeny:acct:<id>`, publishes an `account` invalidation and e-mails the person (`auth.mfa_changed`). A platform admin cannot be the target (`403 FORBIDDEN`, `details.reason = platform_admin`): another admin first revokes the admin rights, or the developer runs `admin:reset-mfa` on the VM (PADR-0006 item 6). `409 CONFLICT` when the account has no MFA (`details.reason = mfa_not_enabled`).
+         */
+        post: operations["adminResetAccountMfa"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/admins": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the platform admins
+         * @description Every account with `is_platform_admin = true`, by name. The list is short, so it is not paginated.
+         */
+        get: operations["adminListAdmins"];
+        put?: never;
+        /**
+         * Grant platform admin rights
+         * @description Makes an existing account a platform admin, with a written `reason` of 5–500 characters that the audit row keeps. Needs a TOTP step-up within the last 15 minutes (PADR-0006 item 4). The account must be `active`, with a verified e-mail address and MFA enabled, because every admin sign-in asks for a TOTP code: otherwise `422 UNPROCESSABLE` with `details.reason` `account_not_active`, `email_not_verified` or `mfa_not_enabled`. No account with the e-mail address answers `404 NOT_FOUND`; an account that is already a platform admin answers `409 CONFLICT` (`details.reason = already_admin`). The new admin signs in on the admin host; portal sessions are unaffected.
+         */
+        post: operations["adminGrantAdmin"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/admins/{accountId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The account (`id` of `adminListAccounts`); an unknown id answers `404 NOT_FOUND`.
+                 * @example acc_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+                 */
+                accountId: components["parameters"]["AdminAccountId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Revoke platform admin rights
+         * @description Takes the platform admin rights away from an account. Needs a TOTP step-up within the last 15 minutes (PADR-0006 item 4). One transaction clears `is_platform_admin` and revokes the account's admin sessions; because the admin guard re-reads the account on every request, its admin tokens stop working at once (PADR-0006 item 3). Portal sessions are unaffected. The optional `reason` goes into the audit row. `403 FORBIDDEN` for the caller's own account (`details.reason = self`) or the last active platform admin (`details.reason = last_admin`); an account that is not a platform admin answers `404 NOT_FOUND`.
+         */
+        delete: operations["adminRevokeAdmin"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/audit-log": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Search the platform audit log
+         * @description The rows of `platform_audit_log` (PADR-0006, Audit), newest first, cursor-paginated, filtered by OTA, acting account, actor type, action, target and period (`from` inclusive, `to` exclusive; `from` after `to` answers `400 VALIDATION_FAILED`). `action` matches the dotted action exactly, as the admin's filter lists it. The `details` were redacted when the row was written: never a secret, a token or a bank number.
+         */
+        get: operations["adminListAudit"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/audit-log.csv": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Export the platform audit log as CSV
+         * @description The rows of `adminListAudit` with the same filters, as a CSV file to download: UTF-8, comma-separated, quoted as RFC 4180 says, with one header row and these columns: `id`, `createdAt`, `tenantId`, `tenantKey`, `actorType`, `actorAccountId`, `actorLabel`, `action`, `targetType`, `targetId`, `requestId`, `ipAddress`, `userAgent`, `details` (the redacted JSON); an empty cell is a `null`. A cell that starts with `=`, `+`, `-`, `@`, a tab or a carriage return gets a leading `'` (the OWASP rule against CSV injection), so a spreadsheet never runs it as a formula. The period is required and at most one year (`from` inclusive, `to` exclusive; a longer or reversed period answers `400 VALIDATION_FAILED`), and the file holds at most 100 000 rows, newest first: narrow the filters when the limit is reached. The answer is streamed.
+         *
+         *     The export is a sensitive read: it writes an audit row with the filters (PADR-0006, Audit item 2). The file holds e-mail and IP addresses, so it is never cached.
+         */
+        get: operations["adminExportAudit"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/internal/tls/ask": {
         parameters: {
             query?: never;
@@ -2905,11 +3431,7 @@ export interface components {
             tenantId: string | null;
             /** @description The OTA key at the time of the action. */
             tenantKey: string | null;
-            /**
-             * @description Who acted.
-             * @enum {string}
-             */
-            actorType: "account" | "platform_admin" | "api_key" | "system";
+            actorType: components["schemas"]["AuditActorType"];
             /** @description The acting account; `null` for `system` and `api_key` rows. */
             actorAccountId: string | null;
             /** @description A snapshot of the actor (e-mail address, key prefix or job name). */
@@ -2932,6 +3454,446 @@ export interface components {
             };
             /** Format: date-time */
             createdAt: string;
+        };
+        /**
+         * @description Who acted: `account` (a portal user), `platform_admin` (Velexis staff in the admin), `api_key` or `system` (a job or a CLI command run on the VM).
+         * @enum {string}
+         */
+        AuditActorType: "account" | "platform_admin" | "api_key" | "system";
+        AuditEntryList: {
+            data: components["schemas"]["AuditEntry"][];
+            page: components["schemas"]["Page"];
+        };
+        /** @description A plan price in a request: a `Money` whose amount is not negative and has at most two decimals (the `numeric(12,2)` prices of `platform.plans`). Its currency must be the plan's currency, which the service checks (`400 VALIDATION_FAILED`). */
+        PlanPrice: {
+            /** @example 149.00 */
+            amount: string;
+            currency: components["schemas"]["CurrencyCode"];
+        };
+        /** @description The feature flags the plan unlocks, by name (`plans.features`); the whole object is replaced. */
+        PlanFeatures: {
+            [key: string]: boolean;
+        };
+        /** @description One difference between a plan and a linked Stripe price (subscription-billing flow §A): the amount, the currency or the interval differ, or the price is inactive. Warnings never block saving. */
+        PlanPriceWarning: {
+            /** @description The linked price and the attribute that differs, for example `stripePriceIdMonth.amount` or `stripePriceIdYear.active`. */
+            field: string;
+            /** @description The value the plan implies. */
+            expected: string | null;
+            /** @description The value Stripe answered. */
+            actual: string | null;
+        };
+        /** @description A plan as Velexis staff see it: the fields of `Plan`, plus the currency, the visibility, the active flag, the order, the settlement fee, the Stripe link state and the number of OTAs on it. The Stripe ids stay `null` and `priceWarnings` empty until PBE-042 links prices in M5. */
+        AdminPlan: {
+            code: components["schemas"]["PlanCode"];
+            name: string;
+            description: string | null;
+            currency: components["schemas"]["CurrencyCode"];
+            monthlyPrice: components["schemas"]["Money"];
+            /** @description The yearly price, or null when the plan has no annual option. */
+            annualPrice: components["schemas"]["Money"] | null;
+            /** @description Free trial days on the first subscription of an OTA. */
+            trialDays: number;
+            limits: components["schemas"]["PlanLimits"];
+            /** @description Feature flags the plan unlocks, by name. */
+            features: {
+                [key: string]: boolean;
+            };
+            /** @description Whether Stripe Checkout can start for each billing interval (the plan has a Stripe price for it). */
+            checkoutAvailable: {
+                month: boolean;
+                year: boolean;
+            };
+            /** @description Whether the plan is offered on the pricing page and in the create-OTA wizard. */
+            isPublic: boolean;
+            /** @description False for a retired plan, kept for its existing subscriptions only. */
+            isActive: boolean;
+            /** @description The order on the pricing page, lowest first. */
+            sortOrder: number;
+            /** @description The Velexis fee in basis points on the net captured volume of `velexis`-mode payments, deducted in the settlements (M5). */
+            settlementFeeBps: number;
+            /** @description The Stripe Product of the plan; `null` until linked (M5). */
+            stripeProductId: string | null;
+            /** @description The recurring Stripe Price of monthly billing; `null` until linked (M5). */
+            stripePriceIdMonth: string | null;
+            /** @description The recurring Stripe Price of yearly billing; `null` until linked (M5). */
+            stripePriceIdYear: string | null;
+            /** @description The differences found by the last comparison with Stripe; empty while no price is linked. */
+            priceWarnings: components["schemas"]["PlanPriceWarning"][];
+            /** @description The OTAs on the plan (`tenants.plan_code`), in any status. */
+            tenantCount: number;
+            /** @description Optimistic-locking version; send it in `If-Match` to `adminUpdatePlan`. */
+            version: number;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            updatedAt: string;
+        };
+        AdminPlanList: {
+            data: components["schemas"]["AdminPlan"][];
+        };
+        /** @description A new plan. Only `annualPrice` is optional (no yearly option without it). `code` and `currency` never change afterwards. */
+        CreatePlanRequest: {
+            code: components["schemas"]["PlanCode"];
+            name: string;
+            description: string | null;
+            currency: components["schemas"]["CurrencyCode"];
+            monthlyPrice: components["schemas"]["PlanPrice"];
+            annualPrice?: components["schemas"]["PlanPrice"];
+            limits: components["schemas"]["PlanLimits"];
+            features: components["schemas"]["PlanFeatures"];
+            isPublic: boolean;
+            trialDays: number;
+            settlementFeeBps: number;
+            sortOrder: number;
+        };
+        /** @description The fields to change; at least one. Never `code` or `currency`. `annualPrice: null` removes the yearly option and `isActive: false` retires the plan. PBE-042 adds the Stripe product and price ids in M5. */
+        UpdatePlanRequest: {
+            name?: string;
+            description?: string | null;
+            monthlyPrice?: components["schemas"]["PlanPrice"];
+            annualPrice?: components["schemas"]["PlanPrice"] | null;
+            limits?: components["schemas"]["PlanLimits"];
+            features?: components["schemas"]["PlanFeatures"];
+            isPublic?: boolean;
+            isActive?: boolean;
+            trialDays?: number;
+            settlementFeeBps?: number;
+            sortOrder?: number;
+        };
+        /**
+         * @description Stripe's subscription statuses (`subscriptions.status`); manual subscriptions use `trialing`, `past_due` and `canceled` only.
+         * @enum {string}
+         */
+        SubscriptionStatus: "trialing" | "active" | "past_due" | "paused" | "canceled" | "incomplete" | "incomplete_expired" | "unpaid";
+        /**
+         * @description `manual` (the trials before M5) or `stripe`.
+         * @enum {string}
+         */
+        BillingProvider: "stripe" | "manual";
+        /** @description A subscription row as Velexis staff see it, with its OTA. The Stripe ids are references for the Stripe dashboard, never secrets; they are `null` on manual subscriptions. */
+        AdminSubscription: {
+            id: string;
+            tenantId: components["schemas"]["TenantId"];
+            tenantKey: components["schemas"]["TenantKey"];
+            tenantName: string;
+            planCode: components["schemas"]["PlanCode"];
+            planName: string;
+            status: components["schemas"]["SubscriptionStatus"];
+            billingProvider: components["schemas"]["BillingProvider"];
+            billingInterval: components["schemas"]["BillingInterval"];
+            /** Format: date-time */
+            trialEndsAt: string | null;
+            /** Format: date-time */
+            currentPeriodStart: string | null;
+            /** Format: date-time */
+            currentPeriodEnd: string | null;
+            cancelAtPeriodEnd: boolean;
+            /** Format: date-time */
+            canceledAt: string | null;
+            /** @description The Stripe Customer; `null` on manual subscriptions. */
+            providerCustomerId: string | null;
+            /** @description The Stripe Subscription; `null` on manual subscriptions. */
+            providerSubscriptionId: string | null;
+            /** Format: date-time */
+            createdAt: string;
+            /** @description Optimistic-locking version; send it in `If-Match` to `adminUpdateManualSubscription`. */
+            version: number;
+        };
+        AdminSubscriptionList: {
+            data: components["schemas"]["AdminSubscription"][];
+            page: components["schemas"]["Page"];
+        };
+        /** @description A Velexis invoice of an OTA, synchronised from Stripe (M5). Amounts are `Money` in the invoice currency; the links point to the Stripe-hosted page and PDF. */
+        AdminInvoice: {
+            id: string;
+            tenantId: components["schemas"]["TenantId"];
+            subscriptionId: string | null;
+            /** @description The legal invoice number. */
+            number: string;
+            /** @enum {string} */
+            status: "draft" | "open" | "paid" | "void" | "uncollectible";
+            subtotal: components["schemas"]["Money"];
+            taxAmount: components["schemas"]["Money"];
+            total: components["schemas"]["Money"];
+            amountPaid: components["schemas"]["Money"];
+            amountDue: components["schemas"]["Money"];
+            /** Format: date-time */
+            periodStart: string | null;
+            /** Format: date-time */
+            periodEnd: string | null;
+            /** Format: date-time */
+            issuedAt: string | null;
+            /** Format: date-time */
+            dueAt: string | null;
+            /** Format: date-time */
+            paidAt: string | null;
+            /** Format: uri */
+            hostedInvoiceUrl: string | null;
+            /** Format: uri */
+            invoicePdfUrl: string | null;
+            /** @description The Stripe Invoice. */
+            providerInvoiceId: string | null;
+            /** Format: date-time */
+            createdAt: string;
+        };
+        /** @description One event of the Stripe webhook inbox (`stripe_events`, M5): its type, processing state and last error. The payload is never stored or answered; the worker re-fetches the object from Stripe. */
+        AdminStripeEvent: {
+            /** @description The Stripe event id. */
+            id: string;
+            /**
+             * @description The receiver that got it.
+             * @enum {string}
+             */
+            endpoint: "billing" | "connect_accounts";
+            /** @description The Stripe event type, for example `invoice.paid`. */
+            type: string;
+            /** @enum {string} */
+            status: "received" | "processing" | "processed" | "ignored" | "failed";
+            attempts: number;
+            /** @description The last processing error, a short message without secrets. */
+            lastError: string | null;
+            tenantId: string | null;
+            /** Format: date-time */
+            receivedAt: string;
+            /** Format: date-time */
+            processedAt: string | null;
+        };
+        /** @description A subscription with its invoices and the Stripe events of its OTA; both lists are empty before M5. */
+        AdminSubscriptionDetail: {
+            subscription: components["schemas"]["AdminSubscription"];
+            /** @description The invoices of the subscription, newest first (at most 50). */
+            invoices: components["schemas"]["AdminInvoice"][];
+            /** @description The Stripe events of the subscription's OTA, newest first (at most 50). */
+            events: components["schemas"]["AdminStripeEvent"][];
+        };
+        /** @description At least one change (`planCode`, `trialEndsAt` or `status`) and the required reason, so a body holds at least two properties. */
+        UpdateManualSubscriptionRequest: {
+            planCode?: components["schemas"]["PlanCode"];
+            /**
+             * Format: date-time
+             * @description The new end of the trial.
+             */
+            trialEndsAt?: string;
+            /**
+             * @description `canceled` ends the manual subscription; `trialing` reopens one.
+             * @enum {string}
+             */
+            status?: "trialing" | "canceled";
+            reason: components["schemas"]["AdminReason"];
+        };
+        /**
+         * @description Velexis Amadeus account id (`ama_` + ULID).
+         * @example ama_01JA2Y8K3M7P1R5T9W3Z7C1F5H
+         */
+        AmadeusAccountId: string;
+        /**
+         * @description The credential health after the last verification: `pending_verification` (new or changed credentials), `active`, `invalid_credentials` (Amadeus refused the token request), `disabled` (by an admin).
+         * @enum {string}
+         */
+        AmadeusAccountStatus: "pending_verification" | "active" | "invalid_credentials" | "disabled";
+        /**
+         * Format: uri
+         * @description The Amadeus API host: an `https` URL, or the loopback Amadeus stub (`http://127.0.0.1:<port>`) in development; the service refuses the stub in production.
+         * @example https://test.travel.api.amadeus.com
+         */
+        AmadeusBaseUrl: string;
+        /** @description The OAuth2 client secret Amadeus issued to Velexis. Write-only: envelope-encrypted at once, never logged and never answered. */
+        AmadeusClientSecret: string;
+        /** @description The offices of the account's pool in each status. */
+        AmadeusOfficeCounts: {
+            available: number;
+            assigned: number;
+            releasing: number;
+            retired: number;
+        };
+        /** @description A Velexis Amadeus account (one per environment). Never holds the client secret or its ciphertext; `clientId` is not a secret. */
+        AdminAmadeusAccount: {
+            id: components["schemas"]["AmadeusAccountId"];
+            /** @description The label shown in the admin. */
+            name: string;
+            environment: components["schemas"]["Environment"];
+            baseUrl: components["schemas"]["AmadeusBaseUrl"];
+            /** @description The OAuth2 client id Amadeus issued to Velexis. */
+            clientId: string;
+            status: components["schemas"]["AmadeusAccountStatus"];
+            /**
+             * Format: date-time
+             * @description The last successful token request.
+             */
+            lastVerifiedAt: string | null;
+            /** @description The last verification error (HTTP status and Amadeus code), never a secret or a provider body. */
+            lastError: string | null;
+            officeCounts: components["schemas"]["AmadeusOfficeCounts"];
+            /** Format: date-time */
+            createdAt: string;
+            /** @description Optimistic-locking version; send it in `If-Match` to `adminUpdateAmadeusAccount`. */
+            version: number;
+        };
+        AdminAmadeusAccountList: {
+            data: components["schemas"]["AdminAmadeusAccount"][];
+        };
+        CreateAmadeusAccountRequest: {
+            name: string;
+            environment: components["schemas"]["Environment"];
+            baseUrl: components["schemas"]["AmadeusBaseUrl"];
+            clientId: string;
+            clientSecret: components["schemas"]["AmadeusClientSecret"];
+        };
+        /** @description The fields to change; at least one. A new `baseUrl`, `clientId` or `clientSecret` needs a step-up; `status` only takes `disabled`, and a successful verification makes the account `active` again. */
+        UpdateAmadeusAccountRequest: {
+            name?: string;
+            baseUrl?: components["schemas"]["AmadeusBaseUrl"];
+            clientId?: string;
+            clientSecret?: components["schemas"]["AmadeusClientSecret"];
+            /** @enum {string} */
+            status?: "disabled";
+        };
+        /**
+         * @description An office of the pool (PADR-0012 item 1): `available`, `assigned` to an OTA, `releasing` (the OTA moved to its own credentials and old orders may still use it), or `retired`.
+         * @enum {string}
+         */
+        AmadeusOfficeStatus: "available" | "assigned" | "releasing" | "retired";
+        /** @description An OTA named in another resource. */
+        TenantReference: {
+            id: components["schemas"]["TenantId"];
+            key: components["schemas"]["TenantKey"];
+        };
+        /** @description One office of a Velexis Amadeus account's pool. */
+        AdminAmadeusOffice: {
+            /** @description The pool entry id (`amo_` + ULID). */
+            id: string;
+            amadeusAccountId: components["schemas"]["AmadeusAccountId"];
+            officeId: components["schemas"]["AmadeusOfficeId"];
+            environment: components["schemas"]["Environment"];
+            status: components["schemas"]["AmadeusOfficeStatus"];
+            /** @description The OTA using the office while `assigned` or `releasing`; `null` otherwise. */
+            assignedTenant: components["schemas"]["TenantReference"] | null;
+            /** Format: date-time */
+            assignedAt: string | null;
+            /**
+             * Format: date-time
+             * @description When the OTA stopped using the office (the start of `releasing`).
+             */
+            releaseRequestedAt: string | null;
+            /**
+             * Format: date-time
+             * @description When an admin last returned the office to the pool.
+             */
+            releasedAt: string | null;
+            /** @description Admin notes (commercial onboarding, ticketing agreements). */
+            notes: string | null;
+            /**
+             * Format: date-time
+             * @description When the office was added to the pool.
+             */
+            createdAt: string;
+            /** @description Optimistic-locking version; send it in `If-Match` to `adminUpdateAmadeusOffice`. */
+            version: number;
+        };
+        AdminAmadeusOfficeList: {
+            data: components["schemas"]["AdminAmadeusOffice"][];
+            page: components["schemas"]["Page"];
+        };
+        AddAmadeusOfficesRequest: {
+            amadeusAccountId: components["schemas"]["AmadeusAccountId"];
+            /** @description The Amadeus office ids, 9 letters or digits each; upper-cased by the service, and repeats are skipped rather than refused. */
+            officeIds: string[];
+            /** @description Notes for every created office, for example the order reference. */
+            notes?: string;
+        };
+        /** @description The offices created, and the upper-cased ids skipped because the pool already held them or they repeat an earlier id of the request: one entry per skipped request entry, both lists in request order. */
+        AmadeusOfficesAdded: {
+            created: components["schemas"]["AdminAmadeusOffice"][];
+            skipped: components["schemas"]["AmadeusOfficeId"][];
+        };
+        /** @description The new notes; `null` clears them. */
+        UpdateAmadeusOfficeRequest: {
+            notes: string | null;
+        };
+        AssignAmadeusOfficeRequest: {
+            tenantId: components["schemas"]["TenantId"];
+        };
+        /** @description The assigned office and the OTA's masked Amadeus connection of its environment. */
+        AmadeusOfficeAssigned: {
+            office: components["schemas"]["AdminAmadeusOffice"];
+            connection: components["schemas"]["AmadeusConnection"];
+        };
+        /**
+         * @description The lifecycle of an account: `pending_verification` (e-mail address not verified), `active`, `locked`, `disabled` (by Velexis staff), `deleted` (erased).
+         * @enum {string}
+         */
+        AccountStatus: "pending_verification" | "active" | "locked" | "disabled" | "deleted";
+        /** @description One account in the admin search. */
+        AdminAccountSummary: {
+            id: components["schemas"]["AccountId"];
+            email: components["schemas"]["EmailAddress"];
+            fullName: string;
+            status: components["schemas"]["AccountStatus"];
+            mfaEnabled: boolean;
+            isPlatformAdmin: boolean;
+            /** Format: date-time */
+            lastLoginAt: string | null;
+            /** Format: date-time */
+            createdAt: string;
+        };
+        AdminAccountList: {
+            data: components["schemas"]["AdminAccountSummary"][];
+            page: components["schemas"]["Page"];
+        };
+        /** @description An account as Velexis support sees it. Never holds the password hash, the MFA secret, recovery codes or tokens. */
+        AdminAccount: {
+            id: components["schemas"]["AccountId"];
+            email: components["schemas"]["EmailAddress"];
+            emailVerified: boolean;
+            fullName: string;
+            locale: components["schemas"]["Locale"];
+            timeZone: components["schemas"]["TimeZone"];
+            status: components["schemas"]["AccountStatus"];
+            mfaEnabled: boolean;
+            /** Format: date-time */
+            mfaEnabledAt: string | null;
+            isPlatformAdmin: boolean;
+            /** @description Consecutive failed sign-ins; five lock the account for 15 minutes. */
+            failedLoginCount: number;
+            /**
+             * Format: date-time
+             * @description The end of the current lockout; `null` when not locked.
+             */
+            lockedUntil: string | null;
+            /** Format: date-time */
+            lastLoginAt: string | null;
+            /** Format: date-time */
+            createdAt: string;
+            /** @description Optimistic-locking version. */
+            version: number;
+        };
+        /** @description An account with its memberships, its active session count and its recent audit rows. */
+        AdminAccountDetail: {
+            account: components["schemas"]["AdminAccount"];
+            /** @description The active memberships, one per OTA. */
+            memberships: components["schemas"]["AccountMembership"][];
+            /** @description The refresh families of the portal and the admin that are neither revoked nor expired. */
+            activeSessions: number;
+            /** @description The last 50 audit rows the account acted in or that target it, newest first. */
+            recentAudit: components["schemas"]["AuditEntry"][];
+        };
+        /** @description A platform admin. */
+        PlatformAdmin: {
+            accountId: components["schemas"]["AccountId"];
+            email: components["schemas"]["EmailAddress"];
+            fullName: string;
+            /** @description Always true for an admin who can sign in (PADR-0006 item 2). */
+            mfaEnabled: boolean;
+            /** Format: date-time */
+            lastLoginAt: string | null;
+        };
+        PlatformAdminList: {
+            data: components["schemas"]["PlatformAdmin"][];
+        };
+        GrantAdminRequest: {
+            email: components["schemas"]["EmailAddress"];
+            reason: components["schemas"]["AdminReason"];
         };
     };
     responses: {
@@ -3136,6 +4098,26 @@ export interface components {
                 "application/json": components["schemas"]["ErrorResponse"];
             };
         };
+        /** @description No valid platform admin access token, or no TOTP step-up within the last 15 minutes (call adminStepUp, then retry). Possible codes: UNAUTHENTICATED, TOKEN_EXPIRED, REAUTH_REQUIRED. */
+        AdminStepUpUnauthorized: {
+            headers: {
+                "X-Request-Id": components["headers"]["X-Request-Id"];
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["ErrorResponse"];
+            };
+        };
+        /** @description The action would lock Velexis out of its admin: it targets the caller's own account (`details.reason = self`) or the last active platform admin (`details.reason = last_admin`). Possible codes: FORBIDDEN. */
+        AdminSelfOrLastAdminForbidden: {
+            headers: {
+                "X-Request-Id": components["headers"]["X-Request-Id"];
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["ErrorResponse"];
+            };
+        };
     };
     parameters: {
         /** @description Client-generated unique key (a UUID v4) that makes the request safe to retry for 24 hours. The same key with another body answers `409 IDEMPOTENCY_KEY_REUSED`. */
@@ -3189,6 +4171,52 @@ export interface components {
          * @example 1843
          */
         QueueJobId: string;
+        /**
+         * @description The plan (`code` of `adminListPlans`); an unknown code answers `404 NOT_FOUND`.
+         * @example growth
+         */
+        AdminPlanCode: components["schemas"]["PlanCode"];
+        /**
+         * @description The subscription (`id` of `adminListSubscriptions`); an unknown id answers `404 NOT_FOUND`.
+         * @example sub_01JA2Z7R5N0S3V7X1Z4B9D2F6H
+         */
+        SubscriptionId: string;
+        /**
+         * @description The Velexis Amadeus account (`id` of `adminListAmadeusAccounts`); an unknown id answers `404 NOT_FOUND`.
+         * @example ama_01JA2Y8K3M7P1R5T9W3Z7C1F5H
+         */
+        AmadeusAccountId: components["schemas"]["AmadeusAccountId"];
+        /**
+         * @description The pool entry (`id` of `adminListAmadeusOffices`, `amo_…`), not the 9-character Amadeus office id; an unknown id answers `404 NOT_FOUND`.
+         * @example amo_01JC8R6T0W4Y8A2C6E0G4J8M2P
+         */
+        AmadeusOfficeRowId: string;
+        /**
+         * @description The account (`id` of `adminListAccounts`); an unknown id answers `404 NOT_FOUND`.
+         * @example acc_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+         */
+        AdminAccountId: components["schemas"]["AccountId"];
+        /** @description Only the rows of this OTA. */
+        AuditTenantId: components["schemas"]["TenantId"];
+        /** @description Only the rows of this acting account. */
+        AuditActorAccountId: components["schemas"]["AccountId"];
+        /** @description Only the rows of this kind of actor. */
+        AuditActorType: components["schemas"]["AuditActorType"];
+        /**
+         * @description Only the rows of this dotted action, matched exactly.
+         * @example tenant.suspended
+         */
+        AuditAction: string;
+        /**
+         * @description Only the rows about this kind of object, for example `tenant` or `api_key`.
+         * @example tenant
+         */
+        AuditTargetType: string;
+        /**
+         * @description Only the rows about this object id.
+         * @example ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F
+         */
+        AuditTargetId: string;
     };
     requestBodies: never;
     headers: {
@@ -3202,6 +4230,8 @@ export interface components {
         NoStore: "no-store";
         /** @description Always `no-store`: health answers are never cached. */
         NoStoreHealth: "no-store";
+        /** @description Always `no-store`: the export holds personal data (e-mail and IP addresses) and is never cached by the admin server, a proxy or the browser. */
+        NoStoreExport: "no-store";
     };
     pathItems: never;
 }
@@ -6819,6 +7849,1686 @@ export interface operations {
             429: components["responses"]["RateLimited"];
             500: components["responses"]["InternalError"];
             503: components["responses"]["ServiceUnavailable"];
+        };
+    };
+    adminListPlans: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Every plan. */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "data": [
+                     *         {
+                     *           "code": "early_access",
+                     *           "name": "Early access",
+                     *           "description": "Free plan for OTAs created before paid plans open. Test mode only.",
+                     *           "currency": "EUR",
+                     *           "monthlyPrice": {
+                     *             "amount": "0.00",
+                     *             "currency": "EUR"
+                     *           },
+                     *           "annualPrice": null,
+                     *           "trialDays": 90,
+                     *           "limits": {
+                     *             "staffSeats": 5,
+                     *             "apiKeys": 10,
+                     *             "customDomains": 0,
+                     *             "liveMode": false
+                     *           },
+                     *           "features": {},
+                     *           "checkoutAvailable": {
+                     *             "month": false,
+                     *             "year": false
+                     *           },
+                     *           "isPublic": true,
+                     *           "isActive": true,
+                     *           "sortOrder": 0,
+                     *           "settlementFeeBps": 0,
+                     *           "stripeProductId": null,
+                     *           "stripePriceIdMonth": null,
+                     *           "stripePriceIdYear": null,
+                     *           "priceWarnings": [],
+                     *           "tenantCount": 17,
+                     *           "version": 1,
+                     *           "createdAt": "2026-10-01T00:00:00Z",
+                     *           "updatedAt": "2026-10-01T00:00:00Z"
+                     *         },
+                     *         {
+                     *           "code": "growth",
+                     *           "name": "Growth",
+                     *           "description": "For OTAs selling live with up to 15 staff.",
+                     *           "currency": "EUR",
+                     *           "monthlyPrice": {
+                     *             "amount": "149.00",
+                     *             "currency": "EUR"
+                     *           },
+                     *           "annualPrice": {
+                     *             "amount": "1490.00",
+                     *             "currency": "EUR"
+                     *           },
+                     *           "trialDays": 14,
+                     *           "limits": {
+                     *             "staffSeats": 15,
+                     *             "apiKeys": 25,
+                     *             "customDomains": 1,
+                     *             "liveMode": true
+                     *           },
+                     *           "features": {
+                     *             "queues": true
+                     *           },
+                     *           "checkoutAvailable": {
+                     *             "month": false,
+                     *             "year": false
+                     *           },
+                     *           "isPublic": false,
+                     *           "isActive": true,
+                     *           "sortOrder": 20,
+                     *           "settlementFeeBps": 150,
+                     *           "stripeProductId": null,
+                     *           "stripePriceIdMonth": null,
+                     *           "stripePriceIdYear": null,
+                     *           "priceWarnings": [],
+                     *           "tenantCount": 0,
+                     *           "version": 2,
+                     *           "createdAt": "2026-10-18T09:30:00Z",
+                     *           "updatedAt": "2026-10-19T11:02:41Z"
+                     *         }
+                     *       ]
+                     *     }
+                     */
+                    "application/json": components["schemas"]["AdminPlanList"];
+                };
+            };
+            401: components["responses"]["AdminUnauthenticated"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    adminCreatePlan: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                /**
+                 * @example {
+                 *       "code": "growth",
+                 *       "name": "Growth",
+                 *       "description": "For OTAs selling live with up to 15 staff.",
+                 *       "currency": "EUR",
+                 *       "monthlyPrice": {
+                 *         "amount": "149.00",
+                 *         "currency": "EUR"
+                 *       },
+                 *       "annualPrice": {
+                 *         "amount": "1490.00",
+                 *         "currency": "EUR"
+                 *       },
+                 *       "limits": {
+                 *         "staffSeats": 15,
+                 *         "apiKeys": 25,
+                 *         "customDomains": 1,
+                 *         "liveMode": true
+                 *       },
+                 *       "features": {
+                 *         "queues": true
+                 *       },
+                 *       "isPublic": false,
+                 *       "trialDays": 14,
+                 *       "settlementFeeBps": 150,
+                 *       "sortOrder": 20
+                 *     }
+                 */
+                "application/json": components["schemas"]["CreatePlanRequest"];
+            };
+        };
+        responses: {
+            /** @description The new plan, with its version in `ETag`. */
+            201: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    ETag: components["headers"]["ETag"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminPlan"];
+                };
+            };
+            400: components["responses"]["ValidationFailed"];
+            401: components["responses"]["AdminUnauthenticated"];
+            /** @description A plan with this code exists (`details.reason = code_taken`). Possible codes: CONFLICT. */
+            409: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    adminUpdatePlan: {
+        parameters: {
+            query?: never;
+            header: {
+                /**
+                 * @description The `ETag` of the version being changed; a stale version answers `412 PRECONDITION_FAILED`.
+                 * @example "3"
+                 */
+                "If-Match": components["parameters"]["IfMatch"];
+            };
+            path: {
+                /**
+                 * @description The plan (`code` of `adminListPlans`); an unknown code answers `404 NOT_FOUND`.
+                 * @example growth
+                 */
+                planCode: components["parameters"]["AdminPlanCode"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdatePlanRequest"];
+            };
+        };
+        responses: {
+            /** @description The updated plan, with its new version in `ETag`. */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    ETag: components["headers"]["ETag"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminPlan"];
+                };
+            };
+            400: components["responses"]["ValidationFailed"];
+            401: components["responses"]["AdminUnauthenticated"];
+            404: components["responses"]["NotFound"];
+            412: components["responses"]["PreconditionFailed"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    adminListSubscriptions: {
+        parameters: {
+            query?: {
+                /** @description Only subscriptions in this status. */
+                status?: components["schemas"]["SubscriptionStatus"];
+                /** @description Only subscriptions billed this way. */
+                provider?: components["schemas"]["BillingProvider"];
+                /** @description Only subscriptions to this plan. */
+                planCode?: components["schemas"]["PlanCode"];
+                /** @description Opaque cursor from `page.nextCursor` of the previous page. */
+                cursor?: components["parameters"]["Cursor"];
+                /** @description Page size. */
+                limit?: components["parameters"]["Limit"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of subscriptions. */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "data": [
+                     *         {
+                     *           "id": "sub_01JA2Z7R5N0S3V7X1Z4B9D2F6H",
+                     *           "tenantId": "ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F",
+                     *           "tenantKey": "acme",
+                     *           "tenantName": "Acme Travel",
+                     *           "planCode": "early_access",
+                     *           "planName": "Early access",
+                     *           "status": "trialing",
+                     *           "billingProvider": "manual",
+                     *           "billingInterval": "month",
+                     *           "trialEndsAt": "2027-01-12T08:20:11Z",
+                     *           "currentPeriodStart": null,
+                     *           "currentPeriodEnd": null,
+                     *           "cancelAtPeriodEnd": false,
+                     *           "canceledAt": null,
+                     *           "providerCustomerId": null,
+                     *           "providerSubscriptionId": null,
+                     *           "createdAt": "2026-10-14T08:20:11Z",
+                     *           "version": 1
+                     *         }
+                     *       ],
+                     *       "page": {
+                     *         "nextCursor": null,
+                     *         "limit": 50
+                     *       }
+                     *     }
+                     */
+                    "application/json": components["schemas"]["AdminSubscriptionList"];
+                };
+            };
+            400: components["responses"]["ValidationFailed"];
+            401: components["responses"]["AdminUnauthenticated"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    adminGetSubscription: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The subscription (`id` of `adminListSubscriptions`); an unknown id answers `404 NOT_FOUND`.
+                 * @example sub_01JA2Z7R5N0S3V7X1Z4B9D2F6H
+                 */
+                subscriptionId: components["parameters"]["SubscriptionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The subscription and its history. */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    ETag: components["headers"]["ETag"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminSubscriptionDetail"];
+                };
+            };
+            400: components["responses"]["ValidationFailed"];
+            401: components["responses"]["AdminUnauthenticated"];
+            404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    adminUpdateManualSubscription: {
+        parameters: {
+            query?: never;
+            header: {
+                /**
+                 * @description The `ETag` of the version being changed; a stale version answers `412 PRECONDITION_FAILED`.
+                 * @example "3"
+                 */
+                "If-Match": components["parameters"]["IfMatch"];
+            };
+            path: {
+                /**
+                 * @description The subscription (`id` of `adminListSubscriptions`); an unknown id answers `404 NOT_FOUND`.
+                 * @example sub_01JA2Z7R5N0S3V7X1Z4B9D2F6H
+                 */
+                subscriptionId: components["parameters"]["SubscriptionId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                /**
+                 * @example {
+                 *       "trialEndsAt": "2027-02-12T08:20:11Z",
+                 *       "reason": "Pilot extended by one month as agreed with Anna Berg on 2026-12-20."
+                 *     }
+                 */
+                "application/json": components["schemas"]["UpdateManualSubscriptionRequest"];
+            };
+        };
+        responses: {
+            /** @description The updated subscription, with its new version in `ETag`. */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    ETag: components["headers"]["ETag"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "id": "sub_01JA2Z7R5N0S3V7X1Z4B9D2F6H",
+                     *       "tenantId": "ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F",
+                     *       "tenantKey": "acme",
+                     *       "tenantName": "Acme Travel",
+                     *       "planCode": "early_access",
+                     *       "planName": "Early access",
+                     *       "status": "trialing",
+                     *       "billingProvider": "manual",
+                     *       "billingInterval": "month",
+                     *       "trialEndsAt": "2027-02-12T08:20:11Z",
+                     *       "currentPeriodStart": null,
+                     *       "currentPeriodEnd": null,
+                     *       "cancelAtPeriodEnd": false,
+                     *       "canceledAt": null,
+                     *       "providerCustomerId": null,
+                     *       "providerSubscriptionId": null,
+                     *       "createdAt": "2026-10-14T08:20:11Z",
+                     *       "version": 2
+                     *     }
+                     */
+                    "application/json": components["schemas"]["AdminSubscription"];
+                };
+            };
+            400: components["responses"]["ValidationFailed"];
+            401: components["responses"]["AdminUnauthenticated"];
+            404: components["responses"]["NotFound"];
+            /** @description The subscription is billed by Stripe, or the change would give the OTA a second current subscription (`details.reason`). Possible codes: CONFLICT. */
+            409: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            412: components["responses"]["PreconditionFailed"];
+            /** @description The plan is unknown or retired (`details.reason = plan_not_active`). Possible codes: UNPROCESSABLE. */
+            422: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    adminListAmadeusAccounts: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The accounts. */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "data": [
+                     *         {
+                     *           "id": "ama_01JA2Y8K3M7P1R5T9W3Z7C1F5H",
+                     *           "name": "Velexis test",
+                     *           "environment": "test",
+                     *           "baseUrl": "https://test.travel.api.amadeus.com",
+                     *           "clientId": "Vx7tK2mQ9pL4wR8nZ3cB6hY1dF5sJ0aG",
+                     *           "status": "active",
+                     *           "lastVerifiedAt": "2026-10-20T06:00:04Z",
+                     *           "lastError": null,
+                     *           "officeCounts": {
+                     *             "available": 6,
+                     *             "assigned": 17,
+                     *             "releasing": 0,
+                     *             "retired": 1
+                     *           },
+                     *           "createdAt": "2026-10-02T09:15:00Z",
+                     *           "version": 3
+                     *         }
+                     *       ]
+                     *     }
+                     */
+                    "application/json": components["schemas"]["AdminAmadeusAccountList"];
+                };
+            };
+            401: components["responses"]["AdminUnauthenticated"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    adminCreateAmadeusAccount: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                /**
+                 * @example {
+                 *       "name": "Velexis test",
+                 *       "environment": "test",
+                 *       "baseUrl": "https://test.travel.api.amadeus.com",
+                 *       "clientId": "Vx7tK2mQ9pL4wR8nZ3cB6hY1dF5sJ0aG",
+                 *       "clientSecret": "example-client-secret-not-real"
+                 *     }
+                 */
+                "application/json": components["schemas"]["CreateAmadeusAccountRequest"];
+            };
+        };
+        responses: {
+            /** @description The account, waiting for its verification, with its version in `ETag`. */
+            201: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    ETag: components["headers"]["ETag"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "id": "ama_01JA2Y8K3M7P1R5T9W3Z7C1F5H",
+                     *       "name": "Velexis test",
+                     *       "environment": "test",
+                     *       "baseUrl": "https://test.travel.api.amadeus.com",
+                     *       "clientId": "Vx7tK2mQ9pL4wR8nZ3cB6hY1dF5sJ0aG",
+                     *       "status": "pending_verification",
+                     *       "lastVerifiedAt": null,
+                     *       "lastError": null,
+                     *       "officeCounts": {
+                     *         "available": 0,
+                     *         "assigned": 0,
+                     *         "releasing": 0,
+                     *         "retired": 0
+                     *       },
+                     *       "createdAt": "2026-10-02T09:15:00Z",
+                     *       "version": 1
+                     *     }
+                     */
+                    "application/json": components["schemas"]["AdminAmadeusAccount"];
+                };
+            };
+            400: components["responses"]["ValidationFailed"];
+            401: components["responses"]["AdminStepUpUnauthorized"];
+            /** @description The environment already has a Velexis Amadeus account (`details.reason = environment_exists`). Possible codes: CONFLICT. */
+            409: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    adminUpdateAmadeusAccount: {
+        parameters: {
+            query?: never;
+            header: {
+                /**
+                 * @description The `ETag` of the version being changed; a stale version answers `412 PRECONDITION_FAILED`.
+                 * @example "3"
+                 */
+                "If-Match": components["parameters"]["IfMatch"];
+            };
+            path: {
+                /**
+                 * @description The Velexis Amadeus account (`id` of `adminListAmadeusAccounts`); an unknown id answers `404 NOT_FOUND`.
+                 * @example ama_01JA2Y8K3M7P1R5T9W3Z7C1F5H
+                 */
+                accountId: components["parameters"]["AmadeusAccountId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateAmadeusAccountRequest"];
+            };
+        };
+        responses: {
+            /** @description The updated account, with its new version in `ETag`. */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    ETag: components["headers"]["ETag"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "id": "ama_01JA2Y8K3M7P1R5T9W3Z7C1F5H",
+                     *       "name": "Velexis test",
+                     *       "environment": "test",
+                     *       "baseUrl": "https://test.travel.api.amadeus.com",
+                     *       "clientId": "Vx7tK2mQ9pL4wR8nZ3cB6hY1dF5sJ0aG",
+                     *       "status": "pending_verification",
+                     *       "lastVerifiedAt": "2026-10-20T06:00:04Z",
+                     *       "lastError": null,
+                     *       "officeCounts": {
+                     *         "available": 6,
+                     *         "assigned": 17,
+                     *         "releasing": 0,
+                     *         "retired": 1
+                     *       },
+                     *       "createdAt": "2026-10-02T09:15:00Z",
+                     *       "version": 4
+                     *     }
+                     */
+                    "application/json": components["schemas"]["AdminAmadeusAccount"];
+                };
+            };
+            400: components["responses"]["ValidationFailed"];
+            401: components["responses"]["AdminStepUpUnauthorized"];
+            404: components["responses"]["NotFound"];
+            412: components["responses"]["PreconditionFailed"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    adminVerifyAmadeusAccount: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The Velexis Amadeus account (`id` of `adminListAmadeusAccounts`); an unknown id answers `404 NOT_FOUND`.
+                 * @example ama_01JA2Y8K3M7P1R5T9W3Z7C1F5H
+                 */
+                accountId: components["parameters"]["AmadeusAccountId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Accepted. The verification job is queued. */
+            202: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["ValidationFailed"];
+            401: components["responses"]["AdminUnauthenticated"];
+            404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["ServiceUnavailable"];
+        };
+    };
+    adminListAmadeusOffices: {
+        parameters: {
+            query?: {
+                /** @description Only the offices of this Velexis Amadeus account. */
+                accountId?: components["schemas"]["AmadeusAccountId"];
+                /** @description Only the offices of the account of this environment. */
+                environment?: components["schemas"]["Environment"];
+                /** @description Only offices in this status. */
+                status?: components["schemas"]["AmadeusOfficeStatus"];
+                /** @description Opaque cursor from `page.nextCursor` of the previous page. */
+                cursor?: components["parameters"]["Cursor"];
+                /** @description Page size. */
+                limit?: components["parameters"]["Limit"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of offices. */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "data": [
+                     *         {
+                     *           "id": "amo_01JA2Y9N4Q8S2V6X0Z4B8D2G6J",
+                     *           "amadeusAccountId": "ama_01JA2Y8K3M7P1R5T9W3Z7C1F5H",
+                     *           "officeId": "NCE1A0955",
+                     *           "environment": "test",
+                     *           "status": "assigned",
+                     *           "assignedTenant": {
+                     *             "id": "ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F",
+                     *             "key": "acme"
+                     *           },
+                     *           "assignedAt": "2026-10-14T08:20:15Z",
+                     *           "releaseRequestedAt": null,
+                     *           "releasedAt": null,
+                     *           "notes": null,
+                     *           "createdAt": "2026-10-02T09:20:00Z",
+                     *           "version": 2
+                     *         },
+                     *         {
+                     *           "id": "amo_01JC8R6T0W4Y8A2C6E0G4J8M2P",
+                     *           "amadeusAccountId": "ama_01JA2Y8K3M7P1R5T9W3Z7C1F5H",
+                     *           "officeId": "PAR1A0001",
+                     *           "environment": "test",
+                     *           "status": "available",
+                     *           "assignedTenant": null,
+                     *           "assignedAt": null,
+                     *           "releaseRequestedAt": null,
+                     *           "releasedAt": null,
+                     *           "notes": "Ordered with the October batch.",
+                     *           "createdAt": "2026-10-22T10:05:00Z",
+                     *           "version": 1
+                     *         }
+                     *       ],
+                     *       "page": {
+                     *         "nextCursor": "eyJjcmVhdGVkQXQiOiIyMDI2LTEwLTIyVDEwOjA1OjAwWiJ9",
+                     *         "limit": 2
+                     *       }
+                     *     }
+                     */
+                    "application/json": components["schemas"]["AdminAmadeusOfficeList"];
+                };
+            };
+            400: components["responses"]["ValidationFailed"];
+            401: components["responses"]["AdminUnauthenticated"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    adminAddAmadeusOffices: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                /**
+                 * @example {
+                 *       "amadeusAccountId": "ama_01JA2Y8K3M7P1R5T9W3Z7C1F5H",
+                 *       "officeIds": [
+                 *         "NCE1A0955",
+                 *         "PAR1A0001",
+                 *         "par1a0001",
+                 *         "PAR1A0002"
+                 *       ],
+                 *       "notes": "Ordered with the October batch."
+                 *     }
+                 */
+                "application/json": components["schemas"]["AddAmadeusOfficesRequest"];
+            };
+        };
+        responses: {
+            /** @description The created offices and the skipped ids: here `NCE1A0955` was already in the pool and `par1a0001` repeats `PAR1A0001`. */
+            201: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "created": [
+                     *         {
+                     *           "id": "amo_01JC8R6T0W4Y8A2C6E0G4J8M2P",
+                     *           "amadeusAccountId": "ama_01JA2Y8K3M7P1R5T9W3Z7C1F5H",
+                     *           "officeId": "PAR1A0001",
+                     *           "environment": "test",
+                     *           "status": "available",
+                     *           "assignedTenant": null,
+                     *           "assignedAt": null,
+                     *           "releaseRequestedAt": null,
+                     *           "releasedAt": null,
+                     *           "notes": "Ordered with the October batch.",
+                     *           "createdAt": "2026-10-22T10:05:00Z",
+                     *           "version": 1
+                     *         },
+                     *         {
+                     *           "id": "amo_01JC8R6T0W4Y8A2C6E0G4J8M3Q",
+                     *           "amadeusAccountId": "ama_01JA2Y8K3M7P1R5T9W3Z7C1F5H",
+                     *           "officeId": "PAR1A0002",
+                     *           "environment": "test",
+                     *           "status": "available",
+                     *           "assignedTenant": null,
+                     *           "assignedAt": null,
+                     *           "releaseRequestedAt": null,
+                     *           "releasedAt": null,
+                     *           "notes": "Ordered with the October batch.",
+                     *           "createdAt": "2026-10-22T10:05:00Z",
+                     *           "version": 1
+                     *         }
+                     *       ],
+                     *       "skipped": [
+                     *         "NCE1A0955",
+                     *         "PAR1A0001"
+                     *       ]
+                     *     }
+                     */
+                    "application/json": components["schemas"]["AmadeusOfficesAdded"];
+                };
+            };
+            400: components["responses"]["ValidationFailed"];
+            401: components["responses"]["AdminUnauthenticated"];
+            404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    adminUpdateAmadeusOffice: {
+        parameters: {
+            query?: never;
+            header: {
+                /**
+                 * @description The `ETag` of the version being changed; a stale version answers `412 PRECONDITION_FAILED`.
+                 * @example "3"
+                 */
+                "If-Match": components["parameters"]["IfMatch"];
+            };
+            path: {
+                /**
+                 * @description The pool entry (`id` of `adminListAmadeusOffices`, `amo_…`), not the 9-character Amadeus office id; an unknown id answers `404 NOT_FOUND`.
+                 * @example amo_01JC8R6T0W4Y8A2C6E0G4J8M2P
+                 */
+                officeRowId: components["parameters"]["AmadeusOfficeRowId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                /**
+                 * @example {
+                 *       "notes": "Live onboarding signed on 2027-03-02; ticketing agreement TA-118."
+                 *     }
+                 */
+                "application/json": components["schemas"]["UpdateAmadeusOfficeRequest"];
+            };
+        };
+        responses: {
+            /** @description The office, with its new version in `ETag`. */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    ETag: components["headers"]["ETag"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminAmadeusOffice"];
+                };
+            };
+            400: components["responses"]["ValidationFailed"];
+            401: components["responses"]["AdminUnauthenticated"];
+            404: components["responses"]["NotFound"];
+            412: components["responses"]["PreconditionFailed"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    adminAssignAmadeusOffice: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The pool entry (`id` of `adminListAmadeusOffices`, `amo_…`), not the 9-character Amadeus office id; an unknown id answers `404 NOT_FOUND`.
+                 * @example amo_01JC8R6T0W4Y8A2C6E0G4J8M2P
+                 */
+                officeRowId: components["parameters"]["AmadeusOfficeRowId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                /**
+                 * @example {
+                 *       "tenantId": "ten_01JB3K4M8P2R6T0W4Y8A2C6E0G"
+                 *     }
+                 */
+                "application/json": components["schemas"]["AssignAmadeusOfficeRequest"];
+            };
+        };
+        responses: {
+            /** @description The assigned office and the OTA's connection. */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "office": {
+                     *         "id": "amo_01JC8R6T0W4Y8A2C6E0G4J8M2P",
+                     *         "amadeusAccountId": "ama_01JA2Y8K3M7P1R5T9W3Z7C1F5H",
+                     *         "officeId": "PAR1A0001",
+                     *         "environment": "test",
+                     *         "status": "assigned",
+                     *         "assignedTenant": {
+                     *           "id": "ten_01JB3K4M8P2R6T0W4Y8A2C6E0G",
+                     *           "key": "nordic"
+                     *         },
+                     *         "assignedAt": "2026-10-22T10:12:30Z",
+                     *         "releaseRequestedAt": null,
+                     *         "releasedAt": null,
+                     *         "notes": "Ordered with the October batch.",
+                     *         "createdAt": "2026-10-22T10:05:00Z",
+                     *         "version": 2
+                     *       },
+                     *       "connection": {
+                     *         "id": "sc_01JC9S7V1X5Z9B3D7F1H5K9N3Q",
+                     *         "environment": "test",
+                     *         "credentialSource": "velexis",
+                     *         "status": "active",
+                     *         "officeIds": [
+                     *           "PAR1A0001"
+                     *         ],
+                     *         "defaultOfficeId": "PAR1A0001",
+                     *         "queuingOfficeId": "PAR1A0001",
+                     *         "ownerOfficeId": "PAR1A0001",
+                     *         "clientId": null,
+                     *         "ticketingDefaults": {},
+                     *         "monitoredQueues": [],
+                     *         "lastVerifiedAt": null,
+                     *         "lastError": null,
+                     *         "pendingSubmission": null,
+                     *         "version": 2
+                     *       }
+                     *     }
+                     */
+                    "application/json": components["schemas"]["AmadeusOfficeAssigned"];
+                };
+            };
+            400: components["responses"]["ValidationFailed"];
+            401: components["responses"]["AdminUnauthenticated"];
+            404: components["responses"]["NotFound"];
+            /** @description The office is not available, or the OTA uses its own credentials or already has an assigned office (`details.reason`). Possible codes: AMADEUS_OFFICE_UNAVAILABLE, CONFLICT. */
+            409: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    adminRetireAmadeusOffice: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The pool entry (`id` of `adminListAmadeusOffices`, `amo_…`), not the 9-character Amadeus office id; an unknown id answers `404 NOT_FOUND`.
+                 * @example amo_01JC8R6T0W4Y8A2C6E0G4J8M2P
+                 */
+                officeRowId: components["parameters"]["AmadeusOfficeRowId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                /**
+                 * @example {
+                 *       "reason": "Amadeus closed this office id at the end of the contract year."
+                 *     }
+                 */
+                "application/json": components["schemas"]["AdminReasonRequest"];
+            };
+        };
+        responses: {
+            /** @description The retired office. */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "id": "amo_01JC8R6T0W4Y8A2C6E0G4J8M3Q",
+                     *       "amadeusAccountId": "ama_01JA2Y8K3M7P1R5T9W3Z7C1F5H",
+                     *       "officeId": "PAR1A0002",
+                     *       "environment": "test",
+                     *       "status": "retired",
+                     *       "assignedTenant": null,
+                     *       "assignedAt": null,
+                     *       "releaseRequestedAt": null,
+                     *       "releasedAt": null,
+                     *       "notes": "Ordered with the October batch.",
+                     *       "createdAt": "2026-10-22T10:05:00Z",
+                     *       "version": 2
+                     *     }
+                     */
+                    "application/json": components["schemas"]["AdminAmadeusOffice"];
+                };
+            };
+            400: components["responses"]["ValidationFailed"];
+            401: components["responses"]["AdminUnauthenticated"];
+            404: components["responses"]["NotFound"];
+            /** @description Only an available office can be retired (`details.reason = not_available`). Possible codes: CONFLICT. */
+            409: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    adminListAccounts: {
+        parameters: {
+            query?: {
+                /**
+                 * @description Part of the e-mail address or the name; case-insensitive.
+                 * @example berg
+                 */
+                q?: string;
+                /** @description Only accounts in this status. */
+                status?: components["schemas"]["AccountStatus"];
+                /** @description Opaque cursor from `page.nextCursor` of the previous page. */
+                cursor?: components["parameters"]["Cursor"];
+                /** @description Page size. */
+                limit?: components["parameters"]["Limit"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of accounts. */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "data": [
+                     *         {
+                     *           "id": "acc_01JA2Z9W5K7Q3M8N4P6R2T0V1X",
+                     *           "email": "anna.berg@example.com",
+                     *           "fullName": "Anna Berg",
+                     *           "status": "active",
+                     *           "mfaEnabled": true,
+                     *           "isPlatformAdmin": false,
+                     *           "lastLoginAt": "2026-10-21T07:58:12Z",
+                     *           "createdAt": "2026-10-01T10:02:17Z"
+                     *         }
+                     *       ],
+                     *       "page": {
+                     *         "nextCursor": null,
+                     *         "limit": 50
+                     *       }
+                     *     }
+                     */
+                    "application/json": components["schemas"]["AdminAccountList"];
+                };
+            };
+            400: components["responses"]["ValidationFailed"];
+            401: components["responses"]["AdminUnauthenticated"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    adminGetAccount: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The account (`id` of `adminListAccounts`); an unknown id answers `404 NOT_FOUND`.
+                 * @example acc_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+                 */
+                accountId: components["parameters"]["AdminAccountId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The account. */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "account": {
+                     *         "id": "acc_01JA2Z9W5K7Q3M8N4P6R2T0V1X",
+                     *         "email": "anna.berg@example.com",
+                     *         "emailVerified": true,
+                     *         "fullName": "Anna Berg",
+                     *         "locale": "en",
+                     *         "timeZone": "Europe/Oslo",
+                     *         "status": "active",
+                     *         "mfaEnabled": true,
+                     *         "mfaEnabledAt": "2026-10-03T09:12:44Z",
+                     *         "isPlatformAdmin": false,
+                     *         "failedLoginCount": 0,
+                     *         "lockedUntil": null,
+                     *         "lastLoginAt": "2026-10-21T07:58:12Z",
+                     *         "createdAt": "2026-10-01T10:02:17Z",
+                     *         "version": 3
+                     *       },
+                     *       "memberships": [
+                     *         {
+                     *           "membershipId": "stf_01JA2ZA1C5E9G3J7K2M6P0R4T8",
+                     *           "tenantId": "ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F",
+                     *           "tenantKey": "acme",
+                     *           "tenantName": "Acme Travel",
+                     *           "tenantStatus": "active",
+                     *           "role": "owner"
+                     *         }
+                     *       ],
+                     *       "activeSessions": 2,
+                     *       "recentAudit": [
+                     *         {
+                     *           "id": "1042",
+                     *           "tenantId": "ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F",
+                     *           "tenantKey": "acme",
+                     *           "actorType": "account",
+                     *           "actorAccountId": "acc_01JA2Z9W5K7Q3M8N4P6R2T0V1X",
+                     *           "actorLabel": "anna.berg@example.com",
+                     *           "action": "invitation.created",
+                     *           "targetType": "invitation",
+                     *           "targetId": "ivt_01JA2ZF4H8K2M6P0R4T8W2Y6A0",
+                     *           "requestId": "req_01JA2ZF4H8K2M6P0R4T8W2Y6A1",
+                     *           "ipAddress": "198.51.100.23",
+                     *           "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_6) AppleWebKit/605.1.15",
+                     *           "details": {
+                     *             "email": "jo@acme-travel.example.com",
+                     *             "role": "agent"
+                     *           },
+                     *           "createdAt": "2026-10-14T09:00:00Z"
+                     *         }
+                     *       ]
+                     *     }
+                     */
+                    "application/json": components["schemas"]["AdminAccountDetail"];
+                };
+            };
+            400: components["responses"]["ValidationFailed"];
+            401: components["responses"]["AdminUnauthenticated"];
+            404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    adminDisableAccount: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The account (`id` of `adminListAccounts`); an unknown id answers `404 NOT_FOUND`.
+                 * @example acc_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+                 */
+                accountId: components["parameters"]["AdminAccountId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                /**
+                 * @example {
+                 *       "reason": "Account used for card testing on two storefronts; see ticket SUP-412."
+                 *     }
+                 */
+                "application/json": components["schemas"]["AdminReasonRequest"];
+            };
+        };
+        responses: {
+            /** @description The disabled account. */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "id": "acc_01JB3K2H6K0N4Q8S2V6X0Z4B8D",
+                     *       "email": "mikael.lind@nordic-fares.example.com",
+                     *       "emailVerified": true,
+                     *       "fullName": "Mikael Lind",
+                     *       "locale": "en",
+                     *       "timeZone": "Europe/Stockholm",
+                     *       "status": "disabled",
+                     *       "mfaEnabled": false,
+                     *       "mfaEnabledAt": null,
+                     *       "isPlatformAdmin": false,
+                     *       "failedLoginCount": 0,
+                     *       "lockedUntil": null,
+                     *       "lastLoginAt": "2026-10-16T13:38:50Z",
+                     *       "createdAt": "2026-10-16T13:35:02Z",
+                     *       "version": 4
+                     *     }
+                     */
+                    "application/json": components["schemas"]["AdminAccount"];
+                };
+            };
+            400: components["responses"]["ValidationFailed"];
+            401: components["responses"]["AdminUnauthenticated"];
+            403: components["responses"]["AdminSelfOrLastAdminForbidden"];
+            404: components["responses"]["NotFound"];
+            /** @description The account is already disabled or deleted (`details.reason = not_enabled`). Possible codes: CONFLICT. */
+            409: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    adminEnableAccount: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The account (`id` of `adminListAccounts`); an unknown id answers `404 NOT_FOUND`.
+                 * @example acc_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+                 */
+                accountId: components["parameters"]["AdminAccountId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                /**
+                 * @example {
+                 *       "reason": "Identity confirmed by phone; the card testing came from a leaked password."
+                 *     }
+                 */
+                "application/json": components["schemas"]["AdminReasonRequest"];
+            };
+        };
+        responses: {
+            /** @description The enabled account. */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "id": "acc_01JB3K2H6K0N4Q8S2V6X0Z4B8D",
+                     *       "email": "mikael.lind@nordic-fares.example.com",
+                     *       "emailVerified": true,
+                     *       "fullName": "Mikael Lind",
+                     *       "locale": "en",
+                     *       "timeZone": "Europe/Stockholm",
+                     *       "status": "active",
+                     *       "mfaEnabled": false,
+                     *       "mfaEnabledAt": null,
+                     *       "isPlatformAdmin": false,
+                     *       "failedLoginCount": 0,
+                     *       "lockedUntil": null,
+                     *       "lastLoginAt": "2026-10-16T13:38:50Z",
+                     *       "createdAt": "2026-10-16T13:35:02Z",
+                     *       "version": 5
+                     *     }
+                     */
+                    "application/json": components["schemas"]["AdminAccount"];
+                };
+            };
+            400: components["responses"]["ValidationFailed"];
+            401: components["responses"]["AdminUnauthenticated"];
+            404: components["responses"]["NotFound"];
+            /** @description Only a disabled account can be enabled (`details.reason = not_disabled`). Possible codes: CONFLICT. */
+            409: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    adminUnlockAccount: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The account (`id` of `adminListAccounts`); an unknown id answers `404 NOT_FOUND`.
+                 * @example acc_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+                 */
+                accountId: components["parameters"]["AdminAccountId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The account, no longer locked. */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminAccount"];
+                };
+            };
+            400: components["responses"]["ValidationFailed"];
+            401: components["responses"]["AdminUnauthenticated"];
+            404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    adminResetAccountMfa: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The account (`id` of `adminListAccounts`); an unknown id answers `404 NOT_FOUND`.
+                 * @example acc_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+                 */
+                accountId: components["parameters"]["AdminAccountId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                /**
+                 * @example {
+                 *       "reason": "Lost phone; identity confirmed on a video call with the passport on 2026-10-21 (SUP-431)."
+                 *     }
+                 */
+                "application/json": components["schemas"]["AdminReasonRequest"];
+            };
+        };
+        responses: {
+            /** @description The account, without MFA. */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "id": "acc_01JA2Z9W5K7Q3M8N4P6R2T0V1X",
+                     *       "email": "anna.berg@example.com",
+                     *       "emailVerified": true,
+                     *       "fullName": "Anna Berg",
+                     *       "locale": "en",
+                     *       "timeZone": "Europe/Oslo",
+                     *       "status": "active",
+                     *       "mfaEnabled": false,
+                     *       "mfaEnabledAt": null,
+                     *       "isPlatformAdmin": false,
+                     *       "failedLoginCount": 0,
+                     *       "lockedUntil": null,
+                     *       "lastLoginAt": "2026-10-21T07:58:12Z",
+                     *       "createdAt": "2026-10-01T10:02:17Z",
+                     *       "version": 4
+                     *     }
+                     */
+                    "application/json": components["schemas"]["AdminAccount"];
+                };
+            };
+            400: components["responses"]["ValidationFailed"];
+            401: components["responses"]["AdminStepUpUnauthorized"];
+            /** @description The account is a platform admin (`details.reason = platform_admin`); revoke the admin rights first. Possible codes: FORBIDDEN. */
+            403: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            404: components["responses"]["NotFound"];
+            /** @description The account has no MFA to reset (`details.reason = mfa_not_enabled`). Possible codes: CONFLICT. */
+            409: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    adminListAdmins: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The platform admins. */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "data": [
+                     *         {
+                     *           "accountId": "acc_01JA2YQ3M7R1T5W9Z3C7F1H5K9",
+                     *           "email": "lena.holm@velexis.example.com",
+                     *           "fullName": "Lena Holm",
+                     *           "mfaEnabled": true,
+                     *           "lastLoginAt": "2026-10-22T07:41:03Z"
+                     *         }
+                     *       ]
+                     *     }
+                     */
+                    "application/json": components["schemas"]["PlatformAdminList"];
+                };
+            };
+            401: components["responses"]["AdminUnauthenticated"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    adminGrantAdmin: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                /**
+                 * @example {
+                 *       "email": "jonas.dahl@velexis.example.com",
+                 *       "reason": "Jonas joins support on 2026-11-01 and covers the admin on-call rota."
+                 *     }
+                 */
+                "application/json": components["schemas"]["GrantAdminRequest"];
+            };
+        };
+        responses: {
+            /** @description The new platform admin. */
+            201: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "accountId": "acc_01JB0F5G9J3M7Q1T5W9Z3C7F1H",
+                     *       "email": "jonas.dahl@velexis.example.com",
+                     *       "fullName": "Jonas Dahl",
+                     *       "mfaEnabled": true,
+                     *       "lastLoginAt": "2026-10-28T08:02:19Z"
+                     *     }
+                     */
+                    "application/json": components["schemas"]["PlatformAdmin"];
+                };
+            };
+            400: components["responses"]["ValidationFailed"];
+            401: components["responses"]["AdminStepUpUnauthorized"];
+            404: components["responses"]["NotFound"];
+            /** @description The account is already a platform admin (`details.reason = already_admin`). Possible codes: CONFLICT. */
+            409: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The account is not active, its e-mail address is not verified, or it has no MFA (`details.reason`). Possible codes: UNPROCESSABLE. */
+            422: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    adminRevokeAdmin: {
+        parameters: {
+            query?: {
+                /**
+                 * @description Why the rights are revoked (5–500 characters), kept in the audit row. Optional: PADR-0006 item 5 does not require a reason for a revocation.
+                 * @example Left the support team on 2027-01-31.
+                 */
+                reason?: components["schemas"]["AdminReason"];
+            };
+            header?: never;
+            path: {
+                /**
+                 * @description The account (`id` of `adminListAccounts`); an unknown id answers `404 NOT_FOUND`.
+                 * @example acc_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+                 */
+                accountId: components["parameters"]["AdminAccountId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The account is no longer a platform admin. */
+            204: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["ValidationFailed"];
+            401: components["responses"]["AdminStepUpUnauthorized"];
+            403: components["responses"]["AdminSelfOrLastAdminForbidden"];
+            404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    adminListAudit: {
+        parameters: {
+            query?: {
+                /** @description Only the rows of this OTA. */
+                tenantId?: components["parameters"]["AuditTenantId"];
+                /** @description Only the rows of this acting account. */
+                actorAccountId?: components["parameters"]["AuditActorAccountId"];
+                /** @description Only the rows of this kind of actor. */
+                actorType?: components["parameters"]["AuditActorType"];
+                /**
+                 * @description Only the rows of this dotted action, matched exactly.
+                 * @example tenant.suspended
+                 */
+                action?: components["parameters"]["AuditAction"];
+                /**
+                 * @description Only the rows about this kind of object, for example `tenant` or `api_key`.
+                 * @example tenant
+                 */
+                targetType?: components["parameters"]["AuditTargetType"];
+                /**
+                 * @description Only the rows about this object id.
+                 * @example ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F
+                 */
+                targetId?: components["parameters"]["AuditTargetId"];
+                /**
+                 * @description Only rows written at or after this time.
+                 * @example 2026-10-01T00:00:00Z
+                 */
+                from?: string;
+                /**
+                 * @description Only rows written before this time.
+                 * @example 2026-11-01T00:00:00Z
+                 */
+                to?: string;
+                /** @description Opaque cursor from `page.nextCursor` of the previous page. */
+                cursor?: components["parameters"]["Cursor"];
+                /** @description Page size. */
+                limit?: components["parameters"]["Limit"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of audit rows. */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "data": [
+                     *         {
+                     *           "id": "1187",
+                     *           "tenantId": "ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F",
+                     *           "tenantKey": "acme",
+                     *           "actorType": "platform_admin",
+                     *           "actorAccountId": "acc_01JA2YQ3M7R1T5W9Z3C7F1H5K9",
+                     *           "actorLabel": "lena.holm@velexis.example.com",
+                     *           "action": "tenant.suspended",
+                     *           "targetType": "tenant",
+                     *           "targetId": "ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F",
+                     *           "requestId": "req_01JC4M2P6R0T4W8Y2A6C0E4G8K",
+                     *           "ipAddress": "203.0.113.7",
+                     *           "userAgent": "Mozilla/5.0 (X11; Linux x86_64) Gecko/20100101 Firefox/131.0",
+                     *           "details": {
+                     *             "reason": "Card testing from the storefront reported by Stripe on 2026-10-20.",
+                     *             "before": {
+                     *               "status": "active"
+                     *             },
+                     *             "after": {
+                     *               "status": "suspended",
+                     *               "suspensionReason": "abuse"
+                     *             }
+                     *           },
+                     *           "createdAt": "2026-10-20T07:33:05Z"
+                     *         }
+                     *       ],
+                     *       "page": {
+                     *         "nextCursor": "eyJpZCI6IjExODcifQ",
+                     *         "limit": 1
+                     *       }
+                     *     }
+                     */
+                    "application/json": components["schemas"]["AuditEntryList"];
+                };
+            };
+            400: components["responses"]["ValidationFailed"];
+            401: components["responses"]["AdminUnauthenticated"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    adminExportAudit: {
+        parameters: {
+            query: {
+                /** @description Only the rows of this OTA. */
+                tenantId?: components["parameters"]["AuditTenantId"];
+                /** @description Only the rows of this acting account. */
+                actorAccountId?: components["parameters"]["AuditActorAccountId"];
+                /** @description Only the rows of this kind of actor. */
+                actorType?: components["parameters"]["AuditActorType"];
+                /**
+                 * @description Only the rows of this dotted action, matched exactly.
+                 * @example tenant.suspended
+                 */
+                action?: components["parameters"]["AuditAction"];
+                /**
+                 * @description Only the rows about this kind of object, for example `tenant` or `api_key`.
+                 * @example tenant
+                 */
+                targetType?: components["parameters"]["AuditTargetType"];
+                /**
+                 * @description Only the rows about this object id.
+                 * @example ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F
+                 */
+                targetId?: components["parameters"]["AuditTargetId"];
+                /**
+                 * @description The start of the period (inclusive); at most one year before `to`.
+                 * @example 2026-10-01T00:00:00Z
+                 */
+                from: string;
+                /**
+                 * @description The end of the period (exclusive).
+                 * @example 2026-11-01T00:00:00Z
+                 */
+                to: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The CSV file. */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    "Cache-Control": components["headers"]["NoStoreExport"];
+                    /** @description Always an attachment named after the period, `velexis-audit-<from date>-<to date>.csv`. */
+                    "Content-Disposition": string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example id,createdAt,tenantId,tenantKey,actorType,actorAccountId,actorLabel,action,targetType,targetId,requestId,ipAddress,userAgent,details
+                     *     1187,2026-10-20T07:33:05Z,ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F,acme,platform_admin,acc_01JA2YQ3M7R1T5W9Z3C7F1H5K9,lena.holm@velexis.example.com,tenant.suspended,tenant,ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F,req_01JC4M2P6R0T4W8Y2A6C0E4G8K,203.0.113.7,Mozilla/5.0 (X11; Linux x86_64) Gecko/20100101 Firefox/131.0,"{""reason"":""Card testing from the storefront reported by Stripe on 2026-10-20."",""before"":{""status"":""active""},""after"":{""status"":""suspended"",""suspensionReason"":""abuse""}}"
+                     *     1042,2026-10-14T09:00:00Z,ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F,acme,account,acc_01JA2Z9W5K7Q3M8N4P6R2T0V1X,anna.berg@example.com,invitation.created,invitation,ivt_01JA2ZF4H8K2M6P0R4T8W2Y6A0,req_01JA2ZF4H8K2M6P0R4T8W2Y6A1,198.51.100.23,Mozilla/5.0 (Macintosh; Intel Mac OS X 14_6) AppleWebKit/605.1.15,"{""email"":""jo@acme-travel.example.com"",""role"":""agent""}"
+                     */
+                    "text/csv": string;
+                };
+            };
+            400: components["responses"]["ValidationFailed"];
+            401: components["responses"]["AdminUnauthenticated"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
         };
     };
     tlsAsk: {

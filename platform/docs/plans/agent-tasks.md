@@ -209,7 +209,8 @@ Common commands: backend `pnpm --filter @velexis/platform-backend test`, `test:i
   - `adminSuspendTenant`, `adminResumeTenant`, `adminSetConnectionStatus` and `adminCancelProvisioningJob` require `reason`.
 - **Verify:** `pnpm contracts:lint && pnpm contracts:generate && git diff --exit-code packages/api-types/src/generated`
 
-### PBE-066 · Add the M1 admin plan, Amadeus, account, admin and audit operations to the OpenAPI document
+### PBE-066 · Add the M1 admin plan, Amadeus, account, admin and audit operations to the OpenAPI document ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-backend
 - **Milestone:** M1
 - **Depends on:** PBE-007
