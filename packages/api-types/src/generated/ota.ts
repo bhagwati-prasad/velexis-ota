@@ -2646,10 +2646,7 @@ export interface components {
              * @example NCE1A0955
              */
             officeId?: string;
-            /**
-             * Format: date-time
-             * @description Datetime limit at which the process takes action in case issuance is not done.
-             */
+            /** @description Datetime limit at which the process takes action in case issuance is not done. */
             dateTime?: string;
         };
         /**
@@ -3522,7 +3519,6 @@ export interface components {
          */
         AmadeusFlightEndPoint: components["schemas"]["AmadeusOriginalFlightEndPoint"] & {
             /**
-             * Format: date-time
              * @description local date and time in [ISO8601](https://en.wikipedia.org/wiki/ISO_8601) YYYY-MM-ddThh:mm:ss format, e.g. 2017-02-10T20:40:00
              * @example 2017-10-23T20:00:00
              */
@@ -3803,7 +3799,6 @@ export interface components {
              */
             upsellFlightOfferIds?: string[];
             /**
-             * Format: date-time
              * @description If booked on the same day as the search (with respect to timezone), this flight offer is guaranteed to be thereafter valid for ticketing until this date/time (included). Unspecified when it does not make sense for this flight offer (e.g. no control over ticketing once booked). This attribute is used in input of pricing request to match the requested flight offer. Local date and time in YYYY-MM-ddThh:mm:ss format, e.g. 2017-02-10T20:40:00
              * @example 2018-06-19T15:00:00
              */
@@ -4078,13 +4073,11 @@ export interface components {
          */
         AmadeusFlightStop: components["schemas"]["AmadeusOriginalFlightStop"] & {
             /**
-             * Format: date-time
              * @description arrival at the stop in [ISO8601](https://en.wikipedia.org/wiki/ISO_8601) YYYY-MM-ddThh:mm:ss format, e.g. 2017-02-10T20:40:00
              * @example 2017-10-23T20:00:00
              */
             arrivalAt?: string;
             /**
-             * Format: date-time
              * @description departure from the stop in [ISO8601](https://en.wikipedia.org/wiki/ISO_8601) YYYY-MM-ddThh:mm:ss format, e.g. 2017-02-10T20:40:00
              * @example 2017-10-23T20:00:00
              */
@@ -4684,7 +4677,6 @@ export interface components {
              */
             creation?: {
                 /**
-                 * Format: date-time
                  * @description time of the change
                  * @example 2018-11-19T04:54
                  */
@@ -4722,7 +4714,6 @@ export interface components {
                              */
                             iataCode?: string;
                             /**
-                             * Format: date-time
                              * @description Local schedule dateTime of the departure or arrival.
                              *     Conversion of dateTime in local date time.
                              * @example 2020-01-13T17:09:00

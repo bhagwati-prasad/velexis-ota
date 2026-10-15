@@ -1,10 +1,12 @@
 // The three entry points as real processes, compiled exactly as `pnpm build` compiles them (tsconfig.build.json) into
 // a scratch folder under the package's node_modules/.cache (ignored by git and ESLint), from where the dependencies
-// resolve as from dist/. They run with NODE_ENV=production, as under systemd, so no .env.local file is read: each
-// process sees only the variables a test gives it.
+// resolve as from dist/. The scratch folder has the layout of the release folder (ADR-0023): the compiled `dist/` next
+// to copies of `openapi/` and `migrations/`, which the processes read from their package folder (the API parses the
+// OpenAPI document at start-up, OBE-010). They run with NODE_ENV=production, as under systemd, so no .env.local file
+// is read: each process sees only the variables a test gives it.
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { mkdirSync, rmSync } from "node:fs";
+import { cpSync, mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import ts from "typescript";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
@@ -12,7 +14,10 @@ import { APP_DIR } from "../../../src/config";
 import { exchange } from "../../helpers/http";
 import { integrationEnv } from "../env";
 
-const OUT_DIR = join(APP_DIR, "node_modules", ".cache", `entry-points-${randomBytes(6).toString("hex")}`);
+const PACKAGE_DIR = join(APP_DIR, "node_modules", ".cache", `entry-points-${randomBytes(6).toString("hex")}`);
+const OUT_DIR = join(PACKAGE_DIR, "dist");
+/** The folders of the package's published files that the processes read at run time. */
+const RUNTIME_FOLDERS = ["openapi", "migrations"] as const;
 /** Compiling the package with type information takes a few seconds, more on a busy CI runner. */
 const COMPILE_TIMEOUT_MS = 30_000;
 const services = integrationEnv();
@@ -68,6 +73,9 @@ async function waitForHealth(port: number, path: string, process: Running): Prom
 
 beforeAll(() => {
   mkdirSync(OUT_DIR, { recursive: true });
+  for (const folder of RUNTIME_FOLDERS) {
+    cpSync(join(APP_DIR, folder), join(PACKAGE_DIR, folder), { recursive: true });
+  }
   const configFile = ts.readConfigFile(join(APP_DIR, "tsconfig.build.json"), (path) => ts.sys.readFile(path));
   const parsed = ts.parseJsonConfigFileContent(configFile.config, ts.sys, APP_DIR);
   const program = ts.createProgram(parsed.fileNames, {
@@ -85,7 +93,7 @@ beforeAll(() => {
 }, COMPILE_TIMEOUT_MS);
 
 afterAll(() => {
-  rmSync(OUT_DIR, { recursive: true, force: true });
+  rmSync(PACKAGE_DIR, { recursive: true, force: true });
 });
 
 describe("main.js", () => {

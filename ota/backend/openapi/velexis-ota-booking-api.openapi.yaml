@@ -19760,7 +19760,7 @@ components:
                 - NCE1A0955
             dateTime:
               type: string
-              format: date-time
+              pattern: '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}(:[0-9]{2}(\.[0-9]+)?)?(Z|[+-][0-9]{2}:[0-9]{2})?$'
               description: Datetime limit at which the process takes action in case issuance is not done.
     AmadeusAutomatedProcessCode:
       type: string
@@ -21141,7 +21141,7 @@ components:
                 local date and time in [ISO8601](https://en.wikipedia.org/wiki/ISO_8601) YYYY-MM-ddThh:mm:ss format,
                 e.g. 2017-02-10T20:40:00
               type: string
-              format: date-time
+              pattern: '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}(:[0-9]{2}(\.[0-9]+)?)?(Z|[+-][0-9]{2}:[0-9]{2})?$'
               examples:
                 - '2017-10-23T20:00:00'
     AmadeusFlightFilters:
@@ -21524,7 +21524,7 @@ components:
             request to match the requested flight offer. Local date and time in YYYY-MM-ddThh:mm:ss format, e.g.
             2017-02-10T20:40:00
           type: string
-          format: date-time
+          pattern: '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}(:[0-9]{2}(\.[0-9]+)?)?(Z|[+-][0-9]{2}:[0-9]{2})?$'
           examples:
             - '2018-06-19T15:00:00'
         billedPrice:
@@ -21952,7 +21952,7 @@ components:
                 arrival at the stop in [ISO8601](https://en.wikipedia.org/wiki/ISO_8601) YYYY-MM-ddThh:mm:ss format,
                 e.g. 2017-02-10T20:40:00
               type: string
-              format: date-time
+              pattern: '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}(:[0-9]{2}(\.[0-9]+)?)?(Z|[+-][0-9]{2}:[0-9]{2})?$'
               examples:
                 - '2017-10-23T20:00:00'
             departureAt:
@@ -21960,7 +21960,7 @@ components:
                 departure from the stop in [ISO8601](https://en.wikipedia.org/wiki/ISO_8601) YYYY-MM-ddThh:mm:ss format,
                 e.g. 2017-02-10T20:40:00
               type: string
-              format: date-time
+              pattern: '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}(:[0-9]{2}(\.[0-9]+)?)?(Z|[+-][0-9]{2}:[0-9]{2})?$'
               examples:
                 - '2017-10-23T20:00:00'
     AmadeusFormOfIdentification:
@@ -22806,7 +22806,7 @@ components:
                 dateTime:
                   type: string
                   description: time of the change
-                  format: date-time
+                  pattern: '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}(:[0-9]{2}(\.[0-9]+)?)?(Z|[+-][0-9]{2}:[0-9]{2})?$'
                   examples:
                     - 2018-11-19T04:54
             travelers:
@@ -22882,7 +22882,7 @@ components:
                                 description: |-
                                   Local schedule dateTime of the departure or arrival.
                                   Conversion of dateTime in local date time.
-                                format: date-time
+                                pattern: '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}(:[0-9]{2}(\.[0-9]+)?)?(Z|[+-][0-9]{2}:[0-9]{2})?$'
                                 examples:
                                   - '2020-01-13T17:09:00'
                           carrierCode:

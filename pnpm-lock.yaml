@@ -138,12 +138,27 @@ importers:
       '@velexis/logger':
         specifier: workspace:*
         version: link:../../packages/logger
+      ajv:
+        specifier: 8.20.0
+        version: 8.20.0
+      ajv-formats:
+        specifier: 3.0.1
+        version: 3.0.1(ajv@8.20.0)
       bullmq:
         specifier: 5.81.5
         version: 5.81.5
+      cookie-parser:
+        specifier: 1.4.7
+        version: 1.4.7
       decimal.js:
         specifier: 10.6.0
         version: 10.6.0
+      express:
+        specifier: 5.2.1
+        version: 5.2.1
+      helmet:
+        specifier: 8.3.0
+        version: 8.3.0
       ioredis:
         specifier: 5.11.1
         version: 5.11.1
@@ -165,7 +180,16 @@ importers:
       rxjs:
         specifier: 7.8.2
         version: 7.8.2
+      yaml:
+        specifier: 2.9.1
+        version: 2.9.1
     devDependencies:
+      '@types/cookie-parser':
+        specifier: 1.4.10
+        version: 1.4.10(@types/express@5.0.6)
+      '@types/express':
+        specifier: 5.0.6
+        version: 5.0.6
       '@types/node':
         specifier: 22.20.5
         version: 22.20.5
@@ -187,9 +211,6 @@ importers:
       vitest:
         specifier: 3.2.7
         version: 3.2.7(@types/node@22.20.5)(happy-dom@17.6.3)(jiti@2.7.0)(lightningcss@1.30.2)(yaml@2.9.1)
-      yaml:
-        specifier: 2.9.1
-        version: 2.9.1
 
   ota/frontend:
     devDependencies:
@@ -3065,6 +3086,10 @@ packages:
 
   helmet@8.1.0:
     resolution: {integrity: sha512-jOiHyAZsmnr8LqoPGmCjYAaiuWwjAPLgY8ZX2XrmHawt99/u1y6RgrZMTeoPfpUbV96HOalYgz1qzkRbw54Pmg==}
+    engines: {node: '>=18.0.0'}
+
+  helmet@8.3.0:
+    resolution: {integrity: sha512-Qgpiaws3Sm30Av8Eah6sjMCZZwjlBu+E68rhpCWBshY1lb09HtLwj5GviX0OyQIn+ulUS0iX0AxN5n3tLZzz1w==}
     engines: {node: '>=18.0.0'}
 
   http-errors@2.0.1:
@@ -6803,6 +6828,8 @@ snapshots:
       function-bind: 1.1.2
 
   helmet@8.1.0: {}
+
+  helmet@8.3.0: {}
 
   http-errors@2.0.1:
     dependencies:

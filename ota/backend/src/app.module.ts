@@ -11,11 +11,14 @@ import {
 import { ConfigModule } from "@nestjs/config";
 import { NestFactory } from "@nestjs/core";
 import type { NestExpressApplication } from "@nestjs/platform-express";
-import { createLogger, pinoHttpOptions, resolveRequestId, type Logger } from "@velexis/logger";
+import { createLogger, pinoHttpOptions, type Logger } from "@velexis/logger";
 import { ClsMiddleware, ClsModule } from "nestjs-cls";
 import { LoggerModule, Logger as NestPinoLogger } from "nestjs-pino";
 import type { DestinationStream } from "pino";
 import { CommonModule } from "./common/common.module";
+import type { JsonBodyLimits } from "./common/http/body-parsers";
+import { HttpModule } from "./common/http/http.module";
+import { requestIdOf } from "./common/http/request-context";
 import { API_APP, type ApiConfig } from "./config";
 import { HealthModule } from "./health/health.module";
 
@@ -27,17 +30,11 @@ export function createApiLogger(config: ApiConfig, destination?: DestinationStre
   return createLogger({ app: API_APP, env: config.APP_ENV, level: config.LOG_LEVEL, destination });
 }
 
-/**
- * The request id of the request context: the id pino-http has already set from a valid `X-Request-Id` or generated
- * (and returned in the response header). The fallback only runs if the middleware order were broken.
- */
-function requestIdOf(req: { id?: unknown; headers: Record<string, string | string[] | undefined> }): string {
-  return typeof req.id === "string" ? req.id : resolveRequestId(req.headers["x-request-id"]);
-}
-
 export interface AppModuleOptions {
   /** The process logger (`createApiLogger`). Every request line and every injected `PinoLogger` writes through it. */
   readonly logger: Logger;
+  /** JSON body limits that differ from the 256 KB default, by operation (`JSON_BODY_LIMITS` of main.ts). */
+  readonly jsonBodyLimits?: JsonBodyLimits | undefined;
 }
 
 @Module({})
@@ -67,6 +64,8 @@ export class AppModule implements NestModule {
           middleware: { mount: false, generateId: true, idGenerator: requestIdOf },
         }),
         CommonModule,
+        // helmet, cookies, body parsers, OpenAPI validation, the error filter and the 501 routes (OBE-010).
+        HttpModule.forRoot({ jsonBodyLimits: options.jsonBodyLimits }),
         HealthModule.forApi(),
       ],
     };
@@ -74,7 +73,8 @@ export class AppModule implements NestModule {
 
   /**
    * Mounts the request context on every route. Middleware of global modules (nestjs-pino's LoggerModule) runs before
-   * the middleware of this module, so pino-http has set `req.id` when the context takes it as its id.
+   * the middleware of this module, so pino-http has set `req.id` when the context takes it as its id; the middleware
+   * of HttpModule, further from the root, runs after it.
    */
   configure(consumer: MiddlewareConsumer): void {
     consumer.apply(ClsMiddleware).forRoutes(ALL_ROUTES);
@@ -83,8 +83,9 @@ export class AppModule implements NestModule {
 
 /**
  * Creates the API application, not yet listening: nestjs-pino as the Nest logger, Express `trust proxy` from
- * TRUST_PROXY, no `X-Powered-By`, and shutdown hooks (SIGTERM from systemd closes the pools and connections).
- * `root` is `AppModule.forRoot(config, …)` or a test module that imports it.
+ * TRUST_PROXY, no `X-Powered-By`, Nest's own body parsers off (HttpModule parses bodies after the request context),
+ * and shutdown hooks (SIGTERM from systemd closes the pools and connections). `root` is `AppModule.forRoot(config, …)`
+ * or a test module that imports it.
  */
 export async function createApiApp(
   config: ApiConfig,
@@ -92,6 +93,7 @@ export async function createApiApp(
 ): Promise<NestExpressApplication> {
   const app = await NestFactory.create<NestExpressApplication>(root, {
     bufferLogs: true,
+    bodyParser: false,
     // Errors while the module graph is built are thrown to the caller, which logs them and exits non-zero.
     abortOnError: false,
   });

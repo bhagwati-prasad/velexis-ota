@@ -193,7 +193,7 @@ How it validates:
 - Ajv runs in **strict mode** for unknown keywords, so a misspelt keyword in a document fails the check instead of being ignored. The OpenAPI annotations `discriminator`, `example`, `xml` and `externalDocs` and every `x-*` extension are declared as annotation keywords. `strictTypes` and `strictRequired` are off: they judge how a schema is written (`properties` without `type: object`, `required` in another `allOf` branch), not what it accepts, and the schemas copied from the Amadeus specifications use both.
 - `createResponseChecker(document, { label })` builds the same checker for any parsed OpenAPI 3.1 document (fixtures, tools), and `responseChecker("ota")` returns the cached one.
 
-**Known document issue:** the Amadeus schemas of the OTA document declare local date-times such as `2026-11-01T10:00:00` (no offset, as Amadeus sends them) as `format: date-time`, which RFC 3339 and ajv-formats reject. Twelve examples of the document fail for that reason (`getFlightOffer`, `priceFlightOffers`, `getPricedOffer`, `consoleFindBookingByRecordLocator`, `consoleListQueue`, …), and so will real responses with those fields. The fix belongs in the document, not in this check.
+**Amadeus local date-times:** Amadeus sends local date-times such as `2026-11-01T10:00:00`, without an offset, which RFC 3339's `date-time` (and so ajv-formats) refuses. The OTA document describes those seven fields with a local date-time pattern instead of `format: date-time` since OBE-010 ([change log](../../ota/backend/openapi/README.md#6-change-log)), and the backend's `response-conformance.contract.test.ts` replays every response example of the document through this check, so the document and the check agree.
 
 ## Mailpit: `@velexis/testing/mailpit`
 

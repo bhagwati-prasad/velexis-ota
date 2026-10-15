@@ -276,7 +276,8 @@ The OTA backend gets its contract extensions, request pipeline, tenancy, Amadeus
   - `ErrorCode` contains `CSRF_TOKEN_INVALID` and `NOT_IMPLEMENTED`.
 - **Verify:** `pnpm contracts:lint && pnpm contracts:generate && pnpm --filter @velexis/ota-backend test -- contract && git diff --exit-code docs/velexis-sdk`
 
-### OBE-010 · Build the HTTP pipeline with OpenAPI validation, error filter and route parity
+### OBE-010 · Build the HTTP pipeline with OpenAPI validation, error filter and route parity ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-backend
 - **Milestone:** M2
 - **Depends on:** OBE-001, OBE-009
