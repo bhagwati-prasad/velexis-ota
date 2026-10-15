@@ -1,17 +1,29 @@
-// The consumer of `ota-tenant-ops` (OBE-005; OADR-0007 item 1, PADR-0001, tenant provisioning flow §1–§3). It runs
-// in the worker only (WorkerModule imports ProvisioningModule; the API never does), with the queue's concurrency of
-// 2 and the retention of ADR-0009. Every job is validated first (`validateTenantOpsJob`, OBE-002): a name that is not
-// a message of the queue, or a payload outside its contract, fails at once as `UnrecoverableError`. Then it
-// dispatches on the name:
+// The consumer of `ota-tenant-ops` (OBE-005, OBE-006; OADR-0007 items 1, 5 and 6, PADR-0001 item 4, tenant
+// provisioning flow §1–§3 and §5). It runs in the worker only (WorkerModule imports ProvisioningModule; the API never
+// does), with the queue's concurrency of 2 and the retention of ADR-0009. Every job is validated first
+// (`validateTenantOpsJob`, OBE-002): a name that is not a message of the queue, or a payload outside its contract,
+// fails at once as `UnrecoverableError`. Then it dispatches on the name:
 //
-// - `tenant.provision`: `ProvisioningService.provisionTenant`, then, after the provisioning transaction committed,
-//   `tenant.provisioned` or `tenant.provision_failed {retryable: false}` (followed by `UnrecoverableError`, so BullMQ
-//   does not retry it). Any other error is thrown as it is: BullMQ retries it within the attempt (OBE-006 reports
-//   the final one);
-// - `tenant.migrate`, `tenant.suspend`, `tenant.resume`: not handled by this release (OBE-006, M4–M5); they fail
-//   as unrecoverable, and the platform's reconciler counts the job as failed (PADR-0001 item 7).
+// - `tenant.provision`: `ProvisioningService.provisionTenant`, then `tenant.provisioned` or
+//   `tenant.provision_failed`;
+// - `tenant.migrate`: `ProvisioningService.migrateTenant(tenantId, targetVersion)`, then `tenant.migrated` or
+//   `tenant.migration_failed`;
+// - `tenant.suspend`, `tenant.resume`: not handled by this release (M4–M5); they fail as unrecoverable, and the
+//   platform's reconciler counts the job as failed (PADR-0001 item 7).
+//
+// Results are published after the transaction ended. A failure is reported once per dispatch attempt
+// (failure-classifier.ts): a non-retryable one at once, and the job then fails with `UnrecoverableError`, so BullMQ
+// does not try again; a retryable one (lock timeout, serialization failure, deadlock, lost connection) is thrown back
+// to BullMQ as long as the job has tries left (the platform dispatches with `attempts: 3`), and only its last try
+// publishes the failure with `retryable: true`, after which the platform re-dispatches with backoff. Log lines carry
+// the error code, never the error itself (it may quote SQL).
 import { OnWorkerEvent, Processor, WorkerHost } from "@nestjs/bullmq";
-import type { TenantOpsJob, TenantProvisionJob } from "@velexis/api-types/jobs";
+import type {
+  TenantJobError,
+  TenantMigrateJob,
+  TenantOpsJob,
+  TenantProvisionJob,
+} from "@velexis/api-types/jobs";
 import { UnrecoverableError, type Job } from "bullmq";
 import { InjectPinoLogger, PinoLogger } from "nestjs-pino";
 import { validateTenantOpsJob } from "../common/queues/job-validation";
@@ -21,13 +33,35 @@ import { dispatchAttempt, TenantEventsProducer, type TenantEventSource } from ".
 
 /** What a completed job returns (stored by BullMQ with the job): names and versions only. */
 export interface TenantOpsJobResult {
-  readonly event: "tenant.provisioned";
+  readonly event: "tenant.provisioned" | "tenant.migrated";
   readonly schemaName: string;
   readonly schemaVersion: string;
 }
 
 /** The message names of `ota-tenant-ops` this release does not handle yet. */
-export type UnhandledTenantOpsJobName = Exclude<TenantOpsJob["name"], "tenant.provision">;
+export type UnhandledTenantOpsJobName = Exclude<TenantOpsJob["name"], "tenant.provision" | "tenant.migrate">;
+
+/** The parts of a BullMQ job that say whether BullMQ tries it again after a failure. */
+export type JobTries = Pick<Job, "attemptsMade"> & { readonly opts: Pick<Job["opts"], "attempts"> };
+
+/**
+ * True when this is the job's last try: BullMQ moves a failed job to `failed` instead of retrying it once
+ * `attemptsMade + 1` reaches `opts.attempts` (a job without `attempts` has one try).
+ */
+export function isLastTry(job: JobTries): boolean {
+  return job.attemptsMade + 1 >= Math.max(1, job.opts.attempts ?? 1);
+}
+
+/** A failed result of the provisioning service: the event's payload and the error the run threw, if any. */
+interface FailedRun<P> {
+  readonly payload: P;
+  readonly cause?: unknown;
+}
+
+/** The error a retryable failure is thrown back to BullMQ with: the run's own error, so BullMQ records it. */
+function retryError(error: TenantJobError, cause: unknown): Error {
+  return cause instanceof Error ? cause : new Error(`${error.code}: ${error.message}`);
+}
 
 @Processor(OTA_QUEUE.tenantOps, otaWorkerOptions(OTA_QUEUE.tenantOps))
 export class TenantOpsProcessor extends WorkerHost {
@@ -48,6 +82,7 @@ export class TenantOpsProcessor extends WorkerHost {
       case "tenant.provision":
         return this.provision(job, message);
       case "tenant.migrate":
+        return this.migrate(job, message);
       case "tenant.suspend":
       case "tenant.resume":
         throw this.unhandled(job, message.name);
@@ -70,13 +105,8 @@ export class TenantOpsProcessor extends WorkerHost {
   }
 
   private async provision(job: Job, message: TenantProvisionJob): Promise<TenantOpsJobResult> {
-    const source: TenantEventSource = { message, attempt: dispatchAttempt(job.id, message.jobId) };
-    const context = {
-      queue: job.queueName,
-      jobId: job.id,
-      tenantId: message.tenantId,
-      requestId: message.requestId,
-    };
+    const source = this.source(job, message);
+    const context = this.context(job, message);
     const result = await this.provisioning.provisionTenant(message.tenantId);
     if (result.status === "provisioned") {
       const { schemaName, schemaVersion, migrations, steps } = result.payload;
@@ -93,10 +123,65 @@ export class TenantOpsProcessor extends WorkerHost {
       );
       return { event: "tenant.provisioned", schemaName, schemaVersion };
     }
-    const { error } = result.payload;
-    await this.events.provisionFailed(source, result.payload);
-    this.logger.warn({ ...context, code: error.code, retryable: false }, "tenant_ops.provision_failed");
-    throw new UnrecoverableError(`${error.code}: ${error.message}`);
+    return this.fail(job, context, result, "tenant_ops.provision_failed", (payload) =>
+      this.events.provisionFailed(source, payload),
+    );
+  }
+
+  private async migrate(job: Job, message: TenantMigrateJob): Promise<TenantOpsJobResult> {
+    const source = this.source(job, message);
+    const { targetVersion } = message.payload;
+    const context = { ...this.context(job, message), targetVersion: targetVersion ?? null };
+    const result = await this.provisioning.migrateTenant(message.tenantId, targetVersion);
+    if (result.status === "migrated") {
+      const { schemaName, applied } = result;
+      const { schemaVersion, migrations } = result.payload;
+      await this.events.migrated(source, result.payload);
+      this.logger.info(
+        { ...context, schemaName, schemaVersion, migrations: migrations.length, applied },
+        "tenant_ops.migrated",
+      );
+      return { event: "tenant.migrated", schemaName, schemaVersion };
+    }
+    return this.fail(job, context, result, "tenant_ops.migration_failed", (payload) =>
+      this.events.migrationFailed(source, payload),
+    );
+  }
+
+  /**
+   * Reports a failed run, or hands it back to BullMQ: a retryable failure with tries left is thrown as it is, for
+   * BullMQ to retry; otherwise the failure event is published, and the job fails with the run's error (retryable, on
+   * its last try) or with `UnrecoverableError` (not retryable, so BullMQ stops at once).
+   */
+  private async fail<P extends { readonly error: TenantJobError; readonly retryable?: boolean }>(
+    job: Job,
+    context: Record<string, unknown>,
+    run: FailedRun<P>,
+    logMessage: string,
+    publish: (payload: P) => Promise<unknown>,
+  ): Promise<never> {
+    const { error } = run.payload;
+    if (run.payload.retryable !== true) {
+      await publish(run.payload);
+      this.logger.warn({ ...context, code: error.code, retryable: false }, logMessage);
+      throw new UnrecoverableError(`${error.code}: ${error.message}`);
+    }
+    const tries = { attempt: job.attemptsMade + 1, attempts: job.opts.attempts ?? 1 };
+    if (!isLastTry(job)) {
+      this.logger.warn({ ...context, ...tries, code: error.code, retryable: true }, "tenant_ops.retrying");
+      throw retryError(error, run.cause);
+    }
+    await publish(run.payload);
+    this.logger.warn({ ...context, ...tries, code: error.code, retryable: true }, logMessage);
+    throw retryError(error, run.cause);
+  }
+
+  private source(job: Job, message: TenantOpsJob): TenantEventSource {
+    return { message, attempt: dispatchAttempt(job.id, message.jobId) };
+  }
+
+  private context(job: Job, message: TenantOpsJob): Record<string, unknown> {
+    return { queue: job.queueName, jobId: job.id, tenantId: message.tenantId, requestId: message.requestId };
   }
 
   private unhandled(job: Job, name: UnhandledTenantOpsJobName): UnrecoverableError {

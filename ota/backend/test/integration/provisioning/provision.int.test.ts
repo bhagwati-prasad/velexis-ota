@@ -561,13 +561,28 @@ describe("tenant.provision on ota-tenant-ops", () => {
     expect(outcome.state === "failed" ? outcome.error : undefined).toMatchObject({ code: ADMIN_SHUTDOWN });
     expect(outcome.state === "failed" ? outcome.error : undefined).not.toBeInstanceOf(UnrecoverableError);
     expect(await schemaExists("tenant_echo")).toBe(false);
-    expect(await eventsOf(message.jobId)).toEqual(new Map());
+    // Its only try was its last (attempts: 1), so the lost connection is reported, retryable (OBE-006).
+    const failures = await eventsOf(message.jobId);
+    expect([...failures.keys()]).toEqual([bullmqJobId(message.jobId, 1)]);
+    expect((failures.get(bullmqJobId(message.jobId, 1)) as TenantProvisionFailedEvent).payload).toEqual({
+      error: {
+        code: "CONNECTION_LOST",
+        message: "The database connection was lost or refused; the transaction was rolled back",
+      },
+      retryable: true,
+      steps: [],
+    });
     expect(await runnerSessions()).toBe(0);
 
     // The platform's next attempt provisions the tenant from scratch.
     expect(await dispatch(message, 2)).toMatchObject({ state: "completed" });
     expect(await tablesOf("tenant_echo")).toHaveLength(42);
-    expect([...(await eventsOf(message.jobId)).keys()]).toEqual([bullmqJobId(message.jobId, 2)]);
+    expect([...(await eventsOf(message.jobId)).keys()].sort()).toEqual(
+      [1, 2].map((attempt) => bullmqJobId(message.jobId, attempt)),
+    );
+    expect((await eventsOf(message.jobId)).get(bullmqJobId(message.jobId, 2))?.name).toBe(
+      "tenant.provisioned",
+    );
   });
 
   it("provisions two schemas from scratch with the same catalog hash", async () => {

@@ -1,7 +1,8 @@
-// Provisioning without PostgreSQL or Redis (OBE-005): which process can build the provisioner database, the pure parts
-// of the provisioning service (steps, ledger, payload), the event producer's validation and job ids, and how the
-// `ota-tenant-ops` processor dispatches and reports. The database and queue behaviour is in
-// test/integration/provisioning/provision.int.test.ts.
+// Provisioning without PostgreSQL or Redis (OBE-005, OBE-006): which process can build the provisioner database, the
+// pure parts of the provisioning service (steps, ledger, payload, the files of a target version), the failures it
+// decides before any tenant SQL, the event producer's validation and job ids, and how the `ota-tenant-ops` processor
+// dispatches and reports, retryable failures only on the last try. The database and queue behaviour is in
+// test/integration/provisioning/provision.int.test.ts and migrate.int.test.ts.
 import { Module, type INestApplicationContext } from "@nestjs/common";
 import { ConfigModule } from "@nestjs/config";
 import { NestFactory } from "@nestjs/core";
@@ -9,9 +10,12 @@ import provisionFixture from "@velexis/api-types/fixtures/jobs/tenant-provision.
 import {
   MessageValidationError,
   validateJob,
+  type TenantMigratedPayload,
   type TenantProvisionedPayload,
   type TenantProvisionFailedPayload,
 } from "@velexis/api-types/jobs";
+import { InvalidTenantSchemaError } from "@velexis/db";
+import type { MigrationFiles } from "@velexis/db/migrate";
 import { createLogger } from "@velexis/logger";
 import { FakeClock } from "@velexis/testing";
 import { UnrecoverableError, type Job, type Queue } from "bullmq";
@@ -23,11 +27,15 @@ import { AppModule, createApiApp, createApiLogger } from "../app.module";
 import { Clock } from "../common/clock";
 import { loadApiConfig, loadWorkerConfig, WORKER_APP, type ApiConfig, type WorkerConfig } from "../config";
 import type { PlatformReadRepository } from "../tenancy/platform-read.repository";
+import type { PlatformTenant } from "../tenancy/platform-read.types";
 import { createWorkerApp, createWorkerLogger, WorkerModule } from "../worker.module";
+import { MAX_ERROR_MESSAGE_LENGTH } from "./failure-classifier";
 import { provisionerDatabaseProvider } from "./provisioning.module";
 import {
   createProvisionerDatabase,
   DEFAULT_PROVISIONING_OPTIONS,
+  filesUpTo,
+  migratedPayload,
   PROVISIONER_DATABASE,
   PROVISIONER_POOL_MAX,
   ProvisionerDsnMissingError,
@@ -37,11 +45,13 @@ import {
   skippedSteps,
   TENANT_MIGRATIONS_DIR,
   toMigrationRecords,
+  type MigrateResult,
   type ProvisionerDatabase,
+  type ProvisioningOptions,
   type ProvisionResult,
 } from "./provisioning.service";
 import { dispatchAttempt, eventJobOptions, TenantEventsProducer } from "./tenant-events.producer";
-import { TenantOpsProcessor } from "./tenant-ops.processor";
+import { isLastTry, TenantOpsProcessor } from "./tenant-ops.processor";
 
 /** Dummy values of the shape the VM uses; nothing here is a real secret, and nothing connects to them. */
 const SHARED = {
@@ -268,6 +278,74 @@ describe("the provisioning steps and payload", () => {
       ]),
     ).toThrow(/R__grants has the phase "repeatable"/);
   });
+
+  it("takes the last ledger row as the schema version of tenant.migrated and validates it", () => {
+    const migrations = toMigrationRecords([
+      {
+        id: "0001_baseline",
+        checksum: CHECKSUM,
+        phase: "expand",
+        execution_ms: 412,
+        created_at: at("01.000"),
+      },
+      {
+        id: "0002_add_loyalty_cards",
+        checksum: CHECKSUM,
+        phase: "expand",
+        execution_ms: 3,
+        created_at: at("02.000"),
+      },
+    ]);
+    const payload = migratedPayload("tenant_acme", migrations);
+
+    expect(payload).toEqual({ schemaVersion: "0002_add_loyalty_cards", migrations });
+    expect(() =>
+      validateJob("tenant.migrated", { ...provisionFixture, name: "tenant.migrated", payload }),
+    ).not.toThrow();
+    expect(() => migratedPayload("tenant_acme", [])).toThrow(/ledger of tenant_acme is empty/);
+  });
+});
+
+describe("the files of a tenant.migrate target", () => {
+  /** A folder of three numbered files; only `numbered` matters here. */
+  function folder(): MigrationFiles {
+    const numbered = ["0001_baseline", "0002_add_loyalty_cards", "0003_add_gift_cards"].map((id) => ({
+      kind: "numbered" as const,
+      file: `${id}.sql`,
+      id,
+      path: `/srv/velexis/migrations/tenant/${id}.sql`,
+      phase: "expand" as const,
+      noTransaction: false,
+      description: id,
+      checksum: CHECKSUM,
+      sql: "SELECT 1;\n",
+      statements: [],
+    }));
+    return { set: "tenant", dir: "/srv/velexis/migrations/tenant", exists: true, numbered, repeatable: [] };
+  }
+  const ids = (files: MigrationFiles | undefined) => files?.numbered.map((file) => file.id);
+
+  it("selects every file without a target, and the files up to the target by ledger id or number", () => {
+    const files = folder();
+
+    expect(filesUpTo(files, undefined)).toBe(files);
+    expect(ids(filesUpTo(files, "0002_add_loyalty_cards"))).toEqual([
+      "0001_baseline",
+      "0002_add_loyalty_cards",
+    ]);
+    expect(ids(filesUpTo(files, "0002"))).toEqual(["0001_baseline", "0002_add_loyalty_cards"]);
+    expect(ids(filesUpTo(files, "0001"))).toEqual(["0001_baseline"]);
+    expect(ids(filesUpTo(files, "0003_add_gift_cards"))).toEqual(ids(files));
+    expect(filesUpTo(files, "0002")?.dir).toBe(files.dir);
+  });
+
+  it("finds no files for a version the release does not have", () => {
+    const files = folder();
+
+    for (const target of ["0004", "0002_add_other_cards", "00002", "0002_add"]) {
+      expect(filesUpTo(files, target)).toBeUndefined();
+    }
+  });
 });
 
 describe("ProvisioningService", () => {
@@ -292,6 +370,148 @@ describe("ProvisioningService", () => {
         steps: [],
       },
     });
+  });
+
+  /** A tenant row as PlatformReadRepository maps it. */
+  function tenantRow(status: PlatformTenant["status"]): PlatformTenant {
+    return {
+      id: provisionFixture.tenantId,
+      key: "acme",
+      name: "Acme Travel",
+      status,
+      schemaName: "tenant_acme" as PlatformTenant["schemaName"],
+      storefrontEnvironment: "test",
+      defaultCurrency: "EUR",
+      defaultLocale: "en",
+      billingNotice: null,
+    };
+  }
+
+  /** A service whose provisioner DSN refuses every connection: these tests must decide before any tenant SQL. */
+  function serviceWith(
+    tenantById: () => Promise<PlatformTenant | null>,
+    options: ProvisioningOptions = DEFAULT_PROVISIONING_OPTIONS,
+  ): ProvisioningService {
+    return new ProvisioningService(
+      { tenantById: vi.fn(tenantById) } as unknown as PlatformReadRepository,
+      { url: "postgres://nobody@127.0.0.1:1/none" } as unknown as ProvisionerDatabase,
+      options,
+      new FakeClock() as Clock,
+    );
+  }
+
+  it("classifies what reading the tenant throws: a malformed schema name is not retryable, a refused connection is", async () => {
+    const malformed = new InvalidTenantSchemaError("tenant_x; DROP SCHEMA platform");
+    const refused = Object.assign(new Error("connect ECONNREFUSED 127.0.0.1:5432"), { code: "ECONNREFUSED" });
+
+    const invalid = await serviceWith(() => Promise.reject(malformed)).provisionTenant(
+      provisionFixture.tenantId,
+    );
+    const lost = await serviceWith(() => Promise.reject(refused)).migrateTenant(provisionFixture.tenantId);
+
+    expect(invalid).toMatchObject({
+      status: "failed",
+      payload: { error: { code: "INVALID_SCHEMA_NAME" }, retryable: false, steps: [] },
+      cause: malformed,
+    });
+    expect(lost).toMatchObject({
+      status: "failed",
+      payload: { version: null, error: { code: "CONNECTION_LOST" }, retryable: true },
+      cause: refused,
+    });
+  });
+
+  it("answers tenant.migrate for an unknown tenant, a tenant that is not migrated and an unknown target, not retryable", async () => {
+    expect(await serviceWith(() => Promise.resolve(null)).migrateTenant(provisionFixture.tenantId)).toEqual({
+      status: "failed",
+      payload: {
+        version: null,
+        error: { code: "TENANT_NOT_FOUND", message: "No tenant has the id of the message" },
+        retryable: false,
+      },
+    });
+    for (const status of ["deprovisioning", "deleted", "failed"] as const) {
+      expect(await serviceWith(() => Promise.resolve(tenantRow(status))).migrateTenant("ten_x")).toEqual({
+        status: "failed",
+        payload: {
+          version: null,
+          error: {
+            code: "TENANT_NOT_MIGRATABLE",
+            message: `The tenant is ${status}: only provisioning, active and suspended tenants are migrated`,
+          },
+          retryable: false,
+        },
+      });
+    }
+    expect(
+      await serviceWith(() => Promise.resolve(tenantRow("active"))).migrateTenant(
+        "ten_x",
+        "0999_add_nothing",
+      ),
+    ).toEqual({
+      status: "failed",
+      payload: {
+        version: null,
+        error: {
+          code: "UNKNOWN_TARGET_VERSION",
+          message: "No tenant migration of this release has the target version 0999_add_nothing",
+        },
+        retryable: false,
+      },
+    });
+  });
+
+  it("caps the message of a failure it decides, so a long unknown target still makes a valid event", async () => {
+    // The contract's version pattern has no length limit; the event's error.message allows 1,000 characters.
+    const target = `0999_${"x".repeat(2000)}`;
+
+    const result = await serviceWith(() => Promise.resolve(tenantRow("active"))).migrateTenant(
+      "ten_x",
+      target,
+    );
+
+    expect(result).toMatchObject({
+      status: "failed",
+      payload: { version: null, error: { code: "UNKNOWN_TARGET_VERSION" }, retryable: false },
+    });
+    const payload = result.status === "failed" ? result.payload : undefined;
+    expect(payload?.error.message).toHaveLength(MAX_ERROR_MESSAGE_LENGTH);
+    expect(() =>
+      validateJob("tenant.migration_failed", {
+        ...provisionFixture,
+        name: "tenant.migration_failed",
+        payload,
+      }),
+    ).not.toThrow();
+  });
+
+  it("reports a release without its tenant migrations folder as INVALID_MIGRATION_FILES, not retryable", async () => {
+    const missing = { migrationsDir: "/nonexistent-velexis-obe006/migrations/tenant" };
+    const invalidFiles = {
+      code: "INVALID_MIGRATION_FILES",
+      message: "The tenant migrations folder of this release is invalid (1 problem(s)); nothing was applied",
+    };
+
+    const migrate = await serviceWith(() => Promise.resolve(tenantRow("active")), missing).migrateTenant(
+      "ten_x",
+    );
+    // A provisioning tenant reaches migrateTenantSchema, which finds no folder; an active one the ledger check.
+    const provisions = await Promise.all(
+      (["provisioning", "active"] as const).map((status) =>
+        serviceWith(() => Promise.resolve(tenantRow(status)), missing).provisionTenant("ten_x"),
+      ),
+    );
+
+    expect(migrate).toMatchObject({
+      status: "failed",
+      payload: { version: null, error: invalidFiles, retryable: false },
+    });
+    for (const provision of provisions) {
+      expect(provision).toMatchObject({
+        status: "failed",
+        payload: { error: invalidFiles, retryable: false, steps: [] },
+      });
+    }
   });
 
   it("reads the tenant migrations of the package", () => {
@@ -379,24 +599,42 @@ describe("TenantEventsProducer", () => {
 });
 
 describe("TenantOpsProcessor", () => {
-  function processorWith(result: () => Promise<ProvisionResult>) {
+  function processorWith(
+    result: () => Promise<ProvisionResult>,
+    migration: () => Promise<MigrateResult> = () =>
+      Promise.reject(new Error("migrateTenant is not expected")),
+  ) {
     const { queue, added } = recordingQueue();
     const provisionTenant = vi.fn(result);
+    const migrateTenant = vi.fn(migration);
     const lines: Array<{ level: string; fields: Record<string, unknown>; msg: string }> = [];
     const log = (level: string) => (fields: Record<string, unknown>, msg: string) =>
       void lines.push({ level, fields, msg });
     const logger = { info: log("info"), warn: log("warn"), error: log("error") } as unknown as PinoLogger;
     const processor = new TenantOpsProcessor(
-      { provisionTenant } as unknown as ProvisioningService,
+      { provisionTenant, migrateTenant } as unknown as ProvisioningService,
       new TenantEventsProducer(queue, new FakeClock() as Clock),
       logger,
     );
-    return { processor, provisionTenant, added, lines };
+    return { processor, provisionTenant, migrateTenant, added, lines };
   }
 
-  function job(name: string, data: unknown, id = `${provisionFixture.jobId}-1`): Job {
-    return { id, name, data, queueName: "ota-tenant-ops" } as unknown as Job;
+  function job(
+    name: string,
+    data: unknown,
+    id = `${provisionFixture.jobId}-1`,
+    tries?: { readonly attemptsMade: number; readonly attempts: number },
+  ): Job {
+    const options =
+      tries === undefined ? {} : { attemptsMade: tries.attemptsMade, opts: { attempts: tries.attempts } };
+    return { id, name, data, queueName: "ota-tenant-ops", ...options } as unknown as Job;
   }
+
+  const migrateMessage = (payload: Record<string, unknown> = {}) => ({
+    ...provisionFixture,
+    name: "tenant.migrate",
+    payload,
+  });
 
   it("provisions, publishes tenant.provisioned after it and returns names and versions only", async () => {
     const { processor, provisionTenant, added, lines } = processorWith(() =>
@@ -460,12 +698,16 @@ describe("TenantOpsProcessor", () => {
   });
 
   it("fails the messages this release does not handle, and unknown names, as unrecoverable", async () => {
-    const { processor, provisionTenant, added, lines } = processorWith(() =>
+    const { processor, provisionTenant, migrateTenant, added, lines } = processorWith(() =>
       Promise.resolve({ status: "provisioned", payload: PROVISIONED }),
     );
 
-    for (const name of ["tenant.migrate", "tenant.resume"]) {
-      await expect(processor.process(job(name, { ...provisionFixture, name }))).rejects.toThrow(
+    // tenant.migrate is handled since OBE-006 (tests below); suspend and resume come in M4–M5.
+    for (const [name, payload] of [
+      ["tenant.suspend", { reason: "billing" }],
+      ["tenant.resume", {}],
+    ] as const) {
+      await expect(processor.process(job(name, { ...provisionFixture, name, payload }))).rejects.toThrow(
         new UnrecoverableError(`${name} is not handled by this release of the OTA worker`),
       );
     }
@@ -474,11 +716,179 @@ describe("TenantOpsProcessor", () => {
     ).rejects.toBeInstanceOf(UnrecoverableError);
 
     expect(provisionTenant).not.toHaveBeenCalled();
+    expect(migrateTenant).not.toHaveBeenCalled();
     expect(added).toEqual([]);
     expect(lines.map(({ level, msg }) => [level, msg])).toEqual([
       ["error", "tenant_ops.unhandled"],
       ["error", "tenant_ops.unhandled"],
       ["error", "queue.job_invalid"],
+    ]);
+  });
+
+  const LOCK_TIMEOUT_FAILURE: TenantProvisionFailedPayload = {
+    error: { code: "LOCK_TIMEOUT", message: "Waiting for a lock timed out (SQLSTATE 55P03)" },
+    retryable: true,
+    steps: [],
+  };
+
+  it("knows the last try of a job from BullMQ's attempts", () => {
+    expect(isLastTry({ attemptsMade: 0, opts: { attempts: 3 } })).toBe(false);
+    expect(isLastTry({ attemptsMade: 1, opts: { attempts: 3 } })).toBe(false);
+    expect(isLastTry({ attemptsMade: 2, opts: { attempts: 3 } })).toBe(true);
+    expect(isLastTry({ attemptsMade: 0, opts: { attempts: 1 } })).toBe(true);
+    expect(isLastTry({ attemptsMade: 0, opts: { attempts: 0 } })).toBe(true);
+    expect(isLastTry({ attemptsMade: 0, opts: {} })).toBe(true);
+  });
+
+  it("throws a retryable failure back to BullMQ while the job has tries left, and publishes nothing [OBE-006 AC1]", async () => {
+    const lockTimeout = Object.assign(new Error("canceling statement due to lock timeout"), {
+      code: "55P03",
+    });
+    const { processor, added, lines } = processorWith(() =>
+      Promise.resolve({ status: "failed", payload: LOCK_TIMEOUT_FAILURE, cause: lockTimeout }),
+    );
+
+    for (const attemptsMade of [0, 1]) {
+      await expect(
+        processor.process(
+          job("tenant.provision", provisionFixture, undefined, { attemptsMade, attempts: 3 }),
+        ),
+      ).rejects.toBe(lockTimeout);
+    }
+
+    expect(added).toEqual([]);
+    expect(lines.map(({ level, msg, fields }) => [level, msg, fields["attempt"], fields["code"]])).toEqual([
+      ["warn", "tenant_ops.retrying", 1, "LOCK_TIMEOUT"],
+      ["warn", "tenant_ops.retrying", 2, "LOCK_TIMEOUT"],
+    ]);
+  });
+
+  it("publishes tenant.provision_failed {retryable: true} on the last try and fails with the run's error [OBE-006 AC1]", async () => {
+    const lockTimeout = Object.assign(new Error("canceling statement due to lock timeout"), {
+      code: "55P03",
+    });
+    const { processor, added, lines } = processorWith(() =>
+      Promise.resolve({ status: "failed", payload: LOCK_TIMEOUT_FAILURE, cause: lockTimeout }),
+    );
+
+    const error = await processor
+      .process(job("tenant.provision", provisionFixture, undefined, { attemptsMade: 2, attempts: 3 }))
+      .catch((thrown: unknown) => thrown);
+
+    expect(error).toBe(lockTimeout);
+    expect(error).not.toBeInstanceOf(UnrecoverableError);
+    expect(added).toEqual([
+      {
+        name: "tenant.provision_failed",
+        data: expect.objectContaining({ payload: LOCK_TIMEOUT_FAILURE }),
+        opts: { jobId: `${provisionFixture.jobId}-1` },
+      },
+    ]);
+    expect(lines).toEqual([
+      expect.objectContaining({
+        level: "warn",
+        msg: "tenant_ops.provision_failed",
+        fields: expect.objectContaining({ code: "LOCK_TIMEOUT", retryable: true, attempt: 3, attempts: 3 }),
+      }),
+    ]);
+    // The log line names the code, never the error and its message.
+    expect(JSON.stringify(lines)).not.toContain("canceling statement");
+  });
+
+  it("fails a retryable result without an error with its code and message", async () => {
+    const { processor } = processorWith(() =>
+      Promise.resolve({ status: "failed", payload: LOCK_TIMEOUT_FAILURE }),
+    );
+
+    await expect(
+      processor.process(
+        job("tenant.provision", provisionFixture, undefined, { attemptsMade: 0, attempts: 3 }),
+      ),
+    ).rejects.toThrow(new Error("LOCK_TIMEOUT: Waiting for a lock timed out (SQLSTATE 55P03)"));
+  });
+
+  it("migrates with the message's target, publishes tenant.migrated after it and returns names and versions only", async () => {
+    const migrated: TenantMigratedPayload = {
+      schemaVersion: "0002_add_loyalty_cards",
+      migrations: [
+        ...PROVISIONED.migrations,
+        {
+          version: "0002_add_loyalty_cards",
+          checksum: CHECKSUM,
+          phase: "expand",
+          appliedAt: "2026-10-14T09:31:00.000Z",
+          durationMs: 3,
+        },
+      ],
+    };
+    const { processor, migrateTenant, added, lines } = processorWith(
+      () => Promise.reject(new Error("provisionTenant is not expected")),
+      () =>
+        Promise.resolve({
+          status: "migrated",
+          schemaName: "tenant_acme",
+          applied: ["0002_add_loyalty_cards"],
+          payload: migrated,
+        }),
+    );
+
+    const result = await processor.process(
+      job(
+        "tenant.migrate",
+        migrateMessage({ targetVersion: "0002_add_loyalty_cards" }),
+        `${provisionFixture.jobId}-2`,
+      ),
+    );
+
+    expect(migrateTenant).toHaveBeenCalledWith(provisionFixture.tenantId, "0002_add_loyalty_cards");
+    expect(result).toEqual({
+      event: "tenant.migrated",
+      schemaName: "tenant_acme",
+      schemaVersion: "0002_add_loyalty_cards",
+    });
+    expect(added).toEqual([
+      {
+        name: "tenant.migrated",
+        data: expect.objectContaining({ jobId: provisionFixture.jobId, payload: migrated }),
+        opts: { jobId: `${provisionFixture.jobId}-2` },
+      },
+    ]);
+    expect(lines).toContainEqual(
+      expect.objectContaining({
+        level: "info",
+        msg: "tenant_ops.migrated",
+        fields: expect.objectContaining({
+          targetVersion: "0002_add_loyalty_cards",
+          applied: ["0002_add_loyalty_cards"],
+          migrations: 2,
+        }),
+      }),
+    );
+  });
+
+  it("publishes tenant.migration_failed and fails as unrecoverable for a non-retryable failure [OBE-006 AC2]", async () => {
+    const changed = {
+      version: "0001_baseline",
+      error: { code: "CHECKSUM_MISMATCH", message: "1 applied tenant migration file(s) changed" },
+      retryable: false,
+    };
+    const { processor, migrateTenant, added } = processorWith(
+      () => Promise.reject(new Error("provisionTenant is not expected")),
+      () => Promise.resolve({ status: "failed", payload: changed, cause: new Error("checksum") }),
+    );
+
+    const error = await processor
+      .process(job("tenant.migrate", migrateMessage(), undefined, { attemptsMade: 0, attempts: 3 }))
+      .catch((thrown: unknown) => thrown);
+
+    expect(migrateTenant).toHaveBeenCalledWith(provisionFixture.tenantId, undefined);
+    expect(error).toBeInstanceOf(UnrecoverableError);
+    expect(error).toMatchObject({ message: "CHECKSUM_MISMATCH: 1 applied tenant migration file(s) changed" });
+    expect(added).toEqual([
+      expect.objectContaining({
+        name: "tenant.migration_failed",
+        data: expect.objectContaining({ payload: changed }),
+      }),
     ]);
   });
 

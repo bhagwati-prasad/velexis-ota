@@ -1,7 +1,8 @@
-// The OTA worker's reports on `platform-tenant-events` (OBE-005; OADR-0007 item 5, PADR-0001 items 4–5, platform
-// architecture §6.1). Each event answers one `ota-tenant-ops` message: same `jobId` and `tenantId`, the message's
-// `requestId` for log correlation, and `requestedAt` from the injected Clock. It is validated with `validateJob` of
-// `@velexis/api-types/jobs` before `queue.add`, so a malformed event is a bug here and never reaches the platform.
+// The OTA worker's reports on `platform-tenant-events` (OBE-005, OBE-006 for `tenant.migrate`; OADR-0007 item 5,
+// PADR-0001 items 4–5, platform architecture §6.1). Each event answers one `ota-tenant-ops` message: same `jobId` and
+// `tenantId`, the message's `requestId` for log correlation, and `requestedAt` from the injected Clock. It is
+// validated with `validateJob` of `@velexis/api-types/jobs` before `queue.add`, so a malformed event is a bug here
+// and never reaches the platform.
 //
 // BullMQ job id: the dispatch attempt's id `<jobId>-<attempt>` (`bullmqJobId`), the id the message itself came
 // with. The platform reads the attempt from it and ignores events of older attempts (PADR-0001 item 5), and a
@@ -15,6 +16,10 @@ import {
   parseBullmqJobId,
   validateJob,
   type TenantEvent,
+  type TenantMigratedEvent,
+  type TenantMigratedPayload,
+  type TenantMigrationFailedEvent,
+  type TenantMigrationFailedPayload,
   type TenantOpsJob,
   type TenantProvisionedEvent,
   type TenantProvisionedPayload,
@@ -67,6 +72,19 @@ export class TenantEventsProducer {
     payload: TenantProvisionFailedPayload,
   ): Promise<TenantProvisionFailedEvent> {
     return this.publish({ ...this.envelope(source), name: "tenant.provision_failed", payload }, source);
+  }
+
+  /** Publishes `tenant.migrated`: the schema is at its target; the platform mirrors the ledger and its version. */
+  async migrated(source: TenantEventSource, payload: TenantMigratedPayload): Promise<TenantMigratedEvent> {
+    return this.publish({ ...this.envelope(source), name: "tenant.migrated", payload }, source);
+  }
+
+  /** Publishes `tenant.migration_failed`: the attempt failed for good (`retryable: false`) or after its retries. */
+  async migrationFailed(
+    source: TenantEventSource,
+    payload: TenantMigrationFailedPayload,
+  ): Promise<TenantMigrationFailedEvent> {
+    return this.publish({ ...this.envelope(source), name: "tenant.migration_failed", payload }, source);
   }
 
   private envelope(source: TenantEventSource) {

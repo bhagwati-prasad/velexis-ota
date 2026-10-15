@@ -192,7 +192,8 @@ The OTA side of M1 is the provisioning worker (OF-11): the platform's `tenant.pr
   - The API process cannot construct the migrator pool (config test).
 - **Verify:** `pnpm --filter @velexis/ota-backend build && pnpm --filter @velexis/ota-backend test:int -- provisioning`
 
-### OBE-006 · Implement tenant.migrate and classify provisioning failures
+### OBE-006 · Implement tenant.migrate and classify provisioning failures ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-backend
 - **Milestone:** M1
 - **Depends on:** OBE-005
