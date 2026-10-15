@@ -29,6 +29,8 @@ Every plan uses exactly these ids and meanings.
 | [`plans/roadmap.md`](plans/roadmap.md) | Master roadmap: calendars with and without agents, batches, review gates, demos, go/no-go criteria, critical path, risks and progress tracking. |
 | [`deployment-single-vm.md`](deployment-single-vm.md) | Operations guide for the single VM: sizing, hardening, process layout, PostgreSQL, Redis, Caddy and TLS, secrets, deploy and rollback, migrations, backups and restore drill, logs, monitoring, capacity, the path to managed services. |
 | [`local-development.md`](local-development.md) | Local development runbook: prerequisites, one-time setup, daily commands, Mailpit, Stripe CLI, Amadeus stub, tests, troubleshooting. |
+| [`runbooks/second-agent-review.md`](runbooks/second-agent-review.md) | Second-agent review of a pull request: when it is required (the M3 deep-review PRs), how the developer runs a fresh read-only session without secrets, its one-comment output, and what happens to each finding before the merge. |
+| [`runbooks/second-agent-review-prompt.md`](runbooks/second-agent-review-prompt.md) | The reviewing session's prompt: limits, checks for card data, idempotent writes, webhooks, timeout paths, tenant isolation and tokens, severities, comment format. |
 | [`adr/README.md`](adr/README.md) | Index of the cross-cutting architecture decision records. |
 | [`plans/`](plans/README.md) | The plans index, the master roadmap and the foundation agent tasks (§5). |
 

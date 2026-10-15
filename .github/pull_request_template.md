@@ -68,7 +68,7 @@ Definition of done: AGENTS.md §5. Conventions: docs/mvp/conventions.md §11–�
 - [ ] Errors leak no stack traces, SQL or raw supplier errors to customers
 - [ ] New dependencies justified here; `pnpm audit` shows no high or critical issue
 - [ ] Airline-card path, storefront payment page, Caddyfile, systemd unit or deploy pipeline changes checked against the PCI controls of ADR-0011 and ADR-0027 (script inventory, CSP, sandboxing)
-- [ ] M3 deep-review PR (money and card code): second-agent review findings attached (procedure of X-036; optional for other PRs)
+- [ ] M3 deep-review PR (money and card code): second-agent review comment linked here (URL: …) and every high finding fixed or answered; procedure `docs/mvp/runbooks/second-agent-review.md` (n/a for other PRs unless the developer ran one)
 
 ## Screenshots
 

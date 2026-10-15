@@ -70,6 +70,8 @@ If you were given a task id, do that task. Otherwise pick one like this:
 8. Commit with Conventional Commits (`feat(ota-backend): add API key guard`, footer `Task: OBE-014`) and open **one PR** using the template. Its title is `<type>(<scope>): <title> [<ID>]`.
 9. **Do not merge.** The developer reviews and merges.
 
+**Second-agent review.** For the deep-review PRs of M3 (money and card code), and for other PRs when the developer asks, a fresh, read-only agent session without secrets reviews the PR before the developer does, and its findings are posted as one PR comment ([`docs/mvp/runbooks/second-agent-review.md`](docs/mvp/runbooks/second-agent-review.md)). Every high finding is fixed or answered before the merge. If you are started as that reviewing session, follow [`docs/mvp/runbooks/second-agent-review-prompt.md`](docs/mvp/runbooks/second-agent-review-prompt.md) as it is on `main`: read only, never push commits, never change anything on GitHub.
+
 Discovered extra work becomes a **new task** in the right plan (next free id, all fields, `node tools/plan-lint/plan-lint.mjs` passes). It is not done silently inside this task.
 
 ## 5. Definition of done
@@ -85,6 +87,7 @@ A task is done only when **all** of these hold:
 - [ ] Docs are updated: README or docs files affected by the change, the [configuration matrix](docs/mvp/architecture.md#6-configuration-matrix), `.env.example` and the `deploy/env` template for new variables (with the human step "add it to `/etc/velexis` before the next deploy" in the PR), and an **ADR** for any new or changed decision (status `Proposed`).
 - [ ] The plan status is set to `done (PR #n)`, the task heading ends with ` ✅`, and `node tools/plan-lint/plan-lint.mjs` passes.
 - [ ] The security checklist in [`conventions.md` §12](docs/mvp/conventions.md#12-security-checklist-every-pr) is ticked.
+- [ ] M3 deep-review PRs: the [second-agent review](docs/mvp/runbooks/second-agent-review.md) comment is linked in the PR, and every high finding is fixed or answered.
 - [ ] One PR, with the template filled in, and CI green.
 
 ## 6. Contract first
@@ -174,5 +177,5 @@ Local services: PostgreSQL `127.0.0.1:5432`, Redis `127.0.0.1:6379`, Mailpit SMT
 | `packages/*` | `config`, `logger`, `db`, `crypto`, `errors`, `api-types`, `testing` (devDependency only) |
 | `deploy/` | Caddyfile, systemd units, VM, deploy and backup scripts, env templates |
 | `tools/` | `plan-lint`, `reference-data`, `amadeus-stub`, `e2e` |
-| `docs/mvp/` | Decisions, architecture, conventions, tech stack, ADRs, plans |
+| `docs/mvp/` | Decisions, architecture, conventions, tech stack, ADRs, plans, runbooks |
 | `docs/velexis-sdk/`, `docs/amadeus-api/` | Reference contracts and designs (reuse, do not redo, do not edit) |

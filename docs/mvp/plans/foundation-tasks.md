@@ -889,7 +889,7 @@ Related: [`../decisions.md`](../decisions.md) (binding), [`../architecture.md`](
 - **Verify:** `pnpm --filter @velexis/amadeus-stub build && pnpm --filter @velexis/amadeus-stub test`
 
 ### X-036 · Write the second-agent review procedure
-- **Status:** todo
+- **Status:** in progress (branch claude/intelligent-bardeen-90hhu7; pending: the dry run on one merged M2 PR (human step: the developer starts the session) and its record in the PR)
 - **Component:** foundation
 - **Milestone:** M2
 - **Depends on:** X-019
