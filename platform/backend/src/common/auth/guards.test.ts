@@ -28,6 +28,7 @@ import {
 import { OpenApiOperation } from "../http/openapi-operation.decorator";
 import { PLATFORM_OPENAPI_FILE, PlatformOpenApi } from "../http/openapi-validation.interceptor";
 import { RequestContext, type RequestActor, type RequestContextStore } from "../http/request-context";
+import { AccountRateLimitGuard, RateLimitGuard } from "../http/throttler.config";
 import { AdminAuthGuard, type AccountAuthState, type AccountAuthStates } from "./admin-auth.guard";
 import { accessTokenOf, Feature, OperationPolicies, RequireRecentMfa } from "./decorators";
 import { FeatureGuard } from "./feature.guard";
@@ -213,11 +214,13 @@ function harness(features: Partial<Record<FeatureName, boolean>> = {}) {
 }
 
 describe("the guard order", () => {
-  it("runs the auth guards of the scope, then RecentMfaGuard, then FeatureGuard (architecture §3)", () => {
+  it("runs RateLimitGuard, the auth guards of the scope, AccountRateLimitGuard, then RecentMfaGuard, then FeatureGuard (architecture §3)", () => {
     expect(API_GUARDS).toEqual([
+      RateLimitGuard,
       InternalOnlyGuard,
       PortalAuthGuard,
       AdminAuthGuard,
+      AccountRateLimitGuard,
       RecentMfaGuard,
       FeatureGuard,
     ]);

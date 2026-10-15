@@ -26,10 +26,12 @@
     "ref:load": "pnpm --dir ../.. db:seed:reference"
   },
   "dependencies": {
+    "@nestjs/bullmq": "11.0.5",
     "@nestjs/common": "11.2.7",
     "@nestjs/config": "4.0.4",
     "@nestjs/core": "11.2.7",
     "@nestjs/platform-express": "11.2.7",
+    "@nestjs/throttler": "6.7.1",
     "@velexis/api-types": "workspace:*",
     "@velexis/config": "workspace:*",
     "@velexis/crypto": "workspace:*",
@@ -38,6 +40,7 @@
     "@velexis/logger": "workspace:*",
     "ajv": "8.20.0",
     "ajv-formats": "3.0.1",
+    "bullmq": "5.81.5",
     "cookie-parser": "1.4.7",
     "express": "5.2.1",
     "helmet": "8.1.0",

@@ -112,13 +112,14 @@ export default tseslint.config(
     rules: { "n/no-process-env": "error" },
   },
   {
-    files: [
-      "packages/config/**",
-      "**/*.config.{ts,mjs,js}",
-      "**/next.config.*",
-      "**/vitest.*",
-      "**/playwright.config.*",
-    ],
+    files: ["packages/config/**", "**/next.config.*", "**/vitest.*", "**/playwright.config.*"],
+    rules: { "n/no-process-env": "off" },
+  },
+  {
+    // Tool configuration files only, never an application source named `*.config.ts`
+    // (platform/backend/src/common/http/throttler.config.ts reads its settings through @velexis/config).
+    files: ["**/*.config.{ts,mjs,js}"],
+    ignores: ["**/src/**"],
     rules: { "n/no-process-env": "off" },
   },
 

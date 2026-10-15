@@ -250,7 +250,8 @@ Common commands: backend `pnpm --filter @velexis/platform-backend test`, `test:i
   - With a valid `X-Velexis-Bff-Key` from loopback and no `X-Forwarded-For`, the request context holds the forwarded IP and user agent. With a wrong key, or with `X-Forwarded-For` present, both headers are ignored and `req.ip` is used. A valid key without a valid IP answers `400 VALIDATION_FAILED` (integration test) [PADR-0019].
 - **Verify:** `pnpm --filter @velexis/platform-backend test && pnpm --filter @velexis/platform-backend test:int`
 
-### PBE-009 · Add Redis, BullMQ queues, the invalidation publisher, idempotency and rate limits
+### PBE-009 · Add Redis, BullMQ queues, the invalidation publisher, idempotency and rate limits ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-backend
 - **Milestone:** M1
 - **Depends on:** PBE-008, PBE-004

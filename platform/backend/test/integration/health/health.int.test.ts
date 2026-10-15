@@ -1,7 +1,9 @@
 // /health/live and /health/ready of the API (127.0.0.1:3100) and the worker (127.0.0.1:3101) against the real
 // PostgreSQL 16 and Redis 7 of DATABASE_URL and REDIS_URL, and the request context and request log lines of the API
 // (PBE-001). The processes start exactly as dist/main.js and dist/worker.js do (startApi, startWorker), with a log
-// destination that keeps the lines. Only `SELECT 1` and `PING` reach the services: no database or key is created.
+// destination that keeps the lines. The checks send only `SELECT 1` and `PING`, and no database is created. Redis is
+// this Vitest worker's test database (`useRedis()`, never the developer's database 0), because a worker that starts
+// with Redis up registers its job schedulers there (`vx:platform-maintenance:*`, PBE-009).
 import { createServer as createHttpServer, request as httpRequest, type Server } from "node:http";
 import { createServer as createTcpServer, type AddressInfo } from "node:net";
 import { resolve } from "node:path";
@@ -15,6 +17,7 @@ import {
 } from "@nestjs/common";
 import type { NestExpressApplication } from "@nestjs/platform-express";
 import { defineConfig, env, loadDevEnvFiles } from "@velexis/config";
+import { useRedis, type TestRedis } from "@velexis/testing";
 import { Redis } from "ioredis";
 import { ClsService } from "nestjs-cls";
 import { InjectPinoLogger, PinoLogger } from "nestjs-pino";
@@ -74,12 +77,14 @@ function get(url: string, headers: Record<string, string> = {}): Promise<Answer>
   });
 }
 
-/** DATABASE_URL and REDIS_URL of the environment (CI services, or the root and app `.env.local` files locally). */
-function services(): { DATABASE_URL: string; REDIS_URL: string } {
+/**
+ * DATABASE_URL of the environment (CI services, or the root and app `.env.local` files locally). Redis comes from
+ * `useRedis()`, which reads REDIS_URL the same way and picks this Vitest worker's database.
+ */
+function services(): { DATABASE_URL: string } {
   loadDevEnvFiles({ appDir: resolve(__dirname, "..", "..", "..") });
   return defineConfig({
     DATABASE_URL: env.url({ protocols: ["postgres:", "postgresql:"] }),
-    REDIS_URL: env.url({ protocols: ["redis:", "rediss:"] }),
   });
 }
 
@@ -102,14 +107,21 @@ let DATABASE_URL: string;
 let REDIS_URL: string;
 let UNREACHABLE_DATABASE_URL: string;
 let UNREACHABLE_REDIS_URL: string;
+let testRedis: TestRedis | undefined;
 
 /** Everything a test started, closed after it even when it fails. */
 const running: Array<{ close(): Promise<void> }> = [];
 
 beforeAll(async () => {
-  ({ DATABASE_URL, REDIS_URL } = services());
+  ({ DATABASE_URL } = services());
+  testRedis = await useRedis();
+  REDIS_URL = testRedis.url;
   UNREACHABLE_DATABASE_URL = withPort(DATABASE_URL, await closedPort());
   UNREACHABLE_REDIS_URL = withPort(REDIS_URL, await closedPort());
+});
+
+afterAll(async () => {
+  await testRedis?.close();
 });
 
 afterEach(async () => {
