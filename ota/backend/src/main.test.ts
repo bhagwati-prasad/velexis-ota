@@ -4,6 +4,7 @@
 import type { NestExpressApplication } from "@nestjs/platform-express";
 import { afterEach, describe, expect, it } from "vitest";
 import { exchange } from "../test/helpers/http";
+import { testApiVariables } from "../test/helpers/api-env";
 import { MemorySink } from "../test/helpers/log-sink";
 import { freePort, occupiedPort } from "../test/helpers/ports";
 import { API_HOST, startApi } from "./main";
@@ -13,6 +14,7 @@ const ENV = {
   APP_ENV: "test",
   DATABASE_URL: "postgres://velexis_ota_app:dummy@127.0.0.1:5432/velexis",
   REDIS_URL: "redis://:dummy@127.0.0.1:6379/0",
+  ...testApiVariables(),
 } as const;
 
 const cleanups: Array<() => Promise<void>> = [];

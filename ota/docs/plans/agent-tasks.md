@@ -296,7 +296,8 @@ The OTA backend gets its contract extensions, request pipeline, tenancy, Amadeus
   - Every not-yet-implemented operation answers 501; the parity test fails for a handler without an operation and for an operation with neither handler nor pending entry.
 - **Verify:** `pnpm --filter @velexis/ota-backend test && pnpm --filter @velexis/ota-backend test -- contract`
 
-### OBE-011 · Classify callers: edge secret and API key verification
+### OBE-011 · Classify callers: edge secret and API key verification ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-backend
 - **Milestone:** M2
 - **Depends on:** OBE-010, OBE-003, X-005

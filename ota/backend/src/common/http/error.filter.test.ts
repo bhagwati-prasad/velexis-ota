@@ -18,6 +18,7 @@ import request from "supertest";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createTestApp, type TestApp } from "../../../test/support/create-test-app";
 import type { LogLine } from "../../../test/helpers/log-sink";
+import { PublicRoute } from "../auth/caller.guard";
 import { ErrorFilter, fromHttpException } from "./error.filter";
 import { OpenApiOperation } from "./openapi-operation.decorator";
 import type { RequestContext } from "./request-context";
@@ -32,7 +33,9 @@ const SUPPLIER = {
 };
 const BOOKING_ID = "bkg_01JA2Z9W5K7Q3M8N4P6R";
 
+// Public: the envelope is rendered the same for every caller; the caller guard is common/auth/caller.guard.test.ts.
 @Controller("__probe")
+@PublicRoute()
 class FailingController {
   @Get("type-error/:bookingId")
   @OpenApiOperation("getBooking")

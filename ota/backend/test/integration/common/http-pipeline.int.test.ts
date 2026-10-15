@@ -11,6 +11,7 @@ import {
 } from "@velexis/testing";
 import request from "supertest";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { edgeHeaders } from "../../helpers/api-env";
 import { createTestApp, type TestApp } from "../../support/create-test-app";
 
 let db: TestDatabase;
@@ -40,7 +41,7 @@ describe("createTestApp on a test database and Redis", () => {
   });
 
   it("answers a pending operation with 501 NOT_IMPLEMENTED and its milestone", async () => {
-    const res = await request(api.server).get("/v1/storefront");
+    const res = await request(api.server).get("/v1/storefront").set(edgeHeaders());
 
     expect(res.status).toBe(501);
     expect(res.body.error).toMatchObject({

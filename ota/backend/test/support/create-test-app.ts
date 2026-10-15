@@ -20,6 +20,7 @@ import { AppModule, createApiApp, createApiLogger } from "../../src/app.module";
 import type { JsonBodyLimits } from "../../src/common/http/body-parsers";
 import { loadApiConfig, type ApiConfig } from "../../src/config";
 import { JSON_BODY_LIMITS } from "../../src/main";
+import { testApiVariables } from "../helpers/api-env";
 import { MemorySink } from "../helpers/log-sink";
 
 /** Dummy service values of the shape the VM uses: nothing here is a secret, and nothing connects to them. */
@@ -59,6 +60,7 @@ export async function createTestApp(options: TestAppOptions = {}): Promise<TestA
   const config = loadApiConfig({
     APP_ENV: "test",
     ...DUMMY_SERVICES,
+    ...testApiVariables(),
     ...(options.database === undefined ? {} : { DATABASE_URL: options.database.urlFor("ota") }),
     ...(options.redis === undefined ? {} : { REDIS_URL: options.redis.url }),
     ...options.env,

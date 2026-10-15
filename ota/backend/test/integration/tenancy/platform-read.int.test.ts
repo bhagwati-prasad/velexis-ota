@@ -28,6 +28,7 @@ import {
 } from "../../../src/tenancy/platform-read.repository";
 import { OTA_POOL, TenancyModule, type OtaPool } from "../../../src/tenancy/tenancy.module";
 import { createWorkerApp, createWorkerLogger, WorkerModule } from "../../../src/worker.module";
+import { testApiVariables } from "../../helpers/api-env";
 import { MemorySink } from "../../helpers/log-sink";
 
 /** Dummy Redis URL: nothing in these graphs connects to Redis (the readiness probe connects on its first check). */
@@ -96,7 +97,12 @@ async function startWorkerTenancy(...extraImports: Type[]): Promise<Tenancy> {
 
 /** The API graph (`AppModule.forRoot`, initialised, not listening) with `TenancyModule.forApi()`. */
 async function startApiTenancy(): Promise<Tenancy> {
-  const config = loadApiConfig({ APP_ENV: "test", DATABASE_URL: db.urlFor("ota"), REDIS_URL });
+  const config = loadApiConfig({
+    APP_ENV: "test",
+    DATABASE_URL: db.urlFor("ota"),
+    REDIS_URL,
+    ...testApiVariables(),
+  });
   const sink = new MemorySink();
   @Module({
     imports: [AppModule.forRoot(config, { logger: createApiLogger(config, sink) }), TenancyModule.forApi()],

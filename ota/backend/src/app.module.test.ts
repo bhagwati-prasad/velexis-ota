@@ -6,8 +6,10 @@ import { ClsService } from "nestjs-cls";
 import { PinoLogger } from "nestjs-pino";
 import request from "supertest";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { testApiVariables } from "../test/helpers/api-env";
 import { MemorySink, type LogLine } from "../test/helpers/log-sink";
 import { AppModule, createApiApp, createApiLogger } from "./app.module";
+import { PublicRoute } from "./common/auth/caller.guard";
 import { Clock } from "./common/clock";
 import { IdGenerator } from "./common/ids";
 import { loadApiConfig, type ApiConfig } from "./config";
@@ -20,9 +22,13 @@ const ENV = {
   LOG_LEVEL: "info",
   DATABASE_URL: "postgres://velexis_ota_app:dummy@127.0.0.1:5432/velexis",
   REDIS_URL: "redis://:dummy@127.0.0.1:6379/0",
+  ...testApiVariables(),
 } as const;
 
+// Public: these tests are about the request context and logging, which come before the caller guard; the guard
+// itself is common/auth/caller.guard.test.ts.
 @Controller("v1/probe")
+@PublicRoute()
 class ProbeController {
   constructor(
     private readonly cls: ClsService,

@@ -17,6 +17,7 @@ import {
   type EnvSource,
   type EnvVar,
 } from "@velexis/config";
+import { API_KEY_PEPPER_MIN_BYTES } from "@velexis/crypto";
 
 /** The package folder (`ota/backend`, or `ota-backend` in a release): `src/` and `dist/` are one level down. */
 export const APP_DIR = resolve(__dirname, "..");
@@ -86,12 +87,37 @@ const sharedSchema = {
   REDIS_URL: env.url({ protocols: REDIS_PROTOCOLS }),
 } as const;
 
+/**
+ * The storefront edge credential (ADR-0018): at least 24 characters of `[A-Za-z0-9_-]`. provision-vm.sh generates 48
+ * hex characters, the development value of the `.env.example` files has 25; an empty value and the unsubstituted
+ * `@@EDGE_SECRET@@` placeholder of the deploy template are refused.
+ */
+const EDGE_SECRET = /^[A-Za-z0-9_-]{24,}$/;
+
+/**
+ * A host name in lower case, without a trailing dot, of at least two labels: the rule of `redis.keys.ts` and of the
+ * `domain` invalidation event (PADR-0004 item 1).
+ */
+const HOST_NAME =
+  /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
+
 /** The API process (`dist/main.js`, unit velexis-ota-api). */
 export const apiConfigSchema = {
   ...sharedSchema,
   // The unit sets PORT=4000; the API binds 127.0.0.1 only (architecture.md §3).
   PORT: env.port({ default: 4000 }),
   TRUST_PROXY: trustProxy(["loopback"]),
+  // The shared secret Caddy sends in X-Velexis-Edge on every storefront /api/* request (ADR-0018, OADR-0009 rule
+  // 1.1); compared in constant time by the caller guard, never logged. The same value is in caddy.env.
+  VELEXIS_EDGE_SECRET: env.string({ pattern: EDGE_SECRET }),
+  // The HMAC pepper of API key hashes (PADR-0005 item 3): an identical copy of the platform's file in the OTA zone's
+  // key folder (ADR-0026). Checked at start-up (mode 0400 or 0600, at least 32 bytes after base64 decoding); the
+  // configuration holds the path, and the tenancy module reads the key once.
+  API_KEY_PEPPER_FILE: env.secretFile({ minBytes: API_KEY_PEPPER_MIN_BYTES }),
+  // `<key>.<STOREFRONT_BASE_DOMAIN>` is a tenant's storefront sub-domain (ADR-0018, OADR-0009 point 2).
+  STOREFRONT_BASE_DOMAIN: env.string({ pattern: HOST_NAME }),
+  // The API's public origin, for absolute URLs given to key callers (asset and file links; ADR-0018).
+  PUBLIC_OTA_API_URL: env.url({ protocols: ["https:", "http:"] }),
 } as const;
 
 /** The worker process (`dist/worker.js`, unit velexis-ota-worker). */

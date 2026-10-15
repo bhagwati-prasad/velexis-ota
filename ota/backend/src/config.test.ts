@@ -1,8 +1,18 @@
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import {
+  chmodSync,
+  copyFileSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import { parseEnv } from "node:util";
 import { ConfigError } from "@velexis/config";
 import { describe, expect, it, vi } from "vitest";
+import { testApiCredentials, testApiVariables } from "../test/helpers/api-env";
 import {
   apiConfigSchema,
   APP_DIR,
@@ -25,6 +35,9 @@ const SHARED = {
 const PROVISIONER_URL = "postgres://velexis_provisioner:dummy-provisioner-password@127.0.0.1:5432/velexis";
 const MIGRATOR_URL = "postgres://velexis_migrator:dummy-migrator-password@127.0.0.1:5432/velexis";
 const WORKER_ENV = { ...SHARED, DATABASE_PROVISIONER_URL: PROVISIONER_URL } as const;
+/** The API-only variables (OBE-011): a random edge secret and a pepper file of this test process. */
+const API_ONLY = testApiVariables();
+const API_ENV = { ...SHARED, ...API_ONLY } as const;
 
 function configErrorOf(run: () => unknown): ConfigError {
   try {
@@ -45,9 +58,15 @@ function readEnvFile(path: string): Record<string, string> {
   );
 }
 
+/** What provision-vm.sh's `gen_secret` writes: `openssl rand -hex 24`, 48 hex characters (a dummy value here). */
+const GENERATED_SECRET = "0123456789abcdef".repeat(3);
+
 /** A deploy/env template with its `@@NAME@@` placeholders replaced, as provision-vm.sh does with generated values. */
 function renderedTemplate(name: string): Record<string, string> {
-  const text = readFileSync(join(REPO_ROOT, "deploy/env", name), "utf8").replace(/@@[A-Z_]+@@/g, "generated");
+  const text = readFileSync(join(REPO_ROOT, "deploy/env", name), "utf8").replace(
+    /@@[A-Z_]+@@/g,
+    GENERATED_SECRET,
+  );
   return Object.fromEntries(
     Object.entries(parseEnv(text)).filter((entry): entry is [string, string] => entry[1] !== undefined),
   );
@@ -55,7 +74,7 @@ function renderedTemplate(name: string): Record<string, string> {
 
 describe("a missing DATABASE_URL", () => {
   it("fails the API's configuration with a ConfigError naming DATABASE_URL [OBE-001 AC3]", () => {
-    const { DATABASE_URL: _omitted, ...withoutUrl } = SHARED;
+    const { DATABASE_URL: _omitted, ...withoutUrl } = API_ENV;
 
     const error = configErrorOf(() => loadApiConfig(withoutUrl));
 
@@ -72,7 +91,7 @@ describe("a missing DATABASE_URL", () => {
   });
 
   it("counts an empty value as missing", () => {
-    const error = configErrorOf(() => loadApiConfig({ ...SHARED, DATABASE_URL: "" }));
+    const error = configErrorOf(() => loadApiConfig({ ...API_ENV, DATABASE_URL: "" }));
 
     expect(error.problems.map((problem) => problem.variable)).toEqual(["DATABASE_URL"]);
   });
@@ -81,18 +100,22 @@ describe("a missing DATABASE_URL", () => {
 describe("the privileged DSNs", () => {
   it("never appear in the API's configuration, even when they are set [OBE-001 AC3]", () => {
     const config: ApiConfig = loadApiConfig({
-      ...SHARED,
+      ...API_ENV,
       DATABASE_PROVISIONER_URL: PROVISIONER_URL,
       DATABASE_MIGRATOR_URL: MIGRATOR_URL,
     });
 
     expect(Object.keys(config).sort()).toEqual([
+      "API_KEY_PEPPER_FILE",
       "APP_ENV",
       "DATABASE_URL",
       "LOG_LEVEL",
       "PORT",
+      "PUBLIC_OTA_API_URL",
       "REDIS_URL",
+      "STOREFRONT_BASE_DOMAIN",
       "TRUST_PROXY",
+      "VELEXIS_EDGE_SECRET",
     ]);
     expect(JSON.stringify(config)).not.toContain("velexis_provisioner");
     expect(JSON.stringify(config)).not.toContain("velexis_migrator");
@@ -101,7 +124,7 @@ describe("the privileged DSNs", () => {
   });
 
   it("are not required by the API: it starts without the worker's DSN [OBE-001 AC3]", () => {
-    expect(loadApiConfig(SHARED).DATABASE_URL).toBe(SHARED.DATABASE_URL);
+    expect(loadApiConfig(API_ENV).DATABASE_URL).toBe(SHARED.DATABASE_URL);
   });
 
   it("give the worker its provisioner DSN and never the migrator DSN [OBE-001 AC3]", () => {
@@ -146,6 +169,7 @@ describe("values", () => {
       APP_ENV: "test",
       DATABASE_URL: SHARED.DATABASE_URL,
       REDIS_URL: SHARED.REDIS_URL,
+      ...API_ONLY,
     });
     const worker = loadWorkerConfig({
       APP_ENV: "test",
@@ -161,6 +185,7 @@ describe("values", () => {
       REDIS_URL: SHARED.REDIS_URL,
       PORT: 4000,
       TRUST_PROXY: ["loopback"],
+      ...API_ONLY,
     });
     expect(worker.HEALTH_PORT).toBe(4001);
     expect(Object.isFrozen(api)).toBe(true);
@@ -194,7 +219,10 @@ describe("values", () => {
   });
 
   it("accepts trusted proxies as presets, addresses and CIDR ranges", () => {
-    const config = loadApiConfig({ ...SHARED, TRUST_PROXY: "loopback, uniquelocal,10.0.0.0/8,::1,fd00::/8" });
+    const config = loadApiConfig({
+      ...API_ENV,
+      TRUST_PROXY: "loopback, uniquelocal,10.0.0.0/8,::1,fd00::/8",
+    });
 
     expect(config.TRUST_PROXY).toEqual(["loopback", "uniquelocal", "10.0.0.0/8", "::1", "fd00::/8"]);
   });
@@ -212,10 +240,77 @@ describe("values", () => {
       "10.0.0.1/8/1",
       "proxy.example.net",
     ]) {
-      const error = configErrorOf(() => loadApiConfig({ ...SHARED, TRUST_PROXY: value }));
+      const error = configErrorOf(() => loadApiConfig({ ...API_ENV, TRUST_PROXY: value }));
 
       expect(error.problems.map((problem) => problem.variable)).toEqual(["TRUST_PROXY"]);
     }
+  });
+});
+
+describe("the caller credentials of the API (OBE-011)", () => {
+  it("are required: the API names every missing one, the worker reads none of them", () => {
+    const error = configErrorOf(() => loadApiConfig(SHARED));
+    const worker = loadWorkerConfig({ ...WORKER_ENV, ...API_ONLY });
+
+    expect(error.problems.map((problem) => problem.variable).sort()).toEqual([
+      "API_KEY_PEPPER_FILE",
+      "PUBLIC_OTA_API_URL",
+      "STOREFRONT_BASE_DOMAIN",
+      "VELEXIS_EDGE_SECRET",
+    ]);
+    for (const name of Object.keys(API_ONLY)) {
+      expect(worker).not.toHaveProperty(name);
+    }
+  });
+
+  it("refuse a short edge secret and the deploy template's placeholder without printing either", () => {
+    for (const value of ["@@EDGE_SECRET@@", "short-edge-secret", "an edge secret with spaces in it"]) {
+      const error = configErrorOf(() => loadApiConfig({ ...API_ENV, VELEXIS_EDGE_SECRET: value }));
+
+      expect(error.problems.map((problem) => problem.variable)).toEqual(["VELEXIS_EDGE_SECRET"]);
+      expect(error.message).not.toContain(value);
+    }
+  });
+
+  it("refuse a pepper file that others may read, that is shorter than 32 bytes or that is missing", () => {
+    const dir = mkdtempSync(join(tmpdir(), "velexis-ota-pepper-"));
+    try {
+      const readable = join(dir, "readable");
+      copyFileSync(testApiCredentials().pepperFile, readable);
+      chmodSync(readable, 0o644);
+      const short = join(dir, "short");
+      writeFileSync(short, Buffer.alloc(16, 7).toString("base64"), { mode: 0o600 });
+
+      for (const file of [readable, short, join(dir, "missing")]) {
+        const error = configErrorOf(() => loadApiConfig({ ...API_ENV, API_KEY_PEPPER_FILE: file }));
+
+        expect(error.problems.map((problem) => problem.variable)).toEqual(["API_KEY_PEPPER_FILE"]);
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("refuse a base domain that is not a lower-case host name, and a public URL that is not http(s)", () => {
+    for (const domain of [
+      "OTA.example.com",
+      "ota.example.com.",
+      "localhost",
+      "https://ota.example.com",
+      "10.0.0.1",
+    ]) {
+      const error = configErrorOf(() => loadApiConfig({ ...API_ENV, STOREFRONT_BASE_DOMAIN: domain }));
+
+      expect([domain, error.problems.map((problem) => problem.variable)]).toEqual([
+        domain,
+        ["STOREFRONT_BASE_DOMAIN"],
+      ]);
+    }
+    const error = configErrorOf(() =>
+      loadApiConfig({ ...API_ENV, PUBLIC_OTA_API_URL: "ftp://api.ota.example.com" }),
+    );
+
+    expect(error.problems.map((problem) => problem.variable)).toEqual(["PUBLIC_OTA_API_URL"]);
   });
 });
 
@@ -225,22 +320,39 @@ describe("example and template files", () => {
       ...readEnvFile(join(REPO_ROOT, ".env.example")),
       ...readEnvFile(join(APP_DIR, ".env.example")),
     };
+    // The pepper path is relative to the workspace root, where `pnpm dev:keys` writes it; a scratch root with the
+    // test process's pepper at that place stands in for a developer's checkout.
+    const root = mkdtempSync(join(tmpdir(), "velexis-ota-config-"));
+    try {
+      const pepperFile = join(root, local["API_KEY_PEPPER_FILE"] ?? "missing");
+      mkdirSync(dirname(pepperFile), { recursive: true });
+      copyFileSync(testApiCredentials().pepperFile, pepperFile);
+      chmodSync(pepperFile, 0o600);
 
-    const api = loadApiConfig(local);
-    const worker = loadWorkerConfig(local);
+      const api = loadApiConfig({ ...local, API_KEY_PEPPER_FILE: pepperFile });
+      const worker = loadWorkerConfig(local);
 
-    expect(api.APP_ENV).toBe("development");
-    expect(api.DATABASE_URL).toContain("velexis_ota_app");
-    expect(api.PORT).toBe(4000);
-    expect(worker.HEALTH_PORT).toBe(4001);
-    expect(worker.DATABASE_PROVISIONER_URL).toContain("velexis_provisioner");
+      expect(local["API_KEY_PEPPER_FILE"]).toBe(".local/keys/api-key-pepper");
+      expect(api.APP_ENV).toBe("development");
+      expect(api.DATABASE_URL).toContain("velexis_ota_app");
+      expect(api.PORT).toBe(4000);
+      expect(api.STOREFRONT_BASE_DOMAIN).toBe("ota.example.com");
+      expect(worker.HEALTH_PORT).toBe(4001);
+      expect(worker.DATABASE_PROVISIONER_URL).toContain("velexis_provisioner");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("matches deploy/env: every variable of both schemas is in the unit's env files, except the ports", () => {
     const shared = renderedTemplate("ota-backend.env.example");
     const worker = renderedTemplate("ota-worker.env.example");
 
-    expect(loadApiConfig(shared).APP_ENV).toBe("production");
+    // The pepper of the OTA zone's key folder on the VM (ADR-0026); the test process's own file stands in for it.
+    expect(shared["API_KEY_PEPPER_FILE"]).toBe(`${shared["MASTER_KEY_DIR"] ?? "missing"}/api-key-pepper`);
+    expect(loadApiConfig({ ...shared, API_KEY_PEPPER_FILE: testApiCredentials().pepperFile }).APP_ENV).toBe(
+      "production",
+    );
     expect(loadWorkerConfig({ ...shared, ...worker }).APP_ENV).toBe("production");
     // PORT and HEALTH_PORT are set by the velexis-ota-api and velexis-ota-worker units.
     for (const name of Object.keys(apiConfigSchema).filter((variable) => variable !== "PORT")) {
@@ -255,7 +367,7 @@ describe("example and template files", () => {
 describe("loading the process environment", () => {
   it("validates the process environment when no source is given [OBE-001 AC3]", () => {
     // production: no .env.local file is read, so only the stubbed environment counts.
-    for (const [name, value] of Object.entries(SHARED)) {
+    for (const [name, value] of Object.entries(API_ENV)) {
       vi.stubEnv(name, value);
     }
     vi.stubEnv("DATABASE_URL", "");

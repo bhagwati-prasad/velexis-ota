@@ -1,9 +1,11 @@
 // The two health endpoints (ADR-0016) on both transports: HealthController serves them in the API's Nest HTTP
 // pipeline (PORT), HealthServer serves the same paths and answers on the worker's node:http port (HEALTH_PORT), which
-// has no Nest HTTP adapter. Caddy blocks /health/* publicly except /health/live on the API hosts.
+// has no Nest HTTP adapter. Caddy blocks /health/* publicly except /health/live on the API hosts; in the API, the caller
+// guard lets /health/live through without a credential and /health/ready on a direct loopback connection only.
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { Controller, Get, Header, Injectable, Res, type BeforeApplicationShutdown } from "@nestjs/common";
+import { LocalRoute, PublicRoute } from "../common/auth/caller.guard";
 import { HealthService, type LivenessBody, type ReadinessBody } from "./health.service";
 
 /** The part of the Express response the controller uses: the status code of the readiness answer. */
@@ -20,6 +22,7 @@ export class HealthController {
 
   /** `200 {status: "ok"}` while the process runs. */
   @Get("live")
+  @PublicRoute()
   @Header("Cache-Control", NO_STORE)
   live(): LivenessBody {
     return this.health.live();
@@ -27,6 +30,7 @@ export class HealthController {
 
   /** `200` when PostgreSQL and Redis answer, `503` otherwise; the body names the status of each. */
   @Get("ready")
+  @LocalRoute()
   @Header("Cache-Control", NO_STORE)
   async ready(@Res({ passthrough: true }) res: StatusWriter): Promise<ReadinessBody> {
     const readiness = await this.health.ready();

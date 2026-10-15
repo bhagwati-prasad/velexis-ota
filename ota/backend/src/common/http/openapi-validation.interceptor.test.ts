@@ -8,7 +8,9 @@ import type { Request } from "express";
 import { ClsService } from "nestjs-cls";
 import request from "supertest";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { edgeHeaders } from "../../../test/helpers/api-env";
 import { createTestApp, type TestApp } from "../../../test/support/create-test-app";
+import { PublicRoute, WebhookRoute } from "../auth/caller.guard";
 import { JSON_BODY_LIMIT_BYTES, routePattern, toBodyError, WEBHOOK_BODY_LIMIT_BYTES } from "./body-parsers";
 import { OpenApiInput, OpenApiOperation, type ValidatedInput } from "./openapi-operation.decorator";
 import { loadOpenApiDocument, MAX_FIELD_ERRORS, toFieldErrors } from "./openapi-validation.interceptor";
@@ -21,7 +23,9 @@ const SECRET = "Hunter2-Secret-Value-77";
 
 const handled = vi.fn();
 
+// Public: validation runs the same for every caller; the caller guard before it is common/auth/caller.guard.test.ts.
 @Controller("__probe")
+@PublicRoute()
 class ProbeController {
   constructor(private readonly cls: ClsService) {}
 
@@ -85,6 +89,7 @@ class ProbeController {
 }
 
 @Controller("webhooks")
+@WebhookRoute()
 class WebhookProbeController {
   @Post("probe/:kind")
   receive(@Req() req: Request): object {
@@ -409,12 +414,13 @@ describe("body parsing", () => {
     try {
       const big = { ...SIGN_IN, password: "p".repeat(1100) };
       const small = SIGN_IN;
+      // The storefront's edge credential: the pending routes answer 501 to an accepted caller (OBE-011).
       const answers = await Promise.all([
-        request(limited.server).post("/v1/auth/sign-in").send(big),
-        request(limited.server).post("/V1/Auth/Sign-In/").send(big),
-        request(limited.server).post("/v1/auth/sign-in").send(small),
+        request(limited.server).post("/v1/auth/sign-in").set(edgeHeaders()).send(big),
+        request(limited.server).post("/V1/Auth/Sign-In/").set(edgeHeaders()).send(big),
+        request(limited.server).post("/v1/auth/sign-in").set(edgeHeaders()).send(small),
         // Another route keeps the default limit.
-        request(limited.server).post("/v1/auth/sign-up").send(big),
+        request(limited.server).post("/v1/auth/sign-up").set(edgeHeaders()).send(big),
       ]);
 
       expect(answers.map((res) => res.status)).toEqual([400, 400, 501, 501]);

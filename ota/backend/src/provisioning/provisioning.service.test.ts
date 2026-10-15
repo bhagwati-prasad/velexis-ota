@@ -21,6 +21,7 @@ import { FakeClock } from "@velexis/testing";
 import { UnrecoverableError, type Job, type Queue } from "bullmq";
 import { LoggerModule, type PinoLogger } from "nestjs-pino";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { testApiVariables } from "../../test/helpers/api-env";
 import { MemorySink } from "../../test/helpers/log-sink";
 import { freePort } from "../../test/helpers/ports";
 import { AppModule, createApiApp, createApiLogger } from "../app.module";
@@ -101,6 +102,7 @@ describe("the provisioner database", () => {
   it("cannot be built from the API's configuration, even when the privileged DSNs are set [OBE-005 AC4]", () => {
     const api = loadApiConfig({
       ...SHARED,
+      ...testApiVariables(),
       DATABASE_PROVISIONER_URL: PROVISIONER_URL,
       DATABASE_MIGRATOR_URL: MIGRATOR_URL,
     });
@@ -113,7 +115,11 @@ describe("the provisioner database", () => {
   });
 
   it("stops a module graph with the API's configuration from starting [OBE-005 AC4]", async () => {
-    const api = loadApiConfig({ ...SHARED, DATABASE_PROVISIONER_URL: PROVISIONER_URL });
+    const api = loadApiConfig({
+      ...SHARED,
+      ...testApiVariables(),
+      DATABASE_PROVISIONER_URL: PROVISIONER_URL,
+    });
 
     await expect(provisionerGraph(api)).rejects.toBeInstanceOf(ProvisionerDsnMissingError);
   });
@@ -137,6 +143,7 @@ describe("the provisioner database", () => {
     const redisUrl = `redis://:dummy@127.0.0.1:${await freePort()}/0`;
     const apiConfig = loadApiConfig({
       ...SHARED,
+      ...testApiVariables(),
       REDIS_URL: redisUrl,
       DATABASE_PROVISIONER_URL: PROVISIONER_URL,
     });

@@ -1,6 +1,8 @@
 // The tenancy module (ota/docs/architecture.md §2.1, OADR-0009): the process's pool of velexis_ota_app, `platformDb`
-// over it and the read-only platform repository. The caller and tenant resolution, the Redis caches, the vx:invalidate
-// subscriber, the tenant context and the `tenantTx` wrapper join it in M2 (OBE-011, OBE-012), on the same pool.
+// over it and the read-only platform repository. The API's module also classifies callers (OBE-011): the API key
+// verifier with the pepper of API_KEY_PEPPER_FILE, the caller resolver and the caller's request context, which the
+// global `CallerGuard` of app.module.ts uses. The tenant resolution, the Redis caches, the vx:invalidate subscriber,
+// the tenant context and the `tenantTx` wrapper join it in M2 (OBE-012), on the same pool.
 //
 // The API imports `TenancyModule.forApi()`, the worker `TenancyModule.forWorker()`. A module that needs the repository
 // imports the same call again. Each call returns the same module object, and Nest 11 tells dynamic modules apart by
@@ -14,9 +16,13 @@ import {
   type OnApplicationShutdown,
 } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
+import { readKeyFile } from "@velexis/config";
+import { API_KEY_PEPPER_MIN_BYTES } from "@velexis/crypto";
 import { createPlatformDb, createPool } from "@velexis/db";
 import { PinoLogger } from "nestjs-pino";
-import { API_APP, WORKER_APP, type SharedConfig } from "../config";
+import { API_APP, WORKER_APP, type ApiConfig, type SharedConfig } from "../config";
+import { API_KEY_PEPPER, ApiKeyVerifier } from "./api-key.verifier";
+import { CallerContext, CallerResolver } from "./caller-resolver";
 import { PLATFORM_DB, PlatformReadRepository, type PlatformDb } from "./platform-read.repository";
 
 /** The `pg.Pool` of velexis_ota_app (DATABASE_URL). */
@@ -61,6 +67,24 @@ const platformDbProvider: FactoryProvider<PlatformDb> = {
   useFactory: (pool: OtaPool) => createPlatformDb(pool),
 };
 
+/**
+ * The decoded API key pepper (PADR-0005 item 3), read once from API_KEY_PEPPER_FILE, which the configuration checked
+ * at start-up. It stays in this process's memory; it is never logged or passed on.
+ */
+const apiKeyPepperProvider: FactoryProvider<Buffer> = {
+  provide: API_KEY_PEPPER,
+  inject: [ConfigService],
+  useFactory: (config: ConfigService<ApiConfig, true>) => {
+    const pepper = readKeyFile(config.get("API_KEY_PEPPER_FILE", { infer: true }), {
+      minBytes: API_KEY_PEPPER_MIN_BYTES,
+    });
+    if (!Buffer.isBuffer(pepper)) {
+      throw new TypeError("API_KEY_PEPPER_FILE must be a base64 key file");
+    }
+    return pepper;
+  },
+};
+
 /** Ends the pool when the process shuts down (SIGTERM from systemd, `app.close()` in tests). */
 @Injectable()
 class OtaPoolCloser implements OnApplicationShutdown {
@@ -78,6 +102,7 @@ export class TenancyModule {
   /** One module object per process kind; a new object on each call would be a new module with a pool of its own. */
   private static readonly modules = new Map<OtaApp, DynamicModule>();
 
+  /** The API's module: the platform repository and the caller classification of OBE-011. */
   static forApi(): DynamicModule {
     return TenancyModule.forApp(API_APP);
   }
@@ -89,6 +114,9 @@ export class TenancyModule {
   private static forApp(app: OtaApp): DynamicModule {
     let dynamicModule = TenancyModule.modules.get(app);
     if (dynamicModule === undefined) {
+      // Caller classification needs the API's configuration (the edge secret and the pepper file).
+      const callers =
+        app === API_APP ? [apiKeyPepperProvider, ApiKeyVerifier, CallerResolver, CallerContext] : [];
       dynamicModule = {
         module: TenancyModule,
         providers: [
@@ -97,8 +125,9 @@ export class TenancyModule {
           platformDbProvider,
           OtaPoolCloser,
           PlatformReadRepository,
+          ...callers,
         ],
-        exports: [PlatformReadRepository],
+        exports: [PlatformReadRepository, ...(app === API_APP ? [CallerResolver, CallerContext] : [])],
       };
       TenancyModule.modules.set(app, dynamicModule);
     }

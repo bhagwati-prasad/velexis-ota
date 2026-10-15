@@ -9,18 +9,20 @@ import {
   type Type,
 } from "@nestjs/common";
 import { ConfigModule } from "@nestjs/config";
-import { NestFactory } from "@nestjs/core";
+import { APP_GUARD, NestFactory } from "@nestjs/core";
 import type { NestExpressApplication } from "@nestjs/platform-express";
 import { createLogger, pinoHttpOptions, type Logger } from "@velexis/logger";
 import { ClsMiddleware, ClsModule } from "nestjs-cls";
 import { LoggerModule, Logger as NestPinoLogger } from "nestjs-pino";
 import type { DestinationStream } from "pino";
+import { CallerGuard } from "./common/auth/caller.guard";
 import { CommonModule } from "./common/common.module";
 import type { JsonBodyLimits } from "./common/http/body-parsers";
 import { HttpModule } from "./common/http/http.module";
 import { requestIdOf } from "./common/http/request-context";
 import { API_APP, type ApiConfig } from "./config";
 import { HealthModule } from "./health/health.module";
+import { TenancyModule } from "./tenancy/tenancy.module";
 
 /** Every route of the application (path-to-regexp 8 syntax of NestJS 11). */
 const ALL_ROUTES = { path: "{*path}", method: RequestMethod.ALL };
@@ -66,8 +68,12 @@ export class AppModule implements NestModule {
         CommonModule,
         // helmet, cookies, body parsers, OpenAPI validation, the error filter and the 501 routes (OBE-010).
         HttpModule.forRoot({ jsonBodyLimits: options.jsonBodyLimits }),
+        // The pool of velexis_ota_app, the platform repository and the caller classification (OBE-011).
+        TenancyModule.forApi(),
         HealthModule.forApi(),
       ],
+      // The first guard of every route: who is calling (OADR-0009 point 1). The tenant guard follows (OBE-012).
+      providers: [{ provide: APP_GUARD, useClass: CallerGuard }],
     };
   }
 

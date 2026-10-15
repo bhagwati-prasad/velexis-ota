@@ -31,6 +31,7 @@ import {
 import { loadOpenApiDocument } from "../../src/common/http/openapi-validation.interceptor";
 import { PENDING_OPERATIONS, UNDOCUMENTED_ROUTES } from "../../src/common/http/pending-operations";
 import { APP_DIR } from "../../src/config";
+import { edgeHeaders } from "../helpers/api-env";
 import { createTestApp, type TestApp } from "../support/create-test-app";
 
 /** One route of a controller method, with the path written as in the document (`/v1/bookings/{bookingId}`). */
@@ -259,19 +260,20 @@ const DOCUMENT_OPERATIONS: readonly DocumentOperation[] = otaOperations.map((ope
 /** A concrete URL of a path template. */
 const concrete = (path: string): string => path.replace(/\{[^}]+\}/g, "x1");
 
+/** A request as the hosted storefront sends it: with the edge credential, which the caller guard accepts (OBE-011). */
 function send(server: TestApp["server"], method: string, url: string): request.Test {
   const agent = request(server);
   switch (method) {
     case "get":
-      return agent.get(url);
+      return agent.get(url).set(edgeHeaders());
     case "post":
-      return agent.post(url);
+      return agent.post(url).set(edgeHeaders());
     case "put":
-      return agent.put(url);
+      return agent.put(url).set(edgeHeaders());
     case "patch":
-      return agent.patch(url);
+      return agent.patch(url).set(edgeHeaders());
     case "delete":
-      return agent.delete(url);
+      return agent.delete(url).set(edgeHeaders());
     default:
       throw new Error(`no request helper for ${method}`);
   }
@@ -417,7 +419,7 @@ describe("route parity", () => {
     }
     const probe = await createTestApp({ controllers: [EarlyController] });
     try {
-      const hidden = await request(probe.server).get("/v1/console/bookings/by-record-locator");
+      const hidden = await send(probe.server, "get", "/v1/console/bookings/by-record-locator");
 
       expect(hidden.body).toEqual({ answeredBy: "consoleGetBooking" });
       expect(shadowedRoutes(registeredRoutes(probe.app))).toEqual([
