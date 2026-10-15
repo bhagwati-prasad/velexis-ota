@@ -1,0 +1,43 @@
+{
+  "$comment": "Reviewed route-table values that the OpenAPI document does not carry (OADR-0016 points 2 and 6, ota/sdk/README.md §5.3, task SDK-002). scripts/generate-operations.mjs applies them to src/internal/operations.js. Keys are x-sdk-method names. timeoutMs replaces the client's default timeout (30 s) for the operation; retry can only be made stricter (\"never\"). Every entry needs a reason. An entry for an operation that is not in the document yet names the specTask that adds it, and applies by itself once that task regenerates the table.",
+  "operations": {
+    "flights.search": {
+      "timeoutMs": 60000,
+      "reason": "Amadeus Flight Offers Search plus storing every offer with its selling price; long searches take tens of seconds."
+    },
+    "flights.upsell": {
+      "timeoutMs": 60000,
+      "reason": "Amadeus Branded Fares Upsell plus storing the new offers."
+    },
+    "flights.price": {
+      "timeoutMs": 60000,
+      "reason": "Amadeus Flight Offers Price with the requested extras."
+    },
+    "checkout.complete": {
+      "timeoutMs": 90000,
+      "reason": "Amadeus order creation plus issuance in one call; retried only with the same Idempotency-Key."
+    },
+    "checkout.completeWithAirlineCard": {
+      "timeoutMs": 90000,
+      "retry": "never",
+      "reason": "Amadeus order creation plus issuance; the card is in the body, so the call is never retried (OADR-0017).",
+      "specTask": "OBE-029"
+    },
+    "console.bookings.issue": {
+      "timeoutMs": 60000,
+      "reason": "Amadeus ticket issuance of a staff action."
+    },
+    "console.bookings.cancel": {
+      "timeoutMs": 60000,
+      "reason": "Amadeus order cancellation plus the refund of a staff action."
+    },
+    "console.bookings.import": {
+      "timeoutMs": 60000,
+      "reason": "Amadeus order retrieval plus storing the imported booking."
+    },
+    "console.bookings.retrieve": {
+      "timeoutMs": 60000,
+      "reason": "Live Amadeus order retrieval, optionally with fare rules."
+    }
+  }
+}

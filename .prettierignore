@@ -13,6 +13,7 @@ docs/*.html
 packages/api-types/src/generated/
 packages/db/src/generated/
 packages/errors/src/generated/
+ota/sdk/src/internal/operations.js
 
 # OpenAPI documents are formatted by their own tooling (Redocly); never reflow them.
 **/openapi/

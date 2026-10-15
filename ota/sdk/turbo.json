@@ -3,7 +3,15 @@
   "extends": ["//"],
   "tasks": {
     "generate": {
-      "outputs": []
+      "outputs": ["src/internal/operations.js"]
+    },
+    "test": {
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "!.env*",
+        "$TURBO_ROOT$/ota/backend/openapi/**",
+        "$TURBO_ROOT$/docs/velexis-sdk/openapi/**"
+      ]
     }
   }
 }

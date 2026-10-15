@@ -437,6 +437,17 @@ jobs:
           git diff --exit-code -- packages/api-types packages/errors packages/db/src/generated \
             || { echo "::error::Generated files are stale. Run pnpm contracts:generate / pnpm db:codegen and commit."; exit 1; }
 
+      - name: SDK route table is up to date
+        # SDK-002: ota/sdk/src/internal/operations.js is generated from the OTA OpenAPI document and
+        # ota/sdk/scripts/operation-overrides.json (OADR-0016 point 2); a stale or missing file fails here.
+        run: |
+          pnpm --filter @velexis/ota-sdk generate
+          if [ -n "$(git status --porcelain -- ota/sdk/src/internal/operations.js)" ]; then
+            git diff -- ota/sdk/src/internal/operations.js
+            echo "::error::The SDK route table is stale. Run pnpm --filter @velexis/ota-sdk generate and commit."
+            exit 1
+          fi
+
       - name: Integration tests
         run: pnpm test:int
 

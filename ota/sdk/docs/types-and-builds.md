@@ -97,20 +97,55 @@ The contract files are never edited. A new operation is added to the OpenAPI doc
 
 ## 5. The generated route table
 
-`scripts/generate-operations.mjs` reads the working OpenAPI document and writes `src/internal/operations.js`, a frozen object keyed by `x-sdk-method` (dots replaced by underscores):
+`scripts/generate-operations.mjs` (`pnpm --filter @velexis/ota-sdk generate`, also part of `pnpm contracts:generate`) reads the working OpenAPI document and writes `src/internal/operations.js`, a frozen object keyed by `x-sdk-method` (dots replaced by underscores), sorted by key, with one entry per operation that has an `x-sdk-method` and is neither `x-internal` nor `x-sdk-exclude`:
 
 ```js
-export const op = Object.freeze({
-  flights_search: { method: "POST", path: "/v1/flights/searches", path_: [], query: [], headers: {},
-                    idempotency: "optional", retry: "key", timeout: 60000, page: false },
-  checkout_completeWithAirlineCard: { method: "POST", path: "/v1/checkouts/{checkoutId}/airline-card-completion",
-                    path_: ["checkoutId"], query: [], headers: {}, idempotency: "required", retry: "never",
-                    timeout: 90000, page: false },
+export const op = /* @__PURE__ */ freeze({
+  /** `checkout.complete` */
+  checkout_complete: {
+    method: "POST",
+    path: "/v1/checkouts/{checkoutId}/complete",
+    pathParams: ["checkoutId"],
+    queryParams: [],
+    headerParams: {},
+    idempotency: "required",
+    retry: "idempotent",
+    timeoutMs: 90000,
+    environment: false,
+    body: "json",
+  },
+  /** `console.bookings.issue` */
+  console_bookings_issue: {
+    method: "POST",
+    path: "/v1/console/bookings/{bookingId}/issuance",
+    pathParams: ["bookingId"],
+    queryParams: [],
+    headerParams: { ifMatch: "If-Match" },
+    idempotency: "required",
+    retry: "idempotent",
+    timeoutMs: 60000,
+    environment: true,
+    body: "json",
+  },
   // …
 });
 ```
 
-Values the document does not carry (timeouts above the default, `retry: "never"`) come from a small override list in the generator, reviewed like code. CI regenerates the file and fails if it differs from the committed one, as for the other generated contract types.
+| Field | From the document | Meaning for `core.call` |
+|---|---|---|
+| `method`, `path` | The operation and its path template | `{name}` placeholders are filled from `pathParams` |
+| `pathParams` | `in: path` parameters, path-item ones included, in template order | Filled into the template, URI-encoded |
+| `queryParams` | `in: query` parameters | Query string; arrays comma-separated (the generator refuses an array without `explode: false`, an object or a style other than `form`); `undefined` dropped |
+| `headerParams` | `If-Match` | `params.ifMatch` is sent as `If-Match`. Every other header the document declares is set by the client: `Accept-Language` and `X-Currency` from `locale` and `currency`, `X-CSRF-Token` in cookie mode, `X-Velexis-Host` and `X-Velexis-End-User-*` from `host` and `endUser`, `X-Velexis-Scope` and `If-None-Match` from `RequestOptions.headers`. An unknown header parameter fails the generator. |
+| `idempotency` | The `Idempotency-Key` parameter: `none`, `optional` or `required` | One key per call, reused across its retries; `RequestOptions.idempotencyKey` overrides it |
+| `retry` | `safe` for GET; `idempotent` for PUT, DELETE, an `Idempotency-Key` or `x-idempotent-by-design`; else `never` | Only `safe` and `idempotent` are retried (README §5.3) |
+| `timeoutMs` | `null` (the client's `timeoutMs`), or the reviewed value | 60 s and 90 s for the long operations below |
+| `environment` | Whether the operation declares `X-Velexis-Environment` (every console operation and `flights.availability`) | The client's `environment` option is sent there only |
+| `body` | The request body's media type: `json`, `multipart` (`multipart/form-data`) or `null` | How the remaining params are sent |
+
+Values the document does not carry come from `scripts/operation-overrides.json`, reviewed like code: 60 s for `flights.search`, `flights.upsell`, `flights.price`, `console.bookings.issue`, `.cancel`, `.import` and `.retrieve`; 90 s for `checkout.complete`; 90 s and `retry: "never"` for `checkout.completeWithAirlineCard`. Every override gives its `reason`; `retry` can only be made stricter (a `POST` that is safe to repeat says so in the document with `x-idempotent-by-design`); an override for an operation that is not in the document yet names the `specTask` that adds it (`OBE-029` for `checkout.completeWithAirlineCard`) and applies by itself once that task regenerates the table, and any other unknown name fails as a typo.
+
+The generator exits 1 and writes nothing on a duplicated `x-sdk-method`, an operation without one that is neither `x-internal` nor `x-sdk-exclude`, a path template that does not match its path parameters (including a repeated placeholder), a request body that does not have exactly one media type, `application/json` or `multipart/form-data`, and a **name collision**: one name used twice among the path, query and header params, or by one of them and a top-level property of the request body (found through `$ref`, `allOf`, `oneOf` and `anyOf`). Such an operation is renamed in the document instead of leaving `core.call` to guess. The output is deterministic, committed, and CI regenerates it and fails when it differs from the committed file (the "SDK route table is up to date" step), as for the other generated contract types; `test/unit/operations.test.js` checks the table against the document and a fresh run.
 
 A namespace method is then one line, and its JSDoc carries the types:
 
@@ -135,7 +170,7 @@ export function createFlightsApi(core) {
 }
 ```
 
-`core.call` splits `params` by the table: names in `path_` fill the path template (URI-encoded), names in `query` become query parameters, `ifMatch` becomes `If-Match`, and everything else is the JSON body. The generator fails on a name collision between a path or query parameter and a body field, so such an operation gets an explicit mapping instead of a silent guess.
+`core.call` splits `params` by the table: names in `pathParams` fill the path template (URI-encoded), names in `queryParams` become query parameters, `ifMatch` becomes `If-Match`, and everything else is the body (`body`). Because the generator refuses name collisions, this split never has to guess.
 
 ## 6. Builds
 

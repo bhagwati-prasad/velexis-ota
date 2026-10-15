@@ -11,7 +11,7 @@
     "./package.json": "./package.json"
   },
   "scripts": {
-    "generate": "echo 'ota-sdk: no route table yet; SDK-002 adds scripts/generate-operations.mjs'",
+    "generate": "node scripts/generate-operations.mjs",
     "typecheck": "tsc -p tsconfig.json",
     "build": "tsc -p tsconfig.build.json",
     "lint": "eslint .",
@@ -23,6 +23,7 @@
     "esbuild": "0.25.12",
     "happy-dom": "17.6.3",
     "typescript": "5.6.3",
-    "vitest": "3.2.7"
+    "vitest": "3.2.7",
+    "yaml": "2.9.1"
   }
 }

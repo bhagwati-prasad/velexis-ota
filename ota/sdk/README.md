@@ -40,7 +40,7 @@ ota/sdk/
   tsconfig.json            checkJs project (src/), noEmit
   tsconfig.build.json      declaration-only emit to dist/types/
   vitest.config.js         Node by default; cookie-mode tests opt into happy-dom; unit + contract tests
-  turbo.json               the outputs of `generate` (none until SDK-002 writes the route table)
+  turbo.json               the output of `generate` (the route table) and the OpenAPI inputs of `test`
   CHANGELOG.md             kept by hand (§9)
   src/
     index.js               public entry: createVelexisClient, VERSION, re-exports        (mirrors index.d.ts)
@@ -70,6 +70,7 @@ ota/sdk/
       ids.js               UUID v4 for idempotency keys
   scripts/
     generate-operations.mjs  OpenAPI -> src/internal/operations.js (+ contract assertion list)
+    operation-overrides.json reviewed timeouts and retry classes the document does not carry
     build.mjs                esbuild ESM + IIFE, tsc declarations, api-types copy for publication
     check-size.mjs           gzip budget
   test/
@@ -182,7 +183,7 @@ The additions are specified in [`../docs/api-changes.md`](../docs/api-changes.md
 | Concern | Rule |
 |---|---|
 | Idempotency keys | Operations that declare `Idempotency-Key` get one per call (UUID v4), reused across that call's retries; `options.idempotencyKey` overrides it. Callers pass a **stable** key when a user action may be repeated, for example `complete-<checkoutId>-<paymentId>` for `checkout.complete` ([B3 §2.7](../../docs/velexis-sdk/sdk/docs/B3.md)). |
-| Retries | At most `maxRetries` (2) for `GET`, `PUT`, `DELETE` and for any request carrying an `Idempotency-Key`, on 429, 503, 504 and network errors. Exponential back-off with jitter (0.5 s, 1 s, capped at 8 s); `Retry-After` is honoured, and a `Retry-After` above 30 s throws `RateLimitError` at once. A client-side timeout is not retried. |
+| Retries | At most `maxRetries` (2) for `GET`, `PUT`, `DELETE`, for any request carrying an `Idempotency-Key` and for a `POST` the document marks `x-idempotent-by-design` (the table's `retry` is `safe` or `idempotent`; a `PATCH` without a key is not retried), on 429, 503, 504 and network errors. Exponential back-off with jitter (0.5 s, 1 s, capped at 8 s); `Retry-After` is honoured, and a `Retry-After` above 30 s throws `RateLimitError` at once. A client-side timeout is not retried. |
 | Never retried | `checkout.completeWithAirlineCard` (`retry: "never"` in the table; the card is in the body) ([OADR-0017](../docs/adr/0017-airline-card-form-isolation.md)). |
 | Timeouts | `timeoutMs` (30 s) through `AbortController`, linked to `options.signal`. The table gives 60 s to `flights.search`, `flights.upsell`, `flights.price`, `console.bookings.issue`, `.cancel`, `.import`, `.retrieve`, and 90 s to `checkout.complete` and `checkout.completeWithAirlineCard` (Amadeus order creation plus issuance). |
 | Query encoding | Arrays are sent comma-separated, as the contract says; `undefined` values are dropped. |
@@ -226,7 +227,7 @@ The contract files under `docs/velexis-sdk/sdk/src/` are never edited; additions
 | Level | Where | Tool | What |
 |---|---|---|---|
 | Unit | `test/unit/*.test.js` | Vitest 3 with a fake `fetch` (`test/helpers/fake-fetch.js`), fake timers, `happy-dom` for cookie mode | Header building per mode, CSRF copy and re-fetch, refresh single flight, retry and back-off rules, `Retry-After`, idempotency key reuse, timeouts and abort, error mapping table, pagination, multipart upload, option validation (`TypeError` cases), `toJSON` without secrets |
-| Route table | `test/unit/operations.test.js` | Vitest | For every entry of `operations.js`, a call with sample parameters hits the right method, path, query, headers and body |
+| Route table | `test/unit/operations.test.js`, then the namespace tests | Vitest | Every entry of `operations.js` matches the working document and the reviewed overrides, a sample per namespace, a fresh generator run changes nothing, and the generator refuses duplicated methods and param-name collisions; from SDK-005 the namespace tests call each method with sample parameters and check method, path, query, headers and body |
 | Contract | `test/contract/` | `tsc`, Vitest | §6: type assertions, approved deviations, runtime parity with the OpenAPI document, `VERSION` equals `package.json` |
 | Smoke | `test/smoke/*.smoke.test.js` | Vitest against `OTA_API_URL` | One call per namespace in token and server mode against the local OTA backend wired to the Amadeus stub, with the `dev:seed` test keys ([`../backend/README.md`](../backend/README.md)); nightly, not on every PR |
 | End to end | `tools/e2e/specs/storefront/` | Playwright | Cookie mode through the real storefront journeys ([storefront testing](../frontend/README.md#13-testing)) |
@@ -235,7 +236,7 @@ The contract files under `docs/velexis-sdk/sdk/src/` are never edited; additions
 - **Fake fetch** (`test/helpers/fake-fetch.js`): `createFakeFetch(answers)` returns `{ fetch, requests, enqueue, remaining, lastRequest }`; tests pass `fake.fetch` as the client's `fetch` option. Answers are used in call order: a canned `{ status, headers, body, delayMs, error }` (an object body is sent as JSON), a ready `Response`, or a function of the recorded request. Every call is recorded with `method`, `url`, `path`, `searchParams`, `headers` (lower-case names), `body`, `json` (the body parsed when it is JSON), `signal` and `init`. `delayMs` runs on `setTimeout`, so fake timers drive it, and `Infinity` waits for an abort; an aborted signal rejects with its reason, as `fetch` does. `errorResponse(status, code, extra)` builds the API's error envelope with `X-Request-Id`, and `networkError()` a failed `fetch`. A call with no answer left rejects with the request named, so a test cannot pass on a missing answer. It behaves the same in Node and in happy-dom, whose `Headers` keep the caller's name case (both are tested).
 - Tests never use the real network or sleep; they follow [ADR-0015](../../docs/mvp/adr/0015-testing-strategy.md) and [conventions §10](../../docs/mvp/conventions.md#10-testing).
 
-Commands (`pnpm --filter @velexis/ota-sdk <script>`): `generate` (route table and assertions from `ota/backend/openapi/`; CI fails on a diff), `typecheck`, `test` (unit + contract), `test:smoke`, `build` (bundles, declarations, size check), `lint`, `clean`. Until SDK-002 `generate` only prints a note, until SDK-007 `build` emits only the declarations, and SDK-014 adds `test:smoke`. `typecheck` and `build` read the types of the built `@velexis/api-types`: Turborepo builds it first; for a single package run `pnpm --filter @velexis/api-types build` once.
+Commands (`pnpm --filter @velexis/ota-sdk <script>`): `generate` (route table and assertions from `ota/backend/openapi/`; CI fails on a diff), `typecheck`, `test` (unit + contract), `test:smoke`, `build` (bundles, declarations, size check), `lint`, `clean`. Until SDK-007 `build` emits only the declarations, and SDK-014 adds `test:smoke`. `typecheck` and `build` read the types of the built `@velexis/api-types`: Turborepo builds it first; for a single package run `pnpm --filter @velexis/api-types build` once.
 
 ## 9. Versioning, publishing and what is deferred
 

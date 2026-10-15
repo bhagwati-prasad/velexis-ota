@@ -614,7 +614,8 @@ The OTA backend gets its contract extensions, request pipeline, tenancy, Amadeus
   - p95 of `flights.search` excluding the stub delay is below 500 ms at 10 concurrent visitors, or a follow-up task is added to this plan.
 - **Verify:** `node ota/backend/test/load/search-load.mjs --visitors 10 --searches 200`
 
-### SDK-002 · Generate the route table from the OpenAPI document
+### SDK-002 · Generate the route table from the OpenAPI document ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-sdk
 - **Milestone:** M2
 - **Depends on:** SDK-001, OBE-009
