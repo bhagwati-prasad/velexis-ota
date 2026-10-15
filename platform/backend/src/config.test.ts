@@ -2,7 +2,9 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseEnv } from "node:util";
 import { ConfigError } from "@velexis/config";
-import { describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
+import { createTestJwtKeyFile, ed25519PrivateKeyPem, writeTestKeyFile } from "../test/support/jwt-key";
+import { FEATURE_VARIABLES, FEATURES } from "./common/features";
 import {
   APP_DIR,
   createProcessLogger,
@@ -15,7 +17,18 @@ import {
 
 const REPO_ROOT = join(APP_DIR, "..", "..");
 
-/** The development values of platform/backend/.env.example (dummy values only). */
+/**
+ * The JWT signing key of the configurations below: a fresh Ed25519 key of mode 0600 in a temporary folder, in place
+ * of the `.local/keys/platform-jwt-ed25519.pem` that `pnpm dev:keys` creates (JWT_PRIVATE_KEY_FILE must name an
+ * existing key file).
+ */
+const jwtKey = createTestJwtKeyFile();
+
+afterAll(() => {
+  jwtKey.remove();
+});
+
+/** The development values of platform/backend/.env.example (dummy values only), with the key file above. */
 const DEVELOPMENT = {
   APP_ENV: "development",
   LOG_LEVEL: "debug",
@@ -25,6 +38,7 @@ const DEVELOPMENT = {
   DATABASE_URL: "postgres://velexis_platform_app:dev_platform@127.0.0.1:5432/velexis",
   REDIS_URL: "redis://:dev_redis@127.0.0.1:6379/0",
   PLATFORM_BFF_KEY: "dev_bff_key_change_me_0123456789abcdef",
+  JWT_PRIVATE_KEY_FILE: jwtKey.path,
 } as const;
 
 /** The variables without a default: the minimum a process needs. */
@@ -33,7 +47,12 @@ const REQUIRED = {
   DATABASE_URL: DEVELOPMENT.DATABASE_URL,
   REDIS_URL: DEVELOPMENT.REDIS_URL,
   PLATFORM_BFF_KEY: DEVELOPMENT.PLATFORM_BFF_KEY,
+  JWT_PRIVATE_KEY_FILE: DEVELOPMENT.JWT_PRIVATE_KEY_FILE,
 } as const;
+
+/** Where `pnpm dev:keys` puts the development key, and where provision-vm.sh puts the key on the VM. */
+const DEV_JWT_KEY_FILE = "./.local/keys/platform-jwt-ed25519.pem";
+const VM_JWT_KEY_FILE = "/etc/velexis/keys/platform/platform-jwt-ed25519.pem";
 
 /** What provision-vm.sh puts in place of @@PLATFORM_BFF_KEY@@ on the VM: 32 random bytes as hex (dummy here). */
 const GENERATED_BFF_KEY = "0123456789abcdef".repeat(4);
@@ -92,6 +111,14 @@ describe("parseConfig", () => {
       DATABASE_URL: DEVELOPMENT.DATABASE_URL,
       REDIS_URL: DEVELOPMENT.REDIS_URL,
       PLATFORM_BFF_KEY: DEVELOPMENT.PLATFORM_BFF_KEY,
+      JWT_PRIVATE_KEY_FILE: jwtKey.path,
+      MAX_TENANTS_PER_ACCOUNT: 3,
+      FEATURE_STRIPE_BILLING: false,
+      FEATURE_OWN_STRIPE: false,
+      FEATURE_SETTLEMENTS: false,
+      FEATURE_OWN_AMADEUS: false,
+      FEATURE_CUSTOM_DOMAINS: false,
+      FEATURE_LIVE_SWITCH: false,
     });
     expect(Object.isFrozen(config)).toBe(true);
     expect(Object.isFrozen(config.TRUST_PROXY)).toBe(true);
@@ -106,6 +133,9 @@ describe("parseConfig", () => {
       DATABASE_URL: "mysql://user:secret-value-4@127.0.0.1/velexis",
       REDIS_URL: "http://:secret-value-5@127.0.0.1:6379",
       PLATFORM_BFF_KEY: "secret-value-6",
+      JWT_PRIVATE_KEY_FILE: "/nowhere/secret-value-7.pem",
+      MAX_TENANTS_PER_ACCOUNT: "many-value-8",
+      FEATURE_CUSTOM_DOMAINS: "maybe-value-9",
     });
 
     expect(error.problems.map((problem) => problem.variable)).toEqual([
@@ -116,6 +146,9 @@ describe("parseConfig", () => {
       "DATABASE_URL",
       "REDIS_URL",
       "PLATFORM_BFF_KEY",
+      "JWT_PRIVATE_KEY_FILE",
+      "MAX_TENANTS_PER_ACCOUNT",
+      "FEATURE_CUSTOM_DOMAINS",
     ]);
     for (const value of [
       "value-1",
@@ -125,6 +158,9 @@ describe("parseConfig", () => {
       "secret-value-4",
       "secret-value-5",
       "secret-value-6",
+      "secret-value-7",
+      "value-8",
+      "value-9",
     ]) {
       expect(error.message).not.toContain(value);
     }
@@ -157,28 +193,70 @@ describe("parseConfig", () => {
       "DATABASE_URL",
       "REDIS_URL",
       "PLATFORM_BFF_KEY",
+      "JWT_PRIVATE_KEY_FILE",
       "TRUST_PROXY",
     ]);
   });
 
-  it("accepts the app's .env.example", () => {
-    const config = parseConfig(readEnvFile(join(APP_DIR, ".env.example")));
+  it("accepts the app's .env.example, with the key file pnpm dev:keys creates", () => {
+    const example = readEnvFile(join(APP_DIR, ".env.example"));
+    const config = parseConfig({ ...example, JWT_PRIVATE_KEY_FILE: jwtKey.path });
 
+    expect(example["JWT_PRIVATE_KEY_FILE"]).toBe(DEV_JWT_KEY_FILE);
     expect(config.APP_ENV).toBe("development");
     expect(config.PORT).toBe(3100);
     expect(config.HEALTH_PORT).toBe(3101);
+    expect(config.MAX_TENANTS_PER_ACCOUNT).toBe(3);
+    for (const feature of FEATURES) {
+      expect(config[FEATURE_VARIABLES[feature]]).toBe(false);
+    }
   });
 
-  it("accepts the VM template with the ports of the systemd units and the generated key", () => {
+  it("accepts the VM template with the ports of the systemd units, the generated key and the key file", () => {
     const template = readEnvFile(join(REPO_ROOT, "deploy/env/platform-backend.env.example"));
-    const api = parseConfig({ ...template, PORT: "3100", PLATFORM_BFF_KEY: GENERATED_BFF_KEY });
-    const worker = parseConfig({ ...template, HEALTH_PORT: "3101", PLATFORM_BFF_KEY: GENERATED_BFF_KEY });
+    const vm = { ...template, PLATFORM_BFF_KEY: GENERATED_BFF_KEY, JWT_PRIVATE_KEY_FILE: jwtKey.path };
+    const api = parseConfig({ ...vm, PORT: "3100" });
+    const worker = parseConfig({ ...vm, HEALTH_PORT: "3101" });
 
     expect(template.PLATFORM_BFF_KEY).toBe("@@PLATFORM_BFF_KEY@@");
+    expect(template.JWT_PRIVATE_KEY_FILE).toBe(VM_JWT_KEY_FILE);
     expect(api.APP_ENV).toBe("production");
     expect(api.TRUST_PROXY).toEqual(["loopback"]);
     expect(api.PLATFORM_BFF_KEY).toBe(GENERATED_BFF_KEY);
+    expect(api.MAX_TENANTS_PER_ACCOUNT).toBe(3);
+    for (const feature of FEATURES) {
+      expect(api[FEATURE_VARIABLES[feature]]).toBe(false);
+    }
     expect(worker.HEALTH_PORT).toBe(3101);
+  });
+
+  it("declares JWT_PRIVATE_KEY_FILE, TRUST_PROXY, MAX_TENANTS_PER_ACCOUNT and the switches, switches off, in every env template", () => {
+    const variables = [
+      "JWT_PRIVATE_KEY_FILE",
+      "TRUST_PROXY",
+      "MAX_TENANTS_PER_ACCOUNT",
+      ...Object.values(FEATURE_VARIABLES),
+    ];
+    const files = [
+      ".env.example",
+      "platform/backend/.env.example",
+      "deploy/env/platform-backend.env.example",
+    ];
+
+    for (const file of files) {
+      const values = readEnvFile(join(REPO_ROOT, file));
+      expect(
+        variables.filter((variable) => values[variable] === undefined),
+        file,
+      ).toEqual([]);
+      expect(values["MAX_TENANTS_PER_ACCOUNT"], file).toBe("3");
+      expect(values["TRUST_PROXY"], file).toBe("loopback");
+      for (const variable of Object.values(FEATURE_VARIABLES)) {
+        expect(values[variable], `${file} ${variable}`).toBe("false");
+      }
+    }
+    // The worker's overlay holds only comments (deploy.test.sh): the API and the worker see the same switches.
+    expect(readEnvFile(join(REPO_ROOT, "deploy/env/platform-worker.env.example"))).toEqual({});
   });
 
   it("declares only variables of the configuration matrix that the processes read", () => {
@@ -191,7 +269,56 @@ describe("parseConfig", () => {
       "DATABASE_URL",
       "REDIS_URL",
       "PLATFORM_BFF_KEY",
+      "JWT_PRIVATE_KEY_FILE",
+      "MAX_TENANTS_PER_ACCOUNT",
+      ...Object.values(FEATURE_VARIABLES),
     ]);
+  });
+
+  it("requires JWT_PRIVATE_KEY_FILE and refuses a missing file or one that others may read, without its path", () => {
+    const readable = writeTestKeyFile(ed25519PrivateKeyPem(), 0o644);
+    try {
+      expect(configError({ ...DEVELOPMENT, JWT_PRIVATE_KEY_FILE: undefined }).problems).toEqual([
+        { variable: "JWT_PRIVATE_KEY_FILE", reason: "is required but missing" },
+      ]);
+      for (const path of [readable.path, join(readable.path, "..", "missing.pem")]) {
+        const error = configError({ ...DEVELOPMENT, JWT_PRIVATE_KEY_FILE: path });
+
+        expect(error.problems.map((problem) => problem.variable)).toEqual(["JWT_PRIVATE_KEY_FILE"]);
+        expect(error.message).not.toContain(path);
+        expect(error.message).not.toContain("PRIVATE KEY");
+      }
+    } finally {
+      readable.remove();
+    }
+  });
+
+  it("reads the six FEATURE_* switches (default false) and MAX_TENANTS_PER_ACCOUNT (default 3)", () => {
+    const on = parseConfig({
+      ...REQUIRED,
+      FEATURE_STRIPE_BILLING: "true",
+      FEATURE_OWN_STRIPE: "1",
+      FEATURE_SETTLEMENTS: "false",
+      FEATURE_OWN_AMADEUS: "0",
+      FEATURE_CUSTOM_DOMAINS: "",
+      FEATURE_LIVE_SWITCH: "true",
+      MAX_TENANTS_PER_ACCOUNT: "5",
+    });
+
+    expect(on).toMatchObject({
+      FEATURE_STRIPE_BILLING: true,
+      FEATURE_OWN_STRIPE: true,
+      FEATURE_SETTLEMENTS: false,
+      FEATURE_OWN_AMADEUS: false,
+      FEATURE_CUSTOM_DOMAINS: false,
+      FEATURE_LIVE_SWITCH: true,
+      MAX_TENANTS_PER_ACCOUNT: 5,
+    });
+    expect(
+      configError({ ...REQUIRED, FEATURE_LIVE_SWITCH: "yes", MAX_TENANTS_PER_ACCOUNT: "0" }).problems.map(
+        (problem) => problem.variable,
+      ),
+    ).toEqual(["MAX_TENANTS_PER_ACCOUNT", "FEATURE_LIVE_SWITCH"]);
   });
 
   it("requires PLATFORM_BFF_KEY (PADR-0019)", () => {

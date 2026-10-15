@@ -470,14 +470,14 @@ Every Node app reads its configuration through `@velexis/config`, which validate
 |---|---|---|---|---|---|---|---|
 | `APP_ENV`, `LOG_LEVEL`, `PORT` | ✓ | ✓ | ✓ | ✓ | ✓ | | `production`, `info`, ports from §3 |
 | `HEALTH_PORT` | worker | | | worker | | | 3101, 4001 |
-| `TRUST_PROXY` | | | | API | | | Express `trust proxy`, default `loopback` (Caddy on the VM); presets, addresses or CIDR ranges only |
+| `TRUST_PROXY` | API | | | API | | | Express `trust proxy`, default `loopback` (Caddy on the VM); presets, addresses or CIDR ranges only |
 | `DATABASE_URL` | ✓ | | | ✓ | | | Role `velexis_platform_app` / `velexis_ota_app` |
 | `DATABASE_MIGRATOR_URL` | deploy only | | | deploy only | | | Role `velexis_migrator` (`migrator.env`, root only; local `pnpm db:migrate`) |
 | `DATABASE_PROVISIONER_URL` | | | | worker | | | Role `velexis_provisioner`: tenant schemas only ([ADR-0004](adr/0004-postgresql-schema-per-tenant.md)) |
 | `REDIS_URL` | ✓ | | | ✓ | | | `redis://:password@127.0.0.1:6379/0` |
 | `MASTER_KEY_DIR`, `MASTER_KEY_CURRENT` | ✓ | | | ✓ | | | The zone's key directory, `local:v1` |
 | `API_KEY_PEPPER_FILE` | ✓ | | | ✓ | | | Same pepper for both backends: identical copies in each zone's key directory ([ADR-0026](adr/0026-system-users-per-trust-zone.md)) |
-| `JWT_PRIVATE_KEY_FILE` | ✓ | | | ✓ | | | Separate Ed25519 key per backend |
+| `JWT_PRIVATE_KEY_FILE` | ✓ | | | ✓ | | | Separate Ed25519 key per backend (PKCS#8 PEM, mode 0400 or 0600); `kid` is its JWK thumbprint. The platform API signs the portal and admin access tokens with it; its worker validates the file too, since both read `platform-backend.env` |
 | `SMTP_URL`, `MAIL_FROM` | ✓ | | | ✓ | | | Mailpit `smtp://127.0.0.1:1025` in development |
 | `PUBLIC_PORTAL_URL` | ✓ | ✓ | ✓ | | ✓ | | `https://platform.example.com` (platform admin: the "enable MFA in the portal" link) |
 | `PUBLIC_PLATFORM_ADMIN_URL` | ✓ | | ✓ | | | | `https://admin.platform.example.com` |
@@ -496,6 +496,8 @@ Every Node app reads its configuration through `@velexis/config`, which validate
 | `STRIPE_WEBHOOK_SECRET_VELEXIS_TEST`, `…_LIVE`, `STRIPE_WEBHOOK_SECRET_CONNECT_TEST`, `…_LIVE` | | | | ✓ | | | Payment webhook endpoints |
 | `AMADEUS_BASE_URL_TEST`, `AMADEUS_BASE_URL_LIVE` | ✓ | | | ✓ | | | Optional override. The platform worker uses it only for OAuth token requests that verify credentials. The stub is `http://127.0.0.1:4900` in development and CI. |
 | `AIRLINE_CARD_ENABLED` | | | | ✓ | | | Global kill switch, `false` by default ([ADR-0011](adr/0011-payments-stripe-and-airline-card.md)) |
+| `MAX_TENANTS_PER_ACCOUNT` | ✓ | | | | | | OTAs that are not `failed` one account may own, default `3` (`422 UNPROCESSABLE`, `details.reason = "tenant_limit"` beyond it) |
+| `FEATURE_STRIPE_BILLING`, `FEATURE_OWN_STRIPE`, `FEATURE_SETTLEMENTS`, `FEATURE_OWN_AMADEUS`, `FEATURE_CUSTOM_DOMAINS`, `FEATURE_LIVE_SWITCH` | ✓ | | | | | | Milestone switches, `false` by default and until M5 ([PADR-0015](../../platform/docs/adr/0015-milestone-feature-switches.md)): an operation with `x-feature` answers `403 FEATURE_DISABLED` while its switch is off, and the worker skips that feature's schedulers. The portal and the admin read them from `GET /v1/me`, never from their own environment |
 | `STORAGE_DRIVER`, `STORAGE_DIR` | reserved | | | ✓ | | | `local`, `/var/lib/velexis/storage`. Not read by the platform in the MVP (CSV exports are streamed). |
 | `DOCUMENT_URL_KEY_FILE` | | | | ✓ | | | Signed document URLs, OTA backend only ([ADR-0010](adr/0010-secrets-envelope-encryption.md)) |
 | `ACME_EMAIL` | | | | | | ✓ | Let's Encrypt account e-mail |

@@ -309,7 +309,8 @@ Common commands: backend `pnpm --filter @velexis/platform-backend test`, `test:i
   - Every template renders with sample data in strict mode.
 - **Verify:** `pnpm --filter @velexis/platform-backend test && pnpm --filter @velexis/platform-backend test:int -- notifications`
 
-### PBE-012 · Add token signing, auth guards and the milestone feature switches
+### PBE-012 · Add token signing, auth guards and the milestone feature switches ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-backend
 - **Milestone:** M1
 - **Depends on:** PBE-008, X-005

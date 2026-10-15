@@ -49,6 +49,12 @@ const TRUST_PROXY_ITEM = /^(?:loopback|linklocal|uniquelocal|[0-9A-Fa-f.:]+(?:\/
 const BFF_KEY = /^[A-Za-z0-9_-]{32,}$/;
 
 /**
+ * The DER length of an Ed25519 private key in PKCS#8 (`openssl genpkey -algorithm ed25519`, `pnpm dev:keys`): the
+ * least JWT_PRIVATE_KEY_FILE may hold. TokenService also checks that the key is Ed25519.
+ */
+export const JWT_PRIVATE_KEY_MIN_BYTES = 48;
+
+/**
  * The schema of every variable the platform backend reads (README §3, configuration matrix in
  * docs/mvp/architecture.md §6). Defaults exist only where they are safe in production (conventions §8).
  */
@@ -75,6 +81,28 @@ export const PLATFORM_BACKEND_CONFIG_SCHEMA = {
    * never logged.
    */
   PLATFORM_BFF_KEY: env.string({ pattern: BFF_KEY }),
+  /**
+   * The Ed25519 key (PKCS#8 PEM) that signs the portal and admin access tokens (platform/docs/architecture.md §3.1,
+   * ADR-0008); `kid` is its JWK thumbprint. The value is the path: the file must exist with mode 0400 or 0600. The
+   * API signs with it; the worker and the CLI validate it too, because the three read `platform-backend.env`.
+   */
+  JWT_PRIVATE_KEY_FILE: env.secretFile({ minBytes: JWT_PRIVATE_KEY_MIN_BYTES, encoding: "pem" }),
+  /**
+   * The OTAs that are not `failed` one account may own (platform/docs/scope.md PF-10 AC4): beyond it createTenant
+   * answers `422 UNPROCESSABLE` with `details.reason = "tenant_limit"`.
+   */
+  MAX_TENANTS_PER_ACCOUNT: env.int({ min: 1, default: 3 }),
+  /**
+   * The milestone switches of PADR-0015 (common/features.ts), all off unless turned on: Stripe Billing, the OTA's
+   * own Stripe, settlements, own Amadeus credentials, custom domains and the live switch. They are read by the API
+   * (`FeatureGuard`, `getMe`) and the worker (its schedulers), so both see the same values.
+   */
+  FEATURE_STRIPE_BILLING: env.bool({ default: false }),
+  FEATURE_OWN_STRIPE: env.bool({ default: false }),
+  FEATURE_SETTLEMENTS: env.bool({ default: false }),
+  FEATURE_OWN_AMADEUS: env.bool({ default: false }),
+  FEATURE_CUSTOM_DOMAINS: env.bool({ default: false }),
+  FEATURE_LIVE_SWITCH: env.bool({ default: false }),
 } as const satisfies ConfigSchema;
 
 export type PlatformBackendConfig = ConfigOf<typeof PLATFORM_BACKEND_CONFIG_SCHEMA>;

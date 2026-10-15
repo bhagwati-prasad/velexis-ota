@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
 import ts from "typescript";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { createTestJwtKeyFile } from "../test/support/jwt-key";
 import { usage, CLI_COMMANDS, EXIT_OK, EXIT_USAGE } from "./cli";
 import { APP_DIR } from "./config";
 import { startApi } from "./main";
@@ -23,11 +24,19 @@ function logSink(): { readonly lines: Record<string, unknown>[]; write(line: str
 /** The development PLATFORM_BFF_KEY of platform/backend/.env.example (a dummy value). */
 const BFF_KEY = "dev_bff_key_change_me_0123456789abcdef";
 
+/** A JWT signing key of mode 0600 in a temporary folder (JWT_PRIVATE_KEY_FILE must name a valid key file). */
+const jwtKey = createTestJwtKeyFile();
+
+afterAll(() => {
+  jwtKey.remove();
+});
+
 /** Everything but DATABASE_URL. */
 const WITHOUT_DATABASE_URL = {
   APP_ENV: "test",
   REDIS_URL: "redis://127.0.0.1:6379/0",
   PLATFORM_BFF_KEY: BFF_KEY,
+  JWT_PRIVATE_KEY_FILE: jwtKey.path,
 } as const;
 
 /** The one line the entry points log when DATABASE_URL is missing. */
@@ -132,6 +141,7 @@ describe("the entry points as processes", () => {
         NODE_ENV: "production",
         REDIS_URL: "redis://127.0.0.1:6379/0",
         PLATFORM_BFF_KEY: BFF_KEY,
+        JWT_PRIVATE_KEY_FILE: jwtKey.path,
       });
 
       expect(result.error).toBeUndefined();

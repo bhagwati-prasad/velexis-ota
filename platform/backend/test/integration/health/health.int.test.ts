@@ -18,11 +18,12 @@ import { defineConfig, env, loadDevEnvFiles } from "@velexis/config";
 import { Redis } from "ioredis";
 import { ClsService } from "nestjs-cls";
 import { InjectPinoLogger, PinoLogger } from "nestjs-pino";
-import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { AppModule } from "../../../src/app.module";
 import { createProcessLogger, PLATFORM_PROCESSES, parseConfig } from "../../../src/config";
 import { API_HOST, createApiApp, startApi } from "../../../src/main";
 import { startWorker, WORKER_HEALTH_HOST, WorkerHealthServer } from "../../../src/worker";
+import { createTestJwtKeyFile } from "../../support/jwt-key";
 
 const API_PORT = 3100;
 const WORKER_PORT = 3101;
@@ -118,9 +119,23 @@ afterEach(async () => {
 /** The development PLATFORM_BFF_KEY of platform/backend/.env.example (a dummy value). */
 const PLATFORM_BFF_KEY = "dev_bff_key_change_me_0123456789abcdef";
 
-/** The environment of a process: the services, APP_ENV=test, and the default ports of the units. */
+/** The JWT signing key of the processes: a fresh key file of mode 0600 in a temporary folder. */
+const jwtKey = createTestJwtKeyFile();
+
+afterAll(() => {
+  jwtKey.remove();
+});
+
+/** The environment of a process: the services, APP_ENV=test, the key file and the default ports of the units. */
 function processEnv(overrides: Record<string, string> = {}): Record<string, string> {
-  return { APP_ENV: "test", DATABASE_URL, REDIS_URL, PLATFORM_BFF_KEY, ...overrides };
+  return {
+    APP_ENV: "test",
+    DATABASE_URL,
+    REDIS_URL,
+    PLATFORM_BFF_KEY,
+    JWT_PRIVATE_KEY_FILE: jwtKey.path,
+    ...overrides,
+  };
 }
 
 async function api(

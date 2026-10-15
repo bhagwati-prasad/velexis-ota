@@ -33,6 +33,7 @@ import { AppModule } from "../../src/app.module";
 import { OpenApiOperation, boundOperationId } from "../../src/common/http/openapi-operation.decorator";
 import { APP_DIR, parseConfig } from "../../src/config";
 import { HealthController } from "../../src/health/health.controller";
+import { createTestJwtKeyFile } from "../support/jwt-key";
 import { PENDING_OPERATIONS, type PendingOperation } from "./pending-operations";
 
 const PLAN = join(APP_DIR, "..", "docs", "plans", "agent-tasks.md");
@@ -170,14 +171,21 @@ function parityProblems(
 
 /** The routes of the API's module graph, built as main.ts builds it (with development values). */
 async function apiRoutes(): Promise<BoundRoute[]> {
-  const config = parseConfig({
-    APP_ENV: "test",
-    DATABASE_URL: "postgres://velexis_platform_app:dev_platform@127.0.0.1:5432/velexis",
-    REDIS_URL: "redis://:dev_redis@127.0.0.1:6379/0",
-    PLATFORM_BFF_KEY: "dev_bff_key_change_me_0123456789abcdef",
-  });
-  const logger = createLogger({ app: "platform-api", env: "test", level: "silent" });
-  return (await controllersOf(AppModule.forRoot(config, logger))).flatMap(routesOf);
+  // The configuration needs a JWT key file that exists; nothing reads it, since nothing is instantiated.
+  const jwtKey = createTestJwtKeyFile();
+  try {
+    const config = parseConfig({
+      APP_ENV: "test",
+      DATABASE_URL: "postgres://velexis_platform_app:dev_platform@127.0.0.1:5432/velexis",
+      REDIS_URL: "redis://:dev_redis@127.0.0.1:6379/0",
+      PLATFORM_BFF_KEY: "dev_bff_key_change_me_0123456789abcdef",
+      JWT_PRIVATE_KEY_FILE: jwtKey.path,
+    });
+    const logger = createLogger({ app: "platform-api", env: "test", level: "silent" });
+    return (await controllersOf(AppModule.forRoot(config, logger))).flatMap(routesOf);
+  } finally {
+    jwtKey.remove();
+  }
 }
 
 /** A test-only controller that binds an operation the document lacks (a cast gets it past the compiler). */
