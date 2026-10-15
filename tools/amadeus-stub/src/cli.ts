@@ -1,7 +1,10 @@
-// cli.js: the Amadeus stub as a process, for local development and end-to-end runs (X-026).
+// cli.js: the Amadeus stub as a process, for local development and end-to-end runs (X-026), and the fixture recorder
+// (X-034, src/record.ts).
 //
 //   pnpm stub:amadeus                         (root; = pnpm --filter @velexis/amadeus-stub run start)
 //   STUB_PORT=4901 node dist/cli.js
+//   pnpm --filter @velexis/amadeus-stub record <operation> --request <file.json> [--scenario <name>]
+//                                             (= node dist/cli.js record ...; see src/record.ts)
 //
 // It listens on 127.0.0.1 only, on STUB_PORT (default 4900), read through @velexis/config after the development env
 // files (root and package `.env.local`). It refuses to start when APP_ENV or NODE_ENV is `production`: the VM never
@@ -11,6 +14,7 @@
 import { resolve } from "node:path";
 import { performance } from "node:perf_hooks";
 import { defineConfig, env, loadDevEnvFiles, type EnvSource } from "@velexis/config";
+import { RECORD_COMMAND, runRecordCli } from "./record";
 import { STUB_SCENARIOS } from "./scenarios";
 import { createStubServer, DEFAULT_HOST, type RecordedRequest, type StubServer } from "./server";
 
@@ -80,8 +84,32 @@ function describeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+function record(args: readonly string[]): void {
+  runRecordCli(args).then(
+    (code) => {
+      process.exitCode = code;
+    },
+    (error: unknown) => {
+      process.stderr.write(`amadeus-stub record: ${error instanceof Error ? error.name : typeof error}\n`);
+      process.exitCode = 1;
+    },
+  );
+}
+
 function main(): void {
   loadDevEnvFiles({ appDir: PACKAGE_DIR });
+  const [command, ...args] = process.argv.slice(2);
+  if (command === RECORD_COMMAND) {
+    record(args);
+    return;
+  }
+  if (command !== undefined) {
+    process.stderr.write(
+      `amadeus-stub: unknown command; run it without arguments, or with ${RECORD_COMMAND}\n`,
+    );
+    process.exitCode = 2;
+    return;
+  }
   // The signal handlers come first, so a SIGINT during start-up still stops the server once it listens.
   let stopRequested = false;
   let running: StubServer | undefined;

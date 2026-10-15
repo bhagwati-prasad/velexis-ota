@@ -2,7 +2,7 @@
   "name": "@velexis/amadeus-stub",
   "version": "0.0.0",
   "private": true,
-  "description": "Amadeus stub server for development and tests (ADR-0015): the OAuth token endpoint and the 12 Amadeus operations on a plain Node http server, served from synthetic or scrubbed fixtures, with scenarios and request validation against docs/amadeus-api. devDependency only (ADR-0022).",
+  "description": "Amadeus stub server for development and tests (ADR-0015): the OAuth token endpoint and the 12 Amadeus operations on a plain Node http server, served from synthetic or scrubbed fixtures, with scenarios and request validation against docs/amadeus-api; records scrubbed fixtures from the Amadeus test environment (record). devDependency only (ADR-0022).",
   "license": "UNLICENSED",
   "type": "commonjs",
   "main": "./dist/index.js",
@@ -26,6 +26,7 @@
     "lint": "eslint .",
     "test": "vitest run",
     "start": "tsc -b && node dist/cli.js",
+    "record": "tsc -b && node dist/cli.js record",
     "clean": "tsc -b --clean"
   },
   "dependencies": {

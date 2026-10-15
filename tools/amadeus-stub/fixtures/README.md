@@ -1,6 +1,6 @@
 # Amadeus stub fixtures
 
-The responses the [Amadeus stub](../README.md) serves. Each fixture is one JSON file per operation and scenario, either written by hand (**synthetic**) or captured once from the Amadeus test environment and scrubbed of personal data (**recorded**, task X-034). They are committed and served as they are: Prettier never rewrites this folder (`.prettierignore`), so a recorded file stays byte for byte what the recorder wrote.
+The responses the [Amadeus stub](../README.md) serves. Each fixture is one JSON file per operation and scenario, either written by hand (**synthetic**) or captured once from the Amadeus test environment with `record` and scrubbed of personal data (**recorded**, task X-034). They are committed and served as they are: Prettier never rewrites this folder (`.prettierignore`), so a recorded file stays byte for byte what the recorder wrote.
 
 ## Layout
 
@@ -10,6 +10,8 @@ fixtures/
                           flight-availabilities (Flight Availabilities Search), flight-create-orders, …
     <scenario>.json       success, sold-out, price-changed, … (the X-Stub-Scenario name, or a variant the handler picks)
 ```
+
+The folder of each API is in `FIXTURE_FOLDERS` (`src/record.ts`) and the [stub README](../README.md#record-a-fixture-from-the-amadeus-test-environment). One exception to the kebab case: Flight Availabilities Search uses `flight-availabilities`, the name OBE-019 gives it.
 
 ## File format
 
@@ -47,7 +49,14 @@ fixtures/
 - **Money stays a decimal string** (`"98.47"`), as Amadeus sends it.
 - **Date-times are local** (`2027-01-15T07:15:00`), as Amadeus sends them; the stub's validator accepts them.
 - A success fixture **matches its operation's response schema** in `docs/amadeus-api/` (`AmadeusSpecs.validateResponse`, tested), apart from documented defects of the specification itself (below).
-- Recording (`pnpm --filter @velexis/amadeus-stub record <operation>`) and the personal-data scan of every committed fixture (`test/fixtures-scan.test.ts`) arrive with task X-034. Until then every fixture is synthetic.
+- **Synthetic values are marked**, so the scan can tell them from real ones: names come from `SYNTHETIC_GIVEN_NAMES` and `SYNTHETIC_FAMILY_NAMES` of `src/scrub.ts` (`ALEX TESTER`), e-mail addresses end in `@example.com`, phone numbers are in a reserved test range (`+44 7700 900nnn`, `+1 nnn 555 01nn`), and document, resident-card, loyalty and ticket numbers and any run of 13 to 19 digits start with `000`. A hand-written fixture follows the same rules.
+
+## Recording, scrubbing and the scan
+
+1. **Record** with your own Amadeus test credentials, never in CI: `pnpm --filter @velexis/amadeus-stub record <operation> --request <file.json> [--scenario <name>]` ([stub README](../README.md#record-a-fixture-from-the-amadeus-test-environment)). Send synthetic travellers in the request.
+2. **Scrub**: `record` passes the response through `scrub` (`src/scrub.ts`), which replaces names, dates of birth (the year stays), document, resident-card and loyalty numbers, e-mail addresses, phone numbers, postal addresses, record locators, flight-order ids, ticket numbers and card data with deterministic synthetic values, also where they repeat in free text, and keeps airports, carriers, fare bases, prices and offer ids ([the table](../README.md#scrubbing-and-the-personal-data-scan)).
+3. **Scan**: `record` writes nothing while `scanForPersonalData` finds anything in the scrubbed file, and `test/fixtures-scan.test.ts` runs the same scan over every `.json` file here in `pnpm test`. It fails on an e-mail address outside `example.com`, a run of 13 to 19 digits without the prefix `000`, a document, resident-card, loyalty or ticket number without it (or a passport number in free text), a phone number outside the reserved test ranges, and a name field with a word that is not a synthetic name. A finding names the file, the JSON pointer and the rule, never the value (a key that holds personal data appears as `<key n>`, its position in its object).
+4. **Review** the file before you commit it, set its `description` if it needs more than the recorder wrote, and add it to the table below. Never edit a recorded value back to a real one; when the scan stops a recording, extend `src/scrub.ts` and its test.
 
 ## Fixtures
 
@@ -66,3 +75,4 @@ fixtures/
 - **Flight Availabilities Search**'s own response example writes `classAvailabilities` and `availabilty`; its schema (and Amadeus) say `availabilityClasses` and `numberOfBookableSeats`, which the fixture follows.
 - **Flight Offers Price and Branded Fares Upsell request schemas** do not declare fields that the offers of Flight Offers Search (`isUpsellOffer`, `brandedFareLabel`) and Branded Fares Upsell (`amenities`) carry, although the client posts those offers back; the stub's unknown-field check knows them in `data.flightOffers` ([`../README.md`](../README.md#request-validation)).
 - **Flight Offers Search** references `#/definitions/LoyaltyProgram` and `#/definitions/commissionValue`, which the document does not define. The validator accepts anything there (`AmadeusSpecs.danglingRefs()`).
+- **Flight Create Orders**: the specification's own `201` example does not match its schema (`co2Emissions[].weight` written as strings, `sliceDiceIndicator: "ABCDEF"`). `record` reports such differences as a count; `test/scrub.test.ts` checks that scrubbing adds none.

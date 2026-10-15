@@ -869,8 +869,8 @@ Related: [`../decisions.md`](../decisions.md) (binding), [`../architecture.md`](
 
 ## M2 Search & price
 
-### X-034 · Add fixture recording and the personal-data scan to the Amadeus stub
-- **Status:** todo
+### X-034 · Add fixture recording and the personal-data scan to the Amadeus stub ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** foundation
 - **Milestone:** M2
 - **Depends on:** X-026

@@ -92,7 +92,20 @@ To start over: `sudo -u postgres dropdb --force velexis` (macOS: `dropdb --force
 - Point the OTA backend at it: `AMADEUS_BASE_URL_TEST=http://127.0.0.1:4900` (already in `.env.example`). The Velexis test Amadeus account in the local database can hold any dummy client id and secret.
 - Choose a scenario per request with the header `X-Stub-Scenario` (`sold-out`, `price-changed`, `ticketing-failed`, `version-conflict`, `server-error`, `timeout`), or with magic values in end-to-end runs (destination `ZZZ` returns no offers).
 - Every request is validated against the Amadeus specification, so a malformed request from our client fails loudly.
-- Recording new fixtures against the real Amadeus test environment (`pnpm --filter @velexis/amadeus-stub record <operation>`, task X-034) uses credentials from your own environment, scrubs names, documents, e-mail addresses and phone numbers, and is **never** run in CI. The stub's fixture scan (`tools/amadeus-stub/test/fixtures-scan.test.ts`) fails on any personal-data pattern left in a committed fixture.
+- **Recording fixtures** from the real Amadeus Enterprise test environment (task X-034; the human step of OBE-027) uses your own test credentials and is **never** run in CI: the command refuses to start when `CI` is set (or `APP_ENV`/`NODE_ENV` is `production`).
+
+  ```bash
+  # In the git-ignored .env.local, or exported by your shell (from your password manager); never in a committed file.
+  AMADEUS_RECORD_CLIENT_ID=...
+  AMADEUS_RECORD_CLIENT_SECRET=...
+  # AMADEUS_RECORD_BASE_URL=https://test.travel.api.amadeus.com   (the default; https only)
+
+  pnpm --filter @velexis/amadeus-stub record quoteAirOffers --request ~/amadeus/price.json
+  pnpm --filter @velexis/amadeus-stub record getFlightOrder --request ~/amadeus/order.json --scenario cancelled
+  ```
+
+  The request file holds `{ "query"?, "pathParams"?, "body"? }`, with synthetic travellers. The command validates it against the specification, gets a token, sends it, scrubs the response (names, dates of birth, document and ticket numbers, e-mail addresses to `@example.com`, phone numbers to reserved test ranges, postal addresses, record locators, card data), scans the result and writes `tools/amadeus-stub/fixtures/<folder>/<scenario>.json`. It never prints the secret, the token or a body, and writes nothing when the scan still finds personal data. Details: [`tools/amadeus-stub/README.md`](../../tools/amadeus-stub/README.md#record-a-fixture-from-the-amadeus-test-environment).
+- **The fixture scan** (`tools/amadeus-stub/test/fixtures-scan.test.ts`, part of `pnpm test`) fails on any personal data left in a committed fixture: an e-mail address outside `example.com`, a run of 13 to 19 digits that does not start with the synthetic prefix `000`, a passport-like document number, a phone number outside the reserved test ranges, or a name that is not in the synthetic name lists ([`fixtures/README.md`](../../tools/amadeus-stub/fixtures/README.md)).
 
 ## 6. Stripe with the Stripe CLI (from M3)
 

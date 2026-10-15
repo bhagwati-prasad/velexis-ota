@@ -3,7 +3,7 @@
 A small Node `http` server (no framework) that stands in for Amadeus Enterprise in development, integration tests and end-to-end runs ([ADR-0015](../../docs/mvp/adr/0015-testing-strategy.md), [ADR-0012](../../docs/mvp/adr/0012-amadeus-account-model.md)). It implements the OAuth token endpoint and routes the 12 Amadeus operations of the 9 specifications in [`docs/amadeus-api/`](../../docs/amadeus-api/), validates every request against its specification, serves synthetic or recorded-and-scrubbed fixtures, and fails on demand through scenarios.
 
 - **Dev only.** It is a `devDependency` of whatever uses it ([ADR-0022](../../docs/mvp/adr/0022-shared-test-support-package.md) item 2; `tools/ci/check-package-json.mjs` enforces it). The VM never runs it ([ADR-0025](../../docs/mvp/adr/0025-roadmap-scheduling-and-tracking.md) item 7): the CLI refuses to start when `APP_ENV` or `NODE_ENV` is `production`.
-- **Tasks.** X-026 built the server, the token endpoint, the route table, validation, the generic scenarios and Flight Offers Search. OBE-019 added the shopping operations (price, upsell, availability), their scenarios `sold-out` and `price-changed`, and the refusal of unknown body fields. OBE-041 adds the order operations (orders, issuance, management, by reference, queue). X-027 added the in-process helper `@velexis/testing/amadeus`; X-034 adds fixture recording and the personal-data scan.
+- **Tasks.** X-026 built the server, the token endpoint, the route table, validation, the generic scenarios and Flight Offers Search. OBE-019 added the shopping operations (price, upsell, availability), their scenarios `sold-out` and `price-changed`, and the refusal of unknown body fields. OBE-041 adds the order operations (orders, issuance, management, by reference, queue). X-027 added the in-process helper `@velexis/testing/amadeus`, X-034 [fixture recording](#record-a-fixture-from-the-amadeus-test-environment) with the [scrubber and the personal-data scan](#scrubbing-and-the-personal-data-scan).
 
 ## Run it
 
@@ -47,6 +47,106 @@ await stub.close();                                         // frees the port, d
 | `onResponse` | none | Called once per request when it is answered or the client went away (the CLI prints its line) |
 
 `requests()` returns the recorded requests, oldest first, at most the last 1000: `method`, `path`, `query`, `headers` (lower-case names; `authorization`, `proxy-authorization` and `cookie` are `[REDACTED]`), `operation` (`oauth2Token`, an operation name, or `undefined` for a 404), `scenario`, `status` (`undefined` while held or after the client went away), `receivedAt` and `durationMs`. Bodies are never recorded, so a client secret, a token or a card number never lands in the log. `clearRequests()` empties it.
+
+## Record a fixture from the Amadeus test environment
+
+`record` captures one response of the real Amadeus Enterprise test environment, scrubs it of personal data and writes it as a fixture ([ADR-0015](../../docs/mvp/adr/0015-testing-strategy.md)). It is a developer's manual step with the developer's own test credentials (OBE-027): **it never runs in CI** and refuses to start when `CI` is set (to any non-empty value: an empty value counts as unset, as for every variable read through `@velexis/config`) and, like the stub, when `APP_ENV` or `NODE_ENV` is `production`.
+
+```bash
+# AMADEUS_RECORD_CLIENT_ID and AMADEUS_RECORD_CLIENT_SECRET: your Amadeus test credentials, in the git-ignored
+# .env.local (root or tools/amadeus-stub) or exported by your shell; never typed on a command line.
+pnpm --filter @velexis/amadeus-stub record quoteAirOffers --request ~/amadeus/price.json
+pnpm --filter @velexis/amadeus-stub record getFlightOrder --request order.json --scenario cancelled
+```
+
+| Variable | Default | What for |
+|---|---|---|
+| `AMADEUS_RECORD_CLIENT_ID` | (required) | The client id of your Amadeus test application |
+| `AMADEUS_RECORD_CLIENT_SECRET` | (required) | Its secret. Sent only in the token request body; never printed |
+| `AMADEUS_RECORD_BASE_URL` | `https://test.travel.api.amadeus.com` | The Amadeus Enterprise test host. `https` only; plain `http` only to `127.0.0.1`/`localhost` (the tests point it at the stub). No user, password, query or fragment |
+
+The variables come from the environment only: your shell, or the root or package `.env.local` (git-ignored), which the CLI loads like every app ([local development §5](../../docs/mvp/local-development.md#5-amadeus-stub)). Never a flag, never the request file, never a committed file. A missing or empty credential stops the command with the variable's name.
+
+**Arguments.**
+
+| Argument | What |
+|---|---|
+| `<operation>` | An operation name of the [route table](#routes) (`searchFlightOffers`, `createFlightOrders`, …), or the fixture folder of an API with a single operation (`flight-create-orders`, `flight-offers-price`) |
+| `--request`, `-r` `<file.json>` | The request, relative to the directory you started `pnpm` in: `{ "query"?: { … }, "pathParams"?: { … }, "body"?: { … } }`. Query values are strings, numbers, booleans or arrays (sent comma-separated) |
+| `--scenario`, `-s` `<name>` | The fixture's name, default `success`; lower-case words joined by hyphens (`sold-out`, `price-changed`) |
+
+```json
+{ "query": { "originLocationCode": "MAD", "destinationLocationCode": "PAR", "departureDate": "2027-01-15", "adults": 1, "max": 5 } }
+```
+
+```json
+{ "pathParams": { "flight-orderId": "eJzTd9f3NjIJdgMADeQCtg" }, "query": { "include": "bags" } }
+```
+
+```json
+{ "body": { "data": { "type": "flight-offers-pricing", "flightOffers": [ … ] } } }
+```
+
+Use synthetic travellers in the requests you send (`ALEX TESTER`, `person1@example.com`, `+44 7700 900123`): the scrubber is the second line of defence, not the first. Keep request files outside the repository, or delete them after recording.
+
+**What it does, in order.** Anything that fails stops it with exit code 1 and writes nothing.
+
+1. Refuses when `CI` is set or in production; checks the arguments (exit code 2 with the usage) and the variables.
+2. Validates the request against the operation's specification in [`docs/amadeus-api/`](../../docs/amadeus-api/), like the stub does, so a malformed request never reaches Amadeus.
+3. Requests a token (`client_credentials` at `/v1/security/oauth2/token`), then sends the request with `Authorization: Bearer`, `application/vnd.amadeus+json` and, for the POST searches, `X-HTTP-Method-Override: GET`. Each call may take 60 s. Neither call follows a redirect, so the secret and the token reach the configured host only, and an `access_token` that is not an RFC 6750 bearer token is refused before it goes into a header.
+4. Refuses a non-2xx answer under the default scenario `success`: record an error response under its own name (`--scenario invalid-data`).
+5. Scrubs the body ([below](#scrubbing-and-the-personal-data-scan)), builds the fixture with its header (`operation`: the folder, `scenario`, `source: "recorded"`, `date`: today in UTC, `scrubbed: true`, a `description` naming the operation and host) and scans the whole file. Any finding stops it: extend `src/scrub.ts` rather than editing the response by hand.
+6. Writes `fixtures/<folder>/<scenario>.json` (2-space JSON, replacing an existing file) and prints the status, the duration, the counts of replaced values per category, the file and, when the body differs from the specification's response schema, how many places differ ([known defects](fixtures/README.md#known-defects-of-the-specifications)).
+
+It prints the operation, the host, the status, durations, counts and file names. It never prints the secret, the token, a header, a request or response body, a value the scan found, or an argument it did not understand. Exit codes: `0` written, `1` refused or failed, `2` usage.
+
+| API (operations) | Fixture folder |
+|---|---|
+| FlightOffersSearch (`getFlightOffers`, `searchFlightOffers`) | `flight-offers-search` |
+| FlightAvailabilitiesSearch (`searchFlightAvailabilities`) | `flight-availabilities` (the name OBE-019 uses) |
+| BrandedFaresUpsell (`upsellAirOffers`) | `branded-fares-upsell` |
+| FlightOffersPrice (`quoteAirOffers`) | `flight-offers-price` |
+| FlightCreateOrders (`createFlightOrders`) | `flight-create-orders` |
+| FlightOrderIssue (`issueFlightOrder`) | `flight-order-issue` |
+| FlightOrderManagement (`getFlightOrder`, `patchFlightOrder`, `cancelFlightOrder`) | `flight-order-management` |
+| GetFlightOrderByRecordLocator (`getFlightOrderByReference`) | `get-flight-order-by-record-locator` |
+| QueueList (`listQueue`) | `queue-list` |
+
+After recording: read the file, list it in the [fixtures table](fixtures/README.md#fixtures), and run `pnpm --filter @velexis/amadeus-stub test`, whose fixture scan covers it from now on.
+
+## Scrubbing and the personal-data scan
+
+`src/scrub.ts` holds both. `scrub(body)` returns a scrubbed copy and the number of replaced values per category; the same input always gives the same output, and a synthetic value is numbered by the order in which its original first appears, so nothing of the original reaches the fixture.
+
+| Personal data (where Amadeus puts it) | Becomes |
+|---|---|
+| Names: `firstName`, `middleName` / `lastName`, `secondLastName`, and the words of `addresseeName` and a card `holder` | A name of `SYNTHETIC_GIVEN_NAMES` (`ALEX`, `BLAKE`, …) / `SYNTHETIC_FAMILY_NAMES` (`TESTER`, `SAMPLE`, …), word by word; titles (`MR`, `MRS`, …) stay. One family keeps one family name |
+| `dateOfBirth` | The same year, `-01-01` (the passenger type depends on the age) |
+| `documents[].number`, `formOfIdentifications[].number` | `000000001`, `000000002`, … |
+| `discountEligibility[].cardNumber` / `certificateNumber`, `loyaltyPrograms[].id` | `00000001Z`, … / `0000000001`, … (valid for their patterns) |
+| `birthPlace`, `issuanceLocation` | `EXAMPLE CITY` |
+| `emailAddress` | `person1@example.com`, … (upper case stays upper case) |
+| `phones[]` (`countryCallingCode` + `number`), `emergencyContact.number` | `44` + `7700900001`, … (Ofcom's drama range); an emergency contact's `countryCode` becomes `GB` |
+| `address` (`lines`, `postalCode`, `cityName`, `stateName`, `postalBox`) | `1 EXAMPLE STREET`, `00000`, `EXAMPLE CITY`, `EXAMPLE STATE`, `BP 1`; `countryCode` stays |
+| `associatedRecords[].reference`, the locator in a Queue List PNR id | `SYN001`, … |
+| A flight-order `id` (base64 of record locator, name and date) | base64url of `SYNTHETIC-ORDER-1`, … |
+| `tickets[].documentNumber` | `000` and zeros with the same separators (`000-0000000001`) |
+| A card's `number`, `expiryDate`, `securityCode` | `XXXXXXXXXXXX0000`, `2099-12`, removed |
+| In every other string: e-mail addresses (also the SSR form `NAME//MAIL.COM`), `+` phone numbers, runs of 13 to 19 digits, passport numbers after `PASSPORT`/`PPT` or in `P/GBR/<number>/`, and any value above (a name in a remark, a record locator or order id in a link) | The same synthetic values |
+
+It keeps what the tests need: airports, carriers, flight and segment numbers, fare bases, booking classes, prices, currencies, offer, segment and traveller ids, dates of travel, offices, genders, document types, expiry dates and countries. A three-letter string equal to a traveller's name (`LIS`) stays a code; in free text the name is replaced. A longer string equal to a name is replaced wherever it stands, because privacy comes first: a traveller called `YOUNG` also changes a `travelerType` `YOUNG`. `record`'s note on schema differences shows such a change; record with synthetic travellers whose names are no Amadeus code.
+
+`scanForPersonalData(value)` checks a whole fixture file, header included, and returns one finding per JSON pointer and rule, never the value (a key that holds personal data appears in the pointer as `<key n>`, its position in its object):
+
+| Rule | Fails on |
+|---|---|
+| `email` | An e-mail address (or SSR form) whose domain is not `example.com` |
+| `digit-run` | A run of 13 to 19 digits (single spaces or hyphens allowed between them) not starting with the synthetic prefix `000`, and any 13 to 19 digit JSON number |
+| `document-number` | A document, resident-card, loyalty or ticket number without the prefix `000`, and a passport number after `PASSPORT`/`PPT` or in an SSR `DOCS` text |
+| `phone` | A phone number (phone objects, emergency contacts, `phone`/`mobile`/`fax` fields, `+` numbers in text) outside the reserved ranges of `RESERVED_TEST_PHONE_RANGES`: UK 07700 900xxx, 020 7946 0xxx and 01632 960xxx (Ofcom, drama), North American 555-0100 to 555-0199 |
+| `name` | A `firstName`, `middleName`, `lastName`, `secondLastName`, `addresseeName` or card `holder` with a word outside the synthetic name lists and titles |
+
+`test/fixtures-scan.test.ts` runs it over every `.json` file under `fixtures/` in `pnpm test`; `record` runs it before it writes.
 
 ## Routes
 
@@ -187,7 +287,7 @@ Codes from 90000 are the stub's own; Amadeus never sends them. API responses are
 
 ## Adding an operation (OBE-041)
 
-1. Add the fixtures under `fixtures/<api-in-kebab-case>/<scenario>.json` with the header of [`fixtures/README.md`](fixtures/README.md), and list the ones read at start in `STUB_FIXTURES`.
+1. Add the fixtures under `fixtures/<api-in-kebab-case>/<scenario>.json` with the header of [`fixtures/README.md`](fixtures/README.md) (written by hand, or [recorded](#record-a-fixture-from-the-amadeus-test-environment)), and list the ones read at start in `STUB_FIXTURES`. The fixture scan must stay green.
 2. Write the handler in `src/handlers/<operation>.ts` as a factory that takes the fixture loader (`(loadFixture: FixtureLoader) => OperationHandler`, so the handler imports only types from `src/routes.ts`), and set it on the operation in `STUB_OPERATIONS` (`src/routes.ts`). It gets the validated query and body, the path parameters and the scenario; authentication, validation and the generic scenarios are already done. Pass `unknownBodyFields` to refuse body fields the specification does not declare, with `alsoKnown` for what the client takes back from other responses.
 3. Add operation-specific scenarios to `STUB_SCENARIOS` (`src/scenarios.ts`), make `applyScenario` continue to the handler for them, and handle them in the handler; error bodies come from `amadeusErrorResponse`.
 4. Test the success fixture against the response schema (`AmadeusSpecs.validateResponse`), a 400 naming a parameter, and each scenario.
@@ -203,10 +303,15 @@ Codes from 90000 are the stub's own; Amadeus never sends them. API responses are
 | `src/handlers/pricing.ts`, `upselling.ts`, `availability.ts` | The Flight Offers Price, Branded Fares Upsell and Flight Availabilities Search handlers (OBE-019) |
 | `src/scenarios.ts` | Scenario names and effects, magic values, the Amadeus error envelope and codes |
 | `src/validate.ts` | `AmadeusSpecs`: loads the specifications, validates requests (and fixtures) with Ajv, refuses unknown body fields where asked |
-| `src/cli.ts` | `pnpm stub:amadeus` |
+| `src/cli.ts` | `pnpm stub:amadeus`, and `record` (`node dist/cli.js record …`) |
+| `src/record.ts` | The `record` command (X-034) |
+| `src/scrub.ts` | `scrub` and `scanForPersonalData`, the synthetic name lists, prefix, domain and phone ranges (X-034) |
 | `fixtures/` | Response fixtures ([`fixtures/README.md`](fixtures/README.md)) |
 | `test/server.test.ts` | The tests of the server, OAuth, validation, the generic scenarios and Flight Offers Search (in-process on free ports; nothing else needs to run) |
 | `test/shopping.test.ts` | The tests of the shopping operations (OBE-019), the same way |
+| `test/record.test.ts` | `record` against the stub and a fake `fetch` |
+| `test/scrub.test.ts` | The scrubber on a recorded-style Flight Create Orders response |
+| `test/fixtures-scan.test.ts` | The personal-data scan of every committed fixture |
 
 ## Commands
 
@@ -216,6 +321,7 @@ pnpm --filter @velexis/amadeus-stub test        # vitest run
 pnpm --filter @velexis/amadeus-stub typecheck   # src and test
 pnpm --filter @velexis/amadeus-stub lint
 pnpm stub:amadeus                               # the root script: build, then node dist/cli.js
+pnpm --filter @velexis/amadeus-stub record <operation> --request <file.json> [--scenario <name>]
 ```
 
-The tests also read files outside this folder: the specifications in `docs/amadeus-api/`, the OTA OpenAPI document (its `x-amadeus` entries) and the root `package.json` (the `stub:amadeus` script). [`turbo.json`](../../turbo.json) lists them as inputs of `@velexis/amadeus-stub#test`, so a change to any of them re-runs the tests instead of replaying a cached pass.
+The tests also read files outside this folder: the specifications in `docs/amadeus-api/` (the scrubber's test starts from Flight Create Orders' documented example), the OTA OpenAPI document (its `x-amadeus` entries) and the root `package.json` (the `stub:amadeus` script). They never call Amadeus: `record` is tested against the stub and a fake `fetch`. [`turbo.json`](../../turbo.json) lists them as inputs of `@velexis/amadeus-stub#test`, so a change to any of them re-runs the tests instead of replaying a cached pass.
