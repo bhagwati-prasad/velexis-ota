@@ -25,6 +25,7 @@ const secret = await decryptValue(row.client_secret_ciphertext, { aad, keys }); 
 | `decryptValue(ciphertext, { aad, keys })` | Returns the plaintext as a `Buffer`. Any KEK the provider has loaded can unwrap, not only the current one. Every failure throws `DecryptionError`. |
 | `rewrapValue(ciphertext, { keys, aad? })` | Re-wraps only the data key under the current KEK and returns `{ ciphertext, kekId }`. The encrypted data is copied byte for byte. A value already under the current KEK comes back unchanged. With `aad`, the value must also authenticate at that place first. |
 | `envelopeKekId(ciphertext)` | Reads the KEK id from an envelope without decrypting it, for checks against `encryption_key_id` and for rotation reports. |
+| `rewrapBatch({ fetch, update, aadFor, keys, batchSize = 500, logger? })` | Moves every row of one row source to the current KEK, page by page, with an optimistic check on each row, and returns `{ rewrapped, skipped, failed, remainingByKekId }`. The shared helper of both `secrets:rewrap` commands (see [KEK rotation](#kek-rotation)). |
 | `aadFor(schema, table, column, rowId)` | Returns `"<schema>.<table>.<column>:<rowId>"`. It refuses identifiers that are not lower-case SQL names, and row ids that are not 1 to 255 printable ASCII characters, so two places can never produce the same string. |
 | `KeyProvider` | The seam for key-encryption keys (KEKs): `currentKekId()`, `wrap(dek)` (returns `{ kekId, wrapped }`) and `unwrap(wrapped, kekId)`. |
 | `LocalFileKeyProvider.fromDir(dir, current)` | The file-based provider (see below). `kekIds()` lists the versions it loaded. |
@@ -65,17 +66,43 @@ The KEKs are kept as Node `KeyObject`s in private fields. `util.inspect`, `JSON.
 
 ## KEK rotation
 
-This is the procedure of ADR-0010 (Rotation). The runbook `docs/mvp/runbooks/master-key-rotation.md` and the shared batch helper `rewrapBatch` come with X-040.
+This is the procedure of ADR-0010 (Rotation). The operator's steps, in order and also after a suspected compromise, are in the runbook [`docs/mvp/runbooks/master-key-rotation.md`](../../docs/mvp/runbooks/master-key-rotation.md).
 
-1. **Add the new key.** Install `master-v2.key` (32 random bytes, base64, `0400`) as an identical copy in both zone folders (`provision-vm.sh --steps keys` with `NEW_MASTER_KEY=v2`, X-040). Set `MASTER_KEY_CURRENT=local:v2` in both backend env files and restart them.
+1. **Add the new key.** Install `master-v2.key` (32 random bytes, base64, `0400`) as an identical copy in both zone folders (`NEW_MASTER_KEY=v2 provision-vm.sh --steps keys`). Set `MASTER_KEY_CURRENT=local:v2` in both backend env files and restart them.
 2. **Both versions decrypt.** `fromDir` loads `master-v1.key` and `master-v2.key`. New values are wrapped with v2, and existing v1 values still decrypt, because `decryptValue` unwraps with the KEK named in each envelope.
-3. **Re-wrap the old data keys with `rewrapValue`.** Only the data keys are re-wrapped; the data is not re-encrypted. Write the returned `ciphertext` and `kekId` together, with an optimistic check on the old ciphertext. Each owner re-wraps its own data:
+3. **Re-wrap the old data keys with `rewrapBatch`**, which calls `rewrapValue` for each value. Only the data keys are re-wrapped; the data is not re-encrypted. Each owner re-wraps its own data:
    - the platform backend's `secrets:rewrap` covers the platform ciphertext columns;
    - the OTA backend's `secrets:rewrap` covers the ciphertext columns of every tenant schema;
    - the Redis caches of Amadeus tokens are flushed (`amadeus:token:*`) instead of re-wrapped.
 
-   Both commands use the shared batch helper of X-040 and report the remaining count per `kekId` (`encryption_key_id`).
+   Both commands report the remaining count per `kekId` (`encryption_key_id`), from `remainingByKekId`.
 4. **Remove the old key** from both folders only when both commands report zero rows under `local:v1`. Then back up `/etc/velexis`. After a suspected compromise, also rotate every credential an attacker could have read ([`deployment-single-vm.md`](../../docs/mvp/deployment-single-vm.md) §7 and §16).
+
+### `rewrapBatch`
+
+```ts
+import { aadFor, rewrapBatch } from "@velexis/crypto";
+
+const result = await rewrapBatch({
+  keys, // the backend's LocalFileKeyProvider, MASTER_KEY_CURRENT = the new KEK
+  // Rows whose encryption_key_id is not the current KEK, after the cursor, in id order (keyset pagination).
+  fetch: ({ currentKekId, afterId, limit }) =>
+    repo.rowsNotUnder(currentKekId, afterId, limit), // WHERE encryption_key_id <> $1 AND id > $2 ORDER BY id LIMIT $3
+  // One UPDATE … SET <columns>, encryption_key_id WHERE id = $id AND <every old value> IS NOT DISTINCT FROM <previous>
+  update: (change) => repo.rewrapRow(change), // true when it changed the row, false when the check matched none
+  aadFor: (row, column) => aadFor("platform", "credential_submissions", column, row.id),
+  logger, // optional: a pino logger or PinoLogger; it gets counts only
+});
+// result: { rewrapped: 12, skipped: 0, failed: 0, remainingByKekId: {} }
+```
+
+- **Rows.** `fetch` returns `{ id, kekId, ciphertexts }` per row: `kekId` is the row's `encryption_key_id`, and `ciphertexts` maps every column that this id covers to its value, or `null` when the column is NULL. That is one column for most tables and two where a table keeps two values under one `encryption_key_id` (`secret_ciphertext` and `webhook_secret_ciphertext` of `platform.credential_submissions`, `documents_ciphertext` and `discount_eligibility_ciphertext` of the tenant traveller tables): they move together in one update, so `encryption_key_id` never names a KEK that does not wrap every value of the row. A table whose id column has another name (`reveal_encryption_key_id` of `platform.provisioning_jobs`) maps it to `kekId` in its own `fetch`. Leave out rows with no ciphertext at all, in the query's `WHERE` clause, never by filtering after its `LIMIT` (see Pages).
+- **Pages.** Rows come in pages of `batchSize` (500 by default, at most `REWRAP_MAX_BATCH_SIZE`, 10,000) by keyset pagination on the id, so rows that change while the run goes on never shift a page. A pass ends at the first empty page, not at a short one; a page that a filter after the `LIMIT` emptied would end it early and hide the rows after it from `remainingByKekId`. A `fetch` that returns more rows than `limit`, or the same page again, stops the run with a `TypeError` instead of looping.
+- **Each value** is re-wrapped with `rewrapValue(ciphertext, { keys, aad: aadFor(row, column) })`: it must authenticate at its own place before its data key moves. No plaintext leaves `rewrapBatch`; `update` receives only the new ciphertexts.
+- **The optimistic check.** `update` gets `{ id, kekId, ciphertexts, previous }`: the new values of the non-NULL columns, the new `encryption_key_id`, and the row exactly as `fetch` returned it. It writes only while every column of `previous` (NULL ones included) and the `encryption_key_id` still hold those values, and resolves to `true` when it changed the row. A row changed by someone else between the read and the write matches nothing: it is counted in `skipped` and keeps the other writer's value. Anything but a boolean is a `TypeError`.
+- **Failures.** A value that does not authenticate (`DecryptionError`: a copied or corrupted ciphertext, or a KEK file already removed) leaves its row unchanged and counts it in `failed`. Errors of `fetch`, `update` or the key provider (a database or KMS outage) stop the run; rows written until then stay written, and the next run continues with what is left.
+- **The report.** After the pass, `rewrapBatch` walks `fetch` once more and counts what is still not under the current KEK by `encryption_key_id`: `remainingByKekId` is `{}` when the old KEKs wrap nothing in this row source any more. Skipped rows that the other writer left under an old KEK, and failed rows, show up there. A second run changes nothing and reports `{ rewrapped: 0, skipped: 0, failed: 0, remainingByKekId: {} }`.
+- **Logs.** With `logger`, it logs one `secrets.rewrap.batch` line per page (`rows`, `rewrapped`, `skipped`, `failed`) and one `secrets.rewrap.done` line with the totals and `remainingByKekId`: counts and KEK ids only, never a row id, a ciphertext or a plaintext. Give it a child logger that names the table or tenant.
 
 A random 96-bit IV per wrap keeps one KEK safe for far more data keys than the MVP will ever create (the AES-GCM limit is about 2³² wraps per key). Rotation is for key hygiene and compromise, not for that limit.
 
@@ -128,5 +155,5 @@ Rules for callers:
 | Command | Does |
 |---|---|
 | `pnpm --filter @velexis/crypto build` | `tsc -b` to `dist/` (CommonJS and `.d.ts`) |
-| `pnpm --filter @velexis/crypto test` | Unit tests (Vitest): round trip, tampering, AAD, rotation, key files and no third-party crypto; HMAC and SHA-256 test vectors, API key verification, tokens, signed URLs and ids |
+| `pnpm --filter @velexis/crypto test` | Unit tests (Vitest): round trip, tampering, AAD, rotation, key files and no third-party crypto; `rewrapBatch` with an in-memory row source (mixed KEK ids, a concurrent update, a second run); HMAC and SHA-256 test vectors, API key verification, tokens, signed URLs and ids |
 | `pnpm --filter @velexis/crypto typecheck` / `lint` | `tsc --noEmit` / ESLint |

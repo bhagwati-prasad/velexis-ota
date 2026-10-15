@@ -29,10 +29,12 @@
 #             (ss -ltn shows no :2019); /run/caddy is 0700 caddy and holds the socket admin.sock
 #   users     the five zone users of ADR-0026 (no shell, locked); the group velexis has exactly them as members and is
 #             nobody's primary group; the deploy user is locked and each of its SSH keys carries restrict
-#   files     owners and modes of §4: /etc/velexis, the key folders (0500) and key files (0400) of each zone, identical
-#             master-key and pepper copies and no zone-only key in the other zone, env files and .provision-secrets
-#             root:root 0600, /srv/velexis with incoming, releases (root:velexis, read-only), current and maintenance,
-#             /var/lib/velexis and its storage, the backup and log folders, the root-owned scripts, the sudoers rule
+#   files     owners and modes of §4: /etc/velexis, the key folders (0500) and key files (0400) of each zone (with the
+#             master key named by MASTER_KEY_CURRENT in the zone's backend env file, master-v1.key when unset),
+#             identical master-key and pepper copies and no zone-only key in the other zone, env files and
+#             .provision-secrets root:root 0600, /srv/velexis with incoming, releases (root:velexis, read-only),
+#             current and maintenance, /var/lib/velexis and its storage, the backup and log folders, the root-owned
+#             scripts, the sudoers rule
 #   envfiles  every /etc/velexis/<app>.env has every variable of its deploy/env/<app>.env.example template (an empty
 #             value is fine; missing ones are listed by name); caddy.env and ota-backend.env hold the same edge
 #             secret, ota-backend.env and ota-admin.env the same service key (compared, never printed)
@@ -440,12 +442,24 @@ key_folder() { # folder owner required-file... -> the required files exist, and 
   if [ -z "$bad" ]; then pass "every file in $(show "$dir") is a plain file, 0400 $owner"; else fail "files in $(show "$dir") that are not 0400 $owner:$bad"; fi
 }
 
+# The master key a zone's backends use: the file of MASTER_KEY_CURRENT=local:v<N> in the zone's backend env file, or
+# master-v1.key when that is unset. After a rotation the old key is gone (docs/mvp/runbooks/master-key-rotation.md).
+current_master_key() { # env file name -> master-v<N>.key
+  local name=master-v1.key
+  if [ -f "$ETC/$1" ]; then
+    env_value "$ETC/$1" MASTER_KEY_CURRENT
+    [[ "$ENV_VALUE" =~ ^local:v[1-9][0-9]{0,8}$ ]] && name="master-${ENV_VALUE#local:}.key"
+    ENV_VALUE=""
+  fi
+  printf '%s' "$name"
+}
+
 group_files() {
   local k="$ETC/keys" f name rel target bad
   expect_mode "$ETC" "root:root 711"
   expect_mode "$k" "root:root 711"
-  key_folder "$k/platform" velexis-platform master-v1.key api-key-pepper platform-jwt-ed25519.pem
-  key_folder "$k/ota" velexis-ota master-v1.key api-key-pepper ota-jwt-ed25519.pem document-url.key
+  key_folder "$k/platform" velexis-platform "$(current_master_key platform-backend.env)" api-key-pepper platform-jwt-ed25519.pem
+  key_folder "$k/ota" velexis-ota "$(current_master_key ota-backend.env)" api-key-pepper ota-jwt-ed25519.pem document-url.key
   # Keys both backends need are identical copies (ADR-0026), including every master key of a rotation.
   for name in $( (cd "$k/platform" 2>/dev/null && ls -1 master-v*.key api-key-pepper 2>/dev/null
                   cd "$k/ota" 2>/dev/null && ls -1 master-v*.key api-key-pepper 2>/dev/null) | sort -u); do

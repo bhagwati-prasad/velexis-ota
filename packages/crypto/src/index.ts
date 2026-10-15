@@ -20,6 +20,17 @@ export {
 } from "./key-provider.js";
 export { LocalFileKeyProvider } from "./local-file-key-provider.js";
 export {
+  rewrapBatch,
+  REWRAP_DEFAULT_BATCH_SIZE,
+  REWRAP_MAX_BATCH_SIZE,
+  type RewrapBatchOptions,
+  type RewrapChange,
+  type RewrapLogger,
+  type RewrapPage,
+  type RewrapResult,
+  type RewrapRow,
+} from "./rewrap-batch.js";
+export {
   sha256Hex,
   hmacSha256,
   hashApiKey,

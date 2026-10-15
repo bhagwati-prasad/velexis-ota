@@ -1082,8 +1082,8 @@ Related: [`../decisions.md`](../decisions.md) (binding), [`../architecture.md`](
   - On the VM (human step): one week of detection reviewed, exclusions committed, blocking enabled.
 - **Verify:** `bash deploy/caddy/build/build-caddy.sh /tmp/caddy-build && bash deploy/caddy/test/caddy-smoke.sh`
 
-### X-040 · Add the shared re-wrap helper and the master-key rotation runbook
-- **Status:** todo
+### X-040 · Add the shared re-wrap helper and the master-key rotation runbook ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** foundation
 - **Milestone:** M6
 - **Depends on:** X-004, X-033

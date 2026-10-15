@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # =====================================================================================================
-# check-vm.test.sh — tests deploy/scripts/check-vm.sh and the env file checks of provision-vm.sh (task X-020).
+# check-vm.test.sh — tests deploy/scripts/check-vm.sh and the env file checks of provision-vm.sh (task X-020), and
+# the master-key rotation of provision-vm.sh's step keys (task X-040).
 #
 #   sudo bash deploy/scripts/test/check-vm.test.sh
 #
@@ -13,7 +14,7 @@
 #     edits, logs its command line, and records as a violation any call that could change something.
 # Users, groups and folders the test created are removed at the end (CHECKVM_KEEP=1 keeps them for inspection). It
 # refuses to run on a provisioned Velexis VM. It prints one PASS or FAIL line per check; a check that proves an
-# acceptance criterion of X-020 ends in [X-020 AC<n>].
+# acceptance criterion of X-020 or X-040 ends in [X-020 AC<n>] or [X-040 AC<n>].
 #
 # What it proves:
 #   1. Two runs of provision-vm.sh --steps users,keys,envfiles: the second changes no key, env or secrets file
@@ -28,7 +29,11 @@
 #      differing key copies, a writable release, the velexis group, the deploy key options and shared env values.
 #   4. With a variable removed from a test copy of an env file, check-vm.sh reports FAIL naming the variable, and
 #      provision-vm.sh --steps envfiles warns about it by name and leaves the file as it is (AC3).
-#   5. No output of either script, no command line of a fake and no line of provision.log holds a generated
+#   5. A master-key rotation (X-040): NEW_MASTER_KEY=v2 with the step keys creates master-v2.key once, as copies with
+#      the same SHA-256 in both zone folders, leaves every other key file alone, restores a missing copy and refuses a
+#      malformed or lower version; after the runbook's end (MASTER_KEY_CURRENT=local:v2, master-v1.key removed from
+#      both folders) check-vm.sh --only files passes and the step keys does not create master-v1.key again (AC3).
+#   6. No output of either script, no command line of a fake and no line of provision.log holds a generated
 #      secret, a key, or a value of an env file, even when caddy validate fails with a message that quotes the edge
 #      secret or caddy.env has a malformed line; provision-vm.sh substitutes no placeholder through sed (AC4).
 # =====================================================================================================
@@ -605,15 +610,110 @@ else
   fail "with the variables back, check-vm.sh --only envfiles,files passes again [X-020 AC3]"
 fi
 
-# ---- 5. no secret in any output ------------------------------------------------------------------------------
+# ---- 5. a master-key rotation (X-040, docs/mvp/runbooks/master-key-rotation.md) ------------------------------
+step "a master-key rotation: NEW_MASTER_KEY=v2, then master-v1.key removed"
+K="$ETC/keys"
+key_sha() { sha256sum <"$1" | cut -d' ' -f1; } # compared, never printed
+without() { grep -vF -- "$1" || true; }         # the fingerprint lines that do not name the file
+FP_V1="$(fingerprint "$K")"
+if provision "$OUT/rotate-1.log" keys NEW_MASTER_KEY=v2 && [ -f "$K/platform/master-v2.key" ] && [ -f "$K/ota/master-v2.key" ] &&
+  [ "$(key_sha "$K/platform/master-v2.key")" = "$(key_sha "$K/ota/master-v2.key")" ] &&
+  [ "$(stat -c '%U:%G %a' "$K/platform/master-v2.key")" = "velexis-platform:velexis-platform 400" ] &&
+  [ "$(stat -c '%U:%G %a' "$K/ota/master-v2.key")" = "velexis-ota:velexis-ota 400" ] &&
+  [ "$(base64 -d <"$K/platform/master-v2.key" | wc -c)" = 32 ] &&
+  ! cmp -s "$K/platform/master-v1.key" "$K/platform/master-v2.key"; then
+  pass "NEW_MASTER_KEY=v2 creates master-v2.key in both zone folders with the same SHA-256 (32 new random bytes, 0400 per zone user) [X-040 AC3]"
+else
+  indent "$OUT/rotate-1.log"
+  fail "NEW_MASTER_KEY=v2 creates master-v2.key in both zone folders with the same SHA-256 [X-040 AC3]"
+fi
+if [ "$(fingerprint "$K" | without master-v2.key)" = "$FP_V1" ]; then
+  pass "adding master-v2.key changed no other key file [X-040 AC3]"
+else
+  fail "adding master-v2.key changed no other key file [X-040 AC3]"
+fi
+FP_V2="$(fingerprint "$K")"
+if provision "$OUT/rotate-2.log" keys NEW_MASTER_KEY=v2 && [ "$(fingerprint "$K")" = "$FP_V2" ]; then
+  pass "a second run with NEW_MASTER_KEY=v2 changes no key file (never overwritten) [X-040 AC3]"
+else
+  indent "$OUT/rotate-2.log"
+  fail "a second run with NEW_MASTER_KEY=v2 changes no key file (never overwritten) [X-040 AC3]"
+fi
+rm -f "$K/ota/master-v2.key"
+if provision "$OUT/rotate-restore.log" keys &&
+  [ "$(fingerprint "$K" | without ota/master-v2.key)" = "$(printf '%s\n' "$FP_V2" | without ota/master-v2.key)" ] &&
+  [ "$(key_sha "$K/platform/master-v2.key")" = "$(key_sha "$K/ota/master-v2.key")" ] &&
+  [ "$(stat -c '%U:%G %a' "$K/ota/master-v2.key")" = "velexis-ota:velexis-ota 400" ]; then
+  pass "a missing copy of master-v2.key is restored from the other zone folder, with the same SHA-256 [X-040 AC3]"
+else
+  indent "$OUT/rotate-restore.log"
+  fail "a missing copy of master-v2.key is restored from the other zone folder, with the same SHA-256 [X-040 AC3]"
+fi
+FP_V2="$(fingerprint "$K")"
+for bad in 2 v02 v0 local:v2 master-v3.key; do
+  if provision "$OUT/rotate-bad.log" keys NEW_MASTER_KEY="$bad"; then rc=0; else rc=$?; fi
+  if [ "$rc" != 0 ] && grep -q 'NEW_MASTER_KEY must be v<N>' "$OUT/rotate-bad.log" && [ "$(fingerprint "$K")" = "$FP_V2" ]; then
+    pass "NEW_MASTER_KEY=$bad is refused and changes nothing [X-040]"
+  else
+    indent "$OUT/rotate-bad.log"
+    fail "NEW_MASTER_KEY=$bad is refused and changes nothing (exit $rc) [X-040]"
+  fi
+done
+if provision "$OUT/rotate-no-keys.log" envfiles NEW_MASTER_KEY=v3; then rc=0; else rc=$?; fi
+if [ "$rc" != 0 ] && grep -q 'NEW_MASTER_KEY needs the step keys' "$OUT/rotate-no-keys.log" && [ "$(fingerprint "$K")" = "$FP_V2" ]; then
+  pass "NEW_MASTER_KEY without the step keys is refused [X-040]"
+else
+  indent "$OUT/rotate-no-keys.log"
+  fail "NEW_MASTER_KEY without the step keys is refused (exit $rc) [X-040]"
+fi
+
+# The end of the runbook: both backends on local:v2, the old key removed from both folders. The removed key stays
+# in a root-only copy for the secret search of step 6.
+( umask 077; cp "$K/platform/master-v1.key" "$PREFIX/removed-master-v1.key" )
+for f in platform-backend.env ota-backend.env; do sed -i -E 's/^MASTER_KEY_CURRENT=.*/MASTER_KEY_CURRENT=local:v2/' "$ETC/$f"; done
+rm -f "$K/platform/master-v1.key" "$K/ota/master-v1.key"
+if run_check "$OUT/rotated.out" --only files && grep -q '^PASS /etc/velexis/keys/platform holds master-v2.key ' "$OUT/rotated.out" &&
+  grep -q '^PASS /etc/velexis/keys/ota holds master-v2.key ' "$OUT/rotated.out"; then
+  pass "after the rotation (MASTER_KEY_CURRENT=local:v2, master-v1.key removed) check-vm.sh --only files passes [X-040]"
+else
+  indent "$OUT/rotated.out"
+  fail "after the rotation (MASTER_KEY_CURRENT=local:v2, master-v1.key removed) check-vm.sh --only files passes [X-040]"
+fi
+FP_ROTATED="$(fingerprint "$K")"
+if provision "$OUT/rotate-after.log" keys && [ ! -e "$K/platform/master-v1.key" ] && [ ! -e "$K/ota/master-v1.key" ] &&
+  [ "$(fingerprint "$K")" = "$FP_ROTATED" ]; then
+  pass "a later run of the step keys does not create master-v1.key again and changes nothing [X-040 AC3]"
+else
+  indent "$OUT/rotate-after.log"
+  fail "a later run of the step keys does not create master-v1.key again and changes nothing [X-040 AC3]"
+fi
+if provision "$OUT/rotate-reuse.log" keys NEW_MASTER_KEY=v1; then rc=0; else rc=$?; fi
+if [ "$rc" != 0 ] && grep -q 'NEW_MASTER_KEY=v1 is below master-v2.key' "$OUT/rotate-reuse.log" &&
+  [ "$(fingerprint "$K")" = "$FP_ROTATED" ]; then
+  pass "NEW_MASTER_KEY=v1 after the rotation is refused: a version is never reused [X-040]"
+else
+  indent "$OUT/rotate-reuse.log"
+  fail "NEW_MASTER_KEY=v1 after the rotation is refused: a version is never reused (exit $rc) [X-040]"
+fi
+sed -i -E 's/^MASTER_KEY_CURRENT=.*/MASTER_KEY_CURRENT=local:v3/' "$ETC/ota-backend.env"
+if run_check "$OUT/rotated-missing.out" --only files; then rc=0; else rc=$?; fi
+if [ "$rc" = 1 ] && grep -q '^FAIL /etc/velexis/keys/ota holds master-v3.key$' "$OUT/rotated-missing.out"; then
+  pass "check-vm.sh fails when a zone lacks the master key its MASTER_KEY_CURRENT names [X-040]"
+else
+  indent "$OUT/rotated-missing.out"
+  fail "check-vm.sh fails when a zone lacks the master key its MASTER_KEY_CURRENT names (exit $rc) [X-040]"
+fi
+sed -i -E 's/^MASTER_KEY_CURRENT=.*/MASTER_KEY_CURRENT=local:v2/' "$ETC/ota-backend.env"
+
+# ---- 6. no secret in any output ------------------------------------------------------------------------------
 step "no generated secret, key or env value in any output, command line or log"
 PATTERNS="$PREFIX/secret-patterns" # root-only, removed with the prefix
 (
   umask 077
   # The generated values (they are also inside every DSN of the env files).
   sed -n 's/^[A-Z_]*=//p' "$ETC/.provision-secrets"
-  # Key files and the deploy private key: every line except PEM armour.
-  cat "$ETC"/keys/platform/* "$ETC"/keys/ota/* "$PREFIX/deploy-key.pem" | grep -v -- '-----'
+  # Key files (also the master key removed in step 5) and the deploy private key: every line except PEM armour.
+  cat "$ETC"/keys/platform/* "$ETC"/keys/ota/* "$PREFIX/removed-master-v1.key" "$PREFIX/deploy-key.pem" | grep -v -- '-----'
 ) | grep -E '.{8,}' | sort -u >"$PATTERNS"
 leaks="$(grep -lF -f "$PATTERNS" "$OUT"/* "$FAKE/calls.log" "$ROOT/var/log/velexis/provision.log" 2>/dev/null || true)"
 # Positive control: the same search finds a value that is there.

@@ -14,8 +14,15 @@
 #   sudo DEPLOY_SSH_PUBKEY_FILE=/tmp/deploy.pub ADMIN_USER=ubuntu bash /tmp/velexis-deploy/scripts/provision-vm.sh
 #   sudo bash /tmp/velexis-deploy/scripts/provision-vm.sh --steps scripts,caddyconf  # re-run selected steps only
 #   sudo bash /tmp/velexis-deploy/scripts/check-vm.sh                               # one PASS or FAIL per item
+#   sudo NEW_MASTER_KEY=v2 bash /srv/velexis/current/deploy/scripts/provision-vm.sh --steps keys  # add a master key
 #
 # Steps: packages harden users node postgres redis caddy keys database envfiles scripts caddyconf summary
+#
+# Master keys (ADR-0010): the first run creates master-v1.key (KEK local:v1). NEW_MASTER_KEY=v<N> with the step keys
+# adds master-v<N>.key for a KEK rotation (docs/mvp/runbooks/master-key-rotation.md): 32 random bytes, generated
+# once, installed as identical 0400 copies in both zone folders. It refuses a version below the highest master key
+# already there (a version is never reused) and never replaces a key file, so a re-run with the same value changes
+# nothing. A master key removed from both folders after a rotation is not created again.
 #
 # Secrets: generated once into /etc/velexis/.provision-secrets (root 0600) and written into the env files and the
 # Redis configuration by bash itself, never through a command line (ps) or a log. The database passwords reach
@@ -45,6 +52,7 @@ set -euo pipefail
 : "${REDIS_PIN:=6:7.4*}"                  # packages.redis.io version string of Redis 7.4
 : "${CADDY_PIN:=2.8*}"
 : "${VELEXIS_ROOT:=}"                     # tests only, see the header; empty on the VM
+: "${NEW_MASTER_KEY:=}"                   # v<N>: the step keys adds master-v<N>.key (KEK rotation, see the header)
 
 DEPLOY_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ETC="$VELEXIS_ROOT/etc/velexis"
@@ -98,6 +106,10 @@ done
 for step in $STEPS; do
   case " $ALL_STEPS " in *" $step "*) ;; *) die "unknown step: $step (steps: $ALL_STEPS)" ;; esac
 done
+if [ -n "$NEW_MASTER_KEY" ]; then
+  [[ "$NEW_MASTER_KEY" =~ ^v[1-9][0-9]{0,8}$ ]] || die "NEW_MASTER_KEY must be v<N> (N >= 1, no leading zeros), for example v2"
+  case " $STEPS " in *" keys "*) ;; *) die "NEW_MASTER_KEY needs the step keys (--steps keys)" ;; esac
+fi
 
 [ "$(id -u)" -eq 0 ] || die "run as root"
 if [ -n "$VELEXIS_ROOT" ]; then
@@ -472,8 +484,35 @@ step_keys() {
     die "$k/master-v1.key belongs to the shared-user layout that ADR-0026 replaced; move it into both zone folders by hand"
   fi
 
+  # Master keys: every one already in either folder (a missing copy is restored), master-v1.key on the first run,
+  # and master-$NEW_MASTER_KEY.key for a rotation. A version below the highest one there is refused.
+  local -a masters=()
+  local highest=0 version
+  for p in "$k/platform"/master-v*.key "$k/ota"/master-v*.key; do
+    [ -e "$p" ] || continue
+    name="$(basename "$p")"
+    [[ "$name" =~ ^master-v([1-9][0-9]{0,8})\.key$ ]] \
+      || die "$p is not named master-v<N>.key (N >= 1, no leading zeros); the backends refuse to start with it"
+    version="${BASH_REMATCH[1]}"
+    [ "$version" -le "$highest" ] || highest="$version"
+    case " ${masters[*]} " in *" $name "*) ;; *) masters+=("$name") ;; esac
+  done
+  [ "${#masters[@]}" -gt 0 ] || masters=(master-v1.key)
+  if [ -n "$NEW_MASTER_KEY" ]; then
+    name="master-$NEW_MASTER_KEY.key"
+    case " ${masters[*]} " in
+      *" $name "*) log "$name exists already; it is kept as it is" ;;
+      *)
+        [ "${NEW_MASTER_KEY#v}" -gt "$highest" ] \
+          || die "NEW_MASTER_KEY=$NEW_MASTER_KEY is below master-v$highest.key; a new master key takes a higher version, never an old one"
+        masters+=("$name")
+        log "New master key $name (KEK local:$NEW_MASTER_KEY) in both zone folders; then set MASTER_KEY_CURRENT=local:$NEW_MASTER_KEY"
+        ;;
+    esac
+  fi
+
   # Keys both backends need: generated once, then an identical copy in each zone's folder.
-  for name in master-v1.key api-key-pepper; do
+  for name in "${masters[@]}" api-key-pepper; do
     p="$k/platform/$name"
     o="$k/ota/$name"
     if [ ! -e "$p" ] && [ ! -e "$o" ]; then new_key_file "$p" "$PLATFORM_USER" random_key; fi
