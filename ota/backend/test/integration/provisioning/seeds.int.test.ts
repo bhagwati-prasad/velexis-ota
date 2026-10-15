@@ -1,11 +1,11 @@
 // The provisioning seeds against PostgreSQL 16 (OBE-004; OADR-0007 item 4): each test provisions its own tenant
 // schema with the real runner (`migrateTenantSchema({ create: true })` as velexis_provisioner, the role of the OTA
 // worker), seeds it in a tenant transaction of that role, and reads the rows back as velexis_ota_app.
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { copyFile, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createPool, createTenantDb, sql, tenantTx, type TenantDb } from "@velexis/db";
-import { migrateTenantSchema } from "@velexis/db/migrate";
+import { BASELINE_FILE, migrateTenantSchema } from "@velexis/db/migrate";
 import { createTestDatabase, type TestDatabase } from "@velexis/testing";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { newId } from "../../../src/common/ids";
@@ -39,6 +39,8 @@ const SCHEMAS = {
   schemaN: "tenant_seed_schema_n",
   rolledBack: "tenant_seed_rolled_back",
 } as const;
+/** A schema at version N-1 (the baseline only), provisioned by its test from a folder without migration 0002. */
+const SCHEMA_N_MINUS_1 = "tenant_seed_schema_n_minus_1";
 
 const quietPoolLogger = { error: (): void => undefined };
 
@@ -265,22 +267,35 @@ describe("seedTenant", () => {
   });
 
   it("writes the columns of migration 0002 only on a schema that has them", async () => {
-    const baseline = await tenantTx(provisioner, SCHEMAS.fresh, (trx) => storefrontSettingsColumns(trx));
+    // Schema N-1: the baseline only, as a tenant provisioned by the previous release is until the deploy fan-out
+    // applies 0002 to it. The seed still inserts its row there, without the columns of 0002.
+    const previousRelease = await mkdtemp(join(tmpdir(), "velexis-obe004-n-minus-1-"));
+    fixtureDirs.push(previousRelease);
+    await copyFile(join(TENANT_MIGRATIONS_DIR, BASELINE_FILE), join(previousRelease, BASELINE_FILE));
+    await migrateTenantSchema({
+      schema: SCHEMA_N_MINUS_1,
+      dir: previousRelease,
+      url: db.urlFor("provisioner"),
+      create: true,
+    });
+    const baseline = await tenantTx(provisioner, SCHEMA_N_MINUS_1, (trx) => storefrontSettingsColumns(trx));
     for (const column of STOREFRONT_SETTINGS_0002_COLUMNS) {
       expect(baseline.has(column)).toBe(false);
     }
-    // Schema N: the storefront_settings columns of 0002_add_mvp_tenant_deltas (data-model-migration-0002.md §6)
-    // that the seed writes, added by the schema's owner.
-    await tenantTx(provisioner, SCHEMAS.schemaN, async (trx) => {
-      await sql`
-        ALTER TABLE storefront_settings
-          ADD COLUMN time_zone                 text NOT NULL DEFAULT 'UTC',
-          ADD COLUMN airline_card_enabled_test boolean NOT NULL DEFAULT false,
-          ADD COLUMN airline_card_enabled_live boolean NOT NULL DEFAULT false,
-          ADD COLUMN booking_queue_number      smallint CONSTRAINT storefront_settings_booking_queue_ck CHECK (booking_queue_number BETWEEN 0 AND 99),
-          ADD COLUMN booking_queue_category    smallint NOT NULL DEFAULT 0 CONSTRAINT storefront_settings_booking_queue_category_ck CHECK (booking_queue_category BETWEEN 0 AND 255)
-      `.execute(trx);
-    });
+    const previous = await tenantTx(provisioner, SCHEMA_N_MINUS_1, (trx) =>
+      seedTenant(trx, TENANT, { now: NOW }),
+    );
+    expect(previous.storefrontSettings).toBe(true);
+    expect((await seededRows(SCHEMA_N_MINUS_1)).settings).toEqual([
+      expect.objectContaining({ id: "sfs_default", brand_name: "Acme Travel", default_currency: "GBP" }),
+    ]);
+
+    // Schema N: every file of migrations/tenant, so the storefront_settings columns of 0002_add_mvp_tenant_deltas
+    // (data-model-migration-0002.md §6, OBE-008) that the seed writes.
+    const current = await tenantTx(provisioner, SCHEMAS.schemaN, (trx) => storefrontSettingsColumns(trx));
+    for (const column of STOREFRONT_SETTINGS_0002_COLUMNS) {
+      expect(current.has(column)).toBe(true);
+    }
 
     const result = await tenantTx(provisioner, SCHEMAS.schemaN, (trx) =>
       seedTenant(trx, TENANT, { now: NOW }),

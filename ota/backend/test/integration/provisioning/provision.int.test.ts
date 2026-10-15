@@ -46,6 +46,10 @@ const PLATFORM_JOB_OPTIONS: JobsOptions = { attempts: 3, backoff: { type: "expon
 const DML = ["SELECT", "INSERT", "UPDATE", "DELETE"];
 /** SQLSTATE admin_shutdown: the provisioning connection was terminated. */
 const ADMIN_SHUTDOWN = "57P01";
+/** The last file of migrations/tenant: the version a new schema reaches (0002_add_mvp_tenant_deltas, OBE-008). */
+const SCHEMA_VERSION = "0002_add_mvp_tenant_deltas";
+/** The tables of a complete tenant schema: the 42 of the baseline and the 2 that migration 0002 adds (OBE-008). */
+const TENANT_TABLE_COUNT = 44;
 
 const quietPoolLogger = { error: (): void => undefined };
 const silentValidationLogger = { error: (): void => undefined };
@@ -312,10 +316,10 @@ describe("tenant.provision on ota-tenant-ops", () => {
 
     expect(outcome).toEqual({
       state: "completed",
-      result: { event: "tenant.provisioned", schemaName: "tenant_acme", schemaVersion: "0001_baseline" },
+      result: { event: "tenant.provisioned", schemaName: "tenant_acme", schemaVersion: SCHEMA_VERSION },
     });
 
-    // Every file of migrations/tenant, applied with its checksum; every table of the baseline.
+    // Every file of migrations/tenant, applied with its checksum; every table they create.
     const files = await readMigrationFiles(TENANT_MIGRATIONS_DIR, "tenant");
     const ledger = await ledgerOf("tenant_acme");
     expect(ledger.map(({ id, checksum, phase, status }) => ({ id, checksum, phase, status }))).toEqual(
@@ -327,7 +331,7 @@ describe("tenant.provision on ota-tenant-ops", () => {
       })),
     );
     const tables = await tablesOf("tenant_acme");
-    expect(tables).toHaveLength(42);
+    expect(tables).toHaveLength(TENANT_TABLE_COUNT);
     expect(tables).toEqual(await tablesOf("tenant_alpha"));
 
     // Grants: DML for velexis_ota_app on every table (nothing more), nothing for velexis_platform_app.
@@ -385,7 +389,7 @@ describe("tenant.provision on ota-tenant-ops", () => {
       requestId: message.requestId,
       payload: {
         schemaName: "tenant_acme",
-        schemaVersion: "0001_baseline",
+        schemaVersion: SCHEMA_VERSION,
         migrations: ledger.map((row) => ({
           version: row.id,
           checksum: row.checksum,
@@ -437,7 +441,7 @@ describe("tenant.provision on ota-tenant-ops", () => {
     // The same message again (the platform re-dispatched it), then once more after the platform activated the tenant.
     expect(await dispatch(message, 2)).toMatchObject({
       state: "completed",
-      result: { event: "tenant.provisioned", schemaName: "tenant_bravo", schemaVersion: "0001_baseline" },
+      result: { event: "tenant.provisioned", schemaName: "tenant_bravo", schemaVersion: SCHEMA_VERSION },
     });
     await setTenantStatus(tenantId, "active");
     expect(await dispatch(message, 3)).toMatchObject({ state: "completed" });
@@ -576,7 +580,7 @@ describe("tenant.provision on ota-tenant-ops", () => {
 
     // The platform's next attempt provisions the tenant from scratch.
     expect(await dispatch(message, 2)).toMatchObject({ state: "completed" });
-    expect(await tablesOf("tenant_echo")).toHaveLength(42);
+    expect(await tablesOf("tenant_echo")).toHaveLength(TENANT_TABLE_COUNT);
     expect([...(await eventsOf(message.jobId)).keys()].sort()).toEqual(
       [1, 2].map((attempt) => bullmqJobId(message.jobId, attempt)),
     );

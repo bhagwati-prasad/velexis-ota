@@ -41,6 +41,15 @@ const REPO = resolve(PACKAGE_DIR, "..", "..");
 const REFERENCE_DDL = join(REPO, "docs", "velexis-sdk", "db");
 const TENANT_DIR = join(REPO, "ota", "backend", "migrations", "tenant");
 const PROVISIONER = "velexis_provisioner";
+/**
+ * What the repository's tenant set holds after its baseline: migration 0002 (OBE-008,
+ * ota/docs/data-model-migration-0002.md), which creates 2 tables. The tests that run TENANT_DIR expect it.
+ */
+const TENANT_MIGRATION_0002 = {
+  file: "0002_add_mvp_tenant_deltas.sql",
+  id: "0002_add_mvp_tenant_deltas",
+  tables: ["storefront_assets", "storefront_pages"],
+};
 
 function testUrls(): { admin: string; migrator: string } {
   loadDevEnvFiles({ appDir: PACKAGE_DIR });
@@ -435,6 +444,11 @@ async function ddlTables(file: string): Promise<string[]> {
   return [...ddl.matchAll(/^CREATE TABLE (?:[a-z]+\.)?([a-z_]+) \(/gm)].map((match) => match[1] ?? "").sort();
 }
 
+/** The tables of a schema migrated with TENANT_DIR: the baseline's 42 and those of 0002, sorted. */
+async function repositoryTenantTables(): Promise<string[]> {
+  return [...(await ddlTables("tenant.sql")), ...TENANT_MIGRATION_0002.tables].sort();
+}
+
 /** The owners of a schema and of every relation in it. */
 async function ownersOf(schema: string): Promise<string[]> {
   const rows = await db.query<{ owner: string }>(
@@ -502,11 +516,12 @@ async function readReport(path: string): Promise<TenantMigrationReport> {
 }
 
 describe("migrateTenantSchema and migrate.js tenant on PostgreSQL", () => {
-  it("creates tenant_demo with --create: 42 tables owned by velexis_provisioner, writable by velexis_ota_app, closed to velexis_platform_app [X-013 AC1]", async () => {
+  it("creates tenant_demo with --create: the baseline's 42 tables and those of 0002, owned by velexis_provisioner, writable by velexis_ota_app, closed to velexis_platform_app [X-013 AC1]", async () => {
     const run = await cli(["tenant", "--schema", "tenant_demo", "--dir", TENANT_DIR, "--create"]);
     expect(run.stderr).toBe("");
     expect(run.code).toBe(0);
     const baselineChecksum = await sha256(join(REFERENCE_DDL, "tenant.sql"));
+    const migrationChecksum = await sha256(join(TENANT_DIR, TENANT_MIGRATION_0002.file));
     expect(run.events).toEqual([
       {
         set: "tenant",
@@ -520,16 +535,31 @@ describe("migrateTenantSchema and migrate.js tenant on PostgreSQL", () => {
         transaction: true,
         executionMs: expect.any(Number),
       },
+      {
+        set: "tenant",
+        schema: "tenant_demo",
+        file: TENANT_MIGRATION_0002.file,
+        id: TENANT_MIGRATION_0002.id,
+        kind: "numbered",
+        phase: "expand",
+        status: "applied",
+        checksum: migrationChecksum,
+        transaction: true,
+        executionMs: expect.any(Number),
+      },
     ]);
 
-    const tenantTables = await ddlTables("tenant.sql");
-    expect(tenantTables).toHaveLength(42);
+    expect(await ddlTables("tenant.sql")).toHaveLength(42);
+    const tenantTables = await repositoryTenantTables();
     expect(await tablesOf("tenant_demo")).toEqual(tenantTables);
     // The schema and every relation in it (tables, indexes) belong to the provisioner, not to the migrator.
     expect(await ownersOf("tenant_demo")).toEqual([PROVISIONER]);
     expect(
       (await ledger("tenant_demo")).map(({ id, checksum, phase, status }) => [id, checksum, phase, status]),
-    ).toEqual([["0001_baseline", baselineChecksum, "expand", "applied"]]);
+    ).toEqual([
+      ["0001_baseline", baselineChecksum, "expand", "applied"],
+      [TENANT_MIGRATION_0002.id, migrationChecksum, "expand", "applied"],
+    ]);
 
     // velexis_ota_app: USAGE and DML on every table, nothing more, and inserts into customers.
     const privileges = await db.query<{ table: string; privileges: string[] }>(
@@ -604,8 +634,11 @@ describe("migrateTenantSchema and migrate.js tenant on PostgreSQL", () => {
       create: true,
     });
     expect(result).toMatchObject({ schema: "tenant_prov", dirExists: true, created: true, upToDate: 0 });
-    expect(result.applied.map((event) => [event.id, event.status])).toEqual([["0001_baseline", "applied"]]);
-    expect(await tablesOf("tenant_prov")).toHaveLength(42);
+    expect(result.applied.map((event) => [event.id, event.status])).toEqual([
+      ["0001_baseline", "applied"],
+      [TENANT_MIGRATION_0002.id, "applied"],
+    ]);
+    expect(await tablesOf("tenant_prov")).toEqual(await repositoryTenantTables());
     expect(await ownersOf("tenant_prov")).toEqual([PROVISIONER]);
     await asOtaApp("tenant_prov", (client) =>
       client.query(CUSTOMER, ["cus_01J9ZK3V5Q8X2M4N6P7R9S1T5Z", "prov@example.com"]),
@@ -766,7 +799,7 @@ describe("migrateTenantSchema and migrate.js tenant on PostgreSQL", () => {
     await db.query("COMMIT");
     const orphan = await cli(["tenant", "--schema", "tenant_orphan", "--dir", TENANT_DIR, "--create"]);
     expect(orphan).toMatchObject({ code: 0, stderr: "" });
-    expect(await tablesOf("tenant_orphan")).toHaveLength(42);
+    expect(await tablesOf("tenant_orphan")).toEqual(await repositoryTenantTables());
   });
 
   it("runs every file as velexis_provisioner with the timeouts, the advisory lock and the schema's search_path, in and outside a transaction", async () => {
@@ -842,12 +875,13 @@ describe("migrateTenantSchema and migrate.js tenant on PostgreSQL", () => {
       await expect.poll(waiting, { timeout: 4_000, interval: 20 }).toBe(2);
       await holder.query("SELECT pg_advisory_unlock(hashtext('tenant_twice'))");
       const results = await Promise.all(runs);
+      // The first applies the baseline and 0002; the second, once it gets the lock, finds nothing pending.
       expect(results.map((result) => [result.created, result.applied.length]).sort()).toEqual([
         [false, 0],
-        [true, 1],
+        [true, 2],
       ]);
     });
-    expect(await ledger("tenant_twice")).toHaveLength(1);
+    expect(await ledger("tenant_twice")).toHaveLength(2);
     expect(await ownersOf("tenant_twice")).toEqual([PROVISIONER]);
   });
 });
@@ -909,7 +943,7 @@ describe("migrateTenantSchema beforeCommit on PostgreSQL (OADR-0007 item 2)", ()
     const first = await migrate();
 
     expect(first).toMatchObject({ created: true, upToDate: 0 });
-    expect(first.applied.map((event) => event.id)).toEqual(["0001_baseline"]);
+    expect(first.applied.map((event) => event.id)).toEqual(["0001_baseline", TENANT_MIGRATION_0002.id]);
     expect(seen).toEqual([
       {
         created: true,
@@ -924,7 +958,7 @@ describe("migrateTenantSchema beforeCommit on PostgreSQL (OADR-0007 item 2)", ()
         emails: ["hook0@example.com"],
       },
     ]);
-    // The baseline's ledger row was written by the transaction the callback ran in, and both committed.
+    // The ledger rows of both files were written by the transaction the callback ran in, and all of it committed.
     expect(await ledgerXids("tenant_hooked")).toEqual([seen[0]?.facts?.xid]);
     const committed = await asOtaApp(
       "tenant_hooked",
@@ -934,7 +968,7 @@ describe("migrateTenantSchema beforeCommit on PostgreSQL (OADR-0007 item 2)", ()
 
     // A re-run applies nothing, still reaches the callback, and reports the schema as existing.
     const second = await migrate();
-    expect(second).toMatchObject({ created: false, applied: [], upToDate: 1 });
+    expect(second).toMatchObject({ created: false, applied: [], upToDate: 2 });
     expect(seen.map(({ created, emails }) => [created, emails])).toEqual([
       [true, ["hook0@example.com"]],
       [false, ["hook0@example.com", "hook1@example.com"]],

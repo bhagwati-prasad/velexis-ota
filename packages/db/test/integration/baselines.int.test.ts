@@ -11,7 +11,8 @@
 //     (amadeus_accounts, amadeus_offices) are expected next to the baseline's;
 //   - the tenant set is applied to tenant_alpha through the runner library (readMigrationFiles, recordMigration)
 //     in one provisioning transaction as velexis_provisioner (db README §3; migrateTenantSchema of X-013 replaces
-//     this helper);
+//     this helper). The tenant folder also holds 0002_add_mvp_tenant_deltas.sql (OBE-008), so its 2 tables are
+//     expected next to the baseline's;
 //   - velexis_platform_app adds a plan, an account and a tenant.
 // The tests compare the privileges of velexis_ota_app and velexis_platform_app with ADR-0004 in the catalog and
 // with real queries, logged in as those roles with the development DSNs of ota/backend/.env.example and
@@ -74,6 +75,12 @@ const MIGRATION_0002 = {
   otaReadableTables: ["amadeus_accounts", "amadeus_offices"],
   /** Tables on which 0002 revokes UPDATE, DELETE and TRUNCATE from velexis_platform_app (data-model.md §4.7). */
   appendOnlyTables: ["platform_audit_log"],
+};
+/** What tenant migration 0002 (OBE-008, ota/docs/data-model-migration-0002.md) adds after the tenant baseline. */
+const TENANT_MIGRATION_0002 = {
+  id: "0002_add_mvp_tenant_deltas",
+  file: "0002_add_mvp_tenant_deltas.sql",
+  tables: ["storefront_assets", "storefront_pages"],
 };
 /** ADR-0004: the only platform.accounts columns velexis_ota_app may read, in table order. */
 const OTA_READABLE_ACCOUNT_COLUMNS = [
@@ -427,11 +434,16 @@ describe("the baselines and the OTA read grants on PostgreSQL", () => {
     ).toEqual([{ owner: "velexis_migrator" }]);
   });
 
-  it("applies the tenant set to tenant_alpha through the runner library: 42 tables owned by velexis_provisioner [X-012 AC1]", async () => {
+  it("applies the tenant set to tenant_alpha through the runner library: the baseline's 42 tables and those of 0002, owned by velexis_provisioner [X-012 AC1]", async () => {
     const tenantTables = await ddlTables("tenant.sql");
     expect(tenantTables).toHaveLength(42);
     expect(tenantTables).toContain("schema_migrations");
-    expect(await tablesOf(TENANT)).toEqual(tenantTables);
+    // The tenant set continues with 0002 (OBE-008), which creates 2 more tables.
+    const migrationTables = createdTables(
+      await readFile(join(TENANT_DIR, TENANT_MIGRATION_0002.file), "utf8"),
+    );
+    expect(migrationTables).toEqual(TENANT_MIGRATION_0002.tables);
+    expect(await tablesOf(TENANT)).toEqual([...tenantTables, ...migrationTables].sort());
 
     expect(
       await catalog(
@@ -441,6 +453,12 @@ describe("the baselines and the OTA read grants on PostgreSQL", () => {
       {
         id: "0001_baseline",
         checksum: await sha256(join(REFERENCE_DDL, "tenant.sql")),
+        phase: "expand",
+        status: "applied",
+      },
+      {
+        id: TENANT_MIGRATION_0002.id,
+        checksum: await sha256(join(TENANT_DIR, TENANT_MIGRATION_0002.file)),
         phase: "expand",
         status: "applied",
       },

@@ -249,6 +249,10 @@ export interface Bookings {
   checkout_id: string | null;
   commissions: Generated<Json>;
   contact_email: string;
+  /**
+   * When Flight Create Orders was sent for this booking (claim time); the reconciler searches PNRs created around it.
+   */
+  create_order_started_at: Timestamp | null;
   created_at: Generated<Timestamp>;
   created_by_staff_id: string | null;
   currency: string;
@@ -285,6 +289,18 @@ export interface Bookings {
   priced_offer_id: string | null;
   pricing_mode: Generated<string>;
   queuing_office_id: string | null;
+  /**
+   * Number of reconciliation checks made (Queue List + by-reference lookups).
+   */
+  reconcile_attempts: Generated<number>;
+  /**
+   * Result of reconciliation: found (order recorded), not_found (payment voided, booking failed), manual_review (staff decide; airline card).
+   */
+  reconcile_outcome: string | null;
+  /**
+   * Set after a supplier timeout: the reconciler looks for the order until this time (create time + 15 minutes).
+   */
+  reconcile_until: Timestamp | null;
   record_locator: string | null;
   reference: string;
   status: Generated<string>;
@@ -401,6 +417,10 @@ export interface Checkouts {
   offer_amount: Numeric;
   payment_brand: string | null;
   priced_offer_id: string;
+  /**
+   * markup_rules = selling prices with markup and OTA fees; net = Amadeus price and Amadeus card fee only (airline_card payments, charged by the airline).
+   */
+  pricing_mode: Generated<string>;
   status: Generated<string>;
   terms_accepted_at: Timestamp | null;
   total_amount: Numeric;
@@ -779,8 +799,14 @@ export interface Payments {
   failure_message: string | null;
   id: string;
   metadata: Generated<Json>;
+  /**
+   * Payment method; airline_card = card passed to the airline through Amadeus (provider = airline): only brand, BIN, last 4 and the outcome are kept.
+   */
   method: Generated<string>;
   next_action: Json | null;
+  /**
+   * Payment service provider: stripe; manual (recorded by staff); airline (card charged by the validating airline through Amadeus formOfPayments, no PSP).
+   */
   provider: string;
   provider_connection_id: string | null;
   provider_customer_id: string | null;
@@ -935,36 +961,232 @@ export interface StaffActions {
   user_agent: string | null;
 }
 
+export interface StorefrontAssets {
+  /**
+   * SHA-256 of the file (integrity, de-duplication).
+   */
+  content_hash: string;
+  /**
+   * MIME type sniffed from the file bytes (never trusted from the upload).
+   */
+  content_type: string;
+  /**
+   * Upload time.
+   */
+  created_at: Generated<Timestamp>;
+  /**
+   * Extension used in the public URL.
+   */
+  file_extension: string;
+  /**
+   * Original file name shown in the console.
+   */
+  file_name: string;
+  /**
+   * Height in pixels read from the file header.
+   */
+  height: number | null;
+  /**
+   * Asset id (ast_ + ULID); part of the public immutable URL /v1/assets/<tenant key>/<id>.<ext>.
+   */
+  id: string;
+  /**
+   * Use of the image; settings reference logo, logo_dark, logo_square, favicon and og_image assets by kind.
+   */
+  kind: string;
+  /**
+   * File size (at most 1 MB).
+   */
+  size_bytes: number;
+  /**
+   * StorageAdapter key, tenant_<key>/assets/<sha256>.<ext>.
+   */
+  storage_key: string;
+  /**
+   * Equal to created_at (immutable rows).
+   */
+  updated_at: Generated<Timestamp>;
+  /**
+   * Staff id (stf_) by value.
+   */
+  uploaded_by_staff_id: string | null;
+  /**
+   * Width in pixels read from the file header.
+   */
+  width: number | null;
+}
+
+export interface StorefrontPages {
+  /**
+   * Body in the allowed Markdown subset (headings, paragraphs, emphasis, lists, links, page images); no HTML.
+   */
+  body_markdown: Generated<string>;
+  /**
+   * Row creation time.
+   */
+  created_at: Generated<Timestamp>;
+  /**
+   * Page id (stp_ + ULID).
+   */
+  id: string;
+  /**
+   * Only published pages are served to the storefront.
+   */
+  is_published: Generated<boolean>;
+  /**
+   * Purpose; legal kinds can be linked from the legal links of storefront_settings.
+   */
+  kind: Generated<string>;
+  /**
+   * Locale of this version of the page (BCP 47).
+   */
+  locale: string;
+  /**
+   * First publication time.
+   */
+  published_at: Timestamp | null;
+  /**
+   * Listed in the storefront footer.
+   */
+  show_in_footer: Generated<boolean>;
+  /**
+   * URL slug: the storefront shows the page at /p/<slug>.
+   */
+  slug: string;
+  /**
+   * Order in the footer and page lists (lower first).
+   */
+  sort_order: Generated<number>;
+  /**
+   * Page title.
+   */
+  title: string;
+  /**
+   * Last modification time.
+   */
+  updated_at: Generated<Timestamp>;
+  /**
+   * Staff id (stf_) of the last editor, by value.
+   */
+  updated_by_staff_id: string | null;
+  /**
+   * Optimistic-locking counter (If-Match).
+   */
+  version: Generated<number>;
+}
+
 export interface StorefrontSettings {
   accepted_card_brands: Generated<string[]>;
+  /**
+   * Airline-card payments allowed in the live environment (only after the M6 security review).
+   */
+  airline_card_enabled_live: Generated<boolean>;
+  /**
+   * Airline-card payments allowed in the test environment (also needs AIRLINE_CARD_ENABLED).
+   */
+  airline_card_enabled_test: Generated<boolean>;
   auto_issue: Generated<boolean | null>;
+  /**
+   * Category of booking_queue_number.
+   */
+  booking_queue_category: Generated<number>;
+  /**
+   * Amadeus queue of the queuing office where every new order is placed (automatedProcess); used to find orders after a timeout.
+   */
+  booking_queue_number: number | null;
   brand_name: string;
   checkout_ttl_minutes: Generated<number>;
+  /**
+   * Cookie consent policy {regime, bannerRequired, policyVersion, categories}.
+   */
+  consent: Generated<Json>;
   created_at: Generated<Timestamp>;
   customer_accounts_enabled: Generated<boolean>;
   default_currency: Generated<string>;
   default_locale: Generated<string>;
+  /**
+   * Default market (ISO 3166-1 alpha-2 point-of-sale country).
+   */
+  default_market: string | null;
+  /**
+   * Favicon (kind favicon).
+   */
+  favicon_asset_id: string | null;
+  /**
+   * Legacy external favicon URL; not used by the MVP (favicon_asset_id). Contract phase later.
+   */
   favicon_url: string | null;
   features: Generated<Json>;
   guest_checkout_enabled: Generated<boolean>;
   id: Generated<string>;
   legal_links: Generated<Json>;
+  /**
+   * Registered company name for footers and e-mails (StorefrontConfig.legalName).
+   */
+  legal_name: string | null;
+  /**
+   * Main logo (storefront_assets, kind logo).
+   */
+  logo_asset_id: string | null;
+  /**
+   * Logo for dark backgrounds (kind logo_dark).
+   */
+  logo_dark_asset_id: string | null;
+  /**
+   * Square logo for e-mails and icons (kind logo_square).
+   */
+  logo_square_asset_id: string | null;
+  /**
+   * Legacy external logo URL; not used by the MVP (logo_asset_id). Contract phase later.
+   */
   logo_url: string | null;
+  /**
+   * Markets served [{countryCode, currency, locale}].
+   */
+  markets: Generated<Json>;
   offer_ttl_minutes: Generated<number>;
+  /**
+   * Default Open Graph image (kind og_image).
+   */
+  og_image_asset_id: string | null;
+  /**
+   * Recipient of operational alerts for the OTA staff; empty = owners' e-mails.
+   */
+  ops_alert_email: string | null;
   payment_timing: Generated<string>;
   primary_color: string | null;
   privacy_url: string | null;
+  /**
+   * Current version of the privacy policy, recorded in customer_consents.
+   */
+  privacy_version: string | null;
   require_3ds: Generated<boolean>;
   require_email_verification: Generated<boolean>;
   search_defaults: Generated<Json>;
   secondary_color: string | null;
+  /**
+   * SEO defaults {titleTemplate, defaultTitle, defaultDescription, robots} (localised texts by locale).
+   */
+  seo: Generated<Json>;
+  /**
+   * Support hours (localised), help centre URL, emergency phone (E.164).
+   */
+  support_details: Generated<Json>;
   support_email: string | null;
   support_phone: string | null;
   supported_currencies: Generated<string[]>;
   supported_locales: Generated<string[]>;
   terms_url: string | null;
+  /**
+   * Current version of the terms, recorded in customer_consents at sign-up.
+   */
+  terms_version: string | null;
   theme: Generated<Json>;
   ticketing_policy: Generated<string>;
+  /**
+   * IANA time zone of the OTA (support hours, e-mail dates); validated against reference.time_zones.
+   */
+  time_zone: Generated<string>;
   updated_at: Generated<Timestamp>;
   version: Generated<number>;
 }
@@ -1038,6 +1260,8 @@ export interface TenantTables {
   saved_travelers: SavedTravelers;
   schema_migrations: SchemaMigrations;
   staff_actions: StaffActions;
+  storefront_assets: StorefrontAssets;
+  storefront_pages: StorefrontPages;
   storefront_settings: StorefrontSettings;
   supplier_requests: SupplierRequests;
 }

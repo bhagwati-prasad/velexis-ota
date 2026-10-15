@@ -8,7 +8,8 @@
         "$TURBO_ROOT$/.env.example",
         "$TURBO_ROOT$/deploy/env/ota-backend.env.example",
         "$TURBO_ROOT$/deploy/env/ota-worker.env.example",
-        "$TURBO_ROOT$/deploy/systemd/velexis-ota-api.service"
+        "$TURBO_ROOT$/deploy/systemd/velexis-ota-api.service",
+        "$TURBO_ROOT$/ota/docs/data-model-migration-0002.md"
       ]
     }
   }

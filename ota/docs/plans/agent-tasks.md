@@ -235,7 +235,8 @@ The OTA side of M1 is the provisioning worker (OF-11): the platform's `tenant.pr
 
 The OTA backend gets its contract extensions, request pipeline, tenancy, Amadeus client and shopping endpoints; the SDK gets its core and the M2 namespaces; the storefront gets the search-to-price pages. Platform tasks PBE-036 and PAD-011 are gated on OF-01 (OBE-011 … OBE-013, OBE-026, OFE-008).
 
-### OBE-008 · Add tenant migration 0002 with the MVP deltas
+### OBE-008 · Add tenant migration 0002 with the MVP deltas ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-backend
 - **Milestone:** M2
 - **Depends on:** OBE-005
