@@ -1193,7 +1193,8 @@ The OTA group builds tenancy, shopping and the storefront in M2. The platform pr
 
 The OTA group builds checkout, Stripe payments on the Velexis account and the airline-card path in M3. The platform only adds the statement descriptor that Velexis-mode payments show on cards.
 
-### PBE-037 · Add the M3 and M4 operations to the OpenAPI document
+### PBE-037 · Add the M3 and M4 operations to the OpenAPI document ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-backend
 - **Milestone:** M3
 - **Depends on:** PBE-066

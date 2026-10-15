@@ -2,10 +2,11 @@
 //
 // PBE-005 wrote its first slice (identity, plans, internal: 24 operations, the conventions and the error catalogue),
 // PBE-006 the second (tenants, team, API keys and the M1 reads: 27 operations), PBE-007 the first admin slice
-// (admin auth and dashboard, tenants, provisioning jobs and queues: 21 operations) and PBE-066 the second (plans and
-// subscriptions, Amadeus accounts and offices, accounts, platform admins and audit: 26 operations). The tests of a
-// slice name its operations by operationId and never count the document, so the later slices (PBE-037, PBE-041,
-// PBE-042) only add operations and tests of their own. The convention checks run on every operation of the
+// (admin auth and dashboard, tenants, provisioning jobs and queues: 21 operations), PBE-066 the second (plans and
+// subscriptions, Amadeus accounts and offices, accounts, platform admins and audit: 26 operations) and PBE-037 the M3
+// and M4 slice (the statement descriptor, the console token and the Amadeus settings: 3 operations). The tests of a
+// slice name its operations by operationId and never count the document, so the later slices (PBE-041, PBE-042) only
+// add operations and tests of their own. The convention checks run on every operation of the
 // document: x-scope and the matching security scheme, `platform_admin` on every `/v1/admin/` path but the public
 // sign-in steps, X-Request-Id on every response, x-platform-tables, Idempotency-Key exactly on x-idempotent
 // operations, a 5–500 character `reason` exactly on x-reason-required operations, closed request bodies,
@@ -657,6 +658,40 @@ const SLICE_PBE066_STEP_UP = [
 
 /** The PBE-066 operation that needs a step-up only in some calls: "MFA↑ when the secret changes". */
 const SLICE_PBE066_CONDITIONAL_STEP_UP = ["adminUpdateAmadeusAccount"] as const;
+
+/**
+ * The PBE-037 slice (M3 and M4): `createConsoleToken` of api-inventory §8 and the connection updates of
+ * api-inventory-resources §3 and §4, the only M3 and M4 rows of the three inventory parts.
+ */
+const SLICE_PBE037: readonly SliceOperation[] = [
+  {
+    operationId: "createConsoleToken",
+    method: "post",
+    path: `${TENANT_PATH}/console-token`,
+    scope: "portal",
+    internal: false,
+  },
+  {
+    operationId: "updateAmadeusConnection",
+    method: "patch",
+    path: `${TENANT_PATH}/amadeus-connections/{environment}`,
+    scope: "portal",
+    internal: false,
+  },
+  {
+    operationId: "updatePaymentConnection",
+    method: "patch",
+    path: `${TENANT_PATH}/payment-connections/{environment}`,
+    scope: "portal",
+    internal: false,
+  },
+];
+
+/** The versioned PATCH operations of the PBE-037 slice, each with the masked connection it answers. */
+const SLICE_PBE037_UPDATES = {
+  updateAmadeusConnection: "#/components/schemas/AmadeusConnection",
+  updatePaymentConnection: "#/components/schemas/PaymentConnection",
+} as const satisfies Partial<Record<PlatformOperationId, string>>;
 
 /** The columns of the audit CSV export, in file order. */
 const AUDIT_CSV_COLUMNS = [
@@ -2073,6 +2108,371 @@ describe("the admin plans, Amadeus, accounts, admins and audit slice (PBE-066)",
         operationId,
         true,
       ]);
+    }
+  });
+});
+
+/** The backticked catalogue codes of an inventory cell (`officeIds` and other camelCase names are not codes). */
+function codesOf(cell: string): string[] {
+  return [...cell.matchAll(/`([A-Z][A-Z0-9_]+)`/g)].map(([, code = ""]) => code);
+}
+
+/** The field names of the first `{…}` of an inventory cell that follows `prefix`, without `?` and `: …` values. */
+function inventoryFields(cell: string, prefix = ""): string[] {
+  const escaped = prefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const fields = new RegExp(`\`${escaped}\\{([^}]+)\\}`, "u").exec(cell)?.[1] ?? "";
+  return fields.split(/,\s*/u).map((field) => field.split(":")[0]?.trim() ?? "");
+}
+
+describe("the M3 and M4 slice: statement descriptor, console token and Amadeus settings (PBE-037)", () => {
+  /** The rows of the three inventory parts by operationId. */
+  const allRows = (): Map<string, string[]> =>
+    new Map([
+      ...inventoryRows(INVENTORY),
+      ...inventoryRows(INVENTORY_RESOURCES),
+      ...inventoryRows(INVENTORY_ADMIN),
+    ]);
+
+  it("lists the 3 operations of the slice in the operations index, each with x-scope portal [PBE-037 AC1]", () => {
+    expect(SLICE_PBE037).toHaveLength(3);
+    const ids = new Set(SLICE_PBE037.map((entry) => entry.operationId));
+    expect(ids.size).toBe(3);
+    // 3 more operations: none of them belongs to an earlier slice.
+    expect(
+      [...SLICE, ...SLICE_PBE006, ...SLICE_PBE007, ...SLICE_PBE066].filter((entry) =>
+        ids.has(entry.operationId),
+      ),
+    ).toEqual([]);
+    for (const entry of SLICE_PBE037) {
+      expect(platformOperations).toContainEqual(expect.objectContaining({ ...entry, sdkMethod: null }));
+      expect([entry.operationId, operation(entry.operationId).spec["x-scope"]]).toEqual([
+        entry.operationId,
+        "portal",
+      ]);
+    }
+  });
+
+  it("documents each slice operation with the method, path, marks and errors of the M3 and M4 inventory rows [PBE-037 AC1]", () => {
+    const rows = allRows();
+    // The slice is exactly the M3 and M4 rows of the inventory; the milestone is the last cell of a row.
+    const later = [...rows]
+      .filter(([, cells]) => /^M[34]\b/u.test(cells[cells.length - 1] ?? ""))
+      .map(([operationId]) => operationId);
+    expect([...later].sort()).toEqual(SLICE_PBE037.map((entry) => entry.operationId).sort());
+
+    for (const entry of SLICE_PBE037) {
+      const [, route = "", auth = "", , , , errors = ""] = rows.get(entry.operationId) ?? [];
+      const [method = "", path = ""] = route.replaceAll("`", "").split(" ");
+      expect([entry.operationId, entry.method, entry.path]).toEqual([
+        entry.operationId,
+        method.toLowerCase(),
+        path.replace(/^…/u, TENANT_PATH),
+      ]);
+      const marks = authMarks(auth);
+      expect([entry.operationId, scopeOf(marks), marks.join(" ")]).toEqual([
+        entry.operationId,
+        "portal",
+        expect.not.stringMatching(/MFA↑|Idem|F:/u),
+      ]);
+      const spec = operation(entry.operationId).spec;
+      expect([
+        entry.operationId,
+        spec["x-mfa-step-up"],
+        spec["x-idempotent"],
+        spec["x-feature"],
+        spec["x-reason-required"],
+        spec["x-internal"],
+      ]).toEqual([entry.operationId, undefined, undefined, undefined, undefined, undefined]);
+      // Every code of the inventory's Errors cell is answered; the operation answers the generic codes too.
+      expect([entry.operationId, codesOf(errors).length > 0]).toEqual([entry.operationId, true]);
+      expect([entry.operationId, spec["x-error-codes"]]).toEqual([
+        entry.operationId,
+        expect.arrayContaining(codesOf(errors)),
+      ]);
+    }
+  });
+
+  it("answers createConsoleToken with a one-time portal token in a no-store 201 that the OTA contract accepts [PBE-037 AC1]", () => {
+    const op = operation("createConsoleToken");
+    const [, , , , exchange = ""] = allRows().get("createConsoleToken") ?? [];
+    // No body, no Idempotency-Key: a token is never stored for a replay.
+    expect([op.spec["requestBody"], op.spec["parameters"], op.spec["x-idempotent"]]).toEqual([
+      undefined,
+      undefined,
+      undefined,
+    ]);
+    const success = responsesOf(platform, op).filter(([status]) => status.startsWith("2"));
+    expect(success.map(([status]) => status)).toEqual(["201"]);
+    const created = successOf("createConsoleToken", "201");
+    expect(exchange).toContain("(no-store)");
+    expect(objectAt(created, "headers")["Cache-Control"]).toEqual({ $ref: "#/components/headers/NoStore" });
+    expect(jsonMedia(created)?.["schema"]).toEqual({ $ref: "#/components/schemas/ConsoleToken" });
+
+    const schemas = objectAt(objectAt(platform, "components"), "schemas");
+    const consoleToken = objectAt(schemas, "ConsoleToken");
+    const fields = inventoryFields(exchange, "201 ");
+    expect(fields).toEqual(["portalToken", "expiresAt", "consoleSsoUrl"]);
+    expect([consoleToken["required"], Object.keys(objectAt(consoleToken, "properties"))]).toEqual([
+      fields,
+      fields,
+    ]);
+    expect(consoleToken["additionalProperties"]).toBe(false);
+
+    // `ptk_` and 43 base62 characters (PADR-0007 item 1), within the pattern the OTA backend redeems.
+    const platformPattern = new RegExp(String(objectAt(schemas, "PortalToken")["pattern"]), "u");
+    const otaSignIn = objectAt(objectAt(ota, "components"), "schemas")["ConsolePortalTokenSignIn"];
+    const otaPattern = new RegExp(
+      String(objectAt(objectAt(otaSignIn, "properties"), "portalToken")["pattern"]),
+      "u",
+    );
+    const [example] = examplesOf(platform, jsonMedia(created) ?? {});
+    const token = String(isObject(example) ? example["portalToken"] : "");
+    const base62 = `${"aZ09".repeat(10)}xY7`;
+    expect(base62).toHaveLength(43);
+    for (const valid of [token, `ptk_${base62}`]) {
+      expect([valid, platformPattern.test(valid), otaPattern.test(valid)]).toEqual([valid, true, true]);
+    }
+    for (const invalid of [`ptk_${base62.slice(1)}`, `ptk_${base62}a`, `ptk_${base62.slice(1)}-`, base62]) {
+      expect([invalid, platformPattern.test(invalid)]).toEqual([invalid, false]);
+    }
+    expect(checker.check("createConsoleToken", { status: 201, body: example })).toEqual([]);
+    expect(
+      checker.check("createConsoleToken", {
+        status: 201,
+        body: { ...(example as Json), tokenHash: "0".repeat(64) },
+      }),
+    ).toEqual([expect.objectContaining({ path: "/tokenHash", keyword: "additionalProperties" })]);
+
+    // Any member may ask (no FORBIDDEN); the MFA policy of a live OTA is not a step-up (no REAUTH_REQUIRED).
+    expect(op.spec["x-error-codes"]).toEqual(
+      expect.arrayContaining(["TENANT_NOT_ACTIVE", "MFA_REQUIRED", "RATE_LIMITED", "EMAIL_NOT_VERIFIED"]),
+    );
+    expect(op.spec["x-error-codes"]).not.toContain("FORBIDDEN");
+    expect(op.spec["x-error-codes"]).not.toContain("REAUTH_REQUIRED");
+    // The token lives only in Redis: while Redis is down no token is issued (the SSO flow's failure handling).
+    expect([op.spec["x-error-codes"], objectAt(op.spec, "responses")["503"]]).toEqual([
+      expect.arrayContaining(["SERVICE_UNAVAILABLE"]),
+      { $ref: "#/components/responses/ServiceUnavailable" },
+    ]);
+    // TENANT_NOT_ACTIVE names the status and the suspension reason, so the portal can explain it.
+    const [, conflict = {}] = responsesOf(platform, op).find(([status]) => status === "409") ?? [];
+    const [notActive] = examplesOf(platform, jsonMedia(conflict) ?? {});
+    expect(Object.keys(objectAt(objectAt(notActive, "error"), "details"))).toEqual([
+      "status",
+      "suspensionReason",
+    ]);
+  });
+
+  it("takes If-Match on the connection updates and answers the masked connection with its ETag, 412 and TENANT_NOT_ACTIVE [PBE-037 AC1]", () => {
+    const rows = allRows();
+    for (const [operationId, masked] of Object.entries(SLICE_PBE037_UPDATES)) {
+      const op = operation(operationId);
+      const pathItem = objectAt(objectAt(platform, "paths"), op.path);
+      expect([operationId, pathItem["parameters"], op.spec["parameters"]]).toEqual([
+        operationId,
+        [
+          { $ref: "#/components/parameters/TenantId" },
+          { $ref: "#/components/parameters/ConnectionEnvironment" },
+        ],
+        [{ $ref: "#/components/parameters/IfMatch" }],
+      ]);
+      const statuses = responsesOf(platform, op).map(([status]) => status);
+      expect([operationId, statuses]).toEqual([operationId, expect.arrayContaining(["200", "409", "412"])]);
+      const ok = successOf(operationId, "200");
+      expect([operationId, objectAt(ok, "headers")["ETag"], jsonMedia(ok)?.["schema"]]).toEqual([
+        operationId,
+        { $ref: "#/components/headers/ETag" },
+        { $ref: masked },
+      ]);
+      expect([operationId, propertyNames(platform, { $ref: masked }).has("version")]).toEqual([
+        operationId,
+        true,
+      ]);
+      // A suspended OTA's connections are read-only (PADR-0014 item 5); only owners and admins write them.
+      expect([operationId, op.spec["x-error-codes"]]).toEqual([
+        operationId,
+        expect.arrayContaining(["PRECONDITION_FAILED", "TENANT_NOT_ACTIVE", "FORBIDDEN", "NOT_FOUND"]),
+      ]);
+      // The request fields are those of the inventory row; the ones without `?` are required.
+      const [, , , , exchange = ""] = rows.get(operationId) ?? [];
+      expect(exchange).toContain("`If-Match`");
+      const fields = inventoryFields(exchange);
+      const body = resolve(platform, requestSchemaOf(operationId));
+      expect([operationId, Object.keys(objectAt(body, "properties"))]).toEqual([
+        operationId,
+        fields.map((field) => field.replace(/\?$/u, "")),
+      ]);
+      const required = fields.filter((field) => !field.endsWith("?"));
+      expect([operationId, isObject(body) ? body["required"] : undefined]).toEqual([
+        operationId,
+        required.length > 0 ? required : undefined,
+      ]);
+    }
+    const environment = resolve(platform, { $ref: "#/components/parameters/ConnectionEnvironment" });
+    expect(
+      isObject(environment)
+        ? [environment["name"], environment["in"], environment["required"], environment["schema"]]
+        : [],
+    ).toEqual(["environment", "path", true, { $ref: "#/components/schemas/Environment" }]);
+
+    // The checker refuses a connection answer that leaks a ciphertext.
+    for (const [operationId, leak] of [
+      ["updateAmadeusConnection", "clientSecretCiphertext"],
+      ["updatePaymentConnection", "secretKeyCiphertext"],
+    ] as const) {
+      const [example] = examplesOf(platform, jsonMedia(successOf(operationId, "200")) ?? {});
+      expect(checker.check(operationId, { status: 200, body: example })).toEqual([]);
+      expect(
+        checker.check(operationId, { status: 200, body: { ...(example as Json), [leak]: "AAAA" } }),
+      ).toEqual([expect.objectContaining({ path: `/${leak}`, keyword: "additionalProperties" })]);
+    }
+  });
+
+  it("accepts only the statement descriptor suffixes that Stripe and the database CHECK accept", () => {
+    const requests = requestBodyChecker(["updatePaymentConnection"]);
+    const check = (suffix: unknown) =>
+      requests
+        .check("updatePaymentConnection", { status: 200, body: { statementDescriptorSuffix: suffix } })
+        .map((problem) => `${problem.path} ${problem.keyword}`);
+    const migration = readFileSync(join(PLATFORM_MIGRATIONS, "0002_add_mvp_platform_deltas.sql"), "utf8");
+    const databaseCheck = new RegExp(
+      /statement_descriptor_suffix ~ '([^']+)'/u.exec(migration)?.[1] ?? "(?!)",
+      "u",
+    );
+    const answered = new RegExp(
+      String(
+        objectAt(
+          objectAt(objectAt(objectAt(platform, "components"), "schemas")["PaymentConnection"], "properties"),
+          "statementDescriptorSuffix",
+        )["pattern"],
+      ),
+      "u",
+    );
+
+    const accepted = ["ACME TRAVEL", "ACME TRAVEL 24", "A1", "7 SEAS", "x".repeat(22), "Fjord Reisen"];
+    for (const suffix of accepted) {
+      expect([suffix, check(suffix)]).toEqual([suffix, []]);
+      // Every accepted suffix can be stored and answered.
+      expect([suffix, databaseCheck.test(suffix), answered.test(suffix)]).toEqual([suffix, true, true]);
+    }
+    const refused: ReadonlyArray<readonly [unknown, string]> = [
+      // The two refusals of PBE-038's acceptance: a forbidden character, and 23 characters.
+      ["ACME*TRAVEL", "pattern"],
+      ["x".repeat(23), "maxLength"],
+      ["A", "minLength"],
+      ["", "minLength"],
+      ["12345", "pattern"],
+      ["2 4 6", "pattern"],
+      [" ACME", "pattern"],
+      ["ACME<TRAVEL", "pattern"],
+      ["ACME>TRAVEL", "pattern"],
+      ["ACME\\TRAVEL", "pattern"],
+      ["ACME'S", "pattern"],
+      ['ACME"S', "pattern"],
+      ["ACMÉ TRAVEL", "pattern"],
+      ["ACME-TRAVEL", "pattern"],
+      ["ACME.TRAVEL", "pattern"],
+      ["A&B TRAVEL", "pattern"],
+      ["ACME\tTRAVEL", "pattern"],
+      [null, "type"],
+      [24, "type"],
+    ];
+    for (const [suffix, keyword] of refused) {
+      expect([suffix, check(suffix)]).toEqual([
+        suffix,
+        expect.arrayContaining([`/statementDescriptorSuffix ${keyword}`]),
+      ]);
+    }
+    expect(requests.check("updatePaymentConnection", { status: 200, body: {} })).toEqual([
+      expect.objectContaining({ path: "/statementDescriptorSuffix", keyword: "required" }),
+    ]);
+    expect(
+      requests.check("updatePaymentConnection", {
+        status: 200,
+        body: { statementDescriptorSuffix: "ACME TRAVEL", accountMode: "connect_standard" },
+      }),
+    ).toEqual([expect.objectContaining({ path: "/accountMode", keyword: "additionalProperties" })]);
+  });
+
+  it("validates the Amadeus settings with the schemas that listAmadeusConnections answers", () => {
+    const schemas = objectAt(objectAt(platform, "components"), "schemas");
+    const answered = objectAt(objectAt(schemas, "AmadeusConnection"), "properties");
+    const update = objectAt(objectAt(schemas, "UpdateAmadeusConnectionRequest"), "properties");
+    // The same schemas as the answer (openapi/README.md §2, PBE-006 notes); only the list is bounded.
+    expect(update["ticketingDefaults"]).toEqual(answered["ticketingDefaults"]);
+    expect(objectAt(update, "monitoredQueues")["items"]).toEqual(
+      objectAt(answered, "monitoredQueues")["items"],
+    );
+    for (const office of ["defaultOfficeId", "queuingOfficeId", "ownerOfficeId"]) {
+      expect([office, update[office]]).toEqual([office, { $ref: "#/components/schemas/AmadeusOfficeId" }]);
+    }
+
+    const requests = requestBodyChecker(["updateAmadeusConnection", "updatePaymentConnection"]);
+    // Every request example of the slice is a valid body.
+    for (const operationId of Object.keys(SLICE_PBE037_UPDATES)) {
+      const body = resolve(platform, operation(operationId).spec["requestBody"]);
+      const media = objectAt(objectAt(body, "content"), "application/json");
+      const examples = examplesOf(platform, media);
+      expect([operationId, examples.length > 0]).toEqual([operationId, true]);
+      for (const example of examples) {
+        expect([operationId, requests.check(operationId, { status: 200, body: example })]).toEqual([
+          operationId,
+          [],
+        ]);
+      }
+    }
+
+    const queue = { officeId: "NCE1A0955", queueId: 8, category: 0 };
+    const check = (body: unknown) =>
+      requests
+        .check("updateAmadeusConnection", { status: 200, body })
+        .map((problem) => `${problem.path} ${problem.keyword}`);
+    expect(check({ monitoredQueues: [] })).toEqual([]);
+    expect(check({ ticketingDefaults: {} })).toEqual([]);
+    expect(
+      check({ monitoredQueues: Array.from({ length: 20 }, (_, queueId) => ({ ...queue, queueId })) }),
+    ).toEqual([]);
+    // A problem of the whole body has the empty path: " minProperties".
+    const refused: ReadonlyArray<readonly [unknown, string]> = [
+      [{}, " minProperties"],
+      [{ officeIds: ["NCE1A0955"] }, "/officeIds additionalProperties"],
+      [{ clientSecret: "not-a-secret" }, "/clientSecret additionalProperties"],
+      [{ status: "active" }, "/status additionalProperties"],
+      [{ defaultOfficeId: "nce1a0955" }, "/defaultOfficeId pattern"],
+      [{ queuingOfficeId: null }, "/queuingOfficeId type"],
+      [{ ownerOfficeId: "NCE1A095" }, "/ownerOfficeId pattern"],
+      [
+        { ticketingDefaults: { ticketingAgreement: { option: "LATER" } } },
+        "/ticketingDefaults/ticketingAgreement/option enum",
+      ],
+      [
+        { ticketingDefaults: { issue: true, printer: "P1" } },
+        "/ticketingDefaults/printer additionalProperties",
+      ],
+      [{ monitoredQueues: [{ officeId: "NCE1A0955", queueId: 8 }] }, "/monitoredQueues/0/category required"],
+      [{ monitoredQueues: [{ ...queue, category: 255 }] }, "/monitoredQueues/0/category maximum"],
+      [{ monitoredQueues: [queue, queue] }, "/monitoredQueues uniqueItems"],
+      [
+        { monitoredQueues: Array.from({ length: 21 }, (_, queueId) => ({ ...queue, queueId })) },
+        "/monitoredQueues maxItems",
+      ],
+    ];
+    for (const [body, problem] of refused) {
+      expect([body, check(body)]).toEqual([body, expect.arrayContaining([problem])]);
+    }
+  });
+
+  it("answers no property ending in Secret, Ciphertext or Hash in any response of the slice", () => {
+    const leaky = (name: string): boolean => /(secret|ciphertext|hash)$/i.test(name);
+    // The walk reaches the connection shapes, so the check cannot pass by not looking.
+    expect(
+      propertyNames(platform, jsonMedia(successOf("updateAmadeusConnection", "200"))?.["schema"]),
+    ).toContain("pendingSubmission");
+    for (const { operationId } of SLICE_PBE037) {
+      for (const [status, response] of responsesOf(platform, operation(operationId))) {
+        const names = [...propertyNames(platform, jsonMedia(response)?.["schema"])];
+        expect([operationId, status, names.filter(leaky)]).toEqual([operationId, status, []]);
+      }
     }
   });
 });

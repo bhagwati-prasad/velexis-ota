@@ -118,4 +118,9 @@ export const PENDING_OPERATIONS: readonly PendingOperation[] = Object.freeze([
   { operationId: "adminRevokeAdmin", task: "PBE-032" },
   { operationId: "adminListAudit", task: "PBE-032" },
   { operationId: "adminExportAudit", task: "PBE-032" },
+
+  // PBE-037: the M4 console token and Amadeus settings, and the M3 statement descriptor.
+  { operationId: "createConsoleToken", task: "PBE-039" },
+  { operationId: "updateAmadeusConnection", task: "PBE-040" },
+  { operationId: "updatePaymentConnection", task: "PBE-038" },
 ] satisfies PendingOperation[]);

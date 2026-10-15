@@ -785,6 +785,36 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/tenants/{tenantId}/console-token": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The OTA; callers without an active membership get `404 NOT_FOUND`.
+                 * @example ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F
+                 */
+                tenantId: components["parameters"]["TenantId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Issue a one-time token that signs the member in to the OTA admin
+         * @description Any active member of the OTA (every role) gets a one-time portal token for the OTA admin's single sign-on (PADR-0007). The portal's "Open console" route handler calls it and posts the token to `consoleSsoUrl` in a form body, never in a URL; the OTA backend redeems it once with `GETDEL` and starts a staff session bound to this OTA.
+         *
+         *     **Preconditions.** A verified, active account (the `portal` scope) with an active membership of the OTA; the OTA must be `active`, otherwise `409 TENANT_NOT_ACTIVE` with `details.status` (`provisioning`, `suspended` or `failed`) and, for a suspended OTA, `details.suspensionReason`, so the portal can explain why and link to the billing page. When the OTA is live (`storefrontEnvironment` `live`), an account without MFA gets `403 MFA_REQUIRED` and is sent to the MFA set-up (PADR-0008). This is the MFA policy of live OTAs, not a step-up: a recent TOTP code is not needed. Rate limited to 30 per account per minute (`429 RATE_LIMITED`).
+         *
+         *     **The token** is `ptk_` and 43 base62 characters from the CSPRNG (256 bits). Only its SHA-256 is used, as the Redis key `ptk:<sha256 hex>`, set with `EX 60 NX` to the JSON `{v: 1, accountId, tenantId, membershipId, role, mfa, issuedAt, requestId}`; no platform table holds it. The answer carries it once with `Cache-Control: no-store`: it is never logged, never written to the audit row or the database, and never stored for a replay. Writes the audit row `console.token_issued` (target the membership, without the token). `503 SERVICE_UNAVAILABLE` while Redis is unreachable, because the token lives only there: no token is issued and no audit row is written (platform/docs/flows/team-and-ota-admin-sso.md, failure handling).
+         */
+        post: operations["createConsoleToken"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/tenants/{tenantId}/api-keys": {
         parameters: {
             query?: never;
@@ -962,6 +992,41 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/tenants/{tenantId}/amadeus-connections/{environment}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The OTA; callers without an active membership get `404 NOT_FOUND`.
+                 * @example ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F
+                 */
+                tenantId: components["parameters"]["TenantId"];
+                /**
+                 * @description The environment of the connection (`environment` of `listAmadeusConnections` or `listPaymentConnections`): `test`, or `live` once the OTA has a live connection. An environment without a connection answers `404 NOT_FOUND`.
+                 * @example test
+                 */
+                environment: components["parameters"]["ConnectionEnvironment"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Change the office defaults, ticketing defaults and monitored queues of an Amadeus connection
+         * @description Owners and admins change the settings the OTA backend applies to Amadeus calls in one environment: the default office (used when the caller names none), the default `queuingOfficeId` and `ownerOfficeId` of new flight orders, the ticketing defaults of new flight orders, and the queues polled into the queue snapshots. Each field is optional; a field that is sent replaces the stored value (`ticketingDefaults` as a whole object, `{}` to clear it, and `monitoredQueues` as a whole list). The connection's offices themselves (`officeIds`), its credentials and its status are not changed here.
+         *
+         *     **Rules.** Every office id of the body must be one of the connection's `officeIds`: the three office defaults and, because the OTA backend acts only for the OTA's own offices on the shared Velexis account (ADR-0012, office isolation), the `officeId` of each `ticketingDefaults.automatedProcess` entry and of each monitored queue. Another office answers `400 VALIDATION_FAILED` with a field error on that field. The shapes of `ticketingDefaults` and `monitoredQueues` are those of `listAmadeusConnections`. `{environment}` without a connection answers `404 NOT_FOUND`. A tenant that is not `active` answers `409 TENANT_NOT_ACTIVE`, because a suspended OTA's connections are read-only (PADR-0014 item 5). `If-Match` carries the connection's `version`; a stale one answers `412 PRECONDITION_FAILED`.
+         *
+         *     Updates the row with `version + 1`, writes the audit row `amadeus.settings_updated` and, after commit, publishes a `connection` invalidation, so the OTA backend reloads the connection within seconds.
+         */
+        patch: operations["updateAmadeusConnection"];
+        trace?: never;
+    };
     "/v1/tenants/{tenantId}/payment-connections": {
         parameters: {
             query?: never;
@@ -986,6 +1051,41 @@ export interface paths {
         options?: never;
         head?: never;
         patch?: never;
+        trace?: never;
+    };
+    "/v1/tenants/{tenantId}/payment-connections/{environment}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The OTA; callers without an active membership get `404 NOT_FOUND`.
+                 * @example ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F
+                 */
+                tenantId: components["parameters"]["TenantId"];
+                /**
+                 * @description The environment of the connection (`environment` of `listAmadeusConnections` or `listPaymentConnections`): `test`, or `live` once the OTA has a live connection. An environment without a connection answers `404 NOT_FOUND`.
+                 * @example test
+                 */
+                environment: components["parameters"]["ConnectionEnvironment"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Change the card statement descriptor suffix of a payment connection
+         * @description Owners and admins change the statement descriptor suffix of the payment connection of one environment: the OTA's brand that card statements show for payments taken in `velexis` mode on the Velexis Stripe account (ADR-0011). Provisioning derives it from the OTA name.
+         *
+         *     **Rules** (Stripe's rules for a suffix and the `CHECK` of the column, applied by the schema): 2 to 22 characters, only ASCII letters, digits and spaces, starting with a letter or a digit and holding at least one letter; none of Stripe's forbidden characters `<`, `>`, `\`, `'`, `"` or `*`. A broken rule answers `400 VALIDATION_FAILED` with a field error, never the submitted value. `{environment}` without a connection answers `404 NOT_FOUND`. A tenant that is not `active` answers `409 TENANT_NOT_ACTIVE`, because a suspended OTA's connections are read-only (PADR-0014 item 5). `If-Match` carries the connection's `version`; a stale one answers `412 PRECONDITION_FAILED`.
+         *
+         *     Updates the row with `version + 1`, writes the audit row `payments.descriptor_updated` and, after commit, publishes a `connection` invalidation, so the OTA backend uses the new suffix for new payments within seconds.
+         */
+        patch: operations["updatePaymentConnection"];
         trace?: never;
     };
     "/v1/tenants/{tenantId}/subscription": {
@@ -2762,6 +2862,22 @@ export interface components {
             membership: components["schemas"]["Member"];
             tenant: components["schemas"]["TenantSummary"];
         };
+        /** @description A one-time portal token for the OTA admin's single sign-on (PADR-0007): `ptk_` and 43 base62 characters (256 bits), within the OTA contract's `ConsolePortalTokenSignIn.portalToken` pattern. Never logged, never in a URL. */
+        PortalToken: string;
+        /** @description What the portal posts to the OTA admin: the token, when it stops working, and where to post it. */
+        ConsoleToken: {
+            portalToken: components["schemas"]["PortalToken"];
+            /**
+             * Format: date-time
+             * @description When the token expires, 60 seconds after it was issued; it also stops working once redeemed.
+             */
+            expiresAt: string;
+            /**
+             * Format: uri
+             * @description The OTA admin's sign-on URL, `PUBLIC_OTA_ADMIN_URL` with `/sso` (`https://admin.ota.example.com/sso` in production); the portal posts the token there as the form field `portalToken`.
+             */
+            consoleSsoUrl: string;
+        };
         /**
          * @description API key id (`key_` + ULID).
          * @example key_01JA2ZD8E2G6J0K4N8Q2S6W0Y4
@@ -3002,6 +3118,15 @@ export interface components {
         AmadeusConnectionList: {
             data: components["schemas"]["AmadeusConnection"][];
         };
+        /** @description The settings to change; at least one. A field that is sent replaces the stored value. Every office id must be one of the connection's `officeIds` (checked by the service, `400 VALIDATION_FAILED` otherwise). */
+        UpdateAmadeusConnectionRequest: {
+            defaultOfficeId?: components["schemas"]["AmadeusOfficeId"];
+            queuingOfficeId?: components["schemas"]["AmadeusOfficeId"];
+            ownerOfficeId?: components["schemas"]["AmadeusOfficeId"];
+            ticketingDefaults?: components["schemas"]["AmadeusTicketingDefaults"];
+            /** @description The queues to poll, replacing the list; `[]` stops polling. Each queue at most once. */
+            monitoredQueues?: components["schemas"]["AmadeusMonitoredQueue"][];
+        };
         /** @description The connected Stripe account's state from `account.updated` (Connect Standard, M5); empty in `velexis` mode. */
         PaymentCapabilities: {
             chargesEnabled?: boolean;
@@ -3052,6 +3177,14 @@ export interface components {
         };
         PaymentConnectionList: {
             data: components["schemas"]["PaymentConnection"][];
+        };
+        /**
+         * @description A card statement descriptor suffix as an owner enters it: 2 to 22 characters, only ASCII letters, digits and spaces, starting with a letter or a digit and holding at least one letter. Stripe's forbidden characters (`<`, `>`, `\`, `'`, `"`, `*`) are outside that set. Every value also meets the `CHECK` of `payment_provider_connections.statement_descriptor_suffix`.
+         * @example ACME TRAVEL
+         */
+        StatementDescriptorSuffix: string;
+        UpdatePaymentConnectionRequest: {
+            statementDescriptorSuffix: components["schemas"]["StatementDescriptorSuffix"];
         };
         /** @description The OTA's subscription to a Velexis plan. */
         Subscription: {
@@ -4078,7 +4211,7 @@ export interface components {
                 "application/json": components["schemas"]["ErrorResponse"];
             };
         };
-        /** @description A dependency the operation needs (PostgreSQL, or Redis for the idempotency store or the BullMQ queues) is unavailable; nothing was written. Retry later. Possible codes: SERVICE_UNAVAILABLE. */
+        /** @description A dependency the operation needs (PostgreSQL, or Redis for the idempotency store, the BullMQ queues or the one-time console tokens) is unavailable; nothing was written. Retry later. Possible codes: SERVICE_UNAVAILABLE. */
         ServiceUnavailable: {
             headers: {
                 "X-Request-Id": components["headers"]["X-Request-Id"];
@@ -4151,6 +4284,11 @@ export interface components {
          * @example key_01JB3KA2C6E0G4J8M2P6S0V4X8
          */
         ApiKeyId: string;
+        /**
+         * @description The environment of the connection (`environment` of `listAmadeusConnections` or `listPaymentConnections`): `test`, or `live` once the OTA has a live connection. An environment without a connection answers `404 NOT_FOUND`.
+         * @example test
+         */
+        ConnectionEnvironment: components["schemas"]["Environment"];
         /**
          * @description The OTA (`id` of `adminListTenants`); an unknown id answers `404 NOT_FOUND`.
          * @example ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F
@@ -6012,6 +6150,67 @@ export interface operations {
             500: components["responses"]["InternalError"];
         };
     };
+    createConsoleToken: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The OTA; callers without an active membership get `404 NOT_FOUND`.
+                 * @example ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F
+                 */
+                tenantId: components["parameters"]["TenantId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The one-time token, valid for 60 seconds, and the OTA admin's sign-on URL to post it to as the form field `portalToken`. */
+            201: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    "Cache-Control": components["headers"]["NoStore"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "portalToken": "ptk_HStG6kFQHy3n6XUc7GtdqJXOQ2LzGqpOXtxJQGAqYTx",
+                     *       "expiresAt": "2026-11-02T09:15:42Z",
+                     *       "consoleSsoUrl": "https://admin.ota.example.com/sso"
+                     *     }
+                     */
+                    "application/json": components["schemas"]["ConsoleToken"];
+                };
+            };
+            400: components["responses"]["ValidationFailed"];
+            401: components["responses"]["Unauthenticated"];
+            /** @description The e-mail address is not verified, or the OTA is live and the account has no MFA (set it up first). Possible codes: EMAIL_NOT_VERIFIED, MFA_REQUIRED. */
+            403: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            404: components["responses"]["NotFound"];
+            /** @description The OTA is not active (`details.status`; `details.suspensionReason` when it is suspended), so its console cannot be opened. Possible codes: TENANT_NOT_ACTIVE. */
+            409: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["ServiceUnavailable"];
+        };
+    };
     listApiKeys: {
         parameters: {
             query?: {
@@ -6507,6 +6706,100 @@ export interface operations {
             500: components["responses"]["InternalError"];
         };
     };
+    updateAmadeusConnection: {
+        parameters: {
+            query?: never;
+            header: {
+                /**
+                 * @description The `ETag` of the version being changed; a stale version answers `412 PRECONDITION_FAILED`.
+                 * @example "3"
+                 */
+                "If-Match": components["parameters"]["IfMatch"];
+            };
+            path: {
+                /**
+                 * @description The OTA; callers without an active membership get `404 NOT_FOUND`.
+                 * @example ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F
+                 */
+                tenantId: components["parameters"]["TenantId"];
+                /**
+                 * @description The environment of the connection (`environment` of `listAmadeusConnections` or `listPaymentConnections`): `test`, or `live` once the OTA has a live connection. An environment without a connection answers `404 NOT_FOUND`.
+                 * @example test
+                 */
+                environment: components["parameters"]["ConnectionEnvironment"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateAmadeusConnectionRequest"];
+            };
+        };
+        responses: {
+            /** @description The connection with its new settings, and its new version in `ETag`. */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    ETag: components["headers"]["ETag"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "id": "sc_01JA2ZB9C3E7G1J5M9Q3S7V1X5",
+                     *       "environment": "test",
+                     *       "credentialSource": "velexis",
+                     *       "status": "active",
+                     *       "officeIds": [
+                     *         "NCE1A0955"
+                     *       ],
+                     *       "defaultOfficeId": "NCE1A0955",
+                     *       "queuingOfficeId": "NCE1A0955",
+                     *       "ownerOfficeId": "NCE1A0955",
+                     *       "clientId": null,
+                     *       "ticketingDefaults": {
+                     *         "ticketingAgreement": {
+                     *           "option": "DELAY_TO_CANCEL",
+                     *           "delay": "2D"
+                     *         },
+                     *         "automatedProcess": [
+                     *           {
+                     *             "code": "IMMEDIATE",
+                     *             "queue": {
+                     *               "number": "8",
+                     *               "category": "0"
+                     *             },
+                     *             "officeId": "NCE1A0955"
+                     *           }
+                     *         ],
+                     *         "issue": false
+                     *       },
+                     *       "monitoredQueues": [
+                     *         {
+                     *           "officeId": "NCE1A0955",
+                     *           "queueId": 8,
+                     *           "category": 0
+                     *         }
+                     *       ],
+                     *       "lastVerifiedAt": "2026-10-14T08:20:15Z",
+                     *       "lastError": null,
+                     *       "pendingSubmission": null,
+                     *       "version": 2
+                     *     }
+                     */
+                    "application/json": components["schemas"]["AmadeusConnection"];
+                };
+            };
+            400: components["responses"]["ValidationFailed"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["TenantRoleForbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["TenantNotActive"];
+            412: components["responses"]["PreconditionFailed"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+        };
+    };
     listPaymentConnections: {
         parameters: {
             query?: never;
@@ -6558,6 +6851,80 @@ export interface operations {
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["TenantRoleForbidden"];
             404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    updatePaymentConnection: {
+        parameters: {
+            query?: never;
+            header: {
+                /**
+                 * @description The `ETag` of the version being changed; a stale version answers `412 PRECONDITION_FAILED`.
+                 * @example "3"
+                 */
+                "If-Match": components["parameters"]["IfMatch"];
+            };
+            path: {
+                /**
+                 * @description The OTA; callers without an active membership get `404 NOT_FOUND`.
+                 * @example ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F
+                 */
+                tenantId: components["parameters"]["TenantId"];
+                /**
+                 * @description The environment of the connection (`environment` of `listAmadeusConnections` or `listPaymentConnections`): `test`, or `live` once the OTA has a live connection. An environment without a connection answers `404 NOT_FOUND`.
+                 * @example test
+                 */
+                environment: components["parameters"]["ConnectionEnvironment"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                /**
+                 * @example {
+                 *       "statementDescriptorSuffix": "ACME TRAVEL 24"
+                 *     }
+                 */
+                "application/json": components["schemas"]["UpdatePaymentConnectionRequest"];
+            };
+        };
+        responses: {
+            /** @description The connection with its new suffix, and its new version in `ETag`. */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    ETag: components["headers"]["ETag"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "id": "ppc_01JA2ZBA4D8F2H6K0N4Q8S2V6X",
+                     *       "environment": "test",
+                     *       "provider": "stripe",
+                     *       "accountMode": "velexis",
+                     *       "status": "active",
+                     *       "accountReference": null,
+                     *       "publishableKey": null,
+                     *       "statementDescriptorSuffix": "ACME TRAVEL 24",
+                     *       "capabilities": {},
+                     *       "connectedAt": null,
+                     *       "disconnectedAt": null,
+                     *       "webhookUrl": null,
+                     *       "pendingSubmission": null,
+                     *       "version": 2
+                     *     }
+                     */
+                    "application/json": components["schemas"]["PaymentConnection"];
+                };
+            };
+            400: components["responses"]["ValidationFailed"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["TenantRoleForbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["TenantNotActive"];
+            412: components["responses"]["PreconditionFailed"];
             429: components["responses"]["RateLimited"];
             500: components["responses"]["InternalError"];
         };
