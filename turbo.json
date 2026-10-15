@@ -59,6 +59,7 @@
         "$TURBO_ROOT$/ota/backend/openapi/**",
         "$TURBO_ROOT$/platform/docs/api-inventory*.md",
         "$TURBO_ROOT$/platform/docs/data-model-migration-0002*.md",
+        "$TURBO_ROOT$/platform/docs/flows/*.md",
         "$TURBO_ROOT$/platform/docs/plans/agent-tasks.md",
         "$TURBO_ROOT$/.env.example",
         "$TURBO_ROOT$/platform/frontend/.env.example",

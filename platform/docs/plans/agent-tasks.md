@@ -272,7 +272,8 @@ Common commands: backend `pnpm --filter @velexis/platform-backend test`, `test:i
   - The registry registers no scheduler for a disabled feature.
 - **Verify:** `pnpm --filter @velexis/platform-backend test && pnpm --filter @velexis/platform-backend test:int -- common`
 
-### PBE-010 · Add the audit module and the platform redaction paths
+### PBE-010 · Add the audit module and the platform redaction paths ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-backend
 - **Milestone:** M1
 - **Depends on:** PBE-003, PBE-008

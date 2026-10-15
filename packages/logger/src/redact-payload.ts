@@ -8,9 +8,10 @@ export const CIRCULAR_REFERENCE = "[Circular]";
  * How the value of a key is treated:
  * - `card`: a payment card (`card`, `creditCard`, …), whose `number` keeps its last 4 digits;
  * - `documents` / `document`: identity documents, whose `number` keeps its last 4 characters;
+ * - `credentialBody`: an MFA or OAuth body (`mfa`, `oauth`), whose `code` and `state` are secrets at any depth;
  * - `plain`: anything else.
  */
-type Kind = "plain" | "card" | "documents" | "document";
+type Kind = "plain" | "card" | "documents" | "document" | "credentialBody";
 
 /** Keys are compared in lower case without `-` and `_`, so `security_code` and `X-Api-Key` match too. */
 function normalise(key: string): string {
@@ -21,6 +22,9 @@ function normalise(key: string): string {
 const CARD_PARENTS = new Set(["card", "creditcard", "paymentcard", "virtualcreditcarddetails"]);
 const DOCUMENT_LIST_PARENTS = new Set(["documents"]);
 const DOCUMENT_PARENTS = new Set(["document"]);
+/** Parents of an MFA or OAuth body (platform/docs/architecture.md §8), and the keys that are secret below them. */
+const CREDENTIAL_BODY_PARENTS = new Set(["mfa", "oauth"]);
+const CREDENTIAL_BODY_SECRET_KEYS = new Set(["code", "state"]);
 
 /** Dropped entirely: card security codes and the document fields db README §8 removes. */
 const DROPPED_KEYS = new Set(["securitycode", "cvc", "cvv", "cvv2", "birthplace", "issuancelocation"]);
@@ -31,7 +35,11 @@ const LAST_FOUR_CHARS_KEYS = new Set(["cardnumber", "certificatenumber"]);
 /** Masked to their last 4 digits wherever they appear. */
 const LAST_FOUR_DIGITS_KEYS = new Set(["pan", "primaryaccountnumber"]);
 
-/** Replaced by `[REDACTED]`: credentials and every token value. */
+/**
+ * Replaced by `[REDACTED]`: credentials and every token value (the fragments also catch the platform's `secretKey`,
+ * `webhookSecret`, `totpSecret`, `mfaChallengeToken` and `invitationToken`), bank numbers, MFA recovery codes and
+ * `otpauth://` URLs (platform/docs/architecture.md §8).
+ */
 const SECRET_KEY_FRAGMENTS = ["password", "passphrase", "token", "secret", "apikey"];
 const SECRET_KEYS = new Set([
   "authorization",
@@ -41,6 +49,11 @@ const SECRET_KEYS = new Set([
   "mfacode",
   "xvelexisedge",
   "stripesignature",
+  "iban",
+  "accountnumber",
+  "recoverycode",
+  "recoverycodes",
+  "otpauthurl",
 ]);
 
 function isSecretKey(key: string): boolean {
@@ -57,19 +70,26 @@ function maskScalar(value: unknown, mask: (raw: string | number) => string): unk
   return REDACT_CENSOR;
 }
 
-function childKind(key: string): Kind {
+function childKind(key: string, kind: Kind): Kind {
   if (CARD_PARENTS.has(key)) {
     return "card";
   }
   if (DOCUMENT_LIST_PARENTS.has(key)) {
     return "documents";
   }
-  return DOCUMENT_PARENTS.has(key) ? "document" : "plain";
+  if (DOCUMENT_PARENTS.has(key)) {
+    return "document";
+  }
+  // Everything below an MFA or OAuth body stays part of it.
+  return kind === "credentialBody" || CREDENTIAL_BODY_PARENTS.has(key) ? "credentialBody" : "plain";
 }
 
 function redactEntry(key: string, value: unknown, kind: Kind, ancestors: Set<object>): unknown {
   const normalised = normalise(key);
   if (isSecretKey(normalised)) {
+    return REDACT_CENSOR;
+  }
+  if (kind === "credentialBody" && CREDENTIAL_BODY_SECRET_KEYS.has(normalised)) {
     return REDACT_CENSOR;
   }
   if (normalised === "number" && kind === "card") {
@@ -84,7 +104,7 @@ function redactEntry(key: string, value: unknown, kind: Kind, ancestors: Set<obj
   if (LAST_FOUR_DIGITS_KEYS.has(normalised)) {
     return maskScalar(value, lastFourDigits);
   }
-  return redactValue(value, childKind(normalised), ancestors);
+  return redactValue(value, childKind(normalised, kind), ancestors);
 }
 
 function redactObject(source: object, kind: Kind, ancestors: Set<object>): Record<string, unknown> {
@@ -136,11 +156,12 @@ function redactValue(value: unknown, kind: Kind, ancestors: Set<object>): unknow
  * The shared redactor for persisted payload copies (db README §8): `supplier_requests` bodies,
  * `order_snapshot`, `booking_events.data`, `staff_actions` before/after, `idempotency_keys.response_body`,
  * `payment_events.payload`, `notifications.payload`, `priced_offers.amadeus_request` and the platform
- * audit log. It returns a deep copy and never mutates its input:
+ * audit log (`platform_audit_log.details`). It returns a deep copy and never mutates its input:
  * - card `number` fields (under `card`, `creditCard`, …) keep their last 4 digits;
  * - `documents[].number`, `cardNumber` and `certificateNumber` keep their last 4 characters;
  * - `securityCode`, `cvc`, `cvv`, `birthPlace` and `issuanceLocation` are dropped;
- * - password, token, secret and API key fields (and credential headers) become `[REDACTED]`;
+ * - password, token, secret and API key fields (and credential headers), bank numbers (`iban`, `accountNumber`),
+ *   recovery codes, `otpauthUrl`, and the `code` and `state` anywhere below `mfa` or `oauth` become `[REDACTED]`;
  * - arrays are handled, and a reference back to an enclosing object becomes `[Circular]`.
  *
  * The static type is the input type for convenience; masked fields hold the masked strings.

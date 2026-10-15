@@ -66,6 +66,8 @@ Returns a deep copy and never mutates its input. Keys are matched without regard
 | `number` under `documents[]` or `document`; `cardNumber`, `certificateNumber` anywhere (Amadeus `discountEligibility`) | last 4 characters |
 | `securityCode`, `cvc`, `cvv`, `cvv2`, `birthPlace`, `issuanceLocation` | dropped |
 | Any key containing `password`, `passphrase`, `token`, `secret` or `apiKey`; `authorization`, `cookie`, `set-cookie`, `mfaCode`, `x-velexis-edge`, `stripe-signature` | `[REDACTED]` |
+| The platform's bank numbers and MFA material (platform architecture §8): `iban`, `accountNumber`, `recoveryCode`, `recoveryCodes`, `otpauthUrl` (`secretKey`, `webhookSecret`, `totpSecret`, `mfaChallengeToken` and `invitationToken` are caught by the fragments above) | `[REDACTED]` |
+| `code` and `state` anywhere below an `mfa` or `oauth` key (an MFA or OAuth body); every other `code` (error codes) stays | `[REDACTED]` |
 | Arrays, nested objects, values with `toJSON` | handled recursively (as `JSON.stringify` would see them) |
 | A reference back to an enclosing object | `[Circular]` |
 
@@ -74,13 +76,15 @@ Returns a deep copy and never mutates its input. Keys are matched without regard
 `REDACT_PATHS` holds, in pino path syntax:
 
 - `password`, `newPassword`, `currentPassword`, `mfaCode`, `accessToken`, `refreshToken`, `portalToken`, `bookingToken`, `token`, `clientSecret`, `secret`, `apiKey`, `securityCode`, `cvc`, `cardNumber`, `certificateNumber` at the top level and one level down (`*.password`);
+- the platform's keys of [platform architecture §8](../../platform/docs/architecture.md#8-security-notes-specific-to-the-platform), at the top level and one level down: `secretKey`, `webhookSecret` (Stripe), `iban`, `accountNumber` (payout accounts), `recoveryCode`, `recoveryCodes`, `totpSecret`, `otpauthUrl`, `mfaChallengeToken` (MFA) and `invitationToken`;
+- `code` and `state` of an MFA or OAuth body: `mfa.code`, `mfa.state`, `oauth.code`, `oauth.state` and the same one level down (`*.mfa.code`). pino paths cannot look at a sibling key, and a bare `code` is the error code of every `err` and error envelope, so the platform logs a `verifyMfa`, `stepUp`, `enableMfa` or `completeStripeConnect` body, if ever, under the key `mfa` or `oauth`, never under a generic key;
 - `*.card.number`, `*.creditCard.number`, `documents[*].number`, `*.documents[*].number`;
 - the whole `card`, `creditCard` and `formOfPayments` objects at the top level and at every nesting depth down to depth 8 (`card`, `*.card`, …, `*.*.*.*.*.*.*.card`). pino paths are not recursive, and an Amadeus Create Orders body logged at depth 1 to 6 has its `formOfPayments` at depth 3 to 8;
 - `req.headers.authorization`, `req.headers.cookie`, `res.headers["set-cookie"]`, `req.headers["x-api-key"]`, `req.headers["x-csrf-token"]`, `req.headers["x-booking-token"]`, `req.headers["x-velexis-edge"]`, `req.headers["x-velexis-bff-key"]` (the platform's first-party key of the portal and admin servers, PADR-0019).
 
 Keep it ordered from shallow to deep: pino applies the paths in order, and censoring an object before a deeper wildcard path reaches it keeps pino from walking into the original object.
 
-Known upstream limit (pino 9.14 with `@pinojs/redact` 0.4.0): below a key that also starts a literal path (`documents` at depth 1 or 2, and `req.headers` / `res.headers` when the `req` and `res` serializers are replaced), pino copies only along that literal path. A `card`, `creditCard` or `formOfPayments` object nested inside such a branch still stays out of the line, but the censor is also written into the caller's object. Identity documents and header strings never nest card objects, and the tests check that realistic logged objects stay unchanged.
+Known upstream limit (pino 9.14 with `@pinojs/redact` 0.4.0): below a key that also starts a literal path (`documents`, `mfa` and `oauth` at depth 1 or 2, and `req.headers` / `res.headers` when the `req` and `res` serializers are replaced), pino copies only along that literal path. A `card`, `creditCard` or `formOfPayments` object nested inside such a branch still stays out of the line, but the censor is also written into the caller's object. Identity documents, MFA and OAuth bodies and header strings never nest card objects, and the tests check that realistic logged objects stay unchanged.
 
 Every path costs time on every line: about 0.1 ms per line with this list, against a few microseconds without redaction. Log events, not loops.
 

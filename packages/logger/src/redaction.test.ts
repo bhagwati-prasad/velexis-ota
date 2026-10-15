@@ -429,6 +429,16 @@ describe("redaction through createLogger", () => {
       "cvc",
       "cardNumber",
       "certificateNumber",
+      "secretKey",
+      "webhookSecret",
+      "iban",
+      "accountNumber",
+      "recoveryCode",
+      "recoveryCodes",
+      "totpSecret",
+      "otpauthUrl",
+      "mfaChallengeToken",
+      "invitationToken",
       "card",
       "creditCard",
       "formOfPayments",
@@ -555,6 +565,171 @@ describe("redaction through createLogger", () => {
     expect(record?.["time"]).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
     expect(record).not.toHaveProperty("pid");
     expect(record).not.toHaveProperty("hostname");
+  });
+});
+
+/** The platform's paths of platform/docs/architecture.md §8 (PBE-010), in the order of REDACT_PATHS. */
+const PLATFORM_KEYS = [
+  "secretKey",
+  "webhookSecret",
+  "iban",
+  "accountNumber",
+  "recoveryCode",
+  "recoveryCodes",
+  "totpSecret",
+  "otpauthUrl",
+  "mfaChallengeToken",
+  "invitationToken",
+] as const;
+const PLATFORM_BODY_PATHS = [
+  "mfa.code",
+  "mfa.state",
+  "oauth.code",
+  "oauth.state",
+  "*.mfa.code",
+  "*.mfa.state",
+  "*.oauth.code",
+  "*.oauth.state",
+] as const;
+const PLATFORM_PATHS = [...PLATFORM_KEYS, ...PLATFORM_KEYS.map((key) => `*.${key}`), ...PLATFORM_BODY_PATHS];
+
+/**
+ * A log object that holds `value` at a pino path of plain keys and `*` wildcards (a `*` becomes the key `level<n>`),
+ * with a visible sibling `keep` next to the value, and the keys to read the value back.
+ */
+function objectAtPath(path: string, value: unknown): { logged: LogRecord; keys: string[] } {
+  const keys = path.split(".").map((segment, index) => (segment === "*" ? `level${index + 1}` : segment));
+  let logged: LogRecord = { [keys.at(-1) ?? ""]: value, keep: "visible" };
+  for (const key of keys.slice(0, -1).reverse()) {
+    logged = { [key]: logged };
+  }
+  return { logged, keys };
+}
+
+function readPath(record: LogRecord, keys: readonly string[]): unknown {
+  let value: unknown = record;
+  for (const key of keys) {
+    value = (value as LogRecord | undefined)?.[key];
+  }
+  return value;
+}
+
+describe("the platform's redaction paths (platform/docs/architecture.md §8)", () => {
+  it("lists every platform path in REDACT_PATHS and keeps the list ordered from shallow to deep [PBE-010 AC3]", () => {
+    for (const path of PLATFORM_PATHS) {
+      expect(REDACT_PATHS).toContain(path);
+    }
+    // `documents[*].number` and `req.headers["x-api-key"]` are three levels deep, like `*.card.number`.
+    const depths = REDACT_PATHS.map((path) => path.split(/\.|\[/).length);
+    expect(depths).toEqual([...depths].sort((a, b) => a - b));
+  });
+
+  for (const path of PLATFORM_PATHS) {
+    it(`censors ${path} and keeps its sibling and the caller's object [PBE-010 AC3]`, () => {
+      const { logger, sink } = testLogger();
+      const secret = `platform-${path}-${TEST_BEARER_TOKEN}`;
+      const { logged, keys } = objectAtPath(path, path.endsWith("recoveryCodes") ? [secret, secret] : secret);
+      const snapshot = structuredClone(logged);
+
+      logger.info(logged, "platform.sensitive");
+
+      const line = sink.lines[0] ?? "";
+      expect(line).not.toContain(TEST_BEARER_TOKEN);
+      const [record] = sink.records();
+      expect(readPath(record ?? {}, keys)).toBe(REDACT_CENSOR);
+      expect(readPath(record ?? {}, [...keys.slice(0, -1), "keep"])).toBe("visible");
+      expect(logged).toEqual(snapshot);
+    });
+  }
+
+  it("logs a payout account, an MFA set-up and an invitation without their bank numbers, secrets or tokens [PBE-010 AC3]", () => {
+    const { logger, sink } = testLogger();
+    // Test values only: a made-up IBAN, account number, TOTP secret and recovery codes.
+    const iban = "XX00TEST0000111122223333";
+    const accountNumber = "000123456789";
+    const totpSecret = "TESTTOTPSECRETAAAAAAAAAAAAAAAAAA";
+    const recoveryCodes = ["TEST-AAAA-BBBB-CCCC", "TEST-DDDD-EEEE-FFFF"];
+    const logged = {
+      tenantId: "ten_01",
+      payoutAccount: { holderName: "Acme Travel SL", iban, accountNumber, last4: "3333" },
+      setup: { totpSecret, otpauthUrl: `otpauth://totp/Velexis:anna%40example.com?secret=${totpSecret}` },
+      recoveryCodes,
+      invitation: { email: "jo@example.com", invitationToken: TEST_BEARER_TOKEN },
+      stripe: { secretKey: `sk_test_${TEST_BEARER_TOKEN}`, webhookSecret: `whsec_${TEST_BEARER_TOKEN}` },
+    };
+    const snapshot = structuredClone(logged);
+
+    logger.warn(logged, "platform.careless_debug");
+
+    const line = sink.lines[0] ?? "";
+    for (const value of [iban, accountNumber, totpSecret, TEST_BEARER_TOKEN, ...recoveryCodes]) {
+      expect(line).not.toContain(value);
+    }
+    expect(sink.records()[0]).toMatchObject({
+      tenantId: "ten_01",
+      payoutAccount: {
+        holderName: "Acme Travel SL",
+        iban: REDACT_CENSOR,
+        accountNumber: REDACT_CENSOR,
+        last4: "3333",
+      },
+      setup: { totpSecret: REDACT_CENSOR, otpauthUrl: REDACT_CENSOR },
+      recoveryCodes: REDACT_CENSOR,
+      invitation: { email: "jo@example.com", invitationToken: REDACT_CENSOR },
+      stripe: { secretKey: REDACT_CENSOR, webhookSecret: REDACT_CENSOR },
+    });
+    expect(logged).toEqual(snapshot);
+  });
+
+  it("censors the code and state of an MFA or OAuth body and keeps every other code visible [PBE-010 AC3]", () => {
+    const { logger, sink } = testLogger();
+    const totpCode = "918273";
+    const oauthCode = `ac_${TEST_BEARER_TOKEN}`;
+    const oauthState = `state-${TEST_BEARER_TOKEN}`;
+    const logged = {
+      mfa: { mfaChallengeToken: TEST_BEARER_TOKEN, code: totpCode },
+      oauth: { state: oauthState, code: oauthCode },
+      request: { mfa: { code: totpCode }, oauth: { state: oauthState, code: oauthCode } },
+      code: "VALIDATION_FAILED",
+      error: { code: "CONNECT_STATE_INVALID", state: "failed" },
+      account: { mfa: true },
+    };
+    const snapshot = structuredClone(logged);
+
+    logger.warn(logged, "platform.mfa_debug");
+
+    const line = sink.lines[0] ?? "";
+    for (const value of [totpCode, oauthCode, oauthState, TEST_BEARER_TOKEN]) {
+      expect(line).not.toContain(value);
+    }
+    expect(sink.records()[0]).toMatchObject({
+      mfa: { mfaChallengeToken: REDACT_CENSOR, code: REDACT_CENSOR },
+      oauth: { state: REDACT_CENSOR, code: REDACT_CENSOR },
+      request: { mfa: { code: REDACT_CENSOR }, oauth: { state: REDACT_CENSOR, code: REDACT_CENSOR } },
+      code: "VALIDATION_FAILED",
+      error: { code: "CONNECT_STATE_INVALID", state: "failed" },
+      account: { mfa: true },
+    });
+    expect(logged).toEqual(snapshot);
+  });
+
+  it("keeps the error code of an err about an OAuth failure, whose other fields the err serializer drops", () => {
+    const { logger, sink } = testLogger();
+    withoutStackFrames(() => {
+      const error = Object.assign(new Error("Stripe OAuth token exchange failed"), {
+        code: "invalid_grant",
+        oauth: { code: `ac_${TEST_BEARER_TOKEN}` },
+      });
+      logger.error({ err: error }, "payments.connect_failed");
+    });
+
+    expect(sink.lines[0]).not.toContain(TEST_BEARER_TOKEN);
+    expect(sink.records()[0]?.["err"]).toEqual({
+      type: "Error",
+      message: "Stripe OAuth token exchange failed",
+      stack: "Error: Stripe OAuth token exchange failed",
+      code: "invalid_grant",
+    });
   });
 });
 

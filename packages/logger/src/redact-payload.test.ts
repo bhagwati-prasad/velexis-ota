@@ -172,6 +172,73 @@ describe("redactPayload", () => {
     expect(JSON.stringify(output)).not.toContain(TEST_PASSWORD);
   });
 
+  it("replaces the platform's secrets, bank numbers, recovery codes and otpauth URLs with [REDACTED] (platform architecture §8)", () => {
+    // Test values only: a made-up IBAN, account number, TOTP secret and recovery codes.
+    const iban = "XX00TEST0000111122223333";
+    const accountNumber = "000123456789";
+    const totpSecret = "TESTTOTPSECRETAAAAAAAAAAAAAAAAAA";
+    const output = redactPayload({
+      before: {
+        holderName: "Acme Travel SL",
+        iban,
+        account_number: accountNumber,
+        last4: "3333",
+        bic: "TESTXXYY",
+      },
+      after: { IBAN: iban, AccountNumber: accountNumber },
+      secretKey: `sk_test_${TEST_TOKEN}`,
+      webhookSecret: `whsec_${TEST_TOKEN}`,
+      totpSecret,
+      otpauthUrl: `otpauth://totp/Velexis:anna%40example.com?secret=${totpSecret}`,
+      recoveryCode: "TEST-AAAA-BBBB-CCCC",
+      recoveryCodes: ["TEST-AAAA-BBBB-CCCC", "TEST-DDDD-EEEE-FFFF"],
+      mfaChallengeToken: TEST_TOKEN,
+      invitationToken: TEST_TOKEN,
+    });
+    expect(output).toEqual({
+      before: {
+        holderName: "Acme Travel SL",
+        iban: REDACT_CENSOR,
+        account_number: REDACT_CENSOR,
+        last4: "3333",
+        bic: "TESTXXYY",
+      },
+      after: { IBAN: REDACT_CENSOR, AccountNumber: REDACT_CENSOR },
+      secretKey: REDACT_CENSOR,
+      webhookSecret: REDACT_CENSOR,
+      totpSecret: REDACT_CENSOR,
+      otpauthUrl: REDACT_CENSOR,
+      recoveryCode: REDACT_CENSOR,
+      recoveryCodes: REDACT_CENSOR,
+      mfaChallengeToken: REDACT_CENSOR,
+      invitationToken: REDACT_CENSOR,
+    });
+    for (const value of [iban, accountNumber, totpSecret, TEST_TOKEN, "TEST-AAAA"]) {
+      expect(JSON.stringify(output)).not.toContain(value);
+    }
+  });
+
+  it("replaces code and state anywhere below mfa or oauth and keeps every other code", () => {
+    const output = redactPayload({
+      mfa: { mfaChallengeToken: TEST_TOKEN, code: "918273" },
+      oauth: {
+        state: `state-${TEST_TOKEN}`,
+        query: { code: `ac_${TEST_TOKEN}` },
+        attempts: [{ code: "x1" }],
+      },
+      code: "VALIDATION_FAILED",
+      error: { code: "CONNECT_STATE_INVALID", state: "failed" },
+      account: { mfa: true },
+    });
+    expect(output).toEqual({
+      mfa: { mfaChallengeToken: REDACT_CENSOR, code: REDACT_CENSOR },
+      oauth: { state: REDACT_CENSOR, query: { code: REDACT_CENSOR }, attempts: [{ code: REDACT_CENSOR }] },
+      code: "VALIDATION_FAILED",
+      error: { code: "CONNECT_STATE_INVALID", state: "failed" },
+      account: { mfa: true },
+    });
+  });
+
   it("handles arrays at the top level and inside objects", () => {
     const output = redactPayload([
       { creditCard: { number: TEST_PAN, securityCode: TEST_CVV } },

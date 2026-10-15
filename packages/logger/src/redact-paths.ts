@@ -16,11 +16,18 @@
  * a shared branch would write the censor into the caller's own object.
  *
  * Known upstream limit (pino 9.14 with @pinojs/redact 0.4.0): below a key that also starts a literal path
- * (`documents` at depth 1 or 2, and `req.headers` / `res.headers` when the `req` and `res` serializers are
- * replaced), the redactor copies only along that literal path. A `card`, `creditCard` or `formOfPayments`
- * object nested inside such a branch is still kept out of the line, but the censor is also written into
- * the caller's object. Realistic shapes (identity documents, header strings) never nest card objects
- * there, and the tests check that every realistic logged object stays unchanged.
+ * (`documents`, `mfa` and `oauth` at depth 1 or 2, and `req.headers` / `res.headers` when the `req` and `res`
+ * serializers are replaced), the redactor copies only along that literal path. A `card`, `creditCard` or
+ * `formOfPayments` object nested inside such a branch is still kept out of the line, but the censor is also written
+ * into the caller's object. Realistic shapes (identity documents, MFA and OAuth bodies, header strings) never nest
+ * card objects there, and the tests check that every realistic logged object stays unchanged.
+ *
+ * The platform's paths (platform/docs/architecture.md §8): Stripe secret keys and webhook secrets, bank numbers,
+ * recovery codes, TOTP secrets and `otpauth://` URLs, MFA challenge and invitation tokens, and the `code` and `state`
+ * of an MFA or OAuth body. pino paths cannot look at a sibling key, and `code` alone is the error code of every `err`
+ * and error envelope, so `code` and `state` are censored only below the keys `mfa` and `oauth`: a body of
+ * `verifyMfa`, `stepUp`, `enableMfa` or `completeStripeConnect` that is ever logged goes under one of those two keys
+ * (`logger.warn({ mfa: body }, …)`), never under a generic one.
  *
  * Every path costs time on every line (about 0.1 ms per line for this list): log events, not loops.
  */
@@ -30,7 +37,7 @@ export const REDACT_CENSOR = "[REDACTED]";
 
 /** Every path pino censors, in the syntax of pino's `redact.paths`. */
 export const REDACT_PATHS: readonly string[] = Object.freeze([
-  // Depth 1: secrets, tokens and card fields at the top level of a log line.
+  // Depth 1: secrets, tokens, bank numbers, recovery codes and card fields at the top level of a log line.
   "password",
   "newPassword",
   "currentPassword",
@@ -47,11 +54,21 @@ export const REDACT_PATHS: readonly string[] = Object.freeze([
   "cvc",
   "cardNumber",
   "certificateNumber",
+  "secretKey",
+  "webhookSecret",
+  "iban",
+  "accountNumber",
+  "recoveryCode",
+  "recoveryCodes",
+  "totpSecret",
+  "otpauthUrl",
+  "mfaChallengeToken",
+  "invitationToken",
   "card",
   "creditCard",
   "formOfPayments",
 
-  // Depth 2: the same keys one level down.
+  // Depth 2: the same keys one level down, and the code and state of an MFA or OAuth body at the top level.
   "*.password",
   "*.newPassword",
   "*.currentPassword",
@@ -68,12 +85,26 @@ export const REDACT_PATHS: readonly string[] = Object.freeze([
   "*.cvc",
   "*.cardNumber",
   "*.certificateNumber",
+  "*.secretKey",
+  "*.webhookSecret",
+  "*.iban",
+  "*.accountNumber",
+  "*.recoveryCode",
+  "*.recoveryCodes",
+  "*.totpSecret",
+  "*.otpauthUrl",
+  "*.mfaChallengeToken",
+  "*.invitationToken",
   "*.card",
   "*.creditCard",
   "*.formOfPayments",
+  "mfa.code",
+  "mfa.state",
+  "oauth.code",
+  "oauth.state",
 
   // Depth 3: credential headers (also the first-party edge header and the platform's BFF key of PADR-0019), card
-  // numbers, card objects.
+  // numbers, the code and state of an MFA or OAuth body one level down, card objects.
   "req.headers.authorization",
   "req.headers.cookie",
   'res.headers["set-cookie"]',
@@ -85,6 +116,10 @@ export const REDACT_PATHS: readonly string[] = Object.freeze([
   "*.card.number",
   "*.creditCard.number",
   "documents[*].number",
+  "*.mfa.code",
+  "*.mfa.state",
+  "*.oauth.code",
+  "*.oauth.state",
   "*.*.card",
   "*.*.creditCard",
   "*.*.formOfPayments",
