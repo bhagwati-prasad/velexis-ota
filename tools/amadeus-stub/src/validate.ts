@@ -15,7 +15,11 @@
 // Query, header and path parameters are validated as one object `{ path, query, header }` compiled per operation.
 // Query values are coerced by the parameter's declared type (`integer`, `number`, `boolean`, `array` with its
 // `collectionFormat`) before validation; a query parameter that the specification does not declare is an error.
-// The JSON body is validated without any coercion. Validators are compiled on first use and cached.
+// The JSON body is validated without any coercion. Validators are compiled on first use and cached. The server
+// `check()`s its operations at start: the specifications are loaded, each operation, its parameters, its body schema and
+// its `alsoKnown` schemas are looked up and the parameter validators compiled, so a broken specification or reference
+// fails there; the body validators, by far the costliest to compile, are compiled on their first request (OBE-041:
+// compiling all twelve at start took most of the stub's 1 s start budget). `prepare()` compiles everything at once.
 //
 // JSON Schema lets an object carry fields its schema does not declare. An operation that sets
 // `unknownBodyFields` (OBE-019: Flight Offers Price, Branded Fares Upsell, Flight Availabilities Search) refuses them
@@ -111,7 +115,12 @@ interface CompiledOperation {
   readonly parameters: readonly ParameterInfo[];
   readonly validateParameters: ValidateFunction;
   readonly body:
-    | { readonly required: boolean; readonly validate: ValidateFunction; readonly schema: SchemaAt }
+    | {
+        readonly required: boolean;
+        /** The body validator, compiled on the first call and cached. */
+        readonly validator: () => ValidateFunction;
+        readonly schema: SchemaAt;
+      }
     | undefined;
 }
 
@@ -517,10 +526,20 @@ export class AmadeusSpecs {
   }
 
   /**
-   * Compiles the validators of `operation` now and resolves the schemas its `unknownBodyFields` names (the server
-   * does this at start for its implemented operations, so a broken reference fails there).
+   * Compiles every validator of `operation` now, its body validator included, and resolves the schemas its
+   * `unknownBodyFields` names.
    */
   prepare(operation: OperationSpec): void {
+    this.#compiled(operation).body?.validator();
+    this.#alsoKnown(operation);
+  }
+
+  /**
+   * Loads the specification of `operation`, looks up the operation, its parameters, its body schema and the schemas
+   * its `unknownBodyFields` names, and compiles its parameter validator; the body validator is compiled on first use.
+   * The server does this at start for its implemented operations, so a broken specification or reference fails there.
+   */
+  check(operation: OperationSpec): void {
     this.#compiled(operation);
     this.#alsoKnown(operation);
   }
@@ -697,9 +716,10 @@ export class AmadeusSpecs {
         ],
       };
     }
-    return body.validate(parsed)
+    const validate = body.validator();
+    return validate(parsed)
       ? { body: parsed, issues: [] }
-      : { body: parsed, issues: (body.validate.errors ?? []).map(bodyIssue) };
+      : { body: parsed, issues: (validate.errors ?? []).map(bodyIssue) };
   }
 
   #spec(specFile: string): LoadedSpec {
@@ -776,10 +796,17 @@ export class AmadeusSpecs {
       const location = parameter["in"];
       if (location === "body") {
         const schemaPointer = pointerFragment([...pointer, "schema"]);
+        const schema = getPointer(document, `#/${schemaPointer}`);
+        if (!isObject(schema)) {
+          throw new Error(
+            `${operation.specFile}: ${operation.method} ${operation.specPath} has no body schema at #/${schemaPointer}`,
+          );
+        }
+        let validate: ValidateFunction | undefined;
         body = {
           required: parameter["required"] === true,
-          validate: this.#ajv.compile({ $ref: `${id}#/${schemaPointer}` }),
-          schema: { document, schema: getPointer(document, `#/${schemaPointer}`) },
+          validator: () => (validate ??= this.#ajv.compile({ $ref: `${id}#/${schemaPointer}` })),
+          schema: { document, schema },
         };
         continue;
       }

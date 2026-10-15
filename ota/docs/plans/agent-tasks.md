@@ -1063,7 +1063,8 @@ Checkout, customer accounts in cookies, Stripe on the Velexis account, the airli
   - The watch alerts once per payment (FakeClock).
 - **Verify:** `pnpm --filter @velexis/ota-backend test -- payments && pnpm --filter @velexis/ota-backend test:int -- payments`
 
-### OBE-041 · Stub the order operations with in-memory orders and scenarios
+### OBE-041 · Stub the order operations with in-memory orders and scenarios ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-backend
 - **Milestone:** M3
 - **Depends on:** OBE-019

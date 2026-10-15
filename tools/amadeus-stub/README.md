@@ -3,7 +3,7 @@
 A small Node `http` server (no framework) that stands in for Amadeus Enterprise in development, integration tests and end-to-end runs ([ADR-0015](../../docs/mvp/adr/0015-testing-strategy.md), [ADR-0012](../../docs/mvp/adr/0012-amadeus-account-model.md)). It implements the OAuth token endpoint and routes the 12 Amadeus operations of the 9 specifications in [`docs/amadeus-api/`](../../docs/amadeus-api/), validates every request against its specification, serves synthetic or recorded-and-scrubbed fixtures, and fails on demand through scenarios.
 
 - **Dev only.** It is a `devDependency` of whatever uses it ([ADR-0022](../../docs/mvp/adr/0022-shared-test-support-package.md) item 2; `tools/ci/check-package-json.mjs` enforces it). The VM never runs it ([ADR-0025](../../docs/mvp/adr/0025-roadmap-scheduling-and-tracking.md) item 7): the CLI refuses to start when `APP_ENV` or `NODE_ENV` is `production`.
-- **Tasks.** X-026 built the server, the token endpoint, the route table, validation, the generic scenarios and Flight Offers Search. OBE-019 added the shopping operations (price, upsell, availability), their scenarios `sold-out` and `price-changed`, and the refusal of unknown body fields. OBE-041 adds the order operations (orders, issuance, management, by reference, queue). X-027 added the in-process helper `@velexis/testing/amadeus`, X-034 [fixture recording](#record-a-fixture-from-the-amadeus-test-environment) with the [scrubber and the personal-data scan](#scrubbing-and-the-personal-data-scan).
+- **Tasks.** X-026 built the server, the token endpoint, the route table, validation, the generic scenarios and Flight Offers Search. OBE-019 added the shopping operations (price, upsell, availability), their scenarios `sold-out` and `price-changed`, and the refusal of unknown body fields. OBE-041 added the order operations (create, issue, management GET/PATCH/DELETE, by reference, queue list) on [in-memory orders](#orders), their scenarios `ticketing-failed`, `version-conflict` and `timeout-lost`, and the masking of card numbers in the request log; every operation now has a handler. X-027 added the in-process helper `@velexis/testing/amadeus`, X-034 [fixture recording](#record-a-fixture-from-the-amadeus-test-environment) with the [scrubber and the personal-data scan](#scrubbing-and-the-personal-data-scan).
 
 ## Run it
 
@@ -41,12 +41,14 @@ await stub.close();                                         // frees the port, d
 | `host` | `127.0.0.1` | The interface to bind |
 | `defaultScenario` | `success` | The scenario of requests without `X-Stub-Scenario`; `setDefaultScenario()` changes it later |
 | `credentials` | any non-empty pair | `{ clientId, clientSecret }`: only this pair gets a token, others get `401 invalid_client` |
-| `clock` | system clock | `{ now(): Date }` (the `FakeClock` of `@velexis/testing` fits): token expiry and `receivedAt` |
+| `clock` | system clock | `{ now(): Date }` (the `FakeClock` of `@velexis/testing` fits): token expiry, `receivedAt`, the creation time of [orders](#orders) and when their `DELAYED` queue placements fall due |
 | `timers` | global timers | `{ setTimeout, clearTimeout }` of the `timeout` scenario, so a test fires the 30 s hold itself |
 | `specs` | one `AmadeusSpecs` per process | The loaded specifications and compiled validators; pass `new AmadeusSpecs()` for a cold start |
 | `onResponse` | none | Called once per request when it is answered or the client went away (the CLI prints its line) |
 
-`requests()` returns the recorded requests, oldest first, at most the last 1000: `method`, `path`, `query`, `headers` (lower-case names; `authorization`, `proxy-authorization` and `cookie` are `[REDACTED]`), `operation` (`oauth2Token`, an operation name, or `undefined` for a 404), `scenario`, `status` (`undefined` while held or after the client went away), `receivedAt` and `durationMs`. Bodies are never recorded, so a client secret, a token or a card number never lands in the log. `clearRequests()` empties it.
+`requests()` returns the recorded requests, oldest first, at most the last 1000: `method`, `path`, `query`, `headers` (lower-case names; `authorization`, `proxy-authorization` and `cookie` are `[REDACTED]`), `operation` (`oauth2Token`, an operation name, or `undefined` for a 404), `scenario`, `status` (`undefined` while held or after the client went away), `receivedAt` and `durationMs`. Bodies are never recorded, so a client secret, a token or a card number never lands in the log; a run of 13 to 19 digits (single spaces, hyphens or a path's `%20` allowed between them) in the path, a query parameter or a header is masked to its last 4 (`XXXXXXXXXXXX1111`) as well, so a card number sent where none belongs does not land there either. `clearRequests()` empties it. The CLI's line per request prints the same masked path.
+
+`orders.list()` returns the [orders](#orders) the server stored, oldest first, cancelled ones included (copies: `id`, `recordLocator`, `createdAt`, `status`, `version`, the order's fields, `queues` and `tickets`); `orders.reset()` forgets them, as a restarted stub would. Each server has its own orders.
 
 ## Record a fixture from the Amadeus test environment
 
@@ -160,16 +162,17 @@ The base URL is the stub's URL; every path is the one of Amadeus's test host (`h
 | `searchFlightAvailabilities` | `POST /v1/shopping/availability/flight-availabilities` (+ `X-HTTP-Method-Override: GET`) | FlightAvailabilitiesSearch | Implemented (OBE-019) |
 | `upsellAirOffers` | `POST /v1/shopping/flight-offers/upselling` | BrandedFaresUpsell | Implemented (OBE-019) |
 | `quoteAirOffers` | `POST /v1/shopping/flight-offers/pricing` | FlightOffersPrice | Implemented (OBE-019) |
-| `createFlightOrders` | `POST /v1/booking/flight-orders` | FlightCreateOrders | 501 until OBE-041 |
-| `issueFlightOrder` | `POST /v1/booking/flight-orders/{flight-orderId}/issuance` | FlightOrderIssue | 501 until OBE-041 |
-| `getFlightOrder` | `GET /v1/booking/flight-orders/{flight-orderId}` | FlightOrderManagement | 501 until OBE-041 |
-| `patchFlightOrder` | `PATCH /v1/booking/flight-orders/{flight-orderId}` | FlightOrderManagement | 501 until OBE-041 |
-| `cancelFlightOrder` | `DELETE /v1/booking/flight-orders/{flight-orderId}` | FlightOrderManagement | 501 until OBE-041 |
-| `getFlightOrderByReference` | `GET /v1/booking/flight-orders/by-reference` | GetFlightOrderByRecordLocator | 501 until OBE-041 |
-| `listQueue` | `GET /v1/office/queues/{queue-id}` | QueueList (OpenAPI 3.0) | 501 until OBE-041 |
+| `createFlightOrders` | `POST /v1/booking/flight-orders` | FlightCreateOrders | Implemented (OBE-041) |
+| `issueFlightOrder` | `POST /v1/booking/flight-orders/{flight-orderId}/issuance` | FlightOrderIssue | Implemented (OBE-041) |
+| `getFlightOrder` | `GET /v1/booking/flight-orders/{flight-orderId}` | FlightOrderManagement | Implemented (OBE-041) |
+| `patchFlightOrder` | `PATCH /v1/booking/flight-orders/{flight-orderId}` | FlightOrderManagement | Implemented (OBE-041) |
+| `cancelFlightOrder` | `DELETE /v1/booking/flight-orders/{flight-orderId}` | FlightOrderManagement | Implemented (OBE-041) |
+| `getFlightOrderByReference` | `GET /v1/booking/flight-orders/by-reference` | GetFlightOrderByRecordLocator | Implemented (OBE-041) |
+| `listQueue` | `GET /v1/office/queues/{queue-id}` | QueueList (OpenAPI 3.0) | Implemented (OBE-041) |
 
 - The operation names are the `AmadeusClient` method names of the OTA plan (OBE-018): the specifications' own `operationId`s are not unique (two `getFlightOrder`) and Queue List's is a path. `STUB_OPERATIONS` keeps both. A test checks that the table equals the `x-amadeus` entries of [`ota/backend/openapi/velexis-ota-booking-api.openapi.yaml`](../../ota/backend/openapi/velexis-ota-booking-api.openapi.yaml), and that each path is its specification's base path plus path key, with the specification's method and `operationId`.
 - Queue List's path is `/v1/office/queues/{queue-id}`: its specification's server URL ends in `/v1` and its path key is written `GET/office/queues/{queue-id}`. The OTA document's `x-amadeus` entry says `/office/queues/{queue-id}`, without the `/v1`.
+- Every operation has a handler since OBE-041. An operation without one would answer `501` (stub code 90002, naming the task in `plannedBy`).
 - Any other method and path answers `404` with Amadeus code 38196, like Amadeus's gateway. A request target that is not a URL at all (`GET http://[::1 HTTP/1.1`) answers `400` code 477, and the stub keeps serving.
 
 **Flight Offers Search** answers the fixture [`fixtures/flight-offers-search/success.json`](fixtures/README.md) for every valid request, whatever the itinerary, cut to `max` (GET) or `searchCriteria.maxFlightOffers` (POST) offers. The destination `ZZZ` (GET `destinationLocationCode`, or any POST `originDestinations[].destinationLocationCode`) answers `{ "meta": { "count": 0 }, "data": [] }`.
@@ -188,13 +191,40 @@ Pricing offer 2 of the search fixture with `include=bags,other-services,detailed
 
 **Flight Availabilities Search** (`src/handlers/availability.ts`) answers [`fixtures/flight-availabilities/success.json`](fixtures/README.md) for every valid request, whatever the itinerary: the seats by booking class on the flights of the search fixture. The destination `ZZZ` in any `originDestinations[]` answers `{ "meta": { "count": 0 }, "data": [] }`.
 
+## Orders
+
+`src/orders.ts` keeps the flight orders in memory, per server (`OrderStore`; tests read them with `orders.list()` and empty them with `orders.reset()`). Flight Create Orders stores an order; the other order operations read and change the same orders, which is what the OTA backend's ticketing jobs and its reconciliation after a timeout need ([architecture-booking §4](../../ota/docs/architecture-booking.md#4-supplier_timeout-recovery)).
+
+| An order keeps | How |
+|---|---|
+| `id` | base64url of the record locator and the creation day joined by a vertical bar (`SYN001\|2026-10-15`; Amadeus's ids are base64 of the locator, a name and the day; the stub leaves the name out) |
+| `recordLocator` | 6 random letters and digits, unique per server; random so that the orders of different stub runs never collide in a test database. Answered as `associatedRecords[0]` `{ reference, creationDate, originSystemCode: "GDS", flightOfferId }` |
+| `createdAt` | The server's clock (`clock` option); answered in UTC without an offset, as Amadeus writes local times (`2026-10-15T09:00:00.000`) |
+| Offices, flight offers, travellers, remarks, contacts, ticketing agreement, automated processes, commissions, forms of identification | As posted; a ticketing agreement with a `delay` such as `6D` is answered with the `dateTime` (a day) it gives |
+| Forms of payment | `other` and `b2bWallet` (without `virtualCreditCardDetails`) as posted; a `creditCard` as `{ brand, number: "XXXXXXXXXXXX1111", flightOfferIds }`, the way Amadeus masks a card. The number, the security code, the expiry date, the holder and the payment operation context are never stored |
+| `queues` | One placement per `automatedProcess` entry: queue `queue.number`, category `queue.category` (default 0), office `officeId` (else the order's `queuingOfficeId`), from creation (`IMMEDIATE` or no code), from `dateTime` or after `delay` (`DELAYED`), never (`ERROR`) |
+| `tickets` | One `ETICKET` per traveller (`documentNumber` `000-0000000001`, `000-0000000002`, … per server, the synthetic prefix of the [fixture rules](fixtures/README.md#rules); `documentStatus: ISSUED`; the traveller's segments) |
+| `status`, `version` | `active` until DELETE cancels the order, then it is gone for every operation; version 1 at creation, +1 per issue, PATCH and cancel |
+
+| Operation | Answer |
+|---|---|
+| **Flight Create Orders** (`src/handlers/create-orders.ts`) | `201` `{ data: <the stored order>, dictionaries }` with the dictionaries of [`fixtures/flight-create-orders/success.json`](fixtures/README.md#fixtures). With `issue=true` the order is issued at once. Creating the order of that fixture (priced offer 2 for ALEX TESTER) answers exactly the fixture apart from the generated id, record locator and creation time. The test card `4000000000000002` is refused with `400` code 1304 `CREDIT CARD NOT ACCEPTED` (`source.pointer` names the card's field, never its number) and nothing is stored |
+| **Flight Order Issue** (`src/handlers/issue.ts`) | Issues one e-ticket per traveller without one, replaces the forms of payment with the posted ones (cards masked as above) and answers `200` `{ data, dictionaries }` ([`fixtures/flight-order-issue/success.json`](fixtures/README.md#fixtures) for the fixture's order with a cash payment). The declined test card answers `400` 1304; an order whose travellers all have tickets answers `400` 9112 `The flight order is already issued`, so a second issue call fails loudly |
+| **Flight Order Management GET** | `200` `{ data, dictionaries }`; `include` and `fareRules` are accepted and add nothing |
+| **Flight Order Management PATCH** | Replaces `contacts` and `remarks` with those of `data` when it has them, `200` with the order. The specification makes `data.type` and `data.flightOffers` mandatory: send the order's offers back; the stub changes no offer |
+| **Flight Order Management DELETE** | Cancels the order, `204` without a body |
+| **By-reference GET** | `reference` is the record locator (any case) and `originSystemCode` must be `GDS` (else `400` 4926): `200` `{ data: [<the order>], dictionaries }` |
+| **Queue List** (`src/handlers/queue-list.ts`) | The active orders placed on `queue-id` with `category` (default 0) by now, of the office `officeId` when given (a placement without any office is in every office: the stub does not know the caller's), oldest first, at most `max`: `{ meta: { count }, data: [ { type: "pnrList", id: "<locator>-<creation day>", creation: { dateTime: "2026-10-15T09:00" }, travelers: [ { names: [ { firstName, lastName } ] } ], products: [ { airSegment: { segment: { carrierCode, number, arrival: { iataCode, localDateTime } } } } ] } ] }`. `creation.dateTime` is to the minute in UTC without an offset, the specification's form |
+
+An unknown or cancelled order (id or record locator) answers `404` code 1797 `NOT FOUND`. Flight Create Orders and Management PATCH refuse body fields their specification does not declare, with the fields of the shopping offers and of the created order's offers known in `data.flightOffers[]`; Flight Order Issue refuses them too.
+
 ## How a request is answered
 
 1. **Route**: the token endpoint or one of the 12 operations; otherwise `404` (`400` for a request target that is not a URL).
 2. **Scenario**: the `X-Stub-Scenario` header, or the default scenario. An unknown name is a `400` (stub code 90001) that names the header and lists the known scenarios.
 3. **Token endpoint**: grant and credentials are checked (below). **Operations**: the bearer token is checked (`401`), an operation without a handler answers `501` (stub code 90002, naming the task that adds it), then the request is validated against the specification (`400`), unknown body fields included for the operations that refuse them.
-4. **Generic scenario**: `server-error`, `rate-limited` or `timeout` (below).
-5. **Answer**: the token, or the operation's handler, which applies the operation-specific scenarios it knows (`sold-out`, `price-changed`).
+4. **Generic scenario**: `server-error`, `rate-limited` or `timeout` (below). An order write (create, issue, PATCH, DELETE) applies `timeout` in its handler instead, after the write.
+5. **Answer**: the token, or the operation's handler, which applies the operation-specific scenarios it knows (`sold-out`, `price-changed`, `ticketing-failed`, `version-conflict`, `timeout-lost`) and answers now or holds its answer.
 
 Authentication and validation come before the scenario, so a request without a token or with a malformed body fails whatever the scenario says.
 
@@ -229,17 +259,21 @@ Tokens live in memory, per server, and expire after 1799 s on the injected clock
 | `success` (default) | everything | Normal behaviour; lets one request opt out of a default scenario |
 | `server-error` | every route, token endpoint included | `500` code 141 `SYSTEM ERROR HAS OCCURRED` |
 | `rate-limited` | every route, token endpoint included | `429` code 38194 `Too many requests` |
-| `timeout` | every route, token endpoint included | Holds the response until the client aborts (the timer is cancelled) or 30 s pass, then `504` |
-| `sold-out` | Flight Offers Price, Branded Fares Upsell | `400` code 34651 `SEGMENT SELL FAILURE`, `detail` `Could not sell segment <id>` naming the first posted segment |
+| `timeout` | every route, token endpoint included | Holds the response until the client aborts (the timer is cancelled) or 30 s pass, then `504`. At an order write (Flight Create Orders, Flight Order Issue, Management PATCH and DELETE) the write happens first: the order is stored (issued, changed, cancelled) although the client never hears so, and reconciliation or a resync finds it |
+| `timeout-lost` | the order writes | Holds the response like `timeout`, then `504`, **without** the write: no order is stored (no ticket issued, nothing changed or cancelled). Every other route answers as for `success` |
+| `sold-out` | Flight Offers Price, Branded Fares Upsell, Flight Create Orders | `400` code 34651 `SEGMENT SELL FAILURE`, `detail` `Could not sell segment <id>` naming the first posted segment; no order is stored |
+| `ticketing-failed` | Flight Order Issue, Flight Create Orders with `issue=true` | Issue: `400` code 9112 `TICKETING - TKT`, no ticket. Create with `issue=true`: the order is stored without tickets and answered `201` with `warnings: [{ "status": 201, "code": 9112, "title": "TICKETING - TKT", … }]` |
+| `version-conflict` | Flight Order Management PATCH | `409` code 2552 `SIMULTANEOUS UPDATE`; the order is unchanged |
 | `price-changed` | Flight Offers Price | `200` with a higher price: the `base` and `total` of each traveller pricing raised by 10.00, the offer's `base`, `total` and `grandTotal` by 10.00 per traveller pricing (98.47 becomes 108.47 for one adult), and `warnings: [{ "status": 200, "code": 37200, "title": "PRICE DISCREPANCY", … }]` |
 
-`sold-out` and `price-changed` change only the operations listed; every other route, the token endpoint included, answers as for `success`, so a default scenario can be set for a whole flow (search and token succeed, pricing fails). Amounts stay decimal strings: `price-changed` adds to their digits with `BigInt`, never through a JavaScript number.
+The operation-specific scenarios (`sold-out`, `price-changed`, `ticketing-failed`, `version-conflict`, `timeout-lost`) change only the operations listed; every other route, the token endpoint included, answers as for `success`, so a default scenario can be set for a whole flow (search and token succeed, pricing fails; or the reconciler's Queue List and by-reference reads succeed while the order was lost). Amounts stay decimal strings: `price-changed` adds to their digits with `BigInt`, never through a JavaScript number.
 
 | Magic value | Answer |
 |---|---|
 | Flight Offers Search or Flight Availabilities Search to destination `ZZZ` | `200` with no offers or availabilities |
+| A credit card numbered `4000000000000002` (`DECLINED_TEST_CARD`) at Flight Create Orders or Flight Order Issue | `400` code 1304 `CREDIT CARD NOT ACCEPTED`, nothing stored |
 
-OBE-041 adds `ticketing-failed`, `version-conflict` and `timeout-lost` with the order operations ([local development §5](../../docs/mvp/local-development.md#5-amadeus-stub)). `STUB_SCENARIOS` and the type `StubScenario` list the names the stub knows.
+`STUB_SCENARIOS` and the type `StubScenario` list the names the stub knows ([local development §5](../../docs/mvp/local-development.md#5-amadeus-stub)).
 
 ### Request validation
 
@@ -247,7 +281,7 @@ OBE-041 adds `ticketing-failed`, `version-conflict` and `timeout-lost` with the 
 
 - query, header and path parameters (required, type, format, pattern, enum, range); query values are coerced by their declared type first (`integer`, `number`, `boolean`, arrays by `collectionFormat`); a repeated or undeclared query parameter is an error;
 - the JSON body against the body parameter's schema, without coercion; a body operation needs `Content-Type: application/vnd.amadeus+json` or `application/json`;
-- for the operations whose `spec.unknownBodyFields` is set (Flight Offers Price, Branded Fares Upsell and Flight Availabilities Search), **unknown body fields**: JSON Schema lets an object carry fields its schema does not declare, these operations refuse them (`request body field /data/paymentz is not defined by the specification`). A field is known when a schema that applies at its place (through `$ref`, `allOf`, `anyOf`, `oneOf`) declares it in `properties`, or allows it with `additionalProperties` or `patternProperties`; a place whose schemas declare no `properties` is not checked. `alsoKnown` adds the schemas of other specifications at a place: Flight Offers Price and Branded Fares Upsell take back in `data.flightOffers[]` the offers that Flight Offers Search, Branded Fares Upsell and Flight Offers Price answered, whose `FlightOffer` schemas declare fields the request schema does not (`isUpsellOffer`, `brandedFareLabel`, `amenities`). Flight Offers Search keeps X-026's behaviour (unknown body fields pass).
+- for the operations whose `spec.unknownBodyFields` is set (Flight Offers Price, Branded Fares Upsell, Flight Availabilities Search, Flight Create Orders, Flight Order Issue and Management PATCH), **unknown body fields**: JSON Schema lets an object carry fields its schema does not declare, these operations refuse them (`request body field /data/paymentz is not defined by the specification`). A field is known when a schema that applies at its place (through `$ref`, `allOf`, `anyOf`, `oneOf`) declares it in `properties`, or allows it with `additionalProperties` or `patternProperties`; a place whose schemas declare no `properties` is not checked. `alsoKnown` adds the schemas of other specifications at a place: Flight Offers Price and Branded Fares Upsell take back in `data.flightOffers[]` the offers that Flight Offers Search, Branded Fares Upsell and Flight Offers Price answered, whose `FlightOffer` schemas declare fields the request schema does not (`isUpsellOffer`, `brandedFareLabel`, `amenities`); Flight Create Orders and Management PATCH know those and the offers of Flight Create Orders' answer too. Flight Offers Search keeps X-026's behaviour (unknown body fields pass).
 
 Each failure is one issue of a `400`, which names the parameter (`source.parameter`) or the body field (`source.pointer`, a JSON pointer) and the rule, never the value:
 
@@ -264,31 +298,37 @@ Each failure is one issue of a `400`, which names the parameter (`source.paramet
 | `enum` | 572 | `INVALID OPTION` |
 | anything else (range, length, repeated or unknown parameter, unknown body field) | 4926 | `INVALID DATA RECEIVED` |
 
-The specifications are loaded as they are, with four normalisations on a copy: draft-4 boolean `exclusiveMinimum`/`exclusiveMaximum` become the numeric form; a `$ref` that points nowhere becomes `{}` (FlightOffersSearch references the undefined `LoyaltyProgram` and `commissionValue`; `AmadeusSpecs.danglingRefs()` lists them); a schema with `properties` but no `type` gets `type: "object"` (FlightOffersSearch's `GetFlightOffersQuery` has none, so a body of `null`, `[]` or a double-encoded JSON string would otherwise find offers); `date-time` accepts the local date-times Amadeus uses (`2027-01-15T07:15:00`). Validators are compiled on first use; the server compiles those of its implemented operations at start. `AmadeusSpecs.validateResponse()` checks a fixture against an operation's response schema.
+The specifications are loaded as they are, with four normalisations on a copy: draft-4 boolean `exclusiveMinimum`/`exclusiveMaximum` become the numeric form; a `$ref` that points nowhere becomes `{}` (FlightOffersSearch references the undefined `LoyaltyProgram` and `commissionValue`; `AmadeusSpecs.danglingRefs()` lists them); a schema with `properties` but no `type` gets `type: "object"` (FlightOffersSearch's `GetFlightOffersQuery` has none, so a body of `null`, `[]` or a double-encoded JSON string would otherwise find offers); `date-time` accepts the local date-times Amadeus uses (`2027-01-15T07:15:00`). At start the server `check()`s each implemented operation: it loads the specifications, looks up the operation, its parameters, its body schema and its `alsoKnown` schemas, and compiles the parameter validator, so a broken specification or reference fails there. The body validators, by far the costliest to compile, are compiled on the first request of their operation and cached (OBE-041: compiling all twelve at start took most of the 1 s start budget); `AmadeusSpecs.prepare()` compiles everything at once, which the route-table test does for every operation. `AmadeusSpecs.validateResponse()` checks a fixture against an operation's response schema.
 
 ### Errors the stub answers with
 
 | Status | Code | When |
 |---|---|---|
 | 400 | 477, 572, 4926, 32171 | Validation (above); 477 also for a request target that is not a URL |
-| 400 | 34651 | `sold-out` at Flight Offers Price and Branded Fares Upsell |
+| 400 | 34651 | `sold-out` at Flight Offers Price, Branded Fares Upsell and Flight Create Orders |
+| 400 | 1304 | The declined test card at Flight Create Orders or Flight Order Issue |
+| 400 | 9112 | `ticketing-failed` at Flight Order Issue, or issuing an order that is already issued |
+| 400 | 4926 | By-reference GET with an `originSystemCode` other than `GDS` |
 | 400 | 90001 | Unknown `X-Stub-Scenario` |
 | 401 | 38187 (OAuth format), 38190, 38191, 38192 | OAuth and bearer token (above) |
 | 404 | 38196 | No route |
+| 404 | 1797 | No active flight order with this id or record locator |
+| 409 | 2552 | `version-conflict` at Management PATCH |
 | 413 | 90003 | Request body over 5 MiB |
 | 429 | 38194 | `rate-limited` |
 | 500 | 141 | `server-error` |
 | 500 | 90000 | A bug in the stub (`detail` has the message) |
-| 501 | 90002 | Operation not stubbed yet |
-| 504 | 141 | `timeout` after 30 s |
+| 501 | 90002 | Operation not stubbed yet (none since OBE-041) |
+| 504 | 141 | `timeout` (and `timeout-lost` at an order write) after 30 s |
 | 200 (warning) | 37200 | `price-changed` at Flight Offers Price, in `warnings` |
+| 201 (warning) | 9112 | `ticketing-failed` at Flight Create Orders with `issue=true`, in `warnings` |
 
-Codes from 90000 are the stub's own; Amadeus never sends them. API responses are `application/vnd.amadeus+json`, token endpoint responses `application/json`.
+Codes from 90000 are the stub's own; Amadeus never sends them. API responses are `application/vnd.amadeus+json`, token endpoint responses `application/json`; the `204` of Management DELETE has no body.
 
-## Adding an operation (OBE-041)
+## Adding or changing an operation
 
 1. Add the fixtures under `fixtures/<api-in-kebab-case>/<scenario>.json` with the header of [`fixtures/README.md`](fixtures/README.md) (written by hand, or [recorded](#record-a-fixture-from-the-amadeus-test-environment)), and list the ones read at start in `STUB_FIXTURES`. The fixture scan must stay green.
-2. Write the handler in `src/handlers/<operation>.ts` as a factory that takes the fixture loader (`(loadFixture: FixtureLoader) => OperationHandler`, so the handler imports only types from `src/routes.ts`), and set it on the operation in `STUB_OPERATIONS` (`src/routes.ts`). It gets the validated query and body, the path parameters and the scenario; authentication, validation and the generic scenarios are already done. Pass `unknownBodyFields` to refuse body fields the specification does not declare, with `alsoKnown` for what the client takes back from other responses.
+2. Write the handler in `src/handlers/<operation>.ts` as a factory that takes the fixture loader (`(loadFixture: FixtureLoader) => OperationHandler`, so the handler imports only types from `src/routes.ts`), or as a plain `OperationHandler` when it reads no fixture, and set it on the operation in `STUB_OPERATIONS` (`src/routes.ts`). It gets the validated query and body, the path parameters, the scenario, the server's `orders` and the request time `now`; authentication, validation and the generic scenarios are already done. It returns a response, or a held answer (`timedOut()`). Pass `unknownBodyFields` to refuse body fields the specification does not declare, with `alsoKnown` for what the client takes back from other responses, and `writesOrder` for an order write (its handler then applies `timeout` itself, after the write).
 3. Add operation-specific scenarios to `STUB_SCENARIOS` (`src/scenarios.ts`), make `applyScenario` continue to the handler for them, and handle them in the handler; error bodies come from `amadeusErrorResponse`.
 4. Test the success fixture against the response schema (`AmadeusSpecs.validateResponse`), a 400 naming a parameter, and each scenario.
 
@@ -301,6 +341,8 @@ Codes from 90000 are the stub's own; Amadeus never sends them. API responses are
 | `src/oauth.ts` | Token endpoint and bearer-token check (`TokenStore`) |
 | `src/routes.ts` | Route table of the 12 operations, route matching, fixture loading, the Flight Offers Search handler |
 | `src/handlers/pricing.ts`, `upselling.ts`, `availability.ts` | The Flight Offers Price, Branded Fares Upsell and Flight Availabilities Search handlers (OBE-019) |
+| `src/orders.ts` | `OrderStore`, the in-memory orders of a server; the `FlightOrder` answer; card masking (`maskCardNumbers`) and the declined test card (OBE-041) |
+| `src/handlers/create-orders.ts`, `issue.ts`, `order-management.ts`, `by-reference.ts`, `queue-list.ts` | The Flight Create Orders, Flight Order Issue, Management GET/PATCH/DELETE, by-reference GET and Queue List handlers (OBE-041) |
 | `src/scenarios.ts` | Scenario names and effects, magic values, the Amadeus error envelope and codes |
 | `src/validate.ts` | `AmadeusSpecs`: loads the specifications, validates requests (and fixtures) with Ajv, refuses unknown body fields where asked |
 | `src/cli.ts` | `pnpm stub:amadeus`, and `record` (`node dist/cli.js record …`) |
@@ -309,6 +351,7 @@ Codes from 90000 are the stub's own; Amadeus never sends them. API responses are
 | `fixtures/` | Response fixtures ([`fixtures/README.md`](fixtures/README.md)) |
 | `test/server.test.ts` | The tests of the server, OAuth, validation, the generic scenarios and Flight Offers Search (in-process on free ports; nothing else needs to run) |
 | `test/shopping.test.ts` | The tests of the shopping operations (OBE-019), the same way |
+| `test/orders.test.ts` | The tests of the order operations, their scenarios, the declined card and the request log (OBE-041), the same way |
 | `test/record.test.ts` | `record` against the stub and a fake `fetch` |
 | `test/scrub.test.ts` | The scrubber on a recorded-style Flight Create Orders response |
 | `test/fixtures-scan.test.ts` | The personal-data scan of every committed fixture |

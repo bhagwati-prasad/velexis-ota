@@ -90,7 +90,7 @@ To start over: `sudo -u postgres dropdb --force velexis` (macOS: `dropdb --force
 [`tools/amadeus-stub`](../../tools/) (task X-026, M1) is a small Node server that implements the Amadeus OAuth token endpoint and the flight operations of [`docs/amadeus-api/`](../amadeus-api/) from recorded, scrubbed fixtures ([ADR-0015](adr/0015-testing-strategy.md)).
 
 - Point the OTA backend at it: `AMADEUS_BASE_URL_TEST=http://127.0.0.1:4900` (already in `.env.example`). The Velexis test Amadeus account in the local database can hold any dummy client id and secret.
-- Choose a scenario per request with the header `X-Stub-Scenario` (`sold-out`, `price-changed`, `ticketing-failed`, `version-conflict`, `server-error`, `timeout`), or with magic values in end-to-end runs (destination `ZZZ` returns no offers).
+- Choose a scenario per request with the header `X-Stub-Scenario` (`sold-out`, `price-changed`, `ticketing-failed`, `version-conflict`, `server-error`, `rate-limited`, `timeout`, `timeout-lost`), or with magic values in end-to-end runs (destination `ZZZ` returns no offers; a credit card numbered `4000000000000002` is refused).
 - Every request is validated against the Amadeus specification, so a malformed request from our client fails loudly.
 - **Recording fixtures** from the real Amadeus Enterprise test environment (task X-034; the human step of OBE-027) uses your own test credentials and is **never** run in CI: the command refuses to start when `CI` is set (or `APP_ENV`/`NODE_ENV` is `production`).
 

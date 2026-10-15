@@ -1,0 +1,201 @@
+{
+  "fixture": {
+    "operation": "flight-create-orders",
+    "scenario": "success",
+    "source": "synthetic",
+    "date": "2026-10-15",
+    "scrubbed": true,
+    "description": "Flight Create Orders of priced offer 2 of flight-offers-price/success.json (Iberia IB3436 Madrid to Orly on 2027-01-15, BASIC, 98.47 EUR) for ALEX TESTER, without issue: remark VELEXIS VX7K2M9Q, queue 50 category 0 of office NCE1A0955, cash form of payment (synthetic, no personal data). The handler answers the stored order of any valid request with these dictionaries; the id, record locator SYN001 and creation time 2026-10-15T09:00 are generated per order."
+  },
+  "status": 201,
+  "body": {
+    "data": {
+      "type": "flight-order",
+      "id": "U1lOMDAxfDIwMjYtMTAtMTU",
+      "queuingOfficeId": "NCE1A0955",
+      "associatedRecords": [
+        {
+          "reference": "SYN001",
+          "creationDate": "2026-10-15T09:00:00.000",
+          "originSystemCode": "GDS",
+          "flightOfferId": "2"
+        }
+      ],
+      "flightOffers": [
+        {
+          "type": "flight-offer",
+          "id": "2",
+          "source": "GDS",
+          "instantTicketingRequired": false,
+          "nonHomogeneous": false,
+          "oneWay": false,
+          "isUpsellOffer": false,
+          "lastTicketingDate": "2027-01-15",
+          "numberOfBookableSeats": 9,
+          "itineraries": [
+            {
+              "duration": "PT2H5M",
+              "segments": [
+                {
+                  "departure": {
+                    "iataCode": "MAD",
+                    "terminal": "4",
+                    "at": "2027-01-15T07:15:00"
+                  },
+                  "arrival": {
+                    "iataCode": "ORY",
+                    "terminal": "1",
+                    "at": "2027-01-15T09:20:00"
+                  },
+                  "carrierCode": "IB",
+                  "number": "3436",
+                  "aircraft": {
+                    "code": "32N"
+                  },
+                  "operating": {
+                    "carrierCode": "IB"
+                  },
+                  "duration": "PT2H5M",
+                  "id": "3",
+                  "numberOfStops": 0,
+                  "blacklistedInEU": false
+                }
+              ]
+            }
+          ],
+          "price": {
+            "currency": "EUR",
+            "total": "98.47",
+            "base": "56.00",
+            "fees": [
+              {
+                "amount": "0.00",
+                "type": "SUPPLIER"
+              },
+              {
+                "amount": "0.00",
+                "type": "TICKETING"
+              }
+            ],
+            "grandTotal": "98.47"
+          },
+          "pricingOptions": {
+            "fareType": [
+              "PUBLISHED"
+            ],
+            "includedCheckedBagsOnly": false
+          },
+          "validatingAirlineCodes": [
+            "IB"
+          ],
+          "travelerPricings": [
+            {
+              "travelerId": "1",
+              "fareOption": "STANDARD",
+              "travelerType": "ADULT",
+              "price": {
+                "currency": "EUR",
+                "total": "98.47",
+                "base": "56.00"
+              },
+              "fareDetailsBySegment": [
+                {
+                  "segmentId": "3",
+                  "cabin": "ECONOMY",
+                  "fareBasis": "ADNNALB4",
+                  "brandedFare": "BASIC",
+                  "brandedFareLabel": "BASIC",
+                  "class": "A",
+                  "includedCheckedBags": {
+                    "quantity": 0
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "travelers": [
+        {
+          "id": "1",
+          "dateOfBirth": "1990-01-01",
+          "name": {
+            "firstName": "ALEX",
+            "lastName": "TESTER"
+          },
+          "gender": "MALE",
+          "contact": {
+            "emailAddress": "person1@example.com",
+            "phones": [
+              {
+                "deviceType": "MOBILE",
+                "countryCallingCode": "44",
+                "number": "7700900123"
+              }
+            ]
+          }
+        }
+      ],
+      "remarks": {
+        "general": [
+          {
+            "subType": "GENERAL_MISCELLANEOUS",
+            "text": "VELEXIS VX7K2M9Q"
+          }
+        ]
+      },
+      "formOfPayments": [
+        {
+          "other": {
+            "method": "CASH",
+            "flightOfferIds": [
+              "2"
+            ]
+          }
+        }
+      ],
+      "ticketingAgreement": {
+        "option": "CONFIRM"
+      },
+      "automatedProcess": [
+        {
+          "code": "IMMEDIATE",
+          "queue": {
+            "number": "50",
+            "category": "0"
+          },
+          "officeId": "NCE1A0955"
+        }
+      ],
+      "contacts": [
+        {
+          "addresseeName": {
+            "firstName": "ALEX",
+            "lastName": "TESTER"
+          },
+          "purpose": "STANDARD",
+          "phones": [
+            {
+              "deviceType": "MOBILE",
+              "countryCallingCode": "44",
+              "number": "7700900123"
+            }
+          ],
+          "emailAddress": "person1@example.com"
+        }
+      ]
+    },
+    "dictionaries": {
+      "locations": {
+        "MAD": {
+          "cityCode": "MAD",
+          "countryCode": "ES"
+        },
+        "ORY": {
+          "cityCode": "PAR",
+          "countryCode": "FR"
+        }
+      }
+    }
+  }
+}

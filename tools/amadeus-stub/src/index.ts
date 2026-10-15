@@ -13,6 +13,19 @@ export {
 } from "./server";
 export { OAUTH_TOKEN_PATH, TOKEN_EXPIRES_IN, type StubClock, type StubCredentials } from "./oauth";
 export {
+  CARD_NUMBER_MASK,
+  DECLINED_TEST_CARD,
+  maskCardNumbers,
+  ORIGIN_SYSTEM_CODE,
+  OrderStore,
+  TICKET_NUMBER_PREFIX,
+  toFlightOrder,
+  type OrderStatus,
+  type QueuePlacement,
+  type StoredOrder,
+  type StubOrders,
+} from "./orders";
+export {
   AMADEUS_SPEC_FILES,
   FIXTURE_DIR,
   loadFixture,
@@ -36,6 +49,7 @@ export {
   TIMEOUT_HOLD_MS,
   isStubScenario,
   type AmadeusIssue,
+  type HeldResponse,
   type StubResponse,
   type StubScenario,
 } from "./scenarios";

@@ -191,7 +191,7 @@ The build is plain `tsc` (one TypeScript version for the whole repository, [tech
 
 - implements `POST /v1/security/oauth2/token` and the 12 operations from recorded, scrubbed fixtures under `tools/amadeus-stub/fixtures/`;
 - validates every request against `docs/amadeus-api/*.json` and answers `400` on a malformed request, so client bugs fail loudly;
-- scenarios with `X-Stub-Scenario`: `sold-out`, `price-changed`, `ticketing-failed`, `version-conflict`, `server-error`, `timeout`; the client forwards the header only when `APP_ENV` is not `production`. End-to-end runs use magic values (destination `ZZZ` returns no offers);
+- scenarios with `X-Stub-Scenario`: `sold-out`, `price-changed`, `ticketing-failed`, `version-conflict`, `server-error`, `rate-limited`, `timeout`, `timeout-lost`; the client forwards the header only when `APP_ENV` is not `production`. End-to-end runs use magic values (destination `ZZZ` returns no offers);
 - remembers created orders in memory so Flight Order Management, by-reference GET and Queue List return them (needed for reconciliation tests);
 - is started in-process by integration tests through `@velexis/testing/amadeus` (random port), and as a background process in CI end-to-end jobs.
 

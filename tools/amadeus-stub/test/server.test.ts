@@ -775,22 +775,12 @@ describe("scenarios and magic values", () => {
     expect(await json<SearchBody>(post)).toEqual({ meta: { count: 0 }, data: [] });
   });
 
-  it("answers 501 not stubbed yet for each operation without a handler [X-026 AC4]", async () => {
+  it("routes each operation to its handler: since OBE-041 none answers 501 not stubbed yet [X-026 AC4]", async () => {
     const stub = await startStub();
     const headers = { ...(await authorized(stub)), "content-type": "application/vnd.amadeus+json" };
-    const unimplemented = STUB_OPERATIONS.filter((op) => op.handler === undefined);
-    expect(unimplemented.map((op) => op.name).sort()).toEqual(
-      [
-        "cancelFlightOrder",
-        "createFlightOrders",
-        "getFlightOrder",
-        "getFlightOrderByReference",
-        "issueFlightOrder",
-        "listQueue",
-        "patchFlightOrder",
-      ].sort(),
-    );
-    for (const op of unimplemented) {
+    // X-026 answered 501 (stub code 90002) for each operation without a handler; OBE-041 stubbed the last seven.
+    expect(STUB_OPERATIONS.filter((op) => op.handler === undefined).map((op) => op.name)).toEqual([]);
+    for (const op of STUB_OPERATIONS) {
       const path = op.path
         .replace("{flight-orderId}", "eJzTd9f3NjIxMwYADRkCqQ%3D%3D")
         .replace("{queue-id}", "50");
@@ -799,19 +789,9 @@ describe("scenarios and magic values", () => {
         headers,
         ...(op.method === "POST" || op.method === "PATCH" ? { body: "{}" } : {}),
       });
-      expect(res.status, op.name).toBe(501);
-      expect(await json<ErrorBody>(res)).toEqual({
-        errors: [
-          {
-            status: 501,
-            code: 90002,
-            title: "NOT STUBBED YET",
-            detail: expect.stringContaining(
-              `${op.name} (${op.method} ${op.path}, ${op.api}) is not stubbed yet`,
-            ),
-          },
-        ],
-      });
+      expect(res.status, op.name).not.toBe(501);
+      const body = await res.text();
+      expect(body, op.name).not.toContain("NOT STUBBED YET");
       expect(stub.requests().at(-1)?.operation).toBe(op.name);
     }
   });

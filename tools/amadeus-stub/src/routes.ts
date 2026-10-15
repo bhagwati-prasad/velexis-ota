@@ -4,20 +4,32 @@
 // X-026 implements Flight Offers Search (GET and POST /v2/shopping/flight-offers) from the synthetic fixture
 // fixtures/flight-offers-search/success.json. OBE-019 adds Flight Offers Price, Branded Fares Upsell and Flight
 // Availabilities Search (src/handlers/), whose request bodies may not carry fields their specification does not
-// declare (`unknownBodyFields`). Every other operation has no handler yet and answers 501 "not stubbed yet";
-// `plannedBy` names the OTA task that adds it. A handler gets the request after authentication, validation against the
+// declare (`unknownBodyFields`). OBE-041 adds the order operations (Flight Create Orders, Flight Order Issue, Flight
+// Order Management GET, PATCH and DELETE, the by-reference GET and Queue List) on the server's in-memory orders
+// (src/orders.ts). Every operation now has a handler; one without would answer 501 "not stubbed yet", `plannedBy`
+// naming the task that stubs it. A handler gets the request after authentication, validation against the
 // specification and the generic scenarios (server.ts), so it only decides what to answer.
 import { readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { FLIGHT_AVAILABILITIES_FIXTURES, searchFlightAvailabilitiesHandler } from "./handlers/availability";
+import { getFlightOrderByReferenceHandler } from "./handlers/by-reference";
+import { createFlightOrdersHandler, FLIGHT_CREATE_ORDERS_FIXTURES } from "./handlers/create-orders";
+import { FLIGHT_ORDER_ISSUE_FIXTURES, issueFlightOrderHandler } from "./handlers/issue";
+import {
+  cancelFlightOrderHandler,
+  getFlightOrderHandler,
+  patchFlightOrderHandler,
+} from "./handlers/order-management";
 import {
   CREDIT_CARD_FEES_FIXTURE,
   FLIGHT_OFFERS_PRICE_FIXTURES,
   quoteAirOffersHandler,
 } from "./handlers/pricing";
+import { listQueueHandler } from "./handlers/queue-list";
 import { BRANDED_FARES_UPSELL_FIXTURES, upsellAirOffersHandler } from "./handlers/upselling";
 import { OAUTH_TOKEN_PATH } from "./oauth";
-import { findsNoOffers, type StubResponse, type StubScenario } from "./scenarios";
+import type { OrderStore } from "./orders";
+import { findsNoOffers, type HeldResponse, type StubResponse, type StubScenario } from "./scenarios";
 import type { OperationSpec, UnknownBodyFields } from "./validate";
 
 /** The 9 Amadeus APIs, by the name the OTA OpenAPI document's `x-amadeus` uses. */
@@ -72,9 +84,14 @@ export interface HandlerContext {
   readonly body: unknown;
   readonly pathParams: Readonly<Record<string, string>>;
   readonly scenario: StubScenario;
+  /** The server's in-memory flight orders (src/orders.ts). */
+  readonly orders: OrderStore;
+  /** The time of the request on the server's clock. */
+  readonly now: Date;
 }
 
-export type OperationHandler = (context: HandlerContext) => StubResponse;
+/** A handler answers now, or holds its answer (`timeout` and `timeout-lost` at an order write). */
+export type OperationHandler = (context: HandlerContext) => StubResponse | HeldResponse;
 
 export interface StubOperation {
   readonly name: OperationName;
@@ -89,6 +106,11 @@ export interface StubOperation {
   readonly handler: OperationHandler | undefined;
   /** The task that stubs the operation. */
   readonly plannedBy: string;
+  /**
+   * An order write (create, issue, PATCH, DELETE): its handler applies the `timeout` scenario itself, after the write,
+   * and `timeout-lost` before it (src/scenarios.ts).
+   */
+  readonly writesOrder: boolean;
 }
 
 // ---- Fixtures --------------------------------------------------------------------------------------------------
@@ -172,6 +194,8 @@ export const STUB_FIXTURES: readonly (readonly [operation: string, scenario: str
   [FLIGHT_OFFERS_PRICE_FIXTURES, CREDIT_CARD_FEES_FIXTURE],
   [BRANDED_FARES_UPSELL_FIXTURES, "success"],
   [FLIGHT_AVAILABILITIES_FIXTURES, "success"],
+  [FLIGHT_CREATE_ORDERS_FIXTURES, "success"],
+  [FLIGHT_ORDER_ISSUE_FIXTURES, "success"],
 ] as const);
 
 function destinationsOf(context: HandlerContext): unknown[] {
@@ -214,24 +238,44 @@ export function searchFlightOffersHandler(context: HandlerContext): StubResponse
 
 // ---- The route table -------------------------------------------------------------------------------------------
 
+/** The fields of the `FlightOffer` schemas of `apis` are known in `data.flightOffers[]` too. */
+function flightOffersOf(apis: readonly AmadeusApi[]): UnknownBodyFields {
+  return Object.freeze({
+    alsoKnown: Object.freeze(
+      apis.map((api) =>
+        Object.freeze({
+          pointer: "/data/flightOffers/*",
+          specFile: AMADEUS_SPEC_FILES[api],
+          ref: "#/definitions/FlightOffer",
+        }),
+      ),
+    ),
+  });
+}
+
 /**
  * Flight Offers Price and Branded Fares Upsell take back the flight offers that Flight Offers Search, Branded Fares
  * Upsell or Flight Offers Price answered, with fields their own request schema does not declare (`isUpsellOffer` and
  * `brandedFareLabel` of a search offer, `amenities` of an upsell offer): those are known in `data.flightOffers` too.
  */
-const ECHOED_FLIGHT_OFFERS: UnknownBodyFields = Object.freeze({
-  alsoKnown: Object.freeze(
-    (["FlightOffersSearch", "BrandedFaresUpsell", "FlightOffersPrice"] as const).map((api) =>
-      Object.freeze({
-        pointer: "/data/flightOffers/*",
-        specFile: AMADEUS_SPEC_FILES[api],
-        ref: "#/definitions/FlightOffer",
-      }),
-    ),
-  ),
-});
+const ECHOED_FLIGHT_OFFERS = flightOffersOf([
+  "FlightOffersSearch",
+  "BrandedFaresUpsell",
+  "FlightOffersPrice",
+]);
 
-/** Flight Availabilities Search has nothing echoed: only its own schema's fields are known. */
+/**
+ * Flight Create Orders books a priced offer, and a Management PATCH sends back the offers of the order (its schema
+ * makes `flightOffers` mandatory): the fields of the shopping offers and of the created order's offers are known.
+ */
+const ORDERED_FLIGHT_OFFERS = flightOffersOf([
+  "FlightOffersSearch",
+  "BrandedFaresUpsell",
+  "FlightOffersPrice",
+  "FlightCreateOrders",
+]);
+
+/** Flight Availabilities Search and Flight Order Issue echo nothing: only their own schema's fields are known. */
 const OWN_FIELDS_ONLY: UnknownBodyFields = Object.freeze({ alsoKnown: Object.freeze([]) });
 
 function operation(
@@ -244,6 +288,7 @@ function operation(
   plannedBy: string,
   handler?: OperationHandler,
   unknownBodyFields?: UnknownBodyFields,
+  writesOrder = false,
 ): StubOperation {
   // Queue List (OpenAPI 3.0) writes its path key with the method in front: `GET/office/queues/{queue-id}`.
   const path = basePath + specPath.replace(/^[A-Z]+(?=\/)/, "");
@@ -261,6 +306,7 @@ function operation(
     }),
     handler,
     plannedBy,
+    writesOrder,
   });
 }
 
@@ -327,6 +373,9 @@ export const STUB_OPERATIONS: readonly StubOperation[] = Object.freeze([
     "/v1",
     "/booking/flight-orders",
     "OBE-041",
+    createFlightOrdersHandler(loadFixture),
+    ORDERED_FLIGHT_OFFERS,
+    true,
   ),
   operation(
     "issueFlightOrder",
@@ -336,6 +385,9 @@ export const STUB_OPERATIONS: readonly StubOperation[] = Object.freeze([
     "/v1",
     "/booking/flight-orders/{flight-orderId}/issuance",
     "OBE-041",
+    issueFlightOrderHandler(loadFixture),
+    OWN_FIELDS_ONLY,
+    true,
   ),
   operation(
     "getFlightOrder",
@@ -345,6 +397,7 @@ export const STUB_OPERATIONS: readonly StubOperation[] = Object.freeze([
     "/v1",
     "/booking/flight-orders/{flight-orderId}",
     "OBE-041",
+    getFlightOrderHandler(loadFixture),
   ),
   operation(
     "patchFlightOrder",
@@ -354,6 +407,9 @@ export const STUB_OPERATIONS: readonly StubOperation[] = Object.freeze([
     "/v1",
     "/booking/flight-orders/{flight-orderId}",
     "OBE-041",
+    patchFlightOrderHandler(loadFixture),
+    ORDERED_FLIGHT_OFFERS,
+    true,
   ),
   operation(
     "cancelFlightOrder",
@@ -363,6 +419,9 @@ export const STUB_OPERATIONS: readonly StubOperation[] = Object.freeze([
     "/v1",
     "/booking/flight-orders/{flight-orderId}",
     "OBE-041",
+    cancelFlightOrderHandler,
+    undefined,
+    true,
   ),
   operation(
     "getFlightOrderByReference",
@@ -372,6 +431,7 @@ export const STUB_OPERATIONS: readonly StubOperation[] = Object.freeze([
     "/v1",
     "/booking/flight-orders/by-reference",
     "OBE-041",
+    getFlightOrderByReferenceHandler(loadFixture),
   ),
   operation(
     "listQueue",
@@ -381,6 +441,7 @@ export const STUB_OPERATIONS: readonly StubOperation[] = Object.freeze([
     "/v1",
     "GET/office/queues/{queue-id}",
     "OBE-041",
+    listQueueHandler,
   ),
 ]);
 

@@ -10,8 +10,15 @@
 // Operation-specific scenarios change only the operations that know them, in their handlers; every other route, the
 // token endpoint included, answers as for `success`, so a default scenario can be set for a whole flow. OBE-019 adds
 // `sold-out` (Flight Offers Price and Branded Fares Upsell answer error 34651) and `price-changed` (Flight Offers Price
-// answers a higher total with warning 37200); OBE-041 adds `ticketing-failed`, `version-conflict` and `timeout-lost`
-// with the order operations.
+// answers a higher total with warning 37200). OBE-041 adds the order operations and their scenarios:
+//   - `sold-out` also refuses Flight Create Orders (34651, no order stored);
+//   - `ticketing-failed`: Flight Order Issue answers 9112 (TICKETING - TKT); Flight Create Orders with `issue=true`
+//     stores the order without tickets and answers 201 with warning 9112;
+//   - `version-conflict`: Flight Order Management PATCH answers 409 with 2552 (SIMULTANEOUS UPDATE);
+//   - `timeout` at an order write (create, issue, PATCH, DELETE) applies the write, then holds the answer as
+//     everywhere else: the order exists although the client never heard so, and reconciliation can find it;
+//   - `timeout-lost` holds the answer of an order write without applying it (no order stored); every other route
+//     answers as for `success`.
 
 /** The request header that selects a scenario (case-insensitive, as every HTTP header). */
 export const SCENARIO_HEADER = "X-Stub-Scenario";
@@ -27,6 +34,9 @@ export const STUB_SCENARIOS = [
   "timeout",
   "sold-out",
   "price-changed",
+  "ticketing-failed",
+  "version-conflict",
+  "timeout-lost",
 ] as const;
 export type StubScenario = (typeof STUB_SCENARIOS)[number];
 
@@ -74,6 +84,14 @@ export const AMADEUS_ERROR_CODES = Object.freeze({
   segmentSellFailure: 34651,
   /** Price discrepancy: the current price differs from the requested one (`price-changed`, a warning at pricing). */
   priceDiscrepancy: 37200,
+  /** The credit card of a form of payment was refused (the test card `4000000000000002`). */
+  creditCardNotAccepted: 1304,
+  /** Ticketing failed (`ticketing-failed`; an error at issuance, a warning at a create order with `issue=true`). */
+  ticketing: 9112,
+  /** Simultaneous update: the order changed meanwhile (`version-conflict` at Flight Order Management PATCH). */
+  simultaneousUpdate: 2552,
+  /** No flight order with this id or record locator (the specifications' `Error_404` example). */
+  notFound: 1797,
 } as const);
 
 /**
@@ -112,11 +130,23 @@ export function amadeusErrorResponse(issues: readonly [AmadeusIssue, ...AmadeusI
   return { status: issues[0].status, body: { errors: issues } };
 }
 
+/** An answer the server holds for `holdMs` before it sends `afterHold` (unless the client goes away first). */
+export interface HeldResponse {
+  readonly kind: "hold";
+  readonly holdMs: number;
+  readonly afterHold: StubResponse;
+}
+
 /** What a scenario does to a request that passed authentication and validation. */
 export type ScenarioOutcome =
   | { readonly kind: "continue" }
   | { readonly kind: "respond"; readonly response: StubResponse }
-  | { readonly kind: "hold"; readonly holdMs: number; readonly afterHold: StubResponse };
+  | HeldResponse;
+
+/** Whether a handler's result is a held answer rather than a response to send now. */
+export function isHeld(result: StubResponse | HeldResponse): result is HeldResponse {
+  return "kind" in result && result.kind === "hold";
+}
 
 const SERVER_ERROR: StubResponse = amadeusErrorResponse([
   {
@@ -145,22 +175,32 @@ const TIMED_OUT: StubResponse = amadeusErrorResponse([
   },
 ]);
 
+/** The held answer of `timeout` (and of `timeout-lost` at an order write): a 504 after 30 s. */
+export function timedOut(): HeldResponse {
+  return { kind: "hold", holdMs: TIMEOUT_HOLD_MS, afterHold: TIMED_OUT };
+}
+
 /**
  * What `scenario` does to any route. The operation-specific scenarios continue to the operation's handler, which
- * applies them or, when the operation does not know them, answers as for `success`.
+ * applies them or, when the operation does not know them, answers as for `success`. `writesOrder` marks the order
+ * writes (Flight Create Orders, Flight Order Issue, Management PATCH and DELETE): their handlers apply `timeout`
+ * themselves, after the write, so it continues to them too.
  */
-export function applyScenario(scenario: StubScenario): ScenarioOutcome {
+export function applyScenario(scenario: StubScenario, writesOrder = false): ScenarioOutcome {
   switch (scenario) {
     case "success":
     case "sold-out":
     case "price-changed":
+    case "ticketing-failed":
+    case "version-conflict":
+    case "timeout-lost":
       return { kind: "continue" };
     case "server-error":
       return { kind: "respond", response: SERVER_ERROR };
     case "rate-limited":
       return { kind: "respond", response: RATE_LIMITED };
     case "timeout":
-      return { kind: "hold", holdMs: TIMEOUT_HOLD_MS, afterHold: TIMED_OUT };
+      return writesOrder ? { kind: "continue" } : timedOut();
   }
 }
 
@@ -193,8 +233,8 @@ export function resolveScenario(
 }
 
 /**
- * `sold-out` at Flight Offers Price or Branded Fares Upsell: a 400 with error 34651 for the first segment of the
- * posted flight offers, as Amadeus answers when the booking class has no seat left.
+ * `sold-out` at Flight Offers Price, Branded Fares Upsell or Flight Create Orders: a 400 with error 34651 for the
+ * first segment of the posted flight offers, as Amadeus answers when the booking class has no seat left.
  */
 export function soldOutResponse(segmentId: string | undefined): StubResponse {
   return amadeusErrorResponse([
@@ -219,3 +259,31 @@ export const PRICE_DISCREPANCY_WARNING: AmadeusIssue = Object.freeze({
 export function findsNoOffers(destinationCodes: readonly unknown[]): boolean {
   return destinationCodes.some((code) => code === NO_OFFERS_DESTINATION);
 }
+
+/** `ticketing-failed` at Flight Order Issue: a 400 with error 9112, the order stays without tickets. */
+export const TICKETING_FAILED: StubResponse = amadeusErrorResponse([
+  {
+    status: 400,
+    code: AMADEUS_ERROR_CODES.ticketing,
+    title: "TICKETING - TKT",
+    detail: "Stub scenario ticketing-failed: the flight order was not issued",
+  },
+]);
+
+/** The warning of a Flight Create Orders with `issue=true` under `ticketing-failed` (the 201 response's `warnings`). */
+export const TICKETING_FAILED_WARNING: AmadeusIssue = Object.freeze({
+  status: 201,
+  code: AMADEUS_ERROR_CODES.ticketing,
+  title: "TICKETING - TKT",
+  detail: "Stub scenario ticketing-failed: the flight order was created but not issued",
+});
+
+/** `version-conflict` at Flight Order Management PATCH: a 409 with error 2552, the order unchanged. */
+export const VERSION_CONFLICT: StubResponse = amadeusErrorResponse([
+  {
+    status: 409,
+    code: AMADEUS_ERROR_CODES.simultaneousUpdate,
+    title: "SIMULTANEOUS UPDATE",
+    detail: "Stub scenario version-conflict: the flight order was updated meanwhile",
+  },
+]);

@@ -6,14 +6,18 @@
 //   2. the scenario (`X-Stub-Scenario` or the server's default; an unknown name is a 400);
 //   3. the token endpoint checks the grant and the client credentials; an operation checks the bearer token (401),
 //      answers 501 while it is not stubbed, then validates the request against its specification (400);
-//   4. the generic scenario (`server-error` 500, `rate-limited` 429, `timeout` holds the response);
-//   5. the token or the operation's handler.
-// Each request is recorded (method, path, query, headers with `Authorization` and `Cookie` redacted, never a body)
-// for test assertions (`requests()`, used by @velexis/testing/amadeus).
+//   4. the generic scenario (`server-error` 500, `rate-limited` 429, `timeout` holds the response; an order write
+//      applies `timeout` itself, after the write);
+//   5. the token or the operation's handler, which answers now or holds its answer.
+// Each request is recorded (method, path, query, headers with `Authorization` and `Cookie` redacted, never a body;
+// runs of 13 to 19 digits in the path, the query and the headers masked to their last 4, so no card number lands in
+// it) for test assertions (`requests()`, used by @velexis/testing/amadeus). Each server keeps the flight orders that
+// Flight Create Orders stored in memory (`orders`, src/orders.ts).
 import { createServer, type IncomingHttpHeaders, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { performance } from "node:perf_hooks";
 import { TokenStore, type StubClock, type StubCredentials } from "./oauth";
+import { maskCardNumbers, OrderStore, type StubOrders } from "./orders";
 import {
   loadFixture,
   matchRoute,
@@ -27,6 +31,7 @@ import {
   AMADEUS_JSON,
   amadeusErrorResponse,
   applyScenario,
+  isHeld,
   isStubScenario,
   resolveScenario,
   SCENARIO_HEADER,
@@ -79,7 +84,10 @@ export interface RecordedRequest {
   readonly path: string;
   /** Query parameters; a repeated one is an array. */
   readonly query: Readonly<Record<string, string | readonly string[]>>;
-  /** Request headers (lower-case names) with `authorization`, `proxy-authorization` and `cookie` redacted. */
+  /**
+   * Request headers (lower-case names) with `authorization`, `proxy-authorization` and `cookie` redacted. In the path,
+   * the query and the headers, a run of 13 to 19 digits is masked to its last 4 (`XXXXXXXXXXXX1111`).
+   */
   readonly headers: Readonly<Record<string, string | readonly string[]>>;
   /** `oauth2Token`, the operation's name, or `undefined` when no route matched. */
   readonly operation: OperationName | typeof TOKEN_OPERATION | undefined;
@@ -102,6 +110,8 @@ export interface StubServer {
   clearRequests(): void;
   /** The scenario of requests without `X-Stub-Scenario` from now on (`success` to go back to normal). */
   setDefaultScenario(scenario: StubScenario): void;
+  /** The flight orders this server stored (Flight Create Orders), and `reset()` to forget them. */
+  readonly orders: StubOrders;
   /** Stops listening, drops held responses and open connections, and resolves when the port is free. */
   close(): Promise<void>;
 }
@@ -187,7 +197,11 @@ function recordHeaders(headers: IncomingHttpHeaders): Record<string, string | re
   const copy: Record<string, string | readonly string[]> = {};
   for (const [name, value] of Object.entries(headers)) {
     if (value !== undefined) {
-      copy[name] = REDACTED_HEADERS.has(name) ? REDACTED : Array.isArray(value) ? [...value] : value;
+      copy[name] = REDACTED_HEADERS.has(name)
+        ? REDACTED
+        : Array.isArray(value)
+          ? value.map(maskCardNumbers)
+          : maskCardNumbers(value);
     }
   }
   return copy;
@@ -196,8 +210,8 @@ function recordHeaders(headers: IncomingHttpHeaders): Record<string, string | re
 function recordQuery(params: URLSearchParams): Record<string, string | readonly string[]> {
   const query: Record<string, string | readonly string[]> = {};
   for (const name of new Set(params.keys())) {
-    const values = params.getAll(name);
-    query[name] = values.length === 1 ? (values[0] ?? "") : values;
+    const values = params.getAll(name).map(maskCardNumbers);
+    query[maskCardNumbers(name)] = values.length === 1 ? (values[0] ?? "") : values;
   }
   return query;
 }
@@ -227,10 +241,18 @@ function readBody(req: IncomingMessage): Promise<string | undefined> {
   });
 }
 
-/** Sends `response` unless the client went away or an answer was already sent; returns whether it was sent. */
+/**
+ * Sends `response` unless the client went away or an answer was already sent; returns whether it was sent. A body of
+ * `undefined` (Flight Order Management DELETE's 204) sends no content.
+ */
 function send(res: ServerResponse, response: StubResponse): boolean {
   if (res.headersSent || res.destroyed) {
     return false;
+  }
+  if (response.body === undefined) {
+    res.writeHead(response.status, { "cache-control": "no-store" });
+    res.end();
+    return true;
   }
   const payload = JSON.stringify(response.body);
   res.writeHead(response.status, {
@@ -255,7 +277,8 @@ function snapshot(record: MutableRecord): RecordedRequest {
 
 /**
  * Starts the stub on `127.0.0.1:<port>` (or `host`) and resolves when it listens. The specifications of the
- * implemented operations and their fixtures are loaded first, so a broken one fails here, not on the first request.
+ * implemented operations and their fixtures are loaded and checked first (`AmadeusSpecs.check`), so a broken one fails
+ * here, not on the first request; body validators are compiled on their first request.
  */
 export async function createStubServer(options: StubServerOptions): Promise<StubServer> {
   const host = options.host ?? DEFAULT_HOST;
@@ -263,6 +286,7 @@ export async function createStubServer(options: StubServerOptions): Promise<Stub
   const timers = options.timers ?? SYSTEM_TIMERS;
   const specs = options.specs ?? (sharedSpecs ??= new AmadeusSpecs());
   const tokens = new TokenStore({ clock, credentials: options.credentials });
+  const orders = new OrderStore();
   let defaultScenario: StubScenario = "success";
   const setDefaultScenario = (scenario: StubScenario): void => {
     if (!isStubScenario(scenario)) {
@@ -276,7 +300,7 @@ export async function createStubServer(options: StubServerOptions): Promise<Stub
 
   for (const operation of STUB_OPERATIONS) {
     if (operation.handler !== undefined) {
-      specs.prepare(operation.spec);
+      specs.check(operation.spec);
     }
   }
   for (const [operation, scenario] of STUB_FIXTURES) {
@@ -336,19 +360,20 @@ export async function createStubServer(options: StubServerOptions): Promise<Stub
     if (!validation.ok) {
       return respond(amadeusErrorResponse(validation.issues));
     }
-    const outcome = applyScenario(scenario);
+    const outcome = applyScenario(scenario, operation.writesOrder);
     if (outcome.kind !== "continue") {
       return outcome;
     }
-    return respond(
-      operation.handler({
-        operation,
-        query: validation.request.query,
-        body: validation.request.body,
-        pathParams,
-        scenario,
-      }),
-    );
+    const result = operation.handler({
+      operation,
+      query: validation.request.query,
+      body: validation.request.body,
+      pathParams,
+      scenario,
+      orders,
+      now: clock.now(),
+    });
+    return isHeld(result) ? result : respond(result);
   };
 
   const handle = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
@@ -357,7 +382,7 @@ export async function createStubServer(options: StubServerOptions): Promise<Stub
     const url = parseTarget(target);
     const record: MutableRecord = {
       method: req.method ?? "",
-      path: url === undefined ? (target.split("?")[0] ?? "") : url.pathname,
+      path: maskCardNumbers(url === undefined ? (target.split("?")[0] ?? "") : url.pathname),
       query: url === undefined ? {} : recordQuery(url.searchParams),
       headers: recordHeaders(req.headers),
       operation: undefined,
@@ -438,6 +463,7 @@ export async function createStubServer(options: StubServerOptions): Promise<Stub
       recorded.length = 0;
     },
     setDefaultScenario,
+    orders: Object.freeze({ list: () => orders.list(), reset: () => orders.reset() }),
     close: () => {
       closing ??= new Promise<void>((resolve, reject) => {
         for (const cancel of held) {
