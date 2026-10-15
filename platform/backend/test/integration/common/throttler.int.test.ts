@@ -1,7 +1,9 @@
 // The rate limits of the platform API (PBE-009; api-inventory §2 "Rate limits", architecture §3 step 4, PADR-0019)
 // through createTestApp, with the counters in this file's Redis database. Test-only routes bind the operations of the
 // inventory's rows, so they get the limits those operations get; the portal and admin servers' calls are made as they
-// make them, with the BFF key and the forwarded end-user IP (TestApp.bffHeaders).
+// make them, with the BFF key and the forwarded end-user IP (TestApp.bffHeaders). On a route bound to a `portal`
+// operation the account comes from a portal access token, through PortalAuthGuard (PBE-012); on the unbound route, which
+// no auth guard covers, from a test header.
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
@@ -20,6 +22,7 @@ import { expectResponseToMatch } from "@velexis/testing";
 import { Redis } from "ioredis";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { ALL_ROUTES } from "../../../src/app.module";
+import { TokenService } from "../../../src/auth/token.service";
 import {
   OPERATION_RATE_LIMITS,
   RATE_LIMITS,
@@ -30,6 +33,7 @@ import { OpenApiOperation } from "../../../src/common/http/openapi-operation.dec
 import { RequestContext } from "../../../src/common/http/request-context";
 import { REDIS_CLIENT } from "../../../src/common/redis/redis.module";
 import { APP_DIR } from "../../../src/config";
+import { testId } from "../../builders/platform-rows";
 import { createTestApp, TEST_BFF_KEY, type TestApp } from "../../support/app";
 
 // Documentation addresses (RFC 5737, RFC 3849), example.com mailboxes and made-up passwords only.
@@ -40,8 +44,12 @@ const PERSON_D = "198.51.100.77";
 const PASSWORD = "Northern-Lights-Test-2026!";
 const ACCOUNT_A = "acc_01JATESTRW0000000000000001";
 const ACCOUNT_B = "acc_01JATESTRW0000000000000002";
-/** The header the test middleware reads the authenticated account from (the auth guard's job, PBE-012). */
+/**
+ * The header the test middleware reads the account from on the unbound route, which no auth guard covers; routes bound
+ * to an operation get it from PortalAuthGuard (PBE-012).
+ */
 const TEST_ACCOUNT_HEADER = "x-test-account";
+const FAMILY = testId("asn", 1);
 
 function signUpBody(n: number): Record<string, unknown> {
   return {
@@ -81,7 +89,7 @@ class LimitedTestController {
   }
 }
 
-/** Sets the account of the request context from a test header, as the auth guard will (PBE-012). */
+/** Sets the account of the request context from a test header, as an auth guard does (PBE-012). */
 @Injectable()
 class TestAccountMiddleware implements NestMiddleware {
   constructor(private readonly context: RequestContext) {}
@@ -221,11 +229,21 @@ describe("the rate limits with Redis up", () => {
   });
 
   it("counts per account once the account is known: the 31st key check of one account is refused, another passes", async () => {
-    const check = (accountId: string): Promise<{ status: number }> =>
-      t.http
+    // checkTenantKey is a `portal` operation: PortalAuthGuard verifies the token and sets the account.
+    const tokens = t.app.get(TokenService);
+    const check = async (accountId: string): Promise<{ status: number }> => {
+      const { token } = await tokens.sign({
+        aud: "portal",
+        sub: accountId,
+        sid: FAMILY,
+        ev: true,
+        amr: ["pwd"],
+      });
+      return t.http
         .get("/test/limits/key-availability?key=acme")
         .set(t.bffHeaders(PERSON_B))
-        .set(TEST_ACCOUNT_HEADER, accountId);
+        .set("Authorization", `Bearer ${token}`);
+    };
 
     const statuses: number[] = [];
     for (let n = 1; n <= 31; n += 1) {

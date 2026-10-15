@@ -1,31 +1,23 @@
 // Idempotent requests (PBE-009; architecture §3 step 10, conventions §2) through createTestApp, with the records in
 // this file's Redis database. Test-only routes bind `createTenant`, the operation the document marks `x-idempotent`,
-// so the interceptor applies to them as to the real route; a test guard puts the account into the request context, as
-// the auth guard will (PBE-012). The handler counts its side effects, and can be held at a gate to make two requests
-// overlap.
+// so the interceptor applies to them as to the real route; each request carries a portal access token of the
+// application's TokenService, so PortalAuthGuard (PBE-012) puts the account into the request context as it does for
+// the real route. The handler counts its side effects, and can be held at a gate to make two requests overlap.
 import { randomUUID } from "node:crypto";
-import {
-  Controller,
-  HttpCode,
-  Injectable,
-  Post,
-  Res,
-  UseGuards,
-  type CanActivate,
-  type ExecutionContext,
-} from "@nestjs/common";
+import { Controller, HttpCode, Post, Res } from "@nestjs/common";
 import { AppError } from "@velexis/errors";
 import { expectResponseToMatch } from "@velexis/testing";
 import { Redis } from "ioredis";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { TokenService } from "../../../src/auth/token.service";
 import { OpenApiOperation, Validated } from "../../../src/common/http/openapi-operation.decorator";
-import { RequestContext } from "../../../src/common/http/request-context";
 import { REDIS_CLIENT } from "../../../src/common/redis/redis.module";
+import { testId } from "../../builders/platform-rows";
 import { createTestApp, type TestApp } from "../../support/app";
 
 const ACCOUNT_A = "acc_01JATESTRW0000000000000011";
 const ACCOUNT_B = "acc_01JATESTRW0000000000000012";
-const TEST_ACCOUNT_HEADER = "x-test-account";
+const FAMILY = testId("asn", 1);
 
 interface CreateTenantBody {
   readonly key: string;
@@ -79,28 +71,11 @@ class SideEffects {
 
 const effects = new SideEffects();
 
-/** Puts the account of a test header into the request context, as the auth guard will (PBE-012). */
-@Injectable()
-class TestAccountGuard implements CanActivate {
-  constructor(private readonly context: RequestContext) {}
-
-  canActivate(execution: ExecutionContext): boolean {
-    const accountId = execution.switchToHttp().getRequest<{ headers: Record<string, unknown> }>().headers[
-      TEST_ACCOUNT_HEADER
-    ];
-    if (typeof accountId === "string") {
-      this.context.setActor({ type: "account", accountId });
-    }
-    return true;
-  }
-}
-
 interface HeaderTarget {
   setHeader(name: string, value: string): unknown;
 }
 
 @Controller("test/idempotent")
-@UseGuards(TestAccountGuard)
 class IdempotentTestController {
   @Post("tenants")
   @HttpCode(202)
@@ -126,8 +101,19 @@ class IdempotentTestController {
   }
 }
 
-function post(t: TestApp, path: string, key: string | undefined, account: string, payload: unknown) {
-  const req = t.http.post(path).set(TEST_ACCOUNT_HEADER, account).set(t.bffHeaders("203.0.113.7"));
+/** `Authorization: Bearer` with a portal access token of `account`, signed by the application's TokenService. */
+async function portalBearer(t: TestApp, account: string): Promise<{ Authorization: string }> {
+  const { token } = await t.app
+    .get(TokenService)
+    .sign({ aud: "portal", sub: account, sid: FAMILY, ev: true, amr: ["pwd"] });
+  return { Authorization: `Bearer ${token}` };
+}
+
+async function post(t: TestApp, path: string, key: string | undefined, account: string, payload: unknown) {
+  const req = t.http
+    .post(path)
+    .set(await portalBearer(t, account))
+    .set(t.bffHeaders("203.0.113.7"));
   return (key === undefined ? req : req.set("Idempotency-Key", key)).send(payload as object);
 }
 
@@ -136,7 +122,7 @@ describe("idempotent requests with Redis up", () => {
   let redis: Redis;
 
   beforeAll(async () => {
-    t = await createTestApp({ controllers: [IdempotentTestController], providers: [TestAccountGuard] });
+    t = await createTestApp({ controllers: [IdempotentTestController] });
     redis = t.app.get<Redis>(REDIS_CLIENT);
   });
 
@@ -288,7 +274,6 @@ describe("idempotent requests with Redis down", () => {
     });
     t = await createTestApp({
       controllers: [IdempotentTestController],
-      providers: [TestAccountGuard],
       overrides: [{ provide: REDIS_CLIENT, useValue: unreachable }],
     });
   });
