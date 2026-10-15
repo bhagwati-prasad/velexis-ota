@@ -92,6 +92,8 @@ describe("the type check of JavaScript", () => {
   /** @type {Map<string, number[]>} diagnostic codes by fixture name */
   const codes = new Map();
 
+  // Building the program loads the DOM and ES2022 libraries: a few seconds alone, and more than Vitest's 10 s hook
+  // default while Turborepo runs every package's tests at once on a CI runner, so the hook gets its own budget.
   beforeAll(() => {
     dir = mkdtempSync(join(tmpdir(), "velexis-sdk-checkjs-"));
     writeFileSync(join(dir, "package.json"), JSON.stringify({ type: "module" }));
@@ -111,7 +113,7 @@ describe("the type check of JavaScript", () => {
         diagnostics.map((diagnostic) => diagnostic.code),
       );
     }
-  });
+  }, 60_000);
 
   afterAll(() => {
     if (dir) {

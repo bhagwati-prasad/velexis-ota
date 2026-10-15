@@ -86,10 +86,16 @@ let documentOperations = [];
 let originalOperations = [];
 const overrides = JSON.parse(readFileSync(OVERRIDES, "utf8")).operations;
 
+/**
+ * Parsing both documents takes about a second alone, and more than Vitest's 10 s hook default while Turborepo runs
+ * every package's tests at once on a CI runner (it timed out there once), so the hook gets its own budget.
+ */
+const PARSE_TIMEOUT_MS = 60_000;
+
 beforeAll(() => {
   documentOperations = operationsOf(parse(readFileSync(DOCUMENT, "utf8")));
   originalOperations = operationsOf(parse(readFileSync(ORIGINAL, "utf8")));
-});
+}, PARSE_TIMEOUT_MS);
 
 describe("the committed route table", () => {
   it("has one entry per x-sdk-method of the working document, keyed with underscores [SDK-002 AC1]", () => {
