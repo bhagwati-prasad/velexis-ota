@@ -3,6 +3,7 @@
 // /health/ready on 127.0.0.1:3100 (ADR-0016). Neither path writes a request log line (@velexis/logger).
 import { Controller, Get, Header, Res } from "@nestjs/common";
 import { InjectPinoLogger, PinoLogger } from "nestjs-pino";
+import { OpenApiOperation } from "../common/http/openapi-operation.decorator";
 import { HealthService, type LiveReport, type ReadyReport } from "./health.service";
 
 /** The part of the Express response the readiness route uses. */
@@ -18,6 +19,7 @@ export class HealthController {
   ) {}
 
   @Get("live")
+  @OpenApiOperation("healthLive")
   @Header("Cache-Control", "no-store")
   live(): LiveReport {
     return this.health.live();
@@ -25,6 +27,7 @@ export class HealthController {
 
   /** `200` when PostgreSQL and Redis answer, otherwise `503`; the body names the status of each dependency. */
   @Get("ready")
+  @OpenApiOperation("healthReady")
   @Header("Cache-Control", "no-store")
   async ready(@Res({ passthrough: true }) res: StatusSettable): Promise<ReadyReport> {
     const { report, failures } = await this.health.ready();

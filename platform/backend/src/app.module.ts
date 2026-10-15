@@ -1,6 +1,6 @@
 // The API's module graph (README §2, platform/docs/architecture.md §2.1). main.ts creates it with the validated
 // configuration and the process logger; tests create it the same way, with their own log destination and, for
-// request pipeline tests, extra controllers in a module that imports `AppModule.forRoot(…)`.
+// request pipeline tests, extra controllers in a module that imports `AppModule.forRoot(…)` (test/support/app.ts).
 import {
   Module,
   RequestMethod,
@@ -8,28 +8,14 @@ import {
   type MiddlewareConsumer,
   type NestModule,
 } from "@nestjs/common";
-import { pinoHttpOptions, REQUEST_ID_HEADER, resolveRequestId, type Logger } from "@velexis/logger";
-import { ClsMiddleware, ClsModule } from "nestjs-cls";
+import { pinoHttpOptions, type Logger } from "@velexis/logger";
 import { LoggerModule } from "nestjs-pino";
+import { API_REQUEST_MIDDLEWARE, CommonModule } from "./common/common.module";
 import { configModule, PLATFORM_PROCESSES, type PlatformBackendConfig } from "./config";
 import { HealthModule } from "./health/health.module";
 
 /** Every route of the application, in the path-to-regexp 8 syntax of NestJS 11 (`*` alone is deprecated). */
 export const ALL_ROUTES = { path: "{*path}", method: RequestMethod.ALL };
-
-interface RequestWithId {
-  readonly id?: unknown;
-  readonly headers: Readonly<Record<string, string | readonly string[] | undefined>>;
-}
-
-/**
- * The id of the request context: the one pino-http has already taken from a valid `X-Request-Id` or generated (and
- * returned in the response header), so the context, the log lines and the response agree. The fallback only runs if
- * the middleware order were broken; the integration test proves it is not.
- */
-export function requestIdOf(req: RequestWithId): string {
-  return typeof req.id === "string" ? req.id : resolveRequestId(req.headers[REQUEST_ID_HEADER]);
-}
 
 @Module({})
 export class AppModule implements NestModule {
@@ -45,22 +31,19 @@ export class AppModule implements NestModule {
           pinoHttp: pinoHttpOptions({ app: PLATFORM_PROCESSES.api, logger }),
           forRoutes: [ALL_ROUTES],
         }),
-        // The request context (AsyncLocalStorage, nestjs-cls). Its middleware is mounted by `configure` below, after
-        // pino-http, so the context id is the request id.
-        ClsModule.forRoot({
-          global: true,
-          middleware: { mount: false, generateId: true, idGenerator: requestIdOf },
-        }),
+        // The request pipeline (body parser, request context, end-user IP, validation, error filter), Clock and ids.
+        CommonModule.forApi(),
         HealthModule.forApi(logger),
       ],
     };
   }
 
   /**
-   * Mounts the request context on every route. The middleware of global modules (nestjs-pino's LoggerModule) runs
-   * before the middleware of this module, so pino-http has set `req.id` when the context takes it.
+   * Mounts the request middleware of CommonModule on every route, in its order. The middleware of global modules
+   * (nestjs-pino's LoggerModule) runs before the middleware of this root module, so pino-http has set `req.id` when
+   * the request context takes it.
    */
   configure(consumer: MiddlewareConsumer): void {
-    consumer.apply(ClsMiddleware).forRoutes(ALL_ROUTES);
+    consumer.apply(...API_REQUEST_MIDDLEWARE).forRoutes(ALL_ROUTES);
   }
 }

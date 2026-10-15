@@ -115,9 +115,12 @@ afterEach(async () => {
   await Promise.all(running.splice(0).map((app) => app.close()));
 });
 
+/** The development PLATFORM_BFF_KEY of platform/backend/.env.example (a dummy value). */
+const PLATFORM_BFF_KEY = "dev_bff_key_change_me_0123456789abcdef";
+
 /** The environment of a process: the services, APP_ENV=test, and the default ports of the units. */
 function processEnv(overrides: Record<string, string> = {}): Record<string, string> {
-  return { APP_ENV: "test", DATABASE_URL, REDIS_URL, ...overrides };
+  return { APP_ENV: "test", DATABASE_URL, REDIS_URL, PLATFORM_BFF_KEY, ...overrides };
 }
 
 async function api(
@@ -475,14 +478,30 @@ describe("the API's request context and request log lines", () => {
     });
 
     expect(answer.status).toBe(500);
-    expect(lines.map((line) => line["msg"])).toEqual(["test.failing", "test failure", "request errored"]);
+    // Since PBE-008 the error filter logs the unknown error (with its stack) instead of Nest's ExceptionsHandler.
+    expect(lines.map((line) => line["msg"])).toEqual([
+      "test.failing",
+      "http.unhandled_error",
+      "request errored",
+    ]);
     for (const line of lines) {
       expect(line).toMatchObject({ app: "platform-api", requestId: "req-test-0500" });
     }
     expect(lines[1]).toMatchObject({
       level: 50,
-      context: "ExceptionsHandler",
-      err: expect.objectContaining({ message: "test failure" }),
+      context: "ErrorFilter",
+      err: expect.objectContaining({
+        message: "test failure",
+        stack: expect.stringContaining("test failure"),
+      }),
+    });
+    expect(answer.body).toEqual({
+      error: {
+        code: "INTERNAL_ERROR",
+        message: "Unexpected error; quote the requestId to support.",
+        status: 500,
+        requestId: "req-test-0500",
+      },
     });
     expect(lines[2]).toMatchObject({ level: 50, method: "GET", route: "/test/fail", status: 500 });
   });

@@ -514,6 +514,34 @@ describe("redaction through createLogger", () => {
     expect(serializedRecord?.["res"]).toEqual({ status: 200 });
   });
 
+  it("censors the platform's X-Velexis-Bff-Key header and keeps the end-user headers it vouches for (PADR-0019)", () => {
+    const { logger, sink } = testLogger();
+    const identity = (value: unknown): unknown => value;
+    const headers = {
+      "x-velexis-bff-key": TEST_BEARER_TOKEN,
+      "x-velexis-end-user-ip": "203.0.113.7",
+      "x-velexis-end-user-agent": "Mozilla/5.0 (test)",
+    };
+
+    logger
+      .child({}, { serializers: { req: identity } })
+      .warn({ req: { method: "POST", headers } }, "bff.debug");
+
+    expect(sink.lines.join("\n")).not.toContain(TEST_BEARER_TOKEN);
+    expect(sink.records()[0]).toMatchObject({
+      req: {
+        headers: {
+          "x-velexis-bff-key": REDACT_CENSOR,
+          "x-velexis-end-user-ip": "203.0.113.7",
+          "x-velexis-end-user-agent": "Mozilla/5.0 (test)",
+        },
+      },
+    });
+    expect(REDACT_PATHS).toContain('req.headers["x-velexis-bff-key"]');
+    // The caller's object is unchanged: pino censors a copy.
+    expect(headers["x-velexis-bff-key"]).toBe(TEST_BEARER_TOKEN);
+  });
+
   it("writes the base fields app and env and an ISO timestamp", () => {
     const { logger, sink } = testLogger();
     logger.info({ bookingId: "bkg_01" }, "booking.created");

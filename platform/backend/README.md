@@ -24,7 +24,7 @@ platform/backend/
 ├── nest-cli.json, tsconfig.json, tsconfig.build.json
 ├── vitest.config.ts, vitest.int.config.ts       unit and integration tests, compiled by tsc (decorator metadata)
 ├── .env.example
-├── openapi/
+├── openapi/                                    shipped with dist/ (package.json `files`): the API validates requests with it
 │   ├── README.md                               slices, conventions, x- extensions, how to change it (PBE-005)
 │   └── velexis-platform-api.openapi.yaml       source of truth for every endpoint (ADR-0006)
 ├── migrations/
@@ -36,19 +36,22 @@ platform/backend/
 │   └── reference/
 │       └── 0001_baseline.sql                   byte copy of docs/velexis-sdk/db/reference.sql
 ├── src/
-│   ├── main.ts                     HTTP entry (raw body on /webhooks/*, trust proxy loopback)
+│   ├── main.ts                     HTTP entry (helmet, cookie-parser, trust proxy loopback, Nest's body parser off)
 │   ├── worker.ts                   BullMQ processors and schedulers, health server on HEALTH_PORT
 │   ├── cli.ts                      admin:grant, admin:reset-mfa, dev:seed
 │   ├── app.module.ts, worker.module.ts
 │   ├── config.ts                   @velexis/config schema of every variable below
 │   ├── common/
 │   │   ├── auth/                   portal-auth, admin-auth, internal-only, tenant-role, recent-mfa, feature guards + decorators
-│   │   ├── http/                   request context, OpenAPI validation interceptor, idempotency interceptor, error filter
+│   │   ├── http/                   request context, end-user IP (PADR-0019), JSON body parser with the raw body on
+│   │   │                           /webhooks/*, @OpenApiOperation, OpenAPI validation interceptor, error filter,
+│   │   │                           idempotency interceptor (PBE-009)
 │   │   ├── stripe/                 Stripe client factory (pinned apiVersion), signature guard, stripe_events inbox
 │   │   ├── credentials/            credential_submissions repository
 │   │   ├── redis/                  ioredis client, vx:invalidate publisher, Redis key helpers
 │   │   ├── queues/                 queue names, producers, @velexis/api-types/jobs validation
-│   │   └── clock.ts, ids.ts        injectable Clock and prefixed-ULID generator
+│   │   ├── clock.ts, ids.ts        injectable Clock and prefixed-ULID generator (`IdGenerator.new("ten")`)
+│   │   └── common.module.ts        CommonModule.forApi() and API_REQUEST_MIDDLEWARE (the middleware order)
 │   ├── audit/                      AuditService.record(tx, …), audit-actions.ts (union of action names), queries, CSV
 │   ├── notifications/              outbox service, email.processor.ts, mailer.gateway.ts, templates/<key>.{subject,html,txt}.hbs
 │   ├── auth/                       sign-up, verification, sign-in, MFA challenge, refresh, sign-out, reset, step-up, token signing
@@ -67,10 +70,12 @@ platform/backend/
 │   ├── admin/                      admin auth controller, one controller per admin area, dashboard, queue inspector
 │   └── health/
 └── test/
+    ├── support/app.ts              createTestApp(): the API on a test database clone and Redis, for Supertest (PBE-008)
     ├── builders/                   test data builders (accounts, tenants, plans, …)
     ├── fixtures/stripe/            signed Stripe event fixtures (Billing and Connect)
     ├── integration/<module>/*.int.test.ts
-    └── contract/                   OpenAPI document and error catalogue, route parity, jobs schemas, baseline checksums
+    └── contract/                   OpenAPI document and error catalogue, route parity and pending-operations.ts, jobs
+                                    schemas, baseline checksums
 ```
 
 There is no reference-data folder and no reference loader in this package. The vendored datasets and their loader live in `tools/reference-data` (`@velexis/reference-data`) and run through `pnpm db:seed:reference` with this backend's database role ([ADR-0024](../../docs/mvp/adr/0024-reference-data-sources-and-loader.md)). The backend owns the `reference` migrations and only reads the tables.
@@ -164,7 +169,9 @@ Run from the repository root (`pnpm --filter @velexis/platform-backend <script>`
 ## 7. OpenAPI document
 
 - Location: `openapi/velexis-platform-api.openapi.yaml` (OpenAPI 3.1), as [ADR-0006](../../docs/mvp/adr/0006-contract-first-openapi.md) names it. The first M1 backend task (PBE-005) created it from [`../docs/api-inventory.md`](../docs/api-inventory.md) and its two companion parts, with the error catalogue, `x-scope` on every operation and `x-internal: true` on webhooks and internal endpoints. [`openapi/README.md`](openapi/README.md) explains its slices, conventions, extensions and contract test, and how to change it.
-- Every endpoint change starts in the document; `pnpm contracts:generate` updates the types; controllers bind to `operationId`s; the route parity test fails on drift.
+- Every endpoint change starts in the document; `pnpm contracts:generate` updates the types; controllers bind to `operationId`s with `@OpenApiOperation("signUp")`; the route parity test fails on drift.
+- **Runtime validation** (PBE-008). The API reads the document from `openapi/` next to `dist/` (the package ships it) once per process. At start-up `OpenApiValidationInterceptor` compiles Ajv 2020 validators (with `ajv-formats`, strict for unknown keywords) for the path, query and header parameters and the JSON body of every bound operation; an `operationId` that the document lacks stops the start. A request that fails answers `400 VALIDATION_FAILED` with `fieldErrors[]` of `{path, code, message}`: `path` is a JSON pointer into the body (`/email`, `""` for the body itself) or `/<in>/<name>` for a parameter (`/query/limit`, `/path/tenantId`, `/header/Idempotency-Key`), `code` the failed rule, and `message` never contains the submitted value. Unknown body properties fail (request bodies are closed); undocumented query parameters are ignored. Handlers read the coerced parameters (with their defaults) through `@Validated("query")`. Responses are validated in the integration tests only.
+- **Route parity** (PADR-0016 item 2). [`test/contract/route-parity.contract.test.ts`](test/contract/route-parity.contract.test.ts) walks the API's module graph and fails when a route has no `@OpenApiOperation`, binds an operation the document lacks or with another method or path, when two routes bind one operation, or when an operation is neither bound nor listed in [`test/contract/pending-operations.ts`](test/contract/pending-operations.ts), or both. Each pending entry names the plan task that implements it; that task removes the entry when it binds the route.
 - Queue message contracts are not in this document: they live in `@velexis/api-types/jobs` ([`../docs/architecture.md`](../docs/architecture.md) §6.1).
 
 ## 8. Tests
@@ -177,11 +184,15 @@ Run from the repository root (`pnpm --filter @velexis/platform-backend <script>`
 | Cross-backend | Provisioning with the OTA worker; API key created here accepted by the OTA API; console token redeemed by the OTA API | `test:xb`, run in CI after the `Build` step because it starts the built OTA worker ([PADR-0017](../docs/adr/0017-platform-test-doubles-and-end-to-end-harness.md)) |
 | End-to-end | Portal and admin journeys | `tools/e2e` ([`../frontend/README.md`](../frontend/README.md), [`../admin/README.md`](../admin/README.md)) |
 
+Integration tests that call the API start it with `createTestApp()` of [`test/support/app.ts`](test/support/app.ts) (PBE-008): the application of `main.ts` (AppModule, helmet, cookie-parser, the request pipeline), compiled with `@nestjs/testing` so providers can be replaced (`overrides: [{ provide: X, useValue: … }]`), on the file's own database clone (`createTestDatabase()`) and the worker's Redis database (`useRedis()`), listening on an ephemeral port of `127.0.0.1`. It returns `{ app, http, db, redis, clock, logs, config, bffHeaders, close }`: `http` is Supertest, `clock` the `FakeClock` that replaces `Clock`, `logs` the parsed log lines, and `bffHeaders(ip)` the three PADR-0019 headers of a portal or admin call. Test-only controllers go in `controllers` and get the same pipeline. Call it once per test file: `useRedis()` empties the worker's Redis database.
+
 ## 9. Operations
 
 - Health: `GET /health/live`, `GET /health/ready` on both processes: the API on `127.0.0.1:3100`, the worker's small `node:http` server on `127.0.0.1:3101` (any other path there answers the `404 NOT_FOUND` error envelope). Both answers carry `Cache-Control: no-store`, and `/health/*` writes no request log line.
   - `live` answers `200 {"status":"ok"}` while the process serves requests; it checks nothing else.
   - `ready` runs `SELECT 1` on a `createPool` pool (role `velexis_platform_app`) and `PING` on Redis in parallel, each within 2 seconds, and answers `200 {"status":"ok","checks":{"postgres":"ok","redis":"ok"}}`, or `503` with `"status":"unavailable"` and `"down"` for each dependency that failed. The cause is never answered: it is logged as `health.dependency_down` (warn, with the `dependency`, the `err` and the request's `requestId`). The age of the oldest waiting job per platform queue ([`api-inventory-admin.md`](../docs/api-inventory-admin.md), `healthReady`) is not in the report yet: the queues arrive with PBE-009.
 - Start-up: an invalid configuration logs one `fatal` line `config.invalid` whose `ConfigError` names every variable (never a value) and exits `1`; so does a failure to build the module graph or bind the port (`api.start_failed`, `worker.start_failed`).
-- Logs: pino JSON to journald with the standard fields and the redaction list of [ADR-0016](../../docs/mvp/adr/0016-observability.md) plus the platform additions in [`../docs/architecture.md`](../docs/architecture.md) §8. Nest's own lines (start-up, the exception handler's error line of a failed request) go through the same logger, inside a request with its `requestId`. `createApiApp` flushes Nest's start-up buffer as soon as the logger is in place, so these lines are written also when `listen()` fails or a request test only runs `init()`.
+- Logs: pino JSON to journald with the standard fields and the redaction list of [ADR-0016](../../docs/mvp/adr/0016-observability.md) plus the platform additions in [`../docs/architecture.md`](../docs/architecture.md) §8 (`x-velexis-bff-key` since PBE-008). Nest's own lines (start-up) go through the same logger, and every line written inside a request carries its `requestId`. `configureApiApp` flushes Nest's start-up buffer as soon as the logger is in place, so these lines are written also when `listen()` fails or a request test only runs `init()`.
+- Errors: every error answer is the envelope of `@velexis/errors` with the `requestId` (also in `X-Request-Id`). `ErrorFilter` answers Nest's own HTTP exceptions (an unknown route, a guard's `401`) with the generic code of their status and never their message, and uses the platform document's message for a code both catalogues list. An unknown error answers `500 INTERNAL_ERROR` and is logged as `http.unhandled_error` (error, with `err` and its stack, never in the body); an `AppError` of 5xx is logged as `http.server_error` with its `code`.
+- Request pipeline (PBE-008, [`../docs/architecture.md`](../docs/architecture.md) §3): `helmet` and `cookie-parser`, pino-http (request id and request line), the JSON body parser (100 KB; 1 MB and the raw body on `/webhooks/*`; a body that cannot be read answers `400 VALIDATION_FAILED` without quoting it), the request context (`nestjs-cls`: `requestId`, `ip`, `userAgent`, `actor`), the end user of PADR-0019 (`X-Velexis-End-User-IP` and `X-Velexis-End-User-Agent` believed only from loopback, without `X-Forwarded-For` and with `X-Velexis-Bff-Key` equal to `PLATFORM_BFF_KEY` in constant time; a believed request without a valid IP answers `400`; a key sent but not believed is logged as `request_context.bff_key_ignored` with the reason only), then guards, the validation interceptor, the handler and the error filter. Services read the IP and user agent from `RequestContext`, never `req.ip`.
 - Deploy order: migrations, then restart the worker, then the API ([ADR-0007](../../docs/mvp/adr/0007-single-vm-without-docker.md)).

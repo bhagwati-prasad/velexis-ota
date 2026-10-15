@@ -20,8 +20,15 @@ function logSink(): { readonly lines: Record<string, unknown>[]; write(line: str
   };
 }
 
+/** The development PLATFORM_BFF_KEY of platform/backend/.env.example (a dummy value). */
+const BFF_KEY = "dev_bff_key_change_me_0123456789abcdef";
+
 /** Everything but DATABASE_URL. */
-const WITHOUT_DATABASE_URL = { APP_ENV: "test", REDIS_URL: "redis://127.0.0.1:6379/0" } as const;
+const WITHOUT_DATABASE_URL = {
+  APP_ENV: "test",
+  REDIS_URL: "redis://127.0.0.1:6379/0",
+  PLATFORM_BFF_KEY: BFF_KEY,
+} as const;
 
 /** The one line the entry points log when DATABASE_URL is missing. */
 function configInvalidLine(app: string): unknown {
@@ -124,6 +131,7 @@ describe("the entry points as processes", () => {
         APP_ENV: "production",
         NODE_ENV: "production",
         REDIS_URL: "redis://127.0.0.1:6379/0",
+        PLATFORM_BFF_KEY: BFF_KEY,
       });
 
       expect(result.error).toBeUndefined();

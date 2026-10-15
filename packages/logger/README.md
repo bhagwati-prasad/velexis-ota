@@ -76,7 +76,7 @@ Returns a deep copy and never mutates its input. Keys are matched without regard
 - `password`, `newPassword`, `currentPassword`, `mfaCode`, `accessToken`, `refreshToken`, `portalToken`, `bookingToken`, `token`, `clientSecret`, `secret`, `apiKey`, `securityCode`, `cvc`, `cardNumber`, `certificateNumber` at the top level and one level down (`*.password`);
 - `*.card.number`, `*.creditCard.number`, `documents[*].number`, `*.documents[*].number`;
 - the whole `card`, `creditCard` and `formOfPayments` objects at the top level and at every nesting depth down to depth 8 (`card`, `*.card`, …, `*.*.*.*.*.*.*.card`). pino paths are not recursive, and an Amadeus Create Orders body logged at depth 1 to 6 has its `formOfPayments` at depth 3 to 8;
-- `req.headers.authorization`, `req.headers.cookie`, `res.headers["set-cookie"]`, `req.headers["x-api-key"]`, `req.headers["x-csrf-token"]`, `req.headers["x-booking-token"]`, `req.headers["x-velexis-edge"]`.
+- `req.headers.authorization`, `req.headers.cookie`, `res.headers["set-cookie"]`, `req.headers["x-api-key"]`, `req.headers["x-csrf-token"]`, `req.headers["x-booking-token"]`, `req.headers["x-velexis-edge"]`, `req.headers["x-velexis-bff-key"]` (the platform's first-party key of the portal and admin servers, PADR-0019).
 
 Keep it ordered from shallow to deep: pino applies the paths in order, and censoring an object before a deeper wildcard path reaches it keeps pino from walking into the original object.
 

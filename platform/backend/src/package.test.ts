@@ -72,7 +72,9 @@ describe("the build", () => {
   it("[PBE-001 AC1] fails when an entry point is missing after the compile, and ships dist without tests", () => {
     expect(manifest.scripts["build"]).toMatch(/^rm -rf dist && tsc -b tsconfig\.build\.json && node -e /);
     expect(manifest.scripts["build"]).toContain("for (const entry of ['main', 'worker', 'cli'])");
-    expect(manifest.files).toEqual(["dist", "!dist/**/*.test.*", "!dist/**/*.tsbuildinfo"]);
+    // openapi/ since PBE-008: the API validates requests against the document it ships (pnpm deploy copies `files`).
+    expect(manifest.files).toEqual(["dist", "!dist/**/*.test.*", "!dist/**/*.tsbuildinfo", "openapi"]);
+    expect(existsSync(join(APP_DIR, "openapi", "velexis-platform-api.openapi.yaml"))).toBe(true);
     expect(
       parsed.fileNames.map((file) => relative(APP_DIR, file)).filter((file) => file.endsWith(".test.ts")),
     ).toEqual([]);

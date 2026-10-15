@@ -72,7 +72,8 @@ export const REDACT_PATHS: readonly string[] = Object.freeze([
   "*.creditCard",
   "*.formOfPayments",
 
-  // Depth 3: credential headers (also the first-party edge header), card numbers, card objects.
+  // Depth 3: credential headers (also the first-party edge header and the platform's BFF key of PADR-0019), card
+  // numbers, card objects.
   "req.headers.authorization",
   "req.headers.cookie",
   'res.headers["set-cookie"]',
@@ -80,6 +81,7 @@ export const REDACT_PATHS: readonly string[] = Object.freeze([
   'req.headers["x-csrf-token"]',
   'req.headers["x-booking-token"]',
   'req.headers["x-velexis-edge"]',
+  'req.headers["x-velexis-bff-key"]',
   "*.card.number",
   "*.creditCard.number",
   "documents[*].number",

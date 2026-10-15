@@ -4,9 +4,11 @@
 //
 // Start-up: validate the configuration (a ConfigError names every bad variable, and the process exits 1), build the
 // module graph, listen. systemd's SIGTERM closes the application through Nest's shutdown hooks.
-import { type DynamicModule, type Type } from "@nestjs/common";
+import { type DynamicModule, type NestApplicationOptions, type Type } from "@nestjs/common";
 import { NestFactory } from "@nestjs/core";
 import type { NestExpressApplication } from "@nestjs/platform-express";
+import cookieParser from "cookie-parser";
+import helmet from "helmet";
 import { Logger as NestPinoLogger } from "nestjs-pino";
 import { AppModule } from "./app.module";
 import {
@@ -21,19 +23,26 @@ import {
 export const API_HOST = "127.0.0.1";
 
 /**
- * Creates the API application, not yet listening: nestjs-pino as the Nest logger, Express `trust proxy` from
- * TRUST_PROXY (client IPs from Caddy's `X-Forwarded-For`), no `X-Powered-By`, and shutdown hooks (SIGTERM from
- * systemd closes the pool and the Redis client). `root` is `AppModule.forRoot(…)` or a test module importing it.
+ * The options of the API application (also of the test application, test/support/app.ts). Nest's body parser is
+ * off: CommonModule's JSON parser runs after pino-http and keeps the raw body on `/webhooks/*` only (raw-body.ts).
  */
-export async function createApiApp(
+export const API_APP_OPTIONS = Object.freeze({
+  bufferLogs: true,
+  // Errors while the module graph is built reach the caller, which logs them and exits non-zero.
+  abortOnError: false,
+  bodyParser: false,
+} satisfies NestApplicationOptions);
+
+/**
+ * Sets up a created API application (platform/docs/architecture.md §3, step 1): nestjs-pino as the Nest logger,
+ * Express `trust proxy` from TRUST_PROXY (client IPs from Caddy's `X-Forwarded-For`), no `X-Powered-By`, `helmet`'s
+ * security headers and `cookie-parser` before every other middleware, and shutdown hooks (SIGTERM from systemd
+ * closes the pool and the Redis client). The API sets no cookies; the Next.js apps do.
+ */
+export function configureApiApp(
+  app: NestExpressApplication,
   config: PlatformBackendConfig,
-  root: DynamicModule | Type,
-): Promise<NestExpressApplication> {
-  const app = await NestFactory.create<NestExpressApplication>(root, {
-    bufferLogs: true,
-    // Errors while the module graph is built reach the caller, which logs them and exits non-zero.
-    abortOnError: false,
-  });
+): NestExpressApplication {
   app.useLogger(app.get(NestPinoLogger));
   // An HTTP application keeps Nest's own lines in the start-up buffer until listen() succeeds. Flush it now, so they
   // reach pino from here on (the exception handler's error line of a failed request included) also when listen()
@@ -41,8 +50,23 @@ export async function createApiApp(
   app.flushLogs();
   app.set("trust proxy", [...config.TRUST_PROXY]);
   app.disable("x-powered-by");
+  // Registered before init(), so they run before the module middleware (pino-http, the body parser, the context).
+  app.use(helmet());
+  app.use(cookieParser());
   app.enableShutdownHooks();
   return app;
+}
+
+/**
+ * Creates the API application, not yet listening (`configureApiApp`). `root` is `AppModule.forRoot(…)` or a test
+ * module importing it.
+ */
+export async function createApiApp(
+  config: PlatformBackendConfig,
+  root: DynamicModule | Type,
+): Promise<NestExpressApplication> {
+  const app = await NestFactory.create<NestExpressApplication>(root, { ...API_APP_OPTIONS });
+  return configureApiApp(app, config);
 }
 
 /**

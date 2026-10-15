@@ -227,7 +227,8 @@ Common commands: backend `pnpm --filter @velexis/platform-backend test`, `test:i
   - `adminExportAudit` documents a `text/csv` response; `adminCreateAmadeusAccount`, `adminGrantAdmin` and `adminResetAccountMfa` carry `x-mfa-step-up: true`; no response schema of the 26 operations has a property ending in `Secret`, `Ciphertext` or `Hash`.
 - **Verify:** `pnpm contracts:lint && pnpm contracts:generate && git diff --exit-code packages/api-types/src/generated`
 
-### PBE-008 · Build the HTTP pipeline with request context, error filter, OpenAPI validation and route parity
+### PBE-008 · Build the HTTP pipeline with request context, error filter, OpenAPI validation and route parity ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-backend
 - **Milestone:** M1
 - **Depends on:** PBE-001, PBE-066, X-005, X-015

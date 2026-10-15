@@ -16,7 +16,7 @@
 #   db/                     @velexis/db (pnpm deploy --prod): migration CLI dist/cli/migrate.js
 #   migrations/{platform,reference,tenant}/
 #   reference-data/         @velexis/reference-data: loader CLI + vendored datasets
-#   platform-backend/       @velexis/platform-backend: dist/main.js, dist/worker.js, node_modules
+#   platform-backend/       @velexis/platform-backend: dist/main.js, dist/worker.js, openapi/, node_modules
 #   ota-backend/            @velexis/ota-backend: dist/main.js, dist/worker.js, openapi/, node_modules
 #   platform-frontend/      Next.js standalone tree; entry platform/frontend/server.js
 #   platform-admin/         Next.js standalone tree; entry platform/admin/server.js

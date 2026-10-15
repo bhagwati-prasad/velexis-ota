@@ -24,6 +24,7 @@ const DEVELOPMENT = {
   TRUST_PROXY: "loopback",
   DATABASE_URL: "postgres://velexis_platform_app:dev_platform@127.0.0.1:5432/velexis",
   REDIS_URL: "redis://:dev_redis@127.0.0.1:6379/0",
+  PLATFORM_BFF_KEY: "dev_bff_key_change_me_0123456789abcdef",
 } as const;
 
 /** The variables without a default: the minimum a process needs. */
@@ -31,7 +32,11 @@ const REQUIRED = {
   APP_ENV: DEVELOPMENT.APP_ENV,
   DATABASE_URL: DEVELOPMENT.DATABASE_URL,
   REDIS_URL: DEVELOPMENT.REDIS_URL,
+  PLATFORM_BFF_KEY: DEVELOPMENT.PLATFORM_BFF_KEY,
 } as const;
+
+/** What provision-vm.sh puts in place of @@PLATFORM_BFF_KEY@@ on the VM: 32 random bytes as hex (dummy here). */
+const GENERATED_BFF_KEY = "0123456789abcdef".repeat(4);
 
 function configError(source: Record<string, string | undefined>): ConfigError {
   try {
@@ -86,6 +91,7 @@ describe("parseConfig", () => {
       TRUST_PROXY: ["loopback"],
       DATABASE_URL: DEVELOPMENT.DATABASE_URL,
       REDIS_URL: DEVELOPMENT.REDIS_URL,
+      PLATFORM_BFF_KEY: DEVELOPMENT.PLATFORM_BFF_KEY,
     });
     expect(Object.isFrozen(config)).toBe(true);
     expect(Object.isFrozen(config.TRUST_PROXY)).toBe(true);
@@ -99,6 +105,7 @@ describe("parseConfig", () => {
       HEALTH_PORT: "70000",
       DATABASE_URL: "mysql://user:secret-value-4@127.0.0.1/velexis",
       REDIS_URL: "http://:secret-value-5@127.0.0.1:6379",
+      PLATFORM_BFF_KEY: "secret-value-6",
     });
 
     expect(error.problems.map((problem) => problem.variable)).toEqual([
@@ -108,8 +115,17 @@ describe("parseConfig", () => {
       "HEALTH_PORT",
       "DATABASE_URL",
       "REDIS_URL",
+      "PLATFORM_BFF_KEY",
     ]);
-    for (const value of ["value-1", "value-2", "value-3", "70000", "secret-value-4", "secret-value-5"]) {
+    for (const value of [
+      "value-1",
+      "value-2",
+      "value-3",
+      "70000",
+      "secret-value-4",
+      "secret-value-5",
+      "secret-value-6",
+    ]) {
       expect(error.message).not.toContain(value);
     }
   });
@@ -140,6 +156,7 @@ describe("parseConfig", () => {
     expect(error.problems.map((problem) => problem.variable)).toEqual([
       "DATABASE_URL",
       "REDIS_URL",
+      "PLATFORM_BFF_KEY",
       "TRUST_PROXY",
     ]);
   });
@@ -152,17 +169,19 @@ describe("parseConfig", () => {
     expect(config.HEALTH_PORT).toBe(3101);
   });
 
-  it("accepts the VM template with the ports of the systemd units", () => {
+  it("accepts the VM template with the ports of the systemd units and the generated key", () => {
     const template = readEnvFile(join(REPO_ROOT, "deploy/env/platform-backend.env.example"));
-    const api = parseConfig({ ...template, PORT: "3100" });
-    const worker = parseConfig({ ...template, HEALTH_PORT: "3101" });
+    const api = parseConfig({ ...template, PORT: "3100", PLATFORM_BFF_KEY: GENERATED_BFF_KEY });
+    const worker = parseConfig({ ...template, HEALTH_PORT: "3101", PLATFORM_BFF_KEY: GENERATED_BFF_KEY });
 
+    expect(template.PLATFORM_BFF_KEY).toBe("@@PLATFORM_BFF_KEY@@");
     expect(api.APP_ENV).toBe("production");
     expect(api.TRUST_PROXY).toEqual(["loopback"]);
+    expect(api.PLATFORM_BFF_KEY).toBe(GENERATED_BFF_KEY);
     expect(worker.HEALTH_PORT).toBe(3101);
   });
 
-  it("declares only variables of the configuration matrix that the M0 processes read", () => {
+  it("declares only variables of the configuration matrix that the processes read", () => {
     expect(Object.keys(PLATFORM_BACKEND_CONFIG_SCHEMA)).toEqual([
       "APP_ENV",
       "LOG_LEVEL",
@@ -171,7 +190,39 @@ describe("parseConfig", () => {
       "TRUST_PROXY",
       "DATABASE_URL",
       "REDIS_URL",
+      "PLATFORM_BFF_KEY",
     ]);
+  });
+
+  it("requires PLATFORM_BFF_KEY (PADR-0019)", () => {
+    const error = configError({ ...DEVELOPMENT, PLATFORM_BFF_KEY: undefined });
+
+    expect(error.problems).toEqual([{ variable: "PLATFORM_BFF_KEY", reason: "is required but missing" }]);
+  });
+
+  it("refuses an empty, short or unsubstituted PLATFORM_BFF_KEY without echoing it", () => {
+    for (const value of [
+      "",
+      "@@PLATFORM_BFF_KEY@@",
+      "short_key_value_31_characters_x",
+      "key with spaces 0123456789abcdef0123",
+    ]) {
+      const error = configError({ ...DEVELOPMENT, PLATFORM_BFF_KEY: value });
+
+      expect(error.problems.map((problem) => problem.variable)).toEqual(["PLATFORM_BFF_KEY"]);
+      if (value !== "") {
+        expect(error.message).not.toContain(value);
+      }
+    }
+  });
+
+  it("uses the same PLATFORM_BFF_KEY as the portal's and the admin's .env.example (one shared key)", () => {
+    const backend = readEnvFile(join(APP_DIR, ".env.example"))["PLATFORM_BFF_KEY"];
+
+    expect(backend).toBeDefined();
+    for (const file of [".env.example", "platform/frontend/.env.example", "platform/admin/.env.example"]) {
+      expect(readEnvFile(join(REPO_ROOT, file))["PLATFORM_BFF_KEY"]).toBe(backend);
+    }
   });
 });
 

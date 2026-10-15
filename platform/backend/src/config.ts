@@ -42,6 +42,13 @@ const TRUST_PROXY_NAMES = ["loopback", "linklocal", "uniquelocal"] as const;
 const TRUST_PROXY_ITEM = /^(?:loopback|linklocal|uniquelocal|[0-9A-Fa-f.:]+(?:\/\d{1,3})?)$/;
 
 /**
+ * The first-party key of the portal and admin servers (PADR-0019): at least 32 characters of `[A-Za-z0-9_-]`, the
+ * rule of the portal's and the admin's configuration (`provision-vm.sh` generates 64 hex characters). It refuses an
+ * empty value and the unsubstituted `@@PLATFORM_BFF_KEY@@` placeholder of the deploy template.
+ */
+const BFF_KEY = /^[A-Za-z0-9_-]{32,}$/;
+
+/**
  * The schema of every variable the platform backend reads (README §3, configuration matrix in
  * docs/mvp/architecture.md §6). Defaults exist only where they are safe in production (conventions §8).
  */
@@ -61,6 +68,13 @@ export const PLATFORM_BACKEND_CONFIG_SCHEMA = {
   /** Role velexis_platform_app: DML on `platform` and `reference`, nothing on tenant schemas (ADR-0004). */
   DATABASE_URL: env.url({ protocols: ["postgres:", "postgresql:"] }),
   REDIS_URL: env.url({ protocols: ["redis:", "rediss:"] }),
+  /**
+   * The key the portal and admin servers send in `X-Velexis-Bff-Key` (PADR-0019): only a loopback request without
+   * `X-Forwarded-For` that carries it (compared in constant time) may forward the end user's IP and user agent. The
+   * API uses it; the worker and the CLI validate it too, because the three read `platform-backend.env`. A secret:
+   * never logged.
+   */
+  PLATFORM_BFF_KEY: env.string({ pattern: BFF_KEY }),
 } as const satisfies ConfigSchema;
 
 export type PlatformBackendConfig = ConfigOf<typeof PLATFORM_BACKEND_CONFIG_SCHEMA>;
