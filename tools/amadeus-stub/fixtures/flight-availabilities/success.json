@@ -1,0 +1,353 @@
+{
+  "fixture": {
+    "operation": "flight-availabilities",
+    "scenario": "success",
+    "source": "synthetic",
+    "date": "2026-10-15",
+    "scrubbed": true,
+    "description": "Seats by booking class on the flights of the five offers of flight-offers-search/success.json, Madrid to Paris on 2027-01-15, one availability per offer in departure order: TAP via Lisbon to Orly, Iberia to Orly, Air France to Charles de Gaulle, Air Europa to Orly, the later Air France flight; the booking class of each search offer is open (written by hand, no personal data). Served for every valid Flight Availabilities Search whatever the itinerary (destination ZZZ excepted)."
+  },
+  "status": 200,
+  "body": {
+    "meta": {
+      "count": 5
+    },
+    "data": [
+      {
+        "type": "flight-availability",
+        "id": "1",
+        "originDestinationId": "1",
+        "source": "GDS",
+        "instantTicketingRequired": false,
+        "paymentCardRequired": false,
+        "duration": "PT5H45M",
+        "segments": [
+          {
+            "departure": {
+              "iataCode": "MAD",
+              "terminal": "2",
+              "at": "2027-01-15T06:00:00"
+            },
+            "arrival": {
+              "iataCode": "LIS",
+              "terminal": "1",
+              "at": "2027-01-15T06:25:00"
+            },
+            "carrierCode": "TP",
+            "number": "1017",
+            "aircraft": {
+              "code": "319"
+            },
+            "operating": {
+              "carrierCode": "TP"
+            },
+            "duration": "PT1H25M",
+            "id": "1",
+            "numberOfStops": 0,
+            "blacklistedInEU": false,
+            "availabilityClasses": [
+              {
+                "numberOfBookableSeats": 2,
+                "class": "J"
+              },
+              {
+                "numberOfBookableSeats": 9,
+                "class": "Y"
+              },
+              {
+                "numberOfBookableSeats": 9,
+                "class": "B"
+              },
+              {
+                "numberOfBookableSeats": 7,
+                "class": "O"
+              }
+            ]
+          },
+          {
+            "departure": {
+              "iataCode": "LIS",
+              "terminal": "1",
+              "at": "2027-01-15T08:10:00"
+            },
+            "arrival": {
+              "iataCode": "ORY",
+              "terminal": "1",
+              "at": "2027-01-15T11:45:00"
+            },
+            "carrierCode": "TP",
+            "number": "438",
+            "aircraft": {
+              "code": "32N"
+            },
+            "operating": {
+              "carrierCode": "TP"
+            },
+            "duration": "PT2H35M",
+            "id": "2",
+            "numberOfStops": 0,
+            "blacklistedInEU": false,
+            "availabilityClasses": [
+              {
+                "numberOfBookableSeats": 4,
+                "class": "J"
+              },
+              {
+                "numberOfBookableSeats": 9,
+                "class": "Y"
+              },
+              {
+                "numberOfBookableSeats": 9,
+                "class": "B"
+              },
+              {
+                "numberOfBookableSeats": 7,
+                "class": "O"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "type": "flight-availability",
+        "id": "2",
+        "originDestinationId": "1",
+        "source": "GDS",
+        "instantTicketingRequired": false,
+        "paymentCardRequired": false,
+        "duration": "PT2H5M",
+        "segments": [
+          {
+            "departure": {
+              "iataCode": "MAD",
+              "terminal": "4",
+              "at": "2027-01-15T07:15:00"
+            },
+            "arrival": {
+              "iataCode": "ORY",
+              "terminal": "1",
+              "at": "2027-01-15T09:20:00"
+            },
+            "carrierCode": "IB",
+            "number": "3436",
+            "aircraft": {
+              "code": "32N"
+            },
+            "operating": {
+              "carrierCode": "IB"
+            },
+            "duration": "PT2H5M",
+            "id": "3",
+            "numberOfStops": 0,
+            "blacklistedInEU": false,
+            "availabilityClasses": [
+              {
+                "numberOfBookableSeats": 4,
+                "class": "J"
+              },
+              {
+                "numberOfBookableSeats": 9,
+                "class": "Y"
+              },
+              {
+                "numberOfBookableSeats": 7,
+                "class": "O"
+              },
+              {
+                "numberOfBookableSeats": 9,
+                "class": "A"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "type": "flight-availability",
+        "id": "3",
+        "originDestinationId": "1",
+        "source": "GDS",
+        "instantTicketingRequired": false,
+        "paymentCardRequired": false,
+        "duration": "PT2H10M",
+        "segments": [
+          {
+            "departure": {
+              "iataCode": "MAD",
+              "terminal": "2",
+              "at": "2027-01-15T08:45:00"
+            },
+            "arrival": {
+              "iataCode": "CDG",
+              "terminal": "2F",
+              "at": "2027-01-15T10:55:00"
+            },
+            "carrierCode": "AF",
+            "number": "1001",
+            "aircraft": {
+              "code": "320"
+            },
+            "operating": {
+              "carrierCode": "AF"
+            },
+            "duration": "PT2H10M",
+            "id": "4",
+            "numberOfStops": 0,
+            "blacklistedInEU": false,
+            "availabilityClasses": [
+              {
+                "numberOfBookableSeats": 4,
+                "class": "J"
+              },
+              {
+                "numberOfBookableSeats": 2,
+                "class": "Z"
+              },
+              {
+                "numberOfBookableSeats": 9,
+                "class": "Y"
+              },
+              {
+                "numberOfBookableSeats": 9,
+                "class": "V"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "type": "flight-availability",
+        "id": "4",
+        "originDestinationId": "1",
+        "source": "GDS",
+        "instantTicketingRequired": false,
+        "paymentCardRequired": false,
+        "duration": "PT2H5M",
+        "segments": [
+          {
+            "departure": {
+              "iataCode": "MAD",
+              "terminal": "2",
+              "at": "2027-01-15T12:30:00"
+            },
+            "arrival": {
+              "iataCode": "ORY",
+              "terminal": "3",
+              "at": "2027-01-15T14:35:00"
+            },
+            "carrierCode": "UX",
+            "number": "1027",
+            "aircraft": {
+              "code": "73H"
+            },
+            "operating": {
+              "carrierCode": "UX"
+            },
+            "duration": "PT2H5M",
+            "id": "5",
+            "numberOfStops": 0,
+            "blacklistedInEU": false,
+            "availabilityClasses": [
+              {
+                "numberOfBookableSeats": 2,
+                "class": "C"
+              },
+              {
+                "numberOfBookableSeats": 9,
+                "class": "Y"
+              },
+              {
+                "numberOfBookableSeats": 4,
+                "class": "Q"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "type": "flight-availability",
+        "id": "5",
+        "originDestinationId": "1",
+        "source": "GDS",
+        "instantTicketingRequired": false,
+        "paymentCardRequired": false,
+        "duration": "PT2H5M",
+        "segments": [
+          {
+            "departure": {
+              "iataCode": "MAD",
+              "terminal": "2",
+              "at": "2027-01-15T16:50:00"
+            },
+            "arrival": {
+              "iataCode": "CDG",
+              "terminal": "2F",
+              "at": "2027-01-15T18:55:00"
+            },
+            "carrierCode": "AF",
+            "number": "1301",
+            "aircraft": {
+              "code": "320"
+            },
+            "operating": {
+              "carrierCode": "AF"
+            },
+            "duration": "PT2H5M",
+            "id": "6",
+            "numberOfStops": 0,
+            "blacklistedInEU": false,
+            "availabilityClasses": [
+              {
+                "numberOfBookableSeats": 4,
+                "class": "J"
+              },
+              {
+                "numberOfBookableSeats": 2,
+                "class": "Z"
+              },
+              {
+                "numberOfBookableSeats": 9,
+                "class": "Y"
+              },
+              {
+                "numberOfBookableSeats": 9,
+                "class": "V"
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "dictionaries": {
+      "locations": {
+        "MAD": {
+          "cityCode": "MAD",
+          "countryCode": "ES"
+        },
+        "LIS": {
+          "cityCode": "LIS",
+          "countryCode": "PT"
+        },
+        "ORY": {
+          "cityCode": "PAR",
+          "countryCode": "FR"
+        },
+        "CDG": {
+          "cityCode": "PAR",
+          "countryCode": "FR"
+        }
+      },
+      "aircraft": {
+        "319": "AIRBUS A319",
+        "320": "AIRBUS A320",
+        "32N": "AIRBUS A320NEO",
+        "73H": "BOEING 737-800 (WINGLETS)"
+      },
+      "carriers": {
+        "AF": "AIR FRANCE",
+        "IB": "IBERIA",
+        "TP": "TAP PORTUGAL",
+        "UX": "AIR EUROPA"
+      }
+    }
+  }
+}

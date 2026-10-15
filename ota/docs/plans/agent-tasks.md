@@ -441,7 +441,8 @@ The OTA backend gets its contract extensions, request pipeline, tenancy, Amadeus
   - An empty tenant bucket answers 429 without calling the stub (`requests()` count unchanged).
 - **Verify:** `pnpm --filter @velexis/ota-backend test && pnpm --filter @velexis/ota-backend test:int -- amadeus`
 
-### OBE-019 · Stub the shopping operations: price, upsell and availability
+### OBE-019 · Stub the shopping operations: price, upsell and availability ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-backend
 - **Milestone:** M2
 - **Depends on:** X-026

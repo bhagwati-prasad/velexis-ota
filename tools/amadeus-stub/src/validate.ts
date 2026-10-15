@@ -17,6 +17,14 @@
 // `collectionFormat`) before validation; a query parameter that the specification does not declare is an error.
 // The JSON body is validated without any coercion. Validators are compiled on first use and cached.
 //
+// JSON Schema lets an object carry fields its schema does not declare. An operation that sets
+// `unknownBodyFields` (OBE-019: Flight Offers Price, Branded Fares Upsell, Flight Availabilities Search) refuses them
+// too: a body field is known when a schema that applies at its place (through `$ref`, `allOf`, `anyOf`, `oneOf`)
+// declares it in `properties`, or allows it through `additionalProperties` or `patternProperties`; a place whose
+// schemas declare no `properties` at all is not checked. `alsoKnown` adds the schemas of other specifications at a
+// place: the flight offers that Flight Offers Search and Branded Fares Upsell answer carry fields (`isUpsellOffer`,
+// `brandedFareLabel`, `amenities`) that the pricing request schema does not declare, and Amadeus takes them back.
+//
 // Issues never quote a value (a request may carry personal data); they name the parameter (`source.parameter`) or the
 // body field (`source.pointer`, a JSON pointer) and the rule that failed.
 import { readFileSync } from "node:fs";
@@ -37,6 +45,24 @@ export interface OperationSpec {
   readonly specPath: string;
   /** The HTTP method, upper case. */
   readonly method: "GET" | "POST" | "PATCH" | "DELETE";
+  /** Refuse body fields that the body schema does not declare (unset: JSON Schema's default, they pass). */
+  readonly unknownBodyFields?: UnknownBodyFields | undefined;
+}
+
+/** `OperationSpec.unknownBodyFields`: body fields the specification does not declare are a 400. */
+export interface UnknownBodyFields {
+  /** Schemas of other specifications whose fields are known too at a place of the body. */
+  readonly alsoKnown: readonly KnownFields[];
+}
+
+/** The fields that a schema of another specification declares, known at the places `pointer` matches. */
+export interface KnownFields {
+  /** A JSON pointer into the body; a `*` segment matches any array index or object key (`/data/flightOffers/*`). */
+  readonly pointer: string;
+  /** File name in docs/amadeus-api. */
+  readonly specFile: string;
+  /** A local reference inside that file (`#/definitions/FlightOffer`). */
+  readonly ref: string;
 }
 
 /** The parts of an HTTP request that the specifications constrain. */
@@ -84,12 +110,20 @@ interface ParameterInfo {
 interface CompiledOperation {
   readonly parameters: readonly ParameterInfo[];
   readonly validateParameters: ValidateFunction;
-  readonly body: { readonly required: boolean; readonly validate: ValidateFunction } | undefined;
+  readonly body:
+    | { readonly required: boolean; readonly validate: ValidateFunction; readonly schema: SchemaAt }
+    | undefined;
 }
 
 interface LoadedSpec {
   readonly id: string;
   readonly document: JsonObject;
+}
+
+/** A schema and the (normalised) document its local `$ref`s resolve in. */
+interface SchemaAt {
+  readonly document: JsonObject;
+  readonly schema: unknown;
 }
 
 /** The media types a JSON body may be sent with. */
@@ -345,6 +379,102 @@ function bodyIssue(error: ErrorObject): AmadeusIssue {
   return { status: 400, code, title, detail: `${where} ${describe(error)}`, source: { pointer } };
 }
 
+const COMPOSITION_KEYWORDS = ["allOf", "anyOf", "oneOf"] as const;
+
+/** `at` and every schema that applies to the same value through `$ref` and composition, each once. */
+function applicableSchemas(at: SchemaAt, found: SchemaAt[] = [], seen = new Set<unknown>()): SchemaAt[] {
+  const { document, schema } = at;
+  if (!isObject(schema) || seen.has(schema)) {
+    return found;
+  }
+  seen.add(schema);
+  found.push(at);
+  const ref = schema["$ref"];
+  if (typeof ref === "string") {
+    applicableSchemas({ document, schema: getPointer(document, ref) }, found, seen);
+  }
+  for (const keyword of COMPOSITION_KEYWORDS) {
+    const members = schema[keyword];
+    if (Array.isArray(members)) {
+      for (const member of members) {
+        applicableSchemas({ document, schema: member }, found, seen);
+      }
+    }
+  }
+  return found;
+}
+
+/** Whether a `KnownFields` pointer (`*` for any segment) matches the body place `path`. */
+function matchesPlace(pattern: readonly string[], path: readonly string[]): boolean {
+  return (
+    pattern.length === path.length && pattern.every((segment, i) => segment === "*" || segment === path[i])
+  );
+}
+
+/**
+ * The body fields of `value` that no schema of `schemas` (nor of `extra` at their place) declares, as issues: code
+ * 4926 naming the field by its JSON pointer, never quoting a value.
+ */
+function unknownFieldIssues(
+  value: unknown,
+  schemas: readonly SchemaAt[],
+  path: readonly string[],
+  extra: (path: readonly string[]) => readonly SchemaAt[],
+  issues: AmadeusIssue[],
+): void {
+  const applicable = [...schemas, ...extra(path)].flatMap((at) => applicableSchemas(at));
+  if (Array.isArray(value)) {
+    const items = applicable.flatMap(({ document, schema }) =>
+      isObject(schema) && isObject(schema["items"]) ? [{ document, schema: schema["items"] }] : [],
+    );
+    value.forEach((item: unknown, index) =>
+      unknownFieldIssues(item, items, [...path, String(index)], extra, issues),
+    );
+    return;
+  }
+  if (!isObject(value)) {
+    return;
+  }
+  const declared = new Map<string, SchemaAt[]>();
+  const additional: SchemaAt[] = [];
+  let closed = false;
+  let open = false;
+  for (const { document, schema } of applicable) {
+    if (!isObject(schema)) {
+      continue;
+    }
+    const properties = schema["properties"];
+    if (isObject(properties)) {
+      closed = true;
+      for (const [name, property] of Object.entries(properties)) {
+        declared.set(name, [...(declared.get(name) ?? []), { document, schema: property }]);
+      }
+    }
+    const additionalProperties = schema["additionalProperties"];
+    if (additionalProperties === true || isObject(schema["patternProperties"])) {
+      open = true;
+    } else if (isObject(additionalProperties)) {
+      additional.push({ document, schema: additionalProperties });
+    }
+  }
+  for (const [name, child] of Object.entries(value)) {
+    const childPath = [...path, name];
+    const known = declared.get(name) ?? (additional.length > 0 ? additional : undefined);
+    if (known !== undefined) {
+      unknownFieldIssues(child, known, childPath, extra, issues);
+    } else if (closed && !open) {
+      const pointer = childPath.map((segment) => `/${escapePointer(segment)}`).join("");
+      issues.push({
+        status: 400,
+        code: AMADEUS_ERROR_CODES.invalidDataReceived,
+        title: "INVALID DATA RECEIVED",
+        detail: `request body field ${pointer} is not defined by the specification`,
+        source: { pointer },
+      });
+    }
+  }
+}
+
 function dedupe(issues: readonly AmadeusIssue[]): AmadeusIssue[] {
   const seen = new Set<string>();
   return issues.filter((issue) => {
@@ -386,9 +516,13 @@ export class AmadeusSpecs {
     return [...this.#dangling].sort();
   }
 
-  /** Compiles the validators of `operation` now (the server does this at start for its implemented operations). */
+  /**
+   * Compiles the validators of `operation` now and resolves the schemas its `unknownBodyFields` names (the server
+   * does this at start for its implemented operations, so a broken reference fails there).
+   */
   prepare(operation: OperationSpec): void {
     this.#compiled(operation);
+    this.#alsoKnown(operation);
   }
 
   /** Validates a request of `operation`: its parameters, its content type and its JSON body. */
@@ -448,6 +582,13 @@ export class AmadeusSpecs {
       const result = this.#validateBody(compiled.body, request);
       issues.push(...result.issues);
       body = result.body;
+      // `body` is undefined only when there was none or it was not JSON (JSON.parse never returns undefined).
+      if (operation.unknownBodyFields !== undefined && body !== undefined) {
+        const alsoKnown = this.#alsoKnown(operation);
+        const extra = (path: readonly string[]): SchemaAt[] =>
+          alsoKnown.filter((known) => matchesPlace(known.pattern, path)).map((known) => known.schema);
+        unknownFieldIssues(body, [compiled.body.schema], [], extra, issues);
+      }
     }
 
     const [first, ...others] = dedupe(issues).slice(0, MAX_ISSUES);
@@ -490,6 +631,20 @@ export class AmadeusSpecs {
           message: error.message ?? error.keyword,
           params: { ...error.params },
         }));
+  }
+
+  /** The schemas of `operation.unknownBodyFields.alsoKnown`, with their places split into segments. */
+  #alsoKnown(
+    operation: OperationSpec,
+  ): readonly { readonly pattern: readonly string[]; readonly schema: SchemaAt }[] {
+    return (operation.unknownBodyFields?.alsoKnown ?? []).map((known) => {
+      const { document } = this.#spec(known.specFile);
+      if (!isObject(getPointer(document, known.ref))) {
+        throw new Error(`${known.specFile} has no schema ${known.ref}`);
+      }
+      const pattern = known.pointer === "" ? [] : known.pointer.split("/").slice(1).map(unescapePointer);
+      return { pattern, schema: { document, schema: { $ref: known.ref } } };
+    });
   }
 
   #validateBody(
@@ -620,9 +775,11 @@ export class AmadeusSpecs {
     for (const { parameter, pointer } of located.values()) {
       const location = parameter["in"];
       if (location === "body") {
+        const schemaPointer = pointerFragment([...pointer, "schema"]);
         body = {
           required: parameter["required"] === true,
-          validate: this.#ajv.compile({ $ref: `${id}#/${pointerFragment([...pointer, "schema"])}` }),
+          validate: this.#ajv.compile({ $ref: `${id}#/${schemaPointer}` }),
+          schema: { document, schema: getPointer(document, `#/${schemaPointer}`) },
         };
         continue;
       }

@@ -2,14 +2,23 @@
 // in docs/amadeus-api that the OTA backend calls (ADR-0012, the `x-amadeus` entries of the OTA OpenAPI document).
 //
 // X-026 implements Flight Offers Search (GET and POST /v2/shopping/flight-offers) from the synthetic fixture
-// fixtures/flight-offers-search/success.json. Every other operation has no handler yet and answers 501 "not stubbed
-// yet"; `plannedBy` names the OTA task that adds it. A handler gets the request after authentication, validation
-// against the specification and the generic scenarios (server.ts), so it only decides what to answer.
+// fixtures/flight-offers-search/success.json. OBE-019 adds Flight Offers Price, Branded Fares Upsell and Flight
+// Availabilities Search (src/handlers/), whose request bodies may not carry fields their specification does not
+// declare (`unknownBodyFields`). Every other operation has no handler yet and answers 501 "not stubbed yet";
+// `plannedBy` names the OTA task that adds it. A handler gets the request after authentication, validation against the
+// specification and the generic scenarios (server.ts), so it only decides what to answer.
 import { readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { FLIGHT_AVAILABILITIES_FIXTURES, searchFlightAvailabilitiesHandler } from "./handlers/availability";
+import {
+  CREDIT_CARD_FEES_FIXTURE,
+  FLIGHT_OFFERS_PRICE_FIXTURES,
+  quoteAirOffersHandler,
+} from "./handlers/pricing";
+import { BRANDED_FARES_UPSELL_FIXTURES, upsellAirOffersHandler } from "./handlers/upselling";
 import { OAUTH_TOKEN_PATH } from "./oauth";
 import { findsNoOffers, type StubResponse, type StubScenario } from "./scenarios";
-import type { OperationSpec } from "./validate";
+import type { OperationSpec, UnknownBodyFields } from "./validate";
 
 /** The 9 Amadeus APIs, by the name the OTA OpenAPI document's `x-amadeus` uses. */
 export type AmadeusApi =
@@ -110,6 +119,9 @@ export interface Fixture {
   readonly body: unknown;
 }
 
+/** Reads a fixture (`loadFixture` below); the handlers of src/handlers/ get it from the route table. */
+export type FixtureLoader = (operation: string, scenario: string) => Fixture;
+
 const fixtureCache = new Map<string, Fixture>();
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -156,6 +168,10 @@ export const FLIGHT_OFFERS_SEARCH_FIXTURES = "flight-offers-search";
 /** The fixtures the implemented operations serve: read and checked when a server starts, so a broken one fails fast. */
 export const STUB_FIXTURES: readonly (readonly [operation: string, scenario: string])[] = Object.freeze([
   [FLIGHT_OFFERS_SEARCH_FIXTURES, "success"],
+  [FLIGHT_OFFERS_PRICE_FIXTURES, "success"],
+  [FLIGHT_OFFERS_PRICE_FIXTURES, CREDIT_CARD_FEES_FIXTURE],
+  [BRANDED_FARES_UPSELL_FIXTURES, "success"],
+  [FLIGHT_AVAILABILITIES_FIXTURES, "success"],
 ] as const);
 
 function destinationsOf(context: HandlerContext): unknown[] {
@@ -198,6 +214,26 @@ export function searchFlightOffersHandler(context: HandlerContext): StubResponse
 
 // ---- The route table -------------------------------------------------------------------------------------------
 
+/**
+ * Flight Offers Price and Branded Fares Upsell take back the flight offers that Flight Offers Search, Branded Fares
+ * Upsell or Flight Offers Price answered, with fields their own request schema does not declare (`isUpsellOffer` and
+ * `brandedFareLabel` of a search offer, `amenities` of an upsell offer): those are known in `data.flightOffers` too.
+ */
+const ECHOED_FLIGHT_OFFERS: UnknownBodyFields = Object.freeze({
+  alsoKnown: Object.freeze(
+    (["FlightOffersSearch", "BrandedFaresUpsell", "FlightOffersPrice"] as const).map((api) =>
+      Object.freeze({
+        pointer: "/data/flightOffers/*",
+        specFile: AMADEUS_SPEC_FILES[api],
+        ref: "#/definitions/FlightOffer",
+      }),
+    ),
+  ),
+});
+
+/** Flight Availabilities Search has nothing echoed: only its own schema's fields are known. */
+const OWN_FIELDS_ONLY: UnknownBodyFields = Object.freeze({ alsoKnown: Object.freeze([]) });
+
 function operation(
   name: OperationName,
   api: AmadeusApi,
@@ -207,6 +243,7 @@ function operation(
   specPath: string,
   plannedBy: string,
   handler?: OperationHandler,
+  unknownBodyFields?: UnknownBodyFields,
 ): StubOperation {
   // Queue List (OpenAPI 3.0) writes its path key with the method in front: `GET/office/queues/{queue-id}`.
   const path = basePath + specPath.replace(/^[A-Z]+(?=\/)/, "");
@@ -216,7 +253,12 @@ function operation(
     operationId,
     method,
     path,
-    spec: Object.freeze({ specFile: AMADEUS_SPEC_FILES[api], specPath, method }),
+    spec: Object.freeze({
+      specFile: AMADEUS_SPEC_FILES[api],
+      specPath,
+      method,
+      ...(unknownBodyFields === undefined ? {} : { unknownBodyFields }),
+    }),
     handler,
     plannedBy,
   });
@@ -252,6 +294,8 @@ export const STUB_OPERATIONS: readonly StubOperation[] = Object.freeze([
     "/v1",
     "/shopping/availability/flight-availabilities",
     "OBE-019",
+    searchFlightAvailabilitiesHandler(loadFixture),
+    OWN_FIELDS_ONLY,
   ),
   operation(
     "upsellAirOffers",
@@ -261,6 +305,8 @@ export const STUB_OPERATIONS: readonly StubOperation[] = Object.freeze([
     "/v1",
     "/shopping/flight-offers/upselling",
     "OBE-019",
+    upsellAirOffersHandler(loadFixture),
+    ECHOED_FLIGHT_OFFERS,
   ),
   operation(
     "quoteAirOffers",
@@ -270,6 +316,8 @@ export const STUB_OPERATIONS: readonly StubOperation[] = Object.freeze([
     "/v1",
     "/shopping/flight-offers/pricing",
     "OBE-019",
+    quoteAirOffersHandler(loadFixture),
+    ECHOED_FLIGHT_OFFERS,
   ),
   operation(
     "createFlightOrders",

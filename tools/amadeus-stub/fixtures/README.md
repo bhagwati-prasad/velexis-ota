@@ -6,7 +6,8 @@ The responses the [Amadeus stub](../README.md) serves. Each fixture is one JSON 
 
 ```text
 fixtures/
-  <operation>/            the API in kebab case: flight-offers-search, flight-offers-price, flight-create-orders, …
+  <operation>/            the API in kebab case: flight-offers-search, flight-offers-price, branded-fares-upsell,
+                          flight-availabilities (Flight Availabilities Search), flight-create-orders, …
     <scenario>.json       success, sold-out, price-changed, … (the X-Stub-Scenario name, or a variant the handler picks)
 ```
 
@@ -53,8 +54,15 @@ fixtures/
 | File | Source | Served for | Content |
 |---|---|---|---|
 | `flight-offers-search/success.json` | synthetic | Every valid Flight Offers Search, GET and POST, whatever the itinerary (destination `ZZZ` excepted) | Five one-way offers Madrid to Paris on 2027-01-15 for one adult in EUR, cheapest first: `1` TAP via Lisbon to Orly (92.15), `2` Iberia to Orly (98.47), `3` Air Europa to Orly (109.32), `4` Air France to Charles de Gaulle (131.86), `5` Air France business class (558.94); segment ids `1` to `6`; dictionaries of locations, aircraft, currencies and carriers |
+| `flight-offers-price/success.json` | synthetic | Every valid Flight Offers Price: the handler echoes the posted offers and takes the rest from here | The pricing of search offer 2 with `include=bags,other-services,detailed-fare-rules`: the offer unchanged; booking requirements (e-mail and mobile phone; gender and date of birth per traveller); checked bags (1 piece 30.00, 2 pieces 65.00), priority boarding (9.00) and penalty notes for fare basis `ADNNALB4`; Madrid and Orly locations |
+| `flight-offers-price/credit-card-fees.json` | synthetic | Read for `include=credit-card-fees`: the fee of each brand | The same pricing with `include=credit-card-fees` and VISA (1.20), MASTERCARD (1.50) and AMERICAN_EXPRESS (3.95 EUR) payments for offer 2 |
+| `branded-fares-upsell/success.json` | synthetic | Every valid Branded Fares Upsell, whatever offer is posted | The branded fares of search offer 2 (Iberia IB3436, segment `3`), cheapest first: `1` BASIC (98.47, no checked bag), `2` CLASSIC (126.47, one bag), `3` FLEXIBLE (189.47, one bag, refundable), with amenities; Madrid and Orly locations, aircraft, currencies and carriers |
+| `flight-availabilities/success.json` | synthetic | Every valid Flight Availabilities Search, whatever the itinerary (destination `ZZZ` excepted) | One availability per search offer, in departure order (TAP via Lisbon, Iberia, Air France 08:45, Air Europa, Air France 16:50), segment ids `1` to `6`, seats by booking class with the class of each search offer open; dictionaries of locations, aircraft and carriers |
 
 ## Known defects of the specifications
 
-- **Flight Offers Search `Dictionaries`**: `LocationEntry` and `CurrencyEntry` require a property `key`, which no Amadeus response has (the codes are the keys: `"locations": { "MAD": { … } }`). Fixtures follow Amadeus's real responses; the schema test tolerates exactly this defect.
+- **`Dictionaries`** of Flight Offers Search, Flight Offers Price, Branded Fares Upsell and Flight Availabilities Search: `LocationEntry` and `CurrencyEntry` require a property `key`, which no Amadeus response has (the codes are the keys: `"locations": { "MAD": { … } }`). Fixtures follow Amadeus's real responses; the schema tests tolerate exactly this defect.
+- **Flight Offers Price `detailed-fare-rules`** is declared as one `DetailedFareRules` object, but Amadeus answers a map keyed `"1"`, `"2"`, … like the other `included` dictionaries; the fixture follows Amadeus (the schema, which does not close its properties, accepts both).
+- **Flight Availabilities Search**'s own response example writes `classAvailabilities` and `availabilty`; its schema (and Amadeus) say `availabilityClasses` and `numberOfBookableSeats`, which the fixture follows.
+- **Flight Offers Price and Branded Fares Upsell request schemas** do not declare fields that the offers of Flight Offers Search (`isUpsellOffer`, `brandedFareLabel`) and Branded Fares Upsell (`amenities`) carry, although the client posts those offers back; the stub's unknown-field check knows them in `data.flightOffers` ([`../README.md`](../README.md#request-validation)).
 - **Flight Offers Search** references `#/definitions/LoyaltyProgram` and `#/definitions/commissionValue`, which the document does not define. The validator accepts anything there (`AmadeusSpecs.danglingRefs()`).

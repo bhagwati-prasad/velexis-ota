@@ -788,9 +788,6 @@ describe("scenarios and magic values", () => {
         "issueFlightOrder",
         "listQueue",
         "patchFlightOrder",
-        "quoteAirOffers",
-        "searchFlightAvailabilities",
-        "upsellAirOffers",
       ].sort(),
     );
     for (const op of unimplemented) {
@@ -850,7 +847,7 @@ describe("scenarios and magic values", () => {
     expect(optOut.status).toBe(200);
     stub.setDefaultScenario("success");
     expect((await fetch(`${stub.url}${SEARCH_PATH}?${MAD_PAR}`, { headers })).status).toBe(200);
-    expect(() => stub.setDefaultScenario("sold-out" as never)).toThrow(TypeError);
+    expect(() => stub.setDefaultScenario("no-such-scenario" as never)).toThrow(TypeError);
   });
 
   it("answers 404 like Amadeus's gateway for an unknown route", async () => {

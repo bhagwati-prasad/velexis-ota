@@ -7,8 +7,11 @@
 // silent success. Magic values (destination `ZZZ`) select behaviour without a header, for end-to-end runs where the
 // browser cannot set one.
 //
-// The OTA plan adds the operation-specific scenarios (`sold-out`, `price-changed`, `ticketing-failed`,
-// `version-conflict`, `timeout-lost`) with the operations that use them (OBE-019, OBE-041).
+// Operation-specific scenarios change only the operations that know them, in their handlers; every other route, the
+// token endpoint included, answers as for `success`, so a default scenario can be set for a whole flow. OBE-019 adds
+// `sold-out` (Flight Offers Price and Branded Fares Upsell answer error 34651) and `price-changed` (Flight Offers Price
+// answers a higher total with warning 37200); OBE-041 adds `ticketing-failed`, `version-conflict` and `timeout-lost`
+// with the order operations.
 
 /** The request header that selects a scenario (case-insensitive, as every HTTP header). */
 export const SCENARIO_HEADER = "X-Stub-Scenario";
@@ -17,7 +20,14 @@ export const SCENARIO_HEADER = "X-Stub-Scenario";
  * Every scenario name the stub knows. `success` is the normal behaviour: it lets one request opt out of a default
  * scenario set on the server.
  */
-export const STUB_SCENARIOS = ["success", "server-error", "rate-limited", "timeout"] as const;
+export const STUB_SCENARIOS = [
+  "success",
+  "server-error",
+  "rate-limited",
+  "timeout",
+  "sold-out",
+  "price-changed",
+] as const;
 export type StubScenario = (typeof STUB_SCENARIOS)[number];
 
 export function isStubScenario(value: string): value is StubScenario {
@@ -27,8 +37,14 @@ export function isStubScenario(value: string): value is StubScenario {
 /** How long the `timeout` scenario holds a response before it gives up with a 504. */
 export const TIMEOUT_HOLD_MS = 30_000;
 
-/** Flight Offers Search for this destination (GET `destinationLocationCode`, any POST origin-destination) finds nothing. */
+/**
+ * Flight Offers Search (GET `destinationLocationCode`, any POST origin-destination) and Flight Availabilities Search
+ * (any origin-destination) for this destination find nothing.
+ */
 export const NO_OFFERS_DESTINATION = "ZZZ";
+
+/** How much `price-changed` raises the base and the total of each traveller pricing, in major units of the currency. */
+export const PRICE_CHANGE_PER_TRAVELER = 10;
 
 /** Amadeus's error codes that the stub answers with (the `code` of an `Issue`). */
 export const AMADEUS_ERROR_CODES = Object.freeze({
@@ -54,6 +70,10 @@ export const AMADEUS_ERROR_CODES = Object.freeze({
   invalidDataReceived: 4926,
   /** A mandatory parameter, header or body field is missing. */
   mandatoryDataMissing: 32171,
+  /** Segment sell failure: no seat left in the booking class (`sold-out`). */
+  segmentSellFailure: 34651,
+  /** Price discrepancy: the current price differs from the requested one (`price-changed`, a warning at pricing). */
+  priceDiscrepancy: 37200,
 } as const);
 
 /**
@@ -125,10 +145,15 @@ const TIMED_OUT: StubResponse = amadeusErrorResponse([
   },
 ]);
 
-/** What `scenario` does to any route. */
+/**
+ * What `scenario` does to any route. The operation-specific scenarios continue to the operation's handler, which
+ * applies them or, when the operation does not know them, answers as for `success`.
+ */
 export function applyScenario(scenario: StubScenario): ScenarioOutcome {
   switch (scenario) {
     case "success":
+    case "sold-out":
+    case "price-changed":
       return { kind: "continue" };
     case "server-error":
       return { kind: "respond", response: SERVER_ERROR };
@@ -167,7 +192,30 @@ export function resolveScenario(
   };
 }
 
-/** True when a Flight Offers Search for these destination codes must find no offers (magic value `ZZZ`). */
+/**
+ * `sold-out` at Flight Offers Price or Branded Fares Upsell: a 400 with error 34651 for the first segment of the
+ * posted flight offers, as Amadeus answers when the booking class has no seat left.
+ */
+export function soldOutResponse(segmentId: string | undefined): StubResponse {
+  return amadeusErrorResponse([
+    {
+      status: 400,
+      code: AMADEUS_ERROR_CODES.segmentSellFailure,
+      title: "SEGMENT SELL FAILURE",
+      detail: segmentId === undefined ? "Could not sell segment" : `Could not sell segment ${segmentId}`,
+    },
+  ]);
+}
+
+/** The warning of a `price-changed` pricing (the 200 response's `warnings`). */
+export const PRICE_DISCREPANCY_WARNING: AmadeusIssue = Object.freeze({
+  status: 200,
+  code: AMADEUS_ERROR_CODES.priceDiscrepancy,
+  title: "PRICE DISCREPANCY",
+  detail: "Current grandTotal price is different from request one",
+});
+
+/** True when a Flight Offers or Flight Availabilities Search for these destination codes finds nothing (`ZZZ`). */
 export function findsNoOffers(destinationCodes: readonly unknown[]): boolean {
   return destinationCodes.some((code) => code === NO_OFFERS_DESTINATION);
 }

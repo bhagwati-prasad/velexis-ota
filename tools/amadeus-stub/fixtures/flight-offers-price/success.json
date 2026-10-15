@@ -1,0 +1,206 @@
+{
+  "fixture": {
+    "operation": "flight-offers-price",
+    "scenario": "success",
+    "source": "synthetic",
+    "date": "2026-10-15",
+    "scrubbed": true,
+    "description": "Flight Offers Price of offer 2 of flight-offers-search/success.json (Iberia IB3436 Madrid to Orly on 2027-01-15, one adult, BASIC, 98.47 EUR) with include=bags,other-services,detailed-fare-rules (written by hand, no personal data). The handler echoes any posted offers, adds these booking requirements, and adapts the included dictionaries to the posted segments, travellers and fare bases."
+  },
+  "status": 200,
+  "body": {
+    "data": {
+      "type": "flight-offers-pricing",
+      "flightOffers": [
+        {
+          "type": "flight-offer",
+          "id": "2",
+          "source": "GDS",
+          "instantTicketingRequired": false,
+          "nonHomogeneous": false,
+          "oneWay": false,
+          "isUpsellOffer": false,
+          "lastTicketingDate": "2027-01-15",
+          "numberOfBookableSeats": 9,
+          "itineraries": [
+            {
+              "duration": "PT2H5M",
+              "segments": [
+                {
+                  "departure": {
+                    "iataCode": "MAD",
+                    "terminal": "4",
+                    "at": "2027-01-15T07:15:00"
+                  },
+                  "arrival": {
+                    "iataCode": "ORY",
+                    "terminal": "1",
+                    "at": "2027-01-15T09:20:00"
+                  },
+                  "carrierCode": "IB",
+                  "number": "3436",
+                  "aircraft": {
+                    "code": "32N"
+                  },
+                  "operating": {
+                    "carrierCode": "IB"
+                  },
+                  "duration": "PT2H5M",
+                  "id": "3",
+                  "numberOfStops": 0,
+                  "blacklistedInEU": false
+                }
+              ]
+            }
+          ],
+          "price": {
+            "currency": "EUR",
+            "total": "98.47",
+            "base": "56.00",
+            "fees": [
+              {
+                "amount": "0.00",
+                "type": "SUPPLIER"
+              },
+              {
+                "amount": "0.00",
+                "type": "TICKETING"
+              }
+            ],
+            "grandTotal": "98.47"
+          },
+          "pricingOptions": {
+            "fareType": [
+              "PUBLISHED"
+            ],
+            "includedCheckedBagsOnly": false
+          },
+          "validatingAirlineCodes": [
+            "IB"
+          ],
+          "travelerPricings": [
+            {
+              "travelerId": "1",
+              "fareOption": "STANDARD",
+              "travelerType": "ADULT",
+              "price": {
+                "currency": "EUR",
+                "total": "98.47",
+                "base": "56.00"
+              },
+              "fareDetailsBySegment": [
+                {
+                  "segmentId": "3",
+                  "cabin": "ECONOMY",
+                  "fareBasis": "ADNNALB4",
+                  "brandedFare": "BASIC",
+                  "brandedFareLabel": "BASIC",
+                  "class": "A",
+                  "includedCheckedBags": {
+                    "quantity": 0
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "bookingRequirements": {
+        "emailAddressRequired": true,
+        "mobilePhoneNumberRequired": true,
+        "travelerRequirements": [
+          {
+            "travelerId": "1",
+            "genderRequired": true,
+            "documentRequired": false,
+            "dateOfBirthRequired": true,
+            "redressRequiredIfAny": false,
+            "residenceRequired": false
+          }
+        ]
+      }
+    },
+    "included": {
+      "bags": {
+        "1": {
+          "quantity": 1,
+          "weight": 23,
+          "weightUnit": "KG",
+          "name": "CHECKED_BAG",
+          "price": {
+            "amount": "30.00",
+            "currencyCode": "EUR"
+          },
+          "bookableByItinerary": true,
+          "segmentIds": [
+            "3"
+          ],
+          "travelerIds": [
+            "1"
+          ]
+        },
+        "2": {
+          "quantity": 2,
+          "weight": 23,
+          "weightUnit": "KG",
+          "name": "CHECKED_BAG",
+          "price": {
+            "amount": "65.00",
+            "currencyCode": "EUR"
+          },
+          "bookableByItinerary": true,
+          "segmentIds": [
+            "3"
+          ],
+          "travelerIds": [
+            "1"
+          ]
+        }
+      },
+      "other-services": {
+        "1": {
+          "name": "PRIORITY_BOARDING",
+          "price": {
+            "amount": "9.00",
+            "currencyCode": "EUR"
+          },
+          "bookableByTraveler": true,
+          "bookableByItinerary": true,
+          "segmentIds": [
+            "3"
+          ],
+          "travelerIds": [
+            "1"
+          ]
+        }
+      },
+      "detailed-fare-rules": {
+        "1": {
+          "fareBasis": "ADNNALB4",
+          "name": "PENALTIES",
+          "fareNotes": {
+            "descriptions": [
+              {
+                "descriptionType": "PENALTIES",
+                "text": "PE.PENALTIES\nCHANGES\n  ANY TIME CHARGE EUR 70.00 FOR REISSUE.\nCANCELLATIONS\n  ANY TIME TICKET IS NON-REFUNDABLE.\n  TAXES ARE REFUNDABLE."
+              }
+            ]
+          },
+          "segmentId": "3"
+        }
+      }
+    },
+    "dictionaries": {
+      "locations": {
+        "MAD": {
+          "cityCode": "MAD",
+          "countryCode": "ES"
+        },
+        "ORY": {
+          "cityCode": "PAR",
+          "countryCode": "FR"
+        }
+      }
+    }
+  }
+}
