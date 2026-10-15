@@ -1,0 +1,21 @@
+{
+  "id": "evt_test_account_application_deauthorized",
+  "object": "event",
+  "account": "acct_test_alpha",
+  "api_version": "2025-08-27.basil",
+  "created": 1796126400,
+  "data": {
+    "object": {
+      "id": "ca_test_velexis",
+      "object": "application",
+      "name": "Velexis (test)"
+    }
+  },
+  "livemode": false,
+  "pending_webhooks": 1,
+  "request": {
+    "id": null,
+    "idempotency_key": null
+  },
+  "type": "account.application.deauthorized"
+}

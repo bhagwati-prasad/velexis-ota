@@ -110,14 +110,25 @@ To start over: `sudo -u postgres dropdb --force velexis` (macOS: `dropdb --force
 ## 6. Stripe with the Stripe CLI (from M3)
 
 ```bash
-stripe login                                                             # once, test mode only
-stripe listen --forward-to localhost:4000/webhooks/stripe/velexis/test   # OTA customer payments
-stripe listen --forward-to localhost:3100/webhooks/stripe/billing        # platform billing (M5)
+stripe login                                       # once, test mode only
+bash tools/dev/stripe-listen.sh                    # both endpoints below; Ctrl-C stops both
+bash tools/dev/stripe-listen.sh --only ota         # OTA customer payments only (the platform API is not running)
+bash tools/dev/stripe-listen.sh --print-secrets    # only print the .env.local lines
 ```
 
-- Each `stripe listen` prints a `whsec_…` secret. Put it in `.env.local` (`STRIPE_WEBHOOK_SECRET_VELEXIS_TEST`, `STRIPE_BILLING_WEBHOOK_SECRET`) and restart the backend.
+[`tools/dev/stripe-listen.sh`](../../tools/dev/stripe-listen.sh) (task X-028) runs one `stripe listen` per webhook endpoint of [`architecture.md`](architecture.md#d-stripe-webhooks-platform-billing-vs-ota-payments) §5 (d), each subscribed to the events its production endpoint receives, with the output prefixed `[ota]` or `[billing]`:
+
+| Listener | Forwards to | Events |
+|---|---|---|
+| `ota` | `localhost:4000/webhooks/stripe/velexis/test` (OTA API) | `payment_intent.amount_capturable_updated`, `.succeeded`, `.payment_failed`, `.canceled`, `charge.refunded`, `charge.refund.updated`, `charge.dispute.created`, `charge.dispute.closed` ([ADR-0011](adr/0011-payments-stripe-and-airline-card.md), [OTA ADR-0010](../../ota/docs/adr/0010-stripe-gateway-and-payment-webhooks.md)) |
+| `billing` (M5) | `localhost:3100/webhooks/stripe/billing` (platform API) | `checkout.session.completed`, `customer.subscription.created`, `.updated`, `.deleted`, `invoice.finalized`, `.paid`, `.payment_failed`, `.voided` ([ADR-0013](adr/0013-subscription-billing-stripe-billing.md)) |
+
+- Before it starts the listeners, the script prints the CLI's `whsec_…` signing secret (`stripe listen --print-secret`; the CLI keeps one per account and device, so both listeners share it) as the lines `STRIPE_WEBHOOK_SECRET_VELEXIS_TEST=…` and `STRIPE_BILLING_WEBHOOK_SECRET=…`. Put them in `.env.local` and restart the backends. Each listener's `Ready!` line shows the secret it signs with; if it ever differs (for example after a new `stripe login`), update `.env.local` (§9, "Webhook signature errors").
+- Test mode only: the script never passes `--live`, refuses a live `STRIPE_API_KEY` (`sk_live_`, `rk_live_`) and refuses to run where `/etc/velexis` exists. When one listener exits (not logged in, network gone), it stops the other and exits with that status.
+- The plain commands, if you prefer two terminals: `stripe listen --forward-to localhost:4000/webhooks/stripe/velexis/test` and `stripe listen --forward-to localhost:3100/webhooks/stripe/billing` (without the event filters, every event of the account reaches both backends, which acknowledge and ignore what is not theirs).
 - Use Stripe's documented test cards only (3-D Secure: `4000 0027 6000 3184`). Never type a real card number anywhere in development.
-- Trigger events without a browser: `stripe trigger payment_intent.succeeded`. Automated tests do not use the CLI: they sign fixture events with `@velexis/testing/stripe` (task X-028).
+- Trigger events without a browser: `stripe trigger payment_intent.succeeded`. Objects that `stripe trigger` creates carry no Velexis metadata, so the OTA backend treats their events as events of an unknown tenant: it logs and acknowledges them ([`architecture.md`](architecture.md#d-stripe-webhooks-platform-billing-vs-ota-payments) §5 (d)). Add the metadata with `--add payment_intent:metadata.<key>=<value>` ([`packages/testing/fixtures/README.md`](../../packages/testing/fixtures/README.md#refreshing-a-fixture-from-stripe-trigger) shows the keys).
+- Automated tests do not use the CLI: they sign synthetic fixture events with `@velexis/testing/stripe` ([`packages/testing/README.md`](../../packages/testing/README.md#stripe-velexistestingstripe), fixtures and how to refresh them in [`packages/testing/fixtures/README.md`](../../packages/testing/fixtures/README.md)).
 - Live keys are never used locally.
 
 ## 7. Tests
@@ -129,7 +140,7 @@ stripe listen --forward-to localhost:3100/webhooks/stripe/billing        # platf
 | End-to-end | `pnpm test:e2e` | the apps built (the harness starts them, with `E2E_WITH_OTA=1` also the stub and the OTA worker, on a fresh database), PostgreSQL, Redis, Mailpit, Playwright's Chromium, Stripe CLI for payment journeys; [`tools/e2e/README.md`](../../tools/e2e/README.md) |
 | Types and lint | `pnpm typecheck`, `pnpm lint`, `pnpm format:check` | nothing running |
 | Plans | `pnpm plan:lint` | nothing |
-| Local setup scripts | `node --test tools/dev/dev-keys.test.mjs`, `shellcheck -S style deploy/scripts/dev-setup.sh` | nothing (the `dev-setup` CI job also runs §2 on a clean runner) |
+| Local setup scripts | `node --test tools/dev/dev-keys.test.mjs`, `shellcheck -S style deploy/scripts/dev-setup.sh tools/dev/stripe-listen.sh` | nothing (the `dev-setup` CI job also runs §2 on a clean runner; no CI job checks `stripe-listen.sh` yet) |
 
 Integration tests build one migrated template database per run (platform, reference, `tenant_alpha`, `tenant_beta`) as `velexis_test_admin`, then clone it per test file, so tests never touch your `velexis` development data.
 

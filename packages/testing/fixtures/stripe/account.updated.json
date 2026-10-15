@@ -1,0 +1,73 @@
+{
+  "id": "evt_test_account_updated",
+  "object": "event",
+  "account": "acct_test_alpha",
+  "api_version": "2025-08-27.basil",
+  "created": 1792484400,
+  "data": {
+    "object": {
+      "id": "acct_test_alpha",
+      "object": "account",
+      "business_profile": {
+        "mcc": "4722",
+        "minority_owned_business_designation": null,
+        "name": "Alpha Travel (test)",
+        "support_address": null,
+        "support_email": "support+alpha@example.com",
+        "support_phone": null,
+        "support_url": null,
+        "url": "https://alpha.example.com"
+      },
+      "business_type": "company",
+      "capabilities": {
+        "card_payments": "active",
+        "transfers": "active"
+      },
+      "charges_enabled": true,
+      "controller": {
+        "type": "account"
+      },
+      "country": "FR",
+      "created": 1792483200,
+      "default_currency": "eur",
+      "details_submitted": true,
+      "email": "owner+alpha@example.com",
+      "future_requirements": {
+        "alternatives": [],
+        "current_deadline": null,
+        "currently_due": [],
+        "disabled_reason": null,
+        "errors": [],
+        "eventually_due": [],
+        "past_due": [],
+        "pending_verification": []
+      },
+      "metadata": {},
+      "payouts_enabled": true,
+      "requirements": {
+        "alternatives": [],
+        "current_deadline": null,
+        "currently_due": [],
+        "disabled_reason": null,
+        "errors": [],
+        "eventually_due": [],
+        "past_due": [],
+        "pending_verification": []
+      },
+      "type": "standard"
+    },
+    "previous_attributes": {
+      "capabilities": {
+        "card_payments": "inactive"
+      },
+      "charges_enabled": false
+    }
+  },
+  "livemode": false,
+  "pending_webhooks": 1,
+  "request": {
+    "id": null,
+    "idempotency_key": null
+  },
+  "type": "account.updated"
+}

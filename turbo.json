@@ -91,7 +91,8 @@
         "$TURBO_ROOT$/ota/backend/.env.example",
         "$TURBO_ROOT$/platform/backend/.env.example",
         "$TURBO_ROOT$/platform/backend/migrations/**",
-        "$TURBO_ROOT$/ota/backend/migrations/**"
+        "$TURBO_ROOT$/ota/backend/migrations/**",
+        "$TURBO_ROOT$/docs/mvp/architecture.md"
       ],
       "outputs": ["coverage/**"]
     },

@@ -8,7 +8,8 @@ Shared test support for every package and app ([ADR-0022](../../docs/mvp/adr/002
 - **`defineBuilder`**, typed factories for test rows and payloads;
 - **`expectResponseToMatch`**, the OpenAPI response check of every integration test that calls an endpoint ([ADR-0006](../../docs/mvp/adr/0006-contract-first-openapi.md));
 - **Mailpit** (`@velexis/testing/mailpit`): `waitForMessage`, `uniqueEmail` and `extractLinks` over Mailpit's API, for the e-mails the code under test sends ([ADR-0015](../../docs/mvp/adr/0015-testing-strategy.md) "E-mail", [ADR-0017](../../docs/mvp/adr/0017-email-documents-storage.md));
-- **Amadeus stub** (`@velexis/testing/amadeus`): `startAmadeusStub` runs the stub of [`tools/amadeus-stub`](../../tools/amadeus-stub/README.md) in the test's own process on a free port, and `stubScenario` builds the header that picks a scenario ([ADR-0022](../../docs/mvp/adr/0022-shared-test-support-package.md) item 5).
+- **Amadeus stub** (`@velexis/testing/amadeus`): `startAmadeusStub` runs the stub of [`tools/amadeus-stub`](../../tools/amadeus-stub/README.md) in the test's own process on a free port, and `stubScenario` builds the header that picks a scenario ([ADR-0022](../../docs/mvp/adr/0022-shared-test-support-package.md) item 5);
+- **Stripe** (`@velexis/testing/stripe`): `signedStripeEvent` signs a synthetic webhook event fixture, with the test's overrides, exactly as Stripe signs a delivery, for the webhook endpoints of both backends ([ADR-0015](../../docs/mvp/adr/0015-testing-strategy.md) "Stripe").
 
 > **devDependency only.** List `@velexis/testing` under `devDependencies`, never under `dependencies` or `peerDependencies` ([ADR-0022](../../docs/mvp/adr/0022-shared-test-support-package.md) item 2). [`tools/ci/check-package-json.mjs`](../../tools/ci/check-package-json.mjs) fails CI otherwise (X-019), and `pnpm deploy --prod` would leave it out of a release anyway. Nothing in an app's `src/` outside its tests may import it.
 
@@ -17,7 +18,7 @@ Shared test support for every package and app ([ADR-0022](../../docs/mvp/adr/002
 | Test databases, Redis, `FakeClock`, builders, `expectResponseToMatch`, the Vitest global setup, [`deploy/postgres/schemas.sql`](../../deploy/postgres/schemas.sql) | [X-015](../../docs/mvp/plans/foundation-tasks.md) | Done (this page) |
 | `@velexis/testing/mailpit` | [X-025](../../docs/mvp/plans/foundation-tasks.md) | Done (this page) |
 | `@velexis/testing/amadeus` (starts `tools/amadeus-stub` in-process) | [X-027](../../docs/mvp/plans/foundation-tasks.md) | Done (this page) |
-| `@velexis/testing/stripe` (signed webhook events) | X-028 | Not yet |
+| `@velexis/testing/stripe` (signed webhook events) and the fixtures of [`fixtures/stripe/`](fixtures/README.md) | [X-028](../../docs/mvp/plans/foundation-tasks.md) | Done (this page) |
 
 ## Use it in a package or app
 
@@ -279,6 +280,47 @@ Each stub has its own tokens, request log and default scenario: a token of one s
 
 `@velexis/amadeus-stub` is a **devDependency** of this package ([ADR-0022](../../docs/mvp/adr/0022-shared-test-support-package.md) item 2; [`tools/ci/check-package-json.mjs`](../../tools/ci/check-package-json.mjs) enforces it), like `@velexis/testing` is of its users. pnpm installs the dev dependencies of every workspace package, so `@velexis/testing/amadeus` finds the stub through this package's own `node_modules`. Turborepo builds the stub before this package (`^build`). The stub loads the specifications of `docs/amadeus-api/` once per process, on the first `startAmadeusStub`.
 
+## Stripe: `@velexis/testing/stripe`
+
+Tests never call Stripe and never run the Stripe CLI ([ADR-0015](../../docs/mvp/adr/0015-testing-strategy.md) "Stripe"). A webhook test takes the synthetic event of [`fixtures/stripe/`](fixtures/README.md), changes what it is about, signs it with a secret of its own, and posts the exact signed body, as Stripe would:
+
+```ts
+import { randomBytes } from "node:crypto";
+import { signedStripeEvent, STRIPE_SIGNATURE_HEADER } from "@velexis/testing/stripe";
+
+const whsec = `whsec_${randomBytes(24).toString("base64url")}`;   // this test's secret, never a committed value
+app = await startApi({ env: { STRIPE_WEBHOOK_SECRET_VELEXIS_TEST: whsec } });
+
+it("stores a captured payment once", async () => {
+  const { payload, header, event } = signedStripeEvent(
+    "payment_intent.succeeded",
+    { data: { object: { metadata: { payment_id: paymentId } } } },    // deep-merged into the fixture
+    whsec,
+  );
+  await request(app.server).post("/webhooks/stripe/velexis/test")
+    .set(STRIPE_SIGNATURE_HEADER, header).set("Content-Type", "application/json")
+    .send(payload)                                                     // the signed string, byte for byte
+    .expect(200);
+  // event.id is "evt_test_pi_succeeded": send the same payload again to test de-duplication.
+});
+```
+
+| Export | Does |
+|---|---|
+| `signedStripeEvent(type, overrides, secret, { timestamp })` | Deep-merges `overrides` into a fresh copy of the fixture of `type`, serialises the event **once** (`JSON.stringify(event, null, 2)`, the way Stripe formats deliveries) and returns `{ payload, header, event }`: the body, the `Stripe-Signature` header from `stripe.webhooks.generateTestHeaderString` (`t=<unix seconds>,v1=<HMAC-SHA256 of "t.payload">`), and the signed event parsed back (a copy). `timestamp` is Unix seconds or a `Date`, default now (`Date.now()`, so Vitest's fake timers move it). Throws a `TypeError` for an unknown type, an empty secret or overrides that are not a plain object, and a `RangeError` for a bad timestamp; no message repeats the secret |
+| `stripeFixture(type)` | The unsigned fixture, a fresh copy on every call (the file is read once per process): for example the object a mocked `stripe.paymentIntents.retrieve` returns when the processor re-fetches it |
+| `stripeFixturePath(type)`, `STRIPE_FIXTURES_DIR` | The fixture files, `fixtures/stripe/<type>.json` |
+| `STRIPE_FIXTURE_EVENT_TYPES`, `StripeFixtureEventType` | The ten event types with a fixture: every event type of the webhook table in [`architecture.md`](../../docs/mvp/architecture.md#d-stripe-webhooks-platform-billing-vs-ota-payments) §5 (d) |
+| `StripeFixtureEvent<T>`, `StripeEventOverrides<T>` | The `stripe` type of an event of type `T` (`Stripe.PaymentIntentSucceededEvent`, …), and the overrides it accepts, so a misspelt field or a wrong status does not compile |
+| `STRIPE_TEST_TENANT_ID`, `STRIPE_TEST_ACCOUNT_ID`, `STRIPE_SIGNATURE_HEADER` | `ten_test_alpha` (the fixtures' tenant), `acct_test_alpha` (the Connect fixtures' account), `Stripe-Signature` |
+| `scanStripeFixture(text)` | The checks every committed fixture passes: no Stripe API key or `whsec_` secret, no `@` outside `example.com`, no run of 13 or more digits (card numbers, also grouped with spaces or dashes), no `"livemode": true`. Returns the findings (kind, line, column), never the values |
+
+**Overrides.** A plain object is merged key by key, at any depth; any other value (a string, a number, `null`, an array) replaces the fixture's value, so an array is always given whole; `undefined` removes the key (`{ data: { object: { metadata: { velexis_tenant_id: undefined } } } }` for an event without a tenant). Typical changes: `id` for a second, distinct event; `livemode: true` for a live event on a test endpoint; `account: "acct_…"` for the Connect endpoints; `data.object.status` for a stale event body. A key named `__proto__` is kept as data.
+
+**Send `payload` as it is.** The header signs that exact string. A receiver that parses JSON before verifying, or a test that sends `event` (Supertest re-serialises objects), fails verification, which is what `constructEvent` must do on a changed body. To test a forged or tampered delivery, change `payload` after signing, or sign with another secret.
+
+`stripe` is a **devDependency** of this package (18.x, exact, as [`tech-stack.md`](../../docs/mvp/tech-stack.md) pins it), like the Amadeus stub: `@velexis/testing/stripe` finds it in this package's own `node_modules`, and the backends list their own runtime `stripe`. The fixtures carry the API version of that `stripe` (`Stripe.API_VERSION`); when it moves, refresh them ([`fixtures/README.md`](fixtures/README.md#refreshing-a-fixture-from-stripe-trigger)). For webhooks from a real Stripe test account during development, see `tools/dev/stripe-listen.sh` ([`local-development.md`](../../docs/mvp/local-development.md) §6).
+
 ## Environment
 
 | Variable | Used by | From |
@@ -296,11 +338,11 @@ All are read through [`@velexis/config`](../config/README.md); values are never 
 | Command | Does |
 |---|---|
 | `pnpm --filter @velexis/testing build` | `tsc -b` to `dist/` |
-| `pnpm --filter @velexis/testing test` | Unit tests (no PostgreSQL, Redis or Mailpit): the response check on the OTA document and on fixtures, `schemas.sql`, roles, clock, builders, Redis indexes, the Mailpit client against a fake Mailpit and a fake timer |
+| `pnpm --filter @velexis/testing test` | Unit tests (no PostgreSQL, Redis or Mailpit): the response check on the OTA document and on fixtures, `schemas.sql`, roles, clock, builders, Redis indexes, the Mailpit client against a fake Mailpit and a fake timer, the signed Stripe fixtures and their scan |
 | `pnpm --filter @velexis/testing test:int` | Integration tests on PostgreSQL 16, Redis 7, Mailpit and the in-process Amadeus stub (`vitest.int.config.ts`, with the package's own global setup). Build the workspace first (`pnpm build`): the tests load `@velexis/db` and `@velexis/amadeus-stub` from their `dist/` (`pnpm test:int` at the root builds them through Turborepo) |
 | `pnpm --filter @velexis/testing typecheck` / `lint` | `tsc --noEmit` (sources and `test/`) / ESLint |
 
-`turbo.json` gives this package's `test` task its own inputs (`@velexis/testing#test`): the OpenAPI documents, `redocly.yaml`, `deploy/postgres/*.sql`, the `.env.example` files and the migration folders, so a change there reruns the tests instead of replaying a cached pass.
+`turbo.json` gives this package's `test` task its own inputs (`@velexis/testing#test`): the OpenAPI documents, `redocly.yaml`, `deploy/postgres/*.sql`, the `.env.example` files, the migration folders and `docs/mvp/architecture.md` (the webhook table the Stripe fixtures must cover), so a change there reruns the tests instead of replaying a cached pass.
 
 ## Tests of X-015
 
@@ -333,6 +375,16 @@ The unit tests ([`mailpit.test.ts`](src/mailpit.test.ts)) also cover the exact r
 
 The same file also checks `setDefaultScenario` (token requests included, and the header winning), that `defaultScenario`, `credentials`, `clock` (token expiry on a `FakeClock`, code 38192) and `timers` (a manual timer fires the 30 s hold, `504`) reach the stub, `stubScenario` for every scenario (a misspelt name fails `tsc` through `@ts-expect-error`, and throws at run time), the `./amadeus` export, the re-exported names, and that the stub is a devDependency only.
 
+## Tests of X-028
+
+| Acceptance criterion | Test |
+|---|---|
+| AC1: `stripe.webhooks.constructEvent(payload, header, secret)` accepts every fixture, and rejects a payload changed after signing | [`stripe.test.ts`](src/stripe.test.ts) `constructEvent accepts the signed <type> fixture` (each of the ten types; also as a `Buffer`, and the verified event equals the fixture) and `constructEvent rejects the <type> fixture when the payload is changed after signing` (each type: one value changed, the id changed, whitespace appended, re-serialised without indentation, one byte removed); `constructEvent rejects another secret, a changed timestamp and a timestamp outside the tolerance` |
+| AC2: the fixtures cover every event type of the webhook table, and none contains a real key, e-mail address or card number (a scan for `sk_live`, `@` outside `example.com` and 13–19 digit runs) | [`stripe.test.ts`](src/stripe.test.ts) `cover every event type of the webhook table in architecture.md §5 (d), one file per type` (parses the table, so a new row without a fixture fails), `<type> contains no real key, e-mail address or card number` (each type), and `the scan fails on a fixture copy with a live key, a real-looking e-mail address and a card number` |
+| AC3: `shellcheck -S style tools/dev/stripe-listen.sh` is clean | Run by hand with ShellCheck 0.9.0 (the CI runner's version) and 0.11.0; no CI job runs it yet ([`local-development.md`](../../docs/mvp/local-development.md) §7) |
+
+The same file also checks the signature scheme against an independent HMAC-SHA256, the deep merge (siblings kept, arrays and scalars replaced, an expanded object over an id, `null` over an object, `undefined` removes, `__proto__` stays data), that the fixture never changes, the timestamp option and fake timers, the errors, the override types (`@ts-expect-error`), that every fixture is a test-mode event of `Stripe.API_VERSION` whose ids are all `<prefix>_test_…`, where each fixture carries its tenant, and the `./stripe` export.
+
 ## Dependencies
 
 | Package | Version | Why |
@@ -345,3 +397,4 @@ The same file also checks `setDefaultScenario` (token requests included, and the
 | `vitest` | 3.2.7 (peer and dev) | `inject` for the template's name. A peer, so the test files and this package share one Vitest; it is ESM-only, so this CommonJS package loads it with `import()` |
 | `@velexis/amadeus-stub` | workspace (dev) | The Amadeus stub that `@velexis/testing/amadeus` starts ([ADR-0022](../../docs/mvp/adr/0022-shared-test-support-package.md) item 5); a devDependency only (item 2) |
 | `nodemailer`, `@types/nodemailer` | 6.10.1, 6.4.24 (dev) | Sending the e-mails of this package's Mailpit integration tests, as the backends send theirs ([`tech-stack.md`](../../docs/mvp/tech-stack.md): `nodemailer` 6.x). `@velexis/testing/mailpit` itself needs no library: Node's `fetch` |
+| `stripe` | 18.5.0 (dev) | `stripe.webhooks.generateTestHeaderString` for `@velexis/testing/stripe`, and the event types ([`tech-stack.md`](../../docs/mvp/tech-stack.md): `stripe` 18.x); a devDependency only, like the Amadeus stub |

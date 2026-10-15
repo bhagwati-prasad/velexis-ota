@@ -907,8 +907,8 @@ Related: [`../decisions.md`](../decisions.md) (binding), [`../architecture.md`](
 
 ## M3 Book & pay
 
-### X-028 · Add the Stripe CLI workflow and signed webhook fixtures
-- **Status:** todo
+### X-028 · Add the Stripe CLI workflow and signed webhook fixtures ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** foundation
 - **Milestone:** M3
 - **Depends on:** X-015

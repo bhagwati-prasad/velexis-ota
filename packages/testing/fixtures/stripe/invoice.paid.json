@@ -1,0 +1,167 @@
+{
+  "id": "evt_test_invoice_paid",
+  "object": "event",
+  "api_version": "2025-08-27.basil",
+  "created": 1791795899,
+  "data": {
+    "object": {
+      "id": "in_test_alpha_1",
+      "object": "invoice",
+      "account_country": "FR",
+      "account_name": "Velexis (test)",
+      "account_tax_ids": null,
+      "amount_due": 4900,
+      "amount_overpaid": 0,
+      "amount_paid": 4900,
+      "amount_remaining": 0,
+      "amount_shipping": 0,
+      "application": null,
+      "attempt_count": 1,
+      "attempted": true,
+      "auto_advance": false,
+      "automatic_tax": {
+        "disabled_reason": null,
+        "enabled": false,
+        "liability": null,
+        "provider": null,
+        "status": null
+      },
+      "automatically_finalizes_at": null,
+      "billing_reason": "subscription_create",
+      "collection_method": "charge_automatically",
+      "created": 1791795896,
+      "currency": "eur",
+      "custom_fields": null,
+      "customer": "cus_test_alpha",
+      "customer_address": null,
+      "customer_email": "owner+alpha@example.com",
+      "customer_name": null,
+      "customer_phone": null,
+      "customer_shipping": null,
+      "customer_tax_exempt": "none",
+      "customer_tax_ids": [],
+      "default_payment_method": null,
+      "default_source": null,
+      "default_tax_rates": [],
+      "description": null,
+      "discounts": [],
+      "due_date": null,
+      "effective_at": 1791795896,
+      "ending_balance": 0,
+      "footer": null,
+      "from_invoice": null,
+      "hosted_invoice_url": "https://invoice.stripe.com/i/acct_test_velexis/test_in_test_alpha_1",
+      "invoice_pdf": "https://pay.stripe.com/invoice/acct_test_velexis/test_in_test_alpha_1/pdf",
+      "issuer": {
+        "type": "self"
+      },
+      "last_finalization_error": null,
+      "latest_revision": null,
+      "lines": {
+        "object": "list",
+        "data": [
+          {
+            "id": "il_test_alpha_1",
+            "object": "line_item",
+            "amount": 4900,
+            "currency": "eur",
+            "description": "1 × Growth (at €49.00 / month)",
+            "discount_amounts": [],
+            "discountable": true,
+            "discounts": [],
+            "invoice": "in_test_alpha_1",
+            "livemode": false,
+            "metadata": {},
+            "parent": {
+              "invoice_item_details": null,
+              "subscription_item_details": {
+                "invoice_item": null,
+                "proration": false,
+                "proration_details": {
+                  "credited_items": null
+                },
+                "subscription": "sub_test_alpha_1",
+                "subscription_item": "si_test_alpha_1"
+              },
+              "type": "subscription_item_details"
+            },
+            "period": {
+              "end": 1794474295,
+              "start": 1791795895
+            },
+            "pretax_credit_amounts": [],
+            "pricing": {
+              "price_details": {
+                "price": "price_test_growth_month",
+                "product": "prod_test_growth"
+              },
+              "type": "price_details",
+              "unit_amount_decimal": "4900"
+            },
+            "quantity": 1,
+            "subscription": "sub_test_alpha_1",
+            "taxes": []
+          }
+        ],
+        "has_more": false,
+        "total_count": 1,
+        "url": "/v1/invoices/in_test_alpha_1/lines"
+      },
+      "livemode": false,
+      "metadata": {},
+      "next_payment_attempt": null,
+      "number": "TESTALPHA-0001",
+      "on_behalf_of": null,
+      "parent": {
+        "quote_details": null,
+        "subscription_details": {
+          "metadata": {
+            "velexis_plan_code": "growth",
+            "velexis_subscription_id": "sub_velexis_test_alpha",
+            "velexis_tenant_id": "ten_test_alpha"
+          },
+          "subscription": "sub_test_alpha_1"
+        },
+        "type": "subscription_details"
+      },
+      "payment_settings": {
+        "default_mandate": null,
+        "payment_method_options": null,
+        "payment_method_types": null
+      },
+      "period_end": 1791795896,
+      "period_start": 1791795896,
+      "post_payment_credit_notes_amount": 0,
+      "pre_payment_credit_notes_amount": 0,
+      "receipt_number": null,
+      "rendering": null,
+      "shipping_cost": null,
+      "shipping_details": null,
+      "starting_balance": 0,
+      "statement_descriptor": null,
+      "status": "paid",
+      "status_transitions": {
+        "finalized_at": 1791795896,
+        "marked_uncollectible_at": null,
+        "paid_at": 1791795898,
+        "voided_at": null
+      },
+      "subtotal": 4900,
+      "subtotal_excluding_tax": 4900,
+      "test_clock": null,
+      "total": 4900,
+      "total_discount_amounts": [],
+      "total_excluding_tax": 4900,
+      "total_pretax_credit_amounts": [],
+      "total_taxes": [],
+      "webhooks_delivered_at": 1791795896
+    }
+  },
+  "livemode": false,
+  "pending_webhooks": 1,
+  "request": {
+    "id": null,
+    "idempotency_key": null
+  },
+  "type": "invoice.paid"
+}

@@ -2,7 +2,7 @@
   "name": "@velexis/testing",
   "version": "0.0.0",
   "private": true,
-  "description": "Test support only, never a runtime dependency (ADR-0022): migrated template databases cloned per test file, per-worker Redis databases, FakeClock, builders, OpenAPI response checks with Ajv, Mailpit helpers and the in-process Amadeus stub.",
+  "description": "Test support only, never a runtime dependency (ADR-0022): migrated template databases cloned per test file, per-worker Redis databases, FakeClock, builders, OpenAPI response checks with Ajv, Mailpit helpers, the in-process Amadeus stub and signed Stripe webhook events.",
   "license": "UNLICENSED",
   "type": "commonjs",
   "main": "./dist/index.js",
@@ -24,10 +24,15 @@
       "types": "./dist/amadeus.d.ts",
       "default": "./dist/amadeus.js"
     },
+    "./stripe": {
+      "types": "./dist/stripe.d.ts",
+      "default": "./dist/stripe.js"
+    },
     "./package.json": "./package.json"
   },
   "files": [
     "dist",
+    "fixtures",
     "!dist/**/*.test.*",
     "!dist/tsconfig.tsbuildinfo"
   ],
@@ -58,6 +63,7 @@
     "@types/pg": "8.23.1",
     "@velexis/amadeus-stub": "workspace:*",
     "nodemailer": "6.10.1",
+    "stripe": "18.5.0",
     "typescript": "5.6.3",
     "vitest": "3.2.7"
   }

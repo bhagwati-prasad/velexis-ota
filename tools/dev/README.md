@@ -1,11 +1,12 @@
 # Local development tools
 
-Plain Node scripts for a developer machine, with no dependencies and no workspace package. They are part of the one-time setup in [`docs/mvp/local-development.md`](../../docs/mvp/local-development.md) §2. The PostgreSQL and Redis half of that setup is [`deploy/scripts/dev-setup.sh`](../../deploy/scripts/dev-setup.sh). Both were written in task X-016 of [`docs/mvp/plans/foundation-tasks.md`](../../docs/mvp/plans/foundation-tasks.md).
+Plain Node and Bash scripts for a developer machine, with no dependencies and no workspace package. The key script is part of the one-time setup in [`docs/mvp/local-development.md`](../../docs/mvp/local-development.md) §2; `stripe-listen.sh` belongs to §6. The PostgreSQL and Redis half of that setup is [`deploy/scripts/dev-setup.sh`](../../deploy/scripts/dev-setup.sh). Both were written in task X-016 of [`docs/mvp/plans/foundation-tasks.md`](../../docs/mvp/plans/foundation-tasks.md).
 
 | File | What it does |
 |---|---|
 | `dev-keys.mjs` | Creates the local key files and the storage folder in the ignored `.local/` folder (`pnpm dev:keys`) |
 | `dev-keys.test.mjs` | Its tests, for the Node test runner (`node --test tools/dev/dev-keys.test.mjs`) |
+| `stripe-listen.sh` | Forwards Stripe test-mode webhooks to the local OTA and platform APIs with the Stripe CLI and prints the `whsec_` lines for `.env.local` (task X-028, from M3; documented in [`local-development.md`](../../docs/mvp/local-development.md) §6). Bash, checked with `shellcheck -S style` |
 
 ## `dev-keys.mjs`
 
