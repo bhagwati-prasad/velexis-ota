@@ -26,6 +26,11 @@ Related: [SDK README](../README.md), [`types-and-builds.md`](types-and-builds.md
 | Deferred operations | The API answers `501 NOT_IMPLEMENTED` (`details.milestone`); the SDK throws `ServerError` with that code and `retryable: false`. |
 | Multipart | `console.settings.assets.upload` sends `multipart/form-data` built from a `Blob` or `File`. |
 | Idempotency key fallback | Where `crypto.randomUUID` is missing (a non-secure browser context), keys come from `crypto.getRandomValues` formatted as UUID v4. |
+| Option validation | `createVelexisClient`, `withOptions` and every method throw a `TypeError` before any request on an unknown or invalid option, naming the option but never its value: keys must carry their prefix (`pk_`, `sk_`, `hk_`, so a secret key passed as `publishableKey` is refused), only one key is allowed, `idempotencyKey` has 16 to 128 visible ASCII characters. |
+| Error mapping details | A response without the error envelope gets a code from its status and is never a `SupplierError`. `retryable` is true for 429, 500, 502, 503, 504, `ACCOUNT_LOCKED`, `DOCUMENT_NOT_READY`, `NETWORK_ERROR` and `TIMEOUT`. `toJSON()` drops secret-named `details` entries (`bookingToken`, `bookingTokenExpiresAt`, …) and redacts API keys, bearer tokens and JWTs in texts. |
+| Error constructor | Every error class takes an optional second argument `{ retryAfterSeconds?, cause? }` (the response's `Retry-After` for `RateLimitError`, the underlying failure of a `ConnectionError`). |
+| `Page` | `Page<T>` is also exported as a class (`new Page(body, loadNextPage)`); list responses keep their extra fields on the page. |
+| `onResponse` | `path` is the API path without the base URL and the query string; failures of the hook are ignored. |
 
 ## 3. Methods added by the MVP
 

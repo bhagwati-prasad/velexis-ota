@@ -634,7 +634,8 @@ The OTA backend gets its contract extensions, request pipeline, tenancy, Amadeus
   - A document with a duplicated `x-sdk-method` makes the generator exit 1.
 - **Verify:** `pnpm --filter @velexis/ota-sdk generate && git diff --exit-code ota/sdk/src/internal/operations.js && pnpm --filter @velexis/ota-sdk test`
 
-### SDK-003 · Build the request core: options, HTTP, retries, errors and pagination
+### SDK-003 · Build the request core: options, HTTP, retries, errors and pagination ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-sdk
 - **Milestone:** M2
 - **Depends on:** SDK-002
