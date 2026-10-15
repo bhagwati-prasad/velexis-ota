@@ -458,7 +458,8 @@ The OTA backend gets its contract extensions, request pipeline, tenancy, Amadeus
   - `price-changed` and `sold-out` behave as described for pricing; `ZZZ` still returns no offers.
 - **Verify:** `pnpm --filter @velexis/amadeus-stub build && pnpm --filter @velexis/amadeus-stub test`
 
-### OBE-020 · Build the markup and fee engine
+### OBE-020 · Build the markup and fee engine ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-backend
 - **Milestone:** M2
 - **Depends on:** OBE-001, X-014

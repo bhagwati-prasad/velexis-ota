@@ -38,6 +38,7 @@
     "@velexis/errors": "workspace:*",
     "@velexis/logger": "workspace:*",
     "bullmq": "5.81.5",
+    "decimal.js": "10.6.0",
     "ioredis": "5.11.1",
     "nestjs-cls": "5.4.3",
     "nestjs-pino": "4.6.1",
