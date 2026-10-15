@@ -24,6 +24,24 @@ info:
     `X-Booking-Token`.
 
 
+    **Hosted storefront (edge mode).** The Velexis-hosted storefront calls this API same-origin on `/api/*` through
+    Caddy, which sets the edge credential `X-Velexis-Edge` and the visitor's host `X-Velexis-Host` on every request
+    (security scheme `storefrontEdge`, `x-internal`: never sent by a browser or by an SDK user). An edge request acts in
+    customer scope for the OTA of the verified host, in that OTA's storefront environment, with the rights of a
+    publishable key. Customer and guest sessions travel in `__Host-` httpOnly cookies (`customerCookie`,
+    `bookingCookie`) and response bodies never contain a token: auth.signIn, auth.refresh and auth.changePassword
+    answer `AuthSessionInfo`, and `session`, `bookingToken` and `bookingTokenExpiresAt` are `null` elsewhere. Every
+    `POST`, `PUT`, `PATCH` and `DELETE` needs `X-CSRF-Token` equal to the `__Host-vx_csrf` cookie and an `Origin` of the
+    storefront host (`403 CSRF_TOKEN_INVALID`). An expired access cookie answers `401 TOKEN_EXPIRED`: call auth.refresh
+    once and retry. Key and bearer callers never get `Set-Cookie`, and cookies sent to the API host are ignored.
+
+
+    **OTA admin service key.** The first-party OTA admin calls console operations with its service key in `X-Api-Key`,
+    a staff token of the OTA, `X-Velexis-Environment` (`test` or `live`) and the staff member's `X-Velexis-End-User-IP`
+    and `X-Velexis-End-User-Agent`. The service key is accepted only on a direct loopback connection that did not come
+    through Caddy.
+
+
     **Supplier fidelity.** Amadeus payloads are exposed in `amadeus` fields typed with the `Amadeus*` schemas converted
     from the Amadeus specifications. In customer scope supplier prices are replaced by the OTA's selling prices; console
     scope sees net prices and markups.
@@ -37,6 +55,25 @@ info:
 
     **Traceability.** `x-sdk-method` names the SDK method, `x-amadeus` the Amadeus operations called, `x-tenant-tables`
     the tenant-schema tables touched, `x-scope` who may call it.
+
+
+    **MVP vendor extensions.** Added to the original design for the MVP:
+
+    - `x-edge-only: true` (operation): only the hosted storefront edge may call it; API keys and the OTA admin's service
+    key get `403 SCOPE_NOT_ALLOWED`.
+
+    - `x-internal: true` (operation, security scheme): not for SDK users (webhook receivers, internal endpoints, the
+    `storefrontEdge` credential); excluded from the SDK and the public reference.
+
+    - `x-sdk-exclude: true` (operation): public, but used as a plain URL (images, downloads), so it has no SDK method;
+    the SDK parity check skips it.
+
+    - `x-milestone` (operation): the MVP milestone that implements it, `M0` to `M6`, or `deferred`. Until its handler
+    exists, and for good when it is `deferred`, the route answers `501 NOT_IMPLEMENTED` with `details.milestone` (the
+    route-parity allow-list).
+
+    - `x-permission` (console operation): the `StaffPermission` the operation needs; a staff member or key without it
+    gets `403 FORBIDDEN` (`details.requiredPermission`).
   contact:
     name: Velexis platform team
   license:
@@ -287,6 +324,7 @@ paths:
         - Storefront
       security:
         - apiKey: []
+        - storefrontEdge: []
       x-sdk-method: storefront.get
       x-amadeus: []
       x-tenant-tables:
@@ -308,6 +346,7 @@ paths:
         - RATE_LIMITED
         - INTERNAL_ERROR
       x-scope: both
+      x-milestone: M2
       parameters:
         - $ref: '#/components/parameters/AcceptLanguage'
         - name: If-None-Match
@@ -321,16 +360,21 @@ paths:
         - $ref: '#/components/parameters/CustomerEndUserAgent'
       responses:
         '200':
-          description: The storefront configuration.
+          description: >-
+            The storefront configuration. In edge mode it also sets a missing or malformed `__Host-vx_csrf` cookie.
           headers:
             X-Request-Id:
               $ref: '#/components/headers/X-Request-Id'
             ETag:
               $ref: '#/components/headers/ETag'
             Cache-Control:
-              description: Public caching directive, e.g. `public, max-age=60, stale-while-revalidate=600`.
+              description: >-
+                Caching directive: `public, max-age=60, stale-while-revalidate=600` for key callers, `private` in edge
+                mode.
               schema:
                 type: string
+            Set-Cookie:
+              $ref: '#/components/headers/Set-Cookie'
           content:
             application/json:
               schema:
@@ -506,12 +550,16 @@ paths:
                 version: 12
                 updatedAt: '2026-10-01T09:30:00Z'
         '304':
-          description: 'Not modified: the configuration matching If-None-Match is still current.'
+          description: >-
+            Not modified: the configuration matching If-None-Match is still current. In edge mode it also sets a missing
+            or malformed `__Host-vx_csrf` cookie.
           headers:
             X-Request-Id:
               $ref: '#/components/headers/X-Request-Id'
             ETag:
               $ref: '#/components/headers/ETag'
+            Set-Cookie:
+              $ref: '#/components/headers/Set-Cookie'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
@@ -561,6 +609,7 @@ paths:
         - Storefront
       security:
         - apiKey: []
+        - storefrontEdge: []
       x-sdk-method: storefront.resolve
       x-amadeus: []
       x-tenant-tables: []
@@ -572,10 +621,12 @@ paths:
         - VALIDATION_FAILED
         - INVALID_API_KEY
         - SCOPE_NOT_ALLOWED
+        - HOST_NOT_ALLOWED
         - NOT_FOUND
         - RATE_LIMITED
         - INTERNAL_ERROR
       x-scope: both
+      x-milestone: deferred
       parameters:
         - name: host
           in: query
@@ -684,6 +735,7 @@ paths:
         - Customer auth
       security:
         - apiKey: []
+        - storefrontEdge: []
       x-sdk-method: auth.signUp
       x-amadeus: []
       x-tenant-tables:
@@ -708,13 +760,16 @@ paths:
         - PASSWORD_TOO_WEAK
         - RATE_LIMITED
         - INTERNAL_ERROR
+        - CSRF_TOKEN_INVALID
       x-scope: customer
+      x-milestone: M3
       parameters:
         - $ref: '#/components/parameters/IdempotencyKey'
         - $ref: '#/components/parameters/AcceptLanguage'
         - $ref: '#/components/parameters/StorefrontHostHeader'
         - $ref: '#/components/parameters/CustomerEndUserIp'
         - $ref: '#/components/parameters/CustomerEndUserAgent'
+        - $ref: '#/components/parameters/CsrfToken'
       requestBody:
         required: true
         content:
@@ -733,12 +788,16 @@ paths:
               returnPath: /checkout/chk_5Jq8Lm2Wx7Rt4Pz9
       responses:
         '201':
-          description: Account created; verification email queued.
+          description: >-
+            Account created; verification email queued. In edge mode an opened session is set in the `__Host-vx_at` and
+            `__Host-vx_rt` cookies, the CSRF cookie is rotated and `session` is `null`.
           headers:
             X-Request-Id:
               $ref: '#/components/headers/X-Request-Id'
             Location:
               $ref: '#/components/headers/Location'
+            Set-Cookie:
+              $ref: '#/components/headers/Set-Cookie'
           content:
             application/json:
               schema:
@@ -821,6 +880,7 @@ paths:
         - Customer auth
       security:
         - apiKey: []
+        - storefrontEdge: []
       x-sdk-method: auth.verifyEmail
       x-amadeus: []
       x-tenant-tables:
@@ -840,13 +900,16 @@ paths:
         - IDEMPOTENCY_KEY_REUSED
         - RATE_LIMITED
         - INTERNAL_ERROR
+        - CSRF_TOKEN_INVALID
       x-scope: customer
+      x-milestone: M3
       parameters:
         - $ref: '#/components/parameters/IdempotencyKey'
         - $ref: '#/components/parameters/AcceptLanguage'
         - $ref: '#/components/parameters/StorefrontHostHeader'
         - $ref: '#/components/parameters/CustomerEndUserIp'
         - $ref: '#/components/parameters/CustomerEndUserAgent'
+        - $ref: '#/components/parameters/CsrfToken'
       requestBody:
         required: true
         content:
@@ -928,6 +991,9 @@ paths:
         - apiKey: []
         - apiKey: []
           customerAuth: []
+        - storefrontEdge: []
+        - storefrontEdge: []
+          customerCookie: []
       x-sdk-method: auth.resendVerification
       x-amadeus: []
       x-tenant-tables:
@@ -947,13 +1013,16 @@ paths:
         - IDEMPOTENCY_KEY_REUSED
         - RATE_LIMITED
         - INTERNAL_ERROR
+        - CSRF_TOKEN_INVALID
       x-scope: customer
+      x-milestone: M3
       parameters:
         - $ref: '#/components/parameters/IdempotencyKey'
         - $ref: '#/components/parameters/AcceptLanguage'
         - $ref: '#/components/parameters/StorefrontHostHeader'
         - $ref: '#/components/parameters/CustomerEndUserIp'
         - $ref: '#/components/parameters/CustomerEndUserAgent'
+        - $ref: '#/components/parameters/CsrfToken'
       requestBody:
         required: true
         content:
@@ -1027,6 +1096,7 @@ paths:
         - Customer auth
       security:
         - apiKey: []
+        - storefrontEdge: []
       x-sdk-method: auth.signIn
       x-amadeus: []
       x-tenant-tables:
@@ -1048,13 +1118,16 @@ paths:
         - ACCOUNT_LOCKED
         - RATE_LIMITED
         - INTERNAL_ERROR
+        - CSRF_TOKEN_INVALID
       x-scope: customer
+      x-milestone: M3
       parameters:
         - $ref: '#/components/parameters/IdempotencyKey'
         - $ref: '#/components/parameters/AcceptLanguage'
         - $ref: '#/components/parameters/StorefrontHostHeader'
         - $ref: '#/components/parameters/CustomerEndUserIp'
         - $ref: '#/components/parameters/CustomerEndUserAgent'
+        - $ref: '#/components/parameters/CsrfToken'
       requestBody:
         required: true
         content:
@@ -1067,14 +1140,24 @@ paths:
               rememberMe: true
       responses:
         '200':
-          description: Signed in.
+          description: >-
+            Signed in. Token mode: `AuthSessionResult` with the tokens. Edge mode: the tokens are set in the
+            `__Host-vx_at` and `__Host-vx_rt` cookies, the CSRF cookie is rotated and the body is `AuthSessionInfo`,
+            without token fields.
           headers:
             X-Request-Id:
               $ref: '#/components/headers/X-Request-Id'
+            Set-Cookie:
+              $ref: '#/components/headers/Set-Cookie'
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/AuthSessionResult'
+                oneOf:
+                  - $ref: '#/components/schemas/AuthSessionResult'
+                  - $ref: '#/components/schemas/AuthSessionInfo'
+                description: >-
+                  Token mode: AuthSessionResult (with `session.accessToken`). Edge mode (hosted storefront):
+                  AuthSessionInfo, without token fields.
               example:
                 session:
                   accessToken: >-
@@ -1152,6 +1235,7 @@ paths:
         - Customer auth
       security:
         - apiKey: []
+        - storefrontEdge: []
       x-sdk-method: auth.refresh
       x-amadeus: []
       x-tenant-tables:
@@ -1170,12 +1254,16 @@ paths:
         - IDEMPOTENCY_KEY_REUSED
         - RATE_LIMITED
         - INTERNAL_ERROR
+        - INVALID_REQUEST
+        - CSRF_TOKEN_INVALID
       x-scope: customer
+      x-milestone: M3
       parameters:
         - $ref: '#/components/parameters/IdempotencyKey'
         - $ref: '#/components/parameters/StorefrontHostHeader'
         - $ref: '#/components/parameters/CustomerEndUserIp'
         - $ref: '#/components/parameters/CustomerEndUserAgent'
+        - $ref: '#/components/parameters/CsrfToken'
       requestBody:
         required: true
         content:
@@ -1186,14 +1274,24 @@ paths:
               refreshToken: rt_TmV3UmFuZG9tUmVmcmVzaFRva2VuVmFsdWUwMDAx
       responses:
         '200':
-          description: New tokens and the customer; the presented refresh token is no longer valid.
+          description: >-
+            New tokens and the customer; the presented refresh token is no longer valid. Edge mode: the rotated tokens
+            are set in the `__Host-vx_at` and `__Host-vx_rt` cookies and the body is `AuthSessionInfo`, without token
+            fields.
           headers:
             X-Request-Id:
               $ref: '#/components/headers/X-Request-Id'
+            Set-Cookie:
+              $ref: '#/components/headers/Set-Cookie'
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/AuthSessionResult'
+                oneOf:
+                  - $ref: '#/components/schemas/AuthSessionResult'
+                  - $ref: '#/components/schemas/AuthSessionInfo'
+                description: >-
+                  Token mode: AuthSessionResult (with `session.accessToken`). Edge mode (hosted storefront):
+                  AuthSessionInfo, without token fields.
               example:
                 session:
                   accessToken: >-
@@ -1268,6 +1366,9 @@ paths:
         - apiKey: []
           customerAuth: []
         - apiKey: []
+        - storefrontEdge: []
+          customerCookie: []
+        - storefrontEdge: []
       x-sdk-method: auth.signOut
       x-amadeus: []
       x-tenant-tables:
@@ -1283,12 +1384,15 @@ paths:
         - IDEMPOTENCY_KEY_REUSED
         - RATE_LIMITED
         - INTERNAL_ERROR
+        - CSRF_TOKEN_INVALID
       x-scope: customer
+      x-milestone: M3
       parameters:
         - $ref: '#/components/parameters/IdempotencyKey'
         - $ref: '#/components/parameters/StorefrontHostHeader'
         - $ref: '#/components/parameters/CustomerEndUserIp'
         - $ref: '#/components/parameters/CustomerEndUserAgent'
+        - $ref: '#/components/parameters/CsrfToken'
       requestBody:
         required: true
         content:
@@ -1300,10 +1404,14 @@ paths:
               refreshToken: rt_Um90YXRlZFJlZnJlc2hUb2tlblZhbHVlMDAwMDI
       responses:
         '204':
-          description: Signed out.
+          description: >-
+            Signed out. In edge mode the `__Host-vx_at` and `__Host-vx_rt` cookies are cleared and the CSRF cookie is
+            rotated.
           headers:
             X-Request-Id:
               $ref: '#/components/headers/X-Request-Id'
+            Set-Cookie:
+              $ref: '#/components/headers/Set-Cookie'
         '400':
           $ref: '#/components/responses/BadRequest'
         '401':
@@ -1337,6 +1445,7 @@ paths:
         - Customer auth
       security:
         - apiKey: []
+        - storefrontEdge: []
       x-sdk-method: auth.requestPasswordReset
       x-amadeus: []
       x-tenant-tables:
@@ -1356,13 +1465,16 @@ paths:
         - IDEMPOTENCY_KEY_REUSED
         - RATE_LIMITED
         - INTERNAL_ERROR
+        - CSRF_TOKEN_INVALID
       x-scope: customer
+      x-milestone: M3
       parameters:
         - $ref: '#/components/parameters/IdempotencyKey'
         - $ref: '#/components/parameters/AcceptLanguage'
         - $ref: '#/components/parameters/StorefrontHostHeader'
         - $ref: '#/components/parameters/CustomerEndUserIp'
         - $ref: '#/components/parameters/CustomerEndUserAgent'
+        - $ref: '#/components/parameters/CsrfToken'
       requestBody:
         required: true
         content:
@@ -1422,6 +1534,7 @@ paths:
         - Customer auth
       security:
         - apiKey: []
+        - storefrontEdge: []
       x-sdk-method: auth.resetPassword
       x-amadeus: []
       x-tenant-tables:
@@ -1443,13 +1556,16 @@ paths:
         - PASSWORD_TOO_WEAK
         - RATE_LIMITED
         - INTERNAL_ERROR
+        - CSRF_TOKEN_INVALID
       x-scope: customer
+      x-milestone: M3
       parameters:
         - $ref: '#/components/parameters/IdempotencyKey'
         - $ref: '#/components/parameters/AcceptLanguage'
         - $ref: '#/components/parameters/StorefrontHostHeader'
         - $ref: '#/components/parameters/CustomerEndUserIp'
         - $ref: '#/components/parameters/CustomerEndUserAgent'
+        - $ref: '#/components/parameters/CsrfToken'
       requestBody:
         required: true
         content:
@@ -1462,10 +1578,14 @@ paths:
               signIn: true
       responses:
         '200':
-          description: Password changed; all previous sessions revoked.
+          description: >-
+            Password changed; all previous sessions revoked. In edge mode an opened session is set in the `__Host-vx_at`
+            and `__Host-vx_rt` cookies, the CSRF cookie is rotated and `session` is `null`.
           headers:
             X-Request-Id:
               $ref: '#/components/headers/X-Request-Id'
+            Set-Cookie:
+              $ref: '#/components/headers/Set-Cookie'
           content:
             application/json:
               schema:
@@ -1538,6 +1658,8 @@ paths:
       security:
         - apiKey: []
           customerAuth: []
+        - storefrontEdge: []
+          customerCookie: []
       x-sdk-method: auth.changePassword
       x-amadeus: []
       x-tenant-tables:
@@ -1561,13 +1683,16 @@ paths:
         - ACCOUNT_LOCKED
         - RATE_LIMITED
         - INTERNAL_ERROR
+        - CSRF_TOKEN_INVALID
       x-scope: customer
+      x-milestone: M3
       parameters:
         - $ref: '#/components/parameters/IdempotencyKey'
         - $ref: '#/components/parameters/AcceptLanguage'
         - $ref: '#/components/parameters/StorefrontHostHeader'
         - $ref: '#/components/parameters/CustomerEndUserIp'
         - $ref: '#/components/parameters/CustomerEndUserAgent'
+        - $ref: '#/components/parameters/CsrfToken'
       requestBody:
         required: true
         content:
@@ -1580,14 +1705,24 @@ paths:
               signOutOtherSessions: true
       responses:
         '200':
-          description: Password changed; a rotated session is returned.
+          description: >-
+            Password changed; a rotated session is returned. Edge mode: the rotated session is set in the `__Host-vx_at`
+            and `__Host-vx_rt` cookies, the CSRF cookie is rotated and the body is `AuthSessionInfo`, without token
+            fields.
           headers:
             X-Request-Id:
               $ref: '#/components/headers/X-Request-Id'
+            Set-Cookie:
+              $ref: '#/components/headers/Set-Cookie'
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/AuthSessionResult'
+                oneOf:
+                  - $ref: '#/components/schemas/AuthSessionResult'
+                  - $ref: '#/components/schemas/AuthSessionInfo'
+                description: >-
+                  Token mode: AuthSessionResult (with `session.accessToken`). Edge mode (hosted storefront):
+                  AuthSessionInfo, without token fields.
               example:
                 session:
                   accessToken: >-
@@ -1659,6 +1794,8 @@ paths:
       security:
         - apiKey: []
           customerAuth: []
+        - storefrontEdge: []
+          customerCookie: []
       x-sdk-method: auth.getSession
       x-amadeus: []
       x-tenant-tables:
@@ -1675,6 +1812,7 @@ paths:
         - RATE_LIMITED
         - INTERNAL_ERROR
       x-scope: customer
+      x-milestone: M3
       parameters:
         - $ref: '#/components/parameters/AcceptLanguage'
         - $ref: '#/components/parameters/StorefrontHostHeader'
@@ -1750,6 +1888,8 @@ paths:
       security:
         - apiKey: []
           customerAuth: []
+        - storefrontEdge: []
+          customerCookie: []
       x-sdk-method: account.get
       x-amadeus: []
       x-tenant-tables:
@@ -1765,6 +1905,7 @@ paths:
         - RATE_LIMITED
         - INTERNAL_ERROR
       x-scope: customer
+      x-milestone: M3
       parameters:
         - $ref: '#/components/parameters/AcceptLanguage'
         - $ref: '#/components/parameters/StorefrontHostHeader'
@@ -1842,6 +1983,8 @@ paths:
       security:
         - apiKey: []
           customerAuth: []
+        - storefrontEdge: []
+          customerCookie: []
       x-sdk-method: account.update
       x-amadeus: []
       x-tenant-tables:
@@ -1863,13 +2006,16 @@ paths:
         - CURRENT_PASSWORD_INCORRECT
         - RATE_LIMITED
         - INTERNAL_ERROR
+        - CSRF_TOKEN_INVALID
       x-scope: customer
+      x-milestone: M3
       parameters:
         - $ref: '#/components/parameters/IfMatch'
         - $ref: '#/components/parameters/AcceptLanguage'
         - $ref: '#/components/parameters/StorefrontHostHeader'
         - $ref: '#/components/parameters/CustomerEndUserIp'
         - $ref: '#/components/parameters/CustomerEndUserAgent'
+        - $ref: '#/components/parameters/CsrfToken'
       requestBody:
         required: true
         content:
@@ -1954,6 +2100,8 @@ paths:
       security:
         - apiKey: []
           customerAuth: []
+        - storefrontEdge: []
+          customerCookie: []
       x-sdk-method: account.preferences.get
       x-amadeus: []
       x-tenant-tables:
@@ -1968,6 +2116,7 @@ paths:
         - RATE_LIMITED
         - INTERNAL_ERROR
       x-scope: customer
+      x-milestone: deferred
       responses:
         '200':
           description: The preferences.
@@ -2030,6 +2179,8 @@ paths:
       security:
         - apiKey: []
           customerAuth: []
+        - storefrontEdge: []
+          customerCookie: []
       x-sdk-method: account.preferences.update
       x-amadeus: []
       x-tenant-tables:
@@ -2050,12 +2201,15 @@ paths:
         - PRECONDITION_FAILED
         - RATE_LIMITED
         - INTERNAL_ERROR
+        - CSRF_TOKEN_INVALID
       x-scope: customer
+      x-milestone: deferred
       parameters:
         - $ref: '#/components/parameters/IfMatch'
         - $ref: '#/components/parameters/StorefrontHostHeader'
         - $ref: '#/components/parameters/CustomerEndUserIp'
         - $ref: '#/components/parameters/CustomerEndUserAgent'
+        - $ref: '#/components/parameters/CsrfToken'
       requestBody:
         required: true
         content:
@@ -2143,6 +2297,8 @@ paths:
       security:
         - apiKey: []
           customerAuth: []
+        - storefrontEdge: []
+          customerCookie: []
       x-sdk-method: account.delete
       x-amadeus: []
       x-tenant-tables:
@@ -2173,13 +2329,16 @@ paths:
         - CURRENT_PASSWORD_INCORRECT
         - RATE_LIMITED
         - INTERNAL_ERROR
+        - CSRF_TOKEN_INVALID
       x-scope: customer
+      x-milestone: M3
       parameters:
         - $ref: '#/components/parameters/IdempotencyKey'
         - $ref: '#/components/parameters/AcceptLanguage'
         - $ref: '#/components/parameters/StorefrontHostHeader'
         - $ref: '#/components/parameters/CustomerEndUserIp'
         - $ref: '#/components/parameters/CustomerEndUserAgent'
+        - $ref: '#/components/parameters/CsrfToken'
       requestBody:
         required: true
         content:
@@ -2192,10 +2351,14 @@ paths:
               exportData: true
       responses:
         '202':
-          description: Deletion accepted; the customer is signed out everywhere.
+          description: >-
+            Deletion accepted; the customer is signed out everywhere. In edge mode the `__Host-vx_at` and `__Host-vx_rt`
+            cookies are cleared and the CSRF cookie is rotated.
           headers:
             X-Request-Id:
               $ref: '#/components/headers/X-Request-Id'
+            Set-Cookie:
+              $ref: '#/components/headers/Set-Cookie'
           content:
             application/json:
               schema:
@@ -2260,6 +2423,8 @@ paths:
       security:
         - apiKey: []
           customerAuth: []
+        - storefrontEdge: []
+          customerCookie: []
       x-sdk-method: account.dataExports.create
       x-amadeus: []
       x-tenant-tables:
@@ -2289,12 +2454,15 @@ paths:
         - IDEMPOTENCY_KEY_REUSED
         - RATE_LIMITED
         - INTERNAL_ERROR
+        - CSRF_TOKEN_INVALID
       x-scope: customer
+      x-milestone: deferred
       parameters:
         - $ref: '#/components/parameters/IdempotencyKey'
         - $ref: '#/components/parameters/StorefrontHostHeader'
         - $ref: '#/components/parameters/CustomerEndUserIp'
         - $ref: '#/components/parameters/CustomerEndUserAgent'
+        - $ref: '#/components/parameters/CsrfToken'
       requestBody:
         required: true
         content:
@@ -2353,6 +2521,8 @@ paths:
       security:
         - apiKey: []
           customerAuth: []
+        - storefrontEdge: []
+          customerCookie: []
       x-sdk-method: account.dataExports.get
       x-amadeus: []
       x-tenant-tables:
@@ -2368,6 +2538,7 @@ paths:
         - RATE_LIMITED
         - INTERNAL_ERROR
       x-scope: customer
+      x-milestone: deferred
       parameters:
         - name: dataExportId
           in: path
@@ -2433,6 +2604,8 @@ paths:
       security:
         - apiKey: []
           customerAuth: []
+        - storefrontEdge: []
+          customerCookie: []
       x-sdk-method: account.savedTravelers.list
       x-amadeus: []
       x-tenant-tables:
@@ -2450,6 +2623,7 @@ paths:
         - RATE_LIMITED
         - INTERNAL_ERROR
       x-scope: customer
+      x-milestone: deferred
       parameters:
         - $ref: '#/components/parameters/Cursor'
         - $ref: '#/components/parameters/Limit'
@@ -2571,6 +2745,8 @@ paths:
       security:
         - apiKey: []
           customerAuth: []
+        - storefrontEdge: []
+          customerCookie: []
       x-sdk-method: account.savedTravelers.create
       x-amadeus: []
       x-tenant-tables:
@@ -2591,12 +2767,15 @@ paths:
         - TRAVELER_DATA_INVALID
         - RATE_LIMITED
         - INTERNAL_ERROR
+        - CSRF_TOKEN_INVALID
       x-scope: customer
+      x-milestone: deferred
       parameters:
         - $ref: '#/components/parameters/IdempotencyKey'
         - $ref: '#/components/parameters/StorefrontHostHeader'
         - $ref: '#/components/parameters/CustomerEndUserIp'
         - $ref: '#/components/parameters/CustomerEndUserAgent'
+        - $ref: '#/components/parameters/CsrfToken'
       requestBody:
         required: true
         content:
@@ -2758,6 +2937,8 @@ paths:
       security:
         - apiKey: []
           customerAuth: []
+        - storefrontEdge: []
+          customerCookie: []
       x-sdk-method: account.savedTravelers.get
       x-amadeus: []
       x-tenant-tables:
@@ -2774,6 +2955,7 @@ paths:
         - RATE_LIMITED
         - INTERNAL_ERROR
       x-scope: customer
+      x-milestone: deferred
       responses:
         '200':
           description: The saved traveller.
@@ -2863,6 +3045,8 @@ paths:
       security:
         - apiKey: []
           customerAuth: []
+        - storefrontEdge: []
+          customerCookie: []
       x-sdk-method: account.savedTravelers.update
       x-amadeus: []
       x-tenant-tables:
@@ -2881,12 +3065,15 @@ paths:
         - TRAVELER_DATA_INVALID
         - RATE_LIMITED
         - INTERNAL_ERROR
+        - CSRF_TOKEN_INVALID
       x-scope: customer
+      x-milestone: deferred
       parameters:
         - $ref: '#/components/parameters/IfMatch'
         - $ref: '#/components/parameters/StorefrontHostHeader'
         - $ref: '#/components/parameters/CustomerEndUserIp'
         - $ref: '#/components/parameters/CustomerEndUserAgent'
+        - $ref: '#/components/parameters/CsrfToken'
       requestBody:
         required: true
         content:
@@ -2988,6 +3175,8 @@ paths:
       security:
         - apiKey: []
           customerAuth: []
+        - storefrontEdge: []
+          customerCookie: []
       x-sdk-method: account.savedTravelers.delete
       x-amadeus: []
       x-tenant-tables:
@@ -3003,7 +3192,9 @@ paths:
         - NOT_FOUND
         - RATE_LIMITED
         - INTERNAL_ERROR
+        - CSRF_TOKEN_INVALID
       x-scope: customer
+      x-milestone: deferred
       responses:
         '204':
           description: Deleted.
@@ -3024,6 +3215,7 @@ paths:
         - $ref: '#/components/parameters/StorefrontHostHeader'
         - $ref: '#/components/parameters/CustomerEndUserIp'
         - $ref: '#/components/parameters/CustomerEndUserAgent'
+        - $ref: '#/components/parameters/CsrfToken'
   /v1/reference/locations:
     get:
       operationId: searchLocations
@@ -3056,6 +3248,7 @@ paths:
         - Reference data
       security:
         - apiKey: []
+        - storefrontEdge: []
       x-sdk-method: reference.locations.search
       x-amadeus: []
       x-tenant-tables: []
@@ -3073,6 +3266,7 @@ paths:
         - RATE_LIMITED
         - INTERNAL_ERROR
       x-scope: both
+      x-milestone: M2
       parameters:
         - name: keyword
           in: query
@@ -3210,6 +3404,7 @@ paths:
         - Reference data
       security:
         - apiKey: []
+        - storefrontEdge: []
       x-sdk-method: reference.airports.get
       x-amadeus: []
       x-tenant-tables: []
@@ -3227,6 +3422,7 @@ paths:
         - RATE_LIMITED
         - INTERNAL_ERROR
       x-scope: both
+      x-milestone: M2
       parameters:
         - name: iataCode
           in: path
@@ -3299,6 +3495,7 @@ paths:
         - Reference data
       security:
         - apiKey: []
+        - storefrontEdge: []
       x-sdk-method: reference.airlines.list
       x-amadeus: []
       x-tenant-tables: []
@@ -3313,6 +3510,7 @@ paths:
         - RATE_LIMITED
         - INTERNAL_ERROR
       x-scope: both
+      x-milestone: M2
       parameters:
         - name: iataCodes
           in: query
@@ -3404,6 +3602,7 @@ paths:
         - Reference data
       security:
         - apiKey: []
+        - storefrontEdge: []
       x-sdk-method: reference.airlines.get
       x-amadeus: []
       x-tenant-tables: []
@@ -3418,6 +3617,7 @@ paths:
         - RATE_LIMITED
         - INTERNAL_ERROR
       x-scope: both
+      x-milestone: M2
       parameters:
         - name: iataCode
           in: path
@@ -3479,6 +3679,7 @@ paths:
         - Reference data
       security:
         - apiKey: []
+        - storefrontEdge: []
       x-sdk-method: reference.countries.list
       x-amadeus: []
       x-tenant-tables: []
@@ -3493,6 +3694,7 @@ paths:
         - RATE_LIMITED
         - INTERNAL_ERROR
       x-scope: both
+      x-milestone: M2
       parameters:
         - $ref: '#/components/parameters/Cursor'
         - $ref: '#/components/parameters/Limit'
@@ -3558,6 +3760,7 @@ paths:
         - Reference data
       security:
         - apiKey: []
+        - storefrontEdge: []
       x-sdk-method: reference.currencies.list
       x-amadeus: []
       x-tenant-tables: []
@@ -3572,6 +3775,7 @@ paths:
         - RATE_LIMITED
         - INTERNAL_ERROR
       x-scope: both
+      x-milestone: M2
       parameters:
         - $ref: '#/components/parameters/Cursor'
         - $ref: '#/components/parameters/Limit'
@@ -3722,6 +3926,9 @@ paths:
           customerAuth: []
         - apiKey: []
           staffAuth: []
+        - storefrontEdge: []
+        - storefrontEdge: []
+          customerCookie: []
       x-sdk-method: flights.search
       x-amadeus:
         - api: FlightOffersSearch
@@ -3757,6 +3964,7 @@ paths:
         - ORIGIN_NOT_ALLOWED
         - SCOPE_NOT_ALLOWED
         - TENANT_SUSPENDED
+        - HOST_NOT_ALLOWED
         - FEATURE_DISABLED
         - IDEMPOTENCY_KEY_REUSED
         - CONFLICT
@@ -3768,12 +3976,15 @@ paths:
         - SERVICE_UNAVAILABLE
         - SUPPLIER_UNAVAILABLE
         - SUPPLIER_TIMEOUT
+        - CSRF_TOKEN_INVALID
       x-scope: both
+      x-milestone: M2
       parameters:
         - $ref: '#/components/parameters/IdempotencyKey'
         - $ref: '#/components/parameters/OfferDataScope'
         - $ref: '#/components/parameters/AcceptLanguage'
         - $ref: '#/components/parameters/Currency'
+        - $ref: '#/components/parameters/CsrfToken'
       requestBody:
         required: true
         description: Search criteria in SIMPLE or ADVANCED mode, plus options for the first page of results.
@@ -3956,6 +4167,9 @@ paths:
           customerAuth: []
         - apiKey: []
           staffAuth: []
+        - storefrontEdge: []
+        - storefrontEdge: []
+          customerCookie: []
       x-sdk-method: flights.getSearch
       x-amadeus: []
       x-tenant-tables:
@@ -3972,10 +4186,12 @@ paths:
         - ORIGIN_NOT_ALLOWED
         - SCOPE_NOT_ALLOWED
         - TENANT_SUSPENDED
+        - HOST_NOT_ALLOWED
         - NOT_FOUND
         - RATE_LIMITED
         - INTERNAL_ERROR
       x-scope: both
+      x-milestone: M2
       parameters:
         - name: searchId
           in: path
@@ -4222,6 +4438,9 @@ paths:
           customerAuth: []
         - apiKey: []
           staffAuth: []
+        - storefrontEdge: []
+        - storefrontEdge: []
+          customerCookie: []
       x-sdk-method: flights.listResults
       x-amadeus: []
       x-tenant-tables:
@@ -4241,12 +4460,14 @@ paths:
         - ORIGIN_NOT_ALLOWED
         - SCOPE_NOT_ALLOWED
         - TENANT_SUSPENDED
+        - HOST_NOT_ALLOWED
         - NOT_FOUND
         - SEARCH_NOT_COMPLETED
         - SEARCH_EXPIRED
         - RATE_LIMITED
         - INTERNAL_ERROR
       x-scope: both
+      x-milestone: M2
       parameters:
         - name: searchId
           in: path
@@ -4337,6 +4558,9 @@ paths:
           customerAuth: []
         - apiKey: []
           staffAuth: []
+        - storefrontEdge: []
+        - storefrontEdge: []
+          customerCookie: []
       x-sdk-method: flights.getOffer
       x-amadeus: []
       x-tenant-tables:
@@ -4354,11 +4578,13 @@ paths:
         - ORIGIN_NOT_ALLOWED
         - SCOPE_NOT_ALLOWED
         - TENANT_SUSPENDED
+        - HOST_NOT_ALLOWED
         - NOT_FOUND
         - OFFER_EXPIRED
         - RATE_LIMITED
         - INTERNAL_ERROR
       x-scope: both
+      x-milestone: M2
       parameters:
         - name: offerId
           in: path
@@ -4953,6 +5179,9 @@ paths:
           customerAuth: []
         - apiKey: []
           staffAuth: []
+        - storefrontEdge: []
+        - storefrontEdge: []
+          customerCookie: []
       x-sdk-method: flights.upsell
       x-amadeus:
         - api: BrandedFaresUpsell
@@ -4983,6 +5212,7 @@ paths:
         - ORIGIN_NOT_ALLOWED
         - SCOPE_NOT_ALLOWED
         - TENANT_SUSPENDED
+        - HOST_NOT_ALLOWED
         - FEATURE_DISABLED
         - NOT_FOUND
         - IDEMPOTENCY_KEY_REUSED
@@ -4997,7 +5227,9 @@ paths:
         - SERVICE_UNAVAILABLE
         - SUPPLIER_UNAVAILABLE
         - SUPPLIER_TIMEOUT
+        - CSRF_TOKEN_INVALID
       x-scope: both
+      x-milestone: M2
       parameters:
         - name: offerId
           in: path
@@ -5009,6 +5241,7 @@ paths:
         - $ref: '#/components/parameters/IdempotencyKey'
         - $ref: '#/components/parameters/OfferDataScope'
         - $ref: '#/components/parameters/AcceptLanguage'
+        - $ref: '#/components/parameters/CsrfToken'
       requestBody:
         required: false
         description: Optional upsell options. An empty body upsells the offer alone without payment information.
@@ -5140,9 +5373,13 @@ paths:
         - SUPPLIER_UNAVAILABLE
         - SUPPLIER_TIMEOUT
       x-scope: console
+      x-milestone: deferred
       parameters:
         - $ref: '#/components/parameters/IdempotencyKey'
         - $ref: '#/components/parameters/AcceptLanguage'
+        - $ref: '#/components/parameters/VelexisEnvironment'
+        - $ref: '#/components/parameters/CustomerEndUserIp'
+        - $ref: '#/components/parameters/CustomerEndUserAgent'
       requestBody:
         required: true
         description: Amadeus availability query.
@@ -5366,6 +5603,9 @@ paths:
           customerAuth: []
         - apiKey: []
           staffAuth: []
+        - storefrontEdge: []
+        - storefrontEdge: []
+          customerCookie: []
       x-sdk-method: flights.price
       x-amadeus:
         - api: FlightOffersPrice
@@ -5397,6 +5637,7 @@ paths:
         - ORIGIN_NOT_ALLOWED
         - SCOPE_NOT_ALLOWED
         - TENANT_SUSPENDED
+        - HOST_NOT_ALLOWED
         - NOT_FOUND
         - IDEMPOTENCY_KEY_REUSED
         - CONFLICT
@@ -5414,12 +5655,15 @@ paths:
         - SERVICE_UNAVAILABLE
         - SUPPLIER_UNAVAILABLE
         - SUPPLIER_TIMEOUT
+        - CSRF_TOKEN_INVALID
       x-scope: both
+      x-milestone: M2
       parameters:
         - $ref: '#/components/parameters/IdempotencyKey'
         - $ref: '#/components/parameters/OfferDataScope'
         - $ref: '#/components/parameters/AcceptLanguage'
         - $ref: '#/components/parameters/Currency'
+        - $ref: '#/components/parameters/CsrfToken'
       requestBody:
         required: true
         description: Offers to price and pricing options.
@@ -5541,6 +5785,9 @@ paths:
           customerAuth: []
         - apiKey: []
           staffAuth: []
+        - storefrontEdge: []
+        - storefrontEdge: []
+          customerCookie: []
       x-sdk-method: flights.getPricedOffer
       x-amadeus: []
       x-tenant-tables:
@@ -5557,11 +5804,13 @@ paths:
         - ORIGIN_NOT_ALLOWED
         - SCOPE_NOT_ALLOWED
         - TENANT_SUSPENDED
+        - HOST_NOT_ALLOWED
         - NOT_FOUND
         - OFFER_EXPIRED
         - RATE_LIMITED
         - INTERNAL_ERROR
       x-scope: both
+      x-milestone: M2
       parameters:
         - name: pricedOfferId
           in: path
@@ -5656,6 +5905,9 @@ paths:
           customerAuth: []
         - apiKey: []
           staffAuth: []
+        - storefrontEdge: []
+        - storefrontEdge: []
+          customerCookie: []
       x-sdk-method: flights.getAncillaries
       x-amadeus:
         - api: FlightOffersPrice
@@ -5676,6 +5928,7 @@ paths:
         - ORIGIN_NOT_ALLOWED
         - SCOPE_NOT_ALLOWED
         - TENANT_SUSPENDED
+        - HOST_NOT_ALLOWED
         - FEATURE_DISABLED
         - NOT_FOUND
         - OFFER_EXPIRED
@@ -5687,6 +5940,7 @@ paths:
         - SUPPLIER_UNAVAILABLE
         - SUPPLIER_TIMEOUT
       x-scope: both
+      x-milestone: M2
       parameters:
         - name: pricedOfferId
           in: path
@@ -5761,6 +6015,9 @@ paths:
           customerAuth: []
         - apiKey: []
           staffAuth: []
+        - storefrontEdge: []
+        - storefrontEdge: []
+          customerCookie: []
       x-sdk-method: flights.getFareRules
       x-amadeus:
         - api: FlightOffersPrice
@@ -5779,6 +6036,7 @@ paths:
         - ORIGIN_NOT_ALLOWED
         - SCOPE_NOT_ALLOWED
         - TENANT_SUSPENDED
+        - HOST_NOT_ALLOWED
         - NOT_FOUND
         - OFFER_EXPIRED
         - SUPPLIER_NOT_CONFIGURED
@@ -5789,6 +6047,7 @@ paths:
         - SUPPLIER_UNAVAILABLE
         - SUPPLIER_TIMEOUT
       x-scope: both
+      x-milestone: M2
       parameters:
         - name: pricedOfferId
           in: path
@@ -5873,6 +6132,9 @@ paths:
           customerAuth: []
         - apiKey: []
           staffAuth: []
+        - storefrontEdge: []
+        - storefrontEdge: []
+          customerCookie: []
       x-sdk-method: checkout.create
       x-amadeus: []
       x-tenant-tables:
@@ -5894,6 +6156,7 @@ paths:
         - TOKEN_EXPIRED
         - ORIGIN_NOT_ALLOWED
         - TENANT_SUSPENDED
+        - HOST_NOT_ALLOWED
         - FEATURE_DISABLED
         - EMAIL_NOT_VERIFIED
         - NOT_FOUND
@@ -5901,10 +6164,13 @@ paths:
         - OFFER_EXPIRED
         - RATE_LIMITED
         - INTERNAL_ERROR
+        - CSRF_TOKEN_INVALID
       x-scope: both
+      x-milestone: M3
       parameters:
         - $ref: '#/components/parameters/IdempotencyKey'
         - $ref: '#/components/parameters/AcceptLanguage'
+        - $ref: '#/components/parameters/CsrfToken'
       requestBody:
         required: true
         description: Priced offer and options.
@@ -5989,6 +6255,9 @@ paths:
           customerAuth: []
         - apiKey: []
           staffAuth: []
+        - storefrontEdge: []
+        - storefrontEdge: []
+          customerCookie: []
       x-sdk-method: checkout.get
       x-amadeus: []
       x-tenant-tables:
@@ -6005,10 +6274,12 @@ paths:
         - TOKEN_EXPIRED
         - ORIGIN_NOT_ALLOWED
         - TENANT_SUSPENDED
+        - HOST_NOT_ALLOWED
         - NOT_FOUND
         - RATE_LIMITED
         - INTERNAL_ERROR
       x-scope: both
+      x-milestone: M3
       parameters:
         - name: checkoutId
           in: path
@@ -6090,6 +6361,9 @@ paths:
           customerAuth: []
         - apiKey: []
           staffAuth: []
+        - storefrontEdge: []
+        - storefrontEdge: []
+          customerCookie: []
       x-sdk-method: checkout.setTravelers
       x-amadeus: []
       x-tenant-tables:
@@ -6108,6 +6382,7 @@ paths:
         - TOKEN_EXPIRED
         - ORIGIN_NOT_ALLOWED
         - TENANT_SUSPENDED
+        - HOST_NOT_ALLOWED
         - NOT_FOUND
         - CHECKOUT_ALREADY_COMPLETED
         - CHECKOUT_EXPIRED
@@ -6115,7 +6390,9 @@ paths:
         - TRAVELER_DATA_INVALID
         - RATE_LIMITED
         - INTERNAL_ERROR
+        - CSRF_TOKEN_INVALID
       x-scope: both
+      x-milestone: M3
       parameters:
         - name: checkoutId
           in: path
@@ -6126,6 +6403,7 @@ paths:
             pattern: ^chk_[0-9A-Za-z]{16,40}$
         - $ref: '#/components/parameters/CheckoutIfMatch'
         - $ref: '#/components/parameters/AcceptLanguage'
+        - $ref: '#/components/parameters/CsrfToken'
       requestBody:
         required: true
         description: Travellers to store.
@@ -6252,6 +6530,9 @@ paths:
           customerAuth: []
         - apiKey: []
           staffAuth: []
+        - storefrontEdge: []
+        - storefrontEdge: []
+          customerCookie: []
       x-sdk-method: checkout.setContacts
       x-amadeus: []
       x-tenant-tables:
@@ -6265,6 +6546,7 @@ paths:
         - TOKEN_EXPIRED
         - ORIGIN_NOT_ALLOWED
         - TENANT_SUSPENDED
+        - HOST_NOT_ALLOWED
         - NOT_FOUND
         - CHECKOUT_ALREADY_COMPLETED
         - CHECKOUT_EXPIRED
@@ -6272,7 +6554,9 @@ paths:
         - CONTACT_DATA_INVALID
         - RATE_LIMITED
         - INTERNAL_ERROR
+        - CSRF_TOKEN_INVALID
       x-scope: both
+      x-milestone: M3
       parameters:
         - name: checkoutId
           in: path
@@ -6283,6 +6567,7 @@ paths:
             pattern: ^chk_[0-9A-Za-z]{16,40}$
         - $ref: '#/components/parameters/CheckoutIfMatch'
         - $ref: '#/components/parameters/AcceptLanguage'
+        - $ref: '#/components/parameters/CsrfToken'
       requestBody:
         required: true
         description: Contacts (replace all).
@@ -6401,6 +6686,9 @@ paths:
           customerAuth: []
         - apiKey: []
           staffAuth: []
+        - storefrontEdge: []
+        - storefrontEdge: []
+          customerCookie: []
       x-sdk-method: checkout.setAncillaries
       x-amadeus:
         - api: FlightOffersPrice
@@ -6428,6 +6716,7 @@ paths:
         - TOKEN_EXPIRED
         - ORIGIN_NOT_ALLOWED
         - TENANT_SUSPENDED
+        - HOST_NOT_ALLOWED
         - FEATURE_DISABLED
         - NOT_FOUND
         - CHECKOUT_ALREADY_COMPLETED
@@ -6444,7 +6733,9 @@ paths:
         - SERVICE_UNAVAILABLE
         - SUPPLIER_UNAVAILABLE
         - SUPPLIER_TIMEOUT
+        - CSRF_TOKEN_INVALID
       x-scope: both
+      x-milestone: M3
       parameters:
         - name: checkoutId
           in: path
@@ -6455,6 +6746,7 @@ paths:
             pattern: ^chk_[0-9A-Za-z]{16,40}$
         - $ref: '#/components/parameters/CheckoutIfMatch'
         - $ref: '#/components/parameters/AcceptLanguage'
+        - $ref: '#/components/parameters/CsrfToken'
       requestBody:
         required: true
         description: Ancillary selections (replace all).
@@ -6543,6 +6835,9 @@ paths:
           customerAuth: []
         - apiKey: []
           staffAuth: []
+        - storefrontEdge: []
+        - storefrontEdge: []
+          customerCookie: []
       x-sdk-method: checkout.setRemarks
       x-amadeus: []
       x-tenant-tables:
@@ -6556,13 +6851,16 @@ paths:
         - TOKEN_EXPIRED
         - ORIGIN_NOT_ALLOWED
         - TENANT_SUSPENDED
+        - HOST_NOT_ALLOWED
         - NOT_FOUND
         - CHECKOUT_ALREADY_COMPLETED
         - CHECKOUT_EXPIRED
         - PRECONDITION_FAILED
         - RATE_LIMITED
         - INTERNAL_ERROR
+        - CSRF_TOKEN_INVALID
       x-scope: both
+      x-milestone: M3
       parameters:
         - name: checkoutId
           in: path
@@ -6573,6 +6871,7 @@ paths:
             pattern: ^chk_[0-9A-Za-z]{16,40}$
         - $ref: '#/components/parameters/CheckoutIfMatch'
         - $ref: '#/components/parameters/AcceptLanguage'
+        - $ref: '#/components/parameters/CsrfToken'
       requestBody:
         required: true
         description: Special requests (replace all).
@@ -6670,6 +6969,9 @@ paths:
           customerAuth: []
         - apiKey: []
           staffAuth: []
+        - storefrontEdge: []
+        - storefrontEdge: []
+          customerCookie: []
       x-sdk-method: checkout.createPayment
       x-amadeus:
         - api: FlightOffersPrice
@@ -6697,6 +6999,7 @@ paths:
         - TOKEN_EXPIRED
         - ORIGIN_NOT_ALLOWED
         - TENANT_SUSPENDED
+        - HOST_NOT_ALLOWED
         - FEATURE_DISABLED
         - NOT_FOUND
         - IDEMPOTENCY_KEY_REUSED
@@ -6714,7 +7017,9 @@ paths:
         - SERVICE_UNAVAILABLE
         - SUPPLIER_UNAVAILABLE
         - SUPPLIER_TIMEOUT
+        - CSRF_TOKEN_INVALID
       x-scope: both
+      x-milestone: M3
       parameters:
         - name: checkoutId
           in: path
@@ -6725,6 +7030,7 @@ paths:
             pattern: ^chk_[0-9A-Za-z]{16,40}$
         - $ref: '#/components/parameters/IdempotencyKey'
         - $ref: '#/components/parameters/AcceptLanguage'
+        - $ref: '#/components/parameters/CsrfToken'
       requestBody:
         required: true
         description: Payment method and card hint.
@@ -6822,6 +7128,11 @@ paths:
           bookingToken: []
         - apiKey: []
           staffAuth: []
+        - storefrontEdge: []
+        - storefrontEdge: []
+          customerCookie: []
+        - storefrontEdge: []
+          bookingCookie: []
       x-sdk-method: checkout.getPayment
       x-amadeus: []
       x-tenant-tables:
@@ -6837,10 +7148,12 @@ paths:
         - TOKEN_EXPIRED
         - ORIGIN_NOT_ALLOWED
         - TENANT_SUSPENDED
+        - HOST_NOT_ALLOWED
         - NOT_FOUND
         - RATE_LIMITED
         - INTERNAL_ERROR
       x-scope: both
+      x-milestone: M3
       parameters:
         - name: paymentId
           in: path
@@ -6915,6 +7228,11 @@ paths:
           bookingToken: []
         - apiKey: []
           staffAuth: []
+        - storefrontEdge: []
+        - storefrontEdge: []
+          customerCookie: []
+        - storefrontEdge: []
+          bookingCookie: []
       x-sdk-method: checkout.updatePayment
       x-amadeus:
         - api: FlightOffersPrice
@@ -6941,6 +7259,7 @@ paths:
         - TOKEN_EXPIRED
         - ORIGIN_NOT_ALLOWED
         - TENANT_SUSPENDED
+        - HOST_NOT_ALLOWED
         - NOT_FOUND
         - CHECKOUT_ALREADY_COMPLETED
         - PAYMENT_NOT_UPDATABLE
@@ -6955,7 +7274,9 @@ paths:
         - SERVICE_UNAVAILABLE
         - SUPPLIER_UNAVAILABLE
         - SUPPLIER_TIMEOUT
+        - CSRF_TOKEN_INVALID
       x-scope: both
+      x-milestone: M3
       parameters:
         - name: paymentId
           in: path
@@ -6965,6 +7286,7 @@ paths:
             type: string
             pattern: ^pay_[0-9A-Za-z]{16,40}$
         - $ref: '#/components/parameters/AcceptLanguage'
+        - $ref: '#/components/parameters/CsrfToken'
       requestBody:
         required: true
         description: Card hint reported by the provider's card form.
@@ -7115,6 +7437,9 @@ paths:
           customerAuth: []
         - apiKey: []
           staffAuth: []
+        - storefrontEdge: []
+        - storefrontEdge: []
+          customerCookie: []
       x-sdk-method: checkout.complete
       x-amadeus:
         - api: FlightOffersPrice
@@ -7171,6 +7496,7 @@ paths:
         - PAYMENT_DECLINED
         - ORIGIN_NOT_ALLOWED
         - TENANT_SUSPENDED
+        - HOST_NOT_ALLOWED
         - EMAIL_NOT_VERIFIED
         - NOT_FOUND
         - IDEMPOTENCY_KEY_REUSED
@@ -7194,7 +7520,9 @@ paths:
         - SERVICE_UNAVAILABLE
         - SUPPLIER_UNAVAILABLE
         - SUPPLIER_TIMEOUT
+        - CSRF_TOKEN_INVALID
       x-scope: both
+      x-milestone: M3
       parameters:
         - name: checkoutId
           in: path
@@ -7205,6 +7533,7 @@ paths:
             pattern: ^chk_[0-9A-Za-z]{16,40}$
         - $ref: '#/components/parameters/IdempotencyKey'
         - $ref: '#/components/parameters/AcceptLanguage'
+        - $ref: '#/components/parameters/CsrfToken'
       requestBody:
         required: true
         description: Payment and confirmed total.
@@ -7222,12 +7551,16 @@ paths:
                     currency: EUR
       responses:
         '201':
-          description: Booking created (ticketed, or ticketing in progress).
+          description: >-
+            Booking created (ticketed, or ticketing in progress). In edge mode a guest's booking token is added to the
+            `__Host-vx_bt` cookie, and `bookingToken` and `bookingTokenExpiresAt` are `null`.
           headers:
             X-Request-Id:
               $ref: '#/components/headers/X-Request-Id'
             Location:
               $ref: '#/components/headers/Location'
+            Set-Cookie:
+              $ref: '#/components/headers/Set-Cookie'
           content:
             application/json:
               schema:
@@ -7481,6 +7814,8 @@ paths:
       security:
         - apiKey: []
           customerAuth: []
+        - storefrontEdge: []
+          customerCookie: []
       x-sdk-method: bookings.list
       x-amadeus: []
       x-tenant-tables:
@@ -7498,9 +7833,11 @@ paths:
         - TOKEN_EXPIRED
         - ORIGIN_NOT_ALLOWED
         - TENANT_SUSPENDED
+        - HOST_NOT_ALLOWED
         - RATE_LIMITED
         - INTERNAL_ERROR
       x-scope: customer
+      x-milestone: M3
       parameters:
         - $ref: '#/components/parameters/BookingTimeframeFilter'
         - $ref: '#/components/parameters/BookingDepartureFrom'
@@ -7635,6 +7972,10 @@ paths:
           customerAuth: []
         - apiKey: []
           bookingToken: []
+        - storefrontEdge: []
+          customerCookie: []
+        - storefrontEdge: []
+          bookingCookie: []
       x-sdk-method: bookings.get
       x-amadeus:
         - api: FlightOrderManagement
@@ -7671,6 +8012,7 @@ paths:
         - TOKEN_EXPIRED
         - ORIGIN_NOT_ALLOWED
         - TENANT_SUSPENDED
+        - HOST_NOT_ALLOWED
         - NOT_FOUND
         - SUPPLIER_NOT_CONFIGURED
         - RATE_LIMITED
@@ -7680,6 +8022,7 @@ paths:
         - SUPPLIER_UNAVAILABLE
         - SUPPLIER_TIMEOUT
       x-scope: customer
+      x-milestone: M3
       parameters:
         - name: bookingId
           in: path
@@ -7792,6 +8135,10 @@ paths:
           customerAuth: []
         - apiKey: []
           bookingToken: []
+        - storefrontEdge: []
+          customerCookie: []
+        - storefrontEdge: []
+          bookingCookie: []
       x-sdk-method: bookings.update
       x-amadeus:
         - api: FlightOrderManagement
@@ -7818,6 +8165,7 @@ paths:
         - TOKEN_EXPIRED
         - ORIGIN_NOT_ALLOWED
         - TENANT_SUSPENDED
+        - HOST_NOT_ALLOWED
         - NOT_FOUND
         - VERSION_CONFLICT
         - BOOKING_NOT_MODIFIABLE
@@ -7832,7 +8180,9 @@ paths:
         - SERVICE_UNAVAILABLE
         - SUPPLIER_UNAVAILABLE
         - SUPPLIER_TIMEOUT
+        - CSRF_TOKEN_INVALID
       x-scope: customer
+      x-milestone: M3
       parameters:
         - name: bookingId
           in: path
@@ -7843,6 +8193,7 @@ paths:
             pattern: ^bkg_[0-9A-Za-z]{16,40}$
         - $ref: '#/components/parameters/IfMatch'
         - $ref: '#/components/parameters/AcceptLanguage'
+        - $ref: '#/components/parameters/CsrfToken'
       requestBody:
         required: true
         description: Changes (at least one property).
@@ -7971,6 +8322,7 @@ paths:
         - Bookings
       security:
         - apiKey: []
+        - storefrontEdge: []
       x-sdk-method: bookings.lookup
       x-amadeus: []
       x-tenant-tables:
@@ -7987,16 +8339,20 @@ paths:
         - INVALID_API_KEY
         - ORIGIN_NOT_ALLOWED
         - TENANT_SUSPENDED
+        - HOST_NOT_ALLOWED
         - NOT_FOUND
         - IDEMPOTENCY_KEY_REUSED
         - RATE_LIMITED
         - INTERNAL_ERROR
+        - CSRF_TOKEN_INVALID
       x-scope: customer
+      x-milestone: M3
       parameters:
         - $ref: '#/components/parameters/IdempotencyKey'
         - $ref: '#/components/parameters/AcceptLanguage'
         - $ref: '#/components/parameters/CustomerEndUserIp'
         - $ref: '#/components/parameters/CustomerEndUserAgent'
+        - $ref: '#/components/parameters/CsrfToken'
       requestBody:
         required: true
         description: Reference and last name.
@@ -8012,10 +8368,14 @@ paths:
                   lastName: Rossi
       responses:
         '200':
-          description: Booking found; guest token issued.
+          description: >-
+            Booking found; guest token issued. In edge mode the token is added to the `__Host-vx_bt` cookie and
+            `bookingToken` is `null`.
           headers:
             X-Request-Id:
               $ref: '#/components/headers/X-Request-Id'
+            Set-Cookie:
+              $ref: '#/components/headers/Set-Cookie'
           content:
             application/json:
               schema:
@@ -8113,6 +8473,10 @@ paths:
           customerAuth: []
         - apiKey: []
           bookingToken: []
+        - storefrontEdge: []
+          customerCookie: []
+        - storefrontEdge: []
+          bookingCookie: []
       x-sdk-method: bookings.quoteCancellation
       x-amadeus:
         - api: FlightOrderManagement
@@ -8137,6 +8501,7 @@ paths:
         - TOKEN_EXPIRED
         - ORIGIN_NOT_ALLOWED
         - TENANT_SUSPENDED
+        - HOST_NOT_ALLOWED
         - NOT_FOUND
         - BOOKING_ALREADY_CANCELLED
         - SUPPLIER_NOT_CONFIGURED
@@ -8147,6 +8512,7 @@ paths:
         - SUPPLIER_UNAVAILABLE
         - SUPPLIER_TIMEOUT
       x-scope: customer
+      x-milestone: M3
       parameters:
         - name: bookingId
           in: path
@@ -8315,6 +8681,10 @@ paths:
           customerAuth: []
         - apiKey: []
           bookingToken: []
+        - storefrontEdge: []
+          customerCookie: []
+        - storefrontEdge: []
+          bookingCookie: []
       x-sdk-method: bookings.cancel
       x-amadeus:
         - api: FlightOrderManagement
@@ -8352,6 +8722,7 @@ paths:
         - TOKEN_EXPIRED
         - ORIGIN_NOT_ALLOWED
         - TENANT_SUSPENDED
+        - HOST_NOT_ALLOWED
         - FEATURE_DISABLED
         - NOT_FOUND
         - IDEMPOTENCY_KEY_REUSED
@@ -8367,7 +8738,9 @@ paths:
         - SERVICE_UNAVAILABLE
         - SUPPLIER_UNAVAILABLE
         - SUPPLIER_TIMEOUT
+        - CSRF_TOKEN_INVALID
       x-scope: customer
+      x-milestone: M3
       parameters:
         - name: bookingId
           in: path
@@ -8379,6 +8752,7 @@ paths:
         - $ref: '#/components/parameters/IdempotencyKey'
         - $ref: '#/components/parameters/IfMatch'
         - $ref: '#/components/parameters/AcceptLanguage'
+        - $ref: '#/components/parameters/CsrfToken'
       requestBody:
         required: true
         description: Reason and expected refund.
@@ -8592,6 +8966,10 @@ paths:
           customerAuth: []
         - apiKey: []
           bookingToken: []
+        - storefrontEdge: []
+          customerCookie: []
+        - storefrontEdge: []
+          bookingCookie: []
       x-sdk-method: bookings.getFareRules
       x-amadeus:
         - api: FlightOrderManagement
@@ -8613,6 +8991,7 @@ paths:
         - TOKEN_EXPIRED
         - ORIGIN_NOT_ALLOWED
         - TENANT_SUSPENDED
+        - HOST_NOT_ALLOWED
         - NOT_FOUND
         - SUPPLIER_NOT_CONFIGURED
         - RATE_LIMITED
@@ -8622,6 +9001,7 @@ paths:
         - SUPPLIER_UNAVAILABLE
         - SUPPLIER_TIMEOUT
       x-scope: customer
+      x-milestone: M3
       parameters:
         - name: bookingId
           in: path
@@ -8779,6 +9159,10 @@ paths:
           customerAuth: []
         - apiKey: []
           bookingToken: []
+        - storefrontEdge: []
+          customerCookie: []
+        - storefrontEdge: []
+          bookingCookie: []
       x-sdk-method: bookings.getTicketingStatus
       x-amadeus:
         - api: FlightOrderManagement
@@ -8802,6 +9186,7 @@ paths:
         - TOKEN_EXPIRED
         - ORIGIN_NOT_ALLOWED
         - TENANT_SUSPENDED
+        - HOST_NOT_ALLOWED
         - NOT_FOUND
         - SUPPLIER_NOT_CONFIGURED
         - RATE_LIMITED
@@ -8811,6 +9196,7 @@ paths:
         - SUPPLIER_UNAVAILABLE
         - SUPPLIER_TIMEOUT
       x-scope: customer
+      x-milestone: M3
       parameters:
         - name: bookingId
           in: path
@@ -8928,6 +9314,10 @@ paths:
           customerAuth: []
         - apiKey: []
           bookingToken: []
+        - storefrontEdge: []
+          customerCookie: []
+        - storefrontEdge: []
+          bookingCookie: []
       x-sdk-method: bookings.listDocuments
       x-amadeus: []
       x-tenant-tables:
@@ -8941,10 +9331,12 @@ paths:
         - TOKEN_EXPIRED
         - ORIGIN_NOT_ALLOWED
         - TENANT_SUSPENDED
+        - HOST_NOT_ALLOWED
         - NOT_FOUND
         - RATE_LIMITED
         - INTERNAL_ERROR
       x-scope: customer
+      x-milestone: M3
       parameters:
         - name: bookingId
           in: path
@@ -9041,6 +9433,10 @@ paths:
           customerAuth: []
         - apiKey: []
           bookingToken: []
+        - storefrontEdge: []
+          customerCookie: []
+        - storefrontEdge: []
+          bookingCookie: []
       x-sdk-method: bookings.getDocumentDownloadUrl
       x-amadeus: []
       x-tenant-tables:
@@ -9054,11 +9450,13 @@ paths:
         - TOKEN_EXPIRED
         - ORIGIN_NOT_ALLOWED
         - TENANT_SUSPENDED
+        - HOST_NOT_ALLOWED
         - NOT_FOUND
         - DOCUMENT_NOT_READY
         - RATE_LIMITED
         - INTERNAL_ERROR
       x-scope: customer
+      x-milestone: M3
       parameters:
         - name: bookingId
           in: path
@@ -9125,6 +9523,10 @@ paths:
           customerAuth: []
         - apiKey: []
           bookingToken: []
+        - storefrontEdge: []
+          customerCookie: []
+        - storefrontEdge: []
+          bookingCookie: []
       x-sdk-method: bookings.listEvents
       x-amadeus: []
       x-tenant-tables:
@@ -9138,10 +9540,12 @@ paths:
         - TOKEN_EXPIRED
         - ORIGIN_NOT_ALLOWED
         - TENANT_SUSPENDED
+        - HOST_NOT_ALLOWED
         - NOT_FOUND
         - RATE_LIMITED
         - INTERNAL_ERROR
       x-scope: customer
+      x-milestone: M3
       parameters:
         - name: bookingId
           in: path
@@ -9251,6 +9655,10 @@ paths:
           customerAuth: []
         - apiKey: []
           bookingToken: []
+        - storefrontEdge: []
+          customerCookie: []
+        - storefrontEdge: []
+          bookingCookie: []
       x-sdk-method: bookings.getAncillaries
       x-amadeus:
         - api: FlightOrderManagement
@@ -9274,6 +9682,7 @@ paths:
         - TOKEN_EXPIRED
         - ORIGIN_NOT_ALLOWED
         - TENANT_SUSPENDED
+        - HOST_NOT_ALLOWED
         - NOT_FOUND
         - SUPPLIER_NOT_CONFIGURED
         - RATE_LIMITED
@@ -9283,6 +9692,7 @@ paths:
         - SUPPLIER_UNAVAILABLE
         - SUPPLIER_TIMEOUT
       x-scope: customer
+      x-milestone: deferred
       parameters:
         - name: bookingId
           in: path
@@ -9422,6 +9832,10 @@ paths:
           customerAuth: []
         - apiKey: []
           bookingToken: []
+        - storefrontEdge: []
+          customerCookie: []
+        - storefrontEdge: []
+          bookingCookie: []
       x-sdk-method: bookings.addAncillaries
       x-amadeus:
         - api: FlightOrderManagement
@@ -9465,6 +9879,7 @@ paths:
         - PAYMENT_DECLINED
         - ORIGIN_NOT_ALLOWED
         - TENANT_SUSPENDED
+        - HOST_NOT_ALLOWED
         - FEATURE_DISABLED
         - NOT_FOUND
         - IDEMPOTENCY_KEY_REUSED
@@ -9484,7 +9899,9 @@ paths:
         - SERVICE_UNAVAILABLE
         - SUPPLIER_UNAVAILABLE
         - SUPPLIER_TIMEOUT
+        - CSRF_TOKEN_INVALID
       x-scope: customer
+      x-milestone: deferred
       parameters:
         - name: bookingId
           in: path
@@ -9496,6 +9913,7 @@ paths:
         - $ref: '#/components/parameters/IdempotencyKey'
         - $ref: '#/components/parameters/IfMatch'
         - $ref: '#/components/parameters/AcceptLanguage'
+        - $ref: '#/components/parameters/CsrfToken'
       requestBody:
         required: true
         description: Paid selections.
@@ -9589,6 +10007,10 @@ paths:
           customerAuth: []
         - apiKey: []
           bookingToken: []
+        - storefrontEdge: []
+          customerCookie: []
+        - storefrontEdge: []
+          bookingCookie: []
       x-sdk-method: bookings.createPayment
       x-amadeus:
         - api: FlightOrderManagement
@@ -9617,6 +10039,7 @@ paths:
         - TOKEN_EXPIRED
         - ORIGIN_NOT_ALLOWED
         - TENANT_SUSPENDED
+        - HOST_NOT_ALLOWED
         - FEATURE_DISABLED
         - NOT_FOUND
         - IDEMPOTENCY_KEY_REUSED
@@ -9634,7 +10057,9 @@ paths:
         - SERVICE_UNAVAILABLE
         - SUPPLIER_UNAVAILABLE
         - SUPPLIER_TIMEOUT
+        - CSRF_TOKEN_INVALID
       x-scope: customer
+      x-milestone: deferred
       parameters:
         - name: bookingId
           in: path
@@ -9645,6 +10070,7 @@ paths:
             pattern: ^bkg_[0-9A-Za-z]{16,40}$
         - $ref: '#/components/parameters/IdempotencyKey'
         - $ref: '#/components/parameters/AcceptLanguage'
+        - $ref: '#/components/parameters/CsrfToken'
       requestBody:
         required: true
         description: Selections, confirmed total and payment method.
@@ -9818,9 +10244,13 @@ paths:
         - RATE_LIMITED
         - INTERNAL_ERROR
       x-scope: console
+      x-milestone: M4
       parameters:
         - $ref: '#/components/parameters/IdempotencyKey'
         - $ref: '#/components/parameters/AcceptLanguage'
+        - $ref: '#/components/parameters/VelexisEnvironment'
+        - $ref: '#/components/parameters/CustomerEndUserIp'
+        - $ref: '#/components/parameters/CustomerEndUserAgent'
       requestBody:
         required: true
         content:
@@ -9921,8 +10351,12 @@ paths:
         - RATE_LIMITED
         - INTERNAL_ERROR
       x-scope: console
+      x-milestone: M4
       parameters:
         - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/VelexisEnvironment'
+        - $ref: '#/components/parameters/CustomerEndUserIp'
+        - $ref: '#/components/parameters/CustomerEndUserAgent'
       requestBody:
         required: true
         content:
@@ -9998,8 +10432,12 @@ paths:
         - RATE_LIMITED
         - INTERNAL_ERROR
       x-scope: console
+      x-milestone: M4
       parameters:
         - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/VelexisEnvironment'
+        - $ref: '#/components/parameters/CustomerEndUserIp'
+        - $ref: '#/components/parameters/CustomerEndUserAgent'
       requestBody:
         required: false
         content:
@@ -10067,6 +10505,7 @@ paths:
         - tenants
         - supplier_connections
       x-error-codes:
+        - VALIDATION_FAILED
         - UNAUTHENTICATED
         - INVALID_API_KEY
         - TOKEN_EXPIRED
@@ -10076,8 +10515,12 @@ paths:
         - RATE_LIMITED
         - INTERNAL_ERROR
       x-scope: console
+      x-milestone: M4
       parameters:
         - $ref: '#/components/parameters/AcceptLanguage'
+        - $ref: '#/components/parameters/VelexisEnvironment'
+        - $ref: '#/components/parameters/CustomerEndUserIp'
+        - $ref: '#/components/parameters/CustomerEndUserAgent'
       responses:
         '200':
           description: The staff profile.
@@ -10091,6 +10534,8 @@ paths:
               examples:
                 agent:
                   $ref: '#/components/examples/ConsoleStaffProfileExample'
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
@@ -10169,6 +10614,7 @@ paths:
         - RATE_LIMITED
         - INTERNAL_ERROR
       x-scope: console
+      x-milestone: M4
       parameters:
         - $ref: '#/components/parameters/ConsoleBookingStatusFilter'
         - $ref: '#/components/parameters/ConsoleTicketingStatusFilter'
@@ -10287,6 +10733,9 @@ paths:
         - $ref: '#/components/parameters/Cursor'
         - $ref: '#/components/parameters/Limit'
         - $ref: '#/components/parameters/AcceptLanguage'
+        - $ref: '#/components/parameters/VelexisEnvironment'
+        - $ref: '#/components/parameters/CustomerEndUserIp'
+        - $ref: '#/components/parameters/CustomerEndUserAgent'
       responses:
         '200':
           description: One page of bookings.
@@ -10489,9 +10938,13 @@ paths:
         - SUPPLIER_UNAVAILABLE
         - SUPPLIER_TIMEOUT
       x-scope: console
+      x-milestone: deferred
       parameters:
         - $ref: '#/components/parameters/IdempotencyKey'
         - $ref: '#/components/parameters/AcceptLanguage'
+        - $ref: '#/components/parameters/VelexisEnvironment'
+        - $ref: '#/components/parameters/CustomerEndUserIp'
+        - $ref: '#/components/parameters/CustomerEndUserAgent'
       requestBody:
         required: true
         content:
@@ -10701,6 +11154,7 @@ paths:
         - SUPPLIER_UNAVAILABLE
         - SUPPLIER_TIMEOUT
       x-scope: console
+      x-milestone: M4
       parameters:
         - name: bookingId
           in: path
@@ -10719,6 +11173,9 @@ paths:
         - $ref: '#/components/parameters/ConsoleOrderInclude'
         - $ref: '#/components/parameters/ConsoleOrderFareRules'
         - $ref: '#/components/parameters/AcceptLanguage'
+        - $ref: '#/components/parameters/VelexisEnvironment'
+        - $ref: '#/components/parameters/CustomerEndUserIp'
+        - $ref: '#/components/parameters/CustomerEndUserAgent'
       responses:
         '200':
           $ref: '#/components/responses/ConsoleBookingOk'
@@ -10848,6 +11305,7 @@ paths:
         - SUPPLIER_UNAVAILABLE
         - SUPPLIER_TIMEOUT
       x-scope: console
+      x-milestone: M4
       parameters:
         - name: bookingId
           in: path
@@ -10858,6 +11316,9 @@ paths:
             pattern: ^bkg_[0-9A-Za-z]{16,40}$
         - $ref: '#/components/parameters/IfMatch'
         - $ref: '#/components/parameters/AcceptLanguage'
+        - $ref: '#/components/parameters/VelexisEnvironment'
+        - $ref: '#/components/parameters/CustomerEndUserIp'
+        - $ref: '#/components/parameters/CustomerEndUserAgent'
       requestBody:
         required: true
         content:
@@ -11068,6 +11529,7 @@ paths:
         - SUPPLIER_UNAVAILABLE
         - SUPPLIER_TIMEOUT
       x-scope: console
+      x-milestone: M4
       parameters:
         - name: bookingId
           in: path
@@ -11079,6 +11541,9 @@ paths:
         - $ref: '#/components/parameters/IdempotencyKey'
         - $ref: '#/components/parameters/IfMatch'
         - $ref: '#/components/parameters/AcceptLanguage'
+        - $ref: '#/components/parameters/VelexisEnvironment'
+        - $ref: '#/components/parameters/CustomerEndUserIp'
+        - $ref: '#/components/parameters/CustomerEndUserAgent'
       requestBody:
         required: false
         content:
@@ -11233,6 +11698,7 @@ paths:
         - SUPPLIER_UNAVAILABLE
         - SUPPLIER_TIMEOUT
       x-scope: console
+      x-milestone: M4
       parameters:
         - name: bookingId
           in: path
@@ -11244,6 +11710,9 @@ paths:
         - $ref: '#/components/parameters/IdempotencyKey'
         - $ref: '#/components/parameters/IfMatch'
         - $ref: '#/components/parameters/AcceptLanguage'
+        - $ref: '#/components/parameters/VelexisEnvironment'
+        - $ref: '#/components/parameters/CustomerEndUserIp'
+        - $ref: '#/components/parameters/CustomerEndUserAgent'
       requestBody:
         required: true
         content:
@@ -11361,6 +11830,7 @@ paths:
         - SUPPLIER_UNAVAILABLE
         - SUPPLIER_TIMEOUT
       x-scope: console
+      x-milestone: M4
       parameters:
         - name: bookingId
           in: path
@@ -11370,6 +11840,9 @@ paths:
             type: string
             pattern: ^bkg_[0-9A-Za-z]{16,40}$
         - $ref: '#/components/parameters/AcceptLanguage'
+        - $ref: '#/components/parameters/VelexisEnvironment'
+        - $ref: '#/components/parameters/CustomerEndUserIp'
+        - $ref: '#/components/parameters/CustomerEndUserAgent'
       requestBody:
         required: false
         content:
@@ -11468,6 +11941,7 @@ paths:
         - RATE_LIMITED
         - INTERNAL_ERROR
       x-scope: console
+      x-milestone: M4
       parameters:
         - name: bookingId
           in: path
@@ -11477,6 +11951,9 @@ paths:
             type: string
             pattern: ^bkg_[0-9A-Za-z]{16,40}$
         - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/VelexisEnvironment'
+        - $ref: '#/components/parameters/CustomerEndUserIp'
+        - $ref: '#/components/parameters/CustomerEndUserAgent'
       requestBody:
         required: true
         content:
@@ -11587,11 +12064,15 @@ paths:
         - SUPPLIER_UNAVAILABLE
         - SUPPLIER_TIMEOUT
       x-scope: console
+      x-milestone: M4
       parameters:
         - $ref: '#/components/parameters/ConsoleRecordLocator'
         - $ref: '#/components/parameters/ConsoleOriginSystemCode'
         - $ref: '#/components/parameters/ConsoleOrderInclude'
         - $ref: '#/components/parameters/AcceptLanguage'
+        - $ref: '#/components/parameters/VelexisEnvironment'
+        - $ref: '#/components/parameters/CustomerEndUserIp'
+        - $ref: '#/components/parameters/CustomerEndUserAgent'
       responses:
         '200':
           description: Matching flight orders.
@@ -11718,9 +12199,13 @@ paths:
         - SUPPLIER_UNAVAILABLE
         - SUPPLIER_TIMEOUT
       x-scope: console
+      x-milestone: M4
       parameters:
         - $ref: '#/components/parameters/IdempotencyKey'
         - $ref: '#/components/parameters/AcceptLanguage'
+        - $ref: '#/components/parameters/VelexisEnvironment'
+        - $ref: '#/components/parameters/CustomerEndUserIp'
+        - $ref: '#/components/parameters/CustomerEndUserAgent'
       requestBody:
         required: true
         content:
@@ -11843,6 +12328,7 @@ paths:
         - SUPPLIER_UNAVAILABLE
         - SUPPLIER_TIMEOUT
       x-scope: console
+      x-milestone: M4
       parameters:
         - name: bookingId
           in: path
@@ -11860,6 +12346,9 @@ paths:
           schema:
             type: boolean
             default: true
+        - $ref: '#/components/parameters/VelexisEnvironment'
+        - $ref: '#/components/parameters/CustomerEndUserIp'
+        - $ref: '#/components/parameters/CustomerEndUserAgent'
       responses:
         '200':
           description: Verbatim Amadeus order.
@@ -11963,6 +12452,7 @@ paths:
         - SUPPLIER_UNAVAILABLE
         - SUPPLIER_TIMEOUT
       x-scope: console
+      x-milestone: M4
       parameters:
         - name: queueId
           in: path
@@ -11977,6 +12467,9 @@ paths:
         - $ref: '#/components/parameters/ConsoleQueueMax'
         - $ref: '#/components/parameters/Cursor'
         - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/VelexisEnvironment'
+        - $ref: '#/components/parameters/CustomerEndUserIp'
+        - $ref: '#/components/parameters/CustomerEndUserAgent'
       responses:
         '200':
           description: PNRs on the queue (one page of the snapshot).
@@ -12108,6 +12601,7 @@ paths:
         - RATE_LIMITED
         - INTERNAL_ERROR
       x-scope: console
+      x-milestone: M4
       parameters:
         - name: queueId
           in: query
@@ -12161,6 +12655,9 @@ paths:
                 - items
         - $ref: '#/components/parameters/Cursor'
         - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/VelexisEnvironment'
+        - $ref: '#/components/parameters/CustomerEndUserIp'
+        - $ref: '#/components/parameters/CustomerEndUserAgent'
       responses:
         '200':
           description: One page of snapshots.
@@ -12258,6 +12755,7 @@ paths:
         - RATE_LIMITED
         - INTERNAL_ERROR
       x-scope: console
+      x-milestone: M4
       parameters:
         - name: q
           in: query
@@ -12318,6 +12816,9 @@ paths:
             default: '-created'
         - $ref: '#/components/parameters/Cursor'
         - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/VelexisEnvironment'
+        - $ref: '#/components/parameters/CustomerEndUserIp'
+        - $ref: '#/components/parameters/CustomerEndUserAgent'
       responses:
         '200':
           description: One page of customers.
@@ -12407,6 +12908,7 @@ paths:
         - RATE_LIMITED
         - INTERNAL_ERROR
       x-scope: console
+      x-milestone: M4
       parameters:
         - name: customerId
           in: path
@@ -12416,6 +12918,9 @@ paths:
             type: string
             pattern: ^cus_[0-9A-Za-z]{12,40}$
         - $ref: '#/components/parameters/AcceptLanguage'
+        - $ref: '#/components/parameters/VelexisEnvironment'
+        - $ref: '#/components/parameters/CustomerEndUserIp'
+        - $ref: '#/components/parameters/CustomerEndUserAgent'
       responses:
         '200':
           description: The customer.
@@ -12561,6 +13066,7 @@ paths:
         - RATE_LIMITED
         - INTERNAL_ERROR
       x-scope: console
+      x-milestone: M4
       parameters:
         - name: bookingId
           in: query
@@ -12669,6 +13175,9 @@ paths:
             default: false
         - $ref: '#/components/parameters/Cursor'
         - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/VelexisEnvironment'
+        - $ref: '#/components/parameters/CustomerEndUserIp'
+        - $ref: '#/components/parameters/CustomerEndUserAgent'
       responses:
         '200':
           description: One page of supplier requests.
@@ -12801,6 +13310,11 @@ paths:
         - SUPPLIER_UNAVAILABLE
         - SUPPLIER_TIMEOUT
       x-scope: console
+      x-milestone: M4
+      parameters:
+        - $ref: '#/components/parameters/VelexisEnvironment'
+        - $ref: '#/components/parameters/CustomerEndUserIp'
+        - $ref: '#/components/parameters/CustomerEndUserAgent'
       requestBody:
         required: true
         content:
@@ -13006,6 +13520,7 @@ paths:
         - SUPPLIER_UNAVAILABLE
         - SUPPLIER_TIMEOUT
       x-scope: console
+      x-milestone: M4
       parameters:
         - name: originLocationCode
           in: query
@@ -13115,6 +13630,9 @@ paths:
             minimum: 1
             maximum: 250
             default: 250
+        - $ref: '#/components/parameters/VelexisEnvironment'
+        - $ref: '#/components/parameters/CustomerEndUserIp'
+        - $ref: '#/components/parameters/CustomerEndUserAgent'
       responses:
         '200':
           description: Verbatim Amadeus flight offers.
@@ -13273,6 +13791,11 @@ paths:
         - SUPPLIER_UNAVAILABLE
         - SUPPLIER_TIMEOUT
       x-scope: console
+      x-milestone: M4
+      parameters:
+        - $ref: '#/components/parameters/VelexisEnvironment'
+        - $ref: '#/components/parameters/CustomerEndUserIp'
+        - $ref: '#/components/parameters/CustomerEndUserAgent'
       requestBody:
         required: true
         content:
@@ -13433,6 +13956,11 @@ paths:
         - SUPPLIER_UNAVAILABLE
         - SUPPLIER_TIMEOUT
       x-scope: console
+      x-milestone: M4
+      parameters:
+        - $ref: '#/components/parameters/VelexisEnvironment'
+        - $ref: '#/components/parameters/CustomerEndUserIp'
+        - $ref: '#/components/parameters/CustomerEndUserAgent'
       requestBody:
         required: true
         content:
@@ -13643,6 +14171,7 @@ paths:
         - SUPPLIER_UNAVAILABLE
         - SUPPLIER_TIMEOUT
       x-scope: console
+      x-milestone: M4
       parameters:
         - name: include
           in: query
@@ -13666,6 +14195,9 @@ paths:
           description: 'Amadeus forceClass: price with the booking class of the offer (no automatic rebooking in a cheaper class).'
           schema:
             type: boolean
+        - $ref: '#/components/parameters/VelexisEnvironment'
+        - $ref: '#/components/parameters/CustomerEndUserIp'
+        - $ref: '#/components/parameters/CustomerEndUserAgent'
       requestBody:
         required: true
         content:
@@ -13931,6 +14463,7 @@ paths:
         - SUPPLIER_UNAVAILABLE
         - SUPPLIER_TIMEOUT
       x-scope: console
+      x-milestone: deferred
       parameters:
         - $ref: '#/components/parameters/IdempotencyKey'
         - name: issue
@@ -13940,6 +14473,9 @@ paths:
           schema:
             type: boolean
             default: false
+        - $ref: '#/components/parameters/VelexisEnvironment'
+        - $ref: '#/components/parameters/CustomerEndUserIp'
+        - $ref: '#/components/parameters/CustomerEndUserAgent'
       requestBody:
         required: true
         content:
@@ -14196,6 +14732,7 @@ paths:
         - SUPPLIER_UNAVAILABLE
         - SUPPLIER_TIMEOUT
       x-scope: console
+      x-milestone: deferred
       parameters:
         - name: flightOrderId
           in: path
@@ -14209,6 +14746,9 @@ paths:
             maxLength: 200
             pattern: ^[A-Za-z0-9=_-]+$
         - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/VelexisEnvironment'
+        - $ref: '#/components/parameters/CustomerEndUserIp'
+        - $ref: '#/components/parameters/CustomerEndUserAgent'
       requestBody:
         required: false
         content:
@@ -14354,6 +14894,7 @@ paths:
         - SUPPLIER_UNAVAILABLE
         - SUPPLIER_TIMEOUT
       x-scope: console
+      x-milestone: M4
       parameters:
         - name: flightOrderId
           in: path
@@ -14368,6 +14909,9 @@ paths:
             pattern: ^[A-Za-z0-9=_-]+$
         - $ref: '#/components/parameters/ConsoleOrderInclude'
         - $ref: '#/components/parameters/ConsoleOrderFareRules'
+        - $ref: '#/components/parameters/VelexisEnvironment'
+        - $ref: '#/components/parameters/CustomerEndUserIp'
+        - $ref: '#/components/parameters/CustomerEndUserAgent'
       responses:
         '200':
           description: Verbatim Amadeus order.
@@ -14558,6 +15102,7 @@ paths:
         - SUPPLIER_UNAVAILABLE
         - SUPPLIER_TIMEOUT
       x-scope: console
+      x-milestone: deferred
       parameters:
         - name: flightOrderId
           in: path
@@ -14570,6 +15115,9 @@ paths:
             minLength: 8
             maxLength: 200
             pattern: ^[A-Za-z0-9=_-]+$
+        - $ref: '#/components/parameters/VelexisEnvironment'
+        - $ref: '#/components/parameters/CustomerEndUserIp'
+        - $ref: '#/components/parameters/CustomerEndUserAgent'
       requestBody:
         required: true
         content:
@@ -14737,6 +15285,7 @@ paths:
         - SUPPLIER_UNAVAILABLE
         - SUPPLIER_TIMEOUT
       x-scope: console
+      x-milestone: deferred
       parameters:
         - name: flightOrderId
           in: path
@@ -14757,6 +15306,9 @@ paths:
             type: string
             minLength: 3
             maxLength: 500
+        - $ref: '#/components/parameters/VelexisEnvironment'
+        - $ref: '#/components/parameters/CustomerEndUserIp'
+        - $ref: '#/components/parameters/CustomerEndUserAgent'
       responses:
         '200':
           description: Order cancelled at Amadeus.
@@ -14861,10 +15413,14 @@ paths:
         - SUPPLIER_UNAVAILABLE
         - SUPPLIER_TIMEOUT
       x-scope: console
+      x-milestone: M4
       parameters:
         - $ref: '#/components/parameters/ConsoleRecordLocator'
         - $ref: '#/components/parameters/ConsoleOriginSystemCode'
         - $ref: '#/components/parameters/ConsoleOrderInclude'
+        - $ref: '#/components/parameters/VelexisEnvironment'
+        - $ref: '#/components/parameters/CustomerEndUserIp'
+        - $ref: '#/components/parameters/CustomerEndUserAgent'
       responses:
         '200':
           description: Verbatim Amadeus orders.
@@ -15002,6 +15558,7 @@ paths:
         - SUPPLIER_UNAVAILABLE
         - SUPPLIER_TIMEOUT
       x-scope: console
+      x-milestone: M4
       parameters:
         - name: queueId
           in: path
@@ -15014,6 +15571,9 @@ paths:
         - $ref: '#/components/parameters/ConsoleQueueMax'
         - $ref: '#/components/parameters/ConsoleQueueCategory'
         - $ref: '#/components/parameters/ConsoleQueueOfficeId'
+        - $ref: '#/components/parameters/VelexisEnvironment'
+        - $ref: '#/components/parameters/CustomerEndUserIp'
+        - $ref: '#/components/parameters/CustomerEndUserAgent'
       responses:
         '200':
           description: Verbatim Amadeus PNR list.
@@ -15090,7 +15650,11 @@ components:
         Tenant + environment key. Publishable (`pk_…`, browser-safe, customer scope only), secret (`sk_…`, server-only;
         customer scope by default, console scope with a staff token or with the `console:automation` key scope +
         `X-Velexis-Scope: console`) or hosting (`hk_…`, server-only, one deployment for several OTA domains, requires
-        `X-Velexis-Host`).
+        `X-Velexis-Host`). The OTA admin's first-party service key travels here too (the SDK's `secretKey`): it is
+        accepted only on console operations, on a direct loopback connection that did not come through Caddy (no
+        `X-Forwarded-For` or `X-Forwarded-Host`), with a staff token of the OTA (except console.auth.signIn with a
+        portal token) and `X-Velexis-Environment`. Sent through Caddy it is an unknown key (`401 INVALID_API_KEY`), or
+        meets the edge header on a storefront's `/api/*` (`400 INVALID_REQUEST`).
     customerAuth:
       type: http
       scheme: bearer
@@ -15106,6 +15670,35 @@ components:
       in: header
       name: X-Booking-Token
       description: Guest access token for one booking (returned at booking creation or by bookings.lookup).
+    storefrontEdge:
+      type: apiKey
+      in: header
+      name: X-Velexis-Edge
+      x-internal: true
+      description: >-
+        Edge credential of the hosted storefront, set by Caddy on every `/api/*` request of a storefront host and
+        never by a browser or an SDK user. The OTA comes from `X-Velexis-Host` (a verified storefront domain, or the
+        OTA's sub-domain of the storefront base domain such as `acme.ota.example.com`), the environment from the OTA's
+        storefront environment. Customer scope only. Each customer-scope operation lists the edge alternatives of its
+        key alternatives: `storefrontEdge` alone where a publishable key alone is enough, with `customerCookie` where
+        a customer token is accepted and with `bookingCookie` where a guest booking token is accepted. Sent together
+        with `X-Api-Key` it answers `400 INVALID_REQUEST`.
+    customerCookie:
+      type: apiKey
+      in: cookie
+      name: __Host-vx_at
+      description: >-
+        Customer access token in an httpOnly cookie (edge mode only), valid 15 minutes; the rotating refresh token is
+        in `__Host-vx_rt`, which auth.refresh reads. An expired access token answers `401 TOKEN_EXPIRED`: the SDK in
+        cookie mode calls auth.refresh once and retries the call.
+    bookingCookie:
+      type: apiKey
+      in: cookie
+      name: __Host-vx_bt
+      description: >-
+        Guest booking tokens in an httpOnly cookie (edge mode only): up to 5 `bkg_<id>.<token>` entries separated by
+        `~`, newest first; the API uses the entry of the requested booking. Set by checkout.complete for guests and by
+        bookings.lookup.
   headers:
     X-Request-Id:
       description: Request identifier; quote it to support.
@@ -15123,6 +15716,13 @@ components:
         format: uri-reference
     ETag:
       description: Resource version; send back in If-Match.
+      schema:
+        type: string
+    Set-Cookie:
+      description: >-
+        Session, CSRF or guest cookies (edge mode only): `__Host-vx_at`, `__Host-vx_rt`, `__Host-vx_csrf` and
+        `__Host-vx_bt`. Always `Secure`, `SameSite=Lax`, `Path=/` and without `Domain`; `HttpOnly` except
+        `__Host-vx_csrf`. Key and bearer callers never get it.
       schema:
         type: string
   parameters:
@@ -15190,6 +15790,12 @@ components:
         with publishable and secret keys; when sent it must be a verified storefront domain of the key's own OTA.
         Otherwise `403 HOST_NOT_ALLOWED` (`details.reason`: `missing` | `unknown` | `not_granted`). SDK: client option
         `host` or `options.host`; look hosts up with storefront.resolve.
+
+
+        **Edge mode.** On the hosted storefront Caddy sets it to the visitor's host on every `/api/*` request, together
+        with `X-Velexis-Edge`, and replaces any value the browser sent. The API resolves the OTA from it (a verified
+        storefront domain, or the OTA's sub-domain of the storefront base domain) and answers `403 HOST_NOT_ALLOWED`
+        for an unknown or unverified host.
       schema:
         type: string
         maxLength: 253
@@ -15203,13 +15809,21 @@ components:
       description: >-
         IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server
         components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key
-        (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server); ignored for
+        (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server), and for the OTA
+        admin's service key on console operations (below); ignored for
         publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API
         uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset
         emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of
         new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every
         secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An
         invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`.
+
+
+        **Console operations.** Honoured for secret keys as above and for the OTA admin's first-party service key,
+        which must send it: the staff member's address (the right-most `X-Forwarded-For` entry Caddy gave the admin).
+        With the service key a missing or malformed value answers `400 VALIDATION_FAILED`; the value drives the
+        console sign-in throttle (10 per minute per end-user IP), the lockout and the staff audit log
+        (`staff_actions`). Other callers' values are ignored.
       schema:
         type: string
         maxLength: 45
@@ -15221,15 +15835,45 @@ components:
       required: false
       description: >-
         User-Agent of the visitor's browser for calls your server makes on their behalf with a secret or hosting key
-        (longer values are truncated to 512 characters). Honoured only for secret and hosting keys; publishable-key
-        calls use the request's own `User-Agent`. Recorded as session metadata (`AuthSessionDetails.userAgent`,
-        new-sign-in security emails) and used by abuse heuristics. SDK: `options.endUser.userAgent` or the client option
-        `endUser`.
+        (longer values are truncated to 512 characters). Honoured only for secret and hosting keys, and for the OTA
+        admin's service key on console operations; publishable-key calls use the request's own `User-Agent`. Recorded
+        as session metadata (`AuthSessionDetails.userAgent`, new-sign-in security emails) and used by abuse
+        heuristics. SDK: `options.endUser.userAgent` or the client option `endUser`.
+
+
+        **Console operations.** The OTA admin's first-party service key must send the staff member's user agent
+        (missing: `400 VALIDATION_FAILED`); it is recorded in the staff audit log (`staff_actions`).
       schema:
         type: string
         maxLength: 512
         examples:
           - Mozilla/5.0 (Macintosh; Intel Mac OS X 14_6) AppleWebKit/605.1.15 Safari/17.6
+    CsrfToken:
+      name: X-CSRF-Token
+      in: header
+      required: false
+      description: >-
+        Copy of the `__Host-vx_csrf` cookie, which storefront.get issues. Required on every state-changing (`POST`,
+        `PUT`, `PATCH`, `DELETE`) request of the hosted storefront edge, anonymous ones included, and the `Origin` (or,
+        without it, `Sec-Fetch-Site: same-origin`) must be the storefront host; otherwise `403 CSRF_TOKEN_INVALID`.
+        Ignored for key and bearer callers.
+      schema:
+        type: string
+        pattern: ^[A-Za-z0-9_-]{43}$
+    VelexisEnvironment:
+      name: X-Velexis-Environment
+      in: header
+      required: false
+      description: >-
+        Environment of a console call made with the OTA admin's first-party service key, `test` or `live`. Required
+        with the service key (missing: `400 VALIDATION_FAILED`) and refused with any other credential, whose
+        environment is the key's. `live` needs an OTA that is live and a role other than `viewer`;
+        ConsoleStaffSession.environments lists the environments the staff member may open.
+      schema:
+        type: string
+        enum:
+          - test
+          - live
     FilterStops:
       name: stops
       in: query
@@ -23399,15 +24043,15 @@ components:
           $ref: '#/components/schemas/Customer'
     AuthRefreshRequest:
       type: object
-      description: Refresh request.
+      description: >-
+        Refresh request. Token mode: `refreshToken` is required. Edge mode (hosted storefront): send `{}`; the token
+        is read from the `__Host-vx_rt` cookie and a token in the body answers `400 INVALID_REQUEST`.
       additionalProperties: false
-      required:
-        - refreshToken
       properties:
         refreshToken:
           type: string
           pattern: ^rt_[A-Za-z0-9_-]{20,256}$
-          description: Current refresh token (from the httpOnly cookie).
+          description: Current refresh token (from the httpOnly cookie). Required in token mode, refused in edge mode.
     AuthSignOutRequest:
       type: object
       description: Sign-out request.
@@ -32005,8 +32649,12 @@ components:
           pattern: ^bkg_[0-9A-Za-z]{16,40}$
           description: Booking.
         bookingToken:
-          type: string
-          description: X-Booking-Token (store in an httpOnly cookie).
+          type:
+            - string
+            - 'null'
+          description: >-
+            X-Booking-Token (store in an httpOnly cookie). `null` in edge mode (hosted storefront), where the token is
+            added to the `__Host-vx_bt` cookie instead.
         expiresAt:
           type: string
           format: date-time
@@ -32833,9 +33481,10 @@ components:
         - staff
         - tenant
         - permissions
+        - environments
       description: >-
-        Result of console sign-in / refresh: tokens (Session.subject.type = staff, roles) + staff, tenant and
-        permissions.
+        Result of console sign-in / refresh: tokens (Session.subject.type = staff, roles) + staff, tenant,
+        permissions and the environments the staff member may open.
       properties:
         session:
           $ref: '#/components/schemas/Session'
@@ -32851,6 +33500,20 @@ components:
           items:
             $ref: '#/components/schemas/StaffPermission'
           description: Effective permissions.
+        environments:
+          type: array
+          minItems: 1
+          maxItems: 2
+          uniqueItems: true
+          items:
+            type: string
+            enum:
+              - test
+              - live
+          description: >-
+            Environments the staff member may open in the OTA admin: `["test"]`, or `["test", "live"]` once the OTA is
+            live and the role is not `viewer`. The admin shows its test/live switch from it and sends the chosen one in
+            `X-Velexis-Environment`.
     ConsoleStaffProfile:
       type: object
       required:
@@ -37247,6 +37910,9 @@ components:
           - queues:read
           - supplier_requests:read
           - amadeus:read
+        environments:
+          - test
+          - live
     ConsoleStaffProfileExample:
       summary: Agent profile
       value:
@@ -39812,6 +40478,12 @@ x-error-catalogue:
       Amadeus rejected the request with a 4xx canned message (e.g. 477 INVALID FORMAT, 4926 INVALID DATA RECEIVED, 32171
       MANDATORY DATA MISSING); error.supplier holds the first Amadeus error and details.errors the complete verbatim
       Amadeus errors[]. Nothing was changed at Amadeus.
+  CSRF_TOKEN_INVALID:
+    status: 403
+    description: The CSRF header is missing or does not match the cookie, or the Origin is not the storefront host.
+  NOT_IMPLEMENTED:
+    status: 501
+    description: The operation is part of the contract but not available yet (details.milestone).
 x-new-tenant-tables:
   customer_consents: >-
     Append-only log of consent events per customer (marketing opt-in/opt-out, terms and privacy policy acceptance) with

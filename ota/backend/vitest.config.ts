@@ -1,7 +1,7 @@
 // Vitest for the OTA backend (README §8): unit tests next to the code (`src/**/*.test.ts`) and contract tests
-// (`test/contract/**/*.test.ts`: migration files against their documents, later the OpenAPI document and route
-// parity), none of which needs a service. The integration tests (`test/integration`, PostgreSQL and Redis) run with
-// vitest.int.config.ts through `pnpm test:int`.
+// (`test/contract/**/*.test.ts`: migration files against their documents, the OpenAPI document's extensions, later
+// route parity), none of which needs a service. The integration tests (`test/integration`, PostgreSQL and Redis) run
+// with vitest.int.config.ts through `pnpm test:int`.
 //
 // NestJS resolves constructor dependencies from TypeScript's decorator metadata (`emitDecoratorMetadata`), which
 // esbuild, Vite's default TypeScript transform, does not emit. The plugin below compiles every TypeScript file of the

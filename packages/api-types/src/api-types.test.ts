@@ -491,6 +491,56 @@ describe("contracts:generate (scripts/generate.mjs)", () => {
     },
   );
 
+  it(
+    "indexes x-milestone, x-edge-only and x-permission, with null, false and null when they are absent",
+    { timeout: SMALL_DOCUMENT_TIMEOUT_MS },
+    async () => {
+      const ota = smallDocument("Scratch OTA with the MVP extensions", [
+        { path: "/v1/things", lines: ["operationId: listThings", "x-milestone: M2"] },
+        {
+          path: "/v1/thing-completions",
+          method: "post",
+          lines: ["operationId: completeThing", "x-milestone: M3", "x-edge-only: true"],
+        },
+        {
+          path: "/v1/console/things",
+          lines: [
+            "operationId: consoleListThings",
+            "x-milestone: deferred",
+            "x-edge-only: false",
+            "x-permission: bookings:read",
+          ],
+        },
+        { path: "/v1/plain", lines: ["operationId: plainThing"] },
+      ]);
+      const { config, out } = makeTree("mvp-extensions", { ota });
+
+      const run = await runGenerate(["--config", config, "--out", out]);
+
+      expect(run.stderr).toBe("");
+      expect(run.code).toBe(0);
+      const files = readFiles(out);
+      expect(loadIndex(files["operations.ts"]).otaOperations).toMatchObject([
+        { operationId: "listThings", milestone: "M2", edgeOnly: false, permission: null },
+        { operationId: "completeThing", milestone: "M3", edgeOnly: true, permission: null },
+        {
+          operationId: "consoleListThings",
+          milestone: "deferred",
+          edgeOnly: false,
+          permission: "bookings:read",
+        },
+        { operationId: "plainThing", milestone: null, edgeOnly: false, permission: null },
+      ]);
+      // The interface types the milestone as the closed list, so a misspelt value does not compile.
+      expect(files["operations.ts"]).toContain(
+        '  readonly milestone: "M0" | "M1" | "M2" | "M3" | "M4" | "M5" | "M6" | "deferred" | null;',
+      );
+      expect(files["operations.ts"]).toContain("  readonly edgeOnly: boolean;");
+      expect(files["operations.ts"]).toContain("  readonly permission: string | null;");
+      expect(compileGenerated(out)).toEqual([]);
+    },
+  );
+
   it.each([
     {
       problem: "an operation without operationId",
@@ -526,6 +576,31 @@ describe("contracts:generate (scripts/generate.mjs)", () => {
       problem: "an empty x-sdk-method",
       lines: ["operationId: brokenThing", 'x-sdk-method: ""'],
       error: 'ota GET /v1/broken: "x-sdk-method" must be a non-empty string',
+    },
+    {
+      problem: "an x-milestone outside M0 … M6 and deferred",
+      lines: ["operationId: brokenThing", "x-milestone: M7"],
+      error: 'ota GET /v1/broken: "x-milestone" must be one of M0, M1, M2, M3, M4, M5, M6, deferred',
+    },
+    {
+      problem: "an x-milestone that is not a string",
+      lines: ["operationId: brokenThing", "x-milestone: 2"],
+      error: 'ota GET /v1/broken: "x-milestone" must be a non-empty string',
+    },
+    {
+      problem: "an x-edge-only that is not a boolean",
+      lines: ["operationId: brokenThing", 'x-edge-only: "true"'],
+      error: 'ota GET /v1/broken: "x-edge-only" must be true or false',
+    },
+    {
+      problem: "an x-edge-only without a value",
+      lines: ["operationId: brokenThing", "x-edge-only:"],
+      error: 'ota GET /v1/broken: "x-edge-only" must be true or false',
+    },
+    {
+      problem: "an x-permission without a value",
+      lines: ["operationId: brokenThing", "x-permission:"],
+      error: 'ota GET /v1/broken: "x-permission" must be a non-empty string',
     },
   ])(
     "fails on $problem and writes nothing",
@@ -618,8 +693,11 @@ describe("@velexis/api-types/operations", () => {
       scope: operation["x-scope"] ?? null,
       tags: operation["tags"] ?? [],
       internal: operation["x-internal"] === true,
+      milestone: operation["x-milestone"] ?? null,
+      edgeOnly: operation["x-edge-only"] === true,
+      permission: operation["x-permission"] ?? null,
     }));
-    // A subset match per entry, so fields added to the index later (OBE-009) do not break it.
+    // A subset match per entry, so fields added to the index later do not break it.
     expect(otaOperations).toMatchObject(expected);
 
     const platformDocument = join(REPO_ROOT, PLATFORM_PATH);

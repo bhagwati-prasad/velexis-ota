@@ -105,10 +105,27 @@ function optionalString(operation, key, where) {
 }
 
 /**
+ * An optional boolean vendor extension; `false` when absent. Only a missing key means `false`: a key without a value
+ * (YAML null) is refused, so an `x-internal:` or `x-edge-only:` left empty never reads as "not internal".
+ */
+function optionalBoolean(operation, key, where) {
+  const value = operation[key] === undefined ? false : operation[key];
+  if (typeof value !== "boolean") {
+    throw new GenerateError(`${where}: "${key}" must be true or false`);
+  }
+  return value;
+}
+
+/**
+ * The values of `x-milestone` (ota/docs/api-changes.md §1): the shared milestones M0–M6 of the MVP, or `deferred`
+ * for an operation the MVP does not build (its route answers `501 NOT_IMPLEMENTED`).
+ */
+const MILESTONES = ["M0", "M1", "M2", "M3", "M4", "M5", "M6", "deferred"];
+
+/**
  * The fields of an index entry, in output order: the property name, its TypeScript type in `ApiOperation`, its
  * JSDoc, and how it is read from an operation (`{ operation, method, path, where }`). The `ApiOperation`
- * interface and every entry are written from this table, so a new field is one row here (OBE-009 adds
- * `milestone`, `edgeOnly` and `permission`).
+ * interface and every entry are written from this table, so a new field is one row here.
  */
 const INDEX_FIELDS = [
   {
@@ -158,14 +175,33 @@ const INDEX_FIELDS = [
     name: "internal",
     type: "boolean",
     doc: "`x-internal: true`: webhook receivers and internal endpoints, never part of the SDK (ADR-0006).",
+    read: ({ operation, where }) => optionalBoolean(operation, "x-internal", where),
+  },
+  {
+    name: "milestone",
+    type: `${MILESTONES.map((value) => JSON.stringify(value)).join(" | ")} | null`,
+    doc:
+      "`x-milestone`: the MVP milestone that implements it, or `deferred` (route-parity allow-list, `501`); " +
+      "`null` when the operation has none.",
     read: ({ operation, where }) => {
-      // `x-internal:` without a value (YAML null) is refused, so an internal operation is never indexed as public.
-      const internal = operation["x-internal"] === undefined ? false : operation["x-internal"];
-      if (typeof internal !== "boolean") {
-        throw new GenerateError(`${where}: "x-internal" must be true or false`);
+      const milestone = optionalString(operation, "x-milestone", where);
+      if (milestone !== null && !MILESTONES.includes(milestone)) {
+        throw new GenerateError(`${where}: "x-milestone" must be one of ${MILESTONES.join(", ")}`);
       }
-      return internal;
+      return milestone;
     },
+  },
+  {
+    name: "edgeOnly",
+    type: "boolean",
+    doc: "`x-edge-only: true`: only the hosted storefront edge may call it; keys get `403 SCOPE_NOT_ALLOWED`.",
+    read: ({ operation, where }) => optionalBoolean(operation, "x-edge-only", where),
+  },
+  {
+    name: "permission",
+    type: "string | null",
+    doc: "`x-permission`: the `StaffPermission` a console operation needs, or `null` when the operation has none.",
+    read: ({ operation, where }) => optionalString(operation, "x-permission", where),
   },
 ];
 

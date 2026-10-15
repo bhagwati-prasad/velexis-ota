@@ -5441,10 +5441,10 @@ export interface components {
             session: components["schemas"]["Session"];
             customer: components["schemas"]["Customer"];
         };
-        /** @description Refresh request. */
+        /** @description Refresh request. Token mode: `refreshToken` is required. Edge mode (hosted storefront): send `{}`; the token is read from the `__Host-vx_rt` cookie and a token in the body answers `400 INVALID_REQUEST`. */
         AuthRefreshRequest: {
-            /** @description Current refresh token (from the httpOnly cookie). */
-            refreshToken: string;
+            /** @description Current refresh token (from the httpOnly cookie). Required in token mode, refused in edge mode. */
+            refreshToken?: string;
         };
         /** @description Sign-out request. */
         AuthSignOutRequest: {
@@ -9578,8 +9578,8 @@ export interface components {
         BookingLookupResult: {
             /** @description Booking. */
             bookingId: string;
-            /** @description X-Booking-Token (store in an httpOnly cookie). */
-            bookingToken: string;
+            /** @description X-Booking-Token (store in an httpOnly cookie). `null` in edge mode (hosted storefront), where the token is added to the `__Host-vx_bt` cookie instead. */
+            bookingToken: string | null;
             /**
              * Format: date-time
              * @description Token expiry (24 hours).
@@ -9967,7 +9967,7 @@ export interface components {
                 queuingOfficeId: string | null;
             };
         };
-        /** @description Result of console sign-in / refresh: tokens (Session.subject.type = staff, roles) + staff, tenant and permissions. */
+        /** @description Result of console sign-in / refresh: tokens (Session.subject.type = staff, roles) + staff, tenant, permissions and the environments the staff member may open. */
         ConsoleStaffSession: {
             /** @description Tokens. Store both in httpOnly cookies; never expose them to client components. */
             session: components["schemas"]["Session"];
@@ -9977,6 +9977,8 @@ export interface components {
             tenant: components["schemas"]["ConsoleTenant"];
             /** @description Effective permissions. */
             permissions: components["schemas"]["StaffPermission"][];
+            /** @description Environments the staff member may open in the OTA admin: `["test"]`, or `["test", "live"]` once the OTA is live and the role is not `viewer`. The admin shows its test/live switch from it and sends the chosen one in `X-Velexis-Environment`. */
+            environments: ("test" | "live")[];
         };
         /** @description Result of console.auth.me. */
         ConsoleStaffProfile: {
@@ -13574,12 +13576,28 @@ export interface components {
         AcceptLanguage: string;
         /** @description Display currency (ISO 4217); defaults to the OTA's currency. Amadeus `currencyCode` is set from it where the API supports it. */
         Currency: string;
-        /** @description Storefront host name the request is made for: the `Host` of the visitor's request, lower case, without port. **Required with a hosting key** (`hk_test_…` / `hk_live_…`, one Next.js deployment serving several OTA domains): the API resolves the OTA from it (a verified storefront domain in `platform.tenant_domains` of an OTA the key is granted for) and then handles the call exactly like a secret key of that OTA in the key's environment. Optional with publishable and secret keys; when sent it must be a verified storefront domain of the key's own OTA. Otherwise `403 HOST_NOT_ALLOWED` (`details.reason`: `missing` | `unknown` | `not_granted`). SDK: client option `host` or `options.host`; look hosts up with storefront.resolve. */
+        /**
+         * @description Storefront host name the request is made for: the `Host` of the visitor's request, lower case, without port. **Required with a hosting key** (`hk_test_…` / `hk_live_…`, one Next.js deployment serving several OTA domains): the API resolves the OTA from it (a verified storefront domain in `platform.tenant_domains` of an OTA the key is granted for) and then handles the call exactly like a secret key of that OTA in the key's environment. Optional with publishable and secret keys; when sent it must be a verified storefront domain of the key's own OTA. Otherwise `403 HOST_NOT_ALLOWED` (`details.reason`: `missing` | `unknown` | `not_granted`). SDK: client option `host` or `options.host`; look hosts up with storefront.resolve.
+         *
+         *     **Edge mode.** On the hosted storefront Caddy sets it to the visitor's host on every `/api/*` request, together with `X-Velexis-Edge`, and replaces any value the browser sent. The API resolves the OTA from it (a verified storefront domain, or the OTA's sub-domain of the storefront base domain) and answers `403 HOST_NOT_ALLOWED` for an unknown or unverified host.
+         */
         StorefrontHostHeader: string;
-        /** @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`. */
+        /**
+         * @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server), and for the OTA admin's service key on console operations (below); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`.
+         *
+         *     **Console operations.** Honoured for secret keys as above and for the OTA admin's first-party service key, which must send it: the staff member's address (the right-most `X-Forwarded-For` entry Caddy gave the admin). With the service key a missing or malformed value answers `400 VALIDATION_FAILED`; the value drives the console sign-in throttle (10 per minute per end-user IP), the lockout and the staff audit log (`staff_actions`). Other callers' values are ignored.
+         */
         CustomerEndUserIp: string;
-        /** @description User-Agent of the visitor's browser for calls your server makes on their behalf with a secret or hosting key (longer values are truncated to 512 characters). Honoured only for secret and hosting keys; publishable-key calls use the request's own `User-Agent`. Recorded as session metadata (`AuthSessionDetails.userAgent`, new-sign-in security emails) and used by abuse heuristics. SDK: `options.endUser.userAgent` or the client option `endUser`. */
+        /**
+         * @description User-Agent of the visitor's browser for calls your server makes on their behalf with a secret or hosting key (longer values are truncated to 512 characters). Honoured only for secret and hosting keys, and for the OTA admin's service key on console operations; publishable-key calls use the request's own `User-Agent`. Recorded as session metadata (`AuthSessionDetails.userAgent`, new-sign-in security emails) and used by abuse heuristics. SDK: `options.endUser.userAgent` or the client option `endUser`.
+         *
+         *     **Console operations.** The OTA admin's first-party service key must send the staff member's user agent (missing: `400 VALIDATION_FAILED`); it is recorded in the staff audit log (`staff_actions`).
+         */
         CustomerEndUserAgent: string;
+        /** @description Copy of the `__Host-vx_csrf` cookie, which storefront.get issues. Required on every state-changing (`POST`, `PUT`, `PATCH`, `DELETE`) request of the hosted storefront edge, anonymous ones included, and the `Origin` (or, without it, `Sec-Fetch-Site: same-origin`) must be the storefront host; otherwise `403 CSRF_TOKEN_INVALID`. Ignored for key and bearer callers. */
+        CsrfToken: string;
+        /** @description Environment of a console call made with the OTA admin's first-party service key, `test` or `live`. Required with the service key (missing: `400 VALIDATION_FAILED`) and refused with any other credential, whose environment is the key's. `live` needs an OTA that is live and a role other than `viewer`; ConsoleStaffSession.environments lists the environments the staff member may open. */
+        VelexisEnvironment: "test" | "live";
         /** @description Keep offers whose itinerary with the most stops has this many stops (0 = non-stop, 1, 2 = two or more). Several values are comma-separated and ORed, e.g. `stops=0,1`. */
         FilterStops: (0 | 1 | 2)[];
         /** @description Keep offers whose marketing carriers are all in this list (IATA codes), comma-separated, e.g. `carriers=AF,KL`. */
@@ -13667,6 +13685,8 @@ export interface components {
         Location: string;
         /** @description Resource version; send back in If-Match. */
         ETag: string;
+        /** @description Session, CSRF or guest cookies (edge mode only): `__Host-vx_at`, `__Host-vx_rt`, `__Host-vx_csrf` and `__Host-vx_bt`. Always `Secure`, `SameSite=Lax`, `Path=/` and without `Domain`; `HttpOnly` except `__Host-vx_csrf`. Key and bearer callers never get it. */
+        "Set-Cookie": string;
     };
     pathItems: never;
 }
@@ -13680,11 +13700,23 @@ export interface operations {
                 "Accept-Language"?: components["parameters"]["AcceptLanguage"];
                 /** @description ETag of a previously fetched configuration; the server answers 304 when it is still current. */
                 "If-None-Match"?: string;
-                /** @description Storefront host name the request is made for: the `Host` of the visitor's request, lower case, without port. **Required with a hosting key** (`hk_test_…` / `hk_live_…`, one Next.js deployment serving several OTA domains): the API resolves the OTA from it (a verified storefront domain in `platform.tenant_domains` of an OTA the key is granted for) and then handles the call exactly like a secret key of that OTA in the key's environment. Optional with publishable and secret keys; when sent it must be a verified storefront domain of the key's own OTA. Otherwise `403 HOST_NOT_ALLOWED` (`details.reason`: `missing` | `unknown` | `not_granted`). SDK: client option `host` or `options.host`; look hosts up with storefront.resolve. */
+                /**
+                 * @description Storefront host name the request is made for: the `Host` of the visitor's request, lower case, without port. **Required with a hosting key** (`hk_test_…` / `hk_live_…`, one Next.js deployment serving several OTA domains): the API resolves the OTA from it (a verified storefront domain in `platform.tenant_domains` of an OTA the key is granted for) and then handles the call exactly like a secret key of that OTA in the key's environment. Optional with publishable and secret keys; when sent it must be a verified storefront domain of the key's own OTA. Otherwise `403 HOST_NOT_ALLOWED` (`details.reason`: `missing` | `unknown` | `not_granted`). SDK: client option `host` or `options.host`; look hosts up with storefront.resolve.
+                 *
+                 *     **Edge mode.** On the hosted storefront Caddy sets it to the visitor's host on every `/api/*` request, together with `X-Velexis-Edge`, and replaces any value the browser sent. The API resolves the OTA from it (a verified storefront domain, or the OTA's sub-domain of the storefront base domain) and answers `403 HOST_NOT_ALLOWED` for an unknown or unverified host.
+                 */
                 "X-Velexis-Host"?: components["parameters"]["StorefrontHostHeader"];
-                /** @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`. */
+                /**
+                 * @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server), and for the OTA admin's service key on console operations (below); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`.
+                 *
+                 *     **Console operations.** Honoured for secret keys as above and for the OTA admin's first-party service key, which must send it: the staff member's address (the right-most `X-Forwarded-For` entry Caddy gave the admin). With the service key a missing or malformed value answers `400 VALIDATION_FAILED`; the value drives the console sign-in throttle (10 per minute per end-user IP), the lockout and the staff audit log (`staff_actions`). Other callers' values are ignored.
+                 */
                 "X-Velexis-End-User-IP"?: components["parameters"]["CustomerEndUserIp"];
-                /** @description User-Agent of the visitor's browser for calls your server makes on their behalf with a secret or hosting key (longer values are truncated to 512 characters). Honoured only for secret and hosting keys; publishable-key calls use the request's own `User-Agent`. Recorded as session metadata (`AuthSessionDetails.userAgent`, new-sign-in security emails) and used by abuse heuristics. SDK: `options.endUser.userAgent` or the client option `endUser`. */
+                /**
+                 * @description User-Agent of the visitor's browser for calls your server makes on their behalf with a secret or hosting key (longer values are truncated to 512 characters). Honoured only for secret and hosting keys, and for the OTA admin's service key on console operations; publishable-key calls use the request's own `User-Agent`. Recorded as session metadata (`AuthSessionDetails.userAgent`, new-sign-in security emails) and used by abuse heuristics. SDK: `options.endUser.userAgent` or the client option `endUser`.
+                 *
+                 *     **Console operations.** The OTA admin's first-party service key must send the staff member's user agent (missing: `400 VALIDATION_FAILED`); it is recorded in the staff audit log (`staff_actions`).
+                 */
                 "X-Velexis-End-User-Agent"?: components["parameters"]["CustomerEndUserAgent"];
             };
             path?: never;
@@ -13692,13 +13724,14 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description The storefront configuration. */
+            /** @description The storefront configuration. In edge mode it also sets a missing or malformed `__Host-vx_csrf` cookie. */
             200: {
                 headers: {
                     "X-Request-Id": components["headers"]["X-Request-Id"];
                     ETag: components["headers"]["ETag"];
-                    /** @description Public caching directive, e.g. `public, max-age=60, stale-while-revalidate=600`. */
+                    /** @description Caching directive: `public, max-age=60, stale-while-revalidate=600` for key callers, `private` in edge mode. */
                     "Cache-Control"?: string;
+                    "Set-Cookie": components["headers"]["Set-Cookie"];
                     [name: string]: unknown;
                 };
                 content: {
@@ -13930,11 +13963,12 @@ export interface operations {
                     "application/json": components["schemas"]["StorefrontConfig"];
                 };
             };
-            /** @description Not modified: the configuration matching If-None-Match is still current. */
+            /** @description Not modified: the configuration matching If-None-Match is still current. In edge mode it also sets a missing or malformed `__Host-vx_csrf` cookie. */
             304: {
                 headers: {
                     "X-Request-Id": components["headers"]["X-Request-Id"];
                     ETag: components["headers"]["ETag"];
+                    "Set-Cookie": components["headers"]["Set-Cookie"];
                     [name: string]: unknown;
                 };
                 content?: never;
@@ -14020,12 +14054,26 @@ export interface operations {
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
                 /** @description BCP 47 locale for messages and display texts. */
                 "Accept-Language"?: components["parameters"]["AcceptLanguage"];
-                /** @description Storefront host name the request is made for: the `Host` of the visitor's request, lower case, without port. **Required with a hosting key** (`hk_test_…` / `hk_live_…`, one Next.js deployment serving several OTA domains): the API resolves the OTA from it (a verified storefront domain in `platform.tenant_domains` of an OTA the key is granted for) and then handles the call exactly like a secret key of that OTA in the key's environment. Optional with publishable and secret keys; when sent it must be a verified storefront domain of the key's own OTA. Otherwise `403 HOST_NOT_ALLOWED` (`details.reason`: `missing` | `unknown` | `not_granted`). SDK: client option `host` or `options.host`; look hosts up with storefront.resolve. */
+                /**
+                 * @description Storefront host name the request is made for: the `Host` of the visitor's request, lower case, without port. **Required with a hosting key** (`hk_test_…` / `hk_live_…`, one Next.js deployment serving several OTA domains): the API resolves the OTA from it (a verified storefront domain in `platform.tenant_domains` of an OTA the key is granted for) and then handles the call exactly like a secret key of that OTA in the key's environment. Optional with publishable and secret keys; when sent it must be a verified storefront domain of the key's own OTA. Otherwise `403 HOST_NOT_ALLOWED` (`details.reason`: `missing` | `unknown` | `not_granted`). SDK: client option `host` or `options.host`; look hosts up with storefront.resolve.
+                 *
+                 *     **Edge mode.** On the hosted storefront Caddy sets it to the visitor's host on every `/api/*` request, together with `X-Velexis-Edge`, and replaces any value the browser sent. The API resolves the OTA from it (a verified storefront domain, or the OTA's sub-domain of the storefront base domain) and answers `403 HOST_NOT_ALLOWED` for an unknown or unverified host.
+                 */
                 "X-Velexis-Host"?: components["parameters"]["StorefrontHostHeader"];
-                /** @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`. */
+                /**
+                 * @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server), and for the OTA admin's service key on console operations (below); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`.
+                 *
+                 *     **Console operations.** Honoured for secret keys as above and for the OTA admin's first-party service key, which must send it: the staff member's address (the right-most `X-Forwarded-For` entry Caddy gave the admin). With the service key a missing or malformed value answers `400 VALIDATION_FAILED`; the value drives the console sign-in throttle (10 per minute per end-user IP), the lockout and the staff audit log (`staff_actions`). Other callers' values are ignored.
+                 */
                 "X-Velexis-End-User-IP"?: components["parameters"]["CustomerEndUserIp"];
-                /** @description User-Agent of the visitor's browser for calls your server makes on their behalf with a secret or hosting key (longer values are truncated to 512 characters). Honoured only for secret and hosting keys; publishable-key calls use the request's own `User-Agent`. Recorded as session metadata (`AuthSessionDetails.userAgent`, new-sign-in security emails) and used by abuse heuristics. SDK: `options.endUser.userAgent` or the client option `endUser`. */
+                /**
+                 * @description User-Agent of the visitor's browser for calls your server makes on their behalf with a secret or hosting key (longer values are truncated to 512 characters). Honoured only for secret and hosting keys, and for the OTA admin's service key on console operations; publishable-key calls use the request's own `User-Agent`. Recorded as session metadata (`AuthSessionDetails.userAgent`, new-sign-in security emails) and used by abuse heuristics. SDK: `options.endUser.userAgent` or the client option `endUser`.
+                 *
+                 *     **Console operations.** The OTA admin's first-party service key must send the staff member's user agent (missing: `400 VALIDATION_FAILED`); it is recorded in the staff audit log (`staff_actions`).
+                 */
                 "X-Velexis-End-User-Agent"?: components["parameters"]["CustomerEndUserAgent"];
+                /** @description Copy of the `__Host-vx_csrf` cookie, which storefront.get issues. Required on every state-changing (`POST`, `PUT`, `PATCH`, `DELETE`) request of the hosted storefront edge, anonymous ones included, and the `Origin` (or, without it, `Sec-Fetch-Site: same-origin`) must be the storefront host; otherwise `403 CSRF_TOKEN_INVALID`. Ignored for key and bearer callers. */
+                "X-CSRF-Token"?: components["parameters"]["CsrfToken"];
             };
             path?: never;
             cookie?: never;
@@ -14049,11 +14097,12 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Account created; verification email queued. */
+            /** @description Account created; verification email queued. In edge mode an opened session is set in the `__Host-vx_at` and `__Host-vx_rt` cookies, the CSRF cookie is rotated and `session` is `null`. */
             201: {
                 headers: {
                     "X-Request-Id": components["headers"]["X-Request-Id"];
                     Location: components["headers"]["Location"];
+                    "Set-Cookie": components["headers"]["Set-Cookie"];
                     [name: string]: unknown;
                 };
                 content: {
@@ -14120,12 +14169,26 @@ export interface operations {
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
                 /** @description BCP 47 locale for messages and display texts. */
                 "Accept-Language"?: components["parameters"]["AcceptLanguage"];
-                /** @description Storefront host name the request is made for: the `Host` of the visitor's request, lower case, without port. **Required with a hosting key** (`hk_test_…` / `hk_live_…`, one Next.js deployment serving several OTA domains): the API resolves the OTA from it (a verified storefront domain in `platform.tenant_domains` of an OTA the key is granted for) and then handles the call exactly like a secret key of that OTA in the key's environment. Optional with publishable and secret keys; when sent it must be a verified storefront domain of the key's own OTA. Otherwise `403 HOST_NOT_ALLOWED` (`details.reason`: `missing` | `unknown` | `not_granted`). SDK: client option `host` or `options.host`; look hosts up with storefront.resolve. */
+                /**
+                 * @description Storefront host name the request is made for: the `Host` of the visitor's request, lower case, without port. **Required with a hosting key** (`hk_test_…` / `hk_live_…`, one Next.js deployment serving several OTA domains): the API resolves the OTA from it (a verified storefront domain in `platform.tenant_domains` of an OTA the key is granted for) and then handles the call exactly like a secret key of that OTA in the key's environment. Optional with publishable and secret keys; when sent it must be a verified storefront domain of the key's own OTA. Otherwise `403 HOST_NOT_ALLOWED` (`details.reason`: `missing` | `unknown` | `not_granted`). SDK: client option `host` or `options.host`; look hosts up with storefront.resolve.
+                 *
+                 *     **Edge mode.** On the hosted storefront Caddy sets it to the visitor's host on every `/api/*` request, together with `X-Velexis-Edge`, and replaces any value the browser sent. The API resolves the OTA from it (a verified storefront domain, or the OTA's sub-domain of the storefront base domain) and answers `403 HOST_NOT_ALLOWED` for an unknown or unverified host.
+                 */
                 "X-Velexis-Host"?: components["parameters"]["StorefrontHostHeader"];
-                /** @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`. */
+                /**
+                 * @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server), and for the OTA admin's service key on console operations (below); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`.
+                 *
+                 *     **Console operations.** Honoured for secret keys as above and for the OTA admin's first-party service key, which must send it: the staff member's address (the right-most `X-Forwarded-For` entry Caddy gave the admin). With the service key a missing or malformed value answers `400 VALIDATION_FAILED`; the value drives the console sign-in throttle (10 per minute per end-user IP), the lockout and the staff audit log (`staff_actions`). Other callers' values are ignored.
+                 */
                 "X-Velexis-End-User-IP"?: components["parameters"]["CustomerEndUserIp"];
-                /** @description User-Agent of the visitor's browser for calls your server makes on their behalf with a secret or hosting key (longer values are truncated to 512 characters). Honoured only for secret and hosting keys; publishable-key calls use the request's own `User-Agent`. Recorded as session metadata (`AuthSessionDetails.userAgent`, new-sign-in security emails) and used by abuse heuristics. SDK: `options.endUser.userAgent` or the client option `endUser`. */
+                /**
+                 * @description User-Agent of the visitor's browser for calls your server makes on their behalf with a secret or hosting key (longer values are truncated to 512 characters). Honoured only for secret and hosting keys, and for the OTA admin's service key on console operations; publishable-key calls use the request's own `User-Agent`. Recorded as session metadata (`AuthSessionDetails.userAgent`, new-sign-in security emails) and used by abuse heuristics. SDK: `options.endUser.userAgent` or the client option `endUser`.
+                 *
+                 *     **Console operations.** The OTA admin's first-party service key must send the staff member's user agent (missing: `400 VALIDATION_FAILED`); it is recorded in the staff audit log (`staff_actions`).
+                 */
                 "X-Velexis-End-User-Agent"?: components["parameters"]["CustomerEndUserAgent"];
+                /** @description Copy of the `__Host-vx_csrf` cookie, which storefront.get issues. Required on every state-changing (`POST`, `PUT`, `PATCH`, `DELETE`) request of the hosted storefront edge, anonymous ones included, and the `Origin` (or, without it, `Sec-Fetch-Site: same-origin`) must be the storefront host; otherwise `403 CSRF_TOKEN_INVALID`. Ignored for key and bearer callers. */
+                "X-CSRF-Token"?: components["parameters"]["CsrfToken"];
             };
             path?: never;
             cookie?: never;
@@ -14197,12 +14260,26 @@ export interface operations {
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
                 /** @description BCP 47 locale for messages and display texts. */
                 "Accept-Language"?: components["parameters"]["AcceptLanguage"];
-                /** @description Storefront host name the request is made for: the `Host` of the visitor's request, lower case, without port. **Required with a hosting key** (`hk_test_…` / `hk_live_…`, one Next.js deployment serving several OTA domains): the API resolves the OTA from it (a verified storefront domain in `platform.tenant_domains` of an OTA the key is granted for) and then handles the call exactly like a secret key of that OTA in the key's environment. Optional with publishable and secret keys; when sent it must be a verified storefront domain of the key's own OTA. Otherwise `403 HOST_NOT_ALLOWED` (`details.reason`: `missing` | `unknown` | `not_granted`). SDK: client option `host` or `options.host`; look hosts up with storefront.resolve. */
+                /**
+                 * @description Storefront host name the request is made for: the `Host` of the visitor's request, lower case, without port. **Required with a hosting key** (`hk_test_…` / `hk_live_…`, one Next.js deployment serving several OTA domains): the API resolves the OTA from it (a verified storefront domain in `platform.tenant_domains` of an OTA the key is granted for) and then handles the call exactly like a secret key of that OTA in the key's environment. Optional with publishable and secret keys; when sent it must be a verified storefront domain of the key's own OTA. Otherwise `403 HOST_NOT_ALLOWED` (`details.reason`: `missing` | `unknown` | `not_granted`). SDK: client option `host` or `options.host`; look hosts up with storefront.resolve.
+                 *
+                 *     **Edge mode.** On the hosted storefront Caddy sets it to the visitor's host on every `/api/*` request, together with `X-Velexis-Edge`, and replaces any value the browser sent. The API resolves the OTA from it (a verified storefront domain, or the OTA's sub-domain of the storefront base domain) and answers `403 HOST_NOT_ALLOWED` for an unknown or unverified host.
+                 */
                 "X-Velexis-Host"?: components["parameters"]["StorefrontHostHeader"];
-                /** @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`. */
+                /**
+                 * @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server), and for the OTA admin's service key on console operations (below); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`.
+                 *
+                 *     **Console operations.** Honoured for secret keys as above and for the OTA admin's first-party service key, which must send it: the staff member's address (the right-most `X-Forwarded-For` entry Caddy gave the admin). With the service key a missing or malformed value answers `400 VALIDATION_FAILED`; the value drives the console sign-in throttle (10 per minute per end-user IP), the lockout and the staff audit log (`staff_actions`). Other callers' values are ignored.
+                 */
                 "X-Velexis-End-User-IP"?: components["parameters"]["CustomerEndUserIp"];
-                /** @description User-Agent of the visitor's browser for calls your server makes on their behalf with a secret or hosting key (longer values are truncated to 512 characters). Honoured only for secret and hosting keys; publishable-key calls use the request's own `User-Agent`. Recorded as session metadata (`AuthSessionDetails.userAgent`, new-sign-in security emails) and used by abuse heuristics. SDK: `options.endUser.userAgent` or the client option `endUser`. */
+                /**
+                 * @description User-Agent of the visitor's browser for calls your server makes on their behalf with a secret or hosting key (longer values are truncated to 512 characters). Honoured only for secret and hosting keys, and for the OTA admin's service key on console operations; publishable-key calls use the request's own `User-Agent`. Recorded as session metadata (`AuthSessionDetails.userAgent`, new-sign-in security emails) and used by abuse heuristics. SDK: `options.endUser.userAgent` or the client option `endUser`.
+                 *
+                 *     **Console operations.** The OTA admin's first-party service key must send the staff member's user agent (missing: `400 VALIDATION_FAILED`); it is recorded in the staff audit log (`staff_actions`).
+                 */
                 "X-Velexis-End-User-Agent"?: components["parameters"]["CustomerEndUserAgent"];
+                /** @description Copy of the `__Host-vx_csrf` cookie, which storefront.get issues. Required on every state-changing (`POST`, `PUT`, `PATCH`, `DELETE`) request of the hosted storefront edge, anonymous ones included, and the `Origin` (or, without it, `Sec-Fetch-Site: same-origin`) must be the storefront host; otherwise `403 CSRF_TOKEN_INVALID`. Ignored for key and bearer callers. */
+                "X-CSRF-Token"?: components["parameters"]["CsrfToken"];
             };
             path?: never;
             cookie?: never;
@@ -14251,12 +14328,26 @@ export interface operations {
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
                 /** @description BCP 47 locale for messages and display texts. */
                 "Accept-Language"?: components["parameters"]["AcceptLanguage"];
-                /** @description Storefront host name the request is made for: the `Host` of the visitor's request, lower case, without port. **Required with a hosting key** (`hk_test_…` / `hk_live_…`, one Next.js deployment serving several OTA domains): the API resolves the OTA from it (a verified storefront domain in `platform.tenant_domains` of an OTA the key is granted for) and then handles the call exactly like a secret key of that OTA in the key's environment. Optional with publishable and secret keys; when sent it must be a verified storefront domain of the key's own OTA. Otherwise `403 HOST_NOT_ALLOWED` (`details.reason`: `missing` | `unknown` | `not_granted`). SDK: client option `host` or `options.host`; look hosts up with storefront.resolve. */
+                /**
+                 * @description Storefront host name the request is made for: the `Host` of the visitor's request, lower case, without port. **Required with a hosting key** (`hk_test_…` / `hk_live_…`, one Next.js deployment serving several OTA domains): the API resolves the OTA from it (a verified storefront domain in `platform.tenant_domains` of an OTA the key is granted for) and then handles the call exactly like a secret key of that OTA in the key's environment. Optional with publishable and secret keys; when sent it must be a verified storefront domain of the key's own OTA. Otherwise `403 HOST_NOT_ALLOWED` (`details.reason`: `missing` | `unknown` | `not_granted`). SDK: client option `host` or `options.host`; look hosts up with storefront.resolve.
+                 *
+                 *     **Edge mode.** On the hosted storefront Caddy sets it to the visitor's host on every `/api/*` request, together with `X-Velexis-Edge`, and replaces any value the browser sent. The API resolves the OTA from it (a verified storefront domain, or the OTA's sub-domain of the storefront base domain) and answers `403 HOST_NOT_ALLOWED` for an unknown or unverified host.
+                 */
                 "X-Velexis-Host"?: components["parameters"]["StorefrontHostHeader"];
-                /** @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`. */
+                /**
+                 * @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server), and for the OTA admin's service key on console operations (below); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`.
+                 *
+                 *     **Console operations.** Honoured for secret keys as above and for the OTA admin's first-party service key, which must send it: the staff member's address (the right-most `X-Forwarded-For` entry Caddy gave the admin). With the service key a missing or malformed value answers `400 VALIDATION_FAILED`; the value drives the console sign-in throttle (10 per minute per end-user IP), the lockout and the staff audit log (`staff_actions`). Other callers' values are ignored.
+                 */
                 "X-Velexis-End-User-IP"?: components["parameters"]["CustomerEndUserIp"];
-                /** @description User-Agent of the visitor's browser for calls your server makes on their behalf with a secret or hosting key (longer values are truncated to 512 characters). Honoured only for secret and hosting keys; publishable-key calls use the request's own `User-Agent`. Recorded as session metadata (`AuthSessionDetails.userAgent`, new-sign-in security emails) and used by abuse heuristics. SDK: `options.endUser.userAgent` or the client option `endUser`. */
+                /**
+                 * @description User-Agent of the visitor's browser for calls your server makes on their behalf with a secret or hosting key (longer values are truncated to 512 characters). Honoured only for secret and hosting keys, and for the OTA admin's service key on console operations; publishable-key calls use the request's own `User-Agent`. Recorded as session metadata (`AuthSessionDetails.userAgent`, new-sign-in security emails) and used by abuse heuristics. SDK: `options.endUser.userAgent` or the client option `endUser`.
+                 *
+                 *     **Console operations.** The OTA admin's first-party service key must send the staff member's user agent (missing: `400 VALIDATION_FAILED`); it is recorded in the staff audit log (`staff_actions`).
+                 */
                 "X-Velexis-End-User-Agent"?: components["parameters"]["CustomerEndUserAgent"];
+                /** @description Copy of the `__Host-vx_csrf` cookie, which storefront.get issues. Required on every state-changing (`POST`, `PUT`, `PATCH`, `DELETE`) request of the hosted storefront edge, anonymous ones included, and the `Origin` (or, without it, `Sec-Fetch-Site: same-origin`) must be the storefront host; otherwise `403 CSRF_TOKEN_INVALID`. Ignored for key and bearer callers. */
+                "X-CSRF-Token"?: components["parameters"]["CsrfToken"];
             };
             path?: never;
             cookie?: never;
@@ -14274,10 +14365,11 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Signed in. */
+            /** @description Signed in. Token mode: `AuthSessionResult` with the tokens. Edge mode: the tokens are set in the `__Host-vx_at` and `__Host-vx_rt` cookies, the CSRF cookie is rotated and the body is `AuthSessionInfo`, without token fields. */
             200: {
                 headers: {
                     "X-Request-Id": components["headers"]["X-Request-Id"];
+                    "Set-Cookie": components["headers"]["Set-Cookie"];
                     [name: string]: unknown;
                 };
                 content: {
@@ -14318,7 +14410,7 @@ export interface operations {
                      *       }
                      *     }
                      */
-                    "application/json": components["schemas"]["AuthSessionResult"];
+                    "application/json": components["schemas"]["AuthSessionResult"] | components["schemas"]["AuthSessionInfo"];
                 };
             };
             400: components["responses"]["BadRequest"];
@@ -14336,12 +14428,26 @@ export interface operations {
             header: {
                 /** @description Client-generated unique key (UUID v4) that makes the request safe to retry for 24 hours. */
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
-                /** @description Storefront host name the request is made for: the `Host` of the visitor's request, lower case, without port. **Required with a hosting key** (`hk_test_…` / `hk_live_…`, one Next.js deployment serving several OTA domains): the API resolves the OTA from it (a verified storefront domain in `platform.tenant_domains` of an OTA the key is granted for) and then handles the call exactly like a secret key of that OTA in the key's environment. Optional with publishable and secret keys; when sent it must be a verified storefront domain of the key's own OTA. Otherwise `403 HOST_NOT_ALLOWED` (`details.reason`: `missing` | `unknown` | `not_granted`). SDK: client option `host` or `options.host`; look hosts up with storefront.resolve. */
+                /**
+                 * @description Storefront host name the request is made for: the `Host` of the visitor's request, lower case, without port. **Required with a hosting key** (`hk_test_…` / `hk_live_…`, one Next.js deployment serving several OTA domains): the API resolves the OTA from it (a verified storefront domain in `platform.tenant_domains` of an OTA the key is granted for) and then handles the call exactly like a secret key of that OTA in the key's environment. Optional with publishable and secret keys; when sent it must be a verified storefront domain of the key's own OTA. Otherwise `403 HOST_NOT_ALLOWED` (`details.reason`: `missing` | `unknown` | `not_granted`). SDK: client option `host` or `options.host`; look hosts up with storefront.resolve.
+                 *
+                 *     **Edge mode.** On the hosted storefront Caddy sets it to the visitor's host on every `/api/*` request, together with `X-Velexis-Edge`, and replaces any value the browser sent. The API resolves the OTA from it (a verified storefront domain, or the OTA's sub-domain of the storefront base domain) and answers `403 HOST_NOT_ALLOWED` for an unknown or unverified host.
+                 */
                 "X-Velexis-Host"?: components["parameters"]["StorefrontHostHeader"];
-                /** @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`. */
+                /**
+                 * @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server), and for the OTA admin's service key on console operations (below); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`.
+                 *
+                 *     **Console operations.** Honoured for secret keys as above and for the OTA admin's first-party service key, which must send it: the staff member's address (the right-most `X-Forwarded-For` entry Caddy gave the admin). With the service key a missing or malformed value answers `400 VALIDATION_FAILED`; the value drives the console sign-in throttle (10 per minute per end-user IP), the lockout and the staff audit log (`staff_actions`). Other callers' values are ignored.
+                 */
                 "X-Velexis-End-User-IP"?: components["parameters"]["CustomerEndUserIp"];
-                /** @description User-Agent of the visitor's browser for calls your server makes on their behalf with a secret or hosting key (longer values are truncated to 512 characters). Honoured only for secret and hosting keys; publishable-key calls use the request's own `User-Agent`. Recorded as session metadata (`AuthSessionDetails.userAgent`, new-sign-in security emails) and used by abuse heuristics. SDK: `options.endUser.userAgent` or the client option `endUser`. */
+                /**
+                 * @description User-Agent of the visitor's browser for calls your server makes on their behalf with a secret or hosting key (longer values are truncated to 512 characters). Honoured only for secret and hosting keys, and for the OTA admin's service key on console operations; publishable-key calls use the request's own `User-Agent`. Recorded as session metadata (`AuthSessionDetails.userAgent`, new-sign-in security emails) and used by abuse heuristics. SDK: `options.endUser.userAgent` or the client option `endUser`.
+                 *
+                 *     **Console operations.** The OTA admin's first-party service key must send the staff member's user agent (missing: `400 VALIDATION_FAILED`); it is recorded in the staff audit log (`staff_actions`).
+                 */
                 "X-Velexis-End-User-Agent"?: components["parameters"]["CustomerEndUserAgent"];
+                /** @description Copy of the `__Host-vx_csrf` cookie, which storefront.get issues. Required on every state-changing (`POST`, `PUT`, `PATCH`, `DELETE`) request of the hosted storefront edge, anonymous ones included, and the `Origin` (or, without it, `Sec-Fetch-Site: same-origin`) must be the storefront host; otherwise `403 CSRF_TOKEN_INVALID`. Ignored for key and bearer callers. */
+                "X-CSRF-Token"?: components["parameters"]["CsrfToken"];
             };
             path?: never;
             cookie?: never;
@@ -14357,10 +14463,11 @@ export interface operations {
             };
         };
         responses: {
-            /** @description New tokens and the customer; the presented refresh token is no longer valid. */
+            /** @description New tokens and the customer; the presented refresh token is no longer valid. Edge mode: the rotated tokens are set in the `__Host-vx_at` and `__Host-vx_rt` cookies and the body is `AuthSessionInfo`, without token fields. */
             200: {
                 headers: {
                     "X-Request-Id": components["headers"]["X-Request-Id"];
+                    "Set-Cookie": components["headers"]["Set-Cookie"];
                     [name: string]: unknown;
                 };
                 content: {
@@ -14401,7 +14508,7 @@ export interface operations {
                      *       }
                      *     }
                      */
-                    "application/json": components["schemas"]["AuthSessionResult"];
+                    "application/json": components["schemas"]["AuthSessionResult"] | components["schemas"]["AuthSessionInfo"];
                 };
             };
             400: components["responses"]["BadRequest"];
@@ -14418,12 +14525,26 @@ export interface operations {
             header: {
                 /** @description Client-generated unique key (UUID v4) that makes the request safe to retry for 24 hours. */
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
-                /** @description Storefront host name the request is made for: the `Host` of the visitor's request, lower case, without port. **Required with a hosting key** (`hk_test_…` / `hk_live_…`, one Next.js deployment serving several OTA domains): the API resolves the OTA from it (a verified storefront domain in `platform.tenant_domains` of an OTA the key is granted for) and then handles the call exactly like a secret key of that OTA in the key's environment. Optional with publishable and secret keys; when sent it must be a verified storefront domain of the key's own OTA. Otherwise `403 HOST_NOT_ALLOWED` (`details.reason`: `missing` | `unknown` | `not_granted`). SDK: client option `host` or `options.host`; look hosts up with storefront.resolve. */
+                /**
+                 * @description Storefront host name the request is made for: the `Host` of the visitor's request, lower case, without port. **Required with a hosting key** (`hk_test_…` / `hk_live_…`, one Next.js deployment serving several OTA domains): the API resolves the OTA from it (a verified storefront domain in `platform.tenant_domains` of an OTA the key is granted for) and then handles the call exactly like a secret key of that OTA in the key's environment. Optional with publishable and secret keys; when sent it must be a verified storefront domain of the key's own OTA. Otherwise `403 HOST_NOT_ALLOWED` (`details.reason`: `missing` | `unknown` | `not_granted`). SDK: client option `host` or `options.host`; look hosts up with storefront.resolve.
+                 *
+                 *     **Edge mode.** On the hosted storefront Caddy sets it to the visitor's host on every `/api/*` request, together with `X-Velexis-Edge`, and replaces any value the browser sent. The API resolves the OTA from it (a verified storefront domain, or the OTA's sub-domain of the storefront base domain) and answers `403 HOST_NOT_ALLOWED` for an unknown or unverified host.
+                 */
                 "X-Velexis-Host"?: components["parameters"]["StorefrontHostHeader"];
-                /** @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`. */
+                /**
+                 * @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server), and for the OTA admin's service key on console operations (below); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`.
+                 *
+                 *     **Console operations.** Honoured for secret keys as above and for the OTA admin's first-party service key, which must send it: the staff member's address (the right-most `X-Forwarded-For` entry Caddy gave the admin). With the service key a missing or malformed value answers `400 VALIDATION_FAILED`; the value drives the console sign-in throttle (10 per minute per end-user IP), the lockout and the staff audit log (`staff_actions`). Other callers' values are ignored.
+                 */
                 "X-Velexis-End-User-IP"?: components["parameters"]["CustomerEndUserIp"];
-                /** @description User-Agent of the visitor's browser for calls your server makes on their behalf with a secret or hosting key (longer values are truncated to 512 characters). Honoured only for secret and hosting keys; publishable-key calls use the request's own `User-Agent`. Recorded as session metadata (`AuthSessionDetails.userAgent`, new-sign-in security emails) and used by abuse heuristics. SDK: `options.endUser.userAgent` or the client option `endUser`. */
+                /**
+                 * @description User-Agent of the visitor's browser for calls your server makes on their behalf with a secret or hosting key (longer values are truncated to 512 characters). Honoured only for secret and hosting keys, and for the OTA admin's service key on console operations; publishable-key calls use the request's own `User-Agent`. Recorded as session metadata (`AuthSessionDetails.userAgent`, new-sign-in security emails) and used by abuse heuristics. SDK: `options.endUser.userAgent` or the client option `endUser`.
+                 *
+                 *     **Console operations.** The OTA admin's first-party service key must send the staff member's user agent (missing: `400 VALIDATION_FAILED`); it is recorded in the staff audit log (`staff_actions`).
+                 */
                 "X-Velexis-End-User-Agent"?: components["parameters"]["CustomerEndUserAgent"];
+                /** @description Copy of the `__Host-vx_csrf` cookie, which storefront.get issues. Required on every state-changing (`POST`, `PUT`, `PATCH`, `DELETE`) request of the hosted storefront edge, anonymous ones included, and the `Origin` (or, without it, `Sec-Fetch-Site: same-origin`) must be the storefront host; otherwise `403 CSRF_TOKEN_INVALID`. Ignored for key and bearer callers. */
+                "X-CSRF-Token"?: components["parameters"]["CsrfToken"];
             };
             path?: never;
             cookie?: never;
@@ -14440,10 +14561,11 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Signed out. */
+            /** @description Signed out. In edge mode the `__Host-vx_at` and `__Host-vx_rt` cookies are cleared and the CSRF cookie is rotated. */
             204: {
                 headers: {
                     "X-Request-Id": components["headers"]["X-Request-Id"];
+                    "Set-Cookie": components["headers"]["Set-Cookie"];
                     [name: string]: unknown;
                 };
                 content?: never;
@@ -14464,12 +14586,26 @@ export interface operations {
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
                 /** @description BCP 47 locale for messages and display texts. */
                 "Accept-Language"?: components["parameters"]["AcceptLanguage"];
-                /** @description Storefront host name the request is made for: the `Host` of the visitor's request, lower case, without port. **Required with a hosting key** (`hk_test_…` / `hk_live_…`, one Next.js deployment serving several OTA domains): the API resolves the OTA from it (a verified storefront domain in `platform.tenant_domains` of an OTA the key is granted for) and then handles the call exactly like a secret key of that OTA in the key's environment. Optional with publishable and secret keys; when sent it must be a verified storefront domain of the key's own OTA. Otherwise `403 HOST_NOT_ALLOWED` (`details.reason`: `missing` | `unknown` | `not_granted`). SDK: client option `host` or `options.host`; look hosts up with storefront.resolve. */
+                /**
+                 * @description Storefront host name the request is made for: the `Host` of the visitor's request, lower case, without port. **Required with a hosting key** (`hk_test_…` / `hk_live_…`, one Next.js deployment serving several OTA domains): the API resolves the OTA from it (a verified storefront domain in `platform.tenant_domains` of an OTA the key is granted for) and then handles the call exactly like a secret key of that OTA in the key's environment. Optional with publishable and secret keys; when sent it must be a verified storefront domain of the key's own OTA. Otherwise `403 HOST_NOT_ALLOWED` (`details.reason`: `missing` | `unknown` | `not_granted`). SDK: client option `host` or `options.host`; look hosts up with storefront.resolve.
+                 *
+                 *     **Edge mode.** On the hosted storefront Caddy sets it to the visitor's host on every `/api/*` request, together with `X-Velexis-Edge`, and replaces any value the browser sent. The API resolves the OTA from it (a verified storefront domain, or the OTA's sub-domain of the storefront base domain) and answers `403 HOST_NOT_ALLOWED` for an unknown or unverified host.
+                 */
                 "X-Velexis-Host"?: components["parameters"]["StorefrontHostHeader"];
-                /** @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`. */
+                /**
+                 * @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server), and for the OTA admin's service key on console operations (below); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`.
+                 *
+                 *     **Console operations.** Honoured for secret keys as above and for the OTA admin's first-party service key, which must send it: the staff member's address (the right-most `X-Forwarded-For` entry Caddy gave the admin). With the service key a missing or malformed value answers `400 VALIDATION_FAILED`; the value drives the console sign-in throttle (10 per minute per end-user IP), the lockout and the staff audit log (`staff_actions`). Other callers' values are ignored.
+                 */
                 "X-Velexis-End-User-IP"?: components["parameters"]["CustomerEndUserIp"];
-                /** @description User-Agent of the visitor's browser for calls your server makes on their behalf with a secret or hosting key (longer values are truncated to 512 characters). Honoured only for secret and hosting keys; publishable-key calls use the request's own `User-Agent`. Recorded as session metadata (`AuthSessionDetails.userAgent`, new-sign-in security emails) and used by abuse heuristics. SDK: `options.endUser.userAgent` or the client option `endUser`. */
+                /**
+                 * @description User-Agent of the visitor's browser for calls your server makes on their behalf with a secret or hosting key (longer values are truncated to 512 characters). Honoured only for secret and hosting keys, and for the OTA admin's service key on console operations; publishable-key calls use the request's own `User-Agent`. Recorded as session metadata (`AuthSessionDetails.userAgent`, new-sign-in security emails) and used by abuse heuristics. SDK: `options.endUser.userAgent` or the client option `endUser`.
+                 *
+                 *     **Console operations.** The OTA admin's first-party service key must send the staff member's user agent (missing: `400 VALIDATION_FAILED`); it is recorded in the staff audit log (`staff_actions`).
+                 */
                 "X-Velexis-End-User-Agent"?: components["parameters"]["CustomerEndUserAgent"];
+                /** @description Copy of the `__Host-vx_csrf` cookie, which storefront.get issues. Required on every state-changing (`POST`, `PUT`, `PATCH`, `DELETE`) request of the hosted storefront edge, anonymous ones included, and the `Origin` (or, without it, `Sec-Fetch-Site: same-origin`) must be the storefront host; otherwise `403 CSRF_TOKEN_INVALID`. Ignored for key and bearer callers. */
+                "X-CSRF-Token"?: components["parameters"]["CsrfToken"];
             };
             path?: never;
             cookie?: never;
@@ -14518,12 +14654,26 @@ export interface operations {
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
                 /** @description BCP 47 locale for messages and display texts. */
                 "Accept-Language"?: components["parameters"]["AcceptLanguage"];
-                /** @description Storefront host name the request is made for: the `Host` of the visitor's request, lower case, without port. **Required with a hosting key** (`hk_test_…` / `hk_live_…`, one Next.js deployment serving several OTA domains): the API resolves the OTA from it (a verified storefront domain in `platform.tenant_domains` of an OTA the key is granted for) and then handles the call exactly like a secret key of that OTA in the key's environment. Optional with publishable and secret keys; when sent it must be a verified storefront domain of the key's own OTA. Otherwise `403 HOST_NOT_ALLOWED` (`details.reason`: `missing` | `unknown` | `not_granted`). SDK: client option `host` or `options.host`; look hosts up with storefront.resolve. */
+                /**
+                 * @description Storefront host name the request is made for: the `Host` of the visitor's request, lower case, without port. **Required with a hosting key** (`hk_test_…` / `hk_live_…`, one Next.js deployment serving several OTA domains): the API resolves the OTA from it (a verified storefront domain in `platform.tenant_domains` of an OTA the key is granted for) and then handles the call exactly like a secret key of that OTA in the key's environment. Optional with publishable and secret keys; when sent it must be a verified storefront domain of the key's own OTA. Otherwise `403 HOST_NOT_ALLOWED` (`details.reason`: `missing` | `unknown` | `not_granted`). SDK: client option `host` or `options.host`; look hosts up with storefront.resolve.
+                 *
+                 *     **Edge mode.** On the hosted storefront Caddy sets it to the visitor's host on every `/api/*` request, together with `X-Velexis-Edge`, and replaces any value the browser sent. The API resolves the OTA from it (a verified storefront domain, or the OTA's sub-domain of the storefront base domain) and answers `403 HOST_NOT_ALLOWED` for an unknown or unverified host.
+                 */
                 "X-Velexis-Host"?: components["parameters"]["StorefrontHostHeader"];
-                /** @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`. */
+                /**
+                 * @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server), and for the OTA admin's service key on console operations (below); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`.
+                 *
+                 *     **Console operations.** Honoured for secret keys as above and for the OTA admin's first-party service key, which must send it: the staff member's address (the right-most `X-Forwarded-For` entry Caddy gave the admin). With the service key a missing or malformed value answers `400 VALIDATION_FAILED`; the value drives the console sign-in throttle (10 per minute per end-user IP), the lockout and the staff audit log (`staff_actions`). Other callers' values are ignored.
+                 */
                 "X-Velexis-End-User-IP"?: components["parameters"]["CustomerEndUserIp"];
-                /** @description User-Agent of the visitor's browser for calls your server makes on their behalf with a secret or hosting key (longer values are truncated to 512 characters). Honoured only for secret and hosting keys; publishable-key calls use the request's own `User-Agent`. Recorded as session metadata (`AuthSessionDetails.userAgent`, new-sign-in security emails) and used by abuse heuristics. SDK: `options.endUser.userAgent` or the client option `endUser`. */
+                /**
+                 * @description User-Agent of the visitor's browser for calls your server makes on their behalf with a secret or hosting key (longer values are truncated to 512 characters). Honoured only for secret and hosting keys, and for the OTA admin's service key on console operations; publishable-key calls use the request's own `User-Agent`. Recorded as session metadata (`AuthSessionDetails.userAgent`, new-sign-in security emails) and used by abuse heuristics. SDK: `options.endUser.userAgent` or the client option `endUser`.
+                 *
+                 *     **Console operations.** The OTA admin's first-party service key must send the staff member's user agent (missing: `400 VALIDATION_FAILED`); it is recorded in the staff audit log (`staff_actions`).
+                 */
                 "X-Velexis-End-User-Agent"?: components["parameters"]["CustomerEndUserAgent"];
+                /** @description Copy of the `__Host-vx_csrf` cookie, which storefront.get issues. Required on every state-changing (`POST`, `PUT`, `PATCH`, `DELETE`) request of the hosted storefront edge, anonymous ones included, and the `Origin` (or, without it, `Sec-Fetch-Site: same-origin`) must be the storefront host; otherwise `403 CSRF_TOKEN_INVALID`. Ignored for key and bearer callers. */
+                "X-CSRF-Token"?: components["parameters"]["CsrfToken"];
             };
             path?: never;
             cookie?: never;
@@ -14541,10 +14691,11 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Password changed; all previous sessions revoked. */
+            /** @description Password changed; all previous sessions revoked. In edge mode an opened session is set in the `__Host-vx_at` and `__Host-vx_rt` cookies, the CSRF cookie is rotated and `session` is `null`. */
             200: {
                 headers: {
                     "X-Request-Id": components["headers"]["X-Request-Id"];
+                    "Set-Cookie": components["headers"]["Set-Cookie"];
                     [name: string]: unknown;
                 };
                 content: {
@@ -14605,12 +14756,26 @@ export interface operations {
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
                 /** @description BCP 47 locale for messages and display texts. */
                 "Accept-Language"?: components["parameters"]["AcceptLanguage"];
-                /** @description Storefront host name the request is made for: the `Host` of the visitor's request, lower case, without port. **Required with a hosting key** (`hk_test_…` / `hk_live_…`, one Next.js deployment serving several OTA domains): the API resolves the OTA from it (a verified storefront domain in `platform.tenant_domains` of an OTA the key is granted for) and then handles the call exactly like a secret key of that OTA in the key's environment. Optional with publishable and secret keys; when sent it must be a verified storefront domain of the key's own OTA. Otherwise `403 HOST_NOT_ALLOWED` (`details.reason`: `missing` | `unknown` | `not_granted`). SDK: client option `host` or `options.host`; look hosts up with storefront.resolve. */
+                /**
+                 * @description Storefront host name the request is made for: the `Host` of the visitor's request, lower case, without port. **Required with a hosting key** (`hk_test_…` / `hk_live_…`, one Next.js deployment serving several OTA domains): the API resolves the OTA from it (a verified storefront domain in `platform.tenant_domains` of an OTA the key is granted for) and then handles the call exactly like a secret key of that OTA in the key's environment. Optional with publishable and secret keys; when sent it must be a verified storefront domain of the key's own OTA. Otherwise `403 HOST_NOT_ALLOWED` (`details.reason`: `missing` | `unknown` | `not_granted`). SDK: client option `host` or `options.host`; look hosts up with storefront.resolve.
+                 *
+                 *     **Edge mode.** On the hosted storefront Caddy sets it to the visitor's host on every `/api/*` request, together with `X-Velexis-Edge`, and replaces any value the browser sent. The API resolves the OTA from it (a verified storefront domain, or the OTA's sub-domain of the storefront base domain) and answers `403 HOST_NOT_ALLOWED` for an unknown or unverified host.
+                 */
                 "X-Velexis-Host"?: components["parameters"]["StorefrontHostHeader"];
-                /** @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`. */
+                /**
+                 * @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server), and for the OTA admin's service key on console operations (below); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`.
+                 *
+                 *     **Console operations.** Honoured for secret keys as above and for the OTA admin's first-party service key, which must send it: the staff member's address (the right-most `X-Forwarded-For` entry Caddy gave the admin). With the service key a missing or malformed value answers `400 VALIDATION_FAILED`; the value drives the console sign-in throttle (10 per minute per end-user IP), the lockout and the staff audit log (`staff_actions`). Other callers' values are ignored.
+                 */
                 "X-Velexis-End-User-IP"?: components["parameters"]["CustomerEndUserIp"];
-                /** @description User-Agent of the visitor's browser for calls your server makes on their behalf with a secret or hosting key (longer values are truncated to 512 characters). Honoured only for secret and hosting keys; publishable-key calls use the request's own `User-Agent`. Recorded as session metadata (`AuthSessionDetails.userAgent`, new-sign-in security emails) and used by abuse heuristics. SDK: `options.endUser.userAgent` or the client option `endUser`. */
+                /**
+                 * @description User-Agent of the visitor's browser for calls your server makes on their behalf with a secret or hosting key (longer values are truncated to 512 characters). Honoured only for secret and hosting keys, and for the OTA admin's service key on console operations; publishable-key calls use the request's own `User-Agent`. Recorded as session metadata (`AuthSessionDetails.userAgent`, new-sign-in security emails) and used by abuse heuristics. SDK: `options.endUser.userAgent` or the client option `endUser`.
+                 *
+                 *     **Console operations.** The OTA admin's first-party service key must send the staff member's user agent (missing: `400 VALIDATION_FAILED`); it is recorded in the staff audit log (`staff_actions`).
+                 */
                 "X-Velexis-End-User-Agent"?: components["parameters"]["CustomerEndUserAgent"];
+                /** @description Copy of the `__Host-vx_csrf` cookie, which storefront.get issues. Required on every state-changing (`POST`, `PUT`, `PATCH`, `DELETE`) request of the hosted storefront edge, anonymous ones included, and the `Origin` (or, without it, `Sec-Fetch-Site: same-origin`) must be the storefront host; otherwise `403 CSRF_TOKEN_INVALID`. Ignored for key and bearer callers. */
+                "X-CSRF-Token"?: components["parameters"]["CsrfToken"];
             };
             path?: never;
             cookie?: never;
@@ -14628,10 +14793,11 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Password changed; a rotated session is returned. */
+            /** @description Password changed; a rotated session is returned. Edge mode: the rotated session is set in the `__Host-vx_at` and `__Host-vx_rt` cookies, the CSRF cookie is rotated and the body is `AuthSessionInfo`, without token fields. */
             200: {
                 headers: {
                     "X-Request-Id": components["headers"]["X-Request-Id"];
+                    "Set-Cookie": components["headers"]["Set-Cookie"];
                     [name: string]: unknown;
                 };
                 content: {
@@ -14672,7 +14838,7 @@ export interface operations {
                      *       }
                      *     }
                      */
-                    "application/json": components["schemas"]["AuthSessionResult"];
+                    "application/json": components["schemas"]["AuthSessionResult"] | components["schemas"]["AuthSessionInfo"];
                 };
             };
             400: components["responses"]["BadRequest"];
@@ -14691,11 +14857,23 @@ export interface operations {
             header?: {
                 /** @description BCP 47 locale for messages and display texts. */
                 "Accept-Language"?: components["parameters"]["AcceptLanguage"];
-                /** @description Storefront host name the request is made for: the `Host` of the visitor's request, lower case, without port. **Required with a hosting key** (`hk_test_…` / `hk_live_…`, one Next.js deployment serving several OTA domains): the API resolves the OTA from it (a verified storefront domain in `platform.tenant_domains` of an OTA the key is granted for) and then handles the call exactly like a secret key of that OTA in the key's environment. Optional with publishable and secret keys; when sent it must be a verified storefront domain of the key's own OTA. Otherwise `403 HOST_NOT_ALLOWED` (`details.reason`: `missing` | `unknown` | `not_granted`). SDK: client option `host` or `options.host`; look hosts up with storefront.resolve. */
+                /**
+                 * @description Storefront host name the request is made for: the `Host` of the visitor's request, lower case, without port. **Required with a hosting key** (`hk_test_…` / `hk_live_…`, one Next.js deployment serving several OTA domains): the API resolves the OTA from it (a verified storefront domain in `platform.tenant_domains` of an OTA the key is granted for) and then handles the call exactly like a secret key of that OTA in the key's environment. Optional with publishable and secret keys; when sent it must be a verified storefront domain of the key's own OTA. Otherwise `403 HOST_NOT_ALLOWED` (`details.reason`: `missing` | `unknown` | `not_granted`). SDK: client option `host` or `options.host`; look hosts up with storefront.resolve.
+                 *
+                 *     **Edge mode.** On the hosted storefront Caddy sets it to the visitor's host on every `/api/*` request, together with `X-Velexis-Edge`, and replaces any value the browser sent. The API resolves the OTA from it (a verified storefront domain, or the OTA's sub-domain of the storefront base domain) and answers `403 HOST_NOT_ALLOWED` for an unknown or unverified host.
+                 */
                 "X-Velexis-Host"?: components["parameters"]["StorefrontHostHeader"];
-                /** @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`. */
+                /**
+                 * @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server), and for the OTA admin's service key on console operations (below); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`.
+                 *
+                 *     **Console operations.** Honoured for secret keys as above and for the OTA admin's first-party service key, which must send it: the staff member's address (the right-most `X-Forwarded-For` entry Caddy gave the admin). With the service key a missing or malformed value answers `400 VALIDATION_FAILED`; the value drives the console sign-in throttle (10 per minute per end-user IP), the lockout and the staff audit log (`staff_actions`). Other callers' values are ignored.
+                 */
                 "X-Velexis-End-User-IP"?: components["parameters"]["CustomerEndUserIp"];
-                /** @description User-Agent of the visitor's browser for calls your server makes on their behalf with a secret or hosting key (longer values are truncated to 512 characters). Honoured only for secret and hosting keys; publishable-key calls use the request's own `User-Agent`. Recorded as session metadata (`AuthSessionDetails.userAgent`, new-sign-in security emails) and used by abuse heuristics. SDK: `options.endUser.userAgent` or the client option `endUser`. */
+                /**
+                 * @description User-Agent of the visitor's browser for calls your server makes on their behalf with a secret or hosting key (longer values are truncated to 512 characters). Honoured only for secret and hosting keys, and for the OTA admin's service key on console operations; publishable-key calls use the request's own `User-Agent`. Recorded as session metadata (`AuthSessionDetails.userAgent`, new-sign-in security emails) and used by abuse heuristics. SDK: `options.endUser.userAgent` or the client option `endUser`.
+                 *
+                 *     **Console operations.** The OTA admin's first-party service key must send the staff member's user agent (missing: `400 VALIDATION_FAILED`); it is recorded in the staff audit log (`staff_actions`).
+                 */
                 "X-Velexis-End-User-Agent"?: components["parameters"]["CustomerEndUserAgent"];
             };
             path?: never;
@@ -14766,11 +14944,23 @@ export interface operations {
             header?: {
                 /** @description BCP 47 locale for messages and display texts. */
                 "Accept-Language"?: components["parameters"]["AcceptLanguage"];
-                /** @description Storefront host name the request is made for: the `Host` of the visitor's request, lower case, without port. **Required with a hosting key** (`hk_test_…` / `hk_live_…`, one Next.js deployment serving several OTA domains): the API resolves the OTA from it (a verified storefront domain in `platform.tenant_domains` of an OTA the key is granted for) and then handles the call exactly like a secret key of that OTA in the key's environment. Optional with publishable and secret keys; when sent it must be a verified storefront domain of the key's own OTA. Otherwise `403 HOST_NOT_ALLOWED` (`details.reason`: `missing` | `unknown` | `not_granted`). SDK: client option `host` or `options.host`; look hosts up with storefront.resolve. */
+                /**
+                 * @description Storefront host name the request is made for: the `Host` of the visitor's request, lower case, without port. **Required with a hosting key** (`hk_test_…` / `hk_live_…`, one Next.js deployment serving several OTA domains): the API resolves the OTA from it (a verified storefront domain in `platform.tenant_domains` of an OTA the key is granted for) and then handles the call exactly like a secret key of that OTA in the key's environment. Optional with publishable and secret keys; when sent it must be a verified storefront domain of the key's own OTA. Otherwise `403 HOST_NOT_ALLOWED` (`details.reason`: `missing` | `unknown` | `not_granted`). SDK: client option `host` or `options.host`; look hosts up with storefront.resolve.
+                 *
+                 *     **Edge mode.** On the hosted storefront Caddy sets it to the visitor's host on every `/api/*` request, together with `X-Velexis-Edge`, and replaces any value the browser sent. The API resolves the OTA from it (a verified storefront domain, or the OTA's sub-domain of the storefront base domain) and answers `403 HOST_NOT_ALLOWED` for an unknown or unverified host.
+                 */
                 "X-Velexis-Host"?: components["parameters"]["StorefrontHostHeader"];
-                /** @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`. */
+                /**
+                 * @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server), and for the OTA admin's service key on console operations (below); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`.
+                 *
+                 *     **Console operations.** Honoured for secret keys as above and for the OTA admin's first-party service key, which must send it: the staff member's address (the right-most `X-Forwarded-For` entry Caddy gave the admin). With the service key a missing or malformed value answers `400 VALIDATION_FAILED`; the value drives the console sign-in throttle (10 per minute per end-user IP), the lockout and the staff audit log (`staff_actions`). Other callers' values are ignored.
+                 */
                 "X-Velexis-End-User-IP"?: components["parameters"]["CustomerEndUserIp"];
-                /** @description User-Agent of the visitor's browser for calls your server makes on their behalf with a secret or hosting key (longer values are truncated to 512 characters). Honoured only for secret and hosting keys; publishable-key calls use the request's own `User-Agent`. Recorded as session metadata (`AuthSessionDetails.userAgent`, new-sign-in security emails) and used by abuse heuristics. SDK: `options.endUser.userAgent` or the client option `endUser`. */
+                /**
+                 * @description User-Agent of the visitor's browser for calls your server makes on their behalf with a secret or hosting key (longer values are truncated to 512 characters). Honoured only for secret and hosting keys, and for the OTA admin's service key on console operations; publishable-key calls use the request's own `User-Agent`. Recorded as session metadata (`AuthSessionDetails.userAgent`, new-sign-in security emails) and used by abuse heuristics. SDK: `options.endUser.userAgent` or the client option `endUser`.
+                 *
+                 *     **Console operations.** The OTA admin's first-party service key must send the staff member's user agent (missing: `400 VALIDATION_FAILED`); it is recorded in the staff audit log (`staff_actions`).
+                 */
                 "X-Velexis-End-User-Agent"?: components["parameters"]["CustomerEndUserAgent"];
             };
             path?: never;
@@ -14831,12 +15021,26 @@ export interface operations {
                 "If-Match": components["parameters"]["IfMatch"];
                 /** @description BCP 47 locale for messages and display texts. */
                 "Accept-Language"?: components["parameters"]["AcceptLanguage"];
-                /** @description Storefront host name the request is made for: the `Host` of the visitor's request, lower case, without port. **Required with a hosting key** (`hk_test_…` / `hk_live_…`, one Next.js deployment serving several OTA domains): the API resolves the OTA from it (a verified storefront domain in `platform.tenant_domains` of an OTA the key is granted for) and then handles the call exactly like a secret key of that OTA in the key's environment. Optional with publishable and secret keys; when sent it must be a verified storefront domain of the key's own OTA. Otherwise `403 HOST_NOT_ALLOWED` (`details.reason`: `missing` | `unknown` | `not_granted`). SDK: client option `host` or `options.host`; look hosts up with storefront.resolve. */
+                /**
+                 * @description Storefront host name the request is made for: the `Host` of the visitor's request, lower case, without port. **Required with a hosting key** (`hk_test_…` / `hk_live_…`, one Next.js deployment serving several OTA domains): the API resolves the OTA from it (a verified storefront domain in `platform.tenant_domains` of an OTA the key is granted for) and then handles the call exactly like a secret key of that OTA in the key's environment. Optional with publishable and secret keys; when sent it must be a verified storefront domain of the key's own OTA. Otherwise `403 HOST_NOT_ALLOWED` (`details.reason`: `missing` | `unknown` | `not_granted`). SDK: client option `host` or `options.host`; look hosts up with storefront.resolve.
+                 *
+                 *     **Edge mode.** On the hosted storefront Caddy sets it to the visitor's host on every `/api/*` request, together with `X-Velexis-Edge`, and replaces any value the browser sent. The API resolves the OTA from it (a verified storefront domain, or the OTA's sub-domain of the storefront base domain) and answers `403 HOST_NOT_ALLOWED` for an unknown or unverified host.
+                 */
                 "X-Velexis-Host"?: components["parameters"]["StorefrontHostHeader"];
-                /** @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`. */
+                /**
+                 * @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server), and for the OTA admin's service key on console operations (below); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`.
+                 *
+                 *     **Console operations.** Honoured for secret keys as above and for the OTA admin's first-party service key, which must send it: the staff member's address (the right-most `X-Forwarded-For` entry Caddy gave the admin). With the service key a missing or malformed value answers `400 VALIDATION_FAILED`; the value drives the console sign-in throttle (10 per minute per end-user IP), the lockout and the staff audit log (`staff_actions`). Other callers' values are ignored.
+                 */
                 "X-Velexis-End-User-IP"?: components["parameters"]["CustomerEndUserIp"];
-                /** @description User-Agent of the visitor's browser for calls your server makes on their behalf with a secret or hosting key (longer values are truncated to 512 characters). Honoured only for secret and hosting keys; publishable-key calls use the request's own `User-Agent`. Recorded as session metadata (`AuthSessionDetails.userAgent`, new-sign-in security emails) and used by abuse heuristics. SDK: `options.endUser.userAgent` or the client option `endUser`. */
+                /**
+                 * @description User-Agent of the visitor's browser for calls your server makes on their behalf with a secret or hosting key (longer values are truncated to 512 characters). Honoured only for secret and hosting keys, and for the OTA admin's service key on console operations; publishable-key calls use the request's own `User-Agent`. Recorded as session metadata (`AuthSessionDetails.userAgent`, new-sign-in security emails) and used by abuse heuristics. SDK: `options.endUser.userAgent` or the client option `endUser`.
+                 *
+                 *     **Console operations.** The OTA admin's first-party service key must send the staff member's user agent (missing: `400 VALIDATION_FAILED`); it is recorded in the staff audit log (`staff_actions`).
+                 */
                 "X-Velexis-End-User-Agent"?: components["parameters"]["CustomerEndUserAgent"];
+                /** @description Copy of the `__Host-vx_csrf` cookie, which storefront.get issues. Required on every state-changing (`POST`, `PUT`, `PATCH`, `DELETE`) request of the hosted storefront edge, anonymous ones included, and the `Origin` (or, without it, `Sec-Fetch-Site: same-origin`) must be the storefront host; otherwise `403 CSRF_TOKEN_INVALID`. Ignored for key and bearer callers. */
+                "X-CSRF-Token"?: components["parameters"]["CsrfToken"];
             };
             path?: never;
             cookie?: never;
@@ -14911,11 +15115,23 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description Storefront host name the request is made for: the `Host` of the visitor's request, lower case, without port. **Required with a hosting key** (`hk_test_…` / `hk_live_…`, one Next.js deployment serving several OTA domains): the API resolves the OTA from it (a verified storefront domain in `platform.tenant_domains` of an OTA the key is granted for) and then handles the call exactly like a secret key of that OTA in the key's environment. Optional with publishable and secret keys; when sent it must be a verified storefront domain of the key's own OTA. Otherwise `403 HOST_NOT_ALLOWED` (`details.reason`: `missing` | `unknown` | `not_granted`). SDK: client option `host` or `options.host`; look hosts up with storefront.resolve. */
+                /**
+                 * @description Storefront host name the request is made for: the `Host` of the visitor's request, lower case, without port. **Required with a hosting key** (`hk_test_…` / `hk_live_…`, one Next.js deployment serving several OTA domains): the API resolves the OTA from it (a verified storefront domain in `platform.tenant_domains` of an OTA the key is granted for) and then handles the call exactly like a secret key of that OTA in the key's environment. Optional with publishable and secret keys; when sent it must be a verified storefront domain of the key's own OTA. Otherwise `403 HOST_NOT_ALLOWED` (`details.reason`: `missing` | `unknown` | `not_granted`). SDK: client option `host` or `options.host`; look hosts up with storefront.resolve.
+                 *
+                 *     **Edge mode.** On the hosted storefront Caddy sets it to the visitor's host on every `/api/*` request, together with `X-Velexis-Edge`, and replaces any value the browser sent. The API resolves the OTA from it (a verified storefront domain, or the OTA's sub-domain of the storefront base domain) and answers `403 HOST_NOT_ALLOWED` for an unknown or unverified host.
+                 */
                 "X-Velexis-Host"?: components["parameters"]["StorefrontHostHeader"];
-                /** @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`. */
+                /**
+                 * @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server), and for the OTA admin's service key on console operations (below); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`.
+                 *
+                 *     **Console operations.** Honoured for secret keys as above and for the OTA admin's first-party service key, which must send it: the staff member's address (the right-most `X-Forwarded-For` entry Caddy gave the admin). With the service key a missing or malformed value answers `400 VALIDATION_FAILED`; the value drives the console sign-in throttle (10 per minute per end-user IP), the lockout and the staff audit log (`staff_actions`). Other callers' values are ignored.
+                 */
                 "X-Velexis-End-User-IP"?: components["parameters"]["CustomerEndUserIp"];
-                /** @description User-Agent of the visitor's browser for calls your server makes on their behalf with a secret or hosting key (longer values are truncated to 512 characters). Honoured only for secret and hosting keys; publishable-key calls use the request's own `User-Agent`. Recorded as session metadata (`AuthSessionDetails.userAgent`, new-sign-in security emails) and used by abuse heuristics. SDK: `options.endUser.userAgent` or the client option `endUser`. */
+                /**
+                 * @description User-Agent of the visitor's browser for calls your server makes on their behalf with a secret or hosting key (longer values are truncated to 512 characters). Honoured only for secret and hosting keys, and for the OTA admin's service key on console operations; publishable-key calls use the request's own `User-Agent`. Recorded as session metadata (`AuthSessionDetails.userAgent`, new-sign-in security emails) and used by abuse heuristics. SDK: `options.endUser.userAgent` or the client option `endUser`.
+                 *
+                 *     **Console operations.** The OTA admin's first-party service key must send the staff member's user agent (missing: `400 VALIDATION_FAILED`); it is recorded in the staff audit log (`staff_actions`).
+                 */
                 "X-Velexis-End-User-Agent"?: components["parameters"]["CustomerEndUserAgent"];
             };
             path?: never;
@@ -14970,12 +15186,26 @@ export interface operations {
             header: {
                 /** @description ETag of the version being modified. */
                 "If-Match": components["parameters"]["IfMatch"];
-                /** @description Storefront host name the request is made for: the `Host` of the visitor's request, lower case, without port. **Required with a hosting key** (`hk_test_…` / `hk_live_…`, one Next.js deployment serving several OTA domains): the API resolves the OTA from it (a verified storefront domain in `platform.tenant_domains` of an OTA the key is granted for) and then handles the call exactly like a secret key of that OTA in the key's environment. Optional with publishable and secret keys; when sent it must be a verified storefront domain of the key's own OTA. Otherwise `403 HOST_NOT_ALLOWED` (`details.reason`: `missing` | `unknown` | `not_granted`). SDK: client option `host` or `options.host`; look hosts up with storefront.resolve. */
+                /**
+                 * @description Storefront host name the request is made for: the `Host` of the visitor's request, lower case, without port. **Required with a hosting key** (`hk_test_…` / `hk_live_…`, one Next.js deployment serving several OTA domains): the API resolves the OTA from it (a verified storefront domain in `platform.tenant_domains` of an OTA the key is granted for) and then handles the call exactly like a secret key of that OTA in the key's environment. Optional with publishable and secret keys; when sent it must be a verified storefront domain of the key's own OTA. Otherwise `403 HOST_NOT_ALLOWED` (`details.reason`: `missing` | `unknown` | `not_granted`). SDK: client option `host` or `options.host`; look hosts up with storefront.resolve.
+                 *
+                 *     **Edge mode.** On the hosted storefront Caddy sets it to the visitor's host on every `/api/*` request, together with `X-Velexis-Edge`, and replaces any value the browser sent. The API resolves the OTA from it (a verified storefront domain, or the OTA's sub-domain of the storefront base domain) and answers `403 HOST_NOT_ALLOWED` for an unknown or unverified host.
+                 */
                 "X-Velexis-Host"?: components["parameters"]["StorefrontHostHeader"];
-                /** @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`. */
+                /**
+                 * @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server), and for the OTA admin's service key on console operations (below); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`.
+                 *
+                 *     **Console operations.** Honoured for secret keys as above and for the OTA admin's first-party service key, which must send it: the staff member's address (the right-most `X-Forwarded-For` entry Caddy gave the admin). With the service key a missing or malformed value answers `400 VALIDATION_FAILED`; the value drives the console sign-in throttle (10 per minute per end-user IP), the lockout and the staff audit log (`staff_actions`). Other callers' values are ignored.
+                 */
                 "X-Velexis-End-User-IP"?: components["parameters"]["CustomerEndUserIp"];
-                /** @description User-Agent of the visitor's browser for calls your server makes on their behalf with a secret or hosting key (longer values are truncated to 512 characters). Honoured only for secret and hosting keys; publishable-key calls use the request's own `User-Agent`. Recorded as session metadata (`AuthSessionDetails.userAgent`, new-sign-in security emails) and used by abuse heuristics. SDK: `options.endUser.userAgent` or the client option `endUser`. */
+                /**
+                 * @description User-Agent of the visitor's browser for calls your server makes on their behalf with a secret or hosting key (longer values are truncated to 512 characters). Honoured only for secret and hosting keys, and for the OTA admin's service key on console operations; publishable-key calls use the request's own `User-Agent`. Recorded as session metadata (`AuthSessionDetails.userAgent`, new-sign-in security emails) and used by abuse heuristics. SDK: `options.endUser.userAgent` or the client option `endUser`.
+                 *
+                 *     **Console operations.** The OTA admin's first-party service key must send the staff member's user agent (missing: `400 VALIDATION_FAILED`); it is recorded in the staff audit log (`staff_actions`).
+                 */
                 "X-Velexis-End-User-Agent"?: components["parameters"]["CustomerEndUserAgent"];
+                /** @description Copy of the `__Host-vx_csrf` cookie, which storefront.get issues. Required on every state-changing (`POST`, `PUT`, `PATCH`, `DELETE`) request of the hosted storefront edge, anonymous ones included, and the `Origin` (or, without it, `Sec-Fetch-Site: same-origin`) must be the storefront host; otherwise `403 CSRF_TOKEN_INVALID`. Ignored for key and bearer callers. */
+                "X-CSRF-Token"?: components["parameters"]["CsrfToken"];
             };
             path?: never;
             cookie?: never;
@@ -15048,12 +15278,26 @@ export interface operations {
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
                 /** @description BCP 47 locale for messages and display texts. */
                 "Accept-Language"?: components["parameters"]["AcceptLanguage"];
-                /** @description Storefront host name the request is made for: the `Host` of the visitor's request, lower case, without port. **Required with a hosting key** (`hk_test_…` / `hk_live_…`, one Next.js deployment serving several OTA domains): the API resolves the OTA from it (a verified storefront domain in `platform.tenant_domains` of an OTA the key is granted for) and then handles the call exactly like a secret key of that OTA in the key's environment. Optional with publishable and secret keys; when sent it must be a verified storefront domain of the key's own OTA. Otherwise `403 HOST_NOT_ALLOWED` (`details.reason`: `missing` | `unknown` | `not_granted`). SDK: client option `host` or `options.host`; look hosts up with storefront.resolve. */
+                /**
+                 * @description Storefront host name the request is made for: the `Host` of the visitor's request, lower case, without port. **Required with a hosting key** (`hk_test_…` / `hk_live_…`, one Next.js deployment serving several OTA domains): the API resolves the OTA from it (a verified storefront domain in `platform.tenant_domains` of an OTA the key is granted for) and then handles the call exactly like a secret key of that OTA in the key's environment. Optional with publishable and secret keys; when sent it must be a verified storefront domain of the key's own OTA. Otherwise `403 HOST_NOT_ALLOWED` (`details.reason`: `missing` | `unknown` | `not_granted`). SDK: client option `host` or `options.host`; look hosts up with storefront.resolve.
+                 *
+                 *     **Edge mode.** On the hosted storefront Caddy sets it to the visitor's host on every `/api/*` request, together with `X-Velexis-Edge`, and replaces any value the browser sent. The API resolves the OTA from it (a verified storefront domain, or the OTA's sub-domain of the storefront base domain) and answers `403 HOST_NOT_ALLOWED` for an unknown or unverified host.
+                 */
                 "X-Velexis-Host"?: components["parameters"]["StorefrontHostHeader"];
-                /** @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`. */
+                /**
+                 * @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server), and for the OTA admin's service key on console operations (below); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`.
+                 *
+                 *     **Console operations.** Honoured for secret keys as above and for the OTA admin's first-party service key, which must send it: the staff member's address (the right-most `X-Forwarded-For` entry Caddy gave the admin). With the service key a missing or malformed value answers `400 VALIDATION_FAILED`; the value drives the console sign-in throttle (10 per minute per end-user IP), the lockout and the staff audit log (`staff_actions`). Other callers' values are ignored.
+                 */
                 "X-Velexis-End-User-IP"?: components["parameters"]["CustomerEndUserIp"];
-                /** @description User-Agent of the visitor's browser for calls your server makes on their behalf with a secret or hosting key (longer values are truncated to 512 characters). Honoured only for secret and hosting keys; publishable-key calls use the request's own `User-Agent`. Recorded as session metadata (`AuthSessionDetails.userAgent`, new-sign-in security emails) and used by abuse heuristics. SDK: `options.endUser.userAgent` or the client option `endUser`. */
+                /**
+                 * @description User-Agent of the visitor's browser for calls your server makes on their behalf with a secret or hosting key (longer values are truncated to 512 characters). Honoured only for secret and hosting keys, and for the OTA admin's service key on console operations; publishable-key calls use the request's own `User-Agent`. Recorded as session metadata (`AuthSessionDetails.userAgent`, new-sign-in security emails) and used by abuse heuristics. SDK: `options.endUser.userAgent` or the client option `endUser`.
+                 *
+                 *     **Console operations.** The OTA admin's first-party service key must send the staff member's user agent (missing: `400 VALIDATION_FAILED`); it is recorded in the staff audit log (`staff_actions`).
+                 */
                 "X-Velexis-End-User-Agent"?: components["parameters"]["CustomerEndUserAgent"];
+                /** @description Copy of the `__Host-vx_csrf` cookie, which storefront.get issues. Required on every state-changing (`POST`, `PUT`, `PATCH`, `DELETE`) request of the hosted storefront edge, anonymous ones included, and the `Origin` (or, without it, `Sec-Fetch-Site: same-origin`) must be the storefront host; otherwise `403 CSRF_TOKEN_INVALID`. Ignored for key and bearer callers. */
+                "X-CSRF-Token"?: components["parameters"]["CsrfToken"];
             };
             path?: never;
             cookie?: never;
@@ -15071,10 +15315,11 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Deletion accepted; the customer is signed out everywhere. */
+            /** @description Deletion accepted; the customer is signed out everywhere. In edge mode the `__Host-vx_at` and `__Host-vx_rt` cookies are cleared and the CSRF cookie is rotated. */
             202: {
                 headers: {
                     "X-Request-Id": components["headers"]["X-Request-Id"];
+                    "Set-Cookie": components["headers"]["Set-Cookie"];
                     [name: string]: unknown;
                 };
                 content: {
@@ -15125,12 +15370,26 @@ export interface operations {
             header: {
                 /** @description Client-generated unique key (UUID v4) that makes the request safe to retry for 24 hours. */
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
-                /** @description Storefront host name the request is made for: the `Host` of the visitor's request, lower case, without port. **Required with a hosting key** (`hk_test_…` / `hk_live_…`, one Next.js deployment serving several OTA domains): the API resolves the OTA from it (a verified storefront domain in `platform.tenant_domains` of an OTA the key is granted for) and then handles the call exactly like a secret key of that OTA in the key's environment. Optional with publishable and secret keys; when sent it must be a verified storefront domain of the key's own OTA. Otherwise `403 HOST_NOT_ALLOWED` (`details.reason`: `missing` | `unknown` | `not_granted`). SDK: client option `host` or `options.host`; look hosts up with storefront.resolve. */
+                /**
+                 * @description Storefront host name the request is made for: the `Host` of the visitor's request, lower case, without port. **Required with a hosting key** (`hk_test_…` / `hk_live_…`, one Next.js deployment serving several OTA domains): the API resolves the OTA from it (a verified storefront domain in `platform.tenant_domains` of an OTA the key is granted for) and then handles the call exactly like a secret key of that OTA in the key's environment. Optional with publishable and secret keys; when sent it must be a verified storefront domain of the key's own OTA. Otherwise `403 HOST_NOT_ALLOWED` (`details.reason`: `missing` | `unknown` | `not_granted`). SDK: client option `host` or `options.host`; look hosts up with storefront.resolve.
+                 *
+                 *     **Edge mode.** On the hosted storefront Caddy sets it to the visitor's host on every `/api/*` request, together with `X-Velexis-Edge`, and replaces any value the browser sent. The API resolves the OTA from it (a verified storefront domain, or the OTA's sub-domain of the storefront base domain) and answers `403 HOST_NOT_ALLOWED` for an unknown or unverified host.
+                 */
                 "X-Velexis-Host"?: components["parameters"]["StorefrontHostHeader"];
-                /** @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`. */
+                /**
+                 * @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server), and for the OTA admin's service key on console operations (below); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`.
+                 *
+                 *     **Console operations.** Honoured for secret keys as above and for the OTA admin's first-party service key, which must send it: the staff member's address (the right-most `X-Forwarded-For` entry Caddy gave the admin). With the service key a missing or malformed value answers `400 VALIDATION_FAILED`; the value drives the console sign-in throttle (10 per minute per end-user IP), the lockout and the staff audit log (`staff_actions`). Other callers' values are ignored.
+                 */
                 "X-Velexis-End-User-IP"?: components["parameters"]["CustomerEndUserIp"];
-                /** @description User-Agent of the visitor's browser for calls your server makes on their behalf with a secret or hosting key (longer values are truncated to 512 characters). Honoured only for secret and hosting keys; publishable-key calls use the request's own `User-Agent`. Recorded as session metadata (`AuthSessionDetails.userAgent`, new-sign-in security emails) and used by abuse heuristics. SDK: `options.endUser.userAgent` or the client option `endUser`. */
+                /**
+                 * @description User-Agent of the visitor's browser for calls your server makes on their behalf with a secret or hosting key (longer values are truncated to 512 characters). Honoured only for secret and hosting keys, and for the OTA admin's service key on console operations; publishable-key calls use the request's own `User-Agent`. Recorded as session metadata (`AuthSessionDetails.userAgent`, new-sign-in security emails) and used by abuse heuristics. SDK: `options.endUser.userAgent` or the client option `endUser`.
+                 *
+                 *     **Console operations.** The OTA admin's first-party service key must send the staff member's user agent (missing: `400 VALIDATION_FAILED`); it is recorded in the staff audit log (`staff_actions`).
+                 */
                 "X-Velexis-End-User-Agent"?: components["parameters"]["CustomerEndUserAgent"];
+                /** @description Copy of the `__Host-vx_csrf` cookie, which storefront.get issues. Required on every state-changing (`POST`, `PUT`, `PATCH`, `DELETE`) request of the hosted storefront edge, anonymous ones included, and the `Origin` (or, without it, `Sec-Fetch-Site: same-origin`) must be the storefront host; otherwise `403 CSRF_TOKEN_INVALID`. Ignored for key and bearer callers. */
+                "X-CSRF-Token"?: components["parameters"]["CsrfToken"];
             };
             path?: never;
             cookie?: never;
@@ -15184,11 +15443,23 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description Storefront host name the request is made for: the `Host` of the visitor's request, lower case, without port. **Required with a hosting key** (`hk_test_…` / `hk_live_…`, one Next.js deployment serving several OTA domains): the API resolves the OTA from it (a verified storefront domain in `platform.tenant_domains` of an OTA the key is granted for) and then handles the call exactly like a secret key of that OTA in the key's environment. Optional with publishable and secret keys; when sent it must be a verified storefront domain of the key's own OTA. Otherwise `403 HOST_NOT_ALLOWED` (`details.reason`: `missing` | `unknown` | `not_granted`). SDK: client option `host` or `options.host`; look hosts up with storefront.resolve. */
+                /**
+                 * @description Storefront host name the request is made for: the `Host` of the visitor's request, lower case, without port. **Required with a hosting key** (`hk_test_…` / `hk_live_…`, one Next.js deployment serving several OTA domains): the API resolves the OTA from it (a verified storefront domain in `platform.tenant_domains` of an OTA the key is granted for) and then handles the call exactly like a secret key of that OTA in the key's environment. Optional with publishable and secret keys; when sent it must be a verified storefront domain of the key's own OTA. Otherwise `403 HOST_NOT_ALLOWED` (`details.reason`: `missing` | `unknown` | `not_granted`). SDK: client option `host` or `options.host`; look hosts up with storefront.resolve.
+                 *
+                 *     **Edge mode.** On the hosted storefront Caddy sets it to the visitor's host on every `/api/*` request, together with `X-Velexis-Edge`, and replaces any value the browser sent. The API resolves the OTA from it (a verified storefront domain, or the OTA's sub-domain of the storefront base domain) and answers `403 HOST_NOT_ALLOWED` for an unknown or unverified host.
+                 */
                 "X-Velexis-Host"?: components["parameters"]["StorefrontHostHeader"];
-                /** @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`. */
+                /**
+                 * @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server), and for the OTA admin's service key on console operations (below); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`.
+                 *
+                 *     **Console operations.** Honoured for secret keys as above and for the OTA admin's first-party service key, which must send it: the staff member's address (the right-most `X-Forwarded-For` entry Caddy gave the admin). With the service key a missing or malformed value answers `400 VALIDATION_FAILED`; the value drives the console sign-in throttle (10 per minute per end-user IP), the lockout and the staff audit log (`staff_actions`). Other callers' values are ignored.
+                 */
                 "X-Velexis-End-User-IP"?: components["parameters"]["CustomerEndUserIp"];
-                /** @description User-Agent of the visitor's browser for calls your server makes on their behalf with a secret or hosting key (longer values are truncated to 512 characters). Honoured only for secret and hosting keys; publishable-key calls use the request's own `User-Agent`. Recorded as session metadata (`AuthSessionDetails.userAgent`, new-sign-in security emails) and used by abuse heuristics. SDK: `options.endUser.userAgent` or the client option `endUser`. */
+                /**
+                 * @description User-Agent of the visitor's browser for calls your server makes on their behalf with a secret or hosting key (longer values are truncated to 512 characters). Honoured only for secret and hosting keys, and for the OTA admin's service key on console operations; publishable-key calls use the request's own `User-Agent`. Recorded as session metadata (`AuthSessionDetails.userAgent`, new-sign-in security emails) and used by abuse heuristics. SDK: `options.endUser.userAgent` or the client option `endUser`.
+                 *
+                 *     **Console operations.** The OTA admin's first-party service key must send the staff member's user agent (missing: `400 VALIDATION_FAILED`); it is recorded in the staff audit log (`staff_actions`).
+                 */
                 "X-Velexis-End-User-Agent"?: components["parameters"]["CustomerEndUserAgent"];
             };
             path: {
@@ -15239,11 +15510,23 @@ export interface operations {
                 limit?: components["parameters"]["Limit"];
             };
             header?: {
-                /** @description Storefront host name the request is made for: the `Host` of the visitor's request, lower case, without port. **Required with a hosting key** (`hk_test_…` / `hk_live_…`, one Next.js deployment serving several OTA domains): the API resolves the OTA from it (a verified storefront domain in `platform.tenant_domains` of an OTA the key is granted for) and then handles the call exactly like a secret key of that OTA in the key's environment. Optional with publishable and secret keys; when sent it must be a verified storefront domain of the key's own OTA. Otherwise `403 HOST_NOT_ALLOWED` (`details.reason`: `missing` | `unknown` | `not_granted`). SDK: client option `host` or `options.host`; look hosts up with storefront.resolve. */
+                /**
+                 * @description Storefront host name the request is made for: the `Host` of the visitor's request, lower case, without port. **Required with a hosting key** (`hk_test_…` / `hk_live_…`, one Next.js deployment serving several OTA domains): the API resolves the OTA from it (a verified storefront domain in `platform.tenant_domains` of an OTA the key is granted for) and then handles the call exactly like a secret key of that OTA in the key's environment. Optional with publishable and secret keys; when sent it must be a verified storefront domain of the key's own OTA. Otherwise `403 HOST_NOT_ALLOWED` (`details.reason`: `missing` | `unknown` | `not_granted`). SDK: client option `host` or `options.host`; look hosts up with storefront.resolve.
+                 *
+                 *     **Edge mode.** On the hosted storefront Caddy sets it to the visitor's host on every `/api/*` request, together with `X-Velexis-Edge`, and replaces any value the browser sent. The API resolves the OTA from it (a verified storefront domain, or the OTA's sub-domain of the storefront base domain) and answers `403 HOST_NOT_ALLOWED` for an unknown or unverified host.
+                 */
                 "X-Velexis-Host"?: components["parameters"]["StorefrontHostHeader"];
-                /** @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`. */
+                /**
+                 * @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server), and for the OTA admin's service key on console operations (below); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`.
+                 *
+                 *     **Console operations.** Honoured for secret keys as above and for the OTA admin's first-party service key, which must send it: the staff member's address (the right-most `X-Forwarded-For` entry Caddy gave the admin). With the service key a missing or malformed value answers `400 VALIDATION_FAILED`; the value drives the console sign-in throttle (10 per minute per end-user IP), the lockout and the staff audit log (`staff_actions`). Other callers' values are ignored.
+                 */
                 "X-Velexis-End-User-IP"?: components["parameters"]["CustomerEndUserIp"];
-                /** @description User-Agent of the visitor's browser for calls your server makes on their behalf with a secret or hosting key (longer values are truncated to 512 characters). Honoured only for secret and hosting keys; publishable-key calls use the request's own `User-Agent`. Recorded as session metadata (`AuthSessionDetails.userAgent`, new-sign-in security emails) and used by abuse heuristics. SDK: `options.endUser.userAgent` or the client option `endUser`. */
+                /**
+                 * @description User-Agent of the visitor's browser for calls your server makes on their behalf with a secret or hosting key (longer values are truncated to 512 characters). Honoured only for secret and hosting keys, and for the OTA admin's service key on console operations; publishable-key calls use the request's own `User-Agent`. Recorded as session metadata (`AuthSessionDetails.userAgent`, new-sign-in security emails) and used by abuse heuristics. SDK: `options.endUser.userAgent` or the client option `endUser`.
+                 *
+                 *     **Console operations.** The OTA admin's first-party service key must send the staff member's user agent (missing: `400 VALIDATION_FAILED`); it is recorded in the staff audit log (`staff_actions`).
+                 */
                 "X-Velexis-End-User-Agent"?: components["parameters"]["CustomerEndUserAgent"];
             };
             path?: never;
@@ -15365,12 +15648,26 @@ export interface operations {
             header: {
                 /** @description Client-generated unique key (UUID v4) that makes the request safe to retry for 24 hours. */
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
-                /** @description Storefront host name the request is made for: the `Host` of the visitor's request, lower case, without port. **Required with a hosting key** (`hk_test_…` / `hk_live_…`, one Next.js deployment serving several OTA domains): the API resolves the OTA from it (a verified storefront domain in `platform.tenant_domains` of an OTA the key is granted for) and then handles the call exactly like a secret key of that OTA in the key's environment. Optional with publishable and secret keys; when sent it must be a verified storefront domain of the key's own OTA. Otherwise `403 HOST_NOT_ALLOWED` (`details.reason`: `missing` | `unknown` | `not_granted`). SDK: client option `host` or `options.host`; look hosts up with storefront.resolve. */
+                /**
+                 * @description Storefront host name the request is made for: the `Host` of the visitor's request, lower case, without port. **Required with a hosting key** (`hk_test_…` / `hk_live_…`, one Next.js deployment serving several OTA domains): the API resolves the OTA from it (a verified storefront domain in `platform.tenant_domains` of an OTA the key is granted for) and then handles the call exactly like a secret key of that OTA in the key's environment. Optional with publishable and secret keys; when sent it must be a verified storefront domain of the key's own OTA. Otherwise `403 HOST_NOT_ALLOWED` (`details.reason`: `missing` | `unknown` | `not_granted`). SDK: client option `host` or `options.host`; look hosts up with storefront.resolve.
+                 *
+                 *     **Edge mode.** On the hosted storefront Caddy sets it to the visitor's host on every `/api/*` request, together with `X-Velexis-Edge`, and replaces any value the browser sent. The API resolves the OTA from it (a verified storefront domain, or the OTA's sub-domain of the storefront base domain) and answers `403 HOST_NOT_ALLOWED` for an unknown or unverified host.
+                 */
                 "X-Velexis-Host"?: components["parameters"]["StorefrontHostHeader"];
-                /** @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`. */
+                /**
+                 * @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server), and for the OTA admin's service key on console operations (below); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`.
+                 *
+                 *     **Console operations.** Honoured for secret keys as above and for the OTA admin's first-party service key, which must send it: the staff member's address (the right-most `X-Forwarded-For` entry Caddy gave the admin). With the service key a missing or malformed value answers `400 VALIDATION_FAILED`; the value drives the console sign-in throttle (10 per minute per end-user IP), the lockout and the staff audit log (`staff_actions`). Other callers' values are ignored.
+                 */
                 "X-Velexis-End-User-IP"?: components["parameters"]["CustomerEndUserIp"];
-                /** @description User-Agent of the visitor's browser for calls your server makes on their behalf with a secret or hosting key (longer values are truncated to 512 characters). Honoured only for secret and hosting keys; publishable-key calls use the request's own `User-Agent`. Recorded as session metadata (`AuthSessionDetails.userAgent`, new-sign-in security emails) and used by abuse heuristics. SDK: `options.endUser.userAgent` or the client option `endUser`. */
+                /**
+                 * @description User-Agent of the visitor's browser for calls your server makes on their behalf with a secret or hosting key (longer values are truncated to 512 characters). Honoured only for secret and hosting keys, and for the OTA admin's service key on console operations; publishable-key calls use the request's own `User-Agent`. Recorded as session metadata (`AuthSessionDetails.userAgent`, new-sign-in security emails) and used by abuse heuristics. SDK: `options.endUser.userAgent` or the client option `endUser`.
+                 *
+                 *     **Console operations.** The OTA admin's first-party service key must send the staff member's user agent (missing: `400 VALIDATION_FAILED`); it is recorded in the staff audit log (`staff_actions`).
+                 */
                 "X-Velexis-End-User-Agent"?: components["parameters"]["CustomerEndUserAgent"];
+                /** @description Copy of the `__Host-vx_csrf` cookie, which storefront.get issues. Required on every state-changing (`POST`, `PUT`, `PATCH`, `DELETE`) request of the hosted storefront edge, anonymous ones included, and the `Origin` (or, without it, `Sec-Fetch-Site: same-origin`) must be the storefront host; otherwise `403 CSRF_TOKEN_INVALID`. Ignored for key and bearer callers. */
+                "X-CSRF-Token"?: components["parameters"]["CsrfToken"];
             };
             path?: never;
             cookie?: never;
@@ -15554,11 +15851,23 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description Storefront host name the request is made for: the `Host` of the visitor's request, lower case, without port. **Required with a hosting key** (`hk_test_…` / `hk_live_…`, one Next.js deployment serving several OTA domains): the API resolves the OTA from it (a verified storefront domain in `platform.tenant_domains` of an OTA the key is granted for) and then handles the call exactly like a secret key of that OTA in the key's environment. Optional with publishable and secret keys; when sent it must be a verified storefront domain of the key's own OTA. Otherwise `403 HOST_NOT_ALLOWED` (`details.reason`: `missing` | `unknown` | `not_granted`). SDK: client option `host` or `options.host`; look hosts up with storefront.resolve. */
+                /**
+                 * @description Storefront host name the request is made for: the `Host` of the visitor's request, lower case, without port. **Required with a hosting key** (`hk_test_…` / `hk_live_…`, one Next.js deployment serving several OTA domains): the API resolves the OTA from it (a verified storefront domain in `platform.tenant_domains` of an OTA the key is granted for) and then handles the call exactly like a secret key of that OTA in the key's environment. Optional with publishable and secret keys; when sent it must be a verified storefront domain of the key's own OTA. Otherwise `403 HOST_NOT_ALLOWED` (`details.reason`: `missing` | `unknown` | `not_granted`). SDK: client option `host` or `options.host`; look hosts up with storefront.resolve.
+                 *
+                 *     **Edge mode.** On the hosted storefront Caddy sets it to the visitor's host on every `/api/*` request, together with `X-Velexis-Edge`, and replaces any value the browser sent. The API resolves the OTA from it (a verified storefront domain, or the OTA's sub-domain of the storefront base domain) and answers `403 HOST_NOT_ALLOWED` for an unknown or unverified host.
+                 */
                 "X-Velexis-Host"?: components["parameters"]["StorefrontHostHeader"];
-                /** @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`. */
+                /**
+                 * @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server), and for the OTA admin's service key on console operations (below); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`.
+                 *
+                 *     **Console operations.** Honoured for secret keys as above and for the OTA admin's first-party service key, which must send it: the staff member's address (the right-most `X-Forwarded-For` entry Caddy gave the admin). With the service key a missing or malformed value answers `400 VALIDATION_FAILED`; the value drives the console sign-in throttle (10 per minute per end-user IP), the lockout and the staff audit log (`staff_actions`). Other callers' values are ignored.
+                 */
                 "X-Velexis-End-User-IP"?: components["parameters"]["CustomerEndUserIp"];
-                /** @description User-Agent of the visitor's browser for calls your server makes on their behalf with a secret or hosting key (longer values are truncated to 512 characters). Honoured only for secret and hosting keys; publishable-key calls use the request's own `User-Agent`. Recorded as session metadata (`AuthSessionDetails.userAgent`, new-sign-in security emails) and used by abuse heuristics. SDK: `options.endUser.userAgent` or the client option `endUser`. */
+                /**
+                 * @description User-Agent of the visitor's browser for calls your server makes on their behalf with a secret or hosting key (longer values are truncated to 512 characters). Honoured only for secret and hosting keys, and for the OTA admin's service key on console operations; publishable-key calls use the request's own `User-Agent`. Recorded as session metadata (`AuthSessionDetails.userAgent`, new-sign-in security emails) and used by abuse heuristics. SDK: `options.endUser.userAgent` or the client option `endUser`.
+                 *
+                 *     **Console operations.** The OTA admin's first-party service key must send the staff member's user agent (missing: `400 VALIDATION_FAILED`); it is recorded in the staff audit log (`staff_actions`).
+                 */
                 "X-Velexis-End-User-Agent"?: components["parameters"]["CustomerEndUserAgent"];
             };
             path: {
@@ -15647,12 +15956,26 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description Storefront host name the request is made for: the `Host` of the visitor's request, lower case, without port. **Required with a hosting key** (`hk_test_…` / `hk_live_…`, one Next.js deployment serving several OTA domains): the API resolves the OTA from it (a verified storefront domain in `platform.tenant_domains` of an OTA the key is granted for) and then handles the call exactly like a secret key of that OTA in the key's environment. Optional with publishable and secret keys; when sent it must be a verified storefront domain of the key's own OTA. Otherwise `403 HOST_NOT_ALLOWED` (`details.reason`: `missing` | `unknown` | `not_granted`). SDK: client option `host` or `options.host`; look hosts up with storefront.resolve. */
+                /**
+                 * @description Storefront host name the request is made for: the `Host` of the visitor's request, lower case, without port. **Required with a hosting key** (`hk_test_…` / `hk_live_…`, one Next.js deployment serving several OTA domains): the API resolves the OTA from it (a verified storefront domain in `platform.tenant_domains` of an OTA the key is granted for) and then handles the call exactly like a secret key of that OTA in the key's environment. Optional with publishable and secret keys; when sent it must be a verified storefront domain of the key's own OTA. Otherwise `403 HOST_NOT_ALLOWED` (`details.reason`: `missing` | `unknown` | `not_granted`). SDK: client option `host` or `options.host`; look hosts up with storefront.resolve.
+                 *
+                 *     **Edge mode.** On the hosted storefront Caddy sets it to the visitor's host on every `/api/*` request, together with `X-Velexis-Edge`, and replaces any value the browser sent. The API resolves the OTA from it (a verified storefront domain, or the OTA's sub-domain of the storefront base domain) and answers `403 HOST_NOT_ALLOWED` for an unknown or unverified host.
+                 */
                 "X-Velexis-Host"?: components["parameters"]["StorefrontHostHeader"];
-                /** @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`. */
+                /**
+                 * @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server), and for the OTA admin's service key on console operations (below); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`.
+                 *
+                 *     **Console operations.** Honoured for secret keys as above and for the OTA admin's first-party service key, which must send it: the staff member's address (the right-most `X-Forwarded-For` entry Caddy gave the admin). With the service key a missing or malformed value answers `400 VALIDATION_FAILED`; the value drives the console sign-in throttle (10 per minute per end-user IP), the lockout and the staff audit log (`staff_actions`). Other callers' values are ignored.
+                 */
                 "X-Velexis-End-User-IP"?: components["parameters"]["CustomerEndUserIp"];
-                /** @description User-Agent of the visitor's browser for calls your server makes on their behalf with a secret or hosting key (longer values are truncated to 512 characters). Honoured only for secret and hosting keys; publishable-key calls use the request's own `User-Agent`. Recorded as session metadata (`AuthSessionDetails.userAgent`, new-sign-in security emails) and used by abuse heuristics. SDK: `options.endUser.userAgent` or the client option `endUser`. */
+                /**
+                 * @description User-Agent of the visitor's browser for calls your server makes on their behalf with a secret or hosting key (longer values are truncated to 512 characters). Honoured only for secret and hosting keys, and for the OTA admin's service key on console operations; publishable-key calls use the request's own `User-Agent`. Recorded as session metadata (`AuthSessionDetails.userAgent`, new-sign-in security emails) and used by abuse heuristics. SDK: `options.endUser.userAgent` or the client option `endUser`.
+                 *
+                 *     **Console operations.** The OTA admin's first-party service key must send the staff member's user agent (missing: `400 VALIDATION_FAILED`); it is recorded in the staff audit log (`staff_actions`).
+                 */
                 "X-Velexis-End-User-Agent"?: components["parameters"]["CustomerEndUserAgent"];
+                /** @description Copy of the `__Host-vx_csrf` cookie, which storefront.get issues. Required on every state-changing (`POST`, `PUT`, `PATCH`, `DELETE`) request of the hosted storefront edge, anonymous ones included, and the `Origin` (or, without it, `Sec-Fetch-Site: same-origin`) must be the storefront host; otherwise `403 CSRF_TOKEN_INVALID`. Ignored for key and bearer callers. */
+                "X-CSRF-Token"?: components["parameters"]["CsrfToken"];
             };
             path: {
                 /** @description Saved traveller id. */
@@ -15683,12 +16006,26 @@ export interface operations {
             header: {
                 /** @description ETag of the version being modified. */
                 "If-Match": components["parameters"]["IfMatch"];
-                /** @description Storefront host name the request is made for: the `Host` of the visitor's request, lower case, without port. **Required with a hosting key** (`hk_test_…` / `hk_live_…`, one Next.js deployment serving several OTA domains): the API resolves the OTA from it (a verified storefront domain in `platform.tenant_domains` of an OTA the key is granted for) and then handles the call exactly like a secret key of that OTA in the key's environment. Optional with publishable and secret keys; when sent it must be a verified storefront domain of the key's own OTA. Otherwise `403 HOST_NOT_ALLOWED` (`details.reason`: `missing` | `unknown` | `not_granted`). SDK: client option `host` or `options.host`; look hosts up with storefront.resolve. */
+                /**
+                 * @description Storefront host name the request is made for: the `Host` of the visitor's request, lower case, without port. **Required with a hosting key** (`hk_test_…` / `hk_live_…`, one Next.js deployment serving several OTA domains): the API resolves the OTA from it (a verified storefront domain in `platform.tenant_domains` of an OTA the key is granted for) and then handles the call exactly like a secret key of that OTA in the key's environment. Optional with publishable and secret keys; when sent it must be a verified storefront domain of the key's own OTA. Otherwise `403 HOST_NOT_ALLOWED` (`details.reason`: `missing` | `unknown` | `not_granted`). SDK: client option `host` or `options.host`; look hosts up with storefront.resolve.
+                 *
+                 *     **Edge mode.** On the hosted storefront Caddy sets it to the visitor's host on every `/api/*` request, together with `X-Velexis-Edge`, and replaces any value the browser sent. The API resolves the OTA from it (a verified storefront domain, or the OTA's sub-domain of the storefront base domain) and answers `403 HOST_NOT_ALLOWED` for an unknown or unverified host.
+                 */
                 "X-Velexis-Host"?: components["parameters"]["StorefrontHostHeader"];
-                /** @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`. */
+                /**
+                 * @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server), and for the OTA admin's service key on console operations (below); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`.
+                 *
+                 *     **Console operations.** Honoured for secret keys as above and for the OTA admin's first-party service key, which must send it: the staff member's address (the right-most `X-Forwarded-For` entry Caddy gave the admin). With the service key a missing or malformed value answers `400 VALIDATION_FAILED`; the value drives the console sign-in throttle (10 per minute per end-user IP), the lockout and the staff audit log (`staff_actions`). Other callers' values are ignored.
+                 */
                 "X-Velexis-End-User-IP"?: components["parameters"]["CustomerEndUserIp"];
-                /** @description User-Agent of the visitor's browser for calls your server makes on their behalf with a secret or hosting key (longer values are truncated to 512 characters). Honoured only for secret and hosting keys; publishable-key calls use the request's own `User-Agent`. Recorded as session metadata (`AuthSessionDetails.userAgent`, new-sign-in security emails) and used by abuse heuristics. SDK: `options.endUser.userAgent` or the client option `endUser`. */
+                /**
+                 * @description User-Agent of the visitor's browser for calls your server makes on their behalf with a secret or hosting key (longer values are truncated to 512 characters). Honoured only for secret and hosting keys, and for the OTA admin's service key on console operations; publishable-key calls use the request's own `User-Agent`. Recorded as session metadata (`AuthSessionDetails.userAgent`, new-sign-in security emails) and used by abuse heuristics. SDK: `options.endUser.userAgent` or the client option `endUser`.
+                 *
+                 *     **Console operations.** The OTA admin's first-party service key must send the staff member's user agent (missing: `400 VALIDATION_FAILED`); it is recorded in the staff audit log (`staff_actions`).
+                 */
                 "X-Velexis-End-User-Agent"?: components["parameters"]["CustomerEndUserAgent"];
+                /** @description Copy of the `__Host-vx_csrf` cookie, which storefront.get issues. Required on every state-changing (`POST`, `PUT`, `PATCH`, `DELETE`) request of the hosted storefront edge, anonymous ones included, and the `Origin` (or, without it, `Sec-Fetch-Site: same-origin`) must be the storefront host; otherwise `403 CSRF_TOKEN_INVALID`. Ignored for key and bearer callers. */
+                "X-CSRF-Token"?: components["parameters"]["CsrfToken"];
             };
             path: {
                 /** @description Saved traveller id. */
@@ -15824,11 +16161,23 @@ export interface operations {
             header?: {
                 /** @description BCP 47 locale for messages and display texts. */
                 "Accept-Language"?: components["parameters"]["AcceptLanguage"];
-                /** @description Storefront host name the request is made for: the `Host` of the visitor's request, lower case, without port. **Required with a hosting key** (`hk_test_…` / `hk_live_…`, one Next.js deployment serving several OTA domains): the API resolves the OTA from it (a verified storefront domain in `platform.tenant_domains` of an OTA the key is granted for) and then handles the call exactly like a secret key of that OTA in the key's environment. Optional with publishable and secret keys; when sent it must be a verified storefront domain of the key's own OTA. Otherwise `403 HOST_NOT_ALLOWED` (`details.reason`: `missing` | `unknown` | `not_granted`). SDK: client option `host` or `options.host`; look hosts up with storefront.resolve. */
+                /**
+                 * @description Storefront host name the request is made for: the `Host` of the visitor's request, lower case, without port. **Required with a hosting key** (`hk_test_…` / `hk_live_…`, one Next.js deployment serving several OTA domains): the API resolves the OTA from it (a verified storefront domain in `platform.tenant_domains` of an OTA the key is granted for) and then handles the call exactly like a secret key of that OTA in the key's environment. Optional with publishable and secret keys; when sent it must be a verified storefront domain of the key's own OTA. Otherwise `403 HOST_NOT_ALLOWED` (`details.reason`: `missing` | `unknown` | `not_granted`). SDK: client option `host` or `options.host`; look hosts up with storefront.resolve.
+                 *
+                 *     **Edge mode.** On the hosted storefront Caddy sets it to the visitor's host on every `/api/*` request, together with `X-Velexis-Edge`, and replaces any value the browser sent. The API resolves the OTA from it (a verified storefront domain, or the OTA's sub-domain of the storefront base domain) and answers `403 HOST_NOT_ALLOWED` for an unknown or unverified host.
+                 */
                 "X-Velexis-Host"?: components["parameters"]["StorefrontHostHeader"];
-                /** @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`. */
+                /**
+                 * @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server), and for the OTA admin's service key on console operations (below); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`.
+                 *
+                 *     **Console operations.** Honoured for secret keys as above and for the OTA admin's first-party service key, which must send it: the staff member's address (the right-most `X-Forwarded-For` entry Caddy gave the admin). With the service key a missing or malformed value answers `400 VALIDATION_FAILED`; the value drives the console sign-in throttle (10 per minute per end-user IP), the lockout and the staff audit log (`staff_actions`). Other callers' values are ignored.
+                 */
                 "X-Velexis-End-User-IP"?: components["parameters"]["CustomerEndUserIp"];
-                /** @description User-Agent of the visitor's browser for calls your server makes on their behalf with a secret or hosting key (longer values are truncated to 512 characters). Honoured only for secret and hosting keys; publishable-key calls use the request's own `User-Agent`. Recorded as session metadata (`AuthSessionDetails.userAgent`, new-sign-in security emails) and used by abuse heuristics. SDK: `options.endUser.userAgent` or the client option `endUser`. */
+                /**
+                 * @description User-Agent of the visitor's browser for calls your server makes on their behalf with a secret or hosting key (longer values are truncated to 512 characters). Honoured only for secret and hosting keys, and for the OTA admin's service key on console operations; publishable-key calls use the request's own `User-Agent`. Recorded as session metadata (`AuthSessionDetails.userAgent`, new-sign-in security emails) and used by abuse heuristics. SDK: `options.endUser.userAgent` or the client option `endUser`.
+                 *
+                 *     **Console operations.** The OTA admin's first-party service key must send the staff member's user agent (missing: `400 VALIDATION_FAILED`); it is recorded in the staff audit log (`staff_actions`).
+                 */
                 "X-Velexis-End-User-Agent"?: components["parameters"]["CustomerEndUserAgent"];
             };
             path?: never;
@@ -15950,11 +16299,23 @@ export interface operations {
             header?: {
                 /** @description BCP 47 locale for messages and display texts. */
                 "Accept-Language"?: components["parameters"]["AcceptLanguage"];
-                /** @description Storefront host name the request is made for: the `Host` of the visitor's request, lower case, without port. **Required with a hosting key** (`hk_test_…` / `hk_live_…`, one Next.js deployment serving several OTA domains): the API resolves the OTA from it (a verified storefront domain in `platform.tenant_domains` of an OTA the key is granted for) and then handles the call exactly like a secret key of that OTA in the key's environment. Optional with publishable and secret keys; when sent it must be a verified storefront domain of the key's own OTA. Otherwise `403 HOST_NOT_ALLOWED` (`details.reason`: `missing` | `unknown` | `not_granted`). SDK: client option `host` or `options.host`; look hosts up with storefront.resolve. */
+                /**
+                 * @description Storefront host name the request is made for: the `Host` of the visitor's request, lower case, without port. **Required with a hosting key** (`hk_test_…` / `hk_live_…`, one Next.js deployment serving several OTA domains): the API resolves the OTA from it (a verified storefront domain in `platform.tenant_domains` of an OTA the key is granted for) and then handles the call exactly like a secret key of that OTA in the key's environment. Optional with publishable and secret keys; when sent it must be a verified storefront domain of the key's own OTA. Otherwise `403 HOST_NOT_ALLOWED` (`details.reason`: `missing` | `unknown` | `not_granted`). SDK: client option `host` or `options.host`; look hosts up with storefront.resolve.
+                 *
+                 *     **Edge mode.** On the hosted storefront Caddy sets it to the visitor's host on every `/api/*` request, together with `X-Velexis-Edge`, and replaces any value the browser sent. The API resolves the OTA from it (a verified storefront domain, or the OTA's sub-domain of the storefront base domain) and answers `403 HOST_NOT_ALLOWED` for an unknown or unverified host.
+                 */
                 "X-Velexis-Host"?: components["parameters"]["StorefrontHostHeader"];
-                /** @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`. */
+                /**
+                 * @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server), and for the OTA admin's service key on console operations (below); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`.
+                 *
+                 *     **Console operations.** Honoured for secret keys as above and for the OTA admin's first-party service key, which must send it: the staff member's address (the right-most `X-Forwarded-For` entry Caddy gave the admin). With the service key a missing or malformed value answers `400 VALIDATION_FAILED`; the value drives the console sign-in throttle (10 per minute per end-user IP), the lockout and the staff audit log (`staff_actions`). Other callers' values are ignored.
+                 */
                 "X-Velexis-End-User-IP"?: components["parameters"]["CustomerEndUserIp"];
-                /** @description User-Agent of the visitor's browser for calls your server makes on their behalf with a secret or hosting key (longer values are truncated to 512 characters). Honoured only for secret and hosting keys; publishable-key calls use the request's own `User-Agent`. Recorded as session metadata (`AuthSessionDetails.userAgent`, new-sign-in security emails) and used by abuse heuristics. SDK: `options.endUser.userAgent` or the client option `endUser`. */
+                /**
+                 * @description User-Agent of the visitor's browser for calls your server makes on their behalf with a secret or hosting key (longer values are truncated to 512 characters). Honoured only for secret and hosting keys, and for the OTA admin's service key on console operations; publishable-key calls use the request's own `User-Agent`. Recorded as session metadata (`AuthSessionDetails.userAgent`, new-sign-in security emails) and used by abuse heuristics. SDK: `options.endUser.userAgent` or the client option `endUser`.
+                 *
+                 *     **Console operations.** The OTA admin's first-party service key must send the staff member's user agent (missing: `400 VALIDATION_FAILED`); it is recorded in the staff audit log (`staff_actions`).
+                 */
                 "X-Velexis-End-User-Agent"?: components["parameters"]["CustomerEndUserAgent"];
             };
             path: {
@@ -16026,11 +16387,23 @@ export interface operations {
             header?: {
                 /** @description BCP 47 locale for messages and display texts. */
                 "Accept-Language"?: components["parameters"]["AcceptLanguage"];
-                /** @description Storefront host name the request is made for: the `Host` of the visitor's request, lower case, without port. **Required with a hosting key** (`hk_test_…` / `hk_live_…`, one Next.js deployment serving several OTA domains): the API resolves the OTA from it (a verified storefront domain in `platform.tenant_domains` of an OTA the key is granted for) and then handles the call exactly like a secret key of that OTA in the key's environment. Optional with publishable and secret keys; when sent it must be a verified storefront domain of the key's own OTA. Otherwise `403 HOST_NOT_ALLOWED` (`details.reason`: `missing` | `unknown` | `not_granted`). SDK: client option `host` or `options.host`; look hosts up with storefront.resolve. */
+                /**
+                 * @description Storefront host name the request is made for: the `Host` of the visitor's request, lower case, without port. **Required with a hosting key** (`hk_test_…` / `hk_live_…`, one Next.js deployment serving several OTA domains): the API resolves the OTA from it (a verified storefront domain in `platform.tenant_domains` of an OTA the key is granted for) and then handles the call exactly like a secret key of that OTA in the key's environment. Optional with publishable and secret keys; when sent it must be a verified storefront domain of the key's own OTA. Otherwise `403 HOST_NOT_ALLOWED` (`details.reason`: `missing` | `unknown` | `not_granted`). SDK: client option `host` or `options.host`; look hosts up with storefront.resolve.
+                 *
+                 *     **Edge mode.** On the hosted storefront Caddy sets it to the visitor's host on every `/api/*` request, together with `X-Velexis-Edge`, and replaces any value the browser sent. The API resolves the OTA from it (a verified storefront domain, or the OTA's sub-domain of the storefront base domain) and answers `403 HOST_NOT_ALLOWED` for an unknown or unverified host.
+                 */
                 "X-Velexis-Host"?: components["parameters"]["StorefrontHostHeader"];
-                /** @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`. */
+                /**
+                 * @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server), and for the OTA admin's service key on console operations (below); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`.
+                 *
+                 *     **Console operations.** Honoured for secret keys as above and for the OTA admin's first-party service key, which must send it: the staff member's address (the right-most `X-Forwarded-For` entry Caddy gave the admin). With the service key a missing or malformed value answers `400 VALIDATION_FAILED`; the value drives the console sign-in throttle (10 per minute per end-user IP), the lockout and the staff audit log (`staff_actions`). Other callers' values are ignored.
+                 */
                 "X-Velexis-End-User-IP"?: components["parameters"]["CustomerEndUserIp"];
-                /** @description User-Agent of the visitor's browser for calls your server makes on their behalf with a secret or hosting key (longer values are truncated to 512 characters). Honoured only for secret and hosting keys; publishable-key calls use the request's own `User-Agent`. Recorded as session metadata (`AuthSessionDetails.userAgent`, new-sign-in security emails) and used by abuse heuristics. SDK: `options.endUser.userAgent` or the client option `endUser`. */
+                /**
+                 * @description User-Agent of the visitor's browser for calls your server makes on their behalf with a secret or hosting key (longer values are truncated to 512 characters). Honoured only for secret and hosting keys, and for the OTA admin's service key on console operations; publishable-key calls use the request's own `User-Agent`. Recorded as session metadata (`AuthSessionDetails.userAgent`, new-sign-in security emails) and used by abuse heuristics. SDK: `options.endUser.userAgent` or the client option `endUser`.
+                 *
+                 *     **Console operations.** The OTA admin's first-party service key must send the staff member's user agent (missing: `400 VALIDATION_FAILED`); it is recorded in the staff audit log (`staff_actions`).
+                 */
                 "X-Velexis-End-User-Agent"?: components["parameters"]["CustomerEndUserAgent"];
             };
             path?: never;
@@ -16106,11 +16479,23 @@ export interface operations {
             header?: {
                 /** @description BCP 47 locale for messages and display texts. */
                 "Accept-Language"?: components["parameters"]["AcceptLanguage"];
-                /** @description Storefront host name the request is made for: the `Host` of the visitor's request, lower case, without port. **Required with a hosting key** (`hk_test_…` / `hk_live_…`, one Next.js deployment serving several OTA domains): the API resolves the OTA from it (a verified storefront domain in `platform.tenant_domains` of an OTA the key is granted for) and then handles the call exactly like a secret key of that OTA in the key's environment. Optional with publishable and secret keys; when sent it must be a verified storefront domain of the key's own OTA. Otherwise `403 HOST_NOT_ALLOWED` (`details.reason`: `missing` | `unknown` | `not_granted`). SDK: client option `host` or `options.host`; look hosts up with storefront.resolve. */
+                /**
+                 * @description Storefront host name the request is made for: the `Host` of the visitor's request, lower case, without port. **Required with a hosting key** (`hk_test_…` / `hk_live_…`, one Next.js deployment serving several OTA domains): the API resolves the OTA from it (a verified storefront domain in `platform.tenant_domains` of an OTA the key is granted for) and then handles the call exactly like a secret key of that OTA in the key's environment. Optional with publishable and secret keys; when sent it must be a verified storefront domain of the key's own OTA. Otherwise `403 HOST_NOT_ALLOWED` (`details.reason`: `missing` | `unknown` | `not_granted`). SDK: client option `host` or `options.host`; look hosts up with storefront.resolve.
+                 *
+                 *     **Edge mode.** On the hosted storefront Caddy sets it to the visitor's host on every `/api/*` request, together with `X-Velexis-Edge`, and replaces any value the browser sent. The API resolves the OTA from it (a verified storefront domain, or the OTA's sub-domain of the storefront base domain) and answers `403 HOST_NOT_ALLOWED` for an unknown or unverified host.
+                 */
                 "X-Velexis-Host"?: components["parameters"]["StorefrontHostHeader"];
-                /** @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`. */
+                /**
+                 * @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server), and for the OTA admin's service key on console operations (below); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`.
+                 *
+                 *     **Console operations.** Honoured for secret keys as above and for the OTA admin's first-party service key, which must send it: the staff member's address (the right-most `X-Forwarded-For` entry Caddy gave the admin). With the service key a missing or malformed value answers `400 VALIDATION_FAILED`; the value drives the console sign-in throttle (10 per minute per end-user IP), the lockout and the staff audit log (`staff_actions`). Other callers' values are ignored.
+                 */
                 "X-Velexis-End-User-IP"?: components["parameters"]["CustomerEndUserIp"];
-                /** @description User-Agent of the visitor's browser for calls your server makes on their behalf with a secret or hosting key (longer values are truncated to 512 characters). Honoured only for secret and hosting keys; publishable-key calls use the request's own `User-Agent`. Recorded as session metadata (`AuthSessionDetails.userAgent`, new-sign-in security emails) and used by abuse heuristics. SDK: `options.endUser.userAgent` or the client option `endUser`. */
+                /**
+                 * @description User-Agent of the visitor's browser for calls your server makes on their behalf with a secret or hosting key (longer values are truncated to 512 characters). Honoured only for secret and hosting keys, and for the OTA admin's service key on console operations; publishable-key calls use the request's own `User-Agent`. Recorded as session metadata (`AuthSessionDetails.userAgent`, new-sign-in security emails) and used by abuse heuristics. SDK: `options.endUser.userAgent` or the client option `endUser`.
+                 *
+                 *     **Console operations.** The OTA admin's first-party service key must send the staff member's user agent (missing: `400 VALIDATION_FAILED`); it is recorded in the staff audit log (`staff_actions`).
+                 */
                 "X-Velexis-End-User-Agent"?: components["parameters"]["CustomerEndUserAgent"];
             };
             path: {
@@ -16167,11 +16552,23 @@ export interface operations {
             header?: {
                 /** @description BCP 47 locale for messages and display texts. */
                 "Accept-Language"?: components["parameters"]["AcceptLanguage"];
-                /** @description Storefront host name the request is made for: the `Host` of the visitor's request, lower case, without port. **Required with a hosting key** (`hk_test_…` / `hk_live_…`, one Next.js deployment serving several OTA domains): the API resolves the OTA from it (a verified storefront domain in `platform.tenant_domains` of an OTA the key is granted for) and then handles the call exactly like a secret key of that OTA in the key's environment. Optional with publishable and secret keys; when sent it must be a verified storefront domain of the key's own OTA. Otherwise `403 HOST_NOT_ALLOWED` (`details.reason`: `missing` | `unknown` | `not_granted`). SDK: client option `host` or `options.host`; look hosts up with storefront.resolve. */
+                /**
+                 * @description Storefront host name the request is made for: the `Host` of the visitor's request, lower case, without port. **Required with a hosting key** (`hk_test_…` / `hk_live_…`, one Next.js deployment serving several OTA domains): the API resolves the OTA from it (a verified storefront domain in `platform.tenant_domains` of an OTA the key is granted for) and then handles the call exactly like a secret key of that OTA in the key's environment. Optional with publishable and secret keys; when sent it must be a verified storefront domain of the key's own OTA. Otherwise `403 HOST_NOT_ALLOWED` (`details.reason`: `missing` | `unknown` | `not_granted`). SDK: client option `host` or `options.host`; look hosts up with storefront.resolve.
+                 *
+                 *     **Edge mode.** On the hosted storefront Caddy sets it to the visitor's host on every `/api/*` request, together with `X-Velexis-Edge`, and replaces any value the browser sent. The API resolves the OTA from it (a verified storefront domain, or the OTA's sub-domain of the storefront base domain) and answers `403 HOST_NOT_ALLOWED` for an unknown or unverified host.
+                 */
                 "X-Velexis-Host"?: components["parameters"]["StorefrontHostHeader"];
-                /** @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`. */
+                /**
+                 * @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server), and for the OTA admin's service key on console operations (below); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`.
+                 *
+                 *     **Console operations.** Honoured for secret keys as above and for the OTA admin's first-party service key, which must send it: the staff member's address (the right-most `X-Forwarded-For` entry Caddy gave the admin). With the service key a missing or malformed value answers `400 VALIDATION_FAILED`; the value drives the console sign-in throttle (10 per minute per end-user IP), the lockout and the staff audit log (`staff_actions`). Other callers' values are ignored.
+                 */
                 "X-Velexis-End-User-IP"?: components["parameters"]["CustomerEndUserIp"];
-                /** @description User-Agent of the visitor's browser for calls your server makes on their behalf with a secret or hosting key (longer values are truncated to 512 characters). Honoured only for secret and hosting keys; publishable-key calls use the request's own `User-Agent`. Recorded as session metadata (`AuthSessionDetails.userAgent`, new-sign-in security emails) and used by abuse heuristics. SDK: `options.endUser.userAgent` or the client option `endUser`. */
+                /**
+                 * @description User-Agent of the visitor's browser for calls your server makes on their behalf with a secret or hosting key (longer values are truncated to 512 characters). Honoured only for secret and hosting keys, and for the OTA admin's service key on console operations; publishable-key calls use the request's own `User-Agent`. Recorded as session metadata (`AuthSessionDetails.userAgent`, new-sign-in security emails) and used by abuse heuristics. SDK: `options.endUser.userAgent` or the client option `endUser`.
+                 *
+                 *     **Console operations.** The OTA admin's first-party service key must send the staff member's user agent (missing: `400 VALIDATION_FAILED`); it is recorded in the staff audit log (`staff_actions`).
+                 */
                 "X-Velexis-End-User-Agent"?: components["parameters"]["CustomerEndUserAgent"];
             };
             path?: never;
@@ -16239,11 +16636,23 @@ export interface operations {
             header?: {
                 /** @description BCP 47 locale for messages and display texts. */
                 "Accept-Language"?: components["parameters"]["AcceptLanguage"];
-                /** @description Storefront host name the request is made for: the `Host` of the visitor's request, lower case, without port. **Required with a hosting key** (`hk_test_…` / `hk_live_…`, one Next.js deployment serving several OTA domains): the API resolves the OTA from it (a verified storefront domain in `platform.tenant_domains` of an OTA the key is granted for) and then handles the call exactly like a secret key of that OTA in the key's environment. Optional with publishable and secret keys; when sent it must be a verified storefront domain of the key's own OTA. Otherwise `403 HOST_NOT_ALLOWED` (`details.reason`: `missing` | `unknown` | `not_granted`). SDK: client option `host` or `options.host`; look hosts up with storefront.resolve. */
+                /**
+                 * @description Storefront host name the request is made for: the `Host` of the visitor's request, lower case, without port. **Required with a hosting key** (`hk_test_…` / `hk_live_…`, one Next.js deployment serving several OTA domains): the API resolves the OTA from it (a verified storefront domain in `platform.tenant_domains` of an OTA the key is granted for) and then handles the call exactly like a secret key of that OTA in the key's environment. Optional with publishable and secret keys; when sent it must be a verified storefront domain of the key's own OTA. Otherwise `403 HOST_NOT_ALLOWED` (`details.reason`: `missing` | `unknown` | `not_granted`). SDK: client option `host` or `options.host`; look hosts up with storefront.resolve.
+                 *
+                 *     **Edge mode.** On the hosted storefront Caddy sets it to the visitor's host on every `/api/*` request, together with `X-Velexis-Edge`, and replaces any value the browser sent. The API resolves the OTA from it (a verified storefront domain, or the OTA's sub-domain of the storefront base domain) and answers `403 HOST_NOT_ALLOWED` for an unknown or unverified host.
+                 */
                 "X-Velexis-Host"?: components["parameters"]["StorefrontHostHeader"];
-                /** @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`. */
+                /**
+                 * @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server), and for the OTA admin's service key on console operations (below); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`.
+                 *
+                 *     **Console operations.** Honoured for secret keys as above and for the OTA admin's first-party service key, which must send it: the staff member's address (the right-most `X-Forwarded-For` entry Caddy gave the admin). With the service key a missing or malformed value answers `400 VALIDATION_FAILED`; the value drives the console sign-in throttle (10 per minute per end-user IP), the lockout and the staff audit log (`staff_actions`). Other callers' values are ignored.
+                 */
                 "X-Velexis-End-User-IP"?: components["parameters"]["CustomerEndUserIp"];
-                /** @description User-Agent of the visitor's browser for calls your server makes on their behalf with a secret or hosting key (longer values are truncated to 512 characters). Honoured only for secret and hosting keys; publishable-key calls use the request's own `User-Agent`. Recorded as session metadata (`AuthSessionDetails.userAgent`, new-sign-in security emails) and used by abuse heuristics. SDK: `options.endUser.userAgent` or the client option `endUser`. */
+                /**
+                 * @description User-Agent of the visitor's browser for calls your server makes on their behalf with a secret or hosting key (longer values are truncated to 512 characters). Honoured only for secret and hosting keys, and for the OTA admin's service key on console operations; publishable-key calls use the request's own `User-Agent`. Recorded as session metadata (`AuthSessionDetails.userAgent`, new-sign-in security emails) and used by abuse heuristics. SDK: `options.endUser.userAgent` or the client option `endUser`.
+                 *
+                 *     **Console operations.** The OTA admin's first-party service key must send the staff member's user agent (missing: `400 VALIDATION_FAILED`); it is recorded in the staff audit log (`staff_actions`).
+                 */
                 "X-Velexis-End-User-Agent"?: components["parameters"]["CustomerEndUserAgent"];
             };
             path?: never;
@@ -16310,6 +16719,8 @@ export interface operations {
                 "Accept-Language"?: components["parameters"]["AcceptLanguage"];
                 /** @description Display currency (ISO 4217); defaults to the OTA's currency. Amadeus `currencyCode` is set from it where the API supports it. */
                 "X-Currency"?: components["parameters"]["Currency"];
+                /** @description Copy of the `__Host-vx_csrf` cookie, which storefront.get issues. Required on every state-changing (`POST`, `PUT`, `PATCH`, `DELETE`) request of the hosted storefront edge, anonymous ones included, and the `Origin` (or, without it, `Sec-Fetch-Site: same-origin`) must be the storefront host; otherwise `403 CSRF_TOKEN_INVALID`. Ignored for key and bearer callers. */
+                "X-CSRF-Token"?: components["parameters"]["CsrfToken"];
             };
             path?: never;
             cookie?: never;
@@ -17368,6 +17779,8 @@ export interface operations {
                 "X-Velexis-Scope"?: components["parameters"]["OfferDataScope"];
                 /** @description BCP 47 locale for messages and display texts. */
                 "Accept-Language"?: components["parameters"]["AcceptLanguage"];
+                /** @description Copy of the `__Host-vx_csrf` cookie, which storefront.get issues. Required on every state-changing (`POST`, `PUT`, `PATCH`, `DELETE`) request of the hosted storefront edge, anonymous ones included, and the `Origin` (or, without it, `Sec-Fetch-Site: same-origin`) must be the storefront host; otherwise `403 CSRF_TOKEN_INVALID`. Ignored for key and bearer callers. */
+                "X-CSRF-Token"?: components["parameters"]["CsrfToken"];
             };
             path: {
                 /** @description Offer to upsell (`off_…`). */
@@ -17416,6 +17829,20 @@ export interface operations {
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
                 /** @description BCP 47 locale for messages and display texts. */
                 "Accept-Language"?: components["parameters"]["AcceptLanguage"];
+                /** @description Environment of a console call made with the OTA admin's first-party service key, `test` or `live`. Required with the service key (missing: `400 VALIDATION_FAILED`) and refused with any other credential, whose environment is the key's. `live` needs an OTA that is live and a role other than `viewer`; ConsoleStaffSession.environments lists the environments the staff member may open. */
+                "X-Velexis-Environment"?: components["parameters"]["VelexisEnvironment"];
+                /**
+                 * @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server), and for the OTA admin's service key on console operations (below); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`.
+                 *
+                 *     **Console operations.** Honoured for secret keys as above and for the OTA admin's first-party service key, which must send it: the staff member's address (the right-most `X-Forwarded-For` entry Caddy gave the admin). With the service key a missing or malformed value answers `400 VALIDATION_FAILED`; the value drives the console sign-in throttle (10 per minute per end-user IP), the lockout and the staff audit log (`staff_actions`). Other callers' values are ignored.
+                 */
+                "X-Velexis-End-User-IP"?: components["parameters"]["CustomerEndUserIp"];
+                /**
+                 * @description User-Agent of the visitor's browser for calls your server makes on their behalf with a secret or hosting key (longer values are truncated to 512 characters). Honoured only for secret and hosting keys, and for the OTA admin's service key on console operations; publishable-key calls use the request's own `User-Agent`. Recorded as session metadata (`AuthSessionDetails.userAgent`, new-sign-in security emails) and used by abuse heuristics. SDK: `options.endUser.userAgent` or the client option `endUser`.
+                 *
+                 *     **Console operations.** The OTA admin's first-party service key must send the staff member's user agent (missing: `400 VALIDATION_FAILED`); it is recorded in the staff audit log (`staff_actions`).
+                 */
+                "X-Velexis-End-User-Agent"?: components["parameters"]["CustomerEndUserAgent"];
             };
             path?: never;
             cookie?: never;
@@ -17602,6 +18029,8 @@ export interface operations {
                 "Accept-Language"?: components["parameters"]["AcceptLanguage"];
                 /** @description Display currency (ISO 4217); defaults to the OTA's currency. Amadeus `currencyCode` is set from it where the API supports it. */
                 "X-Currency"?: components["parameters"]["Currency"];
+                /** @description Copy of the `__Host-vx_csrf` cookie, which storefront.get issues. Required on every state-changing (`POST`, `PUT`, `PATCH`, `DELETE`) request of the hosted storefront edge, anonymous ones included, and the `Origin` (or, without it, `Sec-Fetch-Site: same-origin`) must be the storefront host; otherwise `403 CSRF_TOKEN_INVALID`. Ignored for key and bearer callers. */
+                "X-CSRF-Token"?: components["parameters"]["CsrfToken"];
             };
             path?: never;
             cookie?: never;
@@ -17744,6 +18173,8 @@ export interface operations {
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
                 /** @description BCP 47 locale for messages and display texts. */
                 "Accept-Language"?: components["parameters"]["AcceptLanguage"];
+                /** @description Copy of the `__Host-vx_csrf` cookie, which storefront.get issues. Required on every state-changing (`POST`, `PUT`, `PATCH`, `DELETE`) request of the hosted storefront edge, anonymous ones included, and the `Origin` (or, without it, `Sec-Fetch-Site: same-origin`) must be the storefront host; otherwise `403 CSRF_TOKEN_INVALID`. Ignored for key and bearer callers. */
+                "X-CSRF-Token"?: components["parameters"]["CsrfToken"];
             };
             path?: never;
             cookie?: never;
@@ -17808,6 +18239,8 @@ export interface operations {
                 "If-Match"?: components["parameters"]["CheckoutIfMatch"];
                 /** @description BCP 47 locale for messages and display texts. */
                 "Accept-Language"?: components["parameters"]["AcceptLanguage"];
+                /** @description Copy of the `__Host-vx_csrf` cookie, which storefront.get issues. Required on every state-changing (`POST`, `PUT`, `PATCH`, `DELETE`) request of the hosted storefront edge, anonymous ones included, and the `Origin` (or, without it, `Sec-Fetch-Site: same-origin`) must be the storefront host; otherwise `403 CSRF_TOKEN_INVALID`. Ignored for key and bearer callers. */
+                "X-CSRF-Token"?: components["parameters"]["CsrfToken"];
             };
             path: {
                 /** @description Checkout id (`chk_…`). */
@@ -17843,6 +18276,8 @@ export interface operations {
                 "If-Match"?: components["parameters"]["CheckoutIfMatch"];
                 /** @description BCP 47 locale for messages and display texts. */
                 "Accept-Language"?: components["parameters"]["AcceptLanguage"];
+                /** @description Copy of the `__Host-vx_csrf` cookie, which storefront.get issues. Required on every state-changing (`POST`, `PUT`, `PATCH`, `DELETE`) request of the hosted storefront edge, anonymous ones included, and the `Origin` (or, without it, `Sec-Fetch-Site: same-origin`) must be the storefront host; otherwise `403 CSRF_TOKEN_INVALID`. Ignored for key and bearer callers. */
+                "X-CSRF-Token"?: components["parameters"]["CsrfToken"];
             };
             path: {
                 /** @description Checkout id (`chk_…`). */
@@ -17878,6 +18313,8 @@ export interface operations {
                 "If-Match"?: components["parameters"]["CheckoutIfMatch"];
                 /** @description BCP 47 locale for messages and display texts. */
                 "Accept-Language"?: components["parameters"]["AcceptLanguage"];
+                /** @description Copy of the `__Host-vx_csrf` cookie, which storefront.get issues. Required on every state-changing (`POST`, `PUT`, `PATCH`, `DELETE`) request of the hosted storefront edge, anonymous ones included, and the `Origin` (or, without it, `Sec-Fetch-Site: same-origin`) must be the storefront host; otherwise `403 CSRF_TOKEN_INVALID`. Ignored for key and bearer callers. */
+                "X-CSRF-Token"?: components["parameters"]["CsrfToken"];
             };
             path: {
                 /** @description Checkout id (`chk_…`). */
@@ -17917,6 +18354,8 @@ export interface operations {
                 "If-Match"?: components["parameters"]["CheckoutIfMatch"];
                 /** @description BCP 47 locale for messages and display texts. */
                 "Accept-Language"?: components["parameters"]["AcceptLanguage"];
+                /** @description Copy of the `__Host-vx_csrf` cookie, which storefront.get issues. Required on every state-changing (`POST`, `PUT`, `PATCH`, `DELETE`) request of the hosted storefront edge, anonymous ones included, and the `Origin` (or, without it, `Sec-Fetch-Site: same-origin`) must be the storefront host; otherwise `403 CSRF_TOKEN_INVALID`. Ignored for key and bearer callers. */
+                "X-CSRF-Token"?: components["parameters"]["CsrfToken"];
             };
             path: {
                 /** @description Checkout id (`chk_…`). */
@@ -17951,6 +18390,8 @@ export interface operations {
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
                 /** @description BCP 47 locale for messages and display texts. */
                 "Accept-Language"?: components["parameters"]["AcceptLanguage"];
+                /** @description Copy of the `__Host-vx_csrf` cookie, which storefront.get issues. Required on every state-changing (`POST`, `PUT`, `PATCH`, `DELETE`) request of the hosted storefront edge, anonymous ones included, and the `Origin` (or, without it, `Sec-Fetch-Site: same-origin`) must be the storefront host; otherwise `403 CSRF_TOKEN_INVALID`. Ignored for key and bearer callers. */
+                "X-CSRF-Token"?: components["parameters"]["CsrfToken"];
             };
             path: {
                 /** @description Checkout id (`chk_…`). */
@@ -18020,6 +18461,8 @@ export interface operations {
             header?: {
                 /** @description BCP 47 locale for messages and display texts. */
                 "Accept-Language"?: components["parameters"]["AcceptLanguage"];
+                /** @description Copy of the `__Host-vx_csrf` cookie, which storefront.get issues. Required on every state-changing (`POST`, `PUT`, `PATCH`, `DELETE`) request of the hosted storefront edge, anonymous ones included, and the `Origin` (or, without it, `Sec-Fetch-Site: same-origin`) must be the storefront host; otherwise `403 CSRF_TOKEN_INVALID`. Ignored for key and bearer callers. */
+                "X-CSRF-Token"?: components["parameters"]["CsrfToken"];
             };
             path: {
                 /** @description Payment id (`pay_…`). */
@@ -18058,6 +18501,8 @@ export interface operations {
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
                 /** @description BCP 47 locale for messages and display texts. */
                 "Accept-Language"?: components["parameters"]["AcceptLanguage"];
+                /** @description Copy of the `__Host-vx_csrf` cookie, which storefront.get issues. Required on every state-changing (`POST`, `PUT`, `PATCH`, `DELETE`) request of the hosted storefront edge, anonymous ones included, and the `Origin` (or, without it, `Sec-Fetch-Site: same-origin`) must be the storefront host; otherwise `403 CSRF_TOKEN_INVALID`. Ignored for key and bearer callers. */
+                "X-CSRF-Token"?: components["parameters"]["CsrfToken"];
             };
             path: {
                 /** @description Checkout id (`chk_…`). */
@@ -18072,11 +18517,12 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Booking created (ticketed, or ticketing in progress). */
+            /** @description Booking created (ticketed, or ticketing in progress). In edge mode a guest's booking token is added to the `__Host-vx_bt` cookie, and `bookingToken` and `bookingTokenExpiresAt` are `null`. */
             201: {
                 headers: {
                     "X-Request-Id": components["headers"]["X-Request-Id"];
                     Location: components["headers"]["Location"];
+                    "Set-Cookie": components["headers"]["Set-Cookie"];
                     [name: string]: unknown;
                 };
                 content: {
@@ -18192,6 +18638,8 @@ export interface operations {
                 "If-Match": components["parameters"]["IfMatch"];
                 /** @description BCP 47 locale for messages and display texts. */
                 "Accept-Language"?: components["parameters"]["AcceptLanguage"];
+                /** @description Copy of the `__Host-vx_csrf` cookie, which storefront.get issues. Required on every state-changing (`POST`, `PUT`, `PATCH`, `DELETE`) request of the hosted storefront edge, anonymous ones included, and the `Origin` (or, without it, `Sec-Fetch-Site: same-origin`) must be the storefront host; otherwise `403 CSRF_TOKEN_INVALID`. Ignored for key and bearer callers. */
+                "X-CSRF-Token"?: components["parameters"]["CsrfToken"];
             };
             path: {
                 /** @description Booking id (`bkg_…`). */
@@ -18230,10 +18678,20 @@ export interface operations {
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
                 /** @description BCP 47 locale for messages and display texts. */
                 "Accept-Language"?: components["parameters"]["AcceptLanguage"];
-                /** @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`. */
+                /**
+                 * @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server), and for the OTA admin's service key on console operations (below); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`.
+                 *
+                 *     **Console operations.** Honoured for secret keys as above and for the OTA admin's first-party service key, which must send it: the staff member's address (the right-most `X-Forwarded-For` entry Caddy gave the admin). With the service key a missing or malformed value answers `400 VALIDATION_FAILED`; the value drives the console sign-in throttle (10 per minute per end-user IP), the lockout and the staff audit log (`staff_actions`). Other callers' values are ignored.
+                 */
                 "X-Velexis-End-User-IP"?: components["parameters"]["CustomerEndUserIp"];
-                /** @description User-Agent of the visitor's browser for calls your server makes on their behalf with a secret or hosting key (longer values are truncated to 512 characters). Honoured only for secret and hosting keys; publishable-key calls use the request's own `User-Agent`. Recorded as session metadata (`AuthSessionDetails.userAgent`, new-sign-in security emails) and used by abuse heuristics. SDK: `options.endUser.userAgent` or the client option `endUser`. */
+                /**
+                 * @description User-Agent of the visitor's browser for calls your server makes on their behalf with a secret or hosting key (longer values are truncated to 512 characters). Honoured only for secret and hosting keys, and for the OTA admin's service key on console operations; publishable-key calls use the request's own `User-Agent`. Recorded as session metadata (`AuthSessionDetails.userAgent`, new-sign-in security emails) and used by abuse heuristics. SDK: `options.endUser.userAgent` or the client option `endUser`.
+                 *
+                 *     **Console operations.** The OTA admin's first-party service key must send the staff member's user agent (missing: `400 VALIDATION_FAILED`); it is recorded in the staff audit log (`staff_actions`).
+                 */
                 "X-Velexis-End-User-Agent"?: components["parameters"]["CustomerEndUserAgent"];
+                /** @description Copy of the `__Host-vx_csrf` cookie, which storefront.get issues. Required on every state-changing (`POST`, `PUT`, `PATCH`, `DELETE`) request of the hosted storefront edge, anonymous ones included, and the `Origin` (or, without it, `Sec-Fetch-Site: same-origin`) must be the storefront host; otherwise `403 CSRF_TOKEN_INVALID`. Ignored for key and bearer callers. */
+                "X-CSRF-Token"?: components["parameters"]["CsrfToken"];
             };
             path?: never;
             cookie?: never;
@@ -18245,10 +18703,11 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Booking found; guest token issued. */
+            /** @description Booking found; guest token issued. In edge mode the token is added to the `__Host-vx_bt` cookie and `bookingToken` is `null`. */
             200: {
                 headers: {
                     "X-Request-Id": components["headers"]["X-Request-Id"];
+                    "Set-Cookie": components["headers"]["Set-Cookie"];
                     [name: string]: unknown;
                 };
                 content: {
@@ -18311,6 +18770,8 @@ export interface operations {
                 "If-Match": components["parameters"]["IfMatch"];
                 /** @description BCP 47 locale for messages and display texts. */
                 "Accept-Language"?: components["parameters"]["AcceptLanguage"];
+                /** @description Copy of the `__Host-vx_csrf` cookie, which storefront.get issues. Required on every state-changing (`POST`, `PUT`, `PATCH`, `DELETE`) request of the hosted storefront edge, anonymous ones included, and the `Origin` (or, without it, `Sec-Fetch-Site: same-origin`) must be the storefront host; otherwise `403 CSRF_TOKEN_INVALID`. Ignored for key and bearer callers. */
+                "X-CSRF-Token"?: components["parameters"]["CsrfToken"];
             };
             path: {
                 /** @description Booking id (`bkg_…`). */
@@ -18607,6 +19068,8 @@ export interface operations {
                 "If-Match": components["parameters"]["IfMatch"];
                 /** @description BCP 47 locale for messages and display texts. */
                 "Accept-Language"?: components["parameters"]["AcceptLanguage"];
+                /** @description Copy of the `__Host-vx_csrf` cookie, which storefront.get issues. Required on every state-changing (`POST`, `PUT`, `PATCH`, `DELETE`) request of the hosted storefront edge, anonymous ones included, and the `Origin` (or, without it, `Sec-Fetch-Site: same-origin`) must be the storefront host; otherwise `403 CSRF_TOKEN_INVALID`. Ignored for key and bearer callers. */
+                "X-CSRF-Token"?: components["parameters"]["CsrfToken"];
             };
             path: {
                 /** @description Booking id (`bkg_…`). */
@@ -18646,6 +19109,8 @@ export interface operations {
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
                 /** @description BCP 47 locale for messages and display texts. */
                 "Accept-Language"?: components["parameters"]["AcceptLanguage"];
+                /** @description Copy of the `__Host-vx_csrf` cookie, which storefront.get issues. Required on every state-changing (`POST`, `PUT`, `PATCH`, `DELETE`) request of the hosted storefront edge, anonymous ones included, and the `Origin` (or, without it, `Sec-Fetch-Site: same-origin`) must be the storefront host; otherwise `403 CSRF_TOKEN_INVALID`. Ignored for key and bearer callers. */
+                "X-CSRF-Token"?: components["parameters"]["CsrfToken"];
             };
             path: {
                 /** @description Booking id (`bkg_…`). */
@@ -18693,6 +19158,20 @@ export interface operations {
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
                 /** @description BCP 47 locale for messages and display texts. */
                 "Accept-Language"?: components["parameters"]["AcceptLanguage"];
+                /** @description Environment of a console call made with the OTA admin's first-party service key, `test` or `live`. Required with the service key (missing: `400 VALIDATION_FAILED`) and refused with any other credential, whose environment is the key's. `live` needs an OTA that is live and a role other than `viewer`; ConsoleStaffSession.environments lists the environments the staff member may open. */
+                "X-Velexis-Environment"?: components["parameters"]["VelexisEnvironment"];
+                /**
+                 * @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server), and for the OTA admin's service key on console operations (below); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`.
+                 *
+                 *     **Console operations.** Honoured for secret keys as above and for the OTA admin's first-party service key, which must send it: the staff member's address (the right-most `X-Forwarded-For` entry Caddy gave the admin). With the service key a missing or malformed value answers `400 VALIDATION_FAILED`; the value drives the console sign-in throttle (10 per minute per end-user IP), the lockout and the staff audit log (`staff_actions`). Other callers' values are ignored.
+                 */
+                "X-Velexis-End-User-IP"?: components["parameters"]["CustomerEndUserIp"];
+                /**
+                 * @description User-Agent of the visitor's browser for calls your server makes on their behalf with a secret or hosting key (longer values are truncated to 512 characters). Honoured only for secret and hosting keys, and for the OTA admin's service key on console operations; publishable-key calls use the request's own `User-Agent`. Recorded as session metadata (`AuthSessionDetails.userAgent`, new-sign-in security emails) and used by abuse heuristics. SDK: `options.endUser.userAgent` or the client option `endUser`.
+                 *
+                 *     **Console operations.** The OTA admin's first-party service key must send the staff member's user agent (missing: `400 VALIDATION_FAILED`); it is recorded in the staff audit log (`staff_actions`).
+                 */
+                "X-Velexis-End-User-Agent"?: components["parameters"]["CustomerEndUserAgent"];
             };
             path?: never;
             cookie?: never;
@@ -18730,6 +19209,20 @@ export interface operations {
             header: {
                 /** @description Client-generated unique key (UUID v4) that makes the request safe to retry for 24 hours. */
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+                /** @description Environment of a console call made with the OTA admin's first-party service key, `test` or `live`. Required with the service key (missing: `400 VALIDATION_FAILED`) and refused with any other credential, whose environment is the key's. `live` needs an OTA that is live and a role other than `viewer`; ConsoleStaffSession.environments lists the environments the staff member may open. */
+                "X-Velexis-Environment"?: components["parameters"]["VelexisEnvironment"];
+                /**
+                 * @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server), and for the OTA admin's service key on console operations (below); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`.
+                 *
+                 *     **Console operations.** Honoured for secret keys as above and for the OTA admin's first-party service key, which must send it: the staff member's address (the right-most `X-Forwarded-For` entry Caddy gave the admin). With the service key a missing or malformed value answers `400 VALIDATION_FAILED`; the value drives the console sign-in throttle (10 per minute per end-user IP), the lockout and the staff audit log (`staff_actions`). Other callers' values are ignored.
+                 */
+                "X-Velexis-End-User-IP"?: components["parameters"]["CustomerEndUserIp"];
+                /**
+                 * @description User-Agent of the visitor's browser for calls your server makes on their behalf with a secret or hosting key (longer values are truncated to 512 characters). Honoured only for secret and hosting keys, and for the OTA admin's service key on console operations; publishable-key calls use the request's own `User-Agent`. Recorded as session metadata (`AuthSessionDetails.userAgent`, new-sign-in security emails) and used by abuse heuristics. SDK: `options.endUser.userAgent` or the client option `endUser`.
+                 *
+                 *     **Console operations.** The OTA admin's first-party service key must send the staff member's user agent (missing: `400 VALIDATION_FAILED`); it is recorded in the staff audit log (`staff_actions`).
+                 */
+                "X-Velexis-End-User-Agent"?: components["parameters"]["CustomerEndUserAgent"];
             };
             path?: never;
             cookie?: never;
@@ -18771,6 +19264,20 @@ export interface operations {
             header: {
                 /** @description Client-generated unique key (UUID v4) that makes the request safe to retry for 24 hours. */
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+                /** @description Environment of a console call made with the OTA admin's first-party service key, `test` or `live`. Required with the service key (missing: `400 VALIDATION_FAILED`) and refused with any other credential, whose environment is the key's. `live` needs an OTA that is live and a role other than `viewer`; ConsoleStaffSession.environments lists the environments the staff member may open. */
+                "X-Velexis-Environment"?: components["parameters"]["VelexisEnvironment"];
+                /**
+                 * @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server), and for the OTA admin's service key on console operations (below); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`.
+                 *
+                 *     **Console operations.** Honoured for secret keys as above and for the OTA admin's first-party service key, which must send it: the staff member's address (the right-most `X-Forwarded-For` entry Caddy gave the admin). With the service key a missing or malformed value answers `400 VALIDATION_FAILED`; the value drives the console sign-in throttle (10 per minute per end-user IP), the lockout and the staff audit log (`staff_actions`). Other callers' values are ignored.
+                 */
+                "X-Velexis-End-User-IP"?: components["parameters"]["CustomerEndUserIp"];
+                /**
+                 * @description User-Agent of the visitor's browser for calls your server makes on their behalf with a secret or hosting key (longer values are truncated to 512 characters). Honoured only for secret and hosting keys, and for the OTA admin's service key on console operations; publishable-key calls use the request's own `User-Agent`. Recorded as session metadata (`AuthSessionDetails.userAgent`, new-sign-in security emails) and used by abuse heuristics. SDK: `options.endUser.userAgent` or the client option `endUser`.
+                 *
+                 *     **Console operations.** The OTA admin's first-party service key must send the staff member's user agent (missing: `400 VALIDATION_FAILED`); it is recorded in the staff audit log (`staff_actions`).
+                 */
+                "X-Velexis-End-User-Agent"?: components["parameters"]["CustomerEndUserAgent"];
             };
             path?: never;
             cookie?: never;
@@ -18809,6 +19316,20 @@ export interface operations {
             header?: {
                 /** @description BCP 47 locale for messages and display texts. */
                 "Accept-Language"?: components["parameters"]["AcceptLanguage"];
+                /** @description Environment of a console call made with the OTA admin's first-party service key, `test` or `live`. Required with the service key (missing: `400 VALIDATION_FAILED`) and refused with any other credential, whose environment is the key's. `live` needs an OTA that is live and a role other than `viewer`; ConsoleStaffSession.environments lists the environments the staff member may open. */
+                "X-Velexis-Environment"?: components["parameters"]["VelexisEnvironment"];
+                /**
+                 * @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server), and for the OTA admin's service key on console operations (below); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`.
+                 *
+                 *     **Console operations.** Honoured for secret keys as above and for the OTA admin's first-party service key, which must send it: the staff member's address (the right-most `X-Forwarded-For` entry Caddy gave the admin). With the service key a missing or malformed value answers `400 VALIDATION_FAILED`; the value drives the console sign-in throttle (10 per minute per end-user IP), the lockout and the staff audit log (`staff_actions`). Other callers' values are ignored.
+                 */
+                "X-Velexis-End-User-IP"?: components["parameters"]["CustomerEndUserIp"];
+                /**
+                 * @description User-Agent of the visitor's browser for calls your server makes on their behalf with a secret or hosting key (longer values are truncated to 512 characters). Honoured only for secret and hosting keys, and for the OTA admin's service key on console operations; publishable-key calls use the request's own `User-Agent`. Recorded as session metadata (`AuthSessionDetails.userAgent`, new-sign-in security emails) and used by abuse heuristics. SDK: `options.endUser.userAgent` or the client option `endUser`.
+                 *
+                 *     **Console operations.** The OTA admin's first-party service key must send the staff member's user agent (missing: `400 VALIDATION_FAILED`); it is recorded in the staff audit log (`staff_actions`).
+                 */
+                "X-Velexis-End-User-Agent"?: components["parameters"]["CustomerEndUserAgent"];
             };
             path?: never;
             cookie?: never;
@@ -18825,6 +19346,7 @@ export interface operations {
                     "application/json": components["schemas"]["ConsoleStaffProfile"];
                 };
             };
+            400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["ConsoleForbidden"];
             429: components["responses"]["RateLimited"];
@@ -18880,6 +19402,20 @@ export interface operations {
             header?: {
                 /** @description BCP 47 locale for messages and display texts. */
                 "Accept-Language"?: components["parameters"]["AcceptLanguage"];
+                /** @description Environment of a console call made with the OTA admin's first-party service key, `test` or `live`. Required with the service key (missing: `400 VALIDATION_FAILED`) and refused with any other credential, whose environment is the key's. `live` needs an OTA that is live and a role other than `viewer`; ConsoleStaffSession.environments lists the environments the staff member may open. */
+                "X-Velexis-Environment"?: components["parameters"]["VelexisEnvironment"];
+                /**
+                 * @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server), and for the OTA admin's service key on console operations (below); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`.
+                 *
+                 *     **Console operations.** Honoured for secret keys as above and for the OTA admin's first-party service key, which must send it: the staff member's address (the right-most `X-Forwarded-For` entry Caddy gave the admin). With the service key a missing or malformed value answers `400 VALIDATION_FAILED`; the value drives the console sign-in throttle (10 per minute per end-user IP), the lockout and the staff audit log (`staff_actions`). Other callers' values are ignored.
+                 */
+                "X-Velexis-End-User-IP"?: components["parameters"]["CustomerEndUserIp"];
+                /**
+                 * @description User-Agent of the visitor's browser for calls your server makes on their behalf with a secret or hosting key (longer values are truncated to 512 characters). Honoured only for secret and hosting keys, and for the OTA admin's service key on console operations; publishable-key calls use the request's own `User-Agent`. Recorded as session metadata (`AuthSessionDetails.userAgent`, new-sign-in security emails) and used by abuse heuristics. SDK: `options.endUser.userAgent` or the client option `endUser`.
+                 *
+                 *     **Console operations.** The OTA admin's first-party service key must send the staff member's user agent (missing: `400 VALIDATION_FAILED`); it is recorded in the staff audit log (`staff_actions`).
+                 */
+                "X-Velexis-End-User-Agent"?: components["parameters"]["CustomerEndUserAgent"];
             };
             path?: never;
             cookie?: never;
@@ -18972,6 +19508,20 @@ export interface operations {
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
                 /** @description BCP 47 locale for messages and display texts. */
                 "Accept-Language"?: components["parameters"]["AcceptLanguage"];
+                /** @description Environment of a console call made with the OTA admin's first-party service key, `test` or `live`. Required with the service key (missing: `400 VALIDATION_FAILED`) and refused with any other credential, whose environment is the key's. `live` needs an OTA that is live and a role other than `viewer`; ConsoleStaffSession.environments lists the environments the staff member may open. */
+                "X-Velexis-Environment"?: components["parameters"]["VelexisEnvironment"];
+                /**
+                 * @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server), and for the OTA admin's service key on console operations (below); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`.
+                 *
+                 *     **Console operations.** Honoured for secret keys as above and for the OTA admin's first-party service key, which must send it: the staff member's address (the right-most `X-Forwarded-For` entry Caddy gave the admin). With the service key a missing or malformed value answers `400 VALIDATION_FAILED`; the value drives the console sign-in throttle (10 per minute per end-user IP), the lockout and the staff audit log (`staff_actions`). Other callers' values are ignored.
+                 */
+                "X-Velexis-End-User-IP"?: components["parameters"]["CustomerEndUserIp"];
+                /**
+                 * @description User-Agent of the visitor's browser for calls your server makes on their behalf with a secret or hosting key (longer values are truncated to 512 characters). Honoured only for secret and hosting keys, and for the OTA admin's service key on console operations; publishable-key calls use the request's own `User-Agent`. Recorded as session metadata (`AuthSessionDetails.userAgent`, new-sign-in security emails) and used by abuse heuristics. SDK: `options.endUser.userAgent` or the client option `endUser`.
+                 *
+                 *     **Console operations.** The OTA admin's first-party service key must send the staff member's user agent (missing: `400 VALIDATION_FAILED`); it is recorded in the staff audit log (`staff_actions`).
+                 */
+                "X-Velexis-End-User-Agent"?: components["parameters"]["CustomerEndUserAgent"];
             };
             path?: never;
             cookie?: never;
@@ -19164,6 +19714,20 @@ export interface operations {
             header?: {
                 /** @description BCP 47 locale for messages and display texts. */
                 "Accept-Language"?: components["parameters"]["AcceptLanguage"];
+                /** @description Environment of a console call made with the OTA admin's first-party service key, `test` or `live`. Required with the service key (missing: `400 VALIDATION_FAILED`) and refused with any other credential, whose environment is the key's. `live` needs an OTA that is live and a role other than `viewer`; ConsoleStaffSession.environments lists the environments the staff member may open. */
+                "X-Velexis-Environment"?: components["parameters"]["VelexisEnvironment"];
+                /**
+                 * @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server), and for the OTA admin's service key on console operations (below); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`.
+                 *
+                 *     **Console operations.** Honoured for secret keys as above and for the OTA admin's first-party service key, which must send it: the staff member's address (the right-most `X-Forwarded-For` entry Caddy gave the admin). With the service key a missing or malformed value answers `400 VALIDATION_FAILED`; the value drives the console sign-in throttle (10 per minute per end-user IP), the lockout and the staff audit log (`staff_actions`). Other callers' values are ignored.
+                 */
+                "X-Velexis-End-User-IP"?: components["parameters"]["CustomerEndUserIp"];
+                /**
+                 * @description User-Agent of the visitor's browser for calls your server makes on their behalf with a secret or hosting key (longer values are truncated to 512 characters). Honoured only for secret and hosting keys, and for the OTA admin's service key on console operations; publishable-key calls use the request's own `User-Agent`. Recorded as session metadata (`AuthSessionDetails.userAgent`, new-sign-in security emails) and used by abuse heuristics. SDK: `options.endUser.userAgent` or the client option `endUser`.
+                 *
+                 *     **Console operations.** The OTA admin's first-party service key must send the staff member's user agent (missing: `400 VALIDATION_FAILED`); it is recorded in the staff audit log (`staff_actions`).
+                 */
+                "X-Velexis-End-User-Agent"?: components["parameters"]["CustomerEndUserAgent"];
             };
             path: {
                 /** @description Booking id (`bkg_…`) of this OTA. */
@@ -19194,6 +19758,20 @@ export interface operations {
                 "If-Match": components["parameters"]["IfMatch"];
                 /** @description BCP 47 locale for messages and display texts. */
                 "Accept-Language"?: components["parameters"]["AcceptLanguage"];
+                /** @description Environment of a console call made with the OTA admin's first-party service key, `test` or `live`. Required with the service key (missing: `400 VALIDATION_FAILED`) and refused with any other credential, whose environment is the key's. `live` needs an OTA that is live and a role other than `viewer`; ConsoleStaffSession.environments lists the environments the staff member may open. */
+                "X-Velexis-Environment"?: components["parameters"]["VelexisEnvironment"];
+                /**
+                 * @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server), and for the OTA admin's service key on console operations (below); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`.
+                 *
+                 *     **Console operations.** Honoured for secret keys as above and for the OTA admin's first-party service key, which must send it: the staff member's address (the right-most `X-Forwarded-For` entry Caddy gave the admin). With the service key a missing or malformed value answers `400 VALIDATION_FAILED`; the value drives the console sign-in throttle (10 per minute per end-user IP), the lockout and the staff audit log (`staff_actions`). Other callers' values are ignored.
+                 */
+                "X-Velexis-End-User-IP"?: components["parameters"]["CustomerEndUserIp"];
+                /**
+                 * @description User-Agent of the visitor's browser for calls your server makes on their behalf with a secret or hosting key (longer values are truncated to 512 characters). Honoured only for secret and hosting keys, and for the OTA admin's service key on console operations; publishable-key calls use the request's own `User-Agent`. Recorded as session metadata (`AuthSessionDetails.userAgent`, new-sign-in security emails) and used by abuse heuristics. SDK: `options.endUser.userAgent` or the client option `endUser`.
+                 *
+                 *     **Console operations.** The OTA admin's first-party service key must send the staff member's user agent (missing: `400 VALIDATION_FAILED`); it is recorded in the staff audit log (`staff_actions`).
+                 */
+                "X-Velexis-End-User-Agent"?: components["parameters"]["CustomerEndUserAgent"];
             };
             path: {
                 /** @description Booking id (`bkg_…`) of this OTA. */
@@ -19233,6 +19811,20 @@ export interface operations {
                 "If-Match": components["parameters"]["IfMatch"];
                 /** @description BCP 47 locale for messages and display texts. */
                 "Accept-Language"?: components["parameters"]["AcceptLanguage"];
+                /** @description Environment of a console call made with the OTA admin's first-party service key, `test` or `live`. Required with the service key (missing: `400 VALIDATION_FAILED`) and refused with any other credential, whose environment is the key's. `live` needs an OTA that is live and a role other than `viewer`; ConsoleStaffSession.environments lists the environments the staff member may open. */
+                "X-Velexis-Environment"?: components["parameters"]["VelexisEnvironment"];
+                /**
+                 * @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server), and for the OTA admin's service key on console operations (below); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`.
+                 *
+                 *     **Console operations.** Honoured for secret keys as above and for the OTA admin's first-party service key, which must send it: the staff member's address (the right-most `X-Forwarded-For` entry Caddy gave the admin). With the service key a missing or malformed value answers `400 VALIDATION_FAILED`; the value drives the console sign-in throttle (10 per minute per end-user IP), the lockout and the staff audit log (`staff_actions`). Other callers' values are ignored.
+                 */
+                "X-Velexis-End-User-IP"?: components["parameters"]["CustomerEndUserIp"];
+                /**
+                 * @description User-Agent of the visitor's browser for calls your server makes on their behalf with a secret or hosting key (longer values are truncated to 512 characters). Honoured only for secret and hosting keys, and for the OTA admin's service key on console operations; publishable-key calls use the request's own `User-Agent`. Recorded as session metadata (`AuthSessionDetails.userAgent`, new-sign-in security emails) and used by abuse heuristics. SDK: `options.endUser.userAgent` or the client option `endUser`.
+                 *
+                 *     **Console operations.** The OTA admin's first-party service key must send the staff member's user agent (missing: `400 VALIDATION_FAILED`); it is recorded in the staff audit log (`staff_actions`).
+                 */
+                "X-Velexis-End-User-Agent"?: components["parameters"]["CustomerEndUserAgent"];
             };
             path: {
                 /** @description Booking id (`bkg_…`) of this OTA. */
@@ -19273,6 +19865,20 @@ export interface operations {
                 "If-Match": components["parameters"]["IfMatch"];
                 /** @description BCP 47 locale for messages and display texts. */
                 "Accept-Language"?: components["parameters"]["AcceptLanguage"];
+                /** @description Environment of a console call made with the OTA admin's first-party service key, `test` or `live`. Required with the service key (missing: `400 VALIDATION_FAILED`) and refused with any other credential, whose environment is the key's. `live` needs an OTA that is live and a role other than `viewer`; ConsoleStaffSession.environments lists the environments the staff member may open. */
+                "X-Velexis-Environment"?: components["parameters"]["VelexisEnvironment"];
+                /**
+                 * @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server), and for the OTA admin's service key on console operations (below); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`.
+                 *
+                 *     **Console operations.** Honoured for secret keys as above and for the OTA admin's first-party service key, which must send it: the staff member's address (the right-most `X-Forwarded-For` entry Caddy gave the admin). With the service key a missing or malformed value answers `400 VALIDATION_FAILED`; the value drives the console sign-in throttle (10 per minute per end-user IP), the lockout and the staff audit log (`staff_actions`). Other callers' values are ignored.
+                 */
+                "X-Velexis-End-User-IP"?: components["parameters"]["CustomerEndUserIp"];
+                /**
+                 * @description User-Agent of the visitor's browser for calls your server makes on their behalf with a secret or hosting key (longer values are truncated to 512 characters). Honoured only for secret and hosting keys, and for the OTA admin's service key on console operations; publishable-key calls use the request's own `User-Agent`. Recorded as session metadata (`AuthSessionDetails.userAgent`, new-sign-in security emails) and used by abuse heuristics. SDK: `options.endUser.userAgent` or the client option `endUser`.
+                 *
+                 *     **Console operations.** The OTA admin's first-party service key must send the staff member's user agent (missing: `400 VALIDATION_FAILED`); it is recorded in the staff audit log (`staff_actions`).
+                 */
+                "X-Velexis-End-User-Agent"?: components["parameters"]["CustomerEndUserAgent"];
             };
             path: {
                 /** @description Booking id (`bkg_…`) of this OTA. */
@@ -19318,6 +19924,20 @@ export interface operations {
             header?: {
                 /** @description BCP 47 locale for messages and display texts. */
                 "Accept-Language"?: components["parameters"]["AcceptLanguage"];
+                /** @description Environment of a console call made with the OTA admin's first-party service key, `test` or `live`. Required with the service key (missing: `400 VALIDATION_FAILED`) and refused with any other credential, whose environment is the key's. `live` needs an OTA that is live and a role other than `viewer`; ConsoleStaffSession.environments lists the environments the staff member may open. */
+                "X-Velexis-Environment"?: components["parameters"]["VelexisEnvironment"];
+                /**
+                 * @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server), and for the OTA admin's service key on console operations (below); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`.
+                 *
+                 *     **Console operations.** Honoured for secret keys as above and for the OTA admin's first-party service key, which must send it: the staff member's address (the right-most `X-Forwarded-For` entry Caddy gave the admin). With the service key a missing or malformed value answers `400 VALIDATION_FAILED`; the value drives the console sign-in throttle (10 per minute per end-user IP), the lockout and the staff audit log (`staff_actions`). Other callers' values are ignored.
+                 */
+                "X-Velexis-End-User-IP"?: components["parameters"]["CustomerEndUserIp"];
+                /**
+                 * @description User-Agent of the visitor's browser for calls your server makes on their behalf with a secret or hosting key (longer values are truncated to 512 characters). Honoured only for secret and hosting keys, and for the OTA admin's service key on console operations; publishable-key calls use the request's own `User-Agent`. Recorded as session metadata (`AuthSessionDetails.userAgent`, new-sign-in security emails) and used by abuse heuristics. SDK: `options.endUser.userAgent` or the client option `endUser`.
+                 *
+                 *     **Console operations.** The OTA admin's first-party service key must send the staff member's user agent (missing: `400 VALIDATION_FAILED`); it is recorded in the staff audit log (`staff_actions`).
+                 */
+                "X-Velexis-End-User-Agent"?: components["parameters"]["CustomerEndUserAgent"];
             };
             path: {
                 /** @description Booking id (`bkg_…`) of this OTA. */
@@ -19372,6 +19992,20 @@ export interface operations {
             header: {
                 /** @description Client-generated unique key (UUID v4) that makes the request safe to retry for 24 hours. */
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+                /** @description Environment of a console call made with the OTA admin's first-party service key, `test` or `live`. Required with the service key (missing: `400 VALIDATION_FAILED`) and refused with any other credential, whose environment is the key's. `live` needs an OTA that is live and a role other than `viewer`; ConsoleStaffSession.environments lists the environments the staff member may open. */
+                "X-Velexis-Environment"?: components["parameters"]["VelexisEnvironment"];
+                /**
+                 * @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server), and for the OTA admin's service key on console operations (below); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`.
+                 *
+                 *     **Console operations.** Honoured for secret keys as above and for the OTA admin's first-party service key, which must send it: the staff member's address (the right-most `X-Forwarded-For` entry Caddy gave the admin). With the service key a missing or malformed value answers `400 VALIDATION_FAILED`; the value drives the console sign-in throttle (10 per minute per end-user IP), the lockout and the staff audit log (`staff_actions`). Other callers' values are ignored.
+                 */
+                "X-Velexis-End-User-IP"?: components["parameters"]["CustomerEndUserIp"];
+                /**
+                 * @description User-Agent of the visitor's browser for calls your server makes on their behalf with a secret or hosting key (longer values are truncated to 512 characters). Honoured only for secret and hosting keys, and for the OTA admin's service key on console operations; publishable-key calls use the request's own `User-Agent`. Recorded as session metadata (`AuthSessionDetails.userAgent`, new-sign-in security emails) and used by abuse heuristics. SDK: `options.endUser.userAgent` or the client option `endUser`.
+                 *
+                 *     **Console operations.** The OTA admin's first-party service key must send the staff member's user agent (missing: `400 VALIDATION_FAILED`); it is recorded in the staff audit log (`staff_actions`).
+                 */
+                "X-Velexis-End-User-Agent"?: components["parameters"]["CustomerEndUserAgent"];
             };
             path: {
                 /** @description Booking id (`bkg_…`) of this OTA. */
@@ -19440,6 +20074,20 @@ export interface operations {
             header?: {
                 /** @description BCP 47 locale for messages and display texts. */
                 "Accept-Language"?: components["parameters"]["AcceptLanguage"];
+                /** @description Environment of a console call made with the OTA admin's first-party service key, `test` or `live`. Required with the service key (missing: `400 VALIDATION_FAILED`) and refused with any other credential, whose environment is the key's. `live` needs an OTA that is live and a role other than `viewer`; ConsoleStaffSession.environments lists the environments the staff member may open. */
+                "X-Velexis-Environment"?: components["parameters"]["VelexisEnvironment"];
+                /**
+                 * @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server), and for the OTA admin's service key on console operations (below); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`.
+                 *
+                 *     **Console operations.** Honoured for secret keys as above and for the OTA admin's first-party service key, which must send it: the staff member's address (the right-most `X-Forwarded-For` entry Caddy gave the admin). With the service key a missing or malformed value answers `400 VALIDATION_FAILED`; the value drives the console sign-in throttle (10 per minute per end-user IP), the lockout and the staff audit log (`staff_actions`). Other callers' values are ignored.
+                 */
+                "X-Velexis-End-User-IP"?: components["parameters"]["CustomerEndUserIp"];
+                /**
+                 * @description User-Agent of the visitor's browser for calls your server makes on their behalf with a secret or hosting key (longer values are truncated to 512 characters). Honoured only for secret and hosting keys, and for the OTA admin's service key on console operations; publishable-key calls use the request's own `User-Agent`. Recorded as session metadata (`AuthSessionDetails.userAgent`, new-sign-in security emails) and used by abuse heuristics. SDK: `options.endUser.userAgent` or the client option `endUser`.
+                 *
+                 *     **Console operations.** The OTA admin's first-party service key must send the staff member's user agent (missing: `400 VALIDATION_FAILED`); it is recorded in the staff audit log (`staff_actions`).
+                 */
+                "X-Velexis-End-User-Agent"?: components["parameters"]["CustomerEndUserAgent"];
             };
             path?: never;
             cookie?: never;
@@ -19477,6 +20125,20 @@ export interface operations {
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
                 /** @description BCP 47 locale for messages and display texts. */
                 "Accept-Language"?: components["parameters"]["AcceptLanguage"];
+                /** @description Environment of a console call made with the OTA admin's first-party service key, `test` or `live`. Required with the service key (missing: `400 VALIDATION_FAILED`) and refused with any other credential, whose environment is the key's. `live` needs an OTA that is live and a role other than `viewer`; ConsoleStaffSession.environments lists the environments the staff member may open. */
+                "X-Velexis-Environment"?: components["parameters"]["VelexisEnvironment"];
+                /**
+                 * @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server), and for the OTA admin's service key on console operations (below); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`.
+                 *
+                 *     **Console operations.** Honoured for secret keys as above and for the OTA admin's first-party service key, which must send it: the staff member's address (the right-most `X-Forwarded-For` entry Caddy gave the admin). With the service key a missing or malformed value answers `400 VALIDATION_FAILED`; the value drives the console sign-in throttle (10 per minute per end-user IP), the lockout and the staff audit log (`staff_actions`). Other callers' values are ignored.
+                 */
+                "X-Velexis-End-User-IP"?: components["parameters"]["CustomerEndUserIp"];
+                /**
+                 * @description User-Agent of the visitor's browser for calls your server makes on their behalf with a secret or hosting key (longer values are truncated to 512 characters). Honoured only for secret and hosting keys, and for the OTA admin's service key on console operations; publishable-key calls use the request's own `User-Agent`. Recorded as session metadata (`AuthSessionDetails.userAgent`, new-sign-in security emails) and used by abuse heuristics. SDK: `options.endUser.userAgent` or the client option `endUser`.
+                 *
+                 *     **Console operations.** The OTA admin's first-party service key must send the staff member's user agent (missing: `400 VALIDATION_FAILED`); it is recorded in the staff audit log (`staff_actions`).
+                 */
+                "X-Velexis-End-User-Agent"?: components["parameters"]["CustomerEndUserAgent"];
             };
             path?: never;
             cookie?: never;
@@ -19542,7 +20204,22 @@ export interface operations {
                 /** @description Store the response as the booking's order snapshot. */
                 updateSnapshot?: boolean;
             };
-            header?: never;
+            header?: {
+                /** @description Environment of a console call made with the OTA admin's first-party service key, `test` or `live`. Required with the service key (missing: `400 VALIDATION_FAILED`) and refused with any other credential, whose environment is the key's. `live` needs an OTA that is live and a role other than `viewer`; ConsoleStaffSession.environments lists the environments the staff member may open. */
+                "X-Velexis-Environment"?: components["parameters"]["VelexisEnvironment"];
+                /**
+                 * @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server), and for the OTA admin's service key on console operations (below); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`.
+                 *
+                 *     **Console operations.** Honoured for secret keys as above and for the OTA admin's first-party service key, which must send it: the staff member's address (the right-most `X-Forwarded-For` entry Caddy gave the admin). With the service key a missing or malformed value answers `400 VALIDATION_FAILED`; the value drives the console sign-in throttle (10 per minute per end-user IP), the lockout and the staff audit log (`staff_actions`). Other callers' values are ignored.
+                 */
+                "X-Velexis-End-User-IP"?: components["parameters"]["CustomerEndUserIp"];
+                /**
+                 * @description User-Agent of the visitor's browser for calls your server makes on their behalf with a secret or hosting key (longer values are truncated to 512 characters). Honoured only for secret and hosting keys, and for the OTA admin's service key on console operations; publishable-key calls use the request's own `User-Agent`. Recorded as session metadata (`AuthSessionDetails.userAgent`, new-sign-in security emails) and used by abuse heuristics. SDK: `options.endUser.userAgent` or the client option `endUser`.
+                 *
+                 *     **Console operations.** The OTA admin's first-party service key must send the staff member's user agent (missing: `400 VALIDATION_FAILED`); it is recorded in the staff audit log (`staff_actions`).
+                 */
+                "X-Velexis-End-User-Agent"?: components["parameters"]["CustomerEndUserAgent"];
+            };
             path: {
                 /** @description Booking id (`bkg_…`) of this OTA. */
                 bookingId: string;
@@ -19589,7 +20266,22 @@ export interface operations {
                 /** @description Page size. */
                 limit?: components["parameters"]["Limit"];
             };
-            header?: never;
+            header?: {
+                /** @description Environment of a console call made with the OTA admin's first-party service key, `test` or `live`. Required with the service key (missing: `400 VALIDATION_FAILED`) and refused with any other credential, whose environment is the key's. `live` needs an OTA that is live and a role other than `viewer`; ConsoleStaffSession.environments lists the environments the staff member may open. */
+                "X-Velexis-Environment"?: components["parameters"]["VelexisEnvironment"];
+                /**
+                 * @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server), and for the OTA admin's service key on console operations (below); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`.
+                 *
+                 *     **Console operations.** Honoured for secret keys as above and for the OTA admin's first-party service key, which must send it: the staff member's address (the right-most `X-Forwarded-For` entry Caddy gave the admin). With the service key a missing or malformed value answers `400 VALIDATION_FAILED`; the value drives the console sign-in throttle (10 per minute per end-user IP), the lockout and the staff audit log (`staff_actions`). Other callers' values are ignored.
+                 */
+                "X-Velexis-End-User-IP"?: components["parameters"]["CustomerEndUserIp"];
+                /**
+                 * @description User-Agent of the visitor's browser for calls your server makes on their behalf with a secret or hosting key (longer values are truncated to 512 characters). Honoured only for secret and hosting keys, and for the OTA admin's service key on console operations; publishable-key calls use the request's own `User-Agent`. Recorded as session metadata (`AuthSessionDetails.userAgent`, new-sign-in security emails) and used by abuse heuristics. SDK: `options.endUser.userAgent` or the client option `endUser`.
+                 *
+                 *     **Console operations.** The OTA admin's first-party service key must send the staff member's user agent (missing: `400 VALIDATION_FAILED`); it is recorded in the staff audit log (`staff_actions`).
+                 */
+                "X-Velexis-End-User-Agent"?: components["parameters"]["CustomerEndUserAgent"];
+            };
             path: {
                 /** @description Amadeus queue number (Queue List `queue-id`). */
                 queueId: number;
@@ -19735,7 +20427,22 @@ export interface operations {
                 /** @description Page size. */
                 limit?: components["parameters"]["Limit"];
             };
-            header?: never;
+            header?: {
+                /** @description Environment of a console call made with the OTA admin's first-party service key, `test` or `live`. Required with the service key (missing: `400 VALIDATION_FAILED`) and refused with any other credential, whose environment is the key's. `live` needs an OTA that is live and a role other than `viewer`; ConsoleStaffSession.environments lists the environments the staff member may open. */
+                "X-Velexis-Environment"?: components["parameters"]["VelexisEnvironment"];
+                /**
+                 * @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server), and for the OTA admin's service key on console operations (below); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`.
+                 *
+                 *     **Console operations.** Honoured for secret keys as above and for the OTA admin's first-party service key, which must send it: the staff member's address (the right-most `X-Forwarded-For` entry Caddy gave the admin). With the service key a missing or malformed value answers `400 VALIDATION_FAILED`; the value drives the console sign-in throttle (10 per minute per end-user IP), the lockout and the staff audit log (`staff_actions`). Other callers' values are ignored.
+                 */
+                "X-Velexis-End-User-IP"?: components["parameters"]["CustomerEndUserIp"];
+                /**
+                 * @description User-Agent of the visitor's browser for calls your server makes on their behalf with a secret or hosting key (longer values are truncated to 512 characters). Honoured only for secret and hosting keys, and for the OTA admin's service key on console operations; publishable-key calls use the request's own `User-Agent`. Recorded as session metadata (`AuthSessionDetails.userAgent`, new-sign-in security emails) and used by abuse heuristics. SDK: `options.endUser.userAgent` or the client option `endUser`.
+                 *
+                 *     **Console operations.** The OTA admin's first-party service key must send the staff member's user agent (missing: `400 VALIDATION_FAILED`); it is recorded in the staff audit log (`staff_actions`).
+                 */
+                "X-Velexis-End-User-Agent"?: components["parameters"]["CustomerEndUserAgent"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -19824,7 +20531,22 @@ export interface operations {
                 /** @description Page size. */
                 limit?: components["parameters"]["Limit"];
             };
-            header?: never;
+            header?: {
+                /** @description Environment of a console call made with the OTA admin's first-party service key, `test` or `live`. Required with the service key (missing: `400 VALIDATION_FAILED`) and refused with any other credential, whose environment is the key's. `live` needs an OTA that is live and a role other than `viewer`; ConsoleStaffSession.environments lists the environments the staff member may open. */
+                "X-Velexis-Environment"?: components["parameters"]["VelexisEnvironment"];
+                /**
+                 * @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server), and for the OTA admin's service key on console operations (below); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`.
+                 *
+                 *     **Console operations.** Honoured for secret keys as above and for the OTA admin's first-party service key, which must send it: the staff member's address (the right-most `X-Forwarded-For` entry Caddy gave the admin). With the service key a missing or malformed value answers `400 VALIDATION_FAILED`; the value drives the console sign-in throttle (10 per minute per end-user IP), the lockout and the staff audit log (`staff_actions`). Other callers' values are ignored.
+                 */
+                "X-Velexis-End-User-IP"?: components["parameters"]["CustomerEndUserIp"];
+                /**
+                 * @description User-Agent of the visitor's browser for calls your server makes on their behalf with a secret or hosting key (longer values are truncated to 512 characters). Honoured only for secret and hosting keys, and for the OTA admin's service key on console operations; publishable-key calls use the request's own `User-Agent`. Recorded as session metadata (`AuthSessionDetails.userAgent`, new-sign-in security emails) and used by abuse heuristics. SDK: `options.endUser.userAgent` or the client option `endUser`.
+                 *
+                 *     **Console operations.** The OTA admin's first-party service key must send the staff member's user agent (missing: `400 VALIDATION_FAILED`); it is recorded in the staff audit log (`staff_actions`).
+                 */
+                "X-Velexis-End-User-Agent"?: components["parameters"]["CustomerEndUserAgent"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -19885,6 +20607,20 @@ export interface operations {
             header?: {
                 /** @description BCP 47 locale for messages and display texts. */
                 "Accept-Language"?: components["parameters"]["AcceptLanguage"];
+                /** @description Environment of a console call made with the OTA admin's first-party service key, `test` or `live`. Required with the service key (missing: `400 VALIDATION_FAILED`) and refused with any other credential, whose environment is the key's. `live` needs an OTA that is live and a role other than `viewer`; ConsoleStaffSession.environments lists the environments the staff member may open. */
+                "X-Velexis-Environment"?: components["parameters"]["VelexisEnvironment"];
+                /**
+                 * @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server), and for the OTA admin's service key on console operations (below); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`.
+                 *
+                 *     **Console operations.** Honoured for secret keys as above and for the OTA admin's first-party service key, which must send it: the staff member's address (the right-most `X-Forwarded-For` entry Caddy gave the admin). With the service key a missing or malformed value answers `400 VALIDATION_FAILED`; the value drives the console sign-in throttle (10 per minute per end-user IP), the lockout and the staff audit log (`staff_actions`). Other callers' values are ignored.
+                 */
+                "X-Velexis-End-User-IP"?: components["parameters"]["CustomerEndUserIp"];
+                /**
+                 * @description User-Agent of the visitor's browser for calls your server makes on their behalf with a secret or hosting key (longer values are truncated to 512 characters). Honoured only for secret and hosting keys, and for the OTA admin's service key on console operations; publishable-key calls use the request's own `User-Agent`. Recorded as session metadata (`AuthSessionDetails.userAgent`, new-sign-in security emails) and used by abuse heuristics. SDK: `options.endUser.userAgent` or the client option `endUser`.
+                 *
+                 *     **Console operations.** The OTA admin's first-party service key must send the staff member's user agent (missing: `400 VALIDATION_FAILED`); it is recorded in the staff audit log (`staff_actions`).
+                 */
+                "X-Velexis-End-User-Agent"?: components["parameters"]["CustomerEndUserAgent"];
             };
             path: {
                 /** @description Customer id (`cus_…`). */
@@ -20040,7 +20776,22 @@ export interface operations {
                 /** @description Page size. */
                 limit?: components["parameters"]["Limit"];
             };
-            header?: never;
+            header?: {
+                /** @description Environment of a console call made with the OTA admin's first-party service key, `test` or `live`. Required with the service key (missing: `400 VALIDATION_FAILED`) and refused with any other credential, whose environment is the key's. `live` needs an OTA that is live and a role other than `viewer`; ConsoleStaffSession.environments lists the environments the staff member may open. */
+                "X-Velexis-Environment"?: components["parameters"]["VelexisEnvironment"];
+                /**
+                 * @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server), and for the OTA admin's service key on console operations (below); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`.
+                 *
+                 *     **Console operations.** Honoured for secret keys as above and for the OTA admin's first-party service key, which must send it: the staff member's address (the right-most `X-Forwarded-For` entry Caddy gave the admin). With the service key a missing or malformed value answers `400 VALIDATION_FAILED`; the value drives the console sign-in throttle (10 per minute per end-user IP), the lockout and the staff audit log (`staff_actions`). Other callers' values are ignored.
+                 */
+                "X-Velexis-End-User-IP"?: components["parameters"]["CustomerEndUserIp"];
+                /**
+                 * @description User-Agent of the visitor's browser for calls your server makes on their behalf with a secret or hosting key (longer values are truncated to 512 characters). Honoured only for secret and hosting keys, and for the OTA admin's service key on console operations; publishable-key calls use the request's own `User-Agent`. Recorded as session metadata (`AuthSessionDetails.userAgent`, new-sign-in security emails) and used by abuse heuristics. SDK: `options.endUser.userAgent` or the client option `endUser`.
+                 *
+                 *     **Console operations.** The OTA admin's first-party service key must send the staff member's user agent (missing: `400 VALIDATION_FAILED`); it is recorded in the staff audit log (`staff_actions`).
+                 */
+                "X-Velexis-End-User-Agent"?: components["parameters"]["CustomerEndUserAgent"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -20153,7 +20904,22 @@ export interface operations {
                 /** @description Maximum number of offers (Amadeus default 250). */
                 max?: number;
             };
-            header?: never;
+            header?: {
+                /** @description Environment of a console call made with the OTA admin's first-party service key, `test` or `live`. Required with the service key (missing: `400 VALIDATION_FAILED`) and refused with any other credential, whose environment is the key's. `live` needs an OTA that is live and a role other than `viewer`; ConsoleStaffSession.environments lists the environments the staff member may open. */
+                "X-Velexis-Environment"?: components["parameters"]["VelexisEnvironment"];
+                /**
+                 * @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server), and for the OTA admin's service key on console operations (below); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`.
+                 *
+                 *     **Console operations.** Honoured for secret keys as above and for the OTA admin's first-party service key, which must send it: the staff member's address (the right-most `X-Forwarded-For` entry Caddy gave the admin). With the service key a missing or malformed value answers `400 VALIDATION_FAILED`; the value drives the console sign-in throttle (10 per minute per end-user IP), the lockout and the staff audit log (`staff_actions`). Other callers' values are ignored.
+                 */
+                "X-Velexis-End-User-IP"?: components["parameters"]["CustomerEndUserIp"];
+                /**
+                 * @description User-Agent of the visitor's browser for calls your server makes on their behalf with a secret or hosting key (longer values are truncated to 512 characters). Honoured only for secret and hosting keys, and for the OTA admin's service key on console operations; publishable-key calls use the request's own `User-Agent`. Recorded as session metadata (`AuthSessionDetails.userAgent`, new-sign-in security emails) and used by abuse heuristics. SDK: `options.endUser.userAgent` or the client option `endUser`.
+                 *
+                 *     **Console operations.** The OTA admin's first-party service key must send the staff member's user agent (missing: `400 VALIDATION_FAILED`); it is recorded in the staff audit log (`staff_actions`).
+                 */
+                "X-Velexis-End-User-Agent"?: components["parameters"]["CustomerEndUserAgent"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -20285,7 +21051,22 @@ export interface operations {
     consoleAmadeusSearchFlightOffers: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Environment of a console call made with the OTA admin's first-party service key, `test` or `live`. Required with the service key (missing: `400 VALIDATION_FAILED`) and refused with any other credential, whose environment is the key's. `live` needs an OTA that is live and a role other than `viewer`; ConsoleStaffSession.environments lists the environments the staff member may open. */
+                "X-Velexis-Environment"?: components["parameters"]["VelexisEnvironment"];
+                /**
+                 * @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server), and for the OTA admin's service key on console operations (below); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`.
+                 *
+                 *     **Console operations.** Honoured for secret keys as above and for the OTA admin's first-party service key, which must send it: the staff member's address (the right-most `X-Forwarded-For` entry Caddy gave the admin). With the service key a missing or malformed value answers `400 VALIDATION_FAILED`; the value drives the console sign-in throttle (10 per minute per end-user IP), the lockout and the staff audit log (`staff_actions`). Other callers' values are ignored.
+                 */
+                "X-Velexis-End-User-IP"?: components["parameters"]["CustomerEndUserIp"];
+                /**
+                 * @description User-Agent of the visitor's browser for calls your server makes on their behalf with a secret or hosting key (longer values are truncated to 512 characters). Honoured only for secret and hosting keys, and for the OTA admin's service key on console operations; publishable-key calls use the request's own `User-Agent`. Recorded as session metadata (`AuthSessionDetails.userAgent`, new-sign-in security emails) and used by abuse heuristics. SDK: `options.endUser.userAgent` or the client option `endUser`.
+                 *
+                 *     **Console operations.** The OTA admin's first-party service key must send the staff member's user agent (missing: `400 VALIDATION_FAILED`); it is recorded in the staff audit log (`staff_actions`).
+                 */
+                "X-Velexis-End-User-Agent"?: components["parameters"]["CustomerEndUserAgent"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -20498,7 +21279,22 @@ export interface operations {
     consoleAmadeusSearchFlightAvailabilities: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Environment of a console call made with the OTA admin's first-party service key, `test` or `live`. Required with the service key (missing: `400 VALIDATION_FAILED`) and refused with any other credential, whose environment is the key's. `live` needs an OTA that is live and a role other than `viewer`; ConsoleStaffSession.environments lists the environments the staff member may open. */
+                "X-Velexis-Environment"?: components["parameters"]["VelexisEnvironment"];
+                /**
+                 * @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server), and for the OTA admin's service key on console operations (below); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`.
+                 *
+                 *     **Console operations.** Honoured for secret keys as above and for the OTA admin's first-party service key, which must send it: the staff member's address (the right-most `X-Forwarded-For` entry Caddy gave the admin). With the service key a missing or malformed value answers `400 VALIDATION_FAILED`; the value drives the console sign-in throttle (10 per minute per end-user IP), the lockout and the staff audit log (`staff_actions`). Other callers' values are ignored.
+                 */
+                "X-Velexis-End-User-IP"?: components["parameters"]["CustomerEndUserIp"];
+                /**
+                 * @description User-Agent of the visitor's browser for calls your server makes on their behalf with a secret or hosting key (longer values are truncated to 512 characters). Honoured only for secret and hosting keys, and for the OTA admin's service key on console operations; publishable-key calls use the request's own `User-Agent`. Recorded as session metadata (`AuthSessionDetails.userAgent`, new-sign-in security emails) and used by abuse heuristics. SDK: `options.endUser.userAgent` or the client option `endUser`.
+                 *
+                 *     **Console operations.** The OTA admin's first-party service key must send the staff member's user agent (missing: `400 VALIDATION_FAILED`); it is recorded in the staff audit log (`staff_actions`).
+                 */
+                "X-Velexis-End-User-Agent"?: components["parameters"]["CustomerEndUserAgent"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -20643,7 +21439,22 @@ export interface operations {
     consoleAmadeusUpsellAirOffers: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Environment of a console call made with the OTA admin's first-party service key, `test` or `live`. Required with the service key (missing: `400 VALIDATION_FAILED`) and refused with any other credential, whose environment is the key's. `live` needs an OTA that is live and a role other than `viewer`; ConsoleStaffSession.environments lists the environments the staff member may open. */
+                "X-Velexis-Environment"?: components["parameters"]["VelexisEnvironment"];
+                /**
+                 * @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server), and for the OTA admin's service key on console operations (below); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`.
+                 *
+                 *     **Console operations.** Honoured for secret keys as above and for the OTA admin's first-party service key, which must send it: the staff member's address (the right-most `X-Forwarded-For` entry Caddy gave the admin). With the service key a missing or malformed value answers `400 VALIDATION_FAILED`; the value drives the console sign-in throttle (10 per minute per end-user IP), the lockout and the staff audit log (`staff_actions`). Other callers' values are ignored.
+                 */
+                "X-Velexis-End-User-IP"?: components["parameters"]["CustomerEndUserIp"];
+                /**
+                 * @description User-Agent of the visitor's browser for calls your server makes on their behalf with a secret or hosting key (longer values are truncated to 512 characters). Honoured only for secret and hosting keys, and for the OTA admin's service key on console operations; publishable-key calls use the request's own `User-Agent`. Recorded as session metadata (`AuthSessionDetails.userAgent`, new-sign-in security emails) and used by abuse heuristics. SDK: `options.endUser.userAgent` or the client option `endUser`.
+                 *
+                 *     **Console operations.** The OTA admin's first-party service key must send the staff member's user agent (missing: `400 VALIDATION_FAILED`); it is recorded in the staff audit log (`staff_actions`).
+                 */
+                "X-Velexis-End-User-Agent"?: components["parameters"]["CustomerEndUserAgent"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -20863,7 +21674,22 @@ export interface operations {
                 /** @description Amadeus forceClass: price with the booking class of the offer (no automatic rebooking in a cheaper class). */
                 forceClass?: boolean;
             };
-            header?: never;
+            header?: {
+                /** @description Environment of a console call made with the OTA admin's first-party service key, `test` or `live`. Required with the service key (missing: `400 VALIDATION_FAILED`) and refused with any other credential, whose environment is the key's. `live` needs an OTA that is live and a role other than `viewer`; ConsoleStaffSession.environments lists the environments the staff member may open. */
+                "X-Velexis-Environment"?: components["parameters"]["VelexisEnvironment"];
+                /**
+                 * @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server), and for the OTA admin's service key on console operations (below); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`.
+                 *
+                 *     **Console operations.** Honoured for secret keys as above and for the OTA admin's first-party service key, which must send it: the staff member's address (the right-most `X-Forwarded-For` entry Caddy gave the admin). With the service key a missing or malformed value answers `400 VALIDATION_FAILED`; the value drives the console sign-in throttle (10 per minute per end-user IP), the lockout and the staff audit log (`staff_actions`). Other callers' values are ignored.
+                 */
+                "X-Velexis-End-User-IP"?: components["parameters"]["CustomerEndUserIp"];
+                /**
+                 * @description User-Agent of the visitor's browser for calls your server makes on their behalf with a secret or hosting key (longer values are truncated to 512 characters). Honoured only for secret and hosting keys, and for the OTA admin's service key on console operations; publishable-key calls use the request's own `User-Agent`. Recorded as session metadata (`AuthSessionDetails.userAgent`, new-sign-in security emails) and used by abuse heuristics. SDK: `options.endUser.userAgent` or the client option `endUser`.
+                 *
+                 *     **Console operations.** The OTA admin's first-party service key must send the staff member's user agent (missing: `400 VALIDATION_FAILED`); it is recorded in the staff audit log (`staff_actions`).
+                 */
+                "X-Velexis-End-User-Agent"?: components["parameters"]["CustomerEndUserAgent"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -21116,6 +21942,20 @@ export interface operations {
             header: {
                 /** @description Client-generated unique key (UUID v4) that makes the request safe to retry for 24 hours. */
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+                /** @description Environment of a console call made with the OTA admin's first-party service key, `test` or `live`. Required with the service key (missing: `400 VALIDATION_FAILED`) and refused with any other credential, whose environment is the key's. `live` needs an OTA that is live and a role other than `viewer`; ConsoleStaffSession.environments lists the environments the staff member may open. */
+                "X-Velexis-Environment"?: components["parameters"]["VelexisEnvironment"];
+                /**
+                 * @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server), and for the OTA admin's service key on console operations (below); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`.
+                 *
+                 *     **Console operations.** Honoured for secret keys as above and for the OTA admin's first-party service key, which must send it: the staff member's address (the right-most `X-Forwarded-For` entry Caddy gave the admin). With the service key a missing or malformed value answers `400 VALIDATION_FAILED`; the value drives the console sign-in throttle (10 per minute per end-user IP), the lockout and the staff audit log (`staff_actions`). Other callers' values are ignored.
+                 */
+                "X-Velexis-End-User-IP"?: components["parameters"]["CustomerEndUserIp"];
+                /**
+                 * @description User-Agent of the visitor's browser for calls your server makes on their behalf with a secret or hosting key (longer values are truncated to 512 characters). Honoured only for secret and hosting keys, and for the OTA admin's service key on console operations; publishable-key calls use the request's own `User-Agent`. Recorded as session metadata (`AuthSessionDetails.userAgent`, new-sign-in security emails) and used by abuse heuristics. SDK: `options.endUser.userAgent` or the client option `endUser`.
+                 *
+                 *     **Console operations.** The OTA admin's first-party service key must send the staff member's user agent (missing: `400 VALIDATION_FAILED`); it is recorded in the staff audit log (`staff_actions`).
+                 */
+                "X-Velexis-End-User-Agent"?: components["parameters"]["CustomerEndUserAgent"];
             };
             path?: never;
             cookie?: never;
@@ -21380,6 +22220,20 @@ export interface operations {
             header: {
                 /** @description Client-generated unique key (UUID v4) that makes the request safe to retry for 24 hours. */
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+                /** @description Environment of a console call made with the OTA admin's first-party service key, `test` or `live`. Required with the service key (missing: `400 VALIDATION_FAILED`) and refused with any other credential, whose environment is the key's. `live` needs an OTA that is live and a role other than `viewer`; ConsoleStaffSession.environments lists the environments the staff member may open. */
+                "X-Velexis-Environment"?: components["parameters"]["VelexisEnvironment"];
+                /**
+                 * @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server), and for the OTA admin's service key on console operations (below); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`.
+                 *
+                 *     **Console operations.** Honoured for secret keys as above and for the OTA admin's first-party service key, which must send it: the staff member's address (the right-most `X-Forwarded-For` entry Caddy gave the admin). With the service key a missing or malformed value answers `400 VALIDATION_FAILED`; the value drives the console sign-in throttle (10 per minute per end-user IP), the lockout and the staff audit log (`staff_actions`). Other callers' values are ignored.
+                 */
+                "X-Velexis-End-User-IP"?: components["parameters"]["CustomerEndUserIp"];
+                /**
+                 * @description User-Agent of the visitor's browser for calls your server makes on their behalf with a secret or hosting key (longer values are truncated to 512 characters). Honoured only for secret and hosting keys, and for the OTA admin's service key on console operations; publishable-key calls use the request's own `User-Agent`. Recorded as session metadata (`AuthSessionDetails.userAgent`, new-sign-in security emails) and used by abuse heuristics. SDK: `options.endUser.userAgent` or the client option `endUser`.
+                 *
+                 *     **Console operations.** The OTA admin's first-party service key must send the staff member's user agent (missing: `400 VALIDATION_FAILED`); it is recorded in the staff audit log (`staff_actions`).
+                 */
+                "X-Velexis-End-User-Agent"?: components["parameters"]["CustomerEndUserAgent"];
             };
             path: {
                 /** @description Amadeus flight-order id (`data.id` of Flight Create Orders, e.g. `eJzTd9cPNfX09DUFAAsGAkQ`), forwarded as the Amadeus `flight-orderId` path parameter (URL-encoded). */
@@ -21503,7 +22357,22 @@ export interface operations {
                 /** @description Amadeus `fareRules` of Flight Order Management GET (comma-separated): `rebooks` (rebooking eligibility) and/or `refunds` (refund eligibility). */
                 fareRules?: components["parameters"]["ConsoleOrderFareRules"];
             };
-            header?: never;
+            header?: {
+                /** @description Environment of a console call made with the OTA admin's first-party service key, `test` or `live`. Required with the service key (missing: `400 VALIDATION_FAILED`) and refused with any other credential, whose environment is the key's. `live` needs an OTA that is live and a role other than `viewer`; ConsoleStaffSession.environments lists the environments the staff member may open. */
+                "X-Velexis-Environment"?: components["parameters"]["VelexisEnvironment"];
+                /**
+                 * @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server), and for the OTA admin's service key on console operations (below); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`.
+                 *
+                 *     **Console operations.** Honoured for secret keys as above and for the OTA admin's first-party service key, which must send it: the staff member's address (the right-most `X-Forwarded-For` entry Caddy gave the admin). With the service key a missing or malformed value answers `400 VALIDATION_FAILED`; the value drives the console sign-in throttle (10 per minute per end-user IP), the lockout and the staff audit log (`staff_actions`). Other callers' values are ignored.
+                 */
+                "X-Velexis-End-User-IP"?: components["parameters"]["CustomerEndUserIp"];
+                /**
+                 * @description User-Agent of the visitor's browser for calls your server makes on their behalf with a secret or hosting key (longer values are truncated to 512 characters). Honoured only for secret and hosting keys, and for the OTA admin's service key on console operations; publishable-key calls use the request's own `User-Agent`. Recorded as session metadata (`AuthSessionDetails.userAgent`, new-sign-in security emails) and used by abuse heuristics. SDK: `options.endUser.userAgent` or the client option `endUser`.
+                 *
+                 *     **Console operations.** The OTA admin's first-party service key must send the staff member's user agent (missing: `400 VALIDATION_FAILED`); it is recorded in the staff audit log (`staff_actions`).
+                 */
+                "X-Velexis-End-User-Agent"?: components["parameters"]["CustomerEndUserAgent"];
+            };
             path: {
                 /** @description Amadeus flight-order id (`data.id` of Flight Create Orders, e.g. `eJzTd9cPNfX09DUFAAsGAkQ`), forwarded as the Amadeus `flight-orderId` path parameter (URL-encoded). */
                 flightOrderId: string;
@@ -21665,7 +22534,22 @@ export interface operations {
                 /** @description Audit justification (staff_actions.reason, bookings.cancel_reason). */
                 reason: string;
             };
-            header?: never;
+            header?: {
+                /** @description Environment of a console call made with the OTA admin's first-party service key, `test` or `live`. Required with the service key (missing: `400 VALIDATION_FAILED`) and refused with any other credential, whose environment is the key's. `live` needs an OTA that is live and a role other than `viewer`; ConsoleStaffSession.environments lists the environments the staff member may open. */
+                "X-Velexis-Environment"?: components["parameters"]["VelexisEnvironment"];
+                /**
+                 * @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server), and for the OTA admin's service key on console operations (below); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`.
+                 *
+                 *     **Console operations.** Honoured for secret keys as above and for the OTA admin's first-party service key, which must send it: the staff member's address (the right-most `X-Forwarded-For` entry Caddy gave the admin). With the service key a missing or malformed value answers `400 VALIDATION_FAILED`; the value drives the console sign-in throttle (10 per minute per end-user IP), the lockout and the staff audit log (`staff_actions`). Other callers' values are ignored.
+                 */
+                "X-Velexis-End-User-IP"?: components["parameters"]["CustomerEndUserIp"];
+                /**
+                 * @description User-Agent of the visitor's browser for calls your server makes on their behalf with a secret or hosting key (longer values are truncated to 512 characters). Honoured only for secret and hosting keys, and for the OTA admin's service key on console operations; publishable-key calls use the request's own `User-Agent`. Recorded as session metadata (`AuthSessionDetails.userAgent`, new-sign-in security emails) and used by abuse heuristics. SDK: `options.endUser.userAgent` or the client option `endUser`.
+                 *
+                 *     **Console operations.** The OTA admin's first-party service key must send the staff member's user agent (missing: `400 VALIDATION_FAILED`); it is recorded in the staff audit log (`staff_actions`).
+                 */
+                "X-Velexis-End-User-Agent"?: components["parameters"]["CustomerEndUserAgent"];
+            };
             path: {
                 /** @description Amadeus flight-order id (`data.id` of Flight Create Orders, e.g. `eJzTd9cPNfX09DUFAAsGAkQ`), forwarded as the Amadeus `flight-orderId` path parameter (URL-encoded). */
                 flightOrderId: string;
@@ -21720,7 +22604,22 @@ export interface operations {
     consoleAmadeusPatchFlightOrder: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Environment of a console call made with the OTA admin's first-party service key, `test` or `live`. Required with the service key (missing: `400 VALIDATION_FAILED`) and refused with any other credential, whose environment is the key's. `live` needs an OTA that is live and a role other than `viewer`; ConsoleStaffSession.environments lists the environments the staff member may open. */
+                "X-Velexis-Environment"?: components["parameters"]["VelexisEnvironment"];
+                /**
+                 * @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server), and for the OTA admin's service key on console operations (below); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`.
+                 *
+                 *     **Console operations.** Honoured for secret keys as above and for the OTA admin's first-party service key, which must send it: the staff member's address (the right-most `X-Forwarded-For` entry Caddy gave the admin). With the service key a missing or malformed value answers `400 VALIDATION_FAILED`; the value drives the console sign-in throttle (10 per minute per end-user IP), the lockout and the staff audit log (`staff_actions`). Other callers' values are ignored.
+                 */
+                "X-Velexis-End-User-IP"?: components["parameters"]["CustomerEndUserIp"];
+                /**
+                 * @description User-Agent of the visitor's browser for calls your server makes on their behalf with a secret or hosting key (longer values are truncated to 512 characters). Honoured only for secret and hosting keys, and for the OTA admin's service key on console operations; publishable-key calls use the request's own `User-Agent`. Recorded as session metadata (`AuthSessionDetails.userAgent`, new-sign-in security emails) and used by abuse heuristics. SDK: `options.endUser.userAgent` or the client option `endUser`.
+                 *
+                 *     **Console operations.** The OTA admin's first-party service key must send the staff member's user agent (missing: `400 VALIDATION_FAILED`); it is recorded in the staff audit log (`staff_actions`).
+                 */
+                "X-Velexis-End-User-Agent"?: components["parameters"]["CustomerEndUserAgent"];
+            };
             path: {
                 /** @description Amadeus flight-order id (`data.id` of Flight Create Orders, e.g. `eJzTd9cPNfX09DUFAAsGAkQ`), forwarded as the Amadeus `flight-orderId` path parameter (URL-encoded). */
                 flightOrderId: string;
@@ -21874,7 +22773,22 @@ export interface operations {
                 /** @description Amadeus `include` sub-resources of the flight-order GET (comma-separated): `bags` returns the extra bag options (`included.bags`). */
                 include?: components["parameters"]["ConsoleOrderInclude"];
             };
-            header?: never;
+            header?: {
+                /** @description Environment of a console call made with the OTA admin's first-party service key, `test` or `live`. Required with the service key (missing: `400 VALIDATION_FAILED`) and refused with any other credential, whose environment is the key's. `live` needs an OTA that is live and a role other than `viewer`; ConsoleStaffSession.environments lists the environments the staff member may open. */
+                "X-Velexis-Environment"?: components["parameters"]["VelexisEnvironment"];
+                /**
+                 * @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server), and for the OTA admin's service key on console operations (below); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`.
+                 *
+                 *     **Console operations.** Honoured for secret keys as above and for the OTA admin's first-party service key, which must send it: the staff member's address (the right-most `X-Forwarded-For` entry Caddy gave the admin). With the service key a missing or malformed value answers `400 VALIDATION_FAILED`; the value drives the console sign-in throttle (10 per minute per end-user IP), the lockout and the staff audit log (`staff_actions`). Other callers' values are ignored.
+                 */
+                "X-Velexis-End-User-IP"?: components["parameters"]["CustomerEndUserIp"];
+                /**
+                 * @description User-Agent of the visitor's browser for calls your server makes on their behalf with a secret or hosting key (longer values are truncated to 512 characters). Honoured only for secret and hosting keys, and for the OTA admin's service key on console operations; publishable-key calls use the request's own `User-Agent`. Recorded as session metadata (`AuthSessionDetails.userAgent`, new-sign-in security emails) and used by abuse heuristics. SDK: `options.endUser.userAgent` or the client option `endUser`.
+                 *
+                 *     **Console operations.** The OTA admin's first-party service key must send the staff member's user agent (missing: `400 VALIDATION_FAILED`); it is recorded in the staff audit log (`staff_actions`).
+                 */
+                "X-Velexis-End-User-Agent"?: components["parameters"]["CustomerEndUserAgent"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -21990,7 +22904,22 @@ export interface operations {
                 /** @description Amadeus office id whose queue is read (Queue List `officeId`). Must be one of the offices of the OTA's supplier connection; default: the connection's queuing office. */
                 officeId?: components["parameters"]["ConsoleQueueOfficeId"];
             };
-            header?: never;
+            header?: {
+                /** @description Environment of a console call made with the OTA admin's first-party service key, `test` or `live`. Required with the service key (missing: `400 VALIDATION_FAILED`) and refused with any other credential, whose environment is the key's. `live` needs an OTA that is live and a role other than `viewer`; ConsoleStaffSession.environments lists the environments the staff member may open. */
+                "X-Velexis-Environment"?: components["parameters"]["VelexisEnvironment"];
+                /**
+                 * @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server), and for the OTA admin's service key on console operations (below); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`.
+                 *
+                 *     **Console operations.** Honoured for secret keys as above and for the OTA admin's first-party service key, which must send it: the staff member's address (the right-most `X-Forwarded-For` entry Caddy gave the admin). With the service key a missing or malformed value answers `400 VALIDATION_FAILED`; the value drives the console sign-in throttle (10 per minute per end-user IP), the lockout and the staff audit log (`staff_actions`). Other callers' values are ignored.
+                 */
+                "X-Velexis-End-User-IP"?: components["parameters"]["CustomerEndUserIp"];
+                /**
+                 * @description User-Agent of the visitor's browser for calls your server makes on their behalf with a secret or hosting key (longer values are truncated to 512 characters). Honoured only for secret and hosting keys, and for the OTA admin's service key on console operations; publishable-key calls use the request's own `User-Agent`. Recorded as session metadata (`AuthSessionDetails.userAgent`, new-sign-in security emails) and used by abuse heuristics. SDK: `options.endUser.userAgent` or the client option `endUser`.
+                 *
+                 *     **Console operations.** The OTA admin's first-party service key must send the staff member's user agent (missing: `400 VALIDATION_FAILED`); it is recorded in the staff audit log (`staff_actions`).
+                 */
+                "X-Velexis-End-User-Agent"?: components["parameters"]["CustomerEndUserAgent"];
+            };
             path: {
                 /** @description Amadeus queue number (Queue List `queue-id`). */
                 queueId: number;

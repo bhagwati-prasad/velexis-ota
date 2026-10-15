@@ -254,7 +254,8 @@ The OTA backend gets its contract extensions, request pipeline, tenancy, Amadeus
   - `git diff --exit-code packages/db/src/generated` is clean after `pnpm db:codegen`.
 - **Verify:** `pnpm db:codegen && pnpm --filter @velexis/ota-backend test -- contract && pnpm --filter @velexis/ota-backend test:int -- migrations`
 
-### OBE-009 · Spec-first: edge and cookie mode, environment header, vendor extensions and x-milestone
+### OBE-009 · Spec-first: edge and cookie mode, environment header, vendor extensions and x-milestone ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-backend
 - **Milestone:** M2
 - **Depends on:** X-006, X-008, X-009
