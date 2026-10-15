@@ -1,5 +1,7 @@
 // Contract test of OBE-009: the spec-first changes of ota/docs/api-changes.md §1, §2, §5 and §6 in the OTA document
 // (openapi/velexis-ota-booking-api.openapi.yaml) and the milestone of every original operation (ota/docs/scope.md §3).
+// OBE-029 adds the airline-card method (§3.1), the edge-only operation completeCheckoutWithAirlineCard (§3.2), the
+// payment account modes of StorefrontPaymentConfig (§4) and PAYMENT_ATTEMPTS_EXCEEDED (§6).
 //
 // The 96 operations of the original design are read from the frozen copy under docs/velexis-sdk/openapi/, so the
 // counts asserted here (77 MVP, 19 deferred, 63 customer-scope) never change when later spec tasks add operations.
@@ -11,9 +13,10 @@
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import type { components, operations } from "@velexis/api-types";
 import { otaOperations, type ApiOperation } from "@velexis/api-types/operations";
 import { ERROR_CATALOGUE, OTA_ERROR_CODES, type ErrorCode } from "@velexis/errors";
-import { responseChecker, type ResponseChecker } from "@velexis/testing";
+import { createResponseChecker, responseChecker, type ResponseChecker } from "@velexis/testing";
 import { beforeAll, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import { APP_DIR } from "../../src/config";
@@ -250,6 +253,10 @@ const edgeAlternatives = (operation: Operation): string[] =>
     .map((requirement) => Object.keys(requirement).sort().join("+"))
     .sort();
 
+/** An operation the hosted storefront edge may call: one of its security alternatives is `storefrontEdge`. */
+const acceptsEdge = (operation: Operation): boolean =>
+  securityOf(operation).some((requirement) => "storefrontEdge" in requirement);
+
 let working: Json;
 let frozen: Json;
 let workingOperations: Operation[];
@@ -369,9 +376,7 @@ describe("edge and cookie mode (api-changes §2)", () => {
   it("lists 403 HOST_NOT_ALLOWED on every operation that accepts the edge credential (api-changes §2.4)", () => {
     // An edge request whose X-Velexis-Host is unknown or unverified answers 403 HOST_NOT_ALLOWED, whatever the
     // operation, so every operation with a storefrontEdge alternative can answer it.
-    const edgeOperations = workingOperations.filter((op) =>
-      securityOf(op).some((requirement) => "storefrontEdge" in requirement),
-    );
+    const edgeOperations = workingOperations.filter(acceptsEdge);
     expect(edgeOperations.length).toBeGreaterThanOrEqual(63);
     for (const op of edgeOperations) {
       expect([op.operationId, op.spec["x-error-codes"]]).toEqual([
@@ -414,7 +419,10 @@ describe("edge and cookie mode (api-changes §2)", () => {
     });
     let stateChanging = 0;
     for (const op of workingOperations) {
-      const expected = isCustomerScope(op) && takesKey(op) && STATE_CHANGING.has(op.method);
+      // Customer-scope operations that take a key (and so have edge alternatives), and the edge-only operations
+      // (x-edge-only, OBE-029), which take no key at all: every state-changing request of the edge needs the header.
+      const expected =
+        ((isCustomerScope(op) && takesKey(op)) || acceptsEdge(op)) && STATE_CHANGING.has(op.method);
       expect([op.operationId, parameterRefsOf(op).includes("CsrfToken")]).toEqual([op.operationId, expected]);
       if (expected) {
         stateChanging += 1;
@@ -600,6 +608,528 @@ describe("vendor extensions (api-changes §1)", () => {
         permission: spec["x-permission"] ?? null,
       });
     }
+  });
+});
+
+// ---- OBE-029: the airline card and the payment account modes (api-changes §3, §4, §6) ------------------------
+
+const AIRLINE_CARD_COMPLETION = "completeCheckoutWithAirlineCard";
+
+/** The error codes of api-changes §3.2's table, by status (`As checkout.complete` rows included). */
+const AIRLINE_CARD_ERROR_CODES: Readonly<Record<string, readonly string[]>> = {
+  "400": ["VALIDATION_FAILED"],
+  "402": ["PAYMENT_DECLINED"],
+  "403": ["FEATURE_DISABLED", "SCOPE_NOT_ALLOWED", "PAYMENT_ATTEMPTS_EXCEEDED", "CSRF_TOKEN_INVALID"],
+  "409": ["PRICE_CHANGED", "PAYMENT_AMOUNT_MISMATCH", "SOLD_OUT", "CHECKOUT_ALREADY_COMPLETED"],
+  "410": ["CHECKOUT_EXPIRED"],
+  "422": ["CHECKOUT_INCOMPLETE", "TRAVELER_DATA_INVALID", "CONTACT_DATA_INVALID", "UNPROCESSABLE"],
+  "429": ["RATE_LIMITED"],
+  "502": ["SUPPLIER_ERROR"],
+  "503": ["SUPPLIER_UNAVAILABLE"],
+  "504": ["SUPPLIER_TIMEOUT"],
+};
+
+/** A Stripe-documented test card (AGENTS.md §8): Luhn-valid Visa 4242 4242 4242 4242. */
+const TEST_CARD = {
+  brand: "VISA",
+  holderName: "Marco Rossi",
+  number: "4242424242424242",
+  expiryMonth: 12,
+  expiryYear: 2030,
+  securityCode: "123",
+} as const;
+
+/**
+ * Checks request bodies against the document: a copy of it whose only operations are one probe per operation of
+ * `operationIds`, with that operation's JSON request body schema as the probe's 200 response. The schemas are
+ * compiled by the strict Ajv 2020 set-up of @velexis/testing, as the backend's request validation compiles them.
+ */
+function requestBodyChecker(operationIds: readonly string[]): ResponseChecker {
+  const paths: Json = {};
+  for (const operationId of operationIds) {
+    const schema = objectAt(operation(operationId).spec, "requestBody", "content", "application/json")[
+      "schema"
+    ];
+    paths[`/request-bodies/${operationId}`] = {
+      post: {
+        operationId,
+        responses: {
+          "200": { description: "The request body", content: { "application/json": { schema } } },
+        },
+      },
+    };
+  }
+  return createResponseChecker({ ...working, paths }, { label: "OTA request bodies" });
+}
+
+/** The JSON request example of an operation, by its name in `requestBody.content.application/json.examples`. */
+function requestExample(operationId: string, name: string): Json {
+  const value = objectAt(
+    operation(operationId).spec,
+    "requestBody",
+    "content",
+    "application/json",
+    "examples",
+    name,
+  )["value"];
+  if (!isObject(value)) {
+    throw new Error(`${operationId} has no request example ${name}`);
+  }
+  return value;
+}
+
+/** A named response example of an operation's JSON response (inline `examples.<name>.value`). */
+function namedResponseExample(operationId: string, status: string, name: string): Json {
+  const value = objectAt(
+    operation(operationId).spec,
+    "responses",
+    status,
+    "content",
+    "application/json",
+    "examples",
+    name,
+  )["value"];
+  if (!isObject(value)) {
+    throw new Error(`${operationId} ${status} has no example ${name}`);
+  }
+  return value;
+}
+
+const schemaOf = (name: string): Json => objectAt(working, "components", "schemas", name);
+
+const enumOf = (schema: Json, ...keys: string[]): unknown => objectAt(schema, ...keys)["enum"];
+
+describe("airline-card method and payment account modes (api-changes §3, §4, §6)", () => {
+  let requests: ResponseChecker;
+
+  beforeAll(() => {
+    requests = requestBodyChecker([AIRLINE_CARD_COMPLETION, "createCheckoutPayment"]);
+  });
+
+  it("adds completeCheckoutWithAirlineCard exactly as api-changes §3.2, and the index lists it edge-only [OBE-029 AC1]", () => {
+    const op = operation(AIRLINE_CARD_COMPLETION);
+    expect([op.method, op.path]).toEqual(["post", "/v1/checkouts/{checkoutId}/airline-card-completion"]);
+    expect(op.spec).toMatchObject({
+      "x-sdk-method": "checkout.completeWithAirlineCard",
+      "x-scope": "customer",
+      "x-edge-only": true,
+      "x-milestone": "M3",
+      tags: ["Checkout"],
+    });
+    expect(securityOf(op)).toEqual([{ storefrontEdge: [] }, { storefrontEdge: [], customerCookie: [] }]);
+    expect(op.spec["x-amadeus"]).toEqual([
+      {
+        api: "FlightOffersPrice",
+        operationId: "quoteAirOffers",
+        method: "POST",
+        path: "/v1/shopping/flight-offers/pricing",
+      },
+      {
+        api: "FlightCreateOrders",
+        operationId: "createFligtOrders",
+        method: "POST",
+        path: "/v1/booking/flight-orders",
+      },
+    ]);
+    expect(op.spec["x-tenant-tables"]).toEqual([
+      "checkouts",
+      "checkout_travelers",
+      "checkout_contacts",
+      "checkout_ancillaries",
+      "checkout_remarks",
+      "priced_offers",
+      "payments",
+      "payment_events",
+      "bookings",
+      "booking_associated_records",
+      "booking_travelers",
+      "booking_contacts",
+      "booking_segments",
+      "booking_ancillaries",
+      "booking_remarks",
+      "booking_tickets",
+      "booking_events",
+      "booking_access_tokens",
+      "storefront_settings",
+      "notifications",
+      "supplier_requests",
+      "idempotency_keys",
+    ]);
+    // Idempotency-Key is required (the component parameter is), CSRF header on this state-changing edge request.
+    expect(parameterRefsOf(op)).toEqual(expect.arrayContaining(["IdempotencyKey", "CsrfToken"]));
+    expect(objectAt(working, "components", "parameters", "IdempotencyKey")["required"]).toBe(true);
+    expect(objectAt(op.spec, "requestBody")["required"]).toBe(true);
+    expect(objectAt(op.spec, "requestBody", "content", "application/json", "schema")).toEqual({
+      $ref: "#/components/schemas/AirlineCardCompletionRequest",
+    });
+    const created = objectAt(op.spec, "responses", "201");
+    expect(objectAt(created, "content", "application/json", "schema")).toEqual({
+      $ref: "#/components/schemas/CheckoutCompletion",
+    });
+    expect(objectAt(created, "headers")).toMatchObject({
+      "Set-Cookie": { $ref: "#/components/headers/Set-Cookie" },
+    });
+
+    // The operations index: the 96 operations of the original design plus this one (97 when OBE-029 lands; later
+    // spec tasks add more, so the total itself is not asserted), and this one is edge-only.
+    const original = new Set(frozenOperations.map(({ operationId }) => operationId));
+    expect(
+      otaOperations.filter(
+        ({ operationId }) => original.has(operationId) || operationId === AIRLINE_CARD_COMPLETION,
+      ),
+    ).toHaveLength(97);
+    expect(otaOperations.find(({ operationId }) => operationId === AIRLINE_CARD_COMPLETION)).toEqual({
+      operationId: AIRLINE_CARD_COMPLETION,
+      method: "post",
+      path: "/v1/checkouts/{checkoutId}/airline-card-completion",
+      sdkMethod: "checkout.completeWithAirlineCard",
+      scope: "customer",
+      tags: ["Checkout"],
+      internal: false,
+      milestone: "M3",
+      edgeOnly: true,
+      permission: null,
+    });
+  });
+
+  it("lets only the storefront edge call an x-edge-only operation: never a key-only (sk_) or bearer alternative [OBE-029 AC1]", () => {
+    const edgeOnly = workingOperations.filter(({ spec }) => spec["x-edge-only"] === true);
+    expect(edgeOnly.map(({ operationId }) => operationId)).toEqual(
+      expect.arrayContaining([AIRLINE_CARD_COMPLETION]),
+    );
+    for (const op of edgeOnly) {
+      expect([op.operationId, op.spec["x-scope"]]).toEqual([op.operationId, "customer"]);
+      expect([op.operationId, securityOf(op).length > 0]).toEqual([op.operationId, true]);
+      for (const requirement of securityOf(op)) {
+        const schemes = Object.keys(requirement).sort();
+        // Every alternative is the edge credential, alone or with a session cookie; none takes X-Api-Key (so no
+        // `{apiKey: []}` entry a secret key could satisfy alone), a bearer token or a staff token.
+        expect([op.operationId, schemes.includes("storefrontEdge")]).toEqual([op.operationId, true]);
+        expect([
+          op.operationId,
+          schemes.filter((scheme) =>
+            ["apiKey", "customerAuth", "bookingToken", "staffAuth"].includes(scheme),
+          ),
+        ]).toEqual([op.operationId, []]);
+      }
+      // Keys and the service key that reach it anyway get 403 SCOPE_NOT_ALLOWED (api-changes §1).
+      expect([op.operationId, op.spec["x-error-codes"]]).toEqual([
+        op.operationId,
+        expect.arrayContaining(["SCOPE_NOT_ALLOWED"]),
+      ]);
+    }
+    expect(otaOperations.filter(({ edgeOnly: flag }) => flag).map(({ operationId }) => operationId)).toEqual(
+      edgeOnly.map(({ operationId }) => operationId),
+    );
+  });
+
+  it("lists the error codes of api-changes §3.2, each answered with a documented status [OBE-029 AC1]", () => {
+    const op = operation(AIRLINE_CARD_COMPLETION);
+    const codes = op.spec["x-error-codes"] as string[];
+    expect(codes).toEqual(expect.arrayContaining(Object.values(AIRLINE_CARD_ERROR_CODES).flat()));
+    expect(new Set(codes).size).toBe(codes.length);
+    const responses = objectAt(op.spec, "responses");
+    for (const code of codes) {
+      const entry = ERROR_CATALOGUE[code as ErrorCode] as (typeof ERROR_CATALOGUE)[ErrorCode] | undefined;
+      expect([code, entry?.source]).toEqual([code, "ota"]);
+      expect([code, String(entry?.status) in responses]).toEqual([code, true]);
+    }
+    for (const [status, statusCodes] of Object.entries(AIRLINE_CARD_ERROR_CODES)) {
+      for (const code of statusCodes) {
+        expect([code, ERROR_CATALOGUE[code as ErrorCode].status]).toEqual([code, Number(status)]);
+      }
+    }
+    // The 403 and 504 responses of this route, and their examples, which validate as error envelopes.
+    expect(responses["403"]).toEqual({ $ref: "#/components/responses/AirlineCardForbidden" });
+    expect(responses["504"]).toEqual({ $ref: "#/components/responses/AirlineCardSupplierTimeout" });
+    const forbidden = objectAt(working, "components", "responses", "AirlineCardForbidden");
+    const examples = objectAt(forbidden, "content", "application/json", "examples");
+    expect(Object.keys(examples)).toEqual(
+      expect.arrayContaining(["SCOPE_NOT_ALLOWED", "FEATURE_DISABLED", "PAYMENT_ATTEMPTS_EXCEEDED"]),
+    );
+    for (const [name, example] of Object.entries(examples)) {
+      const body = objectAt(example, "value");
+      expect([name, objectAt(body, "error")["code"]]).toEqual([name, name]);
+      expect([name, checker.check(AIRLINE_CARD_COMPLETION, { status: 403, body })]).toEqual([name, []]);
+    }
+    expect(objectAt(examples, "FEATURE_DISABLED", "value", "error", "details")).toEqual({
+      feature: "airlineCard",
+    });
+    // 504: the order may exist. A guest's booking token goes into the `__Host-vx_bt` cookie, which the storefront
+    // needs to poll bookings.getTicketingStatus, and never into the body (no token readable by browser JavaScript).
+    const timeout = objectAt(working, "components", "responses", "AirlineCardSupplierTimeout");
+    expect(objectAt(timeout, "headers")).toMatchObject({
+      "Set-Cookie": { $ref: "#/components/headers/Set-Cookie" },
+    });
+    const timeoutBody = objectAt(
+      timeout,
+      "content",
+      "application/json",
+      "examples",
+      "SUPPLIER_TIMEOUT",
+      "value",
+    );
+    expect(checker.check(AIRLINE_CARD_COMPLETION, { status: 504, body: timeoutBody })).toEqual([]);
+    expect(objectAt(timeoutBody, "error", "details")).toEqual({
+      bookingId: expect.stringMatching(/^bkg_/),
+      replayed: false,
+    });
+  });
+
+  it("defines AirlineCardCompletionRequest with x-sensitive on card, and validates bodies by it [OBE-029 AC2]", () => {
+    const schema = schemaOf("AirlineCardCompletionRequest");
+    expect(schema).toMatchObject({
+      type: "object",
+      additionalProperties: false,
+      required: ["paymentId", "expectedTotal", "card"],
+    });
+    expect(objectAt(schema, "properties", "paymentId")).toMatchObject({
+      type: "string",
+      pattern: "^pay_[0-9A-Za-z]{16,40}$",
+    });
+    expect(objectAt(schema, "properties", "expectedTotal")).toMatchObject({
+      $ref: "#/components/schemas/Money",
+    });
+    const card = objectAt(schema, "properties", "card");
+    expect(card).toMatchObject({
+      type: "object",
+      additionalProperties: false,
+      required: ["brand", "holderName", "number", "expiryMonth", "expiryYear", "securityCode"],
+      "x-sensitive": true,
+    });
+    expect(objectAt(card, "properties")).toMatchObject({
+      brand: { $ref: "#/components/schemas/AmadeusPaymentBrand" },
+      holderName: { type: "string", minLength: 2, maxLength: 64, pattern: "^[A-Za-z .'-]+$" },
+      number: { type: "string", pattern: "^[0-9]{12,19}$" },
+      expiryMonth: { type: "integer", minimum: 1, maximum: 12 },
+      expiryYear: { type: "integer", minimum: 2026, maximum: 2099 },
+      securityCode: { type: "string", pattern: "^[0-9]{3,4}$" },
+    });
+    // `x-sensitive` marks only the card (documented in info.description).
+    const sensitive = Object.keys(objectAt(working, "components", "schemas")).filter((name) =>
+      JSON.stringify(schemaOf(name)).includes('"x-sensitive"'),
+    );
+    expect(sensitive).toEqual(["AirlineCardCompletionRequest"]);
+    expect(String(objectAt(working, "info")["description"])).toContain("- `x-sensitive: true` (");
+
+    // The generated types carry the body (this assignment compiles only while they do).
+    const typed: components["schemas"]["AirlineCardCompletionRequest"] = {
+      paymentId: "pay_01JA4CF6M3Q6T9W2Z5C8F1H4K7",
+      expectedTotal: { amount: "1361.06", currency: "EUR" },
+      card: { ...TEST_CARD },
+    };
+    const viaOperation: operations[typeof AIRLINE_CARD_COMPLETION]["requestBody"]["content"]["application/json"] =
+      typed;
+    expect(requestExample(AIRLINE_CARD_COMPLETION, "visa")).toEqual(viaOperation);
+
+    const check = (body: unknown) => requests.check(AIRLINE_CARD_COMPLETION, { status: 200, body });
+    const paths = (body: unknown) => check(body).map(({ path, keyword }) => `${path} ${keyword}`);
+    expect(check(typed)).toEqual([]);
+    expect(paths({ ...typed, card: { ...TEST_CARD, number: "4242 4242 4242 4242" } })).toEqual([
+      "/card/number pattern",
+    ]);
+    expect(paths({ ...typed, card: { ...TEST_CARD, expiryMonth: 13 } })).toEqual([
+      "/card/expiryMonth maximum",
+    ]);
+    expect(paths({ ...typed, card: { ...TEST_CARD, securityCode: "12345" } })).toEqual([
+      "/card/securityCode pattern",
+    ]);
+    expect(paths({ ...typed, card: { ...TEST_CARD, brand: "DISCOVER" } })).toEqual(["/card/brand enum"]);
+    expect(paths({ ...typed, card: { ...TEST_CARD, expiry: "12/30" } })).toEqual([
+      "/card/expiry additionalProperties",
+    ]);
+    const { securityCode, ...withoutCode } = TEST_CARD;
+    expect(securityCode).toBe("123");
+    expect(paths({ ...typed, card: withoutCode })).toEqual(["/card/securityCode required"]);
+    expect(paths({ ...typed, savePaymentMethod: true })).toEqual(["/savePaymentMethod additionalProperties"]);
+    // Problems name the field and the keyword, never the rejected value.
+    const problems = JSON.stringify(check({ ...typed, card: { ...TEST_CARD, number: "4242x4242x4242" } }));
+    expect(problems).not.toContain("4242x4242x4242");
+  });
+
+  it("adds airline_card to the payment enums and keeps the provider fields null on airline payments (api-changes §3.1)", () => {
+    expect(enumOf(schemaOf("PaymentCreateRequest"), "properties", "method")).toEqual([
+      "card",
+      "apple_pay",
+      "google_pay",
+      "paypal",
+      "airline_card",
+    ]);
+    expect(enumOf(schemaOf("Payment"), "properties", "method")).toEqual(
+      expect.arrayContaining(["card", "bank_transfer", "agency_credit", "cash", "airline_card"]),
+    );
+    expect(enumOf(schemaOf("Payment"), "properties", "provider")).toEqual(
+      expect.arrayContaining(["stripe", "manual", "airline"]),
+    );
+    expect(enumOf(schemaOf("PaymentNextAction"), "properties", "type")).toEqual([
+      "confirm_with_provider_sdk",
+      "redirect",
+      "wait",
+      "none",
+      "airline_card_form",
+    ]);
+    for (const field of ["clientSecret", "providerPublicKey", "providerPaymentId"]) {
+      expect([field, String(objectAt(schemaOf("Payment"), "properties", field)["description"])]).toEqual([
+        field,
+        expect.stringContaining("Always null for airline payments."),
+      ]);
+    }
+    const method: components["schemas"]["Payment"]["method"] = "airline_card";
+    const provider: components["schemas"]["Payment"]["provider"] = "airline";
+    const nextAction: components["schemas"]["PaymentNextAction"]["type"] = "airline_card_form";
+    expect([method, provider, nextAction]).toEqual(["airline_card", "airline", "airline_card_form"]);
+
+    // createPayment {method: airline_card}: refused to key callers, and `provider` must be absent.
+    expect(operation("createCheckoutPayment").spec["x-error-codes"]).toEqual(
+      expect.arrayContaining(["FEATURE_DISABLED", "SCOPE_NOT_ALLOWED"]),
+    );
+    const airline = requestExample("createCheckoutPayment", "airlineCard");
+    expect(airline).toEqual({ method: "airline_card", termsAccepted: true });
+    const create = (body: unknown) =>
+      requests
+        .check("createCheckoutPayment", { status: 200, body })
+        .map(({ path, keyword }) => `${path} ${keyword}`);
+    expect(create(airline)).toEqual([]);
+    expect(create({ ...airline, provider: "stripe" })).toEqual(["/provider false schema", " if"]);
+    expect(create(requestExample("createCheckoutPayment", "paypal"))).toEqual([]);
+    expect(create({ method: "card", provider: "stripe", termsAccepted: true })).toEqual([]);
+
+    // The airline payment as createPayment returns it, and as the completed booking holds it.
+    const created = namedResponseExample("createCheckoutPayment", "201", "airlineCard");
+    expect(created).toMatchObject({
+      provider: "airline",
+      method: "airline_card",
+      status: "requires_payment_method",
+      captureMethod: "automatic",
+      clientSecret: null,
+      providerPublicKey: null,
+      providerPaymentId: null,
+      nextAction: { type: "airline_card_form" },
+    });
+    expect(checker.check("createCheckoutPayment", { status: 201, body: created })).toEqual([]);
+    const completion = namedResponseExample(AIRLINE_CARD_COMPLETION, "201", "guestTicketed");
+    expect(checker.check(AIRLINE_CARD_COMPLETION, { status: 201, body: completion })).toEqual([]);
+    expect(completion).toMatchObject({ bookingToken: null, bookingTokenExpiresAt: null });
+    const booking = objectAt(completion, "booking");
+    expect(booking["status"]).toBe("ticketed");
+    const [payment] = booking["payments"] as Json[];
+    expect(payment).toMatchObject({
+      id: created["id"],
+      provider: "airline",
+      method: "airline_card",
+      status: "captured",
+      clientSecret: null,
+      providerPublicKey: null,
+      providerPaymentId: null,
+      card: { brand: "VISA", last4: "4242", expMonth: null, expYear: null },
+    });
+    // The amount the airline charges is the payment's amount: what the completion request confirmed.
+    expect(objectAt(payment, "amount")).toEqual(
+      requestExample(AIRLINE_CARD_COMPLETION, "visa")["expectedTotal"],
+    );
+    // No card field of the request (number, security code, holder, expiry) is echoed anywhere in the answer.
+    const answer = JSON.stringify(completion);
+    for (const value of [
+      TEST_CARD.number,
+      TEST_CARD.holderName,
+      "securityCode",
+      "holderName",
+      "expiryYear",
+    ]) {
+      expect([value, answer.includes(value)]).toEqual([value, false]);
+    }
+  });
+
+  it("adds the payment account modes and the airline card to StorefrontPaymentConfig (api-changes §4) [OBE-029 AC2]", () => {
+    const config = schemaOf("StorefrontPaymentConfig");
+    expect(config["required"]).toEqual(
+      expect.arrayContaining(["accountMode", "merchantName", "statementDescriptor", "airlineCard"]),
+    );
+    expect(objectAt(config, "properties", "accountMode")).toMatchObject({
+      type: "string",
+      enum: ["velexis", "connect_standard", "api_keys"],
+    });
+    expect(objectAt(config, "properties", "merchantName")).toMatchObject({ type: "string" });
+    expect(objectAt(config, "properties", "statementDescriptor")).toMatchObject({ type: ["string", "null"] });
+    expect(objectAt(config, "properties", "airlineCard")["anyOf"]).toEqual([
+      { $ref: "#/components/schemas/StorefrontAirlineCard" },
+      { type: "null" },
+    ]);
+    expect(enumOf(config, "properties", "supportedMethods", "items")).toEqual([
+      "card",
+      "apple_pay",
+      "google_pay",
+      "paypal",
+      "airline_card",
+    ]);
+    expect(String(objectAt(config, "properties", "publishableKey")["description"])).toContain("api_keys");
+    expect(String(objectAt(config, "properties", "accountId")["description"])).toContain("connect_standard");
+    expect(schemaOf("StorefrontAirlineCard")).toMatchObject({
+      required: ["enabled", "cardBrands", "chargedBy", "notice"],
+      properties: {
+        enabled: { type: "boolean" },
+        cardBrands: { type: "array", items: { $ref: "#/components/schemas/StorefrontCardBrand" } },
+        chargedBy: { type: "string", enum: ["airline"] },
+        notice: { type: "string" },
+      },
+    });
+
+    // The generated types carry the new fields (this compiles only while they do).
+    const mode: components["schemas"]["StorefrontPaymentConfig"]["accountMode"] = "velexis";
+    const airlineCard: components["schemas"]["StorefrontPaymentConfig"]["airlineCard"] = {
+      enabled: true,
+      cardBrands: [{ amadeus: "VISA", psp: "visa", label: "Visa" }],
+      chargedBy: "airline",
+      notice: "The airline charges your card. The price is the airline's price.",
+    };
+
+    // The document's example (a key caller, connect_standard) and an edge answer in velexis mode both validate.
+    const keyCaller = responseExample("getStorefront", "200") as Json;
+    expect(objectAt(keyCaller, "payment")).toMatchObject({
+      accountMode: "connect_standard",
+      accountId: expect.stringMatching(/^acct_/),
+      statementDescriptor: null,
+      airlineCard: null,
+    });
+    expect(checker.check("getStorefront", { status: 200, body: keyCaller })).toEqual([]);
+    const edgePayment = {
+      ...objectAt(keyCaller, "payment"),
+      accountMode: mode,
+      accountId: null,
+      merchantName: "Velexis on behalf of Acme Travel",
+      statementDescriptor: "ACME TRAVEL",
+      supportedMethods: ["card", "airline_card"],
+      airlineCard,
+    };
+    const storefront = (payment: Json) =>
+      checker
+        .check("getStorefront", { status: 200, body: { ...keyCaller, payment } })
+        .map(({ path, keyword }) => `${path} ${keyword}`);
+    expect(storefront(edgePayment)).toEqual([]);
+    expect(storefront({ ...edgePayment, accountMode: "stripe_direct" })).toEqual([
+      "/payment/accountMode enum",
+    ]);
+    expect(storefront({ ...edgePayment, airlineCard: { ...airlineCard, chargedBy: "ota" } })).toEqual(
+      expect.arrayContaining(["/payment/airlineCard/chargedBy enum"]),
+    );
+    const { merchantName, ...withoutMerchant } = edgePayment;
+    expect(merchantName).toBe("Velexis on behalf of Acme Travel");
+    expect(storefront(withoutMerchant)).toEqual(["/payment/merchantName required"]);
+  });
+
+  it("puts PAYMENT_ATTEMPTS_EXCEEDED (403) in the catalogue and in ErrorCode [OBE-029 AC1]", () => {
+    // Compiles only while the code is a member of the generated union.
+    const code: ErrorCode = "PAYMENT_ATTEMPTS_EXCEEDED";
+    expect(ERROR_CATALOGUE[code]).toMatchObject({ status: 403, source: "ota" });
+    expect(OTA_ERROR_CODES).toContain(code);
+    expect(objectAt(working, "x-error-catalogue", code)).toEqual({
+      status: 403,
+      description:
+        "Too many airline-card attempts on this checkout; start a new checkout or use another method.",
+    });
+    expect(ERROR_CATALOGUE[code].description).toBe(
+      "Too many airline-card attempts on this checkout; start a new checkout or use another method.",
+    );
   });
 });
 

@@ -74,6 +74,9 @@ info:
 
     - `x-permission` (console operation): the `StaffPermission` the operation needs; a staff member or key without it
     gets `403 FORBIDDEN` (`details.requiredPermission`).
+
+    - `x-sensitive: true` (schema): card data (the `card` of checkout.completeWithAirlineCard); processed in memory
+    for one request and never logged, stored, cached or queued, and never echoed in a response or an error.
   contact:
     name: Velexis platform team
   license:
@@ -174,7 +177,10 @@ tags:
       PSP-agnostic payment sessions (`pay_…`) for a checkout. Velexis creates the payment at the OTA's payment provider
       (Stripe, Adyen, Checkout.com or PayPal, configured per tenant in `platform.payment_provider_connections`) and
       returns what the provider's front-end SDK needs (`clientSecret`, `providerPublicKey`, `redirectUrl`). Card data
-      never reaches Velexis; 3-D Secure is handled by the provider's SDK in the browser. A payment can be created before
+      never reaches Velexis; 3-D Secure is handled by the provider's SDK in the browser. The one exception is the
+      hosted storefront's airline-card method (`method = airline_card`, `provider = airline`): no payment provider is
+      involved, checkout.completeWithAirlineCard passes the card in memory to the airline through Amadeus Flight Create
+      Orders, and the airline charges its own price. A payment can be created before
       the card is known and its card hint (brand / BIN) set later with checkout.updatePayment, which re-quotes the
       credit-card fee and updates the amount at the provider before confirmation. Authorisations are captured only after
       the Amadeus flight order (or, for extras bought after booking with bookings.createPayment, the order change)
@@ -303,6 +309,16 @@ paths:
         Amadeus connection with ticketing rights in `platform.supplier_connections`). Currency names/symbols come from
         `reference.currencies`. Localised texts (SEO title/description, consent category texts) follow
         `Accept-Language`, falling back to `defaultLocale`.
+
+
+        **Payment account modes and the airline card.** `payment.accountMode` follows the connection's account mode
+        (`velexis` by default: Velexis's publishable key, `accountId` null, `merchantName` "Velexis on behalf of <OTA
+        name>" and the connection's statement descriptor; `connect_standard`: Velexis's publishable key with the OTA's
+        `acct_…` as `accountId`; `api_keys`: the OTA's own publishable key). Only for the hosted storefront's edge, and
+        only when the global switch `AIRLINE_CARD_ENABLED` and the OTA's `airline_card_enabled_test` / `_live` for the
+        environment are on, `payment.supportedMethods` adds `airline_card` and `payment.airlineCard` describes it (card
+        brands, `chargedBy: airline`, the localised notice); key callers always get `airlineCard: null`. The cache keeps
+        only the caller-independent part; the caller-specific fields are added on each request.
 
 
         **Amadeus.** None.
@@ -478,8 +494,12 @@ paths:
                 payment:
                   provider: stripe
                   environment: test
+                  accountMode: connect_standard
                   publishableKey: pk_test_51NvAcmeDemoKey0000000000000000
                   accountId: acct_1NvAcmeConnect01
+                  merchantName: Acme Travel
+                  statementDescriptor: null
+                  airlineCard: null
                   supportedMethods:
                     - card
                     - apple_pay
@@ -6949,6 +6969,18 @@ paths:
         uses the provider connection of that environment.
 
 
+        **Airline card** (`method: airline_card`, hosted storefront only). Refused unless the global switch
+        `AIRLINE_CARD_ENABLED` and the OTA's `storefront_settings.airline_card_enabled_test` / `_live` for the
+        environment are on (`403 FEATURE_DISABLED`, `details.feature = "airlineCard"`), and unless the caller is the
+        storefront edge (`403 SCOPE_NOT_ALLOWED`). `provider` must be absent; `returnUrl` and `savePaymentMethod` are
+        ignored. The checkout switches to the airline's price (`checkouts.pricing_mode = net`): the totals become the
+        Amadeus total of the priced offer and its Amadeus-priced extras, plus the Amadeus card fee once the brand is
+        known, without OTA markup or fees. Any other active payment of the checkout is cancelled, and the payment is
+        recorded with `provider = airline`, `captureMethod = automatic`, status `requires_payment_method` and
+        `nextAction.type = airline_card_form`. No payment provider is called; the storefront shows its own card form
+        and calls checkout.completeWithAirlineCard. Choosing `card` again restores the selling price.
+
+
         **Front end.** Use `clientSecret` + `providerPublicKey` with the provider SDK (Stripe.js `confirmPayment`, Adyen
         Drop-in, Checkout.com Frames, PayPal Buttons) which collects the card and runs 3-D Secure, or send the browser
         to `redirectUrl` (`nextAction.type = redirect`). When the card form reports the brand / BIN, call
@@ -7001,6 +7033,7 @@ paths:
         - TENANT_SUSPENDED
         - HOST_NOT_ALLOWED
         - FEATURE_DISABLED
+        - SCOPE_NOT_ALLOWED
         - NOT_FOUND
         - IDEMPOTENCY_KEY_REUSED
         - CHECKOUT_ALREADY_COMPLETED
@@ -7052,6 +7085,11 @@ paths:
                   provider: paypal
                   returnUrl: https://www.acme-travel.example/checkout/chk_01JA4CE5H8K1M4P7R0T3V6Y9B2/return
                   termsAccepted: true
+              airlineCard:
+                summary: Airline card (hosted storefront edge only; the airline charges the card)
+                value:
+                  method: airline_card
+                  termsAccepted: true
       responses:
         '201':
           description: Payment session created.
@@ -7067,6 +7105,46 @@ paths:
               examples:
                 payment:
                   $ref: '#/components/examples/PaymentExample'
+                airlineCard:
+                  summary: Airline-card payment, waiting for the card form
+                  value:
+                    id: pay_01JA4CF6M3Q6T9W2Z5C8F1H4K7
+                    checkoutId: chk_01JA4CE5H8K1M4P7R0T3V6Y9B2
+                    bookingId: null
+                    purpose: booking
+                    provider: airline
+                    method: airline_card
+                    status: requires_payment_method
+                    captureMethod: automatic
+                    amount:
+                      amount: '1348.56'
+                      currency: EUR
+                    cardFee: null
+                    cardHint: null
+                    amountAuthorized:
+                      amount: '0.00'
+                      currency: EUR
+                    amountCaptured:
+                      amount: '0.00'
+                      currency: EUR
+                    amountRefunded:
+                      amount: '0.00'
+                      currency: EUR
+                    clientSecret: null
+                    providerPublicKey: null
+                    providerPaymentId: null
+                    redirectUrl: null
+                    nextAction:
+                      type: airline_card_form
+                      redirectUrl: null
+                    card: null
+                    threeDSecure:
+                      required: false
+                      status: not_required
+                      version: null
+                    failure: null
+                    createdAt: '2026-10-10T10:00:12Z'
+                    updatedAt: '2026-10-10T10:00:12Z'
         '400':
           $ref: '#/components/responses/BadRequest'
         '401':
@@ -7211,6 +7289,10 @@ paths:
         (`amount_updated`) records old and new amounts. Refresh the amount shown by the provider UI (e.g. Stripe
         `elements.update({ amount })`) before confirming. Provider errors → `502 PAYMENT_PROVIDER_ERROR` (nothing
         changed); Amadeus errors / timeouts → `502` / `503` / `504` (nothing changed, retry).
+
+
+        **Airline card** (`provider = airline`). The Amadeus credit-card fee for the brand and BIN is quoted exactly as
+        above, without OTA card surcharges (the checkout is at the airline's price), and no provider is called.
 
 
         **Idempotency.** `PATCH` with the same hint is idempotent (no second quote or provider update); no
@@ -7360,7 +7442,8 @@ paths:
         PAYMENT_AMOUNT_MISMATCH` otherwise); `requires_payment_method` / `requires_action` / `processing` → `402
         PAYMENT_REQUIRED`; `failed` → `402 PAYMENT_DECLINED`. With `payment_timing = pay_later` no payment is needed and
         the order is created with a DELAY_TO_CANCEL (or DELAY_TO_QUEUE) ticketing agreement whose `delay` the server
-        derives (step 5).
+        derives (step 5). A checkout whose active payment is an `airline_card` payment answers `422 UNPROCESSABLE`
+        with `details.reason = "use_airline_card_completion"`: complete it with checkout.completeWithAirlineCard.
 
 
         **4. Re-price when needed.** If the priced offer is expired or older than the storefront `repriceAfterMinutes`
@@ -7772,6 +7855,421 @@ paths:
           $ref: '#/components/responses/ServiceUnavailable'
         '504':
           $ref: '#/components/responses/CheckoutSupplierTimeout'
+  /v1/checkouts/{checkoutId}/airline-card-completion:
+    post:
+      operationId: completeCheckoutWithAirlineCard
+      summary: Complete the checkout with the airline card (hosted storefront only)
+      description: >-
+        Completes the checkout in one request with the traveller's card, which the **airline** charges: the card goes
+        into `formOfPayments` (`creditCard`) of Amadeus **Flight Create Orders** with `issue = true`, and the answer is
+        the booking. Only the hosted storefront's edge may call it (`x-edge-only`); its payment page collects the card
+        in its own form. Runs synchronously (allow up to 60 s; the SDK uses `timeoutMs: 90000` and never retries this
+        method).
+
+
+        **1. Preconditions.** The airline card is enabled: the global switch `AIRLINE_CARD_ENABLED` and the OTA's
+        `storefront_settings.airline_card_enabled_test` / `_live` for its storefront environment (`403
+        FEATURE_DISABLED`, `details.feature = "airlineCard"`). The caller is the storefront edge: publishable, secret
+        and hosting keys and the OTA admin's service key get `403 SCOPE_NOT_ALLOWED`. `paymentId` is the checkout's
+        active `airline_card` payment, created by checkout.createPayment (`422 UNPROCESSABLE` otherwise), and
+        `expectedTotal` is its amount, the amount the airline will charge (`409 PAYMENT_AMOUNT_MISMATCH` otherwise).
+        Checkout state, travellers and contacts are checked as by checkout.complete.
+
+
+        **2. The card.** `card` (`x-sensitive`) exists only in memory for this request: it is never logged, stored,
+        cached or queued, and no response or error echoes it. The server checks the Luhn digit (`400
+        VALIDATION_FAILED`, `fieldErrors[].code = "luhn"`), the expiry (`"expired"`) and the brand against the OTA's
+        accepted card brands (`422 UNPROCESSABLE`); messages never contain the value. The body is limited to 10 KB.
+
+
+        **3. Booking.** As checkout.complete, at the airline's price (`checkouts.pricing_mode = net`): re-price with
+        **Flight Offers Price** (quoteAirOffers) when needed, then **Flight Create Orders** (createFligtOrders) with
+        `issue = true`, `formOfPayments: [{creditCard: {brand, holder (upper case), number, expiryDate (YYYY-MM),
+        securityCode, flightOfferIds}}]` and `paymentOperationContext.interactionCondition = ECOMMERCE`, without 3-D
+        Secure. The payment keeps `provider = airline` with the card's brand, BIN and last 4 digits only, and becomes
+        `captured` when the order comes back with tickets. Flight Order Issue never carries the card: an order that
+        comes back without tickets goes to manual review for the OTA's staff (`201` with a warning).
+
+
+        **4. Abuse limits.** 5 requests per minute per IP and 60 per hour per OTA (`429 RATE_LIMITED`). A declined card
+        (`402 PAYMENT_DECLINED`, booking `failed`) counts as an attempt; three declines lock the checkout (`403
+        PAYMENT_ATTEMPTS_EXCEEDED`) and alert the OTA's staff. Without its limits the route answers `503
+        SERVICE_UNAVAILABLE` rather than run unlimited.
+
+
+        **5. Idempotency and timeouts.** `Idempotency-Key` required; the request hash replaces `card` by its brand and
+        last 4 digits. A retry with the same key never calls Amadeus again: it replays the stored outcome. **`504
+        SUPPLIER_TIMEOUT` means "check booking status"**: the order may exist and the card may have been charged; a
+        `pending` booking exists (`details.bookingId`) and reconciliation ends in a booking or in manual review, never
+        in an automatic failure. After any error the storefront asks the traveller to type the card again.
+
+
+        **Response.** `201` + `Location: /v1/bookings/{id}` with the CheckoutCompletion of checkout.complete: the
+        booking (normally `ticketed`) and its payment (`captured`, `card: {brand, last4}`). A guest's booking token is
+        added to the `__Host-vx_bt` cookie, and `bookingToken` and `bookingTokenExpiresAt` are `null`.
+
+
+        **Caching.** `no-store`.
+      tags:
+        - Checkout
+      security:
+        - storefrontEdge: []
+        - storefrontEdge: []
+          customerCookie: []
+      x-sdk-method: checkout.completeWithAirlineCard
+      x-amadeus:
+        - api: FlightOffersPrice
+          operationId: quoteAirOffers
+          method: POST
+          path: /v1/shopping/flight-offers/pricing
+        - api: FlightCreateOrders
+          operationId: createFligtOrders
+          method: POST
+          path: /v1/booking/flight-orders
+      x-tenant-tables:
+        - checkouts
+        - checkout_travelers
+        - checkout_contacts
+        - checkout_ancillaries
+        - checkout_remarks
+        - priced_offers
+        - payments
+        - payment_events
+        - bookings
+        - booking_associated_records
+        - booking_travelers
+        - booking_contacts
+        - booking_segments
+        - booking_ancillaries
+        - booking_remarks
+        - booking_tickets
+        - booking_events
+        - booking_access_tokens
+        - storefront_settings
+        - notifications
+        - supplier_requests
+        - idempotency_keys
+      x-platform-tables:
+        - supplier_connections
+      x-error-codes:
+        - VALIDATION_FAILED
+        - INVALID_REQUEST
+        - INVALID_API_KEY
+        - TOKEN_EXPIRED
+        - PAYMENT_DECLINED
+        - SCOPE_NOT_ALLOWED
+        - TENANT_SUSPENDED
+        - HOST_NOT_ALLOWED
+        - FEATURE_DISABLED
+        - EMAIL_NOT_VERIFIED
+        - PAYMENT_ATTEMPTS_EXCEEDED
+        - CSRF_TOKEN_INVALID
+        - NOT_FOUND
+        - IDEMPOTENCY_KEY_REUSED
+        - CHECKOUT_ALREADY_COMPLETED
+        - PRICE_CHANGED
+        - SOLD_OUT
+        - PAYMENT_AMOUNT_MISMATCH
+        - CHECKOUT_EXPIRED
+        - OFFER_EXPIRED
+        - CHECKOUT_INCOMPLETE
+        - TRAVELER_DATA_INVALID
+        - CONTACT_DATA_INVALID
+        - UNPROCESSABLE
+        - SUPPLIER_NOT_CONFIGURED
+        - RATE_LIMITED
+        - INTERNAL_ERROR
+        - SUPPLIER_ERROR
+        - TICKETING_FAILED
+        - SERVICE_UNAVAILABLE
+        - SUPPLIER_UNAVAILABLE
+        - SUPPLIER_TIMEOUT
+      x-scope: customer
+      x-edge-only: true
+      x-milestone: M3
+      parameters:
+        - name: checkoutId
+          in: path
+          required: true
+          description: Checkout id (`chk_…`).
+          schema:
+            type: string
+            pattern: ^chk_[0-9A-Za-z]{16,40}$
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/AcceptLanguage'
+        - $ref: '#/components/parameters/CsrfToken'
+      requestBody:
+        required: true
+        description: >-
+          The airline-card payment, the amount the airline charges and the card (in memory only; never logged, stored,
+          cached or queued).
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AirlineCardCompletionRequest'
+            examples:
+              visa:
+                summary: Complete with a Visa test card
+                value:
+                  paymentId: pay_01JA4CF6M3Q6T9W2Z5C8F1H4K7
+                  expectedTotal:
+                    amount: '1361.06'
+                    currency: EUR
+                  card:
+                    brand: VISA
+                    holderName: Marco Rossi
+                    number: '4242424242424242'
+                    expiryMonth: 12
+                    expiryYear: 2030
+                    securityCode: '123'
+      responses:
+        '201':
+          description: >-
+            Booking created and ticketed (or in manual review when the order came back without tickets). In edge mode a
+            guest's booking token is added to the `__Host-vx_bt` cookie, and `bookingToken` and `bookingTokenExpiresAt`
+            are `null`. The body never contains card data beyond the brand and the last 4 digits.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+            Location:
+              $ref: '#/components/headers/Location'
+            Set-Cookie:
+              $ref: '#/components/headers/Set-Cookie'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CheckoutCompletion'
+              examples:
+                guestTicketed:
+                  summary: Guest booking in edge mode, one adult, ticketed by the airline
+                  value:
+                    checkoutId: chk_01JA4CE5H8K1M4P7R0T3V6Y9B2
+                    booking:
+                      id: bkg_01JA4CH5L6Q9T2W5Z8C1F4J7M0
+                      reference: VX7K2P
+                      status: ticketed
+                      channel: storefront
+                      customerId: null
+                      isGuest: true
+                      recordLocator: QW8N3D
+                      recordLocators:
+                        - reference: QW8N3D
+                          originSystemCode: GDS
+                          flightOfferId: '1'
+                          creationDate: '2026-10-10T10:02:00.000'
+                          primary: true
+                      tripType: one_way
+                      itineraries:
+                        - index: 0
+                          originCode: CDG
+                          destinationCode: JFK
+                          departureAt: '2026-11-20T10:25:00'
+                          arrivalAt: '2026-11-20T12:45:00'
+                          durationMinutes: 500
+                          stops: 0
+                          segments:
+                            - id: '1'
+                              flightOfferId: '1'
+                              departure:
+                                iataCode: CDG
+                                terminal: 2E
+                                at: '2026-11-20T10:25:00'
+                              arrival:
+                                iataCode: JFK
+                                terminal: '1'
+                                at: '2026-11-20T12:45:00'
+                              carrierCode: AF
+                              carrierName: Air France
+                              number: '6'
+                              flightNumber: AF6
+                              cabin: ECONOMY
+                              bookingClass: V
+                              fareBasis: VS50BALA
+                              status: CONFIRMED
+                              isFlown: false
+                      travelers:
+                        - id: btr_01JA4CH5M7R0U3X6A9D2G5K8N1
+                          travelerId: '1'
+                          travelerType: ADULT
+                          associatedAdultId: null
+                          name:
+                            firstName: MARCO
+                            lastName: ROSSI
+                          dateOfBirth: '1979-03-22'
+                          gender: MALE
+                          documents:
+                            - documentType: PASSPORT
+                              numberMasked: •••••1188
+                              expiryDate: '2030-02-01'
+                              issuanceCountry: IT
+                              nationality: IT
+                              holder: true
+                          loyaltyPrograms: []
+                          discountEligibility: []
+                          complete: true
+                          ticketNumbers:
+                            - 057-2412349977
+                      contacts:
+                        - id: bco_01JA4CH5N8S1V4Y7B0E3H6L9P2
+                          purpose: STANDARD
+                          isPrimary: true
+                          addresseeName:
+                            firstName: MARCO
+                            lastName: ROSSI
+                          emailAddress: marco.rossi@example.com
+                          phones:
+                            - deviceType: MOBILE
+                              countryCallingCode: '39'
+                              number: '3471234567'
+                      ancillaries: []
+                      tickets:
+                        - id: tkt_01JA4CH5P9T2W5Z8C1F4J7M0Q3
+                          documentType: ETICKET
+                          documentNumber: 057-2412349977
+                          status: ISSUED
+                          travelerId: '1'
+                          travelerName: MARCO ROSSI
+                          segmentIds:
+                            - '1'
+                          issuedAt: '2026-10-10T10:02:05Z'
+                          total:
+                            amount: '1348.56'
+                            currency: EUR
+                          amadeus:
+                            documentType: ETICKET
+                            documentNumber: 057-2412349977
+                            documentStatus: ISSUED
+                            travelerId: '1'
+                            segmentIds:
+                              - '1'
+                      payments:
+                        - id: pay_01JA4CF6M3Q6T9W2Z5C8F1H4K7
+                          checkoutId: chk_01JA4CE5H8K1M4P7R0T3V6Y9B2
+                          bookingId: bkg_01JA4CH5L6Q9T2W5Z8C1F4J7M0
+                          purpose: booking
+                          provider: airline
+                          method: airline_card
+                          status: captured
+                          captureMethod: automatic
+                          amount:
+                            amount: '1361.06'
+                            currency: EUR
+                          cardFee:
+                            amount: '12.50'
+                            currency: EUR
+                          amountAuthorized:
+                            amount: '1361.06'
+                            currency: EUR
+                          amountCaptured:
+                            amount: '1361.06'
+                            currency: EUR
+                          amountRefunded:
+                            amount: '0.00'
+                            currency: EUR
+                          clientSecret: null
+                          providerPublicKey: null
+                          providerPaymentId: null
+                          redirectUrl: null
+                          nextAction: null
+                          card:
+                            brand: VISA
+                            last4: '4242'
+                            bin: '424242'
+                            expMonth: null
+                            expYear: null
+                          threeDSecure:
+                            required: false
+                            status: not_required
+                            version: null
+                          failure: null
+                          createdAt: '2026-10-10T10:00:12Z'
+                          updatedAt: '2026-10-10T10:02:05Z'
+                      refunds: []
+                      remarks: []
+                      totals:
+                        currency: EUR
+                        base:
+                          amount: '1088.00'
+                          currency: EUR
+                        taxes:
+                          amount: '260.56'
+                          currency: EUR
+                        fees:
+                          amount: '0.00'
+                          currency: EUR
+                        ancillaries:
+                          amount: '0.00'
+                          currency: EUR
+                        cardFee:
+                          amount: '12.50'
+                          currency: EUR
+                        total:
+                          amount: '1361.06'
+                          currency: EUR
+                        paid:
+                          amount: '1361.06'
+                          currency: EUR
+                        refunded:
+                          amount: '0.00'
+                          currency: EUR
+                      ticketing:
+                        status: issued
+                        policy: issue_at_booking
+                        deadlineAt: '2026-10-13T21:59:00Z'
+                        lastTicketingDate: '2026-10-13'
+                        issuedAt: '2026-10-10T10:02:05Z'
+                        message: Your e-tickets have been issued.
+                      allowedActions:
+                        canCancel: false
+                        canModifyContacts: true
+                        canModifyTravelerDocuments: true
+                        canModifyLoyaltyPrograms: true
+                        canAddRemarks: true
+                        canDownloadDocuments: false
+                        canRefresh: true
+                        canAddAncillaries: false
+                        reasons:
+                          canCancel: disabled_by_ota
+                          canDownloadDocuments: pending
+                          canAddAncillaries: disabled_by_ota
+                      cancellation: null
+                      lastSyncedAt: '2026-10-10T10:02:05Z'
+                      syncStatus: fresh
+                      amadeus: null
+                      version: 1
+                      createdAt: '2026-10-10T10:02:05Z'
+                      updatedAt: '2026-10-10T10:02:05Z'
+                    bookingToken: null
+                    bookingTokenExpiresAt: null
+                    warnings: []
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '402':
+          $ref: '#/components/responses/PaymentRequired'
+        '403':
+          $ref: '#/components/responses/AirlineCardForbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/CheckoutConflict'
+        '410':
+          $ref: '#/components/responses/Gone'
+        '422':
+          $ref: '#/components/responses/CheckoutUnprocessable'
+        '424':
+          $ref: '#/components/responses/PaymentFailedDependency'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '502':
+          $ref: '#/components/responses/PaymentProviderError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '504':
+          $ref: '#/components/responses/AirlineCardSupplierTimeout'
   /v1/bookings:
     get:
       operationId: listBookings
@@ -18559,7 +19057,8 @@ components:
       description: >-
         The caller may not perform this checkout step. Possible codes (see the operation's `x-error-codes`):
         ORIGIN_NOT_ALLOWED, TENANT_SUSPENDED, FEATURE_DISABLED (guest checkout, ancillaries or the payment method
-        disabled), EMAIL_NOT_VERIFIED (storefront requires a verified e-mail before checkout).
+        disabled), EMAIL_NOT_VERIFIED (storefront requires a verified e-mail before checkout), SCOPE_NOT_ALLOWED (the
+        `airline_card` method asked by a caller other than the hosted storefront's edge).
       headers:
         X-Request-Id:
           $ref: '#/components/headers/X-Request-Id'
@@ -18703,6 +19202,87 @@ components:
                     bookingId: bkg_01JA4CH3G1K4N7R0U3X6A9D2F5
                     bookingToken: vxbt_live_7h3K9mQ2xR8vL4nP6tY1wZ5cB0dF2gJ4
                     bookingTokenExpiresAt: '2026-12-20T12:45:00Z'
+                    replayed: false
+    AirlineCardForbidden:
+      description: >-
+        checkout.completeWithAirlineCard may not run. Possible codes (see the operation's `x-error-codes`):
+        SCOPE_NOT_ALLOWED (the caller is not the hosted storefront's edge: publishable, secret and hosting keys and the
+        OTA admin's service key), FEATURE_DISABLED (`details.feature = "airlineCard"`: the global switch or the OTA's
+        setting for its storefront environment is off), PAYMENT_ATTEMPTS_EXCEEDED (three declined attempts on this
+        checkout; start a new checkout or use another method), CSRF_TOKEN_INVALID, HOST_NOT_ALLOWED, TENANT_SUSPENDED,
+        EMAIL_NOT_VERIFIED.
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/X-Request-Id'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            SCOPE_NOT_ALLOWED:
+              summary: SCOPE_NOT_ALLOWED
+              value:
+                error:
+                  code: SCOPE_NOT_ALLOWED
+                  message: This operation is available on the hosted storefront only.
+                  status: 403
+                  requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+            FEATURE_DISABLED:
+              summary: FEATURE_DISABLED
+              value:
+                error:
+                  code: FEATURE_DISABLED
+                  message: Paying with the airline card is not available.
+                  status: 403
+                  requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+                  details:
+                    feature: airlineCard
+            PAYMENT_ATTEMPTS_EXCEEDED:
+              summary: PAYMENT_ATTEMPTS_EXCEEDED
+              value:
+                error:
+                  code: PAYMENT_ATTEMPTS_EXCEEDED
+                  message: Too many airline-card attempts on this checkout; start a new checkout or use another method.
+                  status: 403
+                  requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+            CSRF_TOKEN_INVALID:
+              summary: CSRF_TOKEN_INVALID
+              value:
+                error:
+                  code: CSRF_TOKEN_INVALID
+                  message: The CSRF header is missing or does not match the cookie, or the Origin is not the storefront host.
+                  status: 403
+                  requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+    AirlineCardSupplierTimeout:
+      description: >-
+        checkout.completeWithAirlineCard: Amadeus did not answer Flight Create Orders in time, so the order may exist and
+        the airline may have charged the card. Possible codes: SUPPLIER_TIMEOUT. A `pending` booking was created
+        (`details.bookingId`): poll bookings.getTicketingStatus until `bookingStatus` leaves `pending`, and never send
+        the card again. A retry with the **same** Idempotency-Key never calls Amadeus: it replays this 504 (same
+        details) while the reconciliation job (≤ 15 min) has not decided, then the final outcome. When the order is not
+        found the booking goes to manual review for the OTA's staff, never to an automatic failure. A guest's booking
+        token is added to the `__Host-vx_bt` cookie (`Set-Cookie`), never to `details`, so the storefront can poll
+        bookings.getTicketingStatus with it.
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/X-Request-Id'
+        Set-Cookie:
+          $ref: '#/components/headers/Set-Cookie'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            SUPPLIER_TIMEOUT:
+              summary: SUPPLIER_TIMEOUT
+              value:
+                error:
+                  code: SUPPLIER_TIMEOUT
+                  message: We are confirming your booking with the airline. Do not pay again.
+                  status: 504
+                  requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+                  details:
+                    bookingId: bkg_01JA4CH5L6Q9T2W5Z8C1F4J7M0
                     replayed: false
     BookingConflict:
       description: >-
@@ -25756,16 +26336,23 @@ components:
       description: >-
         Public configuration of the OTA's payment provider for the client-side payment element, aligned with
         checkout.createPayment (PaymentCreateRequest) and flights.price: every value listed here is accepted there.
-        Secret credentials stay in platform.payment_provider_connections.
+        Secret credentials stay in platform.payment_provider_connections. `accountMode` says whose Stripe account takes
+        the payment, so the storefront initialises Stripe.js with `publishableKey` (and `stripeAccount: accountId` in
+        `connect_standard` mode) and shows `merchantName`. The airline card (`airline_card`, `airlineCard`) is listed
+        only for the hosted storefront's edge, which alone may call checkout.completeWithAirlineCard.
       required:
         - provider
         - environment
+        - accountMode
         - publishableKey
+        - merchantName
+        - statementDescriptor
         - supportedMethods
         - cardBrands
         - pspCardBrands
         - merchantCountry
         - threeDSecure
+        - airlineCard
       properties:
         provider:
           type: string
@@ -25784,18 +26371,44 @@ components:
             - test
             - live
           description: Provider environment (follows the API key environment).
+        accountMode:
+          type: string
+          enum:
+            - velexis
+            - connect_standard
+            - api_keys
+          description: >-
+            Whose Stripe account takes the payments (`platform.payment_provider_connections.account_mode`): `velexis`,
+            the Velexis account on behalf of the OTA (the MVP default); `connect_standard`, the OTA's own account
+            through Stripe Connect; `api_keys`, the OTA's own account through its own keys. The last two appear when the
+            platform creates such connections (M5), with no change for the storefront.
         publishableKey:
           type: string
           description: >-
             Provider public key (Stripe publishable key, Adyen client key, Checkout.com public key, PayPal client id).
-            Safe in the browser.
+            Safe in the browser. Stripe: in `velexis` and `connect_standard` mode Velexis's publishable key of the
+            environment (`STRIPE_PUBLISHABLE_KEY_TEST` / `_LIVE`); in `api_keys` mode the OTA's own publishable key from
+            its connection.
         accountId:
           type:
             - string
             - 'null'
           description: >-
             Connected/merchant account id when the provider needs it client-side (Stripe `stripeAccount`, Adyen merchant
-            account).
+            account). Stripe: the OTA's `acct_…` in `connect_standard` mode (pass it as Stripe.js `stripeAccount`);
+            otherwise null.
+        merchantName:
+          type: string
+          description: >-
+            The merchant the traveller pays, to show next to the total: in `velexis` mode "Velexis on behalf of <OTA
+            name>" (wording confirmed by the ADR-0011 legal follow-up), otherwise the OTA's name.
+        statementDescriptor:
+          type:
+            - string
+            - 'null'
+          description: >-
+            What the card statement shows: in `velexis` mode the connection's `statement_descriptor_suffix` with the
+            OTA's brand; otherwise null.
         supportedMethods:
           type: array
           items:
@@ -25805,10 +26418,20 @@ components:
               - apple_pay
               - google_pay
               - paypal
+              - airline_card
           description: >-
             Payment methods the customer can choose in checkout: exactly the values checkout.createPayment accepts in
             `method`, intersected with the methods enabled on the provider connection. Methods staff record in the
-            console (bank_transfer, agency_credit, cash) are never listed.
+            console (bank_transfer, agency_credit, cash) are never listed. `airline_card` is listed only for the hosted
+            storefront's edge, when the airline card is enabled for the OTA and the environment and by the global
+            switch; publishable, secret and hosting keys never get it.
+        airlineCard:
+          anyOf:
+            - $ref: '#/components/schemas/StorefrontAirlineCard'
+            - type: 'null'
+          description: >-
+            The airline-card method for the payment page, under the same conditions as `airline_card` in
+            `supportedMethods` (hosted storefront edge only); always null for key callers.
         cardBrands:
           type: array
           items:
@@ -26049,6 +26672,38 @@ components:
         label:
           type: string
           description: Display name, e.g. "American Express".
+    StorefrontAirlineCard:
+      type: object
+      description: >-
+        The airline-card method of the hosted storefront's payment page (StorefrontPaymentConfig.airlineCard): the
+        traveller types the card into the page's own form and the airline charges it through Amadeus
+        (checkout.completeWithAirlineCard).
+      required:
+        - enabled
+        - cardBrands
+        - chargedBy
+        - notice
+      properties:
+        enabled:
+          type: boolean
+          description: The method can be chosen (`airline_card` in checkout.createPayment).
+        cardBrands:
+          type: array
+          items:
+            $ref: '#/components/schemas/StorefrontCardBrand'
+          description: >-
+            Accepted card brands for the airline card (storefront_settings.accepted_card_brands); send the `amadeus`
+            value as `card.brand`.
+        chargedBy:
+          type: string
+          enum:
+            - airline
+          description: Who charges the card and whose price applies.
+        notice:
+          type: string
+          description: >-
+            Localised notice to show before the card form, e.g. "The airline charges your card. The price is the
+            airline's price."
     StorefrontDomain:
       type: object
       description: A verified storefront domain of the OTA (platform.tenant_domains, purpose storefront).
@@ -30842,7 +31497,12 @@ components:
             - apple_pay
             - google_pay
             - paypal
-          description: Payment method; must be enabled on the OTA's provider connection.
+            - airline_card
+          description: >-
+            Payment method; must be enabled on the OTA's provider connection. `airline_card`: the airline charges the
+            card through Amadeus (hosted storefront edge only, when the airline card is enabled for the environment);
+            with it, `provider` must be absent and `returnUrl` and `savePaymentMethod` are ignored, and the checkout is
+            completed with checkout.completeWithAirlineCard.
         provider:
           type: string
           enum:
@@ -30852,7 +31512,7 @@ components:
             - paypal
           description: >-
             Provider to use when the OTA has several connections; default: the OTA's default connection for this
-            environment.
+            environment. Must be absent with `method: airline_card`.
         card:
           $ref: '#/components/schemas/PaymentCardHint'
           description: >-
@@ -30872,6 +31532,15 @@ components:
           type: boolean
           const: true
           description: The customer accepted the OTA terms and the fare conditions (stored as checkouts.terms_accepted_at).
+      if:
+        required:
+          - method
+        properties:
+          method:
+            const: airline_card
+      then:
+        properties:
+          provider: false
     PaymentUpdateRequest:
       type: object
       additionalProperties: false
@@ -30908,7 +31577,9 @@ components:
       type: object
       description: >-
         A payment (`payments`) at the OTA's payment provider. Velexis never sees card numbers: the provider's front-end
-        SDK collects them (and runs 3-D Secure) using `clientSecret` / `providerPublicKey`.
+        SDK collects them (and runs 3-D Secure) using `clientSecret` / `providerPublicKey`. An airline-card payment
+        (`provider = airline`, `method = airline_card`) has no provider: the airline charges the card that
+        checkout.completeWithAirlineCard passes through Amadeus, and only its brand, BIN and last 4 digits are kept.
       required:
         - id
         - checkoutId
@@ -30964,7 +31635,10 @@ components:
             - checkout_com
             - paypal
             - manual
-          description: Payment service provider (`manual` = recorded by staff).
+            - airline
+          description: >-
+            Payment service provider (`manual` = recorded by staff; `airline` = charged by the airline through Amadeus,
+            method `airline_card`, no payment provider involved).
         method:
           type: string
           enum:
@@ -30975,7 +31649,10 @@ components:
             - bank_transfer
             - agency_credit
             - cash
-          description: Payment method.
+            - airline_card
+          description: >-
+            Payment method. `airline_card`: the traveller's card goes to the airline in Flight Create Orders and the
+            airline charges it (checkout.completeWithAirlineCard).
         status:
           type: string
           enum:
@@ -31034,17 +31711,20 @@ components:
           description: >-
             Provider client secret / session data for the provider's front-end SDK (Stripe PaymentIntent client_secret,
             Adyen sessionData, Checkout.com payment session secret). Returned only by createPayment and getPayment to
-            the checkout's owner while status is requires_payment_method or requires_action; null otherwise.
+            the checkout's owner while status is requires_payment_method or requires_action; null otherwise. Always
+            null for airline payments.
         providerPublicKey:
           type:
             - string
             - 'null'
-          description: Provider publishable key / client key for the front-end SDK (from platform.payment_provider_connections).
+          description: >-
+            Provider publishable key / client key for the front-end SDK (from platform.payment_provider_connections).
+            Always null for airline payments.
         providerPaymentId:
           type:
             - string
             - 'null'
-          description: Provider payment id (e.g. Stripe pi_…).
+          description: Provider payment id (e.g. Stripe pi_…). Always null for airline payments.
         redirectUrl:
           type:
             - string
@@ -31117,10 +31797,12 @@ components:
             - redirect
             - wait
             - none
+            - airline_card_form
           description: >-
             `confirm_with_provider_sdk`: call the provider SDK with clientSecret (it collects the card and runs 3-D
             Secure); `redirect`: send the browser to redirectUrl; `wait`: provider is processing, poll getPayment;
-            `none`: nothing to do.
+            `none`: nothing to do; `airline_card_form`: show the storefront's own card form and call
+            checkout.completeWithAirlineCard (airline payments).
         redirectUrl:
           type:
             - string
@@ -31222,9 +31904,71 @@ components:
           description: >-
             Total the customer confirmed; a re-priced total above it answers 409 PRICE_CHANGED (nothing booked,
             authorisation voided).
+    AirlineCardCompletionRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - paymentId
+        - expectedTotal
+        - card
+      description: >-
+        Body of checkout.completeWithAirlineCard. Its `card` is held in memory for this request only (`x-sensitive`):
+        never logged, stored, cached or queued, and the idempotency hash replaces it by its brand and last 4 digits.
+      properties:
+        paymentId:
+          type: string
+          pattern: ^pay_[0-9A-Za-z]{16,40}$
+          description: The checkout's active `airline_card` payment (checkout.createPayment with `method = airline_card`).
+        expectedTotal:
+          $ref: '#/components/schemas/Money'
+          description: >-
+            The amount the airline will charge, as shown to the traveller (the payment's amount, with the Amadeus card
+            fee once the brand is known); a different total answers 409 PAYMENT_AMOUNT_MISMATCH or PRICE_CHANGED.
+        card:
+          type: object
+          additionalProperties: false
+          required:
+            - brand
+            - holderName
+            - number
+            - expiryMonth
+            - expiryYear
+            - securityCode
+          x-sensitive: true
+          description: >-
+            The traveller's card, passed to the airline in Flight Create Orders `formOfPayments[].creditCard` and never
+            logged, stored, cached or queued. Validation errors name the field and never contain its value.
+          properties:
+            brand:
+              $ref: '#/components/schemas/AmadeusPaymentBrand'
+              description: Card brand (Amadeus PaymentBrand); must be one of the OTA's accepted card brands (`422 UNPROCESSABLE`).
+            holderName:
+              type: string
+              minLength: 2
+              maxLength: 64
+              pattern: ^[A-Za-z .'-]+$
+              description: Name on the card; sent to Amadeus in upper case as `holder`.
+            number:
+              type: string
+              pattern: ^[0-9]{12,19}$
+              description: Card number, digits only; the server checks the Luhn digit (`fieldErrors[].code = "luhn"`).
+            expiryMonth:
+              type: integer
+              minimum: 1
+              maximum: 12
+              description: Expiry month; with `expiryYear` it must not be in the past (`fieldErrors[].code = "expired"`).
+            expiryYear:
+              type: integer
+              minimum: 2026
+              maximum: 2099
+              description: Expiry year (four digits); sent to Amadeus as `expiryDate` `YYYY-MM`.
+            securityCode:
+              type: string
+              pattern: ^[0-9]{3,4}$
+              description: Card security code (CVV/CVC); sent to Amadeus once and never kept.
     CheckoutCompletion:
       type: object
-      description: Result of checkout.complete.
+      description: Result of checkout.complete and checkout.completeWithAirlineCard.
       required:
         - checkoutId
         - booking
@@ -40484,6 +41228,9 @@ x-error-catalogue:
   NOT_IMPLEMENTED:
     status: 501
     description: The operation is part of the contract but not available yet (details.milestone).
+  PAYMENT_ATTEMPTS_EXCEEDED:
+    status: 403
+    description: Too many airline-card attempts on this checkout; start a new checkout or use another method.
 x-new-tenant-tables:
   customer_consents: >-
     Append-only log of consent events per customer (marketing opt-in/opt-out, terms and privacy policy acceptance) with

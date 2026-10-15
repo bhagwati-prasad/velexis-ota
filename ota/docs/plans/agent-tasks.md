@@ -847,7 +847,8 @@ The OTA backend gets its contract extensions, request pipeline, tenancy, Amadeus
 
 Checkout, customer accounts in cookies, Stripe on the Velexis account, the airline-card path (test environment only), order creation and ticketing, e-mails and documents, my bookings, guest lookup, change and cancel.
 
-### OBE-029 · Spec-first: airline-card method, completion operation and payment account modes
+### OBE-029 · Spec-first: airline-card method, completion operation and payment account modes ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-backend
 - **Milestone:** M3
 - **Depends on:** OBE-009
