@@ -17,10 +17,12 @@ Related: [SDK README](../README.md), [`types-and-builds.md`](types-and-builds.md
 
 | Behaviour | Rule |
 |---|---|
-| Cookie mode, CSRF | Copies `__Host-vx_csrf` into `X-CSRF-Token` on `POST`, `PUT`, `PATCH`, `DELETE`. Missing cookie → one `GET /v1/storefront` first. `403 CSRF_TOKEN_INVALID` → one `GET /v1/storefront`, then one retry. |
-| Cookie mode, refresh | `401 TOKEN_EXPIRED` → one `POST /v1/auth/refresh` with an empty body (shared by concurrent calls), then one retry. Failure → `onSessionExpired`, `AuthenticationError`. |
-| Cookie mode, environment | Needs `document`; `fetch` runs with `credentials: "same-origin"` and `mode: "same-origin"`. |
+| Cookie mode, CSRF | Copies `__Host-vx_csrf` into `X-CSRF-Token` on `POST`, `PUT`, `PATCH`, `DELETE`. Missing cookie → one `GET /v1/storefront` first (shared by concurrent writes; `cache: "no-store"`, since a cached copy sets no cookie). `403 CSRF_TOKEN_INVALID` → one `GET /v1/storefront`, then one retry; never a loop. |
+| Cookie mode, refresh | `401 TOKEN_EXPIRED` → one `POST /v1/auth/refresh` with an empty body (shared by concurrent calls), then one retry. Refused with `401` → `onSessionExpired`, `AuthenticationError`. |
+| Cookie mode, environment | Needs `document`; `fetch` runs with `credentials: "same-origin"` and `mode: "same-origin"`; `baseUrl` defaults to `/api`. Keys (`hostingKey` included), tokens and `X-Api-Key` / `Authorization` headers are refused, at construction and per call; `withOptions` cannot leave the mode. |
 | Secret key in a browser | `createVelexisClient({ secretKey })` throws a `TypeError` when `globalThis.document` exists. |
+| Automatic refresh (token and server mode) | The refresh carries the API key only (never the expired access token) and the call's host and end user. The client keeps the rotated tokens: a token source that still gives a rotated token (a string always does) is replaced by the new one, so a rotated refresh token is never presented twice; `withOptions` starts from the new string tokens. A call with its own `options.accessToken` or an `Authorization` header (the call's or the client's) is not refreshed. Hook errors are ignored. |
+| Retries after a refusal | A call sent again after `TOKEN_EXPIRED` or `CSRF_TOKEN_INVALID` keeps its `Idempotency-Key`; `checkout.completeWithAirlineCard` is never sent again (the session still refreshes or re-fetches the CSRF cookie for the next submit). |
 | Airline-card completion | `checkout.completeWithAirlineCard` is never retried automatically, whatever `maxRetries` says, and its arguments never appear in errors, hooks or `toJSON()`. |
 | Long operations | Default timeouts from the route table: 60 s for `flights.search`, `flights.upsell`, `flights.price`, `console.bookings.issue`, `.cancel`, `.import`, `.retrieve`; 90 s for `checkout.complete` and `checkout.completeWithAirlineCard`. `options.timeoutMs` still wins. |
 | Deferred operations | The API answers `501 NOT_IMPLEMENTED` (`details.milestone`); the SDK throws `ServerError` with that code and `retryable: false`. |

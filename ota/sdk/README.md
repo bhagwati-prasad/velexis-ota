@@ -89,7 +89,7 @@ ota/sdk/
 
 ## 4. Session modes
 
-The mode is chosen once, in `createVelexisClient`, from the options. A wrong combination throws a `TypeError` at construction, before any request.
+The mode is chosen once, in `createVelexisClient`, from the options (`internal/session.js`): cookie mode with `session: "cookie"`, server mode with a `secretKey` (or a `hostingKey`), token mode otherwise. A wrong combination throws a `TypeError` at construction, before any request.
 
 | Mode | Who | Options | Credentials sent | Tokens visible to JS |
 |---|---|---|---|---|
@@ -99,21 +99,29 @@ The mode is chosen once, in `createVelexisClient`, from the options. A wrong com
 
 ### 4.1 Cookie mode (hosted storefront)
 
-- **Refused options:** `publishableKey`, `secretKey`, `accessToken`, `refreshToken`, `bookingToken`, and `X-Api-Key` / `Authorization` in `headers`; per-call `accessToken` and `bookingToken` in `RequestOptions` too. Each throws a `TypeError`, so a token cannot leak into storefront code by mistake ([ADR-0019](../../docs/mvp/adr/0019-vanilla-js-sdk-jsdoc.md)).
-- **Same origin only.** `mode: "same-origin"` makes `fetch` reject a cross-origin `baseUrl`, so cookies never travel to another host. The mode needs `document` and throws outside a browser.
-- **CSRF.** On `POST`, `PUT`, `PATCH` and `DELETE` the SDK copies the `__Host-vx_csrf` cookie into `X-CSRF-Token` ([OADR-0006](../docs/adr/0006-storefront-cookie-sessions-and-csrf.md)). If the cookie is missing it first calls `GET /v1/storefront` once (which issues it). On `403 CSRF_TOKEN_INVALID` it does the same once and retries the call once.
-- **Refresh.** On `401 TOKEN_EXPIRED` it calls `POST /v1/auth/refresh` with an empty body (the refresh token is in `__Host-vx_rt`), then retries the original call once. Concurrent calls share **one** refresh promise. A failed refresh (`REFRESH_TOKEN_INVALID`, `REFRESH_TOKEN_REUSED`) calls `onSessionExpired` and throws `AuthenticationError`.
+- **Refused options:** `publishableKey`, `secretKey`, `hostingKey`, `accessToken`, `refreshToken`, `bookingToken` (also as a function or `null`), and `X-Api-Key` / `Authorization` in `headers`; per call `accessToken`, `bookingToken` and those two headers in `RequestOptions` too. Each throws a `TypeError`, so a token cannot leak into storefront code by mistake ([ADR-0019](../../docs/mvp/adr/0019-vanilla-js-sdk-jsdoc.md), [OADR-0016](../docs/adr/0016-sdk-packaging-and-type-contract.md) point 5). `withOptions` cannot switch a cookie-mode client to another mode.
+- **Same origin only.** `mode: "same-origin"` makes `fetch` reject a cross-origin `baseUrl`, so cookies never travel to another host; `baseUrl` defaults to `/api`. The mode needs `document` and throws outside a browser.
+- **CSRF.** On `POST`, `PUT`, `PATCH` and `DELETE` the SDK copies the `__Host-vx_csrf` cookie into `X-CSRF-Token` ([OADR-0006](../docs/adr/0006-storefront-cookie-sessions-and-csrf.md)). If the cookie is missing it first calls `GET /v1/storefront` once (which issues it; concurrent writes share that request, sent with `cache: "no-store"` because a copy from the browser's HTTP cache sets no cookie). On `403 CSRF_TOKEN_INVALID` it does the same once and retries the call once; a second `403` is thrown, never looped on.
+- **Refresh.** On `401 TOKEN_EXPIRED` it calls `POST /v1/auth/refresh` with an empty body (the refresh token is in `__Host-vx_rt`; the call carries `X-CSRF-Token` like any write), then retries the original call once. Concurrent calls share **one** refresh promise, and a call whose `401` arrives after a refresh has finished is retried without another one. A refresh refused with `401` (`REFRESH_TOKEN_INVALID`, `REFRESH_TOKEN_REUSED`) calls `onSessionExpired` and throws that `AuthenticationError`; another failure (network, `503`) is thrown as it is. `onSessionRefreshed` is never called (there are no tokens to report).
+- **Sent again with the same key.** A call retried after `TOKEN_EXPIRED` or `CSRF_TOKEN_INVALID` (the API refused it before doing anything) keeps its `Idempotency-Key`. `checkout.completeWithAirlineCard` is the exception: its card is sent once per submit ([OADR-0017](../docs/adr/0017-airline-card-form-isolation.md) point 6), so the SDK refreshes or re-fetches the CSRF cookie for the next submit and throws the refusal.
 - **Responses without tokens.** `auth.signIn`, `auth.refresh` and `auth.changePassword` resolve with `AuthSessionInfo`; `checkout.complete`, `checkout.completeWithAirlineCard` and `bookings.lookup` resolve with `bookingToken: null`. The guest token lives in `__Host-vx_bt` and is sent by the browser.
 
 ### 4.2 Token mode (publishable key)
 
-The contract's behaviour ([`shared.d.ts`](../../docs/velexis-sdk/sdk/src/shared.d.ts)): `accessToken`, `refreshToken` and `bookingToken` are strings or functions called before every request; with `refreshToken` set, the SDK refreshes once on `TOKEN_EXPIRED` (single flight), reports the new tokens through `onSessionRefreshed` and retries. Where to keep tokens is the integrator's decision; the [build-your-own-frontend guide](../frontend/docs/build-your-own-frontend.md) recommends a small server of their own with httpOnly cookies.
+The contract's behaviour ([`shared.d.ts`](../../docs/velexis-sdk/sdk/src/shared.d.ts)): `accessToken`, `refreshToken` and `bookingToken` are strings or functions called before every request; with `refreshToken` set, the SDK refreshes once on `TOKEN_EXPIRED` (single flight), reports the new tokens through `onSessionRefreshed` and retries. Where to keep tokens is the integrator's decision; the [build-your-own-frontend guide](../frontend/docs/build-your-own-frontend.md) recommends a small server of their own with httpOnly cookies. `fetch` runs with `credentials: "omit"`.
+
+Details of the automatic refresh (token and server mode):
+
+- The refresh request (`POST /v1/auth/refresh` with `{ refreshToken }`) carries the API key only, never the expired access token, plus the storefront host and end user of the call that started it (`host`, `endUser`, `X-Velexis-Host`, `X-Velexis-End-User-*`).
+- The client keeps the new tokens. Wherever a token source still gives a rotated token (a string option always does), it sends the new one instead, so the client never presents a rotated refresh token again (reuse revokes the family); a function source that has moved on (the integrator stored the new tokens, or another visitor signed in) is used as it is. `withOptions` starts from the new string tokens.
+- A call with its own `options.accessToken`, or with an `Authorization` header of its own or of the client (which wins over the session's token), is not the client's session and is not refreshed; neither is a call when the `refreshToken` source gives nothing.
+- A refresh refused with `401` calls `onSessionExpired` and throws that `AuthenticationError`. Errors thrown by `onSessionRefreshed`, `onStaffSessionRefreshed` and `onSessionExpired` are ignored, like those of `onResponse`; the hooks are awaited before the call is retried.
 
 ### 4.3 Server mode (secret key)
 
-- `secretKey` is refused when `globalThis.document` exists (a browser page). Secret keys belong on servers only.
-- `sessionKind: "staff"` (contract augmentation in [`console.d.ts`](../../docs/velexis-sdk/sdk/src/console.d.ts)) makes the automatic refresh call `console.auth.refresh` and report through `onStaffSessionRefreshed`.
-- `environment: "test" | "live"` (extension) sends `X-Velexis-Environment` on console operations, as the OTA admin's service credential requires ([`../docs/api-changes.md`](../docs/api-changes.md) §5).
+- `secretKey` is refused when `globalThis.document` exists (a browser page). Secret keys belong on servers only. `fetch` keeps its default `credentials` (a server has no cookie jar, and some edge runtimes refuse the field).
+- `sessionKind: "staff"` (contract augmentation in [`console.d.ts`](../../docs/velexis-sdk/sdk/src/console.d.ts)) makes the automatic refresh call `console.auth.refresh` and report the new tokens through `onSessionRefreshed` (`result.session`) and the whole `ConsoleStaffSession` through `onStaffSessionRefreshed`.
+- `environment: "test" | "live"` (extension) sends `X-Velexis-Environment` on console operations, as the OTA admin's service credential requires ([`../docs/api-changes.md`](../docs/api-changes.md) §5): the operations whose route-table entry takes the header (every `x-scope: console` operation, `flights.availability` included, and the staff refresh), and `/v1/console/…` paths through `request`. Customer operations never carry it.
 - Server-side callers forward the visitor's address with `headers: { "X-Velexis-End-User-IP": ip }` per call, as the contract describes.
 - **Rotating refresh tokens and concurrency.** A server that renders several requests of one user in parallel must not refresh the same token twice (reuse revokes the family). Pass `refreshToken` only where the new tokens can be written back, and de-duplicate refreshes per token; the OTA admin's approach is in [OADR-0018](../docs/adr/0018-ota-admin-consumes-the-sdk-server-side.md).
 
@@ -144,7 +152,7 @@ Every option of the contract's `VelexisClientOptions` is supported with the cont
 
 | Option | Default | Notes |
 |---|---|---|
-| `baseUrl` | `https://api.ota.example.com` (placeholder host) | Cookie mode: `/api`. The OTA admin: `OTA_API_URL`. The contract's doc comment names another default host; only the text differs, not the type. |
+| `baseUrl` | `https://api.ota.example.com` (placeholder host); `/api` in cookie mode | The OTA admin: `OTA_API_URL`. The contract's doc comment names another default host; only the text differs, not the type. |
 | `publishableKey`, `secretKey` | — | Token and server mode (§4) |
 | `accessToken`, `refreshToken`, `bookingToken` | — | `TokenSource`: string or (async) function |
 | `onSessionRefreshed`, `onSessionExpired` | — | Token and server mode; `onSessionExpired` also in cookie mode |
@@ -161,7 +169,7 @@ Every option of the contract's `VelexisClientOptions` is supported with the cont
 
 `createVelexisClient` validates its options before any request and throws a `TypeError` that names the option but never its value: an unknown option, a key with the wrong prefix (`publishableKey` `pk_`, `secretKey` `sk_`, `hostingKey` `hk_`) or more than one key, a `baseUrl` that is neither an `http(s)` URL without credentials, query or fragment nor a same-origin path, a `timeoutMs` outside 1 to 2^31 − 1 ms, a `currency` that is not an ISO 4217 code, invalid header names or values, and so on. The per-call `RequestOptions` are checked the same way (`idempotencyKey`: 16 to 128 visible ASCII characters, as the document says). The client copies its options, so later changes to the caller's objects reach nothing.
 
-The client offers the eight namespaces, `withOptions(overrides)` (a new client sharing nothing mutable) and `request(method, path, init)` (the low-level escape hatch with the same headers, retries and error mapping; it sends only the caller's `idempotencyKey`, so a `POST` or `PATCH` through it is retried only with one; its `path` must start with a single `/` and contain no backslash, and a `GET` takes no `body`). `withOptions` cannot switch a cookie-mode client to keys. The request core is `internal/client.js` (options, params to request) and `internal/http.js` (transport); until SDK-004 adds `internal/session.js`, the core sends the one API key as `X-Api-Key` and the access and booking tokens (`RequestOptions` first, else the client's token sources, called before every request) as `Authorization: Bearer` and `X-Booking-Token`.
+The client offers the eight namespaces, `withOptions(overrides)` (a new client sharing nothing mutable) and `request(method, path, init)` (the low-level escape hatch with the same headers, retries and error mapping; it sends only the caller's `idempotencyKey`, so a `POST` or `PATCH` through it is retried only with one; its `path` must start with a single `/` and contain no backslash, and a `GET` takes no `body`). `withOptions` cannot switch a cookie-mode client to keys or to another mode. The request core is `internal/client.js` (options, params to request), `internal/session.js` (the mode: credentials, CSRF, refresh, §4) and `internal/http.js` (transport). Outside cookie mode the session sends the one API key as `X-Api-Key` and the access and booking tokens (`RequestOptions` first, else the client's token sources, called before every request) as `Authorization: Bearer` and `X-Booking-Token`.
 
 ### 5.2 Namespaces, mapped 1:1 to `x-sdk-method`
 

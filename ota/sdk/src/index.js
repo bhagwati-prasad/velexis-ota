@@ -29,12 +29,7 @@ export { VERSION } from "./version.js";
 export function createVelexisClient(options) {
   const core = createCore(options);
   return {
-    withOptions(overrides) {
-      if (overrides === null || typeof overrides !== "object" || Array.isArray(overrides)) {
-        throw new TypeError("Velexis SDK: withOptions needs an options object");
-      }
-      return createVelexisClient({ ...core.options, ...overrides });
-    },
+    withOptions: (overrides) => createVelexisClient(core.derive(overrides)),
     request: (method, path, init) => core.request(method, path, init),
   };
 }

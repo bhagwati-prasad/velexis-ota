@@ -654,7 +654,8 @@ The OTA backend gets its contract extensions, request pipeline, tenancy, Amadeus
   - `pnpm --filter @velexis/ota-sdk typecheck` passes.
 - **Verify:** `pnpm --filter @velexis/ota-sdk typecheck && pnpm --filter @velexis/ota-sdk test`
 
-### SDK-004 · Implement cookie, token and server session modes
+### SDK-004 · Implement cookie, token and server session modes ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-sdk
 - **Milestone:** M2
 - **Depends on:** SDK-003

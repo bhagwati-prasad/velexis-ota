@@ -108,6 +108,8 @@ describe("createVelexisClient", () => {
     expect(() =>
       createVelexisClient({ hostingKey: "hk_test_sdk003_fake", endUser: async () => null }),
     ).not.toThrow();
+    // Cookie mode needs a browser page (SDK-004); a stand-in `document` makes this Node runtime one.
+    vi.stubGlobal("document", { cookie: "" });
     expect(() => createVelexisClient({ baseUrl: "/api", session: "cookie" })).not.toThrow();
   });
 

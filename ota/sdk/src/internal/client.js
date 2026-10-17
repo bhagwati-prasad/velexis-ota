@@ -6,26 +6,27 @@
 // the JSON body (or the `multipart/form-data` form; an operation without a body ignores them). The generator refuses
 // name collisions, so this split never guesses. A list operation (one with a `cursor` query param) resolves with a
 // `Page`. `core.request` is the low-level escape hatch with the same headers, retries and error mapping.
-// internal/http.js sends the requests.
 //
-// Credentials: the one API key goes in `X-Api-Key`, the access token (`options.accessToken`, else the client's token
-// source) in `Authorization: Bearer`, the booking token in `X-Booking-Token`. The session modes (cookie mode, the
-// refusals per mode, automatic refresh, `environment`) are SDK-004's internal/session.js; the options are already
-// validated here.
+// The session mode is chosen here, once, from the validated options (internal/session.js, README §4): cookie mode
+// (`session: "cookie"`), token mode (a publishable key) or server mode (a secret or hosting key). The session refuses
+// the options its mode does not allow, at construction and per call, decides the credentials of every request and
+// handles CSRF and the automatic refresh; internal/http.js sends the requests. `environment` adds
+// `X-Velexis-Environment` to console operations (the route table's `environment` flag; `/v1/console/…` paths for
+// `request`).
 
-import { send } from "./http.js";
 import { isPageBody, Page } from "./pagination.js";
+import { createSession } from "./session.js";
 
 /** @typedef {import("../shared.js").VelexisClientOptions} VelexisClientOptions */
 /** @typedef {import("../shared.js").RequestOptions} RequestOptions */
-/** @typedef {import("../shared.js").TokenSource} TokenSource */
 /** @typedef {import("./operations.js").Operation} Operation */
 /** @typedef {import("./operations.js").HttpMethod} HttpMethod */
-/** @typedef {import("./http.js").HttpConfig} HttpConfig */
 /** @typedef {import("./http.js").HttpBody} HttpBody */
 
 /** The contract's default base URL (a placeholder host; the contract's doc comment names another, README §5.1). */
 export const DEFAULT_BASE_URL = "https://api.ota.example.com";
+/** The default base URL of cookie mode: the hosted storefront's same-origin API path (README §5.1). */
+export const COOKIE_BASE_URL = "/api";
 /** The contract's default timeout per request, in ms. */
 export const DEFAULT_TIMEOUT_MS = 30_000;
 /** The contract's default number of automatic retries. */
@@ -48,7 +49,12 @@ const HTTP_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE"];
 /**
  * The request core handed to the namespace factories.
  * @typedef {object} Core
- * @property {Readonly<VelexisClientOptions>} options the client's validated options (what `withOptions` starts from)
+ * @property {Readonly<VelexisClientOptions>} options the client's validated options (what `withOptions` starts from),
+ *   with string tokens that an automatic refresh has rotated replaced by the current ones
+ * @property {"cookie" | "token" | "server"} mode the session mode (README §4)
+ * @property {(overrides: unknown) => VelexisClientOptions} derive the options of `withOptions(overrides)`: these
+ *   options with the overrides applied (validated when the new client is created); a cookie-mode client cannot be
+ *   switched to another mode
  * @property {<T = unknown>(operation: Operation, params?: object, options?: RequestOptions) => Promise<T>} call
  *   one SDK method: params split by the route-table entry; list operations resolve with a `Page`
  * @property {<T = unknown>(method: HttpMethod, path: string, init?: RawRequestInit) => Promise<T>} request
@@ -336,45 +342,6 @@ export function validateRequestOptions(options) {
 }
 
 /**
- * The value of a token source: the string, or what its function returns (called before every request).
- * @param {TokenSource} source
- * @param {string} name the option, for the error message
- * @returns {Promise<string | undefined>}
- */
-async function tokenOf(source, name) {
-  const value = typeof source === "function" ? await source() : source;
-  if (value !== null && value !== undefined && typeof value !== "string") {
-    throw optionError(`the "${name}" function must return a string, null or undefined`);
-  }
-  return value === null || value === "" ? undefined : value;
-}
-
-/**
- * The credential headers of a client: its API key, and the access and booking tokens of each request.
- * @param {Readonly<VelexisClientOptions>} options
- * @returns {HttpConfig["credentials"]}
- */
-function credentialsOf(options) {
-  const key = options.secretKey ?? options.publishableKey ?? options.hostingKey;
-  return async (requestOptions) => {
-    /** @type {Record<string, string>} */
-    const headers = {};
-    if (key !== undefined) {
-      headers["X-Api-Key"] = key;
-    }
-    const accessToken = requestOptions.accessToken ?? (await tokenOf(options.accessToken, "accessToken"));
-    if (accessToken !== undefined) {
-      headers["Authorization"] = `Bearer ${accessToken}`;
-    }
-    const bookingToken = requestOptions.bookingToken ?? (await tokenOf(options.bookingToken, "bookingToken"));
-    if (bookingToken !== undefined) {
-      headers["X-Booking-Token"] = bookingToken;
-    }
-    return headers;
-  };
-}
-
-/**
  * One query value as text: strings, finite numbers and booleans; `undefined` for nothing to send.
  * @param {string} name
  * @param {unknown} value
@@ -478,9 +445,9 @@ function formOf(entries) {
  */
 export function createCore(options) {
   const validated = validateClientOptions(options);
-  /** @type {HttpConfig} */
-  const config = {
-    baseUrl: (validated.baseUrl ?? DEFAULT_BASE_URL).replace(/\/+$/, ""),
+  const defaultBaseUrl = validated.session === "cookie" ? COOKIE_BASE_URL : DEFAULT_BASE_URL;
+  const session = createSession(validated, {
+    baseUrl: (validated.baseUrl ?? defaultBaseUrl).replace(/\/+$/, ""),
     timeoutMs: validated.timeoutMs ?? DEFAULT_TIMEOUT_MS,
     maxRetries: validated.maxRetries ?? DEFAULT_MAX_RETRIES,
     fetch: validated.fetch,
@@ -490,9 +457,7 @@ export function createCore(options) {
     endUser: validated.endUser,
     headers: Object.freeze({ ...validated.headers }),
     onResponse: validated.onResponse,
-    credentials: credentialsOf(validated),
-    fetchInit: {},
-  };
+  });
 
   /**
    * One SDK method: the params split by the operation's route-table entry.
@@ -504,6 +469,7 @@ export function createCore(options) {
    */
   async function call(operation, params, requestOptions) {
     const callOptions = validateRequestOptions(requestOptions);
+    session.checkCall(callOptions);
     if (params !== undefined && !isPlainObject(params)) {
       throw optionError(`the params of ${operation.method} ${operation.path} must be an object`);
     }
@@ -511,7 +477,7 @@ export function createCore(options) {
     const path = fillPath(operation, values);
     const query = encodeQuery(operation.queryParams.map((name) => [name, values[name]]));
     /** @type {Record<string, string>} */
-    const headers = {};
+    const headers = session.environmentHeaders(operation.environment);
     for (const [param, header] of Object.entries(operation.headerParams)) {
       const value = values[param];
       if (value !== undefined && value !== null) {
@@ -531,7 +497,7 @@ export function createCore(options) {
     } else if (operation.body === "multipart") {
       body = { kind: "multipart", value: formOf(rest) };
     }
-    const result = await send(config, {
+    const result = await session.send({
       method: operation.method,
       path,
       query,
@@ -580,6 +546,7 @@ export function createCore(options) {
       throw optionError("a GET request cannot have a body; send its values in query");
     }
     const callOptions = validateRequestOptions(init?.options);
+    session.checkCall(callOptions);
     if (init?.query !== undefined && !isPlainObject(init.query)) {
       throw optionError("request query must be an object");
     }
@@ -592,11 +559,11 @@ export function createCore(options) {
       Object.keys(callOptions.headers ?? {}).some((name) => name.toLowerCase() === "idempotency-key");
     const retry =
       method === "GET" ? "safe" : method === "PUT" || method === "DELETE" || hasKey ? "idempotent" : "never";
-    const result = await send(config, {
+    const result = await session.send({
       method,
       path: pathname,
       query,
-      headers: {},
+      headers: session.environmentHeaders(pathname === "/v1/console" || pathname.startsWith("/v1/console/")),
       body: init?.body === undefined ? null : { kind: "json", value: init.body },
       idempotency: "none",
       retry,
@@ -606,5 +573,33 @@ export function createCore(options) {
     return /** @type {T} */ (result);
   }
 
-  return { options: validated, call, request };
+  /**
+   * The options of `withOptions(overrides)`: the current options with the overrides applied.
+   * @param {unknown} overrides
+   * @returns {VelexisClientOptions}
+   */
+  function derive(overrides) {
+    if (!isPlainObject(overrides)) {
+      throw optionError("withOptions needs an options object");
+    }
+    // `session: undefined` would drop the mode too: validation leaves undefined options out.
+    if (
+      session.mode === "cookie" &&
+      Object.hasOwn(overrides, "session") &&
+      overrides["session"] !== "cookie"
+    ) {
+      throw optionError('withOptions cannot switch a client with session "cookie" to another mode');
+    }
+    return { ...session.options(), ...overrides };
+  }
+
+  return {
+    get options() {
+      return session.options();
+    },
+    mode: session.mode,
+    derive,
+    call,
+    request,
+  };
 }
