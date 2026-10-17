@@ -91,6 +91,7 @@ export const TENANT_OPERATION_ROLES = Object.freeze({
   retryProvisioning: OWNER_ONLY,
   revealInitialKeys: OWNER_ONLY,
   getOnboarding: rolesFor("viewOverview"),
+  goLive: rolesFor("goLive"),
 
   // Team and console (api-inventory.md §8).
   listMembers: rolesFor("viewOverview"),
@@ -104,20 +105,38 @@ export const TENANT_OPERATION_ROLES = Object.freeze({
   resendInvitation: rolesFor("manageStaff"),
   createConsoleToken: rolesFor("openConsole"),
 
-  // API keys, domains and connections (api-inventory-resources.md §1–§4).
+  // API keys, domains, connections, payout account and settlements (api-inventory-resources.md §1–§5).
   listApiKeys: rolesFor("manageApiKeys"),
   createApiKey: rolesFor("manageApiKeys"),
   updateApiKey: rolesFor("manageApiKeys"),
   rollApiKey: rolesFor("manageApiKeys"),
   revokeApiKey: rolesFor("manageApiKeys"),
   listDomains: rolesFor("viewOverview"),
+  addDomain: rolesFor("manageDomains"),
+  checkDomain: rolesFor("manageDomains"),
+  makeDomainPrimary: rolesFor("manageDomains"),
+  removeDomain: rolesFor("manageDomains"),
   listAmadeusConnections: rolesFor("viewConnections"),
   updateAmadeusConnection: rolesFor("changeConnections"),
+  requestLiveAmadeus: OWNER_ONLY,
+  submitAmadeusCredentials: rolesFor("changeConnections"),
+  getCredentialSubmission: rolesFor("changeConnections"),
   listPaymentConnections: rolesFor("viewConnections"),
   updatePaymentConnection: rolesFor("changeConnections"),
+  startStripeConnect: rolesFor("changeConnections"),
+  submitStripeApiKeys: rolesFor("changeConnections"),
+  useVelexisPayments: OWNER_ONLY,
+  getPayoutAccount: rolesFor("viewSettlements"),
+  setPayoutAccount: rolesFor("setPayoutAccount"),
+  listSettlements: rolesFor("viewSettlements"),
+  getSettlement: rolesFor("viewSettlements"),
+  downloadSettlementLines: rolesFor("viewSettlements"),
 
   // Billing (api-inventory-resources.md §6).
   getSubscription: rolesFor("viewBilling"),
+  listInvoices: rolesFor("viewBilling"),
+  createCheckoutSession: rolesFor("manageBilling"),
+  createCustomerPortalSession: rolesFor("manageBilling"),
 } satisfies Partial<Record<PlatformOperationId, readonly TenantRole[]>>);
 
 /** A portal operation under `/v1/tenants/{tenantId}`. */
