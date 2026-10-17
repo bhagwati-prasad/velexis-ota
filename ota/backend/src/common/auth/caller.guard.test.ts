@@ -4,10 +4,11 @@
 // spied on: an edge request never reaches either. Keys against PostgreSQL rows: test/integration/tenancy.
 import { Body, Controller, Get, Post } from "@nestjs/common";
 import { hashApiKey } from "@velexis/crypto";
-import { expectResponseToMatch } from "@velexis/testing";
+import { expectResponseToMatch, responseChecker } from "@velexis/testing";
 import request from "supertest";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { edgeHeaders, newApiKey, testApiCredentials } from "../../../test/helpers/api-env";
+import { OPENAPI_SETUP_TIMEOUT_MS, preloadOpenApiDocument } from "../../../test/helpers/openapi";
 import { freePort } from "../../../test/helpers/ports";
 import { createTestApp, type TestApp } from "../../../test/support/create-test-app";
 import {
@@ -78,12 +79,17 @@ class PublicControllerProbe {
 
 let api: TestApp;
 
+// Starting the application parses and compiles the OTA document, and the first expectResponseToMatch parses it again
+// for the response checker: one-time work that takes several seconds while every package's tests run at once, so it
+// happens here, with the budget of test/helpers/openapi.ts, and not in the first test.
 beforeAll(async () => {
+  preloadOpenApiDocument();
+  responseChecker("ota");
   api = await createTestApp({
     controllers: [CallerProbe, PublicControllerProbe],
     imports: [TenancyModule.forApi()],
   });
-});
+}, OPENAPI_SETUP_TIMEOUT_MS);
 
 afterAll(async () => {
   await api.close();

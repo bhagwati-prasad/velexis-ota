@@ -3,12 +3,13 @@
 // interceptor validates by operation, not by path); the error envelope itself is error.filter.test.ts.
 import { Body, Controller, Get, Headers, Param, Post, Query, Req } from "@nestjs/common";
 import { otaOperations } from "@velexis/api-types/operations";
-import { expectResponseToMatch } from "@velexis/testing";
+import { expectResponseToMatch, responseChecker } from "@velexis/testing";
 import type { Request } from "express";
 import { ClsService } from "nestjs-cls";
 import request from "supertest";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { edgeHeaders } from "../../../test/helpers/api-env";
+import { OPENAPI_SETUP_TIMEOUT_MS, preloadOpenApiDocument } from "../../../test/helpers/openapi";
 import { createTestApp, type TestApp } from "../../../test/support/create-test-app";
 import { PublicRoute, WebhookRoute } from "../auth/caller.guard";
 import { JSON_BODY_LIMIT_BYTES, routePattern, toBodyError, WEBHOOK_BODY_LIMIT_BYTES } from "./body-parsers";
@@ -100,9 +101,14 @@ class WebhookProbeController {
 
 let api: TestApp;
 
+// Starting the application parses and compiles the OTA document, and the first expectResponseToMatch parses it again
+// for the response checker: one-time work that takes several seconds while every package's tests run at once, so it
+// happens here, with the budget of test/helpers/openapi.ts, and not in the first test.
 beforeAll(async () => {
+  preloadOpenApiDocument();
+  responseChecker("ota");
   api = await createTestApp({ controllers: [ProbeController, WebhookProbeController] });
-});
+}, OPENAPI_SETUP_TIMEOUT_MS);
 
 afterAll(async () => {
   await api.close();

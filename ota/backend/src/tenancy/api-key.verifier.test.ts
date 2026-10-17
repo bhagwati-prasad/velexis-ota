@@ -6,8 +6,9 @@ import { hashApiKey } from "@velexis/crypto";
 import { AppError } from "@velexis/errors";
 import { FakeClock } from "@velexis/testing";
 import type { PinoLogger } from "nestjs-pino";
-import { describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import { newApiKey, withCharacterChanged } from "../../test/helpers/api-env";
+import { OPENAPI_SETUP_TIMEOUT_MS, preloadOpenApiDocument } from "../../test/helpers/openapi";
 import { loadOpenApiDocument } from "../common/http/openapi-validation.interceptor";
 import { newId } from "../common/ids";
 import {
@@ -301,6 +302,10 @@ describe("publishable keys and origins", () => {
 });
 
 describe("the scope lists", () => {
+  // Parsing and compiling the OTA document is the expensive part: it happens once, in this hook
+  // (test/helpers/openapi.ts).
+  beforeAll(preloadOpenApiDocument, OPENAPI_SETUP_TIMEOUT_MS);
+
   it("are the enums of ConsoleApiKeyScope and StaffPermission in the OTA document", () => {
     const document = loadOpenApiDocument();
     const enumOf = (name: string): unknown =>

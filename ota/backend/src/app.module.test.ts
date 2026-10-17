@@ -6,9 +6,10 @@ import { ConfigService } from "@nestjs/config";
 import { ClsService } from "nestjs-cls";
 import { PinoLogger } from "nestjs-pino";
 import request from "supertest";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { testApiVariables } from "../test/helpers/api-env";
 import { MemorySink, type LogLine } from "../test/helpers/log-sink";
+import { OPENAPI_SETUP_TIMEOUT_MS, preloadOpenApiDocument } from "../test/helpers/openapi";
 import { unreachableRedisUrl } from "../test/helpers/ports";
 import { AppModule, createApiApp, createApiLogger } from "./app.module";
 import { PublicRoute } from "./common/auth/caller.guard";
@@ -59,6 +60,9 @@ class ProbeController {
 }
 
 const apps: INestApplication[] = [];
+
+// The applications the tests start reuse the OTA document, parsed and compiled once, here (test/helpers/openapi.ts).
+beforeAll(preloadOpenApiDocument, OPENAPI_SETUP_TIMEOUT_MS);
 
 afterEach(async () => {
   await Promise.all(apps.splice(0).map((app) => app.close()));

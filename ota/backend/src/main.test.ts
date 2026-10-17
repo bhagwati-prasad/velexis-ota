@@ -2,10 +2,11 @@
 // vx:invalidate subscriber tries a Redis where nothing listens): configuration failures, the bound interface, and a
 // clean shutdown. Readiness with real dependencies: test/integration/health.
 import type { NestExpressApplication } from "@nestjs/platform-express";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import { exchange } from "../test/helpers/http";
 import { testApiVariables } from "../test/helpers/api-env";
 import { MemorySink } from "../test/helpers/log-sink";
+import { OPENAPI_SETUP_TIMEOUT_MS, preloadOpenApiDocument } from "../test/helpers/openapi";
 import { freePort, occupiedPort, unreachableRedisUrl } from "../test/helpers/ports";
 import { API_HOST, startApi } from "./main";
 
@@ -21,6 +22,9 @@ const ENV = {
 } as const;
 
 const cleanups: Array<() => Promise<void>> = [];
+
+// The applications the tests start reuse the OTA document, parsed and compiled once, here (test/helpers/openapi.ts).
+beforeAll(preloadOpenApiDocument, OPENAPI_SETUP_TIMEOUT_MS);
 
 afterEach(async () => {
   for (const cleanup of cleanups.splice(0).reverse()) {

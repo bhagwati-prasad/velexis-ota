@@ -20,10 +20,10 @@ import { createLogger } from "@velexis/logger";
 import { FakeClock } from "@velexis/testing";
 import { UnrecoverableError, type Job, type Queue } from "bullmq";
 import { LoggerModule, type PinoLogger } from "nestjs-pino";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { testApiVariables } from "../../test/helpers/api-env";
 import { MemorySink } from "../../test/helpers/log-sink";
-import { freePort } from "../../test/helpers/ports";
+import { unreachableRedisUrl } from "../../test/helpers/ports";
 import { AppModule, createApiApp, createApiLogger } from "../app.module";
 import { Clock } from "../common/clock";
 import { loadApiConfig, loadWorkerConfig, WORKER_APP, type ApiConfig, type WorkerConfig } from "../config";
@@ -64,6 +64,8 @@ const PROVISIONER_URL = "postgres://velexis_provisioner:dummy-provisioner-passwo
 const MIGRATOR_URL = "postgres://velexis_migrator:dummy-migrator-password@127.0.0.1:5432/velexis";
 const CHECKSUM = "cfa4d48672d69c947e5e96c0906d2b55c0df213c9cb38b72f30824ff9ae048cc";
 const quietPoolLogger = { error: (): void => undefined };
+/** The budget of the hook that starts the API's and the worker's module graphs (see its comment). */
+const GRAPH_SETUP_TIMEOUT_MS = 60_000;
 
 const apps: INestApplicationContext[] = [];
 const databases: ProvisionerDatabase[] = [];
@@ -139,40 +141,58 @@ describe("the provisioner database", () => {
     expect(database.pool.totalCount).toBe(0);
   });
 
-  it("is in the worker's module graph and not in the API's [OBE-005 AC4]", async () => {
-    const redisUrl = `redis://:dummy@127.0.0.1:${await freePort()}/0`;
-    const apiConfig = loadApiConfig({
-      ...SHARED,
-      ...testApiVariables(),
-      REDIS_URL: redisUrl,
-      DATABASE_PROVISIONER_URL: PROVISIONER_URL,
-    });
-    const workerConfig = loadWorkerConfig({
-      ...SHARED,
-      REDIS_URL: redisUrl,
-      DATABASE_PROVISIONER_URL: PROVISIONER_URL,
-    });
+  describe("in the module graphs of both processes", () => {
+    const started: INestApplicationContext[] = [];
     const sink = new MemorySink();
+    let graphs: { api: INestApplicationContext; worker: INestApplicationContext };
 
-    const api = await createApiApp(
-      apiConfig,
-      AppModule.forRoot(apiConfig, { logger: createApiLogger(apiConfig, sink) }),
-    );
-    apps.push(api);
-    await api.init();
-    const worker = await createWorkerApp(
-      WorkerModule.forRoot(workerConfig, { logger: createWorkerLogger(workerConfig, sink) }),
-    );
-    apps.push(worker);
-    await worker.init();
+    // Starting the API's graph parses the OTA document and compiles its request validators (about 1.5 s alone), and
+    // the worker's graph adds its own modules: a few seconds on an idle machine, and more than Vitest's 5 s test
+    // bound while every package's tests run at once on a 4-CPU runner (CI run 38752280673 took 9.5 s). Both graphs
+    // start once, in this hook with a budget that only stops a start-up that hangs; the test below reads them.
+    beforeAll(async () => {
+      const redisUrl = await unreachableRedisUrl();
+      const apiConfig = loadApiConfig({
+        ...SHARED,
+        ...testApiVariables(),
+        REDIS_URL: redisUrl,
+        DATABASE_PROVISIONER_URL: PROVISIONER_URL,
+      });
+      const workerConfig = loadWorkerConfig({
+        ...SHARED,
+        REDIS_URL: redisUrl,
+        DATABASE_PROVISIONER_URL: PROVISIONER_URL,
+      });
 
-    expect(() => api.get(PROVISIONER_DATABASE, { strict: false })).toThrow();
-    expect(() => api.get(ProvisioningService, { strict: false })).toThrow();
-    expect(worker.get<string, ProvisionerDatabase>(PROVISIONER_DATABASE, { strict: false }).url).toBe(
-      PROVISIONER_URL,
-    );
-    expect(worker.get(TenantOpsProcessor, { strict: false })).toBeInstanceOf(TenantOpsProcessor);
-    expect(sink.text()).not.toContain("dummy-provisioner-password");
+      const api = await createApiApp(
+        apiConfig,
+        AppModule.forRoot(apiConfig, { logger: createApiLogger(apiConfig, sink) }),
+      );
+      started.push(api);
+      await api.init();
+      const worker = await createWorkerApp(
+        WorkerModule.forRoot(workerConfig, { logger: createWorkerLogger(workerConfig, sink) }),
+      );
+      started.push(worker);
+      await worker.init();
+      graphs = { api, worker };
+    }, GRAPH_SETUP_TIMEOUT_MS);
+
+    afterAll(async () => {
+      await Promise.all(started.splice(0).map((app) => app.close()));
+    });
+
+    it("is in the worker's module graph and not in the API's [OBE-005 AC4]", () => {
+      const { api, worker } = graphs;
+
+      expect(() => api.get(PROVISIONER_DATABASE, { strict: false })).toThrow();
+      expect(() => api.get(ProvisioningService, { strict: false })).toThrow();
+      expect(worker.get<string, ProvisionerDatabase>(PROVISIONER_DATABASE, { strict: false }).url).toBe(
+        PROVISIONER_URL,
+      );
+      expect(worker.get(TenantOpsProcessor, { strict: false })).toBeInstanceOf(TenantOpsProcessor);
+      expect(sink.text()).not.toContain("dummy-provisioner-password");
+    });
   });
 });
 
