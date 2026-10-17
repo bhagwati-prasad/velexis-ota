@@ -26,7 +26,7 @@ const SCHEMA_ID = "https://velexis.invalid/ota-error-envelope.json";
 const SCHEMA_REF_PREFIX = "#/components/schemas/";
 const REQUEST_ID = "req_01JA2Z9W5K7Q3M8N4P6R2T0V1X";
 
-// Parsing the 40,000-line OTA document takes a moment on a busy runner.
+// Parsing the 40,000-line OTA document (and the platform document) takes a moment on a busy runner.
 const PARSE_TIMEOUT_MS = 60_000;
 
 type JsonObject = Record<string, unknown>;
@@ -109,10 +109,15 @@ const supplier: SupplierIssue = {
 
 describe("toErrorEnvelope", () => {
   let document: OpenApiDocument;
+  /** The platform document, when it exists: parsed here too, so no test pays for a second parse. */
+  let platformDocument: OpenApiDocument | undefined;
   let validateResponse: ValidateFunction;
   let errorProperties: string[];
   beforeAll(() => {
     document = parse(readFileSync(OTA_DOCUMENT, "utf8")) as OpenApiDocument;
+    platformDocument = existsSync(PLATFORM_DOCUMENT)
+      ? (parse(readFileSync(PLATFORM_DOCUMENT, "utf8")) as OpenApiDocument)
+      : undefined;
     const ajv = new Ajv2020({ strict: true, allErrors: true });
     addFormats(ajv);
     validateResponse = ajv.compile(envelopeSchema(document));
@@ -363,8 +368,8 @@ describe("toErrorEnvelope", () => {
 
   it("allows fieldErrors for exactly the codes the documents' examples answer with fieldErrors", () => {
     const codes = codesWithFieldErrors(document);
-    if (existsSync(PLATFORM_DOCUMENT)) {
-      codesWithFieldErrors(parse(readFileSync(PLATFORM_DOCUMENT, "utf8")), codes);
+    if (platformDocument !== undefined) {
+      codesWithFieldErrors(platformDocument, codes);
     }
     expect([...FIELD_ERROR_CODES].sort()).toEqual([...codes].sort());
   });

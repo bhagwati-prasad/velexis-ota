@@ -193,6 +193,12 @@ describe("AppError", () => {
         ],
       ]),
     );
+    // Type-checking is the expensive part, and the program keeps each file's diagnostics: checking the snippets here,
+    // inside the hook's budget, keeps that work out of the tests below (whose 5 s bound it passed under a full
+    // parallel `pnpm test`); they read the same diagnostics.
+    for (const snippet of [okSnippet, unknownCodeSnippet, fieldErrorsSnippet]) {
+      diagnosticsOf(program, snippet);
+    }
   }, COMPILE_TIMEOUT_MS);
 
   it('does not compile new AppError("NOT_A_CODE") [X-009 AC1]', () => {
