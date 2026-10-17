@@ -168,8 +168,9 @@ export const apiConfigSchema = {
   // The OTA zone's key folder (ADR-0010, ADR-0026): every `master-v<N>.key` in it is the KEK `local:v<N>`, and
   // MASTER_KEY_CURRENT names the one that wraps new data keys (identical copies of the platform zone's files, so the
   // OTA backend decrypts the Amadeus secrets the platform encrypted). The Amadeus module loads them once when it
-  // starts (OBE-017): it decrypts client secrets and encrypts the cached access tokens. The worker adds both variables
-  // with its first encrypted value.
+  // starts (OBE-017): it decrypts client secrets and encrypts the cached access tokens. The HTTP module loads them too
+  // (OBE-014): the idempotency service encrypts the replays that carry a token into
+  // `idempotency_keys.response_ciphertext`. The worker adds both variables with its first encrypted value.
   MASTER_KEY_DIR: env.dir(),
   MASTER_KEY_CURRENT: env.string({ pattern: KEK_ID }),
   // Optional overrides of the Amadeus host per environment (the stub, http://127.0.0.1:4900, in development and CI);

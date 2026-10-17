@@ -6,9 +6,10 @@
 //   later run of this checkout. The first process that needs it creates it with an exclusive link, so concurrent test
 //   processes never replace a pepper another one has already read. Child processes started by a test (the entry
 //   points) read the same file.
-// - MASTER_KEY_DIR and MASTER_KEY_CURRENT (OBE-017): the same folder, with a `master-v1.key` as `pnpm dev:keys` writes
-//   it (32 random bytes, base64, mode 0600), created the same way, and `local:v1`. Tests that store a ciphertext as the
-//   platform would (an Amadeus client secret) encrypt it with `testKeyProvider()`.
+// - MASTER_KEY_DIR and MASTER_KEY_CURRENT (OBE-017, OBE-014): the same folder, with a `master-v1.key` as
+//   `pnpm dev:keys` writes it (32 random bytes, base64, mode 0600), created the same way, and `local:v1`. Tests that
+//   store a ciphertext as the platform would (an Amadeus client secret), or encrypt or decrypt a ciphertext column as
+//   the API does (an idempotent replay), use the KEKs of `testKeyProvider()`.
 // - STOREFRONT_BASE_DOMAIN and PUBLIC_OTA_API_URL: the development values of ota/backend/.env.example.
 //
 // Nothing here is a real secret, and nothing is committed.

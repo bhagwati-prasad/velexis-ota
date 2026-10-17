@@ -354,7 +354,8 @@ The OTA backend gets its contract extensions, request pipeline, tenancy, Amadeus
   - Ten requests with one key within a minute write `apikey:used:<keyId>` once.
 - **Verify:** `pnpm --filter @velexis/ota-backend test && pnpm --filter @velexis/ota-backend test:int -- common`
 
-### OBE-014 · Add the idempotency interceptor
+### OBE-014 · Add the idempotency interceptor ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-backend
 - **Milestone:** M2
 - **Depends on:** OBE-012, OBE-008

@@ -190,10 +190,13 @@ State-changing POSTs that call Amadeus or Stripe require `Idempotency-Key` (cont
 1. **Scope** = `<environment>:<principal>:<operationId>`. Principal: `cus_…` for customers, `key_…` for API keys, `stf_…` for staff, and `edge-<first 16 hex of sha256(csrf cookie)>` for anonymous storefront visitors.
 2. **Insert** `processing` with `request_hash` and `locked_until` in its own short transaction. A unique violation means the key was seen:
    - different `request_hash` → `409 IDEMPOTENCY_KEY_REUSED`;
-   - `completed` → replay the stored status and body (from `response_ciphertext` when it carries a token);
-   - `processing` → wait up to 60 s for completion, then replay or answer `409 CONFLICT`.
-3. **Store the outcome**: success and final business errors (`4xx`, and `504` linked to a reconciling booking) are kept for 24 hours; transient errors (`503`, `502 PAYMENT_PROVIDER_ERROR` before any provider effect) delete the record, so the same key can be retried.
-4. **Airline-card route**: `request_hash` is computed on the body with the `card` object replaced by `{brand, last4}`. No hash of a card number is ever stored.
+   - `completed` (or `failed`, a stored final error) → replay the stored status and body (from `response_ciphertext` when it carries a token);
+   - `processing` → wait up to 60 s for completion, then replay or answer `409 CONFLICT`. A record whose lease (`locked_until`, 2 minutes, longer than any handler) ran out belongs to a process that died: the waiting request takes it over and runs.
+3. **Store the outcome**: success and final business errors (`4xx`, and `504` linked to a reconciling booking) are kept for 24 hours; transient errors (`503`, `502 PAYMENT_PROVIDER_ERROR` before any provider effect, and also `429` and every other `5xx`) delete the record, so the same key can be retried.
+4. **Airline-card route**: `request_hash` is computed on the body with the `card` object replaced by `{brand, last4}`. No hash of a card number is ever stored: on every route, card and identity document data enter the hash only as the shared redactor keeps them (numbers by their last 4), and a request whose hashed input carries a password is refused until its operation has a `hashInput` hook that leaves the password out.
+5. **Storage**: `response_body` always holds the copy after the shared redactor. An answer that carries a token, a cookie or unmasked data is also stored verbatim in `response_ciphertext` (ADR-0010, associated data `tenant_<key>.idempotency_keys.response_ciphertext:<idk_…>`), and its replays come from there.
+
+The interceptor runs after the guards and the validation interceptor, so an invalid request writes no record. Per-operation hooks (`hashInput` for point 4, `resourceOf` and `resolveReplay` for §5.2) come from providers marked `@IdempotencyHooksFor` ([`../backend/README.md`](../backend/README.md) §2).
 
 ### 5.2 Replay after a reconciliation
 

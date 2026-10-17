@@ -320,7 +320,7 @@ describe("the caller credentials of the API (OBE-011)", () => {
   });
 });
 
-describe("the envelope keys and the Amadeus base URLs of the API (OBE-017)", () => {
+describe("the envelope keys and the Amadeus base URLs of the API (OBE-017, OBE-014)", () => {
   it("require a key folder that exists and a current KEK id local:v<N>; the worker reads neither", () => {
     const missingDir = join(tmpdir(), `velexis-ota-no-keys-${process.pid}`);
     for (const [name, value] of [
@@ -337,6 +337,7 @@ describe("the envelope keys and the Amadeus base URLs of the API (OBE-017)", () 
     }
     const worker = loadWorkerConfig({ ...WORKER_ENV, ...API_ONLY });
     expect(worker).not.toHaveProperty("MASTER_KEY_DIR");
+    expect(worker).not.toHaveProperty("MASTER_KEY_CURRENT");
     expect(worker).not.toHaveProperty("AMADEUS_BASE_URL_TEST");
   });
 

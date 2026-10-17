@@ -2,7 +2,7 @@
 // services: probe controllers return the caller the guard put in the request context, and pending operations of the
 // document (501 behind the guard) show the envelopes against the document. The platform repository and the pool are
 // spied on: an edge request never reaches either. Keys against PostgreSQL rows: test/integration/tenancy.
-import { Body, Controller, Get, Post } from "@nestjs/common";
+import { Body, Controller, Get, Patch, Post } from "@nestjs/common";
 import { hashApiKey } from "@velexis/crypto";
 import { expectResponseToMatch, responseChecker } from "@velexis/testing";
 import request from "supertest";
@@ -31,10 +31,12 @@ const PUBLISHABLE_KEY = newApiKey("pk");
 /** A pending operation of the document (OBE-015) that documents 400, 401 and 403. */
 const SEARCH_LOCATIONS = "/v1/reference/locations?keyword=par";
 /**
- * A body of verifyEmail, the operation of the validation probe below: a customer operation without a rate limit
- * (OBE-013), so the probe needs no Redis, which these tests do not have.
+ * A body of updatePayment, the operation of the validation probe below: it takes no Idempotency-Key, so a valid
+ * request reaches the probe without the tenant's `idempotency_keys` (OBE-014), which these tests have no database for,
+ * and it has no rate limit (OBE-013), so the probe needs no Redis, which these tests do not have either.
  */
-const VERIFY_EMAIL = { token: "vt_0123456789abcdefghijklmnopqrstuv" };
+const PAYMENT_UPDATE = { card: { brand: "VISA", bin: "424242" } };
+const PAYMENT_PROBE = "/__callers/payments/pay_0123456789ABCDEFGHJK";
 
 @Controller("__callers")
 class CallerProbe {
@@ -45,9 +47,9 @@ class CallerProbe {
     return { caller: this.callers.get() ?? null };
   }
 
-  @Post("verify-email")
-  @OpenApiOperation("verifyEmail")
-  verifyEmail(@Body() _body: unknown): { caller: Caller | null } {
+  @Patch("payments/:paymentId")
+  @OpenApiOperation("updatePayment")
+  updatePayment(@Body() _body: unknown): { caller: Caller | null } {
     return { caller: this.callers.get() ?? null };
   }
 
@@ -350,21 +352,14 @@ describe("requests without a credential (rules 1.4 and 5)", () => {
       billingNotice: null,
     });
     // The edge requests carry the CSRF pair and Origin of a storefront page: the CSRF guard (OBE-013) runs before
-    // validation too.
-    const anonymous = await request(api.server).post("/__callers/verify-email").send({ nope: true });
-    const edge = await request(api.server)
-      .post("/__callers/verify-email")
-      .set(edgeWriteHeaders())
-      .send({ nope: true });
-    const valid = await request(api.server)
-      .post("/__callers/verify-email")
-      .set(edgeWriteHeaders())
-      .set("Idempotency-Key", "0b9d1c5e-6f3a-4c2b-9e7d-1a2b3c4d5e6f")
-      .send(VERIFY_EMAIL);
+    // validation too, and checks PATCH as well.
+    const anonymous = await request(api.server).patch(PAYMENT_PROBE).send({ nope: true });
+    const edge = await request(api.server).patch(PAYMENT_PROBE).set(edgeWriteHeaders()).send({ nope: true });
+    const valid = await request(api.server).patch(PAYMENT_PROBE).set(edgeWriteHeaders()).send(PAYMENT_UPDATE);
 
     expect([anonymous.status, anonymous.body.error.code]).toEqual([401, "INVALID_API_KEY"]);
     expect([edge.status, edge.body.error.code]).toEqual([400, "VALIDATION_FAILED"]);
-    expect(valid.status).toBe(201);
+    expect(valid.status).toBe(200);
     expect(valid.body.caller).toMatchObject({ type: "edge" });
   });
 });

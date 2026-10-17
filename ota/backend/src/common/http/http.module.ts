@@ -1,13 +1,17 @@
 // The HTTP pipeline of the API (architecture §3, steps 1–3, 6 and 13), around the request context that app.module.ts
 // mounts (pino-http, then nestjs-cls):
 //
-//   helmet → cookie-parser → body parsers → [guards of later tasks] → OpenAPI validation → handler → error filter
+//   helmet → cookie-parser → body parsers → guards → OpenAPI validation → idempotency → handler → error filter
 //
 // - helmet: the security headers of a JSON API, aligned with Caddy's `security_headers` so the answer is the same
 //   with or without the proxy; Caddy replaces them on the public hosts anyway.
 // - cookie-parser: `req.cookies`, unsigned (the storefront session cookies are opaque, OADR-0006).
 // - body parsers (body-parsers.ts): raw on `/webhooks/*`, JSON with 256 KB elsewhere, the per-route limits of main.ts.
 // - the OpenAPI validation interceptor and the error filter are global (`APP_INTERCEPTOR`, `APP_FILTER`).
+// - the idempotency interceptor (OBE-014) is global too, registered after the validation interceptor so it runs after
+//   it: a request is validated before its key is claimed in `idempotency_keys`. It needs the tenant transaction of the
+//   tenancy module, the KEKs of MASTER_KEY_DIR for the replays that carry a token, and Nest's discovery service for the
+//   providers of per-operation hooks (`@IdempotencyHooksFor`).
 // - the not-implemented controller answers `501` for every operation of pending-operations.ts.
 //
 // The middleware runs after the request context: Nest applies the middleware of global modules first (nestjs-pino),
@@ -20,11 +24,15 @@ import {
   type MiddlewareConsumer,
   type NestModule,
 } from "@nestjs/common";
-import { APP_FILTER, APP_INTERCEPTOR } from "@nestjs/core";
+import { APP_FILTER, APP_INTERCEPTOR, DiscoveryModule } from "@nestjs/core";
 import cookieParser from "cookie-parser";
 import helmet, { type HelmetOptions } from "helmet";
+import { TenancyModule } from "../../tenancy/tenancy.module";
 import { BodyParsersMiddleware, HTTP_PIPELINE_OPTIONS, type HttpPipelineOptions } from "./body-parsers";
 import { ErrorFilter } from "./error.filter";
+import { IdempotencyInterceptor } from "./idempotency.interceptor";
+import { IdempotencyRepository } from "./idempotency.repository";
+import { idempotencyKeyProvider, IdempotencyService } from "./idempotency.service";
 import { NotImplementedController } from "./not-implemented.controller";
 import {
   loadOpenApiDocument,
@@ -58,6 +66,7 @@ export class HttpModule implements NestModule {
   static forRoot(options: HttpPipelineOptions = {}): DynamicModule {
     return {
       module: HttpModule,
+      imports: [DiscoveryModule, TenancyModule.forApi()],
       controllers: [NotImplementedController],
       providers: [
         { provide: HTTP_PIPELINE_OPTIONS, useValue: options },
@@ -65,7 +74,12 @@ export class HttpModule implements NestModule {
         { provide: OpenApiDocument, useFactory: () => loadOpenApiDocument() },
         RequestContext,
         BodyParsersMiddleware,
+        idempotencyKeyProvider,
+        IdempotencyRepository,
+        IdempotencyService,
+        // Global interceptors run in the order they are provided: validation, then idempotency.
         { provide: APP_INTERCEPTOR, useClass: OpenApiValidationInterceptor },
+        { provide: APP_INTERCEPTOR, useClass: IdempotencyInterceptor },
         { provide: APP_FILTER, useClass: ErrorFilter },
       ],
       exports: [RequestContext, OpenApiDocument],
