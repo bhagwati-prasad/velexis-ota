@@ -12,7 +12,7 @@
 //
 // The pepper (API_KEY_PEPPER_FILE, the platform's identical copy) is read once when the module starts and stays in
 // memory. The rows come through the platform cache (`apikey:<prefix>`, 60 s, unknown prefixes 10 s; OBE-012), which
-// the tenancy module binds to `API_KEY_ROWS`; the usage counter comes with OBE-013.
+// the tenancy module binds to `API_KEY_ROWS`; the usage counter is key-usage.ts (OBE-013).
 import { Inject, Injectable } from "@nestjs/common";
 import type { components } from "@velexis/api-types";
 import { verifyApiKey } from "@velexis/crypto";

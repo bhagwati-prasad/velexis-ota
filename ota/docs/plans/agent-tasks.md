@@ -335,7 +335,8 @@ The OTA backend gets its contract extensions, request pipeline, tenancy, Amadeus
   - Every invalidation type deletes exactly its keys (table-driven test); unknown hosts are negatively cached for 10 s.
 - **Verify:** `pnpm --filter @velexis/ota-backend test && pnpm --filter @velexis/ota-backend test:int -- tenancy`
 
-### OBE-013 · Add the scope guard, CSRF guard, rate limits and key-usage counters
+### OBE-013 · Add the scope guard, CSRF guard, rate limits and key-usage counters ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-backend
 - **Milestone:** M2
 - **Depends on:** OBE-012

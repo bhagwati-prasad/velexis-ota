@@ -124,3 +124,25 @@ export function withCharacterChanged(key: string, index: number): string {
 export function edgeHeaders(host = `demo.${TEST_STOREFRONT_BASE_DOMAIN}`): Readonly<Record<string, string>> {
   return Object.freeze({ "X-Velexis-Edge": testApiCredentials().edgeSecret, "X-Velexis-Host": host });
 }
+
+/** A CSRF value of the shape `storefront.get` issues (OADR-0006): 256 random bits in base64url, 43 characters. */
+export function newCsrfToken(): string {
+  return randomBytes(32).toString("base64url");
+}
+
+/**
+ * The headers of a state-changing storefront request (`POST`, `PUT`, `PATCH`, `DELETE`) for `host`, which the CSRF
+ * guard accepts (OADR-0006 point 3, OBE-013): Caddy's edge headers, the `__Host-vx_csrf` cookie the browser sends,
+ * its copy in `X-CSRF-Token` that the SDK adds, and the browser's `Origin`, the storefront itself.
+ */
+export function edgeWriteHeaders(
+  host = `demo.${TEST_STOREFRONT_BASE_DOMAIN}`,
+  csrfToken = newCsrfToken(),
+): Readonly<Record<string, string>> {
+  return Object.freeze({
+    ...edgeHeaders(host),
+    Origin: `https://${host}`,
+    "X-CSRF-Token": csrfToken,
+    Cookie: `__Host-vx_csrf=${csrfToken}`,
+  });
+}

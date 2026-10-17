@@ -7,7 +7,7 @@ import { hashApiKey } from "@velexis/crypto";
 import { expectResponseToMatch, responseChecker } from "@velexis/testing";
 import request from "supertest";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { edgeHeaders, newApiKey, testApiCredentials } from "../../../test/helpers/api-env";
+import { edgeHeaders, edgeWriteHeaders, newApiKey, testApiCredentials } from "../../../test/helpers/api-env";
 import { OPENAPI_SETUP_TIMEOUT_MS, preloadOpenApiDocument } from "../../../test/helpers/openapi";
 import { freePort } from "../../../test/helpers/ports";
 import { createTestApp, type TestApp } from "../../../test/support/create-test-app";
@@ -30,7 +30,11 @@ const SECRET_KEY = newApiKey("sk");
 const PUBLISHABLE_KEY = newApiKey("pk");
 /** A pending operation of the document (OBE-015) that documents 400, 401 and 403. */
 const SEARCH_LOCATIONS = "/v1/reference/locations?keyword=par";
-const SIGN_IN = { email: "anna.berg@example.com", password: "Fjord-Lights-2026" };
+/**
+ * A body of verifyEmail, the operation of the validation probe below: a customer operation without a rate limit
+ * (OBE-013), so the probe needs no Redis, which these tests do not have.
+ */
+const VERIFY_EMAIL = { token: "vt_0123456789abcdefghijklmnopqrstuv" };
 
 @Controller("__callers")
 class CallerProbe {
@@ -41,9 +45,9 @@ class CallerProbe {
     return { caller: this.callers.get() ?? null };
   }
 
-  @Post("sign-in")
-  @OpenApiOperation("signIn")
-  signIn(@Body() _body: unknown): { caller: Caller | null } {
+  @Post("verify-email")
+  @OpenApiOperation("verifyEmail")
+  verifyEmail(@Body() _body: unknown): { caller: Caller | null } {
     return { caller: this.callers.get() ?? null };
   }
 
@@ -345,13 +349,18 @@ describe("requests without a credential (rules 1.4 and 5)", () => {
       defaultLocale: "en",
       billingNotice: null,
     });
-    const anonymous = await request(api.server).post("/__callers/sign-in").send({ nope: true });
-    const edge = await request(api.server).post("/__callers/sign-in").set(edgeHeaders()).send({ nope: true });
+    // The edge requests carry the CSRF pair and Origin of a storefront page: the CSRF guard (OBE-013) runs before
+    // validation too.
+    const anonymous = await request(api.server).post("/__callers/verify-email").send({ nope: true });
+    const edge = await request(api.server)
+      .post("/__callers/verify-email")
+      .set(edgeWriteHeaders())
+      .send({ nope: true });
     const valid = await request(api.server)
-      .post("/__callers/sign-in")
-      .set(edgeHeaders())
+      .post("/__callers/verify-email")
+      .set(edgeWriteHeaders())
       .set("Idempotency-Key", "0b9d1c5e-6f3a-4c2b-9e7d-1a2b3c4d5e6f")
-      .send(SIGN_IN);
+      .send(VERIFY_EMAIL);
 
     expect([anonymous.status, anonymous.body.error.code]).toEqual([401, "INVALID_API_KEY"]);
     expect([edge.status, edge.body.error.code]).toEqual([400, "VALIDATION_FAILED"]);

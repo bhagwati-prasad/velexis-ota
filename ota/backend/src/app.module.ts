@@ -9,20 +9,24 @@ import {
   type Type,
 } from "@nestjs/common";
 import { ConfigModule } from "@nestjs/config";
-import { APP_GUARD, NestFactory } from "@nestjs/core";
+import { APP_GUARD, APP_INTERCEPTOR, NestFactory } from "@nestjs/core";
 import type { NestExpressApplication } from "@nestjs/platform-express";
 import { createLogger, pinoHttpOptions, type Logger } from "@velexis/logger";
 import { ClsMiddleware, ClsModule } from "nestjs-cls";
 import { LoggerModule, Logger as NestPinoLogger } from "nestjs-pino";
 import type { DestinationStream } from "pino";
 import { CallerGuard } from "./common/auth/caller.guard";
+import { CsrfGuard } from "./common/auth/csrf.guard";
+import { ScopeGuard } from "./common/auth/scope.guard";
 import { TenantGuard } from "./common/auth/tenant.guard";
 import { CommonModule } from "./common/common.module";
 import type { JsonBodyLimits } from "./common/http/body-parsers";
 import { HttpModule } from "./common/http/http.module";
+import { RateLimitGuard, rateLimitModule } from "./common/http/rate-limits";
 import { requestIdOf } from "./common/http/request-context";
 import { API_APP, type ApiConfig } from "./config";
 import { HealthModule } from "./health/health.module";
+import { KeyUsageInterceptor, KeyUsageRecorder } from "./tenancy/key-usage";
 import { TenancyModule } from "./tenancy/tenancy.module";
 
 /** Every route of the application (path-to-regexp 8 syntax of NestJS 11). */
@@ -72,12 +76,22 @@ export class AppModule implements NestModule {
         // The pool of velexis_ota_app, the platform repository and the caller classification (OBE-011); the platform
         // caches on Redis, the vx:invalidate subscriber, tenant resolution and TenantTx (OBE-012).
         TenancyModule.forApi(),
+        // The rate limits of architecture §8, counted in Redis (OBE-013).
+        rateLimitModule(),
         HealthModule.forApi(),
       ],
-      // Global guards run in this order: who is calling (OADR-0009 point 1), then for which tenant (points 2 and 3).
+      // Global guards run in this order (architecture §3 steps 4–10): who is calling (OADR-0009 point 1), for which
+      // tenant (points 2 and 3), whether the caller may call the operation and in which scope, the CSRF check of
+      // state-changing edge requests (OADR-0006 point 3), then the rate limits. All of them run before validation.
+      // The key-usage interceptor records each successful request of an API key (OADR-0009 point 6).
       providers: [
         { provide: APP_GUARD, useClass: CallerGuard },
         { provide: APP_GUARD, useClass: TenantGuard },
+        { provide: APP_GUARD, useClass: ScopeGuard },
+        { provide: APP_GUARD, useClass: CsrfGuard },
+        { provide: APP_GUARD, useClass: RateLimitGuard },
+        KeyUsageRecorder,
+        { provide: APP_INTERCEPTOR, useClass: KeyUsageInterceptor },
       ],
     };
   }
