@@ -51,22 +51,24 @@ The working OpenAPI document gains these operations (96 + 32 = 128 SDK methods).
 | `x-sdk-method` | HTTP | Parameters → result |
 |---|---|---|
 | `console.settings.markupRules.list` | `GET /v1/console/settings/markup-rules` | `{ active?, cursor?, limit? }` → `Page<MarkupRule>` |
-| `console.settings.markupRules.create` | `POST …/markup-rules` | `MarkupRuleInput` → `MarkupRule` |
+| `console.settings.markupRules.create` | `POST …/markup-rules` | `MarkupRuleInput` → `MarkupRule` (+ `warnings[]`) |
 | `console.settings.markupRules.get` | `GET …/markup-rules/{markupRuleId}` | `{ markupRuleId }` → `MarkupRule` |
-| `console.settings.markupRules.update` | `PATCH …/markup-rules/{markupRuleId}` | `{ markupRuleId, ifMatch, ...Partial<MarkupRuleInput> }` → `MarkupRule` |
+| `console.settings.markupRules.update` | `PATCH …/markup-rules/{markupRuleId}` | `{ markupRuleId, ifMatch, ...MarkupRuleUpdate }` (any subset of `MarkupRuleInput`) → `MarkupRule` (+ `warnings[]`) |
 | `console.settings.markupRules.delete` | `DELETE …/markup-rules/{markupRuleId}` | `{ markupRuleId, ifMatch }` → `void` |
-| `console.settings.feeRules.{list,create,get,update,delete}` | `/v1/console/settings/fee-rules[/{feeRuleId}]` | Same shapes with `FeeRule` / `FeeRuleInput` |
+| `console.settings.feeRules.{list,create,get,update,delete}` | `/v1/console/settings/fee-rules[/{feeRuleId}]` | Same shapes with `feeRuleId`, `FeeRule`, `FeeRuleInput`, `FeeRuleUpdate` |
 | `console.settings.storefront.get` | `GET /v1/console/settings/storefront` | `{}` → `StorefrontSettings` |
-| `console.settings.storefront.update` | `PATCH /v1/console/settings/storefront` | `{ ifMatch, ...Partial<StorefrontSettings> }` → `StorefrontSettings` (+ `warnings[]`) |
+| `console.settings.storefront.update` | `PATCH /v1/console/settings/storefront` | `{ ifMatch, ...StorefrontSettingsUpdate }` (whole sections of `StorefrontSettings`) → `StorefrontSettingsUpdateResult` (`StorefrontSettings` + `warnings[]`) |
 | `console.settings.pages.{list,create,get,update,delete}` | `/v1/console/settings/pages[/{pageId}]` | `StorefrontPage` (Markdown subset in `bodyMarkdown`) |
 | `console.settings.assets.list` | `GET /v1/console/settings/assets` | `{ kind?, cursor?, limit? }` → `Page<StorefrontAsset>` |
 | `console.settings.assets.upload` | `POST /v1/console/settings/assets` (multipart) | `{ file: Blob, kind, fileName? }` → `StorefrontAsset` |
 | `console.settings.assets.delete` | `DELETE /v1/console/settings/assets/{assetId}` | `{ assetId }` → `void` |
-| `console.settings.templates.list` | `GET /v1/console/settings/notification-templates` | `{}` → `{ data: NotificationTemplate[] }` (effective templates) |
+| `console.settings.templates.list` | `GET /v1/console/settings/notification-templates` | `{}` → `NotificationTemplateList` (`{ data: NotificationTemplate[] }`, effective templates) |
 | `console.settings.templates.get` | `GET …/{templateKey}/{channel}/{locale}` | `{ templateKey, channel, locale }` → `NotificationTemplate` |
-| `console.settings.templates.put` | `PUT …/{templateKey}/{channel}/{locale}` | `{ templateKey, channel, locale, ifMatch?, subject, bodyHtml, bodyText, isActive? }` → `NotificationTemplate` |
-| `console.settings.templates.preview` | `POST …/preview` | `{ templateKey, channel, locale, subject?, bodyHtml?, bodyText?, variables? }` → `{ subject, html, text }` |
+| `console.settings.templates.put` | `PUT …/{templateKey}/{channel}/{locale}` | `{ templateKey, channel, locale, ifMatch?, ...NotificationTemplateInput }` (`subject`, `bodyHtml`, `bodyText`, `isActive?`) → `NotificationTemplate` |
+| `console.settings.templates.preview` | `POST …/preview` | `{ templateKey, channel, locale, ...NotificationTemplatePreviewRequest }` (`subject?`, `bodyHtml?`, `bodyText?`, `variables?`) → `NotificationTemplatePreview` (`{ subject, html, text }`) |
 | `console.settings.templates.reset` | `POST …/reset` | `{ templateKey, channel, locale }` → `NotificationTemplate` (code default) |
+
+Creates send an `Idempotency-Key`; updates and deletes are guarded by `ifMatch` instead, `templates.put` takes `ifMatch` only when the OTA already has its own template, and `templates.preview` and `templates.reset` are safe to repeat (`x-idempotent-by-design`). `templateKey` is a `NotificationTemplateKey`, `channel` is `email` and the fonts of `branding.fonts` are the `StorefrontFontFamily` values. Every console operation names the permission it needs in `x-permission` (`settings:read` or `settings:write` here; `none` for `console.auth.*`); `console.auth.me` returns the permissions of the signed-in staff member.
 
 ### 3.3 Console payments (`payments:*`)
 

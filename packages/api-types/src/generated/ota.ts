@@ -1765,7 +1765,7 @@ export interface paths {
          * Current staff member, tenant and permissions
          * @description Returns the signed-in staff member (`platform.tenant_memberships` + `platform.accounts`), the OTA (`platform.tenants`, environment of the key, configured Amadeus offices from `platform.supplier_connections` — never credentials), the permissions derived from the role, and the current session. Use it in the console layout to render navigation and hide actions the role cannot perform.
          *
-         *     **Role → permissions.** `owner`, `admin`: all permissions. `agent`: `bookings:read`, `bookings:write`, `bookings:issue`, `bookings:cancel`, `customers:read`, `queues:read`, `supplier_requests:read`, `amadeus:read`. `finance`: `bookings:read`, `customers:read`, `supplier_requests:read`. `viewer`: `bookings:read`, `customers:read`. `amadeus:write` (raw create/patch/issue/cancel) is limited to `owner` and `admin`. `me` always needs a staff token. Console calls **without** a staff token are automation calls: they are accepted only from a secret key whose scopes include `console:automation`, act with exactly the permissions listed in the key's scopes (never every permission) and are attributed to the API key (`actor.type = api_key`); otherwise `403 SCOPE_NOT_ALLOWED` (`details.requiredScope`) or `403 FORBIDDEN` (`details.requiredPermission`). See ConsoleApiKeyScope.
+         *     **Role → permissions** (StaffPermission). `owner`, `admin`: all permissions. `agent`: `bookings:read`, `bookings:write`, `bookings:issue`, `bookings:cancel`, `customers:read`, `queues:read`, `supplier_requests:read`, `amadeus:read`, `payments:read`, `payments:capture`, `settings:read`. `finance`: `bookings:read`, `customers:read`, `supplier_requests:read`, `payments:read`, `payments:capture`, `payments:refund`, `settings:read`. `viewer`: `bookings:read`, `customers:read`, `payments:read`, `settings:read`. `amadeus:write` (raw create/patch/issue/cancel) and `settings:write` are limited to `owner` and `admin`. `me` always needs a staff token. Console calls **without** a staff token are automation calls: they are accepted only from a secret key whose scopes include `console:automation`, act with exactly the permissions listed in the key's scopes (never every permission) and are attributed to the API key (`actor.type = api_key`); otherwise `403 SCOPE_NOT_ALLOWED` (`details.requiredScope`) or `403 FORBIDDEN` (`details.requiredPermission`). See ConsoleApiKeyScope.
          *
          *     The membership is checked on every call (cached 60 s in Redis): a removed member gets `403 STAFF_MEMBERSHIP_INACTIVE`. Updates `tenant_memberships.last_active_at` (throttled to once per minute). No Amadeus call. Cache: `private, no-store`.
          */
@@ -1859,6 +1859,8 @@ export interface paths {
          *
          *     **Preconditions.** `If-Match` (412 when stale); for Amadeus elements the booking must not be `cancelled` (409 BOOKING_ALREADY_CANCELLED) and must have an Amadeus order (409 BOOKING_NOT_MODIFIABLE for failed/pending). Permission `bookings:write`. PATCH is retry-safe with the same `If-Match` (a replay after success answers 412).
          *
+         *     **No card numbers in the console (MVP).** A `creditCard` entry in `formOfPayments` answers `403 FEATURE_DISABLED` with `details.feature = "consoleCardPayment"` before anything is sent to Amadeus: card data reaches the OTA only through the hosted storefront's airline-card route (ADR-0011, OADR-0018 point 8). Use `other` (`CASH`, `ACCOUNT`) or `b2bWallet`.
+         *
          *     **Key-only calls.** Without a staff token the secret key must carry the `console:automation` scope and this operation's permission in `platform.api_keys.scopes` — otherwise `403 SCOPE_NOT_ALLOWED` (`details.requiredScope`) or `403 FORBIDDEN` (`details.requiredPermission`); such calls are audited as the API key (see ConsoleApiKeyScope). A key scoped `storefront` is refused even with a staff token.
          */
         patch: operations["consolePatchBooking"];
@@ -1878,6 +1880,8 @@ export interface paths {
          * @description Issues the booking's order with **Flight Order Issue** `POST /v1/booking/flight-orders/{id}/issuance` (issueFlightOrder) — basic issuance for full-service carriers (GDS) and NDC. The body's `formOfPayments` (b2bWallet incl. virtualCreditCardDetails and reportingData, creditCard, other CASH/ACCOUNT/CHECK/NONREFUNDABLE) is sent as Amadeus `data.formOfPayments`; when omitted NestJS sends the storefront default (`other.method` from storefront_settings for NDC, empty `data` for GDS orders that already carry a form of payment).
          *
          *     **Preconditions.** `If-Match` (412 when stale). Status `confirmed` or `partially_ticketed` (`ticketed` → `409 ALREADY_ISSUED`, `cancelled` → `409 BOOKING_ALREADY_CANCELLED`, `pending`/`failed` → `409 BOOKING_NOT_MODIFIABLE`). Payment: an authorised storefront payment is **captured first** (`capturePayment`, default true; capture failure → `402 PAYMENT_DECLINED`, nothing issued); an unpaid storefront booking → `402 PAYMENT_REQUIRED` unless `allowUnpaid=true` (owner/admin only, audited). Console/imported bookings (`paymentStatus = not_applicable`) need no payment. Permission `bookings:issue`.
+         *
+         *     **No card numbers in the console (MVP).** A `creditCard` entry in `formOfPayments` answers `403 FEATURE_DISABLED` with `details.feature = "consoleCardPayment"` before anything is sent to Amadeus: card data reaches the OTA only through the hosted storefront's airline-card route (ADR-0011, OADR-0018 point 8). An airline-card booking left without tickets is issued with `other` (`CASH`, `ACCOUNT`: the OTA's own settlement with the airline) or cancelled.
          *
          *     **Result.** Amadeus returns the full order with `tickets[]` (documentNumber, documentStatus, travelerId, segmentIds): `booking_tickets` rows are created, status becomes `ticketed` (or `partially_ticketed`), `bookings.issued_at`, `ticketing.status = issued`; e-ticket receipts and the invoice are queued (`booking_documents`, `notifications` unless `notifyCustomer=false`); `booking_events` `booking.ticketed` (visible to the customer), `staff_actions` `booking.issue`, `supplier_requests`. Amadeus 9112 TICKETING / 4926 / 32171 → `502 TICKETING_FAILED` or `422 SUPPLIER_REJECTED` with `error.supplier` (the captured payment stays captured; retry after fixing the order); 2552 → `409 VERSION_CONFLICT`. Timeout → `504`: resync before retrying — Amadeus may have issued.
          *
@@ -2390,6 +2394,294 @@ export interface paths {
         get: operations["consoleAmadeusGetQueue"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/console/settings/markup-rules": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the markup rules
+         * @description Lists the markup rules of the OTA (`markup_rules`), which turn Amadeus net prices into selling prices, in the order the pricing engine evaluates them: `priority` ascending, then `id`. Cursor pagination. `active=true` lists only enabled rules (`isActive`), `active=false` only disabled ones, no `active` every rule. The seeded default rule (`isDefault`, scope `{}`, priority 1000) is one of them; it cannot be deleted.
+         *
+         *     Settings are shared by the test and live environments (one set of rules per OTA), so `X-Velexis-Environment` changes nothing here. No Amadeus call. Permission `settings:read`; the call is recorded in `staff_actions`.
+         *
+         *     **Key-only calls.** Without a staff token the secret key must carry the `console:automation` scope and this operation's permission in `platform.api_keys.scopes` — otherwise `403 SCOPE_NOT_ALLOWED` (`details.requiredScope`) or `403 FORBIDDEN` (`details.requiredPermission`); such calls are audited as the API key (see ConsoleApiKeyScope). A key scoped `storefront` is refused even with a staff token.
+         */
+        get: operations["consoleListMarkupRules"];
+        put?: never;
+        /**
+         * Create a markup rule
+         * @description Creates a markup rule. `name`, `scope` and `calculation` are required, with the values the calculation uses: `percentage` for `percentage` and `percentage_plus_fixed`, `fixed` for `fixed` and `percentage_plus_fixed` (`400 VALIDATION_FAILED` otherwise). `percentage` is a decimal string with up to four decimals from -100 to 999.9999 (`"5.0000"` = 5 %, negative = discount); `fixed`, `min` and `max` are amounts with at most two decimals in one currency, the currency of the fixed part and of the caps (`400 VALIDATION_FAILED` otherwise). Omitted fields take their defaults: `appliesPer` `traveler`, `priority` 100, `stackable` false, `isActive` true, no validity window. `isDefault` is not writable: the only default rule is the seeded one.
+         *
+         *     **Effect.** The rule applies to the next search; offers already stored keep their prices until they expire (OADR-0005). The answer can carry `warnings`: a fixed currency other than the storefront's default currency (`fixed_currency_not_default`: the fixed part applies only to offers in that currency, no conversion) or a negative markup that sells below net (`sells_below_net`).
+         *
+         *     **Idempotency.** `Idempotency-Key` required (`idempotency_keys`, 24 h): a retry with the same key and body returns the stored rule; the same key with another body → `409 IDEMPOTENCY_KEY_REUSED`.
+         *
+         *     No Amadeus call. Permission `settings:write`; `staff_actions` records the new rule.
+         *
+         *     **Key-only calls.** Without a staff token the secret key must carry the `console:automation` scope and this operation's permission in `platform.api_keys.scopes` — otherwise `403 SCOPE_NOT_ALLOWED` (`details.requiredScope`) or `403 FORBIDDEN` (`details.requiredPermission`); such calls are audited as the API key (see ConsoleApiKeyScope). A key scoped `storefront` is refused even with a staff token.
+         */
+        post: operations["consoleCreateMarkupRule"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/console/settings/markup-rules/{markupRuleId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get a markup rule
+         * @description Returns one markup rule. `ETag` = `"<version>"`: pass it as `If-Match` to update or delete the rule. No Amadeus call. Permission `settings:read`; the call is recorded in `staff_actions`.
+         *
+         *     **Key-only calls.** Without a staff token the secret key must carry the `console:automation` scope and this operation's permission in `platform.api_keys.scopes` — otherwise `403 SCOPE_NOT_ALLOWED` (`details.requiredScope`) or `403 FORBIDDEN` (`details.requiredPermission`); such calls are audited as the API key (see ConsoleApiKeyScope). A key scoped `storefront` is refused even with a staff token.
+         */
+        get: operations["consoleGetMarkupRule"];
+        put?: never;
+        post?: never;
+        /**
+         * Delete a markup rule
+         * @description Deletes a markup rule. History is kept: cached flight offers, priced offers and bookings keep their amounts and their markup lines, and their `markup_rule_id` becomes null. The seeded default rule cannot be deleted (`409 CONFLICT`, `details.reason = "default_rule"`); switch a rule off with `isActive: false` to keep it for later.
+         *
+         *     **Preconditions.** `If-Match` = the `ETag` of the rule (`412 PRECONDITION_FAILED` when stale). The change applies to the next search. No Amadeus call. Permission `settings:write`; `staff_actions` records the deleted rule.
+         *
+         *     **Key-only calls.** Without a staff token the secret key must carry the `console:automation` scope and this operation's permission in `platform.api_keys.scopes` — otherwise `403 SCOPE_NOT_ALLOWED` (`details.requiredScope`) or `403 FORBIDDEN` (`details.requiredPermission`); such calls are audited as the API key (see ConsoleApiKeyScope). A key scoped `storefront` is refused even with a staff token.
+         */
+        delete: operations["consoleDeleteMarkupRule"];
+        options?: never;
+        head?: never;
+        /**
+         * Update a markup rule
+         * @description Changes any subset of a markup rule's fields (`MarkupRuleUpdate`); fields not sent keep their value, `null` clears a nullable one, and `scope` is replaced as a whole. The changed rule must still satisfy the rules of console.settings.markupRules.create (the values of its `calculation`, one currency, `activeUntil` after `activeFrom`), else `400 VALIDATION_FAILED`.
+         *
+         *     **Default rule.** The seeded default rule (`isDefault`) keeps its catch-all scope: a `scope` that is not empty (`{}`) answers `409 CONFLICT` with `details.reason = "default_rule"`; its percentage, priority and the other fields may change.
+         *
+         *     **Preconditions.** `If-Match` = the `ETag` of the rule (`412 PRECONDITION_FAILED` when stale). The answer has the new `version` and `ETag`, and can carry `warnings` like create. Changes apply to the next search; stored offers keep their prices (OADR-0005). No Amadeus call. Permission `settings:write`; `staff_actions` records the rule before and after.
+         *
+         *     **Key-only calls.** Without a staff token the secret key must carry the `console:automation` scope and this operation's permission in `platform.api_keys.scopes` — otherwise `403 SCOPE_NOT_ALLOWED` (`details.requiredScope`) or `403 FORBIDDEN` (`details.requiredPermission`); such calls are audited as the API key (see ConsoleApiKeyScope). A key scoped `storefront` is refused even with a staff token.
+         */
+        patch: operations["consoleUpdateMarkupRule"];
+        trace?: never;
+    };
+    "/v1/console/settings/fee-rules": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the fee rules
+         * @description Lists the fee rules of the OTA (`fee_rules`): the service, card, ticketing, change, cancellation and extra fees the OTA charges on top of the selling price, ordered by `priority`, then `id`. Cursor pagination. `active=true` lists only enabled rules (`isActive`), `active=false` only disabled ones, no `active` every rule.
+         *
+         *     Which pricing step applies which `feeType` is fixed by OADR-0005 point 7: `booking_service` and `ticketing` at pricing, `ancillary_service` per extra, `payment_card` once the card brand is known, `cancellation` in the cancellation quote; `change` fees are stored but unused in the MVP (no exchanges). Settings are shared by the test and live environments, so `X-Velexis-Environment` changes nothing here. No Amadeus call. Permission `settings:read`; the call is recorded in `staff_actions`.
+         *
+         *     **Key-only calls.** Without a staff token the secret key must carry the `console:automation` scope and this operation's permission in `platform.api_keys.scopes` — otherwise `403 SCOPE_NOT_ALLOWED` (`details.requiredScope`) or `403 FORBIDDEN` (`details.requiredPermission`); such calls are audited as the API key (see ConsoleApiKeyScope). A key scoped `storefront` is refused even with a staff token.
+         */
+        get: operations["consoleListFeeRules"];
+        put?: never;
+        /**
+         * Create a fee rule
+         * @description Creates a fee rule. `name`, `label` (shown to the traveller in the price breakdown), `feeType`, `scope` and `calculation` are required, with the values the calculation uses: `percentage` for `percentage` and `percentage_plus_fixed`, `fixed` for `fixed` and `percentage_plus_fixed` (`400 VALIDATION_FAILED` otherwise). `percentage` is a decimal string with up to four decimals from 0 to 100; `fixed`, `min` and `max` are non-negative amounts with two decimals in one currency. `scope.cardBrands` limits a `payment_card` fee to card brands. Omitted fields take their defaults: `appliesPer` `booking`, `refundable` false, `priority` 100, `isActive` true, no validity window.
+         *
+         *     **Effect.** The rule applies from the next pricing; priced offers and bookings keep their fee lines (OADR-0005). The answer can carry `warnings` (`fixed_currency_not_default`: the fixed part applies only to offers in that currency).
+         *
+         *     **Idempotency.** `Idempotency-Key` required (`idempotency_keys`, 24 h): a retry with the same key and body returns the stored rule; the same key with another body → `409 IDEMPOTENCY_KEY_REUSED`.
+         *
+         *     No Amadeus call. Permission `settings:write`; `staff_actions` records the new rule.
+         *
+         *     **Key-only calls.** Without a staff token the secret key must carry the `console:automation` scope and this operation's permission in `platform.api_keys.scopes` — otherwise `403 SCOPE_NOT_ALLOWED` (`details.requiredScope`) or `403 FORBIDDEN` (`details.requiredPermission`); such calls are audited as the API key (see ConsoleApiKeyScope). A key scoped `storefront` is refused even with a staff token.
+         */
+        post: operations["consoleCreateFeeRule"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/console/settings/fee-rules/{feeRuleId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get a fee rule
+         * @description Returns one fee rule. `ETag` = `"<version>"`: pass it as `If-Match` to update or delete the rule. No Amadeus call. Permission `settings:read`; the call is recorded in `staff_actions`.
+         *
+         *     **Key-only calls.** Without a staff token the secret key must carry the `console:automation` scope and this operation's permission in `platform.api_keys.scopes` — otherwise `403 SCOPE_NOT_ALLOWED` (`details.requiredScope`) or `403 FORBIDDEN` (`details.requiredPermission`); such calls are audited as the API key (see ConsoleApiKeyScope). A key scoped `storefront` is refused even with a staff token.
+         */
+        get: operations["consoleGetFeeRule"];
+        put?: never;
+        post?: never;
+        /**
+         * Delete a fee rule
+         * @description Deletes a fee rule. History is kept: priced offers, checkouts and bookings keep their fee lines and amounts. Switch a rule off with `isActive: false` to keep it for later.
+         *
+         *     **Preconditions.** `If-Match` = the `ETag` of the rule (`412 PRECONDITION_FAILED` when stale). The change applies from the next pricing. No Amadeus call. Permission `settings:write`; `staff_actions` records the deleted rule.
+         *
+         *     **Key-only calls.** Without a staff token the secret key must carry the `console:automation` scope and this operation's permission in `platform.api_keys.scopes` — otherwise `403 SCOPE_NOT_ALLOWED` (`details.requiredScope`) or `403 FORBIDDEN` (`details.requiredPermission`); such calls are audited as the API key (see ConsoleApiKeyScope). A key scoped `storefront` is refused even with a staff token.
+         */
+        delete: operations["consoleDeleteFeeRule"];
+        options?: never;
+        head?: never;
+        /**
+         * Update a fee rule
+         * @description Changes any subset of a fee rule's fields (`FeeRuleUpdate`); fields not sent keep their value, `null` clears a nullable one, and `scope` is replaced as a whole. The changed rule must still satisfy the rules of console.settings.feeRules.create, else `400 VALIDATION_FAILED`.
+         *
+         *     **Preconditions.** `If-Match` = the `ETag` of the rule (`412 PRECONDITION_FAILED` when stale). The answer has the new `version` and `ETag`, and can carry `warnings` like create. Changes apply from the next pricing; priced offers and bookings keep their fee lines (OADR-0005). No Amadeus call. Permission `settings:write`; `staff_actions` records the rule before and after.
+         *
+         *     **Key-only calls.** Without a staff token the secret key must carry the `console:automation` scope and this operation's permission in `platform.api_keys.scopes` — otherwise `403 SCOPE_NOT_ALLOWED` (`details.requiredScope`) or `403 FORBIDDEN` (`details.requiredPermission`); such calls are audited as the API key (see ConsoleApiKeyScope). A key scoped `storefront` is refused even with a staff token.
+         */
+        patch: operations["consoleUpdateFeeRule"];
+        trace?: never;
+    };
+    "/v1/console/settings/storefront": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get the storefront settings
+         * @description Returns the OTA's storefront settings as staff edit them (`storefront_settings`, one row per OTA shared by the test and live environments): brand, branding (asset ids of `storefront_assets`, colours, fonts from the bundled list, corner radius), locales, currencies, markets, features, policies, the airline card per environment, legal versions and links, support, SEO, consent and operations. storefront.get derives the public configuration from them.
+         *
+         *     `ETag` = `"<version>"`: pass it as `If-Match` to console.settings.storefront.update. No Amadeus call. Permission `settings:read`; the call is recorded in `staff_actions`.
+         *
+         *     **Key-only calls.** Without a staff token the secret key must carry the `console:automation` scope and this operation's permission in `platform.api_keys.scopes` — otherwise `403 SCOPE_NOT_ALLOWED` (`details.requiredScope`) or `403 FORBIDDEN` (`details.requiredPermission`); such calls are audited as the API key (see ConsoleApiKeyScope). A key scoped `storefront` is refused even with a staff token.
+         */
+        get: operations["consoleGetStorefrontSettings"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Update the storefront settings
+         * @description Changes the storefront settings section by section (`StorefrontSettingsUpdate`): each top-level section sent (`brand`, `branding`, `locales`, …) replaces that section as a whole, sections not sent keep their value.
+         *
+         *     **Validation.** Beyond the schema (a font outside the bundled list fails it: `400 VALIDATION_FAILED`): currencies must exist in `reference.currencies` and the time zone in `reference.time_zones`; every `supported` list contains its `default`; markets use supported currencies and locales; asset ids must name an asset of the right kind (`logo`, `logo_dark`, `logo_square`, `favicon`, `og_image`); a legal link's `pageSlug` must name a page of `storefront_pages`; `policies.paymentTiming` other than `authorize_before_booking` is refused in the MVP. These answer `422 UNPROCESSABLE` with `details.reason` and `details.path` (the JSON pointer of the refused field). Setting `airlineCard.enabledLive` to true answers `403 FEATURE_DISABLED` (`details.feature = "airlineCard"`) while the global `AIRLINE_CARD_ENABLED` switch is off.
+         *
+         *     **Warnings.** Turning the airline card on while active markup or fee rules exist answers `200` with a `warnings` entry (`airline_card_net_price`): airline-card bookings are sold at the airline's price, without markup or fees (OADR-0004).
+         *
+         *     **Effect.** `version` + 1 and a new `ETag`; the storefront.get caches of both environments are deleted, so the hosted storefront shows the change within 5 minutes (its `sessionStorage` copy). `If-Match` required (`412 PRECONDITION_FAILED` when stale). No Amadeus call. Permission `settings:write`; `staff_actions` records the settings before and after (redacted).
+         *
+         *     **Key-only calls.** Without a staff token the secret key must carry the `console:automation` scope and this operation's permission in `platform.api_keys.scopes` — otherwise `403 SCOPE_NOT_ALLOWED` (`details.requiredScope`) or `403 FORBIDDEN` (`details.requiredPermission`); such calls are audited as the API key (see ConsoleApiKeyScope). A key scoped `storefront` is refused even with a staff token.
+         */
+        patch: operations["consoleUpdateStorefrontSettings"];
+        trace?: never;
+    };
+    "/v1/console/settings/notification-templates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the notification templates
+         * @description Lists the **effective** e-mail template of every template key the code knows, for every locale of the storefront settings' `locales.supported`: the OTA's own row of `notification_templates` when it exists (`customised: true`), otherwise the code default (`customised: false`; the English default where the code has none for the locale), each with the variables its key allows. Ordered by key, then locale; not paginated. OADR-0013 point 3.
+         *
+         *     No Amadeus call. Permission `settings:read`; the call is recorded in `staff_actions`.
+         *
+         *     **Key-only calls.** Without a staff token the secret key must carry the `console:automation` scope and this operation's permission in `platform.api_keys.scopes` — otherwise `403 SCOPE_NOT_ALLOWED` (`details.requiredScope`) or `403 FORBIDDEN` (`details.requiredPermission`); such calls are audited as the API key (see ConsoleApiKeyScope). A key scoped `storefront` is refused even with a staff token.
+         */
+        get: operations["consoleListNotificationTemplates"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/console/settings/notification-templates/{templateKey}/{channel}/{locale}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get a notification template
+         * @description Returns the effective template of one key, channel and locale: the OTA's row when it exists (`customised: true`, with `ETag` = `"<version>"` to pass as `If-Match` to console.settings.templates.put), otherwise the code default (`customised: false`, `version` null, no `ETag`; the English default where the code has none for the locale). `variables` lists what the key's templates may use. No Amadeus call. Permission `settings:read`; the call is recorded in `staff_actions`.
+         *
+         *     **Key-only calls.** Without a staff token the secret key must carry the `console:automation` scope and this operation's permission in `platform.api_keys.scopes` — otherwise `403 SCOPE_NOT_ALLOWED` (`details.requiredScope`) or `403 FORBIDDEN` (`details.requiredPermission`); such calls are audited as the API key (see ConsoleApiKeyScope). A key scoped `storefront` is refused even with a staff token.
+         */
+        get: operations["consoleGetNotificationTemplate"];
+        /**
+         * Create or replace a notification template
+         * @description Creates or replaces the OTA's template of one key, channel and locale (upsert of `notification_templates`). `If-Match` is required when the OTA already has a row for them (its `ETag`; missing or stale → `412 PRECONDITION_FAILED`) and must be absent when it has none.
+         *
+         *     **Compilation.** The server compiles `subject`, `bodyHtml` and `bodyText` with Handlebars in strict mode and checks every variable against the key's allow-list (`variables`): a template that does not compile or uses another variable answers `422 TEMPLATE_INVALID` with `details.errors[{part, line, message}]`, and nothing is saved. A locale outside the storefront settings' `locales.supported` answers `422 UNPROCESSABLE` (`details.reason = "locale_not_supported"`).
+         *
+         *     The answer is the saved template (`customised: true`, new `version` and `ETag`); e-mails rendered from then on use it (OADR-0013 point 3). `isActive: false` keeps the row but sends the default. No Amadeus call. Permission `settings:write`; `staff_actions` records the template before and after.
+         *
+         *     **Key-only calls.** Without a staff token the secret key must carry the `console:automation` scope and this operation's permission in `platform.api_keys.scopes` — otherwise `403 SCOPE_NOT_ALLOWED` (`details.requiredScope`) or `403 FORBIDDEN` (`details.requiredPermission`); such calls are audited as the API key (see ConsoleApiKeyScope). A key scoped `storefront` is refused even with a staff token.
+         */
+        put: operations["consolePutNotificationTemplate"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/console/settings/notification-templates/{templateKey}/{channel}/{locale}/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Preview a notification template
+         * @description Renders a template without saving or sending anything: the effective template of the key, channel and locale, or the `subject`, `bodyHtml` and `bodyText` given in the body (a draft), with the template's sample data, or with `variables` when given. Compiled exactly like console.settings.templates.put (strict mode, the key's allow-list): a draft that does not compile answers `422 TEMPLATE_INVALID` with `details.errors`.
+         *
+         *     The answer is `{subject, html, text}`. Show `html` only in a sandboxed `iframe` without scripts (the OTA admin does). Safe to repeat (`x-idempotent-by-design`): nothing is stored. No Amadeus call. Permission `settings:read`; the call is recorded in `staff_actions`.
+         *
+         *     **Key-only calls.** Without a staff token the secret key must carry the `console:automation` scope and this operation's permission in `platform.api_keys.scopes` — otherwise `403 SCOPE_NOT_ALLOWED` (`details.requiredScope`) or `403 FORBIDDEN` (`details.requiredPermission`); such calls are audited as the API key (see ConsoleApiKeyScope). A key scoped `storefront` is refused even with a staff token.
+         */
+        post: operations["consolePreviewNotificationTemplate"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/console/settings/notification-templates/{templateKey}/{channel}/{locale}/reset": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Reset a notification template to the default
+         * @description Deletes the OTA's template of one key, channel and locale, so the code default applies again (OADR-0013 point 3), and returns that default (`customised: false`). Safe to repeat (`x-idempotent-by-design`): without a row it changes nothing and returns the default. No Amadeus call. Permission `settings:write`; `staff_actions` records the deleted template.
+         *
+         *     **Key-only calls.** Without a staff token the secret key must carry the `console:automation` scope and this operation's permission in `platform.api_keys.scopes` — otherwise `403 SCOPE_NOT_ALLOWED` (`details.requiredScope`) or `403 FORBIDDEN` (`details.requiredPermission`); such calls are audited as the API key (see ConsoleApiKeyScope). A key scoped `storefront` is refused even with a staff token.
+         */
+        post: operations["consoleResetNotificationTemplate"];
         delete?: never;
         options?: never;
         head?: never;
@@ -9919,10 +10211,20 @@ export interface components {
          */
         StaffRole: "owner" | "admin" | "agent" | "finance" | "viewer";
         /**
-         * @description Permission derived from the role: owner/admin all; agent everything except amadeus:write; finance bookings:read, customers:read, supplier_requests:read; viewer bookings:read, customers:read. Key-only automation calls (secret key with scope `console:automation`, no staff token) have exactly the permissions listed in the key's scopes (see ConsoleApiKeyScope).
+         * @description Permission derived from the staff member's role (the role matrix of ota/docs/scope.md §1.3); each console operation names the one it needs in `x-permission`.
+         *
+         *     - `owner`, `admin`: every permission.
+         *
+         *     - `agent`: `bookings:read`, `bookings:write`, `bookings:issue`, `bookings:cancel`, `customers:read`, `queues:read`, `supplier_requests:read`, `amadeus:read`, `payments:read`, `payments:capture`, `settings:read`.
+         *
+         *     - `finance`: `bookings:read`, `customers:read`, `supplier_requests:read`, `payments:read`, `payments:capture`, `payments:refund`, `settings:read`.
+         *
+         *     - `viewer`: `bookings:read`, `customers:read`, `payments:read`, `settings:read`.
+         *
+         *     `settings:read` reads the markup and fee rules, storefront settings, pages, assets and templates and `settings:write` changes them; `payments:read` lists and reads payments with their events and refunds, `payments:capture` captures an authorised Stripe payment and `payments:refund` refunds a captured one. `amadeus:write` (raw Amadeus writes, deferred) and `settings:write` are owner and admin only. Key-only automation calls (secret key with scope `console:automation`, no staff token) have exactly the permissions listed in the key's scopes (see ConsoleApiKeyScope).
          * @enum {string}
          */
-        StaffPermission: "bookings:read" | "bookings:write" | "bookings:issue" | "bookings:cancel" | "customers:read" | "queues:read" | "supplier_requests:read" | "amadeus:read" | "amadeus:write";
+        StaffPermission: "bookings:read" | "bookings:write" | "bookings:issue" | "bookings:cancel" | "customers:read" | "queues:read" | "supplier_requests:read" | "amadeus:read" | "amadeus:write" | "settings:read" | "settings:write" | "payments:read" | "payments:capture" | "payments:refund";
         /**
          * @description Scope values of a secret key (`platform.api_keys.scopes`, managed in the Velexis portal) that decide how the key may be used on `/v1/console/**`. `storefront` — customer-scope operations only: every console operation answers `403 SCOPE_NOT_ALLOWED`, also with a staff token, so a storefront deployment (or an SSRF / unguarded server action in it) can never reach the back office. `console` — console operations **with a staff token**; the staff member's role decides the permissions. `console:automation` (implies `console`) — additionally allows console calls **without** a staff token (cron jobs, back-office integrations). Such key-only calls act with exactly the `StaffPermission` values also listed in the key's scopes, e.g. `["console:automation", "bookings:read", "queues:read"]`; nothing is implied (`bookings:issue`, `bookings:cancel` and `amadeus:write` must be listed explicitly). They are audited as `actor.type = api_key` (`key_…`). Rules: a key-only call with a key that lacks `console:automation` → `403 SCOPE_NOT_ALLOWED` (`details.requiredScope = "console:automation"`); a key-only call without the operation's permission → `403 FORBIDDEN` (`details.requiredPermission`); a secret key with an empty scope list may call console operations with a staff token but never key-only; publishable keys are refused on every console operation. Recommended keys per deployment: storefront `sk_…` scoped `storefront`; console backend `sk_…` scoped `console`; one key per automation job scoped `console:automation` + the minimum permissions.
          * @enum {string}
@@ -10623,7 +10925,7 @@ export interface components {
             remarks?: components["schemas"]["AmadeusRemarks"];
             /** @description Add `remarks` to the stored remarks (`true`) or replace the `general` / `airline` lists sent (`false`). Default: `true`. */
             mergeRemarks?: boolean;
-            /** @description Forms of payment (b2bWallet, creditCard, other); replaces the order's forms of payment. */
+            /** @description Forms of payment (b2bWallet, other); replaces the order's forms of payment. `creditCard` answers `403 FEATURE_DISABLED` (`details.feature = "consoleCardPayment"`) in the MVP. */
             formOfPayments?: components["schemas"]["AmadeusFormOfPayment"][];
             /** @description Ticketing agreement: `option` (CONFIRM | DELAY_TO_QUEUE | DELAY_TO_CANCEL) with `delay` (days, e.g. `1D`) — `delay` is the only settable ticketing time limit. `dateTime` and `segmentIds` are read-only in the Amadeus specs (computed by Amadeus and returned on the order, see ConsoleBookingDetails.ticketingAgreement); sending them → `400 VALIDATION_FAILED` (fieldErrors code `read_only`). */
             ticketingAgreement?: components["schemas"]["AmadeusTicketingAgreement"];
@@ -10656,7 +10958,7 @@ export interface components {
         };
         /** @description Body of console.bookings.issue (Flight Order Issue data + Velexis options). */
         ConsoleBookingIssueRequest: {
-            /** @description Amadeus data.formOfPayments of the issuance (b2bWallet, creditCard, other). */
+            /** @description Amadeus data.formOfPayments of the issuance (b2bWallet, other). `creditCard` answers `403 FEATURE_DISABLED` (`details.feature = "consoleCardPayment"`) in the MVP. */
             formOfPayments?: components["schemas"]["AmadeusFormOfPayment"][];
             /** @description Capture an authorised storefront payment before issuing. Default: `true`. */
             capturePayment?: boolean;
@@ -11470,6 +11772,754 @@ export interface components {
             queueSnapshotId: string;
             /** @description Verbatim Queue List response. */
             amadeus: components["schemas"]["AmadeusQueuePnrListResponse"];
+        };
+        /**
+         * @description A BCP 47 locale of a language and an optional region, such as `en` or `fr-CA`.
+         * @example en
+         * @example fr-CA
+         */
+        LocaleCode: string;
+        /** @description Something staff should know about a settings change that was saved anyway. Known codes: `fixed_currency_not_default` (a rule's fixed amount or caps are not in the storefront's default currency, so they apply only to offers in that currency; OADR-0005 point 6), `sells_below_net` (a negative markup can sell below the net price; the engine floors the selling price at net), `airline_card_net_price` (the airline card is on while active markup or fee rules exist: airline-card bookings are sold at the airline's price, OADR-0004). New codes may appear; show the message. */
+        SettingsWarning: {
+            /** @description Machine-readable warning code. */
+            code: string;
+            /** @description Explanation for staff, in the language of `Accept-Language`. */
+            message: string;
+            /** @description JSON pointer of the field the warning is about, or null. */
+            path?: string | null;
+        };
+        /** @description Matching criteria of a markup rule (`markup_rules.scope`). `{}` matches every offer. A rule matches an offer when every non-empty field matches (OADR-0005 point 3): lists are "any of" (one of the offer's values is listed), `minNet` and `maxNet` bound the offer's net total (inclusive, in the offer currency). Fee rules use FeeRuleScope, which adds `cardBrands`. */
+        PricingRuleScope: {
+            /** @description IATA codes of the first departure airport or city. */
+            origins?: string[];
+            /** @description IATA codes of the destination airport or city (the turnaround point of a round trip). */
+            destinations?: string[];
+            /** @description ISO 3166-1 alpha-2 countries of the origin. */
+            originCountries?: string[];
+            /** @description ISO 3166-1 alpha-2 countries of the destination. */
+            destinationCountries?: string[];
+            /** @description IATA codes of the validating or marketing airlines. */
+            carriers?: string[];
+            /** @description Cabins of the offer's fares. */
+            cabins?: components["schemas"]["AmadeusTravelClass"][];
+            /** @description Traveller types of the offer; a rule that `appliesPer` traveller counts only the travellers of these types. */
+            travelerTypes?: components["schemas"]["AmadeusTravelerType"][];
+            /** @description Shape of the itinerary. */
+            tripTypes?: ("one_way" | "round_trip" | "multi_city")[];
+            /** @description Amadeus content sources of the offer (GDS, NDC, …). */
+            sources?: components["schemas"]["AmadeusFlightOfferSource"][];
+            /** @description Who prices the offer: the storefront and API keys, or staff in the console. */
+            channels?: ("storefront" | "console")[];
+            /** @description Lowest net total the rule applies to (inclusive), as a decimal string in the offer currency. */
+            minNet?: string | null;
+            /** @description Highest net total the rule applies to (inclusive), as a decimal string in the offer currency. */
+            maxNet?: string | null;
+        };
+        /** @description Matching criteria of a fee rule (`fee_rules.scope`): the fields of PricingRuleScope plus `cardBrands`, which limits a `payment_card` fee to card brands (it needs a known brand to match). `{}` matches every offer. */
+        FeeRuleScope: {
+            /** @description IATA codes of the first departure airport or city. */
+            origins?: string[];
+            /** @description IATA codes of the destination airport or city (the turnaround point of a round trip). */
+            destinations?: string[];
+            /** @description ISO 3166-1 alpha-2 countries of the origin. */
+            originCountries?: string[];
+            /** @description ISO 3166-1 alpha-2 countries of the destination. */
+            destinationCountries?: string[];
+            /** @description IATA codes of the validating or marketing airlines. */
+            carriers?: string[];
+            /** @description Cabins of the offer's fares. */
+            cabins?: components["schemas"]["AmadeusTravelClass"][];
+            /** @description Traveller types of the offer; a rule that `appliesPer` traveller counts only the travellers of these types. */
+            travelerTypes?: components["schemas"]["AmadeusTravelerType"][];
+            /** @description Shape of the itinerary. */
+            tripTypes?: ("one_way" | "round_trip" | "multi_city")[];
+            /** @description Amadeus content sources of the offer (GDS, NDC, …). */
+            sources?: components["schemas"]["AmadeusFlightOfferSource"][];
+            /** @description Who prices the offer: the storefront and API keys, or staff in the console. */
+            channels?: ("storefront" | "console")[];
+            /** @description Lowest net total the rule applies to (inclusive), as a decimal string in the offer currency. */
+            minNet?: string | null;
+            /** @description Highest net total the rule applies to (inclusive), as a decimal string in the offer currency. */
+            maxNet?: string | null;
+            /** @description Card brands a `payment_card` fee is charged for. */
+            cardBrands?: components["schemas"]["AmadeusPaymentBrand"][];
+        };
+        /** @description A markup rule of the OTA (one row of `markup_rules`): how Amadeus net prices become selling prices (OADR-0005). Rules are evaluated by `priority`, then `id`; the first matching non-stackable rule is the base markup and matching stackable rules with a lower priority number add to it. The seeded default rule (`isDefault`, scope `{}`, priority 1000) always matches. */
+        MarkupRule: {
+            /** @description Markup rule id. */
+            id: string;
+            /** @description Name shown in the OTA admin. */
+            name: string;
+            /** @description Notes for staff. */
+            description?: string | null;
+            scope: components["schemas"]["PricingRuleScope"];
+            /**
+             * @description How the markup is computed.
+             * @enum {string}
+             */
+            calculation: "percentage" | "fixed" | "percentage_plus_fixed";
+            /** @description Percentage of the net price as a decimal string (`"5.0000"` = 5 %, negative = discount, -100 to 999.9999); set for `percentage` and `percentage_plus_fixed`. */
+            percentage?: string | null;
+            /** @description Fixed amount per unit (`fixed_amount`, `fixed_currency`); set for `fixed` and `percentage_plus_fixed`. Applied only to offers in its currency (no conversion in the MVP). */
+            fixed?: components["schemas"]["Money"] | null;
+            /**
+             * @description Unit the markup is computed for and multiplied by.
+             * @enum {string}
+             */
+            appliesPer: "booking" | "traveler" | "segment";
+            /** @description Lower cap of the computed markup per unit, in the rule's currency. */
+            min?: components["schemas"]["Money"] | null;
+            /** @description Upper cap of the computed markup per unit, in the rule's currency. */
+            max?: components["schemas"]["Money"] | null;
+            /** @description Evaluation order, lower first. */
+            priority: number;
+            /** @description Adds to the base rule instead of competing with it. */
+            stackable: boolean;
+            /** @description The seeded catch-all rule; it cannot be deleted and its scope stays `{}`. */
+            isDefault: boolean;
+            /** @description Enabled flag. */
+            isActive: boolean;
+            /**
+             * Format: date-time
+             * @description Start of the validity window (inclusive); null = immediately.
+             */
+            activeFrom?: string | null;
+            /**
+             * Format: date-time
+             * @description End of the validity window (exclusive); null = open-ended.
+             */
+            activeUntil?: string | null;
+            /** @description Optimistic-locking counter; the `ETag` is `"<version>"`. */
+            version: number;
+            /**
+             * Format: date-time
+             * @description Creation time.
+             */
+            createdAt: string;
+            /**
+             * Format: date-time
+             * @description Last change.
+             */
+            updatedAt: string;
+            /** @description Present only in the answers of console.settings.markupRules.create and update: what staff should know about the saved rule (`fixed_currency_not_default`, `sells_below_net`). */
+            warnings?: components["schemas"]["SettingsWarning"][];
+        };
+        /** @description Body of console.settings.markupRules.create. `percentage` is required with `percentage` and `percentage_plus_fixed`, `fixed` with `fixed` and `percentage_plus_fixed`; `percentage` is at least -100; `fixed`, `min` and `max` have at most two decimals (`numeric(12,2)`) and share one currency; `activeUntil` is after `activeFrom` (`400 VALIDATION_FAILED` otherwise). */
+        MarkupRuleInput: {
+            /** @description Name shown in the OTA admin. */
+            name: string;
+            /** @description Notes for staff. */
+            description?: string | null;
+            scope: components["schemas"]["PricingRuleScope"];
+            /**
+             * @description How the markup is computed.
+             * @enum {string}
+             */
+            calculation: "percentage" | "fixed" | "percentage_plus_fixed";
+            /** @description Percentage of the net price (`"5.0000"` = 5 %, negative = discount, -100 to 999.9999). */
+            percentage?: string | null;
+            /** @description Fixed amount per unit, two decimals; negative = discount. */
+            fixed?: components["schemas"]["Money"] | null;
+            /**
+             * @description Unit the markup is computed for. Default `traveler`.
+             * @enum {string}
+             */
+            appliesPer?: "booking" | "traveler" | "segment";
+            /** @description Lower cap per unit, in the rule's currency. */
+            min?: components["schemas"]["Money"] | null;
+            /** @description Upper cap per unit, in the rule's currency. */
+            max?: components["schemas"]["Money"] | null;
+            /** @description Evaluation order, lower first. Default 100 (the default rule has 1000). */
+            priority?: number;
+            /** @description Adds to the base rule instead of competing with it. Default false. */
+            stackable?: boolean;
+            /** @description Enabled flag. Default true. */
+            isActive?: boolean;
+            /**
+             * Format: date-time
+             * @description Start of the validity window (inclusive).
+             */
+            activeFrom?: string | null;
+            /**
+             * Format: date-time
+             * @description End of the validity window (exclusive).
+             */
+            activeUntil?: string | null;
+        };
+        /** @description Body of console.settings.markupRules.update: any subset of the fields of MarkupRuleInput. Fields not sent keep their value, `null` clears a nullable one, `scope` is replaced as a whole; the changed rule must still be valid as MarkupRuleInput describes. */
+        MarkupRuleUpdate: {
+            /** @description Name shown in the OTA admin. */
+            name?: string;
+            /** @description Notes for staff. */
+            description?: string | null;
+            scope?: components["schemas"]["PricingRuleScope"];
+            /**
+             * @description How the markup is computed.
+             * @enum {string}
+             */
+            calculation?: "percentage" | "fixed" | "percentage_plus_fixed";
+            /** @description Percentage of the net price (`"5.0000"` = 5 %, negative = discount, -100 to 999.9999). */
+            percentage?: string | null;
+            /** @description Fixed amount per unit, two decimals; negative = discount. */
+            fixed?: components["schemas"]["Money"] | null;
+            /**
+             * @description Unit the markup is computed for. Default `traveler`.
+             * @enum {string}
+             */
+            appliesPer?: "booking" | "traveler" | "segment";
+            /** @description Lower cap per unit, in the rule's currency. */
+            min?: components["schemas"]["Money"] | null;
+            /** @description Upper cap per unit, in the rule's currency. */
+            max?: components["schemas"]["Money"] | null;
+            /** @description Evaluation order, lower first. Default 100 (the default rule has 1000). */
+            priority?: number;
+            /** @description Adds to the base rule instead of competing with it. Default false. */
+            stackable?: boolean;
+            /** @description Enabled flag. Default true. */
+            isActive?: boolean;
+            /**
+             * Format: date-time
+             * @description Start of the validity window (inclusive).
+             */
+            activeFrom?: string | null;
+            /**
+             * Format: date-time
+             * @description End of the validity window (exclusive).
+             */
+            activeUntil?: string | null;
+        };
+        /** @description A page of markup rules, by `priority`, then `id`. */
+        MarkupRulePage: {
+            /** @description Markup rules. */
+            data: components["schemas"]["MarkupRule"][];
+            /** @description Pagination. */
+            page: components["schemas"]["PageInfo"];
+        };
+        /** @description A fee rule of the OTA (one row of `fee_rules`): a fee charged on top of the selling price at the pricing step of its `feeType` (OADR-0005 point 7), shown to the traveller with its `label`. */
+        FeeRule: {
+            /** @description Fee rule id. */
+            id: string;
+            /** @description Internal name shown in the OTA admin. */
+            name: string;
+            /** @description Label shown to the traveller in the price breakdown. */
+            label: string;
+            /**
+             * @description What the fee is charged for. `change` fees are stored but unused in the MVP (no exchanges); `cancellation` fees feed bookings.quoteCancellation.
+             * @enum {string}
+             */
+            feeType: "booking_service" | "payment_card" | "ticketing" | "change" | "cancellation" | "ancillary_service";
+            scope: components["schemas"]["FeeRuleScope"];
+            /**
+             * @description How the fee is computed.
+             * @enum {string}
+             */
+            calculation: "percentage" | "fixed" | "percentage_plus_fixed";
+            /** @description Percentage of the base amount as a decimal string (`"1.5000"` = 1.5 %, 0 to 100); set for `percentage` and `percentage_plus_fixed`. */
+            percentage?: string | null;
+            /** @description Fixed amount per unit (`fixed_amount`, `currency`); set for `fixed` and `percentage_plus_fixed`. Applied only to offers in its currency (no conversion in the MVP). */
+            fixed?: components["schemas"]["Money"] | null;
+            /**
+             * @description Unit the fee is computed for and multiplied by.
+             * @enum {string}
+             */
+            appliesPer: "booking" | "traveler" | "segment";
+            /** @description Lower cap of the computed fee per unit, in the rule's currency. */
+            min?: components["schemas"]["Money"] | null;
+            /** @description Upper cap of the computed fee per unit, in the rule's currency. */
+            max?: components["schemas"]["Money"] | null;
+            /** @description Refunded on cancellation; non-refundable fees are kept by the cancellation quote. */
+            refundable: boolean;
+            /** @description Evaluation order, lower first. */
+            priority: number;
+            /** @description Enabled flag. */
+            isActive: boolean;
+            /**
+             * Format: date-time
+             * @description Start of the validity window (inclusive); null = immediately.
+             */
+            activeFrom?: string | null;
+            /**
+             * Format: date-time
+             * @description End of the validity window (exclusive); null = open-ended.
+             */
+            activeUntil?: string | null;
+            /** @description Optimistic-locking counter; the `ETag` is `"<version>"`. */
+            version: number;
+            /**
+             * Format: date-time
+             * @description Creation time.
+             */
+            createdAt: string;
+            /**
+             * Format: date-time
+             * @description Last change.
+             */
+            updatedAt: string;
+            /** @description Present only in the answers of console.settings.feeRules.create and update: what staff should know about the saved rule (`fixed_currency_not_default`). */
+            warnings?: components["schemas"]["SettingsWarning"][];
+        };
+        /** @description Body of console.settings.feeRules.create. `percentage` is required with `percentage` and `percentage_plus_fixed`, `fixed` with `fixed` and `percentage_plus_fixed`; `percentage` is at most 100; amounts have at most two decimals (`numeric(12,2)`), are not negative and share one currency; `activeUntil` is after `activeFrom` (`400 VALIDATION_FAILED` otherwise). */
+        FeeRuleInput: {
+            /** @description Internal name shown in the OTA admin. */
+            name: string;
+            /** @description Label shown to the traveller in the price breakdown. */
+            label: string;
+            /**
+             * @description What the fee is charged for.
+             * @enum {string}
+             */
+            feeType: "booking_service" | "payment_card" | "ticketing" | "change" | "cancellation" | "ancillary_service";
+            scope: components["schemas"]["FeeRuleScope"];
+            /**
+             * @description How the fee is computed.
+             * @enum {string}
+             */
+            calculation: "percentage" | "fixed" | "percentage_plus_fixed";
+            /** @description Percentage of the base amount (`"1.5000"` = 1.5 %, 0 to 100). */
+            percentage?: string | null;
+            /** @description Fixed amount per unit, two decimals, not negative. */
+            fixed?: components["schemas"]["Money"] | null;
+            /**
+             * @description Unit the fee is computed for. Default `booking`.
+             * @enum {string}
+             */
+            appliesPer?: "booking" | "traveler" | "segment";
+            /** @description Lower cap per unit, in the rule's currency. */
+            min?: components["schemas"]["Money"] | null;
+            /** @description Upper cap per unit, in the rule's currency. */
+            max?: components["schemas"]["Money"] | null;
+            /** @description Refunded on cancellation. Default false. */
+            refundable?: boolean;
+            /** @description Evaluation order, lower first. Default 100. */
+            priority?: number;
+            /** @description Enabled flag. Default true. */
+            isActive?: boolean;
+            /**
+             * Format: date-time
+             * @description Start of the validity window (inclusive).
+             */
+            activeFrom?: string | null;
+            /**
+             * Format: date-time
+             * @description End of the validity window (exclusive).
+             */
+            activeUntil?: string | null;
+        };
+        /** @description Body of console.settings.feeRules.update: any subset of the fields of FeeRuleInput. Fields not sent keep their value, `null` clears a nullable one, `scope` is replaced as a whole; the changed rule must still be valid as FeeRuleInput describes. */
+        FeeRuleUpdate: {
+            /** @description Internal name shown in the OTA admin. */
+            name?: string;
+            /** @description Label shown to the traveller in the price breakdown. */
+            label?: string;
+            /**
+             * @description What the fee is charged for.
+             * @enum {string}
+             */
+            feeType?: "booking_service" | "payment_card" | "ticketing" | "change" | "cancellation" | "ancillary_service";
+            scope?: components["schemas"]["FeeRuleScope"];
+            /**
+             * @description How the fee is computed.
+             * @enum {string}
+             */
+            calculation?: "percentage" | "fixed" | "percentage_plus_fixed";
+            /** @description Percentage of the base amount (`"1.5000"` = 1.5 %, 0 to 100). */
+            percentage?: string | null;
+            /** @description Fixed amount per unit, two decimals, not negative. */
+            fixed?: components["schemas"]["Money"] | null;
+            /**
+             * @description Unit the fee is computed for. Default `booking`.
+             * @enum {string}
+             */
+            appliesPer?: "booking" | "traveler" | "segment";
+            /** @description Lower cap per unit, in the rule's currency. */
+            min?: components["schemas"]["Money"] | null;
+            /** @description Upper cap per unit, in the rule's currency. */
+            max?: components["schemas"]["Money"] | null;
+            /** @description Refunded on cancellation. Default false. */
+            refundable?: boolean;
+            /** @description Evaluation order, lower first. Default 100. */
+            priority?: number;
+            /** @description Enabled flag. Default true. */
+            isActive?: boolean;
+            /**
+             * Format: date-time
+             * @description Start of the validity window (inclusive).
+             */
+            activeFrom?: string | null;
+            /**
+             * Format: date-time
+             * @description End of the validity window (exclusive).
+             */
+            activeUntil?: string | null;
+        };
+        /** @description A page of fee rules, by `priority`, then `id`. */
+        FeeRulePage: {
+            /** @description Fee rules. */
+            data: components["schemas"]["FeeRule"][];
+            /** @description Pagination. */
+            page: components["schemas"]["PageInfo"];
+        };
+        /**
+         * @description A font family bundled with the hosted storefront: open licence, `woff2` files in `ota/frontend/public/fonts/` declared in `ota/frontend/src/styles/fonts.css` with this exact family name, served from the storefront's own origin under its `font-src 'self'` CSP (OADR-0015 point 8). The OTA admin offers this list, the API validates against it and the storefront declares it; a font outside it fails validation.
+         * @enum {string}
+         */
+        StorefrontFontFamily: "Inter" | "Roboto" | "Open Sans" | "Lato" | "Montserrat" | "Source Sans 3" | "Merriweather" | "Playfair Display";
+        /** @description The OTA's brand (`brand_name`, `legal_name`, `time_zone`). */
+        StorefrontSettingsBrand: {
+            /** @description Brand name shown in the storefront and in e-mails. */
+            name: string;
+            /** @description Registered company name for footers and e-mails. */
+            legalName: string | null;
+            /** @description IANA time zone of the OTA (support hours, e-mail dates), one of `reference.time_zones`. */
+            timeZone: string;
+        };
+        /** @description Logos and theme of the storefront (OADR-0012 point 4). Images are uploaded assets (`ast_…`, console.settings.assets.upload) of the matching kind; the storefront applies colours, fonts and radius as CSS custom properties. Custom CSS is not offered. */
+        StorefrontSettingsBranding: {
+            /** @description Main logo (asset kind `logo`). */
+            logoAssetId: string | null;
+            /** @description Logo for dark backgrounds (asset kind `logo_dark`). */
+            logoDarkAssetId: string | null;
+            /** @description Square logo for e-mails and icons (asset kind `logo_square`). */
+            logoSquareAssetId: string | null;
+            /** @description Favicon (asset kind `favicon`). */
+            faviconAssetId: string | null;
+            /** @description Brand colours as #RRGGBB; the storefront derives text-on colours and keeps WCAG AA contrast. */
+            colors: {
+                /** @description Buttons and links. */
+                primary: string;
+                /** @description Header and footer. */
+                secondary: string;
+                /** @description Badges and highlights. */
+                accent: string;
+                /** @description Page background. */
+                background: string;
+                /** @description Body text. */
+                text: string;
+            };
+            /** @description Fonts for headings and body text, from the bundled list. */
+            fonts: {
+                heading: components["schemas"]["StorefrontFontFamily"];
+                body: components["schemas"]["StorefrontFontFamily"];
+            };
+            /**
+             * @description Corner radius style of buttons and cards.
+             * @enum {string}
+             */
+            cornerRadius: "none" | "small" | "medium" | "large";
+        };
+        /** @description Locales of the storefront's content (pages, e-mails, localised texts); `supported` contains `default`. The MVP user interface is English. */
+        StorefrontSettingsLocales: {
+            default: components["schemas"]["LocaleCode"];
+            /** @description Locales offered. */
+            supported: components["schemas"]["LocaleCode"][];
+        };
+        /** @description Selling currencies (ISO 4217, each in `reference.currencies`); `supported` contains `default`. */
+        StorefrontSettingsCurrencies: {
+            /** @description Default selling currency. */
+            default: string;
+            /** @description Currencies a traveller may choose. */
+            supported: string[];
+        };
+        /** @description A market (point of sale) with its default currency and locale, both supported by the storefront. */
+        StorefrontSettingsMarket: {
+            /** @description ISO 3166-1 alpha-2 country of the market. */
+            countryCode: string;
+            /** @description Market name. */
+            name: string;
+            /** @description Default currency in this market. */
+            currency: string;
+            locale: components["schemas"]["LocaleCode"];
+        };
+        /** @description Markets served (`default_market`, `markets`); `default` is the country of one of them. */
+        StorefrontSettingsMarkets: {
+            /** @description Default market (ISO 3166-1 alpha-2), or null when no market is configured. */
+            default: string | null;
+            /** @description Markets, each country once. */
+            list: components["schemas"]["StorefrontSettingsMarket"][];
+        };
+        /** @description Storefront features the OTA turns on; the plan can still switch a feature off (storefront.get). */
+        StorefrontSettingsFeatures: {
+            /** @description Travellers may book without an account. */
+            guestCheckout: boolean;
+            /** @description Sign-up, sign-in and account pages are offered. */
+            customerAccounts: boolean;
+            /** @description Extra bags and other services are sold in checkout. */
+            ancillaries: boolean;
+            /** @description The branded-fare upsell step is shown after offer selection. */
+            brandedFareUpsell: boolean;
+            /** @description Travellers may cancel from the booking page (bookings.cancel). */
+            selfServiceCancellation: boolean;
+        };
+        /** @description Ticketing, payment and session policies (OADR-0008). */
+        StorefrontSettingsPolicies: {
+            /**
+             * @description When tickets are issued.
+             * @enum {string}
+             */
+            ticketingPolicy: "issue_after_payment" | "issue_at_booking" | "manual_review";
+            /**
+             * @description Payment relative to the creation of the order. The MVP offers `authorize_before_booking` only: the other values are refused with `422 UNPROCESSABLE` (`details.reason = "payment_timing_not_supported"`).
+             * @enum {string}
+             */
+            paymentTiming: "authorize_before_booking" | "capture_before_booking" | "pay_later";
+            /** @description Force 3-D Secure on card payments. */
+            require3ds: boolean;
+            /** @description Card brands accepted for Stripe and airline-card payments. */
+            acceptedCardBrands: components["schemas"]["AmadeusPaymentBrand"][];
+            /** @description Customers verify their e-mail before booking with their account. */
+            requireEmailVerification: boolean;
+            /** @description Lifetime of cached offers and priced offers. */
+            offerTtlMinutes: number;
+            /** @description Lifetime of an open checkout. */
+            checkoutTtlMinutes: number;
+        };
+        /** @description The airline-card payment method per environment (`airline_card_enabled_test`, `_live`; ADR-0011, OADR-0004). It also needs the global `AIRLINE_CARD_ENABLED` switch; `enabledLive` can be set to true only after the M6 security review turns the switch on. */
+        StorefrontSettingsAirlineCard: {
+            /** @description Offered in the test environment. */
+            enabledTest: boolean;
+            /** @description Offered in the live environment. */
+            enabledLive: boolean;
+        };
+        /**
+         * @description What a legal link is for.
+         * @enum {string}
+         */
+        StorefrontLegalLinkKind: "terms" | "privacy" | "cookies" | "refund_policy" | "imprint" | "accessibility" | "other";
+        /** @description A legal link of the storefront footer and sign-up form: to an external page (`url`) or to a content page (`pageSlug`), never both. */
+        StorefrontLegalLink: components["schemas"]["StorefrontLegalUrlLink"] | components["schemas"]["StorefrontLegalPageLink"];
+        /** @description A legal link to an external page. */
+        StorefrontLegalUrlLink: {
+            kind: components["schemas"]["StorefrontLegalLinkKind"];
+            /** @description Link text. */
+            label: string;
+            /**
+             * Format: uri
+             * @description External page (https only).
+             */
+            url: string;
+        };
+        /** @description A legal link to a content page of the storefront (`/p/<slug>`). */
+        StorefrontLegalPageLink: {
+            kind: components["schemas"]["StorefrontLegalLinkKind"];
+            /** @description Link text. */
+            label: string;
+            /** @description Slug of a content page of `storefront_pages`; the page cannot be deleted while linked. */
+            pageSlug: string;
+        };
+        /** @description Versions of the terms and privacy policy (sign-up records them in `customer_consents`) and the legal links. */
+        StorefrontSettingsLegal: {
+            /** @description Current version of the terms. */
+            termsVersion: string | null;
+            /** @description Current version of the privacy policy. */
+            privacyVersion: string | null;
+            /** @description Legal links, in display order. */
+            links: components["schemas"]["StorefrontLegalLink"][];
+        };
+        /** @description Customer support contact shown to travellers and used as the Reply-To of e-mails. */
+        StorefrontSettingsSupport: {
+            /**
+             * Format: email
+             * @description Support e-mail address.
+             */
+            email: string | null;
+            /** @description Support phone (E.164). */
+            phone: string | null;
+            /** @description Opening hours. */
+            hours: string | null;
+            /**
+             * Format: uri
+             * @description Help centre or FAQ (https only).
+             */
+            helpCenterUrl: string | null;
+            /** @description 24/7 number for travellers on the road (E.164). */
+            emergencyPhone: string | null;
+        };
+        /** @description SEO defaults of the storefront pages. */
+        StorefrontSettingsSeo: {
+            /** @description Page title template with one `%s` for the page title. */
+            titleTemplate: string | null;
+            /** @description Default page title. */
+            defaultTitle: string | null;
+            /** @description Default meta description. */
+            defaultDescription: string | null;
+            /** @description Default Open Graph image (asset kind `og_image`). */
+            ogImageAssetId: string | null;
+            /** @description Robots directives in live; test storefronts are never indexed. */
+            robots: {
+                /** @description Allow indexing. */
+                index: boolean;
+                /** @description Allow following links. */
+                follow: boolean;
+            };
+        };
+        /** @description A cookie category of the consent banner. */
+        StorefrontSettingsConsentCategory: {
+            /**
+             * @description Category id.
+             * @enum {string}
+             */
+            id: "necessary" | "preferences" | "analytics" | "marketing";
+            /** @description Cannot be switched off (only `necessary`). */
+            required: boolean;
+            /** @description Pre-selected state. */
+            defaultEnabled: boolean;
+            /** @description Title. */
+            title: string;
+            /** @description Explanation. */
+            description: string;
+        };
+        /** @description Cookie consent policy of the storefront. */
+        StorefrontSettingsConsent: {
+            /**
+             * @description Privacy regime of the OTA's main market.
+             * @enum {string}
+             */
+            regime: "gdpr" | "ccpa" | "lgpd" | "none";
+            /** @description A banner is shown before non-necessary cookies are set. */
+            bannerRequired: boolean;
+            /** @description Version of the cookie policy; travellers are asked again when it changes. */
+            policyVersion: string | null;
+            /** @description Cookie categories to present, each once. */
+            categories: components["schemas"]["StorefrontSettingsConsentCategory"][];
+        };
+        /** @description Operational settings of the OTA's staff. */
+        StorefrontSettingsOperations: {
+            /**
+             * Format: email
+             * @description Recipient of staff alerts (ticketing failed, manual review, airline card); null = the owners.
+             */
+            opsAlertEmail: string | null;
+            /** @description Amadeus queue of the queuing office where every new order is placed, so an order created during a timeout can be found (OADR-0003). */
+            bookingQueue: {
+                /** @description Queue number, or null for none. */
+                number: number | null;
+                /** @description Queue category. */
+                category: number;
+            };
+        };
+        /** @description The OTA's storefront settings as staff edit them (the single `storefront_settings` row, shared by the test and live environments; OADR-0012). storefront.get derives the public StorefrontConfig from them. */
+        StorefrontSettings: {
+            brand: components["schemas"]["StorefrontSettingsBrand"];
+            branding: components["schemas"]["StorefrontSettingsBranding"];
+            locales: components["schemas"]["StorefrontSettingsLocales"];
+            currencies: components["schemas"]["StorefrontSettingsCurrencies"];
+            markets: components["schemas"]["StorefrontSettingsMarkets"];
+            features: components["schemas"]["StorefrontSettingsFeatures"];
+            policies: components["schemas"]["StorefrontSettingsPolicies"];
+            airlineCard: components["schemas"]["StorefrontSettingsAirlineCard"];
+            legal: components["schemas"]["StorefrontSettingsLegal"];
+            support: components["schemas"]["StorefrontSettingsSupport"];
+            seo: components["schemas"]["StorefrontSettingsSeo"];
+            consent: components["schemas"]["StorefrontSettingsConsent"];
+            operations: components["schemas"]["StorefrontSettingsOperations"];
+            /** @description Optimistic-locking counter; the `ETag` is `"<version>"`. */
+            version: number;
+            /**
+             * Format: date-time
+             * @description Last change.
+             */
+            updatedAt: string;
+        };
+        /** @description Body of console.settings.storefront.update: the sections to change. Each section sent replaces that section as a whole (send it complete, as console.settings.storefront.get returns it); sections not sent keep their value. */
+        StorefrontSettingsUpdate: {
+            brand?: components["schemas"]["StorefrontSettingsBrand"];
+            branding?: components["schemas"]["StorefrontSettingsBranding"];
+            locales?: components["schemas"]["StorefrontSettingsLocales"];
+            currencies?: components["schemas"]["StorefrontSettingsCurrencies"];
+            markets?: components["schemas"]["StorefrontSettingsMarkets"];
+            features?: components["schemas"]["StorefrontSettingsFeatures"];
+            policies?: components["schemas"]["StorefrontSettingsPolicies"];
+            airlineCard?: components["schemas"]["StorefrontSettingsAirlineCard"];
+            legal?: components["schemas"]["StorefrontSettingsLegal"];
+            support?: components["schemas"]["StorefrontSettingsSupport"];
+            seo?: components["schemas"]["StorefrontSettingsSeo"];
+            consent?: components["schemas"]["StorefrontSettingsConsent"];
+            operations?: components["schemas"]["StorefrontSettingsOperations"];
+        };
+        /** @description Answer of console.settings.storefront.update: the saved settings and the warnings about them (empty when there are none). */
+        StorefrontSettingsUpdateResult: components["schemas"]["StorefrontSettings"] & {
+            /** @description What staff should know about the saved settings (`airline_card_net_price`). */
+            warnings: components["schemas"]["SettingsWarning"][];
+        };
+        /**
+         * @description The notification template keys of the MVP (OADR-0013 point 4): customers `auth.*`, travellers `booking.*`, the OTA's staff `staff.*`. Later releases add keys with their code defaults.
+         * @enum {string}
+         */
+        NotificationTemplateKey: "auth.verify_email" | "auth.password_reset" | "booking.confirmed" | "booking.ticketed" | "booking.ticketing_delayed" | "booking.cancelled" | "booking.cancellation_requested" | "booking.not_confirmed" | "staff.ticketing_failed" | "staff.manual_review" | "staff.airline_card_alert";
+        /**
+         * @description Delivery channel of a notification template; `email` only in the MVP.
+         * @enum {string}
+         */
+        NotificationChannel: "email";
+        /** @description A variable a template of the key may use: a Handlebars path relative to the render data. `[]` marks the items of a list, reached with `{{#each}}` (`booking.segments[].origin`). */
+        NotificationTemplateVariable: {
+            /** @description Variable path, such as `booking.reference`. */
+            name: string;
+            /** @description What the variable holds. */
+            description: string;
+        };
+        /** @description The effective template of a key, channel and locale: the OTA's row of `notification_templates` (`customised: true`) or the code default (`customised: false`). Templates are Handlebars, compiled in strict mode with the key's variable allow-list (OADR-0013 point 3). */
+        NotificationTemplate: {
+            key: components["schemas"]["NotificationTemplateKey"];
+            channel: components["schemas"]["NotificationChannel"];
+            locale: components["schemas"]["LocaleCode"];
+            /** @description Subject template (always set for e-mail). */
+            subject: string | null;
+            /** @description HTML body template. */
+            bodyHtml: string | null;
+            /** @description Plain-text body template. */
+            bodyText: string;
+            /** @description The variables templates of this key may use (the allow-list), with descriptions. */
+            variables: components["schemas"]["NotificationTemplateVariable"][];
+            /** @description The OTA has its own row; false for the code default. */
+            customised: boolean;
+            /** @description When false the OTA's row is kept but the default is sent. */
+            isActive: boolean;
+            /** @description Optimistic-locking counter of the OTA's row (`ETag` `"<version>"`); null for the code default. */
+            version: number | null;
+            /**
+             * Format: date-time
+             * @description Last change of the OTA's row; null for the code default.
+             */
+            updatedAt: string | null;
+        };
+        /** @description The effective templates, by key, then locale. */
+        NotificationTemplateList: {
+            /** @description Templates. */
+            data: components["schemas"]["NotificationTemplate"][];
+        };
+        /** @description Body of console.settings.templates.put. */
+        NotificationTemplateInput: {
+            /** @description Subject template. */
+            subject: string;
+            /** @description HTML body template. */
+            bodyHtml: string;
+            /** @description Plain-text body template. */
+            bodyText: string;
+            /** @description Send this template (default true); false keeps it but sends the default. */
+            isActive?: boolean;
+        };
+        /** @description Body of console.settings.templates.preview. Parts not sent come from the effective template; `variables` replaces the template's sample data. */
+        NotificationTemplatePreviewRequest: {
+            /** @description Draft subject template. */
+            subject?: string;
+            /** @description Draft HTML body template. */
+            bodyHtml?: string;
+            /** @description Draft plain-text body template. */
+            bodyText?: string;
+            /** @description Render data, in the shape of the key's variables, instead of the sample data. */
+            variables?: {
+                [key: string]: unknown;
+            };
+        };
+        /** @description A rendered template. */
+        NotificationTemplatePreview: {
+            /** @description Rendered subject. */
+            subject: string;
+            /** @description Rendered HTML body; show it only in a sandboxed iframe without scripts. */
+            html: string | null;
+            /** @description Rendered plain-text body. */
+            text: string;
         };
     };
     responses: {
@@ -13606,7 +14656,7 @@ export interface components {
                 "application/json": components["schemas"]["ErrorResponse"];
             };
         };
-        /** @description The caller may not perform this console operation. Possible codes: FORBIDDEN (role lacks the permission, details.requiredPermission), SCOPE_NOT_ALLOWED (publishable key or customer token), TENANT_SUSPENDED, FEATURE_DISABLED, STAFF_MEMBERSHIP_INACTIVE, OFFICE_NOT_ALLOWED. */
+        /** @description The caller may not perform this console operation. Possible codes: FORBIDDEN (role lacks the permission, details.requiredPermission), SCOPE_NOT_ALLOWED (publishable key or customer token), TENANT_SUSPENDED, FEATURE_DISABLED, STAFF_MEMBERSHIP_INACTIVE, OFFICE_NOT_ALLOWED, ENVIRONMENT_NOT_ALLOWED (the OTA admin asked for `live` while the OTA is not live or for a test-only role). */
         ConsoleForbidden: {
             headers: {
                 "X-Request-Id": components["headers"]["X-Request-Id"];
@@ -13661,6 +14711,46 @@ export interface components {
                 "application/json": components["schemas"]["ConsoleBooking"];
             };
         };
+        /** @description The settings change conflicts with the current state. Possible codes: CONFLICT (`details.reason`, such as `default_rule`: the seeded default markup rule cannot be deleted or narrowed), IDEMPOTENCY_KEY_REUSED. */
+        SettingsConflict: {
+            headers: {
+                "X-Request-Id": components["headers"]["X-Request-Id"];
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["ErrorResponse"];
+            };
+        };
+        /** @description The settings are well-formed but refused by a rule: unknown currency or time zone, a `supported` list without its default, an asset of the wrong kind, an unknown page, a payment timing the MVP does not offer. Possible codes: UNPROCESSABLE (`details.reason`, and `details.path`: the JSON pointer of the refused field). */
+        SettingsUnprocessable: {
+            headers: {
+                "X-Request-Id": components["headers"]["X-Request-Id"];
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["ErrorResponse"];
+            };
+        };
+        /** @description The caller may not change the storefront settings this way. Possible codes: FORBIDDEN (the role lacks `settings:write`, details.requiredPermission), SCOPE_NOT_ALLOWED, TENANT_SUSPENDED, STAFF_MEMBERSHIP_INACTIVE, ENVIRONMENT_NOT_ALLOWED, FEATURE_DISABLED (`details.feature = "airlineCard"`: the airline card cannot be enabled in live while the global switch is off). */
+        StorefrontSettingsForbidden: {
+            headers: {
+                "X-Request-Id": components["headers"]["X-Request-Id"];
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["ErrorResponse"];
+            };
+        };
+        /** @description The template was refused. Possible codes: TEMPLATE_INVALID (it does not compile in strict mode or uses a variable the key does not allow; `details.errors[{part, line, message}]`), UNPROCESSABLE (`details.reason`, such as `locale_not_supported`). */
+        TemplateUnprocessable: {
+            headers: {
+                "X-Request-Id": components["headers"]["X-Request-Id"];
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["ErrorResponse"];
+            };
+        };
     };
     parameters: {
         /** @description Client-generated unique key (UUID v4) that makes the request safe to retry for 24 hours. */
@@ -13695,7 +14785,7 @@ export interface components {
         CustomerEndUserAgent: string;
         /** @description Copy of the `__Host-vx_csrf` cookie, which storefront.get issues. Required on every state-changing (`POST`, `PUT`, `PATCH`, `DELETE`) request of the hosted storefront edge, anonymous ones included, and the `Origin` (or, without it, `Sec-Fetch-Site: same-origin`) must be the storefront host; otherwise `403 CSRF_TOKEN_INVALID`. Ignored for key and bearer callers. */
         CsrfToken: string;
-        /** @description Environment of a console call made with the OTA admin's first-party service key, `test` or `live`. Required with the service key (missing: `400 VALIDATION_FAILED`) and refused with any other credential, whose environment is the key's. `live` needs an OTA that is live and a role other than `viewer`; ConsoleStaffSession.environments lists the environments the staff member may open. */
+        /** @description Environment of a console call made with the OTA admin's first-party service key, `test` or `live`. Required with the service key (missing: `400 VALIDATION_FAILED`) and refused with any other credential, whose environment is the key's. `live` needs an OTA that is live and a role other than `viewer`, otherwise `403 ENVIRONMENT_NOT_ALLOWED`; ConsoleStaffSession.environments lists the environments the staff member may open. */
         VelexisEnvironment: "test" | "live";
         /** @description Keep offers whose itinerary with the most stops has this many stops (0 = non-stop, 1, 2 = two or more). Several values are comma-separated and ORed, e.g. `stops=0,1`. */
         FilterStops: (0 | 1 | 2)[];
@@ -13773,6 +14863,18 @@ export interface components {
         ConsoleRecordLocatorFilter: string;
         /** @description Bookings of this customer. */
         ConsoleCustomerIdFilter: string;
+        /** @description `true`: only enabled rules (`isActive`); `false`: only disabled ones; absent: every rule. */
+        ConsoleSettingsActiveFilter: boolean;
+        /** @description Markup rule id (`mkr_…`). */
+        ConsoleMarkupRuleId: string;
+        /** @description Fee rule id (`fee_…`). */
+        ConsoleFeeRuleId: string;
+        /** @description Template key (NotificationTemplateKey). */
+        NotificationTemplateKeyPath: components["schemas"]["NotificationTemplateKey"];
+        /** @description Delivery channel; `email` only in the MVP. */
+        NotificationTemplateChannelPath: components["schemas"]["NotificationChannel"];
+        /** @description Locale of the template (BCP 47, such as `en` or `fr-CA`). */
+        NotificationTemplateLocalePath: components["schemas"]["LocaleCode"];
     };
     requestBodies: never;
     headers: {
@@ -17932,7 +19034,7 @@ export interface operations {
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
                 /** @description BCP 47 locale for messages and display texts. */
                 "Accept-Language"?: components["parameters"]["AcceptLanguage"];
-                /** @description Environment of a console call made with the OTA admin's first-party service key, `test` or `live`. Required with the service key (missing: `400 VALIDATION_FAILED`) and refused with any other credential, whose environment is the key's. `live` needs an OTA that is live and a role other than `viewer`; ConsoleStaffSession.environments lists the environments the staff member may open. */
+                /** @description Environment of a console call made with the OTA admin's first-party service key, `test` or `live`. Required with the service key (missing: `400 VALIDATION_FAILED`) and refused with any other credential, whose environment is the key's. `live` needs an OTA that is live and a role other than `viewer`, otherwise `403 ENVIRONMENT_NOT_ALLOWED`; ConsoleStaffSession.environments lists the environments the staff member may open. */
                 "X-Velexis-Environment"?: components["parameters"]["VelexisEnvironment"];
                 /**
                  * @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server), and for the OTA admin's service key on console operations (below); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`.
@@ -19313,7 +20415,7 @@ export interface operations {
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
                 /** @description BCP 47 locale for messages and display texts. */
                 "Accept-Language"?: components["parameters"]["AcceptLanguage"];
-                /** @description Environment of a console call made with the OTA admin's first-party service key, `test` or `live`. Required with the service key (missing: `400 VALIDATION_FAILED`) and refused with any other credential, whose environment is the key's. `live` needs an OTA that is live and a role other than `viewer`; ConsoleStaffSession.environments lists the environments the staff member may open. */
+                /** @description Environment of a console call made with the OTA admin's first-party service key, `test` or `live`. Required with the service key (missing: `400 VALIDATION_FAILED`) and refused with any other credential, whose environment is the key's. `live` needs an OTA that is live and a role other than `viewer`, otherwise `403 ENVIRONMENT_NOT_ALLOWED`; ConsoleStaffSession.environments lists the environments the staff member may open. */
                 "X-Velexis-Environment"?: components["parameters"]["VelexisEnvironment"];
                 /**
                  * @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server), and for the OTA admin's service key on console operations (below); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`.
@@ -19364,7 +20466,7 @@ export interface operations {
             header: {
                 /** @description Client-generated unique key (UUID v4) that makes the request safe to retry for 24 hours. */
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
-                /** @description Environment of a console call made with the OTA admin's first-party service key, `test` or `live`. Required with the service key (missing: `400 VALIDATION_FAILED`) and refused with any other credential, whose environment is the key's. `live` needs an OTA that is live and a role other than `viewer`; ConsoleStaffSession.environments lists the environments the staff member may open. */
+                /** @description Environment of a console call made with the OTA admin's first-party service key, `test` or `live`. Required with the service key (missing: `400 VALIDATION_FAILED`) and refused with any other credential, whose environment is the key's. `live` needs an OTA that is live and a role other than `viewer`, otherwise `403 ENVIRONMENT_NOT_ALLOWED`; ConsoleStaffSession.environments lists the environments the staff member may open. */
                 "X-Velexis-Environment"?: components["parameters"]["VelexisEnvironment"];
                 /**
                  * @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server), and for the OTA admin's service key on console operations (below); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`.
@@ -19419,7 +20521,7 @@ export interface operations {
             header: {
                 /** @description Client-generated unique key (UUID v4) that makes the request safe to retry for 24 hours. */
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
-                /** @description Environment of a console call made with the OTA admin's first-party service key, `test` or `live`. Required with the service key (missing: `400 VALIDATION_FAILED`) and refused with any other credential, whose environment is the key's. `live` needs an OTA that is live and a role other than `viewer`; ConsoleStaffSession.environments lists the environments the staff member may open. */
+                /** @description Environment of a console call made with the OTA admin's first-party service key, `test` or `live`. Required with the service key (missing: `400 VALIDATION_FAILED`) and refused with any other credential, whose environment is the key's. `live` needs an OTA that is live and a role other than `viewer`, otherwise `403 ENVIRONMENT_NOT_ALLOWED`; ConsoleStaffSession.environments lists the environments the staff member may open. */
                 "X-Velexis-Environment"?: components["parameters"]["VelexisEnvironment"];
                 /**
                  * @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server), and for the OTA admin's service key on console operations (below); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`.
@@ -19471,7 +20573,7 @@ export interface operations {
             header?: {
                 /** @description BCP 47 locale for messages and display texts. */
                 "Accept-Language"?: components["parameters"]["AcceptLanguage"];
-                /** @description Environment of a console call made with the OTA admin's first-party service key, `test` or `live`. Required with the service key (missing: `400 VALIDATION_FAILED`) and refused with any other credential, whose environment is the key's. `live` needs an OTA that is live and a role other than `viewer`; ConsoleStaffSession.environments lists the environments the staff member may open. */
+                /** @description Environment of a console call made with the OTA admin's first-party service key, `test` or `live`. Required with the service key (missing: `400 VALIDATION_FAILED`) and refused with any other credential, whose environment is the key's. `live` needs an OTA that is live and a role other than `viewer`, otherwise `403 ENVIRONMENT_NOT_ALLOWED`; ConsoleStaffSession.environments lists the environments the staff member may open. */
                 "X-Velexis-Environment"?: components["parameters"]["VelexisEnvironment"];
                 /**
                  * @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server), and for the OTA admin's service key on console operations (below); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`.
@@ -19557,7 +20659,7 @@ export interface operations {
             header?: {
                 /** @description BCP 47 locale for messages and display texts. */
                 "Accept-Language"?: components["parameters"]["AcceptLanguage"];
-                /** @description Environment of a console call made with the OTA admin's first-party service key, `test` or `live`. Required with the service key (missing: `400 VALIDATION_FAILED`) and refused with any other credential, whose environment is the key's. `live` needs an OTA that is live and a role other than `viewer`; ConsoleStaffSession.environments lists the environments the staff member may open. */
+                /** @description Environment of a console call made with the OTA admin's first-party service key, `test` or `live`. Required with the service key (missing: `400 VALIDATION_FAILED`) and refused with any other credential, whose environment is the key's. `live` needs an OTA that is live and a role other than `viewer`, otherwise `403 ENVIRONMENT_NOT_ALLOWED`; ConsoleStaffSession.environments lists the environments the staff member may open. */
                 "X-Velexis-Environment"?: components["parameters"]["VelexisEnvironment"];
                 /**
                  * @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server), and for the OTA admin's service key on console operations (below); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`.
@@ -19663,7 +20765,7 @@ export interface operations {
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
                 /** @description BCP 47 locale for messages and display texts. */
                 "Accept-Language"?: components["parameters"]["AcceptLanguage"];
-                /** @description Environment of a console call made with the OTA admin's first-party service key, `test` or `live`. Required with the service key (missing: `400 VALIDATION_FAILED`) and refused with any other credential, whose environment is the key's. `live` needs an OTA that is live and a role other than `viewer`; ConsoleStaffSession.environments lists the environments the staff member may open. */
+                /** @description Environment of a console call made with the OTA admin's first-party service key, `test` or `live`. Required with the service key (missing: `400 VALIDATION_FAILED`) and refused with any other credential, whose environment is the key's. `live` needs an OTA that is live and a role other than `viewer`, otherwise `403 ENVIRONMENT_NOT_ALLOWED`; ConsoleStaffSession.environments lists the environments the staff member may open. */
                 "X-Velexis-Environment"?: components["parameters"]["VelexisEnvironment"];
                 /**
                  * @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server), and for the OTA admin's service key on console operations (below); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`.
@@ -19869,7 +20971,7 @@ export interface operations {
             header?: {
                 /** @description BCP 47 locale for messages and display texts. */
                 "Accept-Language"?: components["parameters"]["AcceptLanguage"];
-                /** @description Environment of a console call made with the OTA admin's first-party service key, `test` or `live`. Required with the service key (missing: `400 VALIDATION_FAILED`) and refused with any other credential, whose environment is the key's. `live` needs an OTA that is live and a role other than `viewer`; ConsoleStaffSession.environments lists the environments the staff member may open. */
+                /** @description Environment of a console call made with the OTA admin's first-party service key, `test` or `live`. Required with the service key (missing: `400 VALIDATION_FAILED`) and refused with any other credential, whose environment is the key's. `live` needs an OTA that is live and a role other than `viewer`, otherwise `403 ENVIRONMENT_NOT_ALLOWED`; ConsoleStaffSession.environments lists the environments the staff member may open. */
                 "X-Velexis-Environment"?: components["parameters"]["VelexisEnvironment"];
                 /**
                  * @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server), and for the OTA admin's service key on console operations (below); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`.
@@ -19913,7 +21015,7 @@ export interface operations {
                 "If-Match": components["parameters"]["IfMatch"];
                 /** @description BCP 47 locale for messages and display texts. */
                 "Accept-Language"?: components["parameters"]["AcceptLanguage"];
-                /** @description Environment of a console call made with the OTA admin's first-party service key, `test` or `live`. Required with the service key (missing: `400 VALIDATION_FAILED`) and refused with any other credential, whose environment is the key's. `live` needs an OTA that is live and a role other than `viewer`; ConsoleStaffSession.environments lists the environments the staff member may open. */
+                /** @description Environment of a console call made with the OTA admin's first-party service key, `test` or `live`. Required with the service key (missing: `400 VALIDATION_FAILED`) and refused with any other credential, whose environment is the key's. `live` needs an OTA that is live and a role other than `viewer`, otherwise `403 ENVIRONMENT_NOT_ALLOWED`; ConsoleStaffSession.environments lists the environments the staff member may open. */
                 "X-Velexis-Environment"?: components["parameters"]["VelexisEnvironment"];
                 /**
                  * @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server), and for the OTA admin's service key on console operations (below); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`.
@@ -19966,7 +21068,7 @@ export interface operations {
                 "If-Match": components["parameters"]["IfMatch"];
                 /** @description BCP 47 locale for messages and display texts. */
                 "Accept-Language"?: components["parameters"]["AcceptLanguage"];
-                /** @description Environment of a console call made with the OTA admin's first-party service key, `test` or `live`. Required with the service key (missing: `400 VALIDATION_FAILED`) and refused with any other credential, whose environment is the key's. `live` needs an OTA that is live and a role other than `viewer`; ConsoleStaffSession.environments lists the environments the staff member may open. */
+                /** @description Environment of a console call made with the OTA admin's first-party service key, `test` or `live`. Required with the service key (missing: `400 VALIDATION_FAILED`) and refused with any other credential, whose environment is the key's. `live` needs an OTA that is live and a role other than `viewer`, otherwise `403 ENVIRONMENT_NOT_ALLOWED`; ConsoleStaffSession.environments lists the environments the staff member may open. */
                 "X-Velexis-Environment"?: components["parameters"]["VelexisEnvironment"];
                 /**
                  * @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server), and for the OTA admin's service key on console operations (below); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`.
@@ -20020,7 +21122,7 @@ export interface operations {
                 "If-Match": components["parameters"]["IfMatch"];
                 /** @description BCP 47 locale for messages and display texts. */
                 "Accept-Language"?: components["parameters"]["AcceptLanguage"];
-                /** @description Environment of a console call made with the OTA admin's first-party service key, `test` or `live`. Required with the service key (missing: `400 VALIDATION_FAILED`) and refused with any other credential, whose environment is the key's. `live` needs an OTA that is live and a role other than `viewer`; ConsoleStaffSession.environments lists the environments the staff member may open. */
+                /** @description Environment of a console call made with the OTA admin's first-party service key, `test` or `live`. Required with the service key (missing: `400 VALIDATION_FAILED`) and refused with any other credential, whose environment is the key's. `live` needs an OTA that is live and a role other than `viewer`, otherwise `403 ENVIRONMENT_NOT_ALLOWED`; ConsoleStaffSession.environments lists the environments the staff member may open. */
                 "X-Velexis-Environment"?: components["parameters"]["VelexisEnvironment"];
                 /**
                  * @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server), and for the OTA admin's service key on console operations (below); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`.
@@ -20079,7 +21181,7 @@ export interface operations {
             header?: {
                 /** @description BCP 47 locale for messages and display texts. */
                 "Accept-Language"?: components["parameters"]["AcceptLanguage"];
-                /** @description Environment of a console call made with the OTA admin's first-party service key, `test` or `live`. Required with the service key (missing: `400 VALIDATION_FAILED`) and refused with any other credential, whose environment is the key's. `live` needs an OTA that is live and a role other than `viewer`; ConsoleStaffSession.environments lists the environments the staff member may open. */
+                /** @description Environment of a console call made with the OTA admin's first-party service key, `test` or `live`. Required with the service key (missing: `400 VALIDATION_FAILED`) and refused with any other credential, whose environment is the key's. `live` needs an OTA that is live and a role other than `viewer`, otherwise `403 ENVIRONMENT_NOT_ALLOWED`; ConsoleStaffSession.environments lists the environments the staff member may open. */
                 "X-Velexis-Environment"?: components["parameters"]["VelexisEnvironment"];
                 /**
                  * @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server), and for the OTA admin's service key on console operations (below); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`.
@@ -20147,7 +21249,7 @@ export interface operations {
             header: {
                 /** @description Client-generated unique key (UUID v4) that makes the request safe to retry for 24 hours. */
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
-                /** @description Environment of a console call made with the OTA admin's first-party service key, `test` or `live`. Required with the service key (missing: `400 VALIDATION_FAILED`) and refused with any other credential, whose environment is the key's. `live` needs an OTA that is live and a role other than `viewer`; ConsoleStaffSession.environments lists the environments the staff member may open. */
+                /** @description Environment of a console call made with the OTA admin's first-party service key, `test` or `live`. Required with the service key (missing: `400 VALIDATION_FAILED`) and refused with any other credential, whose environment is the key's. `live` needs an OTA that is live and a role other than `viewer`, otherwise `403 ENVIRONMENT_NOT_ALLOWED`; ConsoleStaffSession.environments lists the environments the staff member may open. */
                 "X-Velexis-Environment"?: components["parameters"]["VelexisEnvironment"];
                 /**
                  * @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server), and for the OTA admin's service key on console operations (below); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`.
@@ -20229,7 +21331,7 @@ export interface operations {
             header?: {
                 /** @description BCP 47 locale for messages and display texts. */
                 "Accept-Language"?: components["parameters"]["AcceptLanguage"];
-                /** @description Environment of a console call made with the OTA admin's first-party service key, `test` or `live`. Required with the service key (missing: `400 VALIDATION_FAILED`) and refused with any other credential, whose environment is the key's. `live` needs an OTA that is live and a role other than `viewer`; ConsoleStaffSession.environments lists the environments the staff member may open. */
+                /** @description Environment of a console call made with the OTA admin's first-party service key, `test` or `live`. Required with the service key (missing: `400 VALIDATION_FAILED`) and refused with any other credential, whose environment is the key's. `live` needs an OTA that is live and a role other than `viewer`, otherwise `403 ENVIRONMENT_NOT_ALLOWED`; ConsoleStaffSession.environments lists the environments the staff member may open. */
                 "X-Velexis-Environment"?: components["parameters"]["VelexisEnvironment"];
                 /**
                  * @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server), and for the OTA admin's service key on console operations (below); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`.
@@ -20280,7 +21382,7 @@ export interface operations {
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
                 /** @description BCP 47 locale for messages and display texts. */
                 "Accept-Language"?: components["parameters"]["AcceptLanguage"];
-                /** @description Environment of a console call made with the OTA admin's first-party service key, `test` or `live`. Required with the service key (missing: `400 VALIDATION_FAILED`) and refused with any other credential, whose environment is the key's. `live` needs an OTA that is live and a role other than `viewer`; ConsoleStaffSession.environments lists the environments the staff member may open. */
+                /** @description Environment of a console call made with the OTA admin's first-party service key, `test` or `live`. Required with the service key (missing: `400 VALIDATION_FAILED`) and refused with any other credential, whose environment is the key's. `live` needs an OTA that is live and a role other than `viewer`, otherwise `403 ENVIRONMENT_NOT_ALLOWED`; ConsoleStaffSession.environments lists the environments the staff member may open. */
                 "X-Velexis-Environment"?: components["parameters"]["VelexisEnvironment"];
                 /**
                  * @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server), and for the OTA admin's service key on console operations (below); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`.
@@ -20360,7 +21462,7 @@ export interface operations {
                 updateSnapshot?: boolean;
             };
             header?: {
-                /** @description Environment of a console call made with the OTA admin's first-party service key, `test` or `live`. Required with the service key (missing: `400 VALIDATION_FAILED`) and refused with any other credential, whose environment is the key's. `live` needs an OTA that is live and a role other than `viewer`; ConsoleStaffSession.environments lists the environments the staff member may open. */
+                /** @description Environment of a console call made with the OTA admin's first-party service key, `test` or `live`. Required with the service key (missing: `400 VALIDATION_FAILED`) and refused with any other credential, whose environment is the key's. `live` needs an OTA that is live and a role other than `viewer`, otherwise `403 ENVIRONMENT_NOT_ALLOWED`; ConsoleStaffSession.environments lists the environments the staff member may open. */
                 "X-Velexis-Environment"?: components["parameters"]["VelexisEnvironment"];
                 /**
                  * @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server), and for the OTA admin's service key on console operations (below); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`.
@@ -20422,7 +21524,7 @@ export interface operations {
                 limit?: components["parameters"]["Limit"];
             };
             header?: {
-                /** @description Environment of a console call made with the OTA admin's first-party service key, `test` or `live`. Required with the service key (missing: `400 VALIDATION_FAILED`) and refused with any other credential, whose environment is the key's. `live` needs an OTA that is live and a role other than `viewer`; ConsoleStaffSession.environments lists the environments the staff member may open. */
+                /** @description Environment of a console call made with the OTA admin's first-party service key, `test` or `live`. Required with the service key (missing: `400 VALIDATION_FAILED`) and refused with any other credential, whose environment is the key's. `live` needs an OTA that is live and a role other than `viewer`, otherwise `403 ENVIRONMENT_NOT_ALLOWED`; ConsoleStaffSession.environments lists the environments the staff member may open. */
                 "X-Velexis-Environment"?: components["parameters"]["VelexisEnvironment"];
                 /**
                  * @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server), and for the OTA admin's service key on console operations (below); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`.
@@ -20583,7 +21685,7 @@ export interface operations {
                 limit?: components["parameters"]["Limit"];
             };
             header?: {
-                /** @description Environment of a console call made with the OTA admin's first-party service key, `test` or `live`. Required with the service key (missing: `400 VALIDATION_FAILED`) and refused with any other credential, whose environment is the key's. `live` needs an OTA that is live and a role other than `viewer`; ConsoleStaffSession.environments lists the environments the staff member may open. */
+                /** @description Environment of a console call made with the OTA admin's first-party service key, `test` or `live`. Required with the service key (missing: `400 VALIDATION_FAILED`) and refused with any other credential, whose environment is the key's. `live` needs an OTA that is live and a role other than `viewer`, otherwise `403 ENVIRONMENT_NOT_ALLOWED`; ConsoleStaffSession.environments lists the environments the staff member may open. */
                 "X-Velexis-Environment"?: components["parameters"]["VelexisEnvironment"];
                 /**
                  * @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server), and for the OTA admin's service key on console operations (below); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`.
@@ -20687,7 +21789,7 @@ export interface operations {
                 limit?: components["parameters"]["Limit"];
             };
             header?: {
-                /** @description Environment of a console call made with the OTA admin's first-party service key, `test` or `live`. Required with the service key (missing: `400 VALIDATION_FAILED`) and refused with any other credential, whose environment is the key's. `live` needs an OTA that is live and a role other than `viewer`; ConsoleStaffSession.environments lists the environments the staff member may open. */
+                /** @description Environment of a console call made with the OTA admin's first-party service key, `test` or `live`. Required with the service key (missing: `400 VALIDATION_FAILED`) and refused with any other credential, whose environment is the key's. `live` needs an OTA that is live and a role other than `viewer`, otherwise `403 ENVIRONMENT_NOT_ALLOWED`; ConsoleStaffSession.environments lists the environments the staff member may open. */
                 "X-Velexis-Environment"?: components["parameters"]["VelexisEnvironment"];
                 /**
                  * @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server), and for the OTA admin's service key on console operations (below); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`.
@@ -20762,7 +21864,7 @@ export interface operations {
             header?: {
                 /** @description BCP 47 locale for messages and display texts. */
                 "Accept-Language"?: components["parameters"]["AcceptLanguage"];
-                /** @description Environment of a console call made with the OTA admin's first-party service key, `test` or `live`. Required with the service key (missing: `400 VALIDATION_FAILED`) and refused with any other credential, whose environment is the key's. `live` needs an OTA that is live and a role other than `viewer`; ConsoleStaffSession.environments lists the environments the staff member may open. */
+                /** @description Environment of a console call made with the OTA admin's first-party service key, `test` or `live`. Required with the service key (missing: `400 VALIDATION_FAILED`) and refused with any other credential, whose environment is the key's. `live` needs an OTA that is live and a role other than `viewer`, otherwise `403 ENVIRONMENT_NOT_ALLOWED`; ConsoleStaffSession.environments lists the environments the staff member may open. */
                 "X-Velexis-Environment"?: components["parameters"]["VelexisEnvironment"];
                 /**
                  * @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server), and for the OTA admin's service key on console operations (below); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`.
@@ -20932,7 +22034,7 @@ export interface operations {
                 limit?: components["parameters"]["Limit"];
             };
             header?: {
-                /** @description Environment of a console call made with the OTA admin's first-party service key, `test` or `live`. Required with the service key (missing: `400 VALIDATION_FAILED`) and refused with any other credential, whose environment is the key's. `live` needs an OTA that is live and a role other than `viewer`; ConsoleStaffSession.environments lists the environments the staff member may open. */
+                /** @description Environment of a console call made with the OTA admin's first-party service key, `test` or `live`. Required with the service key (missing: `400 VALIDATION_FAILED`) and refused with any other credential, whose environment is the key's. `live` needs an OTA that is live and a role other than `viewer`, otherwise `403 ENVIRONMENT_NOT_ALLOWED`; ConsoleStaffSession.environments lists the environments the staff member may open. */
                 "X-Velexis-Environment"?: components["parameters"]["VelexisEnvironment"];
                 /**
                  * @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server), and for the OTA admin's service key on console operations (below); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`.
@@ -21060,7 +22162,7 @@ export interface operations {
                 max?: number;
             };
             header?: {
-                /** @description Environment of a console call made with the OTA admin's first-party service key, `test` or `live`. Required with the service key (missing: `400 VALIDATION_FAILED`) and refused with any other credential, whose environment is the key's. `live` needs an OTA that is live and a role other than `viewer`; ConsoleStaffSession.environments lists the environments the staff member may open. */
+                /** @description Environment of a console call made with the OTA admin's first-party service key, `test` or `live`. Required with the service key (missing: `400 VALIDATION_FAILED`) and refused with any other credential, whose environment is the key's. `live` needs an OTA that is live and a role other than `viewer`, otherwise `403 ENVIRONMENT_NOT_ALLOWED`; ConsoleStaffSession.environments lists the environments the staff member may open. */
                 "X-Velexis-Environment"?: components["parameters"]["VelexisEnvironment"];
                 /**
                  * @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server), and for the OTA admin's service key on console operations (below); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`.
@@ -21207,7 +22309,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description Environment of a console call made with the OTA admin's first-party service key, `test` or `live`. Required with the service key (missing: `400 VALIDATION_FAILED`) and refused with any other credential, whose environment is the key's. `live` needs an OTA that is live and a role other than `viewer`; ConsoleStaffSession.environments lists the environments the staff member may open. */
+                /** @description Environment of a console call made with the OTA admin's first-party service key, `test` or `live`. Required with the service key (missing: `400 VALIDATION_FAILED`) and refused with any other credential, whose environment is the key's. `live` needs an OTA that is live and a role other than `viewer`, otherwise `403 ENVIRONMENT_NOT_ALLOWED`; ConsoleStaffSession.environments lists the environments the staff member may open. */
                 "X-Velexis-Environment"?: components["parameters"]["VelexisEnvironment"];
                 /**
                  * @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server), and for the OTA admin's service key on console operations (below); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`.
@@ -21435,7 +22537,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description Environment of a console call made with the OTA admin's first-party service key, `test` or `live`. Required with the service key (missing: `400 VALIDATION_FAILED`) and refused with any other credential, whose environment is the key's. `live` needs an OTA that is live and a role other than `viewer`; ConsoleStaffSession.environments lists the environments the staff member may open. */
+                /** @description Environment of a console call made with the OTA admin's first-party service key, `test` or `live`. Required with the service key (missing: `400 VALIDATION_FAILED`) and refused with any other credential, whose environment is the key's. `live` needs an OTA that is live and a role other than `viewer`, otherwise `403 ENVIRONMENT_NOT_ALLOWED`; ConsoleStaffSession.environments lists the environments the staff member may open. */
                 "X-Velexis-Environment"?: components["parameters"]["VelexisEnvironment"];
                 /**
                  * @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server), and for the OTA admin's service key on console operations (below); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`.
@@ -21595,7 +22697,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description Environment of a console call made with the OTA admin's first-party service key, `test` or `live`. Required with the service key (missing: `400 VALIDATION_FAILED`) and refused with any other credential, whose environment is the key's. `live` needs an OTA that is live and a role other than `viewer`; ConsoleStaffSession.environments lists the environments the staff member may open. */
+                /** @description Environment of a console call made with the OTA admin's first-party service key, `test` or `live`. Required with the service key (missing: `400 VALIDATION_FAILED`) and refused with any other credential, whose environment is the key's. `live` needs an OTA that is live and a role other than `viewer`, otherwise `403 ENVIRONMENT_NOT_ALLOWED`; ConsoleStaffSession.environments lists the environments the staff member may open. */
                 "X-Velexis-Environment"?: components["parameters"]["VelexisEnvironment"];
                 /**
                  * @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server), and for the OTA admin's service key on console operations (below); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`.
@@ -21830,7 +22932,7 @@ export interface operations {
                 forceClass?: boolean;
             };
             header?: {
-                /** @description Environment of a console call made with the OTA admin's first-party service key, `test` or `live`. Required with the service key (missing: `400 VALIDATION_FAILED`) and refused with any other credential, whose environment is the key's. `live` needs an OTA that is live and a role other than `viewer`; ConsoleStaffSession.environments lists the environments the staff member may open. */
+                /** @description Environment of a console call made with the OTA admin's first-party service key, `test` or `live`. Required with the service key (missing: `400 VALIDATION_FAILED`) and refused with any other credential, whose environment is the key's. `live` needs an OTA that is live and a role other than `viewer`, otherwise `403 ENVIRONMENT_NOT_ALLOWED`; ConsoleStaffSession.environments lists the environments the staff member may open. */
                 "X-Velexis-Environment"?: components["parameters"]["VelexisEnvironment"];
                 /**
                  * @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server), and for the OTA admin's service key on console operations (below); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`.
@@ -22097,7 +23199,7 @@ export interface operations {
             header: {
                 /** @description Client-generated unique key (UUID v4) that makes the request safe to retry for 24 hours. */
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
-                /** @description Environment of a console call made with the OTA admin's first-party service key, `test` or `live`. Required with the service key (missing: `400 VALIDATION_FAILED`) and refused with any other credential, whose environment is the key's. `live` needs an OTA that is live and a role other than `viewer`; ConsoleStaffSession.environments lists the environments the staff member may open. */
+                /** @description Environment of a console call made with the OTA admin's first-party service key, `test` or `live`. Required with the service key (missing: `400 VALIDATION_FAILED`) and refused with any other credential, whose environment is the key's. `live` needs an OTA that is live and a role other than `viewer`, otherwise `403 ENVIRONMENT_NOT_ALLOWED`; ConsoleStaffSession.environments lists the environments the staff member may open. */
                 "X-Velexis-Environment"?: components["parameters"]["VelexisEnvironment"];
                 /**
                  * @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server), and for the OTA admin's service key on console operations (below); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`.
@@ -22375,7 +23477,7 @@ export interface operations {
             header: {
                 /** @description Client-generated unique key (UUID v4) that makes the request safe to retry for 24 hours. */
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
-                /** @description Environment of a console call made with the OTA admin's first-party service key, `test` or `live`. Required with the service key (missing: `400 VALIDATION_FAILED`) and refused with any other credential, whose environment is the key's. `live` needs an OTA that is live and a role other than `viewer`; ConsoleStaffSession.environments lists the environments the staff member may open. */
+                /** @description Environment of a console call made with the OTA admin's first-party service key, `test` or `live`. Required with the service key (missing: `400 VALIDATION_FAILED`) and refused with any other credential, whose environment is the key's. `live` needs an OTA that is live and a role other than `viewer`, otherwise `403 ENVIRONMENT_NOT_ALLOWED`; ConsoleStaffSession.environments lists the environments the staff member may open. */
                 "X-Velexis-Environment"?: components["parameters"]["VelexisEnvironment"];
                 /**
                  * @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server), and for the OTA admin's service key on console operations (below); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`.
@@ -22513,7 +23615,7 @@ export interface operations {
                 fareRules?: components["parameters"]["ConsoleOrderFareRules"];
             };
             header?: {
-                /** @description Environment of a console call made with the OTA admin's first-party service key, `test` or `live`. Required with the service key (missing: `400 VALIDATION_FAILED`) and refused with any other credential, whose environment is the key's. `live` needs an OTA that is live and a role other than `viewer`; ConsoleStaffSession.environments lists the environments the staff member may open. */
+                /** @description Environment of a console call made with the OTA admin's first-party service key, `test` or `live`. Required with the service key (missing: `400 VALIDATION_FAILED`) and refused with any other credential, whose environment is the key's. `live` needs an OTA that is live and a role other than `viewer`, otherwise `403 ENVIRONMENT_NOT_ALLOWED`; ConsoleStaffSession.environments lists the environments the staff member may open. */
                 "X-Velexis-Environment"?: components["parameters"]["VelexisEnvironment"];
                 /**
                  * @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server), and for the OTA admin's service key on console operations (below); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`.
@@ -22690,7 +23792,7 @@ export interface operations {
                 reason: string;
             };
             header?: {
-                /** @description Environment of a console call made with the OTA admin's first-party service key, `test` or `live`. Required with the service key (missing: `400 VALIDATION_FAILED`) and refused with any other credential, whose environment is the key's. `live` needs an OTA that is live and a role other than `viewer`; ConsoleStaffSession.environments lists the environments the staff member may open. */
+                /** @description Environment of a console call made with the OTA admin's first-party service key, `test` or `live`. Required with the service key (missing: `400 VALIDATION_FAILED`) and refused with any other credential, whose environment is the key's. `live` needs an OTA that is live and a role other than `viewer`, otherwise `403 ENVIRONMENT_NOT_ALLOWED`; ConsoleStaffSession.environments lists the environments the staff member may open. */
                 "X-Velexis-Environment"?: components["parameters"]["VelexisEnvironment"];
                 /**
                  * @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server), and for the OTA admin's service key on console operations (below); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`.
@@ -22760,7 +23862,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description Environment of a console call made with the OTA admin's first-party service key, `test` or `live`. Required with the service key (missing: `400 VALIDATION_FAILED`) and refused with any other credential, whose environment is the key's. `live` needs an OTA that is live and a role other than `viewer`; ConsoleStaffSession.environments lists the environments the staff member may open. */
+                /** @description Environment of a console call made with the OTA admin's first-party service key, `test` or `live`. Required with the service key (missing: `400 VALIDATION_FAILED`) and refused with any other credential, whose environment is the key's. `live` needs an OTA that is live and a role other than `viewer`, otherwise `403 ENVIRONMENT_NOT_ALLOWED`; ConsoleStaffSession.environments lists the environments the staff member may open. */
                 "X-Velexis-Environment"?: components["parameters"]["VelexisEnvironment"];
                 /**
                  * @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server), and for the OTA admin's service key on console operations (below); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`.
@@ -22929,7 +24031,7 @@ export interface operations {
                 include?: components["parameters"]["ConsoleOrderInclude"];
             };
             header?: {
-                /** @description Environment of a console call made with the OTA admin's first-party service key, `test` or `live`. Required with the service key (missing: `400 VALIDATION_FAILED`) and refused with any other credential, whose environment is the key's. `live` needs an OTA that is live and a role other than `viewer`; ConsoleStaffSession.environments lists the environments the staff member may open. */
+                /** @description Environment of a console call made with the OTA admin's first-party service key, `test` or `live`. Required with the service key (missing: `400 VALIDATION_FAILED`) and refused with any other credential, whose environment is the key's. `live` needs an OTA that is live and a role other than `viewer`, otherwise `403 ENVIRONMENT_NOT_ALLOWED`; ConsoleStaffSession.environments lists the environments the staff member may open. */
                 "X-Velexis-Environment"?: components["parameters"]["VelexisEnvironment"];
                 /**
                  * @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server), and for the OTA admin's service key on console operations (below); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`.
@@ -23060,7 +24162,7 @@ export interface operations {
                 officeId?: components["parameters"]["ConsoleQueueOfficeId"];
             };
             header?: {
-                /** @description Environment of a console call made with the OTA admin's first-party service key, `test` or `live`. Required with the service key (missing: `400 VALIDATION_FAILED`) and refused with any other credential, whose environment is the key's. `live` needs an OTA that is live and a role other than `viewer`; ConsoleStaffSession.environments lists the environments the staff member may open. */
+                /** @description Environment of a console call made with the OTA admin's first-party service key, `test` or `live`. Required with the service key (missing: `400 VALIDATION_FAILED`) and refused with any other credential, whose environment is the key's. `live` needs an OTA that is live and a role other than `viewer`, otherwise `403 ENVIRONMENT_NOT_ALLOWED`; ConsoleStaffSession.environments lists the environments the staff member may open. */
                 "X-Velexis-Environment"?: components["parameters"]["VelexisEnvironment"];
                 /**
                  * @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server), and for the OTA admin's service key on console operations (below); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`.
@@ -23162,6 +24264,875 @@ export interface operations {
             502: components["responses"]["SupplierError"];
             503: components["responses"]["ServiceUnavailable"];
             504: components["responses"]["SupplierTimeout"];
+        };
+    };
+    consoleListMarkupRules: {
+        parameters: {
+            query?: {
+                /** @description `true`: only enabled rules (`isActive`); `false`: only disabled ones; absent: every rule. */
+                active?: components["parameters"]["ConsoleSettingsActiveFilter"];
+                /** @description Opaque cursor from page.nextCursor. */
+                cursor?: components["parameters"]["Cursor"];
+                /** @description Page size. */
+                limit?: components["parameters"]["Limit"];
+            };
+            header?: {
+                /** @description BCP 47 locale for messages and display texts. */
+                "Accept-Language"?: components["parameters"]["AcceptLanguage"];
+                /** @description Environment of a console call made with the OTA admin's first-party service key, `test` or `live`. Required with the service key (missing: `400 VALIDATION_FAILED`) and refused with any other credential, whose environment is the key's. `live` needs an OTA that is live and a role other than `viewer`, otherwise `403 ENVIRONMENT_NOT_ALLOWED`; ConsoleStaffSession.environments lists the environments the staff member may open. */
+                "X-Velexis-Environment"?: components["parameters"]["VelexisEnvironment"];
+                /**
+                 * @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server), and for the OTA admin's service key on console operations (below); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`.
+                 *
+                 *     **Console operations.** Honoured for secret keys as above and for the OTA admin's first-party service key, which must send it: the staff member's address (the right-most `X-Forwarded-For` entry Caddy gave the admin). With the service key a missing or malformed value answers `400 VALIDATION_FAILED`; the value drives the console sign-in throttle (10 per minute per end-user IP), the lockout and the staff audit log (`staff_actions`). Other callers' values are ignored.
+                 */
+                "X-Velexis-End-User-IP"?: components["parameters"]["CustomerEndUserIp"];
+                /**
+                 * @description User-Agent of the visitor's browser for calls your server makes on their behalf with a secret or hosting key (longer values are truncated to 512 characters). Honoured only for secret and hosting keys, and for the OTA admin's service key on console operations; publishable-key calls use the request's own `User-Agent`. Recorded as session metadata (`AuthSessionDetails.userAgent`, new-sign-in security emails) and used by abuse heuristics. SDK: `options.endUser.userAgent` or the client option `endUser`.
+                 *
+                 *     **Console operations.** The OTA admin's first-party service key must send the staff member's user agent (missing: `400 VALIDATION_FAILED`); it is recorded in the staff audit log (`staff_actions`).
+                 */
+                "X-Velexis-End-User-Agent"?: components["parameters"]["CustomerEndUserAgent"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of markup rules. */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MarkupRulePage"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["ConsoleForbidden"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    consoleCreateMarkupRule: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Client-generated unique key (UUID v4) that makes the request safe to retry for 24 hours. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+                /** @description BCP 47 locale for messages and display texts. */
+                "Accept-Language"?: components["parameters"]["AcceptLanguage"];
+                /** @description Environment of a console call made with the OTA admin's first-party service key, `test` or `live`. Required with the service key (missing: `400 VALIDATION_FAILED`) and refused with any other credential, whose environment is the key's. `live` needs an OTA that is live and a role other than `viewer`, otherwise `403 ENVIRONMENT_NOT_ALLOWED`; ConsoleStaffSession.environments lists the environments the staff member may open. */
+                "X-Velexis-Environment"?: components["parameters"]["VelexisEnvironment"];
+                /**
+                 * @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server), and for the OTA admin's service key on console operations (below); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`.
+                 *
+                 *     **Console operations.** Honoured for secret keys as above and for the OTA admin's first-party service key, which must send it: the staff member's address (the right-most `X-Forwarded-For` entry Caddy gave the admin). With the service key a missing or malformed value answers `400 VALIDATION_FAILED`; the value drives the console sign-in throttle (10 per minute per end-user IP), the lockout and the staff audit log (`staff_actions`). Other callers' values are ignored.
+                 */
+                "X-Velexis-End-User-IP"?: components["parameters"]["CustomerEndUserIp"];
+                /**
+                 * @description User-Agent of the visitor's browser for calls your server makes on their behalf with a secret or hosting key (longer values are truncated to 512 characters). Honoured only for secret and hosting keys, and for the OTA admin's service key on console operations; publishable-key calls use the request's own `User-Agent`. Recorded as session metadata (`AuthSessionDetails.userAgent`, new-sign-in security emails) and used by abuse heuristics. SDK: `options.endUser.userAgent` or the client option `endUser`.
+                 *
+                 *     **Console operations.** The OTA admin's first-party service key must send the staff member's user agent (missing: `400 VALIDATION_FAILED`); it is recorded in the staff audit log (`staff_actions`).
+                 */
+                "X-Velexis-End-User-Agent"?: components["parameters"]["CustomerEndUserAgent"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MarkupRuleInput"];
+            };
+        };
+        responses: {
+            /** @description The markup rule was created. */
+            201: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    Location: components["headers"]["Location"];
+                    ETag: components["headers"]["ETag"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MarkupRule"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["ConsoleForbidden"];
+            409: components["responses"]["SettingsConflict"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    consoleGetMarkupRule: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description BCP 47 locale for messages and display texts. */
+                "Accept-Language"?: components["parameters"]["AcceptLanguage"];
+                /** @description Environment of a console call made with the OTA admin's first-party service key, `test` or `live`. Required with the service key (missing: `400 VALIDATION_FAILED`) and refused with any other credential, whose environment is the key's. `live` needs an OTA that is live and a role other than `viewer`, otherwise `403 ENVIRONMENT_NOT_ALLOWED`; ConsoleStaffSession.environments lists the environments the staff member may open. */
+                "X-Velexis-Environment"?: components["parameters"]["VelexisEnvironment"];
+                /**
+                 * @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server), and for the OTA admin's service key on console operations (below); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`.
+                 *
+                 *     **Console operations.** Honoured for secret keys as above and for the OTA admin's first-party service key, which must send it: the staff member's address (the right-most `X-Forwarded-For` entry Caddy gave the admin). With the service key a missing or malformed value answers `400 VALIDATION_FAILED`; the value drives the console sign-in throttle (10 per minute per end-user IP), the lockout and the staff audit log (`staff_actions`). Other callers' values are ignored.
+                 */
+                "X-Velexis-End-User-IP"?: components["parameters"]["CustomerEndUserIp"];
+                /**
+                 * @description User-Agent of the visitor's browser for calls your server makes on their behalf with a secret or hosting key (longer values are truncated to 512 characters). Honoured only for secret and hosting keys, and for the OTA admin's service key on console operations; publishable-key calls use the request's own `User-Agent`. Recorded as session metadata (`AuthSessionDetails.userAgent`, new-sign-in security emails) and used by abuse heuristics. SDK: `options.endUser.userAgent` or the client option `endUser`.
+                 *
+                 *     **Console operations.** The OTA admin's first-party service key must send the staff member's user agent (missing: `400 VALIDATION_FAILED`); it is recorded in the staff audit log (`staff_actions`).
+                 */
+                "X-Velexis-End-User-Agent"?: components["parameters"]["CustomerEndUserAgent"];
+            };
+            path: {
+                /** @description Markup rule id (`mkr_…`). */
+                markupRuleId: components["parameters"]["ConsoleMarkupRuleId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The markup rule. */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    ETag: components["headers"]["ETag"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MarkupRule"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["ConsoleForbidden"];
+            404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    consoleDeleteMarkupRule: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description ETag of the version being modified. */
+                "If-Match": components["parameters"]["IfMatch"];
+                /** @description BCP 47 locale for messages and display texts. */
+                "Accept-Language"?: components["parameters"]["AcceptLanguage"];
+                /** @description Environment of a console call made with the OTA admin's first-party service key, `test` or `live`. Required with the service key (missing: `400 VALIDATION_FAILED`) and refused with any other credential, whose environment is the key's. `live` needs an OTA that is live and a role other than `viewer`, otherwise `403 ENVIRONMENT_NOT_ALLOWED`; ConsoleStaffSession.environments lists the environments the staff member may open. */
+                "X-Velexis-Environment"?: components["parameters"]["VelexisEnvironment"];
+                /**
+                 * @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server), and for the OTA admin's service key on console operations (below); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`.
+                 *
+                 *     **Console operations.** Honoured for secret keys as above and for the OTA admin's first-party service key, which must send it: the staff member's address (the right-most `X-Forwarded-For` entry Caddy gave the admin). With the service key a missing or malformed value answers `400 VALIDATION_FAILED`; the value drives the console sign-in throttle (10 per minute per end-user IP), the lockout and the staff audit log (`staff_actions`). Other callers' values are ignored.
+                 */
+                "X-Velexis-End-User-IP"?: components["parameters"]["CustomerEndUserIp"];
+                /**
+                 * @description User-Agent of the visitor's browser for calls your server makes on their behalf with a secret or hosting key (longer values are truncated to 512 characters). Honoured only for secret and hosting keys, and for the OTA admin's service key on console operations; publishable-key calls use the request's own `User-Agent`. Recorded as session metadata (`AuthSessionDetails.userAgent`, new-sign-in security emails) and used by abuse heuristics. SDK: `options.endUser.userAgent` or the client option `endUser`.
+                 *
+                 *     **Console operations.** The OTA admin's first-party service key must send the staff member's user agent (missing: `400 VALIDATION_FAILED`); it is recorded in the staff audit log (`staff_actions`).
+                 */
+                "X-Velexis-End-User-Agent"?: components["parameters"]["CustomerEndUserAgent"];
+            };
+            path: {
+                /** @description Markup rule id (`mkr_…`). */
+                markupRuleId: components["parameters"]["ConsoleMarkupRuleId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The markup rule was deleted. */
+            204: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["ConsoleForbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["SettingsConflict"];
+            412: components["responses"]["PreconditionFailed"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    consoleUpdateMarkupRule: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description ETag of the version being modified. */
+                "If-Match": components["parameters"]["IfMatch"];
+                /** @description BCP 47 locale for messages and display texts. */
+                "Accept-Language"?: components["parameters"]["AcceptLanguage"];
+                /** @description Environment of a console call made with the OTA admin's first-party service key, `test` or `live`. Required with the service key (missing: `400 VALIDATION_FAILED`) and refused with any other credential, whose environment is the key's. `live` needs an OTA that is live and a role other than `viewer`, otherwise `403 ENVIRONMENT_NOT_ALLOWED`; ConsoleStaffSession.environments lists the environments the staff member may open. */
+                "X-Velexis-Environment"?: components["parameters"]["VelexisEnvironment"];
+                /**
+                 * @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server), and for the OTA admin's service key on console operations (below); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`.
+                 *
+                 *     **Console operations.** Honoured for secret keys as above and for the OTA admin's first-party service key, which must send it: the staff member's address (the right-most `X-Forwarded-For` entry Caddy gave the admin). With the service key a missing or malformed value answers `400 VALIDATION_FAILED`; the value drives the console sign-in throttle (10 per minute per end-user IP), the lockout and the staff audit log (`staff_actions`). Other callers' values are ignored.
+                 */
+                "X-Velexis-End-User-IP"?: components["parameters"]["CustomerEndUserIp"];
+                /**
+                 * @description User-Agent of the visitor's browser for calls your server makes on their behalf with a secret or hosting key (longer values are truncated to 512 characters). Honoured only for secret and hosting keys, and for the OTA admin's service key on console operations; publishable-key calls use the request's own `User-Agent`. Recorded as session metadata (`AuthSessionDetails.userAgent`, new-sign-in security emails) and used by abuse heuristics. SDK: `options.endUser.userAgent` or the client option `endUser`.
+                 *
+                 *     **Console operations.** The OTA admin's first-party service key must send the staff member's user agent (missing: `400 VALIDATION_FAILED`); it is recorded in the staff audit log (`staff_actions`).
+                 */
+                "X-Velexis-End-User-Agent"?: components["parameters"]["CustomerEndUserAgent"];
+            };
+            path: {
+                /** @description Markup rule id (`mkr_…`). */
+                markupRuleId: components["parameters"]["ConsoleMarkupRuleId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MarkupRuleUpdate"];
+            };
+        };
+        responses: {
+            /** @description The updated markup rule. */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    ETag: components["headers"]["ETag"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MarkupRule"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["ConsoleForbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["SettingsConflict"];
+            412: components["responses"]["PreconditionFailed"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    consoleListFeeRules: {
+        parameters: {
+            query?: {
+                /** @description `true`: only enabled rules (`isActive`); `false`: only disabled ones; absent: every rule. */
+                active?: components["parameters"]["ConsoleSettingsActiveFilter"];
+                /** @description Opaque cursor from page.nextCursor. */
+                cursor?: components["parameters"]["Cursor"];
+                /** @description Page size. */
+                limit?: components["parameters"]["Limit"];
+            };
+            header?: {
+                /** @description BCP 47 locale for messages and display texts. */
+                "Accept-Language"?: components["parameters"]["AcceptLanguage"];
+                /** @description Environment of a console call made with the OTA admin's first-party service key, `test` or `live`. Required with the service key (missing: `400 VALIDATION_FAILED`) and refused with any other credential, whose environment is the key's. `live` needs an OTA that is live and a role other than `viewer`, otherwise `403 ENVIRONMENT_NOT_ALLOWED`; ConsoleStaffSession.environments lists the environments the staff member may open. */
+                "X-Velexis-Environment"?: components["parameters"]["VelexisEnvironment"];
+                /**
+                 * @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server), and for the OTA admin's service key on console operations (below); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`.
+                 *
+                 *     **Console operations.** Honoured for secret keys as above and for the OTA admin's first-party service key, which must send it: the staff member's address (the right-most `X-Forwarded-For` entry Caddy gave the admin). With the service key a missing or malformed value answers `400 VALIDATION_FAILED`; the value drives the console sign-in throttle (10 per minute per end-user IP), the lockout and the staff audit log (`staff_actions`). Other callers' values are ignored.
+                 */
+                "X-Velexis-End-User-IP"?: components["parameters"]["CustomerEndUserIp"];
+                /**
+                 * @description User-Agent of the visitor's browser for calls your server makes on their behalf with a secret or hosting key (longer values are truncated to 512 characters). Honoured only for secret and hosting keys, and for the OTA admin's service key on console operations; publishable-key calls use the request's own `User-Agent`. Recorded as session metadata (`AuthSessionDetails.userAgent`, new-sign-in security emails) and used by abuse heuristics. SDK: `options.endUser.userAgent` or the client option `endUser`.
+                 *
+                 *     **Console operations.** The OTA admin's first-party service key must send the staff member's user agent (missing: `400 VALIDATION_FAILED`); it is recorded in the staff audit log (`staff_actions`).
+                 */
+                "X-Velexis-End-User-Agent"?: components["parameters"]["CustomerEndUserAgent"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of fee rules. */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FeeRulePage"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["ConsoleForbidden"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    consoleCreateFeeRule: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Client-generated unique key (UUID v4) that makes the request safe to retry for 24 hours. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+                /** @description BCP 47 locale for messages and display texts. */
+                "Accept-Language"?: components["parameters"]["AcceptLanguage"];
+                /** @description Environment of a console call made with the OTA admin's first-party service key, `test` or `live`. Required with the service key (missing: `400 VALIDATION_FAILED`) and refused with any other credential, whose environment is the key's. `live` needs an OTA that is live and a role other than `viewer`, otherwise `403 ENVIRONMENT_NOT_ALLOWED`; ConsoleStaffSession.environments lists the environments the staff member may open. */
+                "X-Velexis-Environment"?: components["parameters"]["VelexisEnvironment"];
+                /**
+                 * @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server), and for the OTA admin's service key on console operations (below); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`.
+                 *
+                 *     **Console operations.** Honoured for secret keys as above and for the OTA admin's first-party service key, which must send it: the staff member's address (the right-most `X-Forwarded-For` entry Caddy gave the admin). With the service key a missing or malformed value answers `400 VALIDATION_FAILED`; the value drives the console sign-in throttle (10 per minute per end-user IP), the lockout and the staff audit log (`staff_actions`). Other callers' values are ignored.
+                 */
+                "X-Velexis-End-User-IP"?: components["parameters"]["CustomerEndUserIp"];
+                /**
+                 * @description User-Agent of the visitor's browser for calls your server makes on their behalf with a secret or hosting key (longer values are truncated to 512 characters). Honoured only for secret and hosting keys, and for the OTA admin's service key on console operations; publishable-key calls use the request's own `User-Agent`. Recorded as session metadata (`AuthSessionDetails.userAgent`, new-sign-in security emails) and used by abuse heuristics. SDK: `options.endUser.userAgent` or the client option `endUser`.
+                 *
+                 *     **Console operations.** The OTA admin's first-party service key must send the staff member's user agent (missing: `400 VALIDATION_FAILED`); it is recorded in the staff audit log (`staff_actions`).
+                 */
+                "X-Velexis-End-User-Agent"?: components["parameters"]["CustomerEndUserAgent"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FeeRuleInput"];
+            };
+        };
+        responses: {
+            /** @description The fee rule was created. */
+            201: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    Location: components["headers"]["Location"];
+                    ETag: components["headers"]["ETag"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FeeRule"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["ConsoleForbidden"];
+            409: components["responses"]["SettingsConflict"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    consoleGetFeeRule: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description BCP 47 locale for messages and display texts. */
+                "Accept-Language"?: components["parameters"]["AcceptLanguage"];
+                /** @description Environment of a console call made with the OTA admin's first-party service key, `test` or `live`. Required with the service key (missing: `400 VALIDATION_FAILED`) and refused with any other credential, whose environment is the key's. `live` needs an OTA that is live and a role other than `viewer`, otherwise `403 ENVIRONMENT_NOT_ALLOWED`; ConsoleStaffSession.environments lists the environments the staff member may open. */
+                "X-Velexis-Environment"?: components["parameters"]["VelexisEnvironment"];
+                /**
+                 * @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server), and for the OTA admin's service key on console operations (below); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`.
+                 *
+                 *     **Console operations.** Honoured for secret keys as above and for the OTA admin's first-party service key, which must send it: the staff member's address (the right-most `X-Forwarded-For` entry Caddy gave the admin). With the service key a missing or malformed value answers `400 VALIDATION_FAILED`; the value drives the console sign-in throttle (10 per minute per end-user IP), the lockout and the staff audit log (`staff_actions`). Other callers' values are ignored.
+                 */
+                "X-Velexis-End-User-IP"?: components["parameters"]["CustomerEndUserIp"];
+                /**
+                 * @description User-Agent of the visitor's browser for calls your server makes on their behalf with a secret or hosting key (longer values are truncated to 512 characters). Honoured only for secret and hosting keys, and for the OTA admin's service key on console operations; publishable-key calls use the request's own `User-Agent`. Recorded as session metadata (`AuthSessionDetails.userAgent`, new-sign-in security emails) and used by abuse heuristics. SDK: `options.endUser.userAgent` or the client option `endUser`.
+                 *
+                 *     **Console operations.** The OTA admin's first-party service key must send the staff member's user agent (missing: `400 VALIDATION_FAILED`); it is recorded in the staff audit log (`staff_actions`).
+                 */
+                "X-Velexis-End-User-Agent"?: components["parameters"]["CustomerEndUserAgent"];
+            };
+            path: {
+                /** @description Fee rule id (`fee_…`). */
+                feeRuleId: components["parameters"]["ConsoleFeeRuleId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The fee rule. */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    ETag: components["headers"]["ETag"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FeeRule"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["ConsoleForbidden"];
+            404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    consoleDeleteFeeRule: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description ETag of the version being modified. */
+                "If-Match": components["parameters"]["IfMatch"];
+                /** @description BCP 47 locale for messages and display texts. */
+                "Accept-Language"?: components["parameters"]["AcceptLanguage"];
+                /** @description Environment of a console call made with the OTA admin's first-party service key, `test` or `live`. Required with the service key (missing: `400 VALIDATION_FAILED`) and refused with any other credential, whose environment is the key's. `live` needs an OTA that is live and a role other than `viewer`, otherwise `403 ENVIRONMENT_NOT_ALLOWED`; ConsoleStaffSession.environments lists the environments the staff member may open. */
+                "X-Velexis-Environment"?: components["parameters"]["VelexisEnvironment"];
+                /**
+                 * @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server), and for the OTA admin's service key on console operations (below); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`.
+                 *
+                 *     **Console operations.** Honoured for secret keys as above and for the OTA admin's first-party service key, which must send it: the staff member's address (the right-most `X-Forwarded-For` entry Caddy gave the admin). With the service key a missing or malformed value answers `400 VALIDATION_FAILED`; the value drives the console sign-in throttle (10 per minute per end-user IP), the lockout and the staff audit log (`staff_actions`). Other callers' values are ignored.
+                 */
+                "X-Velexis-End-User-IP"?: components["parameters"]["CustomerEndUserIp"];
+                /**
+                 * @description User-Agent of the visitor's browser for calls your server makes on their behalf with a secret or hosting key (longer values are truncated to 512 characters). Honoured only for secret and hosting keys, and for the OTA admin's service key on console operations; publishable-key calls use the request's own `User-Agent`. Recorded as session metadata (`AuthSessionDetails.userAgent`, new-sign-in security emails) and used by abuse heuristics. SDK: `options.endUser.userAgent` or the client option `endUser`.
+                 *
+                 *     **Console operations.** The OTA admin's first-party service key must send the staff member's user agent (missing: `400 VALIDATION_FAILED`); it is recorded in the staff audit log (`staff_actions`).
+                 */
+                "X-Velexis-End-User-Agent"?: components["parameters"]["CustomerEndUserAgent"];
+            };
+            path: {
+                /** @description Fee rule id (`fee_…`). */
+                feeRuleId: components["parameters"]["ConsoleFeeRuleId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The fee rule was deleted. */
+            204: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["ConsoleForbidden"];
+            404: components["responses"]["NotFound"];
+            412: components["responses"]["PreconditionFailed"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    consoleUpdateFeeRule: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description ETag of the version being modified. */
+                "If-Match": components["parameters"]["IfMatch"];
+                /** @description BCP 47 locale for messages and display texts. */
+                "Accept-Language"?: components["parameters"]["AcceptLanguage"];
+                /** @description Environment of a console call made with the OTA admin's first-party service key, `test` or `live`. Required with the service key (missing: `400 VALIDATION_FAILED`) and refused with any other credential, whose environment is the key's. `live` needs an OTA that is live and a role other than `viewer`, otherwise `403 ENVIRONMENT_NOT_ALLOWED`; ConsoleStaffSession.environments lists the environments the staff member may open. */
+                "X-Velexis-Environment"?: components["parameters"]["VelexisEnvironment"];
+                /**
+                 * @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server), and for the OTA admin's service key on console operations (below); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`.
+                 *
+                 *     **Console operations.** Honoured for secret keys as above and for the OTA admin's first-party service key, which must send it: the staff member's address (the right-most `X-Forwarded-For` entry Caddy gave the admin). With the service key a missing or malformed value answers `400 VALIDATION_FAILED`; the value drives the console sign-in throttle (10 per minute per end-user IP), the lockout and the staff audit log (`staff_actions`). Other callers' values are ignored.
+                 */
+                "X-Velexis-End-User-IP"?: components["parameters"]["CustomerEndUserIp"];
+                /**
+                 * @description User-Agent of the visitor's browser for calls your server makes on their behalf with a secret or hosting key (longer values are truncated to 512 characters). Honoured only for secret and hosting keys, and for the OTA admin's service key on console operations; publishable-key calls use the request's own `User-Agent`. Recorded as session metadata (`AuthSessionDetails.userAgent`, new-sign-in security emails) and used by abuse heuristics. SDK: `options.endUser.userAgent` or the client option `endUser`.
+                 *
+                 *     **Console operations.** The OTA admin's first-party service key must send the staff member's user agent (missing: `400 VALIDATION_FAILED`); it is recorded in the staff audit log (`staff_actions`).
+                 */
+                "X-Velexis-End-User-Agent"?: components["parameters"]["CustomerEndUserAgent"];
+            };
+            path: {
+                /** @description Fee rule id (`fee_…`). */
+                feeRuleId: components["parameters"]["ConsoleFeeRuleId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FeeRuleUpdate"];
+            };
+        };
+        responses: {
+            /** @description The updated fee rule. */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    ETag: components["headers"]["ETag"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FeeRule"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["ConsoleForbidden"];
+            404: components["responses"]["NotFound"];
+            412: components["responses"]["PreconditionFailed"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    consoleGetStorefrontSettings: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description BCP 47 locale for messages and display texts. */
+                "Accept-Language"?: components["parameters"]["AcceptLanguage"];
+                /** @description Environment of a console call made with the OTA admin's first-party service key, `test` or `live`. Required with the service key (missing: `400 VALIDATION_FAILED`) and refused with any other credential, whose environment is the key's. `live` needs an OTA that is live and a role other than `viewer`, otherwise `403 ENVIRONMENT_NOT_ALLOWED`; ConsoleStaffSession.environments lists the environments the staff member may open. */
+                "X-Velexis-Environment"?: components["parameters"]["VelexisEnvironment"];
+                /**
+                 * @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server), and for the OTA admin's service key on console operations (below); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`.
+                 *
+                 *     **Console operations.** Honoured for secret keys as above and for the OTA admin's first-party service key, which must send it: the staff member's address (the right-most `X-Forwarded-For` entry Caddy gave the admin). With the service key a missing or malformed value answers `400 VALIDATION_FAILED`; the value drives the console sign-in throttle (10 per minute per end-user IP), the lockout and the staff audit log (`staff_actions`). Other callers' values are ignored.
+                 */
+                "X-Velexis-End-User-IP"?: components["parameters"]["CustomerEndUserIp"];
+                /**
+                 * @description User-Agent of the visitor's browser for calls your server makes on their behalf with a secret or hosting key (longer values are truncated to 512 characters). Honoured only for secret and hosting keys, and for the OTA admin's service key on console operations; publishable-key calls use the request's own `User-Agent`. Recorded as session metadata (`AuthSessionDetails.userAgent`, new-sign-in security emails) and used by abuse heuristics. SDK: `options.endUser.userAgent` or the client option `endUser`.
+                 *
+                 *     **Console operations.** The OTA admin's first-party service key must send the staff member's user agent (missing: `400 VALIDATION_FAILED`); it is recorded in the staff audit log (`staff_actions`).
+                 */
+                "X-Velexis-End-User-Agent"?: components["parameters"]["CustomerEndUserAgent"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The storefront settings. */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    ETag: components["headers"]["ETag"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StorefrontSettings"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["ConsoleForbidden"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    consoleUpdateStorefrontSettings: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description ETag of the version being modified. */
+                "If-Match": components["parameters"]["IfMatch"];
+                /** @description BCP 47 locale for messages and display texts. */
+                "Accept-Language"?: components["parameters"]["AcceptLanguage"];
+                /** @description Environment of a console call made with the OTA admin's first-party service key, `test` or `live`. Required with the service key (missing: `400 VALIDATION_FAILED`) and refused with any other credential, whose environment is the key's. `live` needs an OTA that is live and a role other than `viewer`, otherwise `403 ENVIRONMENT_NOT_ALLOWED`; ConsoleStaffSession.environments lists the environments the staff member may open. */
+                "X-Velexis-Environment"?: components["parameters"]["VelexisEnvironment"];
+                /**
+                 * @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server), and for the OTA admin's service key on console operations (below); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`.
+                 *
+                 *     **Console operations.** Honoured for secret keys as above and for the OTA admin's first-party service key, which must send it: the staff member's address (the right-most `X-Forwarded-For` entry Caddy gave the admin). With the service key a missing or malformed value answers `400 VALIDATION_FAILED`; the value drives the console sign-in throttle (10 per minute per end-user IP), the lockout and the staff audit log (`staff_actions`). Other callers' values are ignored.
+                 */
+                "X-Velexis-End-User-IP"?: components["parameters"]["CustomerEndUserIp"];
+                /**
+                 * @description User-Agent of the visitor's browser for calls your server makes on their behalf with a secret or hosting key (longer values are truncated to 512 characters). Honoured only for secret and hosting keys, and for the OTA admin's service key on console operations; publishable-key calls use the request's own `User-Agent`. Recorded as session metadata (`AuthSessionDetails.userAgent`, new-sign-in security emails) and used by abuse heuristics. SDK: `options.endUser.userAgent` or the client option `endUser`.
+                 *
+                 *     **Console operations.** The OTA admin's first-party service key must send the staff member's user agent (missing: `400 VALIDATION_FAILED`); it is recorded in the staff audit log (`staff_actions`).
+                 */
+                "X-Velexis-End-User-Agent"?: components["parameters"]["CustomerEndUserAgent"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StorefrontSettingsUpdate"];
+            };
+        };
+        responses: {
+            /** @description The updated storefront settings, with warnings. */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    ETag: components["headers"]["ETag"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StorefrontSettingsUpdateResult"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["StorefrontSettingsForbidden"];
+            412: components["responses"]["PreconditionFailed"];
+            422: components["responses"]["SettingsUnprocessable"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    consoleListNotificationTemplates: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description BCP 47 locale for messages and display texts. */
+                "Accept-Language"?: components["parameters"]["AcceptLanguage"];
+                /** @description Environment of a console call made with the OTA admin's first-party service key, `test` or `live`. Required with the service key (missing: `400 VALIDATION_FAILED`) and refused with any other credential, whose environment is the key's. `live` needs an OTA that is live and a role other than `viewer`, otherwise `403 ENVIRONMENT_NOT_ALLOWED`; ConsoleStaffSession.environments lists the environments the staff member may open. */
+                "X-Velexis-Environment"?: components["parameters"]["VelexisEnvironment"];
+                /**
+                 * @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server), and for the OTA admin's service key on console operations (below); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`.
+                 *
+                 *     **Console operations.** Honoured for secret keys as above and for the OTA admin's first-party service key, which must send it: the staff member's address (the right-most `X-Forwarded-For` entry Caddy gave the admin). With the service key a missing or malformed value answers `400 VALIDATION_FAILED`; the value drives the console sign-in throttle (10 per minute per end-user IP), the lockout and the staff audit log (`staff_actions`). Other callers' values are ignored.
+                 */
+                "X-Velexis-End-User-IP"?: components["parameters"]["CustomerEndUserIp"];
+                /**
+                 * @description User-Agent of the visitor's browser for calls your server makes on their behalf with a secret or hosting key (longer values are truncated to 512 characters). Honoured only for secret and hosting keys, and for the OTA admin's service key on console operations; publishable-key calls use the request's own `User-Agent`. Recorded as session metadata (`AuthSessionDetails.userAgent`, new-sign-in security emails) and used by abuse heuristics. SDK: `options.endUser.userAgent` or the client option `endUser`.
+                 *
+                 *     **Console operations.** The OTA admin's first-party service key must send the staff member's user agent (missing: `400 VALIDATION_FAILED`); it is recorded in the staff audit log (`staff_actions`).
+                 */
+                "X-Velexis-End-User-Agent"?: components["parameters"]["CustomerEndUserAgent"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The effective templates. */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationTemplateList"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["ConsoleForbidden"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    consoleGetNotificationTemplate: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description BCP 47 locale for messages and display texts. */
+                "Accept-Language"?: components["parameters"]["AcceptLanguage"];
+                /** @description Environment of a console call made with the OTA admin's first-party service key, `test` or `live`. Required with the service key (missing: `400 VALIDATION_FAILED`) and refused with any other credential, whose environment is the key's. `live` needs an OTA that is live and a role other than `viewer`, otherwise `403 ENVIRONMENT_NOT_ALLOWED`; ConsoleStaffSession.environments lists the environments the staff member may open. */
+                "X-Velexis-Environment"?: components["parameters"]["VelexisEnvironment"];
+                /**
+                 * @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server), and for the OTA admin's service key on console operations (below); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`.
+                 *
+                 *     **Console operations.** Honoured for secret keys as above and for the OTA admin's first-party service key, which must send it: the staff member's address (the right-most `X-Forwarded-For` entry Caddy gave the admin). With the service key a missing or malformed value answers `400 VALIDATION_FAILED`; the value drives the console sign-in throttle (10 per minute per end-user IP), the lockout and the staff audit log (`staff_actions`). Other callers' values are ignored.
+                 */
+                "X-Velexis-End-User-IP"?: components["parameters"]["CustomerEndUserIp"];
+                /**
+                 * @description User-Agent of the visitor's browser for calls your server makes on their behalf with a secret or hosting key (longer values are truncated to 512 characters). Honoured only for secret and hosting keys, and for the OTA admin's service key on console operations; publishable-key calls use the request's own `User-Agent`. Recorded as session metadata (`AuthSessionDetails.userAgent`, new-sign-in security emails) and used by abuse heuristics. SDK: `options.endUser.userAgent` or the client option `endUser`.
+                 *
+                 *     **Console operations.** The OTA admin's first-party service key must send the staff member's user agent (missing: `400 VALIDATION_FAILED`); it is recorded in the staff audit log (`staff_actions`).
+                 */
+                "X-Velexis-End-User-Agent"?: components["parameters"]["CustomerEndUserAgent"];
+            };
+            path: {
+                /** @description Template key (NotificationTemplateKey). */
+                templateKey: components["parameters"]["NotificationTemplateKeyPath"];
+                /** @description Delivery channel; `email` only in the MVP. */
+                channel: components["parameters"]["NotificationTemplateChannelPath"];
+                /** @description Locale of the template (BCP 47, such as `en` or `fr-CA`). */
+                locale: components["parameters"]["NotificationTemplateLocalePath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The effective template. */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    ETag: components["headers"]["ETag"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationTemplate"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["ConsoleForbidden"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    consolePutNotificationTemplate: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description `ETag` of the OTA's existing template; required when the OTA has a row for this key, channel and locale, absent when it has none. */
+                "If-Match"?: string;
+                /** @description BCP 47 locale for messages and display texts. */
+                "Accept-Language"?: components["parameters"]["AcceptLanguage"];
+                /** @description Environment of a console call made with the OTA admin's first-party service key, `test` or `live`. Required with the service key (missing: `400 VALIDATION_FAILED`) and refused with any other credential, whose environment is the key's. `live` needs an OTA that is live and a role other than `viewer`, otherwise `403 ENVIRONMENT_NOT_ALLOWED`; ConsoleStaffSession.environments lists the environments the staff member may open. */
+                "X-Velexis-Environment"?: components["parameters"]["VelexisEnvironment"];
+                /**
+                 * @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server), and for the OTA admin's service key on console operations (below); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`.
+                 *
+                 *     **Console operations.** Honoured for secret keys as above and for the OTA admin's first-party service key, which must send it: the staff member's address (the right-most `X-Forwarded-For` entry Caddy gave the admin). With the service key a missing or malformed value answers `400 VALIDATION_FAILED`; the value drives the console sign-in throttle (10 per minute per end-user IP), the lockout and the staff audit log (`staff_actions`). Other callers' values are ignored.
+                 */
+                "X-Velexis-End-User-IP"?: components["parameters"]["CustomerEndUserIp"];
+                /**
+                 * @description User-Agent of the visitor's browser for calls your server makes on their behalf with a secret or hosting key (longer values are truncated to 512 characters). Honoured only for secret and hosting keys, and for the OTA admin's service key on console operations; publishable-key calls use the request's own `User-Agent`. Recorded as session metadata (`AuthSessionDetails.userAgent`, new-sign-in security emails) and used by abuse heuristics. SDK: `options.endUser.userAgent` or the client option `endUser`.
+                 *
+                 *     **Console operations.** The OTA admin's first-party service key must send the staff member's user agent (missing: `400 VALIDATION_FAILED`); it is recorded in the staff audit log (`staff_actions`).
+                 */
+                "X-Velexis-End-User-Agent"?: components["parameters"]["CustomerEndUserAgent"];
+            };
+            path: {
+                /** @description Template key (NotificationTemplateKey). */
+                templateKey: components["parameters"]["NotificationTemplateKeyPath"];
+                /** @description Delivery channel; `email` only in the MVP. */
+                channel: components["parameters"]["NotificationTemplateChannelPath"];
+                /** @description Locale of the template (BCP 47, such as `en` or `fr-CA`). */
+                locale: components["parameters"]["NotificationTemplateLocalePath"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NotificationTemplateInput"];
+            };
+        };
+        responses: {
+            /** @description The saved template. */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    ETag: components["headers"]["ETag"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationTemplate"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["ConsoleForbidden"];
+            412: components["responses"]["PreconditionFailed"];
+            422: components["responses"]["TemplateUnprocessable"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    consolePreviewNotificationTemplate: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description BCP 47 locale for messages and display texts. */
+                "Accept-Language"?: components["parameters"]["AcceptLanguage"];
+                /** @description Environment of a console call made with the OTA admin's first-party service key, `test` or `live`. Required with the service key (missing: `400 VALIDATION_FAILED`) and refused with any other credential, whose environment is the key's. `live` needs an OTA that is live and a role other than `viewer`, otherwise `403 ENVIRONMENT_NOT_ALLOWED`; ConsoleStaffSession.environments lists the environments the staff member may open. */
+                "X-Velexis-Environment"?: components["parameters"]["VelexisEnvironment"];
+                /**
+                 * @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server), and for the OTA admin's service key on console operations (below); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`.
+                 *
+                 *     **Console operations.** Honoured for secret keys as above and for the OTA admin's first-party service key, which must send it: the staff member's address (the right-most `X-Forwarded-For` entry Caddy gave the admin). With the service key a missing or malformed value answers `400 VALIDATION_FAILED`; the value drives the console sign-in throttle (10 per minute per end-user IP), the lockout and the staff audit log (`staff_actions`). Other callers' values are ignored.
+                 */
+                "X-Velexis-End-User-IP"?: components["parameters"]["CustomerEndUserIp"];
+                /**
+                 * @description User-Agent of the visitor's browser for calls your server makes on their behalf with a secret or hosting key (longer values are truncated to 512 characters). Honoured only for secret and hosting keys, and for the OTA admin's service key on console operations; publishable-key calls use the request's own `User-Agent`. Recorded as session metadata (`AuthSessionDetails.userAgent`, new-sign-in security emails) and used by abuse heuristics. SDK: `options.endUser.userAgent` or the client option `endUser`.
+                 *
+                 *     **Console operations.** The OTA admin's first-party service key must send the staff member's user agent (missing: `400 VALIDATION_FAILED`); it is recorded in the staff audit log (`staff_actions`).
+                 */
+                "X-Velexis-End-User-Agent"?: components["parameters"]["CustomerEndUserAgent"];
+            };
+            path: {
+                /** @description Template key (NotificationTemplateKey). */
+                templateKey: components["parameters"]["NotificationTemplateKeyPath"];
+                /** @description Delivery channel; `email` only in the MVP. */
+                channel: components["parameters"]["NotificationTemplateChannelPath"];
+                /** @description Locale of the template (BCP 47, such as `en` or `fr-CA`). */
+                locale: components["parameters"]["NotificationTemplateLocalePath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["NotificationTemplatePreviewRequest"];
+            };
+        };
+        responses: {
+            /** @description The rendered template. */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "subject": "Your trip VX7K2Q is confirmed",
+                     *       "html": "<p>Hello Anna,</p><p>Your booking VX7K2Q is confirmed.</p>",
+                     *       "text": "Hello Anna,\nYour booking VX7K2Q is confirmed."
+                     *     }
+                     */
+                    "application/json": components["schemas"]["NotificationTemplatePreview"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["ConsoleForbidden"];
+            422: components["responses"]["TemplateUnprocessable"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    consoleResetNotificationTemplate: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description BCP 47 locale for messages and display texts. */
+                "Accept-Language"?: components["parameters"]["AcceptLanguage"];
+                /** @description Environment of a console call made with the OTA admin's first-party service key, `test` or `live`. Required with the service key (missing: `400 VALIDATION_FAILED`) and refused with any other credential, whose environment is the key's. `live` needs an OTA that is live and a role other than `viewer`, otherwise `403 ENVIRONMENT_NOT_ALLOWED`; ConsoleStaffSession.environments lists the environments the staff member may open. */
+                "X-Velexis-Environment"?: components["parameters"]["VelexisEnvironment"];
+                /**
+                 * @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server), and for the OTA admin's service key on console operations (below); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`.
+                 *
+                 *     **Console operations.** Honoured for secret keys as above and for the OTA admin's first-party service key, which must send it: the staff member's address (the right-most `X-Forwarded-For` entry Caddy gave the admin). With the service key a missing or malformed value answers `400 VALIDATION_FAILED`; the value drives the console sign-in throttle (10 per minute per end-user IP), the lockout and the staff audit log (`staff_actions`). Other callers' values are ignored.
+                 */
+                "X-Velexis-End-User-IP"?: components["parameters"]["CustomerEndUserIp"];
+                /**
+                 * @description User-Agent of the visitor's browser for calls your server makes on their behalf with a secret or hosting key (longer values are truncated to 512 characters). Honoured only for secret and hosting keys, and for the OTA admin's service key on console operations; publishable-key calls use the request's own `User-Agent`. Recorded as session metadata (`AuthSessionDetails.userAgent`, new-sign-in security emails) and used by abuse heuristics. SDK: `options.endUser.userAgent` or the client option `endUser`.
+                 *
+                 *     **Console operations.** The OTA admin's first-party service key must send the staff member's user agent (missing: `400 VALIDATION_FAILED`); it is recorded in the staff audit log (`staff_actions`).
+                 */
+                "X-Velexis-End-User-Agent"?: components["parameters"]["CustomerEndUserAgent"];
+            };
+            path: {
+                /** @description Template key (NotificationTemplateKey). */
+                templateKey: components["parameters"]["NotificationTemplateKeyPath"];
+                /** @description Delivery channel; `email` only in the MVP. */
+                channel: components["parameters"]["NotificationTemplateChannelPath"];
+                /** @description Locale of the template (BCP 47, such as `en` or `fr-CA`). */
+                locale: components["parameters"]["NotificationTemplateLocalePath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The code default that applies now. */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationTemplate"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["ConsoleForbidden"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
         };
     };
 }

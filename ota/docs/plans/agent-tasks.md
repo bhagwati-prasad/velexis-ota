@@ -1600,7 +1600,8 @@ Checkout, customer accounts in cookies, Stripe on the Velexis account, the airli
 
 The console API (staff sign-in by portal token, bookings, PNR import, queues, customers, supplier log, raw Amadeus reads, payments, settings), the `console` SDK namespace, the OTA admin app and the storefront content pages. Platform task PFE-019 is gated on OF-09 (OBE-059, OAD-003, OAD-016).
 
-### OBE-058 · Spec-first: console permissions and settings operations
+### OBE-058 · Spec-first: console permissions and settings operations ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-backend
 - **Milestone:** M4
 - **Depends on:** OBE-029

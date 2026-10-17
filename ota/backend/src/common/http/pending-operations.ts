@@ -121,6 +121,24 @@ export const PENDING_OPERATIONS: Readonly<Partial<Record<OtaOperationId, Pending
   consoleAmadeusIssueFlightOrder: "deferred",
   consoleAmadeusCancelFlightOrder: "deferred",
   consoleAmadeusPatchFlightOrder: "deferred",
+  // Console settings (OBE-058): markup and fee rules, storefront settings, notification templates
+  consoleListMarkupRules: "OBE-069",
+  consoleCreateMarkupRule: "OBE-069",
+  consoleGetMarkupRule: "OBE-069",
+  consoleUpdateMarkupRule: "OBE-069",
+  consoleDeleteMarkupRule: "OBE-069",
+  consoleListFeeRules: "OBE-069",
+  consoleCreateFeeRule: "OBE-069",
+  consoleGetFeeRule: "OBE-069",
+  consoleUpdateFeeRule: "OBE-069",
+  consoleDeleteFeeRule: "OBE-069",
+  consoleGetStorefrontSettings: "OBE-070",
+  consoleUpdateStorefrontSettings: "OBE-070",
+  consoleListNotificationTemplates: "OBE-073",
+  consoleGetNotificationTemplate: "OBE-073",
+  consolePutNotificationTemplate: "OBE-073",
+  consolePreviewNotificationTemplate: "OBE-073",
+  consoleResetNotificationTemplate: "OBE-073",
 });
 
 /**

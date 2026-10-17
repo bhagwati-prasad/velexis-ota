@@ -28,9 +28,12 @@ interface Example {
 
 let document: OpenApiDocument;
 
+// Parsing the document and compiling its request validators takes about 1.5 s alone, and several times longer on a
+// machine that runs every package's tests at once (past the 10 s default hook timeout), so the hook gets the same
+// budget as the replay hook below.
 beforeAll(() => {
   document = loadOpenApiDocument();
-});
+}, 60_000);
 
 /** The examples of a Media Type or Parameter Object: `example`, and the values of `examples` (refs resolved). */
 function examplesOf(owner: JsonObject, where: string): Example[] {

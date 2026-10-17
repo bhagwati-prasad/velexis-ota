@@ -282,10 +282,13 @@ function send(server: TestApp["server"], method: string, url: string): request.T
 let api: TestApp;
 let routes: HandlerRoute[];
 
+// Building the app parses the OpenAPI document and compiles its request validators (the HTTP module's
+// OpenApiDocument provider): a few seconds alone, several times longer on a machine that runs every package's tests
+// at once, so the hook has its own budget rather than the 10 s default.
 beforeAll(async () => {
   api = await createTestApp();
   routes = collectRoutes(api.app);
-});
+}, 60_000);
 
 afterAll(async () => {
   await api.close();

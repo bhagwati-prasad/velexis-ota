@@ -67,6 +67,11 @@ export const STAFF_PERMISSIONS = Object.freeze([
   "supplier_requests:read",
   "amadeus:read",
   "amadeus:write",
+  "settings:read",
+  "settings:write",
+  "payments:read",
+  "payments:capture",
+  "payments:refund",
 ] as const satisfies readonly StaffPermission[]);
 
 /** A key that passed every check: what the request context keeps of it (never the key or its hash). */

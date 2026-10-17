@@ -73,7 +73,9 @@ info:
     route-parity allow-list).
 
     - `x-permission` (console operation): the `StaffPermission` the operation needs; a staff member or key without it
-    gets `403 FORBIDDEN` (`details.requiredPermission`).
+    gets `403 FORBIDDEN` (`details.requiredPermission`). Every console operation has one; `none` marks the four
+    staff-session operations (console.auth.signIn, refresh, signOut, me), which need a portal token, a refresh token
+    or a staff session but no permission.
 
     - `x-sensitive: true` (schema): card data (the `card` of checkout.completeWithAirlineCard); processed in memory
     for one request and never logged, stored, cached or queued, and never echoed in a response or an error.
@@ -246,6 +248,13 @@ tags:
       from the console. Calls run with the OTA's own Amadeus connection (environment of the API key); responses are net
       supplier data (no markup) and are never shown to customers. Each call writes supplier_requests (redacted) and
       staff_actions.
+  - name: Console settings
+    description: >-
+      The OTA's settings, edited in the OTA admin: markup rules and fee rules (how net prices become selling prices,
+      OADR-0005), the storefront settings (brand, branding, locales, currencies, markets, features, policies, the
+      airline card, legal, support, SEO, consent, operations; OADR-0012) and the e-mail templates (OADR-0013). Settings
+      are shared by the test and live environments (one set per OTA). Reads need `settings:read`, changes
+      `settings:write` (owner and admin only); every call writes staff_actions.
 x-tagGroups:
   - name: Storefront & identity
     tags:
@@ -274,6 +283,7 @@ x-tagGroups:
       - Console customers
       - Console supplier log
       - Console Amadeus
+      - Console settings
 paths:
   /v1/storefront:
     get:
@@ -5381,6 +5391,7 @@ paths:
         - FORBIDDEN
         - SCOPE_NOT_ALLOWED
         - TENANT_SUSPENDED
+        - ENVIRONMENT_NOT_ALLOWED
         - FEATURE_DISABLED
         - IDEMPOTENCY_KEY_REUSED
         - CONFLICT
@@ -5393,6 +5404,7 @@ paths:
         - SUPPLIER_UNAVAILABLE
         - SUPPLIER_TIMEOUT
       x-scope: console
+      x-permission: amadeus:read
       x-milestone: deferred
       parameters:
         - $ref: '#/components/parameters/IdempotencyKey'
@@ -10737,11 +10749,13 @@ paths:
         - SCOPE_NOT_ALLOWED
         - TENANT_SUSPENDED
         - STAFF_MEMBERSHIP_INACTIVE
+        - ENVIRONMENT_NOT_ALLOWED
         - IDEMPOTENCY_KEY_REUSED
         - ACCOUNT_LOCKED
         - RATE_LIMITED
         - INTERNAL_ERROR
       x-scope: console
+      x-permission: none
       x-milestone: M4
       parameters:
         - $ref: '#/components/parameters/IdempotencyKey'
@@ -10845,10 +10859,12 @@ paths:
         - SCOPE_NOT_ALLOWED
         - TENANT_SUSPENDED
         - STAFF_MEMBERSHIP_INACTIVE
+        - ENVIRONMENT_NOT_ALLOWED
         - IDEMPOTENCY_KEY_REUSED
         - RATE_LIMITED
         - INTERNAL_ERROR
       x-scope: console
+      x-permission: none
       x-milestone: M4
       parameters:
         - $ref: '#/components/parameters/IdempotencyKey'
@@ -10926,10 +10942,12 @@ paths:
         - INVALID_API_KEY
         - SCOPE_NOT_ALLOWED
         - TENANT_SUSPENDED
+        - ENVIRONMENT_NOT_ALLOWED
         - IDEMPOTENCY_KEY_REUSED
         - RATE_LIMITED
         - INTERNAL_ERROR
       x-scope: console
+      x-permission: none
       x-milestone: M4
       parameters:
         - $ref: '#/components/parameters/IdempotencyKey'
@@ -10974,11 +10992,13 @@ paths:
         to render navigation and hide actions the role cannot perform.
 
 
-        **Role → permissions.** `owner`, `admin`: all permissions. `agent`: `bookings:read`, `bookings:write`,
-        `bookings:issue`, `bookings:cancel`, `customers:read`, `queues:read`, `supplier_requests:read`, `amadeus:read`.
-        `finance`: `bookings:read`, `customers:read`, `supplier_requests:read`. `viewer`: `bookings:read`,
-        `customers:read`. `amadeus:write` (raw create/patch/issue/cancel) is limited to `owner` and `admin`. `me` always
-        needs a staff token. Console calls **without** a staff token are automation calls: they are accepted only from a
+        **Role → permissions** (StaffPermission). `owner`, `admin`: all permissions. `agent`: `bookings:read`,
+        `bookings:write`, `bookings:issue`, `bookings:cancel`, `customers:read`, `queues:read`, `supplier_requests:read`,
+        `amadeus:read`, `payments:read`, `payments:capture`, `settings:read`. `finance`: `bookings:read`,
+        `customers:read`, `supplier_requests:read`, `payments:read`, `payments:capture`, `payments:refund`,
+        `settings:read`. `viewer`: `bookings:read`, `customers:read`, `payments:read`, `settings:read`. `amadeus:write`
+        (raw create/patch/issue/cancel) and `settings:write` are limited to `owner` and `admin`. `me` always needs a
+        staff token. Console calls **without** a staff token are automation calls: they are accepted only from a
         secret key whose scopes include `console:automation`, act with exactly the permissions listed in the key's
         scopes (never every permission) and are attributed to the API key (`actor.type = api_key`); otherwise `403
         SCOPE_NOT_ALLOWED` (`details.requiredScope`) or `403 FORBIDDEN` (`details.requiredPermission`). See
@@ -11010,9 +11030,11 @@ paths:
         - SCOPE_NOT_ALLOWED
         - TENANT_SUSPENDED
         - STAFF_MEMBERSHIP_INACTIVE
+        - ENVIRONMENT_NOT_ALLOWED
         - RATE_LIMITED
         - INTERNAL_ERROR
       x-scope: console
+      x-permission: none
       x-milestone: M4
       parameters:
         - $ref: '#/components/parameters/AcceptLanguage'
@@ -11109,9 +11131,11 @@ paths:
         - SCOPE_NOT_ALLOWED
         - TENANT_SUSPENDED
         - STAFF_MEMBERSHIP_INACTIVE
+        - ENVIRONMENT_NOT_ALLOWED
         - RATE_LIMITED
         - INTERNAL_ERROR
       x-scope: console
+      x-permission: bookings:read
       x-milestone: M4
       parameters:
         - $ref: '#/components/parameters/ConsoleBookingStatusFilter'
@@ -11418,6 +11442,7 @@ paths:
         - SCOPE_NOT_ALLOWED
         - TENANT_SUSPENDED
         - STAFF_MEMBERSHIP_INACTIVE
+        - ENVIRONMENT_NOT_ALLOWED
         - OFFICE_NOT_ALLOWED
         - NOT_FOUND
         - IDEMPOTENCY_KEY_REUSED
@@ -11436,6 +11461,7 @@ paths:
         - SUPPLIER_UNAVAILABLE
         - SUPPLIER_TIMEOUT
       x-scope: console
+      x-permission: bookings:write
       x-milestone: deferred
       parameters:
         - $ref: '#/components/parameters/IdempotencyKey'
@@ -11644,6 +11670,7 @@ paths:
         - SCOPE_NOT_ALLOWED
         - TENANT_SUSPENDED
         - STAFF_MEMBERSHIP_INACTIVE
+        - ENVIRONMENT_NOT_ALLOWED
         - NOT_FOUND
         - RATE_LIMITED
         - INTERNAL_ERROR
@@ -11652,6 +11679,7 @@ paths:
         - SUPPLIER_UNAVAILABLE
         - SUPPLIER_TIMEOUT
       x-scope: console
+      x-permission: bookings:read
       x-milestone: M4
       parameters:
         - name: bookingId
@@ -11748,6 +11776,12 @@ paths:
         Permission `bookings:write`. PATCH is retry-safe with the same `If-Match` (a replay after success answers 412).
 
 
+        **No card numbers in the console (MVP).** A `creditCard` entry in `formOfPayments` answers `403
+        FEATURE_DISABLED` with `details.feature = "consoleCardPayment"` before anything is sent to Amadeus: card data
+        reaches the OTA only through the hosted storefront's airline-card route (ADR-0011, OADR-0018 point 8). Use
+        `other` (`CASH`, `ACCOUNT`) or `b2bWallet`.
+
+
         **Key-only calls.** Without a staff token the secret key must carry the `console:automation` scope and this
         operation's permission in `platform.api_keys.scopes` — otherwise `403 SCOPE_NOT_ALLOWED`
         (`details.requiredScope`) or `403 FORBIDDEN` (`details.requiredPermission`); such calls are audited as the API
@@ -11787,6 +11821,8 @@ paths:
         - SCOPE_NOT_ALLOWED
         - TENANT_SUSPENDED
         - STAFF_MEMBERSHIP_INACTIVE
+        - ENVIRONMENT_NOT_ALLOWED
+        - FEATURE_DISABLED
         - OFFICE_NOT_ALLOWED
         - NOT_FOUND
         - VERSION_CONFLICT
@@ -11803,6 +11839,7 @@ paths:
         - SUPPLIER_UNAVAILABLE
         - SUPPLIER_TIMEOUT
       x-scope: console
+      x-permission: bookings:write
       x-milestone: M4
       parameters:
         - name: bookingId
@@ -11959,6 +11996,13 @@ paths:
         (`paymentStatus = not_applicable`) need no payment. Permission `bookings:issue`.
 
 
+        **No card numbers in the console (MVP).** A `creditCard` entry in `formOfPayments` answers `403
+        FEATURE_DISABLED` with `details.feature = "consoleCardPayment"` before anything is sent to Amadeus: card data
+        reaches the OTA only through the hosted storefront's airline-card route (ADR-0011, OADR-0018 point 8). An
+        airline-card booking left without tickets is issued with `other` (`CASH`, `ACCOUNT`: the OTA's own settlement
+        with the airline) or cancelled.
+
+
         **Result.** Amadeus returns the full order with `tickets[]` (documentNumber, documentStatus, travelerId,
         segmentIds): `booking_tickets` rows are created, status becomes `ticketed` (or `partially_ticketed`),
         `bookings.issued_at`, `ticketing.status = issued`; e-ticket receipts and the invoice are queued
@@ -12011,6 +12055,8 @@ paths:
         - SCOPE_NOT_ALLOWED
         - TENANT_SUSPENDED
         - STAFF_MEMBERSHIP_INACTIVE
+        - ENVIRONMENT_NOT_ALLOWED
+        - FEATURE_DISABLED
         - NOT_FOUND
         - IDEMPOTENCY_KEY_REUSED
         - VERSION_CONFLICT
@@ -12027,6 +12073,7 @@ paths:
         - SUPPLIER_UNAVAILABLE
         - SUPPLIER_TIMEOUT
       x-scope: console
+      x-permission: bookings:issue
       x-milestone: M4
       parameters:
         - name: bookingId
@@ -12181,6 +12228,7 @@ paths:
         - SCOPE_NOT_ALLOWED
         - TENANT_SUSPENDED
         - STAFF_MEMBERSHIP_INACTIVE
+        - ENVIRONMENT_NOT_ALLOWED
         - NOT_FOUND
         - IDEMPOTENCY_KEY_REUSED
         - VERSION_CONFLICT
@@ -12196,6 +12244,7 @@ paths:
         - SUPPLIER_UNAVAILABLE
         - SUPPLIER_TIMEOUT
       x-scope: console
+      x-permission: bookings:cancel
       x-milestone: M4
       parameters:
         - name: bookingId
@@ -12318,6 +12367,7 @@ paths:
         - SCOPE_NOT_ALLOWED
         - TENANT_SUSPENDED
         - STAFF_MEMBERSHIP_INACTIVE
+        - ENVIRONMENT_NOT_ALLOWED
         - NOT_FOUND
         - BOOKING_NOT_MODIFIABLE
         - SUPPLIER_REJECTED
@@ -12328,6 +12378,7 @@ paths:
         - SUPPLIER_UNAVAILABLE
         - SUPPLIER_TIMEOUT
       x-scope: console
+      x-permission: bookings:write
       x-milestone: M4
       parameters:
         - name: bookingId
@@ -12434,11 +12485,13 @@ paths:
         - SCOPE_NOT_ALLOWED
         - TENANT_SUSPENDED
         - STAFF_MEMBERSHIP_INACTIVE
+        - ENVIRONMENT_NOT_ALLOWED
         - NOT_FOUND
         - IDEMPOTENCY_KEY_REUSED
         - RATE_LIMITED
         - INTERNAL_ERROR
       x-scope: console
+      x-permission: bookings:write
       x-milestone: M4
       parameters:
         - name: bookingId
@@ -12553,6 +12606,7 @@ paths:
         - SCOPE_NOT_ALLOWED
         - TENANT_SUSPENDED
         - STAFF_MEMBERSHIP_INACTIVE
+        - ENVIRONMENT_NOT_ALLOWED
         - NOT_FOUND
         - SUPPLIER_REJECTED
         - SUPPLIER_NOT_CONFIGURED
@@ -12562,6 +12616,7 @@ paths:
         - SUPPLIER_UNAVAILABLE
         - SUPPLIER_TIMEOUT
       x-scope: console
+      x-permission: bookings:read
       x-milestone: M4
       parameters:
         - $ref: '#/components/parameters/ConsoleRecordLocator'
@@ -12685,6 +12740,7 @@ paths:
         - SCOPE_NOT_ALLOWED
         - TENANT_SUSPENDED
         - STAFF_MEMBERSHIP_INACTIVE
+        - ENVIRONMENT_NOT_ALLOWED
         - NOT_FOUND
         - IDEMPOTENCY_KEY_REUSED
         - ORDER_ALREADY_IMPORTED
@@ -12697,6 +12753,7 @@ paths:
         - SUPPLIER_UNAVAILABLE
         - SUPPLIER_TIMEOUT
       x-scope: console
+      x-permission: bookings:write
       x-milestone: M4
       parameters:
         - $ref: '#/components/parameters/IdempotencyKey'
@@ -12816,6 +12873,7 @@ paths:
         - SCOPE_NOT_ALLOWED
         - TENANT_SUSPENDED
         - STAFF_MEMBERSHIP_INACTIVE
+        - ENVIRONMENT_NOT_ALLOWED
         - NOT_FOUND
         - BOOKING_NOT_MODIFIABLE
         - SUPPLIER_REJECTED
@@ -12826,6 +12884,7 @@ paths:
         - SUPPLIER_UNAVAILABLE
         - SUPPLIER_TIMEOUT
       x-scope: console
+      x-permission: bookings:read
       x-milestone: M4
       parameters:
         - name: bookingId
@@ -12941,6 +13000,7 @@ paths:
         - SCOPE_NOT_ALLOWED
         - TENANT_SUSPENDED
         - STAFF_MEMBERSHIP_INACTIVE
+        - ENVIRONMENT_NOT_ALLOWED
         - OFFICE_NOT_ALLOWED
         - SUPPLIER_REJECTED
         - SUPPLIER_NOT_CONFIGURED
@@ -12950,6 +13010,7 @@ paths:
         - SUPPLIER_UNAVAILABLE
         - SUPPLIER_TIMEOUT
       x-scope: console
+      x-permission: queues:read
       x-milestone: M4
       parameters:
         - name: queueId
@@ -13096,9 +13157,11 @@ paths:
         - SCOPE_NOT_ALLOWED
         - TENANT_SUSPENDED
         - STAFF_MEMBERSHIP_INACTIVE
+        - ENVIRONMENT_NOT_ALLOWED
         - RATE_LIMITED
         - INTERNAL_ERROR
       x-scope: console
+      x-permission: queues:read
       x-milestone: M4
       parameters:
         - name: queueId
@@ -13250,9 +13313,11 @@ paths:
         - SCOPE_NOT_ALLOWED
         - TENANT_SUSPENDED
         - STAFF_MEMBERSHIP_INACTIVE
+        - ENVIRONMENT_NOT_ALLOWED
         - RATE_LIMITED
         - INTERNAL_ERROR
       x-scope: console
+      x-permission: customers:read
       x-milestone: M4
       parameters:
         - name: q
@@ -13402,10 +13467,12 @@ paths:
         - SCOPE_NOT_ALLOWED
         - TENANT_SUSPENDED
         - STAFF_MEMBERSHIP_INACTIVE
+        - ENVIRONMENT_NOT_ALLOWED
         - NOT_FOUND
         - RATE_LIMITED
         - INTERNAL_ERROR
       x-scope: console
+      x-permission: customers:read
       x-milestone: M4
       parameters:
         - name: customerId
@@ -13561,9 +13628,11 @@ paths:
         - SCOPE_NOT_ALLOWED
         - TENANT_SUSPENDED
         - STAFF_MEMBERSHIP_INACTIVE
+        - ENVIRONMENT_NOT_ALLOWED
         - RATE_LIMITED
         - INTERNAL_ERROR
       x-scope: console
+      x-permission: supplier_requests:read
       x-milestone: M4
       parameters:
         - name: bookingId
@@ -13800,6 +13869,7 @@ paths:
         - TENANT_SUSPENDED
         - FEATURE_DISABLED
         - STAFF_MEMBERSHIP_INACTIVE
+        - ENVIRONMENT_NOT_ALLOWED
         - SUPPLIER_REJECTED
         - SUPPLIER_NOT_CONFIGURED
         - RATE_LIMITED
@@ -13808,6 +13878,7 @@ paths:
         - SUPPLIER_UNAVAILABLE
         - SUPPLIER_TIMEOUT
       x-scope: console
+      x-permission: amadeus:read
       x-milestone: M4
       parameters:
         - $ref: '#/components/parameters/VelexisEnvironment'
@@ -14010,6 +14081,7 @@ paths:
         - TENANT_SUSPENDED
         - FEATURE_DISABLED
         - STAFF_MEMBERSHIP_INACTIVE
+        - ENVIRONMENT_NOT_ALLOWED
         - SUPPLIER_REJECTED
         - SUPPLIER_NOT_CONFIGURED
         - RATE_LIMITED
@@ -14018,6 +14090,7 @@ paths:
         - SUPPLIER_UNAVAILABLE
         - SUPPLIER_TIMEOUT
       x-scope: console
+      x-permission: amadeus:read
       x-milestone: M4
       parameters:
         - name: originLocationCode
@@ -14281,6 +14354,7 @@ paths:
         - TENANT_SUSPENDED
         - FEATURE_DISABLED
         - STAFF_MEMBERSHIP_INACTIVE
+        - ENVIRONMENT_NOT_ALLOWED
         - SUPPLIER_REJECTED
         - SUPPLIER_NOT_CONFIGURED
         - RATE_LIMITED
@@ -14289,6 +14363,7 @@ paths:
         - SUPPLIER_UNAVAILABLE
         - SUPPLIER_TIMEOUT
       x-scope: console
+      x-permission: amadeus:read
       x-milestone: M4
       parameters:
         - $ref: '#/components/parameters/VelexisEnvironment'
@@ -14446,6 +14521,7 @@ paths:
         - TENANT_SUSPENDED
         - FEATURE_DISABLED
         - STAFF_MEMBERSHIP_INACTIVE
+        - ENVIRONMENT_NOT_ALLOWED
         - SUPPLIER_REJECTED
         - SUPPLIER_NOT_CONFIGURED
         - RATE_LIMITED
@@ -14454,6 +14530,7 @@ paths:
         - SUPPLIER_UNAVAILABLE
         - SUPPLIER_TIMEOUT
       x-scope: console
+      x-permission: amadeus:read
       x-milestone: M4
       parameters:
         - $ref: '#/components/parameters/VelexisEnvironment'
@@ -14661,6 +14738,7 @@ paths:
         - TENANT_SUSPENDED
         - FEATURE_DISABLED
         - STAFF_MEMBERSHIP_INACTIVE
+        - ENVIRONMENT_NOT_ALLOWED
         - SUPPLIER_REJECTED
         - SUPPLIER_NOT_CONFIGURED
         - RATE_LIMITED
@@ -14669,6 +14747,7 @@ paths:
         - SUPPLIER_UNAVAILABLE
         - SUPPLIER_TIMEOUT
       x-scope: console
+      x-permission: amadeus:read
       x-milestone: M4
       parameters:
         - name: include
@@ -14948,6 +15027,7 @@ paths:
         - TENANT_SUSPENDED
         - FEATURE_DISABLED
         - STAFF_MEMBERSHIP_INACTIVE
+        - ENVIRONMENT_NOT_ALLOWED
         - OFFICE_NOT_ALLOWED
         - IDEMPOTENCY_KEY_REUSED
         - SOLD_OUT
@@ -14961,6 +15041,7 @@ paths:
         - SUPPLIER_UNAVAILABLE
         - SUPPLIER_TIMEOUT
       x-scope: console
+      x-permission: amadeus:write
       x-milestone: deferred
       parameters:
         - $ref: '#/components/parameters/IdempotencyKey'
@@ -15218,6 +15299,7 @@ paths:
         - TENANT_SUSPENDED
         - FEATURE_DISABLED
         - STAFF_MEMBERSHIP_INACTIVE
+        - ENVIRONMENT_NOT_ALLOWED
         - NOT_FOUND
         - IDEMPOTENCY_KEY_REUSED
         - VERSION_CONFLICT
@@ -15230,6 +15312,7 @@ paths:
         - SUPPLIER_UNAVAILABLE
         - SUPPLIER_TIMEOUT
       x-scope: console
+      x-permission: amadeus:write
       x-milestone: deferred
       parameters:
         - name: flightOrderId
@@ -15383,6 +15466,7 @@ paths:
         - TENANT_SUSPENDED
         - FEATURE_DISABLED
         - STAFF_MEMBERSHIP_INACTIVE
+        - ENVIRONMENT_NOT_ALLOWED
         - NOT_FOUND
         - SUPPLIER_REJECTED
         - SUPPLIER_NOT_CONFIGURED
@@ -15392,6 +15476,7 @@ paths:
         - SUPPLIER_UNAVAILABLE
         - SUPPLIER_TIMEOUT
       x-scope: console
+      x-permission: amadeus:read
       x-milestone: M4
       parameters:
         - name: flightOrderId
@@ -15589,6 +15674,7 @@ paths:
         - TENANT_SUSPENDED
         - FEATURE_DISABLED
         - STAFF_MEMBERSHIP_INACTIVE
+        - ENVIRONMENT_NOT_ALLOWED
         - OFFICE_NOT_ALLOWED
         - NOT_FOUND
         - VERSION_CONFLICT
@@ -15600,6 +15686,7 @@ paths:
         - SUPPLIER_UNAVAILABLE
         - SUPPLIER_TIMEOUT
       x-scope: console
+      x-permission: amadeus:write
       x-milestone: deferred
       parameters:
         - name: flightOrderId
@@ -15774,6 +15861,7 @@ paths:
         - TENANT_SUSPENDED
         - FEATURE_DISABLED
         - STAFF_MEMBERSHIP_INACTIVE
+        - ENVIRONMENT_NOT_ALLOWED
         - NOT_FOUND
         - SUPPLIER_REJECTED
         - SUPPLIER_NOT_CONFIGURED
@@ -15783,6 +15871,7 @@ paths:
         - SUPPLIER_UNAVAILABLE
         - SUPPLIER_TIMEOUT
       x-scope: console
+      x-permission: amadeus:write
       x-milestone: deferred
       parameters:
         - name: flightOrderId
@@ -15902,6 +15991,7 @@ paths:
         - TENANT_SUSPENDED
         - FEATURE_DISABLED
         - STAFF_MEMBERSHIP_INACTIVE
+        - ENVIRONMENT_NOT_ALLOWED
         - NOT_FOUND
         - SUPPLIER_REJECTED
         - SUPPLIER_NOT_CONFIGURED
@@ -15911,6 +16001,7 @@ paths:
         - SUPPLIER_UNAVAILABLE
         - SUPPLIER_TIMEOUT
       x-scope: console
+      x-permission: amadeus:read
       x-milestone: M4
       parameters:
         - $ref: '#/components/parameters/ConsoleRecordLocator'
@@ -16047,6 +16138,7 @@ paths:
         - TENANT_SUSPENDED
         - FEATURE_DISABLED
         - STAFF_MEMBERSHIP_INACTIVE
+        - ENVIRONMENT_NOT_ALLOWED
         - OFFICE_NOT_ALLOWED
         - SUPPLIER_REJECTED
         - SUPPLIER_NOT_CONFIGURED
@@ -16056,6 +16148,7 @@ paths:
         - SUPPLIER_UNAVAILABLE
         - SUPPLIER_TIMEOUT
       x-scope: console
+      x-permission: amadeus:read
       x-milestone: M4
       parameters:
         - name: queueId
@@ -16138,6 +16231,1574 @@ paths:
           $ref: '#/components/responses/ServiceUnavailable'
         '504':
           $ref: '#/components/responses/SupplierTimeout'
+  /v1/console/settings/markup-rules:
+    get:
+      operationId: consoleListMarkupRules
+      summary: List the markup rules
+      description: >-
+        Lists the markup rules of the OTA (`markup_rules`), which turn Amadeus net prices into selling prices, in the
+        order the pricing engine evaluates them: `priority` ascending, then `id`. Cursor pagination. `active=true`
+        lists only enabled rules (`isActive`), `active=false` only disabled ones, no `active` every rule. The seeded
+        default rule (`isDefault`, scope `{}`, priority 1000) is one of them; it cannot be deleted.
+
+
+        Settings are shared by the test and live environments (one set of rules per OTA), so `X-Velexis-Environment`
+        changes nothing here. No Amadeus call. Permission `settings:read`; the call is recorded in `staff_actions`.
+
+
+        **Key-only calls.** Without a staff token the secret key must carry the `console:automation` scope and this
+        operation's permission in `platform.api_keys.scopes` — otherwise `403 SCOPE_NOT_ALLOWED`
+        (`details.requiredScope`) or `403 FORBIDDEN` (`details.requiredPermission`); such calls are audited as the API
+        key (see ConsoleApiKeyScope). A key scoped `storefront` is refused even with a staff token.
+      tags:
+        - Console settings
+      security:
+        - apiKey: []
+          staffAuth: []
+        - apiKey: []
+      x-sdk-method: console.settings.markupRules.list
+      x-amadeus: []
+      x-tenant-tables:
+        - markup_rules
+        - staff_actions
+      x-error-codes:
+        - VALIDATION_FAILED
+        - UNAUTHENTICATED
+        - INVALID_API_KEY
+        - TOKEN_EXPIRED
+        - FORBIDDEN
+        - SCOPE_NOT_ALLOWED
+        - TENANT_SUSPENDED
+        - STAFF_MEMBERSHIP_INACTIVE
+        - ENVIRONMENT_NOT_ALLOWED
+        - RATE_LIMITED
+        - INTERNAL_ERROR
+      x-scope: console
+      x-permission: settings:read
+      x-milestone: M4
+      parameters:
+        - $ref: '#/components/parameters/ConsoleSettingsActiveFilter'
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/AcceptLanguage'
+        - $ref: '#/components/parameters/VelexisEnvironment'
+        - $ref: '#/components/parameters/CustomerEndUserIp'
+        - $ref: '#/components/parameters/CustomerEndUserAgent'
+      responses:
+        '200':
+          description: One page of markup rules.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MarkupRulePage'
+              examples:
+                rules:
+                  $ref: '#/components/examples/MarkupRulePageExample'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/ConsoleForbidden'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    post:
+      operationId: consoleCreateMarkupRule
+      summary: Create a markup rule
+      description: >-
+        Creates a markup rule. `name`, `scope` and `calculation` are required, with the values the calculation uses:
+        `percentage` for `percentage` and `percentage_plus_fixed`, `fixed` for `fixed` and `percentage_plus_fixed`
+        (`400 VALIDATION_FAILED` otherwise). `percentage` is a decimal string with up to four decimals from -100 to
+        999.9999 (`"5.0000"` = 5 %, negative = discount); `fixed`, `min` and `max` are amounts with at most two
+        decimals in one currency, the currency of the fixed part and of the caps (`400 VALIDATION_FAILED` otherwise).
+        Omitted fields take their defaults: `appliesPer` `traveler`, `priority` 100, `stackable` false, `isActive`
+        true, no validity window. `isDefault` is not writable: the only default rule is the seeded one.
+
+
+        **Effect.** The rule applies to the next search; offers already stored keep their prices until they expire
+        (OADR-0005). The answer can carry `warnings`: a fixed currency other than the storefront's default currency
+        (`fixed_currency_not_default`: the fixed part applies only to offers in that currency, no conversion) or a
+        negative markup that sells below net (`sells_below_net`).
+
+
+        **Idempotency.** `Idempotency-Key` required (`idempotency_keys`, 24 h): a retry with the same key and body
+        returns the stored rule; the same key with another body → `409 IDEMPOTENCY_KEY_REUSED`.
+
+
+        No Amadeus call. Permission `settings:write`; `staff_actions` records the new rule.
+
+
+        **Key-only calls.** Without a staff token the secret key must carry the `console:automation` scope and this
+        operation's permission in `platform.api_keys.scopes` — otherwise `403 SCOPE_NOT_ALLOWED`
+        (`details.requiredScope`) or `403 FORBIDDEN` (`details.requiredPermission`); such calls are audited as the API
+        key (see ConsoleApiKeyScope). A key scoped `storefront` is refused even with a staff token.
+      tags:
+        - Console settings
+      security:
+        - apiKey: []
+          staffAuth: []
+        - apiKey: []
+      x-sdk-method: console.settings.markupRules.create
+      x-amadeus: []
+      x-tenant-tables:
+        - markup_rules
+        - storefront_settings
+        - staff_actions
+        - idempotency_keys
+      x-error-codes:
+        - VALIDATION_FAILED
+        - UNAUTHENTICATED
+        - INVALID_API_KEY
+        - TOKEN_EXPIRED
+        - FORBIDDEN
+        - SCOPE_NOT_ALLOWED
+        - TENANT_SUSPENDED
+        - STAFF_MEMBERSHIP_INACTIVE
+        - ENVIRONMENT_NOT_ALLOWED
+        - IDEMPOTENCY_KEY_REUSED
+        - RATE_LIMITED
+        - INTERNAL_ERROR
+      x-scope: console
+      x-permission: settings:write
+      x-milestone: M4
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/AcceptLanguage'
+        - $ref: '#/components/parameters/VelexisEnvironment'
+        - $ref: '#/components/parameters/CustomerEndUserIp'
+        - $ref: '#/components/parameters/CustomerEndUserAgent'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MarkupRuleInput'
+            examples:
+              longHaul:
+                summary: 4 % on long-haul economy from France, at least 15 EUR per traveller
+                value:
+                  name: Long-haul economy
+                  description: 4 % on economy from France above 400 EUR net, at least 15 EUR per traveller.
+                  scope:
+                    originCountries:
+                      - FR
+                    cabins:
+                      - ECONOMY
+                    minNet: '400.00'
+                  calculation: percentage
+                  percentage: '4.0000'
+                  appliesPer: traveler
+                  min:
+                    amount: '15.00'
+                    currency: EUR
+                  priority: 100
+              promotion:
+                summary: A stackable 10 EUR discount per booking on one carrier for October
+                value:
+                  name: AF October promotion
+                  scope:
+                    carriers:
+                      - AF
+                  calculation: fixed
+                  fixed:
+                    amount: '-10.00'
+                    currency: EUR
+                  appliesPer: booking
+                  priority: 50
+                  stackable: true
+                  activeFrom: '2026-10-01T00:00:00Z'
+                  activeUntil: '2026-11-01T00:00:00Z'
+      responses:
+        '201':
+          description: The markup rule was created.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+            Location:
+              $ref: '#/components/headers/Location'
+            ETag:
+              $ref: '#/components/headers/ETag'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MarkupRule'
+              examples:
+                rule:
+                  $ref: '#/components/examples/MarkupRuleExample'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/ConsoleForbidden'
+        '409':
+          $ref: '#/components/responses/SettingsConflict'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /v1/console/settings/markup-rules/{markupRuleId}:
+    get:
+      operationId: consoleGetMarkupRule
+      summary: Get a markup rule
+      description: >-
+        Returns one markup rule. `ETag` = `"<version>"`: pass it as `If-Match` to update or delete the rule. No Amadeus
+        call. Permission `settings:read`; the call is recorded in `staff_actions`.
+
+
+        **Key-only calls.** Without a staff token the secret key must carry the `console:automation` scope and this
+        operation's permission in `platform.api_keys.scopes` — otherwise `403 SCOPE_NOT_ALLOWED`
+        (`details.requiredScope`) or `403 FORBIDDEN` (`details.requiredPermission`); such calls are audited as the API
+        key (see ConsoleApiKeyScope). A key scoped `storefront` is refused even with a staff token.
+      tags:
+        - Console settings
+      security:
+        - apiKey: []
+          staffAuth: []
+        - apiKey: []
+      x-sdk-method: console.settings.markupRules.get
+      x-amadeus: []
+      x-tenant-tables:
+        - markup_rules
+        - staff_actions
+      x-error-codes:
+        - VALIDATION_FAILED
+        - UNAUTHENTICATED
+        - INVALID_API_KEY
+        - TOKEN_EXPIRED
+        - FORBIDDEN
+        - SCOPE_NOT_ALLOWED
+        - TENANT_SUSPENDED
+        - STAFF_MEMBERSHIP_INACTIVE
+        - ENVIRONMENT_NOT_ALLOWED
+        - NOT_FOUND
+        - RATE_LIMITED
+        - INTERNAL_ERROR
+      x-scope: console
+      x-permission: settings:read
+      x-milestone: M4
+      parameters:
+        - $ref: '#/components/parameters/ConsoleMarkupRuleId'
+        - $ref: '#/components/parameters/AcceptLanguage'
+        - $ref: '#/components/parameters/VelexisEnvironment'
+        - $ref: '#/components/parameters/CustomerEndUserIp'
+        - $ref: '#/components/parameters/CustomerEndUserAgent'
+      responses:
+        '200':
+          description: The markup rule.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+            ETag:
+              $ref: '#/components/headers/ETag'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MarkupRule'
+              examples:
+                rule:
+                  $ref: '#/components/examples/MarkupRuleExample'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/ConsoleForbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    patch:
+      operationId: consoleUpdateMarkupRule
+      summary: Update a markup rule
+      description: >-
+        Changes any subset of a markup rule's fields (`MarkupRuleUpdate`); fields not sent keep their value, `null`
+        clears a nullable one, and `scope` is replaced as a whole. The changed rule must still satisfy the rules of
+        console.settings.markupRules.create (the values of its `calculation`, one currency, `activeUntil` after
+        `activeFrom`), else `400 VALIDATION_FAILED`.
+
+
+        **Default rule.** The seeded default rule (`isDefault`) keeps its catch-all scope: a `scope` that is not empty
+        (`{}`) answers `409 CONFLICT` with `details.reason = "default_rule"`; its percentage, priority and the other
+        fields may change.
+
+
+        **Preconditions.** `If-Match` = the `ETag` of the rule (`412 PRECONDITION_FAILED` when stale). The answer has
+        the new `version` and `ETag`, and can carry `warnings` like create. Changes apply to the next search; stored
+        offers keep their prices (OADR-0005). No Amadeus call. Permission `settings:write`; `staff_actions` records the
+        rule before and after.
+
+
+        **Key-only calls.** Without a staff token the secret key must carry the `console:automation` scope and this
+        operation's permission in `platform.api_keys.scopes` — otherwise `403 SCOPE_NOT_ALLOWED`
+        (`details.requiredScope`) or `403 FORBIDDEN` (`details.requiredPermission`); such calls are audited as the API
+        key (see ConsoleApiKeyScope). A key scoped `storefront` is refused even with a staff token.
+      tags:
+        - Console settings
+      security:
+        - apiKey: []
+          staffAuth: []
+        - apiKey: []
+      x-sdk-method: console.settings.markupRules.update
+      x-amadeus: []
+      x-tenant-tables:
+        - markup_rules
+        - storefront_settings
+        - staff_actions
+      x-error-codes:
+        - VALIDATION_FAILED
+        - UNAUTHENTICATED
+        - INVALID_API_KEY
+        - TOKEN_EXPIRED
+        - FORBIDDEN
+        - SCOPE_NOT_ALLOWED
+        - TENANT_SUSPENDED
+        - STAFF_MEMBERSHIP_INACTIVE
+        - ENVIRONMENT_NOT_ALLOWED
+        - NOT_FOUND
+        - CONFLICT
+        - PRECONDITION_FAILED
+        - RATE_LIMITED
+        - INTERNAL_ERROR
+      x-scope: console
+      x-permission: settings:write
+      x-milestone: M4
+      parameters:
+        - $ref: '#/components/parameters/ConsoleMarkupRuleId'
+        - $ref: '#/components/parameters/IfMatch'
+        - $ref: '#/components/parameters/AcceptLanguage'
+        - $ref: '#/components/parameters/VelexisEnvironment'
+        - $ref: '#/components/parameters/CustomerEndUserIp'
+        - $ref: '#/components/parameters/CustomerEndUserAgent'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MarkupRuleUpdate'
+            examples:
+              raise:
+                summary: Raise the percentage and drop the minimum
+                value:
+                  percentage: '4.5000'
+                  min: null
+              disable:
+                summary: Switch the rule off
+                value:
+                  isActive: false
+      responses:
+        '200':
+          description: The updated markup rule.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+            ETag:
+              $ref: '#/components/headers/ETag'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MarkupRule'
+              examples:
+                rule:
+                  $ref: '#/components/examples/MarkupRuleExample'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/ConsoleForbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/SettingsConflict'
+        '412':
+          $ref: '#/components/responses/PreconditionFailed'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    delete:
+      operationId: consoleDeleteMarkupRule
+      summary: Delete a markup rule
+      description: >-
+        Deletes a markup rule. History is kept: cached flight offers, priced offers and bookings keep their amounts and
+        their markup lines, and their `markup_rule_id` becomes null. The seeded default rule cannot be deleted (`409
+        CONFLICT`, `details.reason = "default_rule"`); switch a rule off with `isActive: false` to keep it for later.
+
+
+        **Preconditions.** `If-Match` = the `ETag` of the rule (`412 PRECONDITION_FAILED` when stale). The change applies
+        to the next search. No Amadeus call. Permission `settings:write`; `staff_actions` records the deleted rule.
+
+
+        **Key-only calls.** Without a staff token the secret key must carry the `console:automation` scope and this
+        operation's permission in `platform.api_keys.scopes` — otherwise `403 SCOPE_NOT_ALLOWED`
+        (`details.requiredScope`) or `403 FORBIDDEN` (`details.requiredPermission`); such calls are audited as the API
+        key (see ConsoleApiKeyScope). A key scoped `storefront` is refused even with a staff token.
+      tags:
+        - Console settings
+      security:
+        - apiKey: []
+          staffAuth: []
+        - apiKey: []
+      x-sdk-method: console.settings.markupRules.delete
+      x-amadeus: []
+      x-tenant-tables:
+        - markup_rules
+        - flight_offers
+        - priced_offers
+        - bookings
+        - staff_actions
+      x-error-codes:
+        - VALIDATION_FAILED
+        - UNAUTHENTICATED
+        - INVALID_API_KEY
+        - TOKEN_EXPIRED
+        - FORBIDDEN
+        - SCOPE_NOT_ALLOWED
+        - TENANT_SUSPENDED
+        - STAFF_MEMBERSHIP_INACTIVE
+        - ENVIRONMENT_NOT_ALLOWED
+        - NOT_FOUND
+        - CONFLICT
+        - PRECONDITION_FAILED
+        - RATE_LIMITED
+        - INTERNAL_ERROR
+      x-scope: console
+      x-permission: settings:write
+      x-milestone: M4
+      parameters:
+        - $ref: '#/components/parameters/ConsoleMarkupRuleId'
+        - $ref: '#/components/parameters/IfMatch'
+        - $ref: '#/components/parameters/AcceptLanguage'
+        - $ref: '#/components/parameters/VelexisEnvironment'
+        - $ref: '#/components/parameters/CustomerEndUserIp'
+        - $ref: '#/components/parameters/CustomerEndUserAgent'
+      responses:
+        '204':
+          description: The markup rule was deleted.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/ConsoleForbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/SettingsConflict'
+        '412':
+          $ref: '#/components/responses/PreconditionFailed'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /v1/console/settings/fee-rules:
+    get:
+      operationId: consoleListFeeRules
+      summary: List the fee rules
+      description: >-
+        Lists the fee rules of the OTA (`fee_rules`): the service, card, ticketing, change, cancellation and extra fees
+        the OTA charges on top of the selling price, ordered by `priority`, then `id`. Cursor pagination. `active=true`
+        lists only enabled rules (`isActive`), `active=false` only disabled ones, no `active` every rule.
+
+
+        Which pricing step applies which `feeType` is fixed by OADR-0005 point 7: `booking_service` and `ticketing` at
+        pricing, `ancillary_service` per extra, `payment_card` once the card brand is known, `cancellation` in the
+        cancellation quote; `change` fees are stored but unused in the MVP (no exchanges). Settings are shared by the
+        test and live environments, so `X-Velexis-Environment` changes nothing here. No Amadeus call. Permission
+        `settings:read`; the call is recorded in `staff_actions`.
+
+
+        **Key-only calls.** Without a staff token the secret key must carry the `console:automation` scope and this
+        operation's permission in `platform.api_keys.scopes` — otherwise `403 SCOPE_NOT_ALLOWED`
+        (`details.requiredScope`) or `403 FORBIDDEN` (`details.requiredPermission`); such calls are audited as the API
+        key (see ConsoleApiKeyScope). A key scoped `storefront` is refused even with a staff token.
+      tags:
+        - Console settings
+      security:
+        - apiKey: []
+          staffAuth: []
+        - apiKey: []
+      x-sdk-method: console.settings.feeRules.list
+      x-amadeus: []
+      x-tenant-tables:
+        - fee_rules
+        - staff_actions
+      x-error-codes:
+        - VALIDATION_FAILED
+        - UNAUTHENTICATED
+        - INVALID_API_KEY
+        - TOKEN_EXPIRED
+        - FORBIDDEN
+        - SCOPE_NOT_ALLOWED
+        - TENANT_SUSPENDED
+        - STAFF_MEMBERSHIP_INACTIVE
+        - ENVIRONMENT_NOT_ALLOWED
+        - RATE_LIMITED
+        - INTERNAL_ERROR
+      x-scope: console
+      x-permission: settings:read
+      x-milestone: M4
+      parameters:
+        - $ref: '#/components/parameters/ConsoleSettingsActiveFilter'
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/AcceptLanguage'
+        - $ref: '#/components/parameters/VelexisEnvironment'
+        - $ref: '#/components/parameters/CustomerEndUserIp'
+        - $ref: '#/components/parameters/CustomerEndUserAgent'
+      responses:
+        '200':
+          description: One page of fee rules.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FeeRulePage'
+              examples:
+                rules:
+                  $ref: '#/components/examples/FeeRulePageExample'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/ConsoleForbidden'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    post:
+      operationId: consoleCreateFeeRule
+      summary: Create a fee rule
+      description: >-
+        Creates a fee rule. `name`, `label` (shown to the traveller in the price breakdown), `feeType`, `scope` and
+        `calculation` are required, with the values the calculation uses: `percentage` for `percentage` and
+        `percentage_plus_fixed`, `fixed` for `fixed` and `percentage_plus_fixed` (`400 VALIDATION_FAILED` otherwise).
+        `percentage` is a decimal string with up to four decimals from 0 to 100; `fixed`, `min` and `max` are
+        non-negative amounts with two decimals in one currency. `scope.cardBrands` limits a `payment_card` fee to card
+        brands. Omitted fields take their defaults: `appliesPer` `booking`, `refundable` false, `priority` 100,
+        `isActive` true, no validity window.
+
+
+        **Effect.** The rule applies from the next pricing; priced offers and bookings keep their fee lines
+        (OADR-0005). The answer can carry `warnings` (`fixed_currency_not_default`: the fixed part applies only to
+        offers in that currency).
+
+
+        **Idempotency.** `Idempotency-Key` required (`idempotency_keys`, 24 h): a retry with the same key and body
+        returns the stored rule; the same key with another body → `409 IDEMPOTENCY_KEY_REUSED`.
+
+
+        No Amadeus call. Permission `settings:write`; `staff_actions` records the new rule.
+
+
+        **Key-only calls.** Without a staff token the secret key must carry the `console:automation` scope and this
+        operation's permission in `platform.api_keys.scopes` — otherwise `403 SCOPE_NOT_ALLOWED`
+        (`details.requiredScope`) or `403 FORBIDDEN` (`details.requiredPermission`); such calls are audited as the API
+        key (see ConsoleApiKeyScope). A key scoped `storefront` is refused even with a staff token.
+      tags:
+        - Console settings
+      security:
+        - apiKey: []
+          staffAuth: []
+        - apiKey: []
+      x-sdk-method: console.settings.feeRules.create
+      x-amadeus: []
+      x-tenant-tables:
+        - fee_rules
+        - storefront_settings
+        - staff_actions
+        - idempotency_keys
+      x-error-codes:
+        - VALIDATION_FAILED
+        - UNAUTHENTICATED
+        - INVALID_API_KEY
+        - TOKEN_EXPIRED
+        - FORBIDDEN
+        - SCOPE_NOT_ALLOWED
+        - TENANT_SUSPENDED
+        - STAFF_MEMBERSHIP_INACTIVE
+        - ENVIRONMENT_NOT_ALLOWED
+        - IDEMPOTENCY_KEY_REUSED
+        - RATE_LIMITED
+        - INTERNAL_ERROR
+      x-scope: console
+      x-permission: settings:write
+      x-milestone: M4
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/AcceptLanguage'
+        - $ref: '#/components/parameters/VelexisEnvironment'
+        - $ref: '#/components/parameters/CustomerEndUserIp'
+        - $ref: '#/components/parameters/CustomerEndUserAgent'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FeeRuleInput'
+            examples:
+              serviceFee:
+                summary: A 12 EUR service fee per booking
+                value:
+                  name: Service fee
+                  label: Service fee
+                  feeType: booking_service
+                  scope: {}
+                  calculation: fixed
+                  fixed:
+                    amount: '12.00'
+                    currency: EUR
+                  appliesPer: booking
+              amexFee:
+                summary: 1.5 % on American Express cards, at least 2 EUR
+                value:
+                  name: Amex surcharge
+                  label: Card fee
+                  feeType: payment_card
+                  scope:
+                    cardBrands:
+                      - AMERICAN_EXPRESS
+                  calculation: percentage
+                  percentage: '1.5000'
+                  min:
+                    amount: '2.00'
+                    currency: EUR
+                  priority: 10
+      responses:
+        '201':
+          description: The fee rule was created.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+            Location:
+              $ref: '#/components/headers/Location'
+            ETag:
+              $ref: '#/components/headers/ETag'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FeeRule'
+              examples:
+                rule:
+                  $ref: '#/components/examples/FeeRuleExample'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/ConsoleForbidden'
+        '409':
+          $ref: '#/components/responses/SettingsConflict'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /v1/console/settings/fee-rules/{feeRuleId}:
+    get:
+      operationId: consoleGetFeeRule
+      summary: Get a fee rule
+      description: >-
+        Returns one fee rule. `ETag` = `"<version>"`: pass it as `If-Match` to update or delete the rule. No Amadeus
+        call. Permission `settings:read`; the call is recorded in `staff_actions`.
+
+
+        **Key-only calls.** Without a staff token the secret key must carry the `console:automation` scope and this
+        operation's permission in `platform.api_keys.scopes` — otherwise `403 SCOPE_NOT_ALLOWED`
+        (`details.requiredScope`) or `403 FORBIDDEN` (`details.requiredPermission`); such calls are audited as the API
+        key (see ConsoleApiKeyScope). A key scoped `storefront` is refused even with a staff token.
+      tags:
+        - Console settings
+      security:
+        - apiKey: []
+          staffAuth: []
+        - apiKey: []
+      x-sdk-method: console.settings.feeRules.get
+      x-amadeus: []
+      x-tenant-tables:
+        - fee_rules
+        - staff_actions
+      x-error-codes:
+        - VALIDATION_FAILED
+        - UNAUTHENTICATED
+        - INVALID_API_KEY
+        - TOKEN_EXPIRED
+        - FORBIDDEN
+        - SCOPE_NOT_ALLOWED
+        - TENANT_SUSPENDED
+        - STAFF_MEMBERSHIP_INACTIVE
+        - ENVIRONMENT_NOT_ALLOWED
+        - NOT_FOUND
+        - RATE_LIMITED
+        - INTERNAL_ERROR
+      x-scope: console
+      x-permission: settings:read
+      x-milestone: M4
+      parameters:
+        - $ref: '#/components/parameters/ConsoleFeeRuleId'
+        - $ref: '#/components/parameters/AcceptLanguage'
+        - $ref: '#/components/parameters/VelexisEnvironment'
+        - $ref: '#/components/parameters/CustomerEndUserIp'
+        - $ref: '#/components/parameters/CustomerEndUserAgent'
+      responses:
+        '200':
+          description: The fee rule.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+            ETag:
+              $ref: '#/components/headers/ETag'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FeeRule'
+              examples:
+                rule:
+                  $ref: '#/components/examples/FeeRuleExample'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/ConsoleForbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    patch:
+      operationId: consoleUpdateFeeRule
+      summary: Update a fee rule
+      description: >-
+        Changes any subset of a fee rule's fields (`FeeRuleUpdate`); fields not sent keep their value, `null` clears a
+        nullable one, and `scope` is replaced as a whole. The changed rule must still satisfy the rules of
+        console.settings.feeRules.create, else `400 VALIDATION_FAILED`.
+
+
+        **Preconditions.** `If-Match` = the `ETag` of the rule (`412 PRECONDITION_FAILED` when stale). The answer has
+        the new `version` and `ETag`, and can carry `warnings` like create. Changes apply from the next pricing; priced
+        offers and bookings keep their fee lines (OADR-0005). No Amadeus call. Permission `settings:write`;
+        `staff_actions` records the rule before and after.
+
+
+        **Key-only calls.** Without a staff token the secret key must carry the `console:automation` scope and this
+        operation's permission in `platform.api_keys.scopes` — otherwise `403 SCOPE_NOT_ALLOWED`
+        (`details.requiredScope`) or `403 FORBIDDEN` (`details.requiredPermission`); such calls are audited as the API
+        key (see ConsoleApiKeyScope). A key scoped `storefront` is refused even with a staff token.
+      tags:
+        - Console settings
+      security:
+        - apiKey: []
+          staffAuth: []
+        - apiKey: []
+      x-sdk-method: console.settings.feeRules.update
+      x-amadeus: []
+      x-tenant-tables:
+        - fee_rules
+        - storefront_settings
+        - staff_actions
+      x-error-codes:
+        - VALIDATION_FAILED
+        - UNAUTHENTICATED
+        - INVALID_API_KEY
+        - TOKEN_EXPIRED
+        - FORBIDDEN
+        - SCOPE_NOT_ALLOWED
+        - TENANT_SUSPENDED
+        - STAFF_MEMBERSHIP_INACTIVE
+        - ENVIRONMENT_NOT_ALLOWED
+        - NOT_FOUND
+        - PRECONDITION_FAILED
+        - RATE_LIMITED
+        - INTERNAL_ERROR
+      x-scope: console
+      x-permission: settings:write
+      x-milestone: M4
+      parameters:
+        - $ref: '#/components/parameters/ConsoleFeeRuleId'
+        - $ref: '#/components/parameters/IfMatch'
+        - $ref: '#/components/parameters/AcceptLanguage'
+        - $ref: '#/components/parameters/VelexisEnvironment'
+        - $ref: '#/components/parameters/CustomerEndUserIp'
+        - $ref: '#/components/parameters/CustomerEndUserAgent'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FeeRuleUpdate'
+            examples:
+              refundable:
+                summary: Refund the fee on cancellation
+                value:
+                  refundable: true
+      responses:
+        '200':
+          description: The updated fee rule.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+            ETag:
+              $ref: '#/components/headers/ETag'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FeeRule'
+              examples:
+                rule:
+                  $ref: '#/components/examples/FeeRuleExample'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/ConsoleForbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '412':
+          $ref: '#/components/responses/PreconditionFailed'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    delete:
+      operationId: consoleDeleteFeeRule
+      summary: Delete a fee rule
+      description: >-
+        Deletes a fee rule. History is kept: priced offers, checkouts and bookings keep their fee lines and amounts.
+        Switch a rule off with `isActive: false` to keep it for later.
+
+
+        **Preconditions.** `If-Match` = the `ETag` of the rule (`412 PRECONDITION_FAILED` when stale). The change applies
+        from the next pricing. No Amadeus call. Permission `settings:write`; `staff_actions` records the deleted rule.
+
+
+        **Key-only calls.** Without a staff token the secret key must carry the `console:automation` scope and this
+        operation's permission in `platform.api_keys.scopes` — otherwise `403 SCOPE_NOT_ALLOWED`
+        (`details.requiredScope`) or `403 FORBIDDEN` (`details.requiredPermission`); such calls are audited as the API
+        key (see ConsoleApiKeyScope). A key scoped `storefront` is refused even with a staff token.
+      tags:
+        - Console settings
+      security:
+        - apiKey: []
+          staffAuth: []
+        - apiKey: []
+      x-sdk-method: console.settings.feeRules.delete
+      x-amadeus: []
+      x-tenant-tables:
+        - fee_rules
+        - staff_actions
+      x-error-codes:
+        - VALIDATION_FAILED
+        - UNAUTHENTICATED
+        - INVALID_API_KEY
+        - TOKEN_EXPIRED
+        - FORBIDDEN
+        - SCOPE_NOT_ALLOWED
+        - TENANT_SUSPENDED
+        - STAFF_MEMBERSHIP_INACTIVE
+        - ENVIRONMENT_NOT_ALLOWED
+        - NOT_FOUND
+        - PRECONDITION_FAILED
+        - RATE_LIMITED
+        - INTERNAL_ERROR
+      x-scope: console
+      x-permission: settings:write
+      x-milestone: M4
+      parameters:
+        - $ref: '#/components/parameters/ConsoleFeeRuleId'
+        - $ref: '#/components/parameters/IfMatch'
+        - $ref: '#/components/parameters/AcceptLanguage'
+        - $ref: '#/components/parameters/VelexisEnvironment'
+        - $ref: '#/components/parameters/CustomerEndUserIp'
+        - $ref: '#/components/parameters/CustomerEndUserAgent'
+      responses:
+        '204':
+          description: The fee rule was deleted.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/ConsoleForbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '412':
+          $ref: '#/components/responses/PreconditionFailed'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /v1/console/settings/storefront:
+    get:
+      operationId: consoleGetStorefrontSettings
+      summary: Get the storefront settings
+      description: >-
+        Returns the OTA's storefront settings as staff edit them (`storefront_settings`, one row per OTA shared by the
+        test and live environments): brand, branding (asset ids of `storefront_assets`, colours, fonts from the bundled
+        list, corner radius), locales, currencies, markets, features, policies, the airline card per environment,
+        legal versions and links, support, SEO, consent and operations. storefront.get derives the public
+        configuration from them.
+
+
+        `ETag` = `"<version>"`: pass it as `If-Match` to console.settings.storefront.update. No Amadeus call.
+        Permission `settings:read`; the call is recorded in `staff_actions`.
+
+
+        **Key-only calls.** Without a staff token the secret key must carry the `console:automation` scope and this
+        operation's permission in `platform.api_keys.scopes` — otherwise `403 SCOPE_NOT_ALLOWED`
+        (`details.requiredScope`) or `403 FORBIDDEN` (`details.requiredPermission`); such calls are audited as the API
+        key (see ConsoleApiKeyScope). A key scoped `storefront` is refused even with a staff token.
+      tags:
+        - Console settings
+      security:
+        - apiKey: []
+          staffAuth: []
+        - apiKey: []
+      x-sdk-method: console.settings.storefront.get
+      x-amadeus: []
+      x-tenant-tables:
+        - storefront_settings
+        - staff_actions
+      x-error-codes:
+        - VALIDATION_FAILED
+        - UNAUTHENTICATED
+        - INVALID_API_KEY
+        - TOKEN_EXPIRED
+        - FORBIDDEN
+        - SCOPE_NOT_ALLOWED
+        - TENANT_SUSPENDED
+        - STAFF_MEMBERSHIP_INACTIVE
+        - ENVIRONMENT_NOT_ALLOWED
+        - RATE_LIMITED
+        - INTERNAL_ERROR
+      x-scope: console
+      x-permission: settings:read
+      x-milestone: M4
+      parameters:
+        - $ref: '#/components/parameters/AcceptLanguage'
+        - $ref: '#/components/parameters/VelexisEnvironment'
+        - $ref: '#/components/parameters/CustomerEndUserIp'
+        - $ref: '#/components/parameters/CustomerEndUserAgent'
+      responses:
+        '200':
+          description: The storefront settings.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+            ETag:
+              $ref: '#/components/headers/ETag'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StorefrontSettings'
+              examples:
+                settings:
+                  $ref: '#/components/examples/StorefrontSettingsExample'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/ConsoleForbidden'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    patch:
+      operationId: consoleUpdateStorefrontSettings
+      summary: Update the storefront settings
+      description: >-
+        Changes the storefront settings section by section (`StorefrontSettingsUpdate`): each top-level section sent
+        (`brand`, `branding`, `locales`, …) replaces that section as a whole, sections not sent keep their value.
+
+
+        **Validation.** Beyond the schema (a font outside the bundled list fails it: `400 VALIDATION_FAILED`):
+        currencies must exist in `reference.currencies` and the time zone in `reference.time_zones`; every `supported`
+        list contains its `default`; markets use supported currencies and locales; asset ids must name an asset of the
+        right kind (`logo`, `logo_dark`, `logo_square`, `favicon`, `og_image`); a legal link's `pageSlug` must name a
+        page of `storefront_pages`; `policies.paymentTiming` other than `authorize_before_booking` is refused in the
+        MVP. These answer `422 UNPROCESSABLE` with `details.reason` and `details.path` (the JSON pointer of the refused
+        field). Setting `airlineCard.enabledLive` to true answers `403 FEATURE_DISABLED` (`details.feature =
+        "airlineCard"`) while the global `AIRLINE_CARD_ENABLED` switch is off.
+
+
+        **Warnings.** Turning the airline card on while active markup or fee rules exist answers `200` with a
+        `warnings` entry (`airline_card_net_price`): airline-card bookings are sold at the airline's price, without
+        markup or fees (OADR-0004).
+
+
+        **Effect.** `version` + 1 and a new `ETag`; the storefront.get caches of both environments are deleted, so the
+        hosted storefront shows the change within 5 minutes (its `sessionStorage` copy). `If-Match` required (`412
+        PRECONDITION_FAILED` when stale). No Amadeus call. Permission `settings:write`; `staff_actions` records the
+        settings before and after (redacted).
+
+
+        **Key-only calls.** Without a staff token the secret key must carry the `console:automation` scope and this
+        operation's permission in `platform.api_keys.scopes` — otherwise `403 SCOPE_NOT_ALLOWED`
+        (`details.requiredScope`) or `403 FORBIDDEN` (`details.requiredPermission`); such calls are audited as the API
+        key (see ConsoleApiKeyScope). A key scoped `storefront` is refused even with a staff token.
+      tags:
+        - Console settings
+      security:
+        - apiKey: []
+          staffAuth: []
+        - apiKey: []
+      x-sdk-method: console.settings.storefront.update
+      x-amadeus: []
+      x-tenant-tables:
+        - storefront_settings
+        - storefront_assets
+        - storefront_pages
+        - markup_rules
+        - fee_rules
+        - staff_actions
+      x-reference-tables:
+        - currencies
+        - countries
+        - time_zones
+      x-error-codes:
+        - VALIDATION_FAILED
+        - UNAUTHENTICATED
+        - INVALID_API_KEY
+        - TOKEN_EXPIRED
+        - FORBIDDEN
+        - SCOPE_NOT_ALLOWED
+        - TENANT_SUSPENDED
+        - STAFF_MEMBERSHIP_INACTIVE
+        - ENVIRONMENT_NOT_ALLOWED
+        - FEATURE_DISABLED
+        - PRECONDITION_FAILED
+        - UNPROCESSABLE
+        - RATE_LIMITED
+        - INTERNAL_ERROR
+      x-scope: console
+      x-permission: settings:write
+      x-milestone: M4
+      parameters:
+        - $ref: '#/components/parameters/IfMatch'
+        - $ref: '#/components/parameters/AcceptLanguage'
+        - $ref: '#/components/parameters/VelexisEnvironment'
+        - $ref: '#/components/parameters/CustomerEndUserIp'
+        - $ref: '#/components/parameters/CustomerEndUserAgent'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StorefrontSettingsUpdate'
+            examples:
+              branding:
+                summary: New colours, fonts and logo
+                value:
+                  branding:
+                    logoAssetId: ast_01JA6B2C3D4E5F6G7H8J9K0M1N
+                    logoDarkAssetId: null
+                    logoSquareAssetId: ast_01JA6B2C3D4E5F6G7H8J9K0M2P
+                    faviconAssetId: ast_01JA6B2C3D4E5F6G7H8J9K0M3Q
+                    colors:
+                      primary: '#0B5FFF'
+                      secondary: '#0F172A'
+                      accent: '#F59E0B'
+                      background: '#FFFFFF'
+                      text: '#111827'
+                    fonts:
+                      heading: Montserrat
+                      body: Inter
+                    cornerRadius: medium
+              airlineCard:
+                summary: Offer the airline card in the test environment
+                value:
+                  airlineCard:
+                    enabledTest: true
+                    enabledLive: false
+      responses:
+        '200':
+          description: The updated storefront settings, with warnings.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+            ETag:
+              $ref: '#/components/headers/ETag'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StorefrontSettingsUpdateResult'
+              examples:
+                settings:
+                  $ref: '#/components/examples/StorefrontSettingsUpdateResultExample'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/StorefrontSettingsForbidden'
+        '412':
+          $ref: '#/components/responses/PreconditionFailed'
+        '422':
+          $ref: '#/components/responses/SettingsUnprocessable'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /v1/console/settings/notification-templates:
+    get:
+      operationId: consoleListNotificationTemplates
+      summary: List the notification templates
+      description: >-
+        Lists the **effective** e-mail template of every template key the code knows, for every locale of the
+        storefront settings' `locales.supported`: the OTA's own row of `notification_templates` when it exists
+        (`customised: true`), otherwise the code default (`customised: false`; the English default where the code has
+        none for the locale), each with the variables its key allows. Ordered by key, then locale; not paginated.
+        OADR-0013 point 3.
+
+
+        No Amadeus call. Permission `settings:read`; the call is recorded in `staff_actions`.
+
+
+        **Key-only calls.** Without a staff token the secret key must carry the `console:automation` scope and this
+        operation's permission in `platform.api_keys.scopes` — otherwise `403 SCOPE_NOT_ALLOWED`
+        (`details.requiredScope`) or `403 FORBIDDEN` (`details.requiredPermission`); such calls are audited as the API
+        key (see ConsoleApiKeyScope). A key scoped `storefront` is refused even with a staff token.
+      tags:
+        - Console settings
+      security:
+        - apiKey: []
+          staffAuth: []
+        - apiKey: []
+      x-sdk-method: console.settings.templates.list
+      x-amadeus: []
+      x-tenant-tables:
+        - notification_templates
+        - storefront_settings
+        - staff_actions
+      x-error-codes:
+        - VALIDATION_FAILED
+        - UNAUTHENTICATED
+        - INVALID_API_KEY
+        - TOKEN_EXPIRED
+        - FORBIDDEN
+        - SCOPE_NOT_ALLOWED
+        - TENANT_SUSPENDED
+        - STAFF_MEMBERSHIP_INACTIVE
+        - ENVIRONMENT_NOT_ALLOWED
+        - RATE_LIMITED
+        - INTERNAL_ERROR
+      x-scope: console
+      x-permission: settings:read
+      x-milestone: M4
+      parameters:
+        - $ref: '#/components/parameters/AcceptLanguage'
+        - $ref: '#/components/parameters/VelexisEnvironment'
+        - $ref: '#/components/parameters/CustomerEndUserIp'
+        - $ref: '#/components/parameters/CustomerEndUserAgent'
+      responses:
+        '200':
+          description: The effective templates.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NotificationTemplateList'
+              examples:
+                templates:
+                  $ref: '#/components/examples/NotificationTemplateListExample'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/ConsoleForbidden'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /v1/console/settings/notification-templates/{templateKey}/{channel}/{locale}:
+    get:
+      operationId: consoleGetNotificationTemplate
+      summary: Get a notification template
+      description: >-
+        Returns the effective template of one key, channel and locale: the OTA's row when it exists (`customised:
+        true`, with `ETag` = `"<version>"` to pass as `If-Match` to console.settings.templates.put), otherwise the code
+        default (`customised: false`, `version` null, no `ETag`; the English default where the code has none for the
+        locale). `variables` lists what the key's templates may use. No Amadeus call. Permission `settings:read`; the
+        call is recorded in `staff_actions`.
+
+
+        **Key-only calls.** Without a staff token the secret key must carry the `console:automation` scope and this
+        operation's permission in `platform.api_keys.scopes` — otherwise `403 SCOPE_NOT_ALLOWED`
+        (`details.requiredScope`) or `403 FORBIDDEN` (`details.requiredPermission`); such calls are audited as the API
+        key (see ConsoleApiKeyScope). A key scoped `storefront` is refused even with a staff token.
+      tags:
+        - Console settings
+      security:
+        - apiKey: []
+          staffAuth: []
+        - apiKey: []
+      x-sdk-method: console.settings.templates.get
+      x-amadeus: []
+      x-tenant-tables:
+        - notification_templates
+        - staff_actions
+      x-error-codes:
+        - VALIDATION_FAILED
+        - UNAUTHENTICATED
+        - INVALID_API_KEY
+        - TOKEN_EXPIRED
+        - FORBIDDEN
+        - SCOPE_NOT_ALLOWED
+        - TENANT_SUSPENDED
+        - STAFF_MEMBERSHIP_INACTIVE
+        - ENVIRONMENT_NOT_ALLOWED
+        - RATE_LIMITED
+        - INTERNAL_ERROR
+      x-scope: console
+      x-permission: settings:read
+      x-milestone: M4
+      parameters:
+        - $ref: '#/components/parameters/NotificationTemplateKeyPath'
+        - $ref: '#/components/parameters/NotificationTemplateChannelPath'
+        - $ref: '#/components/parameters/NotificationTemplateLocalePath'
+        - $ref: '#/components/parameters/AcceptLanguage'
+        - $ref: '#/components/parameters/VelexisEnvironment'
+        - $ref: '#/components/parameters/CustomerEndUserIp'
+        - $ref: '#/components/parameters/CustomerEndUserAgent'
+      responses:
+        '200':
+          description: The effective template.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+            ETag:
+              $ref: '#/components/headers/ETag'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NotificationTemplate'
+              examples:
+                customised:
+                  $ref: '#/components/examples/NotificationTemplateExample'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/ConsoleForbidden'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    put:
+      operationId: consolePutNotificationTemplate
+      summary: Create or replace a notification template
+      description: >-
+        Creates or replaces the OTA's template of one key, channel and locale (upsert of `notification_templates`).
+        `If-Match` is required when the OTA already has a row for them (its `ETag`; missing or stale → `412
+        PRECONDITION_FAILED`) and must be absent when it has none.
+
+
+        **Compilation.** The server compiles `subject`, `bodyHtml` and `bodyText` with Handlebars in strict mode and
+        checks every variable against the key's allow-list (`variables`): a template that does not compile or uses
+        another variable answers `422 TEMPLATE_INVALID` with `details.errors[{part, line, message}]`, and nothing is
+        saved. A locale outside the storefront settings' `locales.supported` answers `422 UNPROCESSABLE`
+        (`details.reason = "locale_not_supported"`).
+
+
+        The answer is the saved template (`customised: true`, new `version` and `ETag`); e-mails rendered from then on
+        use it (OADR-0013 point 3). `isActive: false` keeps the row but sends the default. No Amadeus call. Permission
+        `settings:write`; `staff_actions` records the template before and after.
+
+
+        **Key-only calls.** Without a staff token the secret key must carry the `console:automation` scope and this
+        operation's permission in `platform.api_keys.scopes` — otherwise `403 SCOPE_NOT_ALLOWED`
+        (`details.requiredScope`) or `403 FORBIDDEN` (`details.requiredPermission`); such calls are audited as the API
+        key (see ConsoleApiKeyScope). A key scoped `storefront` is refused even with a staff token.
+      tags:
+        - Console settings
+      security:
+        - apiKey: []
+          staffAuth: []
+        - apiKey: []
+      x-sdk-method: console.settings.templates.put
+      x-amadeus: []
+      x-tenant-tables:
+        - notification_templates
+        - storefront_settings
+        - staff_actions
+      x-error-codes:
+        - VALIDATION_FAILED
+        - UNAUTHENTICATED
+        - INVALID_API_KEY
+        - TOKEN_EXPIRED
+        - FORBIDDEN
+        - SCOPE_NOT_ALLOWED
+        - TENANT_SUSPENDED
+        - STAFF_MEMBERSHIP_INACTIVE
+        - ENVIRONMENT_NOT_ALLOWED
+        - PRECONDITION_FAILED
+        - TEMPLATE_INVALID
+        - UNPROCESSABLE
+        - RATE_LIMITED
+        - INTERNAL_ERROR
+      x-scope: console
+      x-permission: settings:write
+      x-milestone: M4
+      parameters:
+        - $ref: '#/components/parameters/NotificationTemplateKeyPath'
+        - $ref: '#/components/parameters/NotificationTemplateChannelPath'
+        - $ref: '#/components/parameters/NotificationTemplateLocalePath'
+        - name: If-Match
+          in: header
+          required: false
+          description: >-
+            `ETag` of the OTA's existing template; required when the OTA has a row for this key, channel and locale,
+            absent when it has none.
+          schema:
+            type: string
+        - $ref: '#/components/parameters/AcceptLanguage'
+        - $ref: '#/components/parameters/VelexisEnvironment'
+        - $ref: '#/components/parameters/CustomerEndUserIp'
+        - $ref: '#/components/parameters/CustomerEndUserAgent'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NotificationTemplateInput'
+            examples:
+              confirmed:
+                summary: A shorter confirmation e-mail
+                value:
+                  subject: 'Your trip {{booking.reference}} is confirmed'
+                  bodyHtml: >-
+                    <p>Hello {{booking.contact.firstName}},</p><p>Your booking {{booking.reference}} is confirmed.</p>
+                  bodyText: |-
+                    Hello {{booking.contact.firstName}},
+                    Your booking {{booking.reference}} is confirmed.
+                  isActive: true
+      responses:
+        '200':
+          description: The saved template.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+            ETag:
+              $ref: '#/components/headers/ETag'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NotificationTemplate'
+              examples:
+                customised:
+                  $ref: '#/components/examples/NotificationTemplateExample'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/ConsoleForbidden'
+        '412':
+          $ref: '#/components/responses/PreconditionFailed'
+        '422':
+          $ref: '#/components/responses/TemplateUnprocessable'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /v1/console/settings/notification-templates/{templateKey}/{channel}/{locale}/preview:
+    post:
+      operationId: consolePreviewNotificationTemplate
+      summary: Preview a notification template
+      description: >-
+        Renders a template without saving or sending anything: the effective template of the key, channel and locale,
+        or the `subject`, `bodyHtml` and `bodyText` given in the body (a draft), with the template's sample data, or
+        with `variables` when given. Compiled exactly like console.settings.templates.put (strict mode, the key's
+        allow-list): a draft that does not compile answers `422 TEMPLATE_INVALID` with `details.errors`.
+
+
+        The answer is `{subject, html, text}`. Show `html` only in a sandboxed `iframe` without scripts (the OTA admin
+        does). Safe to repeat (`x-idempotent-by-design`): nothing is stored. No Amadeus call. Permission
+        `settings:read`; the call is recorded in `staff_actions`.
+
+
+        **Key-only calls.** Without a staff token the secret key must carry the `console:automation` scope and this
+        operation's permission in `platform.api_keys.scopes` — otherwise `403 SCOPE_NOT_ALLOWED`
+        (`details.requiredScope`) or `403 FORBIDDEN` (`details.requiredPermission`); such calls are audited as the API
+        key (see ConsoleApiKeyScope). A key scoped `storefront` is refused even with a staff token.
+      tags:
+        - Console settings
+      security:
+        - apiKey: []
+          staffAuth: []
+        - apiKey: []
+      x-sdk-method: console.settings.templates.preview
+      x-idempotent-by-design: true
+      x-amadeus: []
+      x-tenant-tables:
+        - notification_templates
+        - storefront_settings
+        - staff_actions
+      x-error-codes:
+        - VALIDATION_FAILED
+        - UNAUTHENTICATED
+        - INVALID_API_KEY
+        - TOKEN_EXPIRED
+        - FORBIDDEN
+        - SCOPE_NOT_ALLOWED
+        - TENANT_SUSPENDED
+        - STAFF_MEMBERSHIP_INACTIVE
+        - ENVIRONMENT_NOT_ALLOWED
+        - TEMPLATE_INVALID
+        - RATE_LIMITED
+        - INTERNAL_ERROR
+      x-scope: console
+      x-permission: settings:read
+      x-milestone: M4
+      parameters:
+        - $ref: '#/components/parameters/NotificationTemplateKeyPath'
+        - $ref: '#/components/parameters/NotificationTemplateChannelPath'
+        - $ref: '#/components/parameters/NotificationTemplateLocalePath'
+        - $ref: '#/components/parameters/AcceptLanguage'
+        - $ref: '#/components/parameters/VelexisEnvironment'
+        - $ref: '#/components/parameters/CustomerEndUserIp'
+        - $ref: '#/components/parameters/CustomerEndUserAgent'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NotificationTemplatePreviewRequest'
+            examples:
+              stored:
+                summary: The effective template with its sample data
+                value: {}
+              draft:
+                summary: A draft subject with other data
+                value:
+                  subject: 'Booked: {{booking.reference}}'
+                  variables:
+                    booking:
+                      reference: VX7K2Q
+      responses:
+        '200':
+          description: The rendered template.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NotificationTemplatePreview'
+              example:
+                subject: Your trip VX7K2Q is confirmed
+                html: <p>Hello Anna,</p><p>Your booking VX7K2Q is confirmed.</p>
+                text: |-
+                  Hello Anna,
+                  Your booking VX7K2Q is confirmed.
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/ConsoleForbidden'
+        '422':
+          $ref: '#/components/responses/TemplateUnprocessable'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /v1/console/settings/notification-templates/{templateKey}/{channel}/{locale}/reset:
+    post:
+      operationId: consoleResetNotificationTemplate
+      summary: Reset a notification template to the default
+      description: >-
+        Deletes the OTA's template of one key, channel and locale, so the code default applies again (OADR-0013 point
+        3), and returns that default (`customised: false`). Safe to repeat (`x-idempotent-by-design`): without a row it
+        changes nothing and returns the default. No Amadeus call. Permission `settings:write`; `staff_actions` records
+        the deleted template.
+
+
+        **Key-only calls.** Without a staff token the secret key must carry the `console:automation` scope and this
+        operation's permission in `platform.api_keys.scopes` — otherwise `403 SCOPE_NOT_ALLOWED`
+        (`details.requiredScope`) or `403 FORBIDDEN` (`details.requiredPermission`); such calls are audited as the API
+        key (see ConsoleApiKeyScope). A key scoped `storefront` is refused even with a staff token.
+      tags:
+        - Console settings
+      security:
+        - apiKey: []
+          staffAuth: []
+        - apiKey: []
+      x-sdk-method: console.settings.templates.reset
+      x-idempotent-by-design: true
+      x-amadeus: []
+      x-tenant-tables:
+        - notification_templates
+        - staff_actions
+      x-error-codes:
+        - VALIDATION_FAILED
+        - UNAUTHENTICATED
+        - INVALID_API_KEY
+        - TOKEN_EXPIRED
+        - FORBIDDEN
+        - SCOPE_NOT_ALLOWED
+        - TENANT_SUSPENDED
+        - STAFF_MEMBERSHIP_INACTIVE
+        - ENVIRONMENT_NOT_ALLOWED
+        - RATE_LIMITED
+        - INTERNAL_ERROR
+      x-scope: console
+      x-permission: settings:write
+      x-milestone: M4
+      parameters:
+        - $ref: '#/components/parameters/NotificationTemplateKeyPath'
+        - $ref: '#/components/parameters/NotificationTemplateChannelPath'
+        - $ref: '#/components/parameters/NotificationTemplateLocalePath'
+        - $ref: '#/components/parameters/AcceptLanguage'
+        - $ref: '#/components/parameters/VelexisEnvironment'
+        - $ref: '#/components/parameters/CustomerEndUserIp'
+        - $ref: '#/components/parameters/CustomerEndUserAgent'
+      responses:
+        '200':
+          description: The code default that applies now.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NotificationTemplate'
+              examples:
+                default:
+                  $ref: '#/components/examples/NotificationTemplateDefaultExample'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/ConsoleForbidden'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
 components:
   securitySchemes:
     apiKey:
@@ -16365,8 +18026,8 @@ components:
       description: >-
         Environment of a console call made with the OTA admin's first-party service key, `test` or `live`. Required
         with the service key (missing: `400 VALIDATION_FAILED`) and refused with any other credential, whose
-        environment is the key's. `live` needs an OTA that is live and a role other than `viewer`;
-        ConsoleStaffSession.environments lists the environments the staff member may open.
+        environment is the key's. `live` needs an OTA that is live and a role other than `viewer`, otherwise `403
+        ENVIRONMENT_NOT_ALLOWED`; ConsoleStaffSession.environments lists the environments the staff member may open.
       schema:
         type: string
         enum:
@@ -16812,6 +18473,50 @@ components:
       schema:
         type: string
         pattern: ^cus_[0-9A-Za-z]{12,40}$
+    ConsoleSettingsActiveFilter:
+      name: active
+      in: query
+      required: false
+      description: '`true`: only enabled rules (`isActive`); `false`: only disabled ones; absent: every rule.'
+      schema:
+        type: boolean
+    ConsoleMarkupRuleId:
+      name: markupRuleId
+      in: path
+      required: true
+      description: Markup rule id (`mkr_…`).
+      schema:
+        type: string
+        pattern: ^mkr_[0-9A-Za-z]{16,40}$
+    ConsoleFeeRuleId:
+      name: feeRuleId
+      in: path
+      required: true
+      description: Fee rule id (`fee_…`).
+      schema:
+        type: string
+        pattern: ^fee_[0-9A-Za-z]{16,40}$
+    NotificationTemplateKeyPath:
+      name: templateKey
+      in: path
+      required: true
+      description: Template key (NotificationTemplateKey).
+      schema:
+        $ref: '#/components/schemas/NotificationTemplateKey'
+    NotificationTemplateChannelPath:
+      name: channel
+      in: path
+      required: true
+      description: Delivery channel; `email` only in the MVP.
+      schema:
+        $ref: '#/components/schemas/NotificationChannel'
+    NotificationTemplateLocalePath:
+      name: locale
+      in: path
+      required: true
+      description: Locale of the template (BCP 47, such as `en` or `fr-CA`).
+      schema:
+        $ref: '#/components/schemas/LocaleCode'
   responses:
     BadRequest:
       description: >-
@@ -19572,7 +21277,8 @@ components:
       description: >-
         The caller may not perform this console operation. Possible codes: FORBIDDEN (role lacks the permission,
         details.requiredPermission), SCOPE_NOT_ALLOWED (publishable key or customer token), TENANT_SUSPENDED,
-        FEATURE_DISABLED, STAFF_MEMBERSHIP_INACTIVE, OFFICE_NOT_ALLOWED.
+        FEATURE_DISABLED, STAFF_MEMBERSHIP_INACTIVE, OFFICE_NOT_ALLOWED, ENVIRONMENT_NOT_ALLOWED (the OTA admin asked
+        for `live` while the OTA is not live or for a test-only role).
       headers:
         X-Request-Id:
           $ref: '#/components/headers/X-Request-Id'
@@ -19641,6 +21347,28 @@ components:
                     allowedOfficeIds:
                       - NCE1A0950
                       - PAR1A2100
+            ENVIRONMENT_NOT_ALLOWED:
+              summary: ENVIRONMENT_NOT_ALLOWED
+              value:
+                error:
+                  code: ENVIRONMENT_NOT_ALLOWED
+                  message: The requested environment is not available to this tenant or role.
+                  status: 403
+                  requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+                  details:
+                    environment: live
+                    environments:
+                      - test
+            FEATURE_DISABLED_CONSOLE_CARD_PAYMENT:
+              summary: FEATURE_DISABLED (a credit card in formOfPayments)
+              value:
+                error:
+                  code: FEATURE_DISABLED
+                  message: Card payments cannot be entered in the console.
+                  status: 403
+                  requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+                  details:
+                    feature: consoleCardPayment
     ConsoleConflict:
       description: >-
         The request conflicts with the booking or order state. Possible codes: CONFLICT, IDEMPOTENCY_KEY_REUSED,
@@ -19827,6 +21555,144 @@ components:
           examples:
             booking:
               $ref: '#/components/examples/ConsoleBookingCreatedExample'
+    SettingsConflict:
+      description: >-
+        The settings change conflicts with the current state. Possible codes: CONFLICT (`details.reason`, such as
+        `default_rule`: the seeded default markup rule cannot be deleted or narrowed), IDEMPOTENCY_KEY_REUSED.
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/X-Request-Id'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            CONFLICT:
+              summary: CONFLICT
+              value:
+                error:
+                  code: CONFLICT
+                  message: The default markup rule cannot be deleted, and its scope stays empty.
+                  status: 409
+                  requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+                  details:
+                    reason: default_rule
+            IDEMPOTENCY_KEY_REUSED:
+              summary: IDEMPOTENCY_KEY_REUSED
+              value:
+                error:
+                  code: IDEMPOTENCY_KEY_REUSED
+                  message: The Idempotency-Key was already used with a different request body.
+                  status: 409
+                  requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+    SettingsUnprocessable:
+      description: >-
+        The settings are well-formed but refused by a rule: unknown currency or time zone, a `supported` list without
+        its default, an asset of the wrong kind, an unknown page, a payment timing the MVP does not offer. Possible
+        codes: UNPROCESSABLE (`details.reason`, and `details.path`: the JSON pointer of the refused field).
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/X-Request-Id'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            UNPROCESSABLE:
+              summary: UNPROCESSABLE
+              value:
+                error:
+                  code: UNPROCESSABLE
+                  message: The logo must be an asset of kind logo.
+                  status: 422
+                  requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+                  details:
+                    reason: asset_kind
+                    path: /branding/logoAssetId
+    StorefrontSettingsForbidden:
+      description: >-
+        The caller may not change the storefront settings this way. Possible codes: FORBIDDEN (the role lacks
+        `settings:write`, details.requiredPermission), SCOPE_NOT_ALLOWED, TENANT_SUSPENDED, STAFF_MEMBERSHIP_INACTIVE,
+        ENVIRONMENT_NOT_ALLOWED, FEATURE_DISABLED (`details.feature = "airlineCard"`: the airline card cannot be
+        enabled in live while the global switch is off).
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/X-Request-Id'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            FORBIDDEN:
+              summary: FORBIDDEN
+              value:
+                error:
+                  code: FORBIDDEN
+                  message: Your role does not allow this action.
+                  status: 403
+                  requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+                  details:
+                    requiredPermission: settings:write
+                    role: agent
+            FEATURE_DISABLED:
+              summary: FEATURE_DISABLED
+              value:
+                error:
+                  code: FEATURE_DISABLED
+                  message: The airline card cannot be enabled in the live environment yet.
+                  status: 403
+                  requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+                  details:
+                    feature: airlineCard
+            ENVIRONMENT_NOT_ALLOWED:
+              summary: ENVIRONMENT_NOT_ALLOWED
+              value:
+                error:
+                  code: ENVIRONMENT_NOT_ALLOWED
+                  message: The requested environment is not available to this tenant or role.
+                  status: 403
+                  requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+                  details:
+                    environment: live
+    TemplateUnprocessable:
+      description: >-
+        The template was refused. Possible codes: TEMPLATE_INVALID (it does not compile in strict mode or uses a
+        variable the key does not allow; `details.errors[{part, line, message}]`), UNPROCESSABLE (`details.reason`,
+        such as `locale_not_supported`).
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/X-Request-Id'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            TEMPLATE_INVALID:
+              summary: TEMPLATE_INVALID
+              value:
+                error:
+                  code: TEMPLATE_INVALID
+                  message: The template does not compile or uses a variable that is not allowed.
+                  status: 422
+                  requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+                  details:
+                    errors:
+                      - part: bodyHtml
+                        line: 3
+                        message: booking.pnr is not a variable of booking.confirmed.
+                      - part: subject
+                        line: 1
+                        message: Expecting 'ID', got 'CLOSE' (an empty {{ }} expression).
+            UNPROCESSABLE:
+              summary: UNPROCESSABLE
+              value:
+                error:
+                  code: UNPROCESSABLE
+                  message: The storefront does not offer the locale de.
+                  status: 422
+                  requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+                  details:
+                    reason: locale_not_supported
   schemas:
     ErrorResponse:
       type: object
@@ -33971,11 +35837,36 @@ components:
         - supplier_requests:read
         - amadeus:read
         - amadeus:write
+        - settings:read
+        - settings:write
+        - payments:read
+        - payments:capture
+        - payments:refund
       description: >-
-        Permission derived from the role: owner/admin all; agent everything except amadeus:write; finance bookings:read,
-        customers:read, supplier_requests:read; viewer bookings:read, customers:read. Key-only automation calls (secret
-        key with scope `console:automation`, no staff token) have exactly the permissions listed in the key's scopes
-        (see ConsoleApiKeyScope).
+        Permission derived from the staff member's role (the role matrix of ota/docs/scope.md §1.3); each console
+        operation names the one it needs in `x-permission`.
+
+
+        - `owner`, `admin`: every permission.
+
+
+        - `agent`: `bookings:read`, `bookings:write`, `bookings:issue`, `bookings:cancel`, `customers:read`,
+        `queues:read`, `supplier_requests:read`, `amadeus:read`, `payments:read`, `payments:capture`, `settings:read`.
+
+
+        - `finance`: `bookings:read`, `customers:read`, `supplier_requests:read`, `payments:read`, `payments:capture`,
+        `payments:refund`, `settings:read`.
+
+
+        - `viewer`: `bookings:read`, `customers:read`, `payments:read`, `settings:read`.
+
+
+        `settings:read` reads the markup and fee rules, storefront settings, pages, assets and templates and
+        `settings:write` changes them; `payments:read` lists and reads payments with their events and refunds,
+        `payments:capture` captures an authorised Stripe payment and `payments:refund` refunds a captured one.
+        `amadeus:write` (raw Amadeus writes, deferred) and `settings:write` are owner and admin only. Key-only automation
+        calls (secret key with scope `console:automation`, no staff token) have exactly the permissions listed in the
+        key's scopes (see ConsoleApiKeyScope).
     ConsoleApiKeyScope:
       type: string
       enum:
@@ -35537,7 +37428,9 @@ components:
           maxItems: 6
           items:
             $ref: '#/components/schemas/AmadeusFormOfPayment'
-          description: Forms of payment (b2bWallet, creditCard, other); replaces the order's forms of payment.
+          description: >-
+            Forms of payment (b2bWallet, other); replaces the order's forms of payment. `creditCard` answers `403
+            FEATURE_DISABLED` (`details.feature = "consoleCardPayment"`) in the MVP.
         ticketingAgreement:
           $ref: '#/components/schemas/AmadeusTicketingAgreement'
           description: >-
@@ -35625,7 +37518,9 @@ components:
           maxItems: 6
           items:
             $ref: '#/components/schemas/AmadeusFormOfPayment'
-          description: Amadeus data.formOfPayments of the issuance (b2bWallet, creditCard, other).
+          description: >-
+            Amadeus data.formOfPayments of the issuance (b2bWallet, other). `creditCard` answers `403
+            FEATURE_DISABLED` (`details.feature = "consoleCardPayment"`) in the MVP.
         capturePayment:
           type: boolean
           description: 'Capture an authorised storefront payment before issuing. Default: `true`.'
@@ -37313,6 +39208,1737 @@ components:
         amadeus:
           $ref: '#/components/schemas/AmadeusQueuePnrListResponse'
           description: Verbatim Queue List response.
+    LocaleCode:
+      type: string
+      pattern: ^[a-z]{2,3}(-[A-Z]{2})?$
+      description: A BCP 47 locale of a language and an optional region, such as `en` or `fr-CA`.
+      examples:
+        - en
+        - fr-CA
+    SettingsWarning:
+      type: object
+      required:
+        - code
+        - message
+      description: >-
+        Something staff should know about a settings change that was saved anyway. Known codes:
+        `fixed_currency_not_default` (a rule's fixed amount or caps are not in the storefront's default currency, so
+        they apply only to offers in that currency; OADR-0005 point 6), `sells_below_net` (a negative markup can sell
+        below the net price; the engine floors the selling price at net), `airline_card_net_price` (the airline card is
+        on while active markup or fee rules exist: airline-card bookings are sold at the airline's price, OADR-0004).
+        New codes may appear; show the message.
+      properties:
+        code:
+          type: string
+          pattern: ^[a-z][a-z0-9_]*$
+          description: Machine-readable warning code.
+        message:
+          type: string
+          description: Explanation for staff, in the language of `Accept-Language`.
+        path:
+          type:
+            - string
+            - 'null'
+          description: JSON pointer of the field the warning is about, or null.
+    PricingRuleScope:
+      type: object
+      additionalProperties: false
+      description: >-
+        Matching criteria of a markup rule (`markup_rules.scope`). `{}` matches every offer. A rule matches an offer
+        when every non-empty field matches (OADR-0005 point 3): lists are "any of" (one of the offer's values is
+        listed), `minNet` and `maxNet` bound the offer's net total (inclusive, in the offer currency). Fee rules use
+        FeeRuleScope, which adds `cardBrands`.
+      properties:
+        origins:
+          type: array
+          maxItems: 200
+          uniqueItems: true
+          items:
+            type: string
+            pattern: ^[A-Z]{3}$
+          description: IATA codes of the first departure airport or city.
+        destinations:
+          type: array
+          maxItems: 200
+          uniqueItems: true
+          items:
+            type: string
+            pattern: ^[A-Z]{3}$
+          description: IATA codes of the destination airport or city (the turnaround point of a round trip).
+        originCountries:
+          type: array
+          maxItems: 250
+          uniqueItems: true
+          items:
+            type: string
+            pattern: ^[A-Z]{2}$
+          description: ISO 3166-1 alpha-2 countries of the origin.
+        destinationCountries:
+          type: array
+          maxItems: 250
+          uniqueItems: true
+          items:
+            type: string
+            pattern: ^[A-Z]{2}$
+          description: ISO 3166-1 alpha-2 countries of the destination.
+        carriers:
+          type: array
+          maxItems: 200
+          uniqueItems: true
+          items:
+            type: string
+            pattern: ^[A-Z0-9]{2}$
+          description: IATA codes of the validating or marketing airlines.
+        cabins:
+          type: array
+          uniqueItems: true
+          items:
+            $ref: '#/components/schemas/AmadeusTravelClass'
+          description: Cabins of the offer's fares.
+        travelerTypes:
+          type: array
+          uniqueItems: true
+          items:
+            $ref: '#/components/schemas/AmadeusTravelerType'
+          description: >-
+            Traveller types of the offer; a rule that `appliesPer` traveller counts only the travellers of these types.
+        tripTypes:
+          type: array
+          uniqueItems: true
+          items:
+            type: string
+            enum:
+              - one_way
+              - round_trip
+              - multi_city
+          description: Shape of the itinerary.
+        sources:
+          type: array
+          uniqueItems: true
+          items:
+            $ref: '#/components/schemas/AmadeusFlightOfferSource'
+          description: Amadeus content sources of the offer (GDS, NDC, …).
+        channels:
+          type: array
+          uniqueItems: true
+          items:
+            type: string
+            enum:
+              - storefront
+              - console
+          description: 'Who prices the offer: the storefront and API keys, or staff in the console.'
+        minNet:
+          type:
+            - string
+            - 'null'
+          pattern: ^[0-9]{1,10}(\.[0-9]{1,2})?$
+          description: Lowest net total the rule applies to (inclusive), as a decimal string in the offer currency.
+        maxNet:
+          type:
+            - string
+            - 'null'
+          pattern: ^[0-9]{1,10}(\.[0-9]{1,2})?$
+          description: Highest net total the rule applies to (inclusive), as a decimal string in the offer currency.
+    FeeRuleScope:
+      type: object
+      additionalProperties: false
+      description: >-
+        Matching criteria of a fee rule (`fee_rules.scope`): the fields of PricingRuleScope plus `cardBrands`, which
+        limits a `payment_card` fee to card brands (it needs a known brand to match). `{}` matches every offer.
+      properties:
+        origins:
+          type: array
+          maxItems: 200
+          uniqueItems: true
+          items:
+            type: string
+            pattern: ^[A-Z]{3}$
+          description: IATA codes of the first departure airport or city.
+        destinations:
+          type: array
+          maxItems: 200
+          uniqueItems: true
+          items:
+            type: string
+            pattern: ^[A-Z]{3}$
+          description: IATA codes of the destination airport or city (the turnaround point of a round trip).
+        originCountries:
+          type: array
+          maxItems: 250
+          uniqueItems: true
+          items:
+            type: string
+            pattern: ^[A-Z]{2}$
+          description: ISO 3166-1 alpha-2 countries of the origin.
+        destinationCountries:
+          type: array
+          maxItems: 250
+          uniqueItems: true
+          items:
+            type: string
+            pattern: ^[A-Z]{2}$
+          description: ISO 3166-1 alpha-2 countries of the destination.
+        carriers:
+          type: array
+          maxItems: 200
+          uniqueItems: true
+          items:
+            type: string
+            pattern: ^[A-Z0-9]{2}$
+          description: IATA codes of the validating or marketing airlines.
+        cabins:
+          type: array
+          uniqueItems: true
+          items:
+            $ref: '#/components/schemas/AmadeusTravelClass'
+          description: Cabins of the offer's fares.
+        travelerTypes:
+          type: array
+          uniqueItems: true
+          items:
+            $ref: '#/components/schemas/AmadeusTravelerType'
+          description: >-
+            Traveller types of the offer; a rule that `appliesPer` traveller counts only the travellers of these types.
+        tripTypes:
+          type: array
+          uniqueItems: true
+          items:
+            type: string
+            enum:
+              - one_way
+              - round_trip
+              - multi_city
+          description: Shape of the itinerary.
+        sources:
+          type: array
+          uniqueItems: true
+          items:
+            $ref: '#/components/schemas/AmadeusFlightOfferSource'
+          description: Amadeus content sources of the offer (GDS, NDC, …).
+        channels:
+          type: array
+          uniqueItems: true
+          items:
+            type: string
+            enum:
+              - storefront
+              - console
+          description: 'Who prices the offer: the storefront and API keys, or staff in the console.'
+        minNet:
+          type:
+            - string
+            - 'null'
+          pattern: ^[0-9]{1,10}(\.[0-9]{1,2})?$
+          description: Lowest net total the rule applies to (inclusive), as a decimal string in the offer currency.
+        maxNet:
+          type:
+            - string
+            - 'null'
+          pattern: ^[0-9]{1,10}(\.[0-9]{1,2})?$
+          description: Highest net total the rule applies to (inclusive), as a decimal string in the offer currency.
+        cardBrands:
+          type: array
+          uniqueItems: true
+          items:
+            $ref: '#/components/schemas/AmadeusPaymentBrand'
+          description: Card brands a `payment_card` fee is charged for.
+    MarkupRule:
+      type: object
+      required:
+        - id
+        - name
+        - scope
+        - calculation
+        - appliesPer
+        - priority
+        - stackable
+        - isDefault
+        - isActive
+        - version
+        - createdAt
+        - updatedAt
+      description: >-
+        A markup rule of the OTA (one row of `markup_rules`): how Amadeus net prices become selling prices
+        (OADR-0005). Rules are evaluated by `priority`, then `id`; the first matching non-stackable rule is the base
+        markup and matching stackable rules with a lower priority number add to it. The seeded default rule
+        (`isDefault`, scope `{}`, priority 1000) always matches.
+      properties:
+        id:
+          type: string
+          pattern: ^mkr_[0-9A-Za-z]{16,40}$
+          description: Markup rule id.
+        name:
+          type: string
+          description: Name shown in the OTA admin.
+        description:
+          type:
+            - string
+            - 'null'
+          description: Notes for staff.
+        scope:
+          $ref: '#/components/schemas/PricingRuleScope'
+        calculation:
+          type: string
+          enum:
+            - percentage
+            - fixed
+            - percentage_plus_fixed
+          description: How the markup is computed.
+        percentage:
+          type:
+            - string
+            - 'null'
+          pattern: ^-?[0-9]{1,3}(\.[0-9]{1,4})?$
+          description: >-
+            Percentage of the net price as a decimal string (`"5.0000"` = 5 %, negative = discount, -100 to
+            999.9999); set for `percentage` and `percentage_plus_fixed`.
+        fixed:
+          anyOf:
+            - $ref: '#/components/schemas/Money'
+            - type: 'null'
+          description: >-
+            Fixed amount per unit (`fixed_amount`, `fixed_currency`); set for `fixed` and `percentage_plus_fixed`.
+            Applied only to offers in its currency (no conversion in the MVP).
+        appliesPer:
+          type: string
+          enum:
+            - booking
+            - traveler
+            - segment
+          description: Unit the markup is computed for and multiplied by.
+        min:
+          anyOf:
+            - $ref: '#/components/schemas/Money'
+            - type: 'null'
+          description: Lower cap of the computed markup per unit, in the rule's currency.
+        max:
+          anyOf:
+            - $ref: '#/components/schemas/Money'
+            - type: 'null'
+          description: Upper cap of the computed markup per unit, in the rule's currency.
+        priority:
+          type: integer
+          description: Evaluation order, lower first.
+        stackable:
+          type: boolean
+          description: Adds to the base rule instead of competing with it.
+        isDefault:
+          type: boolean
+          description: The seeded catch-all rule; it cannot be deleted and its scope stays `{}`.
+        isActive:
+          type: boolean
+          description: Enabled flag.
+        activeFrom:
+          type:
+            - string
+            - 'null'
+          format: date-time
+          description: Start of the validity window (inclusive); null = immediately.
+        activeUntil:
+          type:
+            - string
+            - 'null'
+          format: date-time
+          description: End of the validity window (exclusive); null = open-ended.
+        version:
+          type: integer
+          minimum: 1
+          description: Optimistic-locking counter; the `ETag` is `"<version>"`.
+        createdAt:
+          type: string
+          format: date-time
+          description: Creation time.
+        updatedAt:
+          type: string
+          format: date-time
+          description: Last change.
+        warnings:
+          type: array
+          items:
+            $ref: '#/components/schemas/SettingsWarning'
+          description: >-
+            Present only in the answers of console.settings.markupRules.create and update: what staff should know
+            about the saved rule (`fixed_currency_not_default`, `sells_below_net`).
+    MarkupRuleInput:
+      type: object
+      additionalProperties: false
+      required:
+        - name
+        - scope
+        - calculation
+      description: >-
+        Body of console.settings.markupRules.create. `percentage` is required with `percentage` and
+        `percentage_plus_fixed`, `fixed` with `fixed` and `percentage_plus_fixed`; `percentage` is at least -100;
+        `fixed`, `min` and `max` have at most two decimals (`numeric(12,2)`) and share one currency; `activeUntil` is
+        after `activeFrom` (`400 VALIDATION_FAILED` otherwise).
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 120
+          description: Name shown in the OTA admin.
+        description:
+          type:
+            - string
+            - 'null'
+          maxLength: 1000
+          description: Notes for staff.
+        scope:
+          $ref: '#/components/schemas/PricingRuleScope'
+        calculation:
+          type: string
+          enum:
+            - percentage
+            - fixed
+            - percentage_plus_fixed
+          description: How the markup is computed.
+        percentage:
+          type:
+            - string
+            - 'null'
+          pattern: ^-?[0-9]{1,3}(\.[0-9]{1,4})?$
+          description: Percentage of the net price (`"5.0000"` = 5 %, negative = discount, -100 to 999.9999).
+        fixed:
+          anyOf:
+            - $ref: '#/components/schemas/Money'
+            - type: 'null'
+          description: Fixed amount per unit, two decimals; negative = discount.
+        appliesPer:
+          type: string
+          enum:
+            - booking
+            - traveler
+            - segment
+          description: Unit the markup is computed for. Default `traveler`.
+        min:
+          anyOf:
+            - $ref: '#/components/schemas/Money'
+            - type: 'null'
+          description: Lower cap per unit, in the rule's currency.
+        max:
+          anyOf:
+            - $ref: '#/components/schemas/Money'
+            - type: 'null'
+          description: Upper cap per unit, in the rule's currency.
+        priority:
+          type: integer
+          minimum: 0
+          maximum: 100000
+          description: Evaluation order, lower first. Default 100 (the default rule has 1000).
+        stackable:
+          type: boolean
+          description: Adds to the base rule instead of competing with it. Default false.
+        isActive:
+          type: boolean
+          description: Enabled flag. Default true.
+        activeFrom:
+          type:
+            - string
+            - 'null'
+          format: date-time
+          description: Start of the validity window (inclusive).
+        activeUntil:
+          type:
+            - string
+            - 'null'
+          format: date-time
+          description: End of the validity window (exclusive).
+    MarkupRuleUpdate:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      description: >-
+        Body of console.settings.markupRules.update: any subset of the fields of MarkupRuleInput. Fields not sent keep
+        their value, `null` clears a nullable one, `scope` is replaced as a whole; the changed rule must still be valid
+        as MarkupRuleInput describes.
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 120
+          description: Name shown in the OTA admin.
+        description:
+          type:
+            - string
+            - 'null'
+          maxLength: 1000
+          description: Notes for staff.
+        scope:
+          $ref: '#/components/schemas/PricingRuleScope'
+        calculation:
+          type: string
+          enum:
+            - percentage
+            - fixed
+            - percentage_plus_fixed
+          description: How the markup is computed.
+        percentage:
+          type:
+            - string
+            - 'null'
+          pattern: ^-?[0-9]{1,3}(\.[0-9]{1,4})?$
+          description: Percentage of the net price (`"5.0000"` = 5 %, negative = discount, -100 to 999.9999).
+        fixed:
+          anyOf:
+            - $ref: '#/components/schemas/Money'
+            - type: 'null'
+          description: Fixed amount per unit, two decimals; negative = discount.
+        appliesPer:
+          type: string
+          enum:
+            - booking
+            - traveler
+            - segment
+          description: Unit the markup is computed for. Default `traveler`.
+        min:
+          anyOf:
+            - $ref: '#/components/schemas/Money'
+            - type: 'null'
+          description: Lower cap per unit, in the rule's currency.
+        max:
+          anyOf:
+            - $ref: '#/components/schemas/Money'
+            - type: 'null'
+          description: Upper cap per unit, in the rule's currency.
+        priority:
+          type: integer
+          minimum: 0
+          maximum: 100000
+          description: Evaluation order, lower first. Default 100 (the default rule has 1000).
+        stackable:
+          type: boolean
+          description: Adds to the base rule instead of competing with it. Default false.
+        isActive:
+          type: boolean
+          description: Enabled flag. Default true.
+        activeFrom:
+          type:
+            - string
+            - 'null'
+          format: date-time
+          description: Start of the validity window (inclusive).
+        activeUntil:
+          type:
+            - string
+            - 'null'
+          format: date-time
+          description: End of the validity window (exclusive).
+    MarkupRulePage:
+      type: object
+      required:
+        - data
+        - page
+      description: A page of markup rules, by `priority`, then `id`.
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/MarkupRule'
+          description: Markup rules.
+        page:
+          $ref: '#/components/schemas/PageInfo'
+          description: Pagination.
+    FeeRule:
+      type: object
+      required:
+        - id
+        - name
+        - label
+        - feeType
+        - scope
+        - calculation
+        - appliesPer
+        - refundable
+        - priority
+        - isActive
+        - version
+        - createdAt
+        - updatedAt
+      description: >-
+        A fee rule of the OTA (one row of `fee_rules`): a fee charged on top of the selling price at the pricing step
+        of its `feeType` (OADR-0005 point 7), shown to the traveller with its `label`.
+      properties:
+        id:
+          type: string
+          pattern: ^fee_[0-9A-Za-z]{16,40}$
+          description: Fee rule id.
+        name:
+          type: string
+          description: Internal name shown in the OTA admin.
+        label:
+          type: string
+          description: Label shown to the traveller in the price breakdown.
+        feeType:
+          type: string
+          enum:
+            - booking_service
+            - payment_card
+            - ticketing
+            - change
+            - cancellation
+            - ancillary_service
+          description: >-
+            What the fee is charged for. `change` fees are stored but unused in the MVP (no exchanges);
+            `cancellation` fees feed bookings.quoteCancellation.
+        scope:
+          $ref: '#/components/schemas/FeeRuleScope'
+        calculation:
+          type: string
+          enum:
+            - percentage
+            - fixed
+            - percentage_plus_fixed
+          description: How the fee is computed.
+        percentage:
+          type:
+            - string
+            - 'null'
+          pattern: ^[0-9]{1,3}(\.[0-9]{1,4})?$
+          description: >-
+            Percentage of the base amount as a decimal string (`"1.5000"` = 1.5 %, 0 to 100); set for `percentage` and
+            `percentage_plus_fixed`.
+        fixed:
+          anyOf:
+            - $ref: '#/components/schemas/Money'
+            - type: 'null'
+          description: >-
+            Fixed amount per unit (`fixed_amount`, `currency`); set for `fixed` and `percentage_plus_fixed`. Applied
+            only to offers in its currency (no conversion in the MVP).
+        appliesPer:
+          type: string
+          enum:
+            - booking
+            - traveler
+            - segment
+          description: Unit the fee is computed for and multiplied by.
+        min:
+          anyOf:
+            - $ref: '#/components/schemas/Money'
+            - type: 'null'
+          description: Lower cap of the computed fee per unit, in the rule's currency.
+        max:
+          anyOf:
+            - $ref: '#/components/schemas/Money'
+            - type: 'null'
+          description: Upper cap of the computed fee per unit, in the rule's currency.
+        refundable:
+          type: boolean
+          description: Refunded on cancellation; non-refundable fees are kept by the cancellation quote.
+        priority:
+          type: integer
+          description: Evaluation order, lower first.
+        isActive:
+          type: boolean
+          description: Enabled flag.
+        activeFrom:
+          type:
+            - string
+            - 'null'
+          format: date-time
+          description: Start of the validity window (inclusive); null = immediately.
+        activeUntil:
+          type:
+            - string
+            - 'null'
+          format: date-time
+          description: End of the validity window (exclusive); null = open-ended.
+        version:
+          type: integer
+          minimum: 1
+          description: Optimistic-locking counter; the `ETag` is `"<version>"`.
+        createdAt:
+          type: string
+          format: date-time
+          description: Creation time.
+        updatedAt:
+          type: string
+          format: date-time
+          description: Last change.
+        warnings:
+          type: array
+          items:
+            $ref: '#/components/schemas/SettingsWarning'
+          description: >-
+            Present only in the answers of console.settings.feeRules.create and update: what staff should know about
+            the saved rule (`fixed_currency_not_default`).
+    FeeRuleInput:
+      type: object
+      additionalProperties: false
+      required:
+        - name
+        - label
+        - feeType
+        - scope
+        - calculation
+      description: >-
+        Body of console.settings.feeRules.create. `percentage` is required with `percentage` and
+        `percentage_plus_fixed`, `fixed` with `fixed` and `percentage_plus_fixed`; `percentage` is at most 100;
+        amounts have at most two decimals (`numeric(12,2)`), are not negative and share one currency; `activeUntil` is
+        after `activeFrom` (`400 VALIDATION_FAILED` otherwise).
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 120
+          description: Internal name shown in the OTA admin.
+        label:
+          type: string
+          minLength: 1
+          maxLength: 80
+          description: Label shown to the traveller in the price breakdown.
+        feeType:
+          type: string
+          enum:
+            - booking_service
+            - payment_card
+            - ticketing
+            - change
+            - cancellation
+            - ancillary_service
+          description: What the fee is charged for.
+        scope:
+          $ref: '#/components/schemas/FeeRuleScope'
+        calculation:
+          type: string
+          enum:
+            - percentage
+            - fixed
+            - percentage_plus_fixed
+          description: How the fee is computed.
+        percentage:
+          type:
+            - string
+            - 'null'
+          pattern: ^[0-9]{1,3}(\.[0-9]{1,4})?$
+          description: Percentage of the base amount (`"1.5000"` = 1.5 %, 0 to 100).
+        fixed:
+          anyOf:
+            - $ref: '#/components/schemas/Money'
+            - type: 'null'
+          description: Fixed amount per unit, two decimals, not negative.
+        appliesPer:
+          type: string
+          enum:
+            - booking
+            - traveler
+            - segment
+          description: Unit the fee is computed for. Default `booking`.
+        min:
+          anyOf:
+            - $ref: '#/components/schemas/Money'
+            - type: 'null'
+          description: Lower cap per unit, in the rule's currency.
+        max:
+          anyOf:
+            - $ref: '#/components/schemas/Money'
+            - type: 'null'
+          description: Upper cap per unit, in the rule's currency.
+        refundable:
+          type: boolean
+          description: Refunded on cancellation. Default false.
+        priority:
+          type: integer
+          minimum: 0
+          maximum: 100000
+          description: Evaluation order, lower first. Default 100.
+        isActive:
+          type: boolean
+          description: Enabled flag. Default true.
+        activeFrom:
+          type:
+            - string
+            - 'null'
+          format: date-time
+          description: Start of the validity window (inclusive).
+        activeUntil:
+          type:
+            - string
+            - 'null'
+          format: date-time
+          description: End of the validity window (exclusive).
+    FeeRuleUpdate:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      description: >-
+        Body of console.settings.feeRules.update: any subset of the fields of FeeRuleInput. Fields not sent keep their
+        value, `null` clears a nullable one, `scope` is replaced as a whole; the changed rule must still be valid as
+        FeeRuleInput describes.
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 120
+          description: Internal name shown in the OTA admin.
+        label:
+          type: string
+          minLength: 1
+          maxLength: 80
+          description: Label shown to the traveller in the price breakdown.
+        feeType:
+          type: string
+          enum:
+            - booking_service
+            - payment_card
+            - ticketing
+            - change
+            - cancellation
+            - ancillary_service
+          description: What the fee is charged for.
+        scope:
+          $ref: '#/components/schemas/FeeRuleScope'
+        calculation:
+          type: string
+          enum:
+            - percentage
+            - fixed
+            - percentage_plus_fixed
+          description: How the fee is computed.
+        percentage:
+          type:
+            - string
+            - 'null'
+          pattern: ^[0-9]{1,3}(\.[0-9]{1,4})?$
+          description: Percentage of the base amount (`"1.5000"` = 1.5 %, 0 to 100).
+        fixed:
+          anyOf:
+            - $ref: '#/components/schemas/Money'
+            - type: 'null'
+          description: Fixed amount per unit, two decimals, not negative.
+        appliesPer:
+          type: string
+          enum:
+            - booking
+            - traveler
+            - segment
+          description: Unit the fee is computed for. Default `booking`.
+        min:
+          anyOf:
+            - $ref: '#/components/schemas/Money'
+            - type: 'null'
+          description: Lower cap per unit, in the rule's currency.
+        max:
+          anyOf:
+            - $ref: '#/components/schemas/Money'
+            - type: 'null'
+          description: Upper cap per unit, in the rule's currency.
+        refundable:
+          type: boolean
+          description: Refunded on cancellation. Default false.
+        priority:
+          type: integer
+          minimum: 0
+          maximum: 100000
+          description: Evaluation order, lower first. Default 100.
+        isActive:
+          type: boolean
+          description: Enabled flag. Default true.
+        activeFrom:
+          type:
+            - string
+            - 'null'
+          format: date-time
+          description: Start of the validity window (inclusive).
+        activeUntil:
+          type:
+            - string
+            - 'null'
+          format: date-time
+          description: End of the validity window (exclusive).
+    FeeRulePage:
+      type: object
+      required:
+        - data
+        - page
+      description: A page of fee rules, by `priority`, then `id`.
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/FeeRule'
+          description: Fee rules.
+        page:
+          $ref: '#/components/schemas/PageInfo'
+          description: Pagination.
+    StorefrontFontFamily:
+      type: string
+      enum:
+        - Inter
+        - Roboto
+        - Open Sans
+        - Lato
+        - Montserrat
+        - Source Sans 3
+        - Merriweather
+        - Playfair Display
+      description: >-
+        A font family bundled with the hosted storefront: open licence, `woff2` files in `ota/frontend/public/fonts/`
+        declared in `ota/frontend/src/styles/fonts.css` with this exact family name, served from the storefront's own
+        origin under its `font-src 'self'` CSP (OADR-0015 point 8). The OTA admin offers this list, the API validates
+        against it and the storefront declares it; a font outside it fails validation.
+    StorefrontSettingsBrand:
+      type: object
+      additionalProperties: false
+      required:
+        - name
+        - legalName
+        - timeZone
+      description: The OTA's brand (`brand_name`, `legal_name`, `time_zone`).
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 120
+          description: Brand name shown in the storefront and in e-mails.
+        legalName:
+          type:
+            - string
+            - 'null'
+          maxLength: 200
+          description: Registered company name for footers and e-mails.
+        timeZone:
+          type: string
+          minLength: 1
+          maxLength: 64
+          description: IANA time zone of the OTA (support hours, e-mail dates), one of `reference.time_zones`.
+    StorefrontSettingsBranding:
+      type: object
+      additionalProperties: false
+      required:
+        - logoAssetId
+        - logoDarkAssetId
+        - logoSquareAssetId
+        - faviconAssetId
+        - colors
+        - fonts
+        - cornerRadius
+      description: >-
+        Logos and theme of the storefront (OADR-0012 point 4). Images are uploaded assets (`ast_…`,
+        console.settings.assets.upload) of the matching kind; the storefront applies colours, fonts and radius as CSS
+        custom properties. Custom CSS is not offered.
+      properties:
+        logoAssetId:
+          type:
+            - string
+            - 'null'
+          pattern: ^ast_[0-9A-Za-z]{16,40}$
+          description: Main logo (asset kind `logo`).
+        logoDarkAssetId:
+          type:
+            - string
+            - 'null'
+          pattern: ^ast_[0-9A-Za-z]{16,40}$
+          description: Logo for dark backgrounds (asset kind `logo_dark`).
+        logoSquareAssetId:
+          type:
+            - string
+            - 'null'
+          pattern: ^ast_[0-9A-Za-z]{16,40}$
+          description: Square logo for e-mails and icons (asset kind `logo_square`).
+        faviconAssetId:
+          type:
+            - string
+            - 'null'
+          pattern: ^ast_[0-9A-Za-z]{16,40}$
+          description: Favicon (asset kind `favicon`).
+        colors:
+          type: object
+          additionalProperties: false
+          required:
+            - primary
+            - secondary
+            - accent
+            - background
+            - text
+          description: 'Brand colours as #RRGGBB; the storefront derives text-on colours and keeps WCAG AA contrast.'
+          properties:
+            primary:
+              type: string
+              pattern: ^#[0-9A-Fa-f]{6}$
+              description: Buttons and links.
+            secondary:
+              type: string
+              pattern: ^#[0-9A-Fa-f]{6}$
+              description: Header and footer.
+            accent:
+              type: string
+              pattern: ^#[0-9A-Fa-f]{6}$
+              description: Badges and highlights.
+            background:
+              type: string
+              pattern: ^#[0-9A-Fa-f]{6}$
+              description: Page background.
+            text:
+              type: string
+              pattern: ^#[0-9A-Fa-f]{6}$
+              description: Body text.
+        fonts:
+          type: object
+          additionalProperties: false
+          required:
+            - heading
+            - body
+          description: Fonts for headings and body text, from the bundled list.
+          properties:
+            heading:
+              $ref: '#/components/schemas/StorefrontFontFamily'
+            body:
+              $ref: '#/components/schemas/StorefrontFontFamily'
+        cornerRadius:
+          type: string
+          enum:
+            - none
+            - small
+            - medium
+            - large
+          description: Corner radius style of buttons and cards.
+    StorefrontSettingsLocales:
+      type: object
+      additionalProperties: false
+      required:
+        - default
+        - supported
+      description: >-
+        Locales of the storefront's content (pages, e-mails, localised texts); `supported` contains `default`. The MVP
+        user interface is English.
+      properties:
+        default:
+          $ref: '#/components/schemas/LocaleCode'
+        supported:
+          type: array
+          minItems: 1
+          maxItems: 20
+          uniqueItems: true
+          items:
+            $ref: '#/components/schemas/LocaleCode'
+          description: Locales offered.
+    StorefrontSettingsCurrencies:
+      type: object
+      additionalProperties: false
+      required:
+        - default
+        - supported
+      description: >-
+        Selling currencies (ISO 4217, each in `reference.currencies`); `supported` contains `default`.
+      properties:
+        default:
+          type: string
+          pattern: ^[A-Z]{3}$
+          description: Default selling currency.
+        supported:
+          type: array
+          minItems: 1
+          maxItems: 20
+          uniqueItems: true
+          items:
+            type: string
+            pattern: ^[A-Z]{3}$
+          description: Currencies a traveller may choose.
+    StorefrontSettingsMarket:
+      type: object
+      additionalProperties: false
+      required:
+        - countryCode
+        - name
+        - currency
+        - locale
+      description: A market (point of sale) with its default currency and locale, both supported by the storefront.
+      properties:
+        countryCode:
+          type: string
+          pattern: ^[A-Z]{2}$
+          description: ISO 3166-1 alpha-2 country of the market.
+        name:
+          type: string
+          minLength: 1
+          maxLength: 80
+          description: Market name.
+        currency:
+          type: string
+          pattern: ^[A-Z]{3}$
+          description: Default currency in this market.
+        locale:
+          $ref: '#/components/schemas/LocaleCode'
+    StorefrontSettingsMarkets:
+      type: object
+      additionalProperties: false
+      required:
+        - default
+        - list
+      description: Markets served (`default_market`, `markets`); `default` is the country of one of them.
+      properties:
+        default:
+          type:
+            - string
+            - 'null'
+          pattern: ^[A-Z]{2}$
+          description: Default market (ISO 3166-1 alpha-2), or null when no market is configured.
+        list:
+          type: array
+          maxItems: 50
+          items:
+            $ref: '#/components/schemas/StorefrontSettingsMarket'
+          description: Markets, each country once.
+    StorefrontSettingsFeatures:
+      type: object
+      additionalProperties: false
+      required:
+        - guestCheckout
+        - customerAccounts
+        - ancillaries
+        - brandedFareUpsell
+        - selfServiceCancellation
+      description: Storefront features the OTA turns on; the plan can still switch a feature off (storefront.get).
+      properties:
+        guestCheckout:
+          type: boolean
+          description: Travellers may book without an account.
+        customerAccounts:
+          type: boolean
+          description: Sign-up, sign-in and account pages are offered.
+        ancillaries:
+          type: boolean
+          description: Extra bags and other services are sold in checkout.
+        brandedFareUpsell:
+          type: boolean
+          description: The branded-fare upsell step is shown after offer selection.
+        selfServiceCancellation:
+          type: boolean
+          description: Travellers may cancel from the booking page (bookings.cancel).
+    StorefrontSettingsPolicies:
+      type: object
+      additionalProperties: false
+      required:
+        - ticketingPolicy
+        - paymentTiming
+        - require3ds
+        - acceptedCardBrands
+        - requireEmailVerification
+        - offerTtlMinutes
+        - checkoutTtlMinutes
+      description: Ticketing, payment and session policies (OADR-0008).
+      properties:
+        ticketingPolicy:
+          type: string
+          enum:
+            - issue_after_payment
+            - issue_at_booking
+            - manual_review
+          description: When tickets are issued.
+        paymentTiming:
+          type: string
+          enum:
+            - authorize_before_booking
+            - capture_before_booking
+            - pay_later
+          description: >-
+            Payment relative to the creation of the order. The MVP offers `authorize_before_booking` only: the other
+            values are refused with `422 UNPROCESSABLE` (`details.reason = "payment_timing_not_supported"`).
+        require3ds:
+          type: boolean
+          description: Force 3-D Secure on card payments.
+        acceptedCardBrands:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items:
+            $ref: '#/components/schemas/AmadeusPaymentBrand'
+          description: Card brands accepted for Stripe and airline-card payments.
+        requireEmailVerification:
+          type: boolean
+          description: Customers verify their e-mail before booking with their account.
+        offerTtlMinutes:
+          type: integer
+          minimum: 5
+          maximum: 240
+          description: Lifetime of cached offers and priced offers.
+        checkoutTtlMinutes:
+          type: integer
+          minimum: 5
+          maximum: 1440
+          description: Lifetime of an open checkout.
+    StorefrontSettingsAirlineCard:
+      type: object
+      additionalProperties: false
+      required:
+        - enabledTest
+        - enabledLive
+      description: >-
+        The airline-card payment method per environment (`airline_card_enabled_test`, `_live`; ADR-0011, OADR-0004).
+        It also needs the global `AIRLINE_CARD_ENABLED` switch; `enabledLive` can be set to true only after the M6
+        security review turns the switch on.
+      properties:
+        enabledTest:
+          type: boolean
+          description: Offered in the test environment.
+        enabledLive:
+          type: boolean
+          description: Offered in the live environment.
+    StorefrontLegalLinkKind:
+      type: string
+      enum:
+        - terms
+        - privacy
+        - cookies
+        - refund_policy
+        - imprint
+        - accessibility
+        - other
+      description: What a legal link is for.
+    StorefrontLegalLink:
+      description: >-
+        A legal link of the storefront footer and sign-up form: to an external page (`url`) or to a content page
+        (`pageSlug`), never both.
+      oneOf:
+        - $ref: '#/components/schemas/StorefrontLegalUrlLink'
+        - $ref: '#/components/schemas/StorefrontLegalPageLink'
+    StorefrontLegalUrlLink:
+      type: object
+      additionalProperties: false
+      required:
+        - kind
+        - label
+        - url
+      description: A legal link to an external page.
+      properties:
+        kind:
+          $ref: '#/components/schemas/StorefrontLegalLinkKind'
+        label:
+          type: string
+          minLength: 1
+          maxLength: 80
+          description: Link text.
+        url:
+          type: string
+          format: uri
+          pattern: ^https://
+          description: External page (https only).
+    StorefrontLegalPageLink:
+      type: object
+      additionalProperties: false
+      required:
+        - kind
+        - label
+        - pageSlug
+      description: A legal link to a content page of the storefront (`/p/<slug>`).
+      properties:
+        kind:
+          $ref: '#/components/schemas/StorefrontLegalLinkKind'
+        label:
+          type: string
+          minLength: 1
+          maxLength: 80
+          description: Link text.
+        pageSlug:
+          type: string
+          pattern: ^[a-z0-9]+(-[a-z0-9]+)*$
+          description: Slug of a content page of `storefront_pages`; the page cannot be deleted while linked.
+    StorefrontSettingsLegal:
+      type: object
+      additionalProperties: false
+      required:
+        - termsVersion
+        - privacyVersion
+        - links
+      description: >-
+        Versions of the terms and privacy policy (sign-up records them in `customer_consents`) and the legal links.
+      properties:
+        termsVersion:
+          type:
+            - string
+            - 'null'
+          maxLength: 40
+          description: Current version of the terms.
+        privacyVersion:
+          type:
+            - string
+            - 'null'
+          maxLength: 40
+          description: Current version of the privacy policy.
+        links:
+          type: array
+          maxItems: 20
+          items:
+            $ref: '#/components/schemas/StorefrontLegalLink'
+          description: Legal links, in display order.
+    StorefrontSettingsSupport:
+      type: object
+      additionalProperties: false
+      required:
+        - email
+        - phone
+        - hours
+        - helpCenterUrl
+        - emergencyPhone
+      description: Customer support contact shown to travellers and used as the Reply-To of e-mails.
+      properties:
+        email:
+          type:
+            - string
+            - 'null'
+          format: email
+          description: Support e-mail address.
+        phone:
+          type:
+            - string
+            - 'null'
+          pattern: ^\+[1-9][0-9]{6,14}$
+          description: Support phone (E.164).
+        hours:
+          type:
+            - string
+            - 'null'
+          maxLength: 200
+          description: Opening hours.
+        helpCenterUrl:
+          type:
+            - string
+            - 'null'
+          format: uri
+          pattern: ^https://
+          description: Help centre or FAQ (https only).
+        emergencyPhone:
+          type:
+            - string
+            - 'null'
+          pattern: ^\+[1-9][0-9]{6,14}$
+          description: 24/7 number for travellers on the road (E.164).
+    StorefrontSettingsSeo:
+      type: object
+      additionalProperties: false
+      required:
+        - titleTemplate
+        - defaultTitle
+        - defaultDescription
+        - ogImageAssetId
+        - robots
+      description: SEO defaults of the storefront pages.
+      properties:
+        titleTemplate:
+          type:
+            - string
+            - 'null'
+          maxLength: 120
+          pattern: '%s'
+          description: Page title template with one `%s` for the page title.
+        defaultTitle:
+          type:
+            - string
+            - 'null'
+          maxLength: 120
+          description: Default page title.
+        defaultDescription:
+          type:
+            - string
+            - 'null'
+          maxLength: 300
+          description: Default meta description.
+        ogImageAssetId:
+          type:
+            - string
+            - 'null'
+          pattern: ^ast_[0-9A-Za-z]{16,40}$
+          description: Default Open Graph image (asset kind `og_image`).
+        robots:
+          type: object
+          additionalProperties: false
+          required:
+            - index
+            - follow
+          description: Robots directives in live; test storefronts are never indexed.
+          properties:
+            index:
+              type: boolean
+              description: Allow indexing.
+            follow:
+              type: boolean
+              description: Allow following links.
+    StorefrontSettingsConsentCategory:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - required
+        - defaultEnabled
+        - title
+        - description
+      description: A cookie category of the consent banner.
+      properties:
+        id:
+          type: string
+          enum:
+            - necessary
+            - preferences
+            - analytics
+            - marketing
+          description: Category id.
+        required:
+          type: boolean
+          description: Cannot be switched off (only `necessary`).
+        defaultEnabled:
+          type: boolean
+          description: Pre-selected state.
+        title:
+          type: string
+          minLength: 1
+          maxLength: 80
+          description: Title.
+        description:
+          type: string
+          maxLength: 500
+          description: Explanation.
+    StorefrontSettingsConsent:
+      type: object
+      additionalProperties: false
+      required:
+        - regime
+        - bannerRequired
+        - policyVersion
+        - categories
+      description: Cookie consent policy of the storefront.
+      properties:
+        regime:
+          type: string
+          enum:
+            - gdpr
+            - ccpa
+            - lgpd
+            - none
+          description: Privacy regime of the OTA's main market.
+        bannerRequired:
+          type: boolean
+          description: A banner is shown before non-necessary cookies are set.
+        policyVersion:
+          type:
+            - string
+            - 'null'
+          maxLength: 40
+          description: Version of the cookie policy; travellers are asked again when it changes.
+        categories:
+          type: array
+          maxItems: 4
+          items:
+            $ref: '#/components/schemas/StorefrontSettingsConsentCategory'
+          description: Cookie categories to present, each once.
+    StorefrontSettingsOperations:
+      type: object
+      additionalProperties: false
+      required:
+        - opsAlertEmail
+        - bookingQueue
+      description: Operational settings of the OTA's staff.
+      properties:
+        opsAlertEmail:
+          type:
+            - string
+            - 'null'
+          format: email
+          description: Recipient of staff alerts (ticketing failed, manual review, airline card); null = the owners.
+        bookingQueue:
+          type: object
+          additionalProperties: false
+          required:
+            - number
+            - category
+          description: >-
+            Amadeus queue of the queuing office where every new order is placed, so an order created during a timeout
+            can be found (OADR-0003).
+          properties:
+            number:
+              type:
+                - integer
+                - 'null'
+              minimum: 0
+              maximum: 99
+              description: Queue number, or null for none.
+            category:
+              type: integer
+              minimum: 0
+              maximum: 255
+              description: Queue category.
+    StorefrontSettings:
+      type: object
+      required:
+        - brand
+        - branding
+        - locales
+        - currencies
+        - markets
+        - features
+        - policies
+        - airlineCard
+        - legal
+        - support
+        - seo
+        - consent
+        - operations
+        - version
+        - updatedAt
+      description: >-
+        The OTA's storefront settings as staff edit them (the single `storefront_settings` row, shared by the test and
+        live environments; OADR-0012). storefront.get derives the public StorefrontConfig from them.
+      properties:
+        brand:
+          $ref: '#/components/schemas/StorefrontSettingsBrand'
+        branding:
+          $ref: '#/components/schemas/StorefrontSettingsBranding'
+        locales:
+          $ref: '#/components/schemas/StorefrontSettingsLocales'
+        currencies:
+          $ref: '#/components/schemas/StorefrontSettingsCurrencies'
+        markets:
+          $ref: '#/components/schemas/StorefrontSettingsMarkets'
+        features:
+          $ref: '#/components/schemas/StorefrontSettingsFeatures'
+        policies:
+          $ref: '#/components/schemas/StorefrontSettingsPolicies'
+        airlineCard:
+          $ref: '#/components/schemas/StorefrontSettingsAirlineCard'
+        legal:
+          $ref: '#/components/schemas/StorefrontSettingsLegal'
+        support:
+          $ref: '#/components/schemas/StorefrontSettingsSupport'
+        seo:
+          $ref: '#/components/schemas/StorefrontSettingsSeo'
+        consent:
+          $ref: '#/components/schemas/StorefrontSettingsConsent'
+        operations:
+          $ref: '#/components/schemas/StorefrontSettingsOperations'
+        version:
+          type: integer
+          minimum: 1
+          description: Optimistic-locking counter; the `ETag` is `"<version>"`.
+        updatedAt:
+          type: string
+          format: date-time
+          description: Last change.
+    StorefrontSettingsUpdate:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      description: >-
+        Body of console.settings.storefront.update: the sections to change. Each section sent replaces that section as
+        a whole (send it complete, as console.settings.storefront.get returns it); sections not sent keep their value.
+      properties:
+        brand:
+          $ref: '#/components/schemas/StorefrontSettingsBrand'
+        branding:
+          $ref: '#/components/schemas/StorefrontSettingsBranding'
+        locales:
+          $ref: '#/components/schemas/StorefrontSettingsLocales'
+        currencies:
+          $ref: '#/components/schemas/StorefrontSettingsCurrencies'
+        markets:
+          $ref: '#/components/schemas/StorefrontSettingsMarkets'
+        features:
+          $ref: '#/components/schemas/StorefrontSettingsFeatures'
+        policies:
+          $ref: '#/components/schemas/StorefrontSettingsPolicies'
+        airlineCard:
+          $ref: '#/components/schemas/StorefrontSettingsAirlineCard'
+        legal:
+          $ref: '#/components/schemas/StorefrontSettingsLegal'
+        support:
+          $ref: '#/components/schemas/StorefrontSettingsSupport'
+        seo:
+          $ref: '#/components/schemas/StorefrontSettingsSeo'
+        consent:
+          $ref: '#/components/schemas/StorefrontSettingsConsent'
+        operations:
+          $ref: '#/components/schemas/StorefrontSettingsOperations'
+    StorefrontSettingsUpdateResult:
+      description: >-
+        Answer of console.settings.storefront.update: the saved settings and the warnings about them (empty when there
+        are none).
+      allOf:
+        - $ref: '#/components/schemas/StorefrontSettings'
+        - type: object
+          required:
+            - warnings
+          properties:
+            warnings:
+              type: array
+              items:
+                $ref: '#/components/schemas/SettingsWarning'
+              description: What staff should know about the saved settings (`airline_card_net_price`).
+    NotificationTemplateKey:
+      type: string
+      enum:
+        - auth.verify_email
+        - auth.password_reset
+        - booking.confirmed
+        - booking.ticketed
+        - booking.ticketing_delayed
+        - booking.cancelled
+        - booking.cancellation_requested
+        - booking.not_confirmed
+        - staff.ticketing_failed
+        - staff.manual_review
+        - staff.airline_card_alert
+      description: >-
+        The notification template keys of the MVP (OADR-0013 point 4): customers `auth.*`, travellers `booking.*`, the
+        OTA's staff `staff.*`. Later releases add keys with their code defaults.
+    NotificationChannel:
+      type: string
+      enum:
+        - email
+      description: Delivery channel of a notification template; `email` only in the MVP.
+    NotificationTemplateVariable:
+      type: object
+      required:
+        - name
+        - description
+      description: >-
+        A variable a template of the key may use: a Handlebars path relative to the render data. `[]` marks the items of
+        a list, reached with `{{#each}}` (`booking.segments[].origin`).
+      properties:
+        name:
+          type: string
+          description: Variable path, such as `booking.reference`.
+        description:
+          type: string
+          description: What the variable holds.
+    NotificationTemplate:
+      type: object
+      required:
+        - key
+        - channel
+        - locale
+        - subject
+        - bodyHtml
+        - bodyText
+        - variables
+        - customised
+        - isActive
+        - version
+        - updatedAt
+      description: >-
+        The effective template of a key, channel and locale: the OTA's row of `notification_templates`
+        (`customised: true`) or the code default (`customised: false`). Templates are Handlebars, compiled in strict
+        mode with the key's variable allow-list (OADR-0013 point 3).
+      properties:
+        key:
+          $ref: '#/components/schemas/NotificationTemplateKey'
+        channel:
+          $ref: '#/components/schemas/NotificationChannel'
+        locale:
+          $ref: '#/components/schemas/LocaleCode'
+        subject:
+          type:
+            - string
+            - 'null'
+          description: Subject template (always set for e-mail).
+        bodyHtml:
+          type:
+            - string
+            - 'null'
+          description: HTML body template.
+        bodyText:
+          type: string
+          description: Plain-text body template.
+        variables:
+          type: array
+          items:
+            $ref: '#/components/schemas/NotificationTemplateVariable'
+          description: The variables templates of this key may use (the allow-list), with descriptions.
+        customised:
+          type: boolean
+          description: The OTA has its own row; false for the code default.
+        isActive:
+          type: boolean
+          description: When false the OTA's row is kept but the default is sent.
+        version:
+          type:
+            - integer
+            - 'null'
+          minimum: 1
+          description: Optimistic-locking counter of the OTA's row (`ETag` `"<version>"`); null for the code default.
+        updatedAt:
+          type:
+            - string
+            - 'null'
+          format: date-time
+          description: Last change of the OTA's row; null for the code default.
+    NotificationTemplateList:
+      type: object
+      required:
+        - data
+      description: The effective templates, by key, then locale.
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/NotificationTemplate'
+          description: Templates.
+    NotificationTemplateInput:
+      type: object
+      additionalProperties: false
+      required:
+        - subject
+        - bodyHtml
+        - bodyText
+      description: Body of console.settings.templates.put.
+      properties:
+        subject:
+          type: string
+          minLength: 1
+          maxLength: 300
+          description: Subject template.
+        bodyHtml:
+          type: string
+          minLength: 1
+          maxLength: 100000
+          description: HTML body template.
+        bodyText:
+          type: string
+          minLength: 1
+          maxLength: 50000
+          description: Plain-text body template.
+        isActive:
+          type: boolean
+          description: Send this template (default true); false keeps it but sends the default.
+    NotificationTemplatePreviewRequest:
+      type: object
+      additionalProperties: false
+      description: >-
+        Body of console.settings.templates.preview. Parts not sent come from the effective template; `variables`
+        replaces the template's sample data.
+      properties:
+        subject:
+          type: string
+          maxLength: 300
+          description: Draft subject template.
+        bodyHtml:
+          type: string
+          maxLength: 100000
+          description: Draft HTML body template.
+        bodyText:
+          type: string
+          maxLength: 50000
+          description: Draft plain-text body template.
+        variables:
+          type: object
+          additionalProperties: true
+          description: Render data, in the shape of the key's variables, instead of the sample data.
+    NotificationTemplatePreview:
+      type: object
+      required:
+        - subject
+        - html
+        - text
+      description: A rendered template.
+      properties:
+        subject:
+          type: string
+          description: Rendered subject.
+        html:
+          type:
+            - string
+            - 'null'
+          description: Rendered HTML body; show it only in a sandboxed iframe without scripts.
+        text:
+          type: string
+          description: Rendered plain-text body.
   examples:
     PricedOfferExample:
       summary: Priced ECONOMY STANDARD offer, 1 adult + 1 child, with card fees and ancillary options loaded
@@ -40966,6 +44592,473 @@ components:
               AF: AIR FRANCE
             aircraft:
               '359': AIRBUS A350-900
+    MarkupRuleExample:
+      summary: A markup rule
+      value:
+        id: mkr_01JA5M2K8Q4R7T0V3X6Z9B2D5F
+        name: Long-haul economy
+        description: 4 % on economy from France above 400 EUR net, at least 15 EUR per traveller.
+        scope:
+          originCountries:
+            - FR
+          cabins:
+            - ECONOMY
+          minNet: '400.00'
+        calculation: percentage
+        percentage: '4.0000'
+        fixed: null
+        appliesPer: traveler
+        min:
+          amount: '15.00'
+          currency: EUR
+        max: null
+        priority: 100
+        stackable: false
+        isDefault: false
+        isActive: true
+        activeFrom: null
+        activeUntil: null
+        version: 3
+        createdAt: '2026-10-01T09:00:00Z'
+        updatedAt: '2026-10-12T14:30:00Z'
+    MarkupRulePageExample:
+      summary: The rules in evaluation order
+      value:
+        data:
+          - id: mkr_01JA5K9B2C4D6F8H0J2L4N6Q8S
+            name: AF October promotion
+            description: null
+            scope:
+              carriers:
+                - AF
+            calculation: fixed
+            percentage: null
+            fixed:
+              amount: '-10.00'
+              currency: EUR
+            appliesPer: booking
+            min: null
+            max: null
+            priority: 50
+            stackable: true
+            isDefault: false
+            isActive: true
+            activeFrom: '2026-10-01T00:00:00Z'
+            activeUntil: '2026-11-01T00:00:00Z'
+            version: 1
+            createdAt: '2026-09-28T16:20:00Z'
+            updatedAt: '2026-09-28T16:20:00Z'
+          - id: mkr_01JA5M2K8Q4R7T0V3X6Z9B2D5F
+            name: Long-haul economy
+            description: 4 % on economy from France above 400 EUR net, at least 15 EUR per traveller.
+            scope:
+              originCountries:
+                - FR
+              cabins:
+                - ECONOMY
+              minNet: '400.00'
+            calculation: percentage
+            percentage: '4.0000'
+            fixed: null
+            appliesPer: traveler
+            min:
+              amount: '15.00'
+              currency: EUR
+            max: null
+            priority: 100
+            stackable: false
+            isDefault: false
+            isActive: true
+            activeFrom: null
+            activeUntil: null
+            version: 3
+            createdAt: '2026-10-01T09:00:00Z'
+            updatedAt: '2026-10-12T14:30:00Z'
+          - id: mkr_01J9Z0A1B2C3D4E5F6G7H8J9K0
+            name: Default
+            description: null
+            scope: {}
+            calculation: percentage
+            percentage: '0.0000'
+            fixed: null
+            appliesPer: traveler
+            min: null
+            max: null
+            priority: 1000
+            stackable: false
+            isDefault: true
+            isActive: true
+            activeFrom: null
+            activeUntil: null
+            version: 1
+            createdAt: '2026-08-01T09:00:00Z'
+            updatedAt: '2026-08-01T09:00:00Z'
+        page:
+          nextCursor: null
+          limit: 20
+    FeeRuleExample:
+      summary: A card fee rule
+      value:
+        id: fee_01JA5P4M0S6T9V2X5Z8B1D4F7H
+        name: Amex surcharge
+        label: Card fee
+        feeType: payment_card
+        scope:
+          cardBrands:
+            - AMERICAN_EXPRESS
+        calculation: percentage
+        percentage: '1.5000'
+        fixed: null
+        appliesPer: booking
+        min:
+          amount: '2.00'
+          currency: EUR
+        max: null
+        refundable: false
+        priority: 10
+        isActive: true
+        activeFrom: null
+        activeUntil: null
+        version: 1
+        createdAt: '2026-10-02T11:00:00Z'
+        updatedAt: '2026-10-02T11:00:00Z'
+    FeeRulePageExample:
+      summary: The fee rules in evaluation order
+      value:
+        data:
+          - id: fee_01JA5P4M0S6T9V2X5Z8B1D4F7H
+            name: Amex surcharge
+            label: Card fee
+            feeType: payment_card
+            scope:
+              cardBrands:
+                - AMERICAN_EXPRESS
+            calculation: percentage
+            percentage: '1.5000'
+            fixed: null
+            appliesPer: booking
+            min:
+              amount: '2.00'
+              currency: EUR
+            max: null
+            refundable: false
+            priority: 10
+            isActive: true
+            activeFrom: null
+            activeUntil: null
+            version: 1
+            createdAt: '2026-10-02T11:00:00Z'
+            updatedAt: '2026-10-02T11:00:00Z'
+          - id: fee_01JA5N3L9R5S8U1W4Y7A0C3E6G
+            name: Service fee
+            label: Service fee
+            feeType: booking_service
+            scope: {}
+            calculation: fixed
+            percentage: null
+            fixed:
+              amount: '12.00'
+              currency: EUR
+            appliesPer: booking
+            min: null
+            max: null
+            refundable: false
+            priority: 100
+            isActive: true
+            activeFrom: null
+            activeUntil: null
+            version: 2
+            createdAt: '2026-09-15T08:00:00Z'
+            updatedAt: '2026-10-05T10:45:00Z'
+        page:
+          nextCursor: null
+          limit: 20
+    StorefrontSettingsExample:
+      summary: The storefront settings of an OTA
+      value:
+        brand:
+          name: Acme Travel
+          legalName: Acme Travel Ltd
+          timeZone: Europe/London
+        branding:
+          logoAssetId: ast_01JA6B2C3D4E5F6G7H8J9K0M1N
+          logoDarkAssetId: null
+          logoSquareAssetId: ast_01JA6B2C3D4E5F6G7H8J9K0M2P
+          faviconAssetId: ast_01JA6B2C3D4E5F6G7H8J9K0M3Q
+          colors:
+            primary: '#0B5FFF'
+            secondary: '#0F172A'
+            accent: '#F59E0B'
+            background: '#FFFFFF'
+            text: '#111827'
+          fonts:
+            heading: Montserrat
+            body: Inter
+          cornerRadius: medium
+        locales:
+          default: en
+          supported:
+            - en
+            - fr
+        currencies:
+          default: GBP
+          supported:
+            - GBP
+            - EUR
+        markets:
+          default: GB
+          list:
+            - countryCode: GB
+              name: United Kingdom
+              currency: GBP
+              locale: en
+            - countryCode: FR
+              name: France
+              currency: EUR
+              locale: fr
+        features:
+          guestCheckout: true
+          customerAccounts: true
+          ancillaries: true
+          brandedFareUpsell: true
+          selfServiceCancellation: true
+        policies:
+          ticketingPolicy: issue_after_payment
+          paymentTiming: authorize_before_booking
+          require3ds: true
+          acceptedCardBrands:
+            - VISA
+            - MASTERCARD
+            - AMERICAN_EXPRESS
+          requireEmailVerification: false
+          offerTtlMinutes: 30
+          checkoutTtlMinutes: 30
+        airlineCard:
+          enabledTest: true
+          enabledLive: false
+        legal:
+          termsVersion: '2026-09'
+          privacyVersion: '2026-09'
+          links:
+            - kind: terms
+              label: Terms and conditions
+              pageSlug: terms
+            - kind: privacy
+              label: Privacy policy
+              pageSlug: privacy
+            - kind: refund_policy
+              label: Cancellations and refunds
+              url: https://www.acmetravel.com/refunds
+        support:
+          email: support@acmetravel.com
+          phone: '+442071234567'
+          hours: 'Mon–Fri 09:00–18:00 UK time'
+          helpCenterUrl: null
+          emergencyPhone: '+442071234500'
+        seo:
+          titleTemplate: '%s | Acme Travel'
+          defaultTitle: Cheap flights with Acme Travel
+          defaultDescription: Compare and book flights from 400 airlines.
+          ogImageAssetId: null
+          robots:
+            index: true
+            follow: true
+        consent:
+          regime: gdpr
+          bannerRequired: true
+          policyVersion: '2026-09'
+          categories:
+            - id: necessary
+              required: true
+              defaultEnabled: true
+              title: Necessary
+              description: Sign-in, checkout and security. Always on.
+            - id: analytics
+              required: false
+              defaultEnabled: false
+              title: Analytics
+              description: Anonymous statistics that help us improve the site.
+        operations:
+          opsAlertEmail: ops@acmetravel.com
+          bookingQueue:
+            number: 50
+            category: 0
+        version: 7
+        updatedAt: '2026-10-14T08:12:00Z'
+    StorefrontSettingsUpdateResultExample:
+      summary: The saved settings, with a warning
+      value:
+        brand:
+          name: Acme Travel
+          legalName: Acme Travel Ltd
+          timeZone: Europe/London
+        branding:
+          logoAssetId: ast_01JA6B2C3D4E5F6G7H8J9K0M1N
+          logoDarkAssetId: null
+          logoSquareAssetId: ast_01JA6B2C3D4E5F6G7H8J9K0M2P
+          faviconAssetId: ast_01JA6B2C3D4E5F6G7H8J9K0M3Q
+          colors:
+            primary: '#0B5FFF'
+            secondary: '#0F172A'
+            accent: '#F59E0B'
+            background: '#FFFFFF'
+            text: '#111827'
+          fonts:
+            heading: Montserrat
+            body: Inter
+          cornerRadius: medium
+        locales:
+          default: en
+          supported:
+            - en
+        currencies:
+          default: GBP
+          supported:
+            - GBP
+        markets:
+          default: GB
+          list:
+            - countryCode: GB
+              name: United Kingdom
+              currency: GBP
+              locale: en
+        features:
+          guestCheckout: true
+          customerAccounts: true
+          ancillaries: true
+          brandedFareUpsell: true
+          selfServiceCancellation: true
+        policies:
+          ticketingPolicy: issue_after_payment
+          paymentTiming: authorize_before_booking
+          require3ds: true
+          acceptedCardBrands:
+            - VISA
+            - MASTERCARD
+          requireEmailVerification: false
+          offerTtlMinutes: 30
+          checkoutTtlMinutes: 30
+        airlineCard:
+          enabledTest: true
+          enabledLive: false
+        legal:
+          termsVersion: '2026-09'
+          privacyVersion: '2026-09'
+          links: []
+        support:
+          email: support@acmetravel.com
+          phone: null
+          hours: null
+          helpCenterUrl: null
+          emergencyPhone: null
+        seo:
+          titleTemplate: null
+          defaultTitle: null
+          defaultDescription: null
+          ogImageAssetId: null
+          robots:
+            index: true
+            follow: true
+        consent:
+          regime: gdpr
+          bannerRequired: true
+          policyVersion: null
+          categories: []
+        operations:
+          opsAlertEmail: null
+          bookingQueue:
+            number: 50
+            category: 0
+        version: 8
+        updatedAt: '2026-10-15T10:02:00Z'
+        warnings:
+          - code: airline_card_net_price
+            message: >-
+              Airline-card bookings are sold at the airline's price: your 2 active markup and fee rules do not apply to
+              them.
+            path: /airlineCard/enabledTest
+    NotificationTemplateExample:
+      summary: The OTA's own confirmation e-mail
+      value:
+        key: booking.confirmed
+        channel: email
+        locale: en
+        subject: 'Your trip {{booking.reference}} is confirmed'
+        bodyHtml: '<p>Hello {{booking.contact.firstName}},</p><p>Your booking {{booking.reference}} is confirmed.</p>'
+        bodyText: |-
+          Hello {{booking.contact.firstName}},
+          Your booking {{booking.reference}} is confirmed.
+        variables:
+          - name: brand.name
+            description: Brand name of the OTA (storefront settings).
+          - name: booking.reference
+            description: Booking reference shown to the traveller.
+          - name: booking.contact.firstName
+            description: First name of the booking contact.
+        customised: true
+        isActive: true
+        version: 2
+        updatedAt: '2026-10-13T15:40:00Z'
+    NotificationTemplateDefaultExample:
+      summary: The code default of a key
+      value:
+        key: booking.confirmed
+        channel: email
+        locale: en
+        subject: 'Booking {{booking.reference}} confirmed – {{brand.name}}'
+        bodyHtml: '<p>Hello {{booking.contact.firstName}},</p><p>Thank you for booking with {{brand.name}}.</p>'
+        bodyText: |-
+          Hello {{booking.contact.firstName}},
+          Thank you for booking with {{brand.name}}.
+        variables:
+          - name: brand.name
+            description: Brand name of the OTA (storefront settings).
+          - name: booking.reference
+            description: Booking reference shown to the traveller.
+          - name: booking.contact.firstName
+            description: First name of the booking contact.
+        customised: false
+        isActive: true
+        version: null
+        updatedAt: null
+    NotificationTemplateListExample:
+      summary: Effective templates
+      value:
+        data:
+          - key: auth.verify_email
+            channel: email
+            locale: en
+            subject: 'Confirm your e-mail for {{brand.name}}'
+            bodyHtml: '<p>Hello {{customer.firstName}},</p><p><a href="{{verifyUrl}}">Confirm your e-mail</a>.</p>'
+            bodyText: |-
+              Hello {{customer.firstName}},
+              Confirm your e-mail: {{verifyUrl}}
+            variables:
+              - name: customer.firstName
+                description: First name of the customer account.
+              - name: verifyUrl
+                description: Link to /account/verify.html with the verification token, on the storefront host.
+            customised: false
+            isActive: true
+            version: null
+            updatedAt: null
+          - key: booking.confirmed
+            channel: email
+            locale: en
+            subject: 'Your trip {{booking.reference}} is confirmed'
+            bodyHtml: '<p>Hello {{booking.contact.firstName}},</p><p>Your booking {{booking.reference}} is confirmed.</p>'
+            bodyText: |-
+              Hello {{booking.contact.firstName}},
+              Your booking {{booking.reference}} is confirmed.
+            variables:
+              - name: booking.reference
+                description: Booking reference shown to the traveller.
+              - name: booking.contact.firstName
+                description: First name of the booking contact.
+            customised: true
+            isActive: true
+            version: 2
+            updatedAt: '2026-10-13T15:40:00Z'
 x-error-catalogue:
   VALIDATION_FAILED:
     status: 400
@@ -41231,6 +45324,13 @@ x-error-catalogue:
   PAYMENT_ATTEMPTS_EXCEEDED:
     status: 403
     description: Too many airline-card attempts on this checkout; start a new checkout or use another method.
+  ENVIRONMENT_NOT_ALLOWED:
+    status: 403
+    description: The requested environment is not available to this tenant or role.
+  TEMPLATE_INVALID:
+    status: 422
+    description: >-
+      The notification template does not compile or uses a variable that is not allowed (details.errors).
 x-new-tenant-tables:
   customer_consents: >-
     Append-only log of consent events per customer (marketing opt-in/opt-out, terms and privacy policy acceptance) with
