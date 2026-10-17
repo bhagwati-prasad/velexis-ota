@@ -1,15 +1,18 @@
-// Start-up of the API without PostgreSQL or Redis (the health probes connect on the first readiness check only):
-// configuration failures, the bound interface, and a clean shutdown. Readiness with real dependencies:
-// test/integration/health.
+// Start-up of the API without PostgreSQL or Redis (the health probes connect on the first readiness check only; the
+// vx:invalidate subscriber tries a Redis where nothing listens): configuration failures, the bound interface, and a
+// clean shutdown. Readiness with real dependencies: test/integration/health.
 import type { NestExpressApplication } from "@nestjs/platform-express";
 import { afterEach, describe, expect, it } from "vitest";
 import { exchange } from "../test/helpers/http";
 import { testApiVariables } from "../test/helpers/api-env";
 import { MemorySink } from "../test/helpers/log-sink";
-import { freePort, occupiedPort } from "../test/helpers/ports";
+import { freePort, occupiedPort, unreachableRedisUrl } from "../test/helpers/ports";
 import { API_HOST, startApi } from "./main";
 
-/** Dummy values; nothing connects to them in these tests. */
+/**
+ * Dummy values; nothing connects to them in these tests. An API that starts gets `unreachableRedisUrl()` instead of
+ * this REDIS_URL, for the subscriber it connects at start-up (OBE-012).
+ */
 const ENV = {
   APP_ENV: "test",
   DATABASE_URL: "postgres://velexis_ota_app:dummy@127.0.0.1:5432/velexis",
@@ -69,7 +72,10 @@ describe("startApi", () => {
     const sink = new MemorySink();
     const port = await freePort();
 
-    const app = await startApi({ env: { ...ENV, PORT: String(port) }, logDestination: sink });
+    const app = await startApi({
+      env: { ...ENV, REDIS_URL: await unreachableRedisUrl(), PORT: String(port) },
+      logDestination: sink,
+    });
 
     expect(app).toBeDefined();
     const address: unknown = app?.getHttpServer().address();
@@ -90,7 +96,10 @@ describe("startApi", () => {
     const taken = await occupiedPort();
     cleanups.push(taken.release);
 
-    const app = await startApi({ env: { ...ENV, PORT: String(taken.port) }, logDestination: sink });
+    const app = await startApi({
+      env: { ...ENV, REDIS_URL: await unreachableRedisUrl(), PORT: String(taken.port) },
+      logDestination: sink,
+    });
     closeLater(app);
 
     expect(app).toBeUndefined();

@@ -16,6 +16,7 @@ import { ClsMiddleware, ClsModule } from "nestjs-cls";
 import { LoggerModule, Logger as NestPinoLogger } from "nestjs-pino";
 import type { DestinationStream } from "pino";
 import { CallerGuard } from "./common/auth/caller.guard";
+import { TenantGuard } from "./common/auth/tenant.guard";
 import { CommonModule } from "./common/common.module";
 import type { JsonBodyLimits } from "./common/http/body-parsers";
 import { HttpModule } from "./common/http/http.module";
@@ -68,12 +69,16 @@ export class AppModule implements NestModule {
         CommonModule,
         // helmet, cookies, body parsers, OpenAPI validation, the error filter and the 501 routes (OBE-010).
         HttpModule.forRoot({ jsonBodyLimits: options.jsonBodyLimits }),
-        // The pool of velexis_ota_app, the platform repository and the caller classification (OBE-011).
+        // The pool of velexis_ota_app, the platform repository and the caller classification (OBE-011); the platform
+        // caches on Redis, the vx:invalidate subscriber, tenant resolution and TenantTx (OBE-012).
         TenancyModule.forApi(),
         HealthModule.forApi(),
       ],
-      // The first guard of every route: who is calling (OADR-0009 point 1). The tenant guard follows (OBE-012).
-      providers: [{ provide: APP_GUARD, useClass: CallerGuard }],
+      // Global guards run in this order: who is calling (OADR-0009 point 1), then for which tenant (points 2 and 3).
+      providers: [
+        { provide: APP_GUARD, useClass: CallerGuard },
+        { provide: APP_GUARD, useClass: TenantGuard },
+      ],
     };
   }
 

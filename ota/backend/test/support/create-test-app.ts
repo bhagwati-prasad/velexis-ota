@@ -4,8 +4,11 @@
 // `app.getHttpServer()`.
 //
 // Unit and contract tests pass no services: the configuration then holds dummy DSNs, and nothing connects (the health
-// probes connect on the first readiness check only). Integration tests pass this file's own database and Redis from
-// @velexis/testing:
+// probes connect on the first readiness check only). The dummy Redis is a port where nothing listens: the API connects
+// its vx:invalidate subscriber at start-up and reads the platform caches (OBE-012), and on CI's Redis, which has no
+// password, a dummy password would not keep it away, so tests would share cached rows there and nowhere else. Every
+// cache lookup then falls back to the (spied or failing) platform repository, the same everywhere. Integration tests
+// pass this file's own database and Redis from @velexis/testing:
 //
 //   db = await createTestDatabase();
 //   redis = await useRedis();
@@ -22,11 +25,14 @@ import { loadApiConfig, type ApiConfig } from "../../src/config";
 import { JSON_BODY_LIMITS } from "../../src/main";
 import { testApiVariables } from "../helpers/api-env";
 import { MemorySink } from "../helpers/log-sink";
+import { unreachableRedisUrl } from "../helpers/ports";
 
-/** Dummy service values of the shape the VM uses: nothing here is a secret, and nothing connects to them. */
+/**
+ * Dummy service values of the shape the VM uses: nothing here is a secret, and nothing connects to them. REDIS_URL is
+ * `unreachableRedisUrl()` (test/helpers/ports.ts), a new port for each application.
+ */
 export const DUMMY_SERVICES: Readonly<Record<string, string>> = Object.freeze({
   DATABASE_URL: "postgres://velexis_ota_app:dummy@127.0.0.1:5432/velexis",
-  REDIS_URL: "redis://:dummy@127.0.0.1:6379/0",
 });
 
 export interface TestAppOptions {
@@ -62,7 +68,7 @@ export async function createTestApp(options: TestAppOptions = {}): Promise<TestA
     ...DUMMY_SERVICES,
     ...testApiVariables(),
     ...(options.database === undefined ? {} : { DATABASE_URL: options.database.urlFor("ota") }),
-    ...(options.redis === undefined ? {} : { REDIS_URL: options.redis.url }),
+    REDIS_URL: options.redis === undefined ? await unreachableRedisUrl() : options.redis.url,
     ...options.env,
   });
   const sink = new MemorySink();

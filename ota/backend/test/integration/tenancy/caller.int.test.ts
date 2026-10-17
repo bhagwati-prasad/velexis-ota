@@ -2,8 +2,10 @@
 // database clone, with `platform.api_keys` rows inserted as the platform writes them (as velexis_migrator, the owner of
 // the platform tables): `key_hash = hex(HMAC-SHA-256(pepper, key))` with the pepper file the API was started with. The
 // API reads them through TenancyModule as velexis_ota_app. A probe route returns the caller the guard put in the
-// request context; pending operations of the document show the envelopes against the document.
+// request context; pending operations of the document show the envelopes against the document. The API caches the
+// rows for 60 s (OBE-012): a test that changes a row publishes the `api_key` invalidation, as the platform does.
 import { Controller, Get } from "@nestjs/common";
+import { INVALIDATION_CHANNEL } from "@velexis/api-types/jobs";
 import { hashApiKey } from "@velexis/crypto";
 import {
   createPlatformDb,
@@ -23,6 +25,7 @@ import {
 import request from "supertest";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { newId } from "../../../src/common/ids";
+import { redisKeys } from "../../../src/common/redis/redis.keys";
 import { CallerContext, type Caller } from "../../../src/tenancy/caller-resolver";
 import { PlatformReadRepository } from "../../../src/tenancy/platform-read.repository";
 import { OTA_POOL, TenancyModule, type OtaPool } from "../../../src/tenancy/tenancy.module";
@@ -75,6 +78,17 @@ async function issueKey(
     })
     .execute();
   return { key, id };
+}
+
+/**
+ * Publishes the `api_key` invalidation the platform sends after it changed a key (platform architecture §6.3), and
+ * waits until the API has dropped its cached row.
+ */
+async function invalidateKey(prefix: string): Promise<void> {
+  await redis.client.publish(INVALIDATION_CHANNEL, JSON.stringify({ v: 1, type: "api_key", prefix }));
+  await vi.waitFor(async () => {
+    expect(await redis.client.exists(redisKeys.apiKey(prefix).key)).toBe(0);
+  });
 }
 
 beforeAll(async () => {
@@ -142,12 +156,14 @@ describe("API keys against platform.api_keys", () => {
       .set({ expires_at: sql<Date>`now() - interval '1 second'` })
       .where("id", "=", id)
       .execute();
+    await invalidateKey(key.slice(0, 14));
     const expired = await request(api.server).get(SEARCH_LOCATIONS).set("X-Api-Key", key);
     await migrator
       .updateTable("platform.api_keys")
       .set({ expires_at: null, revoked_at: sql<Date>`now()` })
       .where("id", "=", id)
       .execute();
+    await invalidateKey(key.slice(0, 14));
     const revoked = await request(api.server).get(SEARCH_LOCATIONS).set("X-Api-Key", key);
 
     for (const res of [...changed, expired, revoked]) {

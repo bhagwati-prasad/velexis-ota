@@ -33,11 +33,18 @@ describe("lint rules of the OTA backend", () => {
     overrideConfig: { languageOptions: { parserOptions: { projectService: false, project: null } } },
   });
 
+  let files: string[];
+  let results: ESLint.LintResult[];
+
   // Loading the root config with its plugins and parser is most of the work (about 1 s here, 10 s under a full
-  // parallel `pnpm test`). It happens once, in this hook with its own timeout, as in the platform backend's
-  // package.test.ts, so the first test below measures only its own lint and a loaded machine cannot time it out.
+  // parallel `pnpm test`), then linting every file of the package (about 2 s here, several times that on a loaded
+  // 4-CPU runner, and more with every file the package grows). Both happen once, in this hook with its own timeout,
+  // as in the platform backend's package.test.ts, so the tests below measure only their own work and a loaded
+  // machine cannot time them out.
   beforeAll(async () => {
     await eslint.calculateConfigForFile(join(APP_DIR, "src/main.ts"));
+    files = packageFiles();
+    results = await eslint.lintFiles(files);
   }, 60_000);
 
   it("reports console.* and process.env in this package's code", async () => {
@@ -70,13 +77,10 @@ describe("lint rules of the OTA backend", () => {
     }
   });
 
-  it("finds no console.* and no process.env in src/ and test/ [OBE-001 AC4]", async () => {
-    const files = packageFiles();
+  it("finds no console.* and no process.env in src/ and test/ [OBE-001 AC4]", () => {
     expect(files.map((file) => relative(APP_DIR, file))).toEqual(
       expect.arrayContaining(["src/main.ts", "src/worker.ts", "src/cli.ts", "src/config.ts"]),
     );
-
-    const results = await eslint.lintFiles(files);
 
     const problems = results.flatMap((result) =>
       result.messages.map(

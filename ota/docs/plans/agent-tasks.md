@@ -315,7 +315,8 @@ The OTA backend gets its contract extensions, request pipeline, tenancy, Amadeus
   - Edge header plus `X-Api-Key` answers 400.
 - **Verify:** `pnpm --filter @velexis/ota-backend test && pnpm --filter @velexis/ota-backend test:int -- tenancy`
 
-### OBE-012 · Resolve the tenant with Redis caches and the vx:invalidate subscriber
+### OBE-012 · Resolve the tenant with Redis caches and the vx:invalidate subscriber ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-backend
 - **Milestone:** M2
 - **Depends on:** OBE-011, OBE-002, PBE-002

@@ -8,6 +8,7 @@ import { beforeAll, describe, expect, it } from "vitest";
 import { APP_DIR } from "../../config";
 import {
   AMADEUS_TOKEN_EXPIRES_IN_SECONDS,
+  redisKeyPatterns,
   redisKeys,
   type RedisKey,
   type RedisKeyBuilderName,
@@ -264,6 +265,33 @@ describe("redisKeys", () => {
     } catch (error) {
       expect(String(error)).not.toContain(secret);
     }
+  });
+});
+
+describe("redisKeyPatterns", () => {
+  it("matches the cached memberships of one account and rebuilds only the keys of the member builder [OBE-012]", () => {
+    const pattern = redisKeyPatterns.membersOfAccount(ACCOUNT_ID);
+
+    expect(pattern.match).toBe(`member:${ACCOUNT_ID}:*`);
+    expect(pattern.keyOf(redisKeys.member(ACCOUNT_ID, TENANT_ID).key)).toEqual(
+      redisKeys.member(ACCOUNT_ID, TENANT_ID),
+    );
+    expect(pattern.keyOf(redisKeys.member(ACCOUNT_ID, OTHER_TENANT_ID).key)?.key).toBe(
+      `member:${ACCOUNT_ID}:${OTHER_TENANT_ID}`,
+    );
+    for (const name of [
+      redisKeys.member("acc_01M4TA0Z9N3QKX8V5B7C2D4E6G", TENANT_ID).key,
+      `member:${ACCOUNT_ID}:${TENANT_ID}:extra`,
+      `member:${ACCOUNT_ID}:ten_x`,
+      `member:${ACCOUNT_ID}:`,
+      redisKeys.tenant(TENANT_ID).key,
+    ]) {
+      expect([name, pattern.keyOf(name)]).toEqual([name, undefined]);
+    }
+    expect(Object.isFrozen(pattern)).toBe(true);
+    expect(() => redisKeyPatterns.membersOfAccount("acc_*")).toThrow(
+      /redisKeys\.membersOfAccount: accountId must be an account id/,
+    );
   });
 });
 
@@ -668,23 +696,27 @@ describe("source scan for hand-written Redis keys", () => {
     "",
   ].join("\n");
 
-  let sources: string[];
   let program: ts.Program;
+  let scanned: string[];
+  let sourceProblems: string[];
 
-  // Building the program parses the package and the declarations it imports (NestJS, BullMQ, ioredis): about two
-  // seconds here, more under a full parallel `pnpm test`. It happens once, in this hook with its own timeout.
+  // Building the program parses the package and the declarations it imports (NestJS, BullMQ, ioredis), and the scan of
+  // the sources type-checks every Redis call in them: about three seconds here, several times that under a full
+  // parallel `pnpm test` on a 4-CPU runner, and more with every module the package grows. Both happen once, in this
+  // hook with its own timeout; the tests below only assert on the results.
   beforeAll(() => {
-    sources = productionSources();
+    const sources = productionSources();
     program = createProgram(sources, { [PROBE]: PROBE_SOURCE });
+    scanned = sources.filter((file) => file !== KEYS_FILE);
+    sourceProblems = handWrittenKeys(program, scanned);
   }, 60_000);
 
   it("finds no key written by hand outside redis.keys.ts in src/ [OBE-002 AC1]", () => {
-    const scanned = sources.filter((file) => file !== KEYS_FILE);
     expect(scanned.map((file) => relative(APP_DIR, file))).toEqual(
       expect.arrayContaining(["src/main.ts", "src/worker.ts", "src/health/health.service.ts"]),
     );
 
-    expect(handWrittenKeys(program, scanned)).toEqual([]);
+    expect(sourceProblems).toEqual([]);
   });
 
   it("reports string, template and concatenated keys and keys not built by redisKeys [OBE-002 AC1]", () => {

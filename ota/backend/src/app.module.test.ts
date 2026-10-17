@@ -1,5 +1,6 @@
 // The API's request pipeline, in process (no PostgreSQL or Redis: the health probes connect on the first readiness
-// check only). A probe controller stands in for the business routes that later tasks add.
+// check only, and the vx:invalidate subscriber tries a Redis where nothing listens). A probe controller stands in for
+// the business routes that later tasks add.
 import { Body, Controller, Get, Module, Post, Req, type INestApplication } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { ClsService } from "nestjs-cls";
@@ -8,6 +9,7 @@ import request from "supertest";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { testApiVariables } from "../test/helpers/api-env";
 import { MemorySink, type LogLine } from "../test/helpers/log-sink";
+import { unreachableRedisUrl } from "../test/helpers/ports";
 import { AppModule, createApiApp, createApiLogger } from "./app.module";
 import { PublicRoute } from "./common/auth/caller.guard";
 import { Clock } from "./common/clock";
@@ -16,12 +18,14 @@ import { loadApiConfig, type ApiConfig } from "./config";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
-/** Dummy values of the shape the VM uses; nothing here is a real secret, and nothing connects. */
+/**
+ * Dummy values of the shape the VM uses; nothing here is a real secret, and nothing connects. REDIS_URL is
+ * `unreachableRedisUrl()`, a new port for each application (`startApp`).
+ */
 const ENV = {
   APP_ENV: "test",
   LOG_LEVEL: "info",
   DATABASE_URL: "postgres://velexis_ota_app:dummy@127.0.0.1:5432/velexis",
-  REDIS_URL: "redis://:dummy@127.0.0.1:6379/0",
   ...testApiVariables(),
 } as const;
 
@@ -65,7 +69,7 @@ async function startApp(env: Record<string, string> = {}): Promise<{
   sink: MemorySink;
   config: ApiConfig;
 }> {
-  const config = loadApiConfig({ ...ENV, ...env });
+  const config = loadApiConfig({ ...ENV, REDIS_URL: await unreachableRedisUrl(), ...env });
   const sink = new MemorySink();
   @Module({
     imports: [AppModule.forRoot(config, { logger: createApiLogger(config, sink) })],

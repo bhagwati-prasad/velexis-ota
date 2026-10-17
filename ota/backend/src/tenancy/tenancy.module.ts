@@ -1,8 +1,9 @@
 // The tenancy module (ota/docs/architecture.md §2.1, OADR-0009): the process's pool of velexis_ota_app, `platformDb`
 // over it and the read-only platform repository. The API's module also classifies callers (OBE-011): the API key
 // verifier with the pepper of API_KEY_PEPPER_FILE, the caller resolver and the caller's request context, which the
-// global `CallerGuard` of app.module.ts uses. The tenant resolution, the Redis caches, the vx:invalidate subscriber,
-// the tenant context and the `tenantTx` wrapper join it in M2 (OBE-012), on the same pool.
+// global `CallerGuard` of app.module.ts uses. And it resolves tenants (OBE-012): the Redis caches of the platform rows
+// (on the process's Redis client), the vx:invalidate subscriber, the tenant resolver and the tenant context that the
+// global `TenantGuard` uses, and `TenantTx` over the same pool.
 //
 // The API imports `TenancyModule.forApi()`, the worker `TenancyModule.forWorker()`. A module that needs the repository
 // imports the same call again. Each call returns the same module object, and Nest 11 tells dynamic modules apart by
@@ -18,17 +19,23 @@ import {
 import { ConfigService } from "@nestjs/config";
 import { readKeyFile } from "@velexis/config";
 import { API_KEY_PEPPER_MIN_BYTES } from "@velexis/crypto";
-import { createPlatformDb, createPool } from "@velexis/db";
+import { createPlatformDb, createPool, createTenantDb, type TenantDb } from "@velexis/db";
 import { PinoLogger } from "nestjs-pino";
+import { RedisModule } from "../common/redis/redis.module";
 import { API_APP, WORKER_APP, type ApiConfig, type SharedConfig } from "../config";
-import { API_KEY_PEPPER, ApiKeyVerifier } from "./api-key.verifier";
+import { API_KEY_PEPPER, API_KEY_ROWS, ApiKeyVerifier } from "./api-key.verifier";
 import { CallerContext, CallerResolver } from "./caller-resolver";
+import { InvalidationSubscriber } from "./invalidation.subscriber";
+import { PlatformCache } from "./platform-cache";
 import { PLATFORM_DB, PlatformReadRepository, type PlatformDb } from "./platform-read.repository";
+import { TenantContext } from "./tenant-context";
+import { TenantResolver } from "./tenant-resolver";
+import { TENANT_DB, TenantTx } from "./tenant-tx";
 
 /** The `pg.Pool` of velexis_ota_app (DATABASE_URL). */
 export type OtaPool = ReturnType<typeof createPool>;
 
-/** Injection token of the process's `OtaPool`: platform reads now, `tenantTx` from OBE-012. */
+/** Injection token of the process's `OtaPool`: platform reads, and `tenantTx` in the API (OBE-012). */
 export const OTA_POOL = "OTA_POOL";
 
 /**
@@ -67,6 +74,14 @@ const platformDbProvider: FactoryProvider<PlatformDb> = {
   useFactory: (pool: OtaPool) => createPlatformDb(pool),
 };
 
+/** `tenantTx` over the same pool; the search_path leak guard runs outside production (@velexis/db). */
+const tenantDbProvider: FactoryProvider<TenantDb> = {
+  provide: TENANT_DB,
+  inject: [OTA_POOL, ConfigService],
+  useFactory: (pool: OtaPool, config: ConfigService<SharedConfig, true>) =>
+    createTenantDb(pool, { appEnv: config.get("APP_ENV", { infer: true }) }),
+};
+
 /**
  * The decoded API key pepper (PADR-0005 item 3), read once from API_KEY_PEPPER_FILE, which the configuration checked
  * at start-up. It stays in this process's memory; it is never logged or passed on.
@@ -102,7 +117,7 @@ export class TenancyModule {
   /** One module object per process kind; a new object on each call would be a new module with a pool of its own. */
   private static readonly modules = new Map<OtaApp, DynamicModule>();
 
-  /** The API's module: the platform repository and the caller classification of OBE-011. */
+  /** The API's module: the platform repository, caller classification (OBE-011) and tenant resolution (OBE-012). */
   static forApi(): DynamicModule {
     return TenancyModule.forApp(API_APP);
   }
@@ -114,20 +129,41 @@ export class TenancyModule {
   private static forApp(app: OtaApp): DynamicModule {
     let dynamicModule = TenancyModule.modules.get(app);
     if (dynamicModule === undefined) {
-      // Caller classification needs the API's configuration (the edge secret and the pepper file).
-      const callers =
-        app === API_APP ? [apiKeyPepperProvider, ApiKeyVerifier, CallerResolver, CallerContext] : [];
+      // Caller classification and tenant resolution need the API's configuration (the edge secret, the pepper file,
+      // the storefront base domain) and its request context; the key rows come through the platform cache.
+      const api = app === API_APP;
+      const requests = api
+        ? [
+            apiKeyPepperProvider,
+            { provide: API_KEY_ROWS, useExisting: PlatformCache },
+            ApiKeyVerifier,
+            CallerResolver,
+            CallerContext,
+            PlatformCache,
+            InvalidationSubscriber,
+            TenantResolver,
+            TenantContext,
+            tenantDbProvider,
+            TenantTx,
+          ]
+        : [];
       dynamicModule = {
         module: TenancyModule,
+        imports: api ? [RedisModule] : [],
         providers: [
           { provide: TENANCY_APP, useValue: app },
           poolProvider,
           platformDbProvider,
           OtaPoolCloser,
           PlatformReadRepository,
-          ...callers,
+          ...requests,
         ],
-        exports: [PlatformReadRepository, ...(app === API_APP ? [CallerResolver, CallerContext] : [])],
+        exports: [
+          PlatformReadRepository,
+          ...(api
+            ? [CallerResolver, CallerContext, PlatformCache, TenantResolver, TenantContext, TenantTx]
+            : []),
+        ],
       };
       TenancyModule.modules.set(app, dynamicModule);
     }

@@ -17,6 +17,7 @@ import {
   type Caller,
 } from "../../tenancy/caller-resolver";
 import { PlatformReadRepository, type PlatformApiKey } from "../../tenancy/platform-read.repository";
+import type { PlatformTenant } from "../../tenancy/platform-read.types";
 import { OTA_POOL, TenancyModule, type OtaPool } from "../../tenancy/tenancy.module";
 import { newId } from "../ids";
 import { OpenApiOperation } from "../http/openapi-operation.decorator";
@@ -325,6 +326,19 @@ describe("requests without a credential (rules 1.4 and 5)", () => {
   });
 
   it("are refused before the request is validated (the guard runs first)", async () => {
+    // The probe is bound to an operation, so the tenant guard (OBE-012) resolves the edge caller's host first: an
+    // active tenant behind demo.ota.example.com, from the spied repository (the dummy services have none).
+    spyOnDatabase().tenantByKey.mockResolvedValue({
+      id: TENANT_ID,
+      key: "demo",
+      name: "Demo Travel",
+      status: "active",
+      schemaName: "tenant_demo" as PlatformTenant["schemaName"],
+      storefrontEnvironment: "test",
+      defaultCurrency: "EUR",
+      defaultLocale: "en",
+      billingNotice: null,
+    });
     const anonymous = await request(api.server).post("/__callers/sign-in").send({ nope: true });
     const edge = await request(api.server).post("/__callers/sign-in").set(edgeHeaders()).send({ nope: true });
     const valid = await request(api.server)

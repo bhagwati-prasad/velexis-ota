@@ -30,8 +30,12 @@ import { OTA_POOL, TenancyModule, type OtaPool } from "../../../src/tenancy/tena
 import { createWorkerApp, createWorkerLogger, WorkerModule } from "../../../src/worker.module";
 import { testApiVariables } from "../../helpers/api-env";
 import { MemorySink } from "../../helpers/log-sink";
+import { unreachableRedisUrl } from "../../helpers/ports";
 
-/** Dummy Redis URL: nothing in these graphs connects to Redis (the readiness probe connects on its first check). */
+/**
+ * Dummy Redis URL: nothing in the worker graph connects to Redis (the readiness probe connects on its first check). The
+ * API graph connects its vx:invalidate subscriber at start-up (OBE-012), so it gets `unreachableRedisUrl()` instead.
+ */
 const REDIS_URL = "redis://:dummy@127.0.0.1:6379/0";
 /** SQLSTATE insufficient_privilege. */
 const PERMISSION_DENIED = "42501";
@@ -100,7 +104,7 @@ async function startApiTenancy(): Promise<Tenancy> {
   const config = loadApiConfig({
     APP_ENV: "test",
     DATABASE_URL: db.urlFor("ota"),
-    REDIS_URL,
+    REDIS_URL: await unreachableRedisUrl(),
     ...testApiVariables(),
   });
   const sink = new MemorySink();

@@ -11,23 +11,30 @@
 // the key. A failing platform lookup answers `503 SERVICE_UNAVAILABLE` (OADR-0009 point 5).
 //
 // The pepper (API_KEY_PEPPER_FILE, the platform's identical copy) is read once when the module starts and stays in
-// memory. The Redis cache of the rows (`apikey:<prefix>`, 60 s) and the usage counter come with OBE-012 and OBE-013.
+// memory. The rows come through the platform cache (`apikey:<prefix>`, 60 s, unknown prefixes 10 s; OBE-012), which
+// the tenancy module binds to `API_KEY_ROWS`; the usage counter comes with OBE-013.
 import { Inject, Injectable } from "@nestjs/common";
 import type { components } from "@velexis/api-types";
 import { verifyApiKey } from "@velexis/crypto";
 import { AppError } from "@velexis/errors";
 import { PinoLogger } from "nestjs-pino";
 import { Clock } from "../common/clock";
-import {
+import type {
+  ApiKeyEnvironment,
+  ApiKeyKind,
+  PlatformApiKey,
   PlatformReadRepository,
-  type ApiKeyEnvironment,
-  type ApiKeyKind,
-  type PlatformApiKey,
 } from "./platform-read.repository";
 import { UnexpectedPlatformValueError } from "./platform-read.types";
 
 /** Injection token of the decoded API key pepper (a `Buffer` of at least 32 bytes). */
 export const API_KEY_PEPPER = "API_KEY_PEPPER";
+
+/** Where the verifier reads `platform.api_keys` rows by prefix: the platform cache in the API (tenancy.module.ts). */
+export type ApiKeyRows = Pick<PlatformReadRepository, "apiKeyByPrefix">;
+
+/** Injection token of the `ApiKeyRows` of the verifier. */
+export const API_KEY_ROWS = "API_KEY_ROWS";
 
 /**
  * A publishable or secret key as the platform issues it (PADR-0005 item 1): `pk_`/`sk_`, the environment, and 40
@@ -142,7 +149,7 @@ function originAllowed(origin: string, allowed: readonly string[]): boolean {
 @Injectable()
 export class ApiKeyVerifier {
   constructor(
-    private readonly platform: PlatformReadRepository,
+    @Inject(API_KEY_ROWS) private readonly rows: ApiKeyRows,
     @Inject(API_KEY_PEPPER) private readonly pepper: Buffer,
     private readonly clock: Clock,
     private readonly logger: PinoLogger,
@@ -206,7 +213,7 @@ export class ApiKeyVerifier {
   /** The row of the prefix; a failing lookup is a `503`, a row the backend cannot read stays an error. */
   private async lookup(prefix: string): Promise<PlatformApiKey | null> {
     try {
-      return await this.platform.apiKeyByPrefix(prefix);
+      return await this.rows.apiKeyByPrefix(prefix);
     } catch (error) {
       if (error instanceof UnexpectedPlatformValueError) {
         throw error;

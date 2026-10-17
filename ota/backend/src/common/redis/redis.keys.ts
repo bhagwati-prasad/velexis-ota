@@ -435,3 +435,32 @@ export const redisKeys = Object.freeze({
 
 /** The names of the builders. */
 export type RedisKeyBuilderName = keyof typeof redisKeys;
+
+// ---- Patterns ----------------------------------------------------------------------------------------------------
+
+/**
+ * The keys of one builder that share a prefix, for `SCAN … MATCH` (OBE-012: the `account` invalidation drops every
+ * cached membership of the account). `match` is the glob of the scan; `keyOf` turns a name the scan returned back
+ * into the builder's key, or `undefined` when the name is not one (so only keys this file would build are deleted).
+ */
+export interface RedisKeyPattern<K extends RedisKeyKind = RedisKeyKind> {
+  /** The `MATCH` glob, such as `member:acc_…:*`; its fixed part has no glob characters. */
+  readonly match: string;
+  keyOf(name: string): RedisKey<K> | undefined;
+}
+
+/** The patterns of the OTA backend, built from validated parts like the keys. */
+export const redisKeyPatterns = Object.freeze({
+  /** `member:<accountId>:*`: every cached membership of one account, in any tenant. */
+  membersOfAccount(accountId: string): RedisKeyPattern<"shared"> {
+    const account = part("membersOfAccount", "accountId", "accountId", accountId);
+    const prefix = `member:${account}:`;
+    return Object.freeze({
+      match: `${prefix}*`,
+      keyOf(name: string): RedisKey<"shared"> | undefined {
+        const tenantId = name.startsWith(prefix) ? name.slice(prefix.length) : "";
+        return PARTS.tenantId.pattern.test(tenantId) ? redisKeys.member(account, tenantId) : undefined;
+      },
+    });
+  },
+});

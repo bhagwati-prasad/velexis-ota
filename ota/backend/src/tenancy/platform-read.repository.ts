@@ -1,9 +1,10 @@
 // The read-only platform repository of the OTA backend (OADR-0009 points 4 and 5, platform architecture §6.2). The
 // OTA backend reads the platform tables it needs as velexis_ota_app, which has SELECT on them and nothing else
 // (ADR-0004), and never writes one (ADR-0003). Each method runs one short read-only transaction on `platformDb`, so
-// a lookup holds no lock and no connection longer than its query; the tenancy caches (OBE-012) sit in front of it,
-// and when Redis is down the lookups come here directly. API keys joined in OBE-011 (`apiKeyByPrefix`, for the key
-// verifier); later tasks add domains, memberships and connections to this class.
+// a lookup holds no lock and no connection longer than its query; the tenancy caches (platform-cache.ts, OBE-012) sit
+// in front of it, and when Redis is down the lookups come here directly. API keys joined in OBE-011 (`apiKeyByPrefix`,
+// for the key verifier), verified storefront domains in OBE-012 (`tenantIdByStorefrontHost`, for the tenant
+// resolver); later tasks add memberships and connections to this class.
 import { Inject, Injectable } from "@nestjs/common";
 import {
   assertTenantSchema,
@@ -106,6 +107,13 @@ const API_KEY_COLUMNS = [
 
 type ApiKeyRow = Pick<Selectable<PlatformDatabase["platform.api_keys"]>, (typeof API_KEY_COLUMNS)[number]>;
 
+/**
+ * A host name as `platform.tenant_domains.hostname` stores it (PADR-0004 item 1, the rule of `redis.keys.ts`): lower
+ * case, labels of letters, digits and inner hyphens, at least two labels, no trailing dot, not an IP address.
+ */
+export const STOREFRONT_HOST_PATTERN =
+  /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
+
 @Injectable()
 export class PlatformReadRepository {
   constructor(@Inject(PLATFORM_DB) private readonly db: PlatformDb) {}
@@ -150,6 +158,28 @@ export class PlatformReadRepository {
         .executeTakeFirst(),
     );
     return row === undefined ? null : toPlatformApiKey(row);
+  }
+
+  /**
+   * The tenant id of a storefront host: a `platform.tenant_domains` row with this host name, `purpose = storefront`
+   * and `verification_status = verified` (OADR-0009 point 2), or `null`. A pending or failed domain, one of another
+   * purpose, and an unknown one are all `null`; the tenant's status is the resolver's check. A value that cannot be a
+   * stored host name is unknown without a query.
+   */
+  async tenantIdByStorefrontHost(hostname: string): Promise<string | null> {
+    if (!STOREFRONT_HOST_PATTERN.test(hostname)) {
+      return null;
+    }
+    const row = await this.read((trx) =>
+      trx
+        .selectFrom("platform.tenant_domains")
+        .select("tenant_id")
+        .where("hostname", "=", hostname)
+        .where("purpose", "=", "storefront")
+        .where("verification_status", "=", "verified")
+        .executeTakeFirst(),
+    );
+    return row === undefined ? null : row.tenant_id;
   }
 
   /**
