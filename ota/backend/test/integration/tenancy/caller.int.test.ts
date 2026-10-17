@@ -32,7 +32,7 @@ import { OTA_POOL, TenancyModule, type OtaPool } from "../../../src/tenancy/tena
 import { edgeHeaders, newApiKey, testApiCredentials, withCharacterChanged } from "../../helpers/api-env";
 import { createTestApp, type TestApp } from "../../support/create-test-app";
 
-/** A pending operation of the document (OBE-015) that documents 400, 401 and 403. */
+/** An operation of the document (OBE-015) that documents 400, 401 and 403; the guards refuse before it. */
 const SEARCH_LOCATIONS = "/v1/reference/locations?keyword=par";
 const ALLOWED_ORIGIN = "https://travel.example.net";
 

@@ -278,8 +278,9 @@ describe("edge requests", () => {
     const repository = api.app.get(PlatformReadRepository);
     const lookups = [vi.spyOn(repository, "tenantByKey"), vi.spyOn(repository, "tenantIdByStorefrontHost")];
 
+    // resolveStorefrontHost is deferred: its route answers 501 through the MVP.
     const res = await request(api.server)
-      .get("/v1/reference/locations?keyword=par")
+      .get("/v1/storefront/resolve?host=www.example.com")
       .set(edgeHeaders("nobody.ota.example.com"));
 
     expect([res.status, res.body.error.code]).toEqual([501, "NOT_IMPLEMENTED"]);

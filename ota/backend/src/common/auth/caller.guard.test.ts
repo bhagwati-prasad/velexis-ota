@@ -28,7 +28,7 @@ const TENANT_ID = newId("ten");
 /** Keys in the platform's format, built at run time; valid only against the rows these tests build. */
 const SECRET_KEY = newApiKey("sk");
 const PUBLISHABLE_KEY = newApiKey("pk");
-/** A pending operation of the document (OBE-015) that documents 400, 401 and 403. */
+/** An operation of the document (OBE-015) that documents 400, 401 and 403; the guards refuse before it. */
 const SEARCH_LOCATIONS = "/v1/reference/locations?keyword=par";
 /**
  * A body of updatePayment, the operation of the validation probe below: it takes no Idempotency-Key, so a valid

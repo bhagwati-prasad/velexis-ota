@@ -355,32 +355,37 @@ describe("route parity", () => {
         return {};
       }
 
-      // Two handlers of listAirlines, one without @OpenApiOperation.
-      @Get("reference/airlines")
-      @OpenApiOperation("listAirlines")
-      airlines(): object {
+      // Two handlers of listSavedTravelers, one without @OpenApiOperation. Deferred operations, which stay pending
+      // through the MVP: the application has no handler of its own for them.
+      @Get("account/saved-travelers")
+      @OpenApiOperation("listSavedTravelers")
+      savedTravelers(): object {
         return {};
       }
 
-      @Get("reference/airlines")
-      airlinesAgain(): object {
+      @Get("account/saved-travelers")
+      savedTravelersAgain(): object {
         return {};
       }
 
       // Names an operation whose route is another one.
-      @Get("reference/countries")
-      @OpenApiOperation("listCurrencies")
-      countries(): object {
+      @Get("account/preferences")
+      @OpenApiOperation("resolveStorefrontHost")
+      preferences(): object {
         return {};
       }
     }
     const probe = await createTestApp({ controllers: [MisboundController] });
     try {
-      const { listAirlines: _airlines, listCountries: _countries, ...pending } = PENDING_OPERATIONS;
+      const {
+        listSavedTravelers: _savedTravelers,
+        getAccountPreferences: _preferences,
+        ...pending
+      } = PENDING_OPERATIONS;
       const problems = routeParityProblems({
         operations: DOCUMENT_OPERATIONS,
         routes: collectRoutes(probe.app).filter(
-          (route) => route.pending !== "listAirlines" && route.pending !== "listCountries",
+          (route) => route.pending !== "listSavedTravelers" && route.pending !== "getAccountPreferences",
         ),
         pending: { ...pending, notAnOperation: "OBE-999" },
         undocumented: [...UNDOCUMENTED_ROUTES, "GET /v1/nowhere"],
@@ -388,10 +393,10 @@ describe("route parity", () => {
 
       expect(problems.sort()).toEqual(
         [
-          "MisboundController.airlinesAgain (GET /v1/reference/airlines) handles listAirlines without @OpenApiOperation",
-          "MisboundController.countries (GET /v1/reference/countries) names listCurrencies, whose route is GET /v1/reference/currencies",
+          "MisboundController.savedTravelersAgain (GET /v1/account/saved-travelers) handles listSavedTravelers without @OpenApiOperation",
+          "MisboundController.preferences (GET /v1/account/preferences) names resolveStorefrontHost, whose route is GET /v1/storefront/resolve",
           "getStorefront has a handler (MisboundController.storefront) and a pending entry",
-          "listAirlines has 2 handlers",
+          "listSavedTravelers has 2 handlers",
           "pending-operations.ts lists notAnOperation, which the OTA document does not have",
           "GET /v1/nowhere is in UNDOCUMENTED_ROUTES but no handler serves it",
         ].sort(),

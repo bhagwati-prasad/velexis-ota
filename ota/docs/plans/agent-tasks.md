@@ -374,7 +374,8 @@ The OTA backend gets its contract extensions, request pipeline, tenancy, Amadeus
   - A replay of a token-carrying response decrypts `response_ciphertext`; the plain body column holds no token.
 - **Verify:** `pnpm --filter @velexis/ota-backend test && pnpm --filter @velexis/ota-backend test:int -- common`
 
-### OBE-015 · Implement the reference endpoints
+### OBE-015 · Implement the reference endpoints ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-backend
 - **Milestone:** M2
 - **Depends on:** OBE-012, X-018
