@@ -1119,12 +1119,28 @@ let ota: Json;
 let operations: Operation[];
 let checker: ResponseChecker;
 
+/**
+ * The budget of the setup hook below. Parsing both documents and compiling an Ajv validator for every documented JSON
+ * response takes a few seconds alone, several times that under a full parallel `pnpm test` on four CPUs (past the 10 s
+ * hook default), and it grows with every operation. The budget only stops a hook that hangs.
+ */
+const SETUP_TIMEOUT_MS = 60_000;
+
 beforeAll(() => {
   platform = readYaml(PLATFORM_DOCUMENT);
   ota = readYaml(OTA_DOCUMENT);
   operations = operationsOf(platform);
   checker = createResponseChecker(structuredClone(platform), { label: "platform" });
-});
+  // The checker compiles each response's validator on its first use and keeps it: compiling them all here keeps that
+  // one-time work out of the 5 s bound of the tests that check responses.
+  for (const op of operations) {
+    for (const [status, response] of responsesOf(platform, op)) {
+      if (jsonMedia(response) !== undefined) {
+        checker.check(op.operationId, { status: Number(status), body: undefined });
+      }
+    }
+  }
+}, SETUP_TIMEOUT_MS);
 
 function operation(operationId: string): Operation {
   const found = operations.find((candidate) => candidate.operationId === operationId);
@@ -3720,9 +3736,7 @@ describe("the conventions of every operation", () => {
       }
     }
     expect(checked).toBeGreaterThan(operations.length);
-    // The checker compiles an Ajv validator for every documented response: about a second alone, more than Vitest's
-    // 5 s default under a full parallel `pnpm test` on four CPUs, and it grows with the document.
-  }, 60_000);
+  });
 
   it("refuses answers with an undocumented field, a number for money or an undocumented status", () => {
     const session = objectAt(resolve(platform, { $ref: "#/components/examples/PortalSession" }), "value");
