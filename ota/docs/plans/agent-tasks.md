@@ -676,7 +676,8 @@ The OTA backend gets its contract extensions, request pipeline, tenancy, Amadeus
   - The CSRF re-fetch happens once per failure, never in a loop; `X-Velexis-Environment` is absent on customer operations.
 - **Verify:** `pnpm --filter @velexis/ota-sdk typecheck && pnpm --filter @velexis/ota-sdk test`
 
-### SDK-005 · Write the storefront, reference and flights namespaces
+### SDK-005 · Write the storefront, reference and flights namespaces ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-sdk
 - **Milestone:** M2
 - **Depends on:** SDK-004

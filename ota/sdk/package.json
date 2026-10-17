@@ -20,6 +20,7 @@
   },
   "devDependencies": {
     "@velexis/api-types": "workspace:*",
+    "@velexis/testing": "workspace:*",
     "esbuild": "0.25.12",
     "happy-dom": "17.6.3",
     "typescript": "5.6.3",

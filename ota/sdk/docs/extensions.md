@@ -32,6 +32,7 @@ Related: [SDK README](../README.md), [`types-and-builds.md`](types-and-builds.md
 | Error mapping details | A response without the error envelope gets a code from its status and is never a `SupplierError`. `retryable` is true for 429, 500, 502, 503, 504, `ACCOUNT_LOCKED`, `DOCUMENT_NOT_READY`, `NETWORK_ERROR` and `TIMEOUT`. `toJSON()` drops secret-named `details` entries (`bookingToken`, `bookingTokenExpiresAt`, …) and redacts API keys, bearer tokens and JWTs in texts. |
 | Error constructor | Every error class takes an optional second argument `{ retryAfterSeconds?, cause? }` (the response's `Retry-After` for `RateLimitError`, the underlying failure of a `ConnectionError`). |
 | `Page` | `Page<T>` is also exported as a class (`new Page(body, loadNextPage)`); list responses keep their extra fields on the page. |
+| Namespace factories | The public modules re-export their namespace factories ([OADR-0016](../../docs/adr/0016-sdk-packaging-and-type-contract.md) point 1), so the package also exports `createStorefrontApi`, `createReferenceApi` and `createFlightsApi` (and the factories of the later namespaces). They take the internal request core; applications use `createVelexisClient`. |
 | `onResponse` | `path` is the API path without the base URL and the query string; failures of the hook are ignored. |
 
 ## 3. Methods added by the MVP

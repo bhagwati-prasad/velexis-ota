@@ -1,9 +1,15 @@
 // @velexis/ota-sdk public entry (mirrors docs/velexis-sdk/sdk/src/index.d.ts, ADR-0019): `createVelexisClient`,
-// `VERSION`, and everything of shared.js (the error classes, `isVelexisError`, `Page` and the shared typedefs). The
-// namespaces join the client from SDK-005 on; until then it offers `withOptions` and `request`.
+// `VERSION`, everything of shared.js (the error classes, `isVelexisError`, `Page` and the shared typedefs) and of the
+// public namespace modules (their typedefs and factories, OADR-0016 point 1). A client offers the namespaces of the
+// milestones built so far, `withOptions` and `request`: M2 brings `storefront`, `reference` and `flights` (SDK-005);
+// `auth`, `account`, `checkout`, `bookings` (M3) and `console` (M4) follow.
+import { createFlightsApi } from "./flights.js";
+import { createReferenceApi, createStorefrontApi } from "./identity.js";
 import { createCore } from "./internal/client.js";
 
 export * from "./shared.js";
+export * from "./identity.js";
+export * from "./flights.js";
 export { VERSION } from "./version.js";
 
 /** @typedef {import("./shared.js").VelexisClientOptions} VelexisClientOptions */
@@ -12,8 +18,14 @@ export { VERSION } from "./version.js";
 /** HTTP methods accepted by `VelexisClient.request`. @typedef {"GET" | "POST" | "PUT" | "PATCH" | "DELETE"} HttpMethod */
 
 /**
- * A configured Velexis client. All methods share the client's keys, tokens and defaults.
+ * A configured Velexis client. All namespaces and methods share the client's keys, tokens and defaults.
  * @typedef {object} VelexisClient
+ * @property {import("./identity.js").StorefrontApi} storefront storefront bootstrap (branding, locales, currencies,
+ *   features, payment provider public config)
+ * @property {import("./identity.js").ReferenceApi} reference airports, cities, airlines, countries, currencies
+ *   (platform reference data)
+ * @property {import("./flights.js").FlightsApi} flights flight search, offer details, branded-fare upsell, pricing,
+ *   fare rules, ancillary options and the console's availability search
  * @property {(overrides: Partial<VelexisClientOptions>) => VelexisClient} withOptions a new client with some options
  *   replaced (for example a per-request access token on the server); it shares nothing mutable with this one
  * @property {<T = unknown>(method: HttpMethod, path: string, init?: { query?: Record<string, string | number | boolean | string[] | undefined>, body?: unknown, options?: RequestOptions }) => Promise<T>} request
@@ -29,6 +41,9 @@ export { VERSION } from "./version.js";
 export function createVelexisClient(options) {
   const core = createCore(options);
   return {
+    storefront: createStorefrontApi(core),
+    reference: createReferenceApi(core),
+    flights: createFlightsApi(core),
     withOptions: (overrides) => createVelexisClient(core.derive(overrides)),
     request: (method, path, init) => core.request(method, path, init),
   };

@@ -1,0 +1,213 @@
+{
+  "tenantKey": "acme",
+  "name": "Acme Travel",
+  "legalName": "Acme Travel Ltd",
+  "environment": "test",
+  "primaryUrl": "https://www.acmetravel.com",
+  "domains": [
+    {
+      "host": "www.acmetravel.com",
+      "kind": "custom",
+      "primary": true,
+      "verifiedAt": "2026-08-14T10:00:00Z"
+    },
+    {
+      "host": "acme.velexis.app",
+      "kind": "subdomain",
+      "primary": false,
+      "verifiedAt": "2026-08-01T09:00:00Z"
+    }
+  ],
+  "timeZone": "Europe/London",
+  "branding": {
+    "logoUrl": "https://cdn.velexis.travel/t/acme/brand/logo.svg",
+    "logoDarkUrl": "https://cdn.velexis.travel/t/acme/brand/logo-dark.svg",
+    "logoSquareUrl": "https://cdn.velexis.travel/t/acme/brand/logo-square.png",
+    "faviconUrl": "https://cdn.velexis.travel/t/acme/brand/favicon.ico",
+    "colors": {
+      "primary": "#0B5FFF",
+      "onPrimary": "#FFFFFF",
+      "secondary": "#14213D",
+      "accent": "#FCA311",
+      "background": "#FFFFFF",
+      "surface": "#F5F7FA",
+      "text": "#1A1A1A",
+      "mutedText": "#5C6670",
+      "success": "#1E8E3E",
+      "warning": "#B26A00",
+      "error": "#C5221F"
+    },
+    "fonts": {
+      "heading": {
+        "family": "Poppins",
+        "cssUrl": "https://fonts.googleapis.com/css2?family=Poppins:wght@600;700&display=swap",
+        "weights": [600, 700]
+      },
+      "body": {
+        "family": "Inter",
+        "cssUrl": "https://fonts.googleapis.com/css2?family=Inter:wght@400;500&display=swap",
+        "weights": [400, 500]
+      }
+    },
+    "cornerRadius": "medium",
+    "customCssUrl": null
+  },
+  "defaultLocale": "en-GB",
+  "locales": [
+    {
+      "code": "en-GB",
+      "name": "English (UK)",
+      "direction": "ltr"
+    },
+    {
+      "code": "fr-FR",
+      "name": "Français",
+      "direction": "ltr"
+    }
+  ],
+  "defaultCurrency": "GBP",
+  "currencies": [
+    {
+      "code": "GBP",
+      "name": "Pound sterling",
+      "symbol": "£",
+      "decimals": 2
+    },
+    {
+      "code": "EUR",
+      "name": "Euro",
+      "symbol": "€",
+      "decimals": 2
+    }
+  ],
+  "defaultMarket": "GB",
+  "markets": [
+    {
+      "countryCode": "GB",
+      "name": "United Kingdom",
+      "currency": "GBP",
+      "locale": "en-GB"
+    },
+    {
+      "countryCode": "FR",
+      "name": "France",
+      "currency": "EUR",
+      "locale": "fr-FR"
+    }
+  ],
+  "features": {
+    "guestCheckout": true,
+    "customerAccounts": true,
+    "savedTravelers": true,
+    "ancillaries": true,
+    "seatSelection": true,
+    "brandedFareUpsell": true,
+    "autoIssue": true
+  },
+  "auth": {
+    "emailVerification": "required_before_checkout",
+    "passwordPolicy": {
+      "minLength": 10,
+      "maxLength": 128,
+      "requireUppercase": false,
+      "requireLowercase": true,
+      "requireDigit": true,
+      "requireSymbol": false,
+      "rejectBreached": true
+    },
+    "accessTokenTtlSeconds": 900,
+    "refreshTokenTtlDays": 30
+  },
+  "payment": {
+    "provider": "stripe",
+    "environment": "test",
+    "accountMode": "connect_standard",
+    "publishableKey": "pk_test_fake_storefront_fixture",
+    "accountId": "acct_fake_fixture",
+    "merchantName": "Acme Travel",
+    "statementDescriptor": null,
+    "airlineCard": null,
+    "supportedMethods": ["card", "apple_pay", "google_pay"],
+    "cardBrands": ["VISA", "MASTERCARD", "AMERICAN_EXPRESS"],
+    "pspCardBrands": [
+      {
+        "amadeus": "VISA",
+        "psp": "visa",
+        "label": "Visa"
+      },
+      {
+        "amadeus": "MASTERCARD",
+        "psp": "mastercard",
+        "label": "Mastercard"
+      },
+      {
+        "amadeus": "AMERICAN_EXPRESS",
+        "psp": "amex",
+        "label": "American Express"
+      }
+    ],
+    "merchantCountry": "GB",
+    "threeDSecure": "automatic"
+  },
+  "legal": {
+    "termsUrl": "https://www.acmetravel.com/legal/terms",
+    "termsVersion": "2026-09-01",
+    "privacyUrl": "https://www.acmetravel.com/legal/privacy",
+    "privacyVersion": "2026-09-01",
+    "cookiePolicyUrl": "https://www.acmetravel.com/legal/cookies",
+    "refundPolicyUrl": "https://www.acmetravel.com/legal/refunds",
+    "imprintUrl": null,
+    "accessibilityUrl": "https://www.acmetravel.com/accessibility"
+  },
+  "support": {
+    "email": "help@acmetravel.com",
+    "phone": "+442071234567",
+    "hours": "Mon-Fri 08:00-20:00, Sat 09:00-17:00 (UK time)",
+    "helpCenterUrl": "https://help.acmetravel.com",
+    "emergencyPhone": "+442071234568"
+  },
+  "consent": {
+    "regime": "gdpr",
+    "bannerRequired": true,
+    "policyVersion": "2026-09-01",
+    "cookieName": "vx_consent",
+    "lifetimeDays": 180,
+    "categories": [
+      {
+        "id": "necessary",
+        "required": true,
+        "defaultEnabled": true,
+        "title": "Strictly necessary",
+        "description": "Sign-in, checkout and security cookies."
+      },
+      {
+        "id": "analytics",
+        "required": false,
+        "defaultEnabled": false,
+        "title": "Analytics",
+        "description": "Helps us understand how the site is used."
+      },
+      {
+        "id": "marketing",
+        "required": false,
+        "defaultEnabled": false,
+        "title": "Marketing",
+        "description": "Personalised offers on other sites."
+      }
+    ]
+  },
+  "seo": {
+    "titleTemplate": "%s | Acme Travel",
+    "defaultTitle": "Acme Travel - cheap flights worldwide",
+    "defaultDescription": "Compare and book flights on 400+ airlines with Acme Travel.",
+    "ogImageUrl": "https://cdn.velexis.travel/t/acme/brand/og.jpg",
+    "twitterHandle": "@acmetravel",
+    "canonicalBaseUrl": "https://www.acmetravel.com",
+    "robots": {
+      "index": false,
+      "follow": false
+    }
+  },
+  "version": 12,
+  "updatedAt": "2026-10-01T09:30:00Z"
+}

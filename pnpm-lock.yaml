@@ -247,6 +247,9 @@ importers:
       '@velexis/api-types':
         specifier: workspace:*
         version: link:../../packages/api-types
+      '@velexis/testing':
+        specifier: workspace:*
+        version: link:../../packages/testing
       esbuild:
         specifier: 0.25.12
         version: 0.25.12

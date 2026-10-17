@@ -1,0 +1,588 @@
+{
+  "id": "srch_01JA4C8Q0D5N7R2T6V9X3Z1B4F",
+  "status": "completed",
+  "mode": "simple",
+  "customerId": null,
+  "criteria": {
+    "mode": "simple",
+    "request": {
+      "mode": "simple",
+      "originLocationCode": "PAR",
+      "destinationLocationCode": "NYC",
+      "departureDate": "2026-11-20",
+      "returnDate": "2026-11-27",
+      "adults": 1,
+      "children": 1,
+      "travelClass": "ECONOMY",
+      "nonStop": false,
+      "currencyCode": "EUR",
+      "max": 150
+    },
+    "amadeusOperationId": "getFlightOffers",
+    "amadeusQuery": {
+      "originLocationCode": "PAR",
+      "destinationLocationCode": "NYC",
+      "departureDate": "2026-11-20",
+      "returnDate": "2026-11-27",
+      "adults": "1",
+      "children": "1",
+      "travelClass": "ECONOMY",
+      "nonStop": "false",
+      "currencyCode": "EUR",
+      "max": "150"
+    },
+    "amadeusBody": null
+  },
+  "summary": {
+    "tripType": "round_trip",
+    "legs": [
+      {
+        "originDestinationId": "1",
+        "originCode": "PAR",
+        "destinationCode": "NYC",
+        "departureDate": "2026-11-20"
+      },
+      {
+        "originDestinationId": "2",
+        "originCode": "NYC",
+        "destinationCode": "PAR",
+        "departureDate": "2026-11-27"
+      }
+    ],
+    "travelers": {
+      "adults": 1,
+      "children": 1,
+      "infants": 0,
+      "total": 2
+    },
+    "travelClass": "ECONOMY",
+    "nonStop": false
+  },
+  "currency": "EUR",
+  "resultCount": 143,
+  "highlights": {
+    "cheapest": {
+      "offerId": "off_01JA4C8Q2H6K9M3P5S8U1W4Y7A",
+      "price": {
+        "amount": "1240.56",
+        "currency": "EUR"
+      },
+      "durationMinutes": 945
+    },
+    "fastest": {
+      "offerId": "off_01JA4C8Q2H6K9M3P5S8U1W4Y7A",
+      "price": {
+        "amount": "1240.56",
+        "currency": "EUR"
+      },
+      "durationMinutes": 945
+    },
+    "best": {
+      "offerId": "off_01JA4C8Q2H6K9M3P5S8U1W4Y7A",
+      "price": {
+        "amount": "1240.56",
+        "currency": "EUR"
+      },
+      "durationMinutes": 945
+    }
+  },
+  "offers": [
+    {
+      "id": "off_01JA4C8Q2H6K9M3P5S8U1W4Y7A",
+      "searchId": "srch_01JA4C8Q0D5N7R2T6V9X3Z1B4F",
+      "origin": "search",
+      "baseOfferId": null,
+      "status": "active",
+      "source": "GDS",
+      "expiresAt": "2026-10-10T10:12:00Z",
+      "price": {
+        "currency": "EUR",
+        "total": {
+          "amount": "1240.56",
+          "currency": "EUR"
+        },
+        "base": {
+          "amount": "742.00",
+          "currency": "EUR"
+        },
+        "taxes": {
+          "amount": "478.56",
+          "currency": "EUR"
+        },
+        "fees": {
+          "amount": "20.00",
+          "currency": "EUR"
+        },
+        "additionalServices": null,
+        "perAdult": {
+          "amount": "662.28",
+          "currency": "EUR"
+        }
+      },
+      "summary": {
+        "tripType": "round_trip",
+        "originCode": "CDG",
+        "destinationCode": "JFK",
+        "departureAt": "2026-11-20T10:25:00",
+        "returnAt": "2026-11-27T18:30:00",
+        "totalDurationMinutes": 945,
+        "maxStops": 0,
+        "marketingCarriers": ["AF"],
+        "operatingCarriers": ["AF"],
+        "validatingCarrier": "AF",
+        "cabins": ["ECONOMY"],
+        "brandedFares": [
+          {
+            "itineraryIndex": 0,
+            "code": "LIGHT",
+            "label": "ECONOMY LIGHT"
+          },
+          {
+            "itineraryIndex": 1,
+            "code": "LIGHT",
+            "label": "ECONOMY LIGHT"
+          }
+        ],
+        "includedCheckedBags": {
+          "quantity": 0,
+          "weight": null,
+          "weightUnit": null
+        },
+        "includedCabinBags": {
+          "quantity": 1,
+          "weight": 12,
+          "weightUnit": "KG"
+        },
+        "refundable": false,
+        "changeable": true,
+        "co2Kg": 1084,
+        "numberOfBookableSeats": 7,
+        "lastTicketingDate": "2026-10-13",
+        "tags": ["cheapest", "fastest", "best"]
+      },
+      "itineraries": [
+        {
+          "index": 0,
+          "originCode": "CDG",
+          "destinationCode": "JFK",
+          "departureAt": "2026-11-20T10:25:00",
+          "arrivalAt": "2026-11-20T12:45:00",
+          "duration": "PT8H20M",
+          "durationMinutes": 500,
+          "stops": 0,
+          "stopAirports": [],
+          "arrivalDayOffset": 0,
+          "marketingCarriers": ["AF"],
+          "segments": [
+            {
+              "id": "1",
+              "departure": {
+                "iataCode": "CDG",
+                "terminal": "2E",
+                "at": "2026-11-20T10:25:00",
+                "cityCode": "PAR",
+                "countryCode": "FR",
+                "airportName": "Paris Charles de Gaulle",
+                "cityName": "Paris"
+              },
+              "arrival": {
+                "iataCode": "JFK",
+                "terminal": "1",
+                "at": "2026-11-20T12:45:00",
+                "cityCode": "NYC",
+                "countryCode": "US",
+                "airportName": "John F. Kennedy International",
+                "cityName": "New York"
+              },
+              "carrierCode": "AF",
+              "carrierName": "Air France",
+              "number": "6",
+              "flightNumber": "AF6",
+              "operating": {
+                "carrierCode": "AF",
+                "carrierName": "Air France"
+              },
+              "aircraft": {
+                "code": "359",
+                "name": "Airbus A350-900"
+              },
+              "duration": "PT8H20M",
+              "durationMinutes": 500,
+              "numberOfStops": 0,
+              "stops": [],
+              "co2Emissions": [
+                {
+                  "weight": 542,
+                  "weightUnit": "KG",
+                  "cabin": "ECONOMY"
+                }
+              ],
+              "blacklistedInEU": false,
+              "cabin": "ECONOMY",
+              "bookingClass": "V",
+              "brandedFare": "LIGHT",
+              "brandedFareLabel": "ECONOMY LIGHT",
+              "layoverAfter": null
+            }
+          ]
+        },
+        {
+          "index": 1,
+          "originCode": "JFK",
+          "destinationCode": "CDG",
+          "departureAt": "2026-11-27T18:30:00",
+          "arrivalAt": "2026-11-28T07:55:00",
+          "duration": "PT7H25M",
+          "durationMinutes": 445,
+          "stops": 0,
+          "stopAirports": [],
+          "arrivalDayOffset": 1,
+          "marketingCarriers": ["AF"],
+          "segments": [
+            {
+              "id": "2",
+              "departure": {
+                "iataCode": "JFK",
+                "terminal": "1",
+                "at": "2026-11-27T18:30:00",
+                "cityCode": "NYC",
+                "countryCode": "US",
+                "airportName": "John F. Kennedy International",
+                "cityName": "New York"
+              },
+              "arrival": {
+                "iataCode": "CDG",
+                "terminal": "2E",
+                "at": "2026-11-28T07:55:00",
+                "cityCode": "PAR",
+                "countryCode": "FR",
+                "airportName": "Paris Charles de Gaulle",
+                "cityName": "Paris"
+              },
+              "carrierCode": "AF",
+              "carrierName": "Air France",
+              "number": "11",
+              "flightNumber": "AF11",
+              "operating": {
+                "carrierCode": "AF",
+                "carrierName": "Air France"
+              },
+              "aircraft": {
+                "code": "77W",
+                "name": "Boeing 777-300ER"
+              },
+              "duration": "PT7H25M",
+              "durationMinutes": 445,
+              "numberOfStops": 0,
+              "stops": [],
+              "co2Emissions": [
+                {
+                  "weight": 542,
+                  "weightUnit": "KG",
+                  "cabin": "ECONOMY"
+                }
+              ],
+              "blacklistedInEU": false,
+              "cabin": "ECONOMY",
+              "bookingClass": "V",
+              "brandedFare": "LIGHT",
+              "brandedFareLabel": "ECONOMY LIGHT",
+              "layoverAfter": null
+            }
+          ]
+        }
+      ],
+      "validatingAirlineCodes": ["AF"],
+      "lastTicketingDate": "2026-10-13",
+      "lastTicketingDateTime": null,
+      "numberOfBookableSeats": 7,
+      "instantTicketingRequired": false,
+      "paymentCardRequired": false,
+      "oneWay": false,
+      "isUpsellOffer": false,
+      "upsellOfferIds": [],
+      "createdAt": "2026-10-10T09:42:00Z"
+    }
+  ],
+  "page": {
+    "nextCursor": "eyJvIjoyMCwicyI6ImJlc3QifQ",
+    "limit": 20
+  },
+  "oneWayCombinations": [],
+  "facets": {
+    "total": 143,
+    "price": {
+      "min": {
+        "amount": "1240.56",
+        "currency": "EUR"
+      },
+      "max": {
+        "amount": "6815.10",
+        "currency": "EUR"
+      }
+    },
+    "stops": [
+      {
+        "value": "0",
+        "label": "Non-stop",
+        "count": 38,
+        "minPrice": {
+          "amount": "1240.56",
+          "currency": "EUR"
+        }
+      },
+      {
+        "value": "1",
+        "label": "1 stop",
+        "count": 97,
+        "minPrice": {
+          "amount": "1268.40",
+          "currency": "EUR"
+        }
+      },
+      {
+        "value": "2",
+        "label": "2+ stops",
+        "count": 8,
+        "minPrice": {
+          "amount": "1702.95",
+          "currency": "EUR"
+        }
+      }
+    ],
+    "carriers": [
+      {
+        "value": "AF",
+        "label": "Air France",
+        "count": 41,
+        "minPrice": {
+          "amount": "1240.56",
+          "currency": "EUR"
+        }
+      },
+      {
+        "value": "DL",
+        "label": "Delta Air Lines",
+        "count": 36,
+        "minPrice": {
+          "amount": "1268.40",
+          "currency": "EUR"
+        }
+      }
+    ],
+    "cabins": [
+      {
+        "value": "ECONOMY",
+        "label": "Economy",
+        "count": 143,
+        "minPrice": {
+          "amount": "1240.56",
+          "currency": "EUR"
+        }
+      }
+    ],
+    "brandedFares": [
+      {
+        "value": "LIGHT",
+        "label": "ECONOMY LIGHT",
+        "count": 22,
+        "minPrice": {
+          "amount": "1240.56",
+          "currency": "EUR"
+        }
+      },
+      {
+        "value": "STANDARD",
+        "label": "ECONOMY STANDARD",
+        "count": 31,
+        "minPrice": {
+          "amount": "1356.56",
+          "currency": "EUR"
+        }
+      }
+    ],
+    "includedCheckedBags": [
+      {
+        "value": "0",
+        "label": "No checked bag",
+        "count": 47,
+        "minPrice": {
+          "amount": "1240.56",
+          "currency": "EUR"
+        }
+      },
+      {
+        "value": "1",
+        "label": "1 checked bag",
+        "count": 96,
+        "minPrice": {
+          "amount": "1356.56",
+          "currency": "EUR"
+        }
+      }
+    ],
+    "refundable": [
+      {
+        "value": "false",
+        "label": "Non-refundable",
+        "count": 120,
+        "minPrice": {
+          "amount": "1240.56",
+          "currency": "EUR"
+        }
+      },
+      {
+        "value": "true",
+        "label": "Refundable",
+        "count": 18,
+        "minPrice": {
+          "amount": "2210.00",
+          "currency": "EUR"
+        }
+      },
+      {
+        "value": "unknown",
+        "label": "Unknown",
+        "count": 5,
+        "minPrice": {
+          "amount": "1310.20",
+          "currency": "EUR"
+        }
+      }
+    ],
+    "changeable": [
+      {
+        "value": "true",
+        "label": "Changeable",
+        "count": 110,
+        "minPrice": {
+          "amount": "1240.56",
+          "currency": "EUR"
+        }
+      },
+      {
+        "value": "false",
+        "label": "Not changeable",
+        "count": 28,
+        "minPrice": {
+          "amount": "1251.90",
+          "currency": "EUR"
+        }
+      }
+    ],
+    "departureTimes": [
+      {
+        "itineraryIndex": 0,
+        "band": "morning",
+        "from": "06:00",
+        "to": "11:59",
+        "count": 61,
+        "minPrice": {
+          "amount": "1240.56",
+          "currency": "EUR"
+        }
+      },
+      {
+        "itineraryIndex": 0,
+        "band": "evening",
+        "from": "18:00",
+        "to": "23:59",
+        "count": 44,
+        "minPrice": {
+          "amount": "1288.10",
+          "currency": "EUR"
+        }
+      },
+      {
+        "itineraryIndex": 1,
+        "band": "evening",
+        "from": "18:00",
+        "to": "23:59",
+        "count": 72,
+        "minPrice": {
+          "amount": "1240.56",
+          "currency": "EUR"
+        }
+      }
+    ],
+    "arrivalTimes": [
+      {
+        "itineraryIndex": 0,
+        "band": "afternoon",
+        "from": "12:00",
+        "to": "17:59",
+        "count": 80,
+        "minPrice": {
+          "amount": "1240.56",
+          "currency": "EUR"
+        }
+      },
+      {
+        "itineraryIndex": 1,
+        "band": "morning",
+        "from": "06:00",
+        "to": "11:59",
+        "count": 90,
+        "minPrice": {
+          "amount": "1240.56",
+          "currency": "EUR"
+        }
+      }
+    ],
+    "durations": [
+      {
+        "itineraryIndex": 0,
+        "minMinutes": 500,
+        "maxMinutes": 1415
+      },
+      {
+        "itineraryIndex": 1,
+        "minMinutes": 445,
+        "maxMinutes": 1290
+      }
+    ]
+  },
+  "dictionaries": {
+    "locations": {
+      "CDG": {
+        "cityCode": "PAR",
+        "countryCode": "FR",
+        "airportName": "Paris Charles de Gaulle",
+        "cityName": "Paris",
+        "countryName": "France",
+        "timeZone": "Europe/Paris"
+      },
+      "JFK": {
+        "cityCode": "NYC",
+        "countryCode": "US",
+        "airportName": "John F. Kennedy International",
+        "cityName": "New York",
+        "countryName": "United States",
+        "timeZone": "America/New_York"
+      }
+    },
+    "carriers": {
+      "AF": {
+        "name": "Air France",
+        "logoUrl": "https://cdn.velexis.travel/airlines/AF.svg"
+      },
+      "DL": {
+        "name": "Delta Air Lines",
+        "logoUrl": "https://cdn.velexis.travel/airlines/DL.svg"
+      }
+    },
+    "aircraft": {
+      "359": "Airbus A350-900",
+      "77W": "Boeing 777-300ER"
+    },
+    "currencies": {
+      "EUR": "Euro"
+    }
+  },
+  "warnings": [],
+  "createdAt": "2026-10-10T09:42:00Z",
+  "expiresAt": "2026-10-10T10:12:00Z",
+  "retryAfterSeconds": null,
+  "error": null,
+  "completedAt": "2026-10-10T09:42:00Z"
+}
