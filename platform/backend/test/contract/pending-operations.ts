@@ -15,11 +15,8 @@ export interface PendingOperation {
 }
 
 export const PENDING_OPERATIONS: readonly PendingOperation[] = Object.freeze([
-  // PBE-005: identity, plans and internal (healthLive and healthReady are bound since PBE-001 and PBE-008, listPlans
-  // since PBE-017).
-  { operationId: "signUp", task: "PBE-013" },
-  { operationId: "verifyEmail", task: "PBE-013" },
-  { operationId: "resendVerification", task: "PBE-013" },
+  // PBE-005: identity, plans and internal (healthLive and healthReady are bound since PBE-001 and PBE-008, signUp,
+  // verifyEmail and resendVerification since PBE-013, listPlans since PBE-017).
   { operationId: "signIn", task: "PBE-014" },
   { operationId: "verifyMfa", task: "PBE-015" },
   { operationId: "refreshSession", task: "PBE-014" },

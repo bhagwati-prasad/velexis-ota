@@ -220,6 +220,14 @@ class SignUpController {
   signUp(): void {}
 }
 
+/**
+ * The routes without the API's own signUp route (AuthController, PBE-013): the faults below use signUp as their
+ * example, as if its route were missing.
+ */
+function withoutSignUp(routes: readonly BoundRoute[]): BoundRoute[] {
+  return routes.filter((route) => route.operationId !== "signUp");
+}
+
 describe("route parity", () => {
   let routes: BoundRoute[];
 
@@ -229,9 +237,10 @@ describe("route parity", () => {
 
   it("[PBE-008 AC3] every route of the API binds its operation, and every documented operation is bound or pending", () => {
     expect(parityProblems(routes, platformOperations, PENDING_OPERATIONS)).toEqual([]);
-    // The walk found the API's controllers: the health routes are bound to their operations.
+    // The walk found the API's controllers: the health routes and signUp are bound to their operations.
     expect(routes).toEqual(
       expect.arrayContaining([
+        { handler: "AuthController.signUp", method: "post", path: "/v1/auth/sign-up", operationId: "signUp" },
         { handler: "HealthController.live", method: "get", path: "/health/live", operationId: "healthLive" },
         {
           handler: "HealthController.ready",
@@ -256,10 +265,12 @@ describe("route parity", () => {
   });
 
   it("fails for a route without @OpenApiOperation and for a route whose method or path is not the operation's", () => {
-    const pending = PENDING_OPERATIONS.filter((entry) => entry.operationId !== "signUp");
-
     expect(
-      parityProblems([...routes, ...routesOf(FaultyController)], platformOperations, pending).sort(),
+      parityProblems(
+        [...withoutSignUp(routes), ...routesOf(FaultyController)],
+        platformOperations,
+        PENDING_OPERATIONS,
+      ).sort(),
     ).toEqual([
       "FaultyController.unbound (POST /v1/auth/unbound) has no @OpenApiOperation",
       "FaultyController.wrongMethod (GET /v1/auth/sign-up) binds signUp, which the document has as POST /v1/auth/sign-up",
@@ -267,28 +278,42 @@ describe("route parity", () => {
   });
 
   it("fails for an operation that is neither bound nor pending, and for one that is both", () => {
-    const withoutSignUp = PENDING_OPERATIONS.filter((entry) => entry.operationId !== "signUp");
+    const signUpPending = [...PENDING_OPERATIONS, { operationId: "signUp", task: "PBE-013" } as const];
 
-    expect(parityProblems(routes, platformOperations, withoutSignUp)).toEqual([
+    expect(parityProblems(withoutSignUp(routes), platformOperations, PENDING_OPERATIONS)).toEqual([
       "signUp is neither bound with @OpenApiOperation nor listed in pending-operations.ts",
     ]);
     expect(
-      parityProblems([...routes, ...routesOf(SignUpController)], platformOperations, PENDING_OPERATIONS),
+      parityProblems(
+        [...withoutSignUp(routes), ...routesOf(SignUpController)],
+        platformOperations,
+        signUpPending,
+      ),
     ).toEqual([
       "signUp is bound by SignUpController.signUp (POST /v1/auth/sign-up) and still listed in pending-operations.ts",
     ]);
-    // Bound and no longer pending: what the implementing task (PBE-013) ends with.
+    // Bound and no longer pending: what the implementing task (PBE-013) ended with.
     expect(
-      parityProblems([...routes, ...routesOf(SignUpController)], platformOperations, withoutSignUp),
+      parityProblems(
+        [...withoutSignUp(routes), ...routesOf(SignUpController)],
+        platformOperations,
+        PENDING_OPERATIONS,
+      ),
     ).toEqual([]);
   });
 
   it("fails for an operation bound twice, and for pending entries that are repeated or not in the document", () => {
     const signUpTwice = [...routesOf(SignUpController), ...routesOf(SignUpController)];
-    const withoutSignUp = PENDING_OPERATIONS.filter((entry) => entry.operationId !== "signUp");
 
-    expect(parityProblems([...routes, ...signUpTwice], platformOperations, withoutSignUp)).toEqual([
+    expect(
+      parityProblems([...withoutSignUp(routes), ...signUpTwice], platformOperations, PENDING_OPERATIONS),
+    ).toEqual([
       "signUp is bound by 2 routes: SignUpController.signUp (POST /v1/auth/sign-up), SignUpController.signUp (POST /v1/auth/sign-up)",
+    ]);
+    expect(
+      parityProblems([...routes, ...routesOf(SignUpController)], platformOperations, PENDING_OPERATIONS),
+    ).toEqual([
+      "signUp is bound by 2 routes: AuthController.signUp (POST /v1/auth/sign-up), SignUpController.signUp (POST /v1/auth/sign-up)",
     ]);
     expect(
       parityProblems(routes, platformOperations, [

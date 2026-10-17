@@ -334,7 +334,8 @@ Common commands: backend `pnpm --filter @velexis/platform-backend test`, `test:i
   - An internal route called with `X-Forwarded-For` answers 404.
 - **Verify:** `pnpm --filter @velexis/platform-backend test && pnpm --filter @velexis/platform-backend test:int`
 
-### PBE-013 · Implement sign-up, e-mail verification and resend
+### PBE-013 · Implement sign-up, e-mail verification and resend ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-backend
 - **Milestone:** M1
 - **Depends on:** PBE-011, PBE-012

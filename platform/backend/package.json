@@ -13,7 +13,7 @@
     "openapi"
   ],
   "scripts": {
-    "build": "rm -rf dist && tsc -b tsconfig.build.json && node -e \"require('node:fs').cpSync('src/notifications/templates', 'dist/notifications/templates', { recursive: true })\" && node -e \"for (const entry of ['main', 'worker', 'cli']) require('node:fs').accessSync('dist/' + entry + '.js')\"",
+    "build": "rm -rf dist && tsc -b tsconfig.build.json && node -e \"require('node:fs').cpSync('src/notifications/templates', 'dist/notifications/templates', { recursive: true })\" && node -e \"require('node:fs').cpSync('src/auth/breached-passwords.txt', 'dist/auth/breached-passwords.txt')\" && node -e \"for (const entry of ['main', 'worker', 'cli']) require('node:fs').accessSync('dist/' + entry + '.js')\"",
     "dev": "pnpm run build && pnpm run \"/^dev:(tsc|api|worker)$/\"",
     "dev:tsc": "tsc -p tsconfig.build.json --watch --preserveWatchOutput",
     "dev:api": "node --watch --enable-source-maps dist/main.js",
@@ -40,6 +40,7 @@
     "@velexis/logger": "workspace:*",
     "ajv": "8.20.0",
     "ajv-formats": "3.0.1",
+    "argon2": "0.44.0",
     "bullmq": "5.81.5",
     "cookie-parser": "1.4.7",
     "express": "5.2.1",

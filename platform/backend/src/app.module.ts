@@ -10,6 +10,7 @@ import {
 } from "@nestjs/common";
 import { pinoHttpOptions, type Logger } from "@velexis/logger";
 import { LoggerModule } from "nestjs-pino";
+import { AuthModule } from "./auth/auth.module";
 import { BillingModule } from "./billing/billing.module";
 import { API_REQUEST_MIDDLEWARE, CommonModule } from "./common/common.module";
 import { configModule, PLATFORM_PROCESSES, type PlatformBackendConfig } from "./config";
@@ -39,6 +40,7 @@ export class AppModule implements NestModule {
         // Global: provides TenantRoleGuard's membership read (TenantMembershipLookup) to CommonModule's guards.
         MembershipsModule,
         HealthModule.forApi(logger),
+        AuthModule,
         TenantsModule,
         BillingModule,
       ],
