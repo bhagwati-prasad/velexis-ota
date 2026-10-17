@@ -218,6 +218,31 @@ describe("redactPayload", () => {
     }
   });
 
+  it("replaces an e-mail's secret variables and its links with tokens with [REDACTED] (PBE-011)", () => {
+    const output = redactPayload({
+      template: "team.invitation",
+      secretData: { acceptUrl: `https://platform.example.com/invitations/accept?token=${TEST_TOKEN}` },
+      links: {
+        verifyUrl: `https://platform.example.com/verify-email?token=${TEST_TOKEN}`,
+        reset_url: `https://platform.example.com/reset-password?token=${TEST_TOKEN}`,
+        AcceptUrl: `https://platform.example.com/invitations/accept?token=${TEST_TOKEN}`,
+        portalUrl: "https://platform.example.com",
+      },
+    });
+
+    expect(output).toEqual({
+      template: "team.invitation",
+      secretData: REDACT_CENSOR,
+      links: {
+        verifyUrl: REDACT_CENSOR,
+        reset_url: REDACT_CENSOR,
+        AcceptUrl: REDACT_CENSOR,
+        portalUrl: "https://platform.example.com",
+      },
+    });
+    expect(JSON.stringify(output)).not.toContain(TEST_TOKEN);
+  });
+
   it("replaces code and state anywhere below mfa or oauth and keeps every other code", () => {
     const output = redactPayload({
       mfa: { mfaChallengeToken: TEST_TOKEN, code: "918273" },

@@ -1,12 +1,13 @@
 // /health/live and /health/ready of the API (127.0.0.1:3100) and the worker (127.0.0.1:3101) against the real
-// PostgreSQL 16 and Redis 7 of DATABASE_URL and REDIS_URL, and the request context and request log lines of the API
-// (PBE-001). The processes start exactly as dist/main.js and dist/worker.js do (startApi, startWorker), with a log
-// destination that keeps the lines. The checks send only `SELECT 1` and `PING`, and no database is created. Redis is
-// this Vitest worker's test database (`useRedis()`, never the developer's database 0), because a worker that starts
-// with Redis up registers its job schedulers there (`vx:platform-maintenance:*`, PBE-009).
+// PostgreSQL 16 and Redis 7, and the request context and request log lines of the API (PBE-001). The processes start
+// exactly as dist/main.js and dist/worker.js do (startApi, startWorker), with a log destination that keeps the lines.
+// PostgreSQL is this file's own clone of the test template (`createTestDatabase()`, role velexis_platform_app), never
+// the developer's database `velexis`: a worker that starts runs the e-mail sweep at once (PBE-011), which reads
+// `platform.email_outbox` and sends, or fails, the rows it finds. Redis is this Vitest worker's test database
+// (`useRedis()`, never the developer's database 0), because a worker that starts with Redis up registers its job
+// schedulers there (`vx:platform-maintenance:*`, PBE-009; `email.sweep` on `vx:platform-emails:*`, PBE-011).
 import { createServer as createHttpServer, request as httpRequest, type Server } from "node:http";
 import { createServer as createTcpServer, type AddressInfo } from "node:net";
-import { resolve } from "node:path";
 import {
   Controller,
   Get,
@@ -16,8 +17,7 @@ import {
   type INestApplicationContext,
 } from "@nestjs/common";
 import type { NestExpressApplication } from "@nestjs/platform-express";
-import { defineConfig, env, loadDevEnvFiles } from "@velexis/config";
-import { useRedis, type TestRedis } from "@velexis/testing";
+import { createTestDatabase, useRedis, type TestDatabase, type TestRedis } from "@velexis/testing";
 import { Redis } from "ioredis";
 import { ClsService } from "nestjs-cls";
 import { InjectPinoLogger, PinoLogger } from "nestjs-pino";
@@ -27,6 +27,7 @@ import { createProcessLogger, PLATFORM_PROCESSES, parseConfig } from "../../../s
 import { API_HOST, createApiApp, startApi } from "../../../src/main";
 import { startWorker, WORKER_HEALTH_HOST, WorkerHealthServer } from "../../../src/worker";
 import { createTestJwtKeyFile } from "../../support/jwt-key";
+import { createTestMasterKeyDir, testCryptoAndMailEnv } from "../../support/master-key";
 
 const API_PORT = 3100;
 const WORKER_PORT = 3101;
@@ -78,15 +79,10 @@ function get(url: string, headers: Record<string, string> = {}): Promise<Answer>
 }
 
 /**
- * DATABASE_URL of the environment (CI services, or the root and app `.env.local` files locally). Redis comes from
- * `useRedis()`, which reads REDIS_URL the same way and picks this Vitest worker's database.
+ * Cloning the template database and emptying the Redis database take about a second alone, and several times that
+ * under the parallel load of `pnpm test:int` on a 4-CPU CI runner: the hooks get their own budget.
  */
-function services(): { DATABASE_URL: string } {
-  loadDevEnvFiles({ appDir: resolve(__dirname, "..", "..", "..") });
-  return defineConfig({
-    DATABASE_URL: env.url({ protocols: ["postgres:", "postgresql:"] }),
-  });
-}
+const SETUP_TIMEOUT_MS = 60_000;
 
 /** A loopback port that nothing listens on: bound once by the OS, then released. */
 async function closedPort(): Promise<number> {
@@ -107,22 +103,26 @@ let DATABASE_URL: string;
 let REDIS_URL: string;
 let UNREACHABLE_DATABASE_URL: string;
 let UNREACHABLE_REDIS_URL: string;
+let testDatabase: TestDatabase | undefined;
 let testRedis: TestRedis | undefined;
 
 /** Everything a test started, closed after it even when it fails. */
 const running: Array<{ close(): Promise<void> }> = [];
 
 beforeAll(async () => {
-  ({ DATABASE_URL } = services());
+  // The clone's DSN carries the development password of velexis_platform_app: never log or print it.
+  testDatabase = await createTestDatabase();
+  DATABASE_URL = testDatabase.urlFor("platform");
   testRedis = await useRedis();
   REDIS_URL = testRedis.url;
   UNREACHABLE_DATABASE_URL = withPort(DATABASE_URL, await closedPort());
   UNREACHABLE_REDIS_URL = withPort(REDIS_URL, await closedPort());
-});
+}, SETUP_TIMEOUT_MS);
 
 afterAll(async () => {
   await testRedis?.close();
-});
+  await testDatabase?.drop();
+}, SETUP_TIMEOUT_MS);
 
 afterEach(async () => {
   await Promise.all(running.splice(0).map((app) => app.close()));
@@ -133,12 +133,18 @@ const PLATFORM_BFF_KEY = "dev_bff_key_change_me_0123456789abcdef";
 
 /** The JWT signing key of the processes: a fresh key file of mode 0600 in a temporary folder. */
 const jwtKey = createTestJwtKeyFile();
+/** The master key folder of the processes (PBE-011): a fresh `master-v1.key` in a temporary folder. */
+const masterKeys = createTestMasterKeyDir();
 
 afterAll(() => {
   jwtKey.remove();
+  masterKeys.remove();
 });
 
-/** The environment of a process: the services, APP_ENV=test, the key file and the default ports of the units. */
+/**
+ * The environment of a process: the services, APP_ENV=test, the key files, the e-mail settings of TEST_MAIL_ENV and
+ * the default ports of the units.
+ */
 function processEnv(overrides: Record<string, string> = {}): Record<string, string> {
   return {
     APP_ENV: "test",
@@ -146,6 +152,7 @@ function processEnv(overrides: Record<string, string> = {}): Record<string, stri
     REDIS_URL,
     PLATFORM_BFF_KEY,
     JWT_PRIVATE_KEY_FILE: jwtKey.path,
+    ...testCryptoAndMailEnv(masterKeys),
     ...overrides,
   };
 }
@@ -306,8 +313,12 @@ describe("the worker's health server", () => {
       expect(logs.withMessage("worker.start_failed")).toEqual([
         expect.objectContaining({ level: 60, err: expect.objectContaining({ code: "EADDRINUSE" }) }),
       ]);
-      // The context was closed again: the shutdown hook that ends the pool also disconnected the Redis client.
-      expect(disconnect).toHaveBeenCalledOnce();
+      // The context was closed again: its shutdown hooks disconnected the readiness probe's Redis client and the
+      // blocking connection of the platform-emails processor (PBE-011), and both have ended.
+      const disconnected = disconnect.mock.contexts as Redis[];
+      expect(disconnected).toHaveLength(2);
+      expect(disconnected.map((client) => client.options.connectionName)).toContain("platform-worker");
+      expect(disconnected.map((client) => client.status)).toEqual(["end", "end"]);
     } finally {
       await new Promise<void>((done) => blocker.close(() => done()));
     }

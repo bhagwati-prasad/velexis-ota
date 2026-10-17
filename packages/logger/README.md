@@ -66,7 +66,7 @@ Returns a deep copy and never mutates its input. Keys are matched without regard
 | `number` under `documents[]` or `document`; `cardNumber`, `certificateNumber` anywhere (Amadeus `discountEligibility`) | last 4 characters |
 | `securityCode`, `cvc`, `cvv`, `cvv2`, `birthPlace`, `issuanceLocation` | dropped |
 | Any key containing `password`, `passphrase`, `token`, `secret` or `apiKey`; `authorization`, `cookie`, `set-cookie`, `mfaCode`, `x-velexis-edge`, `stripe-signature` | `[REDACTED]` |
-| The platform's bank numbers and MFA material (platform architecture §8): `iban`, `accountNumber`, `recoveryCode`, `recoveryCodes`, `otpauthUrl` (`secretKey`, `webhookSecret`, `totpSecret`, `mfaChallengeToken` and `invitationToken` are caught by the fragments above) | `[REDACTED]` |
+| The platform's bank numbers and MFA material (platform architecture §8): `iban`, `accountNumber`, `recoveryCode`, `recoveryCodes`, `otpauthUrl`, and the e-mail links with tokens `verifyUrl`, `resetUrl`, `acceptUrl` (`secretKey`, `webhookSecret`, `totpSecret`, `mfaChallengeToken`, `invitationToken` and `secretData` are caught by the fragments above) | `[REDACTED]` |
 | `code` and `state` anywhere below an `mfa` or `oauth` key (an MFA or OAuth body); every other `code` (error codes) stays | `[REDACTED]` |
 | Arrays, nested objects, values with `toJSON` | handled recursively (as `JSON.stringify` would see them) |
 | A reference back to an enclosing object | `[Circular]` |
@@ -76,7 +76,7 @@ Returns a deep copy and never mutates its input. Keys are matched without regard
 `REDACT_PATHS` holds, in pino path syntax:
 
 - `password`, `newPassword`, `currentPassword`, `mfaCode`, `accessToken`, `refreshToken`, `portalToken`, `bookingToken`, `token`, `clientSecret`, `secret`, `apiKey`, `securityCode`, `cvc`, `cardNumber`, `certificateNumber` at the top level and one level down (`*.password`);
-- the platform's keys of [platform architecture §8](../../platform/docs/architecture.md#8-security-notes-specific-to-the-platform), at the top level and one level down: `secretKey`, `webhookSecret` (Stripe), `iban`, `accountNumber` (payout accounts), `recoveryCode`, `recoveryCodes`, `totpSecret`, `otpauthUrl`, `mfaChallengeToken` (MFA) and `invitationToken`;
+- the platform's keys of [platform architecture §8](../../platform/docs/architecture.md#8-security-notes-specific-to-the-platform), at the top level and one level down: `secretKey`, `webhookSecret` (Stripe), `iban`, `accountNumber` (payout accounts), `recoveryCode`, `recoveryCodes`, `totpSecret`, `otpauthUrl`, `mfaChallengeToken` (MFA), `invitationToken`, `secretData` (the secret variables of a platform e-mail, PBE-011) and the links with tokens those variables hold, `verifyUrl`, `resetUrl` and `acceptUrl`;
 - `code` and `state` of an MFA or OAuth body: `mfa.code`, `mfa.state`, `oauth.code`, `oauth.state` and the same one level down (`*.mfa.code`). pino paths cannot look at a sibling key, and a bare `code` is the error code of every `err` and error envelope, so the platform logs a `verifyMfa`, `stepUp`, `enableMfa` or `completeStripeConnect` body, if ever, under the key `mfa` or `oauth`, never under a generic key;
 - `*.card.number`, `*.creditCard.number`, `documents[*].number`, `*.documents[*].number`;
 - the whole `card`, `creditCard` and `formOfPayments` objects at the top level and at every nesting depth down to depth 8 (`card`, `*.card`, …, `*.*.*.*.*.*.*.card`). pino paths are not recursive, and an Amadeus Create Orders body logged at depth 1 to 6 has its `formOfPayments` at depth 3 to 8;

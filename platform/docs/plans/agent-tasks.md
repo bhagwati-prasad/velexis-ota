@@ -291,7 +291,8 @@ Common commands: backend `pnpm --filter @velexis/platform-backend test`, `test:i
   - `UPDATE platform.platform_audit_log` through the app role fails with a permission error.
 - **Verify:** `pnpm --filter @velexis/logger test && pnpm --filter @velexis/platform-backend test && pnpm --filter @velexis/platform-backend test:int -- audit`
 
-### PBE-011 · Add the e-mail outbox, templates and the e-mail processor
+### PBE-011 · Add the e-mail outbox, templates and the e-mail processor ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-backend
 - **Milestone:** M1
 - **Depends on:** PBE-009, PBE-010, X-004, X-025

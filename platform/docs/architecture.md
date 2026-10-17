@@ -127,7 +127,7 @@ BullMQ prefix `vx` ([ADR-0009](../../docs/mvp/adr/0009-background-jobs-bullmq.md
 |---|---|---|---|
 | `ota-tenant-ops` | Platform API and worker → **OTA worker** | `tenant.provision`, `tenant.migrate`, `tenant.suspend`, `tenant.resume` | (OTA side) |
 | `platform-tenant-events` | **OTA worker** → platform worker | `tenant.provisioned`, `tenant.provision_failed`, `tenant.migrated`, `tenant.migration_failed`, `tenant.suspended`, `tenant.resumed` | 4 |
-| `platform-emails` | API, worker → worker | `email.send {emailId}` | 4 |
+| `platform-emails` | API, worker → worker | `email.send {emailId}`; `email.sweep` (its own scheduler, every minute: re-enqueues `pending` rows older than 2 minutes whose job is missing, [PADR-0013](adr/0013-platform-email-outbox.md) item 2) | 4 |
 | `platform-stripe-events` | Webhook receivers → worker | `stripe.event {eventId}` (job id = Stripe event id) | 2 |
 | `platform-domains` | API, schedulers → worker | `domain.verify`, `domain.recheck`, `domain.tls_probe` `{domainId}` | 4 |
 | `platform-connections` | API, admin → worker | `amadeus_account.verify {amadeusAccountId}`, `credentials.verify {submissionId}` | 2 |
@@ -226,7 +226,7 @@ Platform-only keys: `vx:idem:*` (idempotency, 24 h), `mfach:<sha256>` (MFA chall
 
 ## 8. Security notes specific to the platform
 
-- **Redaction list additions** (in `@velexis/logger`, with tests): `secretKey`, `webhookSecret`, `iban`, `accountNumber`, `recoveryCode`, `recoveryCodes`, `totpSecret`, `otpauthUrl`, `mfaChallengeToken`, `invitationToken`, and `code` and `state` anywhere under an MFA or OAuth body. `clientSecret`, `token`, `password` and `portalToken` are already on the list.
+- **Redaction list additions** (in `@velexis/logger`, with tests): `secretKey`, `webhookSecret`, `iban`, `accountNumber`, `recoveryCode`, `recoveryCodes`, `totpSecret`, `otpauthUrl`, `mfaChallengeToken`, `invitationToken`, `secretData` (the secret variables of a platform e-mail, PBE-011) and the links with tokens it holds (`verifyUrl`, `resetUrl`, `acceptUrl`; every secret variable of a template is on the list), and `code` and `state` anywhere under an MFA or OAuth body. `clientSecret`, `token`, `password` and `portalToken` are already on the list.
 - **Sensitive actions** need a recent MFA step-up (§3 item 7): entering Amadeus or Stripe credentials, Connect OAuth start, live secret keys, payout account, go-live, granting owner, disabling MFA.
 - **Platform admin** host is separate, MFA mandatory, optionally IP-restricted in Caddy; every admin call is audited ([PADR-0006](adr/0006-platform-admin-access-and-audit.md)).
 - **Portal CSP** adds `form-action 'self' https://admin.ota.example.com` for the SSO hand-off, and `https://checkout.stripe.com`, `https://billing.stripe.com`, `https://connect.stripe.com` as navigation targets (redirects, not frames).

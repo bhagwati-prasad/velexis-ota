@@ -1,9 +1,10 @@
 // CommonModule (platform/docs/architecture.md §2.1, layer 0): the cross-cutting pieces of the API's request pipeline
 // (§3) and the injectable time and ids every module uses. Global, so other modules inject `Clock`, `IdGenerator`,
-// `RequestContext`, `TokenService`, `FeatureSwitches` and the database (`PLATFORM_DB`) without importing it; AppModule
-// imports it once with `CommonModule.forApi()`. It brings the process's Redis connections and the
-// InvalidationPublisher (RedisModule, global), the rate limits and the idempotency interceptor (PBE-009). Later tasks
-// add the queues and the Stripe pieces here.
+// `RequestContext`, `TokenService`, `FeatureSwitches`, the database (`PLATFORM_DB`) and the envelope encryption
+// (`EnvelopeService`, PBE-011) without importing it; AppModule imports it once with `CommonModule.forApi()`. It brings
+// the process's Redis connections and the InvalidationPublisher (RedisModule, global), the rate limits and the
+// idempotency interceptor (PBE-009). The worker imports `CommonModule.forWorker()`: Clock, ids, the worker's own pool
+// and the envelope encryption, without the request pipeline. Later tasks add the Stripe pieces here.
 import { Global, Module, type DynamicModule } from "@nestjs/common";
 import { APP_FILTER, APP_GUARD, APP_INTERCEPTOR, DiscoveryModule } from "@nestjs/core";
 import { ClsMiddleware } from "nestjs-cls";
@@ -15,6 +16,7 @@ import { InternalOnlyGuard } from "./auth/internal-only.guard";
 import { PortalAuthGuard } from "./auth/portal-auth.guard";
 import { RecentMfaGuard } from "./auth/recent-mfa.guard";
 import { Clock } from "./clock";
+import { cryptoProviders, EnvelopeService } from "./crypto.provider";
 import { PLATFORM_DB, platformDatabaseProviders } from "./database";
 import { FeatureSwitches } from "./features";
 import { EndUserMiddleware } from "./http/end-user";
@@ -78,7 +80,8 @@ export class CommonModule {
         Clock,
         IdGenerator,
         RequestContext,
-        ...platformDatabaseProviders(),
+        ...platformDatabaseProviders("api"),
+        ...cryptoProviders(),
         { provide: PlatformOpenApi, useFactory: () => PlatformOpenApi.load() },
         {
           provide: OperationPolicies,
@@ -100,12 +103,27 @@ export class CommonModule {
         IdGenerator,
         RequestContext,
         PLATFORM_DB,
+        EnvelopeService,
         PlatformOpenApi,
         OperationPolicies,
         TokenService,
         FeatureSwitches,
         AccountAuthStates,
       ],
+    };
+  }
+
+  /**
+   * The worker's common providers (WorkerModule): Clock, ids, the worker's pool of velexis_platform_app (5
+   * connections, `application_name` platform-worker) and the envelope encryption. No request pipeline: the worker
+   * serves no API.
+   */
+  static forWorker(): DynamicModule {
+    return {
+      module: CommonModule,
+      imports: [RedisModule],
+      providers: [Clock, IdGenerator, ...platformDatabaseProviders("worker"), ...cryptoProviders()],
+      exports: [Clock, IdGenerator, PLATFORM_DB, EnvelopeService],
     };
   }
 }

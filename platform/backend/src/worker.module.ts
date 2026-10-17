@@ -2,14 +2,18 @@
 // serves /health/live and /health/ready from the node:http server of worker.ts. It holds the process's Redis
 // connections (RedisModule, through QueuesModule), the eight queues of platform/docs/architecture.md §5
 // (QueuesModule) and the job schedulers, which it registers when it starts (JobSchedulerRegistry, PBE-009). The
-// processors join this graph with the modules that own their work.
+// processors join this graph with the modules that own their work: the `platform-emails` processor of
+// NotificationsModule first (PBE-011), on the worker's common providers (CommonModule.forWorker: Clock, ids, the
+// worker's database pool and the envelope encryption).
 import { Module, type DynamicModule } from "@nestjs/common";
 import type { Logger } from "@velexis/logger";
 import { LoggerModule } from "nestjs-pino";
+import { CommonModule } from "./common/common.module";
 import { QueuesModule } from "./common/queues/queues.module";
 import { JobSchedulerRegistry, schedulerSwitchesProvider } from "./common/queues/scheduler.registry";
 import { configModule, type PlatformBackendConfig } from "./config";
 import { HealthModule } from "./health/health.module";
+import { NotificationsModule } from "./notifications/notifications.module";
 
 @Module({})
 export class WorkerModule {
@@ -22,7 +26,9 @@ export class WorkerModule {
         // health server of worker.ts runs pino-http itself.
         LoggerModule.forRoot({ pinoHttp: { logger } }),
         HealthModule.forWorker(logger),
+        CommonModule.forWorker(),
         QueuesModule,
+        NotificationsModule.forWorker(),
       ],
       // The schedules of a milestone switch that is off are not registered (PADR-0015 item 2).
       providers: [schedulerSwitchesProvider, JobSchedulerRegistry],

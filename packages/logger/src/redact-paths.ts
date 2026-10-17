@@ -23,9 +23,11 @@
  * card objects there, and the tests check that every realistic logged object stays unchanged.
  *
  * The platform's paths (platform/docs/architecture.md §8): Stripe secret keys and webhook secrets, bank numbers,
- * recovery codes, TOTP secrets and `otpauth://` URLs, MFA challenge and invitation tokens, and the `code` and `state`
- * of an MFA or OAuth body. pino paths cannot look at a sibling key, and `code` alone is the error code of every `err`
- * and error envelope, so `code` and `state` are censored only below the keys `mfa` and `oauth`: a body of
+ * recovery codes, TOTP secrets and `otpauth://` URLs, MFA challenge and invitation tokens, the secret variables of an
+ * e-mail (`secretData`, and the links with tokens it holds: `verifyUrl`, `resetUrl`, `acceptUrl`; PBE-011), and the
+ * `code` and `state` of an MFA or OAuth body. pino paths
+ * cannot look at a sibling key, and `code` alone is the error code of every `err` and error envelope, so `code` and
+ * `state` are censored only below the keys `mfa` and `oauth`: a body of
  * `verifyMfa`, `stepUp`, `enableMfa` or `completeStripeConnect` that is ever logged goes under one of those two keys
  * (`logger.warn({ mfa: body }, …)`), never under a generic one.
  *
@@ -64,6 +66,10 @@ export const REDACT_PATHS: readonly string[] = Object.freeze([
   "otpauthUrl",
   "mfaChallengeToken",
   "invitationToken",
+  "secretData",
+  "verifyUrl",
+  "resetUrl",
+  "acceptUrl",
   "card",
   "creditCard",
   "formOfPayments",
@@ -95,6 +101,10 @@ export const REDACT_PATHS: readonly string[] = Object.freeze([
   "*.otpauthUrl",
   "*.mfaChallengeToken",
   "*.invitationToken",
+  "*.secretData",
+  "*.verifyUrl",
+  "*.resetUrl",
+  "*.acceptUrl",
   "*.card",
   "*.creditCard",
   "*.formOfPayments",

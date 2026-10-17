@@ -342,16 +342,21 @@ describe("source scan for Redis writes past redis-keys.ts", () => {
 
   let sources: string[];
   let program: ts.Program;
+  let scanned: string[];
+  let findings: string[];
 
-  // Building the program parses the package and the declarations it imports (NestJS, BullMQ, ioredis): a few
-  // seconds, more under a full parallel `pnpm test`. It happens once, in this hook with its own timeout.
+  // Building the program parses the package and the declarations it imports (NestJS, BullMQ, ioredis), and the scan
+  // resolves the type of every call in src/ with the type checker: a few seconds that grow with the package, several
+  // times that under a full parallel `pnpm test`. Both happen once, in this hook with its own timeout, so the tests
+  // below only compare results.
   beforeAll(() => {
     sources = productionSources();
     program = createProgram(sources, { [PROBE]: PROBE_SOURCE });
+    scanned = sources.filter((file) => file !== KEYS_FILE);
+    findings = redisWritesOutsideHelpers(program, scanned);
   }, 60_000);
 
   it("finds no hand-written key and no Redis write outside redis-keys.ts in src/", () => {
-    const scanned = sources.filter((file) => file !== KEYS_FILE);
     expect(scanned.map((file) => relative(APP_DIR, file))).toEqual(
       expect.arrayContaining([
         "src/common/http/idempotency.interceptor.ts",
@@ -361,7 +366,7 @@ describe("source scan for Redis writes past redis-keys.ts", () => {
       ]),
     );
 
-    expect(redisWritesOutsideHelpers(program, scanned)).toEqual([]);
+    expect(findings).toEqual([]);
   });
 
   it("reports hand-written keys and writes that bypass the helpers, and lets reads, deletes and publish through", () => {

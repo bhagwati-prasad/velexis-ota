@@ -5,6 +5,7 @@ import { dirname, join, relative } from "node:path";
 import ts from "typescript";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createTestJwtKeyFile } from "../test/support/jwt-key";
+import { createTestMasterKeyDir, testCryptoAndMailEnv } from "../test/support/master-key";
 import { usage, CLI_COMMANDS, EXIT_OK, EXIT_USAGE } from "./cli";
 import { APP_DIR } from "./config";
 import { startApi } from "./main";
@@ -26,9 +27,12 @@ const BFF_KEY = "dev_bff_key_change_me_0123456789abcdef";
 
 /** A JWT signing key of mode 0600 in a temporary folder (JWT_PRIVATE_KEY_FILE must name a valid key file). */
 const jwtKey = createTestJwtKeyFile();
+/** A master key folder (MASTER_KEY_DIR must name an existing folder). */
+const masterKeys = createTestMasterKeyDir();
 
 afterAll(() => {
   jwtKey.remove();
+  masterKeys.remove();
 });
 
 /** Everything but DATABASE_URL. */
@@ -37,6 +41,7 @@ const WITHOUT_DATABASE_URL = {
   REDIS_URL: "redis://127.0.0.1:6379/0",
   PLATFORM_BFF_KEY: BFF_KEY,
   JWT_PRIVATE_KEY_FILE: jwtKey.path,
+  ...testCryptoAndMailEnv(masterKeys),
 } as const;
 
 /** The one line the entry points log when DATABASE_URL is missing. */
@@ -142,6 +147,7 @@ describe("the entry points as processes", () => {
         REDIS_URL: "redis://127.0.0.1:6379/0",
         PLATFORM_BFF_KEY: BFF_KEY,
         JWT_PRIVATE_KEY_FILE: jwtKey.path,
+        ...testCryptoAndMailEnv(masterKeys),
       });
 
       expect(result.error).toBeUndefined();

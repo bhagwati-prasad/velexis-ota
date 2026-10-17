@@ -54,6 +54,35 @@ const BFF_KEY = /^[A-Za-z0-9_-]{32,}$/;
  */
 export const JWT_PRIVATE_KEY_MIN_BYTES = 48;
 
+/** The id of a KEK of `LocalFileKeyProvider` (ADR-0010): `local:v<N>`, N >= 1 without leading zeros. */
+const KEK_ID = /^local:v[1-9][0-9]{0,8}$/;
+
+/**
+ * An e-mail address without anchors: exactly the `email` format of ajv-formats ("full" mode, the one the OpenAPI
+ * validation uses; dot-atom local part, two or more labels). config.test.ts compares the two, so a sign-up the API
+ * accepts never fails on its e-mail.
+ */
+const ADDRESS =
+  "[a-z0-9!#$%&'*+/=?^_`{|}~-]+(?:\\.[a-z0-9!#$%&'*+/=?^_`{|}~-]+)*@(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\\.)+[a-z0-9](?:[a-z0-9-]*[a-z0-9])?";
+
+/**
+ * One e-mail address as the platform sends to it: the `email` format of the OpenAPI validation (ajv-formats), so every
+ * address an account signed up with passes, ASCII only and at most 254 characters. Nothing SMTP or Nodemailer could
+ * read as several addresses, a display name or a comment passes (no spaces, quotes, angle brackets, commas,
+ * parentheses or line breaks).
+ */
+export const EMAIL_ADDRESS = new RegExp(`^(?=.{3,254}$)${ADDRESS}$`, "i");
+
+/**
+ * The sender of the platform's e-mails: an address, or a display name and the address in angle brackets
+ * (`"Velexis" <no-reply@mail.platform.example.com>`, `Velexis <no-reply@mail.platform.example.com>`). One line, one
+ * address.
+ */
+export const MAIL_FROM_PATTERN = new RegExp(
+  `^(?:${ADDRESS}|(?:"[^"\\\\\\r\\n]*"|[^"<>,;:@\\\\\\r\\n]*?)\\s*<${ADDRESS}>)$`,
+  "i",
+);
+
 /**
  * The schema of every variable the platform backend reads (README §3, configuration matrix in
  * docs/mvp/architecture.md §6). Defaults exist only where they are safe in production (conventions §8).
@@ -87,6 +116,31 @@ export const PLATFORM_BACKEND_CONFIG_SCHEMA = {
    * API signs with it; the worker and the CLI validate it too, because the three read `platform-backend.env`.
    */
   JWT_PRIVATE_KEY_FILE: env.secretFile({ minBytes: JWT_PRIVATE_KEY_MIN_BYTES, encoding: "pem" }),
+  /**
+   * The platform zone's key folder (ADR-0010, ADR-0026): every `master-v<N>.key` in it is the KEK `local:v<N>`, and
+   * MASTER_KEY_CURRENT names the one that wraps new data keys. `common/crypto.provider.ts` loads them once at
+   * start-up; a missing current key, or a key file that group or others may read, stops the process. The API
+   * encrypts (the secret links of e-mails, PADR-0013) and the worker decrypts.
+   */
+  MASTER_KEY_DIR: env.dir(),
+  MASTER_KEY_CURRENT: env.string({ pattern: KEK_ID }),
+  /**
+   * The SMTP server of the platform's e-mails (ADR-0017): `smtp://` or `smtps://`, credentials in the URL (a secret:
+   * never logged). Mailpit `smtp://127.0.0.1:1025` in development and tests. Only the worker sends.
+   */
+  SMTP_URL: env.url({ protocols: ["smtp:", "smtps:"] }),
+  /** The sender of every platform e-mail (PADR-0013 item 6), e.g. `"Velexis" <no-reply@mail.platform.example.com>`. */
+  MAIL_FROM: env.string({ pattern: MAIL_FROM_PATTERN }),
+  /** The recipient of `ops.alert` e-mails (pool low, live office request, payout account to review, failures). */
+  OPS_ALERT_EMAIL: env.string({ pattern: EMAIL_ADDRESS }),
+  /**
+   * The portal's public base URL: every link of a platform e-mail starts with it or with PUBLIC_PLATFORM_ADMIN_URL,
+   * never with a host taken from a request (PADR-0013 item 7). Later tasks build the Checkout and Connect redirects
+   * on it too.
+   */
+  PUBLIC_PORTAL_URL: env.url({ protocols: ["http:", "https:"] }),
+  /** The platform admin's public base URL, for the links of ops e-mails (PADR-0013 item 7). */
+  PUBLIC_PLATFORM_ADMIN_URL: env.url({ protocols: ["http:", "https:"] }),
   /**
    * The OTAs that are not `failed` one account may own (platform/docs/scope.md PF-10 AC4): beyond it createTenant
    * answers `422 UNPROCESSABLE` with `details.reason = "tenant_limit"`.

@@ -37,8 +37,9 @@ const LAST_FOUR_DIGITS_KEYS = new Set(["pan", "primaryaccountnumber"]);
 
 /**
  * Replaced by `[REDACTED]`: credentials and every token value (the fragments also catch the platform's `secretKey`,
- * `webhookSecret`, `totpSecret`, `mfaChallengeToken` and `invitationToken`), bank numbers, MFA recovery codes and
- * `otpauth://` URLs (platform/docs/architecture.md §8).
+ * `webhookSecret`, `totpSecret`, `mfaChallengeToken`, `invitationToken` and an e-mail's `secretData`), bank numbers,
+ * MFA recovery codes, `otpauth://` URLs and the e-mail links with tokens (`verifyUrl`, `resetUrl`, `acceptUrl`;
+ * platform/docs/architecture.md §8).
  */
 const SECRET_KEY_FRAGMENTS = ["password", "passphrase", "token", "secret", "apikey"];
 const SECRET_KEYS = new Set([
@@ -54,6 +55,9 @@ const SECRET_KEYS = new Set([
   "recoverycode",
   "recoverycodes",
   "otpauthurl",
+  "verifyurl",
+  "reseturl",
+  "accepturl",
 ]);
 
 function isSecretKey(key: string): boolean {
@@ -161,7 +165,8 @@ function redactValue(value: unknown, kind: Kind, ancestors: Set<object>): unknow
  * - `documents[].number`, `cardNumber` and `certificateNumber` keep their last 4 characters;
  * - `securityCode`, `cvc`, `cvv`, `birthPlace` and `issuanceLocation` are dropped;
  * - password, token, secret and API key fields (and credential headers), bank numbers (`iban`, `accountNumber`),
- *   recovery codes, `otpauthUrl`, and the `code` and `state` anywhere below `mfa` or `oauth` become `[REDACTED]`;
+ *   recovery codes, `otpauthUrl`, the e-mail links with tokens (`verifyUrl`, `resetUrl`, `acceptUrl`), and the `code`
+ *   and `state` anywhere below `mfa` or `oauth` become `[REDACTED]`;
  * - arrays are handled, and a reference back to an enclosing object becomes `[Circular]`.
  *
  * The static type is the input type for convenience; masked fields hold the masked strings.

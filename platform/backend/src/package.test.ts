@@ -108,6 +108,15 @@ describe("the build", () => {
   });
 });
 
+/**
+ * ESLint computes the configuration of, and parses, every source and test file of the package: 84 files in PBE-011,
+ * about 3 s on one idle core, and more with every task. While the other test files of the package (and, under
+ * `pnpm test`, the other packages) run in parallel it takes several times that, so Vitest's default bounds fail the
+ * check on a busy machine, not on a finding. Both passes run once, in the setup hook with this budget, which only
+ * stops a run that hangs; the tests below compare their results.
+ */
+const LINT_SETUP_TIMEOUT_MS = 60_000;
+
 describe("lint rules", () => {
   const RULES = ["no-console", "n/no-process-env"] as const;
   // Only the two rules run, and neither needs type information: parsing without the TypeScript project keeps it fast.
@@ -120,6 +129,8 @@ describe("lint rules", () => {
 
   /** The severity of each rule for each file, as ESLint computes the configuration (loaded once, in the hook). */
   let severities: Array<{ file: string; rule: string; severity: unknown }>;
+  /** What the two rules report in every source and test file, as `file:line rule` (linted once, in the hook). */
+  let findings: string[];
 
   beforeAll(async () => {
     severities = [];
@@ -132,7 +143,13 @@ describe("lint rules", () => {
         severities.push({ file, rule, severity: Array.isArray(setting) ? setting[0] : setting });
       }
     }
-  });
+    const results = await eslint.lintFiles(files.map((file) => join(APP_DIR, file)));
+    findings = results.flatMap((result) =>
+      result.messages.map(
+        (message) => `${relative(APP_DIR, result.filePath)}:${message.line} ${message.ruleId}`,
+      ),
+    );
+  }, LINT_SETUP_TIMEOUT_MS);
 
   it("[PBE-001 AC4] has no-console and n/no-process-env on at error level for every source and test file", () => {
     expect(files).toEqual(
@@ -156,16 +173,8 @@ describe("lint rules", () => {
     ]);
   });
 
-  it("[PBE-001 AC4] finds no console.* and no process.env in src/ and test/", async () => {
-    const results = await eslint.lintFiles(files.map((file) => join(APP_DIR, file)));
-
-    expect(
-      results.flatMap((result) =>
-        result.messages.map(
-          (message) => `${relative(APP_DIR, result.filePath)}:${message.line} ${message.ruleId}`,
-        ),
-      ),
-    ).toEqual([]);
+  it("[PBE-001 AC4] finds no console.* and no process.env in src/ and test/", () => {
+    expect(findings).toEqual([]);
   });
 });
 

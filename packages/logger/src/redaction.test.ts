@@ -439,6 +439,10 @@ describe("redaction through createLogger", () => {
       "otpauthUrl",
       "mfaChallengeToken",
       "invitationToken",
+      "secretData",
+      "verifyUrl",
+      "resetUrl",
+      "acceptUrl",
       "card",
       "creditCard",
       "formOfPayments",
@@ -568,7 +572,7 @@ describe("redaction through createLogger", () => {
   });
 });
 
-/** The platform's paths of platform/docs/architecture.md §8 (PBE-010), in the order of REDACT_PATHS. */
+/** The platform's paths of platform/docs/architecture.md §8 (PBE-010, PBE-011), in the order of REDACT_PATHS. */
 const PLATFORM_KEYS = [
   "secretKey",
   "webhookSecret",
@@ -580,6 +584,10 @@ const PLATFORM_KEYS = [
   "otpauthUrl",
   "mfaChallengeToken",
   "invitationToken",
+  "secretData",
+  "verifyUrl",
+  "resetUrl",
+  "acceptUrl",
 ] as const;
 const PLATFORM_BODY_PATHS = [
   "mfa.code",

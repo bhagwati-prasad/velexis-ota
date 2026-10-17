@@ -21,6 +21,10 @@ ota/sdk/src/internal/operations.js
 # SQL migrations are copies of the reviewed reference DDL (checksummed).
 **/migrations/**/*.sql
 
+# E-mail templates (Handlebars): their line breaks and spaces are the text part's content, and Prettier's glimmer
+# parser would reflow the text and drop <!DOCTYPE html> (PBE-011).
+**/*.hbs
+
 # Vendored datasets and recorded fixtures stay exactly as produced.
 tools/reference-data/data/
 tools/amadeus-stub/fixtures/

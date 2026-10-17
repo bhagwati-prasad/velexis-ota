@@ -12,7 +12,8 @@
 // The application is the one main.ts builds (AppModule.forRoot, `configureApiApp`: helmet, cookie-parser, trust proxy,
 // the request pipeline of CommonModule), compiled with @nestjs/testing so providers can be replaced, on this test
 // file's own database clone (`createTestDatabase()`, role velexis_platform_app) and this worker's Redis database
-// (`useRedis()`), with a JWT signing key of its own (a fresh Ed25519 key file, removed by `close()`). It listens on an
+// (`useRedis()`), with a JWT signing key and a master key folder of its own (fresh key files, removed by `close()`) and
+// the development e-mail settings of `.env.example` (the API never sends; it only queues e-mails). It listens on an
 // ephemeral port of 127.0.0.1, so Supertest's requests come from loopback, as the portal's and the admin's do. `Clock`
 // is a FakeClock unless an override replaces it; TokenService signs and checks tokens at its time.
 import type { DynamicModule, ForwardReference, Provider, Type } from "@nestjs/common";
@@ -31,6 +32,7 @@ import {
 } from "../../src/config";
 import { API_APP_OPTIONS, API_HOST, configureApiApp } from "../../src/main";
 import { createTestJwtKeyFile, type TestKeyFile } from "./jwt-key";
+import { createTestMasterKeyDir, testCryptoAndMailEnv, type TestMasterKeyDir } from "./master-key";
 
 /** The PLATFORM_BFF_KEY of test applications: the development value of `.env.example` (a dummy). */
 export const TEST_BFF_KEY = "dev_bff_key_change_me_0123456789abcdef";
@@ -55,7 +57,8 @@ export interface CreateTestAppOptions {
   readonly imports?: ReadonlyArray<Type | DynamicModule | Promise<DynamicModule> | ForwardReference>;
   /**
    * Configuration variables over the test defaults (APP_ENV=test, the clone, the Redis database, TEST_BFF_KEY, a new
-   * JWT key file; the FEATURE_* switches stay off unless set here).
+   * JWT key file, a new master key folder, the e-mail settings of TEST_MAIL_ENV; the FEATURE_* switches stay off
+   * unless set here).
    */
   readonly env?: Readonly<Record<string, string>>;
   /** The clock the application sees; a new FakeClock (2026-01-15T10:00:00Z) by default. */
@@ -93,7 +96,7 @@ export interface TestApp {
    * `userAgent` defaults to a browser's.
    */
   bffHeaders(ip: string, userAgent?: string): Record<string, string>;
-  /** Closes the application, then Redis, then drops the database and deletes the JWT key file. */
+  /** Closes the application, then Redis, then drops the database and deletes the key files. */
   close(): Promise<void>;
 }
 
@@ -107,9 +110,11 @@ export async function createTestApp(options: CreateTestAppOptions = {}): Promise
   let redis: TestRedis | undefined;
   let app: NestExpressApplication | undefined;
   let jwtKey: TestKeyFile | undefined;
+  let masterKeys: TestMasterKeyDir | undefined;
   try {
     redis = await useRedis();
     jwtKey = createTestJwtKeyFile();
+    masterKeys = createTestMasterKeyDir();
     const config = parseConfig({
       APP_ENV: "test",
       LOG_LEVEL: "info",
@@ -117,6 +122,7 @@ export async function createTestApp(options: CreateTestAppOptions = {}): Promise
       REDIS_URL: redis.url,
       PLATFORM_BFF_KEY: TEST_BFF_KEY,
       JWT_PRIVATE_KEY_FILE: jwtKey.path,
+      ...testCryptoAndMailEnv(masterKeys),
       ...options.env,
     });
     const logs = new LogSink();
@@ -153,6 +159,7 @@ export async function createTestApp(options: CreateTestAppOptions = {}): Promise
     const started = app;
     const startedRedis = redis;
     const startedKey = jwtKey;
+    const startedMasterKeys = masterKeys;
     return {
       app: started,
       http: request(started.getHttpServer()),
@@ -171,6 +178,7 @@ export async function createTestApp(options: CreateTestAppOptions = {}): Promise
         await startedRedis.close();
         await db.drop();
         startedKey.remove();
+        startedMasterKeys.remove();
       },
     };
   } catch (error) {
@@ -178,6 +186,7 @@ export async function createTestApp(options: CreateTestAppOptions = {}): Promise
     await redis?.close().catch(() => undefined);
     await db.drop();
     jwtKey?.remove();
+    masterKeys?.remove();
     throw error;
   }
 }

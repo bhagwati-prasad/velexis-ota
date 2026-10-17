@@ -479,6 +479,7 @@ Every Node app reads its configuration through `@velexis/config`, which validate
 | `API_KEY_PEPPER_FILE` | ✓ | | | ✓ | | | Same pepper for both backends: identical copies in each zone's key directory ([ADR-0026](adr/0026-system-users-per-trust-zone.md)) |
 | `JWT_PRIVATE_KEY_FILE` | ✓ | | | ✓ | | | Separate Ed25519 key per backend (PKCS#8 PEM, mode 0400 or 0600); `kid` is its JWK thumbprint. The platform API signs the portal and admin access tokens with it; its worker validates the file too, since both read `platform-backend.env` |
 | `SMTP_URL`, `MAIL_FROM` | ✓ | | | ✓ | | | Mailpit `smtp://127.0.0.1:1025` in development |
+| `OPS_ALERT_EMAIL` | ✓ | | | ✓ | | | Velexis ops address, one plain address. Platform: recipient of the `ops.alert` e-mails (pool low, live office request, payout account to review, failures; [PADR-0013](../../platform/docs/adr/0013-platform-email-outbox.md)). OTA (M3): airline-card abuse and bad Amadeus credentials ([OADR-0004](../../ota/docs/adr/0004-airline-card-data-handling.md)) |
 | `PUBLIC_PORTAL_URL` | ✓ | ✓ | ✓ | | ✓ | | `https://platform.example.com` (platform admin: the "enable MFA in the portal" link) |
 | `PUBLIC_PLATFORM_ADMIN_URL` | ✓ | | ✓ | | | | `https://admin.platform.example.com` |
 | `PUBLIC_OTA_ADMIN_URL` | ✓ | ✓ | | | ✓ | | `https://admin.ota.example.com` |
