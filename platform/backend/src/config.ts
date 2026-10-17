@@ -16,6 +16,7 @@ import {
   type ConfigSchema,
   type EnvSource,
 } from "@velexis/config";
+import { API_KEY_PEPPER_MIN_BYTES } from "@velexis/crypto";
 import { createLogger, type Logger } from "@velexis/logger";
 import type { DestinationStream } from "pino";
 
@@ -125,6 +126,14 @@ export const PLATFORM_BACKEND_CONFIG_SCHEMA = {
    * API signs with it; the worker and the CLI validate it too, because the three read `platform-backend.env`.
    */
   JWT_PRIVATE_KEY_FILE: env.secretFile({ minBytes: JWT_PRIVATE_KEY_MIN_BYTES, encoding: "pem" }),
+  /**
+   * The pepper of the API key hashes (PADR-0005 item 3, ADR-0010): 32 random bytes in base64, an identical copy of
+   * the OTA backend's, in the platform zone's key folder on the VM. `key_hash = hex(HMAC-SHA-256(pepper, key))`. The
+   * value is the path: the file must exist with mode 0400 or 0600. The API hashes the keys it creates and rolls, the
+   * worker the initial test keys of provisioning (PBE-022); `api-keys/api-keys.module.ts` reads the file once at
+   * start-up. The CLI validates it too, because the three read `platform-backend.env`. A secret: never logged.
+   */
+  API_KEY_PEPPER_FILE: env.secretFile({ minBytes: API_KEY_PEPPER_MIN_BYTES }),
   /**
    * The platform zone's key folder (ADR-0010, ADR-0026): every `master-v<N>.key` in it is the KEK `local:v<N>`, and
    * MASTER_KEY_CURRENT names the one that wraps new data keys. `common/crypto.provider.ts` loads them once at

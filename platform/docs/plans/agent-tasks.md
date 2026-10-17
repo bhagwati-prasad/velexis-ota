@@ -492,7 +492,8 @@ Common commands: backend `pnpm --filter @velexis/platform-backend test`, `test:i
   - With two available test offices the daily job sends one `ops.alert` e-mail (Mailpit).
 - **Verify:** `pnpm --filter @velexis/platform-backend test && pnpm --filter @velexis/platform-backend test:int -- supplier-connections`
 
-### PBE-021 · Implement API keys with the generator, endpoints and usage flush
+### PBE-021 · Implement API keys with the generator, endpoints and usage flush ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-backend
 - **Milestone:** M1
 - **Depends on:** PBE-017

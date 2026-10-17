@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseEnv } from "node:util";
@@ -45,6 +46,7 @@ const DEVELOPMENT = {
   REDIS_URL: "redis://:dev_redis@127.0.0.1:6379/0",
   PLATFORM_BFF_KEY: "dev_bff_key_change_me_0123456789abcdef",
   JWT_PRIVATE_KEY_FILE: jwtKey.path,
+  API_KEY_PEPPER_FILE: masterKeys.pepperFile,
   MASTER_KEY_DIR: masterKeys.path,
   MASTER_KEY_CURRENT: "local:v1",
   ...TEST_MAIL_ENV,
@@ -58,6 +60,7 @@ const REQUIRED = {
   REDIS_URL: DEVELOPMENT.REDIS_URL,
   PLATFORM_BFF_KEY: DEVELOPMENT.PLATFORM_BFF_KEY,
   JWT_PRIVATE_KEY_FILE: DEVELOPMENT.JWT_PRIVATE_KEY_FILE,
+  API_KEY_PEPPER_FILE: DEVELOPMENT.API_KEY_PEPPER_FILE,
   MASTER_KEY_DIR: DEVELOPMENT.MASTER_KEY_DIR,
   MASTER_KEY_CURRENT: DEVELOPMENT.MASTER_KEY_CURRENT,
   SMTP_URL: DEVELOPMENT.SMTP_URL,
@@ -82,6 +85,9 @@ const MAIL_AND_KEY_VARIABLES = [
 /** Where `pnpm dev:keys` puts the development key, and where provision-vm.sh puts the key on the VM. */
 const DEV_JWT_KEY_FILE = "./.local/keys/platform-jwt-ed25519.pem";
 const VM_JWT_KEY_FILE = "/etc/velexis/keys/platform/platform-jwt-ed25519.pem";
+/** The API key pepper of `pnpm dev:keys` and of the VM (PADR-0005, ADR-0026), in the key folders below. */
+const DEV_PEPPER_FILE = "./.local/keys/api-key-pepper";
+const VM_PEPPER_FILE = "/etc/velexis/keys/platform/api-key-pepper";
 /** The key folders of `pnpm dev:keys` and of the VM (ADR-0026). */
 const DEV_MASTER_KEY_DIR = "./.local/keys";
 const VM_MASTER_KEY_DIR = "/etc/velexis/keys/platform";
@@ -152,6 +158,7 @@ describe("parseConfig", () => {
       REDIS_URL: DEVELOPMENT.REDIS_URL,
       PLATFORM_BFF_KEY: DEVELOPMENT.PLATFORM_BFF_KEY,
       JWT_PRIVATE_KEY_FILE: jwtKey.path,
+      API_KEY_PEPPER_FILE: masterKeys.pepperFile,
       MASTER_KEY_DIR: masterKeys.path,
       MASTER_KEY_CURRENT: "local:v1",
       SMTP_URL: "smtp://127.0.0.1:1025",
@@ -182,6 +189,7 @@ describe("parseConfig", () => {
       REDIS_URL: "http://:secret-value-5@127.0.0.1:6379",
       PLATFORM_BFF_KEY: "secret-value-6",
       JWT_PRIVATE_KEY_FILE: "/nowhere/secret-value-7.pem",
+      API_KEY_PEPPER_FILE: "/nowhere/secret-value-17",
       MASTER_KEY_DIR: "/nowhere/secret-value-10",
       MASTER_KEY_CURRENT: "kms:secret-value-11",
       SMTP_URL: "http://user:secret-value-12@smtp.example.com",
@@ -203,6 +211,7 @@ describe("parseConfig", () => {
       "REDIS_URL",
       "PLATFORM_BFF_KEY",
       "JWT_PRIVATE_KEY_FILE",
+      "API_KEY_PEPPER_FILE",
       ...MAIL_AND_KEY_VARIABLES,
       "STOREFRONT_BASE_DOMAIN",
       "MAX_TENANTS_PER_ACCOUNT",
@@ -226,6 +235,7 @@ describe("parseConfig", () => {
       "secret-value-14",
       "secret-value-15",
       "secret-value-16",
+      "secret-value-17",
       "domain-value-10",
     ]) {
       expect(error.message).not.toContain(value);
@@ -290,6 +300,7 @@ describe("parseConfig", () => {
       "REDIS_URL",
       "PLATFORM_BFF_KEY",
       "JWT_PRIVATE_KEY_FILE",
+      "API_KEY_PEPPER_FILE",
       ...MAIL_AND_KEY_VARIABLES,
       "STOREFRONT_BASE_DOMAIN",
       "TRUST_PROXY",
@@ -301,10 +312,12 @@ describe("parseConfig", () => {
     const config = parseConfig({
       ...example,
       JWT_PRIVATE_KEY_FILE: jwtKey.path,
+      API_KEY_PEPPER_FILE: masterKeys.pepperFile,
       MASTER_KEY_DIR: masterKeys.path,
     });
 
     expect(example["JWT_PRIVATE_KEY_FILE"]).toBe(DEV_JWT_KEY_FILE);
+    expect(example["API_KEY_PEPPER_FILE"]).toBe(DEV_PEPPER_FILE);
     expect(example["MASTER_KEY_DIR"]).toBe(DEV_MASTER_KEY_DIR);
     expect(config.MASTER_KEY_CURRENT).toBe("local:v1");
     expect(config.SMTP_URL).toBe("smtp://127.0.0.1:1025");
@@ -325,6 +338,7 @@ describe("parseConfig", () => {
       ...template,
       PLATFORM_BFF_KEY: GENERATED_BFF_KEY,
       JWT_PRIVATE_KEY_FILE: jwtKey.path,
+      API_KEY_PEPPER_FILE: masterKeys.pepperFile,
       MASTER_KEY_DIR: masterKeys.path,
     };
     const api = parseConfig({ ...vm, PORT: "3100" });
@@ -332,6 +346,7 @@ describe("parseConfig", () => {
 
     expect(template.PLATFORM_BFF_KEY).toBe("@@PLATFORM_BFF_KEY@@");
     expect(template.JWT_PRIVATE_KEY_FILE).toBe(VM_JWT_KEY_FILE);
+    expect(template.API_KEY_PEPPER_FILE).toBe(VM_PEPPER_FILE);
     expect(template.MASTER_KEY_DIR).toBe(VM_MASTER_KEY_DIR);
     expect(api.APP_ENV).toBe("production");
     expect(api.MASTER_KEY_CURRENT).toBe("local:v1");
@@ -409,6 +424,7 @@ describe("parseConfig", () => {
       "REDIS_URL",
       "PLATFORM_BFF_KEY",
       "JWT_PRIVATE_KEY_FILE",
+      "API_KEY_PEPPER_FILE",
       ...MAIL_AND_KEY_VARIABLES,
       "STOREFRONT_BASE_DOMAIN",
       "MAX_TENANTS_PER_ACCOUNT",
@@ -431,6 +447,41 @@ describe("parseConfig", () => {
       }
     } finally {
       readable.remove();
+    }
+  });
+
+  it("[PBE-021] requires API_KEY_PEPPER_FILE: a key file of at least 32 bytes that only its owner may read, never echoed", () => {
+    const short = writeTestKeyFile(`${randomBytes(16).toString("base64")}\n`, 0o600);
+    const readable = writeTestKeyFile(`${randomBytes(32).toString("base64")}\n`, 0o644);
+    try {
+      expect(configError({ ...REQUIRED, API_KEY_PEPPER_FILE: undefined }).problems).toEqual([
+        { variable: "API_KEY_PEPPER_FILE", reason: "is required but missing" },
+      ]);
+      for (const path of [short.path, readable.path, join(short.path, "..", "missing-pepper")]) {
+        const error = configError({ ...REQUIRED, API_KEY_PEPPER_FILE: path });
+
+        expect(error.problems.map((problem) => problem.variable)).toEqual(["API_KEY_PEPPER_FILE"]);
+        expect(error.message).not.toContain(path);
+      }
+      expect(parseConfig(REQUIRED).API_KEY_PEPPER_FILE).toBe(masterKeys.pepperFile);
+    } finally {
+      short.remove();
+      readable.remove();
+    }
+  });
+
+  it("[PBE-021] declares API_KEY_PEPPER_FILE in the key folder of every env template", () => {
+    for (const [file, expected] of [
+      [".env.example", ".local/keys/api-key-pepper"],
+      ["platform/backend/.env.example", DEV_PEPPER_FILE],
+      ["deploy/env/platform-backend.env.example", VM_PEPPER_FILE],
+    ] as const) {
+      const values = readEnvFile(join(REPO_ROOT, file));
+
+      expect(values["API_KEY_PEPPER_FILE"], file).toBe(expected);
+      expect(values["API_KEY_PEPPER_FILE"], file).toBe(
+        `${values["MASTER_KEY_DIR"] ?? "missing"}/api-key-pepper`,
+      );
     }
   });
 

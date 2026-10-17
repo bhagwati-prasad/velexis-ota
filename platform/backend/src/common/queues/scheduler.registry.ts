@@ -2,16 +2,17 @@
 // schedule of the architecture's table is declared here, in code, and the worker registers them with BullMQ's
 // `upsertJobScheduler` when it starts: one scheduler per schedule on the `platform-maintenance` queue, whose id and
 // job name are the schedule's id (`provisioning.reconcile`), with an empty payload. The modules that own the work
-// (provisioning, API keys, invitations, …) consume these jobs by name when they add their processors.
+// (provisioning, API keys, invitations, …) consume these jobs by name: each provides a `@MaintenanceJob("<id>")`
+// handler, which the one processor of the queue runs (maintenance.processor.ts, PBE-021).
 //
 // M5 schedules belong to a milestone switch of PADR-0015 (item 2: "a check in the schedulers"). A schedule whose
 // switches are all off is not registered, and a scheduler left in Redis from a run with the switch on, or from a
 // schedule that no longer exists, is removed, so turning a switch off stops its schedules at the next worker start.
 //
 // Registration runs in the background: the worker serves its health checks while Redis is down, and the BullMQ
-// connection waits for Redis instead of failing, so the schedulers are registered once Redis is back. Until a
-// processor consumes the queue, each scheduler keeps exactly one waiting job (BullMQ adds the next iteration when a
-// worker takes the current one), so nothing piles up.
+// connection waits for Redis instead of failing, so the schedulers are registered once Redis is back. Each scheduler
+// keeps exactly one waiting job (BullMQ adds the next iteration when a worker takes the current one), so nothing piles
+// up; a job whose schedule has no handler yet completes without doing anything.
 import { InjectQueue } from "@nestjs/bullmq";
 import {
   Inject,

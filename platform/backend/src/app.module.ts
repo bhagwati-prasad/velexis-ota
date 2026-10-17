@@ -10,6 +10,7 @@ import {
 } from "@nestjs/common";
 import { pinoHttpOptions, type Logger } from "@velexis/logger";
 import { LoggerModule } from "nestjs-pino";
+import { ApiKeysModule } from "./api-keys/api-keys.module";
 import { AuthModule } from "./auth/auth.module";
 import { BillingModule } from "./billing/billing.module";
 import { API_REQUEST_MIDDLEWARE, CommonModule } from "./common/common.module";
@@ -43,6 +44,7 @@ export class AppModule implements NestModule {
         AuthModule,
         TenantsModule,
         BillingModule,
+        ApiKeysModule.forApi(),
       ],
     };
   }

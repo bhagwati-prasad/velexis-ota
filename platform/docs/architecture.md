@@ -135,6 +135,8 @@ BullMQ prefix `vx` ([ADR-0009](../../docs/mvp/adr/0009-background-jobs-bullmq.md
 | `platform-settlements` | Scheduler, admin → worker | `settlement.generate {periodStart, tenantId?}` | 1 |
 | `platform-maintenance` | Schedulers → worker | The schedules below | 1 |
 
+BullMQ gives any job of a queue to any of its workers, so `platform-maintenance` has exactly one processor (`common/queues/maintenance.processor.ts`): it runs each job with the `@MaintenanceJob("<schedule id>")` handler of the module that owns the schedule, and completes a job whose schedule has no handler yet without doing anything.
+
 | Scheduler (`upsertJobScheduler`) | When (UTC) | Does | Milestone |
 |---|---|---|---|
 | `provisioning.reconcile` | every 5 min | Dispatch due `queued` jobs whose gate is open; re-dispatch `running` jobs past `locked_until` whose BullMQ job is gone or failed | M1 |

@@ -36,7 +36,8 @@ export const PENDING_OPERATIONS: readonly PendingOperation[] = Object.freeze([
   { operationId: "revokeSession", task: "PBE-016" },
   { operationId: "tlsAsk", task: "PBE-027" },
 
-  // PBE-006: tenants, team, API keys and the M1 reads (the tenant reads and getSubscription are bound since PBE-017).
+  // PBE-006: tenants, team, API keys and the M1 reads (the tenant reads and getSubscription are bound since PBE-017, the
+  // API key operations since PBE-021).
   { operationId: "createTenant", task: "PBE-018" },
   { operationId: "getProvisioning", task: "PBE-023" },
   { operationId: "retryProvisioning", task: "PBE-023" },
@@ -51,11 +52,6 @@ export const PENDING_OPERATIONS: readonly PendingOperation[] = Object.freeze([
   { operationId: "resendInvitation", task: "PBE-026" },
   { operationId: "lookupInvitation", task: "PBE-026" },
   { operationId: "acceptInvitation", task: "PBE-026" },
-  { operationId: "listApiKeys", task: "PBE-021" },
-  { operationId: "createApiKey", task: "PBE-021" },
-  { operationId: "updateApiKey", task: "PBE-021" },
-  { operationId: "rollApiKey", task: "PBE-021" },
-  { operationId: "revokeApiKey", task: "PBE-021" },
   { operationId: "listDomains", task: "PBE-027" },
   { operationId: "listAmadeusConnections", task: "PBE-027" },
   { operationId: "listPaymentConnections", task: "PBE-027" },

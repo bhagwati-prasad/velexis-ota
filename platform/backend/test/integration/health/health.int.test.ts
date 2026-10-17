@@ -315,11 +315,12 @@ describe("the worker's health server", () => {
         expect.objectContaining({ level: 60, err: expect.objectContaining({ code: "EADDRINUSE" }) }),
       ]);
       // The context was closed again: its shutdown hooks disconnected the readiness probe's Redis client and the
-      // blocking connection of the platform-emails processor (PBE-011), and both have ended.
+      // blocking connections of the platform-emails processor (PBE-011) and the platform-maintenance processor
+      // (PBE-021), and all three have ended.
       const disconnected = disconnect.mock.contexts as Redis[];
-      expect(disconnected).toHaveLength(2);
+      expect(disconnected).toHaveLength(3);
       expect(disconnected.map((client) => client.options.connectionName)).toContain("platform-worker");
-      expect(disconnected.map((client) => client.status)).toEqual(["end", "end"]);
+      expect(disconnected.map((client) => client.status)).toEqual(["end", "end", "end"]);
     } finally {
       await new Promise<void>((done) => blocker.close(() => done()));
     }
