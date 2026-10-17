@@ -1326,7 +1326,8 @@ The OTA group builds the OTA admin and the console in M4. The platform issues th
 
 M5 work is merged behind the `FEATURE_*` switches (PADR-0015). The switches are turned on in production when the outside steps are done: legal and Stripe review of Velexis-collected payments, Amadeus live contracts, Stripe Connect approval.
 
-### PBE-041 · Add the M5 tenant resource operations to the OpenAPI document
+### PBE-041 · Add the M5 tenant resource operations to the OpenAPI document ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-backend
 - **Milestone:** M5
 - **Depends on:** PBE-037

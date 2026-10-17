@@ -592,6 +592,36 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/tenants/{tenantId}/go-live": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The OTA; callers without an active membership get `404 NOT_FOUND`.
+                 * @example ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F
+                 */
+                tenantId: components["parameters"]["TenantId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Switch the OTA's storefront to live
+         * @description Owners only (M5), with a TOTP step-up within the last 15 minutes (`401 REAUTH_REQUIRED`, or `403 MFA_REQUIRED` without MFA) and `FEATURE_LIVE_SWITCH` on (`403 FEATURE_DISABLED`, `details.feature = live_switch`). The body only confirms the switch (`{confirm: true}`). The OTA must be `active` (`409 TENANT_NOT_ACTIVE` with `details.status`).
+         *
+         *     **Preconditions** (platform/docs/scope.md PF-14). The service checks every one and answers `422 LIVE_PRECONDITIONS_UNMET` with all the missing ones in `details.missing`, so the portal can show a checklist: `amadeus_live` (an `active` live Amadeus connection), `payments_live` (a live payment mode that can charge: the Velexis Stripe account, a connected account whose charges are enabled, or verified live API keys), `payout_account` (a `verified` payout account, when the payments stay in `velexis` mode), `plan_live_mode` (the plan's `limits.liveMode`), `subscription` (a Stripe subscription that is `trialing` or `active`) and `mfa` (the account still has MFA on, read again inside the transaction).
+         *
+         *     **Effect**, in one transaction: `storefront_environment = live`, `live_enabled_at`, `live_enabled_by_account_id` and `version + 1`; when the test payment connection is in `velexis` mode the live one is created in that mode, and a `connect_standard` test connection is copied to live; the audit row `tenant.went_live`. After commit it publishes `tenant` and `connection` invalidations, so the hosted storefront serves live within 60 seconds. An OTA that is live already answers `200` with the tenant unchanged. Live API keys can be created from then on (`createApiKey`).
+         */
+        post: operations["goLive"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/tenants/{tenantId}/members": {
         parameters: {
             query?: never;
@@ -959,7 +989,108 @@ export interface paths {
          */
         get: operations["listDomains"];
         put?: never;
+        /**
+         * Add a custom storefront domain
+         * @description Owners and admins add a custom storefront domain (M5, PADR-0004). It needs `FEATURE_CUSTOM_DOMAINS` and a plan with custom domains (`limits.customDomains` above 0); otherwise `403 FEATURE_DISABLED` with `details.feature = custom_domains`. The OTA's custom domains, in any status, must stay below `limits.customDomains` (`422 PLAN_LIMIT_REACHED` with `details.limit` and `details.used`). The OTA must be `active` (`409 TENANT_NOT_ACTIVE`): a suspended OTA's domains are read-only (PADR-0014 item 5).
+         *
+         *     **Host name rules**, checked by the service, so a malformed host answers `422 DOMAIN_INVALID` and not `400`: the input is lower-cased, IDN labels become punycode and a trailing dot is dropped (`Travel.Acme.com.` is stored as `travel.acme.com`); the host must then have valid labels, at least two of them and at most 253 characters, and must not be an IP address, `STOREFRONT_BASE_DOMAIN` or a host below it, any other Velexis host, or a host under a shared hosting suffix of the deny list (`github.io`, `herokuapp.com`, `vercel.app`, `netlify.app`, …) where owning a sub-domain proves nothing. A host that any OTA uses, in any status, answers `409 DOMAIN_TAKEN`.
+         *
+         *     **Answer**: the new domain, `pending`, with a verification deadline 72 hours ahead and the DNS records to create: the `TXT` record `_velexis.<host>` holding the token (`vx-verify-` and 32 base32 characters), and both routing options, a `CNAME` to the OTA's sub-domain, or `A` and `AAAA` records to the storefront addresses (`STOREFRONT_IPV4`, `STOREFRONT_IPV6`) for an apex domain, which cannot have a CNAME; verification accepts either. Writes an audit row. The platform worker checks pending domains every 5 minutes; `checkDomain` checks one now.
+         */
+        post: operations["addDomain"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/tenants/{tenantId}/domains/{domainId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The OTA; callers without an active membership get `404 NOT_FOUND`.
+                 * @example ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F
+                 */
+                tenantId: components["parameters"]["TenantId"];
+                /**
+                 * @description The domain (`id` of `listDomains`); a domain of another OTA answers `404 NOT_FOUND`.
+                 * @example dom_01JB3K5N9Q3S7W1Y5A9C3E7G1J
+                 */
+                domainId: components["parameters"]["DomainId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
         post?: never;
+        /**
+         * Remove a custom domain
+         * @description Owners and admins remove a custom domain in any status (M5): the row is deleted and, if it was primary, the sub-domain becomes primary again, in one transaction. After commit `domain` invalidations for the host (and, when the primary moved, the sub-domain) are published and the cached `tlsask:<host>` answer is deleted, so neither the storefront nor the TLS gate serves the host any more; Caddy keeps the old certificate until it expires but uses it for nothing. The host name is then free for another OTA that proves ownership. The sub-domain cannot be removed (`409 CONFLICT`, `details.reason = subdomain`). The OTA must be `active` (`409 TENANT_NOT_ACTIVE`, PADR-0014 item 5). Writes an audit row.
+         */
+        delete: operations["removeDomain"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/tenants/{tenantId}/domains/{domainId}/check": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The OTA; callers without an active membership get `404 NOT_FOUND`.
+                 * @example ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F
+                 */
+                tenantId: components["parameters"]["TenantId"];
+                /**
+                 * @description The domain (`id` of `listDomains`); a domain of another OTA answers `404 NOT_FOUND`.
+                 * @example dom_01JB3K5N9Q3S7W1Y5A9C3E7G1J
+                 */
+                domainId: components["parameters"]["DomainId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Check the DNS records of a custom domain now
+         * @description Owners and admins ask for the DNS check of a custom domain that is not verified yet (M5), instead of waiting for the next 5-minute run: the API enqueues a `domain.verify` job on `platform-domains` and answers at once with the domain as it is now; the result shows in `listDomains` within seconds (`verificationStatus`, `lastCheckedAt`, `lastCheckError`). A `failed` domain first gets a new 72-hour window with the same token, so it is `pending` again in the answer, and an audit row records the restart. Only `pending` and `failed` custom domains can be checked: the sub-domain has no records (`409 CONFLICT`, `details.reason = subdomain`) and a verified domain has nothing left to prove (`details.reason = already_verified`; the daily re-check watches it). Rate limited to 1 call per domain per minute (`429 RATE_LIMITED`). The OTA must be `active` (`409 TENANT_NOT_ACTIVE`). `503 SERVICE_UNAVAILABLE` while Redis is down, because the job is the operation's effect.
+         */
+        post: operations["checkDomain"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/tenants/{tenantId}/domains/{domainId}/make-primary": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The OTA; callers without an active membership get `404 NOT_FOUND`.
+                 * @example ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F
+                 */
+                tenantId: components["parameters"]["TenantId"];
+                /**
+                 * @description The domain (`id` of `listDomains`); a domain of another OTA answers `404 NOT_FOUND`.
+                 * @example dom_01JB3K5N9Q3S7W1Y5A9C3E7G1J
+                 */
+                domainId: components["parameters"]["DomainId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Make a verified domain the primary storefront host
+         * @description Owners and admins choose the primary storefront host (M5), which links and e-mails use: in one transaction the OTA's other storefront host loses `isPrimary` and this one gets it (the partial unique index keeps exactly one primary), then `domain` invalidations for both hosts are published. Only a verified domain can be primary (`409 DOMAIN_NOT_VERIFIED`); making the sub-domain primary again is allowed, and the primary domain answers `200` unchanged. The OTA must be `active` (`409 TENANT_NOT_ACTIVE`, PADR-0014 item 5). Writes an audit row. Redirecting the sub-domain to the primary host is a follow-up of ADR-0018.
+         */
+        post: operations["makeDomainPrimary"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1027,6 +1158,100 @@ export interface paths {
         patch: operations["updateAmadeusConnection"];
         trace?: never;
     };
+    "/v1/tenants/{tenantId}/amadeus-connections/live/request": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The OTA; callers without an active membership get `404 NOT_FOUND`.
+                 * @example ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F
+                 */
+                tenantId: components["parameters"]["TenantId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Ask Velexis for a live Amadeus office
+         * @description Owners ask Velexis for live Amadeus access on the Velexis account (M5, platform/docs/flows/amadeus-connection.md §C). It needs `FEATURE_LIVE_SWITCH` and a plan with `limits.liveMode` (`403 FEATURE_DISABLED`, `details.feature = live_switch`), an `active` OTA (`409 TENANT_NOT_ACTIVE`) and no live Amadeus connection yet (`409 CONFLICT`, `details.reason = live_connection_exists`, also when the OTA brought its own live credentials). Velexis must have entered its live Amadeus account (`409 CONFLICT`, `details.reason = live_account_missing`; ops are alerted).
+         *
+         *     The API inserts the live connection (`credentialSource: velexis`, the live Velexis account, no office yet, `pending_verification`), writes the audit row `amadeus.live_requested` and e-mails ops (`ops.alert`) with the optional `note`. Velexis then completes the commercial onboarding outside the system, and a platform admin assigns a live office (`adminAssignAmadeusOffice`), which makes the connection `active` and e-mails the owners. The live connection is a precondition of `goLive`.
+         */
+        post: operations["requestLiveAmadeus"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/tenants/{tenantId}/amadeus-connections/{environment}/credentials": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The OTA; callers without an active membership get `404 NOT_FOUND`.
+                 * @example ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F
+                 */
+                tenantId: components["parameters"]["TenantId"];
+                /**
+                 * @description The environment whose connection the submitted credentials are for: `test` or `live`. The connection need not exist yet: a successful verification creates it.
+                 * @example test
+                 */
+                environment: components["parameters"]["CredentialsEnvironment"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Submit the OTA's own Amadeus credentials for verification
+         * @description Owners and admins switch the Amadeus connection of an environment to the OTA's own credentials (M5, ADR-0012, PADR-0010), with a TOTP step-up within the last 15 minutes (`401 REAUTH_REQUIRED`, or `403 MFA_REQUIRED` without MFA) and `FEATURE_OWN_AMADEUS` on (`403 FEATURE_DISABLED`). Nothing changes on the connection yet: the credentials wait in a credential submission, the client secret envelope-encrypted, and a platform worker job verifies them with an OAuth token request to the Amadeus host of the environment. Success switches the connection in one transaction (`credentialSource: tenant`, the secret re-encrypted for the connection, the offices of the body, `active`), moves the Velexis office of that environment to `releasing`, and e-mails the submitter; a rejection (`AMADEUS_CREDENTIALS_INVALID`) or an unreachable Amadeus (`PROVIDER_UNAVAILABLE`, after retries) leaves the working connection untouched. The portal follows the submission with `getCredentialSubmission`; `listAmadeusConnections` shows it as `pendingSubmission`.
+         *
+         *     **Rules.** Office ids are 9 upper-case letters and digits, each at most once; `defaultOfficeId` and, when sent, `queuingOfficeId` and `ownerOfficeId` must be among `officeIds` (`400 VALIDATION_FAILED` with a field error); the two optional offices default to `defaultOfficeId`. An open submission of the same environment is superseded and its secret erased. The environment needs no connection yet: an OTA may bring its own live credentials before it asks for a Velexis live office, and the connection is then created on success. The OTA must be `active` (`409 TENANT_NOT_ACTIVE`, PADR-0014 item 5).
+         *
+         *     **The secret.** `clientSecret` is write-only: it is never logged (the logger redacts it), never answered and never put in a queue message, and it is erased from the submission when the submission ends. The operation is not idempotent, so no body is stored for a replay. Writes the audit row `amadeus.credentials_submitted` without the secret, then enqueues `credentials.verify` with the submission id only.
+         */
+        put: operations["submitAmadeusCredentials"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/tenants/{tenantId}/credential-submissions/{submissionId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The OTA; callers without an active membership get `404 NOT_FOUND`.
+                 * @example ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F
+                 */
+                tenantId: components["parameters"]["TenantId"];
+                /**
+                 * @description The credential submission (`submission.id` of `submitAmadeusCredentials` or `submitStripeApiKeys`, or `pendingSubmission.id` of a connection); a submission of another OTA answers `404 NOT_FOUND`.
+                 * @example crs_01JD4Q2S6V0X4Z8B2D6F0H4K8N
+                 */
+                submissionId: components["parameters"]["CredentialSubmissionId"];
+            };
+            cookie?: never;
+        };
+        /**
+         * Follow the verification of submitted credentials
+         * @description Owners and admins follow a submission of the OTA's own credentials (M5, PADR-0010), Amadeus or Stripe API keys: `pending` (waiting for the worker), `verifying`, then `applied` (the connection uses them) or `failed` with `errorCode` (`AMADEUS_CREDENTIALS_INVALID`, `STRIPE_KEY_INVALID`, `STRIPE_LIVEMODE_MISMATCH` or `PROVIDER_UNAVAILABLE`: verification results, not error codes of this API) and a sanitised `errorMessage` (the provider's HTTP status and error code, never a provider body or a secret); `superseded` when a newer submission of the same environment replaced it. The portal polls it every 2 seconds until it is final. The submitted secrets are never answered; they are erased when the submission ends. A submission of another OTA answers `404 NOT_FOUND`.
+         */
+        get: operations["getCredentialSubmission"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/tenants/{tenantId}/payment-connections": {
         parameters: {
             query?: never;
@@ -1088,6 +1313,129 @@ export interface paths {
         patch: operations["updatePaymentConnection"];
         trace?: never;
     };
+    "/v1/tenants/{tenantId}/payment-connections/stripe-connect/start": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The OTA; callers without an active membership get `404 NOT_FOUND`.
+                 * @example ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F
+                 */
+                tenantId: components["parameters"]["TenantId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Start connecting the OTA's own Stripe account with Connect Standard
+         * @description Owners and admins start connecting the OTA's own Stripe account through Stripe Connect Standard OAuth (M5, PADR-0011), with a TOTP step-up within the last 15 minutes (`401 REAUTH_REQUIRED`, or `403 MFA_REQUIRED` without MFA) and `FEATURE_OWN_STRIPE` on (`403 FEATURE_DISABLED`). The OTA must be `active` (`409 TENANT_NOT_ACTIVE`, PADR-0014 item 5).
+         *
+         *     The API creates a 256-bit random `state`, keeps `{tenantId, accountId, membershipId}` under the Redis key `stripe:oauth:<sha256 of the state>` for 10 minutes, and answers Stripe's authorize URL: `https://connect.stripe.com/oauth/authorize` with `response_type=code`, `client_id` (`STRIPE_CONNECT_CLIENT_ID`), `scope=read_write`, the `state`, `redirect_uri` (`<PUBLIC_PORTAL_URL>/connect/stripe/callback`) and a prefilled `stripe_user[email]`. The portal sends the browser there with a `303`; Stripe sends it back to the portal's callback page, which calls `completeStripeConnect`. The URL holds the single-use state, so the answer is `no-store`. `503 SERVICE_UNAVAILABLE` while Redis is down, because the state lives only there. One connected account serves both environments: the test connection is switched at once, the live one too when the OTA is live, otherwise at go-live.
+         */
+        post: operations["startStripeConnect"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/payment-connections/stripe-connect/callback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Finish connecting the OTA's own Stripe account
+         * @description The portal's callback page (`/connect/stripe/callback`, signed-in user) posts what Stripe sent back (M5, PADR-0011); the OTA is the one of the state, so the path names none. The API takes the state with `GETDEL`, so it works once: an unknown, expired or used state, or one that another account started, answers `400 CONNECT_STATE_INVALID`. The account that started must still be an owner or admin of the OTA (`403 FORBIDDEN`), and the OTA must be `active` (`409 TENANT_NOT_ACTIVE`).
+         *
+         *     - `{state, error}`: Stripe reported an error and nothing changes: `422 UNPROCESSABLE` with `details.reason = access_denied` when the person declined, `oauth_error` for any other error.
+         *     - `{state, code}`: the code is exchanged with `stripe.oauth.token` using Velexis's secret key. Only the connected account id (`acct_…`) and `livemode` are kept; the access and refresh tokens Stripe returns are discarded, because charges use Velexis's key with `Stripe-Account`. `livemode` must match the deployment (live in production, test elsewhere; `422 UNPROCESSABLE`, `details.reason = livemode_mismatch`), and an account connected to another OTA answers `409 STRIPE_ACCOUNT_ALREADY_CONNECTED`. The account's `charges_enabled`, `payouts_enabled` and `details_submitted` are read from Stripe. A Stripe failure answers `502 PROVIDER_ERROR`.
+         *
+         *     **Effect**, in one transaction: the test payment connection becomes `connect_standard` with the account id, no publishable key and no secrets, the account's capabilities, `connectedAt`, and `active` when charges are enabled (`pending` otherwise, until `account.updated` says so); the live connection the same when the OTA is live, otherwise go-live creates it in this mode. Writes the audit row `payments.connect_connected` and, after commit, publishes `connection` invalidations. Existing payments stay on the account they were taken with. `code` and `state` are write-only: never logged and never answered. `503 SERVICE_UNAVAILABLE` while Redis is down, because the state lives only there.
+         */
+        post: operations["completeStripeConnect"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/tenants/{tenantId}/payment-connections/{environment}/api-keys": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The OTA; callers without an active membership get `404 NOT_FOUND`.
+                 * @example ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F
+                 */
+                tenantId: components["parameters"]["TenantId"];
+                /**
+                 * @description The environment whose connection the submitted credentials are for: `test` or `live`. The connection need not exist yet: a successful verification creates it.
+                 * @example test
+                 */
+                environment: components["parameters"]["CredentialsEnvironment"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Submit the OTA's own Stripe API keys for verification
+         * @description Owners and admins switch the payment connection of an environment to the OTA's own Stripe account by its API keys (`api_keys` mode, M5, PADR-0011), with a TOTP step-up within the last 15 minutes (`401 REAUTH_REQUIRED`, or `403 MFA_REQUIRED` without MFA) and `FEATURE_OWN_STRIPE` on (`403 FEATURE_DISABLED`). As for own Amadeus credentials (PADR-0010), nothing changes yet: the keys wait in a credential submission, the secret key and the webhook secret envelope-encrypted, and a platform worker job verifies them with `GET /v1/account`, which must succeed with a `livemode` that matches the environment. Success switches the connection in one transaction (`api_keys`, the account id, the publishable key, both secrets re-encrypted for the connection, `active`) and e-mails the submitter; a failure (`STRIPE_KEY_INVALID`, `STRIPE_LIVEMODE_MISMATCH`, `PROVIDER_UNAVAILABLE`) leaves the connection untouched. Follow it with `getCredentialSubmission`.
+         *
+         *     **Rules.** Every key must belong to the environment: `pk_test_` and `sk_test_` or `rk_test_` on `test`, `pk_live_` and `sk_live_` or `rk_live_` on `live`; another prefix answers `400 VALIDATION_FAILED` with a field error that never holds the key. A restricted key (`rk_`) needs write access to PaymentIntents and Refunds and read access to Charges and Disputes. An open submission of the same environment is superseded and its secrets erased. The OTA must be `active` (`409 TENANT_NOT_ACTIVE`, PADR-0014 item 5).
+         *
+         *     **Answer**: the submission, and the webhook endpoint to create in the OTA's Stripe dashboard: `webhookUrl` (`https://api.ota.example.com/webhooks/stripe/c/<ppc_id>`, stable because the connection row is updated in place; when the environment has no connection yet, the submission keeps the id that the connection gets) and the events to enable. The webhook secret can only be tested when Stripe sends an event to the OTA backend, so the portal asks the owner to send a test event.
+         *
+         *     **Secrets.** `secretKey` and `webhookSecret` are write-only: never logged (the logger redacts them), never answered, never put in a queue message, and erased from the submission when it ends. The operation is not idempotent, so no body is stored for a replay. Writes an audit row without them.
+         */
+        put: operations["submitStripeApiKeys"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/tenants/{tenantId}/payment-connections/{environment}/use-velexis": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The OTA; callers without an active membership get `404 NOT_FOUND`.
+                 * @example ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F
+                 */
+                tenantId: components["parameters"]["TenantId"];
+                /**
+                 * @description The environment of the connection (`environment` of `listAmadeusConnections` or `listPaymentConnections`): `test`, or `live` once the OTA has a live connection. An environment without a connection answers `404 NOT_FOUND`.
+                 * @example test
+                 */
+                environment: components["parameters"]["ConnectionEnvironment"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Return a payment connection to the Velexis Stripe account
+         * @description Owners return the payment connection of an environment to the Velexis Stripe account (`velexis` mode, settled monthly; M5, PADR-0011 item 6), with a TOTP step-up within the last 15 minutes (`401 REAUTH_REQUIRED`, or `403 MFA_REQUIRED` without MFA). It is not behind a switch, so an OTA can always come back. For a `connect_standard` connection the API first calls `stripe.oauth.deauthorize`; a failure there is logged and does not block, so the operation never waits for Stripe. Then, in one transaction, it clears the account reference, the publishable key and the secrets, sets `velexis` mode and `active`, and writes an audit row with the old and the new mode; a `connection` invalidation follows the commit. The `live` connection needs a `verified` payout account first, because Velexis then collects the money and settles it (`422 PAYOUT_ACCOUNT_REQUIRED`). A connection in `velexis` mode already answers `200` unchanged.
+         *
+         *     Switching never moves existing payments: the OTA backend keeps capturing and refunding each payment on the account recorded with it, and only new payments use Velexis. `{environment}` without a connection answers `404 NOT_FOUND`; the OTA must be `active` (`409 TENANT_NOT_ACTIVE`, PADR-0014 item 5).
+         */
+        post: operations["useVelexisPayments"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/tenants/{tenantId}/subscription": {
         parameters: {
             query?: never;
@@ -1106,6 +1454,208 @@ export interface paths {
          * @description Owners and finance members see the OTA's subscription: the current one, or after a cancellation the canceled one. It shows the plan, status, billing provider (`manual` for the trial before M5, `stripe` from M5), interval, trial end, current period end and scheduled cancellation. `banner` is what the portal shows: `past_due` or `trial_ending` from the billing notice that billing sync keeps on the tenant, `canceled` for a canceled subscription, otherwise `null`. `canManageInStripe` is true only for a Stripe subscription, whose plan, card and cancellation are managed in the Stripe Customer Portal (M5). An OTA without a subscription answers `404 NOT_FOUND`.
          */
         get: operations["getSubscription"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/tenants/{tenantId}/billing/checkout-session": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The OTA; callers without an active membership get `404 NOT_FOUND`.
+                 * @example ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F
+                 */
+                tenantId: components["parameters"]["TenantId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Open a Stripe Checkout to choose or restart a paid plan
+         * @description Owners choose or restart a paid plan for an existing OTA (M5, platform/docs/flows/subscription-billing.md §B): when the manual trial of an OTA created before M5 ends, after a cancellation, or after an abandoned Checkout. It needs `FEATURE_STRIPE_BILLING` (`403 FEATURE_DISABLED`). `planCode` must name a public, active plan with a Stripe price for `billingInterval` (`422 PLAN_NOT_AVAILABLE`). An OTA whose Stripe subscription is current (`trialing`, `active`, `past_due`, `paused` or `unpaid`) changes its plan or card in the Customer Portal instead (`409 CONFLICT`, `details.reason = stripe_subscription_active`). No subscription row is written here: the current row keeps its place until the `checkout.session.completed` webhook creates the Stripe one. It works in any tenant status, so a suspended or failed OTA can pay.
+         *
+         *     The API creates or reuses the OTA's Stripe Customer (`billing_customers`) and creates a Checkout Session in `subscription` mode with the plan's price, `client_reference_id` (the OTA id), the Velexis metadata, a trial only on the OTA's first Stripe subscription, `payment_method_collection: always`, and success and cancel URLs on the portal; Stripe's idempotency key is `checkout:<tenantId>:<Idempotency-Key>`. A Stripe failure answers `502 PROVIDER_ERROR`. Writes an audit row.
+         *
+         *     **Idempotent** (`Idempotency-Key`, 24 hours): a retry with the same key and body replays the `201` with the same URL, another body answers `409 IDEMPOTENCY_KEY_REUSED`, and while the idempotency store (Redis) is down the call answers `503 SERVICE_UNAVAILABLE` before writing anything.
+         */
+        post: operations["createCheckoutSession"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/tenants/{tenantId}/billing/portal-session": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The OTA; callers without an active membership get `404 NOT_FOUND`.
+                 * @example ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F
+                 */
+                tenantId: components["parameters"]["TenantId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Open the Stripe Customer Portal
+         * @description Owners open the Stripe Customer Portal (M5, platform/docs/flows/subscription-billing.md §F), where they switch between the public plans, update the card, see Stripe's invoices and cancel at the end of the period. It needs `FEATURE_STRIPE_BILLING` (`403 FEATURE_DISABLED`). The API calls `billingPortal.sessions.create` with the OTA's Stripe Customer and `return_url` `<PUBLIC_PORTAL_URL>/otas/{tenantId}/billing`, and answers the session URL, which the portal opens with a `303`. The URL signs its holder in to the Customer Portal for a few minutes, so the answer is `no-store` and the call is not idempotent. An OTA without a Stripe Customer yet (a manual trial that never went through Checkout) answers `409 CONFLICT` (`details.reason = no_stripe_customer`); a Stripe failure answers `502 PROVIDER_ERROR`. It works while the OTA is suspended, so the owner can pay.
+         */
+        post: operations["createCustomerPortalSession"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/tenants/{tenantId}/invoices": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The OTA; callers without an active membership get `404 NOT_FOUND`.
+                 * @example ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F
+                 */
+                tenantId: components["parameters"]["TenantId"];
+            };
+            cookie?: never;
+        };
+        /**
+         * List the Velexis invoices of an OTA
+         * @description Owners and finance members see Velexis's invoices to the OTA (M5), newest first: number, status, total, amount due and paid, the billed period, issue and payment dates, and the links to the Stripe-hosted invoice page and PDF (ADR-0017). Billing sync copies them from Stripe on the `invoice.*` events, converting minor units with the currency's exponent. The list is short (one invoice per billing period), so it is not paginated; it is empty until the OTA's first Stripe invoice. It works while the OTA is suspended, so the owner can download invoices.
+         */
+        get: operations["listInvoices"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/tenants/{tenantId}/payout-account": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The OTA; callers without an active membership get `404 NOT_FOUND`.
+                 * @example ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F
+                 */
+                tenantId: components["parameters"]["TenantId"];
+            };
+            cookie?: never;
+        };
+        /**
+         * Get the OTA's payout account, masked
+         * @description Owners and finance members see the bank account where Velexis pays the OTA's settlements (M5, PADR-0003 item 10), masked: holder, bank country, currency, scheme and the last 4 characters of the IBAN or account number, with the review status: `pending_review` until a platform admin verifies it, `verified`, or `rejected` with the reviewer's note. The bank identifiers are never answered here; only a platform admin can reveal them, with a reason, and every reveal is audited. The `ETag` is the account's version. An OTA without a payout account answers `404 NOT_FOUND`.
+         */
+        get: operations["getPayoutAccount"];
+        /**
+         * Set or replace the OTA's payout account
+         * @description Owners set or replace the bank account where Velexis pays the OTA's settlements (M5, `velexis` mode, PADR-0003 item 10), with a TOTP step-up within the last 15 minutes (`401 REAUTH_REQUIRED`, or `403 MFA_REQUIRED` without MFA) and `FEATURE_SETTLEMENTS` on (`403 FEATURE_DISABLED`). `scheme: iban` takes an IBAN (spaces and lower case allowed; the service removes the spaces, upper-cases it and checks the mod-97 checksum) and an optional BIC; `scheme: local` takes an account number and a routing number (sort code, ABA or bank code). A wrong checksum answers `400 VALIDATION_FAILED` with a field error on `/iban` that never holds the value.
+         *
+         *     The bank identifiers are stored envelope-encrypted as one JSON value; only `last4`, the last 4 characters of the IBAN or account number, is kept in clear. Every change sets the status back to `pending_review` until a platform admin verifies it, writes the audit row `payout_account.updated` without the numbers and e-mails ops (`ops.alert`). `iban`, `bic`, `accountNumber` and `routingNumber` are write-only: never logged and never answered, so the answer is the masked account.
+         */
+        put: operations["setPayoutAccount"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/tenants/{tenantId}/settlements": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The OTA; callers without an active membership get `404 NOT_FOUND`.
+                 * @example ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F
+                 */
+                tenantId: components["parameters"]["TenantId"];
+            };
+            cookie?: never;
+        };
+        /**
+         * List the settlement statements of an OTA
+         * @description Owners and finance members see the monthly statements of the payments that Velexis collected for the OTA (M5, `velexis` mode, PADR-0003), newest period first: one per calendar month (UTC) and balance currency, once a platform admin approved it. Drafts and voided drafts are never shown. An `approved` statement waits for the bank transfer, a `paid` one carries the transfer date, and a `carried_forward` one had a net of zero or less, which the next statement absorbs. The list is short (one or two statements a month), so it is not paginated; it is empty for an OTA that never took payments in `velexis` mode.
+         */
+        get: operations["listSettlements"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/tenants/{tenantId}/settlements/{settlementId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The OTA; callers without an active membership get `404 NOT_FOUND`.
+                 * @example ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F
+                 */
+                tenantId: components["parameters"]["TenantId"];
+                /**
+                 * @description The statement (`id` of `listSettlements`); a draft, a voided draft or a statement of another OTA answers `404 NOT_FOUND`.
+                 * @example stl_01JC7T1V5X9Z3B7D1F5H9K3N7Q
+                 */
+                settlementId: components["parameters"]["SettlementId"];
+            };
+            cookie?: never;
+        };
+        /**
+         * Get one settlement statement with its totals
+         * @description Owners and finance members see one statement (M5) with its totals (PADR-0003 item 5): `netAmount = grossAmount − refundsAmount − disputesAmount − stripeFeesAmount − velexisFeesAmount + adjustmentsAmount`, where `velexisFeesAmount` is `feeBps` basis points of the captured amount net of refunds, and `adjustmentsAmount` holds the manual lines and the balance carried from earlier statements. `payoutReference` is the bank transfer's reference once paid; `notes` are Velexis's remarks. Drafts, voided drafts and statements of other OTAs answer `404 NOT_FOUND`. The lines are in `downloadSettlementLines`.
+         */
+        get: operations["getSettlement"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/tenants/{tenantId}/settlements/{settlementId}/lines.csv": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The OTA; callers without an active membership get `404 NOT_FOUND`.
+                 * @example ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F
+                 */
+                tenantId: components["parameters"]["TenantId"];
+                /**
+                 * @description The statement (`id` of `listSettlements`); a draft, a voided draft or a statement of another OTA answers `404 NOT_FOUND`.
+                 * @example stl_01JC7T1V5X9Z3B7D1F5H9K3N7Q
+                 */
+                settlementId: components["parameters"]["SettlementId"];
+            };
+            cookie?: never;
+        };
+        /**
+         * Download the lines of a settlement statement as CSV
+         * @description The lines of one statement as a CSV file (M5), to reconcile it with the OTA's own bookings: UTF-8, comma-separated, quoted as RFC 4180 says, with one header row and these columns: `type` (`charge`, `refund`, `dispute`, `dispute_reversal`, `adjustment` or `carry_forward`), `occurredAt`, `amount` (signed, in the statement's currency: refunds and disputes are negative), `stripeFee` (Stripe's fee of the transaction, a positive number is a cost), `paymentIntentId`, `velexisPaymentId` and `checkoutId` (the Stripe PaymentIntent and the OTA's payment and checkout ids, which the OTA admin shows), and `description`; an empty cell is a `null`. The lines are in `occurredAt` order. Amounts are decimal strings without a thousands separator, written by the API and kept as they are; a text cell that starts with `=`, `+`, `-`, `@`, a tab or a carriage return gets a leading `'` (the OWASP rule against CSV injection), so a spreadsheet never runs it as a formula. Drafts, voided drafts and statements of other OTAs answer `404 NOT_FOUND`. The file holds the OTA's payment records, so it is never cached.
+         */
+        get: operations["downloadSettlementLines"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2686,6 +3236,14 @@ export interface components {
             countryCode?: components["schemas"]["CountryCode"];
             timeZone?: components["schemas"]["TimeZone"];
         };
+        /** @description Confirms the switch to live (M5); nothing else is sent. */
+        GoLiveRequest: {
+            /**
+             * @description Always `true`.
+             * @constant
+             */
+            confirm: true;
+        };
         /**
          * @description Tenant job id (`job_` + ULID).
          * @example job_01JA2ZC3D7F1H5K9M3P7R1T5V9
@@ -3034,6 +3592,14 @@ export interface components {
         DomainList: {
             data: components["schemas"]["Domain"][];
         };
+        /** @description The custom storefront domain to add (M5). */
+        AddDomainRequest: {
+            /**
+             * @description The host name as the owner typed it. The service normalises it (lower case, punycode, no trailing dot) and checks the host name rules, so a malformed host answers `422 DOMAIN_INVALID`, not `400`.
+             * @example travel.acme-travel.example.com
+             */
+            hostname: string;
+        };
         /**
          * @description An Amadeus office id (9 characters).
          * @example NCE1A0955
@@ -3127,6 +3693,59 @@ export interface components {
             /** @description The queues to poll, replacing the list; `[]` stops polling. Each queue at most once. */
             monitoredQueues?: components["schemas"]["AmadeusMonitoredQueue"][];
         };
+        /** @description An optional note for Velexis's operations team about the live access (M5). */
+        RequestLiveAmadeusRequest: {
+            /** @description Shown to ops in the alert e-mail and kept in the audit row; no secrets. */
+            note?: string;
+        };
+        /** @description The OAuth2 client secret Amadeus issued to the OTA. Write-only: envelope-encrypted at once, never logged, never answered, never put in a queue message, and erased from the submission when its verification ends. */
+        OwnAmadeusClientSecret: string;
+        /** @description The OTA's own Amadeus credentials for one environment (M5). `defaultOfficeId` and, when sent, `queuingOfficeId` and `ownerOfficeId` must be among `officeIds` (checked by the service, `400 VALIDATION_FAILED` otherwise); the two optional offices default to `defaultOfficeId`. */
+        SubmitAmadeusCredentialsRequest: {
+            /** @description The OAuth2 client id Amadeus issued to the OTA (not a secret; `listAmadeusConnections` shows it). */
+            clientId: string;
+            clientSecret: components["schemas"]["OwnAmadeusClientSecret"];
+            /** @description The office ids the credentials may act for, each at most once. */
+            officeIds: components["schemas"]["AmadeusOfficeId"][];
+            defaultOfficeId: components["schemas"]["AmadeusOfficeId"];
+            queuingOfficeId?: components["schemas"]["AmadeusOfficeId"];
+            ownerOfficeId?: components["schemas"]["AmadeusOfficeId"];
+        };
+        /**
+         * @description Credential submission id (`crs_` + ULID).
+         * @example crs_01JD4Q2S6V0X4Z8B2D6F0H4K8N
+         */
+        CredentialSubmissionId: string;
+        /** @description A submission of the OTA's own credentials and its verification (M5, PADR-0010). Never holds the submitted secrets or their ciphertexts, nor the non-secret fields of the submission. */
+        CredentialSubmission: {
+            id: components["schemas"]["CredentialSubmissionId"];
+            /**
+             * @description `amadeus` (own Amadeus credentials) or `stripe_api_keys` (own Stripe API keys).
+             * @enum {string}
+             */
+            kind: "amadeus" | "stripe_api_keys";
+            environment: components["schemas"]["Environment"];
+            /**
+             * @description `pending` (waiting for the worker), `verifying`, `applied` (the connection uses the credentials), `failed` or `superseded` (a newer submission of the same environment replaced it). The last three are final.
+             * @enum {string}
+             */
+            status: "pending" | "verifying" | "applied" | "failed" | "superseded";
+            /** @description Why the verification failed, a stable code for the portal: `AMADEUS_CREDENTIALS_INVALID`, `STRIPE_KEY_INVALID`, `STRIPE_LIVEMODE_MISMATCH` or `PROVIDER_UNAVAILABLE`; `null` unless `failed`. These are verification results, not error codes of the API. */
+            errorCode: string | null;
+            /** @description The sanitised reason: the provider's HTTP status and error code, never a provider body or a secret; `null` unless `failed`. */
+            errorMessage: string | null;
+            /** Format: date-time */
+            createdAt: string;
+            /**
+             * Format: date-time
+             * @description When the submission reached a final status; `null` while it is open.
+             */
+            finishedAt: string | null;
+        };
+        /** @description The new submission, `pending` until the worker verifies it. */
+        CredentialSubmissionAccepted: {
+            submission: components["schemas"]["CredentialSubmission"];
+        };
         /** @description The connected Stripe account's state from `account.updated` (Connect Standard, M5); empty in `velexis` mode. */
         PaymentCapabilities: {
             chargesEnabled?: boolean;
@@ -3186,6 +3805,66 @@ export interface components {
         UpdatePaymentConnectionRequest: {
             statementDescriptorSuffix: components["schemas"]["StatementDescriptorSuffix"];
         };
+        /** @description Where to send the browser to connect a Stripe account (M5). The URL holds the single-use OAuth state, so the answer is `no-store`. */
+        StripeConnectStart: {
+            /**
+             * Format: uri
+             * @description Stripe's Connect OAuth authorize URL with Velexis's client id, `scope=read_write` and the state.
+             */
+            authorizeUrl: string;
+            /**
+             * Format: date-time
+             * @description When the state expires (10 minutes); start again after it.
+             */
+            expiresAt: string;
+        };
+        /** @description The OAuth `state` that `startStripeConnect` put in the authorize URL and Stripe sent back. Write-only: single use, never logged and never answered. */
+        StripeConnectState: string;
+        /** @description The OAuth authorisation code Stripe sent back (`ac_…`). Write-only: exchanged once with Velexis's secret key, never logged and never answered. */
+        StripeConnectCode: string;
+        /** @description What Stripe sent back to the portal's callback page (M5): the state with the code, or the state with an error. Exactly one of the two shapes. */
+        CompleteStripeConnectRequest: components["schemas"]["StripeConnectAuthorized"] | components["schemas"]["StripeConnectRefused"];
+        /** @description The person authorised Velexis on Stripe. */
+        StripeConnectAuthorized: {
+            state: components["schemas"]["StripeConnectState"];
+            code: components["schemas"]["StripeConnectCode"];
+        };
+        /** @description Stripe reported an error, for example the person declined (`access_denied`). */
+        StripeConnectRefused: {
+            state: components["schemas"]["StripeConnectState"];
+            /** @description Stripe's OAuth error code, for example `access_denied`. */
+            error: string;
+            /** @description Stripe's human-readable description of the error. */
+            errorDescription?: string;
+        };
+        /** @description The OTA of the state and its payment connections after the switch (M5). */
+        StripeConnectCompleted: {
+            tenantId: components["schemas"]["TenantId"];
+            /** @description The OTA's payment connections, test first. */
+            connections: components["schemas"]["PaymentConnection"][];
+        };
+        /** @description A secret key (`sk_`) or restricted key (`rk_`) of the OTA's own Stripe account, of the path's environment. Write-only: envelope-encrypted at once, never logged, never answered, never put in a queue message, and erased from the submission when its verification ends. */
+        StripeSecretKey: string;
+        /** @description The signing secret (`whsec_`) of the webhook endpoint the OTA creates in its Stripe account for `webhookUrl`. Write-only, like the secret key. */
+        StripeWebhookSecret: string;
+        /** @description The OTA's own Stripe keys for one environment (M5). Every key must carry the environment's prefix (`_test_` or `_live_`; checked by the service, `400 VALIDATION_FAILED` otherwise). */
+        SubmitStripeApiKeysRequest: {
+            /** @description The publishable key of the OTA's Stripe account (not a secret; the connection shows it). */
+            publishableKey: string;
+            secretKey: components["schemas"]["StripeSecretKey"];
+            webhookSecret: components["schemas"]["StripeWebhookSecret"];
+        };
+        /** @description The new submission and the webhook endpoint to create in the OTA's Stripe dashboard (M5). */
+        StripeApiKeysSubmitted: {
+            submission: components["schemas"]["CredentialSubmission"];
+            /**
+             * Format: uri
+             * @description The endpoint URL to enter in Stripe: the OTA backend's webhook receiver for this connection, `https://api.ota.example.com/webhooks/stripe/c/<ppc_id>`.
+             */
+            webhookUrl: string;
+            /** @description The events to enable on the endpoint. */
+            webhookEvents: string[];
+        };
         /** @description The OTA's subscription to a Velexis plan. */
         Subscription: {
             id: string;
@@ -3214,6 +3893,191 @@ export interface components {
             banner: "past_due" | "trial_ending" | "canceled" | null;
             /** @description True for a Stripe subscription, managed in the Stripe Customer Portal (M5). */
             canManageInStripe: boolean;
+        };
+        /** @description The paid plan to subscribe to (M5). */
+        CreateCheckoutSessionRequest: {
+            planCode: components["schemas"]["PlanCode"];
+            billingInterval: components["schemas"]["BillingInterval"];
+        };
+        /** @description A Stripe Checkout Session to send the browser to (M5). */
+        CheckoutSession: {
+            /**
+             * Format: uri
+             * @description The Stripe Checkout page.
+             */
+            url: string;
+            /**
+             * Format: date-time
+             * @description When Stripe expires the session; ask for a new one after it.
+             */
+            expiresAt: string;
+        };
+        /** @description A Stripe Customer Portal session (M5). The URL signs its holder in to the portal, so the answer is `no-store`. */
+        CustomerPortalSession: {
+            /**
+             * Format: uri
+             * @description The Stripe Customer Portal session URL.
+             */
+            url: string;
+        };
+        /** @description A Velexis invoice to the OTA, synchronised from Stripe (M5): the fields of `AdminInvoice` that the portal shows, with the same schemas. */
+        Invoice: {
+            id: string;
+            /** @description The legal invoice number. */
+            number: string;
+            /** @enum {string} */
+            status: "draft" | "open" | "paid" | "void" | "uncollectible";
+            total: components["schemas"]["Money"];
+            amountDue: components["schemas"]["Money"];
+            amountPaid: components["schemas"]["Money"];
+            /** Format: date-time */
+            periodStart: string | null;
+            /** Format: date-time */
+            periodEnd: string | null;
+            /** Format: date-time */
+            issuedAt: string | null;
+            /** Format: date-time */
+            paidAt: string | null;
+            /** Format: uri */
+            hostedInvoiceUrl: string | null;
+            /** Format: uri */
+            invoicePdfUrl: string | null;
+        };
+        InvoiceList: {
+            data: components["schemas"]["Invoice"][];
+        };
+        /**
+         * @description `pending_review` until a platform admin verifies it (every change resets it), `verified` or `rejected`.
+         * @enum {string}
+         */
+        PayoutAccountStatus: "pending_review" | "verified" | "rejected";
+        /**
+         * @description `iban` (IBAN and an optional BIC) or `local` (an account number and a routing number).
+         * @enum {string}
+         */
+        PayoutScheme: "iban" | "local";
+        /** @description The bank account where Velexis pays the OTA's settlements (M5, PADR-0003 item 10), masked. Never holds the IBAN, the BIC, the account or routing number, or their ciphertext. */
+        PayoutAccount: {
+            /** @description The legal name on the bank account. */
+            accountHolderName: string;
+            countryCode: components["schemas"]["CountryCode"];
+            currency: components["schemas"]["CurrencyCode"];
+            scheme: components["schemas"]["PayoutScheme"];
+            /** @description The last 4 characters of the IBAN or account number, for display. */
+            last4: string;
+            status: components["schemas"]["PayoutAccountStatus"];
+            /** @description The reviewer's note, set with a rejection; `null` otherwise. */
+            reviewNote: string | null;
+            /** Format: date-time */
+            updatedAt: string;
+            /** @description Optimistic-locking version; the `ETag` of the response carries it. */
+            version: number;
+        };
+        /** @description The legal name on the bank account. */
+        PayoutAccountHolderName: string;
+        /** @description An IBAN, spaces and lower case allowed; the service removes the spaces, upper-cases it and checks the mod-97 checksum. Write-only: envelope-encrypted at once, never logged and never answered. */
+        Iban: string;
+        /** @description The BIC (SWIFT code) of the bank, 8 or 11 characters. Write-only, like the IBAN. */
+        Bic: string;
+        /** @description A national bank account number. Write-only: envelope-encrypted at once, never logged and never answered. */
+        BankAccountNumber: string;
+        /** @description The national routing number of the bank (for example an ABA routing number or a sort code). Write-only, like the account number. */
+        BankRoutingNumber: string;
+        /** @description The bank account (M5): an IBAN account or a local one, told apart by `scheme`. */
+        SetPayoutAccountRequest: components["schemas"]["IbanPayoutAccountRequest"] | components["schemas"]["LocalPayoutAccountRequest"];
+        /** @description A bank account identified by its IBAN. */
+        IbanPayoutAccountRequest: {
+            accountHolderName: components["schemas"]["PayoutAccountHolderName"];
+            countryCode: components["schemas"]["CountryCode"];
+            currency: components["schemas"]["CurrencyCode"];
+            /** @constant */
+            scheme: "iban";
+            iban: components["schemas"]["Iban"];
+            bic?: components["schemas"]["Bic"];
+        };
+        /** @description A bank account identified by a national account number and routing number. */
+        LocalPayoutAccountRequest: {
+            accountHolderName: components["schemas"]["PayoutAccountHolderName"];
+            countryCode: components["schemas"]["CountryCode"];
+            currency: components["schemas"]["CurrencyCode"];
+            /** @constant */
+            scheme: "local";
+            accountNumber: components["schemas"]["BankAccountNumber"];
+            routingNumber: components["schemas"]["BankRoutingNumber"];
+        };
+        /**
+         * @description Settlement statement id (`stl_` + ULID).
+         * @example stl_01JC7T1V5X9Z3B7D1F5H9K3N7Q
+         */
+        SettlementId: string;
+        /** @description One monthly statement of payments Velexis collected for the OTA (M5, PADR-0003), as the portal lists it. Drafts and voided drafts are never answered to the portal. */
+        SettlementSummary: {
+            id: components["schemas"]["SettlementId"];
+            /**
+             * Format: date-time
+             * @description The first instant of the calendar month (UTC), inclusive.
+             */
+            periodStart: string;
+            /**
+             * Format: date-time
+             * @description The first instant of the next month, exclusive.
+             */
+            periodEnd: string;
+            currency: components["schemas"]["CurrencyCode"];
+            /**
+             * @description `approved` (to be paid by bank transfer), `paid`, or `carried_forward` (a net of zero or less, absorbed by the next statement).
+             * @enum {string}
+             */
+            status: "approved" | "paid" | "carried_forward";
+            netAmount: components["schemas"]["Money"];
+            /**
+             * Format: date-time
+             * @description The date of the bank transfer; `null` unless `paid`.
+             */
+            paidAt: string | null;
+        };
+        SettlementList: {
+            data: components["schemas"]["SettlementSummary"][];
+        };
+        /** @description One statement with its totals (M5, PADR-0003 item 5): the properties of `SettlementSummary` with the same schemas, plus the parts of `netAmount`, the fee rate, the line count, the bank reference and the notes. */
+        Settlement: {
+            id: components["schemas"]["SettlementId"];
+            /**
+             * Format: date-time
+             * @description The first instant of the calendar month (UTC), inclusive.
+             */
+            periodStart: string;
+            /**
+             * Format: date-time
+             * @description The first instant of the next month, exclusive.
+             */
+            periodEnd: string;
+            currency: components["schemas"]["CurrencyCode"];
+            /**
+             * @description `approved` (to be paid by bank transfer), `paid`, or `carried_forward` (a net of zero or less, absorbed by the next statement).
+             * @enum {string}
+             */
+            status: "approved" | "paid" | "carried_forward";
+            netAmount: components["schemas"]["Money"];
+            /**
+             * Format: date-time
+             * @description The date of the bank transfer; `null` unless `paid`.
+             */
+            paidAt: string | null;
+            grossAmount: components["schemas"]["Money"];
+            refundsAmount: components["schemas"]["Money"];
+            disputesAmount: components["schemas"]["Money"];
+            stripeFeesAmount: components["schemas"]["Money"];
+            velexisFeesAmount: components["schemas"]["Money"];
+            adjustmentsAmount: components["schemas"]["Money"];
+            /** @description The Velexis fee in basis points, copied from the plan when the statement was generated. */
+            feeBps: number;
+            /** @description The lines of `downloadSettlementLines`. */
+            lineCount: number;
+            /** @description The bank transfer's reference; `null` unless `paid`. */
+            payoutReference: string | null;
+            /** @description Velexis's remarks on the statement. */
+            notes: string | null;
         };
         /** @description The password step of an admin sign-in succeeded; send a TOTP or recovery code to adminVerifyMfa. Every admin sign-in needs this second step. */
         AdminMfaChallenge: {
@@ -4221,6 +5085,16 @@ export interface components {
                 "application/json": components["schemas"]["ErrorResponse"];
             };
         };
+        /** @description Stripe failed or could not be reached (`details.provider = stripe`); retry later. Possible codes: PROVIDER_ERROR. */
+        ProviderError: {
+            headers: {
+                "X-Request-Id": components["headers"]["X-Request-Id"];
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["ErrorResponse"];
+            };
+        };
         /** @description No valid platform admin access token was sent: none, an expired one, a portal token, or the token of an account that is no longer an active platform admin (the guard re-reads the account on every request). Possible codes: UNAUTHENTICATED, TOKEN_EXPIRED. */
         AdminUnauthenticated: {
             headers: {
@@ -4289,6 +5163,26 @@ export interface components {
          * @example test
          */
         ConnectionEnvironment: components["schemas"]["Environment"];
+        /**
+         * @description The environment whose connection the submitted credentials are for: `test` or `live`. The connection need not exist yet: a successful verification creates it.
+         * @example test
+         */
+        CredentialsEnvironment: components["schemas"]["Environment"];
+        /**
+         * @description The domain (`id` of `listDomains`); a domain of another OTA answers `404 NOT_FOUND`.
+         * @example dom_01JB3K5N9Q3S7W1Y5A9C3E7G1J
+         */
+        DomainId: string;
+        /**
+         * @description The credential submission (`submission.id` of `submitAmadeusCredentials` or `submitStripeApiKeys`, or `pendingSubmission.id` of a connection); a submission of another OTA answers `404 NOT_FOUND`.
+         * @example crs_01JD4Q2S6V0X4Z8B2D6F0H4K8N
+         */
+        CredentialSubmissionId: components["schemas"]["CredentialSubmissionId"];
+        /**
+         * @description The statement (`id` of `listSettlements`); a draft, a voided draft or a statement of another OTA answers `404 NOT_FOUND`.
+         * @example stl_01JC7T1V5X9Z3B7D1F5H9K3N7Q
+         */
+        SettlementId: components["schemas"]["SettlementId"];
         /**
          * @description The OTA (`id` of `adminListTenants`); an unknown id answers `404 NOT_FOUND`.
          * @example ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F
@@ -4370,6 +5264,8 @@ export interface components {
         NoStoreHealth: "no-store";
         /** @description Always `no-store`: the export holds personal data (e-mail and IP addresses) and is never cached by the admin server, a proxy or the browser. */
         NoStoreExport: "no-store";
+        /** @description Always `no-store`: the file holds the OTA's payment records and is never cached by the portal server, a proxy or the browser. */
+        NoStoreStatement: "no-store";
     };
     pathItems: never;
 }
@@ -5683,6 +6579,93 @@ export interface operations {
             500: components["responses"]["InternalError"];
         };
     };
+    goLive: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The OTA; callers without an active membership get `404 NOT_FOUND`.
+                 * @example ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F
+                 */
+                tenantId: components["parameters"]["TenantId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                /**
+                 * @example {
+                 *       "confirm": true
+                 *     }
+                 */
+                "application/json": components["schemas"]["GoLiveRequest"];
+            };
+        };
+        responses: {
+            /** @description The OTA, now live, with its new version in `ETag`. */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    ETag: components["headers"]["ETag"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "id": "ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F",
+                     *       "key": "acme",
+                     *       "name": "Acme Travel",
+                     *       "legalName": "Acme Travel AS",
+                     *       "status": "active",
+                     *       "suspensionReason": null,
+                     *       "billingNotice": null,
+                     *       "planCode": "growth",
+                     *       "defaultCurrency": "EUR",
+                     *       "countryCode": "NO",
+                     *       "timeZone": "Europe/Oslo",
+                     *       "supportEmail": "support@acme-travel.example.com",
+                     *       "storefrontEnvironment": "live",
+                     *       "liveEnabledAt": "2027-02-01T09:30:00Z",
+                     *       "primaryHost": "travel.acme-travel.example.com",
+                     *       "schemaVersion": "0002_mvp_deltas",
+                     *       "createdAt": "2026-10-14T08:20:11Z",
+                     *       "activatedAt": "2026-10-14T08:20:16Z",
+                     *       "version": 7,
+                     *       "myRole": "owner"
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Tenant"];
+                };
+            };
+            400: components["responses"]["ValidationFailed"];
+            401: components["responses"]["StepUpUnauthorized"];
+            /** @description The e-mail address is not verified, the caller is not an owner, MFA is not enabled, or the live switch is off or not in the plan. Possible codes: EMAIL_NOT_VERIFIED, FORBIDDEN, MFA_REQUIRED, FEATURE_DISABLED. */
+            403: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["TenantNotActive"];
+            /** @description Some preconditions of going live are missing (`details.missing`). Possible codes: LIVE_PRECONDITIONS_UNMET. */
+            422: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+        };
+    };
     listMembers: {
         parameters: {
             query?: never;
@@ -6648,6 +7631,334 @@ export interface operations {
             500: components["responses"]["InternalError"];
         };
     };
+    addDomain: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The OTA; callers without an active membership get `404 NOT_FOUND`.
+                 * @example ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F
+                 */
+                tenantId: components["parameters"]["TenantId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                /**
+                 * @example {
+                 *       "hostname": "Travel.Acme-Travel.example.com"
+                 *     }
+                 */
+                "application/json": components["schemas"]["AddDomainRequest"];
+            };
+        };
+        responses: {
+            /** @description The new custom domain, pending, with the DNS records to create. */
+            201: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "id": "dom_01JB3K5N9Q3S7W1Y5A9C3E7G1J",
+                     *       "hostname": "travel.acme-travel.example.com",
+                     *       "kind": "custom",
+                     *       "purpose": "storefront",
+                     *       "isPrimary": false,
+                     *       "verificationStatus": "pending",
+                     *       "dnsRecords": [
+                     *         {
+                     *           "type": "TXT",
+                     *           "name": "_velexis.travel.acme-travel.example.com",
+                     *           "value": "vx-verify-K7Q4M2XP9TRWH5ZDB3NV8QKE1MZT6RYC"
+                     *         },
+                     *         {
+                     *           "type": "CNAME",
+                     *           "name": "travel.acme-travel.example.com",
+                     *           "value": "acme.ota.example.com"
+                     *         },
+                     *         {
+                     *           "type": "A",
+                     *           "name": "travel.acme-travel.example.com",
+                     *           "value": "203.0.113.10"
+                     *         },
+                     *         {
+                     *           "type": "AAAA",
+                     *           "name": "travel.acme-travel.example.com",
+                     *           "value": "2001:db8::10"
+                     *         }
+                     *       ],
+                     *       "verificationDeadlineAt": "2026-11-21T10:00:00Z",
+                     *       "lastCheckedAt": null,
+                     *       "lastCheckError": null,
+                     *       "tlsStatus": "pending",
+                     *       "tlsExpiresAt": null,
+                     *       "createdAt": "2026-11-18T10:00:00Z"
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Domain"];
+                };
+            };
+            400: components["responses"]["ValidationFailed"];
+            401: components["responses"]["Unauthenticated"];
+            /** @description The e-mail address is not verified, the caller's role does not allow it, or custom domains are off or not in the plan. Possible codes: EMAIL_NOT_VERIFIED, FORBIDDEN, FEATURE_DISABLED. */
+            403: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            404: components["responses"]["NotFound"];
+            /** @description Another OTA uses the host name, or the OTA is not active. Possible codes: DOMAIN_TAKEN, TENANT_NOT_ACTIVE. */
+            409: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The host name breaks the rules, or the plan's custom domain limit is reached. Possible codes: DOMAIN_INVALID, PLAN_LIMIT_REACHED. */
+            422: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    removeDomain: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The OTA; callers without an active membership get `404 NOT_FOUND`.
+                 * @example ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F
+                 */
+                tenantId: components["parameters"]["TenantId"];
+                /**
+                 * @description The domain (`id` of `listDomains`); a domain of another OTA answers `404 NOT_FOUND`.
+                 * @example dom_01JB3K5N9Q3S7W1Y5A9C3E7G1J
+                 */
+                domainId: components["parameters"]["DomainId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The domain is removed. */
+            204: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["ValidationFailed"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["TenantRoleForbidden"];
+            404: components["responses"]["NotFound"];
+            /** @description The domain is the OTA's sub-domain (`details.reason = subdomain`), or the OTA is not active. Possible codes: CONFLICT, TENANT_NOT_ACTIVE. */
+            409: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    checkDomain: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The OTA; callers without an active membership get `404 NOT_FOUND`.
+                 * @example ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F
+                 */
+                tenantId: components["parameters"]["TenantId"];
+                /**
+                 * @description The domain (`id` of `listDomains`); a domain of another OTA answers `404 NOT_FOUND`.
+                 * @example dom_01JB3K5N9Q3S7W1Y5A9C3E7G1J
+                 */
+                domainId: components["parameters"]["DomainId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Accepted. The check runs; the domain is answered as it is now. */
+            202: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "id": "dom_01JB3K5N9Q3S7W1Y5A9C3E7G1J",
+                     *       "hostname": "travel.acme-travel.example.com",
+                     *       "kind": "custom",
+                     *       "purpose": "storefront",
+                     *       "isPrimary": false,
+                     *       "verificationStatus": "pending",
+                     *       "dnsRecords": [
+                     *         {
+                     *           "type": "TXT",
+                     *           "name": "_velexis.travel.acme-travel.example.com",
+                     *           "value": "vx-verify-K7Q4M2XP9TRWH5ZDB3NV8QKE1MZT6RYC"
+                     *         },
+                     *         {
+                     *           "type": "CNAME",
+                     *           "name": "travel.acme-travel.example.com",
+                     *           "value": "acme.ota.example.com"
+                     *         },
+                     *         {
+                     *           "type": "A",
+                     *           "name": "travel.acme-travel.example.com",
+                     *           "value": "203.0.113.10"
+                     *         },
+                     *         {
+                     *           "type": "AAAA",
+                     *           "name": "travel.acme-travel.example.com",
+                     *           "value": "2001:db8::10"
+                     *         }
+                     *       ],
+                     *       "verificationDeadlineAt": "2026-11-21T10:00:00Z",
+                     *       "lastCheckedAt": "2026-11-18T10:05:00Z",
+                     *       "lastCheckError": "The TXT record _velexis.travel.acme-travel.example.com was not found.",
+                     *       "tlsStatus": "pending",
+                     *       "tlsExpiresAt": null,
+                     *       "createdAt": "2026-11-18T10:00:00Z"
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Domain"];
+                };
+            };
+            400: components["responses"]["ValidationFailed"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["TenantRoleForbidden"];
+            404: components["responses"]["NotFound"];
+            /** @description The domain is the sub-domain or is verified already (`details.reason`), or the OTA is not active. Possible codes: CONFLICT, TENANT_NOT_ACTIVE. */
+            409: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["ServiceUnavailable"];
+        };
+    };
+    makeDomainPrimary: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The OTA; callers without an active membership get `404 NOT_FOUND`.
+                 * @example ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F
+                 */
+                tenantId: components["parameters"]["TenantId"];
+                /**
+                 * @description The domain (`id` of `listDomains`); a domain of another OTA answers `404 NOT_FOUND`.
+                 * @example dom_01JB3K5N9Q3S7W1Y5A9C3E7G1J
+                 */
+                domainId: components["parameters"]["DomainId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The domain, now primary. */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "id": "dom_01JB3K5N9Q3S7W1Y5A9C3E7G1J",
+                     *       "hostname": "travel.acme-travel.example.com",
+                     *       "kind": "custom",
+                     *       "purpose": "storefront",
+                     *       "isPrimary": true,
+                     *       "verificationStatus": "verified",
+                     *       "dnsRecords": [
+                     *         {
+                     *           "type": "TXT",
+                     *           "name": "_velexis.travel.acme-travel.example.com",
+                     *           "value": "vx-verify-K7Q4M2XP9TRWH5ZDB3NV8QKE1MZT6RYC"
+                     *         },
+                     *         {
+                     *           "type": "CNAME",
+                     *           "name": "travel.acme-travel.example.com",
+                     *           "value": "acme.ota.example.com"
+                     *         },
+                     *         {
+                     *           "type": "A",
+                     *           "name": "travel.acme-travel.example.com",
+                     *           "value": "203.0.113.10"
+                     *         },
+                     *         {
+                     *           "type": "AAAA",
+                     *           "name": "travel.acme-travel.example.com",
+                     *           "value": "2001:db8::10"
+                     *         }
+                     *       ],
+                     *       "verificationDeadlineAt": "2026-11-21T10:00:00Z",
+                     *       "lastCheckedAt": "2026-11-18T10:35:00Z",
+                     *       "lastCheckError": null,
+                     *       "tlsStatus": "issued",
+                     *       "tlsExpiresAt": "2027-02-16T10:36:00Z",
+                     *       "createdAt": "2026-11-18T10:00:00Z"
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Domain"];
+                };
+            };
+            400: components["responses"]["ValidationFailed"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["TenantRoleForbidden"];
+            404: components["responses"]["NotFound"];
+            /** @description The domain is not verified, or the OTA is not active. Possible codes: DOMAIN_NOT_VERIFIED, TENANT_NOT_ACTIVE. */
+            409: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+        };
+    };
     listAmadeusConnections: {
         parameters: {
             query?: never;
@@ -6800,6 +8111,203 @@ export interface operations {
             500: components["responses"]["InternalError"];
         };
     };
+    requestLiveAmadeus: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The OTA; callers without an active membership get `404 NOT_FOUND`.
+                 * @example ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F
+                 */
+                tenantId: components["parameters"]["TenantId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                /**
+                 * @example {
+                 *       "note": "We start selling to Norway in March; our ticketing agreement with Amadeus is signed."
+                 *     }
+                 */
+                "application/json": components["schemas"]["RequestLiveAmadeusRequest"];
+            };
+        };
+        responses: {
+            /** @description Accepted. The live connection waits for a Velexis office. */
+            202: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "id": "sc_01JD4P2R6T0W4Y8A2C6E0G4J8M",
+                     *       "environment": "live",
+                     *       "credentialSource": "velexis",
+                     *       "status": "pending_verification",
+                     *       "officeIds": [],
+                     *       "defaultOfficeId": null,
+                     *       "queuingOfficeId": null,
+                     *       "ownerOfficeId": null,
+                     *       "clientId": null,
+                     *       "ticketingDefaults": {},
+                     *       "monitoredQueues": [],
+                     *       "lastVerifiedAt": null,
+                     *       "lastError": null,
+                     *       "pendingSubmission": null,
+                     *       "version": 1
+                     *     }
+                     */
+                    "application/json": components["schemas"]["AmadeusConnection"];
+                };
+            };
+            400: components["responses"]["ValidationFailed"];
+            401: components["responses"]["Unauthenticated"];
+            /** @description The e-mail address is not verified, the caller is not an owner, or live mode is off or not in the plan. Possible codes: EMAIL_NOT_VERIFIED, FORBIDDEN, FEATURE_DISABLED. */
+            403: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            404: components["responses"]["NotFound"];
+            /** @description The OTA has a live Amadeus connection already, or Velexis has no live Amadeus account yet (`details.reason`), or the OTA is not active. Possible codes: CONFLICT, TENANT_NOT_ACTIVE. */
+            409: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    submitAmadeusCredentials: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The OTA; callers without an active membership get `404 NOT_FOUND`.
+                 * @example ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F
+                 */
+                tenantId: components["parameters"]["TenantId"];
+                /**
+                 * @description The environment whose connection the submitted credentials are for: `test` or `live`. The connection need not exist yet: a successful verification creates it.
+                 * @example test
+                 */
+                environment: components["parameters"]["CredentialsEnvironment"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                /**
+                 * @example {
+                 *       "clientId": "acme-amadeus-client",
+                 *       "clientSecret": "example-client-secret-not-real",
+                 *       "officeIds": [
+                 *         "OSLN12345",
+                 *         "OSLN12346"
+                 *       ],
+                 *       "defaultOfficeId": "OSLN12345",
+                 *       "queuingOfficeId": "OSLN12345",
+                 *       "ownerOfficeId": "OSLN12346"
+                 *     }
+                 */
+                "application/json": components["schemas"]["SubmitAmadeusCredentialsRequest"];
+            };
+        };
+        responses: {
+            /** @description Accepted. The submission waits for its verification. */
+            202: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "submission": {
+                     *         "id": "crs_01JD4Q2S6V0X4Z8B2D6F0H4K8N",
+                     *         "kind": "amadeus",
+                     *         "environment": "test",
+                     *         "status": "pending",
+                     *         "errorCode": null,
+                     *         "errorMessage": null,
+                     *         "createdAt": "2027-01-11T14:02:00Z",
+                     *         "finishedAt": null
+                     *       }
+                     *     }
+                     */
+                    "application/json": components["schemas"]["CredentialSubmissionAccepted"];
+                };
+            };
+            400: components["responses"]["ValidationFailed"];
+            401: components["responses"]["StepUpUnauthorized"];
+            /** @description The e-mail address is not verified, the caller's role does not allow it, MFA is not enabled, or own Amadeus credentials are off. Possible codes: EMAIL_NOT_VERIFIED, FORBIDDEN, MFA_REQUIRED, FEATURE_DISABLED. */
+            403: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["TenantNotActive"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getCredentialSubmission: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The OTA; callers without an active membership get `404 NOT_FOUND`.
+                 * @example ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F
+                 */
+                tenantId: components["parameters"]["TenantId"];
+                /**
+                 * @description The credential submission (`submission.id` of `submitAmadeusCredentials` or `submitStripeApiKeys`, or `pendingSubmission.id` of a connection); a submission of another OTA answers `404 NOT_FOUND`.
+                 * @example crs_01JD4Q2S6V0X4Z8B2D6F0H4K8N
+                 */
+                submissionId: components["parameters"]["CredentialSubmissionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The submission. */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CredentialSubmission"];
+                };
+            };
+            400: components["responses"]["ValidationFailed"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["TenantRoleForbidden"];
+            404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+        };
+    };
     listPaymentConnections: {
         parameters: {
             query?: never;
@@ -6929,6 +8437,296 @@ export interface operations {
             500: components["responses"]["InternalError"];
         };
     };
+    startStripeConnect: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The OTA; callers without an active membership get `404 NOT_FOUND`.
+                 * @example ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F
+                 */
+                tenantId: components["parameters"]["TenantId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The Stripe authorize URL, valid for 10 minutes. */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    "Cache-Control": components["headers"]["NoStore"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "authorizeUrl": "https://connect.stripe.com/oauth/authorize?response_type=code&client_id=ca_ExampleConnectClient&scope=read_write&state=Xq7Lm2Np9Rt4Vw8Yb3Dc6Fg1Hj5Kk0Zs2Ae7Ui4Ow9Pq&redirect_uri=https%3A%2F%2Fplatform.example.com%2Fconnect%2Fstripe%2Fcallback&stripe_user%5Bemail%5D=anna.berg%40example.com",
+                     *       "expiresAt": "2027-01-11T14:12:00Z"
+                     *     }
+                     */
+                    "application/json": components["schemas"]["StripeConnectStart"];
+                };
+            };
+            400: components["responses"]["ValidationFailed"];
+            401: components["responses"]["StepUpUnauthorized"];
+            /** @description The e-mail address is not verified, the caller's role does not allow it, MFA is not enabled, or own Stripe accounts are off. Possible codes: EMAIL_NOT_VERIFIED, FORBIDDEN, MFA_REQUIRED, FEATURE_DISABLED. */
+            403: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["TenantNotActive"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["ServiceUnavailable"];
+        };
+    };
+    completeStripeConnect: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CompleteStripeConnectRequest"];
+            };
+        };
+        responses: {
+            /** @description The OTA and its payment connections, now on the connected account. */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "tenantId": "ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F",
+                     *       "connections": [
+                     *         {
+                     *           "id": "ppc_01JA2ZBA4D8F2H6K0N4Q8S2V6X",
+                     *           "environment": "test",
+                     *           "provider": "stripe",
+                     *           "accountMode": "connect_standard",
+                     *           "status": "active",
+                     *           "accountReference": "acct_1QExampleAcme",
+                     *           "publishableKey": null,
+                     *           "statementDescriptorSuffix": "ACME TRAVEL",
+                     *           "capabilities": {
+                     *             "chargesEnabled": true,
+                     *             "payoutsEnabled": true,
+                     *             "detailsSubmitted": true
+                     *           },
+                     *           "connectedAt": "2027-01-11T14:05:31Z",
+                     *           "disconnectedAt": null,
+                     *           "webhookUrl": null,
+                     *           "pendingSubmission": null,
+                     *           "version": 3
+                     *         }
+                     *       ]
+                     *     }
+                     */
+                    "application/json": components["schemas"]["StripeConnectCompleted"];
+                };
+            };
+            /** @description The body failed validation, or the state is unknown, expired, used or another account's. Possible codes: VALIDATION_FAILED, CONNECT_STATE_INVALID. */
+            400: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["TenantRoleForbidden"];
+            /** @description The Stripe account is connected to another OTA, or the OTA is not active. Possible codes: STRIPE_ACCOUNT_ALREADY_CONNECTED, TENANT_NOT_ACTIVE. */
+            409: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The person declined on Stripe, Stripe reported another error, or the account's mode does not match the deployment (`details.reason`). Possible codes: UNPROCESSABLE. */
+            422: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+            502: components["responses"]["ProviderError"];
+            503: components["responses"]["ServiceUnavailable"];
+        };
+    };
+    submitStripeApiKeys: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The OTA; callers without an active membership get `404 NOT_FOUND`.
+                 * @example ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F
+                 */
+                tenantId: components["parameters"]["TenantId"];
+                /**
+                 * @description The environment whose connection the submitted credentials are for: `test` or `live`. The connection need not exist yet: a successful verification creates it.
+                 * @example test
+                 */
+                environment: components["parameters"]["CredentialsEnvironment"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                /**
+                 * @example {
+                 *       "publishableKey": "pk_test_ExampleOnly",
+                 *       "secretKey": "rk_test_ExampleOnly",
+                 *       "webhookSecret": "whsec_ExampleOnly"
+                 *     }
+                 */
+                "application/json": components["schemas"]["SubmitStripeApiKeysRequest"];
+            };
+        };
+        responses: {
+            /** @description Accepted. The submission waits for its verification; create the webhook endpoint meanwhile. */
+            202: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "submission": {
+                     *         "id": "crs_01JD4R7W1Y5A9C3E7G1J5M9Q3S",
+                     *         "kind": "stripe_api_keys",
+                     *         "environment": "test",
+                     *         "status": "pending",
+                     *         "errorCode": null,
+                     *         "errorMessage": null,
+                     *         "createdAt": "2027-01-12T09:40:00Z",
+                     *         "finishedAt": null
+                     *       },
+                     *       "webhookUrl": "https://api.ota.example.com/webhooks/stripe/c/ppc_01JA2ZBA4D8F2H6K0N4Q8S2V6X",
+                     *       "webhookEvents": [
+                     *         "payment_intent.succeeded",
+                     *         "payment_intent.payment_failed",
+                     *         "payment_intent.canceled",
+                     *         "payment_intent.amount_capturable_updated",
+                     *         "charge.refunded",
+                     *         "charge.dispute.created",
+                     *         "charge.dispute.closed"
+                     *       ]
+                     *     }
+                     */
+                    "application/json": components["schemas"]["StripeApiKeysSubmitted"];
+                };
+            };
+            400: components["responses"]["ValidationFailed"];
+            401: components["responses"]["StepUpUnauthorized"];
+            /** @description The e-mail address is not verified, the caller's role does not allow it, MFA is not enabled, or own Stripe accounts are off. Possible codes: EMAIL_NOT_VERIFIED, FORBIDDEN, MFA_REQUIRED, FEATURE_DISABLED. */
+            403: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["TenantNotActive"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    useVelexisPayments: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The OTA; callers without an active membership get `404 NOT_FOUND`.
+                 * @example ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F
+                 */
+                tenantId: components["parameters"]["TenantId"];
+                /**
+                 * @description The environment of the connection (`environment` of `listAmadeusConnections` or `listPaymentConnections`): `test`, or `live` once the OTA has a live connection. An environment without a connection answers `404 NOT_FOUND`.
+                 * @example test
+                 */
+                environment: components["parameters"]["ConnectionEnvironment"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The connection in `velexis` mode, with its new version in `ETag`. */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    ETag: components["headers"]["ETag"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "id": "ppc_01JA2ZBA4D8F2H6K0N4Q8S2V6X",
+                     *       "environment": "test",
+                     *       "provider": "stripe",
+                     *       "accountMode": "velexis",
+                     *       "status": "active",
+                     *       "accountReference": null,
+                     *       "publishableKey": null,
+                     *       "statementDescriptorSuffix": "ACME TRAVEL",
+                     *       "capabilities": {},
+                     *       "connectedAt": null,
+                     *       "disconnectedAt": null,
+                     *       "webhookUrl": null,
+                     *       "pendingSubmission": null,
+                     *       "version": 4
+                     *     }
+                     */
+                    "application/json": components["schemas"]["PaymentConnection"];
+                };
+            };
+            400: components["responses"]["ValidationFailed"];
+            401: components["responses"]["StepUpUnauthorized"];
+            403: components["responses"]["TenantRoleOrStepUpForbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["TenantNotActive"];
+            /** @description The live connection needs a verified payout account before Velexis collects the payments. Possible codes: PAYOUT_ACCOUNT_REQUIRED. */
+            422: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+        };
+    };
     getSubscription: {
         parameters: {
             query?: never;
@@ -6967,6 +8765,504 @@ export interface operations {
                      *     }
                      */
                     "application/json": components["schemas"]["Subscription"];
+                };
+            };
+            400: components["responses"]["ValidationFailed"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["TenantRoleForbidden"];
+            404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    createCheckoutSession: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Client-generated unique key (a UUID v4) that makes the request safe to retry for 24 hours. The same key with another body answers `409 IDEMPOTENCY_KEY_REUSED`. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                /**
+                 * @description The OTA; callers without an active membership get `404 NOT_FOUND`.
+                 * @example ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F
+                 */
+                tenantId: components["parameters"]["TenantId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                /**
+                 * @example {
+                 *       "planCode": "growth",
+                 *       "billingInterval": "year"
+                 *     }
+                 */
+                "application/json": components["schemas"]["CreateCheckoutSessionRequest"];
+            };
+        };
+        responses: {
+            /** @description The Stripe Checkout page to send the browser to. */
+            201: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "url": "https://checkout.stripe.com/c/pay/cs_test_b1C2d3E4f5G6h7I8j9K0l1M2n3O4",
+                     *       "expiresAt": "2027-01-12T10:00:00Z"
+                     *     }
+                     */
+                    "application/json": components["schemas"]["CheckoutSession"];
+                };
+            };
+            400: components["responses"]["ValidationFailed"];
+            401: components["responses"]["Unauthenticated"];
+            /** @description The e-mail address is not verified, the caller is not an owner, or Stripe billing is off. Possible codes: EMAIL_NOT_VERIFIED, FORBIDDEN, FEATURE_DISABLED. */
+            403: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            404: components["responses"]["NotFound"];
+            /** @description The OTA has a current Stripe subscription (manage it in the Customer Portal), or the `Idempotency-Key` was used with another body. Possible codes: CONFLICT, IDEMPOTENCY_KEY_REUSED. */
+            409: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The plan cannot be chosen with this billing interval. Possible codes: PLAN_NOT_AVAILABLE. */
+            422: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+            502: components["responses"]["ProviderError"];
+            503: components["responses"]["ServiceUnavailable"];
+        };
+    };
+    createCustomerPortalSession: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The OTA; callers without an active membership get `404 NOT_FOUND`.
+                 * @example ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F
+                 */
+                tenantId: components["parameters"]["TenantId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The Customer Portal session URL, valid for a few minutes. */
+            201: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    "Cache-Control": components["headers"]["NoStore"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "url": "https://billing.stripe.com/p/session/test_ExamplePortalSession"
+                     *     }
+                     */
+                    "application/json": components["schemas"]["CustomerPortalSession"];
+                };
+            };
+            400: components["responses"]["ValidationFailed"];
+            401: components["responses"]["Unauthenticated"];
+            /** @description The e-mail address is not verified, the caller is not an owner, or Stripe billing is off. Possible codes: EMAIL_NOT_VERIFIED, FORBIDDEN, FEATURE_DISABLED. */
+            403: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            404: components["responses"]["NotFound"];
+            /** @description The OTA has no Stripe Customer yet; choose a plan with Checkout first. Possible codes: CONFLICT. */
+            409: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+            502: components["responses"]["ProviderError"];
+        };
+    };
+    listInvoices: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The OTA; callers without an active membership get `404 NOT_FOUND`.
+                 * @example ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F
+                 */
+                tenantId: components["parameters"]["TenantId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The invoices. */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "data": [
+                     *         {
+                     *           "id": "inv_01JD8V2X6Z0B4D8F2H6K0N4Q8S",
+                     *           "number": "VX-2027-000184",
+                     *           "status": "paid",
+                     *           "total": {
+                     *             "amount": "490.00",
+                     *             "currency": "EUR"
+                     *           },
+                     *           "amountDue": {
+                     *             "amount": "0.00",
+                     *             "currency": "EUR"
+                     *           },
+                     *           "amountPaid": {
+                     *             "amount": "490.00",
+                     *             "currency": "EUR"
+                     *           },
+                     *           "periodStart": "2027-02-01T00:00:00Z",
+                     *           "periodEnd": "2028-02-01T00:00:00Z",
+                     *           "issuedAt": "2027-02-01T00:04:12Z",
+                     *           "paidAt": "2027-02-01T00:04:15Z",
+                     *           "hostedInvoiceUrl": "https://invoice.stripe.com/i/acct_1Velexis/test_ExampleHostedInvoice",
+                     *           "invoicePdfUrl": "https://pay.stripe.com/invoice/acct_1Velexis/test_ExampleHostedInvoice/pdf"
+                     *         }
+                     *       ]
+                     *     }
+                     */
+                    "application/json": components["schemas"]["InvoiceList"];
+                };
+            };
+            400: components["responses"]["ValidationFailed"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["TenantRoleForbidden"];
+            404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getPayoutAccount: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The OTA; callers without an active membership get `404 NOT_FOUND`.
+                 * @example ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F
+                 */
+                tenantId: components["parameters"]["TenantId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The payout account, masked. */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    ETag: components["headers"]["ETag"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PayoutAccount"];
+                };
+            };
+            400: components["responses"]["ValidationFailed"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["TenantRoleForbidden"];
+            404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    setPayoutAccount: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The OTA; callers without an active membership get `404 NOT_FOUND`.
+                 * @example ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F
+                 */
+                tenantId: components["parameters"]["TenantId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetPayoutAccountRequest"];
+            };
+        };
+        responses: {
+            /** @description The payout account, masked and pending review, with its new version in `ETag`. */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    ETag: components["headers"]["ETag"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "accountHolderName": "Acme Travel AS",
+                     *       "countryCode": "NO",
+                     *       "currency": "NOK",
+                     *       "scheme": "iban",
+                     *       "last4": "7947",
+                     *       "status": "pending_review",
+                     *       "reviewNote": null,
+                     *       "updatedAt": "2027-01-20T08:12:44Z",
+                     *       "version": 2
+                     *     }
+                     */
+                    "application/json": components["schemas"]["PayoutAccount"];
+                };
+            };
+            /** @description The body failed validation, for example an IBAN with a wrong checksum. Possible codes: VALIDATION_FAILED. */
+            400: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            401: components["responses"]["StepUpUnauthorized"];
+            /** @description The e-mail address is not verified, the caller is not an owner, MFA is not enabled, or settlements are off. Possible codes: EMAIL_NOT_VERIFIED, FORBIDDEN, MFA_REQUIRED, FEATURE_DISABLED. */
+            403: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    listSettlements: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The OTA; callers without an active membership get `404 NOT_FOUND`.
+                 * @example ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F
+                 */
+                tenantId: components["parameters"]["TenantId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The statements. */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "data": [
+                     *         {
+                     *           "id": "stl_01JD9W3Y7A1C5E9G3J7M1Q5S9V",
+                     *           "periodStart": "2027-02-01T00:00:00Z",
+                     *           "periodEnd": "2027-03-01T00:00:00Z",
+                     *           "currency": "EUR",
+                     *           "status": "approved",
+                     *           "netAmount": {
+                     *             "amount": "11204.87",
+                     *             "currency": "EUR"
+                     *           },
+                     *           "paidAt": null
+                     *         },
+                     *         {
+                     *           "id": "stl_01JC7T1V5X9Z3B7D1F5H9K3N7Q",
+                     *           "periodStart": "2027-01-01T00:00:00Z",
+                     *           "periodEnd": "2027-02-01T00:00:00Z",
+                     *           "currency": "EUR",
+                     *           "status": "paid",
+                     *           "netAmount": {
+                     *             "amount": "8935.10",
+                     *             "currency": "EUR"
+                     *           },
+                     *           "paidAt": "2027-02-07T00:00:00Z"
+                     *         }
+                     *       ]
+                     *     }
+                     */
+                    "application/json": components["schemas"]["SettlementList"];
+                };
+            };
+            400: components["responses"]["ValidationFailed"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["TenantRoleForbidden"];
+            404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getSettlement: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The OTA; callers without an active membership get `404 NOT_FOUND`.
+                 * @example ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F
+                 */
+                tenantId: components["parameters"]["TenantId"];
+                /**
+                 * @description The statement (`id` of `listSettlements`); a draft, a voided draft or a statement of another OTA answers `404 NOT_FOUND`.
+                 * @example stl_01JC7T1V5X9Z3B7D1F5H9K3N7Q
+                 */
+                settlementId: components["parameters"]["SettlementId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The statement. */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "id": "stl_01JC7T1V5X9Z3B7D1F5H9K3N7Q",
+                     *       "periodStart": "2027-01-01T00:00:00Z",
+                     *       "periodEnd": "2027-02-01T00:00:00Z",
+                     *       "currency": "EUR",
+                     *       "status": "paid",
+                     *       "netAmount": {
+                     *         "amount": "8935.10",
+                     *         "currency": "EUR"
+                     *       },
+                     *       "paidAt": "2027-02-07T00:00:00Z",
+                     *       "grossAmount": {
+                     *         "amount": "9600.00",
+                     *         "currency": "EUR"
+                     *       },
+                     *       "refundsAmount": {
+                     *         "amount": "249.00",
+                     *         "currency": "EUR"
+                     *       },
+                     *       "disputesAmount": {
+                     *         "amount": "0.00",
+                     *         "currency": "EUR"
+                     *       },
+                     *       "stripeFeesAmount": {
+                     *         "amount": "139.40",
+                     *         "currency": "EUR"
+                     *       },
+                     *       "velexisFeesAmount": {
+                     *         "amount": "187.02",
+                     *         "currency": "EUR"
+                     *       },
+                     *       "adjustmentsAmount": {
+                     *         "amount": "-89.48",
+                     *         "currency": "EUR"
+                     *       },
+                     *       "feeBps": 200,
+                     *       "lineCount": 41,
+                     *       "payoutReference": "VX-SETTLE-2027-01-ACME",
+                     *       "notes": null
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Settlement"];
+                };
+            };
+            400: components["responses"]["ValidationFailed"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["TenantRoleForbidden"];
+            404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    downloadSettlementLines: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The OTA; callers without an active membership get `404 NOT_FOUND`.
+                 * @example ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F
+                 */
+                tenantId: components["parameters"]["TenantId"];
+                /**
+                 * @description The statement (`id` of `listSettlements`); a draft, a voided draft or a statement of another OTA answers `404 NOT_FOUND`.
+                 * @example stl_01JC7T1V5X9Z3B7D1F5H9K3N7Q
+                 */
+                settlementId: components["parameters"]["SettlementId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The CSV file. */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    "Cache-Control": components["headers"]["NoStoreStatement"];
+                    /** @description Always an attachment named after the statement's month and currency, `velexis-statement-<yyyy-mm>-<currency>.csv`. */
+                    "Content-Disposition": string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example type,occurredAt,amount,stripeFee,paymentIntentId,velexisPaymentId,checkoutId,description
+                     *     charge,2027-01-04T09:14:22Z,1249.00,18.36,pi_3QExampleCharge01,pay_01JC2H6K0N4Q8S2V6X0Z4B8D2F,chk_01JC2H5J9M3P7R1T5W9Y3A7C1E,Booking 7Q4M2X OSL-BCN
+                     *     refund,2027-01-11T15:02:10Z,-249.00,0.00,pi_3QExampleCharge01,pay_01JC2H6K0N4Q8S2V6X0Z4B8D2F,chk_01JC2H5J9M3P7R1T5W9Y3A7C1E,Partial refund of booking 7Q4M2X
+                     *     carry_forward,2027-01-31T23:59:59Z,-79.48,0.00,,,,Balance carried from the December 2026 statement
+                     *     adjustment,2027-01-31T23:59:59Z,-10.00,0.00,,,,"'-10.00 fee correction, see the note"
+                     */
+                    "text/csv": string;
                 };
             };
             400: components["responses"]["ValidationFailed"];

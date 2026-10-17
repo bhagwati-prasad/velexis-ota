@@ -89,16 +89,23 @@ tags:
       once), rename or change origins, roll and revoke. Only the HMAC of a key is stored.
   - name: Domains
     description: >-
-      The OTA's storefront hosts (`DomainsModule`, PADR-0004): the Velexis sub-domain from M1, custom domains with DNS
-      verification from M5.
+      The OTA's storefront hosts (`DomainsModule`, PADR-0004): the Velexis sub-domain from M1; from M5, custom domains
+      with DNS verification, the primary host and removal.
   - name: Connections
     description: >-
       The OTA's Amadeus connections (`SupplierConnectionsModule`) and Stripe payment connections
       (`PaymentConnectionsModule`) per environment, always without secrets, with the card statement descriptor (M3)
-      and the office defaults, ticketing defaults and monitored queues of Amadeus (M4).
+      and the office defaults, ticketing defaults and monitored queues of Amadeus (M4). From M5: the request for a live
+      Velexis office, the OTA's own Amadeus credentials and Stripe API keys (verified by a worker before they replace a
+      working connection, PADR-0010), Stripe Connect Standard, and the return to Velexis payments.
   - name: Billing
     description: >-
-      The OTA's subscription to a Velexis plan (`BillingModule`); Checkout and the Customer Portal follow in M5.
+      The OTA's subscription to a Velexis plan (`BillingModule`); from M5, Stripe Checkout, the Stripe Customer Portal
+      and the invoices.
+  - name: Settlements
+    description: >-
+      Payments Velexis collects for the OTA in `velexis` mode (`SettlementsModule`, PADR-0003, M5): the bank account
+      Velexis pays them to, shown masked, and the monthly statements with their lines as CSV.
   - name: Admin auth
     description: >-
       Platform admin identity (`AdminModule`, PADR-0006): the password step and the TOTP step of every sign-in, the
@@ -2242,6 +2249,153 @@ paths:
           $ref: '#/components/responses/RateLimited'
         '500':
           $ref: '#/components/responses/InternalError'
+  /v1/tenants/{tenantId}/go-live:
+    parameters:
+      - $ref: '#/components/parameters/TenantId'
+    post:
+      operationId: goLive
+      summary: Switch the OTA's storefront to live
+      description: >-
+        Owners only (M5), with a TOTP step-up within the last 15 minutes (`401 REAUTH_REQUIRED`, or `403 MFA_REQUIRED`
+        without MFA) and `FEATURE_LIVE_SWITCH` on (`403 FEATURE_DISABLED`, `details.feature = live_switch`). The body
+        only confirms the switch (`{confirm: true}`). The OTA must be `active` (`409 TENANT_NOT_ACTIVE` with
+        `details.status`).
+
+
+        **Preconditions** (platform/docs/scope.md PF-14). The service checks every one and answers `422
+        LIVE_PRECONDITIONS_UNMET` with all the missing ones in `details.missing`, so the portal can show a checklist:
+        `amadeus_live` (an `active` live Amadeus connection), `payments_live` (a live payment mode that can charge: the
+        Velexis Stripe account, a connected account whose charges are enabled, or verified live API keys),
+        `payout_account` (a `verified` payout account, when the payments stay in `velexis` mode), `plan_live_mode`
+        (the plan's `limits.liveMode`), `subscription` (a Stripe subscription that is `trialing` or `active`) and
+        `mfa` (the account still has MFA on, read again inside the transaction).
+
+
+        **Effect**, in one transaction: `storefront_environment = live`, `live_enabled_at`,
+        `live_enabled_by_account_id` and `version + 1`; when the test payment connection is in `velexis` mode the live
+        one is created in that mode, and a `connect_standard` test connection is copied to live; the audit row
+        `tenant.went_live`. After commit it publishes `tenant` and `connection` invalidations, so the hosted storefront
+        serves live within 60 seconds. An OTA that is live already answers `200` with the tenant unchanged. Live API
+        keys can be created from then on (`createApiKey`).
+      tags:
+        - Tenants
+      security:
+        - portalBearer: []
+      x-scope: portal
+      x-mfa-step-up: true
+      x-feature: live_switch
+      x-error-codes:
+        - VALIDATION_FAILED
+        - UNAUTHENTICATED
+        - TOKEN_EXPIRED
+        - REAUTH_REQUIRED
+        - EMAIL_NOT_VERIFIED
+        - FORBIDDEN
+        - MFA_REQUIRED
+        - FEATURE_DISABLED
+        - NOT_FOUND
+        - TENANT_NOT_ACTIVE
+        - LIVE_PRECONDITIONS_UNMET
+        - RATE_LIMITED
+        - INTERNAL_ERROR
+      x-platform-tables:
+        - tenant_memberships
+        - accounts
+        - tenants
+        - plans
+        - subscriptions
+        - supplier_connections
+        - payment_provider_connections
+        - tenant_payout_accounts
+        - tenant_domains
+        - platform_audit_log
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GoLiveRequest'
+            example:
+              confirm: true
+      responses:
+        '200':
+          description: The OTA, now live, with its new version in `ETag`.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+            ETag:
+              $ref: '#/components/headers/ETag'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Tenant'
+              example:
+                id: ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F
+                key: acme
+                name: Acme Travel
+                legalName: Acme Travel AS
+                status: active
+                suspensionReason: null
+                billingNotice: null
+                planCode: growth
+                defaultCurrency: EUR
+                countryCode: 'NO'
+                timeZone: Europe/Oslo
+                supportEmail: support@acme-travel.example.com
+                storefrontEnvironment: live
+                liveEnabledAt: '2027-02-01T09:30:00Z'
+                primaryHost: travel.acme-travel.example.com
+                schemaVersion: '0002_mvp_deltas'
+                createdAt: '2026-10-14T08:20:11Z'
+                activatedAt: '2026-10-14T08:20:16Z'
+                version: 7
+                myRole: owner
+        '400':
+          $ref: '#/components/responses/ValidationFailed'
+        '401':
+          $ref: '#/components/responses/StepUpUnauthorized'
+        '403':
+          description: >-
+            The e-mail address is not verified, the caller is not an owner, MFA is not enabled, or the live switch is
+            off or not in the plan. Possible codes: EMAIL_NOT_VERIFIED, FORBIDDEN, MFA_REQUIRED, FEATURE_DISABLED.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                EMAIL_NOT_VERIFIED:
+                  $ref: '#/components/examples/EMAIL_NOT_VERIFIED'
+                FORBIDDEN:
+                  $ref: '#/components/examples/FORBIDDEN'
+                MFA_REQUIRED:
+                  $ref: '#/components/examples/MFA_REQUIRED'
+                FEATURE_DISABLED:
+                  $ref: '#/components/examples/FeatureDisabledLiveSwitch'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/TenantNotActive'
+        '422':
+          description: >-
+            Some preconditions of going live are missing (`details.missing`). Possible codes:
+            LIVE_PRECONDITIONS_UNMET.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                LIVE_PRECONDITIONS_UNMET:
+                  $ref: '#/components/examples/LIVE_PRECONDITIONS_UNMET'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
   /v1/tenants/{tenantId}/members:
     parameters:
       - $ref: '#/components/parameters/TenantId'
@@ -3537,6 +3691,454 @@ paths:
           $ref: '#/components/responses/RateLimited'
         '500':
           $ref: '#/components/responses/InternalError'
+    post:
+      operationId: addDomain
+      summary: Add a custom storefront domain
+      description: >-
+        Owners and admins add a custom storefront domain (M5, PADR-0004). It needs `FEATURE_CUSTOM_DOMAINS` and a plan
+        with custom domains (`limits.customDomains` above 0); otherwise `403 FEATURE_DISABLED` with `details.feature =
+        custom_domains`. The OTA's custom domains, in any status, must stay below `limits.customDomains` (`422
+        PLAN_LIMIT_REACHED` with `details.limit` and `details.used`). The OTA must be `active` (`409
+        TENANT_NOT_ACTIVE`): a suspended OTA's domains are read-only (PADR-0014 item 5).
+
+
+        **Host name rules**, checked by the service, so a malformed host answers `422 DOMAIN_INVALID` and not `400`:
+        the input is lower-cased, IDN labels become punycode and a trailing dot is dropped (`Travel.Acme.com.` is
+        stored as `travel.acme.com`); the host must then have valid labels, at least two of them and at most 253
+        characters, and must not be an IP address, `STOREFRONT_BASE_DOMAIN` or a host below it, any other Velexis
+        host, or a host under a shared hosting suffix of the deny list (`github.io`, `herokuapp.com`, `vercel.app`,
+        `netlify.app`, …) where owning a sub-domain proves nothing. A host that any OTA uses, in any status, answers
+        `409 DOMAIN_TAKEN`.
+
+
+        **Answer**: the new domain, `pending`, with a verification deadline 72 hours ahead and the DNS records to
+        create: the `TXT` record `_velexis.<host>` holding the token (`vx-verify-` and 32 base32 characters), and both
+        routing options, a `CNAME` to the OTA's sub-domain, or `A` and `AAAA` records to the storefront addresses
+        (`STOREFRONT_IPV4`, `STOREFRONT_IPV6`) for an apex domain, which cannot have a CNAME; verification accepts
+        either. Writes an audit row. The platform worker checks pending domains every 5 minutes; `checkDomain` checks
+        one now.
+      tags:
+        - Domains
+      security:
+        - portalBearer: []
+      x-scope: portal
+      x-feature: custom_domains
+      x-error-codes:
+        - VALIDATION_FAILED
+        - UNAUTHENTICATED
+        - TOKEN_EXPIRED
+        - EMAIL_NOT_VERIFIED
+        - FORBIDDEN
+        - FEATURE_DISABLED
+        - NOT_FOUND
+        - DOMAIN_TAKEN
+        - TENANT_NOT_ACTIVE
+        - DOMAIN_INVALID
+        - PLAN_LIMIT_REACHED
+        - RATE_LIMITED
+        - INTERNAL_ERROR
+      x-platform-tables:
+        - tenant_memberships
+        - tenants
+        - plans
+        - tenant_domains
+        - platform_audit_log
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AddDomainRequest'
+            example:
+              hostname: Travel.Acme-Travel.example.com
+      responses:
+        '201':
+          description: The new custom domain, pending, with the DNS records to create.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Domain'
+              example:
+                id: dom_01JB3K5N9Q3S7W1Y5A9C3E7G1J
+                hostname: travel.acme-travel.example.com
+                kind: custom
+                purpose: storefront
+                isPrimary: false
+                verificationStatus: pending
+                dnsRecords:
+                  - type: TXT
+                    name: _velexis.travel.acme-travel.example.com
+                    value: vx-verify-K7Q4M2XP9TRWH5ZDB3NV8QKE1MZT6RYC
+                  - type: CNAME
+                    name: travel.acme-travel.example.com
+                    value: acme.ota.example.com
+                  - type: A
+                    name: travel.acme-travel.example.com
+                    value: 203.0.113.10
+                  - type: AAAA
+                    name: travel.acme-travel.example.com
+                    value: 2001:db8::10
+                verificationDeadlineAt: '2026-11-21T10:00:00Z'
+                lastCheckedAt: null
+                lastCheckError: null
+                tlsStatus: pending
+                tlsExpiresAt: null
+                createdAt: '2026-11-18T10:00:00Z'
+        '400':
+          $ref: '#/components/responses/ValidationFailed'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          description: >-
+            The e-mail address is not verified, the caller's role does not allow it, or custom domains are off or not
+            in the plan. Possible codes: EMAIL_NOT_VERIFIED, FORBIDDEN, FEATURE_DISABLED.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                EMAIL_NOT_VERIFIED:
+                  $ref: '#/components/examples/EMAIL_NOT_VERIFIED'
+                FORBIDDEN:
+                  $ref: '#/components/examples/FORBIDDEN'
+                FEATURE_DISABLED:
+                  $ref: '#/components/examples/FeatureDisabledCustomDomains'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: >-
+            Another OTA uses the host name, or the OTA is not active. Possible codes: DOMAIN_TAKEN, TENANT_NOT_ACTIVE.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                DOMAIN_TAKEN:
+                  $ref: '#/components/examples/DOMAIN_TAKEN'
+                TENANT_NOT_ACTIVE:
+                  $ref: '#/components/examples/TENANT_NOT_ACTIVE'
+        '422':
+          description: >-
+            The host name breaks the rules, or the plan's custom domain limit is reached. Possible codes:
+            DOMAIN_INVALID, PLAN_LIMIT_REACHED.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                DOMAIN_INVALID:
+                  $ref: '#/components/examples/DOMAIN_INVALID'
+                PLAN_LIMIT_REACHED:
+                  summary: The plan allows one custom domain
+                  value:
+                    error:
+                      code: PLAN_LIMIT_REACHED
+                      message: The plan's limit is reached.
+                      status: 422
+                      requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+                      details:
+                        limit: 1
+                        used: 1
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /v1/tenants/{tenantId}/domains/{domainId}:
+    parameters:
+      - $ref: '#/components/parameters/TenantId'
+      - $ref: '#/components/parameters/DomainId'
+    delete:
+      operationId: removeDomain
+      summary: Remove a custom domain
+      description: >-
+        Owners and admins remove a custom domain in any status (M5): the row is deleted and, if it was primary, the
+        sub-domain becomes primary again, in one transaction. After commit `domain` invalidations for the host (and,
+        when the primary moved, the sub-domain) are published and the cached `tlsask:<host>` answer is deleted, so
+        neither the storefront nor the TLS gate serves the host any more; Caddy keeps the old certificate until it
+        expires but uses it for nothing. The host name is then free for another OTA that proves ownership. The
+        sub-domain cannot be removed (`409 CONFLICT`, `details.reason = subdomain`). The OTA must be `active` (`409
+        TENANT_NOT_ACTIVE`, PADR-0014 item 5). Writes an audit row.
+      tags:
+        - Domains
+      security:
+        - portalBearer: []
+      x-scope: portal
+      x-error-codes:
+        - VALIDATION_FAILED
+        - UNAUTHENTICATED
+        - TOKEN_EXPIRED
+        - EMAIL_NOT_VERIFIED
+        - FORBIDDEN
+        - NOT_FOUND
+        - CONFLICT
+        - TENANT_NOT_ACTIVE
+        - RATE_LIMITED
+        - INTERNAL_ERROR
+      x-platform-tables:
+        - tenant_memberships
+        - tenants
+        - tenant_domains
+        - platform_audit_log
+      responses:
+        '204':
+          description: The domain is removed.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+        '400':
+          $ref: '#/components/responses/ValidationFailed'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/TenantRoleForbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: >-
+            The domain is the OTA's sub-domain (`details.reason = subdomain`), or the OTA is not active. Possible codes:
+            CONFLICT, TENANT_NOT_ACTIVE.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                CONFLICT:
+                  $ref: '#/components/examples/DomainIsSubdomain'
+                TENANT_NOT_ACTIVE:
+                  $ref: '#/components/examples/TENANT_NOT_ACTIVE'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /v1/tenants/{tenantId}/domains/{domainId}/check:
+    parameters:
+      - $ref: '#/components/parameters/TenantId'
+      - $ref: '#/components/parameters/DomainId'
+    post:
+      operationId: checkDomain
+      summary: Check the DNS records of a custom domain now
+      description: >-
+        Owners and admins ask for the DNS check of a custom domain that is not verified yet (M5), instead of waiting
+        for the next 5-minute run: the API enqueues a `domain.verify` job on `platform-domains` and answers at once
+        with the domain as it is now; the result shows in `listDomains` within seconds (`verificationStatus`,
+        `lastCheckedAt`, `lastCheckError`). A `failed` domain first gets a new 72-hour window with the same token, so
+        it is `pending` again in the answer, and an audit row records the restart. Only `pending` and `failed` custom
+        domains can be checked: the sub-domain has no records (`409 CONFLICT`, `details.reason = subdomain`) and a
+        verified domain has nothing left to prove (`details.reason = already_verified`; the daily re-check watches it).
+        Rate limited to 1 call per domain per minute (`429 RATE_LIMITED`). The OTA must be `active` (`409
+        TENANT_NOT_ACTIVE`). `503 SERVICE_UNAVAILABLE` while Redis is down, because the job is the operation's effect.
+      tags:
+        - Domains
+      security:
+        - portalBearer: []
+      x-scope: portal
+      x-error-codes:
+        - VALIDATION_FAILED
+        - UNAUTHENTICATED
+        - TOKEN_EXPIRED
+        - EMAIL_NOT_VERIFIED
+        - FORBIDDEN
+        - NOT_FOUND
+        - CONFLICT
+        - TENANT_NOT_ACTIVE
+        - RATE_LIMITED
+        - INTERNAL_ERROR
+        - SERVICE_UNAVAILABLE
+      x-platform-tables:
+        - tenant_memberships
+        - tenants
+        - tenant_domains
+        - platform_audit_log
+      responses:
+        '202':
+          description: Accepted. The check runs; the domain is answered as it is now.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Domain'
+              example:
+                id: dom_01JB3K5N9Q3S7W1Y5A9C3E7G1J
+                hostname: travel.acme-travel.example.com
+                kind: custom
+                purpose: storefront
+                isPrimary: false
+                verificationStatus: pending
+                dnsRecords:
+                  - type: TXT
+                    name: _velexis.travel.acme-travel.example.com
+                    value: vx-verify-K7Q4M2XP9TRWH5ZDB3NV8QKE1MZT6RYC
+                  - type: CNAME
+                    name: travel.acme-travel.example.com
+                    value: acme.ota.example.com
+                  - type: A
+                    name: travel.acme-travel.example.com
+                    value: 203.0.113.10
+                  - type: AAAA
+                    name: travel.acme-travel.example.com
+                    value: 2001:db8::10
+                verificationDeadlineAt: '2026-11-21T10:00:00Z'
+                lastCheckedAt: '2026-11-18T10:05:00Z'
+                lastCheckError: The TXT record _velexis.travel.acme-travel.example.com was not found.
+                tlsStatus: pending
+                tlsExpiresAt: null
+                createdAt: '2026-11-18T10:00:00Z'
+        '400':
+          $ref: '#/components/responses/ValidationFailed'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/TenantRoleForbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: >-
+            The domain is the sub-domain or is verified already (`details.reason`), or the OTA is not active. Possible
+            codes: CONFLICT, TENANT_NOT_ACTIVE.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                CONFLICT:
+                  $ref: '#/components/examples/DomainIsSubdomain'
+                CONFLICT_VERIFIED:
+                  summary: The domain is verified already
+                  value:
+                    error:
+                      code: CONFLICT
+                      message: The request conflicts with the current state of the resource.
+                      status: 409
+                      requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+                      details:
+                        reason: already_verified
+                TENANT_NOT_ACTIVE:
+                  $ref: '#/components/examples/TENANT_NOT_ACTIVE'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+  /v1/tenants/{tenantId}/domains/{domainId}/make-primary:
+    parameters:
+      - $ref: '#/components/parameters/TenantId'
+      - $ref: '#/components/parameters/DomainId'
+    post:
+      operationId: makeDomainPrimary
+      summary: Make a verified domain the primary storefront host
+      description: >-
+        Owners and admins choose the primary storefront host (M5), which links and e-mails use: in one transaction the
+        OTA's other storefront host loses `isPrimary` and this one gets it (the partial unique index keeps exactly one
+        primary), then `domain` invalidations for both hosts are published. Only a verified domain can be primary
+        (`409 DOMAIN_NOT_VERIFIED`); making the sub-domain primary again is allowed, and the primary domain answers
+        `200` unchanged. The OTA must be `active` (`409 TENANT_NOT_ACTIVE`, PADR-0014 item 5). Writes an audit row.
+        Redirecting the sub-domain to the primary host is a follow-up of ADR-0018.
+      tags:
+        - Domains
+      security:
+        - portalBearer: []
+      x-scope: portal
+      x-error-codes:
+        - VALIDATION_FAILED
+        - UNAUTHENTICATED
+        - TOKEN_EXPIRED
+        - EMAIL_NOT_VERIFIED
+        - FORBIDDEN
+        - NOT_FOUND
+        - DOMAIN_NOT_VERIFIED
+        - TENANT_NOT_ACTIVE
+        - RATE_LIMITED
+        - INTERNAL_ERROR
+      x-platform-tables:
+        - tenant_memberships
+        - tenants
+        - tenant_domains
+        - platform_audit_log
+      responses:
+        '200':
+          description: The domain, now primary.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Domain'
+              example:
+                id: dom_01JB3K5N9Q3S7W1Y5A9C3E7G1J
+                hostname: travel.acme-travel.example.com
+                kind: custom
+                purpose: storefront
+                isPrimary: true
+                verificationStatus: verified
+                dnsRecords:
+                  - type: TXT
+                    name: _velexis.travel.acme-travel.example.com
+                    value: vx-verify-K7Q4M2XP9TRWH5ZDB3NV8QKE1MZT6RYC
+                  - type: CNAME
+                    name: travel.acme-travel.example.com
+                    value: acme.ota.example.com
+                  - type: A
+                    name: travel.acme-travel.example.com
+                    value: 203.0.113.10
+                  - type: AAAA
+                    name: travel.acme-travel.example.com
+                    value: 2001:db8::10
+                verificationDeadlineAt: '2026-11-21T10:00:00Z'
+                lastCheckedAt: '2026-11-18T10:35:00Z'
+                lastCheckError: null
+                tlsStatus: issued
+                tlsExpiresAt: '2027-02-16T10:36:00Z'
+                createdAt: '2026-11-18T10:00:00Z'
+        '400':
+          $ref: '#/components/responses/ValidationFailed'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/TenantRoleForbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: >-
+            The domain is not verified, or the OTA is not active. Possible codes: DOMAIN_NOT_VERIFIED,
+            TENANT_NOT_ACTIVE.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                DOMAIN_NOT_VERIFIED:
+                  $ref: '#/components/examples/DOMAIN_NOT_VERIFIED'
+                TENANT_NOT_ACTIVE:
+                  $ref: '#/components/examples/TENANT_NOT_ACTIVE'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
   /v1/tenants/{tenantId}/amadeus-connections:
     parameters:
       - $ref: '#/components/parameters/TenantId'
@@ -3748,6 +4350,352 @@ paths:
           $ref: '#/components/responses/RateLimited'
         '500':
           $ref: '#/components/responses/InternalError'
+  /v1/tenants/{tenantId}/amadeus-connections/live/request:
+    parameters:
+      - $ref: '#/components/parameters/TenantId'
+    post:
+      operationId: requestLiveAmadeus
+      summary: Ask Velexis for a live Amadeus office
+      description: >-
+        Owners ask Velexis for live Amadeus access on the Velexis account (M5, platform/docs/flows/amadeus-connection.md
+        §C). It needs `FEATURE_LIVE_SWITCH` and a plan with `limits.liveMode` (`403 FEATURE_DISABLED`,
+        `details.feature = live_switch`), an `active` OTA (`409 TENANT_NOT_ACTIVE`) and no live Amadeus connection yet
+        (`409 CONFLICT`, `details.reason = live_connection_exists`, also when the OTA brought its own live
+        credentials). Velexis must have entered its live Amadeus account (`409 CONFLICT`, `details.reason =
+        live_account_missing`; ops are alerted).
+
+
+        The API inserts the live connection (`credentialSource: velexis`, the live Velexis account, no office yet,
+        `pending_verification`), writes the audit row `amadeus.live_requested` and e-mails ops (`ops.alert`) with the
+        optional `note`. Velexis then completes the commercial onboarding outside the system, and a platform admin
+        assigns a live office (`adminAssignAmadeusOffice`), which makes the connection `active` and e-mails the owners.
+        The live connection is a precondition of `goLive`.
+      tags:
+        - Connections
+      security:
+        - portalBearer: []
+      x-scope: portal
+      x-feature: live_switch
+      x-error-codes:
+        - VALIDATION_FAILED
+        - UNAUTHENTICATED
+        - TOKEN_EXPIRED
+        - EMAIL_NOT_VERIFIED
+        - FORBIDDEN
+        - FEATURE_DISABLED
+        - NOT_FOUND
+        - CONFLICT
+        - TENANT_NOT_ACTIVE
+        - RATE_LIMITED
+        - INTERNAL_ERROR
+      x-platform-tables:
+        - tenant_memberships
+        - tenants
+        - plans
+        - amadeus_accounts
+        - supplier_connections
+        - credential_submissions
+        - email_outbox
+        - platform_audit_log
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RequestLiveAmadeusRequest'
+            example:
+              note: We start selling to Norway in March; our ticketing agreement with Amadeus is signed.
+      responses:
+        '202':
+          description: Accepted. The live connection waits for a Velexis office.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AmadeusConnection'
+              example:
+                id: sc_01JD4P2R6T0W4Y8A2C6E0G4J8M
+                environment: live
+                credentialSource: velexis
+                status: pending_verification
+                officeIds: []
+                defaultOfficeId: null
+                queuingOfficeId: null
+                ownerOfficeId: null
+                clientId: null
+                ticketingDefaults: {}
+                monitoredQueues: []
+                lastVerifiedAt: null
+                lastError: null
+                pendingSubmission: null
+                version: 1
+        '400':
+          $ref: '#/components/responses/ValidationFailed'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          description: >-
+            The e-mail address is not verified, the caller is not an owner, or live mode is off or not in the plan.
+            Possible codes: EMAIL_NOT_VERIFIED, FORBIDDEN, FEATURE_DISABLED.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                EMAIL_NOT_VERIFIED:
+                  $ref: '#/components/examples/EMAIL_NOT_VERIFIED'
+                FORBIDDEN:
+                  $ref: '#/components/examples/FORBIDDEN'
+                FEATURE_DISABLED:
+                  $ref: '#/components/examples/FeatureDisabledLiveSwitch'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: >-
+            The OTA has a live Amadeus connection already, or Velexis has no live Amadeus account yet
+            (`details.reason`), or the OTA is not active. Possible codes: CONFLICT, TENANT_NOT_ACTIVE.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                CONFLICT:
+                  summary: The OTA has a live Amadeus connection already
+                  value:
+                    error:
+                      code: CONFLICT
+                      message: The request conflicts with the current state of the resource.
+                      status: 409
+                      requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+                      details:
+                        reason: live_connection_exists
+                CONFLICT_NO_LIVE_ACCOUNT:
+                  summary: Velexis has not entered its live Amadeus account yet
+                  value:
+                    error:
+                      code: CONFLICT
+                      message: The request conflicts with the current state of the resource.
+                      status: 409
+                      requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+                      details:
+                        reason: live_account_missing
+                TENANT_NOT_ACTIVE:
+                  $ref: '#/components/examples/TENANT_NOT_ACTIVE'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /v1/tenants/{tenantId}/amadeus-connections/{environment}/credentials:
+    parameters:
+      - $ref: '#/components/parameters/TenantId'
+      - $ref: '#/components/parameters/CredentialsEnvironment'
+    put:
+      operationId: submitAmadeusCredentials
+      summary: Submit the OTA's own Amadeus credentials for verification
+      description: >-
+        Owners and admins switch the Amadeus connection of an environment to the OTA's own credentials (M5, ADR-0012,
+        PADR-0010), with a TOTP step-up within the last 15 minutes (`401 REAUTH_REQUIRED`, or `403 MFA_REQUIRED`
+        without MFA) and `FEATURE_OWN_AMADEUS` on (`403 FEATURE_DISABLED`). Nothing changes on the connection yet: the
+        credentials wait in a credential submission, the client secret envelope-encrypted, and a platform worker job
+        verifies them with an OAuth token request to the Amadeus host of the environment. Success switches the
+        connection in one transaction (`credentialSource: tenant`, the secret re-encrypted for the connection, the
+        offices of the body, `active`), moves the Velexis office of that environment to `releasing`, and e-mails the
+        submitter; a rejection (`AMADEUS_CREDENTIALS_INVALID`) or an unreachable Amadeus (`PROVIDER_UNAVAILABLE`,
+        after retries) leaves the working connection untouched. The portal follows the submission with
+        `getCredentialSubmission`; `listAmadeusConnections` shows it as `pendingSubmission`.
+
+
+        **Rules.** Office ids are 9 upper-case letters and digits, each at most once; `defaultOfficeId` and, when sent,
+        `queuingOfficeId` and `ownerOfficeId` must be among `officeIds` (`400 VALIDATION_FAILED` with a field error);
+        the two optional offices default to `defaultOfficeId`. An open submission of the same environment is
+        superseded and its secret erased. The environment needs no connection yet: an OTA may bring its own live
+        credentials before it asks for a Velexis live office, and the connection is then created on success. The OTA
+        must be `active` (`409 TENANT_NOT_ACTIVE`, PADR-0014 item 5).
+
+
+        **The secret.** `clientSecret` is write-only: it is never logged (the logger redacts it), never answered and
+        never put in a queue message, and it is erased from the submission when the submission ends. The operation is
+        not idempotent, so no body is stored for a replay. Writes the audit row `amadeus.credentials_submitted` without
+        the secret, then enqueues `credentials.verify` with the submission id only.
+      tags:
+        - Connections
+      security:
+        - portalBearer: []
+      x-scope: portal
+      x-mfa-step-up: true
+      x-feature: own_amadeus
+      x-error-codes:
+        - VALIDATION_FAILED
+        - UNAUTHENTICATED
+        - TOKEN_EXPIRED
+        - REAUTH_REQUIRED
+        - EMAIL_NOT_VERIFIED
+        - FORBIDDEN
+        - MFA_REQUIRED
+        - FEATURE_DISABLED
+        - NOT_FOUND
+        - TENANT_NOT_ACTIVE
+        - RATE_LIMITED
+        - INTERNAL_ERROR
+      x-platform-tables:
+        - tenant_memberships
+        - tenants
+        - supplier_connections
+        - credential_submissions
+        - platform_audit_log
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SubmitAmadeusCredentialsRequest'
+            example:
+              clientId: acme-amadeus-client
+              clientSecret: example-client-secret-not-real
+              officeIds:
+                - OSLN12345
+                - OSLN12346
+              defaultOfficeId: OSLN12345
+              queuingOfficeId: OSLN12345
+              ownerOfficeId: OSLN12346
+      responses:
+        '202':
+          description: Accepted. The submission waits for its verification.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CredentialSubmissionAccepted'
+              example:
+                submission:
+                  id: crs_01JD4Q2S6V0X4Z8B2D6F0H4K8N
+                  kind: amadeus
+                  environment: test
+                  status: pending
+                  errorCode: null
+                  errorMessage: null
+                  createdAt: '2027-01-11T14:02:00Z'
+                  finishedAt: null
+        '400':
+          $ref: '#/components/responses/ValidationFailed'
+        '401':
+          $ref: '#/components/responses/StepUpUnauthorized'
+        '403':
+          description: >-
+            The e-mail address is not verified, the caller's role does not allow it, MFA is not enabled, or own Amadeus
+            credentials are off. Possible codes: EMAIL_NOT_VERIFIED, FORBIDDEN, MFA_REQUIRED, FEATURE_DISABLED.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                EMAIL_NOT_VERIFIED:
+                  $ref: '#/components/examples/EMAIL_NOT_VERIFIED'
+                FORBIDDEN:
+                  $ref: '#/components/examples/FORBIDDEN'
+                MFA_REQUIRED:
+                  $ref: '#/components/examples/MFA_REQUIRED'
+                FEATURE_DISABLED:
+                  $ref: '#/components/examples/FeatureDisabledOwnAmadeus'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/TenantNotActive'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /v1/tenants/{tenantId}/credential-submissions/{submissionId}:
+    parameters:
+      - $ref: '#/components/parameters/TenantId'
+      - $ref: '#/components/parameters/CredentialSubmissionId'
+    get:
+      operationId: getCredentialSubmission
+      summary: Follow the verification of submitted credentials
+      description: >-
+        Owners and admins follow a submission of the OTA's own credentials (M5, PADR-0010), Amadeus or Stripe API keys:
+        `pending` (waiting for the worker), `verifying`, then `applied` (the connection uses them) or `failed` with
+        `errorCode` (`AMADEUS_CREDENTIALS_INVALID`, `STRIPE_KEY_INVALID`, `STRIPE_LIVEMODE_MISMATCH` or
+        `PROVIDER_UNAVAILABLE`: verification results, not error codes of this API) and a sanitised `errorMessage` (the
+        provider's HTTP status and error code, never a provider body or a secret); `superseded` when a newer submission
+        of the same environment replaced it. The portal polls it every 2 seconds until it is final. The submitted
+        secrets are never answered; they are erased when the submission ends. A submission of another OTA answers `404
+        NOT_FOUND`.
+      tags:
+        - Connections
+      security:
+        - portalBearer: []
+      x-scope: portal
+      x-error-codes:
+        - VALIDATION_FAILED
+        - UNAUTHENTICATED
+        - TOKEN_EXPIRED
+        - EMAIL_NOT_VERIFIED
+        - FORBIDDEN
+        - NOT_FOUND
+        - RATE_LIMITED
+        - INTERNAL_ERROR
+      x-platform-tables:
+        - tenant_memberships
+        - credential_submissions
+      responses:
+        '200':
+          description: The submission.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CredentialSubmission'
+              examples:
+                applied:
+                  summary: The OTA's own Amadeus credentials are in use
+                  value:
+                    id: crs_01JD4Q2S6V0X4Z8B2D6F0H4K8N
+                    kind: amadeus
+                    environment: test
+                    status: applied
+                    errorCode: null
+                    errorMessage: null
+                    createdAt: '2027-01-11T14:02:00Z'
+                    finishedAt: '2027-01-11T14:02:04Z'
+                failed:
+                  summary: Stripe refused the secret key
+                  value:
+                    id: crs_01JD4R7W1Y5A9C3E7G1J5M9Q3S
+                    kind: stripe_api_keys
+                    environment: live
+                    status: failed
+                    errorCode: STRIPE_KEY_INVALID
+                    errorMessage: 'Stripe answered 401 (api_key_invalid).'
+                    createdAt: '2027-01-12T09:40:00Z'
+                    finishedAt: '2027-01-12T09:40:02Z'
+        '400':
+          $ref: '#/components/responses/ValidationFailed'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/TenantRoleForbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
   /v1/tenants/{tenantId}/payment-connections:
     parameters:
       - $ref: '#/components/parameters/TenantId'
@@ -3915,6 +4863,518 @@ paths:
           $ref: '#/components/responses/RateLimited'
         '500':
           $ref: '#/components/responses/InternalError'
+  /v1/tenants/{tenantId}/payment-connections/stripe-connect/start:
+    parameters:
+      - $ref: '#/components/parameters/TenantId'
+    post:
+      operationId: startStripeConnect
+      summary: Start connecting the OTA's own Stripe account with Connect Standard
+      description: >-
+        Owners and admins start connecting the OTA's own Stripe account through Stripe Connect Standard OAuth (M5,
+        PADR-0011), with a TOTP step-up within the last 15 minutes (`401 REAUTH_REQUIRED`, or `403 MFA_REQUIRED` without
+        MFA) and `FEATURE_OWN_STRIPE` on (`403 FEATURE_DISABLED`). The OTA must be `active` (`409 TENANT_NOT_ACTIVE`,
+        PADR-0014 item 5).
+
+
+        The API creates a 256-bit random `state`, keeps `{tenantId, accountId, membershipId}` under the Redis key
+        `stripe:oauth:<sha256 of the state>` for 10 minutes, and answers Stripe's authorize URL:
+        `https://connect.stripe.com/oauth/authorize` with `response_type=code`, `client_id` (`STRIPE_CONNECT_CLIENT_ID`),
+        `scope=read_write`, the `state`, `redirect_uri` (`<PUBLIC_PORTAL_URL>/connect/stripe/callback`) and a prefilled
+        `stripe_user[email]`. The portal sends the browser there with a `303`; Stripe sends it back to the portal's
+        callback page, which calls `completeStripeConnect`. The URL holds the single-use state, so the answer is
+        `no-store`. `503 SERVICE_UNAVAILABLE` while Redis is down, because the state lives only there. One connected
+        account serves both environments: the test connection is switched at once, the live one too when the OTA is
+        live, otherwise at go-live.
+      tags:
+        - Connections
+      security:
+        - portalBearer: []
+      x-scope: portal
+      x-mfa-step-up: true
+      x-feature: own_stripe
+      x-error-codes:
+        - VALIDATION_FAILED
+        - UNAUTHENTICATED
+        - TOKEN_EXPIRED
+        - REAUTH_REQUIRED
+        - EMAIL_NOT_VERIFIED
+        - FORBIDDEN
+        - MFA_REQUIRED
+        - FEATURE_DISABLED
+        - NOT_FOUND
+        - TENANT_NOT_ACTIVE
+        - RATE_LIMITED
+        - INTERNAL_ERROR
+        - SERVICE_UNAVAILABLE
+      x-platform-tables:
+        - tenant_memberships
+        - tenants
+        - accounts
+      responses:
+        '200':
+          description: The Stripe authorize URL, valid for 10 minutes.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+            Cache-Control:
+              $ref: '#/components/headers/NoStore'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StripeConnectStart'
+              example:
+                authorizeUrl: >-
+                  https://connect.stripe.com/oauth/authorize?response_type=code&client_id=ca_ExampleConnectClient&scope=read_write&state=Xq7Lm2Np9Rt4Vw8Yb3Dc6Fg1Hj5Kk0Zs2Ae7Ui4Ow9Pq&redirect_uri=https%3A%2F%2Fplatform.example.com%2Fconnect%2Fstripe%2Fcallback&stripe_user%5Bemail%5D=anna.berg%40example.com
+                expiresAt: '2027-01-11T14:12:00Z'
+        '400':
+          $ref: '#/components/responses/ValidationFailed'
+        '401':
+          $ref: '#/components/responses/StepUpUnauthorized'
+        '403':
+          description: >-
+            The e-mail address is not verified, the caller's role does not allow it, MFA is not enabled, or own Stripe
+            accounts are off. Possible codes: EMAIL_NOT_VERIFIED, FORBIDDEN, MFA_REQUIRED, FEATURE_DISABLED.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                EMAIL_NOT_VERIFIED:
+                  $ref: '#/components/examples/EMAIL_NOT_VERIFIED'
+                FORBIDDEN:
+                  $ref: '#/components/examples/FORBIDDEN'
+                MFA_REQUIRED:
+                  $ref: '#/components/examples/MFA_REQUIRED'
+                FEATURE_DISABLED:
+                  $ref: '#/components/examples/FeatureDisabledOwnStripe'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/TenantNotActive'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+  /v1/payment-connections/stripe-connect/callback:
+    post:
+      operationId: completeStripeConnect
+      summary: Finish connecting the OTA's own Stripe account
+      description: >-
+        The portal's callback page (`/connect/stripe/callback`, signed-in user) posts what Stripe sent back (M5,
+        PADR-0011); the OTA is the one of the state, so the path names none. The API takes the state with `GETDEL`, so
+        it works once: an unknown, expired or used state, or one that another account started, answers `400
+        CONNECT_STATE_INVALID`. The account that started must still be an owner or admin of the OTA (`403
+        FORBIDDEN`), and the OTA must be `active` (`409 TENANT_NOT_ACTIVE`).
+
+
+        - `{state, error}`: Stripe reported an error and nothing changes: `422 UNPROCESSABLE` with `details.reason =
+        access_denied` when the person declined, `oauth_error` for any other error.
+
+        - `{state, code}`: the code is exchanged with `stripe.oauth.token` using Velexis's secret key. Only the
+        connected account id (`acct_…`) and `livemode` are kept; the access and refresh tokens Stripe returns are
+        discarded, because charges use Velexis's key with `Stripe-Account`. `livemode` must match the deployment (live
+        in production, test elsewhere; `422 UNPROCESSABLE`, `details.reason = livemode_mismatch`), and an account
+        connected to another OTA answers `409 STRIPE_ACCOUNT_ALREADY_CONNECTED`. The account's `charges_enabled`,
+        `payouts_enabled` and `details_submitted` are read from Stripe. A Stripe failure answers `502 PROVIDER_ERROR`.
+
+
+        **Effect**, in one transaction: the test payment connection becomes `connect_standard` with the account id, no
+        publishable key and no secrets, the account's capabilities, `connectedAt`, and `active` when charges are
+        enabled (`pending` otherwise, until `account.updated` says so); the live connection the same when the OTA is
+        live, otherwise go-live creates it in this mode. Writes the audit row `payments.connect_connected` and, after
+        commit, publishes `connection` invalidations. Existing payments stay on the account they were taken with.
+        `code` and `state` are write-only: never logged and never answered. `503 SERVICE_UNAVAILABLE` while Redis is
+        down, because the state lives only there.
+      tags:
+        - Connections
+      security:
+        - portalBearer: []
+      x-scope: portal
+      x-error-codes:
+        - VALIDATION_FAILED
+        - CONNECT_STATE_INVALID
+        - UNAUTHENTICATED
+        - TOKEN_EXPIRED
+        - EMAIL_NOT_VERIFIED
+        - FORBIDDEN
+        - STRIPE_ACCOUNT_ALREADY_CONNECTED
+        - TENANT_NOT_ACTIVE
+        - UNPROCESSABLE
+        - RATE_LIMITED
+        - INTERNAL_ERROR
+        - PROVIDER_ERROR
+        - SERVICE_UNAVAILABLE
+      x-platform-tables:
+        - tenant_memberships
+        - tenants
+        - payment_provider_connections
+        - credential_submissions
+        - platform_audit_log
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CompleteStripeConnectRequest'
+            examples:
+              authorized:
+                summary: The owner authorised Velexis on Stripe
+                value:
+                  state: Xq7Lm2Np9Rt4Vw8Yb3Dc6Fg1Hj5Kk0Zs2Ae7Ui4Ow9Pq
+                  code: ac_ExampleAuthorizationCode
+              declined:
+                summary: The owner declined on Stripe
+                value:
+                  state: Xq7Lm2Np9Rt4Vw8Yb3Dc6Fg1Hj5Kk0Zs2Ae7Ui4Ow9Pq
+                  error: access_denied
+                  errorDescription: The user denied your request
+      responses:
+        '200':
+          description: The OTA and its payment connections, now on the connected account.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StripeConnectCompleted'
+              example:
+                tenantId: ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F
+                connections:
+                  - id: ppc_01JA2ZBA4D8F2H6K0N4Q8S2V6X
+                    environment: test
+                    provider: stripe
+                    accountMode: connect_standard
+                    status: active
+                    accountReference: acct_1QExampleAcme
+                    publishableKey: null
+                    statementDescriptorSuffix: ACME TRAVEL
+                    capabilities:
+                      chargesEnabled: true
+                      payoutsEnabled: true
+                      detailsSubmitted: true
+                    connectedAt: '2027-01-11T14:05:31Z'
+                    disconnectedAt: null
+                    webhookUrl: null
+                    pendingSubmission: null
+                    version: 3
+        '400':
+          description: >-
+            The body failed validation, or the state is unknown, expired, used or another account's. Possible codes:
+            VALIDATION_FAILED, CONNECT_STATE_INVALID.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                VALIDATION_FAILED:
+                  $ref: '#/components/examples/VALIDATION_FAILED'
+                CONNECT_STATE_INVALID:
+                  $ref: '#/components/examples/CONNECT_STATE_INVALID'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/TenantRoleForbidden'
+        '409':
+          description: >-
+            The Stripe account is connected to another OTA, or the OTA is not active. Possible codes:
+            STRIPE_ACCOUNT_ALREADY_CONNECTED, TENANT_NOT_ACTIVE.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                STRIPE_ACCOUNT_ALREADY_CONNECTED:
+                  $ref: '#/components/examples/STRIPE_ACCOUNT_ALREADY_CONNECTED'
+                TENANT_NOT_ACTIVE:
+                  $ref: '#/components/examples/TENANT_NOT_ACTIVE'
+        '422':
+          description: >-
+            The person declined on Stripe, Stripe reported another error, or the account's mode does not match the
+            deployment (`details.reason`). Possible codes: UNPROCESSABLE.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                UNPROCESSABLE:
+                  summary: The person declined on Stripe
+                  value:
+                    error:
+                      code: UNPROCESSABLE
+                      message: The request breaks a business rule.
+                      status: 422
+                      requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+                      details:
+                        reason: access_denied
+                UNPROCESSABLE_LIVEMODE:
+                  summary: A test-mode account in a live deployment
+                  value:
+                    error:
+                      code: UNPROCESSABLE
+                      message: The request breaks a business rule.
+                      status: 422
+                      requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+                      details:
+                        reason: livemode_mismatch
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '502':
+          $ref: '#/components/responses/ProviderError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+  /v1/tenants/{tenantId}/payment-connections/{environment}/api-keys:
+    parameters:
+      - $ref: '#/components/parameters/TenantId'
+      - $ref: '#/components/parameters/CredentialsEnvironment'
+    put:
+      operationId: submitStripeApiKeys
+      summary: Submit the OTA's own Stripe API keys for verification
+      description: >-
+        Owners and admins switch the payment connection of an environment to the OTA's own Stripe account by its API
+        keys (`api_keys` mode, M5, PADR-0011), with a TOTP step-up within the last 15 minutes (`401 REAUTH_REQUIRED`, or
+        `403 MFA_REQUIRED` without MFA) and `FEATURE_OWN_STRIPE` on (`403 FEATURE_DISABLED`). As for own Amadeus
+        credentials (PADR-0010), nothing changes yet: the keys wait in a credential submission, the secret key and the
+        webhook secret envelope-encrypted, and a platform worker job verifies them with `GET /v1/account`, which must
+        succeed with a `livemode` that matches the environment. Success switches the connection in one transaction
+        (`api_keys`, the account id, the publishable key, both secrets re-encrypted for the connection, `active`) and
+        e-mails the submitter; a failure (`STRIPE_KEY_INVALID`, `STRIPE_LIVEMODE_MISMATCH`, `PROVIDER_UNAVAILABLE`)
+        leaves the connection untouched. Follow it with `getCredentialSubmission`.
+
+
+        **Rules.** Every key must belong to the environment: `pk_test_` and `sk_test_` or `rk_test_` on `test`,
+        `pk_live_` and `sk_live_` or `rk_live_` on `live`; another prefix answers `400 VALIDATION_FAILED` with a field
+        error that never holds the key. A restricted key (`rk_`) needs write access to PaymentIntents and Refunds and
+        read access to Charges and Disputes. An open submission of the same environment is superseded and its secrets
+        erased. The OTA must be `active` (`409 TENANT_NOT_ACTIVE`, PADR-0014 item 5).
+
+
+        **Answer**: the submission, and the webhook endpoint to create in the OTA's Stripe dashboard: `webhookUrl`
+        (`https://api.ota.example.com/webhooks/stripe/c/<ppc_id>`, stable because the connection row is updated in
+        place; when the environment has no connection yet, the submission keeps the id that the connection gets) and
+        the events to enable. The webhook secret can only be tested when Stripe sends an event to the OTA backend, so
+        the portal asks the owner to send a test event.
+
+
+        **Secrets.** `secretKey` and `webhookSecret` are write-only: never logged (the logger redacts them), never
+        answered, never put in a queue message, and erased from the submission when it ends. The operation is not
+        idempotent, so no body is stored for a replay. Writes an audit row without them.
+      tags:
+        - Connections
+      security:
+        - portalBearer: []
+      x-scope: portal
+      x-mfa-step-up: true
+      x-feature: own_stripe
+      x-error-codes:
+        - VALIDATION_FAILED
+        - UNAUTHENTICATED
+        - TOKEN_EXPIRED
+        - REAUTH_REQUIRED
+        - EMAIL_NOT_VERIFIED
+        - FORBIDDEN
+        - MFA_REQUIRED
+        - FEATURE_DISABLED
+        - NOT_FOUND
+        - TENANT_NOT_ACTIVE
+        - RATE_LIMITED
+        - INTERNAL_ERROR
+      x-platform-tables:
+        - tenant_memberships
+        - tenants
+        - payment_provider_connections
+        - credential_submissions
+        - platform_audit_log
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SubmitStripeApiKeysRequest'
+            example:
+              publishableKey: pk_test_ExampleOnly
+              secretKey: rk_test_ExampleOnly
+              webhookSecret: whsec_ExampleOnly
+      responses:
+        '202':
+          description: Accepted. The submission waits for its verification; create the webhook endpoint meanwhile.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StripeApiKeysSubmitted'
+              example:
+                submission:
+                  id: crs_01JD4R7W1Y5A9C3E7G1J5M9Q3S
+                  kind: stripe_api_keys
+                  environment: test
+                  status: pending
+                  errorCode: null
+                  errorMessage: null
+                  createdAt: '2027-01-12T09:40:00Z'
+                  finishedAt: null
+                webhookUrl: https://api.ota.example.com/webhooks/stripe/c/ppc_01JA2ZBA4D8F2H6K0N4Q8S2V6X
+                webhookEvents:
+                  - payment_intent.succeeded
+                  - payment_intent.payment_failed
+                  - payment_intent.canceled
+                  - payment_intent.amount_capturable_updated
+                  - charge.refunded
+                  - charge.dispute.created
+                  - charge.dispute.closed
+        '400':
+          $ref: '#/components/responses/ValidationFailed'
+        '401':
+          $ref: '#/components/responses/StepUpUnauthorized'
+        '403':
+          description: >-
+            The e-mail address is not verified, the caller's role does not allow it, MFA is not enabled, or own Stripe
+            accounts are off. Possible codes: EMAIL_NOT_VERIFIED, FORBIDDEN, MFA_REQUIRED, FEATURE_DISABLED.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                EMAIL_NOT_VERIFIED:
+                  $ref: '#/components/examples/EMAIL_NOT_VERIFIED'
+                FORBIDDEN:
+                  $ref: '#/components/examples/FORBIDDEN'
+                MFA_REQUIRED:
+                  $ref: '#/components/examples/MFA_REQUIRED'
+                FEATURE_DISABLED:
+                  $ref: '#/components/examples/FeatureDisabledOwnStripe'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/TenantNotActive'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /v1/tenants/{tenantId}/payment-connections/{environment}/use-velexis:
+    parameters:
+      - $ref: '#/components/parameters/TenantId'
+      - $ref: '#/components/parameters/ConnectionEnvironment'
+    post:
+      operationId: useVelexisPayments
+      summary: Return a payment connection to the Velexis Stripe account
+      description: >-
+        Owners return the payment connection of an environment to the Velexis Stripe account (`velexis` mode, settled
+        monthly; M5, PADR-0011 item 6), with a TOTP step-up within the last 15 minutes (`401 REAUTH_REQUIRED`, or `403
+        MFA_REQUIRED` without MFA). It is not behind a switch, so an OTA can always come back. For a
+        `connect_standard` connection the API first calls `stripe.oauth.deauthorize`; a failure there is logged and
+        does not block, so the operation never waits for Stripe. Then, in one transaction, it clears the account
+        reference, the publishable key and the secrets, sets `velexis` mode and `active`, and writes an audit row with
+        the old and the new mode; a `connection` invalidation follows the commit. The `live` connection needs a
+        `verified` payout account first, because Velexis then collects the money and settles it (`422
+        PAYOUT_ACCOUNT_REQUIRED`). A connection in `velexis` mode already answers `200` unchanged.
+
+
+        Switching never moves existing payments: the OTA backend keeps capturing and refunding each payment on the
+        account recorded with it, and only new payments use Velexis. `{environment}` without a connection answers
+        `404 NOT_FOUND`; the OTA must be `active` (`409 TENANT_NOT_ACTIVE`, PADR-0014 item 5).
+      tags:
+        - Connections
+      security:
+        - portalBearer: []
+      x-scope: portal
+      x-mfa-step-up: true
+      x-error-codes:
+        - VALIDATION_FAILED
+        - UNAUTHENTICATED
+        - TOKEN_EXPIRED
+        - REAUTH_REQUIRED
+        - EMAIL_NOT_VERIFIED
+        - FORBIDDEN
+        - MFA_REQUIRED
+        - NOT_FOUND
+        - TENANT_NOT_ACTIVE
+        - PAYOUT_ACCOUNT_REQUIRED
+        - RATE_LIMITED
+        - INTERNAL_ERROR
+      x-platform-tables:
+        - tenant_memberships
+        - tenants
+        - payment_provider_connections
+        - tenant_payout_accounts
+        - credential_submissions
+        - platform_audit_log
+      responses:
+        '200':
+          description: The connection in `velexis` mode, with its new version in `ETag`.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+            ETag:
+              $ref: '#/components/headers/ETag'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaymentConnection'
+              example:
+                id: ppc_01JA2ZBA4D8F2H6K0N4Q8S2V6X
+                environment: test
+                provider: stripe
+                accountMode: velexis
+                status: active
+                accountReference: null
+                publishableKey: null
+                statementDescriptorSuffix: ACME TRAVEL
+                capabilities: {}
+                connectedAt: null
+                disconnectedAt: null
+                webhookUrl: null
+                pendingSubmission: null
+                version: 4
+        '400':
+          $ref: '#/components/responses/ValidationFailed'
+        '401':
+          $ref: '#/components/responses/StepUpUnauthorized'
+        '403':
+          $ref: '#/components/responses/TenantRoleOrStepUpForbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/TenantNotActive'
+        '422':
+          description: >-
+            The live connection needs a verified payout account before Velexis collects the payments. Possible codes:
+            PAYOUT_ACCOUNT_REQUIRED.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                PAYOUT_ACCOUNT_REQUIRED:
+                  $ref: '#/components/examples/PAYOUT_ACCOUNT_REQUIRED'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
   /v1/tenants/{tenantId}/subscription:
     parameters:
       - $ref: '#/components/parameters/TenantId'
@@ -3970,6 +5430,760 @@ paths:
                 cancelAtPeriodEnd: false
                 banner: null
                 canManageInStripe: false
+        '400':
+          $ref: '#/components/responses/ValidationFailed'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/TenantRoleForbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /v1/tenants/{tenantId}/billing/checkout-session:
+    parameters:
+      - $ref: '#/components/parameters/TenantId'
+    post:
+      operationId: createCheckoutSession
+      summary: Open a Stripe Checkout to choose or restart a paid plan
+      description: >-
+        Owners choose or restart a paid plan for an existing OTA (M5, platform/docs/flows/subscription-billing.md §B):
+        when the manual trial of an OTA created before M5 ends, after a cancellation, or after an abandoned Checkout. It
+        needs `FEATURE_STRIPE_BILLING` (`403 FEATURE_DISABLED`). `planCode` must name a public, active plan with a
+        Stripe price for `billingInterval` (`422 PLAN_NOT_AVAILABLE`). An OTA whose Stripe subscription is current
+        (`trialing`, `active`, `past_due`, `paused` or `unpaid`) changes its plan or card in the Customer Portal instead
+        (`409 CONFLICT`, `details.reason = stripe_subscription_active`). No subscription row is written here: the
+        current row keeps its place until the `checkout.session.completed` webhook creates the Stripe one. It works in
+        any tenant status, so a suspended or failed OTA can pay.
+
+
+        The API creates or reuses the OTA's Stripe Customer (`billing_customers`) and creates a Checkout Session in
+        `subscription` mode with the plan's price, `client_reference_id` (the OTA id), the Velexis metadata, a trial
+        only on the OTA's first Stripe subscription, `payment_method_collection: always`, and success and cancel URLs
+        on the portal; Stripe's idempotency key is `checkout:<tenantId>:<Idempotency-Key>`. A Stripe failure answers
+        `502 PROVIDER_ERROR`. Writes an audit row.
+
+
+        **Idempotent** (`Idempotency-Key`, 24 hours): a retry with the same key and body replays the `201` with the
+        same URL, another body answers `409 IDEMPOTENCY_KEY_REUSED`, and while the idempotency store (Redis) is down
+        the call answers `503 SERVICE_UNAVAILABLE` before writing anything.
+      tags:
+        - Billing
+      security:
+        - portalBearer: []
+      x-scope: portal
+      x-idempotent: true
+      x-feature: stripe_billing
+      x-error-codes:
+        - VALIDATION_FAILED
+        - UNAUTHENTICATED
+        - TOKEN_EXPIRED
+        - EMAIL_NOT_VERIFIED
+        - FORBIDDEN
+        - FEATURE_DISABLED
+        - NOT_FOUND
+        - CONFLICT
+        - IDEMPOTENCY_KEY_REUSED
+        - PLAN_NOT_AVAILABLE
+        - RATE_LIMITED
+        - INTERNAL_ERROR
+        - PROVIDER_ERROR
+        - SERVICE_UNAVAILABLE
+      x-platform-tables:
+        - tenant_memberships
+        - tenants
+        - accounts
+        - plans
+        - subscriptions
+        - billing_customers
+        - platform_audit_log
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateCheckoutSessionRequest'
+            example:
+              planCode: growth
+              billingInterval: year
+      responses:
+        '201':
+          description: The Stripe Checkout page to send the browser to.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CheckoutSession'
+              example:
+                url: https://checkout.stripe.com/c/pay/cs_test_b1C2d3E4f5G6h7I8j9K0l1M2n3O4
+                expiresAt: '2027-01-12T10:00:00Z'
+        '400':
+          $ref: '#/components/responses/ValidationFailed'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          description: >-
+            The e-mail address is not verified, the caller is not an owner, or Stripe billing is off. Possible codes:
+            EMAIL_NOT_VERIFIED, FORBIDDEN, FEATURE_DISABLED.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                EMAIL_NOT_VERIFIED:
+                  $ref: '#/components/examples/EMAIL_NOT_VERIFIED'
+                FORBIDDEN:
+                  $ref: '#/components/examples/FORBIDDEN'
+                FEATURE_DISABLED:
+                  $ref: '#/components/examples/FeatureDisabledStripeBilling'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: >-
+            The OTA has a current Stripe subscription (manage it in the Customer Portal), or the `Idempotency-Key` was
+            used with another body. Possible codes: CONFLICT, IDEMPOTENCY_KEY_REUSED.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                CONFLICT:
+                  summary: The OTA has a current Stripe subscription
+                  value:
+                    error:
+                      code: CONFLICT
+                      message: The request conflicts with the current state of the resource.
+                      status: 409
+                      requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+                      details:
+                        reason: stripe_subscription_active
+                IDEMPOTENCY_KEY_REUSED:
+                  $ref: '#/components/examples/IDEMPOTENCY_KEY_REUSED'
+        '422':
+          description: >-
+            The plan cannot be chosen with this billing interval. Possible codes: PLAN_NOT_AVAILABLE.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                PLAN_NOT_AVAILABLE:
+                  $ref: '#/components/examples/PLAN_NOT_AVAILABLE'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '502':
+          $ref: '#/components/responses/ProviderError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+  /v1/tenants/{tenantId}/billing/portal-session:
+    parameters:
+      - $ref: '#/components/parameters/TenantId'
+    post:
+      operationId: createCustomerPortalSession
+      summary: Open the Stripe Customer Portal
+      description: >-
+        Owners open the Stripe Customer Portal (M5, platform/docs/flows/subscription-billing.md §F), where they switch
+        between the public plans, update the card, see Stripe's invoices and cancel at the end of the period. It needs
+        `FEATURE_STRIPE_BILLING` (`403 FEATURE_DISABLED`). The API calls `billingPortal.sessions.create` with the OTA's
+        Stripe Customer and `return_url` `<PUBLIC_PORTAL_URL>/otas/{tenantId}/billing`, and answers the session URL,
+        which the portal opens with a `303`. The URL signs its holder in to the Customer Portal for a few minutes, so
+        the answer is `no-store` and the call is not idempotent. An OTA without a Stripe Customer yet (a manual trial
+        that never went through Checkout) answers `409 CONFLICT` (`details.reason = no_stripe_customer`); a Stripe
+        failure answers `502 PROVIDER_ERROR`. It works while the OTA is suspended, so the owner can pay.
+      tags:
+        - Billing
+      security:
+        - portalBearer: []
+      x-scope: portal
+      x-feature: stripe_billing
+      x-error-codes:
+        - VALIDATION_FAILED
+        - UNAUTHENTICATED
+        - TOKEN_EXPIRED
+        - EMAIL_NOT_VERIFIED
+        - FORBIDDEN
+        - FEATURE_DISABLED
+        - NOT_FOUND
+        - CONFLICT
+        - RATE_LIMITED
+        - INTERNAL_ERROR
+        - PROVIDER_ERROR
+      x-platform-tables:
+        - tenant_memberships
+        - billing_customers
+      responses:
+        '201':
+          description: The Customer Portal session URL, valid for a few minutes.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+            Cache-Control:
+              $ref: '#/components/headers/NoStore'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CustomerPortalSession'
+              example:
+                url: https://billing.stripe.com/p/session/test_ExamplePortalSession
+        '400':
+          $ref: '#/components/responses/ValidationFailed'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          description: >-
+            The e-mail address is not verified, the caller is not an owner, or Stripe billing is off. Possible codes:
+            EMAIL_NOT_VERIFIED, FORBIDDEN, FEATURE_DISABLED.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                EMAIL_NOT_VERIFIED:
+                  $ref: '#/components/examples/EMAIL_NOT_VERIFIED'
+                FORBIDDEN:
+                  $ref: '#/components/examples/FORBIDDEN'
+                FEATURE_DISABLED:
+                  $ref: '#/components/examples/FeatureDisabledStripeBilling'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: >-
+            The OTA has no Stripe Customer yet; choose a plan with Checkout first. Possible codes: CONFLICT.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                CONFLICT:
+                  summary: The OTA has no Stripe Customer yet
+                  value:
+                    error:
+                      code: CONFLICT
+                      message: The request conflicts with the current state of the resource.
+                      status: 409
+                      requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+                      details:
+                        reason: no_stripe_customer
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '502':
+          $ref: '#/components/responses/ProviderError'
+  /v1/tenants/{tenantId}/invoices:
+    parameters:
+      - $ref: '#/components/parameters/TenantId'
+    get:
+      operationId: listInvoices
+      summary: List the Velexis invoices of an OTA
+      description: >-
+        Owners and finance members see Velexis's invoices to the OTA (M5), newest first: number, status, total, amount
+        due and paid, the billed period, issue and payment dates, and the links to the Stripe-hosted invoice page and
+        PDF (ADR-0017). Billing sync copies them from Stripe on the `invoice.*` events, converting minor units with the
+        currency's exponent. The list is short (one invoice per billing period), so it is not paginated; it is empty
+        until the OTA's first Stripe invoice. It works while the OTA is suspended, so the owner can download invoices.
+      tags:
+        - Billing
+      security:
+        - portalBearer: []
+      x-scope: portal
+      x-error-codes:
+        - VALIDATION_FAILED
+        - UNAUTHENTICATED
+        - TOKEN_EXPIRED
+        - EMAIL_NOT_VERIFIED
+        - FORBIDDEN
+        - NOT_FOUND
+        - RATE_LIMITED
+        - INTERNAL_ERROR
+      x-platform-tables:
+        - tenant_memberships
+        - invoices
+      responses:
+        '200':
+          description: The invoices.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InvoiceList'
+              example:
+                data:
+                  - id: inv_01JD8V2X6Z0B4D8F2H6K0N4Q8S
+                    number: VX-2027-000184
+                    status: paid
+                    total:
+                      amount: '490.00'
+                      currency: EUR
+                    amountDue:
+                      amount: '0.00'
+                      currency: EUR
+                    amountPaid:
+                      amount: '490.00'
+                      currency: EUR
+                    periodStart: '2027-02-01T00:00:00Z'
+                    periodEnd: '2028-02-01T00:00:00Z'
+                    issuedAt: '2027-02-01T00:04:12Z'
+                    paidAt: '2027-02-01T00:04:15Z'
+                    hostedInvoiceUrl: https://invoice.stripe.com/i/acct_1Velexis/test_ExampleHostedInvoice
+                    invoicePdfUrl: https://pay.stripe.com/invoice/acct_1Velexis/test_ExampleHostedInvoice/pdf
+        '400':
+          $ref: '#/components/responses/ValidationFailed'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/TenantRoleForbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /v1/tenants/{tenantId}/payout-account:
+    parameters:
+      - $ref: '#/components/parameters/TenantId'
+    get:
+      operationId: getPayoutAccount
+      summary: Get the OTA's payout account, masked
+      description: >-
+        Owners and finance members see the bank account where Velexis pays the OTA's settlements (M5, PADR-0003 item
+        10), masked: holder, bank country, currency, scheme and the last 4 characters of the IBAN or account number,
+        with the review status: `pending_review` until a platform admin verifies it, `verified`, or `rejected` with the
+        reviewer's note. The bank identifiers are never answered here; only a platform admin can reveal them, with a
+        reason, and every reveal is audited. The `ETag` is the account's version. An OTA without a payout account
+        answers `404 NOT_FOUND`.
+      tags:
+        - Settlements
+      security:
+        - portalBearer: []
+      x-scope: portal
+      x-error-codes:
+        - VALIDATION_FAILED
+        - UNAUTHENTICATED
+        - TOKEN_EXPIRED
+        - EMAIL_NOT_VERIFIED
+        - FORBIDDEN
+        - NOT_FOUND
+        - RATE_LIMITED
+        - INTERNAL_ERROR
+      x-platform-tables:
+        - tenant_memberships
+        - tenant_payout_accounts
+      responses:
+        '200':
+          description: The payout account, masked.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+            ETag:
+              $ref: '#/components/headers/ETag'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PayoutAccount'
+              examples:
+                payoutAccount:
+                  $ref: '#/components/examples/PayoutAccount'
+        '400':
+          $ref: '#/components/responses/ValidationFailed'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/TenantRoleForbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    put:
+      operationId: setPayoutAccount
+      summary: Set or replace the OTA's payout account
+      description: >-
+        Owners set or replace the bank account where Velexis pays the OTA's settlements (M5, `velexis` mode, PADR-0003
+        item 10), with a TOTP step-up within the last 15 minutes (`401 REAUTH_REQUIRED`, or `403 MFA_REQUIRED` without
+        MFA) and `FEATURE_SETTLEMENTS` on (`403 FEATURE_DISABLED`). `scheme: iban` takes an IBAN (spaces and lower case
+        allowed; the service removes the spaces, upper-cases it and checks the mod-97 checksum) and an optional BIC;
+        `scheme: local` takes an account number and a routing number (sort code, ABA or bank code). A wrong checksum
+        answers `400 VALIDATION_FAILED` with a field error on `/iban` that never holds the value.
+
+
+        The bank identifiers are stored envelope-encrypted as one JSON value; only `last4`, the last 4 characters of the
+        IBAN or account number, is kept in clear. Every change sets the status back to `pending_review` until a platform
+        admin verifies it, writes the audit row `payout_account.updated` without the numbers and e-mails ops
+        (`ops.alert`). `iban`, `bic`, `accountNumber` and `routingNumber` are write-only: never logged and never
+        answered, so the answer is the masked account.
+      tags:
+        - Settlements
+      security:
+        - portalBearer: []
+      x-scope: portal
+      x-mfa-step-up: true
+      x-feature: settlements
+      x-error-codes:
+        - VALIDATION_FAILED
+        - UNAUTHENTICATED
+        - TOKEN_EXPIRED
+        - REAUTH_REQUIRED
+        - EMAIL_NOT_VERIFIED
+        - FORBIDDEN
+        - MFA_REQUIRED
+        - FEATURE_DISABLED
+        - NOT_FOUND
+        - RATE_LIMITED
+        - INTERNAL_ERROR
+      x-platform-tables:
+        - tenant_memberships
+        - tenants
+        - tenant_payout_accounts
+        - email_outbox
+        - platform_audit_log
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SetPayoutAccountRequest'
+            examples:
+              iban:
+                summary: A Norwegian IBAN with its BIC
+                value:
+                  accountHolderName: Acme Travel AS
+                  countryCode: 'NO'
+                  currency: NOK
+                  scheme: iban
+                  iban: NO93 8601 1117 947
+                  bic: DNBANOKK
+              local:
+                summary: A US account with its ABA routing number
+                value:
+                  accountHolderName: Acme Travel Inc.
+                  countryCode: US
+                  currency: USD
+                  scheme: local
+                  accountNumber: '000123456789'
+                  routingNumber: '110000000'
+      responses:
+        '200':
+          description: The payout account, masked and pending review, with its new version in `ETag`.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+            ETag:
+              $ref: '#/components/headers/ETag'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PayoutAccount'
+              example:
+                accountHolderName: Acme Travel AS
+                countryCode: 'NO'
+                currency: NOK
+                scheme: iban
+                last4: '7947'
+                status: pending_review
+                reviewNote: null
+                updatedAt: '2027-01-20T08:12:44Z'
+                version: 2
+        '400':
+          description: >-
+            The body failed validation, for example an IBAN with a wrong checksum. Possible codes: VALIDATION_FAILED.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                VALIDATION_FAILED:
+                  summary: The IBAN's checksum is wrong
+                  value:
+                    error:
+                      code: VALIDATION_FAILED
+                      message: The request body, query or headers failed validation; see fieldErrors.
+                      status: 400
+                      requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+                      fieldErrors:
+                        - path: /iban
+                          code: iban_checksum
+                          message: Check the IBAN; its check digits do not match.
+        '401':
+          $ref: '#/components/responses/StepUpUnauthorized'
+        '403':
+          description: >-
+            The e-mail address is not verified, the caller is not an owner, MFA is not enabled, or settlements are off.
+            Possible codes: EMAIL_NOT_VERIFIED, FORBIDDEN, MFA_REQUIRED, FEATURE_DISABLED.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                EMAIL_NOT_VERIFIED:
+                  $ref: '#/components/examples/EMAIL_NOT_VERIFIED'
+                FORBIDDEN:
+                  $ref: '#/components/examples/FORBIDDEN'
+                MFA_REQUIRED:
+                  $ref: '#/components/examples/MFA_REQUIRED'
+                FEATURE_DISABLED:
+                  $ref: '#/components/examples/FeatureDisabledSettlements'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /v1/tenants/{tenantId}/settlements:
+    parameters:
+      - $ref: '#/components/parameters/TenantId'
+    get:
+      operationId: listSettlements
+      summary: List the settlement statements of an OTA
+      description: >-
+        Owners and finance members see the monthly statements of the payments that Velexis collected for the OTA (M5,
+        `velexis` mode, PADR-0003), newest period first: one per calendar month (UTC) and balance currency, once a
+        platform admin approved it. Drafts and voided drafts are never shown. An `approved` statement waits for the
+        bank transfer, a `paid` one carries the transfer date, and a `carried_forward` one had a net of zero or less,
+        which the next statement absorbs. The list is short (one or two statements a month), so it is not paginated; it
+        is empty for an OTA that never took payments in `velexis` mode.
+      tags:
+        - Settlements
+      security:
+        - portalBearer: []
+      x-scope: portal
+      x-error-codes:
+        - VALIDATION_FAILED
+        - UNAUTHENTICATED
+        - TOKEN_EXPIRED
+        - EMAIL_NOT_VERIFIED
+        - FORBIDDEN
+        - NOT_FOUND
+        - RATE_LIMITED
+        - INTERNAL_ERROR
+      x-platform-tables:
+        - tenant_memberships
+        - settlements
+      responses:
+        '200':
+          description: The statements.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SettlementList'
+              example:
+                data:
+                  - id: stl_01JD9W3Y7A1C5E9G3J7M1Q5S9V
+                    periodStart: '2027-02-01T00:00:00Z'
+                    periodEnd: '2027-03-01T00:00:00Z'
+                    currency: EUR
+                    status: approved
+                    netAmount:
+                      amount: '11204.87'
+                      currency: EUR
+                    paidAt: null
+                  - id: stl_01JC7T1V5X9Z3B7D1F5H9K3N7Q
+                    periodStart: '2027-01-01T00:00:00Z'
+                    periodEnd: '2027-02-01T00:00:00Z'
+                    currency: EUR
+                    status: paid
+                    netAmount:
+                      amount: '8935.10'
+                      currency: EUR
+                    paidAt: '2027-02-07T00:00:00Z'
+        '400':
+          $ref: '#/components/responses/ValidationFailed'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/TenantRoleForbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /v1/tenants/{tenantId}/settlements/{settlementId}:
+    parameters:
+      - $ref: '#/components/parameters/TenantId'
+      - $ref: '#/components/parameters/SettlementId'
+    get:
+      operationId: getSettlement
+      summary: Get one settlement statement with its totals
+      description: >-
+        Owners and finance members see one statement (M5) with its totals (PADR-0003 item 5): `netAmount = grossAmount
+        − refundsAmount − disputesAmount − stripeFeesAmount − velexisFeesAmount + adjustmentsAmount`, where
+        `velexisFeesAmount` is `feeBps` basis points of the captured amount net of refunds, and `adjustmentsAmount`
+        holds the manual lines and the balance carried from earlier statements. `payoutReference` is the bank
+        transfer's reference once paid; `notes` are Velexis's remarks. Drafts, voided drafts and statements of other
+        OTAs answer `404 NOT_FOUND`. The lines are in `downloadSettlementLines`.
+      tags:
+        - Settlements
+      security:
+        - portalBearer: []
+      x-scope: portal
+      x-error-codes:
+        - VALIDATION_FAILED
+        - UNAUTHENTICATED
+        - TOKEN_EXPIRED
+        - EMAIL_NOT_VERIFIED
+        - FORBIDDEN
+        - NOT_FOUND
+        - RATE_LIMITED
+        - INTERNAL_ERROR
+      x-platform-tables:
+        - tenant_memberships
+        - settlements
+      responses:
+        '200':
+          description: The statement.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Settlement'
+              example:
+                id: stl_01JC7T1V5X9Z3B7D1F5H9K3N7Q
+                periodStart: '2027-01-01T00:00:00Z'
+                periodEnd: '2027-02-01T00:00:00Z'
+                currency: EUR
+                status: paid
+                netAmount:
+                  amount: '8935.10'
+                  currency: EUR
+                paidAt: '2027-02-07T00:00:00Z'
+                grossAmount:
+                  amount: '9600.00'
+                  currency: EUR
+                refundsAmount:
+                  amount: '249.00'
+                  currency: EUR
+                disputesAmount:
+                  amount: '0.00'
+                  currency: EUR
+                stripeFeesAmount:
+                  amount: '139.40'
+                  currency: EUR
+                velexisFeesAmount:
+                  amount: '187.02'
+                  currency: EUR
+                adjustmentsAmount:
+                  amount: '-89.48'
+                  currency: EUR
+                feeBps: 200
+                lineCount: 41
+                payoutReference: VX-SETTLE-2027-01-ACME
+                notes: null
+        '400':
+          $ref: '#/components/responses/ValidationFailed'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/TenantRoleForbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /v1/tenants/{tenantId}/settlements/{settlementId}/lines.csv:
+    parameters:
+      - $ref: '#/components/parameters/TenantId'
+      - $ref: '#/components/parameters/SettlementId'
+    get:
+      operationId: downloadSettlementLines
+      summary: Download the lines of a settlement statement as CSV
+      description: >-
+        The lines of one statement as a CSV file (M5), to reconcile it with the OTA's own bookings: UTF-8,
+        comma-separated, quoted as RFC 4180 says, with one header row and these columns: `type` (`charge`, `refund`,
+        `dispute`, `dispute_reversal`, `adjustment` or `carry_forward`), `occurredAt`, `amount` (signed, in the
+        statement's currency: refunds and disputes are negative), `stripeFee` (Stripe's fee of the transaction, a
+        positive number is a cost), `paymentIntentId`, `velexisPaymentId` and `checkoutId` (the Stripe PaymentIntent and
+        the OTA's payment and checkout ids, which the OTA admin shows), and `description`; an empty cell is a `null`.
+        The lines are in `occurredAt` order. Amounts are decimal strings without a thousands separator, written by the
+        API and kept as they are; a text cell that starts with `=`, `+`, `-`, `@`, a tab or a carriage return gets a
+        leading `'` (the OWASP rule against CSV injection), so a spreadsheet never runs it as a formula. Drafts, voided
+        drafts and statements of other OTAs answer `404 NOT_FOUND`. The file holds the OTA's payment records, so it is
+        never cached.
+      tags:
+        - Settlements
+      security:
+        - portalBearer: []
+      x-scope: portal
+      x-error-codes:
+        - VALIDATION_FAILED
+        - UNAUTHENTICATED
+        - TOKEN_EXPIRED
+        - EMAIL_NOT_VERIFIED
+        - FORBIDDEN
+        - NOT_FOUND
+        - RATE_LIMITED
+        - INTERNAL_ERROR
+      x-platform-tables:
+        - tenant_memberships
+        - settlements
+        - settlement_lines
+      responses:
+        '200':
+          description: The CSV file.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+            Cache-Control:
+              $ref: '#/components/headers/NoStoreStatement'
+            Content-Disposition:
+              description: >-
+                Always an attachment named after the statement's month and currency,
+                `velexis-statement-<yyyy-mm>-<currency>.csv`.
+              required: true
+              schema:
+                type: string
+                pattern: ^attachment; filename="velexis-statement-[0-9]{4}-[0-9]{2}-[A-Z]{3}\.csv"$
+                examples:
+                  - attachment; filename="velexis-statement-2027-01-EUR.csv"
+          content:
+            text/csv:
+              schema:
+                type: string
+                description: The CSV text, header row first.
+              example: |
+                type,occurredAt,amount,stripeFee,paymentIntentId,velexisPaymentId,checkoutId,description
+                charge,2027-01-04T09:14:22Z,1249.00,18.36,pi_3QExampleCharge01,pay_01JC2H6K0N4Q8S2V6X0Z4B8D2F,chk_01JC2H5J9M3P7R1T5W9Y3A7C1E,Booking 7Q4M2X OSL-BCN
+                refund,2027-01-11T15:02:10Z,-249.00,0.00,pi_3QExampleCharge01,pay_01JC2H6K0N4Q8S2V6X0Z4B8D2F,chk_01JC2H5J9M3P7R1T5W9Y3A7C1E,Partial refund of booking 7Q4M2X
+                carry_forward,2027-01-31T23:59:59Z,-79.48,0.00,,,,Balance carried from the December 2026 statement
+                adjustment,2027-01-31T23:59:59Z,-10.00,0.00,,,,"'-10.00 fee correction, see the note"
         '400':
           $ref: '#/components/responses/ValidationFailed'
         '401':
@@ -8259,6 +10473,13 @@ components:
       schema:
         type: string
         const: no-store
+    NoStoreStatement:
+      description: >-
+        Always `no-store`: the file holds the OTA's payment records and is never cached by the portal server, a proxy
+        or the browser.
+      schema:
+        type: string
+        const: no-store
   parameters:
     IdempotencyKey:
       name: Idempotency-Key
@@ -8346,6 +10567,45 @@ components:
       schema:
         $ref: '#/components/schemas/Environment'
       example: test
+    CredentialsEnvironment:
+      name: environment
+      in: path
+      required: true
+      description: >-
+        The environment whose connection the submitted credentials are for: `test` or `live`. The connection need not
+        exist yet: a successful verification creates it.
+      schema:
+        $ref: '#/components/schemas/Environment'
+      example: test
+    DomainId:
+      name: domainId
+      in: path
+      required: true
+      description: The domain (`id` of `listDomains`); a domain of another OTA answers `404 NOT_FOUND`.
+      schema:
+        type: string
+        pattern: ^dom_[0-9A-HJKMNP-TV-Z]{26}$
+      example: dom_01JB3K5N9Q3S7W1Y5A9C3E7G1J
+    CredentialSubmissionId:
+      name: submissionId
+      in: path
+      required: true
+      description: >-
+        The credential submission (`submission.id` of `submitAmadeusCredentials` or `submitStripeApiKeys`, or
+        `pendingSubmission.id` of a connection); a submission of another OTA answers `404 NOT_FOUND`.
+      schema:
+        $ref: '#/components/schemas/CredentialSubmissionId'
+      example: crs_01JD4Q2S6V0X4Z8B2D6F0H4K8N
+    SettlementId:
+      name: settlementId
+      in: path
+      required: true
+      description: >-
+        The statement (`id` of `listSettlements`); a draft, a voided draft or a statement of another OTA answers `404
+        NOT_FOUND`.
+      schema:
+        $ref: '#/components/schemas/SettlementId'
+      example: stl_01JC7T1V5X9Z3B7D1F5H9K3N7Q
     AdminTenantId:
       name: tenantId
       in: path
@@ -8770,6 +11030,20 @@ components:
           examples:
             SERVICE_UNAVAILABLE:
               $ref: '#/components/examples/SERVICE_UNAVAILABLE'
+    ProviderError:
+      description: >-
+        Stripe failed or could not be reached (`details.provider = stripe`); retry later. Possible codes:
+        PROVIDER_ERROR.
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/X-Request-Id'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            PROVIDER_ERROR:
+              $ref: '#/components/examples/PROVIDER_ERROR'
     AdminUnauthenticated:
       description: >-
         No valid platform admin access token was sent: none, an expired one, a portal token, or the token of an account
@@ -9160,6 +11434,88 @@ components:
         lastLoginAt: '2026-10-21T07:58:12Z'
         createdAt: '2026-10-01T10:02:17Z'
         version: 4
+    PayoutAccount:
+      summary: A verified IBAN payout account, masked
+      value:
+        accountHolderName: Acme Travel AS
+        countryCode: 'NO'
+        currency: NOK
+        scheme: iban
+        last4: '7947'
+        status: verified
+        reviewNote: null
+        updatedAt: '2027-01-20T08:12:44Z'
+        version: 3
+    FeatureDisabledStripeBilling:
+      summary: FEATURE_DISABLED (stripe_billing)
+      value:
+        error:
+          code: FEATURE_DISABLED
+          message: The feature is not available yet, or the plan does not include it.
+          status: 403
+          requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+          details:
+            feature: stripe_billing
+    FeatureDisabledOwnStripe:
+      summary: FEATURE_DISABLED (own_stripe)
+      value:
+        error:
+          code: FEATURE_DISABLED
+          message: The feature is not available yet, or the plan does not include it.
+          status: 403
+          requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+          details:
+            feature: own_stripe
+    FeatureDisabledSettlements:
+      summary: FEATURE_DISABLED (settlements)
+      value:
+        error:
+          code: FEATURE_DISABLED
+          message: The feature is not available yet, or the plan does not include it.
+          status: 403
+          requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+          details:
+            feature: settlements
+    FeatureDisabledOwnAmadeus:
+      summary: FEATURE_DISABLED (own_amadeus)
+      value:
+        error:
+          code: FEATURE_DISABLED
+          message: The feature is not available yet, or the plan does not include it.
+          status: 403
+          requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+          details:
+            feature: own_amadeus
+    FeatureDisabledCustomDomains:
+      summary: FEATURE_DISABLED (custom_domains)
+      value:
+        error:
+          code: FEATURE_DISABLED
+          message: The feature is not available yet, or the plan does not include it.
+          status: 403
+          requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+          details:
+            feature: custom_domains
+    FeatureDisabledLiveSwitch:
+      summary: FEATURE_DISABLED (live_switch)
+      value:
+        error:
+          code: FEATURE_DISABLED
+          message: The feature is not available yet, or the plan does not include it.
+          status: 403
+          requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+          details:
+            feature: live_switch
+    DomainIsSubdomain:
+      summary: The domain is the OTA's sub-domain
+      value:
+        error:
+          code: CONFLICT
+          message: The request conflicts with the current state of the resource.
+          status: 409
+          requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+          details:
+            reason: subdomain
     VALIDATION_FAILED:
       summary: VALIDATION_FAILED
       value:
@@ -9202,6 +11558,14 @@ components:
         error:
           code: INVITATION_INVALID
           message: The invitation is unknown, already used, revoked or expired.
+          status: 400
+          requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+    CONNECT_STATE_INVALID:
+      summary: CONNECT_STATE_INVALID
+      value:
+        error:
+          code: CONNECT_STATE_INVALID
+          message: The Stripe connection request is unknown, already used or expired; start again.
           status: 400
           requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
     UNAUTHENTICATED:
@@ -9374,12 +11738,36 @@ components:
           message: An invitation for this e-mail address is already pending.
           status: 409
           requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+    DOMAIN_TAKEN:
+      summary: DOMAIN_TAKEN
+      value:
+        error:
+          code: DOMAIN_TAKEN
+          message: The host name is used by another OTA.
+          status: 409
+          requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+    DOMAIN_NOT_VERIFIED:
+      summary: DOMAIN_NOT_VERIFIED
+      value:
+        error:
+          code: DOMAIN_NOT_VERIFIED
+          message: Verify the domain first.
+          status: 409
+          requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
     AMADEUS_OFFICE_UNAVAILABLE:
       summary: AMADEUS_OFFICE_UNAVAILABLE
       value:
         error:
           code: AMADEUS_OFFICE_UNAVAILABLE
           message: The Amadeus office is not available, or no free office is left.
+          status: 409
+          requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+    STRIPE_ACCOUNT_ALREADY_CONNECTED:
+      summary: STRIPE_ACCOUNT_ALREADY_CONNECTED
+      value:
+        error:
+          code: STRIPE_ACCOUNT_ALREADY_CONNECTED
+          message: The Stripe account is already connected to another OTA.
           status: 409
           requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
     MFA_ALREADY_ENABLED:
@@ -9449,6 +11837,34 @@ components:
           message: The OTA must be live first.
           status: 422
           requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+    LIVE_PRECONDITIONS_UNMET:
+      summary: LIVE_PRECONDITIONS_UNMET
+      value:
+        error:
+          code: LIVE_PRECONDITIONS_UNMET
+          message: The OTA cannot go live yet; some requirements are missing.
+          status: 422
+          requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+          details:
+            missing:
+              - amadeus_live
+              - payout_account
+    DOMAIN_INVALID:
+      summary: DOMAIN_INVALID
+      value:
+        error:
+          code: DOMAIN_INVALID
+          message: Enter a valid public host name that does not belong to Velexis.
+          status: 422
+          requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+    PAYOUT_ACCOUNT_REQUIRED:
+      summary: PAYOUT_ACCOUNT_REQUIRED
+      value:
+        error:
+          code: PAYOUT_ACCOUNT_REQUIRED
+          message: Live payments collected by Velexis need a verified payout account.
+          status: 422
+          requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
     ACCOUNT_LOCKED:
       summary: ACCOUNT_LOCKED
       value:
@@ -9473,6 +11889,16 @@ components:
           message: Unexpected error; quote the requestId to support.
           status: 500
           requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+    PROVIDER_ERROR:
+      summary: PROVIDER_ERROR
+      value:
+        error:
+          code: PROVIDER_ERROR
+          message: An external service (Stripe, Amadeus or DNS) failed; try again later.
+          status: 502
+          requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+          details:
+            provider: stripe
     SERVICE_UNAVAILABLE:
       summary: SERVICE_UNAVAILABLE
       value:
@@ -10573,6 +12999,17 @@ components:
           $ref: '#/components/schemas/CountryCode'
         timeZone:
           $ref: '#/components/schemas/TimeZone'
+    GoLiveRequest:
+      type: object
+      description: Confirms the switch to live (M5); nothing else is sent.
+      additionalProperties: false
+      required:
+        - confirm
+      properties:
+        confirm:
+          type: boolean
+          const: true
+          description: Always `true`.
     ProvisioningJobId:
       type: string
       description: Tenant job id (`job_` + ULID).
@@ -11360,6 +13797,22 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/Domain'
+    AddDomainRequest:
+      type: object
+      description: The custom storefront domain to add (M5).
+      additionalProperties: false
+      required:
+        - hostname
+      properties:
+        hostname:
+          type: string
+          minLength: 1
+          maxLength: 254
+          description: >-
+            The host name as the owner typed it. The service normalises it (lower case, punycode, no trailing dot) and
+            checks the host name rules, so a malformed host answers `422 DOMAIN_INVALID`, not `400`.
+          examples:
+            - travel.acme-travel.example.com
     AmadeusOfficeId:
       type: string
       description: An Amadeus office id (9 characters).
@@ -11602,6 +14055,137 @@ components:
           uniqueItems: true
           items:
             $ref: '#/components/schemas/AmadeusMonitoredQueue'
+    RequestLiveAmadeusRequest:
+      type: object
+      description: An optional note for Velexis's operations team about the live access (M5).
+      additionalProperties: false
+      properties:
+        note:
+          type: string
+          minLength: 1
+          maxLength: 1000
+          description: Shown to ops in the alert e-mail and kept in the audit row; no secrets.
+    OwnAmadeusClientSecret:
+      type: string
+      description: >-
+        The OAuth2 client secret Amadeus issued to the OTA. Write-only: envelope-encrypted at once, never logged, never
+        answered, never put in a queue message, and erased from the submission when its verification ends.
+      minLength: 1
+      maxLength: 512
+      writeOnly: true
+    SubmitAmadeusCredentialsRequest:
+      type: object
+      description: >-
+        The OTA's own Amadeus credentials for one environment (M5). `defaultOfficeId` and, when sent, `queuingOfficeId`
+        and `ownerOfficeId` must be among `officeIds` (checked by the service, `400 VALIDATION_FAILED` otherwise); the
+        two optional offices default to `defaultOfficeId`.
+      additionalProperties: false
+      required:
+        - clientId
+        - clientSecret
+        - officeIds
+        - defaultOfficeId
+      properties:
+        clientId:
+          type: string
+          minLength: 1
+          maxLength: 200
+          pattern: ^\S+$
+          description: The OAuth2 client id Amadeus issued to the OTA (not a secret; `listAmadeusConnections` shows it).
+        clientSecret:
+          $ref: '#/components/schemas/OwnAmadeusClientSecret'
+        officeIds:
+          type: array
+          description: The office ids the credentials may act for, each at most once.
+          minItems: 1
+          maxItems: 50
+          uniqueItems: true
+          items:
+            $ref: '#/components/schemas/AmadeusOfficeId'
+        defaultOfficeId:
+          $ref: '#/components/schemas/AmadeusOfficeId'
+        queuingOfficeId:
+          $ref: '#/components/schemas/AmadeusOfficeId'
+        ownerOfficeId:
+          $ref: '#/components/schemas/AmadeusOfficeId'
+    CredentialSubmissionId:
+      type: string
+      description: Credential submission id (`crs_` + ULID).
+      pattern: ^crs_[0-9A-HJKMNP-TV-Z]{26}$
+      examples:
+        - crs_01JD4Q2S6V0X4Z8B2D6F0H4K8N
+    CredentialSubmission:
+      type: object
+      description: >-
+        A submission of the OTA's own credentials and its verification (M5, PADR-0010). Never holds the submitted
+        secrets or their ciphertexts, nor the non-secret fields of the submission.
+      additionalProperties: false
+      required:
+        - id
+        - kind
+        - environment
+        - status
+        - errorCode
+        - errorMessage
+        - createdAt
+        - finishedAt
+      properties:
+        id:
+          $ref: '#/components/schemas/CredentialSubmissionId'
+        kind:
+          type: string
+          description: '`amadeus` (own Amadeus credentials) or `stripe_api_keys` (own Stripe API keys).'
+          enum:
+            - amadeus
+            - stripe_api_keys
+        environment:
+          $ref: '#/components/schemas/Environment'
+        status:
+          type: string
+          description: >-
+            `pending` (waiting for the worker), `verifying`, `applied` (the connection uses the credentials), `failed`
+            or `superseded` (a newer submission of the same environment replaced it). The last three are final.
+          enum:
+            - pending
+            - verifying
+            - applied
+            - failed
+            - superseded
+        errorCode:
+          type:
+            - string
+            - 'null'
+          pattern: ^[A-Z][A-Z0-9_]+$
+          description: >-
+            Why the verification failed, a stable code for the portal: `AMADEUS_CREDENTIALS_INVALID`,
+            `STRIPE_KEY_INVALID`, `STRIPE_LIVEMODE_MISMATCH` or `PROVIDER_UNAVAILABLE`; `null` unless `failed`. These
+            are verification results, not error codes of the API.
+        errorMessage:
+          type:
+            - string
+            - 'null'
+          maxLength: 500
+          description: >-
+            The sanitised reason: the provider's HTTP status and error code, never a provider body or a secret; `null`
+            unless `failed`.
+        createdAt:
+          type: string
+          format: date-time
+        finishedAt:
+          type:
+            - string
+            - 'null'
+          format: date-time
+          description: When the submission reached a final status; `null` while it is open.
+    CredentialSubmissionAccepted:
+      type: object
+      description: The new submission, `pending` until the worker verifies it.
+      additionalProperties: false
+      required:
+        - submission
+      properties:
+        submission:
+          $ref: '#/components/schemas/CredentialSubmission'
     PaymentCapabilities:
       type: object
       description: >-
@@ -11737,6 +14321,158 @@ components:
       properties:
         statementDescriptorSuffix:
           $ref: '#/components/schemas/StatementDescriptorSuffix'
+    StripeConnectStart:
+      type: object
+      description: >-
+        Where to send the browser to connect a Stripe account (M5). The URL holds the single-use OAuth state, so the
+        answer is `no-store`.
+      additionalProperties: false
+      required:
+        - authorizeUrl
+        - expiresAt
+      properties:
+        authorizeUrl:
+          type: string
+          format: uri
+          pattern: ^https://connect\.stripe\.com/oauth/authorize\?
+          description: Stripe's Connect OAuth authorize URL with Velexis's client id, `scope=read_write` and the state.
+        expiresAt:
+          type: string
+          format: date-time
+          description: When the state expires (10 minutes); start again after it.
+    StripeConnectState:
+      type: string
+      description: >-
+        The OAuth `state` that `startStripeConnect` put in the authorize URL and Stripe sent back. Write-only: single
+        use, never logged and never answered.
+      minLength: 16
+      maxLength: 128
+      pattern: ^[A-Za-z0-9_-]+$
+      writeOnly: true
+    StripeConnectCode:
+      type: string
+      description: >-
+        The OAuth authorisation code Stripe sent back (`ac_…`). Write-only: exchanged once with Velexis's secret key,
+        never logged and never answered.
+      minLength: 1
+      maxLength: 255
+      pattern: ^[A-Za-z0-9_]+$
+      writeOnly: true
+    CompleteStripeConnectRequest:
+      description: >-
+        What Stripe sent back to the portal's callback page (M5): the state with the code, or the state with an error.
+        Exactly one of the two shapes.
+      oneOf:
+        - $ref: '#/components/schemas/StripeConnectAuthorized'
+        - $ref: '#/components/schemas/StripeConnectRefused'
+    StripeConnectAuthorized:
+      type: object
+      description: The person authorised Velexis on Stripe.
+      additionalProperties: false
+      required:
+        - state
+        - code
+      properties:
+        state:
+          $ref: '#/components/schemas/StripeConnectState'
+        code:
+          $ref: '#/components/schemas/StripeConnectCode'
+    StripeConnectRefused:
+      type: object
+      description: Stripe reported an error, for example the person declined (`access_denied`).
+      additionalProperties: false
+      required:
+        - state
+        - error
+      properties:
+        state:
+          $ref: '#/components/schemas/StripeConnectState'
+        error:
+          type: string
+          minLength: 1
+          maxLength: 100
+          pattern: ^[a-z][a-z_]*$
+          description: Stripe's OAuth error code, for example `access_denied`.
+        errorDescription:
+          type: string
+          maxLength: 500
+          description: Stripe's human-readable description of the error.
+    StripeConnectCompleted:
+      type: object
+      description: The OTA of the state and its payment connections after the switch (M5).
+      additionalProperties: false
+      required:
+        - tenantId
+        - connections
+      properties:
+        tenantId:
+          $ref: '#/components/schemas/TenantId'
+        connections:
+          type: array
+          description: The OTA's payment connections, test first.
+          items:
+            $ref: '#/components/schemas/PaymentConnection'
+    StripeSecretKey:
+      type: string
+      description: >-
+        A secret key (`sk_`) or restricted key (`rk_`) of the OTA's own Stripe account, of the path's environment.
+        Write-only: envelope-encrypted at once, never logged, never answered, never put in a queue message, and erased
+        from the submission when its verification ends.
+      maxLength: 255
+      pattern: ^(sk|rk)_(test|live)_[A-Za-z0-9]+$
+      writeOnly: true
+    StripeWebhookSecret:
+      type: string
+      description: >-
+        The signing secret (`whsec_`) of the webhook endpoint the OTA creates in its Stripe account for `webhookUrl`.
+        Write-only, like the secret key.
+      maxLength: 255
+      pattern: ^whsec_[A-Za-z0-9_-]+$
+      writeOnly: true
+    SubmitStripeApiKeysRequest:
+      type: object
+      description: >-
+        The OTA's own Stripe keys for one environment (M5). Every key must carry the environment's prefix (`_test_` or
+        `_live_`; checked by the service, `400 VALIDATION_FAILED` otherwise).
+      additionalProperties: false
+      required:
+        - publishableKey
+        - secretKey
+        - webhookSecret
+      properties:
+        publishableKey:
+          type: string
+          maxLength: 255
+          pattern: ^pk_(test|live)_[A-Za-z0-9]+$
+          description: The publishable key of the OTA's Stripe account (not a secret; the connection shows it).
+        secretKey:
+          $ref: '#/components/schemas/StripeSecretKey'
+        webhookSecret:
+          $ref: '#/components/schemas/StripeWebhookSecret'
+    StripeApiKeysSubmitted:
+      type: object
+      description: The new submission and the webhook endpoint to create in the OTA's Stripe dashboard (M5).
+      additionalProperties: false
+      required:
+        - submission
+        - webhookUrl
+        - webhookEvents
+      properties:
+        submission:
+          $ref: '#/components/schemas/CredentialSubmission'
+        webhookUrl:
+          type: string
+          format: uri
+          pattern: ^https://[^/]+/webhooks/stripe/c/ppc_[0-9A-HJKMNP-TV-Z]{26}$
+          description: >-
+            The endpoint URL to enter in Stripe: the OTA backend's webhook receiver for this connection,
+            `https://api.ota.example.com/webhooks/stripe/c/<ppc_id>`.
+        webhookEvents:
+          type: array
+          description: The events to enable on the endpoint.
+          items:
+            type: string
+            pattern: ^[a-z_]+(\.[a-z_]+)+$
     Subscription:
       type: object
       description: The OTA's subscription to a Velexis plan.
@@ -11807,6 +14543,421 @@ components:
         canManageInStripe:
           type: boolean
           description: True for a Stripe subscription, managed in the Stripe Customer Portal (M5).
+    CreateCheckoutSessionRequest:
+      type: object
+      description: The paid plan to subscribe to (M5).
+      additionalProperties: false
+      required:
+        - planCode
+        - billingInterval
+      properties:
+        planCode:
+          $ref: '#/components/schemas/PlanCode'
+        billingInterval:
+          $ref: '#/components/schemas/BillingInterval'
+    CheckoutSession:
+      type: object
+      description: A Stripe Checkout Session to send the browser to (M5).
+      additionalProperties: false
+      required:
+        - url
+        - expiresAt
+      properties:
+        url:
+          type: string
+          format: uri
+          description: The Stripe Checkout page.
+        expiresAt:
+          type: string
+          format: date-time
+          description: When Stripe expires the session; ask for a new one after it.
+    CustomerPortalSession:
+      type: object
+      description: >-
+        A Stripe Customer Portal session (M5). The URL signs its holder in to the portal, so the answer is `no-store`.
+      additionalProperties: false
+      required:
+        - url
+      properties:
+        url:
+          type: string
+          format: uri
+          description: The Stripe Customer Portal session URL.
+    Invoice:
+      type: object
+      description: >-
+        A Velexis invoice to the OTA, synchronised from Stripe (M5): the fields of `AdminInvoice` that the portal shows,
+        with the same schemas.
+      additionalProperties: false
+      required:
+        - id
+        - number
+        - status
+        - total
+        - amountDue
+        - amountPaid
+        - periodStart
+        - periodEnd
+        - issuedAt
+        - paidAt
+        - hostedInvoiceUrl
+        - invoicePdfUrl
+      properties:
+        id:
+          type: string
+          pattern: ^inv_[0-9A-HJKMNP-TV-Z]{26}$
+        number:
+          type: string
+          description: The legal invoice number.
+        status:
+          type: string
+          enum:
+            - draft
+            - open
+            - paid
+            - void
+            - uncollectible
+        total:
+          $ref: '#/components/schemas/Money'
+        amountDue:
+          $ref: '#/components/schemas/Money'
+        amountPaid:
+          $ref: '#/components/schemas/Money'
+        periodStart:
+          type:
+            - string
+            - 'null'
+          format: date-time
+        periodEnd:
+          type:
+            - string
+            - 'null'
+          format: date-time
+        issuedAt:
+          type:
+            - string
+            - 'null'
+          format: date-time
+        paidAt:
+          type:
+            - string
+            - 'null'
+          format: date-time
+        hostedInvoiceUrl:
+          type:
+            - string
+            - 'null'
+          format: uri
+        invoicePdfUrl:
+          type:
+            - string
+            - 'null'
+          format: uri
+    InvoiceList:
+      type: object
+      additionalProperties: false
+      required:
+        - data
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Invoice'
+    PayoutAccountStatus:
+      type: string
+      description: '`pending_review` until a platform admin verifies it (every change resets it), `verified` or `rejected`.'
+      enum:
+        - pending_review
+        - verified
+        - rejected
+    PayoutScheme:
+      type: string
+      description: '`iban` (IBAN and an optional BIC) or `local` (an account number and a routing number).'
+      enum:
+        - iban
+        - local
+    PayoutAccount:
+      type: object
+      description: >-
+        The bank account where Velexis pays the OTA's settlements (M5, PADR-0003 item 10), masked. Never holds the
+        IBAN, the BIC, the account or routing number, or their ciphertext.
+      additionalProperties: false
+      required:
+        - accountHolderName
+        - countryCode
+        - currency
+        - scheme
+        - last4
+        - status
+        - reviewNote
+        - updatedAt
+        - version
+      properties:
+        accountHolderName:
+          type: string
+          description: The legal name on the bank account.
+        countryCode:
+          $ref: '#/components/schemas/CountryCode'
+        currency:
+          $ref: '#/components/schemas/CurrencyCode'
+        scheme:
+          $ref: '#/components/schemas/PayoutScheme'
+        last4:
+          type: string
+          pattern: ^[A-Z0-9]{4}$
+          description: The last 4 characters of the IBAN or account number, for display.
+        status:
+          $ref: '#/components/schemas/PayoutAccountStatus'
+        reviewNote:
+          type:
+            - string
+            - 'null'
+          maxLength: 1000
+          description: The reviewer's note, set with a rejection; `null` otherwise.
+        updatedAt:
+          type: string
+          format: date-time
+        version:
+          type: integer
+          minimum: 1
+          description: Optimistic-locking version; the `ETag` of the response carries it.
+    PayoutAccountHolderName:
+      type: string
+      description: The legal name on the bank account.
+      minLength: 1
+      maxLength: 200
+    Iban:
+      type: string
+      description: >-
+        An IBAN, spaces and lower case allowed; the service removes the spaces, upper-cases it and checks the mod-97
+        checksum. Write-only: envelope-encrypted at once, never logged and never answered.
+      minLength: 15
+      maxLength: 42
+      pattern: ^[A-Za-z]{2}[0-9]{2}[A-Za-z0-9 ]{11,38}$
+      writeOnly: true
+    Bic:
+      type: string
+      description: The BIC (SWIFT code) of the bank, 8 or 11 characters. Write-only, like the IBAN.
+      pattern: ^[A-Za-z]{6}[A-Za-z0-9]{2}([A-Za-z0-9]{3})?$
+      writeOnly: true
+    BankAccountNumber:
+      type: string
+      description: >-
+        A national bank account number. Write-only: envelope-encrypted at once, never logged and never answered.
+      minLength: 4
+      maxLength: 34
+      pattern: ^[A-Za-z0-9][A-Za-z0-9 -]*$
+      writeOnly: true
+    BankRoutingNumber:
+      type: string
+      description: >-
+        The national routing number of the bank (for example an ABA routing number or a sort code). Write-only, like the
+        account number.
+      minLength: 3
+      maxLength: 20
+      pattern: ^[A-Za-z0-9][A-Za-z0-9 -]*$
+      writeOnly: true
+    SetPayoutAccountRequest:
+      description: 'The bank account (M5): an IBAN account or a local one, told apart by `scheme`.'
+      oneOf:
+        - $ref: '#/components/schemas/IbanPayoutAccountRequest'
+        - $ref: '#/components/schemas/LocalPayoutAccountRequest'
+    IbanPayoutAccountRequest:
+      type: object
+      description: A bank account identified by its IBAN.
+      additionalProperties: false
+      required:
+        - accountHolderName
+        - countryCode
+        - currency
+        - scheme
+        - iban
+      properties:
+        accountHolderName:
+          $ref: '#/components/schemas/PayoutAccountHolderName'
+        countryCode:
+          $ref: '#/components/schemas/CountryCode'
+        currency:
+          $ref: '#/components/schemas/CurrencyCode'
+        scheme:
+          type: string
+          const: iban
+        iban:
+          $ref: '#/components/schemas/Iban'
+        bic:
+          $ref: '#/components/schemas/Bic'
+    LocalPayoutAccountRequest:
+      type: object
+      description: A bank account identified by a national account number and routing number.
+      additionalProperties: false
+      required:
+        - accountHolderName
+        - countryCode
+        - currency
+        - scheme
+        - accountNumber
+        - routingNumber
+      properties:
+        accountHolderName:
+          $ref: '#/components/schemas/PayoutAccountHolderName'
+        countryCode:
+          $ref: '#/components/schemas/CountryCode'
+        currency:
+          $ref: '#/components/schemas/CurrencyCode'
+        scheme:
+          type: string
+          const: local
+        accountNumber:
+          $ref: '#/components/schemas/BankAccountNumber'
+        routingNumber:
+          $ref: '#/components/schemas/BankRoutingNumber'
+    SettlementId:
+      type: string
+      description: Settlement statement id (`stl_` + ULID).
+      pattern: ^stl_[0-9A-HJKMNP-TV-Z]{26}$
+      examples:
+        - stl_01JC7T1V5X9Z3B7D1F5H9K3N7Q
+    SettlementSummary:
+      type: object
+      description: >-
+        One monthly statement of payments Velexis collected for the OTA (M5, PADR-0003), as the portal lists it.
+        Drafts and voided drafts are never answered to the portal.
+      additionalProperties: false
+      required:
+        - id
+        - periodStart
+        - periodEnd
+        - currency
+        - status
+        - netAmount
+        - paidAt
+      properties:
+        id:
+          $ref: '#/components/schemas/SettlementId'
+        periodStart:
+          type: string
+          format: date-time
+          description: The first instant of the calendar month (UTC), inclusive.
+        periodEnd:
+          type: string
+          format: date-time
+          description: The first instant of the next month, exclusive.
+        currency:
+          $ref: '#/components/schemas/CurrencyCode'
+        status:
+          type: string
+          description: >-
+            `approved` (to be paid by bank transfer), `paid`, or `carried_forward` (a net of zero or less, absorbed by
+            the next statement).
+          enum:
+            - approved
+            - paid
+            - carried_forward
+        netAmount:
+          $ref: '#/components/schemas/Money'
+        paidAt:
+          type:
+            - string
+            - 'null'
+          format: date-time
+          description: The date of the bank transfer; `null` unless `paid`.
+    SettlementList:
+      type: object
+      additionalProperties: false
+      required:
+        - data
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/SettlementSummary'
+    Settlement:
+      type: object
+      description: >-
+        One statement with its totals (M5, PADR-0003 item 5): the properties of `SettlementSummary` with the same
+        schemas, plus the parts of `netAmount`, the fee rate, the line count, the bank reference and the notes.
+      additionalProperties: false
+      required:
+        - id
+        - periodStart
+        - periodEnd
+        - currency
+        - status
+        - netAmount
+        - paidAt
+        - grossAmount
+        - refundsAmount
+        - disputesAmount
+        - stripeFeesAmount
+        - velexisFeesAmount
+        - adjustmentsAmount
+        - feeBps
+        - lineCount
+        - payoutReference
+        - notes
+      properties:
+        id:
+          $ref: '#/components/schemas/SettlementId'
+        periodStart:
+          type: string
+          format: date-time
+          description: The first instant of the calendar month (UTC), inclusive.
+        periodEnd:
+          type: string
+          format: date-time
+          description: The first instant of the next month, exclusive.
+        currency:
+          $ref: '#/components/schemas/CurrencyCode'
+        status:
+          type: string
+          description: >-
+            `approved` (to be paid by bank transfer), `paid`, or `carried_forward` (a net of zero or less, absorbed by
+            the next statement).
+          enum:
+            - approved
+            - paid
+            - carried_forward
+        netAmount:
+          $ref: '#/components/schemas/Money'
+        paidAt:
+          type:
+            - string
+            - 'null'
+          format: date-time
+          description: The date of the bank transfer; `null` unless `paid`.
+        grossAmount:
+          $ref: '#/components/schemas/Money'
+        refundsAmount:
+          $ref: '#/components/schemas/Money'
+        disputesAmount:
+          $ref: '#/components/schemas/Money'
+        stripeFeesAmount:
+          $ref: '#/components/schemas/Money'
+        velexisFeesAmount:
+          $ref: '#/components/schemas/Money'
+        adjustmentsAmount:
+          $ref: '#/components/schemas/Money'
+        feeBps:
+          type: integer
+          minimum: 0
+          maximum: 10000
+          description: The Velexis fee in basis points, copied from the plan when the statement was generated.
+        lineCount:
+          type: integer
+          minimum: 0
+          description: The lines of `downloadSettlementLines`.
+        payoutReference:
+          type:
+            - string
+            - 'null'
+          maxLength: 200
+          description: The bank transfer's reference; `null` unless `paid`.
+        notes:
+          type:
+            - string
+            - 'null'
+          maxLength: 2000
+          description: Velexis's remarks on the statement.
     AdminMfaChallenge:
       type: object
       description: >-
