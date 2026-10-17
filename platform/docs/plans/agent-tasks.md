@@ -565,7 +565,8 @@ Common commands: backend `pnpm --filter @velexis/platform-backend test`, `test:i
   - With all switches off only the seven M1 items appear; with them on, eleven.
 - **Verify:** `pnpm --filter @velexis/platform-backend test && pnpm --filter @velexis/platform-backend test:int -- provisioning`
 
-### PBE-025 · Implement members and role rules
+### PBE-025 · Implement members and role rules ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-backend
 - **Milestone:** M1
 - **Depends on:** PBE-017

@@ -81,21 +81,6 @@ const PROFILE_FIELDS = [
   ["timeZone", "time_zone"],
 ] as const satisfies ReadonlyArray<readonly [keyof UpdateTenantRequest, keyof TenantProfileChanges]>;
 
-/** The ETag of a versioned resource: its version as a quoted string (`"3"`), as `If-Match` sends it back. */
-export function etagOf(version: number): string {
-  return `"${version}"`;
-}
-
-/** The version an `If-Match` value names (`"3"` → 3); the OpenAPI validation has checked the form. */
-export function versionOfIfMatch(value: string): number {
-  const match = /^"([0-9]+)"$/.exec(value);
-  const version = match?.[1] === undefined ? Number.NaN : Number(match[1]);
-  if (!Number.isSafeInteger(version)) {
-    throw new AppError("PRECONDITION_FAILED");
-  }
-  return version;
-}
-
 @Injectable()
 export class TenantsService {
   private readonly baseDomain: string;

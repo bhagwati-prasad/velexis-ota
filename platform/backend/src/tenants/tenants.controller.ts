@@ -6,12 +6,11 @@ import { Controller, Get, Patch, Res } from "@nestjs/common";
 import type { AccessTokenClaims } from "../auth/token.service";
 import { AccessToken } from "../common/auth/decorators";
 import { CurrentMembership, TenantRoles, type TenantMembership } from "../common/auth/tenant-role.guard";
+import { etagOf, versionOfIfMatch } from "../common/http/if-match";
 import { OpenApiOperation, Validated } from "../common/http/openapi-operation.decorator";
 import { tenantRolesOf } from "../memberships/tenant-roles";
 import {
-  etagOf,
   TenantsService,
-  versionOfIfMatch,
   type KeyAvailability,
   type Tenant,
   type TenantList,
