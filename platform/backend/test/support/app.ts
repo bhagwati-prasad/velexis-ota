@@ -37,6 +37,9 @@ import { createTestMasterKeyDir, testCryptoAndMailEnv, type TestMasterKeyDir } f
 /** The PLATFORM_BFF_KEY of test applications: the development value of `.env.example` (a dummy). */
 export const TEST_BFF_KEY = "dev_bff_key_change_me_0123456789abcdef";
 
+/** The STOREFRONT_BASE_DOMAIN of test applications: the placeholder of `.env.example` (decisions.md §4). */
+export const TEST_STOREFRONT_BASE_DOMAIN = "ota.example.com";
+
 /** A provider replaced in the application: `{ provide: Clock, useValue: clock }`, a class or a factory. */
 export type ProviderOverride =
   | { readonly provide: unknown; readonly useValue: unknown }
@@ -57,8 +60,8 @@ export interface CreateTestAppOptions {
   readonly imports?: ReadonlyArray<Type | DynamicModule | Promise<DynamicModule> | ForwardReference>;
   /**
    * Configuration variables over the test defaults (APP_ENV=test, the clone, the Redis database, TEST_BFF_KEY, a new
-   * JWT key file, a new master key folder, the e-mail settings of TEST_MAIL_ENV; the FEATURE_* switches stay off
-   * unless set here).
+   * JWT key file, a new master key folder, the e-mail settings of TEST_MAIL_ENV, TEST_STOREFRONT_BASE_DOMAIN; the
+   * FEATURE_* switches stay off unless set here).
    */
   readonly env?: Readonly<Record<string, string>>;
   /** The clock the application sees; a new FakeClock (2026-01-15T10:00:00Z) by default. */
@@ -123,6 +126,7 @@ export async function createTestApp(options: CreateTestAppOptions = {}): Promise
       PLATFORM_BFF_KEY: TEST_BFF_KEY,
       JWT_PRIVATE_KEY_FILE: jwtKey.path,
       ...testCryptoAndMailEnv(masterKeys),
+      STOREFRONT_BASE_DOMAIN: TEST_STOREFRONT_BASE_DOMAIN,
       ...options.env,
     });
     const logs = new LogSink();

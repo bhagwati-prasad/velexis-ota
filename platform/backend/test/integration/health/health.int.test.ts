@@ -153,6 +153,7 @@ function processEnv(overrides: Record<string, string> = {}): Record<string, stri
     PLATFORM_BFF_KEY,
     JWT_PRIVATE_KEY_FILE: jwtKey.path,
     ...testCryptoAndMailEnv(masterKeys),
+    STOREFRONT_BASE_DOMAIN: "ota.example.com",
     ...overrides,
   };
 }

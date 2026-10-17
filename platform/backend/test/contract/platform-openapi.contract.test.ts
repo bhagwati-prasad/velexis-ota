@@ -2720,7 +2720,9 @@ describe("the conventions of every operation", () => {
       }
     }
     expect(checked).toBeGreaterThan(operations.length);
-  });
+    // The checker compiles an Ajv validator for every documented response: about a second alone, more than Vitest's
+    // 5 s default under a full parallel `pnpm test` on four CPUs, and it grows with the document.
+  }, 60_000);
 
   it("refuses answers with an undocumented field, a number for money or an undocumented status", () => {
     const session = objectAt(resolve(platform, { $ref: "#/components/examples/PortalSession" }), "value");

@@ -42,6 +42,7 @@ const WITHOUT_DATABASE_URL = {
   PLATFORM_BFF_KEY: BFF_KEY,
   JWT_PRIVATE_KEY_FILE: jwtKey.path,
   ...testCryptoAndMailEnv(masterKeys),
+  STOREFRONT_BASE_DOMAIN: "ota.example.com",
 } as const;
 
 /** The one line the entry points log when DATABASE_URL is missing. */
@@ -148,6 +149,7 @@ describe("the entry points as processes", () => {
         PLATFORM_BFF_KEY: BFF_KEY,
         JWT_PRIVATE_KEY_FILE: jwtKey.path,
         ...testCryptoAndMailEnv(masterKeys),
+        STOREFRONT_BASE_DOMAIN: "ota.example.com",
       });
 
       expect(result.error).toBeUndefined();

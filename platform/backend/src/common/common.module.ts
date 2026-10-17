@@ -4,7 +4,9 @@
 // (`EnvelopeService`, PBE-011) without importing it; AppModule imports it once with `CommonModule.forApi()`. It brings
 // the process's Redis connections and the InvalidationPublisher (RedisModule, global), the rate limits and the
 // idempotency interceptor (PBE-009). The worker imports `CommonModule.forWorker()`: Clock, ids, the worker's own pool
-// and the envelope encryption, without the request pipeline. Later tasks add the Stripe pieces here.
+// and the envelope encryption, without the request pipeline. Later tasks add the Stripe pieces here. TenantRoleGuard's
+// membership read (`TenantMembershipLookup`) comes from the global MembershipsModule, which AppModule imports next to
+// it (PBE-017).
 import { Global, Module, type DynamicModule } from "@nestjs/common";
 import { APP_FILTER, APP_GUARD, APP_INTERCEPTOR, DiscoveryModule } from "@nestjs/core";
 import { ClsMiddleware } from "nestjs-cls";
@@ -15,6 +17,7 @@ import { FeatureGuard } from "./auth/feature.guard";
 import { InternalOnlyGuard } from "./auth/internal-only.guard";
 import { PortalAuthGuard } from "./auth/portal-auth.guard";
 import { RecentMfaGuard } from "./auth/recent-mfa.guard";
+import { TenantRoleGuard } from "./auth/tenant-role.guard";
 import { Clock } from "./clock";
 import { cryptoProviders, EnvelopeService } from "./crypto.provider";
 import { PLATFORM_DB, platformDatabaseProviders } from "./database";
@@ -52,11 +55,12 @@ export const API_REQUEST_MIDDLEWARE = [jsonBodyParser, ClsMiddleware, EndUserMid
  *    (`portal_unverified`, `portal`) or AdminAuthGuard (`platform_admin`); `public` has none;
  * 3. AccountRateLimitGuard: the per-account rate limits, which need the account the auth guards put into the
  *    request context (PBE-009);
- * 4. RecentMfaGuard for `x-mfa-step-up`;
- * 5. FeatureGuard for `x-feature`.
+ * 4. TenantRoleGuard for `@TenantRoles(...)`: the caller's active membership of `{tenantId}` (step 6, PBE-017), so a
+ *    non-member gets `404` before any step-up or switch says anything about the operation;
+ * 5. RecentMfaGuard for `x-mfa-step-up`;
+ * 6. FeatureGuard for `x-feature`.
  *
- * TenantRoleGuard (step 6, PBE-017) goes between 3 and 4, and the Stripe signature guard of the `webhook` scope (M5)
- * with the auth guards.
+ * The Stripe signature guard of the `webhook` scope (M5) goes with the auth guards.
  */
 export const API_GUARDS = [
   RateLimitGuard,
@@ -64,6 +68,7 @@ export const API_GUARDS = [
   PortalAuthGuard,
   AdminAuthGuard,
   AccountRateLimitGuard,
+  TenantRoleGuard,
   RecentMfaGuard,
   FeatureGuard,
 ] as const;

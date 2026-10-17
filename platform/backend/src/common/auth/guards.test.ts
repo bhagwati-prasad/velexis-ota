@@ -35,6 +35,7 @@ import { FeatureGuard } from "./feature.guard";
 import { InternalOnlyGuard } from "./internal-only.guard";
 import { PortalAuthGuard } from "./portal-auth.guard";
 import { MFA_STEP_UP_WINDOW_SECONDS, RecentMfaGuard } from "./recent-mfa.guard";
+import { TenantRoleGuard } from "./tenant-role.guard";
 
 const START = "2026-10-15T09:00:00.000Z";
 const NOW = Date.parse(START) / 1000;
@@ -214,13 +215,14 @@ function harness(features: Partial<Record<FeatureName, boolean>> = {}) {
 }
 
 describe("the guard order", () => {
-  it("runs RateLimitGuard, the auth guards of the scope, AccountRateLimitGuard, then RecentMfaGuard, then FeatureGuard (architecture §3)", () => {
+  it("runs RateLimitGuard, the auth guards of the scope, AccountRateLimitGuard, TenantRoleGuard, then RecentMfaGuard, then FeatureGuard (architecture §3)", () => {
     expect(API_GUARDS).toEqual([
       RateLimitGuard,
       InternalOnlyGuard,
       PortalAuthGuard,
       AdminAuthGuard,
       AccountRateLimitGuard,
+      TenantRoleGuard,
       RecentMfaGuard,
       FeatureGuard,
     ]);

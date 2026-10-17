@@ -48,6 +48,7 @@ const DEVELOPMENT = {
   MASTER_KEY_DIR: masterKeys.path,
   MASTER_KEY_CURRENT: "local:v1",
   ...TEST_MAIL_ENV,
+  STOREFRONT_BASE_DOMAIN: "ota.example.com",
 } as const;
 
 /** The variables without a default: the minimum a process needs. */
@@ -64,6 +65,7 @@ const REQUIRED = {
   OPS_ALERT_EMAIL: DEVELOPMENT.OPS_ALERT_EMAIL,
   PUBLIC_PORTAL_URL: DEVELOPMENT.PUBLIC_PORTAL_URL,
   PUBLIC_PLATFORM_ADMIN_URL: DEVELOPMENT.PUBLIC_PLATFORM_ADMIN_URL,
+  STOREFRONT_BASE_DOMAIN: DEVELOPMENT.STOREFRONT_BASE_DOMAIN,
 } as const;
 
 /** The variables PBE-011 adds, in the order of the schema. */
@@ -157,6 +159,7 @@ describe("parseConfig", () => {
       OPS_ALERT_EMAIL: "ops@example.com",
       PUBLIC_PORTAL_URL: "http://localhost:3000",
       PUBLIC_PLATFORM_ADMIN_URL: "http://localhost:3001",
+      STOREFRONT_BASE_DOMAIN: "ota.example.com",
       MAX_TENANTS_PER_ACCOUNT: 3,
       FEATURE_STRIPE_BILLING: false,
       FEATURE_OWN_STRIPE: false,
@@ -186,6 +189,7 @@ describe("parseConfig", () => {
       OPS_ALERT_EMAIL: "secret-value-14",
       PUBLIC_PORTAL_URL: "ftp://secret-value-15.example.com",
       PUBLIC_PLATFORM_ADMIN_URL: "secret-value-16",
+      STOREFRONT_BASE_DOMAIN: "https://ota.example.com/domain-value-10",
       MAX_TENANTS_PER_ACCOUNT: "many-value-8",
       FEATURE_CUSTOM_DOMAINS: "maybe-value-9",
     });
@@ -200,6 +204,7 @@ describe("parseConfig", () => {
       "PLATFORM_BFF_KEY",
       "JWT_PRIVATE_KEY_FILE",
       ...MAIL_AND_KEY_VARIABLES,
+      "STOREFRONT_BASE_DOMAIN",
       "MAX_TENANTS_PER_ACCOUNT",
       "FEATURE_CUSTOM_DOMAINS",
     ]);
@@ -221,8 +226,39 @@ describe("parseConfig", () => {
       "secret-value-14",
       "secret-value-15",
       "secret-value-16",
+      "domain-value-10",
     ]) {
       expect(error.message).not.toContain(value);
+    }
+  });
+
+  it("requires STOREFRONT_BASE_DOMAIN as lower-case DNS labels without a scheme, a path or a trailing dot", () => {
+    expect(configError({ ...REQUIRED, STOREFRONT_BASE_DOMAIN: undefined }).problems).toEqual([
+      { variable: "STOREFRONT_BASE_DOMAIN", reason: "is required but missing" },
+    ]);
+    for (const domain of ["ota.example.com", "example.test", "stores.ota-1.example.co.uk"]) {
+      expect(parseConfig({ ...REQUIRED, STOREFRONT_BASE_DOMAIN: domain }).STOREFRONT_BASE_DOMAIN).toBe(
+        domain,
+      );
+    }
+    // The OTA backend's rule for the same variable: a single label or a numeric last label is no parent domain.
+    for (const domain of [
+      "localhost",
+      "ota.example.123",
+      "OTA.example.com",
+      "ota.example.com.",
+      ".ota.example.com",
+      "https://ota.example.com",
+      "ota.example.com/x",
+      "ota_example.com",
+      "-ota.example.com",
+      `${"a".repeat(64)}.example.com`,
+      `${"abcdefghi.".repeat(22)}com`,
+    ]) {
+      expect(
+        configError({ ...REQUIRED, STOREFRONT_BASE_DOMAIN: domain }).problems.map(({ variable }) => variable),
+        domain,
+      ).toEqual(["STOREFRONT_BASE_DOMAIN"]);
     }
   });
 
@@ -255,6 +291,7 @@ describe("parseConfig", () => {
       "PLATFORM_BFF_KEY",
       "JWT_PRIVATE_KEY_FILE",
       ...MAIL_AND_KEY_VARIABLES,
+      "STOREFRONT_BASE_DOMAIN",
       "TRUST_PROXY",
     ]);
   });
@@ -308,10 +345,11 @@ describe("parseConfig", () => {
     expect(worker.HEALTH_PORT).toBe(3101);
   });
 
-  it("declares JWT_PRIVATE_KEY_FILE, TRUST_PROXY, MAX_TENANTS_PER_ACCOUNT and the switches, switches off, in every env template", () => {
+  it("declares JWT_PRIVATE_KEY_FILE, TRUST_PROXY, STOREFRONT_BASE_DOMAIN, MAX_TENANTS_PER_ACCOUNT and the switches, switches off, in every env template", () => {
     const variables = [
       "JWT_PRIVATE_KEY_FILE",
       "TRUST_PROXY",
+      "STOREFRONT_BASE_DOMAIN",
       "MAX_TENANTS_PER_ACCOUNT",
       ...Object.values(FEATURE_VARIABLES),
     ];
@@ -329,6 +367,7 @@ describe("parseConfig", () => {
       ).toEqual([]);
       expect(values["MAX_TENANTS_PER_ACCOUNT"], file).toBe("3");
       expect(values["TRUST_PROXY"], file).toBe("loopback");
+      expect(values["STOREFRONT_BASE_DOMAIN"], file).toBe("ota.example.com");
       for (const variable of Object.values(FEATURE_VARIABLES)) {
         expect(values[variable], `${file} ${variable}`).toBe("false");
       }
@@ -371,6 +410,7 @@ describe("parseConfig", () => {
       "PLATFORM_BFF_KEY",
       "JWT_PRIVATE_KEY_FILE",
       ...MAIL_AND_KEY_VARIABLES,
+      "STOREFRONT_BASE_DOMAIN",
       "MAX_TENANTS_PER_ACCOUNT",
       ...Object.values(FEATURE_VARIABLES),
     ]);

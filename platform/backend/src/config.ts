@@ -84,6 +84,15 @@ export const MAIL_FROM_PATTERN = new RegExp(
 );
 
 /**
+ * The parent domain of the storefront sub-domains (`<key>.<STOREFRONT_BASE_DOMAIN>`, decisions.md §4): the host-name
+ * rule the OTA backend applies to the same variable (two or more lower-case DNS labels, the last one starting with a
+ * letter, no trailing dot), at most 222 characters, so `<key>.` (31 characters at most) in front still makes a host
+ * name of at most 253.
+ */
+export const STOREFRONT_BASE_DOMAIN_PATTERN =
+  /^(?=.{1,222}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
+
+/**
  * The schema of every variable the platform backend reads (README §3, configuration matrix in
  * docs/mvp/architecture.md §6). Defaults exist only where they are safe in production (conventions §8).
  */
@@ -141,6 +150,12 @@ export const PLATFORM_BACKEND_CONFIG_SCHEMA = {
   PUBLIC_PORTAL_URL: env.url({ protocols: ["http:", "https:"] }),
   /** The platform admin's public base URL, for the links of ops e-mails (PADR-0013 item 7). */
   PUBLIC_PLATFORM_ADMIN_URL: env.url({ protocols: ["http:", "https:"] }),
+  /**
+   * The parent domain of every OTA's storefront sub-domain, `<key>.<STOREFRONT_BASE_DOMAIN>` (`ota.example.com`):
+   * the host the key check shows (`checkTenantKey`), the sub-domain row of a new OTA and the TLS `ask` rule. No
+   * default: a wrong domain in production would hand out hosts Velexis does not serve.
+   */
+  STOREFRONT_BASE_DOMAIN: env.string({ pattern: STOREFRONT_BASE_DOMAIN_PATTERN }),
   /**
    * The OTAs that are not `failed` one account may own (platform/docs/scope.md PF-10 AC4): beyond it createTenant
    * answers `422 UNPROCESSABLE` with `details.reason = "tenant_limit"`.

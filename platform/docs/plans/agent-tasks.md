@@ -414,7 +414,8 @@ Common commands: backend `pnpm --filter @velexis/platform-backend test`, `test:i
   - `updateMe` with a stale `If-Match` answers 412 [PF-07 AC1]; `getMe` works for an unverified account and shows all six switches.
 - **Verify:** `pnpm --filter @velexis/platform-backend test && pnpm --filter @velexis/platform-backend test:int -- auth accounts`
 
-### PBE-017 · Implement tenant key rules, tenant reads and updates, plans and subscription reads
+### PBE-017 · Implement tenant key rules, tenant reads and updates, plans and subscription reads ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-backend
 - **Milestone:** M1
 - **Depends on:** PBE-006, PBE-009, PBE-010, PBE-012

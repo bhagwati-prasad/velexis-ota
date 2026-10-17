@@ -10,9 +10,12 @@ import {
 } from "@nestjs/common";
 import { pinoHttpOptions, type Logger } from "@velexis/logger";
 import { LoggerModule } from "nestjs-pino";
+import { BillingModule } from "./billing/billing.module";
 import { API_REQUEST_MIDDLEWARE, CommonModule } from "./common/common.module";
 import { configModule, PLATFORM_PROCESSES, type PlatformBackendConfig } from "./config";
 import { HealthModule } from "./health/health.module";
+import { MembershipsModule } from "./memberships/memberships.module";
+import { TenantsModule } from "./tenants/tenants.module";
 
 /** Every route of the application, in the path-to-regexp 8 syntax of NestJS 11 (`*` alone is deprecated). */
 export const ALL_ROUTES = { path: "{*path}", method: RequestMethod.ALL };
@@ -33,7 +36,11 @@ export class AppModule implements NestModule {
         }),
         // The request pipeline (body parser, request context, end-user IP, validation, error filter), Clock and ids.
         CommonModule.forApi(),
+        // Global: provides TenantRoleGuard's membership read (TenantMembershipLookup) to CommonModule's guards.
+        MembershipsModule,
         HealthModule.forApi(logger),
+        TenantsModule,
+        BillingModule,
       ],
     };
   }

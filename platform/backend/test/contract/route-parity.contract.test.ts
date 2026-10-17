@@ -184,6 +184,7 @@ async function apiRoutes(): Promise<BoundRoute[]> {
       PLATFORM_BFF_KEY: "dev_bff_key_change_me_0123456789abcdef",
       JWT_PRIVATE_KEY_FILE: jwtKey.path,
       ...testCryptoAndMailEnv(masterKeys),
+      STOREFRONT_BASE_DOMAIN: "ota.example.com",
     });
     const logger = createLogger({ app: "platform-api", env: "test", level: "silent" });
     return (await controllersOf(AppModule.forRoot(config, logger))).flatMap(routesOf);
@@ -292,11 +293,11 @@ describe("route parity", () => {
     expect(
       parityProblems(routes, platformOperations, [
         ...PENDING_OPERATIONS,
-        { operationId: "listPlans", task: "PBE-017" },
+        { operationId: "tlsAsk", task: "PBE-027" },
         { operationId: "rogueOperation" as PlatformOperationId, task: "PBE-999" },
       ]),
     ).toEqual([
-      "pending-operations.ts lists listPlans twice",
+      "pending-operations.ts lists tlsAsk twice",
       "pending-operations.ts lists rogueOperation, which is not in the document",
     ]);
   });

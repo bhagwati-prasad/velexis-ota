@@ -15,7 +15,8 @@ export interface PendingOperation {
 }
 
 export const PENDING_OPERATIONS: readonly PendingOperation[] = Object.freeze([
-  // PBE-005: identity, plans and internal (healthLive and healthReady are bound since PBE-001 and PBE-008).
+  // PBE-005: identity, plans and internal (healthLive and healthReady are bound since PBE-001 and PBE-008, listPlans
+  // since PBE-017).
   { operationId: "signUp", task: "PBE-013" },
   { operationId: "verifyEmail", task: "PBE-013" },
   { operationId: "resendVerification", task: "PBE-013" },
@@ -36,15 +37,10 @@ export const PENDING_OPERATIONS: readonly PendingOperation[] = Object.freeze([
   { operationId: "regenerateRecoveryCodes", task: "PBE-015" },
   { operationId: "listSessions", task: "PBE-016" },
   { operationId: "revokeSession", task: "PBE-016" },
-  { operationId: "listPlans", task: "PBE-017" },
   { operationId: "tlsAsk", task: "PBE-027" },
 
-  // PBE-006: tenants, team, API keys and the M1 reads.
-  { operationId: "checkTenantKey", task: "PBE-017" },
-  { operationId: "listTenants", task: "PBE-017" },
+  // PBE-006: tenants, team, API keys and the M1 reads (the tenant reads and getSubscription are bound since PBE-017).
   { operationId: "createTenant", task: "PBE-018" },
-  { operationId: "getTenant", task: "PBE-017" },
-  { operationId: "updateTenant", task: "PBE-017" },
   { operationId: "getProvisioning", task: "PBE-023" },
   { operationId: "retryProvisioning", task: "PBE-023" },
   { operationId: "revealInitialKeys", task: "PBE-023" },
@@ -66,7 +62,6 @@ export const PENDING_OPERATIONS: readonly PendingOperation[] = Object.freeze([
   { operationId: "listDomains", task: "PBE-027" },
   { operationId: "listAmadeusConnections", task: "PBE-027" },
   { operationId: "listPaymentConnections", task: "PBE-027" },
-  { operationId: "getSubscription", task: "PBE-017" },
 
   // PBE-007: admin auth and dashboard, tenants, provisioning jobs and queues.
   { operationId: "adminSignIn", task: "PBE-028" },

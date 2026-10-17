@@ -59,6 +59,7 @@ flowchart TB
 
 - A module imports only modules of a **lower** layer. Same-layer modules never import each other. ESLint `import/no-cycle` and the Nest module graph enforce it.
 - A module reads another module's table only through that module's exported repository or service.
+- One exception for the request pipeline: `TenantRoleGuard` (layer 0, §3 step 6) reads the caller's membership through the abstract `TenantMembershipLookup`, which the global `MembershipsModule` provides with its repository. The role matrix `memberships/tenant-roles.ts` is plain data that every tenant controller imports for its `@TenantRoles(...)`; no module imports `MembershipsModule` for it (PBE-017).
 - Cross-module use cases (create OTA, activate, suspend) live in `ProvisioningModule`, so resource modules stay simple.
 
 ### 2.3 Inside a module
