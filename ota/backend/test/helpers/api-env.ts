@@ -6,6 +6,9 @@
 //   later run of this checkout. The first process that needs it creates it with an exclusive link, so concurrent test
 //   processes never replace a pepper another one has already read. Child processes started by a test (the entry
 //   points) read the same file.
+// - MASTER_KEY_DIR and MASTER_KEY_CURRENT (OBE-017): the same folder, with a `master-v1.key` as `pnpm dev:keys` writes
+//   it (32 random bytes, base64, mode 0600), created the same way, and `local:v1`. Tests that store a ciphertext as the
+//   platform would (an Amadeus client secret) encrypt it with `testKeyProvider()`.
 // - STOREFRONT_BASE_DOMAIN and PUBLIC_OTA_API_URL: the development values of ota/backend/.env.example.
 //
 // Nothing here is a real secret, and nothing is committed.
@@ -13,6 +16,7 @@ import { randomBytes, randomInt } from "node:crypto";
 import { linkSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { readKeyFile } from "@velexis/config";
+import { LocalFileKeyProvider } from "@velexis/crypto";
 import { APP_DIR } from "../../src/config";
 
 export interface TestApiCredentials {
@@ -22,6 +26,8 @@ export interface TestApiCredentials {
   readonly pepperFile: string;
   /** The decoded pepper: what `hashApiKey` of @velexis/crypto takes to compute a key's `key_hash`. */
   readonly pepper: Buffer;
+  /** The absolute path of the key folder (MASTER_KEY_DIR) that holds `master-v1.key`. */
+  readonly masterKeyDir: string;
 }
 
 /** The storefront base domain of the tests: `<key>.ota.example.com` are the tenants' sub-domains. */
@@ -30,14 +36,21 @@ export const TEST_STOREFRONT_BASE_DOMAIN = "ota.example.com";
 const KEY_DIR = join(APP_DIR, "node_modules", ".cache", "test-keys");
 const PEPPER_FILE = join(KEY_DIR, "api-key-pepper");
 const PEPPER_BYTES = 32;
+/** The KEK of the tests: `master-v1.key` in KEY_DIR, `local:v1`. */
+const MASTER_KEY_FILE = join(KEY_DIR, "master-v1.key");
+export const TEST_MASTER_KEY_CURRENT = "local:v1";
+const MASTER_KEY_BYTES = 32;
 
-/** Creates the pepper file unless it exists; never replaces one. */
-function ensurePepperFile(): void {
+/**
+ * Creates a key file of `bytes` random bytes (base64, mode 0600) unless it exists; never replaces one. The scratch
+ * file's name starts with a dot, so neither LocalFileKeyProvider nor a reader of the final name ever sees it.
+ */
+function ensureKeyFile(file: string, bytes: number): void {
   mkdirSync(KEY_DIR, { recursive: true, mode: 0o700 });
-  const scratch = join(KEY_DIR, `.api-key-pepper-${process.pid}-${randomBytes(4).toString("hex")}`);
-  writeFileSync(scratch, `${randomBytes(PEPPER_BYTES).toString("base64")}\n`, { mode: 0o600 });
+  const scratch = join(KEY_DIR, `.key-${process.pid}-${randomBytes(4).toString("hex")}`);
+  writeFileSync(scratch, `${randomBytes(bytes).toString("base64")}\n`, { mode: 0o600 });
   try {
-    linkSync(scratch, PEPPER_FILE);
+    linkSync(scratch, file);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
       throw error;
@@ -52,7 +65,8 @@ let credentials: TestApiCredentials | undefined;
 /** The credentials of this test process, created on first use. */
 export function testApiCredentials(): TestApiCredentials {
   if (credentials === undefined) {
-    ensurePepperFile();
+    ensureKeyFile(PEPPER_FILE, PEPPER_BYTES);
+    ensureKeyFile(MASTER_KEY_FILE, MASTER_KEY_BYTES);
     const pepper = readKeyFile(PEPPER_FILE, { minBytes: PEPPER_BYTES });
     if (!Buffer.isBuffer(pepper)) {
       throw new Error("the test pepper file is not a base64 key file");
@@ -61,6 +75,7 @@ export function testApiCredentials(): TestApiCredentials {
       edgeSecret: randomBytes(32).toString("hex"),
       pepperFile: PEPPER_FILE,
       pepper,
+      masterKeyDir: KEY_DIR,
     });
   }
   return credentials;
@@ -68,13 +83,20 @@ export function testApiCredentials(): TestApiCredentials {
 
 /** The API-only variables of src/config.ts with test values, to merge into an API environment. */
 export function testApiVariables(): Readonly<Record<string, string>> {
-  const { edgeSecret, pepperFile } = testApiCredentials();
+  const { edgeSecret, pepperFile, masterKeyDir } = testApiCredentials();
   return Object.freeze({
     VELEXIS_EDGE_SECRET: edgeSecret,
     API_KEY_PEPPER_FILE: pepperFile,
     STOREFRONT_BASE_DOMAIN: TEST_STOREFRONT_BASE_DOMAIN,
     PUBLIC_OTA_API_URL: "http://localhost:4000",
+    MASTER_KEY_DIR: masterKeyDir,
+    MASTER_KEY_CURRENT: TEST_MASTER_KEY_CURRENT,
   });
+}
+
+/** The KEKs of MASTER_KEY_DIR as the API loads them: what a test encrypts a platform secret with. */
+export function testKeyProvider(): Promise<LocalFileKeyProvider> {
+  return LocalFileKeyProvider.fromDir(testApiCredentials().masterKeyDir, TEST_MASTER_KEY_CURRENT);
 }
 
 const BASE62 = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";

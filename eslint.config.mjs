@@ -51,6 +51,8 @@ export default tseslint.config(
       "**/test-results/**",
       "**/next-env.d.ts",
       "**/src/generated/**",
+      // The Amadeus types of OADR-0001 point 2 (scripts/amadeus-types.mjs), generated and committed like the above.
+      "ota/backend/src/amadeus/generated/**",
       "release/**",
       ".local/**",
       // Reference material is never linted or edited (decisions.md §3).

@@ -101,6 +101,53 @@ const EDGE_SECRET = /^[A-Za-z0-9_-]{24,}$/;
 const HOST_NAME =
   /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
 
+/** `MASTER_KEY_CURRENT`: a KEK id of `LocalFileKeyProvider`, `local:v<N>` with N >= 1 and no leading zeros. */
+const KEK_ID = /^local:v[1-9][0-9]{0,8}$/;
+
+/** The loopback hosts on which an `http:` Amadeus base URL is accepted: the stub in development and CI. */
+const LOOPBACK_HOSTS: readonly string[] = ["127.0.0.1", "localhost", "[::1]"];
+
+/**
+ * An optional Amadeus base URL (`AMADEUS_BASE_URL_TEST`, `_LIVE`): the origin that every Amadeus request of that
+ * environment goes to instead of the connection's (flows/amadeus-connection-and-tokens.md §2 rule 5). The client
+ * secret and the access tokens travel to it, so only `https:` is accepted, or `http:` on the loopback interface (the
+ * stub, as the CHECK of `platform.amadeus_accounts.base_url` allows); a path, query, fragment or user info is refused.
+ * The value is the URL's origin (`http://127.0.0.1:4900`, no trailing slash).
+ */
+function amadeusBaseUrl(): EnvVar<string | undefined> {
+  const url = env.url({ protocols: ["https:", "http:"], optional: true });
+  return {
+    ...url,
+    kind: "amadeusBaseUrl",
+    parse(raw, context) {
+      const result = url.parse(raw, context);
+      if (!result.ok) {
+        return result;
+      }
+      const parsed = new URL(raw);
+      if (parsed.protocol === "http:" && !LOOPBACK_HOSTS.includes(parsed.hostname)) {
+        return {
+          ok: false,
+          reason: "must be an https URL, or an http URL on the loopback interface (the stub)",
+        };
+      }
+      if (
+        parsed.pathname !== "/" ||
+        parsed.search !== "" ||
+        parsed.hash !== "" ||
+        parsed.username !== "" ||
+        parsed.password !== ""
+      ) {
+        return {
+          ok: false,
+          reason: "must be an origin only, without a path, query, fragment or credentials",
+        };
+      }
+      return { ok: true, value: parsed.origin };
+    },
+  };
+}
+
 /** The API process (`dist/main.js`, unit velexis-ota-api). */
 export const apiConfigSchema = {
   ...sharedSchema,
@@ -118,6 +165,17 @@ export const apiConfigSchema = {
   STOREFRONT_BASE_DOMAIN: env.string({ pattern: HOST_NAME }),
   // The API's public origin, for absolute URLs given to key callers (asset and file links; ADR-0018).
   PUBLIC_OTA_API_URL: env.url({ protocols: ["https:", "http:"] }),
+  // The OTA zone's key folder (ADR-0010, ADR-0026): every `master-v<N>.key` in it is the KEK `local:v<N>`, and
+  // MASTER_KEY_CURRENT names the one that wraps new data keys (identical copies of the platform zone's files, so the
+  // OTA backend decrypts the Amadeus secrets the platform encrypted). The Amadeus module loads them once when it
+  // starts (OBE-017): it decrypts client secrets and encrypts the cached access tokens. The worker adds both variables
+  // with its first encrypted value.
+  MASTER_KEY_DIR: env.dir(),
+  MASTER_KEY_CURRENT: env.string({ pattern: KEK_ID }),
+  // Optional overrides of the Amadeus host per environment (the stub, http://127.0.0.1:4900, in development and CI);
+  // empty on the VM, where the connection's or the shared account's base_url is used (OADR-0001 point 4).
+  AMADEUS_BASE_URL_TEST: amadeusBaseUrl(),
+  AMADEUS_BASE_URL_LIVE: amadeusBaseUrl(),
 } as const;
 
 /** The worker process (`dist/worker.js`, unit velexis-ota-worker). */

@@ -106,10 +106,14 @@ describe("the privileged DSNs", () => {
     });
 
     expect(Object.keys(config).sort()).toEqual([
+      "AMADEUS_BASE_URL_LIVE",
+      "AMADEUS_BASE_URL_TEST",
       "API_KEY_PEPPER_FILE",
       "APP_ENV",
       "DATABASE_URL",
       "LOG_LEVEL",
+      "MASTER_KEY_CURRENT",
+      "MASTER_KEY_DIR",
       "PORT",
       "PUBLIC_OTA_API_URL",
       "REDIS_URL",
@@ -254,6 +258,8 @@ describe("the caller credentials of the API (OBE-011)", () => {
 
     expect(error.problems.map((problem) => problem.variable).sort()).toEqual([
       "API_KEY_PEPPER_FILE",
+      "MASTER_KEY_CURRENT",
+      "MASTER_KEY_DIR",
       "PUBLIC_OTA_API_URL",
       "STOREFRONT_BASE_DOMAIN",
       "VELEXIS_EDGE_SECRET",
@@ -314,6 +320,62 @@ describe("the caller credentials of the API (OBE-011)", () => {
   });
 });
 
+describe("the envelope keys and the Amadeus base URLs of the API (OBE-017)", () => {
+  it("require a key folder that exists and a current KEK id local:v<N>; the worker reads neither", () => {
+    const missingDir = join(tmpdir(), `velexis-ota-no-keys-${process.pid}`);
+    for (const [name, value] of [
+      ["MASTER_KEY_DIR", missingDir],
+      ["MASTER_KEY_DIR", testApiCredentials().pepperFile],
+      ["MASTER_KEY_CURRENT", "v1"],
+      ["MASTER_KEY_CURRENT", "local:v01"],
+      ["MASTER_KEY_CURRENT", "local:v0"],
+      ["MASTER_KEY_CURRENT", "kms:key-1"],
+    ] as const) {
+      const error = configErrorOf(() => loadApiConfig({ ...API_ENV, [name]: value }));
+
+      expect([value, error.problems.map((problem) => problem.variable)]).toEqual([value, [name]]);
+    }
+    const worker = loadWorkerConfig({ ...WORKER_ENV, ...API_ONLY });
+    expect(worker).not.toHaveProperty("MASTER_KEY_DIR");
+    expect(worker).not.toHaveProperty("AMADEUS_BASE_URL_TEST");
+  });
+
+  it("accept an https origin, or http on the loopback interface, and give the origin without a slash", () => {
+    const config = loadApiConfig({
+      ...API_ENV,
+      AMADEUS_BASE_URL_TEST: "http://127.0.0.1:4900/",
+      AMADEUS_BASE_URL_LIVE: "https://travel.api.amadeus.com",
+    });
+
+    expect(config.AMADEUS_BASE_URL_TEST).toBe("http://127.0.0.1:4900");
+    expect(config.AMADEUS_BASE_URL_LIVE).toBe("https://travel.api.amadeus.com");
+    for (const origin of ["http://localhost:4900", "http://[::1]:4900"]) {
+      expect(loadApiConfig({ ...API_ENV, AMADEUS_BASE_URL_TEST: origin }).AMADEUS_BASE_URL_TEST).toBe(origin);
+    }
+    expect(loadApiConfig({ ...API_ENV, AMADEUS_BASE_URL_TEST: "" }).AMADEUS_BASE_URL_TEST).toBeUndefined();
+  });
+
+  it("refuse a base URL that would send the client secret in clear text, or that is not an origin", () => {
+    for (const value of [
+      "http://test.travel.api.amadeus.com",
+      "http://10.0.0.5:4900",
+      "ftp://127.0.0.1:4900",
+      "https://test.travel.api.amadeus.com/v1",
+      "https://test.travel.api.amadeus.com/?x=1",
+      "https://user:dummy-password@test.travel.api.amadeus.com",
+      "not a url",
+    ]) {
+      const error = configErrorOf(() => loadApiConfig({ ...API_ENV, AMADEUS_BASE_URL_LIVE: value }));
+
+      expect([value, error.problems.map((problem) => problem.variable)]).toEqual([
+        value,
+        ["AMADEUS_BASE_URL_LIVE"],
+      ]);
+      expect(error.message).not.toContain("dummy-password");
+    }
+  });
+});
+
 describe("example and template files", () => {
   it("accept the local values of the root and app .env.example files", () => {
     const local = {
@@ -329,10 +391,18 @@ describe("example and template files", () => {
       copyFileSync(testApiCredentials().pepperFile, pepperFile);
       chmodSync(pepperFile, 0o600);
 
-      const api = loadApiConfig({ ...local, API_KEY_PEPPER_FILE: pepperFile });
+      // The key folder of `pnpm dev:keys` (MASTER_KEY_DIR, the pepper's folder) is the scratch root's too.
+      const api = loadApiConfig({
+        ...local,
+        API_KEY_PEPPER_FILE: pepperFile,
+        MASTER_KEY_DIR: join(root, local["MASTER_KEY_DIR"] ?? "missing"),
+      });
       const worker = loadWorkerConfig(local);
 
       expect(local["API_KEY_PEPPER_FILE"]).toBe(".local/keys/api-key-pepper");
+      expect(local["MASTER_KEY_DIR"]).toBe(".local/keys");
+      expect(api.MASTER_KEY_DIR).toBe(dirname(pepperFile));
+      expect(api.AMADEUS_BASE_URL_TEST).toBe("http://127.0.0.1:4900");
       expect(api.APP_ENV).toBe("development");
       expect(api.DATABASE_URL).toContain("velexis_ota_app");
       expect(api.PORT).toBe(4000);
@@ -350,9 +420,15 @@ describe("example and template files", () => {
 
     // The pepper of the OTA zone's key folder on the VM (ADR-0026); the test process's own file stands in for it.
     expect(shared["API_KEY_PEPPER_FILE"]).toBe(`${shared["MASTER_KEY_DIR"] ?? "missing"}/api-key-pepper`);
-    expect(loadApiConfig({ ...shared, API_KEY_PEPPER_FILE: testApiCredentials().pepperFile }).APP_ENV).toBe(
-      "production",
-    );
+    // The OTA zone's key folder does not exist here either: the test process's own folder stands in for it.
+    const api = loadApiConfig({
+      ...shared,
+      API_KEY_PEPPER_FILE: testApiCredentials().pepperFile,
+      MASTER_KEY_DIR: testApiCredentials().masterKeyDir,
+    });
+    expect(api.APP_ENV).toBe("production");
+    // Empty in the template: the connection's or the shared account's base_url is used on the VM.
+    expect([api.AMADEUS_BASE_URL_TEST, api.AMADEUS_BASE_URL_LIVE]).toEqual([undefined, undefined]);
     expect(loadWorkerConfig({ ...shared, ...worker }).APP_ENV).toBe("production");
     // PORT and HEALTH_PORT are set by the velexis-ota-api and velexis-ota-worker units.
     for (const name of Object.keys(apiConfigSchema).filter((variable) => variable !== "PORT")) {

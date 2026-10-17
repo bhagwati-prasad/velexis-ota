@@ -408,7 +408,8 @@ The OTA backend gets its contract extensions, request pipeline, tenancy, Amadeus
   - A `pk_` call followed by an edge call for the same tenant and locale (one cache fill) returns absolute asset URLs to the key and relative `/api/v1/assets/…` paths to the edge, and the reverse order gives the same answers.
 - **Verify:** `pnpm --filter @velexis/ota-backend test && pnpm --filter @velexis/ota-backend test:int -- storefront`
 
-### OBE-017 · Build the Amadeus connection resolver and token provider
+### OBE-017 · Build the Amadeus connection resolver and token provider ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-backend
 - **Milestone:** M2
 - **Depends on:** OBE-012, X-004

@@ -27,10 +27,13 @@ function packageFiles(): string[] {
 
 describe("lint rules of the OTA backend", () => {
   // Only the two rules run, and neither needs type information: parsing without the TypeScript project keeps it fast.
+  // Files the root config ignores (the generated Amadeus types, OBE-017) give no result instead of an "ignored"
+  // warning; the test of src/ and test/ below proves that nothing else is ignored.
   const eslint = new ESLint({
     cwd: REPO_ROOT,
     ruleFilter: ({ ruleId }) => RULES.some((rule) => rule === ruleId),
     overrideConfig: { languageOptions: { parserOptions: { projectService: false, project: null } } },
+    warnIgnored: false,
   });
 
   let files: string[];
@@ -81,6 +84,14 @@ describe("lint rules of the OTA backend", () => {
     expect(files.map((file) => relative(APP_DIR, file))).toEqual(
       expect.arrayContaining(["src/main.ts", "src/worker.ts", "src/cli.ts", "src/config.ts"]),
     );
+    // Only generated code is skipped: every hand-written file of src/ and test/ was linted.
+    const linted = new Set(results.map((result) => result.filePath));
+    expect(
+      files
+        .filter((file) => !linted.has(file))
+        .map((file) => relative(APP_DIR, file))
+        .filter((file) => !file.startsWith("src/amadeus/generated/")),
+    ).toEqual([]);
 
     const problems = results.flatMap((result) =>
       result.messages.map(

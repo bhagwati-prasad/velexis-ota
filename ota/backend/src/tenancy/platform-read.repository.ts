@@ -4,7 +4,9 @@
 // a lookup holds no lock and no connection longer than its query; the tenancy caches (platform-cache.ts, OBE-012) sit
 // in front of it, and when Redis is down the lookups come here directly. API keys joined in OBE-011 (`apiKeyByPrefix`,
 // for the key verifier), verified storefront domains in OBE-012 (`tenantIdByStorefrontHost`, for the tenant
-// resolver); later tasks add memberships and connections to this class.
+// resolver), the Amadeus connection and the shared Amadeus account in OBE-017 (`amadeusConnection`,
+// `amadeusAccountById`, for the connection resolver of src/amadeus/); later tasks add memberships and payment
+// connections to this class.
 import { Inject, Injectable } from "@nestjs/common";
 import {
   assertTenantSchema,
@@ -107,6 +109,114 @@ const API_KEY_COLUMNS = [
 
 type ApiKeyRow = Pick<Selectable<PlatformDatabase["platform.api_keys"]>, (typeof API_KEY_COLUMNS)[number]>;
 
+/** `platform.supplier_connections.environment` and `platform.amadeus_accounts.environment`. */
+export const AMADEUS_ENVIRONMENTS = ["test", "live"] as const;
+export type AmadeusEnvironment = (typeof AMADEUS_ENVIRONMENTS)[number];
+
+/**
+ * `platform.supplier_connections.credential_source` (ADR-0012): `velexis`, the Velexis shared account of the
+ * environment through the tenant's assigned office; `tenant`, the OTA's own credentials (M5, OBE-079).
+ */
+export const CREDENTIAL_SOURCES = ["velexis", "tenant"] as const;
+export type CredentialSource = (typeof CREDENTIAL_SOURCES)[number];
+
+/** The `status` of a supplier connection and of a shared Amadeus account: the health of its credentials. */
+export const AMADEUS_CREDENTIAL_STATUSES = [
+  "pending_verification",
+  "active",
+  "invalid_credentials",
+  "disabled",
+] as const;
+export type AmadeusCredentialStatus = (typeof AMADEUS_CREDENTIAL_STATUSES)[number];
+
+/**
+ * A tenant's Amadeus connection of one environment (`platform.supplier_connections`, provider `amadeus`), as far as
+ * the connection resolver relies on it (OBE-017): plain and JSON-safe, so the `conn:amadeus:` cache stores it as it
+ * is. The client secret stays the platform's envelope ciphertext, as base64 text; it is never decrypted to be read or
+ * cached. With `credentialSource = velexis` the four credential fields are `null` and `amadeusAccountId` names the
+ * shared account (the CHECK `supplier_connections_source_ck`); with `tenant` it is the other way round.
+ */
+export interface PlatformAmadeusConnection {
+  /** `sc_` + ULID: the credential id of a `tenant` connection. */
+  readonly id: string;
+  readonly tenantId: string;
+  readonly environment: AmadeusEnvironment;
+  readonly credentialSource: CredentialSource;
+  /** `ama_` + ULID, the shared account of the environment (`velexis` only). */
+  readonly amadeusAccountId: string | null;
+  readonly baseUrl: string | null;
+  readonly clientId: string | null;
+  /** base64 of `client_secret_ciphertext` (`tenant` only). */
+  readonly clientSecretCiphertext: string | null;
+  /** The offices the connection may act for. */
+  readonly officeIds: readonly string[];
+  /** The office of queue reads and PNR retrieval when the caller names none. */
+  readonly defaultOfficeId: string | null;
+  /** `queuingOfficeId` of new flight orders. */
+  readonly queuingOfficeId: string | null;
+  /** `ownerOfficeId` of new flight orders. */
+  readonly ownerOfficeId: string | null;
+  readonly status: AmadeusCredentialStatus;
+}
+
+/** The columns of `platform.supplier_connections` that `PlatformAmadeusConnection` maps. */
+const AMADEUS_CONNECTION_COLUMNS = [
+  "id",
+  "tenant_id",
+  "environment",
+  "credential_source",
+  "amadeus_account_id",
+  "base_url",
+  "client_id",
+  "client_secret_ciphertext",
+  "office_ids",
+  "default_office_id",
+  "queuing_office_id",
+  "owner_office_id",
+  "status",
+] as const;
+
+type AmadeusConnectionRow = Pick<
+  Selectable<PlatformDatabase["platform.supplier_connections"]>,
+  (typeof AMADEUS_CONNECTION_COLUMNS)[number]
+>;
+
+/**
+ * The Velexis shared Amadeus account of one environment (`platform.amadeus_accounts`, ADR-0012), as the connection
+ * resolver relies on it: plain and JSON-safe for the `amadeus:acct:` cache, the client secret as base64 ciphertext.
+ */
+export interface PlatformAmadeusAccount {
+  /** `ama_` + ULID: the credential id of every connection on the shared account. */
+  readonly id: string;
+  readonly environment: AmadeusEnvironment;
+  /** The Amadeus host (`https://…`), or the loopback stub in development. */
+  readonly baseUrl: string;
+  readonly clientId: string;
+  /** base64 of `client_secret_ciphertext`, encrypted by the platform for `platform.amadeus_accounts.<column>:<id>`. */
+  readonly clientSecretCiphertext: string;
+  readonly status: AmadeusCredentialStatus;
+}
+
+/** The columns of `platform.amadeus_accounts` that `PlatformAmadeusAccount` maps. */
+const AMADEUS_ACCOUNT_COLUMNS = [
+  "id",
+  "environment",
+  "base_url",
+  "client_id",
+  "client_secret_ciphertext",
+  "status",
+] as const;
+
+type AmadeusAccountRow = Pick<
+  Selectable<PlatformDatabase["platform.amadeus_accounts"]>,
+  (typeof AMADEUS_ACCOUNT_COLUMNS)[number]
+>;
+
+/** A tenant id as the platform writes it (`ten_` and a ULID); anything else is unknown without a query. */
+const TENANT_ID_PATTERN = /^ten_[0-9A-Za-z]{1,60}$/;
+/** A shared Amadeus account id (`ama_` and a ULID). */
+const AMADEUS_ACCOUNT_ID_PATTERN = /^ama_[0-9A-Za-z]{1,60}$/;
+
 /**
  * A host name as `platform.tenant_domains.hostname` stores it (PADR-0004 item 1, the rule of `redis.keys.ts`): lower
  * case, labels of letters, digits and inner hyphens, at least two labels, no trailing dot, not an IP address.
@@ -183,6 +293,49 @@ export class PlatformReadRepository {
   }
 
   /**
+   * The tenant's Amadeus connection of `environment` (`platform.supplier_connections`, one row per tenant, provider
+   * and environment), whatever its status, or `null` when there is none: status and credential source are the
+   * connection resolver's checks (OBE-017). A value that cannot be a tenant id or an environment is unknown without a
+   * query.
+   */
+  async amadeusConnection(
+    tenantId: string,
+    environment: AmadeusEnvironment,
+  ): Promise<PlatformAmadeusConnection | null> {
+    if (!TENANT_ID_PATTERN.test(tenantId) || !isOneOf(environment, AMADEUS_ENVIRONMENTS)) {
+      return null;
+    }
+    const row = await this.read((trx) =>
+      trx
+        .selectFrom("platform.supplier_connections")
+        .select(AMADEUS_CONNECTION_COLUMNS)
+        .where("tenant_id", "=", tenantId)
+        .where("provider", "=", "amadeus")
+        .where("environment", "=", environment)
+        .executeTakeFirst(),
+    );
+    return row === undefined ? null : toPlatformAmadeusConnection(row);
+  }
+
+  /**
+   * The Velexis shared Amadeus account with this id (`ama_…`), whatever its status, or `null` when there is none. A
+   * value that cannot be an account id is unknown without a query.
+   */
+  async amadeusAccountById(id: string): Promise<PlatformAmadeusAccount | null> {
+    if (!AMADEUS_ACCOUNT_ID_PATTERN.test(id)) {
+      return null;
+    }
+    const row = await this.read((trx) =>
+      trx
+        .selectFrom("platform.amadeus_accounts")
+        .select(AMADEUS_ACCOUNT_COLUMNS)
+        .where("id", "=", id)
+        .executeTakeFirst(),
+    );
+    return row === undefined ? null : toPlatformAmadeusAccount(row);
+  }
+
+  /**
    * Runs `query` in its own read-only transaction (`START TRANSACTION READ ONLY`) with the short statement timeout.
    * Rows are mapped after the commit, so a refused row never keeps the transaction open.
    */
@@ -246,6 +399,43 @@ function toPlatformApiKey(row: ApiKeyRow): PlatformApiKey {
     scopes: Object.freeze([...row.scopes]),
     expiresAt: row.expires_at === null ? null : row.expires_at.toISOString(),
     revokedAt: row.revoked_at === null ? null : row.revoked_at.toISOString(),
+  });
+}
+
+/**
+ * Maps a `platform.supplier_connections` row. An environment, credential source or status outside the CHECK lists
+ * throws `UnexpectedPlatformValueError`; the ciphertext becomes base64 text, the office list a frozen copy.
+ */
+function toPlatformAmadeusConnection(row: AmadeusConnectionRow): PlatformAmadeusConnection {
+  const column = (name: string) => `platform.supplier_connections.${name}`;
+  return Object.freeze({
+    id: row.id,
+    tenantId: row.tenant_id,
+    environment: oneOf(row.environment, AMADEUS_ENVIRONMENTS, column("environment"), row.id),
+    credentialSource: oneOf(row.credential_source, CREDENTIAL_SOURCES, column("credential_source"), row.id),
+    amadeusAccountId: row.amadeus_account_id,
+    baseUrl: row.base_url,
+    clientId: row.client_id,
+    clientSecretCiphertext:
+      row.client_secret_ciphertext === null ? null : row.client_secret_ciphertext.toString("base64"),
+    officeIds: Object.freeze([...row.office_ids]),
+    defaultOfficeId: row.default_office_id,
+    queuingOfficeId: row.queuing_office_id,
+    ownerOfficeId: row.owner_office_id,
+    status: oneOf(row.status, AMADEUS_CREDENTIAL_STATUSES, column("status"), row.id),
+  });
+}
+
+/** Maps a `platform.amadeus_accounts` row, as `toPlatformAmadeusConnection` does. */
+function toPlatformAmadeusAccount(row: AmadeusAccountRow): PlatformAmadeusAccount {
+  const column = (name: string) => `platform.amadeus_accounts.${name}`;
+  return Object.freeze({
+    id: row.id,
+    environment: oneOf(row.environment, AMADEUS_ENVIRONMENTS, column("environment"), row.id),
+    baseUrl: row.base_url,
+    clientId: row.client_id,
+    clientSecretCiphertext: row.client_secret_ciphertext.toString("base64"),
+    status: oneOf(row.status, AMADEUS_CREDENTIAL_STATUSES, column("status"), row.id),
   });
 }
 

@@ -23,6 +23,7 @@
     "test:int": "vitest run --config vitest.int.config.ts",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
+    "amadeus:types": "node scripts/amadeus-types.mjs",
     "clean": "rm -rf dist coverage"
   },
   "dependencies": {
@@ -60,7 +61,9 @@
     "@types/supertest": "7.2.1",
     "@velexis/testing": "workspace:*",
     "eslint": "9.39.5",
+    "openapi-typescript": "7.13.0",
     "supertest": "7.3.1",
+    "swagger2openapi": "7.0.8",
     "typescript": "5.6.3",
     "vitest": "3.2.7"
   }
