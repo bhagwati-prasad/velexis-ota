@@ -27,6 +27,7 @@ import { requestIdOf } from "./common/http/request-context";
 import { API_APP, type ApiConfig } from "./config";
 import { HealthModule } from "./health/health.module";
 import { ReferenceModule } from "./reference/reference.module";
+import { ShoppingModule } from "./shopping/shopping.module";
 import { StorefrontModule } from "./storefront/storefront.module";
 import { KeyUsageInterceptor, KeyUsageRecorder } from "./tenancy/key-usage";
 import { TenancyModule } from "./tenancy/tenancy.module";
@@ -84,6 +85,7 @@ export class AppModule implements NestModule {
         // The operations of the OTA document, one module per context (conventions §2).
         ReferenceModule,
         StorefrontModule,
+        ShoppingModule,
       ],
       // Global guards run in this order (architecture §3 steps 4–10): who is calling (OADR-0009 point 1), for which
       // tenant (points 2 and 3), whether the caller may call the operation and in which scope, the CSRF check of

@@ -487,7 +487,8 @@ The OTA backend gets its contract extensions, request pipeline, tenancy, Amadeus
   - Tenant B's rules never apply to tenant A.
 - **Verify:** `pnpm --filter @velexis/ota-backend test -- pricing && pnpm --filter @velexis/ota-backend test:int -- pricing`
 
-### OBE-021 · Implement flights.search, getSearch and listResults
+### OBE-021 · Implement flights.search, getSearch and listResults ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-backend
 - **Milestone:** M2
 - **Depends on:** OBE-018, OBE-020, OBE-013

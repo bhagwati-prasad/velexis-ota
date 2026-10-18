@@ -41,15 +41,14 @@ describe("createTestApp on a test database and Redis", () => {
   });
 
   it("answers a pending operation with 501 NOT_IMPLEMENTED and its milestone", async () => {
-    const res = await request(api.server)
-      .get("/v1/flight-searches/srch_01J9ZQ4V6W8X0Y2Z4A6B8C0D2E")
-      .set(edgeHeaders());
+    // An operation the MVP leaves out (`x-milestone: deferred`) stays pending, whichever tasks are merged.
+    const res = await request(api.server).get("/v1/account/preferences").set(edgeHeaders());
 
     expect(res.status).toBe(501);
     expect(res.body.error).toMatchObject({
       code: "NOT_IMPLEMENTED",
       requestId: res.headers["x-request-id"],
-      details: { milestone: "M2", operationId: "getFlightSearch" },
+      details: { milestone: "deferred", operationId: "getAccountPreferences" },
     });
   });
 
