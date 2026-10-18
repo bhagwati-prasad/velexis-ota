@@ -1,0 +1,24 @@
+<template id="tpl-segment-group">
+  <li>
+    <p class="text-xs font-semibold tracking-wide text-muted uppercase" data-field="title"></p>
+    <ol class="mt-2 space-y-2" data-segments></ol>
+  </li>
+</template>
+
+<template id="tpl-segment">
+  <li class="rounded-ui bg-panel p-3 text-sm" data-segment>
+    <p class="font-medium" data-field="flight"></p>
+    <p class="text-muted" data-field="operatedBy" data-field-hidden="noOperatedBy"></p>
+    <p class="mt-1" data-field="departure"></p>
+    <p data-field="arrival"></p>
+    <p class="mt-1 text-muted" data-field="details"></p>
+  </li>
+</template>
+
+<template id="tpl-layover">
+  <li class="border-l-2 border-warning py-1 pl-3 text-sm" data-layover>
+    <p data-field="text"></p>
+    <p class="font-medium" data-field="airportChange" data-field-hidden="noAirportChange"></p>
+    <p data-field="overnight" data-field-hidden="noOvernight"></p>
+  </li>
+</template>

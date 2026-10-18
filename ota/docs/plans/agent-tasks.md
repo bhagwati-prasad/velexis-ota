@@ -791,7 +791,8 @@ The OTA backend gets its contract extensions, request pipeline, tenancy, Amadeus
   - Typing quickly sends at most one request per 250 ms and aborts the previous one.
 - **Verify:** `pnpm --filter @velexis/ota-frontend test && pnpm --filter @velexis/ota-frontend build`
 
-### OFE-005 · Build the results page with filters, sort and load more
+### OFE-005 · Build the results page with filters, sort and load more ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-frontend
 - **Milestone:** M2
 - **Depends on:** OFE-004, OBE-021

@@ -1,0 +1,82 @@
+<template id="tpl-offer-card">
+  <li data-offer>
+    <article
+      tabindex="-1"
+      class="rounded-ui border border-muted/30 bg-surface p-4 focus:outline-2 focus:outline-primary sm:p-5"
+      data-field-aria-label="label"
+      data-field-data-offer-id="id"
+    >
+      <ul class="mb-3 flex flex-wrap gap-2 text-xs font-semibold" data-offer-tags></ul>
+      <div class="grid gap-4 md:grid-cols-[1fr_13rem]">
+        <ol class="space-y-4" data-itineraries></ol>
+        <div class="flex flex-col gap-1 md:border-l md:border-muted/30 md:pl-4 md:text-right">
+          <p class="font-heading text-2xl font-semibold" data-field="price"></p>
+          <p class="text-sm text-muted" data-field="priceNote"></p>
+          <p class="text-sm text-muted" data-field="perAdult" data-field-hidden="noPerAdult"></p>
+          <p class="mt-2">
+            <a
+              class="inline-block min-h-6 rounded-ui bg-primary px-5 py-2 font-medium text-on-primary hover:opacity-90"
+              data-field-href="href"
+              data-field-aria-label="selectLabel"
+              >Select</a
+            >
+          </p>
+        </div>
+      </div>
+      <ul class="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-sm text-muted" data-offer-facts></ul>
+      <details class="mt-3">
+        <summary class="min-h-6 cursor-pointer text-sm font-medium text-primary">Flight details</summary>
+        <ol class="mt-3 space-y-4" data-offer-segments></ol>
+      </details>
+    </article>
+  </li>
+</template>
+
+<template id="tpl-offer-tag">
+  <li class="rounded-ui border border-accent px-2 py-0.5 text-accent" data-field="text"></li>
+</template>
+
+<template id="tpl-offer-fact">
+  <li data-field="text"></li>
+</template>
+
+<template id="tpl-itinerary">
+  <li class="grid grid-cols-[auto_1fr_auto] items-center gap-x-4 gap-y-1" data-itinerary>
+    <p class="col-span-3 text-xs font-semibold tracking-wide text-muted uppercase" data-field="title"></p>
+    <p class="text-left">
+      <time
+        class="block text-lg font-semibold"
+        data-field="departureTime"
+        data-field-datetime="departureAt"
+      ></time>
+      <span class="font-mono text-sm" data-field="originCode"></span>
+    </p>
+    <p class="text-center text-sm text-muted">
+      <span class="block" data-field="duration"></span>
+      <span class="my-1 block border-t border-muted/50" aria-hidden="true"></span>
+      <span class="block" data-field="stops"></span>
+    </p>
+    <p class="text-right">
+      <time
+        class="block text-lg font-semibold"
+        data-field="arrivalTime"
+        data-field-datetime="arrivalAt"
+      ></time>
+      <span
+        class="block text-xs font-semibold text-warning"
+        data-field="dayOffset"
+        data-field-hidden="noDayOffset"
+      ></span>
+      <span class="font-mono text-sm" data-field="destinationCode"></span>
+    </p>
+    <p class="col-span-3 text-sm" data-field="carriers"></p>
+  </li>
+</template>
+
+<template id="tpl-offer-skeleton">
+  <li aria-hidden="true" class="rounded-ui border border-muted/30 bg-surface p-5" data-offer-skeleton>
+    <div class="h-4 w-1/3 rounded-ui bg-panel motion-safe:animate-pulse"></div>
+    <div class="mt-4 h-8 w-2/3 rounded-ui bg-panel motion-safe:animate-pulse"></div>
+    <div class="mt-4 h-4 w-1/2 rounded-ui bg-panel motion-safe:animate-pulse"></div>
+  </li>
+</template>
