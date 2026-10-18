@@ -1,8 +1,9 @@
-// The `subscriptions` repository (platform/docs/architecture.md §2.1: BillingModule owns the table). This task brings
-// the read of `getSubscription`; the manual trial of a new OTA (PBE-018) and the Stripe Billing sync (M5) add their
-// writes. Kysely on the API's `PLATFORM_DB` (ADR-0005).
+// The `subscriptions` repository (platform/docs/architecture.md §2.1: BillingModule owns the table). PBE-017 brings
+// the read of `getSubscription`, PBE-018 the manual trial of a new OTA (ADR-0013 point 4, the path before M5); the
+// Stripe Billing sync (M5) adds its writes. Kysely on the API's `PLATFORM_DB` (ADR-0005).
 import { Inject, Injectable } from "@nestjs/common";
 import { sql, type PlatformDatabase, type Selectable } from "@velexis/db";
+import type { PlatformTransaction } from "../audit/audit.repository";
 import { PLATFORM_DB, type PlatformDb } from "../common/database";
 
 /**
@@ -35,9 +36,79 @@ export interface SubscriptionRow extends Pick<
   readonly billing_notice: string | null;
 }
 
+/** The manual trial of a new OTA. */
+export interface NewManualTrial {
+  /** `sub_…`. */
+  readonly id: string;
+  readonly tenantId: string;
+  /** The plan of the trial (`early_access` before M5); its `trial_days` set the end of the trial. */
+  readonly planCode: string;
+  /** The time of the creation: the start of the trial, `created_at` and `updated_at`. */
+  readonly now: Date;
+}
+
+/** The manual trial as written. */
+export interface ManualTrialRow {
+  readonly id: string;
+  readonly plan_code: string;
+  readonly status: string;
+  readonly billing_provider: string;
+  readonly trial_ends_at: Date | null;
+}
+
 @Injectable()
 export class SubscriptionsRepository {
   constructor(@Inject(PLATFORM_DB) private readonly db: PlatformDb) {}
+
+  /**
+   * Inserts the subscription of a new OTA before M5 in `trx`, in one statement that reads the plan: `trialing`,
+   * `billing_provider = 'manual'` (nobody bills it), monthly, `trial_ends_at = now + plans.trial_days` days, no provider
+   * ids (ADR-0013 point 4). Throws when `planCode` names no plan, so the caller's transaction rolls back; a second
+   * current subscription of the tenant fails on `subscriptions_current_uq`.
+   *
+   * A trial day is 24 hours, as Stripe counts `trial_period_days`: `make_interval(days => …)` on a `timestamptz` would
+   * count calendar days in the session's `TimeZone`, so the end would move by an hour across a summer-time change
+   * wherever the server's zone is not UTC.
+   */
+  async insertManualTrial(trx: PlatformTransaction, trial: NewManualTrial): Promise<ManualTrialRow> {
+    const row = await trx
+      .insertInto("platform.subscriptions")
+      .columns([
+        "id",
+        "tenant_id",
+        "plan_code",
+        "status",
+        "billing_interval",
+        "billing_provider",
+        "trial_ends_at",
+        "created_at",
+        "updated_at",
+      ])
+      .expression(
+        trx
+          .selectFrom("platform.plans as p")
+          .select([
+            sql<string>`${trial.id}::text`.as("id"),
+            sql<string>`${trial.tenantId}::text`.as("tenant_id"),
+            "p.code as plan_code",
+            sql<string>`'trialing'::text`.as("status"),
+            sql<string>`'month'::text`.as("billing_interval"),
+            sql<string>`'manual'::text`.as("billing_provider"),
+            sql<Date>`${trial.now}::timestamptz + make_interval(hours => 24 * p.trial_days)`.as(
+              "trial_ends_at",
+            ),
+            sql<Date>`${trial.now}::timestamptz`.as("created_at"),
+            sql<Date>`${trial.now}::timestamptz`.as("updated_at"),
+          ])
+          .where("p.code", "=", trial.planCode),
+      )
+      .returning(["id", "plan_code", "status", "billing_provider", "trial_ends_at"])
+      .executeTakeFirst();
+    if (row === undefined) {
+      throw new Error(`insertManualTrial: the plan ${trial.planCode} does not exist`);
+    }
+    return row;
+  }
 
   /**
    * The subscription of `tenantId` that the portal shows: the current one, or, when there is none, the latest one

@@ -34,8 +34,7 @@ export const PENDING_OPERATIONS: readonly PendingOperation[] = Object.freeze([
   { operationId: "tlsAsk", task: "PBE-027" },
 
   // PBE-006: tenants, team, API keys and the M1 reads (the tenant reads and getSubscription are bound since PBE-017,
-  // the API key operations since PBE-021, the member routes since PBE-025).
-  { operationId: "createTenant", task: "PBE-018" },
+  // createTenant since PBE-018, the API key operations since PBE-021, the member routes since PBE-025).
   { operationId: "getProvisioning", task: "PBE-023" },
   { operationId: "retryProvisioning", task: "PBE-023" },
   { operationId: "revealInitialKeys", task: "PBE-023" },

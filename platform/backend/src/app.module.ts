@@ -17,6 +17,7 @@ import { API_REQUEST_MIDDLEWARE, CommonModule } from "./common/common.module";
 import { configModule, PLATFORM_PROCESSES, type PlatformBackendConfig } from "./config";
 import { HealthModule } from "./health/health.module";
 import { MembershipsModule } from "./memberships/memberships.module";
+import { ProvisioningModule } from "./provisioning/provisioning.module";
 import { TenantsModule } from "./tenants/tenants.module";
 
 /** Every route of the application, in the path-to-regexp 8 syntax of NestJS 11 (`*` alone is deprecated). */
@@ -45,6 +46,7 @@ export class AppModule implements NestModule {
         TenantsModule,
         BillingModule,
         ApiKeysModule.forApi(),
+        ProvisioningModule.forApi(),
       ],
     };
   }

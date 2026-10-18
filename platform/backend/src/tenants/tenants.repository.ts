@@ -1,9 +1,10 @@
 // The `tenants` repository (platform/docs/architecture.md §2.1: TenantsModule owns the table): the key check, the
-// lists and reads of the portal and the profile update. Kysely on the API's `PLATFORM_DB`, schema-qualified tables
+// lists and reads of the portal and the profile update (PBE-017), and the row of a new OTA, which ProvisioningModule
+// writes in the create-OTA transaction (PBE-018). Kysely on the API's `PLATFORM_DB`, schema-qualified tables
 // (ADR-0005). The reads join what an answer shows next to the tenant row: the caller's role from the active
-// membership (listTenants) and the primary storefront host from `tenant_domains`, read only. `reference.countries` and
-// `reference.time_zones` are read for the checks of a profile update (the reference tables are read directly,
-// architecture §2.1).
+// membership (listTenants) and the primary storefront host from `tenant_domains`, read only. `reference.countries`,
+// `reference.currencies` and `reference.time_zones` are read for the checks of a new OTA and a profile update (the
+// reference tables are read directly, architecture §2.1).
 import { Inject, Injectable } from "@nestjs/common";
 import { sql, type PlatformDatabase, type Selectable } from "@velexis/db";
 import type { PlatformTransaction } from "../audit/audit.repository";
@@ -31,6 +32,28 @@ export interface TenantListRow {
   readonly primary_host: string | null;
 }
 
+/** A new OTA, as createTenant writes it. */
+export interface NewTenant {
+  /** `ten_…`. */
+  readonly id: string;
+  /** A key that follows the key rules and is not reserved (tenant-key.ts); `schema_name` is `tenant_<key>`. */
+  readonly key: string;
+  readonly name: string;
+  readonly planCode: string;
+  readonly countryCode: string;
+  readonly defaultCurrency: string;
+  readonly timeZone: string;
+  readonly createdByAccountId: string;
+  /** The time of the creation: `created_at` and `updated_at`. */
+  readonly now: Date;
+}
+
+/** The unique constraints of `tenants` that a new OTA's key can break: the key and the schema name derived from it. */
+export const TENANT_KEY_CONSTRAINTS: readonly string[] = Object.freeze([
+  "tenants_key_key",
+  "tenants_schema_name_key",
+]);
+
 /** The profile fields of `updateTenant`, as columns; an absent field is not changed. */
 export interface TenantProfileChanges {
   readonly name?: string;
@@ -44,9 +67,12 @@ export interface TenantProfileChanges {
 export class TenantsRepository {
   constructor(@Inject(PLATFORM_DB) private readonly db: PlatformDb) {}
 
-  /** True when any tenant row, in any status (deleted and failed ones included), has `key`. */
-  async keyExists(key: string): Promise<boolean> {
-    const row = await this.db
+  /**
+   * True when any tenant row, in any status (deleted and failed ones included), has `key`, read on `db` (the pool, or
+   * the caller's transaction).
+   */
+  async keyExists(key: string, db: PlatformDb | PlatformTransaction = this.db): Promise<boolean> {
+    const row = await db
       .selectFrom("platform.tenants")
       .select(sql<number>`1`.as("found"))
       .where("key", "=", key)
@@ -106,6 +132,31 @@ export class TenantsRepository {
       .executeTakeFirst();
   }
 
+  /**
+   * Inserts a new OTA in `trx`: `provisioning`, storefront environment `test`, no schema version yet (the provisioning
+   * post-steps mirror it, PBE-022). A key that a row has, or had, fails on one of TENANT_KEY_CONSTRAINTS; the CHECK
+   * constraints refuse a key that breaks the key rules.
+   */
+  async insert(trx: PlatformTransaction, tenant: NewTenant): Promise<void> {
+    await trx
+      .insertInto("platform.tenants")
+      .values({
+        id: tenant.id,
+        key: tenant.key,
+        name: tenant.name,
+        status: "provisioning",
+        plan_code: tenant.planCode,
+        country_code: tenant.countryCode,
+        default_currency: tenant.defaultCurrency,
+        time_zone: tenant.timeZone,
+        storefront_environment: "test",
+        created_by_account_id: tenant.createdByAccountId,
+        created_at: tenant.now,
+        updated_at: tenant.now,
+      })
+      .execute();
+  }
+
   /** The tenant row, locked for the rest of the caller's transaction (`FOR UPDATE`). */
   async lockForUpdate(trx: PlatformTransaction, tenantId: string): Promise<TenantRecord | undefined> {
     return trx
@@ -139,6 +190,16 @@ export class TenantsRepository {
   async countryExists(code: string): Promise<boolean> {
     const row = await this.db
       .selectFrom("reference.countries")
+      .select("code")
+      .where("code", "=", code)
+      .executeTakeFirst();
+    return row !== undefined;
+  }
+
+  /** True when `code` is a currency of `reference.currencies`. */
+  async currencyExists(code: string): Promise<boolean> {
+    const row = await this.db
+      .selectFrom("reference.currencies")
       .select("code")
       .where("code", "=", code)
       .executeTakeFirst();

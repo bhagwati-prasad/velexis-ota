@@ -436,7 +436,8 @@ Common commands: backend `pnpm --filter @velexis/platform-backend test`, `test:i
   - Every route under `/v1/tenants/{tenantId}` answers 404 to a non-member, and a `tenant` invalidation follows a profile update.
 - **Verify:** `pnpm --filter @velexis/platform-backend test && pnpm --filter @velexis/platform-backend test:int -- tenants billing`
 
-### PBE-018 · Implement createTenant in one idempotent transaction
+### PBE-018 · Implement createTenant in one idempotent transaction ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-backend
 - **Milestone:** M1
 - **Depends on:** PBE-017, PBE-013

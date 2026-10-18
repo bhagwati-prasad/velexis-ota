@@ -1,10 +1,10 @@
 // The `tenant_memberships` repository (platform/docs/architecture.md §2.1: MembershipsModule owns the table). It brings
-// the read of TenantRoleGuard (PBE-017): the caller's **active** membership of an OTA that members may see; and the
-// team routes (PBE-025): the member list, the rows a role change or a removal locks, and its two writes. Later tasks
-// add the owner membership of a new OTA and the membership of an accepted invitation (PBE-018, PBE-026). Kysely on the
-// API's `PLATFORM_DB`, schema-qualified tables (ADR-0005). The member reads join `platform.accounts` for what the
-// `Member` schema shows next to the membership (name, e-mail address, MFA flag), read only, as the operations'
-// `x-platform-tables` say.
+// the read of TenantRoleGuard (PBE-017): the caller's **active** membership of an OTA that members may see; the team
+// routes (PBE-025): the member list, the rows a role change or a removal locks, and its two writes; and the create-OTA
+// transaction (PBE-018): the owner membership of a new OTA and the count of the OTAs an account owns (the tenant limit
+// of scope PF-10 AC4). The membership of an accepted invitation comes with PBE-026. Kysely on the API's `PLATFORM_DB`,
+// schema-qualified tables (ADR-0005). The member reads join `platform.accounts` for what the `Member` schema shows
+// next to the membership (name, e-mail address, MFA flag), read only, as the operations' `x-platform-tables` say.
 import { Inject, Injectable } from "@nestjs/common";
 import { sql } from "@velexis/db";
 import type { PlatformTransaction } from "../audit/audit.repository";
@@ -44,6 +44,16 @@ export interface LockedMembership {
 
 /** The membership states of migration 0001; only `active` members are on the team. */
 export type MembershipStatus = "active" | "suspended" | "removed";
+
+/** The owner membership of a new OTA: its founder, invited by nobody. */
+export interface NewOwnerMembership {
+  /** `stf_…`. */
+  readonly id: string;
+  readonly tenantId: string;
+  readonly accountId: string;
+  /** The time of the creation: `created_at` and `updated_at`. */
+  readonly now: Date;
+}
 
 @Injectable()
 export class MembershipsRepository implements TenantMembershipLookup {
@@ -152,6 +162,44 @@ export class MembershipsRepository implements TenantMembershipLookup {
       .where("id", "=", memberId)
       .returning("id")
       .executeTakeFirstOrThrow();
+  }
+
+  /**
+   * Inserts the `owner` membership of a new OTA in `trx`: `active`, no inviter (`invited_by_account_id` is NULL for
+   * the founder, migration 0001).
+   */
+  async insertOwner(trx: PlatformTransaction, membership: NewOwnerMembership): Promise<void> {
+    await trx
+      .insertInto("platform.tenant_memberships")
+      .values({
+        id: membership.id,
+        tenant_id: membership.tenantId,
+        account_id: membership.accountId,
+        role: "owner" satisfies TenantRole,
+        status: "active" satisfies MembershipStatus,
+        created_at: membership.now,
+        updated_at: membership.now,
+      })
+      .execute();
+  }
+
+  /**
+   * The number of OTAs that `accountId` owns and that are not `failed`, read in `trx`: its `owner` memberships that are
+   * not `removed` (a suspended membership still holds its OTA) of tenants in any status but `failed` (scope PF-10
+   * AC4: a failed OTA keeps its key but no longer counts). The caller holds the account's row lock, so two creations
+   * of one account count one after the other.
+   */
+  async countOwnedTenants(trx: PlatformTransaction, accountId: string): Promise<number> {
+    const row = await trx
+      .selectFrom("platform.tenant_memberships as m")
+      .innerJoin("platform.tenants as t", "t.id", "m.tenant_id")
+      .select((eb) => eb.fn.countAll<string>().as("owned"))
+      .where("m.account_id", "=", accountId)
+      .where("m.role", "=", "owner" satisfies TenantRole)
+      .where("m.status", "<>", "removed" satisfies MembershipStatus)
+      .where("t.status", "<>", "failed")
+      .executeTakeFirstOrThrow();
+    return Number(row.owned);
   }
 
   /** The member columns of a membership and its account. */

@@ -5,9 +5,9 @@
 //
 // It is global for one reason: TenantRoleGuard, a global guard of CommonModule (layer 0) that must run between the
 // auth guards and RecentMfaGuard (API_GUARDS), reads the caller's membership on every tenant request through the
-// abstract `TenantMembershipLookup`, which this module provides with its repository. The module exports only that
-// lookup; a module of a higher layer that needs the repository itself imports MembershipsModule (PBE-018), and
-// modules of the same layer never use it (layering rule of architecture §2.2).
+// abstract `TenantMembershipLookup`, which this module provides with its repository. It also exports the repository
+// for the modules of a higher layer, which import MembershipsModule for it (ProvisioningModule writes the owner
+// membership of a new OTA, PBE-018); modules of the same layer never use it (layering rule of architecture §2.2).
 import { Global, Module } from "@nestjs/common";
 import { AuditModule } from "../audit/audit.module";
 import { TenantMembershipLookup } from "../common/auth/tenant-role.guard";
@@ -24,6 +24,6 @@ import { MembershipsRepository } from "./memberships.repository";
     MembersService,
     { provide: TenantMembershipLookup, useExisting: MembershipsRepository },
   ],
-  exports: [TenantMembershipLookup],
+  exports: [TenantMembershipLookup, MembershipsRepository],
 })
 export class MembershipsModule {}
