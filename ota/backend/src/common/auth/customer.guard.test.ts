@@ -60,10 +60,11 @@ class Handlers {
   getSession(): void {}
   createFlightSearch(): void {}
   signIn(): void {}
+  signOut(): void {}
   getBooking(): void {}
   unbound(): void {}
 }
-for (const operationId of ["getSession", "createFlightSearch", "signIn", "getBooking"] as const) {
+for (const operationId of ["getSession", "createFlightSearch", "signIn", "signOut", "getBooking"] as const) {
   Reflect.defineMetadata(OPENAPI_OPERATION, operationId, Handlers.prototype[operationId]);
 }
 type HandlerName = keyof Handlers;
@@ -82,6 +83,8 @@ interface Harness {
   readonly customers: CustomerPrincipal[];
   /** The reasons of the refusals it logged. */
   readonly refusals: unknown[];
+  /** How often it recorded an expired token that it let through as none. */
+  readonly expired: { count: number };
 }
 
 interface HarnessOptions {
@@ -95,6 +98,7 @@ function harness(options: HarnessOptions = {}): Harness {
   const actors: ContextActor[] = [];
   const customers: CustomerPrincipal[] = [];
   const refusals: unknown[] = [];
+  const expired = { count: 0 };
   const caller = "caller" in options ? options.caller : KEY;
   const tenants = {
     require: () => ({ tenantId: options.tenantId ?? TENANT_A }) as RequestTenant,
@@ -106,11 +110,16 @@ function harness(options: HarnessOptions = {}): Harness {
     tenants,
     { isConsoleScope: () => options.consoleScope ?? false } as unknown as RequestContext,
     tokensAt(options.clock ?? new FakeClock(START)),
-    { set: (customer: CustomerPrincipal) => customers.push(customer) } as unknown as CustomerContext,
+    {
+      set: (customer: CustomerPrincipal) => customers.push(customer),
+      markExpiredToken: () => {
+        expired.count += 1;
+      },
+    } as unknown as CustomerContext,
     document,
     { info: (fields: { reason: unknown }) => refusals.push(fields.reason) } as unknown as PinoLogger,
   );
-  return { guard, actors, customers, refusals };
+  return { guard, actors, customers, refusals, expired };
 }
 
 /** An execution context of `handler` with the request's headers and cookies. */
@@ -246,6 +255,29 @@ describe("CustomerGuard", () => {
     expect(await outcome(guard.canActivate(execution("getSession", bearer(token))))).toBe("passed");
   });
 
+  it("takes an expired token as none on auth.signOut only, which ends the session by its refresh token (OBE-033)", async () => {
+    const token = await accessToken();
+    const clock = new FakeClock(Date.parse(START) + (ACCESS_TOKEN_TTL_SECONDS + CLOCK_SKEW_SECONDS) * 1000);
+    const key = harness({ clock });
+    const edge = harness({ caller: EDGE, clock });
+
+    expect(await outcome(key.guard.canActivate(execution("signOut", bearer(token))))).toBe("passed");
+    expect(await outcome(edge.guard.canActivate(execution("signOut", cookie(token))))).toBe("passed");
+    // Neither became the request's customer; the guard recorded the expired token for the handler.
+    expect([key.customers, key.actors, edge.customers, edge.actors]).toEqual([[], [], [], []]);
+    expect([key.expired.count, edge.expired.count, key.refusals]).toEqual([1, 1, []]);
+    // Any other refusal stays one on auth.signOut: a token of another tenant, a forged one.
+    const other = await accessToken(TENANT_B);
+    const fresh = harness();
+    expect(await outcome(fresh.guard.canActivate(execution("signOut", bearer(other))))).toBe(
+      "401 UNAUTHENTICATED",
+    );
+    expect(await outcome(fresh.guard.canActivate(execution("signOut", bearer("garbage"))))).toBe(
+      "401 UNAUTHENTICATED",
+    );
+    expect(fresh.expired.count).toBe(0);
+  });
+
   it("answers 401 UNAUTHENTICATED without a token on a required operation, and lets a guest through an optional one", async () => {
     const { guard, actors, customers } = harness();
 
@@ -331,5 +363,21 @@ describe("CustomerContext", () => {
     expect(guest).toEqual([undefined, "401 UNAUTHENTICATED"]);
     expect(customers.get()).toBeUndefined();
     expect(() => customers.set(principal)).toThrow(/outside a request context/);
+  });
+
+  it("remembers, for the request only, that an expired token was taken as none", () => {
+    const cls = new ClsService(new AsyncLocalStorage());
+    const customers = new CustomerContext(cls);
+
+    const marked = cls.run(() => {
+      const before = customers.presentedExpiredToken();
+      customers.markExpiredToken();
+      return [before, customers.presentedExpiredToken(), customers.get()];
+    });
+    const other = cls.run(() => customers.presentedExpiredToken());
+
+    expect(marked).toEqual([false, true, undefined]);
+    expect([other, customers.presentedExpiredToken()]).toEqual([false, false]);
+    expect(() => customers.markExpiredToken()).toThrow(/outside a request context/);
   });
 });

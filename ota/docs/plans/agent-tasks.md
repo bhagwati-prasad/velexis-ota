@@ -942,7 +942,8 @@ Checkout, customer accounts in cookies, Stripe on the Velexis account, the airli
   - Edge sign-up with verification off returns `session: null` and sets the cookies; bearer sign-up returns tokens.
 - **Verify:** `pnpm --filter @velexis/ota-backend test:int -- identity`
 
-### OBE-033 · Implement sign-in with lockout, refresh rotation, sign-out and getSession
+### OBE-033 · Implement sign-in with lockout, refresh rotation, sign-out and getSession ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-backend
 - **Milestone:** M3
 - **Depends on:** OBE-031

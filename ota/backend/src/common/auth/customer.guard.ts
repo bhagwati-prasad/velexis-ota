@@ -18,7 +18,11 @@
 // token of this tenant (the SDK in cookie mode then calls auth.refresh once and retries), `401 UNAUTHENTICATED` for
 // anything else, a token of another tenant included (`tid` must equal the tenant the tenant guard resolved; OF-01
 // AC2). A required operation without a token is `401 UNAUTHENTICATED`; an optional one goes on as a guest. Refusals are
-// logged as `customer.token_refused` with the reason, never the token.
+// logged as `customer.token_refused` with the reason, never the token. One exception (OBE-033): on auth.signOut an
+// expired token of this tenant counts as no token, because the document ends the session of the refresh token "when
+// the access token has already expired" (`EXPIRED_TOKEN_AS_GUEST`); the guard records that it saw one
+// (`CustomerContext.presentedExpiredToken`), and the handler answers `401 TOKEN_EXPIRED` itself when no refresh token
+// comes with it either.
 //
 // A verified token makes the customer the request's actor (`TenantContext.setActor`, `customer`/`cus_…`) and puts
 // `{customerId, sessionId, accessTokenExpiresAt}` into the request context (`CustomerContext`), where services read
@@ -61,6 +65,13 @@ export const CUSTOMER_SECURITY_SCHEMES: Readonly<
 });
 
 const NONE: CustomerRequirements = Object.freeze({ key: "none", edge: "none" });
+
+/**
+ * The operations on which an expired customer token of the tenant counts as no token (the request goes on as a guest
+ * and `CustomerContext.presentedExpiredToken()` is true): auth.signOut, which the document lets end a session by its
+ * refresh token when the access token has expired. Every other operation answers `401 TOKEN_EXPIRED`.
+ */
+export const EXPIRED_TOKEN_AS_GUEST: ReadonlySet<string> = new Set(["signOut"]);
 
 const isObject = (value: unknown): value is Record<string, unknown> =>
   value !== null && typeof value === "object" && !Array.isArray(value);
@@ -122,6 +133,7 @@ export interface CustomerPrincipal {
 }
 
 const CUSTOMER_KEY = "identity.customer";
+const EXPIRED_TOKEN_KEY = "identity.customer_token_expired";
 
 /** The signed-in customer of the current request in the request context (nestjs-cls), set by `CustomerGuard`. */
 @Injectable()
@@ -152,6 +164,19 @@ export class CustomerContext {
       throw new AppError("UNAUTHENTICATED");
     }
     return customer;
+  }
+
+  /** Records that the request presented an expired token, which an `EXPIRED_TOKEN_AS_GUEST` operation took as none. */
+  markExpiredToken(): void {
+    if (!this.cls.isActive()) {
+      throw new Error("CustomerContext.markExpiredToken outside a request context");
+    }
+    this.cls.set(EXPIRED_TOKEN_KEY, true);
+  }
+
+  /** True when the guard let the request through as a guest although it presented an expired customer token. */
+  presentedExpiredToken(): boolean {
+    return this.cls.isActive() && this.cls.get(EXPIRED_TOKEN_KEY) === true;
   }
 }
 
@@ -213,6 +238,15 @@ export class CustomerGuard implements CanActivate {
       throw new AppError("UNAUTHENTICATED");
     }
     const verdict = await this.tokens.verifyCustomerToken(token, this.tenants.require().tenantId);
+    if (
+      !verdict.ok &&
+      verdict.reason === "expired" &&
+      requirement === "optional" &&
+      EXPIRED_TOKEN_AS_GUEST.has(operationId)
+    ) {
+      this.customers.markExpiredToken();
+      return true;
+    }
     if (!verdict.ok) {
       this.logger.info({ reason: verdict.reason, callerType: caller.type }, "customer.token_refused");
       throw new AppError(verdict.reason === "expired" ? "TOKEN_EXPIRED" : "UNAUTHENTICATED");

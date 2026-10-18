@@ -333,25 +333,26 @@ describe("route parity", () => {
   });
 
   it("fails for an operation with neither a handler nor a pending entry [OBE-010 AC3]", () => {
-    const { getSession: _removed, ...pending } = PENDING_OPERATIONS;
+    // A deferred operation, which stays pending through the MVP (getSession was the example until OBE-033 served it).
+    const { getAccountDataExport: _removed, ...pending } = PENDING_OPERATIONS;
 
     const problems = routeParityProblems({
       operations: DOCUMENT_OPERATIONS,
-      routes: routes.filter((route) => route.pending !== "getSession"),
+      routes: routes.filter((route) => route.pending !== "getAccountDataExport"),
       pending,
       undocumented: UNDOCUMENTED_ROUTES,
     });
 
-    expect(problems).toEqual(["getSession has neither a handler nor a pending entry"]);
+    expect(problems).toEqual(["getAccountDataExport has neither a handler nor a pending entry"]);
   });
 
   it("fails for a handler next to a pending entry, two handlers, a handler of another route and a missing binding", async () => {
     @Controller("v1")
     class MisboundController {
-      // Implemented while still pending.
-      @Get("auth/session")
-      @OpenApiOperation("getSession")
-      session(): object {
+      // Implemented while still pending (a deferred operation: getSession was the example until OBE-033 served it).
+      @Get("account/data-exports/:dataExportId")
+      @OpenApiOperation("getAccountDataExport")
+      dataExport(): object {
         return {};
       }
 
@@ -395,7 +396,7 @@ describe("route parity", () => {
         [
           "MisboundController.savedTravelersAgain (GET /v1/account/saved-travelers) handles listSavedTravelers without @OpenApiOperation",
           "MisboundController.preferences (GET /v1/account/preferences) names resolveStorefrontHost, whose route is GET /v1/storefront/resolve",
-          "getSession has a handler (MisboundController.session) and a pending entry",
+          "getAccountDataExport has a handler (MisboundController.dataExport) and a pending entry",
           "listSavedTravelers has 2 handlers",
           "pending-operations.ts lists notAnOperation, which the OTA document does not have",
           "GET /v1/nowhere is in UNDOCUMENTED_ROUTES but no handler serves it",

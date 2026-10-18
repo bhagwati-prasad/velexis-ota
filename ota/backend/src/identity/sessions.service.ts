@@ -17,6 +17,22 @@
 // - `revokeFamily` and `revokeAllOfCustomer` end sessions in the caller's transaction (sign-out, password change,
 //   account deletion).
 //
+// The auth operations of OBE-033 build on these:
+//
+// - `view` reads a family's metadata (`AuthSessionDetails`: the sign-in time of its first row, and the remember-me
+//   flag, end, user agent, country and last use of its current generation) and its customer, for an answer.
+// - `refreshSession` is auth.refresh: `refresh`, and the customer and the session's metadata read in the same
+//   transaction as the rotation, for the answer (`AuthSessionResult`, or `AuthSessionInfo` for the edge).
+// - `current` is auth.getSession: the family of the access token's `sid` must still be live (its current generation
+//   neither revoked nor past its end) and its customer may still hold a session; otherwise `401 UNAUTHENTICATED`. An
+//   access token is stateless for its 15 minutes on the other operations (ADR-0008), but "me" answers only for a
+//   session that has not been signed out. It records the use (`last_used_at`) at most once a minute.
+// - `signOut` is auth.signOut: the session of the access token (`sid`), or, without one, the family of the refresh
+//   token the caller holds (the body's for a key caller, the `__Host-vx_rt` cookie's for the edge); `scope: all`
+//   revokes every family of that customer, and needs the access token or a current refresh token. Revoking a revoked
+//   family, or a `current` sign-out with an unknown refresh token, changes nothing and still succeeds; no credential
+//   at all is `401 UNAUTHENTICATED`.
+//
 // Concurrency: every change of a family takes the customer's `FOR KEY SHARE` lock, then the lock of the family's
 // first row, then the presented row; a revocation of all the customer's families takes the customer's `FOR UPDATE`
 // lock. So a revocation never misses a generation that a concurrent rotation is writing, two refreshes with one token
@@ -31,6 +47,7 @@ import { Clock } from "../common/clock";
 import { IdGenerator } from "../common/ids";
 import { TenantContext } from "../tenancy/tenant-context";
 import { TenantTx, type TenantTransaction } from "../tenancy/tenant-tx";
+import { CustomersRepository, type CustomerRecord } from "./customers.repository";
 import {
   SessionsRepository,
   type CustomerSessionRecord,
@@ -137,12 +154,93 @@ export interface SessionTokens extends IssuedSession {
   readonly accessTokenExpiresAt: Date;
 }
 
+/** How a session was opened (`AuthSessionDetails.authMethod`). */
+export type SessionAuthMethod = "password" | "sign_up" | "password_reset";
+
+/**
+ * How the sessions of this release are reported: the tenant schema keeps no column for how a family was opened, and
+ * only auth.signIn opens families yet (OBE-033); sign-up and password reset (OBE-032, OBE-034) open theirs later.
+ */
+export const DEFAULT_AUTH_METHOD: SessionAuthMethod = "password";
+
+/** A family's metadata, as `AuthSessionDetails` shows it (without the access token of the answer). */
+export interface SessionDetails {
+  /** `ses_…`: the family. */
+  readonly sessionId: string;
+  /** The sign-in: when the family's first row was written. */
+  readonly createdAt: Date;
+  /** The current generation's last use, else its creation (the sign-in or the last refresh). */
+  readonly lastUsedAt: Date;
+  /** The family's absolute end. */
+  readonly refreshTokenExpiresAt: Date;
+  readonly rememberMe: boolean;
+  readonly authMethod: SessionAuthMethod;
+  readonly userAgent: string | null;
+  readonly ipCountry: string | null;
+}
+
+/** A session and its customer, as the answers of the auth operations show them. */
+export interface SessionView {
+  readonly customer: CustomerRecord;
+  readonly details: SessionDetails;
+}
+
+/** A session with new tokens (auth.signIn, auth.refresh), and its customer and metadata for the answer. */
+export interface SessionWithTokens extends SessionView {
+  readonly tokens: SessionTokens;
+}
+
+/** `scope` of auth.signOut. */
+export type SignOutScope = "current" | "all";
+
+/** What `signOut` takes. */
+export interface SignOutInput {
+  readonly scope: SignOutScope;
+  /** The signed-in customer of the request (the access token's `sub` and `sid`), when it has one. */
+  readonly principal: { readonly customerId: string; readonly sessionId: string } | undefined;
+  /** The refresh token the caller holds: the body's (key callers) or the `__Host-vx_rt` cookie's (the edge). */
+  readonly refreshToken: string | undefined;
+}
+
+/** How often auth.getSession records a session's use (`last_used_at`, "minute precision"). */
+export const LAST_USED_RESOLUTION_MS = 60_000;
+
+/** True when `row` (a family's current generation) still holds a session at `now`: not revoked, not past its end. */
+export function isLiveGeneration(
+  row: Pick<CustomerSessionRecord, "revoked_at" | "expires_at" | "family_expires_at">,
+  now: Date,
+): boolean {
+  return (
+    row.revoked_at === null &&
+    row.expires_at.getTime() > now.getTime() &&
+    row.family_expires_at.getTime() > now.getTime()
+  );
+}
+
+/** The metadata of a family from its first row and its current generation. */
+export function sessionDetailsOf(
+  head: CustomerSessionRecord,
+  current: CustomerSessionRecord,
+): SessionDetails {
+  return {
+    sessionId: head.id,
+    createdAt: head.created_at,
+    lastUsedAt: current.last_used_at ?? current.created_at,
+    refreshTokenExpiresAt: current.family_expires_at,
+    rememberMe: current.remember_me,
+    authMethod: DEFAULT_AUTH_METHOD,
+    userAgent: current.user_agent,
+    ipCountry: current.ip_country,
+  };
+}
+
 const COUNTRY = /^[A-Z]{2}$/;
 
 @Injectable()
 export class SessionsService {
   constructor(
     private readonly sessions: SessionsRepository,
+    private readonly customers: CustomersRepository,
     private readonly tokens: TokenService,
     private readonly tx: TenantTx,
     private readonly tenants: TenantContext,
@@ -191,6 +289,14 @@ export class SessionsService {
 
   /** auth.refresh's rotation (see the file header), in a transaction of its own on the request's tenant. */
   async refresh(refreshToken: string): Promise<SessionTokens> {
+    return (await this.refreshSession(refreshToken)).tokens;
+  }
+
+  /**
+   * auth.refresh: the rotation of `refresh`, with the customer and the session's metadata read in the rotation's
+   * transaction for the answer.
+   */
+  async refreshSession(refreshToken: string): Promise<SessionWithTokens> {
     if (!REFRESH_TOKEN_PATTERN.test(refreshToken)) {
       throw new AppError("REFRESH_TOKEN_INVALID");
     }
@@ -198,7 +304,10 @@ export class SessionsService {
     const outcome = await this.tx.run(
       async (
         trx,
-      ): Promise<{ readonly issued: IssuedSession } | { readonly reused: CustomerSessionRecord }> => {
+      ): Promise<
+        | { readonly issued: IssuedSession; readonly view: SessionView }
+        | { readonly reused: CustomerSessionRecord }
+      > => {
         const seen = await this.sessions.findByTokenHash(trx, tokenHash);
         if (seen === undefined) {
           throw new AppError("REFRESH_TOKEN_INVALID");
@@ -219,7 +328,13 @@ export class SessionsService {
         if (!mayHoldSession(customer)) {
           throw new AppError("REFRESH_TOKEN_INVALID");
         }
-        return { issued: await this.rotate(trx, row, now) };
+        const issued = await this.rotate(trx, row, now);
+        const view = await this.view(trx, issued.customerId, issued.sessionId);
+        if (view === undefined) {
+          // The customer and the family are locked by this transaction: they cannot have gone.
+          throw new Error("SessionsService.refreshSession: the rotated family has no current generation");
+        }
+        return { issued, view };
       },
     );
     if ("reused" in outcome) {
@@ -230,7 +345,116 @@ export class SessionsService {
       );
       throw new AppError("REFRESH_TOKEN_REUSED");
     }
-    return this.tokensFor(outcome.issued);
+    return { ...outcome.view, tokens: await this.tokensFor(outcome.issued) };
+  }
+
+  /**
+   * Family `sessionId` of `customerId` and that customer, as an answer shows them, in `trx` (the metadata from the
+   * family's first row and its current generation); `undefined` when either is missing or the family is another
+   * customer's. It says nothing about whether the family is still live (`current` checks that).
+   */
+  async view(
+    trx: TenantTransaction,
+    customerId: string,
+    sessionId: string,
+  ): Promise<SessionView | undefined> {
+    const head = await this.sessions.findFamilyHead(trx, sessionId);
+    if (head === undefined || head.customer_id !== customerId) {
+      return undefined;
+    }
+    const current = await this.sessions.findCurrentGeneration(trx, sessionId);
+    const customer = await this.customers.findCustomer(trx, customerId);
+    return current === undefined || customer === undefined
+      ? undefined
+      : { customer, details: sessionDetailsOf(head, current) };
+  }
+
+  /**
+   * auth.getSession for the signed-in customer of the request (see the file header): the customer and the session,
+   * or `401 UNAUTHENTICATED` when the session has ended (signed out, revoked, past its end) or its customer may no
+   * longer hold one. Records the session's use at most once a minute.
+   */
+  async current(principal: {
+    readonly customerId: string;
+    readonly sessionId: string;
+  }): Promise<SessionView> {
+    return this.tx.run(async (trx) => {
+      const now = this.clock.now();
+      const head = await this.sessions.findFamilyHead(trx, principal.sessionId);
+      const current =
+        head === undefined ? undefined : await this.sessions.findCurrentGeneration(trx, principal.sessionId);
+      const customer = await this.customers.findCustomer(trx, principal.customerId);
+      if (
+        head === undefined ||
+        current === undefined ||
+        customer === undefined ||
+        head.customer_id !== principal.customerId ||
+        !isLiveGeneration(current, now) ||
+        !mayHoldSession(customer)
+      ) {
+        throw new AppError("UNAUTHENTICATED");
+      }
+      const lastUsed = current.last_used_at;
+      if (lastUsed === null || now.getTime() - lastUsed.getTime() >= LAST_USED_RESOLUTION_MS) {
+        await this.sessions.touch(trx, current.id, now);
+        return { customer, details: sessionDetailsOf(head, { ...current, last_used_at: now }) };
+      }
+      return { customer, details: sessionDetailsOf(head, current) };
+    });
+  }
+
+  /**
+   * auth.signOut (see the file header), in a transaction of its own on the request's tenant: revokes the session, or
+   * every session of its customer with `scope: all` (`logout`). Returns how many families it revoked (a family that
+   * was revoked already counts as one for `current`).
+   */
+  async signOut(input: SignOutInput): Promise<number> {
+    const outcome = await this.tx.run(async (trx) => {
+      const target = await this.signOutTarget(trx, input);
+      if (target === undefined) {
+        return { target, revoked: 0 };
+      }
+      if (input.scope === "all") {
+        return { target, revoked: await this.revokeAllOfCustomer(trx, target.customerId, "logout") };
+      }
+      const revoked = await this.revokeFamily(trx, target.customerId, target.sessionId, "logout");
+      return { target, revoked: revoked ? 1 : 0 };
+    });
+    // Ids only: no token is ever logged.
+    this.logger.info(
+      {
+        customerId: outcome.target?.customerId,
+        sessionId: outcome.target?.sessionId,
+        scope: input.scope,
+        revoked: outcome.revoked,
+      },
+      "customer.signed_out",
+    );
+    return outcome.revoked;
+  }
+
+  /**
+   * Whose session `signOut` ends: the access token's, else the family of the presented refresh token. `undefined` (a
+   * no-op) for a `current` sign-out with an unknown refresh token; `401 UNAUTHENTICATED` without any credential, and
+   * for `scope: all` without the access token or a current refresh token.
+   */
+  private async signOutTarget(
+    trx: TenantTransaction,
+    input: SignOutInput,
+  ): Promise<{ readonly customerId: string; readonly sessionId: string } | undefined> {
+    if (input.principal !== undefined) {
+      return { customerId: input.principal.customerId, sessionId: input.principal.sessionId };
+    }
+    if (input.refreshToken === undefined) {
+      throw new AppError("UNAUTHENTICATED");
+    }
+    const row = REFRESH_TOKEN_PATTERN.test(input.refreshToken)
+      ? await this.sessions.findByTokenHash(trx, sha256Hex(input.refreshToken))
+      : undefined;
+    if (input.scope === "all" && (row === undefined || refreshVerdict(row, this.clock.now()) !== "rotate")) {
+      throw new AppError("UNAUTHENTICATED");
+    }
+    return row === undefined ? undefined : { customerId: row.customer_id, sessionId: row.family_id };
   }
 
   /**
@@ -247,8 +471,9 @@ export class SessionsService {
     if (!(await this.sessions.lockFamily(trx, sessionId))) {
       return false;
     }
-    const family = await this.sessions.listFamily(trx, sessionId);
-    if (family[0]?.customer_id !== customerId) {
+    // The first row tells whose family it is (every generation has its customer): no need to read them all.
+    const head = await this.sessions.findFamilyHead(trx, sessionId);
+    if (head?.customer_id !== customerId) {
       return false;
     }
     await this.sessions.revokeFamily(trx, sessionId, reason, this.clock.now());

@@ -416,17 +416,18 @@ describe("body parsing", () => {
   });
 
   it("applies a per-operation JSON limit on every spelling of the operation's route", async () => {
-    const limited = await createTestApp({ jsonBodyLimits: { signIn: 1024 } });
+    // Deferred operations, whose routes answer 501 through the MVP (the auth routes were the example until OBE-033).
+    const limited = await createTestApp({ jsonBodyLimits: { createSavedTraveler: 1024 } });
     try {
       const big = { ...SIGN_IN, password: "p".repeat(1100) };
       const small = SIGN_IN;
       // The storefront's edge credential: the pending routes answer 501 to an accepted caller (OBE-011).
       const answers = await Promise.all([
-        request(limited.server).post("/v1/auth/sign-in").set(edgeHeaders()).send(big),
-        request(limited.server).post("/V1/Auth/Sign-In/").set(edgeHeaders()).send(big),
-        request(limited.server).post("/v1/auth/sign-in").set(edgeHeaders()).send(small),
+        request(limited.server).post("/v1/account/saved-travelers").set(edgeHeaders()).send(big),
+        request(limited.server).post("/V1/Account/Saved-Travelers/").set(edgeHeaders()).send(big),
+        request(limited.server).post("/v1/account/saved-travelers").set(edgeHeaders()).send(small),
         // Another route keeps the default limit.
-        request(limited.server).post("/v1/auth/sign-up").set(edgeHeaders()).send(big),
+        request(limited.server).post("/v1/account/data-exports").set(edgeHeaders()).send(big),
       ]);
 
       expect(answers.map((res) => res.status)).toEqual([400, 400, 501, 501]);

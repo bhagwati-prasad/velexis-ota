@@ -150,14 +150,44 @@ export class SessionsRepository {
     return row !== undefined;
   }
 
-  /** Every row of family `familyId`, oldest first (the ownership check of `revokeFamily`). */
-  async listFamily(trx: TenantTransaction, familyId: string): Promise<CustomerSessionRecord[]> {
+  /**
+   * The first row of family `familyId` (its `id` is the family id), read without a lock; `undefined` without one. Its
+   * customer is the family's (the ownership check of `revokeFamily`), its creation the sign-in.
+   */
+  async findFamilyHead(trx: TenantTransaction, familyId: string): Promise<CustomerSessionRecord | undefined> {
+    return trx
+      .selectFrom("customer_sessions")
+      .selectAll()
+      .where("id", "=", familyId)
+      .where("family_id", "=", familyId)
+      .executeTakeFirst();
+  }
+
+  /**
+   * The family's current generation (OBE-033): its newest row that was not rotated, whose refresh token is the one
+   * the customer holds; `undefined` when the family has none.
+   */
+  async findCurrentGeneration(
+    trx: TenantTransaction,
+    familyId: string,
+  ): Promise<CustomerSessionRecord | undefined> {
     return trx
       .selectFrom("customer_sessions")
       .selectAll()
       .where("family_id", "=", familyId)
-      .orderBy("created_at", "asc")
-      .orderBy("id", "asc")
+      .where("rotated_at", "is", null)
+      .orderBy("created_at", "desc")
+      .orderBy("id", "desc")
+      .limit(1)
+      .executeTakeFirst();
+  }
+
+  /** Sets `last_used_at` of row `id` to `now` (auth.getSession, at most once a minute; OBE-033). */
+  async touch(trx: TenantTransaction, id: string, now: Date): Promise<void> {
+    await trx
+      .updateTable("customer_sessions")
+      .set({ last_used_at: now, updated_at: now })
+      .where("id", "=", id)
       .execute();
   }
 
