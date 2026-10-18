@@ -289,14 +289,109 @@ export const VERIFICATION_STRINGS = Object.freeze({
   signOut: "Sign out",
 });
 
-// ---- Public pages: landing, pricing and legal (PFE-004) ------------------------------------------------------
-
 /** Counts in the portal's English: "1 API key", "10 API keys", "1,000 API keys". */
 const COUNT_FORMAT = new Intl.NumberFormat("en");
 
 function counted(count: number, one: string, other: string): string {
   return `${COUNT_FORMAT.format(count)} ${count === 1 ? one : other}`;
 }
+
+// ---- Sign-in, MFA, password reset and sign-out (PFE-006) -----------------------------------------------------
+
+/**
+ * A wait of `seconds` in words: whole seconds under a minute, otherwise minutes rounded up ("45 seconds",
+ * "1 minute", "15 minutes"), so the person never tries again too early.
+ */
+export function waitTime(seconds: number): string {
+  const whole = Math.max(1, Math.ceil(seconds));
+  return whole < 60
+    ? counted(whole, "second", "seconds")
+    : counted(Math.ceil(whole / 60), "minute", "minutes");
+}
+
+/** `/sign-in`: e-mail and password (PF-03). */
+export const SIGN_IN_STRINGS = Object.freeze({
+  title: "Sign in to Velexis",
+  intro: "Use the e-mail address and password of your Velexis account.",
+  emailLabel: "E-mail address",
+  passwordLabel: "Password",
+  forgotPassword: "Forgot your password?",
+  submit: "Sign in",
+  submitting: "Signing in…",
+  noAccount: "New to Velexis?",
+  signUp: "Create an account",
+  emailRequired: "Enter your e-mail address.",
+  emailInvalid: "Enter a valid e-mail address, like name@example.com.",
+  passwordRequired: "Enter your password.",
+  passwordTooLong: "Enter a password of at most 256 characters.",
+  /** `ACCOUNT_LOCKED` with the wait of its `Retry-After` header (PF-03 AC2). */
+  lockedFor: (seconds: number) =>
+    `Too many failed sign-in attempts. Your account is locked: try again in ${waitTime(seconds)}, or reset your password.`,
+  rateLimited: "Too many sign-in attempts from your network. Wait a minute, then try again.",
+  verified: "Your e-mail address is verified. Sign in to continue.",
+  passwordChanged:
+    "Your password is changed and every session of your account was signed out. Sign in with your new password.",
+  signedOut: "You are signed out.",
+});
+
+/** `/sign-in/mfa`: the second step of a sign-in with MFA (PF-04 AC2). */
+export const MFA_STRINGS = Object.freeze({
+  title: "Two-factor authentication",
+  totpIntro: "Enter the 6-digit code your authenticator app shows for Velexis.",
+  recoveryIntro:
+    "Enter one of the recovery codes you stored when you turned on two-factor authentication. Each code works once.",
+  codeLabel: "Authentication code",
+  codeHint: "The 6-digit code your authenticator app shows now.",
+  codeFormat: "Enter the 6 digits of the code from your authenticator app.",
+  recoveryLabel: "Recovery code",
+  recoveryHint: "Four groups of four letters and digits, with or without the dashes.",
+  recoveryFormat: "Enter a recovery code: four groups of four letters and digits.",
+  recoveryInvalid: "This recovery code is not correct or was already used. Check it and try again.",
+  useRecoveryCode: "Use a recovery code instead",
+  useAuthenticator: "Use your authenticator app instead",
+  submit: "Verify and sign in",
+  submitting: "Checking…",
+  backToSignIn: "Back to sign in",
+  lostDevice: "Lost your device and your recovery codes? Contact Velexis support to regain access.",
+  /** `RATE_LIMITED` of verifyMfa (10 attempts per account per 10 minutes), with the wait of `Retry-After`. */
+  rateLimitedFor: (seconds: number) => `Too many codes were tried. Try again in ${waitTime(seconds)}.`,
+});
+
+/** `/forgot-password` and `/reset-password` (PF-05). */
+export const PASSWORD_RESET_STRINGS = Object.freeze({
+  forgotTitle: "Reset your password",
+  forgotIntro: "Enter the e-mail address of your account. We send you a link to choose a new password.",
+  emailLabel: "E-mail address",
+  requestSubmit: "Send the reset link",
+  requestSubmitting: "Sending…",
+  /** The same confirmation for every address (PF-05 AC1): it never says whether an account exists. */
+  sent: "If an account uses this address, we sent it a link to choose a new password. The link works for 1 hour, once. Nothing arrived after a few minutes? Check your spam folder.",
+  requestRateLimited:
+    "You can ask for 3 reset links per hour. Use the newest e-mail you received, or try again later.",
+  backToSignIn: "Back to sign in",
+  resetTitle: "Choose a new password",
+  resetIntro:
+    "Choose a new password for your Velexis account. Saving it signs out every session of your account, on every device.",
+  newPasswordLabel: "New password",
+  newPasswordHint: "At least 10 characters. Avoid common passwords and passwords you use elsewhere.",
+  resetSubmit: "Save the new password",
+  resetSubmitting: "Saving…",
+  linkMissingTitle: "Open the link from your e-mail",
+  linkMissing:
+    "To choose a new password, open the link in the password reset e-mail. A link works for 1 hour and only once; if yours expired, ask for a new one.",
+  requestNewLink: "Ask for a new link",
+});
+
+/**
+ * The page `middleware.ts` answers to a link with `?token=` (`/reset-password?token=…`): it moves on to the page
+ * without the token at once, and shows this link only to a browser that does not follow the refresh.
+ */
+export const TOKEN_LINK_STRINGS = Object.freeze({
+  title: "Velexis",
+  continue: "Continue to Velexis",
+});
+
+// ---- Public pages: landing, pricing and legal (PFE-004) ------------------------------------------------------
 
 /** The header and footer of the public pages (`(marketing)/layout.tsx`). */
 export const MARKETING_STRINGS = Object.freeze({

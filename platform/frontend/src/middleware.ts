@@ -1,6 +1,7 @@
 // Portal middleware (README §6 and §7): runs before every page, server action and route handler except the health
-// routes and static files. It refreshes an expired access token before anything renders, sends people without a
-// session away from the signed-in area, and sets the per-request nonce-based Content-Security-Policy.
+// routes and static files. It refreshes an expired access token before anything renders, moves the single-use token
+// of an e-mail link (`/reset-password?token=…`) into its cookie, sends people without a session away from the
+// signed-in area, and sets the per-request nonce-based Content-Security-Policy.
 import "server-only";
 
 import { NextResponse, type NextRequest } from "next/server";
@@ -10,17 +11,22 @@ import { getConfig, type PortalConfig } from "@/lib/config";
 import { NONCE_HEADER, contentSecurityPolicy, createNonce } from "@/lib/csp";
 import {
   ACCESS_TOKEN_COOKIE,
+  PASSWORD_RESET_COOKIE,
   REFRESH_TOKEN_COOKIE,
   accessTokenClaims,
+  clearedCookie,
   clearedSessionCookies,
   isAccessTokenFresh,
+  passwordResetCookie,
   refresh,
   safeNextPath,
   sessionCookies,
   writeCookies,
   type AccessTokenClaims,
   type CookieWrite,
+  type PortalCookieName,
 } from "@/lib/session";
+import { TOKEN_LINK_STRINGS } from "@/lib/strings";
 
 export const config = {
   // The Node.js runtime: the single-flight refresh map must live in the portal process itself, and the
@@ -50,6 +56,98 @@ export function signInUrl(request: NextRequest, portalUrl: string): URL {
     url.searchParams.set("next", next);
   }
   return url;
+}
+
+/** A page whose e-mail link carries a single-use token in `?token=`, and the cookie the token moves into. */
+interface TokenLink {
+  readonly cookie: PortalCookieName;
+  readonly write: (token: string) => CookieWrite;
+}
+
+/**
+ * The pages opened from a link with `?token=` (README §6). Pages cannot set cookies in Next.js, so the middleware
+ * moves the token before the page renders (`tokenLinkRedirect`).
+ */
+const TOKEN_LINKS: Readonly<Record<string, TokenLink>> = Object.freeze({
+  "/reset-password": { cookie: PASSWORD_RESET_COOKIE, write: passwordResetCookie },
+});
+
+/** `OpaqueToken` of the platform document: a longer token cannot be one Velexis issued. */
+const TOKEN_MAX_LENGTH = 512;
+
+const HTML_ESCAPES: Readonly<Record<string, string>> = Object.freeze({
+  "&": "&amp;",
+  "<": "&lt;",
+  ">": "&gt;",
+  '"': "&quot;",
+  "'": "&#39;",
+});
+
+/** `value` as HTML text or attribute value. */
+function escapeHtml(value: string): string {
+  return value.replace(/[&<>"']/g, (character) => HTML_ESCAPES[character] ?? character);
+}
+
+/**
+ * The page that takes the browser on to `target`, the token link without its token: a declarative refresh (with a
+ * plain link for a browser that does not follow refreshes), no script and no form. It is not a `303` because a
+ * browser sends a `SameSite=Strict` cookie only with a navigation that the portal itself started: a redirect keeps
+ * the start of the navigation it continues, so after a `303` the page of a link clicked in web mail (a navigation
+ * started by another site) would not get the cookie that was just set, and would say the link is missing. The
+ * refresh is a new navigation started by this page, and it replaces this page in the history.
+ */
+function tokenLinkPage(target: URL): string {
+  const href = escapeHtml(target.href);
+  return [
+    "<!doctype html>",
+    '<html lang="en">',
+    "<head>",
+    '<meta charset="utf-8">',
+    '<meta name="viewport" content="width=device-width, initial-scale=1">',
+    '<meta name="referrer" content="no-referrer">',
+    `<meta http-equiv="refresh" content="0; url=${href}">`,
+    `<title>${escapeHtml(TOKEN_LINK_STRINGS.title)}</title>`,
+    "</head>",
+    "<body>",
+    `<main><p><a href="${href}">${escapeHtml(TOKEN_LINK_STRINGS.continue)}</a></p></main>`,
+    "</body>",
+    "</html>",
+    "",
+  ].join("\n");
+}
+
+/**
+ * The answer to `GET` or `HEAD` of a token link: the token of `?token=` goes into its httpOnly `__Host-` cookie
+ * (`SameSite=Strict`, 15 minutes) and a page without script takes the browser on to the same URL without the token
+ * (`tokenLinkPage`), so the token never stays in the address bar or the history and never reaches the rendered
+ * page, a `Referer` (`Referrer-Policy: no-referrer`) or browser JavaScript. Other query parameters are kept. An empty
+ * or over-long token deletes an older cookie instead, so the page says the link is no good rather than using an
+ * older one. `undefined` for every other request.
+ */
+export function tokenLinkRedirect(request: NextRequest, portalUrl: string): NextResponse | undefined {
+  const { pathname, searchParams } = request.nextUrl;
+  const link = Object.hasOwn(TOKEN_LINKS, pathname) ? TOKEN_LINKS[pathname] : undefined;
+  if (link === undefined || !searchParams.has("token") || !["GET", "HEAD"].includes(request.method)) {
+    return undefined;
+  }
+  const token = searchParams.get("token") ?? "";
+  const clean = new URL(pathname, portalUrl);
+  for (const [name, value] of searchParams) {
+    if (name !== "token") {
+      clean.searchParams.append(name, value);
+    }
+  }
+  const response = new NextResponse(tokenLinkPage(clean), {
+    status: 200,
+    headers: {
+      "Content-Type": "text/html; charset=utf-8",
+      "Referrer-Policy": "no-referrer",
+      "Cache-Control": "no-store",
+    },
+  });
+  const usable = token !== "" && token.length <= TOKEN_MAX_LENGTH;
+  writeCookies(response.cookies, [usable ? link.write(token) : clearedCookie(link.cookie)]);
+  return response;
 }
 
 interface SessionState {
@@ -140,8 +238,11 @@ export async function middleware(request: NextRequest): Promise<NextResponse> {
   const session = await resolveSession(request, forwarded, settings);
 
   const appRoute = isAppRoute(request.nextUrl.pathname);
+  const tokenLink = tokenLinkRedirect(request, settings.PUBLIC_PORTAL_URL);
   let response: NextResponse;
-  if (appRoute && session.claims === undefined) {
+  if (tokenLink !== undefined) {
+    response = tokenLink;
+  } else if (appRoute && session.claims === undefined) {
     response = redirectTo(signInUrl(request, settings.PUBLIC_PORTAL_URL));
   } else if (appRoute && session.claims?.emailVerified !== true) {
     response = redirectTo(new URL(VERIFY_PENDING_PATH, settings.PUBLIC_PORTAL_URL));

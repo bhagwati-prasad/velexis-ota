@@ -429,6 +429,169 @@ describe("Content-Security-Policy", () => {
   });
 });
 
+describe("token links (PFE-006)", () => {
+  /** A reset token as the e-mail carries it (a dummy, never a real one). */
+  const RESET_TOKEN = "pr_Pr2xL9qW5mT8vK3cN7bZ4hY1dF6sJ0aG2eU8iO5rQ1k";
+
+  /** The HTML entities `tokenLinkPage` writes, decoded as a browser decodes an attribute value. */
+  function unescapeHtml(value: string): string {
+    return value
+      .replaceAll("&quot;", '"')
+      .replaceAll("&#39;", "'")
+      .replaceAll("&lt;", "<")
+      .replaceAll("&gt;", ">")
+      .replaceAll("&amp;", "&");
+  }
+
+  /**
+   * Where the page of a token link takes the browser: the URL of its declarative refresh, which must be the URL of
+   * its fallback link too.
+   */
+  async function refreshTarget(response: NextResponse): Promise<string> {
+    const html = await response.clone().text();
+    const refreshes = [...html.matchAll(/<meta http-equiv="refresh" content="0; url=([^"]*)">/g)];
+    const links = [...html.matchAll(/<a href="([^"]*)">/g)];
+    expect(refreshes).toHaveLength(1);
+    expect(links).toHaveLength(1);
+    expect(links[0]?.[1]).toBe(refreshes[0]?.[1]);
+    return unescapeHtml(refreshes[0]?.[1] ?? "");
+  }
+
+  it("[PFE-006 AC3] moves the token of /reset-password?token=… into an HttpOnly cookie and takes the browser to the URL without it [PF-05 AC1]", async () => {
+    const response = await middleware(request(`/reset-password?token=${RESET_TOKEN}`));
+
+    // A page without script that refreshes at once, not a 303: after a redirect the browser would not send the
+    // SameSite=Strict cookie with a link opened from web mail (README §6).
+    expect(response.status).toBe(200);
+    expect(response.headers.get("location")).toBeNull();
+    expect(response.headers.get("content-type")).toBe("text/html; charset=utf-8");
+    const html = await response.clone().text();
+    expect(html).not.toMatch(/<script|<form/i);
+    // The browser URL it ends on (and so the history and any later Referer) carries no token, and the page shows
+    // none either.
+    expect(await refreshTarget(response)).toBe("https://platform.example.com/reset-password");
+    expect(html).not.toContain(RESET_TOKEN);
+    expect(html).not.toContain("token");
+    // One cookie: the token, HttpOnly (no browser JavaScript reads it), Secure, SameSite=Strict, 15 minutes, no
+    // Domain (the __Host- prefix). The Expires attribute Next.js adds next to Max-Age is left out of the comparison.
+    const [line, ...others] = setCookies(response);
+    expect(others).toEqual([]);
+    expect(
+      line
+        ?.split("; ")
+        .filter((attribute) => !attribute.startsWith("Expires="))
+        .sort(),
+    ).toEqual(
+      [
+        `__Host-vxp_reset=${RESET_TOKEN}`,
+        "HttpOnly",
+        "Max-Age=900",
+        "Path=/",
+        "SameSite=strict",
+        "Secure",
+      ].sort(),
+    );
+    // The refresh sends no Referer, whatever the browser takes from the header or the page.
+    expect(response.headers.get("referrer-policy")).toBe("no-referrer");
+    expect(html).toContain('<meta name="referrer" content="no-referrer">');
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(response.headers.get("content-security-policy")).toContain("default-src 'self'");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("answers HEAD of a token link the same way, without passing it to the page", async () => {
+    const response = await middleware(
+      new NextRequest(new URL(`/reset-password?token=${RESET_TOKEN}`, "http://127.0.0.1:3000"), {
+        method: "HEAD",
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("referrer-policy")).toBe("no-referrer");
+    expect(setCookies(response)).toHaveLength(1);
+    expect(setCookies(response)[0]).toContain(`__Host-vxp_reset=${RESET_TOKEN};`);
+  });
+
+  it("[PFE-006 AC3] passes the clean URL through to the page, which reads the cookie", async () => {
+    const response = await middleware(
+      request("/reset-password", { cookies: { "__Host-vxp_reset": RESET_TOKEN } }),
+    );
+
+    expect(isPassedThrough(response)).toBe(true);
+    expect(forwardedCookies(response).get("__Host-vxp_reset")).toBe(RESET_TOKEN);
+    expect(setCookies(response)).toEqual([]);
+  });
+
+  it("keeps the other query parameters and the session refresh of the same request", async () => {
+    const refreshToken = uniqueRefreshToken();
+    fetchMock.mockResolvedValue(
+      Response.json(portalSession(accessToken({ expiresInSeconds: 900 }), "rotated")),
+    );
+
+    const response = await middleware(
+      request(`/reset-password?lang=en&token=${RESET_TOKEN}&token=second`, {
+        cookies: { "__Host-vxp_rt": refreshToken },
+      }),
+    );
+
+    expect(await refreshTarget(response)).toBe("https://platform.example.com/reset-password?lang=en");
+    // The first token is the one moved; the session cookies of the refresh are set next to it.
+    expect(setCookies(response).map((line) => line.slice(0, line.indexOf("=")))).toEqual([
+      "__Host-vxp_reset",
+      "__Host-vxp_at",
+      "__Host-vxp_rt",
+    ]);
+    expect(setCookies(response)[0]).toContain(`__Host-vxp_reset=${RESET_TOKEN};`);
+  });
+
+  it("deletes an older reset cookie for an empty or over-long token, so the page says the link is no good", async () => {
+    for (const token of ["", "x".repeat(513)]) {
+      const response = await middleware(
+        request(`/reset-password?token=${token}`, { cookies: { "__Host-vxp_reset": RESET_TOKEN } }),
+      );
+
+      expect(response.status).toBe(200);
+      expect(await refreshTarget(response)).toBe("https://platform.example.com/reset-password");
+      expect(setCookies(response)).toEqual([
+        "__Host-vxp_reset=; Path=/; Max-Age=0; Secure; HttpOnly; SameSite=strict",
+      ]);
+    }
+  });
+
+  it("escapes the other query parameters it keeps, so a crafted link cannot add markup to the page", async () => {
+    const crafted = `"><script>alert(1)</script><a href='x`;
+    const response = await middleware(
+      request(`/reset-password?lang=en&next=${encodeURIComponent(crafted)}&token=${RESET_TOKEN}`),
+    );
+
+    const html = await response.clone().text();
+    expect(html).not.toMatch(/<script/i);
+    expect(html.match(/<a /g)).toHaveLength(1);
+    // Two parameters: the `&` between them is written as `&amp;` in the attributes.
+    expect(html).toContain("reset-password?lang=en&amp;next=");
+    const target = new URL(await refreshTarget(response));
+    expect(`${target.origin}${target.pathname}`).toBe("https://platform.example.com/reset-password");
+    expect([...target.searchParams]).toEqual([
+      ["lang", "en"],
+      ["next", crafted],
+    ]);
+  });
+
+  it("leaves a POST (the form's server action) and other pages with ?token= alone", async () => {
+    const post = await middleware(
+      new NextRequest(new URL(`/reset-password?token=${RESET_TOKEN}`, "http://127.0.0.1:3000"), {
+        method: "POST",
+      }),
+    );
+    const other = await middleware(request(`/sign-in?token=${RESET_TOKEN}`));
+
+    expect(isPassedThrough(post)).toBe(true);
+    expect(isPassedThrough(other)).toBe(true);
+    expect(setCookies(post)).toEqual([]);
+    expect(setCookies(other)).toEqual([]);
+  });
+});
+
 describe("request id", () => {
   it("keeps a valid X-Request-Id and creates one when there is none", async () => {
     const kept = await middleware(request("/", { headers: { "X-Request-Id": "req_from_caddy_0001" } }));

@@ -850,7 +850,8 @@ Common commands: backend `pnpm --filter @velexis/platform-backend test`, `test:i
   - The end-to-end journey of PFE-015 covers the full path through Mailpit.
 - **Verify:** `pnpm --filter @velexis/platform-frontend test`
 
-### PFE-006 · Build sign-in with MFA, password reset and sign-out
+### PFE-006 · Build sign-in with MFA, password reset and sign-out ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-frontend
 - **Milestone:** M1
 - **Depends on:** PFE-005, PBE-015, PBE-016
