@@ -2,9 +2,10 @@
 // the read of TenantRoleGuard (PBE-017): the caller's **active** membership of an OTA that members may see; the team
 // routes (PBE-025): the member list, the rows a role change or a removal locks, and its two writes; and the create-OTA
 // transaction (PBE-018): the owner membership of a new OTA and the count of the OTAs an account owns (the tenant limit
-// of scope PF-10 AC4). The membership of an accepted invitation comes with PBE-026. Kysely on the API's `PLATFORM_DB`,
-// schema-qualified tables (ADR-0005). The member reads join `platform.accounts` for what the `Member` schema shows
-// next to the membership (name, e-mail address, MFA flag), read only, as the operations' `x-platform-tables` say.
+// of scope PF-10 AC4). The membership of an accepted invitation is written by invitations.repository.ts (PBE-026).
+// Kysely on the API's `PLATFORM_DB`, schema-qualified tables (ADR-0005). The member reads join `platform.accounts` for
+// what the `Member` schema shows next to the membership (name, e-mail address, MFA flag), read only, as the operations'
+// `x-platform-tables` say.
 import { Inject, Injectable } from "@nestjs/common";
 import { sql } from "@velexis/db";
 import type { PlatformTransaction } from "../audit/audit.repository";

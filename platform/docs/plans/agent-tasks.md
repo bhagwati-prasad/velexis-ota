@@ -586,7 +586,8 @@ Common commands: backend `pnpm --filter @velexis/platform-backend test`, `test:i
   - Removal publishes the `membership` invalidation the OTA admin relies on [PF-21 AC3].
 - **Verify:** `pnpm --filter @velexis/platform-backend test && pnpm --filter @velexis/platform-backend test:int -- memberships`
 
-### PBE-026 · Implement invitations
+### PBE-026 · Implement invitations ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-backend
 - **Milestone:** M1
 - **Depends on:** PBE-025, PBE-011

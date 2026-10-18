@@ -6,7 +6,8 @@
 // NotificationsModule first (PBE-011), on the worker's common providers (CommonModule.forWorker: Clock, ids, the
 // worker's database pool and the envelope encryption). The jobs of those schedules run in the one
 // `platform-maintenance` processor (MaintenanceProcessor, PBE-021), which hands each to the `@MaintenanceJob` handler
-// of the module that owns it: `api_keys.flush_usage` of ApiKeysModule first.
+// of the module that owns it: `api_keys.flush_usage` of ApiKeysModule first, `invitations.expire` of MembershipsModule
+// (PBE-026).
 import { Module, type DynamicModule } from "@nestjs/common";
 import { DiscoveryModule } from "@nestjs/core";
 import type { Logger } from "@velexis/logger";
@@ -18,6 +19,7 @@ import { QueuesModule } from "./common/queues/queues.module";
 import { JobSchedulerRegistry, schedulerSwitchesProvider } from "./common/queues/scheduler.registry";
 import { configModule, type PlatformBackendConfig } from "./config";
 import { HealthModule } from "./health/health.module";
+import { MembershipsModule } from "./memberships/memberships.module";
 import { NotificationsModule } from "./notifications/notifications.module";
 
 @Module({})
@@ -37,6 +39,7 @@ export class WorkerModule {
         DiscoveryModule,
         NotificationsModule.forWorker(),
         ApiKeysModule.forWorker(),
+        MembershipsModule.forWorker(),
       ],
       // The schedules of a milestone switch that is off are not registered (PADR-0015 item 2).
       providers: [schedulerSwitchesProvider, JobSchedulerRegistry, MaintenanceProcessor],
