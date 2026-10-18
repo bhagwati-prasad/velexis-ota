@@ -1,16 +1,24 @@
 // The tenant-event consumer and the post-step bookkeeping without a database or Redis (PBE-022; flows/provisioning.md
 // §3, PADR-0001 item 5): the attempt of an event from its BullMQ id, which `tenant.provisioned` events run the
 // post-steps and which are ignored, the step log the runner resumes from, when a run stops, and the error a failed step
-// leaves in the log. The integration test (test/integration/provisioning/post-steps.int.test.ts) runs the whole chain
-// on PostgreSQL and Redis with the fake OTA worker.
+// leaves in the log; and (PBE-023) which `tenant.provision_failed` events go to the failure handler, and when failed
+// post-steps fail the job. The integration tests (test/integration/provisioning/post-steps.int.test.ts and
+// failures.int.test.ts) run the whole chain on PostgreSQL and Redis with the fake OTA worker.
+import provisionFailedFixture from "@velexis/api-types/fixtures/jobs/tenant-provision-failed.json";
 import provisionedFixture from "@velexis/api-types/fixtures/jobs/tenant-provisioned.json";
-import { validateJob, type TenantProvisionedEvent } from "@velexis/api-types/jobs";
+import {
+  validateJob,
+  type TenantProvisionedEvent,
+  type TenantProvisionFailedEvent,
+} from "@velexis/api-types/jobs";
 import type { Job } from "bullmq";
 import type { PinoLogger } from "nestjs-pino";
 import { beforeAll, describe, expect, it, vi } from "vitest";
+import type { FailureOutcome, JobFailure, ProvisioningFailureHandler } from "./failure-handler";
 import {
   completedPostSteps,
   POST_STEP_NAMES,
+  PostStepError,
   postStepsFinished,
   stepErrorOf,
   stepLog,
@@ -18,17 +26,31 @@ import {
   type PostStepsRunner,
 } from "./post-steps/post-steps.runner";
 import type { PostStepJobRow, ProvisioningJobsRepository } from "./provisioning-jobs.repository";
-import { eventAttempt, provisionedEventIgnoreReason, TenantEventsProcessor } from "./tenant-events.processor";
+import {
+  eventAttempt,
+  failedOtaStep,
+  isLastTry,
+  POST_STEPS_EXHAUSTED_MESSAGE,
+  provisionedEventIgnoreReason,
+  provisionFailedEventIgnoreReason,
+  TenantEventsProcessor,
+} from "./tenant-events.processor";
 
 const JOB_ID = "job_01M4T9HVE0355QAKGD2AVSQWH2";
 const AT = "2026-01-15T10:00:00.000Z";
 
 let event: TenantProvisionedEvent;
+let failedEvent: TenantProvisionFailedEvent;
 
 beforeAll(() => {
   // validateJob compiles every message schema with Ajv on its first call: once here, not inside a test. 30 s covers a
   // slow CI runner.
   event = validateJob("tenant.provisioned", provisionedFixture);
+  // The failure of the same job and tenant as the success fixture.
+  failedEvent = validateJob("tenant.provision_failed", {
+    ...provisionFailedFixture,
+    tenantId: event.tenantId,
+  });
 }, 30_000);
 
 /** A log entry of `step` with `status`. */
@@ -166,21 +188,37 @@ describe("the step log", () => {
 describe("TenantEventsProcessor", () => {
   function processor(found: PostStepJobRow | undefined) {
     const jobs = { findForEvent: vi.fn(() => Promise.resolve(found)) };
-    const runner = { run: vi.fn(() => Promise.resolve({ outcome: "completed" as const, steps: [] })) };
+    const runner = {
+      run: vi.fn((_event: TenantProvisionedEvent, _attempt: number): Promise<unknown> =>
+        Promise.resolve({ outcome: "completed" as const, steps: [] }),
+      ),
+    };
+    const failures = {
+      handle: vi.fn((failure: JobFailure): Promise<FailureOutcome> =>
+        Promise.resolve({
+          outcome: "requeued",
+          jobId: failure.jobId,
+          attempt: failure.attempt,
+          scheduledAt: new Date("2026-01-15T10:01:00.000Z"),
+        }),
+      ),
+    };
     const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
     return {
       runner,
+      failures,
       logger,
       instance: new TenantEventsProcessor(
         jobs as unknown as ProvisioningJobsRepository,
         runner as unknown as PostStepsRunner,
+        failures as unknown as ProvisioningFailureHandler,
         logger as unknown as PinoLogger,
       ),
     };
   }
 
-  function bullmqJob(name: string, data: unknown, id = `${event.jobId}-1`): Job {
-    return { id, name, data } as Job;
+  function bullmqJob(name: string, data: unknown, id = `${event.jobId}-1`, tries?: Partial<Job>): Job {
+    return { id, name, data, ...tries } as Job;
   }
 
   it("[PBE-022 AC2] fails an invalid message at once, naming paths and rules only", async () => {
@@ -224,6 +262,98 @@ describe("TenantEventsProcessor", () => {
       name: "UnrecoverableError",
     });
     expect(other.runner.run).not.toHaveBeenCalled();
+  });
+
+  it("[PBE-023 AC2] hands tenant.provision_failed of the current attempt to the failure handler, with the OTA worker's steps", async () => {
+    const { instance, failures, runner } = processor(job());
+
+    await expect(instance.process(bullmqJob("tenant.provision_failed", failedEvent))).resolves.toEqual({
+      outcome: "requeued",
+      scheduledAt: "2026-01-15T10:01:00.000Z",
+    });
+    expect(failures.handle).toHaveBeenCalledWith({
+      jobId: failedEvent.jobId,
+      attempt: 1,
+      error: failedEvent.payload.error,
+      retryable: true,
+      source: "event",
+      steps: failedEvent.payload.steps,
+      step: "run_migrations",
+      requestId: failedEvent.requestId,
+    });
+    expect(runner.run).not.toHaveBeenCalled();
+  });
+
+  it("ignores tenant.provision_failed of an older attempt or another kind, and fails one about another tenant", async () => {
+    const stale = processor(job({ attempt: 2 }));
+    await expect(stale.instance.process(bullmqJob("tenant.provision_failed", failedEvent))).resolves.toEqual({
+      outcome: "ignored",
+      reason: "stale_attempt",
+    });
+    expect(stale.failures.handle).not.toHaveBeenCalled();
+
+    expect(provisionFailedEventIgnoreReason(job({ kind: "migrate" }), 1)).toBe("other_kind");
+    expect(provisionFailedEventIgnoreReason(job({ attempt: 1 }), 2)).toBe("unknown_attempt");
+
+    const other = processor(job({ tenant_id: "ten_01M4T9E68084G7ZWYRD6Z1RV0X" }));
+    await expect(
+      other.instance.process(bullmqJob("tenant.provision_failed", failedEvent)),
+    ).rejects.toMatchObject({
+      name: "UnrecoverableError",
+    });
+    expect(other.failures.handle).not.toHaveBeenCalled();
+  });
+
+  it("passes the failure handler's ignored reason on: the attempt was counted as lost already", async () => {
+    const { instance, failures } = processor(job());
+    failures.handle.mockResolvedValueOnce({ outcome: "ignored", jobId: event.jobId, reason: "not_running" });
+
+    await expect(instance.process(bullmqJob("tenant.provision_failed", failedEvent))).resolves.toEqual({
+      outcome: "ignored",
+      reason: "not_running",
+    });
+  });
+
+  it("fails the job with the step's name when the post-steps fail on the event's last try, and not before", async () => {
+    const { instance, runner, failures } = processor(job());
+    const stepFailure = new PostStepError(
+      "create_payment_connection",
+      { code: "23505", message: "The step failed (Error); the event is tried again." },
+      { cause: new Error("duplicate key") },
+    );
+    runner.run.mockRejectedValue(stepFailure);
+
+    // Try 4 of 5: BullMQ tries again, so the job stays as it is.
+    await expect(
+      instance.process(
+        bullmqJob("tenant.provisioned", event, undefined, { attemptsMade: 3, opts: { attempts: 5 } }),
+      ),
+    ).rejects.toBe(stepFailure);
+    expect(failures.handle).not.toHaveBeenCalled();
+
+    // Try 5 of 5: the last one.
+    await expect(
+      instance.process(
+        bullmqJob("tenant.provisioned", event, undefined, { attemptsMade: 4, opts: { attempts: 5 } }),
+      ),
+    ).rejects.toBe(stepFailure);
+    expect(failures.handle).toHaveBeenCalledWith({
+      jobId: event.jobId,
+      attempt: 1,
+      error: { code: "23505", message: POST_STEPS_EXHAUSTED_MESSAGE },
+      retryable: false,
+      source: "post_steps",
+      step: "create_payment_connection",
+      requestId: event.requestId,
+    });
+  });
+
+  it("knows the last try of a BullMQ job and the OTA worker's failed step", () => {
+    expect(isLastTry({ attemptsMade: 0 })).toBe(true);
+    expect(isLastTry({ attemptsMade: 0, opts: { attempts: 5 } })).toBe(false);
+    expect(isLastTry({ attemptsMade: 4, opts: { attempts: 5 } })).toBe(true);
+    expect(failedOtaStep(failedEvent.payload.steps)).toBe("run_migrations");
+    expect(failedOtaStep([])).toBeUndefined();
   });
 
   it("completes the events of later tasks without effect", async () => {

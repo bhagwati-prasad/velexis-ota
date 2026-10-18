@@ -1,7 +1,8 @@
 // The tenant lifecycle use cases (platform/docs/architecture.md §2.1: ProvisioningModule, layer 2; PADR-0001). PBE-018
 // brings `createTenant` (platform/docs/flows/signup-and-create-ota.md steps 5 to 7, scope PF-10 and PF-40): the checks,
-// then one transaction that writes the six rows of a new OTA; PBE-019 dispatches its job after the commit. The retries
-// and the key reveal (PBE-023), suspend, resume, migrate and go-live (later tasks) follow.
+// then one transaction that writes the six rows of a new OTA; PBE-019 dispatches its job after the commit. PBE-023
+// brings the setup progress, the owner's retry and the one-time reveal of the initial test keys (below); suspend,
+// resume, migrate and go-live (later tasks) follow.
 //
 // createTenant, in order:
 //
@@ -31,6 +32,27 @@
 // The operation is idempotent through the global IdempotencyInterceptor (`x-idempotent: true`, PBE-009): a retry with
 // the same `Idempotency-Key` and body gets the stored `202` without running this again, and while Redis is down the
 // interceptor answers `503` before this service runs.
+//
+// The setup page (PBE-023; flows/provisioning.md §4 and "Failure handling", scope PF-11). TenantRoleGuard has checked
+// the caller's membership and role before each of these runs (`404` for non-members):
+//
+// - `getProvisioning` (any member): the tenant's status and its latest `provision` job (the active one, else the
+//   newest): status, current step, the step log of the OTA worker and the post-steps, attempts, the last error, and
+//   `initialKeysAvailable`, true while the keys of a succeeded job wait for their reveal (`revealState`). It writes
+//   nothing.
+// - `retryProvisioning` (owners): one transaction locks the tenant's row; only a `failed` tenant may be retried (`409
+//   PROVISIONING_NOT_RETRYABLE`, also when a `provision` job is active already, the partial unique index). The tenant
+//   goes back to `provisioning` (`version + 1`), a **new** `provision` job is queued (the failed ones stay as history)
+//   and `provisioning_job.retried` is audited. After the commit the job is dispatched as createTenant's is (never
+//   failing the call; the reconciler takes a job left `queued`), and the answer is `202 {job, checkoutUrl: null}`
+//   with the job as it is then. The new Checkout of a tenant failed by an abandoned Checkout comes with M5 (PBE-044).
+// - `revealInitialKeys` (owners): one transaction locks the latest `provision` job. Its keys are revealed only once its
+//   setup succeeded and within REVEAL_WINDOW_MS (24 hours) after it finished: the ciphertext is decrypted (associated
+//   data of `revealPlace`) and, in the same update, `revealed_at` and `revealed_by_account_id` are set and the
+//   ciphertext and its KEK id erased; `tenant.initial_keys_revealed` is audited with the key ids and prefixes, never
+//   the keys. The keys are returned after the commit only. Afterwards, or once the window has passed (purged or not),
+//   the answer is `410 KEYS_ALREADY_REVEALED`; before the setup has issued its keys there is nothing to reveal (`404
+//   NOT_FOUND`). The controller sends the answer with `Cache-Control: no-store`; nothing logs it.
 import { Inject, Injectable } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import type { components } from "@velexis/api-types/platform";
@@ -40,7 +62,9 @@ import type { PlatformTransaction } from "../audit/audit.repository";
 import { AuditService } from "../audit/audit.service";
 import { AccountsRepository } from "../auth/accounts.repository";
 import { SubscriptionsRepository } from "../billing/subscriptions.repository";
+import type { TenantMembership, TenantStatus } from "../common/auth/tenant-role.guard";
 import { Clock } from "../common/clock";
+import { EnvelopeService } from "../common/crypto.provider";
 import { PLATFORM_DB, type PlatformDb } from "../common/database";
 import { FeatureSwitches } from "../common/features";
 import { IdGenerator } from "../common/ids";
@@ -52,10 +76,23 @@ import { isReservedTenantKey, storefrontHost } from "../tenants/tenant-key";
 import { TENANT_KEY_CONSTRAINTS, TenantsRepository } from "../tenants/tenants.repository";
 import { toTenant } from "../tenants/tenants.service";
 import { ProvisioningDispatcher } from "./dispatcher";
-import { ProvisioningJobsRepository, type ProvisioningJobStatus } from "./provisioning-jobs.repository";
+import { revealPlace, type InitialKeys } from "./post-steps/issue-api-keys.step";
+import { stepLog } from "./post-steps/post-steps.runner";
+import {
+  MAX_JOB_ERROR_LENGTH,
+  ProvisioningJobsRepository,
+  type ProgressJobRow,
+  type ProvisioningJobStatus,
+  type RevealJobRow,
+} from "./provisioning-jobs.repository";
+import { REVEAL_WINDOW_MS } from "./purge-reveals.scheduler";
 
 export type CreateTenantRequest = components["schemas"]["CreateTenantRequest"];
 export type TenantCreated = components["schemas"]["TenantCreated"];
+export type ProvisioningStatus = components["schemas"]["ProvisioningStatus"];
+export type ProvisioningRetried = components["schemas"]["ProvisioningRetried"];
+export type ProvisioningJob = components["schemas"]["ProvisioningJob"];
+export type { InitialKeys };
 
 /** The plan of every OTA created before M5 (ADR-0013 point 4; seeded by migration 0002). */
 export const PRE_M5_PLAN_CODE = "early_access";
@@ -83,6 +120,89 @@ function isKeyConflict(error: unknown): boolean {
   );
 }
 
+/** The unique index that allows one active job of each kind per tenant (migration 0001). */
+const ACTIVE_JOB_UNIQUE_INDEX = "provisioning_jobs_active_uq";
+
+/** True when `error` is the unique violation of a second active `provision` job of the tenant. */
+function isActiveJobConflict(error: unknown): boolean {
+  if (typeof error !== "object" || error === null) {
+    return false;
+  }
+  const { code, constraint } = error as { code?: unknown; constraint?: unknown };
+  return code === UNIQUE_VIOLATION && constraint === ACTIVE_JOB_UNIQUE_INDEX;
+}
+
+/** Where the initial keys of a `provision` job stand at `now` (see the file header). */
+export type RevealState = "available" | "gone" | "not_ready";
+
+/**
+ * `available` while a succeeded job holds its unrevealed ciphertext and fewer than REVEAL_WINDOW_MS have passed since it
+ * finished; `gone` once revealed, purged or past the window; `not_ready` before the setup has issued its keys (the job
+ * is not `succeeded`, or never kept any).
+ */
+export function revealState(
+  job: Pick<RevealJobRow, "status" | "finished_at" | "revealed_at"> & { readonly hasCiphertext: boolean },
+  now: Date,
+): RevealState {
+  if (job.revealed_at !== null) {
+    return "gone";
+  }
+  if (job.status !== "succeeded" || job.finished_at === null) {
+    return "not_ready";
+  }
+  if (!job.hasCiphertext || now.getTime() >= job.finished_at.getTime() + REVEAL_WINDOW_MS) {
+    return "gone";
+  }
+  return "available";
+}
+
+/** The `ProvisioningJob` of the API for a job row: the step log in the schema's shape, the error at most 1,000 long. */
+export function toProvisioningJob(row: ProgressJobRow): ProvisioningJob {
+  return {
+    id: row.id,
+    kind: row.kind as ProvisioningJob["kind"],
+    status: row.status,
+    step: row.step,
+    steps: stepLog(row.steps).map((entry) => ({
+      step: entry.step,
+      status: entry.status,
+      startedAt: entry.startedAt,
+      finishedAt: entry.finishedAt,
+      ...(entry.error === undefined
+        ? {}
+        : { error: { code: entry.error.code, message: entry.error.message } }),
+    })),
+    attempt: row.attempt,
+    maxAttempts: row.max_attempts,
+    error: row.error === null ? null : row.error.slice(0, MAX_JOB_ERROR_LENGTH),
+  };
+}
+
+/** The keys of a decrypted reveal, checked for the shape the reveal answers (`InitialKeys`). */
+function initialKeysOf(value: unknown): InitialKeys {
+  const keys: unknown =
+    typeof value === "object" && value !== null ? (value as { keys?: unknown }).keys : undefined;
+  if (
+    !Array.isArray(keys) ||
+    keys.length === 0 ||
+    !keys.every(
+      (key) =>
+        typeof key === "object" &&
+        key !== null &&
+        ["id", "kind", "environment", "prefix", "key"].every(
+          (field) => typeof (key as Record<string, unknown>)[field] === "string",
+        ),
+    )
+  ) {
+    // Never the value: it holds the keys.
+    throw new Error("revealInitialKeys: the decrypted reveal is not an InitialKeys value");
+  }
+  const checked = keys as InitialKeys["keys"];
+  return {
+    keys: checked.map(({ id, kind, environment, prefix, key }) => ({ id, kind, environment, prefix, key })),
+  };
+}
+
 /** `409 TENANT_KEY_UNAVAILABLE`: reserved, used by a tenant row, or taken meanwhile; the answer never says which. */
 function keyUnavailable(cause?: unknown): AppError {
   return new AppError("TENANT_KEY_UNAVAILABLE", cause === undefined ? {} : { cause });
@@ -102,6 +222,7 @@ export class LifecycleService {
     private readonly jobs: ProvisioningJobsRepository,
     private readonly dispatcher: ProvisioningDispatcher,
     private readonly audit: AuditService,
+    private readonly envelope: EnvelopeService,
     private readonly features: FeatureSwitches,
     private readonly ids: IdGenerator,
     private readonly clock: Clock,
@@ -134,18 +255,133 @@ export class LifecycleService {
     return { ...created, provisioningJob: { ...created.provisioningJob, status } };
   }
 
+  /** getProvisioning for the caller's membership (see the file header). */
+  async getProvisioning(membership: TenantMembership): Promise<ProvisioningStatus> {
+    const [tenant, job] = await Promise.all([
+      this.tenants.findWithHost(membership.tenantId),
+      this.jobs.latestProvisionJob(membership.tenantId),
+    ]);
+    if (tenant === undefined || job === undefined) {
+      throw new AppError("NOT_FOUND");
+    }
+    const keys = revealState({ ...job, hasCiphertext: job.reveal_pending }, this.clock.now());
+    return {
+      tenantStatus: tenant.status as TenantStatus,
+      job: toProvisioningJob(job),
+      initialKeysAvailable: keys === "available",
+    };
+  }
+
+  /** retryProvisioning by an owner (see the file header). */
+  async retryProvisioning(membership: TenantMembership): Promise<ProvisioningRetried> {
+    const { tenantId, accountId } = membership;
+    let jobId: string;
+    try {
+      jobId = await runInTransaction(this.db, async (trx) => {
+        const tenant = await this.tenants.lockForUpdate(trx, tenantId);
+        if (tenant === undefined) {
+          throw new AppError("NOT_FOUND");
+        }
+        const previous = await this.jobs.latestProvisionJob(tenantId, trx);
+        const now = this.clock.now();
+        if (tenant.status !== "failed" || !(await this.tenants.reopenFailed(trx, tenantId, now))) {
+          throw new AppError("PROVISIONING_NOT_RETRYABLE", { details: { status: tenant.status } });
+        }
+        const job = await this.jobs.insertQueued(trx, {
+          id: this.ids.new("job"),
+          tenantId,
+          kind: "provision",
+          requestedByAccountId: accountId,
+          now,
+        });
+        await this.audit.record(trx, {
+          actorType: "account",
+          actorAccountId: accountId,
+          action: "provisioning_job.retried",
+          targetType: "provisioning_job",
+          targetId: job.id,
+          tenantId,
+          tenantKey: tenant.key,
+          before: { tenantStatus: "failed" },
+          after: { tenantStatus: "provisioning" },
+          details: {
+            kind: "provision",
+            ...(previous === undefined ? {} : { previousJobId: previous.id, previousError: previous.error }),
+          },
+        });
+        return job.id;
+      });
+    } catch (error) {
+      if (isActiveJobConflict(error)) {
+        throw new AppError("PROVISIONING_NOT_RETRYABLE", { cause: error, details: { reason: "job_active" } });
+      }
+      throw error;
+    }
+    await this.dispatchQuietly(jobId, tenantId);
+    const job = await this.jobs.findProgress(jobId);
+    if (job === undefined) {
+      throw new Error("retryProvisioning: the job written in this request cannot be read back");
+    }
+    return { job: toProvisioningJob(job), checkoutUrl: null };
+  }
+
+  /** revealInitialKeys by an owner (see the file header); the keys leave this method only after the commit. */
+  async revealInitialKeys(membership: TenantMembership): Promise<InitialKeys> {
+    const { tenantId, accountId } = membership;
+    return runInTransaction(this.db, async (trx) => {
+      const now = this.clock.now();
+      const job = await this.jobs.lockForReveal(trx, tenantId);
+      if (job === undefined) {
+        throw new AppError("NOT_FOUND");
+      }
+      const state = revealState({ ...job, hasCiphertext: job.reveal_ciphertext !== null }, now);
+      if (state === "not_ready") {
+        throw new AppError("NOT_FOUND");
+      }
+      if (state === "gone" || job.reveal_ciphertext === null) {
+        throw new AppError("KEYS_ALREADY_REVEALED");
+      }
+      const keys = initialKeysOf(await this.envelope.decryptJson(job.reveal_ciphertext, revealPlace(job.id)));
+      if (!(await this.jobs.markRevealed(trx, { jobId: job.id, accountId, now }))) {
+        throw new AppError("KEYS_ALREADY_REVEALED");
+      }
+      await this.audit.record(trx, {
+        actorType: "account",
+        actorAccountId: accountId,
+        action: "tenant.initial_keys_revealed",
+        targetType: "tenant",
+        targetId: tenantId,
+        tenantId,
+        details: {
+          jobId: job.id,
+          keys: keys.keys.map(({ id, kind, environment, prefix }) => ({ id, kind, environment, prefix })),
+        },
+      });
+      return keys;
+    });
+  }
+
   /**
    * Dispatches the job of an OTA that has just been created (step 4 of the file header) and returns the job's status
    * afterwards. Never rejects: the OTA is committed, and the reconciler dispatches a job left `queued`.
    */
   private async dispatchAfterCreate(created: TenantCreated): Promise<ProvisioningJobStatus> {
     const { id: jobId, status } = created.provisioningJob;
+    return (await this.dispatchQuietly(jobId, created.tenant.id)) ?? status;
+  }
+
+  /**
+   * Dispatches a job queued by this request after its commit; returns its status afterwards, or `undefined` when the
+   * dispatch failed (logged as `provisioning.dispatch_failed`; the reconciler dispatches a job left `queued`). Never
+   * rejects.
+   */
+  private async dispatchQuietly(jobId: string, tenantId: string): Promise<ProvisioningJobStatus | undefined> {
     try {
       const result = await this.dispatcher.dispatch(jobId);
-      return result.dispatched ? "running" : (result.status ?? status);
+      return result.dispatched ? "running" : (result.status ?? undefined);
     } catch (error) {
-      this.logger.warn({ jobId, tenantId: created.tenant.id, err: error }, "provisioning.dispatch_failed");
-      return status;
+      this.logger.warn({ jobId, tenantId, err: error }, "provisioning.dispatch_failed");
+      return undefined;
     }
   }
 

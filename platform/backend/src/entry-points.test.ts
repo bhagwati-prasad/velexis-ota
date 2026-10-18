@@ -129,7 +129,9 @@ describe("the entry points as processes", () => {
   beforeAll(() => {
     outDir = mkdtempSync(join(tmpdir(), "velexis-platform-backend-entry-"));
     compileSources(outDir);
-  });
+    // Transpiling every source file takes seconds, more on a machine that runs the other packages' tests at the same
+    // time; 60 s bounds it for a slow CI runner.
+  }, 60_000);
 
   afterAll(() => {
     rmSync(outDir, { recursive: true, force: true });

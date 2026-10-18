@@ -3,9 +3,10 @@
 // a job with its dispatch gate and the transition `queued → running` of a dispatch; PBE-022 the reads and writes of the
 // tenant-event consumer and the post-steps (the job with its tenant, the step log, the result, the reveal ciphertext,
 // the transition to `succeeded`) and the mirror of the tenant's migration ledger in `tenant_schema_migrations`, the
-// module's other table; the reconciler, retries and the key reveal (PBE-023) add theirs. Kysely on the process's
-// `PLATFORM_DB`, schema-qualified tables (ADR-0005). Times are the service's `Clock`, never the database's `now()`, so
-// leases follow the FakeClock in tests.
+// module's other table; PBE-023 the writes of the failure handler (back to `queued` with a backoff, or `failed`), the
+// reads and the lease extension of the reconciler, the setup progress and the one-time key reveal with its purge.
+// Kysely on the process's `PLATFORM_DB`, schema-qualified tables (ADR-0005). Times are the service's `Clock`, never the
+// database's `now()`, so leases follow the FakeClock in tests.
 import { Inject, Injectable } from "@nestjs/common";
 import type { ProvisioningStepRecord, TenantMigrationRecord } from "@velexis/api-types/jobs";
 import { sql } from "@velexis/db";
@@ -22,6 +23,9 @@ export type ProvisioningJobStatus = "queued" | "running" | "succeeded" | "failed
 
 /** The attempts a provisioning job may make before it fails for good (provisioning flow, PADR-0001). */
 export const PROVISION_MAX_ATTEMPTS = 5;
+
+/** The longest `error` the API shows (`ProvisioningJob.error`, `maxLength: 1000`). */
+export const MAX_JOB_ERROR_LENGTH = 1000;
 
 /** A new job, as the lifecycle service queues it. */
 export interface NewProvisioningJob {
@@ -105,6 +109,108 @@ export interface TenantMigrationMirror {
   readonly migration: TenantMigrationRecord;
   readonly now: Date;
 }
+
+/**
+ * The holder the reconciler writes to `locked_by` when it extends a lease (PBE-023): a lease that ends with this holder
+ * was extended once already, so the job has stayed `running` across two leases. A dispatch clears it.
+ */
+export const LEASE_EXTENDED_BY = "reconciler";
+
+/** A job as the failure handler and the reconciler read it, with its row locked: the job and its tenant. */
+export interface LockedJobRow {
+  readonly id: string;
+  readonly tenant_id: string;
+  readonly kind: ProvisioningJobKind;
+  readonly status: ProvisioningJobStatus;
+  readonly attempt: number;
+  readonly max_attempts: number;
+  readonly locked_until: Date | null;
+  readonly locked_by: string | null;
+  readonly tenant_key: string;
+  readonly tenant_name: string;
+  readonly tenant_status: string;
+}
+
+/** A `running` job whose lease has ended, as the reconciler lists it. */
+export interface ExpiredLeaseRow {
+  readonly id: string;
+  readonly tenant_id: string;
+  readonly kind: ProvisioningJobKind;
+  readonly attempt: number;
+  readonly locked_until: Date | null;
+}
+
+/** How a failed attempt ends in the job row: back to `queued`, or `failed` for good. */
+export interface FailedAttemptWrite {
+  readonly jobId: string;
+  /** The attempt that failed: the row changes only while it is `running` at this attempt. */
+  readonly attempt: number;
+  /** The job's new `error`: a short text without values or secrets (at most 1,000 characters). */
+  readonly error: string;
+  /** Entries appended to `steps` (the OTA worker's steps of the failed attempt); none by default. */
+  readonly entries?: readonly ProvisioningStepRecord[];
+  /** The new `step`; absent leaves it as it is. */
+  readonly step?: string;
+  readonly now: Date;
+}
+
+/** A job as the setup progress shows it (`ProvisioningJob` of the OpenAPI document), with its reveal state. */
+export interface ProgressJobRow {
+  readonly id: string;
+  readonly tenant_id: string;
+  readonly kind: ProvisioningJobKind;
+  readonly status: ProvisioningJobStatus;
+  readonly step: string | null;
+  /** The step log, as stored. */
+  readonly steps: unknown;
+  readonly attempt: number;
+  readonly max_attempts: number;
+  readonly error: string | null;
+  readonly finished_at: Date | null;
+  readonly revealed_at: Date | null;
+  /** True while `reveal_ciphertext` holds the initial keys (the ciphertext itself is not read). */
+  readonly reveal_pending: boolean;
+}
+
+/** The latest `provision` job of a tenant with its reveal ciphertext, locked for the reveal. */
+export interface RevealJobRow {
+  readonly id: string;
+  readonly status: ProvisioningJobStatus;
+  readonly finished_at: Date | null;
+  readonly revealed_at: Date | null;
+  readonly reveal_ciphertext: Buffer | null;
+}
+
+/** The columns of a `LockedJobRow`. */
+const LOCKED_JOB_COLUMNS = [
+  "j.id",
+  "j.tenant_id",
+  "j.kind",
+  "j.status",
+  "j.attempt",
+  "j.max_attempts",
+  "j.locked_until",
+  "j.locked_by",
+  "t.key as tenant_key",
+  "t.name as tenant_name",
+  "t.status as tenant_status",
+] as const;
+
+/** The columns of a `ProgressJobRow`, the reveal state computed in SQL so the ciphertext never leaves the database. */
+const PROGRESS_COLUMNS = [
+  "id",
+  "tenant_id",
+  "kind",
+  "status",
+  "step",
+  "steps",
+  "attempt",
+  "max_attempts",
+  "error",
+  "finished_at",
+  "revealed_at",
+  sql<boolean>`reveal_ciphertext IS NOT NULL`.as("reveal_pending"),
+] as const;
 
 /** The columns of a `PostStepJobRow`: the job's and its tenant's. */
 const POST_STEP_JOB_COLUMNS = [
@@ -206,6 +312,8 @@ export class ProvisioningJobsRepository {
         step: "dispatch",
         started_at: sql<Date>`coalesce(started_at, ${now}::timestamptz)`,
         locked_until: lockedUntil,
+        // A new attempt starts with its own lease, not one the reconciler extended (PBE-023).
+        locked_by: null,
         updated_at: now,
       }))
       .where("id", "=", jobId)
@@ -322,6 +430,268 @@ export class ProvisioningJobsRepository {
   }
 
   /**
+   * Job `jobId` with its tenant, read in `trx` with the job's row locked (`FOR UPDATE OF j`): the failure handler's and
+   * the reconciler's read, so a failure, a lease extension, an event's post-steps and a dispatch of one job run one
+   * after the other. `undefined` for an unknown job.
+   */
+  async lockForLifecycle(trx: PlatformTransaction, jobId: string): Promise<LockedJobRow | undefined> {
+    const row = await trx
+      .selectFrom("platform.provisioning_jobs as j")
+      .innerJoin("platform.tenants as t", "t.id", "j.tenant_id")
+      .select(LOCKED_JOB_COLUMNS)
+      .where("j.id", "=", jobId)
+      .forUpdate("j")
+      .executeTakeFirst();
+    if (row === undefined) {
+      return undefined;
+    }
+    return { ...row, kind: row.kind as ProvisioningJobKind, status: row.status as ProvisioningJobStatus };
+  }
+
+  /**
+   * A retryable failure of attempt `attempt`, in `trx`: the job goes back to `queued`, due at `scheduledAt`, without a
+   * lease, with the error and the given log entries, only while it is `running` at that attempt. False when it changed
+   * meanwhile (no row changed).
+   */
+  async requeue(
+    trx: PlatformTransaction,
+    write: FailedAttemptWrite & { readonly scheduledAt: Date },
+  ): Promise<boolean> {
+    const row = await trx
+      .updateTable("platform.provisioning_jobs")
+      .set({
+        status: "queued" satisfies ProvisioningJobStatus,
+        scheduled_at: write.scheduledAt,
+        locked_until: null,
+        locked_by: null,
+        error: write.error.slice(0, MAX_JOB_ERROR_LENGTH),
+        // jsonb is written as JSON text; `||` appends the array's elements (none appends nothing).
+        steps: sql`steps || ${JSON.stringify(write.entries ?? [])}::jsonb`,
+        ...(write.step === undefined ? {} : { step: write.step }),
+        updated_at: write.now,
+      })
+      .where("id", "=", write.jobId)
+      .where("status", "=", "running" satisfies ProvisioningJobStatus)
+      .where("attempt", "=", write.attempt)
+      .returning("id")
+      .executeTakeFirst();
+    return row !== undefined;
+  }
+
+  /**
+   * The end of a job whose attempt failed for good, in `trx`: `failed`, `finished_at`, no lease, the error and the
+   * given log entries, only while it is `running` at `attempt`. False when it changed meanwhile (no row changed).
+   */
+  async markFailed(trx: PlatformTransaction, write: FailedAttemptWrite): Promise<boolean> {
+    const row = await trx
+      .updateTable("platform.provisioning_jobs")
+      .set({
+        status: "failed" satisfies ProvisioningJobStatus,
+        finished_at: write.now,
+        locked_until: null,
+        locked_by: null,
+        error: write.error.slice(0, MAX_JOB_ERROR_LENGTH),
+        steps: sql`steps || ${JSON.stringify(write.entries ?? [])}::jsonb`,
+        ...(write.step === undefined ? {} : { step: write.step }),
+        updated_at: write.now,
+      })
+      .where("id", "=", write.jobId)
+      .where("status", "=", "running" satisfies ProvisioningJobStatus)
+      .where("attempt", "=", write.attempt)
+      .returning("id")
+      .executeTakeFirst();
+    return row !== undefined;
+  }
+
+  /**
+   * The `running` jobs whose lease has ended by `now` (`locked_until <= now`), the longest ended first, at most
+   * `limit`, read on the pool: the reconciler's candidates. A job inside its lease is never listed.
+   */
+  async listExpiredLeases(now: Date, limit: number): Promise<ExpiredLeaseRow[]> {
+    const rows = await this.db
+      .selectFrom("platform.provisioning_jobs")
+      .select(["id", "tenant_id", "kind", "attempt", "locked_until"])
+      .where("status", "=", "running" satisfies ProvisioningJobStatus)
+      .where("locked_until", "<=", now)
+      .orderBy("locked_until")
+      .orderBy("id")
+      .limit(limit)
+      .execute();
+    return rows.map((row) => ({ ...row, kind: row.kind as ProvisioningJobKind }));
+  }
+
+  /**
+   * Extends the lease of a job locked by `lockForLifecycle` in `trx`: `locked_until`, `locked_by = LEASE_EXTENDED_BY`
+   * and `updated_at`, only while it is `running` at `attempt`. False when it changed meanwhile.
+   */
+  async extendLease(
+    trx: PlatformTransaction,
+    lease: {
+      readonly jobId: string;
+      readonly attempt: number;
+      readonly lockedUntil: Date;
+      readonly now: Date;
+    },
+  ): Promise<boolean> {
+    const row = await trx
+      .updateTable("platform.provisioning_jobs")
+      .set({ locked_until: lease.lockedUntil, locked_by: LEASE_EXTENDED_BY, updated_at: lease.now })
+      .where("id", "=", lease.jobId)
+      .where("status", "=", "running" satisfies ProvisioningJobStatus)
+      .where("attempt", "=", lease.attempt)
+      .returning("id")
+      .executeTakeFirst();
+    return row !== undefined;
+  }
+
+  /**
+   * One page of the `queued` jobs due by `now` (`scheduled_at <= now`) of the kinds `kinds`, with their tenant's
+   * status and current subscription (as `lockForDispatch` reads them, without a lock), ordered by `scheduled_at` and
+   * id, after the job `after` of the previous page: the reconciler's dispatch candidates.
+   */
+  async listDueQueued(
+    now: Date,
+    kinds: readonly ProvisioningJobKind[],
+    limit: number,
+    after?: { readonly scheduledAt: Date; readonly id: string },
+  ): Promise<DispatchCandidateRow[]> {
+    if (kinds.length === 0) {
+      return [];
+    }
+    let query = this.db
+      .selectFrom("platform.provisioning_jobs as j")
+      .innerJoin("platform.tenants as t", "t.id", "j.tenant_id")
+      .leftJoin("platform.subscriptions as s", (join) =>
+        join
+          .onRef("s.tenant_id", "=", "j.tenant_id")
+          .on("s.status", "in", [...CURRENT_SUBSCRIPTION_STATUSES]),
+      )
+      .select([
+        "j.id",
+        "j.tenant_id",
+        "j.kind",
+        "j.status",
+        "j.scheduled_at",
+        "j.payload",
+        "t.status as tenant_status",
+        "s.status as subscription_status",
+        "s.billing_provider",
+      ])
+      .where("j.status", "=", "queued" satisfies ProvisioningJobStatus)
+      .where("j.scheduled_at", "<=", now)
+      .where("j.kind", "in", [...kinds]);
+    if (after !== undefined) {
+      query = query.where((eb) =>
+        eb.or([
+          eb("j.scheduled_at", ">", after.scheduledAt),
+          eb.and([eb("j.scheduled_at", "=", after.scheduledAt), eb("j.id", ">", after.id)]),
+        ]),
+      );
+    }
+    const rows = await query.orderBy("j.scheduled_at").orderBy("j.id").limit(limit).execute();
+    return rows.map((row) => ({
+      ...row,
+      kind: row.kind as ProvisioningJobKind,
+      status: row.status as ProvisioningJobStatus,
+    }));
+  }
+
+  /**
+   * The latest `provision` job of `tenantId`, read on `db` (the pool, or the caller's transaction): the active one when
+   * there is one (`provisioning_jobs_active_uq` allows one), otherwise the newest; a tie on `created_at` prefers a
+   * succeeded job. `undefined` when the tenant has none.
+   */
+  async latestProvisionJob(
+    tenantId: string,
+    db: PlatformDb | PlatformTransaction = this.db,
+  ): Promise<ProgressJobRow | undefined> {
+    const row = await db
+      .selectFrom("platform.provisioning_jobs")
+      .select(PROGRESS_COLUMNS)
+      .where("tenant_id", "=", tenantId)
+      .where("kind", "=", "provision" satisfies ProvisioningJobKind)
+      .orderBy(sql`status IN ('queued', 'running')`, "desc")
+      .orderBy("created_at", "desc")
+      .orderBy(sql`status = 'succeeded'`, "desc")
+      .orderBy("id", "desc")
+      .limit(1)
+      .executeTakeFirst();
+    return row === undefined ? undefined : toProgressJob(row);
+  }
+
+  /** Job `jobId` as the setup progress shows it, read on `db`; `undefined` for an unknown job. */
+  async findProgress(
+    jobId: string,
+    db: PlatformDb | PlatformTransaction = this.db,
+  ): Promise<ProgressJobRow | undefined> {
+    const row = await db
+      .selectFrom("platform.provisioning_jobs")
+      .select(PROGRESS_COLUMNS)
+      .where("id", "=", jobId)
+      .executeTakeFirst();
+    return row === undefined ? undefined : toProgressJob(row);
+  }
+
+  /**
+   * The latest `provision` job of `tenantId` (as `latestProvisionJob` picks it) with its reveal ciphertext, its row
+   * locked in `trx` (`FOR UPDATE`), so two reveals run one after the other and the second finds the ciphertext erased.
+   */
+  async lockForReveal(trx: PlatformTransaction, tenantId: string): Promise<RevealJobRow | undefined> {
+    const latest = await this.latestProvisionJob(tenantId, trx);
+    if (latest === undefined) {
+      return undefined;
+    }
+    const row = await trx
+      .selectFrom("platform.provisioning_jobs")
+      .select(["id", "status", "finished_at", "revealed_at", "reveal_ciphertext"])
+      .where("id", "=", latest.id)
+      .forUpdate()
+      .executeTakeFirst();
+    return row === undefined ? undefined : { ...row, status: row.status as ProvisioningJobStatus };
+  }
+
+  /**
+   * The one reveal of a job locked by `lockForReveal`, in `trx`: `revealed_at`, `revealed_by_account_id`, and the
+   * ciphertext and its KEK id erased in the same update, only while the ciphertext is there and not revealed. False
+   * when it is gone already.
+   */
+  async markRevealed(
+    trx: PlatformTransaction,
+    reveal: { readonly jobId: string; readonly accountId: string; readonly now: Date },
+  ): Promise<boolean> {
+    const row = await trx
+      .updateTable("platform.provisioning_jobs")
+      .set({
+        revealed_at: reveal.now,
+        revealed_by_account_id: reveal.accountId,
+        reveal_ciphertext: null,
+        reveal_encryption_key_id: null,
+        updated_at: reveal.now,
+      })
+      .where("id", "=", reveal.jobId)
+      .where("reveal_ciphertext", "is not", null)
+      .where("revealed_at", "is", null)
+      .returning("id")
+      .executeTakeFirst();
+    return row !== undefined;
+  }
+
+  /**
+   * Erases the unrevealed ciphertext of every job that finished at or before `finishedBy` (`reveal_ciphertext` and its
+   * KEK id; `revealed_at` stays empty, so the keys were never shown). Returns the ids of the jobs changed.
+   */
+  async purgeReveals(finishedBy: Date, now: Date): Promise<string[]> {
+    const rows = await this.db
+      .updateTable("platform.provisioning_jobs")
+      .set({ reveal_ciphertext: null, reveal_encryption_key_id: null, updated_at: now })
+      .where("reveal_ciphertext", "is not", null)
+      .where("finished_at", "<=", finishedBy)
+      .returning("id")
+      .execute();
+    return rows.map((row) => row.id);
+  }
+
+  /**
    * Mirrors one row of a tenant schema's ledger into `tenant_schema_migrations` in `trx` (`applied`): an upsert on
    * `(tenant_id, version)`, so a second report of the same ledger changes nothing but the times it carries.
    */
@@ -348,6 +718,13 @@ export class ProvisioningJobsRepository {
       .onConflict((conflict) => conflict.columns(["tenant_id", "version"]).doUpdateSet(values))
       .execute();
   }
+}
+
+/** The row of a `ProgressJobRow` query, typed. */
+function toProgressJob(
+  row: Omit<ProgressJobRow, "kind" | "status"> & { kind: string; status: string },
+): ProgressJobRow {
+  return { ...row, kind: row.kind as ProvisioningJobKind, status: row.status as ProvisioningJobStatus };
 }
 
 /** The row of a `PostStepJobRow` query, typed. */

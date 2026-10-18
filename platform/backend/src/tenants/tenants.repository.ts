@@ -1,7 +1,8 @@
 // The `tenants` repository (platform/docs/architecture.md §2.1: TenantsModule owns the table): the key check, the
 // lists and reads of the portal and the profile update (PBE-017), the row of a new OTA, which ProvisioningModule
-// writes in the create-OTA transaction (PBE-018), and the two writes of its post-steps (PBE-022): the mirrored schema
-// version and the activation. Kysely on the process's `PLATFORM_DB`, schema-qualified tables
+// writes in the create-OTA transaction (PBE-018), the two writes of its post-steps (PBE-022): the mirrored schema
+// version and the activation, and the failure of a provisioning and the owner's retry (PBE-023). Kysely on the
+// process's `PLATFORM_DB`, schema-qualified tables
 // (ADR-0005). The reads join what an answer shows next to the tenant row: the caller's role from the active
 // membership (listTenants) and the primary storefront host from `tenant_domains`, read only. `reference.countries`,
 // `reference.currencies` and `reference.time_zones` are read for the checks of a new OTA and a profile update (the
@@ -230,6 +231,37 @@ export class TenantsRepository {
       .where("id", "=", tenantId)
       .executeTakeFirst();
     return { activated: false, status: current?.status };
+  }
+
+  /**
+   * The failure of a provisioning (PBE-023, PADR-0001 item 7) in `trx`: `provisioning → failed`, `version + 1`, only
+   * while the tenant is `provisioning`, so a lost or rejected job of another kind can never fail an active or suspended
+   * tenant. True when this call changed the tenant.
+   */
+  async failProvisioning(trx: PlatformTransaction, tenantId: string, now: Date): Promise<boolean> {
+    const row = await trx
+      .updateTable("platform.tenants")
+      .set({ status: "failed", version: sql<number>`version + 1`, updated_at: now })
+      .where("id", "=", tenantId)
+      .where("status", "=", "provisioning")
+      .returning("id")
+      .executeTakeFirst();
+    return row !== undefined;
+  }
+
+  /**
+   * The owner's retry of a failed setup (PBE-023, `retryProvisioning`) in `trx`: `failed → provisioning`,
+   * `version + 1`, only while the tenant is `failed`. True when this call changed the tenant.
+   */
+  async reopenFailed(trx: PlatformTransaction, tenantId: string, now: Date): Promise<boolean> {
+    const row = await trx
+      .updateTable("platform.tenants")
+      .set({ status: "provisioning", version: sql<number>`version + 1`, updated_at: now })
+      .where("id", "=", tenantId)
+      .where("status", "=", "failed")
+      .returning("id")
+      .executeTakeFirst();
+    return row !== undefined;
   }
 
   /** True when `code` is a country of `reference.countries`. */

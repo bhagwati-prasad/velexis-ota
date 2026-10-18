@@ -537,7 +537,8 @@ Common commands: backend `pnpm --filter @velexis/platform-backend test`, `test:i
   - A crash injected after `issue_api_keys` resumes at `activate` on retry.
 - **Verify:** `pnpm --filter @velexis/platform-backend test && pnpm --filter @velexis/platform-backend test:int -- provisioning`
 
-### PBE-023 · Add the reconciler, retries, setup progress and the one-time key reveal
+### PBE-023 · Add the reconciler, retries, setup progress and the one-time key reveal ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-backend
 - **Milestone:** M1
 - **Depends on:** PBE-022

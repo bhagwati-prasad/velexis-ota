@@ -1,8 +1,8 @@
 // ProvisioningModule (platform/docs/architecture.md §2.1, layer 2; PADR-0001): owns `provisioning_jobs` and
 // `tenant_schema_migrations`, and the tenant lifecycle use cases that span the resource modules of layer 1, so those
-// stay simple (architecture §2.2). PBE-018 brings the create-OTA transaction, PBE-019 the dispatch to the OTA worker
-// and PBE-022 the tenant-event consumer and the post-steps; the reconciler, retries and key reveal (PBE-023) and the
-// later lifecycle actions follow.
+// stay simple (architecture §2.2). PBE-018 brings the create-OTA transaction, PBE-019 the dispatch to the OTA worker,
+// PBE-022 the tenant-event consumer and the post-steps, PBE-023 the failure handler, the reconciler, the purge of
+// unrevealed keys and the portal's setup progress, retry and one-time key reveal; the later lifecycle actions follow.
 //
 // - The static module holds what the API uses: the jobs repository, ProvisioningDispatcher (on the `ota-tenant-ops`
 //   queue of QueuesModule), and the layer-1 modules whose repositories the use cases write through (AuthModule for the
@@ -10,11 +10,14 @@
 // - `ProvisioningModule.forApi()` (AppModule) adds the portal's lifecycle routes and LifecycleService.
 // - `ProvisioningModule.forWorker()` (WorkerModule) is the worker's part, in a module of its own (ProvisioningWorker-
 //   Module), so the worker gets none of the portal's routes and services: the one processor of
-//   `platform-tenant-events` (TenantEventsProcessor) and the post-steps it runs (PostStepsRunner and the six steps of
-//   post-steps/). They write through the repositories of the layer-1 modules they import (ApiKeysModule,
-//   SupplierConnectionsModule, PaymentConnectionsModule) and through TenantsRepository and MembershipsRepository,
-//   provided here on their own because their modules carry the portal's routes. NotificationsModule queues the e-mails
-//   (ops alerts, `tenant.welcome`) and AuditModule writes the audit rows.
+//   `platform-tenant-events` (TenantEventsProcessor), the post-steps it runs (PostStepsRunner and the six steps of
+//   post-steps/), the failure handler both it and the reconciler end failed attempts with, the dispatcher, and the
+//   `@MaintenanceJob` handlers of `provisioning.reconcile` and `provisioning.purge_reveals`, which the one
+//   `platform-maintenance` processor runs. They write through the repositories of the layer-1 modules they import
+//   (ApiKeysModule, SupplierConnectionsModule, PaymentConnectionsModule) and through TenantsRepository and
+//   MembershipsRepository, provided here on their own because their modules carry the portal's routes.
+//   NotificationsModule queues the e-mails (ops alerts, `tenant.welcome`, `tenant.provisioning_failed`) and AuditModule
+//   writes the audit rows.
 //
 // It uses the global CommonModule (Clock, IdGenerator, FeatureSwitches, PLATFORM_DB, EnvelopeService, and
 // RequestContext in the API) and RedisModule (InvalidationPublisher).
@@ -33,6 +36,7 @@ import { SupplierConnectionsModule } from "../supplier-connections/supplier-conn
 import { TenantsModule } from "../tenants/tenants.module";
 import { TenantsRepository } from "../tenants/tenants.repository";
 import { ProvisioningDispatcher } from "./dispatcher";
+import { ProvisioningFailureHandler } from "./failure-handler";
 import { LifecycleController } from "./lifecycle.controller";
 import { LifecycleService } from "./lifecycle.service";
 import { ActivateStep } from "./post-steps/activate.step";
@@ -43,11 +47,13 @@ import { NotifyStep } from "./post-steps/notify.step";
 import { PostStepsRunner } from "./post-steps/post-steps.runner";
 import { RecordMigrationsStep } from "./post-steps/record-migrations.step";
 import { ProvisioningJobsRepository } from "./provisioning-jobs.repository";
+import { PurgeRevealsScheduler } from "./purge-reveals.scheduler";
+import { ReconcilerScheduler } from "./reconciler.scheduler";
 import { TenantEventsProcessor } from "./tenant-events.processor";
 
 /**
- * The worker's part of ProvisioningModule (`ProvisioningModule.forWorker()`): the `platform-tenant-events` processor
- * and the post-steps.
+ * The worker's part of ProvisioningModule (`ProvisioningModule.forWorker()`): the `platform-tenant-events` processor,
+ * the post-steps, the failure handler, the reconciler and the purge of unrevealed keys.
  */
 @Module({
   imports: [
@@ -69,7 +75,11 @@ import { TenantEventsProcessor } from "./tenant-events.processor";
     ActivateStep,
     NotifyStep,
     PostStepsRunner,
+    ProvisioningDispatcher,
+    ProvisioningFailureHandler,
     TenantEventsProcessor,
+    ReconcilerScheduler,
+    PurgeRevealsScheduler,
   ],
 })
 export class ProvisioningWorkerModule {}
