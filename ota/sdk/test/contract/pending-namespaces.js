@@ -30,7 +30,6 @@ export const PENDING = Object.freeze(
   /** @type {const} */ ([
     { entry: "auth", task: "SDK-008" },
     { entry: "account", task: "SDK-008" },
-    { entry: "bookings", task: "SDK-010" },
     {
       entry: "console",
       task: "SDK-011",

@@ -1414,7 +1414,8 @@ Checkout, customer accounts in cookies, Stripe on the Velexis account, the airli
   - An error from `completeWithAirlineCard` serialises without any card field.
 - **Verify:** `pnpm --filter @velexis/ota-sdk generate && pnpm --filter @velexis/ota-sdk build && pnpm --filter @velexis/ota-sdk test`
 
-### SDK-010 · Write the bookings namespace
+### SDK-010 · Write the bookings namespace ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-sdk
 - **Milestone:** M3
 - **Depends on:** SDK-006

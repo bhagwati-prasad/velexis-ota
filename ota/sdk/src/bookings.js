@@ -1,14 +1,16 @@
 // Checkout, payment and bookings (mirrors docs/velexis-sdk/sdk/src/bookings.d.ts, ADR-0019, OADR-0016 point 1): the
 // typedefs of bookings.d.ts with the same names, in the same order, and the factories of its namespaces. The namespace
-// types are inferred from the factories in ./namespaces/, so each method is documented once, there. SDK-009 brings the
-// schema aliases, the checkout parameters and `checkout` (`CheckoutApi`); the parameters of `bookings`
-// (`BookingListTimeframe` … `ListBookingEventsParams`) and `BookingsApi` follow with SDK-010, in their places of the
-// contract's order (marked below). The types of the MVP addition `checkout.completeWithAirlineCard`
-// (ota/sdk/docs/extensions.md §3.1) close the file; the contract has no counterpart for them.
+// types are inferred from the factories in ./namespaces/, so each method is documented once, there. The schema
+// aliases and `IfMatchValue` come first; then the checkout parameters (SDK-009), the parameters of `bookings`
+// (`BookingListTimeframe` … `ListBookingEventsParams`, SDK-010), `CheckoutCompletionWithWarnings`, and the namespaces
+// `checkout` (`CheckoutApi`, SDK-009) and `bookings` (`BookingsApi`, SDK-010), in the contract's order. The types of
+// the MVP addition `checkout.completeWithAirlineCard` (ota/sdk/docs/extensions.md §3.1) close the file; the contract
+// has no counterpart for them.
 //
 // Schema types come only from `@velexis/api-types` through ./types.js; nothing here declares a name that shared.js,
 // identity.js or flights.js exports, because index.js re-exports all of them with `export *`.
 
+export { createBookingsApi } from "./namespaces/bookings.js";
 export { createCheckoutApi } from "./namespaces/checkout.js";
 
 /* ------------------------------------------------------------------------------------------------------------ */
@@ -154,10 +156,101 @@ export { createCheckoutApi } from "./namespaces/checkout.js";
  * @property {boolean} [replayed] true when this answer is a replay of an earlier same-key attempt
  */
 
-// SDK-010: BookingListTimeframe, BookingListStatus, BookingListSort, ListBookingsParams, BookingRefParams,
-// GetBookingParams, LookupBookingParams, UpdateBookingParams, CancelBookingParams, CreateBookingPaymentParams,
-// AddBookingAncillariesParams, GetBookingFareRulesParams, GetTicketingStatusParams, ListBookingDocumentsParams,
-// GetDocumentDownloadUrlParams and ListBookingEventsParams go here.
+/** Tab of "My trips": the `timeframe` filter, matching `BookingSummary.timeframe` (not a `BookingStatus`). @typedef {"upcoming" | "past" | "cancelled" | "all"} BookingListTimeframe */
+/**
+ * Deprecated: the old name of `BookingListTimeframe`, renamed because the filter is `timeframe`, not a booking status.
+ * @deprecated Renamed to `BookingListTimeframe`.
+ * @typedef {BookingListTimeframe} BookingListStatus
+ */
+/** Order of `BookingsApi.list`. @typedef {"departure" | "-departure" | "created" | "-created"} BookingListSort */
+
+/**
+ * Parameters of `BookingsApi.list`: the common list parameters and the filters of "My trips".
+ * @typedef {object} ListBookingsParams
+ * @property {string} [cursor] the `page.nextCursor` of the previous page
+ * @property {number} [limit] the page size (at most 100)
+ * @property {BookingListTimeframe} [timeframe] tab (default `upcoming`); filters on `BookingSummary.timeframe`. For
+ *   booking statuses use the console list.
+ * @property {string} [departureFrom] first departure on or after this local date (`YYYY-MM-DD`)
+ * @property {string} [departureTo] first departure on or before this local date
+ * @property {string} [createdFrom] booked at or after this instant (inclusive, ISO-8601 date-time), as in the console
+ *   lists
+ * @property {string} [createdTo] booked before this instant (exclusive, ISO-8601 date-time), as in the console lists
+ * @property {BookingListSort} [sort] sort (default per tab); changing filters or sort requires dropping `cursor`
+ */
+
+/**
+ * Parameters identifying a booking.
+ * @typedef {object} BookingRefParams
+ * @property {string} bookingId booking id (`bkg_…`)
+ */
+
+/**
+ * Parameters of `BookingsApi.get`.
+ * @typedef {object} GetBookingParams
+ * @property {string} bookingId booking id (`bkg_…`)
+ * @property {boolean} [refresh] synchronise with Amadeus Flight Order Management GET first (throttled to once per
+ *   60 s per booking)
+ * @property {Array<"bags">} [include] with `refresh`: Amadeus `include` (`bags` = raw extra bag options in
+ *   `amadeus.included.bags`; to buy them use `BookingsApi.getAncillaries`); sent comma-separated
+ * @property {Array<"rebooks" | "refunds">} [fareRules] with `refresh`: Amadeus `fareRules` eligibility (`rebooks`,
+ *   `refunds`), returned in `fareRules`; sent comma-separated
+ */
+
+/** Parameters of `BookingsApi.lookup`: the booking reference (or record locator) and any traveller's last name. @typedef {import("./types.js").Schemas["BookingLookupRequest"]} LookupBookingParams */
+
+/**
+ * Parameters of `BookingsApi.update`: `ifMatch` (required), the booking `version` (or ETag) the customer saw, and the
+ * changes (`contacts`, `travelers` keyed by `travelerId`, `remarks`).
+ * @typedef {BookingRefParams & { ifMatch: IfMatchValue } & import("./types.js").Schemas["BookingUpdateRequest"]} UpdateBookingParams
+ */
+
+/**
+ * Parameters of `BookingsApi.cancel`: `ifMatch` (required), the booking `version` (or ETag), `reasonCode`
+ * (`CancellationReason`), an optional `comment` and the quote's `estimatedRefund` as `expectedRefund`.
+ * @typedef {BookingRefParams & { ifMatch: IfMatchValue } & import("./types.js").Schemas["CancellationRequest"]} CancelBookingParams
+ */
+
+/** Parameters of `BookingsApi.createPayment`: selections, confirmed `expectedTotal`, payment method. @typedef {BookingRefParams & import("./types.js").Schemas["BookingPaymentCreateRequest"]} CreateBookingPaymentParams */
+
+/**
+ * Parameters of `BookingsApi.addAncillaries`: `ifMatch` (required), the booking `version` (or ETag), and the
+ * `selections`, `paymentId` and `expectedTotal` of `BookingsApi.createPayment`.
+ * @typedef {BookingRefParams & { ifMatch: IfMatchValue } & import("./types.js").Schemas["BookingAncillariesRequest"]} AddBookingAncillariesParams
+ */
+
+/**
+ * Parameters of `BookingsApi.getFareRules`.
+ * @typedef {object} GetBookingFareRulesParams
+ * @property {string} bookingId booking id (`bkg_…`)
+ * @property {Array<"rebooks" | "refunds">} [types] Amadeus `fareRules` values (default both); sent comma-separated
+ * @property {boolean} [refresh] bypass the 1-hour cache
+ */
+
+/**
+ * Parameters of `BookingsApi.getTicketingStatus`.
+ * @typedef {object} GetTicketingStatusParams
+ * @property {string} bookingId booking id (`bkg_…`)
+ * @property {boolean} [refresh] read tickets from Amadeus when the status is not final (throttled to once per 60 s)
+ */
+
+/**
+ * Parameters of `BookingsApi.listDocuments`.
+ * @typedef {object} ListBookingDocumentsParams
+ * @property {string} [cursor] the `page.nextCursor` of the previous page
+ * @property {number} [limit] the page size
+ * @property {string} bookingId booking id (`bkg_…`)
+ * @property {BookingDocumentKind[]} [kind] only these kinds; sent comma-separated
+ */
+
+/**
+ * Parameters of `BookingsApi.getDocumentDownloadUrl`.
+ * @typedef {object} GetDocumentDownloadUrlParams
+ * @property {string} bookingId booking id (`bkg_…`)
+ * @property {string} documentId document id (`doc_…`)
+ */
+
+/** Parameters of `BookingsApi.listEvents`. @typedef {import("./shared.js").ListParams & BookingRefParams} ListBookingEventsParams */
 
 /** A checkout completion as returned to callers that want warnings typed explicitly. @typedef {CheckoutCompletion & import("./shared.js").WithWarnings} CheckoutCompletionWithWarnings */
 
@@ -173,7 +266,14 @@ export { createCheckoutApi } from "./namespaces/checkout.js";
  * @typedef {ReturnType<typeof import("./namespaces/checkout.js").createCheckoutApi>} CheckoutApi
  */
 
-// SDK-010: BookingsApi goes here.
+/**
+ * `client.bookings`: the customer and guest view of bookings ("My trips", detail, manage booking). Customers use their
+ * access token; guests the booking token of `checkout.complete` or `bookings.lookup` (client option `bookingToken` or
+ * `RequestOptions.bookingToken` in token and server mode; the httpOnly `__Host-vx_bt` cookie in cookie mode, where a
+ * booking token in the options is refused). Only bookings of the key's environment are visible. Staff booking
+ * management is `console.*`.
+ * @typedef {ReturnType<typeof import("./namespaces/bookings.js").createBookingsApi>} BookingsApi
+ */
 
 /* ------------------------------------------------------------------------------------------------------------ */
 /* Additions to the contract (ota/sdk/docs/extensions.md §3.1)                                                   */

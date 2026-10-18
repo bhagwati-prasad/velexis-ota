@@ -2,8 +2,8 @@
 // `VERSION`, everything of shared.js (the error classes, `isVelexisError`, `Page` and the shared typedefs) and of the
 // public namespace modules (their typedefs and factories, OADR-0016 point 1). A client offers the namespaces of the
 // milestones built so far, `withOptions` and `request`: M2 brings `storefront`, `reference` and `flights` (SDK-005),
-// M3 `checkout` (SDK-009); `auth`, `account`, `bookings` (M3) and `console` (M4) follow.
-import { createCheckoutApi } from "./bookings.js";
+// M3 `checkout` (SDK-009) and `bookings` (SDK-010); `auth`, `account` (M3) and `console` (M4) follow.
+import { createBookingsApi, createCheckoutApi } from "./bookings.js";
 import { createFlightsApi } from "./flights.js";
 import { createReferenceApi, createStorefrontApi } from "./identity.js";
 import { createCore } from "./internal/client.js";
@@ -30,6 +30,8 @@ export { VERSION } from "./version.js";
  *   fare rules, ancillary options and the console's availability search
  * @property {import("./bookings.js").CheckoutApi} checkout checkout session: travellers, contacts, ancillaries,
  *   payment, completion (creates the booking), and the hosted storefront's airline-card completion
+ * @property {import("./bookings.js").BookingsApi} bookings customer and guest bookings: "My trips", detail, guest
+ *   lookup, changes, extras after booking, cancellation, documents, timeline and ticketing status
  * @property {(overrides: Partial<VelexisClientOptions>) => VelexisClient} withOptions a new client with some options
  *   replaced (for example a per-request access token on the server); it shares nothing mutable with this one
  * @property {<T = unknown>(method: HttpMethod, path: string, init?: { query?: Record<string, string | number | boolean | string[] | undefined>, body?: unknown, options?: RequestOptions }) => Promise<T>} request
@@ -49,6 +51,7 @@ export function createVelexisClient(options) {
     reference: createReferenceApi(core),
     flights: createFlightsApi(core),
     checkout: createCheckoutApi(core),
+    bookings: createBookingsApi(core),
     withOptions: (overrides) => createVelexisClient(core.derive(overrides)),
     request: (method, path, init) => core.request(method, path, init),
   };
