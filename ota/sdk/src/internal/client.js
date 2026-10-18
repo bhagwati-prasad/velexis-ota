@@ -2,10 +2,11 @@
 // the contract's defaults, and the core handed to the namespaces. `core.call(op, params, options)` turns the params of
 // one SDK method into an HTTP request by its route-table entry (internal/operations.js): names in `pathParams` fill
 // the path template (URI-encoded), names in `queryParams` become the query string (arrays comma-separated,
-// `undefined` and `null` dropped), `headerParams` become headers (`ifMatch` → `If-Match`), and every other param is
-// the JSON body (or the `multipart/form-data` form; an operation without a body ignores them). The generator refuses
-// name collisions, so this split never guesses. A list operation (one with a `cursor` query param) resolves with a
-// `Page`. `core.request` is the low-level escape hatch with the same headers, retries and error mapping.
+// `undefined` and `null` dropped), `headerParams` become headers (`ifMatch` → `If-Match`, a version number as its
+// ETag `"<n>"`), and every other param is the JSON body (or the `multipart/form-data` form; an operation without a
+// body ignores them). The generator refuses name collisions, so this split never guesses. A list operation (one with
+// a `cursor` query param) resolves with a `Page`. `core.request` is the low-level escape hatch with the same headers,
+// retries and error mapping.
 //
 // The session mode is chosen here, once, from the validated options (internal/session.js, README §4): cookie mode
 // (`session: "cookie"`), token mode (a publishable key) or server mode (a secret or hosting key). The session refuses
@@ -481,7 +482,9 @@ export function createCore(options) {
     for (const [param, header] of Object.entries(operation.headerParams)) {
       const value = values[param];
       if (value !== undefined && value !== null) {
-        headers[header] = String(value);
+        // `ifMatch` is the contract's IfMatchValue: a number is the resource `version`, sent as its ETag `"<n>"`; a
+        // string is the ETag itself and is sent as it is.
+        headers[header] = header === "If-Match" && typeof value === "number" ? `"${value}"` : String(value);
       }
     }
     const used = new Set([

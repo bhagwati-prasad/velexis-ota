@@ -1,8 +1,9 @@
 // @velexis/ota-sdk public entry (mirrors docs/velexis-sdk/sdk/src/index.d.ts, ADR-0019): `createVelexisClient`,
 // `VERSION`, everything of shared.js (the error classes, `isVelexisError`, `Page` and the shared typedefs) and of the
 // public namespace modules (their typedefs and factories, OADR-0016 point 1). A client offers the namespaces of the
-// milestones built so far, `withOptions` and `request`: M2 brings `storefront`, `reference` and `flights` (SDK-005);
-// `auth`, `account`, `checkout`, `bookings` (M3) and `console` (M4) follow.
+// milestones built so far, `withOptions` and `request`: M2 brings `storefront`, `reference` and `flights` (SDK-005),
+// M3 `checkout` (SDK-009); `auth`, `account`, `bookings` (M3) and `console` (M4) follow.
+import { createCheckoutApi } from "./bookings.js";
 import { createFlightsApi } from "./flights.js";
 import { createReferenceApi, createStorefrontApi } from "./identity.js";
 import { createCore } from "./internal/client.js";
@@ -10,6 +11,7 @@ import { createCore } from "./internal/client.js";
 export * from "./shared.js";
 export * from "./identity.js";
 export * from "./flights.js";
+export * from "./bookings.js";
 export { VERSION } from "./version.js";
 
 /** @typedef {import("./shared.js").VelexisClientOptions} VelexisClientOptions */
@@ -26,6 +28,8 @@ export { VERSION } from "./version.js";
  *   (platform reference data)
  * @property {import("./flights.js").FlightsApi} flights flight search, offer details, branded-fare upsell, pricing,
  *   fare rules, ancillary options and the console's availability search
+ * @property {import("./bookings.js").CheckoutApi} checkout checkout session: travellers, contacts, ancillaries,
+ *   payment, completion (creates the booking), and the hosted storefront's airline-card completion
  * @property {(overrides: Partial<VelexisClientOptions>) => VelexisClient} withOptions a new client with some options
  *   replaced (for example a per-request access token on the server); it shares nothing mutable with this one
  * @property {<T = unknown>(method: HttpMethod, path: string, init?: { query?: Record<string, string | number | boolean | string[] | undefined>, body?: unknown, options?: RequestOptions }) => Promise<T>} request
@@ -44,6 +48,7 @@ export function createVelexisClient(options) {
     storefront: createStorefrontApi(core),
     reference: createReferenceApi(core),
     flights: createFlightsApi(core),
+    checkout: createCheckoutApi(core),
     withOptions: (overrides) => createVelexisClient(core.derive(overrides)),
     request: (method, path, init) => core.request(method, path, init),
   };

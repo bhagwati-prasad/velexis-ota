@@ -74,8 +74,10 @@ describe("createVelexisClient", () => {
   it("returns a client with withOptions and request, and the public entry exports VERSION [SDK-003 AC1]", () => {
     const client = createVelexisClient({ publishableKey: PK, fetch: createFakeFetch().fetch });
 
-    // Besides the namespaces of the milestones built so far (M2: storefront, reference, flights since SDK-005).
+    // Besides the namespaces of the milestones built so far (M2: storefront, reference, flights since SDK-005; M3:
+    // checkout since SDK-009).
     expect(Object.keys(client).sort()).toEqual([
+      "checkout",
       "flights",
       "reference",
       "request",

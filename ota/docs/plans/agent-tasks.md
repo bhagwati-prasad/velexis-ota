@@ -1397,7 +1397,8 @@ Checkout, customer accounts in cookies, Stripe on the Velexis account, the airli
   - Deferred methods surface `ServerError` `NOT_IMPLEMENTED`.
 - **Verify:** `pnpm --filter @velexis/ota-sdk build && pnpm --filter @velexis/ota-sdk test`
 
-### SDK-009 · Write the checkout namespace including completeWithAirlineCard
+### SDK-009 · Write the checkout namespace including completeWithAirlineCard ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-sdk
 - **Milestone:** M3
 - **Depends on:** SDK-006, OBE-029
