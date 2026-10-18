@@ -6,8 +6,8 @@
 // - a key is never written by hand: a module asks a builder here for `{ key, ttlSeconds }` (`redisKeys.portalToken
 //   (digest)`), and no string or template literal elsewhere in `src/` starts with one of the key prefixes below;
 // - a key is only written through the helpers at the end of this file (`setKey`, `setKeyIfAbsent`,
-//   `incrementInWindow`, which always set the builder's TTL in the same command, and `deleteKeyIfValue`, which
-//   releases a lock). No other file calls an ioredis
+//   `incrementInWindow` and `setKeyIfHigher`, which always set the builder's TTL in the same command, and
+//   `deleteKeyIfValue`, which releases a lock). No other file calls an ioredis
 //   command that creates or changes a key (`set`, `incr`, `hset`, `eval`, `multi`, …). Reading (`get`, `getdel`,
 //   `pttl`) and deleting (`del`) are free.
 //
@@ -53,6 +53,11 @@ export const IDEMPOTENCY_LOCK_TTL_SECONDS = 10;
 export const MFA_CHALLENGE_TTL_SECONDS = 5 * MINUTE;
 /** A pending TOTP set-up (the encrypted secret) until it is confirmed. */
 export const MFA_SETUP_TTL_SECONDS = 10 * MINUTE;
+/**
+ * The last TOTP time step an account used (PADR-0008 item 1): 90 s, the longest a code stays valid with the ±1 step
+ * window (its own step and the steps before and after it), so a replayed code is refused for as long as it works.
+ */
+export const TOTP_LAST_STEP_TTL_SECONDS = 90;
 /** The `state` of a Stripe Connect OAuth start (PADR-0011). */
 export const STRIPE_OAUTH_STATE_TTL_SECONDS = 10 * MINUTE;
 /** A positive answer of Caddy's TLS `ask` (PADR-0004 item 6); negative answers stay in process. */
@@ -171,10 +176,27 @@ export const redisKeys = Object.freeze({
     segments: ["mfach", part("mfaChallenge", "challengeSha256", "sha256", challengeSha256)],
     ttlSeconds: MFA_CHALLENGE_TTL_SECONDS,
   })),
+  /**
+   * `mfach:<sha256(challenge token)>:attempts`: the codes tried against a challenge (`incrementInWindow`), living as
+   * long as a challenge can (PBE-015).
+   */
+  mfaChallengeAttempts: builder("mfach:<sha256>:attempts", (challengeSha256: string) => ({
+    segments: [
+      "mfach",
+      part("mfaChallengeAttempts", "challengeSha256", "sha256", challengeSha256),
+      "attempts",
+    ],
+    ttlSeconds: MFA_CHALLENGE_TTL_SECONDS,
+  })),
   /** `mfasetup:<accountId>`: the pending TOTP secret of an account, encrypted. */
   mfaSetup: builder("mfasetup:<accountId>", (accountId: string) => ({
     segments: ["mfasetup", part("mfaSetup", "accountId", "accountId", accountId)],
     ttlSeconds: MFA_SETUP_TTL_SECONDS,
+  })),
+  /** `mfastep:<accountId>`: the last TOTP time step the account used (`setKeyIfHigher`), against replays (PBE-015). */
+  totpLastStep: builder("mfastep:<accountId>", (accountId: string) => ({
+    segments: ["mfastep", part("totpLastStep", "accountId", "accountId", accountId)],
+    ttlSeconds: TOTP_LAST_STEP_TTL_SECONDS,
   })),
   /** `stripe:oauth:<sha256(state)>`: the state of a Connect OAuth start. */
   stripeOAuthState: builder("stripe:oauth:<sha256>", (stateSha256: string) => ({
@@ -214,6 +236,7 @@ export const REDIS_KEY_PREFIXES = Object.freeze([
   "vx:idem:",
   "mfach:",
   "mfasetup:",
+  "mfastep:",
   "stripe:oauth:",
   "tlsask:",
   "rl:",
@@ -249,6 +272,19 @@ end
 return { hits, ttl }
 `;
 
+/**
+ * Raises a counter: writes ARGV[1] with the key's TTL only when the key is absent or holds a lower integer, in one
+ * script, so of two concurrent writes of one value only one succeeds.
+ */
+const SET_IF_HIGHER = `
+local current = tonumber(redis.call('GET', KEYS[1]))
+if current ~= nil and current >= tonumber(ARGV[1]) then
+  return 0
+end
+redis.call('SET', KEYS[1], ARGV[1], 'EX', ARGV[2])
+return 1
+`;
+
 /** Releases a lock: `DEL` only while the key still holds this holder's token. */
 const DELETE_IF_VALUE = `
 if redis.call('GET', KEYS[1]) == ARGV[1] then
@@ -273,6 +309,18 @@ export async function incrementInWindow(client: RedisWriter, key: RedisKey): Pro
     throw new Error("incrementInWindow: unexpected reply from Redis");
   }
   return { hits, expiresInMs };
+}
+
+/**
+ * Writes the safe integer `value` to `key` with the key's TTL when the key is absent or holds a lower number (see the
+ * script above); true when written. `totpLastStep` uses it so a TOTP time step is accepted once and never after a
+ * later one.
+ */
+export async function setKeyIfHigher(client: RedisWriter, key: RedisKey, value: number): Promise<boolean> {
+  if (!Number.isSafeInteger(value)) {
+    throw new RangeError("setKeyIfHigher: the value must be a safe integer");
+  }
+  return Number(await client.eval(SET_IF_HIGHER, 1, key.key, String(value), String(key.ttlSeconds))) === 1;
 }
 
 /** Deletes `key` only while it holds `value` (the release of a lock taken with `setKeyIfAbsent`). */

@@ -7,7 +7,8 @@
 // - `expires_at` is the idle expiry of one token (7 days for the portal, never after the family's end) and
 //   `family_expires_at` the absolute end of the family (30 days for the portal, 12 hours for the admin);
 // - `revoked_at` with `revoke_reason` ends a row; revoking a family revokes every row of it, rotated ones included;
-// - `mfa_verified_at` is the family's last TOTP verification, copied into each new generation (the `mfa_at` claim).
+// - `mfa_verified_at` is the family's last TOTP verification, copied into each new generation (the `mfa_at` claim);
+//   a step-up (PBE-015) writes the next generation with a new one.
 //
 // Kysely on the caller's transaction, schema-qualified tables (ADR-0005). Times are the service's `Clock`, never the
 // database's `now()`, so expiry follows the FakeClock in tests.
@@ -101,6 +102,25 @@ export class SessionsRepository {
       .forUpdate()
       .executeTakeFirst();
     return row !== undefined;
+  }
+
+  /**
+   * The current generation of family `familyId` (the newest row that is neither rotated nor revoked), locked for the
+   * rest of `trx` (`FOR UPDATE`); `undefined` when the family has none (it was revoked). The step-up (PBE-015) rotates
+   * it, as a refresh would, without the refresh token in hand.
+   */
+  async lockCurrentOfFamily(trx: PlatformTransaction, familyId: string): Promise<SessionRecord | undefined> {
+    return trx
+      .selectFrom("platform.account_sessions")
+      .selectAll()
+      .where("family_id", "=", familyId)
+      .where("rotated_at", "is", null)
+      .where("revoked_at", "is", null)
+      .orderBy("created_at", "desc")
+      .orderBy("id", "desc")
+      .limit(1)
+      .forUpdate()
+      .executeTakeFirst();
   }
 
   /** The row whose refresh token hashes to `refreshTokenHash`, read on `db`, without a lock. */

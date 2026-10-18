@@ -10,6 +10,7 @@ import {
 } from "@nestjs/common";
 import { pinoHttpOptions, type Logger } from "@velexis/logger";
 import { LoggerModule } from "nestjs-pino";
+import { AccountsModule } from "./accounts/accounts.module";
 import { ApiKeysModule } from "./api-keys/api-keys.module";
 import { AuthModule } from "./auth/auth.module";
 import { BillingModule } from "./billing/billing.module";
@@ -43,6 +44,8 @@ export class AppModule implements NestModule {
         MembershipsModule,
         HealthModule.forApi(logger),
         AuthModule,
+        // Global: provides AuthController's MFA steps (MfaVerification) with its MfaService.
+        AccountsModule,
         TenantsModule,
         BillingModule,
         ApiKeysModule.forApi(),

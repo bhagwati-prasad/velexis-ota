@@ -9,8 +9,10 @@
 //   const secrets = await envelope.decryptJson(row.secret_payload_ciphertext, place);  // never log it
 //
 // The associated data of every value is `platform.<table>.<column>:<row id>` (`aadFor`), so a ciphertext copied to
-// another column or row fails to decrypt. The platform never writes a tenant schema (ADR-0004), so the schema is always
-// `platform`. Decrypted values live in memory only: they are never logged, queued or stored elsewhere.
+// another column or row fails to decrypt. The platform never writes a tenant schema (ADR-0004), so the schema is
+// `platform`, or `redis` for a value kept in a Redis key (`redis.<key prefix>.<field>:<id>`, as the OTA backend binds
+// its cached Amadeus tokens; the pending TOTP secret of `mfasetup:<accountId>`, PBE-015). Decrypted values live in
+// memory only: they are never logged, queued or stored elsewhere.
 import { Inject, Injectable, type FactoryProvider } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import {
@@ -30,19 +32,24 @@ export const KEY_PROVIDER = "KEY_PROVIDER";
 /** The schema of every platform ciphertext column. */
 const PLATFORM_SCHEMA = "platform";
 
-/** Where a value is stored: a ciphertext column of a `platform` table and the row's id. */
+/**
+ * Where a value is stored: a ciphertext column of a `platform` table and the row's id, or (`schema: "redis"`) a value
+ * of a Redis key, named by the key's prefix, the field and the key's id.
+ */
 export interface CiphertextPlace {
-  /** The table in schema `platform`, e.g. `email_outbox`. */
+  /** `platform` (the default) for a column, `redis` for a value kept in a Redis key. */
+  readonly schema?: "platform" | "redis";
+  /** The table in schema `platform`, e.g. `email_outbox`; for Redis, the key's prefix, e.g. `mfasetup`. */
   readonly table: string;
-  /** The `*_ciphertext` column, e.g. `secret_payload_ciphertext`. */
+  /** The `*_ciphertext` column, e.g. `secret_payload_ciphertext`; for Redis, the field, e.g. `totp_secret`. */
   readonly column: string;
-  /** The row's id, e.g. `eml_01J…`. */
+  /** The row's id, e.g. `eml_01J…`; for Redis, the id in the key, e.g. `acc_01J…`. */
   readonly rowId: string;
 }
 
-/** The associated data of a value stored at `place`: `platform.<table>.<column>:<rowId>`. */
+/** The associated data of a value stored at `place`: `platform.<table>.<column>:<rowId>` (or `redis.…`). */
 export function associatedData(place: CiphertextPlace): string {
-  return aadFor(PLATFORM_SCHEMA, place.table, place.column, place.rowId);
+  return aadFor(place.schema ?? PLATFORM_SCHEMA, place.table, place.column, place.rowId);
 }
 
 /** A decrypted JSON value that is not what `decryptJson`'s caller stored: the ciphertext is not a JSON text. */

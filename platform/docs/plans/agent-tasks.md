@@ -376,7 +376,8 @@ Common commands: backend `pnpm --filter @velexis/platform-backend test`, `test:i
   - Sign out everywhere revokes every family and sets `staffdeny:acct:<id>` with a TTL [PF-06 AC2].
 - **Verify:** `pnpm --filter @velexis/platform-backend test && pnpm --filter @velexis/platform-backend test:int -- auth`
 
-### PBE-015 · Implement TOTP MFA, recovery codes and step-up
+### PBE-015 · Implement TOTP MFA, recovery codes and step-up ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-backend
 - **Milestone:** M1
 - **Depends on:** PBE-014

@@ -215,7 +215,7 @@ The three new types extend the list of [`docs/mvp/architecture.md` §4](../../do
 | `staffdeny:acct:<accountId>` | Platform API | OTA API (staff guard and refresh) | 30 days | Epoch ms cut-off: staff families created before it are revoked. Written on sign out everywhere, password change or reset, MFA reset, account disable (new; refines `staffdeny:<familyId>`). |
 | `apikey:used:<keyId>` | OTA API | Platform worker (`GETDEL`) | 1 day | `{at, ip}` of the last use, flushed every 5 minutes |
 
-Platform-only keys: `vx:idem:*` (idempotency, 24 h), `mfach:<sha256>` (MFA challenge, 5 min), `mfasetup:<accountId>` (pending TOTP secret, encrypted, 10 min), `stripe:oauth:<sha256(state)>` (Connect OAuth state, 10 min), `tlsask:<host>` (positive `ask` answer only, 60 s; negative answers stay in a bounded in-process cache, [PADR-0004](adr/0004-custom-domain-verification.md) item 6), `rl:*` (throttler). All have a TTL, as `noeviction` requires.
+Platform-only keys: `vx:idem:*` (idempotency, 24 h), `mfach:<sha256>` (MFA challenge, 5 min), `mfach:<sha256>:attempts` (codes tried against a challenge, 5 min), `mfasetup:<accountId>` (pending TOTP secret, encrypted, 10 min), `mfastep:<accountId>` (last TOTP time step the account used, so each code works once, 90 s), `stripe:oauth:<sha256(state)>` (Connect OAuth state, 10 min), `tlsask:<host>` (positive `ask` answer only, 60 s; negative answers stay in a bounded in-process cache, [PADR-0004](adr/0004-custom-domain-verification.md) item 6), `rl:*` (throttler). All have a TTL, as `noeviction` requires.
 
 ## 7. External services
 

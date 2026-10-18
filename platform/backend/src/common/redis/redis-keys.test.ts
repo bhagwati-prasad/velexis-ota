@@ -14,6 +14,7 @@ import {
   redisKeys,
   setKey,
   setKeyIfAbsent,
+  setKeyIfHigher,
   type RedisKey,
   type RedisKeyBuilderName,
   type RedisWriter,
@@ -32,7 +33,9 @@ const SAMPLES: Readonly<Record<RedisKeyBuilderName, readonly unknown[]>> = {
   idempotency: [ACCOUNT_ID, IDEMPOTENCY_KEY],
   idempotencyLock: [ACCOUNT_ID, IDEMPOTENCY_KEY],
   mfaChallenge: [HASH],
+  mfaChallengeAttempts: [HASH],
   mfaSetup: [ACCOUNT_ID],
+  totpLastStep: [ACCOUNT_ID],
   stripeOAuthState: [HASH],
   tlsAsk: ["travel.example.net"],
   throttle: ["sign_up", HASH, 3600],
@@ -47,7 +50,9 @@ const EXPECTED: Readonly<Record<RedisKeyBuilderName, { readonly key: string; rea
     idempotency: { key: `vx:idem:${ACCOUNT_ID}:${IDEMPOTENCY_KEY}`, ttlSeconds: 86400 },
     idempotencyLock: { key: `vx:idem:${ACCOUNT_ID}:${IDEMPOTENCY_KEY}:lock`, ttlSeconds: 10 },
     mfaChallenge: { key: `mfach:${HASH}`, ttlSeconds: 300 },
+    mfaChallengeAttempts: { key: `mfach:${HASH}:attempts`, ttlSeconds: 300 },
     mfaSetup: { key: `mfasetup:${ACCOUNT_ID}`, ttlSeconds: 600 },
+    totpLastStep: { key: `mfastep:${ACCOUNT_ID}`, ttlSeconds: 90 },
     stripeOAuthState: { key: `stripe:oauth:${HASH}`, ttlSeconds: 600 },
     tlsAsk: { key: "tlsask:travel.example.net", ttlSeconds: 60 },
     throttle: { key: `rl:sign_up:${HASH}`, ttlSeconds: 3600 },
@@ -93,6 +98,8 @@ describe("redisKeys", () => {
       [() => redisKeys.mfaChallenge(HASH.toUpperCase()), /challengeSha256 must be a SHA-256 digest/],
       [() => redisKeys.staffDenyAccount("acc_123"), /accountId must be an account id/],
       [() => redisKeys.mfaSetup(`${ACCOUNT_ID}:x`), /accountId must be an account id/],
+      [() => redisKeys.mfaChallengeAttempts(`${HASH}:x`), /challengeSha256 must be a SHA-256 digest/],
+      [() => redisKeys.totpLastStep("acc_123"), /redisKeys\.totpLastStep: accountId must be an account id/],
       [() => redisKeys.apiKeyUsed(ACCOUNT_ID), /keyId must be an API key id/],
       [() => redisKeys.idempotency(ACCOUNT_ID, "short"), /idempotencyKey must be an Idempotency-Key/],
       [() => redisKeys.idempotency(ACCOUNT_ID, `${IDEMPOTENCY_KEY}:lock`), /idempotencyKey must be/],
@@ -176,6 +183,25 @@ describe("the write helpers", () => {
     await expect(incrementInWindow(client, redisKeys.throttle("sign_up", HASH, 60))).rejects.toThrow(
       /unexpected reply/,
     );
+  });
+
+  it("setKeyIfHigher writes with the key's TTL only over an absent or lower value, in one script", async () => {
+    const step = redisKeys.totpLastStep(ACCOUNT_ID);
+    const raised = recordingClient({ eval: 1 });
+    const kept = recordingClient({ eval: 0 });
+
+    await expect(setKeyIfHigher(raised.client, step, 59_012_345)).resolves.toBe(true);
+    await expect(setKeyIfHigher(kept.client, step, 59_012_345)).resolves.toBe(false);
+
+    const [call] = raised.calls;
+    expect(call?.slice(0, 1)).toEqual(["eval"]);
+    expect(call?.slice(2)).toEqual([1, step.key, "59012345", "90"]);
+    const script = String(call?.[1]);
+    expect(script).toMatch(/if current ~= nil and current >= tonumber\(ARGV\[1\]\) then\s+return 0/);
+    expect(script).toContain("redis.call('SET', KEYS[1], ARGV[1], 'EX', ARGV[2])");
+    for (const value of [1.5, Number.NaN, Number.MAX_SAFE_INTEGER + 1]) {
+      await expect(setKeyIfHigher(raised.client, step, value), String(value)).rejects.toThrow(RangeError);
+    }
   });
 
   it("deleteKeyIfValue deletes only while the key holds the value", async () => {

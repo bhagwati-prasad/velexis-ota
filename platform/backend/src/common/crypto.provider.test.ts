@@ -1,5 +1,6 @@
 // The envelope encryption of the platform's ciphertext columns (PBE-011; ADR-0010): the KEKs of MASTER_KEY_DIR, the
-// associated data `platform.<table>.<column>:<row id>`, and the refusal of a value copied to another place.
+// associated data `platform.<table>.<column>:<row id>` (and `redis.<prefix>.<field>:<id>` for a value kept in Redis,
+// PBE-015), and the refusal of a value copied to another place.
 import type { ConfigService } from "@nestjs/config";
 import { DecryptionError, KeyProviderError, type KeyProvider } from "@velexis/crypto";
 import { afterAll, describe, expect, it } from "vitest";
@@ -39,6 +40,26 @@ describe("EnvelopeService", () => {
   it("binds a value to its platform table, column and row", () => {
     expect(associatedData(PLACE)).toBe(
       "platform.email_outbox.secret_payload_ciphertext:eml_01JTESTCRYPTO000000000000",
+    );
+  });
+
+  it("binds a value kept in Redis to the key's prefix, field and id, never to a platform column (PBE-015)", async () => {
+    const service = await envelope();
+    const redisPlace = {
+      schema: "redis",
+      table: "mfasetup",
+      column: "totp_secret",
+      rowId: "acc_01JTESTCRYPTO000000000000",
+    } as const;
+    expect(associatedData(redisPlace)).toBe("redis.mfasetup.totp_secret:acc_01JTESTCRYPTO000000000000");
+
+    const { ciphertext } = await service.encrypt("TESTONLYSECRETAAAAAAAAAAAAAAAAAA", redisPlace);
+
+    expect((await service.decrypt(ciphertext, redisPlace)).toString("utf8")).toBe(
+      "TESTONLYSECRETAAAAAAAAAAAAAAAAAA",
+    );
+    await expect(service.decrypt(ciphertext, { ...redisPlace, schema: "platform" })).rejects.toBeInstanceOf(
+      DecryptionError,
     );
   });
 

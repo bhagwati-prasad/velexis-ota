@@ -14,6 +14,10 @@
 //   a session (disabled, erased) answers `401 REFRESH_TOKEN_INVALID` and changes nothing.
 // - signOut revokes the family of the presented refresh token when it is a portal family of the caller; anything else
 //   changes nothing (the answer is `204` either way).
+// - stepUp (`stepUp`, PBE-015; the TOTP code is checked by AccountsModule's MfaService first) rotates the current
+//   generation of the caller's family as a refresh would, with `mfa_verified_at` = the time of the code, so the new
+//   access token carries `mfa_at` = now and the new refresh token keeps it. A family that was revoked or has ended
+//   answers `401 UNAUTHENTICATED`: the access token outlived its session.
 // - signOutEverywhere writes the OTA cut-off `staffdeny:acct:<accountId>` = now in epoch milliseconds (30 days, so
 //   the OTA backend revokes the account's OTA admin staff sessions), then revokes every family of the account, portal
 //   and admin alike, audits `auth.signed_out_everywhere` and publishes an `account` invalidation after the commit.
@@ -339,10 +343,48 @@ export class SessionsService {
   }
 
   /**
-   * Rotates `row` (locked, verdict `rotate`) at `now`, in `trx`: the family's next generation with a new token and
-   * the same family end and TOTP verification, and `row` marked rotated and replaced by it.
+   * stepUp (see the file header): after a valid TOTP code of `accountId` at `verifiedAt`, rotates the current
+   * generation of its portal family `familyId` (the access token's `sid`) with `mfa_verified_at = verifiedAt` and
+   * answers the family's new `PortalSession`. Takes the locks of a refresh, in the same order.
    */
-  private async rotate(trx: PlatformTransaction, row: SessionRecord, now: Date): Promise<IssuedRefreshToken> {
+  async stepUp(accountId: string, familyId: string, verifiedAt: Date): Promise<PortalSession> {
+    return runInTransaction(this.db, async (trx) => {
+      if (
+        !(await this.accounts.lockForSessionChange(trx, accountId)) ||
+        !(await this.sessions.lockFamily(trx, familyId))
+      ) {
+        throw new AppError("UNAUTHENTICATED");
+      }
+      const row = await this.sessions.lockCurrentOfFamily(trx, familyId);
+      const now = this.clock.now();
+      if (
+        row === undefined ||
+        row.account_id !== accountId ||
+        refreshVerdict(row, now, "portal") !== "rotate"
+      ) {
+        throw new AppError("UNAUTHENTICATED");
+      }
+      const account = await this.accounts.findPortalAccount(trx, accountId);
+      if (account === undefined || !maySignIn(account.status)) {
+        throw new AppError("UNAUTHENTICATED");
+      }
+      const issued = await this.rotate(trx, row, now, { mfaVerifiedAt: verifiedAt });
+      return this.portalSession(trx, issued, account);
+    });
+  }
+
+  /**
+   * Rotates `row` (locked, verdict `rotate`) at `now`, in `trx`: the family's next generation with a new token and
+   * the same family end and TOTP verification (or the newer `mfaVerifiedAt` of a step-up), and `row` marked rotated
+   * and replaced by it.
+   */
+  private async rotate(
+    trx: PlatformTransaction,
+    row: SessionRecord,
+    now: Date,
+    options: { readonly mfaVerifiedAt?: Date } = {},
+  ): Promise<IssuedRefreshToken> {
+    const mfaVerifiedAt = options.mfaVerifiedAt ?? row.mfa_verified_at;
     // A portal row always has a family end (startPortalFamily); an older row without one ends with its own expiry.
     const familyExpiresAt = row.family_expires_at ?? row.expires_at;
     const { token, hash } = generateToken(REFRESH_TOKEN_PREFIX);
@@ -359,7 +401,7 @@ export class SessionsService {
       ipAddress: row.ip_address,
       expiresAt,
       familyExpiresAt,
-      mfaVerifiedAt: row.mfa_verified_at,
+      mfaVerifiedAt,
       now,
     });
     await this.sessions.markRotated(trx, row.id, id, now);
@@ -368,7 +410,7 @@ export class SessionsService {
       familyId: row.family_id,
       refreshToken: token,
       refreshTokenExpiresAt: expiresAt,
-      mfaVerifiedAt: row.mfa_verified_at,
+      mfaVerifiedAt,
     };
   }
 }

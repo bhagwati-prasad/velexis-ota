@@ -10,7 +10,9 @@
 // the account is not locked out, so concurrent attempts cannot slip past a lockout. These bookkeeping columns are not
 // part of the `Account` the API shows, so they leave `version` (the `ETag` of the profile) alone. `findPortalAccount`
 // reads the account as `PortalSession.account` shows it, with its active memberships (`tenant_memberships` and
-// `tenants`, read only, as MembershipsRepository reads `accounts` next to a membership).
+// `tenants`, read only, as MembershipsRepository reads `accounts` next to a membership). The MFA settings (PBE-015)
+// are read and changed here for AccountsModule's MfaService: `enableMfa` and `disableMfa` change what the `Account`
+// shows, so they add one to `version`.
 import { Injectable } from "@nestjs/common";
 import { sql, type PlatformDatabase, type Selectable } from "@velexis/db";
 import type { PlatformTransaction } from "../audit/audit.repository";
@@ -120,6 +122,41 @@ const PORTAL_ACCOUNT_COLUMNS = [
   "created_at",
   "version",
 ] as const;
+
+/**
+ * What the MFA steps (PBE-015, AccountsModule's MfaService) read of an account: who it is, whether it may hold a
+ * session, whether it is a platform admin, and its MFA settings with the envelope of its TOTP secret.
+ */
+export type MfaAccount = Pick<
+  AccountRecord,
+  | "id"
+  | "email"
+  | "full_name"
+  | "status"
+  | "is_platform_admin"
+  | "mfa_enabled"
+  | "mfa_secret_ciphertext"
+  | "deleted_at"
+>;
+
+const MFA_ACCOUNT_COLUMNS = [
+  "id",
+  "email",
+  "full_name",
+  "status",
+  "is_platform_admin",
+  "mfa_enabled",
+  "mfa_secret_ciphertext",
+  "deleted_at",
+] as const;
+
+/** The TOTP secret of an account that enables MFA, envelope-encrypted for `platform.accounts.mfa_secret_ciphertext`. */
+export interface EnabledMfa {
+  readonly secretCiphertext: Uint8Array;
+  /** The KEK that wraps its data key (`encryption_key_id`). */
+  readonly kekId: string;
+  readonly now: Date;
+}
 
 /** The condition "not locked out at `now`": `locked_until` is unset or has passed. */
 function notLockedOutAt(now: Date) {
@@ -299,6 +336,73 @@ export class AccountsRepository {
       .returning("id")
       .executeTakeFirst();
     return row !== undefined;
+  }
+
+  /** The MFA state of account `accountId`, read on `db`; `undefined` when there is no such account. */
+  async findMfaAccount(
+    db: PlatformTransaction | PlatformDb,
+    accountId: string,
+  ): Promise<MfaAccount | undefined> {
+    return db
+      .selectFrom("platform.accounts")
+      .select(MFA_ACCOUNT_COLUMNS)
+      .where("id", "=", accountId)
+      .executeTakeFirst();
+  }
+
+  /** The MFA state of account `accountId`, locked for the rest of `trx` (`FOR UPDATE`). */
+  async lockMfaAccount(trx: PlatformTransaction, accountId: string): Promise<MfaAccount | undefined> {
+    return trx
+      .selectFrom("platform.accounts")
+      .select(MFA_ACCOUNT_COLUMNS)
+      .where("id", "=", accountId)
+      .forUpdate()
+      .executeTakeFirst();
+  }
+
+  /**
+   * Turns MFA on for account `accountId` with the encrypted TOTP secret, in `trx`: `mfa_enabled`, `mfa_enabled_at`,
+   * `mfa_secret_ciphertext`, `encryption_key_id`, and `version + 1` (the `Account` shows `mfaEnabled` and
+   * `mfaEnabledAt`). Returns `false` when MFA was on already (nothing changed).
+   */
+  async enableMfa(trx: PlatformTransaction, accountId: string, mfa: EnabledMfa): Promise<boolean> {
+    const updated = await trx
+      .updateTable("platform.accounts")
+      .set({
+        mfa_enabled: true,
+        mfa_enabled_at: mfa.now,
+        mfa_secret_ciphertext: Buffer.from(mfa.secretCiphertext),
+        encryption_key_id: mfa.kekId,
+        version: sql<number>`version + 1`,
+        updated_at: mfa.now,
+      })
+      .where("id", "=", accountId)
+      .where("mfa_enabled", "=", false)
+      .returning("id")
+      .executeTakeFirst();
+    return updated !== undefined;
+  }
+
+  /**
+   * Turns MFA off for account `accountId` at `now`, in `trx`: the flag, its time, the TOTP secret and its key id are
+   * cleared, with `version + 1`. Returns `false` when MFA was off already (nothing changed).
+   */
+  async disableMfa(trx: PlatformTransaction, accountId: string, now: Date): Promise<boolean> {
+    const updated = await trx
+      .updateTable("platform.accounts")
+      .set({
+        mfa_enabled: false,
+        mfa_enabled_at: null,
+        mfa_secret_ciphertext: null,
+        encryption_key_id: null,
+        version: sql<number>`version + 1`,
+        updated_at: now,
+      })
+      .where("id", "=", accountId)
+      .where("mfa_enabled", "=", true)
+      .returning("id")
+      .executeTakeFirst();
+    return updated !== undefined;
   }
 
   /**

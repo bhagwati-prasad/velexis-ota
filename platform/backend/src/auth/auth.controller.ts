@@ -1,15 +1,24 @@
 // The portal identity routes (platform/docs/api-inventory.md §4, `AuthModule`): sign-up, e-mail verification and the
-// resend of the verification link (PBE-013); sign-in, refresh, sign-out and sign-out everywhere (PBE-014). The MFA
-// steps (PBE-015) and the password reset (PBE-016) join this controller. Thin: each handler binds its operation, reads
-// the validated body (and the caller's access token) and makes one service call. Sign-up, verification, resend,
-// sign-in and refresh are `public`, the two sign-outs `portal_unverified`; the rate limits are the operations'
-// throttlers.
+// resend of the verification link (PBE-013); sign-in, refresh, sign-out and sign-out everywhere (PBE-014); the MFA
+// steps verifyMfa and stepUp (PBE-015). The password reset (PBE-016) joins this controller. Thin: each handler binds
+// its operation, reads the validated body (and the caller's access token) and makes one service call. Sign-up,
+// verification, resend, sign-in, verifyMfa and refresh are `public`, the two sign-outs `portal_unverified`, stepUp
+// `portal`; the rate limits are the operations' throttlers, except verifyMfa's per-account limit, which its service
+// counts once the challenge names the account. The MFA steps go to `MfaVerification`, which AccountsModule's
+// MfaService implements (mfa-challenge.store.ts).
 //
-// The answers of signIn and refreshSession carry tokens, so they are sent with `Cache-Control: no-store`; a
-// `423 ACCOUNT_LOCKED` gets `Retry-After` with the seconds the lockout has left. Nothing here logs a body.
+// The answers of signIn, verifyMfa, refreshSession and stepUp carry tokens, so they are sent with `Cache-Control:
+// no-store`; a `423 ACCOUNT_LOCKED` and verifyMfa's `429 RATE_LIMITED` get `Retry-After` with the seconds left.
+// Nothing here logs a body.
 import { Controller, HttpCode, Post, Res } from "@nestjs/common";
 import { AccessToken } from "../common/auth/decorators";
 import { OpenApiOperation, Validated } from "../common/http/openapi-operation.decorator";
+import {
+  MfaRateLimitedError,
+  MfaVerification,
+  type TotpCodeRequest,
+  type VerifyMfaRequest,
+} from "./mfa-challenge.store";
 import {
   SessionsService,
   type PortalSession,
@@ -43,6 +52,7 @@ export class AuthController {
     private readonly signUps: SignUpService,
     private readonly signIns: SignInService,
     private readonly sessions: SessionsService,
+    private readonly mfa: MfaVerification,
   ) {}
 
   @Post("sign-up")
@@ -84,6 +94,38 @@ export class AuthController {
       }
       throw error;
     }
+  }
+
+  /** A `PortalSession` for a TOTP or unused recovery code of the challenge's account. */
+  @Post("mfa/verify")
+  @HttpCode(200)
+  @OpenApiOperation("verifyMfa")
+  async verifyMfa(
+    @Validated("body") body: VerifyMfaRequest,
+    @Res({ passthrough: true }) res: HeaderTarget,
+  ): Promise<PortalSession> {
+    noStore(res);
+    try {
+      return await this.mfa.verifyMfa(body);
+    } catch (error) {
+      if (error instanceof AccountLockedError || error instanceof MfaRateLimitedError) {
+        res.setHeader("Retry-After", String(error.retryAfterSeconds));
+      }
+      throw error;
+    }
+  }
+
+  /** A new session of the caller's family whose access token carries `mfa_at` = now. */
+  @Post("step-up")
+  @HttpCode(200)
+  @OpenApiOperation("stepUp")
+  stepUp(
+    @AccessToken() token: AccessTokenClaims,
+    @Validated("body") body: TotpCodeRequest,
+    @Res({ passthrough: true }) res: HeaderTarget,
+  ): Promise<PortalSession> {
+    noStore(res);
+    return this.mfa.stepUp(token, body);
   }
 
   @Post("refresh")
