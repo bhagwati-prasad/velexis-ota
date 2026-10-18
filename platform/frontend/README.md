@@ -26,6 +26,13 @@ Route groups: `(marketing)` public pages, `(auth)` sign-in flows, `(app)` signed
 | `/pricing` | Public plans with limits; "Start" links to sign-up with the plan preselected | `listPlans` | M1 |
 | `/legal/terms`, `/legal/privacy` | Static legal pages (versioned terms label used at sign-up) | — | M1 |
 
+How the public pages behave (PFE-004; scope §2.2, PF-70):
+
+- **`(marketing)/layout.tsx`** puts a header (home link, "Pricing", "Sign in", "Get started" → `/sign-up`) and a footer (terms of service, privacy notice) around each public page; each page renders its own `<main id="main-content" tabIndex={-1}>` with exactly one `h1`. The text lives in `lib/strings.ts` (`MARKETING_STRINGS`, `LANDING_STRINGS`, `PRICING_STRINGS`, `LEGAL_STRINGS`).
+- **`/`** is static: what Velexis does, the three steps from sign-up to the first booking, what every OTA gets, and the calls to action to `/sign-up` and `/pricing`. No API call.
+- **`/pricing`** calls `listPlans` on the server for every request and shows the plans it answers, in its order (`sort_order`), and nothing else: name, description, the monthly and the annual price with `Money` ("Monthly billing only" without an annual price), the free trial in days, the limits (team members, API keys, custom domains, live or test mode only), and "Start", a link to `/sign-up?plan=<code>` whose accessible name includes the plan's name. `listPlans` is public, so the call carries no access token, even for a signed-in visitor; it carries the end-user headers of PADR-0019, so the API's rate limit counts the visitor. A failed call shows the portal's message for its code (never the API's text) with a link to sign up; an empty list says no plan is open. Whether Checkout is available (`checkoutAvailable`) does not change the page: "Start" always leads to sign-up, which does not read `plan` yet, and the plan is chosen again in the create-OTA wizard.
+- **`/legal/terms`** and **`/legal/privacy`** hold placeholder text, marked as such in a note, under "Version `termsVersion`" of `lib/terms.ts`: the value sign-up sends, so the pages and the acceptance the API stores name the same text. Change `termsVersion` (at most 32 characters) whenever either text changes in substance.
+
 ### Auth
 
 | Route | Purpose | API | M |
@@ -84,7 +91,7 @@ How sign-up and verification behave (PFE-005; [flow](../docs/flows/signup-and-cr
 ```
 platform/frontend/src/
   app/
-    (marketing)/page.tsx, pricing/page.tsx, legal/…
+    (marketing)/layout.tsx, page.tsx, pricing/page.tsx, legal/terms/page.tsx, legal/privacy/page.tsx
     (auth)/sign-up/…, sign-in/…, sign-in/mfa/…, forgot-password/…, reset-password/…, invitations/accept/…, verify-pending/…
     verify-email/route.ts
     (app)/layout.tsx                    signed-in shell: loads getMe once, renders AppShell around the page
@@ -259,6 +266,11 @@ See [`.env.example`](.env.example). On the VM they come from `/etc/velexis/platf
 
 - `src/lib/roles.test.ts`: the matrix equals scope §1.2 row by row; the navigation of each of the five roles with the M5 switches off and on (a viewer has no API keys, team, billing, Amadeus or payments entry; finance has billing); the switches hide settlements, payout account and go-live; the OTA of a path, the most specific current entry, and where an OTA in set-up opens.
 - `src/components/components.test.tsx`: `SideNav` per role and the current page; `OtaSwitcher` items; the `(app)` layout calls `getMe` once, redirects an ended session and an unverified account, and shows the message of other failures; `StepUpDialog` asks for a code on `{ stepUp: true }`, posts it to `/v1/auth/step-up`, writes the new tokens as httpOnly cookies and only then re-submits the same `FormData`, keeps a wrong code in the dialog, and does not re-submit when cancelled; `SecretRevealPanel` writes nothing to `localStorage`, `sessionStorage`, `document.cookie` or the history, and its fields never join a form submission; every `FormField` error is in the control's `aria-describedby` with `aria-invalid`; `FormErrorSummary` takes the focus; `Money` keeps every digit of large and precise amounts; `DateTime`, `StatusBadge`, `TenantBanner`, `ConfirmDialog` and `DataTable`.
+
+**What the public page tests prove** (PFE-004). `src/app/(marketing)/pricing/pricing.test.tsx` runs the real `lib/api.ts` against a mocked `fetch`.
+
+- `/pricing` lists exactly the plans of the mocked `listPlans` answer, in its order, with prices formatted per currency (`€49.00`, `$1,290.50`, the decimal string kept in `<data value>`), "Monthly billing only", the trial days and the limits; one plan in the answer gives one card; each "Start" link goes to `/sign-up?plan=<code>` and is named after its plan [PF-70 AC1]; the call is one `GET /v1/plans` without `Authorization` or cookies for a signed-in visitor, with the right-most `X-Forwarded-For` entry, the user agent and the BFF key; a `429` or an unreachable API shows the portal's message and a sign-up link, never the API's text; an empty answer shows the "no plan" message.
+- `/`, `/pricing`, `/legal/terms` and `/legal/privacy` (each inside the marketing layout) render on the server with `renderToString` and hydrate in the DOM with no console error or warning, no recoverable, caught or uncaught React error, no `error` event and no change to the server's markup, and have one `h1` inside the one `<main id="main-content">`; the landing page links to `/sign-up` and `/pricing` and calls no API; the header and footer links; the legal pages show `termsVersion` and a placeholder note, and `termsVersion` fits the API's 32 characters. happy-dom's HTML parser leaves `&#x27;`, `&lt;` and `&gt;` undecoded in attribute values, which a browser decodes, so the test decodes them before hydrating.
 
 **What the sign-up and verification tests prove** (PFE-005).
 

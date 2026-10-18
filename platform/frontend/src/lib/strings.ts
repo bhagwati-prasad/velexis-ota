@@ -288,3 +288,171 @@ export const VERIFICATION_STRINGS = Object.freeze({
   notYou: "Not your account?",
   signOut: "Sign out",
 });
+
+// ---- Public pages: landing, pricing and legal (PFE-004) ------------------------------------------------------
+
+/** Counts in the portal's English: "1 API key", "10 API keys", "1,000 API keys". */
+const COUNT_FORMAT = new Intl.NumberFormat("en");
+
+function counted(count: number, one: string, other: string): string {
+  return `${COUNT_FORMAT.format(count)} ${count === 1 ? one : other}`;
+}
+
+/** The header and footer of the public pages (`(marketing)/layout.tsx`). */
+export const MARKETING_STRINGS = Object.freeze({
+  productName: "Velexis",
+  homeLink: "Velexis home",
+  navigationLabel: "Main",
+  pricing: "Pricing",
+  signIn: "Sign in",
+  getStarted: "Get started",
+  footerLabel: "Legal",
+  terms: "Terms of service",
+  privacy: "Privacy notice",
+  footerNote: "Velexis: online travel agencies, ready to sell flights.",
+});
+
+/** `/`: the landing page (scope §2.2). */
+export const LANDING_STRINGS = Object.freeze({
+  eyebrow: "Velexis",
+  title: "Your own online travel agency, ready to sell flights.",
+  intro:
+    "Create an OTA, connect Amadeus and Stripe, and open a hosted storefront for your customers, all from one portal.",
+  getStarted: "Get started",
+  seePricing: "See pricing",
+  stepsTitle: "From sign-up to your first booking",
+  steps: Object.freeze([
+    Object.freeze({
+      title: "Create your OTA",
+      text: "Sign up, verify your e-mail address and choose a name and a key for your OTA. Velexis sets up its storefront, its OTA admin and its test keys for you.",
+    }),
+    Object.freeze({
+      title: "Connect flights and payments",
+      text: "Every OTA starts with an Amadeus test office and Stripe test mode, so you can search, book and pay before anything is real.",
+    }),
+    Object.freeze({
+      title: "Sell on your storefront",
+      text: "Your customers search, book and pay on your own storefront, while you manage bookings, markups and branding in the OTA admin.",
+    }),
+  ]),
+  featuresTitle: "What every OTA gets",
+  features: Object.freeze([
+    Object.freeze({
+      title: "Flights from Amadeus",
+      text: "Flight search, pricing and booking through Amadeus, with your own markups and fees.",
+    }),
+    Object.freeze({
+      title: "Payments with Stripe",
+      text: "Card payments through Stripe, collected by Velexis for you or in your own Stripe account.",
+    }),
+    Object.freeze({
+      title: "A storefront in your name",
+      text: "A hosted storefront on its own address with your branding, or your own front end built on the Velexis API and SDK.",
+    }),
+    Object.freeze({
+      title: "Your team, with roles",
+      text: "Invite owners, admins, agents, finance staff and viewers, each with the access their role needs.",
+    }),
+  ]),
+  closingTitle: "Ready to open your OTA?",
+  closingText:
+    "Every OTA starts in test mode: the Amadeus test system and Stripe test mode, so no booking or payment is real until you go live.",
+});
+
+/** `/pricing`: the public plans of `listPlans` (PF-70). */
+export const PRICING_STRINGS = Object.freeze({
+  title: "Pricing",
+  intro:
+    "Choose the plan for your OTA. Every plan comes with a hosted storefront, the OTA admin and test mode, so you can try everything before you go live.",
+  plansLabel: "Plans",
+  monthly: "Monthly",
+  perMonth: "per month",
+  annual: "Annual",
+  perYear: "per year",
+  noAnnual: "Monthly billing only",
+  trial: "Free trial",
+  trialDays: (days: number) => counted(days, "day", "days"),
+  noTrial: "None",
+  includedTitle: "Included",
+  staffSeats: (seats: number) => `Up to ${counted(seats, "team member", "team members")}`,
+  apiKeys: (keys: number) => counted(keys, "API key", "API keys"),
+  customDomains: (domains: number) =>
+    domains === 0 ? "No custom domains" : counted(domains, "custom domain", "custom domains"),
+  liveMode: "Live bookings and payments",
+  testModeOnly: "Test mode only",
+  start: "Start",
+  /** Read after "Start" by screen readers only, so each plan's link has its own name. */
+  startWith: (planName: string) => ` with ${planName}`,
+  empty: "No plans are open for sign-up right now. Check back soon.",
+  unavailableTitle: "The plans could not be loaded",
+  signUpAnyway: "You can still create your account now.",
+  signUp: "Create your account",
+});
+
+/** One section of a legal page. */
+export interface LegalSection {
+  readonly title: string;
+  readonly text: string;
+}
+
+/** `/legal/terms` and `/legal/privacy`: static legal pages, versioned by `termsVersion` of `lib/terms.ts`. */
+export const LEGAL_STRINGS = Object.freeze({
+  version: (version: string) => `Version ${version}`,
+  placeholderTitle: "Placeholder text",
+  placeholder:
+    "This page holds placeholder text. The final text will be published here before Velexis opens to the public, under a new version.",
+  termsTitle: "Terms of service",
+  termsIntro:
+    "These terms govern the use of the Velexis portal, the OTA admin, the hosted storefront and the Velexis API by the people and companies who create an OTA with Velexis.",
+  termsSections: Object.freeze<readonly LegalSection[]>([
+    {
+      title: "Your account",
+      text: "Placeholder: who may create an account, how to keep it secure, and what happens when it is disabled.",
+    },
+    {
+      title: "Your OTA and your customers",
+      text: "Placeholder: your responsibilities towards the travellers who book on your storefront, and what Velexis provides.",
+    },
+    {
+      title: "Plans, trials and billing",
+      text: "Placeholder: how plans, free trials, invoices and cancellations work.",
+    },
+    {
+      title: "Acceptable use",
+      text: "Placeholder: what an OTA may not do with Velexis, Amadeus and Stripe, and when Velexis may suspend an OTA.",
+    },
+    {
+      title: "Liability",
+      text: "Placeholder: the limits of each party's liability.",
+    },
+    {
+      title: "Changes to these terms",
+      text: "Placeholder: how Velexis announces a new version, and when it applies.",
+    },
+  ]),
+  privacyTitle: "Privacy notice",
+  privacyIntro:
+    "This notice explains which personal data Velexis processes when you use the portal, and why.",
+  privacySections: Object.freeze<readonly LegalSection[]>([
+    {
+      title: "What we collect",
+      text: "Placeholder: account data (name, e-mail address), security data (sessions, sign-in attempts) and the data of your OTA.",
+    },
+    {
+      title: "Why we use it",
+      text: "Placeholder: the purposes and legal bases of each kind of processing.",
+    },
+    {
+      title: "Who we share it with",
+      text: "Placeholder: the processors Velexis relies on, such as payment, flight content and e-mail providers.",
+    },
+    {
+      title: "How long we keep it",
+      text: "Placeholder: the retention period of each kind of data.",
+    },
+    {
+      title: "Your rights",
+      text: "Placeholder: how to access, correct, export or delete your data, and how to complain.",
+    },
+  ]),
+});

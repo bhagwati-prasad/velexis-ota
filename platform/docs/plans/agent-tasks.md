@@ -813,7 +813,8 @@ Common commands: backend `pnpm --filter @velexis/platform-backend test`, `test:i
   - Every `FormField` error is announced through `aria-describedby`.
 - **Verify:** `pnpm --filter @velexis/platform-frontend test`
 
-### PFE-004 · Build the landing, pricing and legal pages
+### PFE-004 · Build the landing, pricing and legal pages ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-frontend
 - **Milestone:** M1
 - **Depends on:** PFE-003, PBE-017
