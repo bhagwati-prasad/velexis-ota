@@ -104,6 +104,12 @@ const HOST_NAME =
 /** `MASTER_KEY_CURRENT`: a KEK id of `LocalFileKeyProvider`, `local:v<N>` with N >= 1 and no leading zeros. */
 const KEK_ID = /^local:v[1-9][0-9]{0,8}$/;
 
+/**
+ * The DER length of an Ed25519 private key in PKCS#8 (`openssl genpkey -algorithm ed25519`, `pnpm dev:keys`): the
+ * least JWT_PRIVATE_KEY_FILE may hold. The identity module's TokenService also checks that the key is Ed25519.
+ */
+export const JWT_PRIVATE_KEY_MIN_BYTES = 48;
+
 /** The loopback hosts on which an `http:` Amadeus base URL is accepted: the stub in development and CI. */
 const LOOPBACK_HOSTS: readonly string[] = ["127.0.0.1", "localhost", "[::1]"];
 
@@ -161,6 +167,11 @@ export const apiConfigSchema = {
   // key folder (ADR-0026). Checked at start-up (mode 0400 or 0600, at least 32 bytes after base64 decoding); the
   // configuration holds the path, and the tenancy module reads the key once.
   API_KEY_PEPPER_FILE: env.secretFile({ minBytes: API_KEY_PEPPER_MIN_BYTES }),
+  // The OTA backend's own Ed25519 signing key (ADR-0008, architecture §3.2): customer access tokens (OBE-031) and
+  // later staff tokens, with its JWK thumbprint as `kid`. A PKCS#8 PEM file of mode 0400 or 0600 in the OTA zone's key
+  // folder, never the platform's key. Checked here and read once by the identity module's TokenService, which refuses
+  // a key that is not Ed25519. Only the API signs and verifies tokens; the worker does not read it.
+  JWT_PRIVATE_KEY_FILE: env.secretFile({ minBytes: JWT_PRIVATE_KEY_MIN_BYTES, encoding: "pem" }),
   // `<key>.<STOREFRONT_BASE_DOMAIN>` is a tenant's storefront sub-domain (ADR-0018, OADR-0009 point 2).
   STOREFRONT_BASE_DOMAIN: env.string({ pattern: HOST_NAME }),
   // The API's public origin, for absolute URLs given to key callers (asset and file links; ADR-0018).

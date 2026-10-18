@@ -111,6 +111,7 @@ describe("the privileged DSNs", () => {
       "API_KEY_PEPPER_FILE",
       "APP_ENV",
       "DATABASE_URL",
+      "JWT_PRIVATE_KEY_FILE",
       "LOG_LEVEL",
       "MASTER_KEY_CURRENT",
       "MASTER_KEY_DIR",
@@ -258,6 +259,7 @@ describe("the caller credentials of the API (OBE-011)", () => {
 
     expect(error.problems.map((problem) => problem.variable).sort()).toEqual([
       "API_KEY_PEPPER_FILE",
+      "JWT_PRIVATE_KEY_FILE",
       "MASTER_KEY_CURRENT",
       "MASTER_KEY_DIR",
       "PUBLIC_OTA_API_URL",
@@ -292,6 +294,26 @@ describe("the caller credentials of the API (OBE-011)", () => {
 
         expect(error.problems.map((problem) => problem.variable)).toEqual(["API_KEY_PEPPER_FILE"]);
       }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("refuse a signing key file that others may read, that holds no PEM block or that is missing (OBE-031)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "velexis-ota-jwt-"));
+    try {
+      const readable = join(dir, "readable.pem");
+      copyFileSync(testApiCredentials().jwtKeyFile, readable);
+      chmodSync(readable, 0o644);
+      const notPem = join(dir, "not-pem");
+      writeFileSync(notPem, Buffer.alloc(64, 7).toString("base64"), { mode: 0o600 });
+
+      for (const file of [readable, notPem, join(dir, "missing.pem")]) {
+        const error = configErrorOf(() => loadApiConfig({ ...API_ENV, JWT_PRIVATE_KEY_FILE: file }));
+
+        expect(error.problems.map((problem) => problem.variable)).toEqual(["JWT_PRIVATE_KEY_FILE"]);
+      }
+      expect(loadApiConfig(API_ENV).JWT_PRIVATE_KEY_FILE).toBe(testApiCredentials().jwtKeyFile);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -392,15 +414,22 @@ describe("example and template files", () => {
       copyFileSync(testApiCredentials().pepperFile, pepperFile);
       chmodSync(pepperFile, 0o600);
 
+      // The OTA backend's own signing key of `pnpm dev:keys`, in the same folder (OBE-031).
+      const jwtKeyFile = join(root, local["JWT_PRIVATE_KEY_FILE"] ?? "missing");
+      copyFileSync(testApiCredentials().jwtKeyFile, jwtKeyFile);
+      chmodSync(jwtKeyFile, 0o600);
+
       // The key folder of `pnpm dev:keys` (MASTER_KEY_DIR, the pepper's folder) is the scratch root's too.
       const api = loadApiConfig({
         ...local,
         API_KEY_PEPPER_FILE: pepperFile,
+        JWT_PRIVATE_KEY_FILE: jwtKeyFile,
         MASTER_KEY_DIR: join(root, local["MASTER_KEY_DIR"] ?? "missing"),
       });
       const worker = loadWorkerConfig(local);
 
       expect(local["API_KEY_PEPPER_FILE"]).toBe(".local/keys/api-key-pepper");
+      expect(local["JWT_PRIVATE_KEY_FILE"]).toBe(".local/keys/ota-jwt-ed25519.pem");
       expect(local["MASTER_KEY_DIR"]).toBe(".local/keys");
       expect(api.MASTER_KEY_DIR).toBe(dirname(pepperFile));
       expect(api.AMADEUS_BASE_URL_TEST).toBe("http://127.0.0.1:4900");
@@ -419,12 +448,17 @@ describe("example and template files", () => {
     const shared = renderedTemplate("ota-backend.env.example");
     const worker = renderedTemplate("ota-worker.env.example");
 
-    // The pepper of the OTA zone's key folder on the VM (ADR-0026); the test process's own file stands in for it.
+    // The pepper and the signing key of the OTA zone's key folder on the VM (ADR-0026); the test process's own files
+    // stand in for them.
     expect(shared["API_KEY_PEPPER_FILE"]).toBe(`${shared["MASTER_KEY_DIR"] ?? "missing"}/api-key-pepper`);
+    expect(shared["JWT_PRIVATE_KEY_FILE"]).toBe(
+      `${shared["MASTER_KEY_DIR"] ?? "missing"}/ota-jwt-ed25519.pem`,
+    );
     // The OTA zone's key folder does not exist here either: the test process's own folder stands in for it.
     const api = loadApiConfig({
       ...shared,
       API_KEY_PEPPER_FILE: testApiCredentials().pepperFile,
+      JWT_PRIVATE_KEY_FILE: testApiCredentials().jwtKeyFile,
       MASTER_KEY_DIR: testApiCredentials().masterKeyDir,
     });
     expect(api.APP_ENV).toBe("production");

@@ -10,10 +10,13 @@
 //   `pnpm dev:keys` writes it (32 random bytes, base64, mode 0600), created the same way, and `local:v1`. Tests that
 //   store a ciphertext as the platform would (an Amadeus client secret), or encrypt or decrypt a ciphertext column as
 //   the API does (an idempotent replay), use the KEKs of `testKeyProvider()`.
+// - JWT_PRIVATE_KEY_FILE (OBE-031): an Ed25519 private key in PKCS#8 PEM as `pnpm dev:keys` writes
+//   .local/keys/ota-jwt-ed25519.pem (mode 0600), in the same folder and created the same way, so tokens one test process
+//   signs verify in the applications it starts.
 // - STOREFRONT_BASE_DOMAIN and PUBLIC_OTA_API_URL: the development values of ota/backend/.env.example.
 //
 // Nothing here is a real secret, and nothing is committed.
-import { randomBytes, randomInt } from "node:crypto";
+import { generateKeyPairSync, randomBytes, randomInt } from "node:crypto";
 import { linkSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { readKeyFile } from "@velexis/config";
@@ -29,6 +32,8 @@ export interface TestApiCredentials {
   readonly pepper: Buffer;
   /** The absolute path of the key folder (MASTER_KEY_DIR) that holds `master-v1.key`. */
   readonly masterKeyDir: string;
+  /** The absolute path of the Ed25519 signing key (JWT_PRIVATE_KEY_FILE). */
+  readonly jwtKeyFile: string;
 }
 
 /** The storefront base domain of the tests: `<key>.ota.example.com` are the tenants' sub-domains. */
@@ -41,15 +46,28 @@ const PEPPER_BYTES = 32;
 const MASTER_KEY_FILE = join(KEY_DIR, "master-v1.key");
 export const TEST_MASTER_KEY_CURRENT = "local:v1";
 const MASTER_KEY_BYTES = 32;
+/** The token signing key of the tests: `ota-jwt-ed25519.pem` in KEY_DIR. */
+const JWT_KEY_FILE = join(KEY_DIR, "ota-jwt-ed25519.pem");
+
+/** `bytes` random bytes in base64, as `pnpm dev:keys` writes a key file. */
+const base64Key = (bytes: number) => (): string => `${randomBytes(bytes).toString("base64")}\n`;
+
+/** A new Ed25519 private key as PKCS#8 PEM, as `pnpm dev:keys` writes the signing keys. */
+function ed25519Pem(): string {
+  return generateKeyPairSync("ed25519", {
+    privateKeyEncoding: { type: "pkcs8", format: "pem" },
+    publicKeyEncoding: { type: "spki", format: "pem" },
+  }).privateKey;
+}
 
 /**
- * Creates a key file of `bytes` random bytes (base64, mode 0600) unless it exists; never replaces one. The scratch
- * file's name starts with a dot, so neither LocalFileKeyProvider nor a reader of the final name ever sees it.
+ * Creates a key file with the text of `contents` (mode 0600) unless it exists; never replaces one. The scratch file's
+ * name starts with a dot, so neither LocalFileKeyProvider nor a reader of the final name ever sees it.
  */
-function ensureKeyFile(file: string, bytes: number): void {
+function ensureKeyFile(file: string, contents: () => string): void {
   mkdirSync(KEY_DIR, { recursive: true, mode: 0o700 });
   const scratch = join(KEY_DIR, `.key-${process.pid}-${randomBytes(4).toString("hex")}`);
-  writeFileSync(scratch, `${randomBytes(bytes).toString("base64")}\n`, { mode: 0o600 });
+  writeFileSync(scratch, contents(), { mode: 0o600 });
   try {
     linkSync(scratch, file);
   } catch (error) {
@@ -66,8 +84,9 @@ let credentials: TestApiCredentials | undefined;
 /** The credentials of this test process, created on first use. */
 export function testApiCredentials(): TestApiCredentials {
   if (credentials === undefined) {
-    ensureKeyFile(PEPPER_FILE, PEPPER_BYTES);
-    ensureKeyFile(MASTER_KEY_FILE, MASTER_KEY_BYTES);
+    ensureKeyFile(PEPPER_FILE, base64Key(PEPPER_BYTES));
+    ensureKeyFile(MASTER_KEY_FILE, base64Key(MASTER_KEY_BYTES));
+    ensureKeyFile(JWT_KEY_FILE, ed25519Pem);
     const pepper = readKeyFile(PEPPER_FILE, { minBytes: PEPPER_BYTES });
     if (!Buffer.isBuffer(pepper)) {
       throw new Error("the test pepper file is not a base64 key file");
@@ -77,6 +96,7 @@ export function testApiCredentials(): TestApiCredentials {
       pepperFile: PEPPER_FILE,
       pepper,
       masterKeyDir: KEY_DIR,
+      jwtKeyFile: JWT_KEY_FILE,
     });
   }
   return credentials;
@@ -84,10 +104,11 @@ export function testApiCredentials(): TestApiCredentials {
 
 /** The API-only variables of src/config.ts with test values, to merge into an API environment. */
 export function testApiVariables(): Readonly<Record<string, string>> {
-  const { edgeSecret, pepperFile, masterKeyDir } = testApiCredentials();
+  const { edgeSecret, pepperFile, masterKeyDir, jwtKeyFile } = testApiCredentials();
   return Object.freeze({
     VELEXIS_EDGE_SECRET: edgeSecret,
     API_KEY_PEPPER_FILE: pepperFile,
+    JWT_PRIVATE_KEY_FILE: jwtKeyFile,
     STOREFRONT_BASE_DOMAIN: TEST_STOREFRONT_BASE_DOMAIN,
     PUBLIC_OTA_API_URL: "http://localhost:4000",
     MASTER_KEY_DIR: masterKeyDir,

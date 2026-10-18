@@ -4,9 +4,11 @@
 // third-party frontend or server with a `pk_`/`sk_` key) never gets a `Set-Cookie` (OADR-0006 point 1).
 //
 //   Cookie            HttpOnly  Max-Age                          Content
-//   __Host-vx_at      yes       900 s                            customer access JWT (OBE-033)
-//   __Host-vx_rt      yes       the refresh family's lifetime    refresh token (OBE-033)
-//   __Host-vx_csrf    no        30 days                          256-bit random, base64url (storefront.get)
+//   __Host-vx_at      yes       900 s                            customer access JWT (OBE-031, `setSession`)
+//   __Host-vx_rt      yes       the refresh family's remaining   refresh token (OBE-031, `setSession`)
+//                               lifetime
+//   __Host-vx_csrf    no        30 days                          256-bit random, base64url (storefront.get; rotated
+//                                                                by `setSession` and `clearSession`)
 //   __Host-vx_bt      yes       30 days                          up to 5 guest booking tokens (OBE-042, OBE-047)
 //
 // Every cookie is `Secure; SameSite=Lax; Path=/` without `Domain`, which the `__Host-` prefix requires: the browser
@@ -14,6 +16,16 @@
 // readable by the storefront's JavaScript, which copies it into `X-CSRF-Token` (the CSRF guard compares both).
 //
 //   if (this.cookies.write(res, "csrf", newCsrfValue())) { … }   // false (and no header) for a key caller
+//   const edge = this.cookies.setSession(res, tokens);            // sign-in: the session in cookies, a new CSRF value
+//   this.cookies.clearSession(res);                               // sign-out: both session cookies removed
+//
+// The session cookies (OADR-0006 points 2 and 4): `setSession` writes the access token for 900 s and the refresh token
+// for what remains of its family (12 hours, or 30 days with rememberMe, from the sign-in; rotation never extends it),
+// and rotates the CSRF value, as sign-in, a sign-up that opens a session and a password change do. auth.refresh keeps
+// the CSRF value (`{ rotateCsrf: false }`): OADR-0006 point 2 rotates it on sign-in, sign-up, sign-out and password
+// change. `clearSession` removes both session cookies and rotates the CSRF value (sign-out, a refused refresh). In
+// edge mode the answer bodies carry no token (OADR-0006 point 4); for a key caller both return false and write
+// nothing, and the caller answers the tokens in the body (bearer mode).
 //
 // Values are opaque to the browser and are written as they are, so a value is restricted to the characters the
 // tokens use (base64url, `.` of JWTs, `~` between guest booking tokens); anything else is refused with an error
@@ -23,6 +35,7 @@ import { Injectable } from "@nestjs/common";
 import type { Response } from "express";
 import { CallerContext } from "../../tenancy/caller-resolver";
 import { CSRF_COOKIE, CSRF_TOKEN_PATTERN } from "../auth/csrf.guard";
+import { Clock } from "../clock";
 
 /** The storefront cookies by role. */
 export const STOREFRONT_COOKIES = Object.freeze({
@@ -55,6 +68,26 @@ const MAX_VALUE_LENGTH = 3_800;
 export interface CookieOptions {
   /** Seconds until the browser drops the cookie; `0` removes it. A non-negative integer. */
   readonly maxAgeSeconds: number;
+}
+
+/** The tokens of a customer session that `setSession` puts into cookies (`SessionTokens` of the identity module). */
+export interface SessionCookieTokens {
+  /** The 15-minute access JWT. */
+  readonly accessToken: string;
+  /** The opaque refresh token (`rt_…`). */
+  readonly refreshToken: string;
+  /** The end of the refresh family: the refresh cookie lives until then. */
+  readonly refreshTokenExpiresAt: Date;
+}
+
+export interface SetSessionOptions {
+  /** Whether a new CSRF value replaces the current one: true (sign-in, sign-up, password change) unless refreshing. */
+  readonly rotateCsrf?: boolean;
+}
+
+/** Whole seconds from `now` until `end`, at least 0: a cookie never outlives what it holds. */
+export function secondsUntil(end: Date, now: Date): number {
+  return Math.max(0, Math.floor((end.getTime() - now.getTime()) / 1000));
 }
 
 /**
@@ -94,7 +127,10 @@ export function isWellFormedCsrfValue(value: unknown): value is string {
 /** Writes the storefront cookies on a response, for the storefront edge caller only. */
 @Injectable()
 export class CookieWriter {
-  constructor(private readonly callers: CallerContext) {}
+  constructor(
+    private readonly callers: CallerContext,
+    private readonly clock: Clock,
+  ) {}
 
   /** True when the current request comes from the storefront edge, the only caller that gets cookies. */
   isEdge(): boolean {
@@ -118,6 +154,48 @@ export class CookieWriter {
   /** Removes `cookie` from the browser (an empty value with `Max-Age=0`), in edge mode; false for other callers. */
   clear(res: Response, cookie: StorefrontCookie): boolean {
     return this.write(res, cookie, "", 0);
+  }
+
+  /**
+   * Puts a customer session into cookies, in edge mode: `__Host-vx_at` for 900 s, `__Host-vx_rt` until the end of the
+   * refresh family, and (unless `rotateCsrf` is false) a new `__Host-vx_csrf`. Returns false and writes nothing for
+   * any other caller, which gets the tokens in the answer body instead. The values are checked before any header is
+   * appended, so a refused value never leaves half a session behind.
+   */
+  setSession(res: Response, tokens: SessionCookieTokens, options: SetSessionOptions = {}): boolean {
+    if (!this.isEdge()) {
+      return false;
+    }
+    const refreshMaxAge = secondsUntil(tokens.refreshTokenExpiresAt, this.clock.now());
+    const headers = [
+      storefrontSetCookie("accessToken", tokens.accessToken, {
+        maxAgeSeconds: COOKIE_MAX_AGE_SECONDS.accessToken,
+      }),
+      storefrontSetCookie("refreshToken", tokens.refreshToken, { maxAgeSeconds: refreshMaxAge }),
+    ];
+    if (options.rotateCsrf ?? true) {
+      headers.push(
+        storefrontSetCookie("csrf", newCsrfValue(), { maxAgeSeconds: COOKIE_MAX_AGE_SECONDS.csrf }),
+      );
+    }
+    res.append("Set-Cookie", headers);
+    return true;
+  }
+
+  /**
+   * Ends the customer session in the browser, in edge mode: `__Host-vx_at` and `__Host-vx_rt` removed (`Max-Age=0`)
+   * and a new `__Host-vx_csrf`. Returns false and writes nothing for any other caller.
+   */
+  clearSession(res: Response): boolean {
+    if (!this.isEdge()) {
+      return false;
+    }
+    res.append("Set-Cookie", [
+      storefrontSetCookie("accessToken", "", { maxAgeSeconds: 0 }),
+      storefrontSetCookie("refreshToken", "", { maxAgeSeconds: 0 }),
+      storefrontSetCookie("csrf", newCsrfValue(), { maxAgeSeconds: COOKIE_MAX_AGE_SECONDS.csrf }),
+    ]);
+    return true;
   }
 }
 

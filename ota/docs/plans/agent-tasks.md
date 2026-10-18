@@ -904,7 +904,8 @@ Checkout, customer accounts in cookies, Stripe on the Velexis account, the airli
   - A tenant template using a variable outside the allow-list fails to render with a clear error; the code default is used when the tenant row is inactive.
 - **Verify:** `pnpm --filter @velexis/ota-backend test -- notifications && pnpm --filter @velexis/ota-backend test:int -- notifications`
 
-### OBE-031 · Add token signing, customer sessions, the cookie writer and the customer guard
+### OBE-031 · Add token signing, customer sessions, the cookie writer and the customer guard ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-backend
 - **Milestone:** M3
 - **Depends on:** OBE-013, X-005
