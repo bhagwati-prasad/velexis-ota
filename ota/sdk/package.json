@@ -7,13 +7,25 @@
   "type": "module",
   "sideEffects": false,
   "exports": {
-    ".": "./src/index.js",
+    ".": {
+      "types": "./dist/types/index.d.ts",
+      "development": "./src/index.js",
+      "import": "./dist/velexis-sdk.mjs",
+      "default": "./dist/velexis-sdk.mjs"
+    },
+    "./iife": "./dist/velexis-sdk.iife.js",
     "./package.json": "./package.json"
   },
+  "files": [
+    "dist",
+    "src",
+    "README.md",
+    "CHANGELOG.md"
+  ],
   "scripts": {
     "generate": "node scripts/generate-operations.mjs",
     "typecheck": "tsc -p tsconfig.json",
-    "build": "tsc -p tsconfig.build.json",
+    "build": "node scripts/build.mjs && node scripts/check-size.mjs",
     "lint": "eslint .",
     "test": "vitest run",
     "test:contract": "tsc -p tsconfig.build.json && tsc -p test/contract/tsconfig.json",

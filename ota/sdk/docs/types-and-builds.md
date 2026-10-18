@@ -175,13 +175,19 @@ export function createFlightsApi(core) {
 
 ## 6. Builds
 
-`pnpm --filter @velexis/ota-sdk build` runs `scripts/build.mjs`:
+`pnpm --filter @velexis/ota-sdk build` runs `scripts/build.mjs`, then `scripts/check-size.mjs` (§7):
 
 | Output | How | Used by |
 |---|---|---|
 | `dist/velexis-sdk.mjs` + `.map` | esbuild 0.25, `format: "esm"`, `target: "es2022"`, `platform: "neutral"`, minified, external source map | The storefront (through Vite), the OTA admin, npm consumers |
-| `dist/velexis-sdk.iife.js` + `.map` | esbuild, `format: "iife"`, `globalName: "Velexis"` | Plain HTML pages: `<script src="/vendor/velexis-sdk.iife.js"></script>` then `Velexis.createVelexisClient(…)` |
-| `dist/types/*.d.ts` | `tsc -p tsconfig.build.json` (§3) | Consumers' type checking |
+| `dist/velexis-sdk.iife.js` + `.map` | esbuild, the same options with `format: "iife"`, `globalName: "Velexis"` | Plain HTML pages: `<script src="/vendor/velexis-sdk.iife.js"></script>` then `Velexis.createVelexisClient(…)` |
+| `dist/types/*.d.ts` + `.d.ts.map` | `tsc -p tsconfig.build.json` (§3) | Consumers' type checking |
+
+- **Source maps** are separate `.map` files with `sourcesContent`, linked from the bundle's last line (esbuild `sourcemap: "linked"`, so devtools find them; esbuild's `"external"` mode would leave the link out).
+- **Self-contained:** the bundles hold only `src/` modules (the SDK has no runtime dependencies, `@velexis/api-types` is used in JSDoc only), with no `import` or `require` left.
+- **Names:** minifying renames classes; every error class sets its `name` field, so `error.name` and `toJSON().name` stay `"ValidationError"` and so on. Compare errors with `instanceof`, not `constructor.name`.
+- **Strict:** an esbuild warning fails the build like an error, and a bundle is written only when esbuild reported neither. The previous outputs (the bundles, their maps and `types/`) are removed first, so a deleted module leaves no stale declaration. `--outdir <dir>` writes the same files elsewhere (the bundle tests).
+- **The IIFE** starts with `"use strict"`, as esbuild turns ES modules into a script; its top-level `var Velexis` is a property of `window`, as for every classic script.
 
 ```json
 {
@@ -192,7 +198,8 @@ export function createFlightsApi(core) {
     ".": {
       "types": "./dist/types/index.d.ts",
       "development": "./src/index.js",
-      "import": "./dist/velexis-sdk.mjs"
+      "import": "./dist/velexis-sdk.mjs",
+      "default": "./dist/velexis-sdk.mjs"
     },
     "./iife": "./dist/velexis-sdk.iife.js"
   },
@@ -200,10 +207,14 @@ export function createFlightsApi(core) {
 }
 ```
 
-- The `development` condition lets Vite's dev server use `src/` directly (Vite 6 resolves it in dev); production builds use the bundle. Both are the same ES2022 code, so behaviour does not change between them.
-- **ESM only.** Node 22 can `require()` an ES module where needed; there is no CommonJS build.
-- Turborepo builds the SDK before the storefront and the OTA admin (`dependsOn: ["^build"]`).
+- The `development` condition lets Vite's dev server use `src/` directly (Vite 6 resolves it in dev, and Vitest in tests); production builds use the bundle, and so does Node without `--conditions=development`. Both are the same ES2022 code, so behaviour does not change between them.
+- **ESM only.** Node 22 can `require()` an ES module where needed; there is no CommonJS build. Node's `require()` does not match the `import` condition, so the `default` condition, last, gives it the same bundle (without it, `require("@velexis/ota-sdk")` fails with `ERR_PACKAGE_PATH_NOT_EXPORTED`).
+- `"./iife"` is the address of the classic script, for copying it next to a page or for a CDN path (`import.meta.resolve("@velexis/ota-sdk/iife")`); it is loaded with a `<script>` tag, not imported.
+- Turborepo builds the SDK before the storefront and the OTA admin (`dependsOn: ["^build"]`). A single-package run that builds a consumer for production (the storefront's `vite build`) needs `pnpm --filter @velexis/ota-sdk build` first.
+- **No top-level side effects** (`"sideEffects": false` is true of the bundle too): importing it performs no `fetch`, schedules no timer and changes no global or built-in prototype; the IIFE only adds `window.Velexis`.
+
+`test/unit/bundle.test.js` (part of `test`) proves this section and the next on a fresh build: it runs `build.mjs --outdir` and `check-size.mjs --dir` into a scratch copy of the package, so it needs no earlier build and never reads a stale `dist/` (CI runs `pnpm test` before `pnpm build`). It checks the outputs, source maps and declarations, that the stale outputs of an earlier build are removed, and that an esbuild warning or error fails the build without writing a bundle; resolves `@velexis/ota-sdk` the way Node does, for `import` and `require()` (the bundle, and `src/` with `--conditions=development`); imports the bundle natively in a child process and compares `globalThis` and the built-in prototypes before and after, with `fetch` and the timer functions counting calls; and runs the IIFE as a classic script in a happy-dom page (with `vm.Script` on the page's window, because happy-dom runs a `<script>` element through an indirect `eval`, where the top-level `var` of a strict script stays local), comparing the window and the document before and after, then makes a cookie-mode call through the page's `fetch`. Each check also runs on a module made to fetch, schedule and write globals, so a check that reports nothing proves something.
 
 ## 7. Size budget
 
-`scripts/check-size.mjs` gzips `dist/velexis-sdk.mjs` at level 9 and fails above **25 KB**; it prints the IIFE size too. The route table keeps each method to one line, so all 128 methods fit with room to spare. If the console namespace ever pushes the bundle past the budget, it moves to a separate entry point, `@velexis/ota-sdk/console`, which the storefront never imports (the [ADR-0019](../../../docs/mvp/adr/0019-vanilla-js-sdk-jsdoc.md) follow-up).
+`scripts/check-size.mjs` gzips `dist/velexis-sdk.mjs` at level 9 and exits 1 above **25 KB** (25 × 1024 bytes); it prints the size of both bundles, minified and min+gzip (the IIFE is printed, not budgeted), and also exits 1 when a bundle is missing. `build` runs it, so the CI Build step checks the budget. The route table keeps each method to one line, so all 128 methods fit with room to spare: with the M2 namespaces the ESM bundle is 11.3 KB min+gzip (SDK-007), and SDK-013 records the size with all of them. If the console namespace ever pushes the bundle past the budget, it moves to a separate entry point, `@velexis/ota-sdk/console`, which the storefront never imports (the [ADR-0019](../../../docs/mvp/adr/0019-vanilla-js-sdk-jsdoc.md) follow-up); the budget is not raised.

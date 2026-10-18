@@ -71,8 +71,8 @@ ota/sdk/
   scripts/
     generate-operations.mjs  OpenAPI -> src/internal/operations.js (+ contract assertion list)
     operation-overrides.json reviewed timeouts and retry classes the document does not carry
-    build.mjs                esbuild ESM + IIFE, tsc declarations, api-types copy for publication
-    check-size.mjs           gzip budget
+    build.mjs                esbuild ESM + IIFE, tsc declarations (SDK-015 adds the api-types copy for publication)
+    check-size.mjs           gzip budget of the ESM bundle (25 KB)
   test/
     unit/                  Vitest, fake fetch, fake timers, happy-dom for cookie mode
     contract/              tsc project against the contract + runtime parity test
@@ -225,7 +225,7 @@ The contract files under `docs/velexis-sdk/sdk/src/` are never edited; additions
 
 ## 7. Builds
 
-`pnpm --filter @velexis/ota-sdk build` (esbuild 0.25 + `tsc`) produces:
+`pnpm --filter @velexis/ota-sdk build` (esbuild 0.25 + `tsc`, `scripts/build.mjs`, then `scripts/check-size.mjs`) produces:
 
 | Output | Format | Used by |
 |---|---|---|
@@ -233,9 +233,10 @@ The contract files under `docs/velexis-sdk/sdk/src/` are never edited; additions
 | `dist/velexis-sdk.iife.js` + `.map` | IIFE exposing `window.Velexis` | Plain HTML pages: `<script src="/vendor/velexis-sdk.iife.js"></script>`, then `Velexis.createVelexisClient(…)` |
 | `dist/types/*.d.ts` | Declarations | Consumers' type checking |
 
-- `package.json` `exports`: `"."` → `{ types, development: "./src/index.js", import: "./dist/velexis-sdk.mjs" }`, `"./iife"` → the IIFE; `"sideEffects": false`. ESM only, no CommonJS build. Until SDK-007 adds the bundles, `"."` points at `./src/index.js` and `build` runs only `tsc -p tsconfig.build.json` (the declarations).
-- **Size budget:** `scripts/check-size.mjs` fails when the ESM bundle exceeds **25 KB** min+gzip. If `console` ever pushes past it, it moves to a separate entry, `@velexis/ota-sdk/console` (the ADR-0019 follow-up).
-- **Published types are self-contained:** for npm the build copies the OTA part of `@velexis/api-types` into `dist/types/` and rewrites the specifier ([OADR-0016](../docs/adr/0016-sdk-packaging-and-type-contract.md)).
+- `package.json` `exports`: `"."` → `{ types, development: "./src/index.js", import: "./dist/velexis-sdk.mjs", default: "./dist/velexis-sdk.mjs" }`, `"./iife"` → the IIFE; `"sideEffects": false`; `files`: `dist`, `src`, `README.md`, `CHANGELOG.md`. ESM only, no CommonJS build: `default` lets CommonJS code `require()` the ES module bundle (Node 22). Vite's dev server and Vitest use `src/` through the `development` condition; production builds and plain Node import the bundle, so Turborepo builds the SDK before its consumers (`^build`).
+- **No top-level side effects:** importing the bundle performs no `fetch`, schedules nothing and touches no global; the IIFE only defines `window.Velexis` (`test/unit/bundle.test.js`).
+- **Size budget:** `scripts/check-size.mjs` fails `build` when the ESM bundle exceeds **25 KB** min+gzip, and prints the size (11.3 KB with the M2 namespaces, SDK-007). If `console` ever pushes past it, it moves to a separate entry, `@velexis/ota-sdk/console` (the ADR-0019 follow-up).
+- **Published types are self-contained:** for npm (SDK-015, M6) the build also copies the OTA part of `@velexis/api-types` into `dist/types/` and rewrites the specifier ([OADR-0016](../docs/adr/0016-sdk-packaging-and-type-contract.md)).
 
 ## 8. Testing
 
@@ -244,6 +245,7 @@ The contract files under `docs/velexis-sdk/sdk/src/` are never edited; additions
 | Unit | `test/unit/*.test.js` | Vitest 3 with a fake `fetch` (`test/helpers/fake-fetch.js`), fake timers, `happy-dom` for cookie mode | Header building per mode, CSRF copy and re-fetch, refresh single flight, retry and back-off rules, `Retry-After`, idempotency key reuse, timeouts and abort, error mapping table, pagination, multipart upload, option validation (`TypeError` cases), `toJSON` without secrets |
 | Route table | `test/unit/operations.test.js`, then the namespace tests | Vitest | Every entry of `operations.js` matches the working document and the reviewed overrides, a sample per namespace, a fresh generator run changes nothing, and the generator refuses duplicated methods and param-name collisions; from SDK-005 the namespace tests call each method with sample parameters and check method, path, query, headers and body |
 | Contract | `test/contract/` | `tsc`, Vitest | §6: type assertions, approved deviations, runtime parity with the OpenAPI document, `VERSION` equals `package.json` |
+| Bundles | `test/unit/bundle.test.js` | Vitest, Node child processes, happy-dom | §7: `build.mjs` and `check-size.mjs` run into a scratch copy of the package (no earlier build, no stale `dist/`); the outputs, source maps and declarations, stale outputs removed, an esbuild warning failing the build; the size check passing, and failing above 25 KB; `exports` resolved by Node, for `import` and `require()`; the ESM bundle imported natively with no `fetch`, timer, global or prototype change; the IIFE run as a classic script in a happy-dom page, adding only `window.Velexis`, then making a cookie-mode call through the page's `fetch` |
 | Smoke | `test/smoke/*.smoke.test.js` | Vitest against `OTA_API_URL` | One call per namespace in token and server mode against the local OTA backend wired to the Amadeus stub, with the `dev:seed` test keys ([`../backend/README.md`](../backend/README.md)); nightly, not on every PR |
 | End to end | `tools/e2e/specs/storefront/` | Playwright | Cookie mode through the real storefront journeys ([storefront testing](../frontend/README.md#13-testing)) |
 
@@ -251,7 +253,7 @@ The contract files under `docs/velexis-sdk/sdk/src/` are never edited; additions
 - **Fake fetch** (`test/helpers/fake-fetch.js`): `createFakeFetch(answers)` returns `{ fetch, requests, enqueue, remaining, lastRequest }`; tests pass `fake.fetch` as the client's `fetch` option. Answers are used in call order: a canned `{ status, headers, body, delayMs, error }` (an object body is sent as JSON), a ready `Response`, or a function of the recorded request. Every call is recorded with `method`, `url`, `path`, `searchParams`, `headers` (lower-case names), `body`, `json` (the body parsed when it is JSON), `signal` and `init`. `delayMs` runs on `setTimeout`, so fake timers drive it, and `Infinity` waits for an abort; an aborted signal rejects with its reason, as `fetch` does. `errorResponse(status, code, extra)` builds the API's error envelope with `X-Request-Id`, and `networkError()` a failed `fetch`. A call with no answer left rejects with the request named, so a test cannot pass on a missing answer. It behaves the same in Node and in happy-dom, whose `Headers` keep the caller's name case (both are tested).
 - Tests never use the real network or sleep; they follow [ADR-0015](../../docs/mvp/adr/0015-testing-strategy.md) and [conventions §10](../../docs/mvp/conventions.md#10-testing).
 
-Commands (`pnpm --filter @velexis/ota-sdk <script>`): `generate` (route table and contract assertions from `ota/backend/openapi/`; CI and the contract test fail on a diff), `typecheck`, `test` (unit + contract), `test:contract` (the contract project with the `tsc` command line, after a declaration build), `test:smoke`, `build` (bundles, declarations, size check), `lint`, `clean`. Until SDK-007 `build` emits only the declarations, and SDK-014 adds `test:smoke`. `typecheck` and `build` read the types of the built `@velexis/api-types`: Turborepo builds it first; for a single package run `pnpm --filter @velexis/api-types build` once.
+Commands (`pnpm --filter @velexis/ota-sdk <script>`): `generate` (route table and contract assertions from `ota/backend/openapi/`; CI and the contract test fail on a diff), `typecheck`, `test` (unit + contract), `test:contract` (the contract project with the `tsc` command line, after a declaration build), `test:smoke`, `build` (bundles, declarations, size check), `lint`, `clean`. SDK-014 adds `test:smoke`. `typecheck`, `build` and `test` (the contract and bundle tests emit declarations) read the types of the built `@velexis/api-types`: Turborepo builds it first; for a single package run `pnpm --filter @velexis/api-types build` once.
 
 ## 9. Versioning, publishing and what is deferred
 

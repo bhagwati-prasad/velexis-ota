@@ -717,7 +717,8 @@ The OTA backend gets its contract extensions, request pipeline, tenancy, Amadeus
   - `pnpm --filter @velexis/ota-sdk test` runs the contract project and the parity test.
 - **Verify:** `pnpm --filter @velexis/ota-sdk build && pnpm --filter @velexis/ota-sdk test`
 
-### SDK-007 · Build the ESM and IIFE bundles with declarations and the size budget
+### SDK-007 · Build the ESM and IIFE bundles with declarations and the size budget ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-sdk
 - **Milestone:** M2
 - **Depends on:** SDK-005
