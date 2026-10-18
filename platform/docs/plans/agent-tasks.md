@@ -826,6 +826,7 @@ Common commands: backend `pnpm --filter @velexis/platform-backend test`, `test:i
 - **Verify:** `pnpm --filter @velexis/platform-frontend test`
 
 ### PFE-005 · Build sign-up, e-mail verification and the verify-pending page
+- **Status:** in progress (branch claude/intelligent-bardeen-90hhu7; pending: AC3, the PFE-015 end-to-end journey through Mailpit, which PFE-015 writes)
 - **Component:** platform-frontend
 - **Milestone:** M1
 - **Depends on:** PFE-003, PBE-013

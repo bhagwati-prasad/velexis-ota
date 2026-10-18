@@ -40,6 +40,13 @@ Route groups: `(marketing)` public pages, `(auth)` sign-in flows, `(app)` signed
 | `/invitations/accept` | Token moved into a 15-minute cookie; shows the invitation; sign in or sign up; accept | `lookupInvitation`, `acceptInvitation` | M1 |
 | `/verify-pending` | Only page for signed-in, unverified accounts | `getMe`, `resendVerification` | M1 |
 
+How sign-up and verification behave (PFE-005; [flow](../docs/flows/signup-and-create-ota.md) steps 1–3, PADR-0008):
+
+- **`/sign-up`** (`sign-up-form.tsx`, action `signUp` in `actions.ts`). Zod checks the form on the server first: a full name (trimmed, at most 200 characters), an e-mail address (trimmed, at most 254), a password of 10 to 256 characters (counted in Unicode code points, as the API counts them) and the terms checkbox. The action then calls `signUp` with `acceptTerms: true` and `termsVersion` of `lib/terms.ts`. The API's field errors are mapped by JSON pointer to the form's own messages (`PASSWORD_TOO_WEAK` with `too_short` or `breached` lands on the password field), `RATE_LIMITED` and other failures show above the form, and `202` redirects to `/sign-up/check-email`. A refused submission keeps the name, the address and the checkbox, never the password.
+- **`/sign-up/check-email`** reads the same for a new and an already registered address and asks for the address to send a new link to (the portal keeps no copy of it). **`/verify-pending`** shows a signed-in, unverified account its own address, a "send a new link" button for it and "Sign out"; a visitor without a session types the address. Both use `resendVerificationLink` (`verify-pending/actions.ts`): the confirmation never says whether the address has an account, and `RATE_LIMITED` shows the 3-links-per-hour message.
+- **`/verify-email?token=…`** (`verify-email/route.ts`) calls `verifyEmail` on the server without a bearer token and answers `303` to a URL without the token, with `Referrer-Policy: no-referrer` and `Cache-Control: no-store`: `/sign-in?verified=1` without a session; for a signed-in account it first renews the session through the single-flight `refresh()` (the old access token still says `ev: false`, which the middleware would send back to `/verify-pending`) and continues to `/dashboard`. An expired, used, unknown or malformed token goes to `/verify-pending?error=token`, a rate limit or an unavailable API to `/verify-pending?error=unavailable`. Redirects use `PUBLIC_PORTAL_URL`. Only `GET` consumes the token: `HEAD` answers `204` with the same two headers and never calls the API, because Next.js would otherwise answer `HEAD` by running `GET`, and link checkers and mail scanners send `HEAD` to the links they find.
+- An account verified in another tab or browser keeps an access token with `ev: false` until it is renewed: `/verify-pending` then shows "Your e-mail address is verified" with a "Continue" button (`continueAfterVerification`), which refreshes the session and goes to `/dashboard`.
+
 ### Signed in
 
 | Route | Purpose | Role | API | M |
@@ -105,6 +112,7 @@ platform/frontend/src/
   lib/csp.ts                            nonce and Content-Security-Policy of every response
   lib/roles.ts                          role matrix of scope §1.2 and the navigation it allows (mirrors the backend)
   lib/strings.ts                        UI strings (English), including one message per error code
+  lib/terms.ts                          the current termsVersion that sign-up sends
   middleware.ts                         access token refresh, auth and unverified redirects, CSP (Node.js runtime)
 ```
 
@@ -199,6 +207,7 @@ base-uri 'self'; object-src 'none'
 |---|---|---|
 | `X-Content-Type-Options` | `nosniff` | `next.config.ts`, every response (PFE-001) |
 | `Referrer-Policy` | `strict-origin-when-cross-origin` | `next.config.ts`, every response (PFE-001); token pages override it with `no-referrer` |
+| `Referrer-Policy` | `no-referrer` | `next.config.ts` `TOKEN_PAGES` (`/verify-email`, PFE-005), a later rule that replaces the one above, and the route handler itself. The rule is needed: Next.js sets the configured headers on the response before a route handler runs and keeps them over the handler's own value of the same header |
 | `Permissions-Policy` | `camera=(), microphone=(), geolocation=(), payment=(), usb=(), browsing-topics=()` | `next.config.ts`, every response (PFE-001) |
 | `Content-Security-Policy` | nonce-based, as above | `middleware.ts` with `lib/csp.ts` (PFE-002) |
 
@@ -250,6 +259,11 @@ See [`.env.example`](.env.example). On the VM they come from `/etc/velexis/platf
 
 - `src/lib/roles.test.ts`: the matrix equals scope §1.2 row by row; the navigation of each of the five roles with the M5 switches off and on (a viewer has no API keys, team, billing, Amadeus or payments entry; finance has billing); the switches hide settlements, payout account and go-live; the OTA of a path, the most specific current entry, and where an OTA in set-up opens.
 - `src/components/components.test.tsx`: `SideNav` per role and the current page; `OtaSwitcher` items; the `(app)` layout calls `getMe` once, redirects an ended session and an unverified account, and shows the message of other failures; `StepUpDialog` asks for a code on `{ stepUp: true }`, posts it to `/v1/auth/step-up`, writes the new tokens as httpOnly cookies and only then re-submits the same `FormData`, keeps a wrong code in the dialog, and does not re-submit when cancelled; `SecretRevealPanel` writes nothing to `localStorage`, `sessionStorage`, `document.cookie` or the history, and its fields never join a form submission; every `FormField` error is in the control's `aria-describedby` with `aria-invalid`; `FormErrorSummary` takes the focus; `Money` keeps every digit of large and precise amounts; `DateTime`, `StatusBadge`, `TenantBanner`, `ConfirmDialog` and `DataTable`.
+
+**What the sign-up and verification tests prove** (PFE-005).
+
+- `src/app/(auth)/sign-up/sign-up-form.test.tsx`: a short password shows its error at the field (`aria-describedby`, `aria-invalid`, the focused summary) without an API call; the API's `PASSWORD_TOO_WEAK` (with `too_short`, with `breached`, or without a field) lands on the password field; a refused submission keeps the name and the address but not the password; `202` redirects to `/sign-up/check-email` with the trimmed values and `termsVersion`; missing fields and the terms are listed in form order; field errors are mapped by JSON pointer; "send a new link" confirms the same way for every address, shows the 3-per-hour message on `RATE_LIMITED`, and uses the signed-in account's own address; `/verify-pending` for a visitor, an unverified account, an account verified in the meantime (stale and current token) and `?error=token`; `continueAfterVerification` renews the session, or ends it when it cannot be renewed.
+- `src/app/verify-email/route.test.ts`: the `303` never carries the token and has `Referrer-Policy: no-referrer` and `Cache-Control: no-store`; the `verifyEmail` call carries the end-user headers and no bearer token; a signed-in visitor's session is renewed after the verification and reaches `/dashboard` with new httpOnly cookies; a dead session is cleared, a passing failure keeps it; invalid, missing and over-long tokens go to `?error=token` (the last two without an API call), a rate limit or an unavailable API to `?error=unavailable`; `HEAD`, dispatched as Next.js dispatches it, answers `204` without calling the API; and the header rules of `next.config.ts`, compiled as `next build` compiles them, give `/verify-email` `no-referrer`, which survives Next.js's merge with the handler's headers.
 
 **What the API, session and middleware tests prove** (PFE-002). `fetch` is a Vitest mock; the tests build `NextRequest`s and read what `NextResponse.next({ request })` hands to the page from its `x-middleware-request-*` headers.
 

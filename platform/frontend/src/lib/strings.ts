@@ -220,3 +220,71 @@ export const STATUS_LABELS = Object.freeze({
     void: "Void",
   },
 });
+
+// ---- Sign-up and e-mail verification (PFE-005) ---------------------------------------------------------------
+
+/** `/sign-up`: the sign-up form (PF-01). */
+export const SIGN_UP_STRINGS = Object.freeze({
+  title: "Create your Velexis account",
+  intro: "Sign up to create your own OTA. After this step you verify your e-mail address.",
+  fullNameLabel: "Full name",
+  emailLabel: "E-mail address",
+  emailHint: "We send a verification link to this address.",
+  passwordLabel: "Password",
+  passwordHint: "At least 10 characters. Avoid common passwords and passwords you use elsewhere.",
+  termsBefore: "I accept the ",
+  termsLink: "terms of service",
+  termsBetween: " and the ",
+  privacyLink: "privacy notice",
+  submit: "Create account",
+  submitting: "Creating your account…",
+  haveAccount: "Already have an account?",
+  signIn: "Sign in",
+  fullNameRequired: "Enter your full name.",
+  fullNameTooLong: "Enter a name of at most 200 characters.",
+  emailRequired: "Enter your e-mail address.",
+  emailInvalid: "Enter a valid e-mail address, like name@example.com.",
+  passwordTooShort: "Use at least 10 characters.",
+  passwordTooLong: "Use at most 256 characters.",
+  passwordBreached: "This password is too common or has appeared in a data breach. Choose another one.",
+  termsRequired: "Accept the terms of service and the privacy notice to create an account.",
+  rateLimited: "Too many sign-ups from your network in the last hour. Try again later.",
+});
+
+/** `/sign-up/check-email`, `/verify-pending` and the "send a new link" form (PF-02). */
+export const VERIFICATION_STRINGS = Object.freeze({
+  checkEmailTitle: "Check your e-mail",
+  checkEmailIntro:
+    "We sent a message to the address you entered. Open the link in it within 24 hours to verify your address and activate your account.",
+  checkEmailExisting:
+    "If you already have an account with this address, the message explains how to sign in or reset your password instead.",
+  checkEmailSpam: "Nothing after a few minutes? Check your spam folder, or ask for a new link below.",
+  pendingTitle: "Verify your e-mail address",
+  pendingSignedIn: "Before you can create an OTA, open the verification link we sent to",
+  pendingSignedInHint:
+    "The link works for 24 hours. Nothing arrived? Check your spam folder, or send a new link.",
+  pendingAnonymous:
+    "Open the verification link we sent when you signed up. If it expired or did not arrive, ask for a new one below.",
+  verifiedTitle: "Your e-mail address is verified",
+  verifiedIntro: "Your account is active. Continue to your dashboard to create your OTA.",
+  continue: "Continue to your dashboard",
+  tokenInvalid: "This verification link has expired or was already used. Ask for a new link below.",
+  verifyUnavailable:
+    "We could not check your link just now. Open the link in the e-mail again in a few minutes.",
+  continueUnavailable: "We could not continue just now. Try again in a few minutes.",
+  sessionUnavailable: "Your account could not be loaded right now. You can still ask for a new link.",
+  resendTitle: "Need a new link?",
+  resendEmailLabel: "E-mail address",
+  resendEmailHint: "The address you signed up with.",
+  resend: "Send a new link",
+  resending: "Sending…",
+  resentAnonymous:
+    "If an account that still needs verifying uses this address, we sent a new link to it. The link works for 24 hours.",
+  resentSignedIn: "We sent a new link. It works for 24 hours.",
+  resendRateLimited:
+    "You can ask for a new link 3 times per hour. Use the newest e-mail you received, or try again later.",
+  signIn: "Sign in",
+  backToSignIn: "Back to sign in",
+  notYou: "Not your account?",
+  signOut: "Sign out",
+});

@@ -17,6 +17,14 @@ const SECURITY_HEADERS = [
   },
 ] as const;
 
+/**
+ * Paths whose URL carries a single-use token, served with `Referrer-Policy: no-referrer` (README §7, PADR-0008
+ * item 4). The override lives here and not only in the route handler: Next.js sets these configured headers on the
+ * response first and keeps them over a handler's own value of the same header. A later rule replaces the value of
+ * an earlier one.
+ */
+const TOKEN_PAGES = ["/verify-email"] as const;
+
 const nextConfig: NextConfig = {
   // The VM runs `node platform/frontend/server.js` from the standalone tree (deploy/scripts/pack-release.sh).
   output: "standalone",
@@ -26,7 +34,13 @@ const nextConfig: NextConfig = {
   poweredByHeader: false,
   reactStrictMode: true,
   async headers() {
-    return [{ source: "/:path*", headers: [...SECURITY_HEADERS] }];
+    return [
+      { source: "/:path*", headers: [...SECURITY_HEADERS] },
+      ...TOKEN_PAGES.map((source) => ({
+        source,
+        headers: [{ key: "Referrer-Policy", value: "no-referrer" }],
+      })),
+    ];
   },
 };
 
