@@ -13,7 +13,7 @@ sequenceDiagram
   participant Q as Redis (BullMQ)
   participant OW as OTA worker (provisioning module)
   participant P as platform schema (read-only)
-  participant DB as PostgreSQL as velexis_migrator
+  participant DB as PostgreSQL as velexis_provisioner
   participant T as tenant_acme
 
   PW->>Q: ota-tenant-ops tenant.provision {v, jobId, tenantId, requestedAt, requestId} (BullMQ id jobId-attempt)
@@ -21,7 +21,7 @@ sequenceDiagram
   OW->>OW: validate message (JSON Schema from @velexis/api-types/jobs)
   OW->>P: tenants row (status provisioning, key, schema_name, name, currency, locale)
   OW->>DB: BEGIN, lock_timeout 5s, advisory lock on the schema name
-  OW->>DB: CREATE SCHEMA IF NOT EXISTS tenant_acme AUTHORIZATION velexis_migrator
+  OW->>DB: CREATE SCHEMA IF NOT EXISTS tenant_acme AUTHORIZATION velexis_provisioner
   OW->>T: set_config(search_path), verify checksums, apply 0001..N, ledger rows
   OW->>T: GRANT USAGE + DML to velexis_ota_app, ALTER DEFAULT PRIVILEGES
   OW->>T: seed storefront_settings, default markup rule, templates (ON CONFLICT DO NOTHING)
@@ -35,12 +35,12 @@ sequenceDiagram
 1. **Validate.** The message must match its JSON Schema (`v = 1`); otherwise the job fails with an `UnrecoverableError` and `tenant.provision_failed {retryable: false}` is sent.
 2. **Read the tenant** through the read-only role. Only `status = provisioning` is provisioned; any other status answers `tenant.provision_failed {retryable: false, error.code: TENANT_NOT_PROVISIONING}`, except a schema that is already complete at the latest version, which answers `tenant.provisioned` again (idempotent).
 3. **Schema name** is taken from `tenants.schema_name` and checked against `^tenant_[a-z][a-z0-9_]{1,39}$`. An existing schema that has tables but no `schema_migrations` ledger is "foreign content": non-retryable failure, never dropped ([db README §3](../../../docs/velexis-sdk/db/README.md)).
-4. **One transaction** as `velexis_migrator` (`DATABASE_MIGRATOR_URL`, worker only): create the schema, apply every pending file of `ota/backend/migrations/tenant/` with `migrateTenantSchema` from `@velexis/db` (checksums verified, ledger rows written), then the grants:
+4. **One transaction** as `velexis_provisioner` (`DATABASE_PROVISIONER_URL`, worker only; no app process holds the migrator DSN, [ADR-0004](../../../docs/mvp/adr/0004-postgresql-schema-per-tenant.md)): create the schema, apply every pending file of `ota/backend/migrations/tenant/` with `migrateTenantSchema` from `@velexis/db` (checksums verified, ledger rows written), then the grants:
 
    ```sql
    GRANT USAGE ON SCHEMA tenant_acme TO velexis_ota_app;
    GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA tenant_acme TO velexis_ota_app;
-   ALTER DEFAULT PRIVILEGES FOR ROLE velexis_migrator IN SCHEMA tenant_acme
+   ALTER DEFAULT PRIVILEGES FOR ROLE velexis_provisioner IN SCHEMA tenant_acme
      GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO velexis_ota_app;
    ```
 

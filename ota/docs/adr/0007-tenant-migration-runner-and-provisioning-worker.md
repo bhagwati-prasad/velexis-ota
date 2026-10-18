@@ -3,7 +3,7 @@
 **Status:** Accepted
 **Date:** 2026-10-12
 **Deciders:** OTA backend tech lead. Decided during planning; revisit when tenant count makes the deploy fan-out slower than 10 minutes, when per-tenant roles are introduced, or when a second database cluster is added.
-**Revisions:** 2026-10-12 (planning review): item 7 names the release paths `deploy.sh` uses and the `velexis-run` step that OBE-007 adds to it.
+**Revisions:** 2026-10-12 (planning review): item 7 names the release paths `deploy.sh` uses and the `velexis-run` step that OBE-007 adds to it. 2026-10-18 (owner decision): items 2 and 3 and the Consequences use `velexis_provisioner` and `DATABASE_PROVISIONER_URL` for the worker, as ADR-0004 and ADR-0021 say; no app process holds the migrator DSN.
 
 ## Context
 
@@ -12,8 +12,8 @@ The OTA backend owns every tenant schema and its migrations ([`decisions.md`](..
 ## Decision
 
 1. **Consumer.** `provisioning/tenant-ops.processor.ts` in the OTA worker consumes `ota-tenant-ops` with concurrency 2. Messages are validated against `@velexis/api-types/jobs`. The worker re-reads `platform.tenants` and acts on the current state, never on message order.
-2. **One transaction per provisioning**, as `velexis_migrator` (the only process with `DATABASE_MIGRATOR_URL` is the worker): advisory lock on the schema name, `CREATE SCHEMA IF NOT EXISTS … AUTHORIZATION velexis_migrator`, `migrateTenantSchema` (pending files from `migrations/tenant/`, checksums verified, ledger rows), grants, seeds. Either everything exists after the commit or nothing does.
-3. **Privileges:** `GRANT USAGE ON SCHEMA`, `GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES`, and `ALTER DEFAULT PRIVILEGES FOR ROLE velexis_migrator IN SCHEMA … GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO velexis_ota_app`. New tables of later migrations are therefore usable without a `GRANT` in the migration, which keeps tenant migrations free of role names. No sequences exist (ULID ids). `TRUNCATE`, `REFERENCES` and `TRIGGER` are never granted.
+2. **One transaction per provisioning**, as `velexis_provisioner` (the only process with `DATABASE_PROVISIONER_URL` is the worker; no app process holds `DATABASE_MIGRATOR_URL`, ADR-0004): advisory lock on the schema name, `CREATE SCHEMA IF NOT EXISTS … AUTHORIZATION velexis_provisioner`, `migrateTenantSchema` (pending files from `migrations/tenant/`, checksums verified, ledger rows), grants, seeds. Either everything exists after the commit or nothing does.
+3. **Privileges:** `GRANT USAGE ON SCHEMA`, `GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES`, and `ALTER DEFAULT PRIVILEGES FOR ROLE velexis_provisioner IN SCHEMA … GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO velexis_ota_app`. New tables of later migrations are therefore usable without a `GRANT` in the migration, which keeps tenant migrations free of role names. No sequences exist (ULID ids). `TRUNCATE`, `REFERENCES` and `TRIGGER` are never granted.
 4. **Seeds** live in code (`provisioning/seeds/`) and use `ON CONFLICT DO NOTHING`: the settings row (brand name, currency, locale, `UTC`, `issue_after_payment`, `authorize_before_booking`, booking queue 50/0, airline card off), one default markup rule at 0 %, and the English template defaults. Seeds never overwrite OTA edits; template keys added in later releases are covered by the code fallback, not by backfills ([OADR-0013](0013-notifications-and-booking-documents.md)).
 5. **Results** are published after the commit: `tenant.provisioned` or `tenant.migrated` with the full ledger (`version`, `checksum`, `phase`, `appliedAt`, `durationMs`) and `steps[]`; failures as `…_failed` with `error {code, message}` and `retryable`.
 6. **Failure classes.**
@@ -38,7 +38,7 @@ The OTA backend owns every tenant schema and its migrations ([`decisions.md`](..
 
 ### Negative
 
-- Default privileges are bound to the role that creates the tables; running a tenant migration as another role would leave tables without grants. The CLI only accepts `DATABASE_MIGRATOR_URL`, and an integration test checks privileges on a table created by a later migration.
+- Default privileges are bound to the role that creates the tables; running a tenant migration as another role would leave tables without grants. The deploy fan-out connects as `velexis_migrator` (`DATABASE_MIGRATOR_URL`, never in an app process) and runs every tenant transaction with `SET LOCAL ROLE velexis_provisioner`, so tables keep one owner (ADR-0021); an integration test checks privileges on a table created by a later migration.
 - Seeds in code must stay compatible with every schema version they may run on (they run right after all migrations, so they always see the latest version).
 - The fan-out runs at deploy time and grows with the number of tenants (about 1 s per schema for small migrations).
 

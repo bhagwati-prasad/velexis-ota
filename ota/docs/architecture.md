@@ -12,7 +12,7 @@ Related: [`scope.md`](scope.md), [`data-model.md`](data-model.md), [`api-changes
 | Worker | `dist/worker.js` | 4001 (health only) | `velexis-ota-worker.service` | BullMQ processors and schedulers: provisioning, tenant migrations, Stripe events, ticketing, sync, reconciliation, notifications, documents, purges, queue polling |
 | CLI | `dist/cli.js` | none | none | Development seeding of a demo tenant, one-off repairs (refused in production unless named safe) |
 
-Only the worker reads `DATABASE_MIGRATOR_URL` (role `velexis_migrator`); the API unit cannot read that file ([ADR-0004](../../docs/mvp/adr/0004-postgresql-schema-per-tenant.md), `deploy/env/ota-worker.env.example`). Both processes use `velexis_ota_app` for everything else.
+Only the worker reads `DATABASE_PROVISIONER_URL` (role `velexis_provisioner`, tenant schemas only); the API unit cannot read that file, and no app process holds `DATABASE_MIGRATOR_URL`, which is for deploys and `pnpm db:migrate` ([ADR-0004](../../docs/mvp/adr/0004-postgresql-schema-per-tenant.md), `deploy/env/ota-worker.env.example`). Both processes use `velexis_ota_app` for everything else.
 
 ## 2. Modules
 
@@ -38,7 +38,7 @@ The contexts follow [`conventions.md` §2](../../docs/mvp/conventions.md#2-nestj
 | `notifications` | Outbox, templates (rows or code defaults), rendering, SMTP | `notifications`, `notification_templates` | SMTP | both | M3 |
 | `console` | Console controllers: bookings, PNR import, queues, customers, supplier log, read-only raw Amadeus, payments; `staff_actions` writer | `staff_actions`, `queue_snapshots` + the above | via `amadeus`, `payments` | API | M4 |
 | `settings` | Markup and fee rules, storefront settings, pages, asset uploads, templates ([OADR-0012](adr/0012-storefront-settings-assets-and-pages.md)) | `markup_rules`, `fee_rules`, `storefront_settings`, `storefront_pages`, `storefront_assets`, `notification_templates` | storage | API | M4 |
-| `provisioning` | `ota-tenant-ops` consumer: provision, migrate, suspend, resume; seeds; `platform-tenant-events` producer ([OADR-0007](adr/0007-tenant-migration-runner-and-provisioning-worker.md)) | whole schema (DDL as migrator) | — | worker | M1 |
+| `provisioning` | `ota-tenant-ops` consumer: provision, migrate, suspend, resume; seeds; `platform-tenant-events` producer ([OADR-0007](adr/0007-tenant-migration-runner-and-provisioning-worker.md)) | whole schema (DDL as provisioner) | — | worker | M1 |
 | `jobs` | Schedulers and per-tenant fan-out, retention purges, queue poller ([OADR-0014](adr/0014-per-tenant-workers-and-schedulers.md)) | many | — | worker | M2–M4 |
 | `health` | `/health/live`, `/health/ready` | — | PostgreSQL, Redis | both | M0 |
 

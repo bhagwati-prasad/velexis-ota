@@ -30,8 +30,8 @@ Common commands: backend `pnpm --filter @velexis/ota-backend test` and `test:int
 
 ## M0 — Foundations
 
-### OBE-001 · Scaffold the OTA backend with API, worker and CLI entry points
-- **Status:** in progress (branch claude/intelligent-bardeen-90hhu7; pending: a decision on AC3, which names `DATABASE_MIGRATOR_URL` as the worker's DSN while ADR-0004, the configuration matrix and `deploy/env/ota-worker.env.example` give the worker `DATABASE_PROVISIONER_URL` and no app the migrator DSN; the branch follows the ADR)
+### OBE-001 · Scaffold the OTA backend with API, worker and CLI entry points ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-backend
 - **Milestone:** M0
 - **Depends on:** X-002, X-003, X-009, X-010
@@ -40,14 +40,14 @@ Common commands: backend `pnpm --filter @velexis/ota-backend test` and `test:int
 - **Files:** `ota/backend/package.json`, `ota/backend/nest-cli.json`, `ota/backend/tsconfig.json`, `ota/backend/tsconfig.build.json`, `ota/backend/vitest.config.ts`, `ota/backend/vitest.int.config.ts`, `ota/backend/.env.example`, `ota/backend/src/main.ts`, `ota/backend/src/worker.ts`, `ota/backend/src/cli.ts`, `ota/backend/src/app.module.ts`, `ota/backend/src/worker.module.ts`, `ota/backend/src/config.ts`, `ota/backend/src/config.test.ts`, `ota/backend/src/common/clock.ts`, `ota/backend/src/common/ids.ts`, `ota/backend/src/health/health.module.ts`, `ota/backend/src/health/health.controller.ts`, `ota/backend/src/health/health.service.ts`, `ota/backend/test/integration/health/health.int.test.ts`, `deploy/env/ota-backend.env.example`
 - **Steps:**
   1. Create `@velexis/ota-backend` (private, CommonJS output) with the exact versions of tech-stack §2: `@nestjs/core`, `@nestjs/common`, `@nestjs/platform-express` 11, `@nestjs/config`, `nestjs-pino`, `pino-http`, `nestjs-cls`, `ioredis`, and the workspace packages `@velexis/config`, `@velexis/logger`, `@velexis/db`, `@velexis/errors`, `@velexis/api-types`. Scripts: `build` (entry points `dist/main.js`, `dist/worker.js`, `dist/cli.js`), `dev` (`dev:api` + `dev:worker`), `test`, `test:int`, `typecheck`, `lint`, `clean`.
-  2. `src/config.ts` with `defineConfig`: `APP_ENV`, `LOG_LEVEL`, `PORT` (4000), `HEALTH_PORT` (4001, worker), `TRUST_PROXY` (`loopback`), `DATABASE_URL`, `DATABASE_MIGRATOR_URL` (required in the worker only), `REDIS_URL`. Later tasks extend the schema. Write `ota/backend/.env.example` with dummy values.
+  2. `src/config.ts` with `defineConfig`: `APP_ENV`, `LOG_LEVEL`, `PORT` (4000), `HEALTH_PORT` (4001, worker), `TRUST_PROXY` (`loopback`), `DATABASE_URL`, `DATABASE_PROVISIONER_URL` (required in the worker only: tenant provisioning as `velexis_provisioner`; no app process ever holds the migrator DSN, ADR-0004), `REDIS_URL`. Later tasks extend the schema. Write `ota/backend/.env.example` with dummy values.
   3. `main.ts` binds `127.0.0.1:PORT`, sets `trust proxy` from `TRUST_PROXY`, uses `nestjs-pino` with the `@velexis/logger` HTTP options (request bodies never logged), `nestjs-cls` with `requestId` from `X-Request-Id` or a new id, and shutdown hooks. `worker.ts` is a Nest application context plus a `node:http` health server on `HEALTH_PORT`. `cli.ts` is a command dispatcher with `help`.
   4. `Clock` (injectable, `now()`) and `newId(prefix)` (prefixed ULID from X-005) in `src/common/`.
   5. `HealthModule`: `GET /health/live` answers `200 {status: "ok"}`; `GET /health/ready` checks PostgreSQL (`SELECT 1` through `createPool`) and Redis (`PING`) and answers `200` or `503` with the status of each dependency. The worker serves the same paths.
 - **Acceptance:**
   - `pnpm --filter @velexis/ota-backend build` produces `dist/main.js`, `dist/worker.js` and `dist/cli.js`.
   - `/health/ready` answers 200 on 4000 and 4001 with PostgreSQL and Redis up, and 503 naming `redis` when Redis is unreachable (integration test).
-  - Starting without `DATABASE_URL` exits non-zero with a `ConfigError` naming the variable; the API's config object never exposes `DATABASE_MIGRATOR_URL`, only the worker's does (unit tests of `config.ts`).
+  - Starting without `DATABASE_URL` exits non-zero with a `ConfigError` naming the variable; the API's config object never exposes `DATABASE_PROVISIONER_URL`, only the worker's does, and neither process's config exposes `DATABASE_MIGRATOR_URL` (unit tests of `config.ts`).
   - Lint finds no `console.*` and no `process.env`; every request log line carries `requestId`.
 - **Verify:** `pnpm --filter @velexis/ota-backend build && pnpm --filter @velexis/ota-backend test && pnpm --filter @velexis/ota-backend test:int`
 
@@ -171,7 +171,7 @@ The OTA side of M1 is the provisioning worker (OF-11): the platform's `tenant.pr
   - With a template file present in a test fixture directory, one `notification_templates` row is seeded per key.
 - **Verify:** `pnpm --filter @velexis/ota-backend test:int -- provisioning`
 
-### OBE-005 · Implement the tenant.provision consumer in one migrator transaction ✅
+### OBE-005 · Implement the tenant.provision consumer in one provisioner transaction ✅
 - **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-backend
 - **Milestone:** M1
@@ -182,14 +182,14 @@ The OTA side of M1 is the provisioning worker (OF-11): the platform's `tenant.pr
 - **Steps:**
   1. `tenant-ops.processor.ts` consumes `ota-tenant-ops` with concurrency 2 in the worker only; validates with OBE-002; dispatches by job name. Unknown names fail as unrecoverable.
   2. `provisionTenant(tenantId)`: re-read the tenant (OBE-003); only `status = 'provisioning'` is provisioned. A schema already complete at the latest version answers `tenant.provisioned` again; other statuses answer `tenant.provision_failed {retryable: false, error.code: "TENANT_NOT_PROVISIONING"}`.
-  3. One transaction on a `DATABASE_MIGRATOR_URL` pool: `lock_timeout 5s`, advisory lock on the schema name, `migrateTenantSchema({ schema, dir: migrations/tenant, create: true })` (schema, files, ledger, grants and default privileges for `velexis_ota_app`), then `seedTenant` (OBE-004). A schema with tables but no ledger is "foreign content": unrecoverable, never dropped.
+  3. One transaction on a `DATABASE_PROVISIONER_URL` pool (role `velexis_provisioner`, ADR-0004): `lock_timeout 5s`, advisory lock on the schema name, `migrateTenantSchema({ schema, dir: migrations/tenant, create: true })` (schema, files, ledger, grants and default privileges for `velexis_ota_app`), then `seedTenant` (OBE-004). A schema with tables but no ledger is "foreign content": unrecoverable, never dropped.
   4. After commit, `tenant-events.producer.ts` publishes `tenant.provisioned {schemaName, schemaVersion, migrations[{version, checksum, phase, appliedAt, durationMs}], steps[]}` on `platform-tenant-events`, validated with `validateJob`.
   5. Integration tests with `@velexis/testing`: a fresh tenant row → complete schema, ledger, grants (`has_table_privilege` for `velexis_ota_app`) and seeds; the same message twice → one schema and two `tenant.provisioned` events; two schemas provisioned from scratch have the same catalog hash.
 - **Acceptance:**
   - `tenant.provision` creates the schema, applies every migration, grants and seeds in one transaction and reports `tenant.provisioned` with the ledger [OF-11 AC1].
   - Re-running the message is harmless and answers `tenant.provisioned` again [OF-11 AC2].
   - A crash injected after the migrations but before commit leaves no schema.
-  - The API process cannot construct the migrator pool (config test).
+  - The API process cannot construct the provisioner pool (config test).
 - **Verify:** `pnpm --filter @velexis/ota-backend build && pnpm --filter @velexis/ota-backend test:int -- provisioning`
 
 ### OBE-006 · Implement tenant.migrate and classify provisioning failures ✅
