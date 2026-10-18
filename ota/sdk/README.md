@@ -235,7 +235,7 @@ The contract files under `docs/velexis-sdk/sdk/src/` are never edited; additions
 
 - `package.json` `exports`: `"."` → `{ types, development: "./src/index.js", import: "./dist/velexis-sdk.mjs", default: "./dist/velexis-sdk.mjs" }`, `"./iife"` → the IIFE; `"sideEffects": false`; `files`: `dist`, `src`, `README.md`, `CHANGELOG.md`. ESM only, no CommonJS build: `default` lets CommonJS code `require()` the ES module bundle (Node 22). Vite's dev server and Vitest use `src/` through the `development` condition; production builds and plain Node import the bundle, so Turborepo builds the SDK before its consumers (`^build`).
 - **No top-level side effects:** importing the bundle performs no `fetch`, schedules nothing and touches no global; the IIFE only defines `window.Velexis` (`test/unit/bundle.test.js`).
-- **Size budget:** `scripts/check-size.mjs` fails `build` when the ESM bundle exceeds **25 KB** min+gzip, and prints the size (11.3 KB with the M2 namespaces, SDK-007; 12.2 KB with `checkout`, SDK-009). If `console` ever pushes past it, it moves to a separate entry, `@velexis/ota-sdk/console` (the ADR-0019 follow-up).
+- **Size budget:** `scripts/check-size.mjs` fails `build` when the ESM bundle exceeds **25 KB** min+gzip, and prints the size (11.3 KB with the M2 namespaces, SDK-007; 12.2 KB with `checkout`, SDK-009; 12.5 KB with `bookings`, SDK-010). If `console` ever pushes past it, it moves to a separate entry, `@velexis/ota-sdk/console` (the ADR-0019 follow-up).
 - **Published types are self-contained:** for npm (SDK-015, M6) the build also copies the OTA part of `@velexis/api-types` into `dist/types/` and rewrites the specifier ([OADR-0016](../docs/adr/0016-sdk-packaging-and-type-contract.md)).
 
 ## 8. Testing

@@ -1186,10 +1186,12 @@ describe("the checkout types", () => {
   it("declare the type names of bookings.d.ts in the contract's order, the additions last, exported from the root [SDK-009]", () => {
     const contractPart = mirror.sdk.filter((name) => !ADDITIONS.includes(name));
 
-    // Only names of the contract file, in its order; the bookings part joins in its places with SDK-010.
-    expect(contractPart).toEqual(mirror.contract.filter((name) => contractPart.includes(name)));
-    expect(mirror.contract.filter((name) => !contractPart.includes(name))).toEqual(BOOKINGS_PART);
+    // Every name of the contract file, in its order, with the bookings part of SDK-010 in its places.
+    expect(contractPart).toEqual(mirror.contract);
+    expect(contractPart.filter((name) => BOOKINGS_PART.includes(name))).toEqual(BOOKINGS_PART);
     expect(mirror.sdk.slice(-ADDITIONS.length)).toEqual(ADDITIONS);
-    expect(rootExports).toEqual(expect.arrayContaining([...contractPart, ...ADDITIONS, "createCheckoutApi"]));
+    expect(rootExports).toEqual(
+      expect.arrayContaining([...contractPart, ...ADDITIONS, "createCheckoutApi", "createBookingsApi"]),
+    );
   });
 });
