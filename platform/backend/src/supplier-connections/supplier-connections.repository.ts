@@ -10,6 +10,7 @@
 // locked; the post-step takes it first and then picks its office with `FOR UPDATE SKIP LOCKED`, which never waits, so
 // the two orders cannot deadlock.
 //
+// `listForTenant` reads a tenant's connections without the ciphertext column (the portal's list, PBE-027), and
 // `toAmadeusConnection` is the API's `AmadeusConnection` of a row: never the client secret or any ciphertext.
 import { Inject, Injectable } from "@nestjs/common";
 import type { components } from "@velexis/api-types/platform";
@@ -22,6 +23,9 @@ export type AmadeusConnection = components["schemas"]["AmadeusConnection"];
 
 /** A `platform.supplier_connections` row as the platform reads it (with the ciphertext: never answer it). */
 export type SupplierConnectionRecord = Selectable<PlatformDatabase["platform.supplier_connections"]>;
+
+/** A connection row without its secret: what the API may read to answer (no `client_secret_ciphertext`). */
+export type SupplierConnectionView = Omit<SupplierConnectionRecord, "client_secret_ciphertext">;
 
 /** The supplier of every connection today. */
 export const AMADEUS_PROVIDER = "amadeus";
@@ -106,6 +110,47 @@ export class SupplierConnectionsRepository {
       .where("provider", "=", AMADEUS_PROVIDER)
       .where("environment", "=", environment)
       .executeTakeFirst();
+  }
+
+  /**
+   * The tenant's Amadeus connections, `test` first, then `live`, read on `db` without the client secret's ciphertext
+   * (the column is never selected).
+   */
+  async listForTenant(
+    tenantId: string,
+    db: PlatformDb | PlatformTransaction = this.db,
+  ): Promise<SupplierConnectionView[]> {
+    return db
+      .selectFrom("platform.supplier_connections")
+      .select([
+        "id",
+        "tenant_id",
+        "provider",
+        "environment",
+        "credential_source",
+        "amadeus_account_id",
+        "base_url",
+        "client_id",
+        "encryption_key_id",
+        "office_ids",
+        "default_office_id",
+        "queuing_office_id",
+        "owner_office_id",
+        "ticketing_defaults",
+        "monitored_queues",
+        "status",
+        "last_verified_at",
+        "last_error",
+        "created_by_account_id",
+        "version",
+        "created_at",
+        "updated_at",
+      ])
+      .where("tenant_id", "=", tenantId)
+      .where("provider", "=", AMADEUS_PROVIDER)
+      .orderBy(sql`environment = 'live'`)
+      .orderBy("id")
+      .execute();
   }
 
   /**
@@ -211,7 +256,7 @@ const iso = (value: Date | null): string | null => (value === null ? null : valu
  * secret or its ciphertext; `clientId` only for the OTA's own credentials. `pendingSubmission` is the M5 credential
  * submission (PBE-053) and stays `null` until then.
  */
-export function toAmadeusConnection(row: SupplierConnectionRecord): AmadeusConnection {
+export function toAmadeusConnection(row: SupplierConnectionView): AmadeusConnection {
   return {
     id: row.id,
     environment: row.environment as AmadeusConnection["environment"],

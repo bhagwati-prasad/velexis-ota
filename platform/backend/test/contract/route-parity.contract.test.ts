@@ -315,14 +315,19 @@ describe("route parity", () => {
     ).toEqual([
       "signUp is bound by 2 routes: AuthController.signUp (POST /v1/auth/sign-up), SignUpController.signUp (POST /v1/auth/sign-up)",
     ]);
+    // An operation that is still pending, listed a second time (any one: the list shrinks as tasks bind routes).
+    const [pending] = PENDING_OPERATIONS;
+    if (pending === undefined) {
+      throw new Error("no pending operation left to repeat");
+    }
     expect(
       parityProblems(routes, platformOperations, [
         ...PENDING_OPERATIONS,
-        { operationId: "tlsAsk", task: "PBE-027" },
+        { ...pending },
         { operationId: "rogueOperation" as PlatformOperationId, task: "PBE-999" },
       ]),
     ).toEqual([
-      "pending-operations.ts lists tlsAsk twice",
+      `pending-operations.ts lists ${pending.operationId} twice`,
       "pending-operations.ts lists rogueOperation, which is not in the document",
     ]);
   });

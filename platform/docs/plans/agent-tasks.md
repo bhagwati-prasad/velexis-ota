@@ -612,7 +612,8 @@ Common commands: backend `pnpm --filter @velexis/platform-backend test`, `test:i
   - After resend the old token fails and the new one works; a revoked invitation cannot be accepted [PF-20 AC4].
 - **Verify:** `pnpm --filter @velexis/platform-backend test && pnpm --filter @velexis/platform-backend test:int -- memberships`
 
-### PBE-027 · Implement connection and domain reads and the TLS ask endpoint
+### PBE-027 · Implement connection and domain reads and the TLS ask endpoint ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-backend
 - **Milestone:** M1
 - **Depends on:** PBE-022

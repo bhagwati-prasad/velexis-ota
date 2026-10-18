@@ -12201,7 +12201,7 @@ export interface operations {
                  * @description The host name of the TLS handshake (SNI), as Caddy sends it. Caddy always sends it; a missing or malformed value answers `404`.
                  * @example acme.ota.example.com
                  */
-                domain?: string;
+                domain?: unknown;
             };
             header?: never;
             path?: never;

@@ -15,19 +15,16 @@ export interface PendingOperation {
 }
 
 export const PENDING_OPERATIONS: readonly PendingOperation[] = Object.freeze([
-  // PBE-005: identity, plans and internal (healthLive and healthReady are bound since PBE-001 and PBE-008, signUp,
+  // PBE-005: identity, plans and internal are all bound (healthLive and healthReady since PBE-001 and PBE-008, signUp,
   // verifyEmail and resendVerification since PBE-013, signIn, refreshSession, signOut and signOutEverywhere since
   // PBE-014, verifyMfa, stepUp and the four MFA settings since PBE-015, listPlans since PBE-017, the password reset,
-  // the account, the password change and the sessions since PBE-016).
-  { operationId: "tlsAsk", task: "PBE-027" },
+  // the account, the password change and the sessions since PBE-016, tlsAsk since PBE-027).
 
   // PBE-006: tenants, team, API keys and the M1 reads (the tenant reads and getSubscription are bound since PBE-017,
   // createTenant since PBE-018, the API key operations since PBE-021, the member routes since PBE-025, the invitations
-  // since PBE-026, the setup progress, retry and key reveal since PBE-023).
+  // since PBE-026, the setup progress, retry and key reveal since PBE-023, listDomains, listAmadeusConnections and
+  // listPaymentConnections since PBE-027).
   { operationId: "getOnboarding", task: "PBE-024" },
-  { operationId: "listDomains", task: "PBE-027" },
-  { operationId: "listAmadeusConnections", task: "PBE-027" },
-  { operationId: "listPaymentConnections", task: "PBE-027" },
 
   // PBE-007: admin auth and dashboard, tenants, provisioning jobs and queues (the admin auth operations are bound since
   // PBE-028).

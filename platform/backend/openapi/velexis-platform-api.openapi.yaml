@@ -10323,7 +10323,9 @@ paths:
             The host name of the TLS handshake (SNI), as Caddy sends it. Caddy always sends it; a missing or malformed
             value answers `404`.
           schema:
-            type: string
+            description: >-
+              No type on purpose: a value that is not one host name, such as a repeated `domain` (which arrives as a
+              list), is refused with `404` by the handler, never with `400` by the request validation.
           example: acme.ota.example.com
       responses:
         '200':

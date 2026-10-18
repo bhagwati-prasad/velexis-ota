@@ -6,15 +6,25 @@
 // schema-qualified tables (ADR-0005).
 //
 // M1 brings the `velexis` test row of a new OTA, which the provisioning post-step `create_payment_connection` inserts
-// (PBE-022, flows/stripe-payments-account.md §A step 1); the descriptor update (PBE-038), go-live's live row and the M5
-// modes (Connect Standard, API keys) add their reads and writes.
+// (PBE-022, flows/stripe-payments-account.md §A step 1), and the portal's list, read without the ciphertext columns
+// (`listForTenant`, PBE-027); the descriptor update (PBE-038), go-live's live row and the M5 modes (Connect Standard,
+// API keys) add their reads and writes.
 import { Inject, Injectable } from "@nestjs/common";
-import type { PlatformDatabase, Selectable } from "@velexis/db";
+import { sql, type PlatformDatabase, type Selectable } from "@velexis/db";
 import type { PlatformTransaction } from "../audit/audit.repository";
 import { PLATFORM_DB, type PlatformDb } from "../common/database";
 
 /** A `platform.payment_provider_connections` row as the platform reads it (with the ciphertexts: never answer it). */
 export type PaymentConnectionRecord = Selectable<PlatformDatabase["platform.payment_provider_connections"]>;
+
+/**
+ * A connection row without its secrets: what the API may read to answer (no `secret_ciphertext`, no
+ * `webhook_secret_ciphertext`).
+ */
+export type PaymentConnectionView = Omit<
+  PaymentConnectionRecord,
+  "secret_ciphertext" | "webhook_secret_ciphertext"
+>;
 
 /** The payment provider of every connection in the MVP. */
 export const STRIPE_PROVIDER = "stripe";
@@ -68,6 +78,47 @@ export class PaymentConnectionsRepository {
       .onConflict((conflict) => conflict.columns(["tenant_id", "provider", "environment"]).doNothing())
       .returningAll()
       .executeTakeFirst();
+  }
+
+  /**
+   * The tenant's Stripe connections, `test` first, then `live`, read on `db` without the secrets' ciphertexts (the
+   * columns are never selected).
+   */
+  async listForTenant(
+    tenantId: string,
+    db: PlatformDb | PlatformTransaction = this.db,
+  ): Promise<PaymentConnectionView[]> {
+    return db
+      .selectFrom("platform.payment_provider_connections")
+      .select([
+        "id",
+        "tenant_id",
+        "provider",
+        "environment",
+        "account_mode",
+        "account_reference",
+        "publishable_key",
+        "encryption_key_id",
+        "supported_methods",
+        "capture_mode",
+        "is_default",
+        "status",
+        "statement_descriptor_suffix",
+        "capabilities",
+        "connected_at",
+        "disconnected_at",
+        "last_verified_at",
+        "last_error",
+        "created_by_account_id",
+        "version",
+        "created_at",
+        "updated_at",
+      ])
+      .where("tenant_id", "=", tenantId)
+      .where("provider", "=", STRIPE_PROVIDER)
+      .orderBy(sql`environment = 'live'`)
+      .orderBy("id")
+      .execute();
   }
 
   /** The tenant's Stripe connection of `environment`, read on `db` (the pool, or the caller's transaction). */

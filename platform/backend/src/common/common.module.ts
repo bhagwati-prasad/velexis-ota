@@ -3,9 +3,10 @@
 // `RequestContext`, `TokenService`, `FeatureSwitches`, the database (`PLATFORM_DB`) and the envelope encryption
 // (`EnvelopeService`, PBE-011) without importing it; AppModule imports it once with `CommonModule.forApi()`. It brings
 // the process's Redis connections and the InvalidationPublisher (RedisModule, global), the rate limits and the
-// idempotency interceptor (PBE-009). The worker imports `CommonModule.forWorker()`: Clock, ids, the worker's own pool
-// and the envelope encryption, without the request pipeline; a CLI command `CommonModule.forCli()`, the same with the
-// CLI's own small pool (PBE-028). Later tasks add the Stripe pieces here. TenantRoleGuard's
+// idempotency interceptor (PBE-009), and the API's `vx:invalidate` subscriber, which hands each event to the caches of
+// the API marked `@InvalidationListener()` (PBE-027). The worker imports `CommonModule.forWorker()`: Clock, ids, the
+// worker's own pool and the envelope encryption, without the request pipeline; a CLI command `CommonModule.forCli()`,
+// the same with the CLI's own small pool (PBE-028). Later tasks add the Stripe pieces here. TenantRoleGuard's
 // membership read (`TenantMembershipLookup`) comes from the global MembershipsModule, which AppModule imports next to
 // it (PBE-017).
 import { Global, Module, type DynamicModule } from "@nestjs/common";
@@ -31,6 +32,7 @@ import { jsonBodyParser } from "./http/raw-body";
 import { RequestContext, requestContextModule } from "./http/request-context";
 import { AccountRateLimitGuard, RateLimitGuard, throttlerModule } from "./http/throttler.config";
 import { IdGenerator } from "./ids";
+import { InvalidationSubscriber } from "./redis/invalidation.subscriber";
 import { RedisModule } from "./redis/redis.module";
 
 /**
@@ -97,6 +99,7 @@ export class CommonModule {
         TokenService,
         FeatureSwitches,
         AccountAuthStates,
+        InvalidationSubscriber,
         // Nest runs global guards in the order they are provided (API_GUARDS above).
         ...API_GUARDS.map((guard) => ({ provide: APP_GUARD, useClass: guard })),
         // Global interceptors run in the order they are provided: validation (step 9), then idempotency (step 10).
