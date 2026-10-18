@@ -1,11 +1,12 @@
-// The tenant lifecycle routes of the portal (platform/docs/api-inventory.md §7): `createTenant` (PBE-018), and the setup
-// page's progress, retry and one-time key reveal (PBE-023). Thin: each handler binds its operation, reads the validated
-// request and makes one service call. `POST /v1/tenants` is no tenant route (there is no tenant yet), so it has no
-// `@TenantRoles`: PortalAuthGuard needs a verified portal account (`x-scope: portal`), and the global
-// IdempotencyInterceptor makes it idempotent (`x-idempotent: true`). The routes under `/v1/tenants/{tenantId}` declare
-// their roles from the role matrix (`tenantRolesOf`): any member reads the progress, owners retry and reveal;
-// TenantRoleGuard answers `404` to non-members before the handler runs. The reveal's answer holds the full keys once,
-// so it is sent with `Cache-Control: no-store`; nothing here logs a body.
+// The tenant lifecycle routes of the portal (platform/docs/api-inventory.md §7): `createTenant` (PBE-018), the setup
+// page's progress, retry and one-time key reveal (PBE-023), and the onboarding checklist (PBE-024). Thin: each handler
+// binds its operation, reads the validated request and makes one service call. `POST /v1/tenants` is no tenant route
+// (there is no tenant yet), so it has no `@TenantRoles`: PortalAuthGuard needs a verified portal account
+// (`x-scope: portal`), and the global IdempotencyInterceptor makes it idempotent (`x-idempotent: true`). The routes
+// under `/v1/tenants/{tenantId}` declare their roles from the role matrix (`tenantRolesOf`): any member reads the
+// progress and the checklist, owners retry and reveal; TenantRoleGuard answers `404` to non-members before the handler
+// runs. The reveal's answer holds the full keys once, so it is sent with `Cache-Control: no-store`; nothing here logs
+// a body.
 import { Controller, Get, HttpCode, Post, Res } from "@nestjs/common";
 import type { AccessTokenClaims } from "../auth/token.service";
 import { AccessToken } from "../common/auth/decorators";
@@ -20,6 +21,7 @@ import {
   type ProvisioningStatus,
   type TenantCreated,
 } from "./lifecycle.service";
+import { OnboardingService, type OnboardingChecklist } from "./onboarding.service";
 
 /** The part of the Express response the handlers write. */
 interface HeaderTarget {
@@ -28,7 +30,10 @@ interface HeaderTarget {
 
 @Controller("v1/tenants")
 export class LifecycleController {
-  constructor(private readonly lifecycle: LifecycleService) {}
+  constructor(
+    private readonly lifecycle: LifecycleService,
+    private readonly onboarding: OnboardingService,
+  ) {}
 
   @Post()
   @HttpCode(202)
@@ -66,5 +71,12 @@ export class LifecycleController {
     // The keys are shown once (PADR-0005 item 4): never cached, and never stored for an idempotent replay.
     res.setHeader("Cache-Control", "no-store");
     return this.lifecycle.revealInitialKeys(membership);
+  }
+
+  @Get(":tenantId/onboarding")
+  @OpenApiOperation("getOnboarding")
+  @TenantRoles(...tenantRolesOf("getOnboarding"))
+  getOnboarding(@CurrentMembership() membership: TenantMembership): Promise<OnboardingChecklist> {
+    return this.onboarding.get(membership);
   }
 }

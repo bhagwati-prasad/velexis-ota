@@ -7,7 +7,8 @@
 // - The static module holds what the API uses: the jobs repository, ProvisioningDispatcher (on the `ota-tenant-ops`
 //   queue of QueuesModule), and the layer-1 modules whose repositories the use cases write through (AuthModule for the
 //   account, TenantsModule, the global MembershipsModule, BillingModule, DomainsModule) and AuditModule.
-// - `ProvisioningModule.forApi()` (AppModule) adds the portal's lifecycle routes and LifecycleService.
+// - `ProvisioningModule.forApi()` (AppModule) adds the portal's lifecycle routes, LifecycleService, and
+//   OnboardingService with its read-only OnboardingRepository (the checklist of PADR-0018, PBE-024).
 // - `ProvisioningModule.forWorker()` (WorkerModule) is the worker's part, in a module of its own (ProvisioningWorker-
 //   Module), so the worker gets none of the portal's routes and services: the one processor of
 //   `platform-tenant-events` (TenantEventsProcessor), the post-steps it runs (PostStepsRunner and the six steps of
@@ -39,6 +40,8 @@ import { ProvisioningDispatcher } from "./dispatcher";
 import { ProvisioningFailureHandler } from "./failure-handler";
 import { LifecycleController } from "./lifecycle.controller";
 import { LifecycleService } from "./lifecycle.service";
+import { OnboardingRepository } from "./onboarding.repository";
+import { OnboardingService } from "./onboarding.service";
 import { ActivateStep } from "./post-steps/activate.step";
 import { AssignAmadeusOfficeStep } from "./post-steps/assign-amadeus-office.step";
 import { CreatePaymentConnectionStep } from "./post-steps/create-payment-connection.step";
@@ -103,7 +106,7 @@ export class ProvisioningModule {
     return {
       module: ProvisioningModule,
       controllers: [LifecycleController],
-      providers: [LifecycleService],
+      providers: [LifecycleService, OnboardingService, OnboardingRepository],
     };
   }
 

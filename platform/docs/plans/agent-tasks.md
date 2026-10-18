@@ -558,7 +558,8 @@ Common commands: backend `pnpm --filter @velexis/platform-backend test`, `test:i
   - The keys are revealed once; a second reveal and a reveal after 24 hours answer 410 [PF-11 AC3].
 - **Verify:** `pnpm --filter @velexis/platform-backend test && pnpm --filter @velexis/platform-backend test:int -- provisioning`
 
-### PBE-024 · Compute the onboarding checklist
+### PBE-024 · Compute the onboarding checklist ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-backend
 - **Milestone:** M1
 - **Depends on:** PBE-021, PBE-022
