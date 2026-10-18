@@ -128,8 +128,10 @@ describe("expectResponseToMatch on the OTA document", () => {
     const parsed = parse(readFileSync(join(REPO_ROOT, API_DOCUMENTS.ota), "utf8")) as JsonObject;
     document = parsed as typeof document;
     paths = parsed["paths"] as typeof paths;
-    // Warm the cached checker inside the hook's time budget.
-    responseChecker("ota");
+    // Warm the cached checker inside the hook's time budget, and compile the getBooking 200 validator the first tests
+    // use (the Booking schema pulls in much of the document, so Ajv takes seconds on a busy runner), so that work
+    // runs here under PARSE_TIMEOUT_MS and not inside a test body on the default bound.
+    responseChecker("ota").check("getBooking", { status: 200, body: {} });
   }, PARSE_TIMEOUT_MS);
 
   it("fails getBooking 200 with { foo: 1 }, naming the missing required properties [X-015 AC4]", () => {
