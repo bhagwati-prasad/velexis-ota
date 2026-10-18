@@ -81,9 +81,15 @@ export class MembershipsRepository implements TenantMembershipLookup {
     return { membershipId: row.id, tenantId: row.tenant_id, accountId: row.account_id, role: row.role };
   }
 
-  /** The active members of `tenantId`, oldest first (then by id, so the order is stable). */
-  async listActive(tenantId: string): Promise<MemberRecord[]> {
-    return this.members(this.db)
+  /**
+   * The active members of `tenantId`, oldest first (then by id, so the order is stable), read on `db` (the pool, or the
+   * caller's transaction: the provisioning post-step `notify` reads the owners in its own, PBE-022).
+   */
+  async listActive(
+    tenantId: string,
+    db: PlatformDb | PlatformTransaction = this.db,
+  ): Promise<MemberRecord[]> {
+    return this.members(db)
       .where("m.tenant_id", "=", tenantId)
       .where("m.status", "=", "active")
       .orderBy("m.created_at")

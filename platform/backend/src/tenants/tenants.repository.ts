@@ -1,6 +1,7 @@
 // The `tenants` repository (platform/docs/architecture.md §2.1: TenantsModule owns the table): the key check, the
-// lists and reads of the portal and the profile update (PBE-017), and the row of a new OTA, which ProvisioningModule
-// writes in the create-OTA transaction (PBE-018). Kysely on the API's `PLATFORM_DB`, schema-qualified tables
+// lists and reads of the portal and the profile update (PBE-017), the row of a new OTA, which ProvisioningModule
+// writes in the create-OTA transaction (PBE-018), and the two writes of its post-steps (PBE-022): the mirrored schema
+// version and the activation. Kysely on the process's `PLATFORM_DB`, schema-qualified tables
 // (ADR-0005). The reads join what an answer shows next to the tenant row: the caller's role from the active
 // membership (listTenants) and the primary storefront host from `tenant_domains`, read only. `reference.countries`,
 // `reference.currencies` and `reference.time_zones` are read for the checks of a new OTA and a profile update (the
@@ -184,6 +185,51 @@ export class TenantsRepository {
       .returning("version")
       .executeTakeFirstOrThrow();
     return row.version;
+  }
+
+  /**
+   * Sets the tenant's `schema_version`, the mirror of the latest migration of its schema (PBE-022, record_migrations),
+   * in `trx`. The optimistic-locking `version` stays: the owner's profile edits do not conflict with the mirror.
+   */
+  async setSchemaVersion(
+    trx: PlatformTransaction,
+    tenantId: string,
+    schemaVersion: string,
+    now: Date,
+  ): Promise<void> {
+    await trx
+      .updateTable("platform.tenants")
+      .set({ schema_version: schemaVersion, updated_at: now })
+      .where("id", "=", tenantId)
+      .execute();
+  }
+
+  /**
+   * The activation of a provisioned OTA in `trx` (PBE-022, activate): `provisioning → active`, `activated_at`,
+   * `version + 1`, only while the tenant is `provisioning`. Returns the tenant's status after the call: `active` when
+   * this call activated it, otherwise the status it has (`undefined` for no such tenant).
+   */
+  async activateProvisioned(
+    trx: PlatformTransaction,
+    tenantId: string,
+    now: Date,
+  ): Promise<{ readonly activated: boolean; readonly status: string | undefined }> {
+    const activated = await trx
+      .updateTable("platform.tenants")
+      .set({ status: "active", activated_at: now, version: sql<number>`version + 1`, updated_at: now })
+      .where("id", "=", tenantId)
+      .where("status", "=", "provisioning")
+      .returning("status")
+      .executeTakeFirst();
+    if (activated !== undefined) {
+      return { activated: true, status: activated.status };
+    }
+    const current = await trx
+      .selectFrom("platform.tenants")
+      .select("status")
+      .where("id", "=", tenantId)
+      .executeTakeFirst();
+    return { activated: false, status: current?.status };
   }
 
   /** True when `code` is a country of `reference.countries`. */

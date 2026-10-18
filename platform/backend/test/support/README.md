@@ -49,4 +49,4 @@ How it behaves, so tests can rely on it:
 - **No tenant schema.** It connects to Redis only. The schema name comes from `schemaNameOf`; `schemaNamesFrom(pool)` reads `platform.tenants`, as the real worker does with its read-only role. It writes nothing to PostgreSQL.
 - **One queue, one consumer.** It consumes every message on the Redis database it is given, so a test file starts at most one, after `createTestApp()` (which empties that database). Messages that earlier tests of the file left on `ota-tenant-ops` are taken too; drain the queue first (`tenantOps.drain(true)`) when that matters.
 
-[`../integration/provisioning/dispatch.int.test.ts`](../integration/provisioning/dispatch.int.test.ts) runs it for every outcome and message.
+[`../integration/provisioning/dispatch.int.test.ts`](../integration/provisioning/dispatch.int.test.ts) runs it for every outcome and message. [`../integration/provisioning/post-steps.int.test.ts`](../integration/provisioning/post-steps.int.test.ts) (PBE-022) runs it with the worker's module graph, whose `platform-tenant-events` processor takes its `tenant.provisioned` answers and runs the platform's post-steps.

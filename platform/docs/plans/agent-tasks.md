@@ -518,7 +518,8 @@ Common commands: backend `pnpm --filter @velexis/platform-backend test`, `test:i
   - After a usage counter is written to Redis, the next flush updates `last_used_at` [PF-30 AC5]; revoked and expired keys do not count against the limit.
 - **Verify:** `pnpm --filter @velexis/platform-backend test && pnpm --filter @velexis/platform-backend test:int -- api-keys`
 
-### PBE-022 · Consume tenant events and run the provisioning post-steps
+### PBE-022 · Consume tenant events and run the provisioning post-steps ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-backend
 - **Milestone:** M1
 - **Depends on:** PBE-019, PBE-020, PBE-021

@@ -316,11 +316,12 @@ describe("the worker's health server", () => {
       ]);
       // The context was closed again: its shutdown hooks disconnected the readiness probe's Redis client and the
       // blocking connections of the platform-emails processor (PBE-011), the platform-maintenance processor
-      // (PBE-021) and the platform-connections processor (PBE-020), and all four have ended.
+      // (PBE-021), the platform-connections processor (PBE-020) and the platform-tenant-events processor (PBE-022),
+      // and all five have ended.
       const disconnected = disconnect.mock.contexts as Redis[];
-      expect(disconnected).toHaveLength(4);
+      expect(disconnected).toHaveLength(5);
       expect(disconnected.map((client) => client.options.connectionName)).toContain("platform-worker");
-      expect(disconnected.map((client) => client.status)).toEqual(["end", "end", "end", "end"]);
+      expect(disconnected.map((client) => client.status)).toEqual(["end", "end", "end", "end", "end"]);
     } finally {
       await new Promise<void>((done) => blocker.close(() => done()));
     }

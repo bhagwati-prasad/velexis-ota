@@ -5,8 +5,10 @@
 // keeps the two shapes apart, and the composite foreign key keeps a `velexis` row on the account of its environment.
 //
 // Writes of a tenant's connection of one environment are serialised with a transaction-level advisory lock
-// (`lockTenantEnvironment`), taken after the office row is locked: an admin assignment here and the provisioning
-// post-step (PBE-022) both create or complete the row, and the lock makes sure only one of them inserts it.
+// (`lockTenantEnvironment`): an admin assignment here and the provisioning post-step (PBE-022) both create or complete
+// the row, and the lock makes sure only one of them inserts it. The admin's assignment takes it after the office row is
+// locked; the post-step takes it first and then picks its office with `FOR UPDATE SKIP LOCKED`, which never waits, so
+// the two orders cannot deadlock.
 //
 // `toAmadeusConnection` is the API's `AmadeusConnection` of a row: never the client secret or any ciphertext.
 import { Inject, Injectable } from "@nestjs/common";
@@ -45,6 +47,9 @@ export interface VelexisConnectionInsert extends VelexisOffice {
   readonly createdByAccountId: string | null;
   readonly now: Date;
 }
+
+/** The columns of a new `velexis` connection that waits for an office (no free office, or no active account). */
+export type PendingVelexisConnectionInsert = Omit<VelexisConnectionInsert, "officeId">;
 
 @Injectable()
 export class SupplierConnectionsRepository {
@@ -128,6 +133,38 @@ export class SupplierConnectionsRepository {
         ticketing_defaults: JSON.stringify({}),
         monitored_queues: JSON.stringify([]),
         status: "active",
+        created_by_account_id: row.createdByAccountId,
+        created_at: row.now,
+        updated_at: row.now,
+      })
+      .returningAll()
+      .executeTakeFirstOrThrow();
+  }
+
+  /**
+   * Inserts the tenant's `velexis` connection without an office (flows/amadeus-connection.md §B, provisioning.md §3):
+   * the account of its environment, `office_ids = {}`, no default, queuing or owner office, empty ticketing defaults
+   * and monitored queues, `pending_verification`. An admin completes it with an office later
+   * (`adminAssignAmadeusOffice`, `completeVelexis`).
+   */
+  async insertPendingVelexis(
+    trx: PlatformTransaction,
+    row: PendingVelexisConnectionInsert,
+  ): Promise<SupplierConnectionRecord> {
+    return trx
+      .insertInto("platform.supplier_connections")
+      .values({
+        id: row.id,
+        tenant_id: row.tenantId,
+        provider: AMADEUS_PROVIDER,
+        environment: row.environment,
+        credential_source: "velexis",
+        amadeus_account_id: row.amadeusAccountId,
+        office_ids: [],
+        // jsonb columns are written as JSON text.
+        ticketing_defaults: JSON.stringify({}),
+        monitored_queues: JSON.stringify([]),
+        status: "pending_verification",
         created_by_account_id: row.createdByAccountId,
         created_at: row.now,
         updated_at: row.now,

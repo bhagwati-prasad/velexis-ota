@@ -8,7 +8,8 @@
 // `platform-maintenance` processor (MaintenanceProcessor, PBE-021), which hands each to the `@MaintenanceJob` handler
 // of the module that owns it: `api_keys.flush_usage` of ApiKeysModule first, `invitations.expire` of MembershipsModule
 // (PBE-026), `amadeus.pool_level` of SupplierConnectionsModule (PBE-020). SupplierConnectionsModule also brings the one
-// processor of `platform-connections` (the verification jobs, PBE-020).
+// processor of `platform-connections` (the verification jobs, PBE-020), and ProvisioningModule the one processor of
+// `platform-tenant-events` with the provisioning post-steps (PBE-022).
 import { Module, type DynamicModule } from "@nestjs/common";
 import { DiscoveryModule } from "@nestjs/core";
 import type { Logger } from "@velexis/logger";
@@ -22,6 +23,7 @@ import { configModule, type PlatformBackendConfig } from "./config";
 import { HealthModule } from "./health/health.module";
 import { MembershipsModule } from "./memberships/memberships.module";
 import { NotificationsModule } from "./notifications/notifications.module";
+import { ProvisioningModule } from "./provisioning/provisioning.module";
 import { SupplierConnectionsModule } from "./supplier-connections/supplier-connections.module";
 
 @Module({})
@@ -43,6 +45,7 @@ export class WorkerModule {
         ApiKeysModule.forWorker(),
         MembershipsModule.forWorker(),
         SupplierConnectionsModule.forWorker(),
+        ProvisioningModule.forWorker(),
       ],
       // The schedules of a milestone switch that is off are not registered (PADR-0015 item 2).
       providers: [schedulerSwitchesProvider, JobSchedulerRegistry, MaintenanceProcessor],

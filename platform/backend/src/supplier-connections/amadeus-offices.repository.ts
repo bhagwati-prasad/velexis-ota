@@ -6,8 +6,9 @@
 // tenant and account. Offices are never deleted.
 //
 // Writes go through a row locked with `lock` (`FOR UPDATE`), so two concurrent assignments of one office are
-// serialised and the second sees the first one's status. Reads for the API (`AmadeusOfficeView`) add the environment
-// (from the account) and the key of the assigned tenant.
+// serialised and the second sees the first one's status; the provisioning post-step takes the oldest free office with
+// `lockOldestAvailable` (`FOR UPDATE SKIP LOCKED`, PBE-022). Reads for the API (`AmadeusOfficeView`) add the
+// environment (from the account) and the key of the assigned tenant.
 import { Inject, Injectable } from "@nestjs/common";
 import { sql, type PlatformDatabase, type Selectable } from "@velexis/db";
 import type { PlatformTransaction } from "../audit/audit.repository";
@@ -148,6 +149,28 @@ export class AmadeusOfficesRepository {
       .where("amadeus_account_id", "=", accountId)
       .where("assigned_tenant_id", "=", tenantId)
       .where("status", "=", "assigned")
+      .executeTakeFirst();
+  }
+
+  /**
+   * The oldest `available` office of the account's pool (`created_at`, then id), locked for the rest of `trx` with
+   * `FOR UPDATE SKIP LOCKED` (PADR-0012 item 2): an office another transaction is assigning is passed over, so two
+   * concurrent provisionings never wait for each other or get the same office. `undefined` when none is free.
+   */
+  async lockOldestAvailable(
+    trx: PlatformTransaction,
+    accountId: string,
+  ): Promise<AmadeusOfficeRecord | undefined> {
+    return trx
+      .selectFrom("platform.amadeus_offices")
+      .selectAll()
+      .where("amadeus_account_id", "=", accountId)
+      .where("status", "=", "available")
+      .orderBy("created_at", "asc")
+      .orderBy("id", "asc")
+      .limit(1)
+      .forUpdate()
+      .skipLocked()
       .executeTakeFirst();
   }
 
