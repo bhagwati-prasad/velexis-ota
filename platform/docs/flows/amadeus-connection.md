@@ -93,6 +93,7 @@ The `assign_amadeus_office` post-step of [`provisioning.md`](provisioning.md) ta
 | Failure | Behaviour |
 |---|---|
 | Shared account credentials wrong | Account `invalid_credentials`; dashboard alert. Tenants on it keep their rows; the OTA backend reports `SUPPLIER_NOT_CONFIGURED` or Amadeus errors until fixed. |
+| Amadeus unavailable while the shared account is verified (5xx, 429, timeout) | `last_error` set and the job retried (5 attempts, backoff); after the last one the account becomes `invalid_credentials`, except an `active` one, which stays `active` with the error, so an outage does not cut off every OTA on the shared account (PBE-020). |
 | Pool empty at provisioning | Connection `pending_verification`; ops e-mail; admin assigns later (`AMADEUS_OFFICE_UNAVAILABLE` if still empty). |
 | Two admins assign the same office | Row version and the `amadeus_offices_assignment_ck` / unique index reject the second. |
 | Own credentials rejected | The working connection is untouched; the portal shows the error from the submission. |

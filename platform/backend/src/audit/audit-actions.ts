@@ -87,6 +87,7 @@ export const AUDIT_ACTIONS = Object.freeze([
   "amadeus.credentials_rejected", // credentials.verify job, failure (system)
   "amadeus_account.created", // adminCreateAmadeusAccount (never the secret)
   "amadeus_account.updated", // adminUpdateAmadeusAccount (rotation and disabling included)
+  "amadeus_account.verification_requested", // adminVerifyAmadeusAccount
   "amadeus_account.verified", // amadeus_account.verify job, success (system)
   "amadeus_account.verification_failed", // amadeus_account.verify job, failure (system)
   "amadeus_office.added", // adminAddAmadeusOffices

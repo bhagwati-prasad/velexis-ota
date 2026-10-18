@@ -55,22 +55,14 @@ export const PENDING_OPERATIONS: readonly PendingOperation[] = Object.freeze([
   { operationId: "adminListFailedQueueJobs", task: "PBE-031" },
   { operationId: "adminRetryQueueJob", task: "PBE-031" },
 
-  // PBE-066: admin plans and subscriptions, Amadeus accounts and offices, accounts, platform admins and audit.
+  // PBE-066: admin plans and subscriptions, Amadeus accounts and offices, accounts, platform admins and audit (the
+  // Amadeus accounts and offices are bound since PBE-020).
   { operationId: "adminListPlans", task: "PBE-033" },
   { operationId: "adminCreatePlan", task: "PBE-033" },
   { operationId: "adminUpdatePlan", task: "PBE-033" },
   { operationId: "adminListSubscriptions", task: "PBE-033" },
   { operationId: "adminGetSubscription", task: "PBE-033" },
   { operationId: "adminUpdateManualSubscription", task: "PBE-033" },
-  { operationId: "adminListAmadeusAccounts", task: "PBE-020" },
-  { operationId: "adminCreateAmadeusAccount", task: "PBE-020" },
-  { operationId: "adminUpdateAmadeusAccount", task: "PBE-020" },
-  { operationId: "adminVerifyAmadeusAccount", task: "PBE-020" },
-  { operationId: "adminListAmadeusOffices", task: "PBE-020" },
-  { operationId: "adminAddAmadeusOffices", task: "PBE-020" },
-  { operationId: "adminUpdateAmadeusOffice", task: "PBE-020" },
-  { operationId: "adminAssignAmadeusOffice", task: "PBE-020" },
-  { operationId: "adminRetireAmadeusOffice", task: "PBE-020" },
   { operationId: "adminListAccounts", task: "PBE-032" },
   { operationId: "adminGetAccount", task: "PBE-032" },
   { operationId: "adminDisableAccount", task: "PBE-032" },

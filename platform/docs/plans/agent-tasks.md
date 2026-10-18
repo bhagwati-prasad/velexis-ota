@@ -477,7 +477,8 @@ Common commands: backend `pnpm --filter @velexis/platform-backend test`, `test:i
   - The message on `ota-tenant-ops` validates against the PBE-004 schema; the fake worker's events validate too.
 - **Verify:** `pnpm --filter @velexis/platform-backend test && pnpm --filter @velexis/platform-backend test:int -- provisioning`
 
-### PBE-020 · Implement the Velexis Amadeus accounts and office pool admin endpoints
+### PBE-020 · Implement the Velexis Amadeus accounts and office pool admin endpoints ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-backend
 - **Milestone:** M1
 - **Depends on:** PBE-066, PBE-010, PBE-011, PBE-012, X-027

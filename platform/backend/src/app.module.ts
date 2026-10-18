@@ -11,6 +11,7 @@ import {
 import { pinoHttpOptions, type Logger } from "@velexis/logger";
 import { LoggerModule } from "nestjs-pino";
 import { AccountsModule } from "./accounts/accounts.module";
+import { AdminModule } from "./admin/admin.module";
 import { ApiKeysModule } from "./api-keys/api-keys.module";
 import { AuthModule } from "./auth/auth.module";
 import { BillingModule } from "./billing/billing.module";
@@ -50,6 +51,8 @@ export class AppModule implements NestModule {
         BillingModule,
         ApiKeysModule.forApi(),
         ProvisioningModule.forApi(),
+        // The platform admin's controllers over the services of the modules above (layer 4).
+        AdminModule,
       ],
     };
   }
