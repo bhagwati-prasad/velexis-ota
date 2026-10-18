@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "display": "@velexis/ota-sdk contract test (OADR-0016 point 4, ota/sdk/docs/types-and-builds.md §4): tsc --noEmit over the emitted declarations of the SDK and the frozen contract in docs/velexis-sdk/sdk/src/, both reading the generated @velexis/api-types. skipLibCheck is off: a contract type that no longer resolves against the working document must fail, not turn into any. `pnpm --filter @velexis/ota-sdk test:contract` runs it after a declaration build; test/contract/contract.test.js runs it in `test`.",
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "allowJs": true,
+    "checkJs": true,
+    "noEmit": true,
+    "skipLibCheck": false,
+    "paths": {
+      "velexis-contract": ["../../../../docs/velexis-sdk/sdk/src/index.d.ts"],
+      "@velexis/ota-sdk": ["../../dist/types/index.d.ts"],
+      "@velexis/api-types": ["../../node_modules/@velexis/api-types/dist/index.d.ts"]
+    }
+  },
+  "include": ["*.ts", "pending-namespaces.js"]
+}

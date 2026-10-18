@@ -697,7 +697,8 @@ The OTA backend gets its contract extensions, request pipeline, tenancy, Amadeus
   - `typecheck` passes with no `any` in the three namespace files.
 - **Verify:** `pnpm --filter @velexis/ota-sdk typecheck && pnpm --filter @velexis/ota-sdk test`
 
-### SDK-006 · Add the contract test, approved deviations and the parity test with a pending list
+### SDK-006 · Add the contract test, approved deviations and the parity test with a pending list ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-sdk
 - **Milestone:** M2
 - **Depends on:** SDK-005

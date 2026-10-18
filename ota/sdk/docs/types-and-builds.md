@@ -67,12 +67,13 @@ For **npm publication** (M6) the build copies the OTA part of `@velexis/api-type
 
 ## 4. The contract test
 
-`test/contract/` runs with `pnpm --filter @velexis/ota-sdk test:contract` and in CI on every PR.
+`test/contract/` runs in `pnpm --filter @velexis/ota-sdk test`, so in CI on every PR: `contract.test.js` compiles the project below the way `tsc` does, against declarations it emits from `src/` into a scratch folder (no earlier build, no stale `dist/`), and `parity.test.js` checks the runtime parity. `pnpm --filter @velexis/ota-sdk test:contract` runs the same project with the `tsc` command line after a declaration build (`tsc -p tsconfig.build.json && tsc -p test/contract/tsconfig.json`), for a readable error list.
 
 ```mermaid
 flowchart LR
   OA["ota/backend/openapi/*.yaml<br/>(working contract)"] -->|pnpm contracts:generate| AT["@velexis/api-types"]
-  OA -->|generate-operations.mjs| OPS["src/internal/operations.js<br/>assertions.generated.ts"]
+  OA -->|generate-operations.mjs| OPS["src/internal/operations.js<br/>test/contract/methods.generated.ts"]
+  FD["docs/velexis-sdk/openapi/*.yaml<br/>(frozen design)"] -->|contract methods| OPS
   SRC["src/**/*.js + JSDoc"] -->|tsc emitDeclarationOnly| DTS["dist/types/*.d.ts"]
   C["docs/velexis-sdk/sdk/src/*.d.ts<br/>(frozen contract)"] --> T{"tsc --noEmit<br/>test/contract"}
   DTS --> T
@@ -80,18 +81,18 @@ flowchart LR
   OPS --> T
 ```
 
-1. **Project.** A `tsc --noEmit` project maps three module names with `paths`:
+1. **Project** (`test/contract/tsconfig.json`, extending the SDK's strict options with `skipLibCheck: false`, so a contract type that no longer resolves against the working document fails instead of becoming `any`). It maps three module names with `paths`:
    - `velexis-contract` → [`docs/velexis-sdk/sdk/src/index.d.ts`](../../../docs/velexis-sdk/sdk/src/index.d.ts);
    - `@velexis/ota-sdk` → `dist/types/index.d.ts`;
    - `@velexis/api-types` → the generated package, for **both** sides, so they share the same schemas.
-2. **Per-method assertions** (`assertions.generated.ts`, written by `generate-operations.mjs` from the `x-sdk-method` list). For every contract method:
-   - `Parameters<Contract["flights"]["search"]>` must be assignable to the SDK method's parameters (the SDK accepts everything the contract accepts);
-   - the SDK's `Awaited<ReturnType<…>>` must be assignable to the contract's (callers get at least what the contract promises).
-   Explicit checks are needed because TypeScript compares method parameters bivariantly, so plain interface assignability would miss a narrowed parameter.
-3. **Hand-written assertions** cover `createVelexisClient`, `VelexisClient` (including `withOptions` and `request`), `VelexisClientOptions` with the `console.d.ts` augmentation, `RequestOptions`, `Page<T>`, `ListParams`, every error class (constructor, fields such as `PriceChangedError.newPrice`, `RateLimitError.retryAfterSeconds`) and `isVelexisError`.
-4. **Approved deviations** are listed in `test/contract/deviations.ts`, each with the ADR that approves it; the assertions use `Omit` for exactly those members and a separate assertion pins the deviating type. Today there is one entry: `auth.signIn`, `auth.refresh` and `auth.changePassword` return `AuthSessionResult | AuthSessionInfo`, because cookie mode returns no tokens ([OADR-0006](../../docs/adr/0006-storefront-cookie-sessions-and-csrf.md)). Anything else that fails is an SDK bug, not a reason to add an entry.
-5. **Runtime parity** (`parity.contract.test.js`, Vitest): loads the working OpenAPI document and asserts that the set of `x-sdk-method` values (without `x-internal` and `x-sdk-exclude` operations) equals the set of method paths on a client instance. `withOptions` and `request` are the only extra members.
-6. **Version**: `VERSION` from `src/version.js` equals `package.json` `version`.
+2. **Per-method assertions** (`methods.generated.ts`, written by `generate-operations.mjs` with the route table, one type per `x-sdk-method`; stale output fails `contract.test.js`). A method of the frozen contract (an `x-sdk-method` of [`docs/velexis-sdk/openapi/`](../../../docs/velexis-sdk/openapi/velexis-ota-booking-api.openapi.yaml)) gets `Conforms`:
+   - the contract's `Parameters` must be assignable to the SDK method's (the SDK accepts everything the contract accepts);
+   - the SDK's awaited result must be assignable to the contract's (callers get at least what the contract promises), and may be neither `any` nor `never`.
+   Explicit checks are needed because TypeScript compares method parameters bivariantly, so plain interface assignability would miss a narrowed parameter (the test proves it: a narrowed `flights.search` fails only its own assertion). Any other method is an addition ([`extensions.md`](extensions.md)) and gets `Addition`: the client has it as a method and the contract does not. A last assertion fails when a method of the contract is no longer in the working document.
+3. **Hand-written assertions** (`client.contract.ts`, which also holds the helpers) cover `createVelexisClient`, `VelexisClient` (including `withOptions` and `request`), `VelexisClientOptions` with the `identity.d.ts` and `console.d.ts` augmentations, `RequestOptions`, `Page<T>`, `ListParams`, the shared types, every error class (constructor, fields such as `PriceChangedError.newPrice`, `RateLimitError.retryAfterSeconds`) and `isVelexisError`.
+4. **Approved deviations** are listed in `test/contract/deviations.ts`, each with the ADR that approves it; the assertions compare the SDK with the contract with `Omit` for exactly those members plus the approved signature, a separate assertion pins the deviating type, and another proves that no other member differs from the contract. Today there is one entry: `auth.signIn`, `auth.refresh` and `auth.changePassword` return `AuthSessionResult | AuthSessionInfo`, because cookie mode returns no tokens ([OADR-0006](../../docs/adr/0006-storefront-cookie-sessions-and-csrf.md)). Anything else that fails is an SDK bug, not a reason to add an entry.
+5. **Runtime parity** (`parity.test.js`, Vitest): loads the working OpenAPI document and asserts that the set of `x-sdk-method` values (without `x-internal` and `x-sdk-exclude` operations) equals the set of method paths on a client instance, except what `test/contract/pending-namespaces.js` lists. `withOptions` and `request` are the only extra members. A pending entry is a whole namespace or one method of an implemented namespace, with the SDK task that adds it; the test refuses an entry that covers no method of the document and one whose methods the client already has all of, so the SDK task removes it. The type assertions read the same list: a pending method the client does not have yet is skipped, one it already has is checked, and a method of the contract is skipped only while the client has no namespace of that name (SDK-011 writes the contract's `console` methods while the namespace stays pending for `console.settings` and `console.payments`, and every one of them is checked; `contract.test.js` proves it with an empty `console` namespace). SDK-013 empties the list.
+6. **Version**: `VERSION` from `src/version.js` equals `package.json` `version` (`test/unit/version.test.js`).
 
 The contract files are never edited. A new operation is added to the OpenAPI document first ([`../../docs/api-changes.md`](../../docs/api-changes.md) §1), then the SDK method and its line in [`extensions.md`](extensions.md).
 
@@ -145,7 +146,7 @@ export const op = /* @__PURE__ */ freeze({
 
 Values the document does not carry come from `scripts/operation-overrides.json`, reviewed like code: 60 s for `flights.search`, `flights.upsell`, `flights.price`, `console.bookings.issue`, `.cancel`, `.import` and `.retrieve`; 90 s for `checkout.complete`; 90 s and `retry: "never"` for `checkout.completeWithAirlineCard`. Every override gives its `reason`; `retry` can only be made stricter (a `POST` that is safe to repeat says so in the document with `x-idempotent-by-design`); an override for an operation that is not in the document yet names the `specTask` that adds it (`OBE-029` for `checkout.completeWithAirlineCard`) and applies by itself once that task regenerates the table, and any other unknown name fails as a typo.
 
-The generator exits 1 and writes nothing on a duplicated `x-sdk-method`, an operation without one that is neither `x-internal` nor `x-sdk-exclude`, a path template that does not match its path parameters (including a repeated placeholder), a request body that does not have exactly one media type, `application/json` or `multipart/form-data`, and a **name collision**: one name used twice among the path, query and header params, or by one of them and a top-level property of the request body (found through `$ref`, `allOf`, `oneOf` and `anyOf`). Such an operation is renamed in the document instead of leaving `core.call` to guess. The output is deterministic, committed, and CI regenerates it and fails when it differs from the committed file (the "SDK route table is up to date" step), as for the other generated contract types; `test/unit/operations.test.js` checks the table against the document and a fresh run.
+The generator exits 1 and writes nothing on a duplicated `x-sdk-method`, an operation without one that is neither `x-internal` nor `x-sdk-exclude`, a path template that does not match its path parameters (including a repeated placeholder), a request body that does not have exactly one media type, `application/json` or `multipart/form-data`, and a **name collision**: one name used twice among the path, query and header params, or by one of them and a top-level property of the request body (found through `$ref`, `allOf`, `oneOf` and `anyOf`). Such an operation is renamed in the document instead of leaving `core.call` to guess. The output is deterministic, committed, and CI regenerates it and fails when it differs from the committed file (the "SDK route table is up to date" step), as for the other generated contract types; `test/unit/operations.test.js` checks the table against the document and a fresh run. The same run writes the contract assertions `test/contract/methods.generated.ts` (§4 point 2); a run with `--out` (the tests of the table) writes them only to an explicit `--methods-out`, so it never touches the committed file.
 
 A namespace method is then one line, and its JSDoc carries the types:
 

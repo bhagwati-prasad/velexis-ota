@@ -16,6 +16,7 @@
     "build": "tsc -p tsconfig.build.json",
     "lint": "eslint .",
     "test": "vitest run",
+    "test:contract": "tsc -p tsconfig.build.json && tsc -p test/contract/tsconfig.json",
     "clean": "rm -rf dist coverage"
   },
   "devDependencies": {
