@@ -22,6 +22,22 @@ export const STRINGS = Object.freeze({
   // Counts.
   "results.count": { one: "{count} flight", other: "{count} flights" },
 
+  // Header, account menu and footer (src/components/header.js, footer.js, lib/session.js).
+  "header.currency": "Currency",
+  "header.currencyOption": "{code} ({symbol})",
+  "header.currencyChanged": "Prices will be shown in {currency} from your next search",
+  "account.signIn": "Sign in",
+  "account.account": "My account",
+  "footer.terms": "Terms and conditions",
+  "footer.privacy": "Privacy policy",
+  "footer.cookies": "Cookie policy",
+  "footer.refunds": "Cancellation and refunds",
+  "footer.imprint": "Legal notice",
+  "footer.accessibility": "Accessibility",
+  "footer.helpCenter": "Help centre",
+  "footer.support": "Support:",
+  "footer.supportHours": "({hours})",
+
   // Durations (lib/format.js): "7 h 35 min".
   "duration.hours": "{hours} h",
   "duration.minutes": "{minutes} min",
@@ -98,6 +114,11 @@ export const STRINGS = Object.freeze({
   "state.validation": "Check the highlighted fields",
   "state.aborted": "Cancelled",
   "state.unexpected": "Something went wrong. Please try again.",
+  // A second line under some state titles (src/boot.js renderState).
+  "stateHint.suspended": "Please come back later.",
+  "stateHint.unknown-host":
+    "Check the address in your browser. If you followed a link, it may be out of date.",
+  "stateHint.supplier-not-configured": "This travel site is still being set up. Please come back later.",
 });
 
 const plurals = new Intl.PluralRules(LANGUAGE);

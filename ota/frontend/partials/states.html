@@ -1,0 +1,45 @@
+<template id="tpl-state-page">
+  <section class="mx-auto max-w-prose py-6" data-state data-field-data-state="name">
+    <h1 class="font-heading text-3xl font-semibold" tabindex="-1" data-field="title">Something went wrong</h1>
+    <p class="mt-3 text-muted" data-field="hint" data-field-hidden="noHint"></p>
+    <p class="mt-3" data-field-hidden="noSupport">
+      Contact us at
+      <a class="font-medium underline" data-field="supportEmail" data-field-href="supportHref"></a>
+    </p>
+    <p class="mt-3 text-sm text-muted" data-field-hidden="noRequestId">
+      Reference for support: <span class="font-mono" data-field="requestId"></span>
+    </p>
+    <p class="mt-6" data-field-hidden="noRetry">
+      <button
+        type="button"
+        data-action="retry"
+        class="rounded-ui bg-primary px-4 py-2 font-medium text-on-primary hover:opacity-90 disabled:opacity-60"
+      >
+        Try again
+      </button>
+    </p>
+  </section>
+</template>
+<template id="tpl-state-inline">
+  <div class="my-6 rounded-ui border-2 border-warning bg-panel p-4" data-state data-field-data-state="name">
+    <p class="font-heading text-lg font-semibold" tabindex="-1" data-field="title">Something went wrong</p>
+    <p class="mt-2 text-muted" data-field="hint" data-field-hidden="noHint"></p>
+    <p class="mt-2" data-field-hidden="noSupport">
+      Contact us at
+      <a class="font-medium underline" data-field="supportEmail" data-field-href="supportHref"></a>
+    </p>
+    <p class="mt-2 text-sm text-muted" data-field-hidden="noRequestId">
+      Reference for support: <span class="font-mono" data-field="requestId"></span>
+    </p>
+    <p class="mt-4" data-field-hidden="noRetry">
+      <button
+        type="button"
+        data-action="retry"
+        class="rounded-ui bg-primary px-4 py-2 font-medium text-on-primary hover:opacity-90 disabled:opacity-60"
+      >
+        Try again
+      </button>
+    </p>
+  </div>
+</template>
+<div data-live-region role="status" aria-live="polite" aria-atomic="true" class="sr-only"></div>

@@ -752,7 +752,8 @@ The OTA backend gets its contract extensions, request pipeline, tenancy, Amadeus
   - A test file using `el.innerHTML = data` fails lint.
 - **Verify:** `pnpm --filter @velexis/ota-frontend test && pnpm lint`
 
-### OFE-003 · Build boot, theming, header, footer, banners and the shared page states
+### OFE-003 · Build boot, theming, header, footer, banners and the shared page states ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-frontend
 - **Milestone:** M2
 - **Depends on:** OFE-002, SDK-005, OBE-016

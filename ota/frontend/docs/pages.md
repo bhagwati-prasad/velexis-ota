@@ -21,7 +21,7 @@ flowchart LR
 
 ## 2. States every page shares
 
-Rendered by `boot()` and `lib/errors.js` before or instead of the page content.
+Rendered by `boot()` and `lib/errors.js` before or instead of the page content: `boot()` replaces `<main>` with the state when `storefront.get` fails, and pages render the same states for their own calls with `renderState` of `src/boot.js` (templates in `partials/states.html`, texts in `lib/i18n.js`).
 
 | Condition | Shows |
 |---|---|
