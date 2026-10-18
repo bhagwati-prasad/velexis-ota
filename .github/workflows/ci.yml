@@ -436,6 +436,15 @@ jobs:
           if [ -f packages/db/package.json ]; then pnpm db:migrate && pnpm db:codegen; fi
           git diff --exit-code -- packages/api-types packages/errors packages/db/src/generated \
             || { echo "::error::Generated files are stale. Run pnpm contracts:generate / pnpm db:codegen and commit."; exit 1; }
+          # OBE-017: the Amadeus types in ota/backend/src/amadeus/generated are generated from docs/amadeus-api/;
+          # a stale, missing or extra file fails here.
+          pnpm --filter @velexis/ota-backend amadeus:types
+          if [ -n "$(git status --porcelain -- ota/backend/src/amadeus/generated)" ]; then
+            git status --porcelain -- ota/backend/src/amadeus/generated
+            git diff -- ota/backend/src/amadeus/generated
+            echo "::error::The generated Amadeus types are stale. Run pnpm --filter @velexis/ota-backend amadeus:types and commit."
+            exit 1
+          fi
 
       - name: SDK route table is up to date
         # SDK-002: ota/sdk/src/internal/operations.js is generated from the OTA OpenAPI document and
