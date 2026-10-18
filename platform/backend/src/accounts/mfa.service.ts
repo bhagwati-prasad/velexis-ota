@@ -35,6 +35,10 @@
 // is typed in any letter case, with or without dashes and spaces (O reads as 0, I and L as 1), and stored only as the
 // SHA-256 of its 16 normalised characters. The TOTP secret, the codes and the recovery codes are never logged,
 // audited, queued or stored in clear; audit rows hold counts and the method only.
+//
+// The platform admin's sign-in (PBE-028, admin/admin-auth.service.ts) uses the same checks through `verifyChallenge`
+// with the `platform_admin` audience (a challenge of `adminSignIn` only; the account must still be an active platform
+// admin; a wrong code is audited as `admin.sign_in_failed`) and `verifyStepUpCode`; the admin's sessions are its own.
 import { randomBytes } from "node:crypto";
 import { Inject, Injectable } from "@nestjs/common";
 import type { components } from "@velexis/api-types/platform";
@@ -54,6 +58,7 @@ import {
   type TotpCodeRequest,
   type VerifyMfaRequest,
 } from "../auth/mfa-challenge.store";
+import type { SessionAudience } from "../auth/sessions.repository";
 import { maySignIn, SessionsService, type PortalSession } from "../auth/sessions.service";
 import { SignInService } from "../auth/sign-in.service";
 import type { AccessTokenClaims } from "../auth/token.service";
@@ -230,6 +235,35 @@ export const MFA_CHANGES = Object.freeze({
 /** How a verifyMfa attempt proved the second factor. */
 type MfaMethod = "totp" | "recovery_code";
 
+/** A challenge that a valid code completed: whose it was, and when the code was verified. */
+export interface VerifiedChallenge {
+  readonly accountId: string;
+  /** The time of the verification: the family's `mfa_verified_at`. */
+  readonly verifiedAt: Date;
+}
+
+/** The audit action of a wrong code against a challenge of each surface. */
+const WRONG_CODE_ACTIONS = Object.freeze({
+  portal: "auth.sign_in_failed",
+  platform_admin: "admin.sign_in_failed",
+} as const satisfies Record<SessionAudience, string>);
+
+/**
+ * True when `account` may complete a sign-in challenge of `audience`: a portal account that may sign in, or for the
+ * admin an `active` platform admin (PADR-0006 item 2); in both cases with MFA on and a stored secret.
+ */
+function mayCompleteChallenge(account: MfaAccount | undefined, audience: SessionAudience): boolean {
+  if (account === undefined || account.deleted_at !== null || !account.mfa_enabled) {
+    return false;
+  }
+  if (account.mfa_secret_ciphertext === null) {
+    return false;
+  }
+  return audience === "portal"
+    ? maySignIn(account.status)
+    : account.status === "active" && account.is_platform_admin;
+}
+
 @Injectable()
 export class MfaService implements MfaVerification {
   private readonly throttle: RedisThrottlerStorage;
@@ -382,9 +416,19 @@ export class MfaService implements MfaVerification {
 
   /** verifyMfa (see the file header). */
   async verifyMfa(request: VerifyMfaRequest): Promise<PortalSession> {
+    const { accountId, verifiedAt } = await this.verifyChallenge(request, "portal");
+    return this.signIns.startSession(accountId, { mfaVerifiedAt: verifiedAt });
+  }
+
+  /**
+   * The checks of verifyMfa (see the file header) for a challenge of `audience`: the portal's, or the admin's
+   * adminVerifyMfa (PBE-028), whose account must still be an active platform admin. Ends the challenge and answers
+   * whose it was and when the code was verified; the caller starts the session of its surface.
+   */
+  async verifyChallenge(request: VerifyMfaRequest, audience: SessionAudience): Promise<VerifiedChallenge> {
     const token = request.mfaChallengeToken;
     const challenge = await this.challenges.find(token);
-    if (challenge?.audience !== "portal") {
+    if (challenge?.audience !== audience) {
       throw new AppError("MFA_CHALLENGE_INVALID");
     }
     const { accountId } = challenge;
@@ -395,13 +439,7 @@ export class MfaService implements MfaVerification {
       throw new AppError("MFA_CHALLENGE_INVALID");
     }
     const account = await this.accounts.findMfaAccount(this.db, accountId);
-    if (
-      account === undefined ||
-      account.deleted_at !== null ||
-      !maySignIn(account.status) ||
-      !account.mfa_enabled ||
-      account.mfa_secret_ciphertext === null
-    ) {
+    if (account === undefined || !mayCompleteChallenge(account, audience)) {
       await this.challenges.delete(token);
       throw new AppError("MFA_CHALLENGE_INVALID");
     }
@@ -422,20 +460,30 @@ export class MfaService implements MfaVerification {
     if (!(await this.challenges.delete(token))) {
       throw new AppError("MFA_CHALLENGE_INVALID");
     }
-    return this.signIns.startSession(accountId, { mfaVerifiedAt: now });
+    return { accountId, verifiedAt: now };
   }
 
   /** stepUp (see the file header): `token` is the caller's verified access token. */
   async stepUp(token: AccessTokenClaims, request: TotpCodeRequest): Promise<PortalSession> {
-    const account = await this.existingAccount(token.sub);
+    const verifiedAt = await this.verifyStepUpCode(token.sub, request.code);
+    return this.sessions.stepUp(token.sub, token.sid, verifiedAt);
+  }
+
+  /**
+   * The code check of stepUp (see the file header), also for the admin's adminStepUp (PBE-028): a valid, unused TOTP
+   * code of `accountId` answers the time of the verification; `403 MFA_REQUIRED` without MFA, `401 MFA_CODE_INVALID`
+   * for a wrong or replayed code. The caller rotates the session of its surface.
+   */
+  async verifyStepUpCode(accountId: string, code: string): Promise<Date> {
+    const account = await this.existingAccount(accountId);
     if (!account.mfa_enabled || account.mfa_secret_ciphertext === null) {
       throw new AppError("MFA_REQUIRED");
     }
     const now = this.clock.now();
-    if (!(await this.acceptAccountTotp(account, request.code, now))) {
+    if (!(await this.acceptAccountTotp(account, code, now))) {
       throw new AppError("MFA_CODE_INVALID");
     }
-    return this.sessions.stepUp(token.sub, token.sid, now);
+    return now;
   }
 
   /** The account behind an access token; `401 UNAUTHENTICATED` when it is gone (erased) since the token was issued. */
@@ -494,13 +542,13 @@ export class MfaService implements MfaVerification {
     });
   }
 
-  /** Audits a wrong code against a challenge: the method and the attempt, never the code. */
+  /** Audits a wrong code against a challenge (of its surface): the method and the attempt, never the code. */
   private async recordWrongCode(challenge: MfaChallenge, method: MfaMethod, attempt: number): Promise<void> {
     await runInTransaction(this.db, async (trx) => {
       await this.audit.record(trx, {
         actorType: "account",
         actorAccountId: challenge.accountId,
-        action: "auth.sign_in_failed",
+        action: WRONG_CODE_ACTIONS[challenge.audience],
         targetType: "account",
         targetId: challenge.accountId,
         details: { reason: "invalid_mfa_code", method, attempt, maxAttempts: challenge.maxAttempts },

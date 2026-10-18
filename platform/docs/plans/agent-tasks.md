@@ -631,7 +631,8 @@ Common commands: backend `pnpm --filter @velexis/platform-backend test`, `test:i
   - A `viewer` gets 403 on the connection lists; responses contain no field ending in `Ciphertext`.
 - **Verify:** `pnpm --filter @velexis/platform-backend test && pnpm --filter @velexis/platform-backend test:int -- domains connections`
 
-### PBE-028 · Implement admin sign-in, step-up and the admin bootstrap CLI
+### PBE-028 · Implement admin sign-in, step-up and the admin bootstrap CLI ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-backend
 - **Milestone:** M1
 - **Depends on:** PBE-015, PBE-007

@@ -38,7 +38,8 @@ platform/backend/
 ├── src/
 │   ├── main.ts                     HTTP entry (helmet, cookie-parser, trust proxy loopback, Nest's body parser off)
 │   ├── worker.ts                   BullMQ processors and schedulers, health server on HEALTH_PORT
-│   ├── cli.ts                      admin:grant, admin:reset-mfa, dev:seed
+│   ├── cli.ts                      the command dispatcher: admin:grant, admin:reset-mfa (loaded only when one runs,
+│   │                               PBE-028), dev:seed
 │   ├── app.module.ts, worker.module.ts
 │   ├── config.ts                   @velexis/config schema of every variable below
 │   ├── common/
@@ -56,10 +57,10 @@ platform/backend/
 │   │   ├── clock.ts, ids.ts        injectable Clock and prefixed-ULID generator (`IdGenerator.new("ten")`)
 │   │   ├── crypto.provider.ts      EnvelopeService: @velexis/crypto envelopes on the KEKs of MASTER_KEY_DIR (PBE-011)
 │   │   ├── database.ts             each process's pool of velexis_platform_app and `PLATFORM_DB` (Kysely) (PBE-012,
-│   │   │                           PBE-011)
+│   │   │                           PBE-011); a CLI command's pool of 2, `application_name` platform-cli (PBE-028)
 │   │   ├── features.ts             the six FEATURE_* switches of PADR-0015, FeatureSwitches, featuresFor() (PBE-012)
-│   │   └── common.module.ts        CommonModule.forApi(), CommonModule.forWorker(), API_REQUEST_MIDDLEWARE and
-│   │                               API_GUARDS (their order)
+│   │   └── common.module.ts        CommonModule.forApi(), CommonModule.forWorker(), CommonModule.forCli() (PBE-028),
+│   │                               API_REQUEST_MIDDLEWARE and API_GUARDS (their order)
 │   ├── audit/                      AuditService.record(tx, …), audit-actions.ts (union of action names), queries, CSV
 │   ├── notifications/              OutboxService.queue, outbox repository, email.processor.ts (send and sweep),
 │   │                               mailer.gateway.ts (SMTP), templates.ts and templates/<key>.{subject,html,txt}.hbs
@@ -87,7 +88,10 @@ platform/backend/
 │   │                               tenant-events.processor.ts, post-steps/ (runner and six steps, PBE-022), reconciler,
 │   │                               onboarding checklist
 │   ├── admin/                      admin auth controller, one controller per admin area, dashboard, queue inspector;
-│   │                               admin-amadeus.controller.ts (Velexis Amadeus accounts and office pool, PBE-020)
+│   │                               admin-amadeus.controller.ts (Velexis Amadeus accounts and office pool, PBE-020);
+│   │                               admin-auth.{controller,service}.ts (sign-in with MFA, 12-hour families, step-up,
+│   │                               sign-out, adminGetMe) and admin-cli.commands.ts (admin:grant, admin:reset-mfa)
+│   │                               (PBE-028)
 │   └── health/
 └── test/
     ├── support/app.ts              createTestApp(): the API on a test database clone and Redis, for Supertest (PBE-008)
@@ -209,6 +213,12 @@ The e-mail processor has one scheduler of its own, on its own queue (PADR-0013 i
 - **Runner** (`src/provisioning/post-steps/post-steps.runner.ts`): the steps `record_migrations`, `assign_amadeus_office`, `create_payment_connection`, `issue_api_keys`, `activate`, `notify`, in this order, each in its own short transaction that locks the job's row (`FOR UPDATE OF j`; a second delivery of the event waits and then finds the steps done), stops when the job's attempt changed, skips a step the log holds as `succeeded` or `skipped`, and stops before a step not done when the job is no longer `queued` or `running` (only `notify` runs on the `succeeded` job, so a retry after a failed `notify` still sends the e-mails and the invalidations), merges the step's output into `provisioning_jobs.result` (`{schemaVersion, officeId?, apiKeyIds}`), appends `{step, status, startedAt, finishedAt}` to `provisioning_jobs.steps` (the first step also appends the OTA worker's three steps from the event), sets `step` and clears the job's `error`. A step that throws rolls back; the runner appends `{step, status: "failed", error: {code, message}}` and the job's `error` (the SQLSTATE or the error's code, never its message) and fails the BullMQ job (`provisioning.post_step_failed`), which BullMQ tries again with the producer's options; the next try resumes at the failed step.
 - **Steps** (`src/provisioning/post-steps/*.step.ts`): `record_migrations` upserts the event's ledger into `tenant_schema_migrations` (`applied`, checksum, phase, duration, the job as `runner_id`) and sets `tenants.schema_version`. `assign_amadeus_office` takes the tenant's connection lock of `test`, then the oldest `available` office of the Velexis test account with `FOR UPDATE SKIP LOCKED` (concurrent provisionings get different offices and never wait for each other), assigns it and inserts the `velexis` connection (`office_ids = {office}`, default, queuing and owner office, `active`; audit `amadeus_office.assigned` as `system`; `amadeus_account` invalidation); with no free office or an account that is not `active` it inserts the connection `pending_verification` without an office, and without any test account row the step is `skipped`; both queue an `ops.alert` (idempotency key `provisioning.assign_amadeus_office:<jobId>`); a tenant that has a test connection already keeps it. `create_payment_connection` inserts the `velexis` Stripe test connection (`manual` capture, `active`, no secret) with the statement descriptor suffix of `src/payment-connections/descriptor.ts` (the OTA's name in ASCII letters, digits and single spaces, at least one letter, 2 to 22 characters cut after a whole word; else the tenant key; else none), `ON CONFLICT (tenant_id, provider, environment) DO NOTHING`. `issue_api_keys` issues `pk_test` and `sk_test` with `ApiKeyGenerator.issueInitialTestKeys` (unless `result.apiKeyIds` exists) and envelope-encrypts the two raw keys, as the `InitialKeys` answer of the reveal, into `reveal_ciphertext` (associated data `platform.provisioning_jobs.reveal_ciphertext:<jobId>`); the raw keys are never stored in clear, logged or queued. `activate` sets the tenant `active` (from `provisioning` only; `activated_at`, `version + 1`) and the job `succeeded` (`finished_at`, no lease, no error) and audits `tenant.activated` as `system`. `notify` queues `tenant.welcome` to every active owner (idempotency key = job id, so one e-mail per owner and job) and publishes the `tenant` and `connection` invalidations after its commit.
 
+### Platform admin sign-in and bootstrap (PBE-028, [PADR-0006](../docs/adr/0006-platform-admin-access-and-audit.md), [admin flow §A](../docs/flows/platform-admin-operations.md#a-access))
+
+- **Sign-in** (`src/admin/admin-auth.controller.ts` over `AdminAuthService`). `adminSignIn` runs the portal's password step (`SignInService.verifyPassword`: the same lockout and failure count, the same Argon2id work for an unknown address; a wrong password is audited as `admin.sign_in_failed`). After a correct password, an account that is not an `active` platform admin gets the same `401 INVALID_CREDENTIALS` as a wrong password, a platform admin without MFA `403 MFA_REQUIRED` (both audited with the reason); everyone else always gets an MFA challenge of the `platform_admin` audience, never a session. `adminVerifyMfa` checks the code with `MfaService.verifyChallenge` (a portal challenge answers `MFA_CHALLENGE_INVALID`, 5 attempts, the account's `mfa` limit, one use per TOTP step, recovery codes used up; wrong codes audited as `admin.sign_in_failed`) and starts an `account_sessions` family with `audience = 'platform_admin'`, a 12-hour `family_expires_at` and `mfa_verified_at`, audited as `admin.sign_in` (`actor_type = 'platform_admin'`).
+- **Sessions.** Admin access tokens have `aud = platform_admin`, `ev = true`, `amr = ["pwd","otp"]` and `mfa_at`. `adminRefresh` rotates only admin families (a portal refresh token answers `REFRESH_TOKEN_INVALID` and changes nothing, as the portal's `refreshSession` does for admin tokens); a reused token revokes the family; each refresh token lives 2 idle hours and never past the family's end, so no admin session outlives 12 hours; an account that is no longer an active admin with MFA cannot refresh. `adminStepUp` takes a fresh TOTP code (`MfaService.verifyStepUpCode`) and rotates the caller's family with `mfa_verified_at` = now. `adminSignOut` revokes the caller's admin family of the presented token (`204` whatever it is). `adminGetMe` answers `{id, email, fullName, features}` (`featuresFor()`).
+- **Bootstrap** (`src/admin/admin-cli.commands.ts`, run through `dist/cli.js`, §5). Each command loads the configuration and runs in a Nest application context of its own (`AdminCliModule`: `CommonModule.forCli()`, the audit, the outbox, the repositories of AuthModule); log lines go to stderr. `admin:grant` needs an `active` account with a verified address and MFA, sets `is_platform_admin` (`version + 1`) and writes one `admin.granted` row; an admin already is left as it is. `admin:reset-mfa` (platform admins only) writes `staffdeny:acct:<id>`, then turns MFA off, deletes the recovery codes, revokes every session family (`revoke_reason = 'admin'`), queues `auth.mfa_changed`, writes one `account.mfa_reset` row and publishes an `account` invalidation after the commit. Both rows have `actor_type = 'system'` and `actor_label = 'cli <command> by <operator>'`.
+
 ## 5. Commands
 
 Run from the repository root (`pnpm --filter @velexis/platform-backend <script>`), or the root shortcuts of [`AGENTS.md`](../../AGENTS.md#10-commands-cheat-sheet).
@@ -225,9 +235,9 @@ Run from the repository root (`pnpm --filter @velexis/platform-backend <script>`
 | `pnpm dev:keys` | Create local key files in `.local/keys/` (master key, pepper, JWT keys) |
 | `pnpm --filter @velexis/platform-backend ref:load` | Shortcut for `pnpm db:seed:reference`: loads the vendored datasets of `tools/reference-data` into `reference` (idempotent upserts, [ADR-0024](../../docs/mvp/adr/0024-reference-data-sources-and-loader.md)). The backend has no loader of its own. |
 | `pnpm --filter @velexis/platform-backend dev:seed` | Development only (refused when `APP_ENV=production`): an admin account with MFA (prints its TOTP set-up URI), a Velexis test Amadeus account pointing at the stub, 10 test offices. The `early_access` plan comes from migration `0002`. |
-| `node dist/cli.js help` | List the CLI commands. Exit codes: `0` done, `1` the command failed, `2` no or unknown command |
-| `node dist/cli.js admin:grant <email>` | Grant platform admin (account must be verified with MFA); audited as `system` |
-| `node dist/cli.js admin:reset-mfa <email>` | Emergency MFA reset of an admin; audited as `system` |
+| `node dist/cli.js help` | List the CLI commands. Exit codes: `0` done (or nothing to do), `1` the command failed or refused, `2` no or unknown command, or wrong arguments (never echoed) |
+| `node dist/cli.js admin:grant <email> [--operator <name>]` | Grant platform admin to an existing `active` account with a verified address and MFA (exit `1` with the reason otherwise; exit `0` without a change for an admin already); one audit row `admin.granted` with `actor_type = 'system'` and the operator. `--operator` defaults to the user of the process: on the VM (`sudo velexis-run platform node dist/cli.js admin:grant <email> --operator <your name>`) pass it, as the command runs as `velexis-platform` |
+| `node dist/cli.js admin:reset-mfa <email> [--operator <name>]` | Emergency MFA reset of a platform admin who lost the authenticator and the recovery codes: MFA off, recovery codes deleted, every session revoked, `staffdeny` written, the account e-mailed; one audit row `account.mfa_reset` (`system`, the operator). Refuses accounts that are not admins (exit `1`) |
 | `stripe listen --forward-to localhost:3100/webhooks/stripe/billing` | Forward test billing events |
 | `stripe listen --forward-connect-to localhost:3100/webhooks/stripe/connect-accounts --events account.updated,account.application.deauthorized` | Forward test Connect account events |
 

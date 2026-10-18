@@ -22,6 +22,10 @@
 // An account that waits for e-mail verification signs in too; its access token has `ev = false` and reaches only the
 // `portal_unverified` operations (PADR-0008 item 2). The rate limit (10 sign-ins per end-user IP per minute) is the
 // operation's throttler. The password is never logged, audited or stored; neither are the tokens.
+//
+// The admin's `adminSignIn` (PBE-028, admin/admin-auth.service.ts) shares steps 1 and 2 (`verifyPassword`: the same
+// lockout and the same failure count, a wrong password audited as `admin.sign_in_failed` there) and the challenge
+// (`issueChallenge`, with the `platform_admin` audience); its own checks of the account follow the password.
 import { Inject, Injectable, type OnModuleInit } from "@nestjs/common";
 import type { components } from "@velexis/api-types/platform";
 import { generateToken } from "@velexis/crypto";
@@ -32,8 +36,9 @@ import { Clock } from "../common/clock";
 import { PLATFORM_DB, type PlatformDb } from "../common/database";
 import { runInTransaction } from "../common/redis/invalidation.publisher";
 import { AccountsRepository, type AccountStatus, type SignInAccount } from "./accounts.repository";
-import { MfaChallengeStore } from "./mfa-challenge.store";
+import { MfaChallengeStore, type IssuedMfaChallenge } from "./mfa-challenge.store";
 import { PasswordPolicy } from "./password-policy";
+import type { SessionAudience } from "./sessions.repository";
 import { maySignIn, SessionsService, type PortalSession } from "./sessions.service";
 
 export type SignInRequest = components["schemas"]["SignInRequest"];
@@ -62,6 +67,12 @@ export class AccountLockedError extends AppError<"ACCOUNT_LOCKED"> {
 function isLockedOut(account: Pick<SignInAccount, "locked_until">, now: Date): boolean {
   return account.locked_until !== null && account.locked_until.getTime() > now.getTime();
 }
+
+/** The audit action of a wrong password on each surface: the portal's `signIn` and the admin's `adminSignIn`. */
+const SIGN_IN_FAILED_ACTIONS = Object.freeze({
+  portal: "auth.sign_in_failed",
+  platform_admin: "admin.sign_in_failed",
+} as const satisfies Record<SessionAudience, string>);
 
 /** The account a password may sign in to: not erased. An erased account is as unknown as an address without one. */
 function signInCandidate(account: SignInAccount | undefined): SignInAccount | undefined {
@@ -94,27 +105,43 @@ export class SignInService implements OnModuleInit {
 
   /** signIn (see the file header). */
   async signIn(request: SignInRequest): Promise<SignInResult> {
-    const now = this.clock.now();
-    const account = signInCandidate(await this.accounts.findForSignIn(this.db, request.email.trim()));
-    if (account !== undefined && isLockedOut(account, now)) {
-      throw new AccountLockedError(lockoutRetryAfter(account.locked_until ?? now, now));
-    }
-    const hash = account?.password_hash ?? (await this.dummy());
-    const matches = await this.passwords.verify(hash, request.password);
-    if (account === undefined) {
-      throw new AppError("INVALID_CREDENTIALS");
-    }
-    if (!matches || account.password_hash === null) {
-      throw await this.recordFailure(account);
-    }
+    const account = await this.verifyPassword(request, "portal");
     if (!maySignIn(account.status)) {
       await this.recordRefusal(account);
       throw new AppError("ACCOUNT_DISABLED");
     }
     if (account.mfa_enabled) {
-      return this.challenge(account);
+      const issued = await this.issueChallenge(account.id, "portal");
+      return { mfaRequired: true, mfaChallengeToken: issued.token, expiresIn: issued.expiresIn };
     }
     return this.startSession(account.id, { mfaVerifiedAt: null });
+  }
+
+  /**
+   * Steps 1 and 2 of the file header for a sign-in on `surface`: answers `423 ACCOUNT_LOCKED` for an account that is
+   * locked out, verifies the password with one Argon2id verification (against the dummy hash for an unknown address),
+   * answers `401 INVALID_CREDENTIALS` for a wrong address or password and counts a wrong password of an existing
+   * account (audited as the surface's failure, `auth.sign_in_failed` or `admin.sign_in_failed`; the fifth starts the
+   * lockout). Returns the account whose password is right, whatever its status: the caller checks the rest.
+   */
+  async verifyPassword(
+    credentials: Pick<SignInRequest, "email" | "password">,
+    surface: SessionAudience,
+  ): Promise<SignInAccount> {
+    const now = this.clock.now();
+    const account = signInCandidate(await this.accounts.findForSignIn(this.db, credentials.email.trim()));
+    if (account !== undefined && isLockedOut(account, now)) {
+      throw new AccountLockedError(lockoutRetryAfter(account.locked_until ?? now, now));
+    }
+    const hash = account?.password_hash ?? (await this.dummy());
+    const matches = await this.passwords.verify(hash, credentials.password);
+    if (account === undefined) {
+      throw new AppError("INVALID_CREDENTIALS");
+    }
+    if (!matches || account.password_hash === null) {
+      throw await this.recordFailure(account, surface);
+    }
+    return account;
   }
 
   /**
@@ -145,24 +172,27 @@ export class SignInService implements OnModuleInit {
     });
   }
 
-  /** The password of an account with MFA was right: clear its failures and answer a challenge for verifyMfa. */
-  private async challenge(account: SignInAccount): Promise<MfaChallengeAnswer> {
+  /**
+   * The password of an account with MFA was right: clears its failures and issues a challenge of `audience` for the
+   * MFA step of that surface (verifyMfa, or the admin's adminVerifyMfa). `423 ACCOUNT_LOCKED` when a concurrent
+   * failure locked the account meanwhile.
+   */
+  async issueChallenge(accountId: string, audience: SessionAudience): Promise<IssuedMfaChallenge> {
     await runInTransaction(this.db, async (trx) => {
       const now = this.clock.now();
-      if (!(await this.accounts.recordSignIn(trx, account.id, now, { signedIn: false }))) {
-        throw await this.lockedError(trx, account.id, now);
+      if (!(await this.accounts.recordSignIn(trx, accountId, now, { signedIn: false }))) {
+        throw await this.lockedError(trx, accountId, now);
       }
     });
-    const issued = await this.challenges.create(account.id, "portal");
-    return { mfaRequired: true, mfaChallengeToken: issued.token, expiresIn: issued.expiresIn };
+    return this.challenges.create(accountId, audience);
   }
 
   /**
-   * Counts a wrong password of `account` and audits it (and the lockout it may start), then returns the error to
-   * answer: `401 INVALID_CREDENTIALS`, or `423 ACCOUNT_LOCKED` when this failure started a lockout or a concurrent one
-   * had.
+   * Counts a wrong password of `account` on `surface` and audits it (and the lockout it may start), then returns the
+   * error to answer: `401 INVALID_CREDENTIALS`, or `423 ACCOUNT_LOCKED` when this failure started a lockout or a
+   * concurrent one had.
    */
-  private async recordFailure(account: SignInAccount): Promise<AppError> {
+  private async recordFailure(account: SignInAccount, surface: SessionAudience): Promise<AppError> {
     return runInTransaction(this.db, async (trx): Promise<AppError> => {
       const now = this.clock.now();
       const lockedUntil = new Date(now.getTime() + SIGN_IN_LOCKOUT_MS);
@@ -176,7 +206,7 @@ export class SignInService implements OnModuleInit {
       await this.audit.record(trx, {
         actorType: "account",
         actorAccountId: account.id,
-        action: "auth.sign_in_failed",
+        action: SIGN_IN_FAILED_ACTIONS[surface],
         targetType: "account",
         targetId: account.id,
         details: { reason: "invalid_password", failedLoginCount: failed.failedLoginCount },

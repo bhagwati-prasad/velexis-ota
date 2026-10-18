@@ -12,7 +12,7 @@
 // reads the account as `PortalSession.account` shows it, with its active memberships (`tenant_memberships` and
 // `tenants`, read only, as MembershipsRepository reads `accounts` next to a membership). The MFA settings (PBE-015)
 // are read and changed here for AccountsModule's MfaService: `enableMfa` and `disableMfa` change what the `Account`
-// shows, so they add one to `version`.
+// shows, so they add one to `version`, as `grantPlatformAdmin` (the admin bootstrap, PBE-028) does.
 import { Injectable } from "@nestjs/common";
 import { sql, type PlatformDatabase, type Selectable } from "@velexis/db";
 import type { PlatformTransaction } from "../audit/audit.repository";
@@ -422,6 +422,22 @@ export class AccountsRepository {
       })
       .where("id", "=", accountId)
       .where("mfa_enabled", "=", true)
+      .returning("id")
+      .executeTakeFirst();
+    return updated !== undefined;
+  }
+
+  /**
+   * Makes account `accountId` a platform admin at `now`, in `trx` (the admin bootstrap of dist/cli.js, PBE-028; the
+   * admin's grant, PBE-032), with `version + 1` (the `Account` shows `isPlatformAdmin`). Returns `false` when it was a
+   * platform admin already (nothing changed).
+   */
+  async grantPlatformAdmin(trx: PlatformTransaction, accountId: string, now: Date): Promise<boolean> {
+    const updated = await trx
+      .updateTable("platform.accounts")
+      .set({ is_platform_admin: true, version: sql<number>`version + 1`, updated_at: now })
+      .where("id", "=", accountId)
+      .where("is_platform_admin", "=", false)
       .returning("id")
       .executeTakeFirst();
     return updated !== undefined;

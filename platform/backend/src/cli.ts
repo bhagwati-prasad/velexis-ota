@@ -1,11 +1,14 @@
 // dist/cli.js: one-off operator commands of the platform backend (README §5), run on the VM with
 // `sudo velexis-run platform node dist/cli.js <command>` and locally with `node dist/cli.js <command>`. This file is
 // the command dispatcher; each command is one entry of CLI_COMMANDS. PBE-028 adds `admin:grant` and
-// `admin:reset-mfa`, PBE-034 adds `dev:seed`. A command that needs the database or Redis loads the configuration
-// itself (`loadConfig`), so `help` works without any.
+// `admin:reset-mfa` (admin/admin-cli.commands.ts, loaded only when one of them runs), PBE-034 adds `dev:seed`. A
+// command that needs the database or Redis loads the configuration itself (`loadConfig`), so `help` works without
+// any.
 //
-// Exit codes: 0 done, 1 the command failed, 2 usage error (no or unknown command).
+// Exit codes: 0 done, 1 the command failed, 2 usage error (no or unknown command, or wrong arguments).
+import type { EnvSource } from "@velexis/config";
 import { createLogger } from "@velexis/logger";
+import type * as AdminCliCommands from "./admin/admin-cli.commands";
 import { PLATFORM_PROCESSES } from "./config";
 
 /** Where the CLI writes (the process's stdout and stderr; tests pass buffers). */
@@ -14,8 +17,17 @@ export interface CliOutput {
   readonly stderr: { write(text: string): unknown };
 }
 
+/** How `runCli` runs: where it writes, and where the commands read their configuration. */
+export interface CliOptions extends CliOutput {
+  /**
+   * The configuration variables of the commands that need one, instead of the process environment and the
+   * `.env.local` files (tests).
+   */
+  readonly env?: EnvSource;
+}
+
 /** What a command gets besides its arguments. */
-export interface CliContext extends CliOutput {
+export interface CliContext extends CliOptions {
   /** Every command of this run, for `help`. */
   readonly commands: readonly CliCommand[];
 }
@@ -55,8 +67,33 @@ const helpCommand: CliCommand = {
   },
 };
 
+/** The admin bootstrap commands, loaded when one runs: `help` needs neither Nest nor the configuration. */
+function adminCommands(): Promise<typeof AdminCliCommands> {
+  return import("./admin/admin-cli.commands.js");
+}
+
+/** `admin:grant <email>`: the first platform admin (PADR-0006 item 6; admin/admin-cli.commands.ts). */
+const adminGrantCommand: CliCommand = {
+  name: "admin:grant",
+  args: "<email> [--operator <name>]",
+  summary: "Make the verified account with MFA of <email> a platform admin (audited as system).",
+  async run(args, context) {
+    return (await adminCommands()).runAdminGrant(args, context);
+  },
+};
+
+/** `admin:reset-mfa <email>`: the emergency MFA reset of a platform admin (admin/admin-cli.commands.ts). */
+const adminResetMfaCommand: CliCommand = {
+  name: "admin:reset-mfa",
+  args: "<email> [--operator <name>]",
+  summary: "Turn MFA off for the platform admin <email> and revoke its sessions (audited as system).",
+  async run(args, context) {
+    return (await adminCommands()).runAdminResetMfa(args, context);
+  },
+};
+
 /** Every command of the CLI. Later tasks append theirs. */
-export const CLI_COMMANDS: readonly CliCommand[] = [helpCommand];
+export const CLI_COMMANDS: readonly CliCommand[] = [helpCommand, adminGrantCommand, adminResetMfaCommand];
 
 /** `-h` and `--help` are spellings of `help`. */
 const HELP_ALIASES: ReadonlySet<string> = new Set(["-h", "--help"]);
@@ -70,7 +107,7 @@ const COMMAND_WORD = /^[a-z][a-z0-9:-]{0,39}$/;
  */
 export async function runCli(
   argv: readonly string[],
-  output: CliOutput = process,
+  output: CliOptions = { stdout: process.stdout, stderr: process.stderr },
   commands: readonly CliCommand[] = CLI_COMMANDS,
 ): Promise<number> {
   const [word, ...args] = argv;
@@ -85,7 +122,12 @@ export async function runCli(
     output.stderr.write(`Unknown command${shown}.\n\n${usage(commands)}`);
     return EXIT_USAGE;
   }
-  return command.run(args, { stdout: output.stdout, stderr: output.stderr, commands });
+  return command.run(args, {
+    stdout: output.stdout,
+    stderr: output.stderr,
+    ...(output.env === undefined ? {} : { env: output.env }),
+    commands,
+  });
 }
 
 if (require.main === module) {

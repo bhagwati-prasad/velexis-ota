@@ -32,13 +32,8 @@ export const PENDING_OPERATIONS: readonly PendingOperation[] = Object.freeze([
   { operationId: "listAmadeusConnections", task: "PBE-027" },
   { operationId: "listPaymentConnections", task: "PBE-027" },
 
-  // PBE-007: admin auth and dashboard, tenants, provisioning jobs and queues.
-  { operationId: "adminSignIn", task: "PBE-028" },
-  { operationId: "adminVerifyMfa", task: "PBE-028" },
-  { operationId: "adminRefresh", task: "PBE-028" },
-  { operationId: "adminStepUp", task: "PBE-028" },
-  { operationId: "adminSignOut", task: "PBE-028" },
-  { operationId: "adminGetMe", task: "PBE-028" },
+  // PBE-007: admin auth and dashboard, tenants, provisioning jobs and queues (the admin auth operations are bound since
+  // PBE-028).
   { operationId: "adminGetDashboard", task: "PBE-029" },
   { operationId: "adminListTenants", task: "PBE-029" },
   { operationId: "adminGetTenant", task: "PBE-029" },

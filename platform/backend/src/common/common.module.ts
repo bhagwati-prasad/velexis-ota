@@ -4,7 +4,8 @@
 // (`EnvelopeService`, PBE-011) without importing it; AppModule imports it once with `CommonModule.forApi()`. It brings
 // the process's Redis connections and the InvalidationPublisher (RedisModule, global), the rate limits and the
 // idempotency interceptor (PBE-009). The worker imports `CommonModule.forWorker()`: Clock, ids, the worker's own pool
-// and the envelope encryption, without the request pipeline. Later tasks add the Stripe pieces here. TenantRoleGuard's
+// and the envelope encryption, without the request pipeline; a CLI command `CommonModule.forCli()`, the same with the
+// CLI's own small pool (PBE-028). Later tasks add the Stripe pieces here. TenantRoleGuard's
 // membership read (`TenantMembershipLookup`) comes from the global MembershipsModule, which AppModule imports next to
 // it (PBE-017).
 import { Global, Module, type DynamicModule } from "@nestjs/common";
@@ -128,6 +129,19 @@ export class CommonModule {
       module: CommonModule,
       imports: [RedisModule],
       providers: [Clock, IdGenerator, ...platformDatabaseProviders("worker"), ...cryptoProviders()],
+      exports: [Clock, IdGenerator, PLATFORM_DB, EnvelopeService],
+    };
+  }
+
+  /**
+   * The common providers of a CLI command's application context (dist/cli.js, PBE-028): those of the worker, with a
+   * pool of 2 connections whose `application_name` is platform-cli.
+   */
+  static forCli(): DynamicModule {
+    return {
+      module: CommonModule,
+      imports: [RedisModule],
+      providers: [Clock, IdGenerator, ...platformDatabaseProviders("cli"), ...cryptoProviders()],
       exports: [Clock, IdGenerator, PLATFORM_DB, EnvelopeService],
     };
   }

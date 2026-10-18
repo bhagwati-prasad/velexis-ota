@@ -8,8 +8,9 @@
 // password change (AuthModule owns the credentials and exports them for this module), AuditModule and
 // NotificationsModule (layer 0). It is global for one reason: AuthController's verifyMfa and stepUp reach MfaService
 // through the abstract `MfaVerification` of auth/mfa-challenge.store.ts, which this module provides, so AuthModule
-// never imports AccountsModule (architecture §2.2, as MembershipsModule provides TenantMembershipLookup). Nothing
-// else uses it as a global.
+// never imports AccountsModule (architecture §2.2, as MembershipsModule provides TenantMembershipLookup). It also
+// exports MfaService itself for AdminModule's sign-in (PBE-028: the admin's challenge and step-up codes go through the
+// same checks). Nothing else uses it as a global.
 import { Global, Module } from "@nestjs/common";
 import { AuditModule } from "../audit/audit.module";
 import { AuthModule } from "../auth/auth.module";
@@ -31,6 +32,6 @@ import { RecoveryCodesRepository } from "./recovery-codes.repository";
     MfaService,
     { provide: MfaVerification, useExisting: MfaService },
   ],
-  exports: [MfaVerification],
+  exports: [MfaVerification, MfaService],
 })
 export class AccountsModule {}
