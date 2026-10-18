@@ -4,9 +4,17 @@
 //
 // E-mail addresses are stored as the person typed them (trimmed) and compared lower-cased: the unique index
 // `accounts_email_lower_uq` is on `lower(email)`, so `Anna@Example.com` and `anna@example.com` are one account.
+//
+// Sign-in (PBE-014) reads the credentials and the lockout counters here and keeps them: `recordFailedSignIn` and
+// `recordSignIn` change `failed_login_count`, `locked_until` and `last_login_at` in one statement each, and only while
+// the account is not locked out, so concurrent attempts cannot slip past a lockout. These bookkeeping columns are not
+// part of the `Account` the API shows, so they leave `version` (the `ETag` of the profile) alone. `findPortalAccount`
+// reads the account as `PortalSession.account` shows it, with its active memberships (`tenant_memberships` and
+// `tenants`, read only, as MembershipsRepository reads `accounts` next to a membership).
 import { Injectable } from "@nestjs/common";
 import { sql, type PlatformDatabase, type Selectable } from "@velexis/db";
 import type { PlatformTransaction } from "../audit/audit.repository";
+import { MEMBER_VISIBLE_TENANT_STATUSES } from "../common/auth/tenant-role.guard";
 import type { PlatformDb } from "../common/database";
 
 /** A `platform.accounts` row as the API reads it. */
@@ -35,6 +43,88 @@ export interface NewAccount {
 }
 
 const IDENTITY_COLUMNS = ["id", "email", "full_name", "status", "email_verified_at"] as const;
+
+/** What sign-in reads of an account: its credentials, its status, its MFA flag and its lockout counters. */
+export type SignInAccount = Pick<
+  AccountRecord,
+  | "id"
+  | "email"
+  | "status"
+  | "password_hash"
+  | "email_verified_at"
+  | "mfa_enabled"
+  | "failed_login_count"
+  | "locked_until"
+  | "deleted_at"
+>;
+
+const SIGN_IN_COLUMNS = [
+  "id",
+  "email",
+  "status",
+  "password_hash",
+  "email_verified_at",
+  "mfa_enabled",
+  "failed_login_count",
+  "locked_until",
+  "deleted_at",
+] as const;
+
+/** The counters after a failed sign-in that `recordFailedSignIn` counted. */
+export interface FailedSignIn {
+  /** Consecutive failures since the last successful sign-in (or the last unlock), this one included. */
+  readonly failedLoginCount: number;
+  /** The end of the lockout this failure started; `null` when it started none. */
+  readonly lockedUntil: Date | null;
+}
+
+/** An active membership of an account, with what `AccountMembership` shows of its OTA. */
+export interface AccountMembershipRecord {
+  /** `stf_…`. */
+  readonly membership_id: string;
+  readonly tenant_id: string;
+  readonly tenant_key: string;
+  readonly tenant_name: string;
+  readonly tenant_status: string;
+  readonly role: string;
+}
+
+/** The account as `PortalSession.account` shows it, before mapping. */
+export type PortalAccountRecord = Pick<
+  AccountRecord,
+  | "id"
+  | "email"
+  | "email_verified_at"
+  | "full_name"
+  | "locale"
+  | "time_zone"
+  | "mfa_enabled"
+  | "mfa_enabled_at"
+  | "is_platform_admin"
+  | "status"
+  | "created_at"
+  | "version"
+> & { readonly memberships: readonly AccountMembershipRecord[] };
+
+const PORTAL_ACCOUNT_COLUMNS = [
+  "id",
+  "email",
+  "email_verified_at",
+  "full_name",
+  "locale",
+  "time_zone",
+  "mfa_enabled",
+  "mfa_enabled_at",
+  "is_platform_admin",
+  "status",
+  "created_at",
+  "version",
+] as const;
+
+/** The condition "not locked out at `now`": `locked_until` is unset or has passed. */
+function notLockedOutAt(now: Date) {
+  return sql<boolean>`(locked_until IS NULL OR locked_until <= ${now})`;
+}
 
 @Injectable()
 export class AccountsRepository {
@@ -107,5 +197,144 @@ export class AccountsRepository {
       .returning("id")
       .executeTakeFirst();
     return updated !== undefined;
+  }
+
+  /**
+   * What sign-in needs of the account whose address equals `email` ignoring letter case (as `findByEmail` compares
+   * it), read on `db`; `undefined` when there is none.
+   */
+  async findForSignIn(
+    db: PlatformTransaction | PlatformDb,
+    email: string,
+  ): Promise<SignInAccount | undefined> {
+    return db
+      .selectFrom("platform.accounts")
+      .select(SIGN_IN_COLUMNS)
+      .where(sql<string>`lower(email)`, "=", sql<string>`lower(${email})`)
+      .executeTakeFirst();
+  }
+
+  /**
+   * Takes a `FOR KEY SHARE` lock on account `accountId` for the rest of `trx`: the lock a change of one of its session
+   * families holds, so it waits for a "sign out everywhere" in progress (`lockForUpdate`) and the reverse, while
+   * sign-ins and other families of the account go on. Returns `false` when there is no such account.
+   */
+  async lockForSessionChange(trx: PlatformTransaction, accountId: string): Promise<boolean> {
+    const row = await trx
+      .selectFrom("platform.accounts")
+      .select("id")
+      .where("id", "=", accountId)
+      .forKeyShare()
+      .executeTakeFirst();
+    return row !== undefined;
+  }
+
+  /** The end of the account's lockout, or `null` when it has none (also for an unknown account). */
+  async lockedUntil(db: PlatformTransaction | PlatformDb, accountId: string): Promise<Date | null> {
+    const row = await db
+      .selectFrom("platform.accounts")
+      .select("locked_until")
+      .where("id", "=", accountId)
+      .executeTakeFirst();
+    return row?.locked_until ?? null;
+  }
+
+  /**
+   * Counts a failed sign-in of `accountId` at `now`, in `trx`, unless the account is locked out at `now`: one more
+   * consecutive failure, and when the count reaches `threshold`, a lockout until `lockedUntil`. The count keeps
+   * growing until a sign-in succeeds or an admin unlocks the account, so once the threshold is reached every further
+   * failure after a lockout starts the next one. Returns the new counters, or `undefined` when the account was locked
+   * out (by a concurrent failure, say) and nothing was counted.
+   */
+  async recordFailedSignIn(
+    trx: PlatformTransaction,
+    accountId: string,
+    now: Date,
+    lockout: { readonly threshold: number; readonly lockedUntil: Date },
+  ): Promise<FailedSignIn | undefined> {
+    const reachesThreshold = sql<boolean>`failed_login_count + 1 >= ${lockout.threshold}`;
+    const row = await trx
+      .updateTable("platform.accounts")
+      .set({
+        failed_login_count: sql<number>`failed_login_count + 1`,
+        locked_until: sql<Date | null>`CASE WHEN ${reachesThreshold} THEN ${lockout.lockedUntil}::timestamptz ELSE locked_until END`,
+        updated_at: now,
+      })
+      .where("id", "=", accountId)
+      .where(notLockedOutAt(now))
+      .returning(["failed_login_count", "locked_until"])
+      .executeTakeFirst();
+    if (row === undefined) {
+      return undefined;
+    }
+    // RETURNING reads the new values: a count at the threshold means this failure set the lockout.
+    const startedLockout = row.failed_login_count >= lockout.threshold;
+    return {
+      failedLoginCount: row.failed_login_count,
+      lockedUntil: startedLockout ? row.locked_until : null,
+    };
+  }
+
+  /**
+   * Records a correct password of `accountId` at `now`, in `trx`, unless the account is locked out at `now`: the
+   * failure count and the lockout are cleared, and with `signedIn` (the sign-in is complete, not waiting for a TOTP
+   * code) `last_login_at` becomes `now`. Returns `false` when the account was locked out (nothing changed).
+   */
+  async recordSignIn(
+    trx: PlatformTransaction,
+    accountId: string,
+    now: Date,
+    options: { readonly signedIn: boolean },
+  ): Promise<boolean> {
+    const row = await trx
+      .updateTable("platform.accounts")
+      .set({
+        failed_login_count: 0,
+        locked_until: null,
+        ...(options.signedIn ? { last_login_at: now } : {}),
+        updated_at: now,
+      })
+      .where("id", "=", accountId)
+      .where(notLockedOutAt(now))
+      .returning("id")
+      .executeTakeFirst();
+    return row !== undefined;
+  }
+
+  /**
+   * The account `accountId` as `PortalSession.account` shows it, with its **active** memberships of OTAs that members
+   * may see (oldest first), read on `db`; `undefined` when there is no such account.
+   */
+  async findPortalAccount(
+    db: PlatformTransaction | PlatformDb,
+    accountId: string,
+  ): Promise<PortalAccountRecord | undefined> {
+    const account = await db
+      .selectFrom("platform.accounts")
+      .select(PORTAL_ACCOUNT_COLUMNS)
+      .where("id", "=", accountId)
+      .executeTakeFirst();
+    if (account === undefined) {
+      return undefined;
+    }
+    const memberships = await db
+      .selectFrom("platform.tenant_memberships as m")
+      .innerJoin("platform.tenants as t", "t.id", "m.tenant_id")
+      .select([
+        "m.id as membership_id",
+        "m.tenant_id",
+        "t.key as tenant_key",
+        "t.name as tenant_name",
+        "t.status as tenant_status",
+        "m.role",
+      ])
+      .where("m.account_id", "=", accountId)
+      .where("m.status", "=", "active")
+      .where("t.status", "in", MEMBER_VISIBLE_TENANT_STATUSES)
+      .where("t.deleted_at", "is", null)
+      .orderBy("m.created_at")
+      .orderBy("m.id")
+      .execute();
+    return { ...account, memberships };
   }
 }

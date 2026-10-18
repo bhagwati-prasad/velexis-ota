@@ -356,7 +356,8 @@ Common commands: backend `pnpm --filter @velexis/platform-backend test`, `test:i
   - The stored hash starts with `$argon2id$` and no captured log contains the password or the token.
 - **Verify:** `pnpm --filter @velexis/platform-backend test && pnpm --filter @velexis/platform-backend test:int -- auth`
 
-### PBE-014 · Implement sign-in, lockout, refresh rotation and sign-out
+### PBE-014 · Implement sign-in, lockout, refresh rotation and sign-out ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-backend
 - **Milestone:** M1
 - **Depends on:** PBE-013
