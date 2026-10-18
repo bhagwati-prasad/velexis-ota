@@ -524,7 +524,8 @@ The OTA backend gets its contract extensions, request pipeline, tenancy, Amadeus
   - Tenant B gets 404 for tenant A's `off_` id.
 - **Verify:** `pnpm --filter @velexis/ota-backend test:int -- shopping`
 
-### OBE-023 · Implement flights.price, getPricedOffer, getAncillaries and getFareRules
+### OBE-023 · Implement flights.price, getPricedOffer, getAncillaries and getFareRules ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-backend
 - **Milestone:** M2
 - **Depends on:** OBE-022
