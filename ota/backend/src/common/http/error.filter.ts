@@ -8,6 +8,7 @@
 //   status, with the catalogue's message: Nest's messages may quote the request.
 // - Anything else is `500 INTERNAL_ERROR` with the generic message and the `requestId`; the error and its stack go to
 //   the log, never to the client.
+// - A `429 RATE_LIMITED` with `details.retryAfterSeconds` (the Amadeus buckets, OBE-018) is sent with `Retry-After`.
 //
 // The filter is global (`APP_FILTER` in http.module.ts), so it also answers errors of middleware (body parsing) and
 // of Express' router.
@@ -77,6 +78,17 @@ export class ErrorFilter implements ExceptionFilter {
     // pino-http sets X-Request-Id; an error raised before it ran (a path Express cannot decode) gets it here.
     if (res.getHeader("X-Request-Id") === undefined) {
       res.setHeader("X-Request-Id", requestId);
+    }
+    // A `429` raised below the guards (the Amadeus token buckets, OBE-018) carries its wait in
+    // `details.retryAfterSeconds`; the rate-limit guard sets `Retry-After` itself before it throws.
+    const retryAfter = isAppError(error) && status === 429 ? error.details?.["retryAfterSeconds"] : undefined;
+    if (
+      typeof retryAfter === "number" &&
+      Number.isSafeInteger(retryAfter) &&
+      retryAfter > 0 &&
+      res.getHeader("Retry-After") === undefined
+    ) {
+      res.setHeader("Retry-After", String(retryAfter));
     }
     res.setHeader("Cache-Control", "no-store");
     res.status(status).json(body);

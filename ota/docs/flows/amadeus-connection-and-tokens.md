@@ -69,22 +69,28 @@ sequenceDiagram
 | Flight Order Management GET, by-reference GET, Queue List | 15 s | 1 |
 | Flight Order Management PATCH, DELETE | 30 s | **never** (resync / reconcile) |
 
-Retries wait 300–800 ms with jitter. Token buckets start at **20 requests per second per credential set** (shared by all OTAs on the Velexis account) and **5 per second, burst 10, per tenant**; both are configuration constants revisited after the M2 load test (ADR-0012 follow-up). An empty bucket answers `429 RATE_LIMITED` with `Retry-After` and makes no call.
+Retries wait 300–800 ms with jitter. A `401` of any operation (writes included: Amadeus refused the request before doing anything) drops the token and sends the request once more with a new one. Every request sent, a retry included, takes a token from both buckets. Token buckets start at **20 requests per second per credential set** (shared by all OTAs on the Velexis account) and **5 per second, burst 10, per tenant**; both are configuration constants revisited after the M2 load test (ADR-0012 follow-up). An empty bucket answers `429 RATE_LIMITED` with `Retry-After` and makes no call.
 
 ## 5. Error mapping (initial table, confirmed against recorded fixtures in M2)
 
 | Amadeus | API code | Notes |
 |---|---|---|
 | Timeout, connection reset | `504 SUPPLIER_TIMEOUT` | "May have happened" for writes |
-| HTTP `5xx`, `141` system error | `503 SUPPLIER_UNAVAILABLE` / `502 SUPPLIER_ERROR` | |
+| Other network errors (connection refused, DNS) | `503 SUPPLIER_UNAVAILABLE` | The request never reached Amadeus |
+| HTTP `502`, `503` / HTTP `504` | `503 SUPPLIER_UNAVAILABLE` / `504 SUPPLIER_TIMEOUT` | A gateway timeout "may have happened" too |
+| HTTP `500` (`141` system error), other `5xx` | `502 SUPPLIER_ERROR` | |
 | HTTP `429` from Amadeus | `503 SUPPLIER_UNAVAILABLE` | Bucket sizes too large: ops alert |
 | `34651` segment sell failure, no availability | `409 SOLD_OUT` | |
 | `37200` price discrepancy | `409 PRICE_CHANGED` | New price from a re-price |
 | `4926` invalid data, `32171` mandatory data missing | `422 TRAVELER_DATA_INVALID` (traveller pointers) or `422 SUPPLIER_REJECTED` | `fieldErrors` from `source.pointer` |
 | `2552` simultaneous update | `409 VERSION_CONFLICT` | |
 | `9112` ticketing | `502 TICKETING_FAILED` | |
-| Credit card refused (form of payment errors) | `402 PAYMENT_DECLINED` | Airline card only |
+| Credit card refused (form of payment errors, `1304` credit card not accepted) | `402 PAYMENT_DECLINED` | Airline card only |
+| HTTP `403` (an office Amadeus refuses, e.g. Queue List) | `403 OFFICE_NOT_ALLOWED` | |
+| HTTP `401` after the retry with a new token | `502 SUPPLIER_ERROR` | |
 | Other `4xx` | `422 SUPPLIER_REJECTED` | `error.supplier` in console scope only |
+
+The codes decide for `4xx` answers, the first issue with a code of the table first; the table is the constant of `src/amadeus/error-mapper.ts` (OBE-018), which keeps every issue on the error's cause for the console's raw calls (`details.errors`).
 
 ## 6. Logging
 

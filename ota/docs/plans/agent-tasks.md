@@ -429,7 +429,8 @@ The OTA backend gets its contract extensions, request pipeline, tenancy, Amadeus
   - `pnpm --filter @velexis/ota-backend amadeus:types` is deterministic (second run, no diff).
 - **Verify:** `pnpm --filter @velexis/ota-backend amadeus:types && git diff --exit-code ota/backend/src/amadeus/generated && pnpm --filter @velexis/ota-backend test:int -- amadeus`
 
-### OBE-018 · Add rate limits, timeouts, retries, error mapping and supplier_requests to the Amadeus client
+### OBE-018 · Add rate limits, timeouts, retries, error mapping and supplier_requests to the Amadeus client ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-backend
 - **Milestone:** M2
 - **Depends on:** OBE-017, OBE-008, X-027

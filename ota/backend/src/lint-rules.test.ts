@@ -1,6 +1,7 @@
 // Logging goes through the injected pino logger and configuration through @velexis/config (conventions §1, §7). The
 // root ESLint config enforces both with `no-console` and `n/no-process-env`; these tests prove the two rules are active
-// for this package and that no file of it breaks or switches off either.
+// for this package and that no file of it breaks or switches off either. They also prove that `fetch` and the HTTP
+// clients are refused outside src/amadeus/ (OADR-0001 point 1, OBE-018).
 import { readdirSync, readFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import { ESLint } from "eslint";
@@ -105,5 +106,73 @@ describe("lint rules of the OTA backend", () => {
     const offenders = packageFiles().filter((file) => DISABLE_COMMENT.test(readFileSync(file, "utf8")));
 
     expect(offenders.map((file) => relative(APP_DIR, file))).toEqual([]);
+  });
+});
+
+// Only src/amadeus/ talks to Amadeus (OADR-0001 point 1, OBE-018): the root config forbids `fetch` and the HTTP clients
+// in the rest of the package's production code. `pnpm lint` checks the files; these probes prove the rules are on
+// where they must be and off where the client lives.
+describe("the Amadeus-only HTTP rules of the OTA backend [OBE-018]", () => {
+  const AMADEUS_RULES = [
+    "no-restricted-globals",
+    "no-restricted-properties",
+    "no-restricted-imports",
+  ] as const;
+  const eslint = new ESLint({
+    cwd: REPO_ROOT,
+    ruleFilter: ({ ruleId }) => AMADEUS_RULES.some((rule) => rule === ruleId),
+    overrideConfig: { languageOptions: { parserOptions: { projectService: false, project: null } } },
+    warnIgnored: false,
+  });
+  const PROBE = [
+    'import { createServer } from "node:http";',
+    'import { request } from "node:https";',
+    'import { fetch as undiciFetch } from "undici";',
+    'import http from "node:http";',
+    'import * as https from "node:https";',
+    'export const viaGlobal = fetch("https://test.travel.api.amadeus.com/v2/shopping/flight-offers");',
+    'export const viaGlobalThis = globalThis.fetch("https://test.travel.api.amadeus.com");',
+    "export { createServer, request, undiciFetch, http, https };",
+    "",
+  ].join("\n");
+
+  /** `line ruleId` of every message the probe gets at `path` (relative to the package). */
+  async function problems(path: string): Promise<string[]> {
+    const [result] = await eslint.lintText(PROBE, { filePath: join(APP_DIR, path) });
+    return (result?.messages ?? []).map((message) => `${message.line} ${message.ruleId}`);
+  }
+
+  // Loading the root config with its plugins and parser takes about 1 s here and up to 10 s under a full parallel
+  // `pnpm test` (as above): once, in this hook with its own timeout.
+  beforeAll(async () => {
+    await eslint.calculateConfigForFile(join(APP_DIR, "src/main.ts"));
+  }, 60_000);
+
+  it("refuses fetch, globalThis.fetch and HTTP client imports outside src/amadeus/, and allows an HTTP server", async () => {
+    // Lines 4 and 5: the default and namespace imports of node:http(s), which reach `request` without naming it.
+    const expected = [
+      "2 no-restricted-imports",
+      "3 no-restricted-imports",
+      "4 no-restricted-imports",
+      "5 no-restricted-imports",
+      "6 no-restricted-globals",
+      "7 no-restricted-properties",
+    ];
+
+    expect(await problems("src/bookings/lint-probe.ts")).toEqual(expected);
+    expect(await problems("src/common/http/lint-probe.ts")).toEqual(expected);
+  });
+
+  it("allows them in src/amadeus/ and in unit tests", async () => {
+    expect(await problems("src/amadeus/lint-probe.ts")).toEqual([]);
+    expect(await problems("src/bookings/lint-probe.test.ts")).toEqual([]);
+  });
+
+  it("keeps the dependency rule of ADR-0002 next to them", async () => {
+    const [result] = await eslint.lintText('export { x } from "@velexis/platform-backend";\n', {
+      filePath: join(APP_DIR, "src/bookings/lint-probe.ts"),
+    });
+
+    expect(result?.messages.map((message) => message.ruleId)).toEqual(["no-restricted-imports"]);
   });
 });

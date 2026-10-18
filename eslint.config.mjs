@@ -38,6 +38,19 @@ const relativeIntoPackages = {
 const restrict = (/** @type {Array<{group: string[], message: string}>} */ patterns) => ({
   "no-restricted-imports": ["error", { patterns: [relativeIntoPackages, ...patterns] }],
 });
+const otaNeverImportsPlatform = {
+  group: ["@velexis/platform-*"],
+  message: "ota/* never imports from platform/*. Share code through packages/*.",
+};
+
+/**
+ * Only ota/backend/src/amadeus/ talks to Amadeus (OADR-0001 point 1, OBE-018): elsewhere in the OTA backend's code
+ * there is no `fetch` and no HTTP client to reach it with. Business modules call AmadeusClient.
+ */
+const AMADEUS_ONLY =
+  "Only src/amadeus/ talks to Amadeus (OADR-0001 point 1): call AmadeusClient instead of fetch or an HTTP client.";
+// `default` too: `import https from "node:https"` would otherwise reach `https.request` past the named imports.
+const HTTP_CLIENT_EXPORTS = ["default", "request", "get", "Agent", "ClientRequest", "globalAgent"];
 
 export default tseslint.config(
   {
@@ -143,12 +156,54 @@ export default tseslint.config(
   },
   {
     files: ["ota/backend/**"],
-    rules: restrict([
-      {
-        group: ["@velexis/platform-*"],
-        message: "ota/* never imports from platform/*. Share code through packages/*.",
-      },
-    ]),
+    rules: restrict([otaNeverImportsPlatform]),
+  },
+  {
+    // The OTA backend's production code outside src/amadeus/ (unit tests may call the API they test over HTTP).
+    files: ["ota/backend/src/**/*.ts"],
+    ignores: ["ota/backend/src/amadeus/**", "**/*.test.ts"],
+    rules: {
+      "no-restricted-globals": [
+        "error",
+        ...["fetch", "XMLHttpRequest", "WebSocket", "EventSource"].map((name) => ({
+          name,
+          message: AMADEUS_ONLY,
+        })),
+      ],
+      "no-restricted-properties": [
+        "error",
+        ...["globalThis", "global"].map((object) => ({ object, property: "fetch", message: AMADEUS_ONLY })),
+      ],
+      "no-restricted-imports": [
+        "error",
+        {
+          paths: ["node:http", "http", "node:https", "https"].map((name) => ({
+            name,
+            importNames: HTTP_CLIENT_EXPORTS,
+            message: AMADEUS_ONLY,
+          })),
+          patterns: [
+            relativeIntoPackages,
+            otaNeverImportsPlatform,
+            {
+              group: [
+                "undici",
+                "undici/*",
+                "node:http2",
+                "http2",
+                "node-fetch",
+                "cross-fetch",
+                "axios",
+                "got",
+                "ky",
+                "superagent",
+              ],
+              message: AMADEUS_ONLY,
+            },
+          ],
+        },
+      ],
+    },
   },
   {
     files: ["ota/admin/**", "ota/frontend/**"],

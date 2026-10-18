@@ -20,7 +20,8 @@
 // A token request refused with 401, or with 400 `invalid_client`, sets the refused-credentials flag and answers 424;
 // the platform's verification job owns fixing credentials. Timeouts answer 504 SUPPLIER_TIMEOUT, network errors,
 // `429` and `5xx` 503 SUPPLIER_UNAVAILABLE, any other answer 502 SUPPLIER_ERROR. Retries of the token request (once,
-// with jitter) belong to the client's limits (OBE-018).
+// with jitter) belong to the client's limits (OBE-018): the cause of these errors, `AmadeusTokenRequestError`, says
+// whether the request may be sent again (a network error, a timeout or a `5xx`; never a `429`).
 //
 // Without Redis there is no token cache and no single flight: every call answers 503 SERVICE_UNAVAILABLE (flow §7),
 // which protects the shared account's quota.
@@ -79,6 +80,22 @@ export class AmadeusCredentialsRefusedError extends Error {
     readonly environment: string,
   ) {
     super(`Amadeus refused the credentials ${credId} (${environment}); calls answer 424 for 5 minutes`);
+  }
+}
+
+/**
+ * The cause of a failed token request (a timeout, a network error or an unexpected answer): its HTTP status (`null`
+ * without an answer) and whether the client may send it once more (OADR-0001 point 7). Ids and codes only.
+ */
+export class AmadeusTokenRequestError extends Error {
+  override readonly name = "AmadeusTokenRequestError";
+
+  constructor(
+    message: string,
+    readonly status: number | null,
+    readonly retryable: boolean,
+  ) {
+    super(message);
   }
 }
 
@@ -315,7 +332,11 @@ export class TokenProvider {
       const timeout = isTimeout(error);
       log(timeout ? "timeout" : "network_error", null);
       // The cause keeps the error's name and code only: an undici error may quote the request.
-      const cause = new Error(`token request failed: ${networkCode(error) ?? errorName(error)}`);
+      const cause = new AmadeusTokenRequestError(
+        `token request failed: ${networkCode(error) ?? errorName(error)}`,
+        null,
+        true,
+      );
       throw new AppError(timeout ? "SUPPLIER_TIMEOUT" : "SUPPLIER_UNAVAILABLE", { cause });
     }
 
@@ -335,7 +356,11 @@ export class TokenProvider {
     if (response.status === 429 || response.status >= 500) {
       log("unavailable", response.status);
       throw new AppError("SUPPLIER_UNAVAILABLE", {
-        cause: new Error(`token request: HTTP ${response.status}`),
+        cause: new AmadeusTokenRequestError(
+          `token request: HTTP ${response.status}`,
+          response.status,
+          response.status >= 500,
+        ),
       });
     }
     const accessToken = json?.["access_token"];
@@ -349,7 +374,11 @@ export class TokenProvider {
     ) {
       log("unexpected_answer", response.status);
       throw new AppError("SUPPLIER_ERROR", {
-        cause: new Error(`token request: unexpected answer, HTTP ${response.status}`),
+        cause: new AmadeusTokenRequestError(
+          `token request: unexpected answer, HTTP ${response.status}`,
+          response.status,
+          false,
+        ),
       });
     }
     log("ok", response.status);

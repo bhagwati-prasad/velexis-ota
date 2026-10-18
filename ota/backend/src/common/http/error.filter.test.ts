@@ -61,6 +61,12 @@ class FailingController {
     throw new AppError("SUPPLIER_TIMEOUT", { cause: new Error("socket hang up") });
   }
 
+  @Get("rate-limited/:bookingId")
+  @OpenApiOperation("getBooking")
+  rateLimited(): never {
+    throw new AppError("RATE_LIMITED", { details: { retryAfterSeconds: 7 } });
+  }
+
   @Get("http/:status")
   http(@Param("status") status: string): never {
     switch (status) {
@@ -169,6 +175,14 @@ describe("error envelope", () => {
         err: expect.objectContaining({ message: "socket hang up" }),
       }),
     );
+  });
+
+  it("sends Retry-After with a 429 that carries details.retryAfterSeconds (the Amadeus buckets) [OBE-018]", async () => {
+    const res = await request(api.server).get(`/__probe/rate-limited/${BOOKING_ID}`);
+
+    expect(res.status).toBe(429);
+    expect(res.headers["retry-after"]).toBe("7");
+    expect(res.body.error).toMatchObject({ code: "RATE_LIMITED", details: { retryAfterSeconds: 7 } });
   });
 
   it("answers Nest's HTTP exceptions with the catalogue code of their status and never their message", async () => {
