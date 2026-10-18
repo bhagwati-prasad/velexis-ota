@@ -20,7 +20,7 @@ sequenceDiagram
   T->>C: GET /search.html with the search form fields
   B->>O: storefront.get (via /api, edge headers added by Caddy)
   O->>R: host + tenant cache (miss: platform read-only)
-  O->>R: t:{id}:test:sf:en (miss: storefront_settings + platform data)
+  O->>R: t:{id}:test:sf:und, the default locale (miss: storefront_settings + platform data)
   O-->>B: config (branding, currencies, features, payment config) + Set-Cookie __Host-vx_csrf
   B->>O: flights.search {mode: simple, …} (X-CSRF-Token)
   O->>R: rate limits (IP, Amadeus buckets), search single flight

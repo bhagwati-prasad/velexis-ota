@@ -195,7 +195,7 @@ Shared keys follow the [cross-cutting table](../../docs/mvp/architecture.md#redi
 | `amadeus:tokenlock:<credId>:<env>` | 10 s | Single flight for token refresh |
 | `amadeus:badcred:<credId>` | 5 min | Credentials refused by Amadeus: calls answer `424` without retrying the token request |
 | `rl:amadeus:cred:<credId>:<env>`, `rl:amadeus:ten:<tenantId>:<env>` | 2 s | Token buckets |
-| `t:<tenantId>:<env>:sf:<locale>` | 5 min | Caller-independent part of `storefront.get` (asset ids, airline-card flag); asset URLs and `airline_card` are added per request for the caller ([OADR-0012](adr/0012-storefront-settings-assets-and-pages.md) point 7) |
+| `t:<tenantId>:<env>:sf:<locale>` | 5 min | Caller-independent part of `storefront.get` (asset ids, airline-card flag); asset URLs and `airline_card` are added per request for the caller ([OADR-0012](adr/0012-storefront-settings-assets-and-pages.md) point 7). One entry per supported locale; the default locale's entry is `sf:und` and carries the supported locales that `Accept-Language` is matched against (OBE-016) |
 | `t:<tenantId>:<env>:search:<sha256>` | 30 s | Single flight for identical concurrent searches |
 | `t:<tenantId>:<env>:cxq:<bookingId>` | 10 min | Cancellation quote (the contract text calls it `cxq:{bookingId}`; the OTA keeps it under the tenant prefix) |
 | `t:<tenantId>:<env>:ac:chk:<checkoutId>` | 2 h | Airline-card attempts of one checkout (max 3) |

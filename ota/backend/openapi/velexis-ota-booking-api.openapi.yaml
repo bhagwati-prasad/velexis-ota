@@ -355,6 +355,7 @@ paths:
       x-amadeus: []
       x-tenant-tables:
         - storefront_settings
+        - storefront_assets
       x-platform-tables:
         - tenants
         - tenant_domains
@@ -27920,7 +27921,11 @@ components:
           description: Last change of the settings (UTC).
     StorefrontBranding:
       type: object
-      description: Brand assets and design tokens. Asset URLs point to the Velexis CDN or the OTA's own host.
+      description: >-
+        Brand assets and design tokens. Asset URLs are the OTA's uploaded images, served by this API
+        (`/v1/assets/<tenantKey>/<assetId>.<ext>`): absolute URLs on the API's public host for key callers, and
+        same-origin paths (`/api/v1/assets/…`) for the hosted storefront's edge, whose CSP allows images from its own
+        origin only (OADR-0012 point 3). Without an uploaded logo or favicon they are a small `data:` image.
       required:
         - logoUrl
         - faviconUrl
@@ -27930,24 +27935,26 @@ components:
       properties:
         logoUrl:
           type: string
-          format: uri
-          description: Main logo (SVG or PNG) for light backgrounds.
+          format: uri-reference
+          description: >-
+            Main logo (PNG, JPEG or WebP) for light backgrounds: an absolute URL, or a same-origin path for the hosted
+            storefront's edge.
         logoDarkUrl:
           type:
             - string
             - 'null'
-          format: uri
-          description: Logo variant for dark backgrounds.
+          format: uri-reference
+          description: Logo variant for dark backgrounds (absolute URL, or same-origin path for the edge).
         logoSquareUrl:
           type:
             - string
             - 'null'
-          format: uri
-          description: Square logo (app icons, emails).
+          format: uri-reference
+          description: Square logo (app icons, emails) (absolute URL, or same-origin path for the edge).
         faviconUrl:
           type: string
-          format: uri
-          description: Favicon URL.
+          format: uri-reference
+          description: Favicon URL (absolute URL, or same-origin path for the edge).
         colors:
           type: object
           description: 'Colour tokens as #RRGGBB hex values.'
@@ -28495,8 +28502,10 @@ components:
           type:
             - string
             - 'null'
-          format: uri
-          description: Default Open Graph image.
+          format: uri-reference
+          description: >-
+            Default Open Graph image: an absolute URL, or a same-origin path for the hosted storefront's edge (resolve
+            it against the page's origin for `og:image`).
         twitterHandle:
           type:
             - string

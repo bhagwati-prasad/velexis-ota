@@ -392,7 +392,8 @@ The OTA backend gets its contract extensions, request pipeline, tenancy, Amadeus
   - No tenant table is touched (query log assertion).
 - **Verify:** `pnpm --filter @velexis/ota-backend test && pnpm --filter @velexis/ota-backend test:int -- reference`
 
-### OBE-016 · Implement storefront.get with the CSRF cookie and the response cache
+### OBE-016 · Implement storefront.get with the CSRF cookie and the response cache ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-backend
 - **Milestone:** M2
 - **Depends on:** OBE-013, OBE-008

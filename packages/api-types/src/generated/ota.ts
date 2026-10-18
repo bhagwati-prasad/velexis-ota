@@ -6476,26 +6476,26 @@ export interface components {
              */
             updatedAt: string;
         };
-        /** @description Brand assets and design tokens. Asset URLs point to the Velexis CDN or the OTA's own host. */
+        /** @description Brand assets and design tokens. Asset URLs are the OTA's uploaded images, served by this API (`/v1/assets/<tenantKey>/<assetId>.<ext>`): absolute URLs on the API's public host for key callers, and same-origin paths (`/api/v1/assets/…`) for the hosted storefront's edge, whose CSP allows images from its own origin only (OADR-0012 point 3). Without an uploaded logo or favicon they are a small `data:` image. */
         StorefrontBranding: {
             /**
-             * Format: uri
-             * @description Main logo (SVG or PNG) for light backgrounds.
+             * Format: uri-reference
+             * @description Main logo (PNG, JPEG or WebP) for light backgrounds: an absolute URL, or a same-origin path for the hosted storefront's edge.
              */
             logoUrl: string;
             /**
-             * Format: uri
-             * @description Logo variant for dark backgrounds.
+             * Format: uri-reference
+             * @description Logo variant for dark backgrounds (absolute URL, or same-origin path for the edge).
              */
             logoDarkUrl?: string | null;
             /**
-             * Format: uri
-             * @description Square logo (app icons, emails).
+             * Format: uri-reference
+             * @description Square logo (app icons, emails) (absolute URL, or same-origin path for the edge).
              */
             logoSquareUrl?: string | null;
             /**
-             * Format: uri
-             * @description Favicon URL.
+             * Format: uri-reference
+             * @description Favicon URL (absolute URL, or same-origin path for the edge).
              */
             faviconUrl: string;
             /** @description Colour tokens as #RRGGBB hex values. */
@@ -6761,8 +6761,8 @@ export interface components {
             /** @description Localised default meta description. */
             defaultDescription: string;
             /**
-             * Format: uri
-             * @description Default Open Graph image.
+             * Format: uri-reference
+             * @description Default Open Graph image: an absolute URL, or a same-origin path for the hosted storefront's edge (resolve it against the page's origin for `og:image`).
              */
             ogImageUrl?: string | null;
             /** @description Twitter/X handle for twitter:site. */

@@ -333,25 +333,25 @@ describe("route parity", () => {
   });
 
   it("fails for an operation with neither a handler nor a pending entry [OBE-010 AC3]", () => {
-    const { getStorefront: _removed, ...pending } = PENDING_OPERATIONS;
+    const { getSession: _removed, ...pending } = PENDING_OPERATIONS;
 
     const problems = routeParityProblems({
       operations: DOCUMENT_OPERATIONS,
-      routes: routes.filter((route) => route.pending !== "getStorefront"),
+      routes: routes.filter((route) => route.pending !== "getSession"),
       pending,
       undocumented: UNDOCUMENTED_ROUTES,
     });
 
-    expect(problems).toEqual(["getStorefront has neither a handler nor a pending entry"]);
+    expect(problems).toEqual(["getSession has neither a handler nor a pending entry"]);
   });
 
   it("fails for a handler next to a pending entry, two handlers, a handler of another route and a missing binding", async () => {
     @Controller("v1")
     class MisboundController {
       // Implemented while still pending.
-      @Get("storefront")
-      @OpenApiOperation("getStorefront")
-      storefront(): object {
+      @Get("auth/session")
+      @OpenApiOperation("getSession")
+      session(): object {
         return {};
       }
 
@@ -395,7 +395,7 @@ describe("route parity", () => {
         [
           "MisboundController.savedTravelersAgain (GET /v1/account/saved-travelers) handles listSavedTravelers without @OpenApiOperation",
           "MisboundController.preferences (GET /v1/account/preferences) names resolveStorefrontHost, whose route is GET /v1/storefront/resolve",
-          "getStorefront has a handler (MisboundController.storefront) and a pending entry",
+          "getSession has a handler (MisboundController.session) and a pending entry",
           "listSavedTravelers has 2 handlers",
           "pending-operations.ts lists notAnOperation, which the OTA document does not have",
           "GET /v1/nowhere is in UNDOCUMENTED_ROUTES but no handler serves it",

@@ -14,7 +14,6 @@ export type PendingTask = `OBE-${number}` | "deferred";
 
 export const PENDING_OPERATIONS: Readonly<Partial<Record<OtaOperationId, PendingTask>>> = Object.freeze({
   // Storefront
-  getStorefront: "OBE-016",
   resolveStorefrontHost: "deferred",
   // Customer auth
   signUp: "OBE-032",
