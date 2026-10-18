@@ -19,10 +19,14 @@ const DEVELOPMENT = {
   PORT: "3001",
   HOSTNAME: "127.0.0.1",
   PLATFORM_API_URL: "http://127.0.0.1:3100",
+  PLATFORM_BFF_KEY: "dev_bff_key_change_me_0123456789abcdef",
   PUBLIC_PLATFORM_ADMIN_URL: "http://localhost:3001",
   PUBLIC_PORTAL_URL: "http://localhost:3000",
   SENTRY_DSN: "",
 } as const;
+
+/** What provision-vm.sh puts in place of @@PLATFORM_BFF_KEY@@ on the VM: 32 random bytes as hex (dummy here). */
+const GENERATED_BFF_KEY = "0123456789abcdef".repeat(4);
 
 function configError(source: Record<string, string | undefined>): ConfigError {
   try {
@@ -83,6 +87,7 @@ describe("parseConfig", () => {
     const config = parseConfig({
       APP_ENV: "test",
       PLATFORM_API_URL: DEVELOPMENT.PLATFORM_API_URL,
+      PLATFORM_BFF_KEY: DEVELOPMENT.PLATFORM_BFF_KEY,
       PUBLIC_PLATFORM_ADMIN_URL: DEVELOPMENT.PUBLIC_PLATFORM_ADMIN_URL,
       PUBLIC_PORTAL_URL: DEVELOPMENT.PUBLIC_PORTAL_URL,
     });
@@ -93,6 +98,7 @@ describe("parseConfig", () => {
       PORT: 3001,
       HOSTNAME: "127.0.0.1",
       PLATFORM_API_URL: "http://127.0.0.1:3100",
+      PLATFORM_BFF_KEY: "dev_bff_key_change_me_0123456789abcdef",
       PUBLIC_PLATFORM_ADMIN_URL: "http://localhost:3001",
       PUBLIC_PORTAL_URL: "http://localhost:3000",
       SENTRY_DSN: undefined,
@@ -106,6 +112,7 @@ describe("parseConfig", () => {
     expect(error.problems.map((problem) => problem.variable).sort()).toEqual([
       "APP_ENV",
       "PLATFORM_API_URL",
+      "PLATFORM_BFF_KEY",
       "PUBLIC_PLATFORM_ADMIN_URL",
       "PUBLIC_PORTAL_URL",
     ]);
@@ -184,18 +191,57 @@ describe("parseConfig", () => {
     expect(config.APP_ENV).toBe("development");
     expect(config.PORT).toBe(3001);
     expect(config.PLATFORM_API_URL).toBe("http://127.0.0.1:3100");
+    expect(config.PLATFORM_BFF_KEY).toBe("dev_bff_key_change_me_0123456789abcdef");
   });
 
-  it("accepts the VM template with the PORT and HOSTNAME of the systemd unit", () => {
+  it("[PAD-002] uses the same development PLATFORM_BFF_KEY as the root .env.example and the portal (one shared key)", () => {
+    const admin = readEnvFile(join(APP_DIR, ".env.example"));
+
+    for (const file of [".env.example", "platform/frontend/.env.example"]) {
+      expect(readEnvFile(join(REPO_ROOT, file)).PLATFORM_BFF_KEY, file).toBe(admin.PLATFORM_BFF_KEY);
+    }
+  });
+
+  it("accepts the VM template with the PORT and HOSTNAME of the systemd unit and the generated key", () => {
     const template = readEnvFile(join(REPO_ROOT, "deploy/env/platform-admin.env.example"));
     const unit = unitEnvironment(join(REPO_ROOT, "deploy/systemd/velexis-platform-admin.service"));
-    const config = parseConfig({ ...template, PORT: unit["PORT"], HOSTNAME: unit["HOSTNAME"] });
+    const config = parseConfig({
+      ...template,
+      PORT: unit["PORT"],
+      HOSTNAME: unit["HOSTNAME"],
+      PLATFORM_BFF_KEY: GENERATED_BFF_KEY,
+    });
 
+    // provision-vm.sh replaces the placeholder with the key it generated for the API, the portal and the admin.
+    expect(template.PLATFORM_BFF_KEY).toBe("@@PLATFORM_BFF_KEY@@");
+    expect(config.PLATFORM_BFF_KEY).toBe(GENERATED_BFF_KEY);
     expect(config.APP_ENV).toBe("production");
     expect(config.PORT).toBe(3001);
     expect(config.HOSTNAME).toBe("127.0.0.1");
     expect(config.PUBLIC_PLATFORM_ADMIN_URL).toBe("https://admin.platform.example.com");
     expect(config.PUBLIC_PORTAL_URL).toBe("https://platform.example.com");
+  });
+
+  it("[PAD-002] requires PLATFORM_BFF_KEY (PADR-0019)", () => {
+    const error = configError({ ...DEVELOPMENT, PLATFORM_BFF_KEY: undefined });
+
+    expect(error.problems).toEqual([{ variable: "PLATFORM_BFF_KEY", reason: "is required but missing" }]);
+  });
+
+  it("[PAD-002] refuses an empty, short or unsubstituted PLATFORM_BFF_KEY without echoing it", () => {
+    for (const value of [
+      "",
+      "@@PLATFORM_BFF_KEY@@",
+      "short_key_value_31_characters_x",
+      "key with spaces 0123456789abcdef0123",
+    ]) {
+      const error = configError({ ...DEVELOPMENT, PLATFORM_BFF_KEY: value });
+
+      expect(error.problems.map((problem) => problem.variable)).toEqual(["PLATFORM_BFF_KEY"]);
+      if (value !== "") {
+        expect(error.message).not.toContain(value);
+      }
+    }
   });
 });
 

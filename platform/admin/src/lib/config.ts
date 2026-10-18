@@ -20,9 +20,16 @@ const BIND_HOST = /^[A-Za-z0-9.:-]+$/;
 const HTTP_URL = { protocols: ["http:", "https:"] } as const;
 
 /**
+ * The first-party key shared with the platform API and the portal (PADR-0019): at least 32 characters of
+ * `[A-Za-z0-9_-]` (`provision-vm.sh` generates 64 hex characters, `.env.example` has a dummy value). It refuses an
+ * empty value and the unsubstituted `@@PLATFORM_BFF_KEY@@` placeholder of the deploy template.
+ */
+const BFF_KEY = /^[A-Za-z0-9_-]{32,}$/;
+
+/**
  * The platform admin's configuration (README §5, configuration matrix in docs/mvp/architecture.md §6). Every
  * variable is read on the server only; the admin has no browser-exposed variables. Later tasks add their
- * entries here (`PLATFORM_BFF_KEY` comes with PAD-002).
+ * entries here.
  */
 export const ADMIN_CONFIG_SCHEMA = {
   APP_ENV: env.enum(["development", "test", "production"]),
@@ -31,6 +38,11 @@ export const ADMIN_CONFIG_SCHEMA = {
   HOSTNAME: env.string({ pattern: BIND_HOST, default: "127.0.0.1" }),
   /** Platform API base URL, called from server code only (loopback on the VM; admin surface `/v1/admin`). */
   PLATFORM_API_URL: env.url(HTTP_URL),
+  /**
+   * Sent as `X-Velexis-Bff-Key` on every API call, so the API believes the forwarded end-user IP and user agent
+   * of the admin (PADR-0019). A secret: never logged, never sent anywhere but `PLATFORM_API_URL`.
+   */
+  PLATFORM_BFF_KEY: env.string({ pattern: BFF_KEY }),
   /** The admin's own public origin, `https://admin.platform.example.com` in production. */
   PUBLIC_PLATFORM_ADMIN_URL: env.url(HTTP_URL),
   /** The portal origin: admins enable MFA there before their first admin sign-in (`MFA_REQUIRED` link). */

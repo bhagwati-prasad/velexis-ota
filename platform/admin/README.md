@@ -57,22 +57,27 @@ Health ([ADR-0016](../../docs/mvp/adr/0016-observability.md)), both `GET` with `
 ```
 platform/admin/src/
   app/
-    (auth)/sign-in/…, sign-in/mfa/…
+    (auth)/sign-in/page.tsx, actions.ts, sign-in-form.tsx        e-mail and password (PAD-002)
+    (auth)/sign-in/mfa/page.tsx, actions.ts, mfa-form.tsx    TOTP or recovery code, on every sign-in (PAD-002)
+    (auth)/form-controls.tsx            labelled field and error summary of the two sign-in forms
     (app)/layout.tsx                    shell: navigation, signed-in admin, environment badge
     (app)/page.tsx                      dashboard
     (app)/tenants/…, provisioning-jobs/…, queues/…, plans/…, subscriptions/…, invoices/…,
     (app)/stripe-events/…, amadeus/accounts/…, amadeus/offices/…, settlements/…, domains/…,
     (app)/accounts/…, admins/…, audit/…
+    sign-out/route.ts                   POST only, Origin checked (PAD-002)
     health/live/route.ts, health/ready/route.ts
-    layout.tsx                          root layout: lang="en", skip link to #main-content, robots noindex
+    layout.tsx                          root layout: lang="en", skip link to #main-content, robots noindex, every page dynamic
     globals.css                         Tailwind CSS 4 entry and the design tokens (@theme), copied from the portal
   components/ui/                        shadcn/ui copies (components.json configures the CLI; PAD-003 adds them)
   components/                           AdminShell, DataTable, StatusBadge, ReasonDialog, StepUpDialog,
                                         ConfirmDialog, JsonView (id-only payloads, audit details), MaskedValue,
                                         RevealPanel (payout account, auto-hides after 60 s), FilterBar, Money, DateTime
   lib/config.ts                         configuration schema and getConfig(), server-only (§5)
-  lib/api.ts, lib/session.ts, lib/errors.ts, lib/strings.ts
-  middleware.ts
+  lib/api.ts, lib/end-user.ts          platform API client of the admin surface and the PADR-0019 headers, server-only
+  lib/session.ts                      cookies, access token claims, return path, single-flight refresh, server-only
+  lib/errors.ts, lib/strings.ts       error code -> admin message (every platform code), the admin's English text
+  middleware.ts                       refresh, sign-in redirect (deny by default), CSP with a nonce, noindex
 ```
 
 ## 4. Data fetching, actions and session
@@ -81,25 +86,30 @@ platform/admin/src/
 - Every mutation is a server action that validates with Zod, sends `If-Match` where the resource is versioned, passes the reason when required, and handles `REAUTH_REQUIRED` with `StepUpDialog` (TOTP → `adminStepUp` → retry).
 - Revealed payout details come back from a server action and render in memory only; the panel hides them after 60 seconds and offers no copy-to-clipboard of the full value in logs or URLs.
 - Cookies: `__Host-vxa_at` (admin access token, 15 minutes) and `__Host-vxa_rt` (refresh, 12-hour family), `HttpOnly; Secure; SameSite=Strict; Path=/`; `__Host-vxa_mfa` during sign-in. Middleware refreshes the access token (single-flighted in the process) and redirects to `/sign-in` without a session.
+- **Sign-in (PAD-002).** `/sign-in` sends e-mail and password to `adminSignIn` (no bearer token, the end-user headers below). Its answer is always an MFA challenge, which goes into `__Host-vxa_mfa` (at most 5 minutes) before the browser continues to `/sign-in/mfa`; the password step never writes a session cookie, and an answer that is not a challenge is refused (`INTERNAL_ERROR`). `/sign-in/mfa` sends the challenge with a TOTP code or one recovery code to `adminVerifyMfa`, and only its `AdminSession` becomes `__Host-vxa_at` and `__Host-vxa_rt`, so the TOTP step happens on **every** sign-in (PF-80). Without a challenge cookie, and on `MFA_CHALLENGE_INVALID`, the admin goes back to `/sign-in?mfa=expired`. `MFA_REQUIRED` (a platform admin without MFA) explains that MFA is turned on in the portal and links to `PUBLIC_PORTAL_URL/account/security`; `ACCOUNT_LOCKED` and `RATE_LIMITED` show the wait of `Retry-After`. A forgotten password is reset in the portal (`PUBLIC_PORTAL_URL/forgot-password`): it is the same account.
+- **Return path.** The middleware sends a request without a session to `/sign-in?next=<path and query>`; `next` travels in the query of `/sign-in/mfa` (no fourth cookie) and is used after the code step only when it is a relative path on the admin (`safeNextPath`: no absolute, protocol-relative or backslash URL, no control character, at most 2 048 characters). Otherwise the admin lands on the dashboard `/`. Because every cookie is `SameSite=Strict`, a link to the admin opened from another site (a chat, a mail client) arrives without the session and asks to sign in again; `next` then brings the admin back to the page.
+- **Middleware (PAD-002).** It runs on every request except `/_next/…`, `/favicon.ico` and `/health/…`, in the Node.js runtime (the single-flight map lives in the admin process). Deny by default: only the exact paths `/sign-in`, `/sign-in/mfa` and `/sign-out` work without a session; every other path, including one that does not exist yet (`/sign-in/other` too), answers `303` to `/sign-in`. An access token that is missing, unreadable, not of the `platform_admin` audience or within 30 seconds of its expiry is refreshed with `adminRefresh` (the same refresh token is sent once per 10 seconds however many requests present it; `REFRESH_TOKEN_INVALID`, `REFRESH_TOKEN_REUSED`, `VALIDATION_FAILED` and `UNAUTHENTICATED` delete both cookies, a rate limit or an unreachable API keeps them), and the new tokens replace the old ones in the request the page renders. The JWT signature is not checked here: the API checks it on every call.
+- **Sign-out.** `POST /sign-out` answers `403` unless `Origin` is the origin of `PUBLIC_PLATFORM_ADMIN_URL`, then calls `adminSignOut` with the bearer token and the refresh token, deletes the cookies whatever the API answered, and answers `303` to `/sign-in?signedOut=1`. Other methods answer `405`.
 - Portal sessions do not work here and admin sessions do not work in the portal: different cookies on different hosts and different token audiences ([PADR-0009](../docs/adr/0009-platform-api-surface-and-authentication.md)).
 - Security headers as the portal, with `form-action 'self'` and `X-Robots-Tag: noindex`. The static ones are set in `next.config.ts` `headers()` for `/:path*`, so they reach every response: pages, route handlers (the health routes included), static assets and error pages.
 
   | Header | Value | Where |
   |---|---|---|
-  | `X-Robots-Tag` | `noindex` | `next.config.ts`, every response (PAD-001) |
+  | `X-Robots-Tag` | `noindex` | `next.config.ts`, every response (PAD-001); `middleware.ts` sets it on its own redirects too (PAD-002) |
   | `X-Content-Type-Options` | `nosniff` | `next.config.ts`, every response (PAD-001) |
   | `Referrer-Policy` | `same-origin`: admin URLs (tenant ids, filters) are not sent to other origins | `next.config.ts`, every response (PAD-001); see the Caddy note below |
   | `Permissions-Policy` | `camera=(), microphone=(), geolocation=(), payment=(), usb=(), browsing-topics=()` | `next.config.ts`, every response (PAD-001), as the portal |
-  | `Content-Security-Policy` | nonce-based, as the portal, with `form-action 'self'` | `middleware.ts` (PAD-002) |
+  | `Content-Security-Policy` | `default-src 'self'; script-src 'self' 'nonce-…'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'self'; object-src 'none'` with a new nonce per request; `script-src` also has `'unsafe-eval'` when `APP_ENV=development` (`next dev`). Every page is rendered per request (`export const dynamic = "force-dynamic"` in the root layout), as in the portal: a prerendered page would keep inline scripts without the nonce, and the policy would block them | `middleware.ts` (PAD-002), on pages and on its own redirects |
 
   `X-Powered-By` is switched off (`poweredByHeader: false`), and the root layout also renders `<meta name="robots" content="noindex, nofollow">`. Caddy adds `Strict-Transport-Security` and `X-Frame-Options: DENY` on the public host ([`deploy/caddy/Caddyfile`](../../deploy/caddy/Caddyfile)). Its shared `security_headers` snippet also sets `Referrer-Policy: strict-origin-when-cross-origin` (the value of [ADR-0014](../../docs/mvp/adr/0014-frontend-stack-nextjs-tailwind.md)), and Caddy's deferred header operations replace the app's `same-origin` with it on `admin.platform.example.com`; the stricter value only holds there once the Caddyfile's admin site stops overriding it.
-- `lib/api.ts` forwards the admin's IP and user agent on every call, as the portal does: `X-Velexis-End-User-IP` (right-most `X-Forwarded-For` entry set by Caddy, `127.0.0.1` without one), `X-Velexis-End-User-Agent` (at most 512 characters) and `X-Velexis-Bff-Key` (`PLATFORM_BFF_KEY`). Admin sign-in is throttled per admin IP, and admin audit rows record it ([PADR-0019](../docs/adr/0019-end-user-ip-forwarding-from-the-portal-and-admin.md)).
+- `lib/api.ts` (`server-only`) calls the admin surface `/v1/admin/…` only (the types refuse other paths, and a call of another path throws before anything is sent), with `cache: "no-store"`, no redirect following, the bearer token of `__Host-vxa_at` when there is one and the request id of the incoming request. A call answers `{ data }` or `{ error }` with the code of the platform catalogue, field errors, details and `Retry-After`, never the API's own message. It forwards the admin's IP and user agent on every call, as the portal does (`lib/end-user.ts`): `X-Velexis-End-User-IP` (right-most `X-Forwarded-For` entry set by Caddy, `127.0.0.1` without one), `X-Velexis-End-User-Agent` (at most 512 characters) and `X-Velexis-Bff-Key` (`PLATFORM_BFF_KEY`). Admin sign-in is throttled per admin IP, and admin audit rows record it ([PADR-0019](../docs/adr/0019-end-user-ip-forwarding-from-the-portal-and-admin.md)). The sign-in calls and the middleware's refresh carry them too.
+- `lib/errors.ts` maps every code of the platform catalogue to the admin's own message (`lib/strings.ts`); `errors.test.ts` fails when the catalogue gains a code without one.
 
 ## 5. Configuration
 
 See [`.env.example`](.env.example); on the VM `/etc/velexis/platform-admin.env` (template [`deploy/env/platform-admin.env.example`](../../deploy/env/platform-admin.env.example)): `APP_ENV`, `LOG_LEVEL`, `PORT` (3001), `HOSTNAME` (`127.0.0.1`), `PLATFORM_API_URL`, `PLATFORM_BFF_KEY` (shared with the API, PADR-0019), `PUBLIC_PLATFORM_ADMIN_URL`, `PUBLIC_PORTAL_URL` (link to enable MFA in the portal), `SENTRY_DSN`. All are read in server code through `@velexis/config`. On the VM the systemd unit sets `PORT` and `HOSTNAME`.
 
-`src/lib/config.ts` (`import "server-only"`) declares the schema `ADMIN_CONFIG_SCHEMA`; later tasks add their entries there (`PLATFORM_BFF_KEY` comes with PAD-002).
+`src/lib/config.ts` (`import "server-only"`) declares the schema `ADMIN_CONFIG_SCHEMA`; later tasks add their entries there.
 
 | Variable | Rule | Default |
 |---|---|---|
@@ -108,6 +118,7 @@ See [`.env.example`](.env.example); on the VM `/etc/velexis/platform-admin.env` 
 | `PORT` | 1–65535 | `3001` |
 | `HOSTNAME` | host name or IP literal to bind | `127.0.0.1` |
 | `PLATFORM_API_URL` | absolute `http:` or `https:` URL | required |
+| `PLATFORM_BFF_KEY` | at least 32 characters of `[A-Za-z0-9_-]` (refuses the unsubstituted `@@PLATFORM_BFF_KEY@@`); the same value as the API and the portal | required |
 | `PUBLIC_PLATFORM_ADMIN_URL`, `PUBLIC_PORTAL_URL` | absolute `http:` or `https:` URL; `https:` when `APP_ENV=production` | required |
 | `SENTRY_DSN` | `https:` URL; unset or empty switches error tracking off | optional |
 
@@ -123,11 +134,11 @@ See [`.env.example`](.env.example); on the VM `/etc/velexis/platform-admin.env` 
 | `pnpm --filter @velexis/platform-admin dev` | Next.js dev server on `127.0.0.1:3001` (needs the platform API on 3100; configuration from the root `.env.local`, §5) |
 | `pnpm --filter @velexis/platform-admin build` | Standalone build: `.next/standalone/platform/admin/server.js` plus `.next/static` (`outputFileTracingRoot` is the repository root, as `deploy/scripts/pack-release.sh` expects) |
 | `pnpm --filter @velexis/platform-admin start` | Local smoke run of the production build with `next start` on `127.0.0.1:3001` (Next.js warns that standalone output is meant for `server.js`; the VM runs `node platform/admin/server.js` from the release, unit `velexis-platform-admin.service`) |
-| `pnpm --filter @velexis/platform-admin test` | Vitest in Node: configuration, health route handlers and the static headers of `next.config.ts` (`src/**/*.test.ts`, `fetch` mocked, fake timers). Testing Library for reason and step-up dialogs, tables and form states arrives with the first client components (PAD-002, PAD-003). |
+| `pnpm --filter @velexis/platform-admin test` | Vitest: configuration, health route handlers and the static headers of `next.config.ts`, the API client and the end-user headers, session cookies and the single-flight refresh, the middleware, `/sign-out`, the error messages (Node, `fetch` mocked, fake timers), and the two sign-in steps with Testing Library (`sign-in.test.tsx`, `// @vitest-environment happy-dom`). |
 | `pnpm --filter @velexis/platform-admin lint` / `typecheck` | ESLint with the root flat config (Next.js rules included) / `tsc --noEmit` (strict, path alias `@/*` → `src/*`) |
 | `pnpm test:e2e -- --project=platform-admin` | Playwright: admin sign-in with TOTP; suspend and resume a tenant and see the storefront follow; retry a failed provisioning job (M1); assign and release an office (M1/M5); approve and mark a settlement paid (M5) |
 
-**Health and headers without a browser.** After a build, `PORT=3001 APP_ENV=development PLATFORM_API_URL=http://127.0.0.1:3100 PUBLIC_PLATFORM_ADMIN_URL=http://localhost:3001 PUBLIC_PORTAL_URL=http://localhost:3000 node .next/standalone/platform/admin/server.js` serves the standalone build (it sets `NODE_ENV=production`, so no `.env.local` is read), and `curl -i http://127.0.0.1:3001/health/live` shows `200` with `X-Robots-Tag: noindex`. The unit test `src/app/health/live/route.test.ts` checks the same headers by compiling the rules of `next.config.ts` with Next.js's own route matcher, for `/health/live` and other paths.
+**Health and headers without a browser.** After a build, `PORT=3001 APP_ENV=development PLATFORM_API_URL=http://127.0.0.1:3100 PLATFORM_BFF_KEY=dev_bff_key_change_me_0123456789abcdef PUBLIC_PLATFORM_ADMIN_URL=http://localhost:3001 PUBLIC_PORTAL_URL=http://localhost:3000 node .next/standalone/platform/admin/server.js` serves the standalone build (it sets `NODE_ENV=production`, so no `.env.local` is read), and `curl -i http://127.0.0.1:3001/health/live` shows `200` with `X-Robots-Tag: noindex`. The unit test `src/app/health/live/route.test.ts` checks the same headers by compiling the rules of `next.config.ts` with Next.js's own route matcher, for `/health/live` and other paths.
 
 **Tests in Node.** `server-only` throws outside the `react-server` export condition, which only Next.js sets, so `vitest.config.ts` maps it to the package's own empty module. The `@/` alias matches `tsconfig.json`.
 

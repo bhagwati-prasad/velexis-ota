@@ -3,7 +3,11 @@ import { defineConfig } from "vitest/config";
 
 const here = (path: string) => fileURLToPath(new URL(path, import.meta.url));
 
+// Unit, route and middleware tests run in Node; component tests (`*.test.tsx` with Testing Library) opt into a DOM
+// with a `// @vitest-environment happy-dom` comment (README §6).
 export default defineConfig({
+  // tsconfig.json keeps JSX for Next.js (`"jsx": "preserve"`); tests compile it with the React 19 runtime.
+  esbuild: { jsx: "automatic" },
   resolve: {
     alias: [
       // The tsconfig path alias of the app.

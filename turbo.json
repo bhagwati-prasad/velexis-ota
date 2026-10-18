@@ -112,6 +112,17 @@
       ],
       "outputs": ["coverage/**"]
     },
+    "@velexis/platform-admin#test": {
+      "dependsOn": ["^build"],
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "$TURBO_ROOT$/.env.example",
+        "$TURBO_ROOT$/platform/frontend/.env.example",
+        "$TURBO_ROOT$/deploy/env/platform-admin.env.example",
+        "$TURBO_ROOT$/deploy/systemd/velexis-platform-admin.service"
+      ],
+      "outputs": ["coverage/**"]
+    },
     "test:int": {
       "dependsOn": ["^build"],
       "cache": false,

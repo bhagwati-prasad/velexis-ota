@@ -1027,7 +1027,8 @@ Common commands: backend `pnpm --filter @velexis/platform-backend test`, `test:i
   - No serious or critical accessibility violation on the visited pages.
 - **Verify:** `E2E_WITH_OTA=1 pnpm test:e2e -- --project=portal`
 
-### PAD-002 · Add the admin API client, session and TOTP sign-in
+### PAD-002 · Add the admin API client, session and TOTP sign-in ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-admin
 - **Milestone:** M1
 - **Depends on:** PAD-001, PBE-028
