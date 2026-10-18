@@ -26,6 +26,21 @@ export type SessionAudience = "portal" | "platform_admin";
 /** Why a row was revoked (`account_sessions.revoke_reason`, migration 0001). */
 export type SessionRevokeReason = "logout" | "rotation_reuse" | "password_change" | "admin" | "expired";
 
+/** An active refresh family of an account, as listSessions shows it (PBE-016). */
+export interface ActiveFamily {
+  /** `asn_…` of the family's first row. */
+  readonly family_id: string;
+  readonly audience: string;
+  /** The end user's user agent at sign-in. */
+  readonly user_agent: string | null;
+  /** The end user's IP at sign-in. */
+  readonly ip_address: string | null;
+  /** The sign-in: the `created_at` of the family's first row. */
+  readonly signed_in_at: Date;
+  /** The family's last refresh; `null` before the first one. */
+  readonly last_used_at: Date | null;
+}
+
 /** A new row: the first of a family, or the next generation of one. */
 export interface NewSession {
   /** `asn_…` */
@@ -182,5 +197,77 @@ export class SessionsRepository {
       .returning("family_id")
       .execute();
     return new Set(rows.map((row) => row.family_id)).size;
+  }
+
+  /**
+   * Revokes every row of every family of `accountId` except family `keptFamilyId` (the caller's own session of a
+   * password change), as `revokeAllOfAccount` does. Returns how many families had a row revoked.
+   */
+  async revokeAllOfAccountExcept(
+    trx: PlatformTransaction,
+    accountId: string,
+    keptFamilyId: string,
+    reason: SessionRevokeReason,
+    now: Date,
+  ): Promise<number> {
+    const rows = await trx
+      .updateTable("platform.account_sessions")
+      .set({ revoked_at: now, revoke_reason: reason, updated_at: now })
+      .where("account_id", "=", accountId)
+      .where("family_id", "<>", keptFamilyId)
+      .where("revoked_at", "is", null)
+      .returning("family_id")
+      .execute();
+    return new Set(rows.map((row) => row.family_id)).size;
+  }
+
+  /**
+   * The active families of `accountId` at `now`, newest sign-in first (listSessions, PBE-016): one per family whose
+   * current generation (neither rotated nor revoked) has not expired, nor has the family's end passed. Each holds the
+   * sign-in's time from the family's first row and the family's last refresh (the latest `last_used_at` of its rows,
+   * `null` before the first refresh).
+   */
+  async listActiveFamilies(
+    db: PlatformTransaction | PlatformDb,
+    accountId: string,
+    now: Date,
+  ): Promise<ActiveFamily[]> {
+    return this.activeFamilies(db, accountId, now).execute();
+  }
+
+  /** The active family `familyId` of `accountId` at `now` (see `listActiveFamilies`); `undefined` for any other. */
+  async findActiveFamily(
+    db: PlatformTransaction | PlatformDb,
+    accountId: string,
+    familyId: string,
+    now: Date,
+  ): Promise<ActiveFamily | undefined> {
+    return this.activeFamilies(db, accountId, now).where("cur.family_id", "=", familyId).executeTakeFirst();
+  }
+
+  private activeFamilies(db: PlatformTransaction | PlatformDb, accountId: string, now: Date) {
+    return db
+      .selectFrom("platform.account_sessions as cur")
+      .leftJoin("platform.account_sessions as first", "first.id", "cur.family_id")
+      .select((eb) => [
+        "cur.family_id",
+        "cur.audience",
+        "cur.user_agent",
+        "cur.ip_address",
+        eb.fn.coalesce("first.created_at", "cur.created_at").as("signed_in_at"),
+        eb
+          .selectFrom("platform.account_sessions as generation")
+          .select((inner) => inner.fn.max("generation.last_used_at").as("last_used_at"))
+          .whereRef("generation.family_id", "=", "cur.family_id")
+          .as("last_used_at"),
+      ])
+      .where("cur.account_id", "=", accountId)
+      .where("cur.rotated_at", "is", null)
+      .where("cur.revoked_at", "is", null)
+      .where("cur.expires_at", ">", now)
+      .where((eb) => eb.or([eb("cur.family_expires_at", "is", null), eb("cur.family_expires_at", ">", now)]))
+      .orderBy("signed_in_at", "desc")
+      .orderBy("cur.family_id", "desc")
+      .$castTo<ActiveFamily>();
   }
 }

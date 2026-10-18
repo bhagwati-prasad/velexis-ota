@@ -72,6 +72,28 @@ const SIGN_IN_COLUMNS = [
   "deleted_at",
 ] as const;
 
+/**
+ * What a password reset or change (PBE-016) reads of an account: who it is and where its e-mails go, whether it may
+ * hold a session, and its password hash.
+ */
+export type CredentialsAccount = Pick<
+  AccountRecord,
+  "id" | "email" | "full_name" | "status" | "password_hash" | "deleted_at"
+>;
+
+const CREDENTIALS_COLUMNS = ["id", "email", "full_name", "status", "password_hash", "deleted_at"] as const;
+
+/** The profile of an account as `updateMe` (PBE-016) changes it, with its status and its version (the `ETag`). */
+export type ProfileAccount = Pick<
+  AccountRecord,
+  "id" | "full_name" | "locale" | "time_zone" | "status" | "version"
+>;
+
+const PROFILE_COLUMNS = ["id", "full_name", "locale", "time_zone", "status", "version"] as const;
+
+/** The profile columns `updateMe` writes; only the ones that change. */
+export type AccountProfileChanges = Partial<Pick<AccountRecord, "full_name" | "locale" | "time_zone">>;
+
 /** The counters after a failed sign-in that `recordFailedSignIn` counted. */
 export interface FailedSignIn {
   /** Consecutive failures since the last successful sign-in (or the last unlock), this one included. */
@@ -440,5 +462,93 @@ export class AccountsRepository {
       .orderBy("m.id")
       .execute();
     return { ...account, memberships };
+  }
+
+  /** The credentials of account `accountId`, read on `db`; `undefined` when there is no such account. */
+  async findCredentials(
+    db: PlatformTransaction | PlatformDb,
+    accountId: string,
+  ): Promise<CredentialsAccount | undefined> {
+    return db
+      .selectFrom("platform.accounts")
+      .select(CREDENTIALS_COLUMNS)
+      .where("id", "=", accountId)
+      .executeTakeFirst();
+  }
+
+  /**
+   * The credentials of account `accountId`, locked for the rest of `trx` (`FOR UPDATE`): the lock of a password reset
+   * or change, which also waits for every change of the account's session families (`lockForSessionChange`).
+   */
+  async lockCredentials(
+    trx: PlatformTransaction,
+    accountId: string,
+  ): Promise<CredentialsAccount | undefined> {
+    return trx
+      .selectFrom("platform.accounts")
+      .select(CREDENTIALS_COLUMNS)
+      .where("id", "=", accountId)
+      .forUpdate()
+      .executeTakeFirst();
+  }
+
+  /**
+   * Stores the Argon2id hash of a new password of `accountId` at `now`, in `trx`, with `password_changed_at` (the
+   * cut-off for older OTA staff sessions, architecture §6.4). The password is not part of the `Account` the API shows,
+   * so `version` stays as it is.
+   */
+  async setPassword(
+    trx: PlatformTransaction,
+    accountId: string,
+    passwordHash: string,
+    now: Date,
+  ): Promise<void> {
+    await trx
+      .updateTable("platform.accounts")
+      .set({ password_hash: passwordHash, password_changed_at: now, updated_at: now })
+      .where("id", "=", accountId)
+      .execute();
+  }
+
+  /** The profile of account `accountId`, locked for the rest of `trx` (`FOR UPDATE`). */
+  async lockProfile(trx: PlatformTransaction, accountId: string): Promise<ProfileAccount | undefined> {
+    return trx
+      .selectFrom("platform.accounts")
+      .select(PROFILE_COLUMNS)
+      .where("id", "=", accountId)
+      .forUpdate()
+      .executeTakeFirst();
+  }
+
+  /**
+   * Writes the profile `changes` of an account locked by `lockProfile`, with `version + 1` and `updated_at = now`, in
+   * `trx`. Returns the new version.
+   */
+  async updateProfile(
+    trx: PlatformTransaction,
+    accountId: string,
+    changes: AccountProfileChanges,
+    now: Date,
+  ): Promise<number> {
+    const row = await trx
+      .updateTable("platform.accounts")
+      .set({ ...changes, version: sql<number>`version + 1`, updated_at: now })
+      .where("id", "=", accountId)
+      .returning("version")
+      .executeTakeFirstOrThrow();
+    return row.version;
+  }
+
+  /**
+   * True when `name` is a zone of `reference.time_zones`: `accounts.time_zone` refers to it by value, as
+   * `tenants.time_zone` does (read only, architecture §2.1).
+   */
+  async timeZoneExists(db: PlatformTransaction | PlatformDb, name: string): Promise<boolean> {
+    const row = await db
+      .selectFrom("reference.time_zones")
+      .select("name")
+      .where("name", "=", name)
+      .executeTakeFirst();
+    return row !== undefined;
   }
 }

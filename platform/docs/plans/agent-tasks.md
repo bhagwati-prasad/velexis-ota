@@ -397,7 +397,8 @@ Common commands: backend `pnpm --filter @velexis/platform-backend test`, `test:i
   - The TOTP secret and recovery codes never appear in a log, a queue payload or an audit row.
 - **Verify:** `pnpm --filter @velexis/platform-backend test && pnpm --filter @velexis/platform-backend test:int -- accounts`
 
-### PBE-016 · Implement password reset and change, profile and session management
+### PBE-016 · Implement password reset and change, profile and session management ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-backend
 - **Milestone:** M1
 - **Depends on:** PBE-014

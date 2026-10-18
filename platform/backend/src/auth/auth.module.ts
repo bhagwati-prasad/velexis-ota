@@ -10,6 +10,10 @@
 //
 // It queues e-mails through NotificationsModule and audits through AuditModule, both of layer 0; the Redis client and
 // the invalidation publisher come from the global RedisModule.
+//
+// PBE-016 adds the password reset and the change of a known password (`PasswordResetService`, whose changePassword
+// AccountsModule's route calls, since this module owns the credentials) and exports SessionsRepository for
+// AccountsModule's session list.
 import { Module } from "@nestjs/common";
 import { AuditModule } from "../audit/audit.module";
 import { NotificationsModule } from "../notifications/notifications.module";
@@ -18,6 +22,7 @@ import { AccountsRepository } from "./accounts.repository";
 import { AuthController } from "./auth.controller";
 import { MfaChallengeStore } from "./mfa-challenge.store";
 import { PasswordPolicy } from "./password-policy";
+import { PasswordResetService } from "./password-reset.service";
 import { SessionsRepository } from "./sessions.repository";
 import { SessionsService } from "./sessions.service";
 import { SignInService } from "./sign-in.service";
@@ -35,6 +40,7 @@ import { SignUpService } from "./sign-up.service";
     MfaChallengeStore,
     SignUpService,
     SignInService,
+    PasswordResetService,
   ],
   exports: [
     PasswordPolicy,
@@ -43,6 +49,8 @@ import { SignUpService } from "./sign-up.service";
     SessionsService,
     SignInService,
     MfaChallengeStore,
+    SessionsRepository,
+    PasswordResetService,
   ],
 })
 export class AuthModule {}

@@ -17,14 +17,8 @@ export interface PendingOperation {
 export const PENDING_OPERATIONS: readonly PendingOperation[] = Object.freeze([
   // PBE-005: identity, plans and internal (healthLive and healthReady are bound since PBE-001 and PBE-008, signUp,
   // verifyEmail and resendVerification since PBE-013, signIn, refreshSession, signOut and signOutEverywhere since
-  // PBE-014, verifyMfa, stepUp and the four MFA settings since PBE-015, listPlans since PBE-017).
-  { operationId: "requestPasswordReset", task: "PBE-016" },
-  { operationId: "confirmPasswordReset", task: "PBE-016" },
-  { operationId: "getMe", task: "PBE-016" },
-  { operationId: "updateMe", task: "PBE-016" },
-  { operationId: "changePassword", task: "PBE-016" },
-  { operationId: "listSessions", task: "PBE-016" },
-  { operationId: "revokeSession", task: "PBE-016" },
+  // PBE-014, verifyMfa, stepUp and the four MFA settings since PBE-015, listPlans since PBE-017, the password reset,
+  // the account, the password change and the sessions since PBE-016).
   { operationId: "tlsAsk", task: "PBE-027" },
 
   // PBE-006: tenants, team, API keys and the M1 reads (the tenant reads and getSubscription are bound since PBE-017,

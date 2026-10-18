@@ -1,11 +1,11 @@
 // The portal identity routes (platform/docs/api-inventory.md §4, `AuthModule`): sign-up, e-mail verification and the
 // resend of the verification link (PBE-013); sign-in, refresh, sign-out and sign-out everywhere (PBE-014); the MFA
-// steps verifyMfa and stepUp (PBE-015). The password reset (PBE-016) joins this controller. Thin: each handler binds
-// its operation, reads the validated body (and the caller's access token) and makes one service call. Sign-up,
-// verification, resend, sign-in, verifyMfa and refresh are `public`, the two sign-outs `portal_unverified`, stepUp
-// `portal`; the rate limits are the operations' throttlers, except verifyMfa's per-account limit, which its service
-// counts once the challenge names the account. The MFA steps go to `MfaVerification`, which AccountsModule's
-// MfaService implements (mfa-challenge.store.ts).
+// steps verifyMfa and stepUp (PBE-015); the password reset request and confirmation (PBE-016). Thin: each handler
+// binds its operation, reads the validated body (and the caller's access token) and makes one service call. Sign-up,
+// verification, resend, sign-in, verifyMfa, refresh and the two reset steps are `public`, the two sign-outs
+// `portal_unverified`, stepUp `portal`; the rate limits are the operations' throttlers, except verifyMfa's
+// per-account limit, which its service counts once the challenge names the account. The MFA steps go to
+// `MfaVerification`, which AccountsModule's MfaService implements (mfa-challenge.store.ts).
 //
 // The answers of signIn, verifyMfa, refreshSession and stepUp carry tokens, so they are sent with `Cache-Control:
 // no-store`; a `423 ACCOUNT_LOCKED` and verifyMfa's `429 RATE_LIMITED` get `Retry-After` with the seconds left.
@@ -19,6 +19,11 @@ import {
   type TotpCodeRequest,
   type VerifyMfaRequest,
 } from "./mfa-challenge.store";
+import {
+  PasswordResetService,
+  type PasswordResetConfirmRequest,
+  type PasswordResetRequest,
+} from "./password-reset.service";
 import {
   SessionsService,
   type PortalSession,
@@ -53,6 +58,7 @@ export class AuthController {
     private readonly signIns: SignInService,
     private readonly sessions: SessionsService,
     private readonly mfa: MfaVerification,
+    private readonly passwordResets: PasswordResetService,
   ) {}
 
   @Post("sign-up")
@@ -152,5 +158,21 @@ export class AuthController {
   @OpenApiOperation("signOutEverywhere")
   signOutEverywhere(@AccessToken() token: AccessTokenClaims): Promise<void> {
     return this.sessions.signOutEverywhere(token.sub);
+  }
+
+  /** `202` without a body, whatever the address. */
+  @Post("password-reset")
+  @HttpCode(202)
+  @OpenApiOperation("requestPasswordReset")
+  requestPasswordReset(@Validated("body") body: PasswordResetRequest): Promise<void> {
+    return this.passwordResets.requestReset(body);
+  }
+
+  /** `204`: the password is changed and every session of the account is revoked. */
+  @Post("password-reset/confirm")
+  @HttpCode(204)
+  @OpenApiOperation("confirmPasswordReset")
+  confirmPasswordReset(@Validated("body") body: PasswordResetConfirmRequest): Promise<void> {
+    return this.passwordResets.confirmReset(body);
   }
 }
