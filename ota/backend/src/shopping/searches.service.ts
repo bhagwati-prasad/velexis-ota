@@ -183,7 +183,7 @@ export function canonicalJson(value: unknown): string {
 }
 
 /** The Amadeus dictionaries of a search answer (`locations`, `carriers`, `aircraft`, `currencies`). */
-interface AmadeusDictionaries {
+export interface AmadeusDictionaries {
   readonly locations: Readonly<Record<string, { readonly cityCode?: string; readonly countryCode?: string }>>;
   readonly carriers: Readonly<Record<string, string>>;
   readonly aircraft: Readonly<Record<string, string>>;
@@ -199,7 +199,8 @@ function stringMap(value: unknown): Record<string, string> {
   );
 }
 
-function amadeusDictionaries(value: unknown): AmadeusDictionaries {
+/** The Amadeus dictionaries of an answer (search or upsell), read leniently. */
+export function amadeusDictionaries(value: unknown): AmadeusDictionaries {
   const raw = isRecord(value) ? value : {};
   const locations: Record<string, { cityCode?: string; countryCode?: string }> = {};
   if (isRecord(raw["locations"])) {
@@ -223,24 +224,24 @@ function amadeusDictionaries(value: unknown): AmadeusDictionaries {
 }
 
 /** Display names and the response's Dictionaries, from the reference schema and the Amadeus dictionaries. */
-interface NameSet {
+export interface NameSet {
   readonly names: DisplayNames;
   readonly dictionaries: Dictionaries;
 }
 
 /** The codes a response needs names for. */
-interface CodeSet {
+export interface CodeSet {
   readonly locations: Set<string>;
   readonly carriers: Set<string>;
   readonly aircraft: Set<string>;
   readonly currencies: Set<string>;
 }
 
-function emptyCodes(): CodeSet {
+export function emptyCodes(): CodeSet {
   return { locations: new Set(), carriers: new Set(), aircraft: new Set(), currencies: new Set() };
 }
 
-function addOfferCodes(codes: CodeSet, offer: ParsedOffer): void {
+export function addOfferCodes(codes: CodeSet, offer: ParsedOffer): void {
   const found = codesOf(offer);
   found.locations.forEach((code) => codes.locations.add(code));
   found.carriers.forEach((code) => codes.carriers.add(code));
@@ -977,7 +978,7 @@ export class SearchesService {
     return search;
   }
 
-  /** The console diagnostics of a search: its latest supplier call. */
+  /** The console diagnostics of a search: its latest Flight Offers Search call. */
   private async diagnosticsOf(trx: TenantTransaction, row: SearchRow): Promise<FlightSearch["diagnostics"]> {
     const call = await this.repository.latestSupplierRequest(trx, row.id);
     if (
@@ -1004,9 +1005,10 @@ export class SearchesService {
 
   /**
    * Names and dictionaries for `codes`: the reference schema first, the Amadeus dictionaries for the rest. Country and
-   * currency names follow `language` (`Accept-Language`) where ICU has them, as in the reference operations.
+   * currency names follow `language` (`Accept-Language`) where ICU has them, as in the reference operations. Public for
+   * the offer and upsell answers of the same module (OBE-022), which carry the same dictionaries.
    */
-  private async names(
+  async names(
     trx: TenantTransaction,
     codes: CodeSet,
     amadeus: AmadeusDictionaries,
@@ -1214,7 +1216,7 @@ function oneWayCombinationsOf(value: unknown, offerIds: ReadonlyMap<string, stri
 }
 
 /** Amadeus warnings as the document's Warning (title required). */
-function warningsOf(value: unknown): Warning[] {
+export function warningsOf(value: unknown): Warning[] {
   if (!Array.isArray(value)) {
     return [];
   }

@@ -506,7 +506,10 @@ export class SearchesRepository {
     return rows.map((row) => ({ ...row, totalDurationMinutes: row.totalDurationMinutes ?? 0 }));
   }
 
-  /** The latest supplier call recorded for a search. */
+  /**
+   * The latest Flight Offers Search call recorded for a search. Later calls linked to the search (flights.upsell's
+   * Branded Fares Upsell, OBE-022) are not the search's own call, and never replace it in its diagnostics.
+   */
   async latestSupplierRequest(
     trx: TenantTransaction,
     searchId: string,
@@ -520,6 +523,7 @@ export class SearchesRepository {
         "duration_ms as durationMs",
       ])
       .where("search_id", "=", searchId)
+      .where("amadeus_api", "=", "FlightOffersSearch")
       .orderBy("created_at", "desc")
       .orderBy("id", "desc")
       .executeTakeFirst();

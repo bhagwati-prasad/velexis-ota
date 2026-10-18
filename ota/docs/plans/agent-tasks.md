@@ -507,7 +507,8 @@ The OTA backend gets its contract extensions, request pipeline, tenancy, Amadeus
   - Two identical concurrent searches make one stub call.
 - **Verify:** `pnpm --filter @velexis/ota-backend test -- shopping && pnpm --filter @velexis/ota-backend test:int -- shopping`
 
-### OBE-022 · Implement flights.getOffer and flights.upsell
+### OBE-022 · Implement flights.getOffer and flights.upsell ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-backend
 - **Milestone:** M2
 - **Depends on:** OBE-021, OBE-019

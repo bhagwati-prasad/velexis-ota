@@ -40,8 +40,6 @@ export const PENDING_OPERATIONS: Readonly<Partial<Record<OtaOperationId, Pending
   deleteSavedTraveler: "deferred",
   updateSavedTraveler: "deferred",
   // Flights
-  getFlightOffer: "OBE-022",
-  upsellFlightOffer: "OBE-022",
   searchFlightAvailabilities: "deferred",
   priceFlightOffers: "OBE-023",
   getPricedOffer: "OBE-023",
