@@ -263,7 +263,10 @@ describe("the configuration", () => {
       expectResponseToMatch("getStorefront", res);
       expect(res.text).not.toMatch(/ops_?alert|booking_?queue/i);
       expect(res.text).not.toContain(OPS_ALERT_EMAIL);
-      expect(res.text).not.toMatch(/"42"|:42\b/);
+      // booking_queue_number (42) as a JSON string or as the number value of a property. The colon must follow the
+      // key's closing quote: the response's own timestamps (verifiedAt, updatedAt) contain ":42" at minute or second
+      // 42 of any hour, which is not a leak.
+      expect(res.text).not.toMatch(/"42"|":\s*42\b/);
     }
     // Nor does the cache.
     for (const key of [
