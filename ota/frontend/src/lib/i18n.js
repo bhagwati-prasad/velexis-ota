@@ -38,6 +38,22 @@ export const STRINGS = Object.freeze({
   "footer.support": "Support:",
   "footer.supportHours": "({hours})",
 
+  // Search form (src/components/search-form.js, location-combobox.js, passenger-picker.js).
+  "location.none": "No airport or city found",
+  "location.count": { one: "{count} airport or city found", other: "{count} airports or cities found" },
+  "location.label": "{name} ({code})",
+  "location.allAirports": "{city} (all airports)",
+  "location.place": "{city}, {country}",
+  "location.cityDetail": "{country} · {airports}",
+  "passengers.adults": { one: "{count} adult", other: "{count} adults" },
+  "passengers.children": { one: "{count} child", other: "{count} children" },
+  "passengers.infants": { one: "{count} infant", other: "{count} infants" },
+  "passengers.separator": ", ",
+  "search.legTitle": "Flight {number}",
+  "search.removeLeg": "Remove flight {number}",
+  "search.legAdded": "Flight {number} added",
+  "search.legRemoved": "Flight {number} removed",
+
   // Durations (lib/format.js): "7 h 35 min".
   "duration.hours": "{hours} h",
   "duration.minutes": "{minutes} min",
@@ -87,6 +103,19 @@ export const STRINGS = Object.freeze({
   "field.POSTAL_CODE_REQUIRED": "Enter the postal code",
   "field.TOO_MANY_CONTACTS": "Remove a contact",
   "field.REJECTED_BY_AIRLINE": "The airline did not accept this value",
+  // Checks of the search form before it leaves the page (src/components/search-form.js, docs/pages.md §3).
+  "field.LOCATION_REQUIRED": "Enter an airport or city",
+  "field.LOCATION_NOT_CHOSEN": "Choose an airport or city from the list, or type its 3-letter code",
+  "field.SAME_LOCATION": "Choose a destination different from the departure",
+  "field.DATE_REQUIRED": "Choose a date",
+  "field.DATE_IN_PAST": "Choose today or a later date",
+  "field.RETURN_BEFORE_DEPARTURE": "The return cannot be before the departure",
+  "field.LEG_BEFORE_PREVIOUS": "This flight cannot be before the flight above it",
+  "field.ADULTS_RANGE": "Choose between 1 and 9 adults",
+  "field.CHILDREN_RANGE": "Choose between 0 and 8 children",
+  "field.INFANTS_RANGE": "Choose between 0 and 9 infants",
+  "field.TOO_MANY_SEATS": "At most 9 passengers can have a seat (adults and children together)",
+  "field.INFANTS_EXCEED_ADULTS": "Each infant travels on an adult's lap: add an adult or remove an infant",
 
   // Page states (lib/errors.js, ota/frontend/docs/pages.md §2 and the pages' state tables).
   "state.suspended": "This travel site is temporarily unavailable",

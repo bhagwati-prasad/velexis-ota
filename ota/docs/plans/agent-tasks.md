@@ -772,7 +772,8 @@ The OTA backend gets its contract extensions, request pipeline, tenancy, Amadeus
   - No CSS text is injected (`style.setProperty` only, asserted by a test).
 - **Verify:** `pnpm --filter @velexis/ota-frontend test && pnpm --filter @velexis/ota-frontend build`
 
-### OFE-004 · Build the home page with the search form and location combobox
+### OFE-004 · Build the home page with the search form and location combobox ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-frontend
 - **Milestone:** M2
 - **Depends on:** OFE-003, OBE-015

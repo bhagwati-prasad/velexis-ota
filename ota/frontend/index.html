@@ -14,16 +14,14 @@
     <!-- @include partials/header.html -->
     <main id="main" tabindex="-1" class="mx-auto w-full max-w-6xl flex-1 px-4 py-10 focus:outline-none">
       <h1 class="font-heading text-3xl font-semibold">Search flights</h1>
-      <p class="mt-3 max-w-prose text-muted">
-        Find a flight and book it in a few steps. Already booked? Find your booking with its reference and
-        your last name.
-      </p>
-      <p class="mt-6">
-        <a
-          href="/lookup.html"
-          class="inline-block rounded-ui bg-primary px-4 py-2 font-medium text-on-primary hover:opacity-90"
-          >Find a booking</a
+      <p class="mt-3 max-w-prose text-muted">Find a flight and book it in a few steps.</p>
+      <!-- @include partials/search-form.html -->
+      <p class="mt-8 max-w-prose text-muted">
+        Already booked?
+        <a href="/lookup.html" class="font-medium text-primary underline underline-offset-4"
+          >Find your booking</a
         >
+        with its reference and your last name.
       </p>
     </main>
     <!-- @include partials/footer.html -->

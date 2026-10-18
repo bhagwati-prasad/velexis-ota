@@ -41,13 +41,21 @@ Rendered by `boot()` and `lib/errors.js` before or instead of the page content: 
 
 1. `boot()`: `storefront.get`, `auth.getSession`, `storefront.listPages` (M4).
 2. Location fields: `reference.locations.search({ keyword, subType: ["AIRPORT", "CITY"], limit: 8 })`, debounced 250 ms, from 2 characters, each new keystroke aborting the previous call with `options.signal`.
+3. Codes pre-filled from the address (`/?from=LHR&to=PAR&depart=…`, or `legs=`): `reference.airports.get({ iataCode })` for the label ("London Heathrow Airport (LHR)"); a city code, which is no airport (`404`), takes the exact match of `reference.locations.search` ("Paris (PAR)"); without an answer the code itself stays. One request per code.
 
-**Form.** A real `<form method="get" action="/search.html">` with `from`, `to` (IATA codes in hidden inputs, the visible text in the combobox), `depart`, `return`, `trip` (`oneway`, `return`, `multi`), `adults`, `children`, `infants`, `cabin`. Multi-city adds leg rows (`legs=PAR-NYC-2026-11-20,NYC-MIA-2026-11-25`). Defaults (passengers, cabin) come from the configuration. Client checks: return after departure, infants ≤ adults, at most 9 seats.
+**Form.** A real `<form method="get" action="/search.html">` with `from`, `to` (IATA codes in hidden inputs, the visible text in the combobox), `depart`, `return`, `trip` (`oneway`, `return`, `multi`), `adults`, `children`, `infants`, `cabin` (`ECONOMY`, `PREMIUM_ECONOMY`, `BUSINESS`, `FIRST`). Multi-city adds leg rows (`legs=PAR-NYC-2026-11-20,NYC-MIA-2026-11-25`, 2 to 6 legs; the first two start from the route and date already typed). Client checks: return after departure, infants ≤ adults, at most 9 seats.
+
+- **Query string.** The script sends what the form itself would send, in document order, with literal commas: `/search.html?trip=return&from=PAR&to=NYC&depart=2026-11-20&return=2026-11-27&adults=2&children=0&infants=0&cabin=ECONOMY`; a one-way trip has no `return`, a multi-city trip has `legs` instead of `from`, `to` and `depart` (hidden sections are disabled). `readSearchQuery` of `src/components/search-form.js` reads it back.
+- **Without JavaScript** the form is a plain GET: the place fields take typed 3-letter codes (`pattern`), the passengers are number fields, and multi-city is not offered (its legs are composed by the script).
+- **Defaults**: return trip, 1 adult, economy (`SEARCH_DEFAULTS`). `StorefrontConfig` publishes no search defaults, so these are the storefront's own; the OTA's default cabin (`storefront_settings.search_defaults`) applies on the server only to searches sent without a cabin, which this form never sends.
+- **Location combobox** (ARIA 1.2, list autocomplete): Down and Up move `aria-activedescendant` (wrapping), Enter selects without submitting, Escape closes and keeps the typed text (a search still waiting is dropped, so the list stays closed), typing gives the visual focus back to the text. A typed 3-letter code counts when the search failed or has not answered yet; after an answer, only a suggested code counts.
+- **Checks before leaving the page**: a place chosen (or an accepted code) for every field, origin and destination different, dates from today on, a return on or after the departure (a same-day return is allowed), each multi-city flight on or after the one above it, 1–9 adults, at most 9 seats (adults and children), at most one infant per adult. Problems appear as field errors with the focused error summary of `lib/forms.js`; the passenger panel opens for its own and stays open when a summary link moves the focus into it.
 
 | State | Shows |
 |---|---|
 | Autocomplete empty | "No airport or city found" in the listbox |
 | Autocomplete error | The field still accepts a typed IATA code |
+| Text that is no suggestion | "Choose an airport or city from the list, or type its 3-letter code" at the field |
 
 ## 4. Results: `/search.html` (M2)
 

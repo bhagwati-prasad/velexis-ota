@@ -51,7 +51,7 @@ ota/frontend/
   account/index.html  account/sign-in.html  account/sign-up.html  account/verify.html
   account/forgot-password.html  account/reset-password.html
   partials/                   header.html, footer.html, test-banner.html, states.html (page states, live region),
-                              noscript.html, templates/*.html
+                              noscript.html, search-form.html (form, leg and suggestion templates), templates/*.html
   public/fonts/               bundled open-licence fonts (woff2), selectable in settings
   public/favicon.ico          neutral default, replaced at runtime by the OTA favicon
   src/
@@ -68,7 +68,7 @@ ota/frontend/
     lib/session.js            auth.getSession, account menu
     lib/blocks.js             content-page blocks → DOM (createElement only)
     lib/url.js                query helpers (comma lists, replaceState), one-time token parameters, safe links and `next` redirects
-    components/               header, footer, test-banner, location-combobox, passenger-picker, date-range,
+    components/               header, footer, test-banner, search-form, location-combobox, passenger-picker, date-range,
                               offer-card, itinerary, filters, sort, load-more, fare-families, price-breakdown,
                               stepper, traveller-form, contact-form, ancillary-picker, error-summary, dialog, live-region
     styles/main.css           @import "tailwindcss"; @theme tokens; a few component classes
@@ -119,7 +119,8 @@ E-mail links point at these URLs (`/account/verify.html?token=…`, `/account/re
 
 ### 5.2 Components and templates
 
-- **Components are small ES modules** in `src/components/` with one export, `mount(root, props)`, that returns an object with `update(props)` and `destroy()` where needed (the footer also exports `supportEmail`, the rule for showing a support address that boot's states share). No component holds global state; pages pass data down and listen to `CustomEvent`s. The polite live region is `mount()` of `components/live-region.js` (`announce(text)`, `clear()`), on the `[data-live-region]` element of `partials/states.html`.
+- **Components are small ES modules** in `src/components/` with one export, `mount(root, props)`, that returns an object with `update(props)` and `destroy()` where needed (the footer also exports `supportEmail`, the rule for showing a support address that boot's states share; the search form's components export their pure helpers, such as `readSearchQuery`, `searchUrl` and the passenger and date checks). No component holds global state; pages pass data down and listen to `CustomEvent`s. The polite live region is `mount()` of `components/live-region.js` (`announce(text)`, `clear()`), on the `[data-live-region]` element of `partials/states.html`.
+- **The search form** (`partials/search-form.html`, `components/search-form.js` with `location-combobox`, `passenger-picker` and `date-range`) enhances a plain GET form to `/search.html`; `readSearchQuery(params)` reads the query it sends back, so the results page can run the search and show the same form pre-filled ([`docs/pages.md`](docs/pages.md) §3).
 - **Markup lives in HTML.** Repeated items (offer card, segment, traveller form, document row) are `<template>` elements in `partials/templates/*.html`, included at build time by a 20-line Vite plugin (`<!-- @include partials/templates/offer-card.html -->`, `transformIndexHtml`). Shared header and footer are partials too, so they are in the static HTML.
 - **Rendering**: `clone("tpl-offer-card")` then `fill(el, data)`, which sets `textContent` and safe attributes by `data-field` names. `innerHTML` with data is forbidden (ESLint `no-unsanitized`).
   - `data-field="carrier.name"` sets the element's `textContent` from that path of `data` (own properties only); `data-field-<attribute>="path"` sets one attribute from an allowlist: text attributes (`alt`, `title`, `aria-label`, `datetime`, `value`, …), boolean ones (`hidden`, `disabled`, `checked`, `selected`, `open`), `data-*`, and `href` (on `<a>` and `<area>`) / `src` (on `<img>`) checked by `safeUrl` (same-origin paths, `?…`, `#…`; `href` also `https:`, `mailto:`, `tel:`). Any other attribute (`on*`, `style`, `srcdoc`, `class`, …), and a URL attribute of any other element (a script, frame or stylesheet), throws.
@@ -177,7 +178,7 @@ Branding comes from `storefront.get` (`branding.colors`, fonts, corner radius, l
 |---|---|
 | Structure | Landmarks (`header`, `nav`, `main`, `footer`), one `h1` per page, skip link to `main`, page `<title>` per step |
 | Forms | Visible labels, `autocomplete` tokens (names, e-mail, phone, `cc-*` on the airline-card page), errors linked by `aria-describedby`, an error summary that receives focus, no placeholder-only labels |
-| Search | Location autocomplete follows the ARIA 1.2 combobox pattern (listbox, `aria-activedescendant`, Escape, typed text kept); native date inputs; the passenger picker is a disclosure with steppers that have text labels |
+| Search | Location autocomplete follows the ARIA 1.2 combobox pattern (listbox, `aria-activedescendant`, Escape, typed text kept); native date inputs; the passenger picker is a disclosure with steppers that have text labels; the form's checks use the error summary of `lib/forms.js` ([`docs/pages.md`](docs/pages.md) §3) |
 | Dynamic content | A polite live region announces result counts, "loading", price changes and payment progress; focus moves to the new step heading in checkout |
 | Keyboard | The whole booking flow works with the keyboard only, including filters, fare choice, extras, the Stripe element and dialogs; visible focus, never obscured by the sticky header (2.4.11) |
 | Targets and motion | Targets at least 24 × 24 px (2.5.8); the price filter offers number inputs as well as a slider (2.5.7); no auto-advancing content; `prefers-reduced-motion` respected |
@@ -268,7 +269,7 @@ The variables are listed in [`.env.example`](.env.example) (`STOREFRONT_DEV_PORT
 
 | Level | Where | What |
 |---|---|---|
-| Unit | `ota/frontend/test/*.test.js` (Vitest + happy-dom) | `lib/format` (money, local times, durations), `lib/forms` (field errors, summary focus), `lib/config` (5-minute cache, throwing `sessionStorage`), `lib/dom` (attribute allowlist), `lib/errors` (code → page state), `lib/i18n` (plural forms), `lib/theme` (contrast fallback, `style.setProperty` only, no CSS text in any module), `lib/blocks` (unknown link schemes dropped), `lib/url` (`next` validation), components (combobox keyboard, filters → query string, stepper) |
+| Unit | `ota/frontend/test/*.test.js` (Vitest + happy-dom) | `lib/format` (money, local times, durations), `lib/forms` (field errors, summary focus), `lib/config` (5-minute cache, throwing `sessionStorage`), `lib/dom` (attribute allowlist), `lib/errors` (code → page state), `lib/i18n` (plural forms), `lib/theme` (contrast fallback, `style.setProperty` only, no CSS text in any module), `lib/blocks` (unknown link schemes dropped), `lib/url` (`next` validation), components (combobox keyboard, debounce and abort; search form → query string, checks, passenger steppers; filters → query string, stepper) |
 | Boot | `test/boot.test.js` (happy-dom browser page) | The real pages with their partials expanded by the build's include plugin, against a fake SDK: the full-page states of `storefront.get` (`TENANT_SUSPENDED`, `HOST_NOT_ALLOWED`, `503` and Retry, `429` with `Retry-After`), theme, header, footer, test banner, currency and session; every page includes the partials boot needs |
 | Lint | `test/lint.test.js` | `el.innerHTML = data` and the other HTML sinks fail lint in every storefront file, tests included |
 | Configuration | `test/csp.test.js` | The preview CSP equals the CSP in `deploy/caddy/Caddyfile`, so E2E runs see production headers; the build (made with the real `vite.config.js` in a scratch folder) has no inline script or style and no development value |

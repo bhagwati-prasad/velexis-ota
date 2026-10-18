@@ -1,0 +1,334 @@
+<form
+  method="get"
+  action="/search.html"
+  aria-label="Search flights"
+  class="mt-6 rounded-ui border border-muted/30 bg-panel p-4 sm:p-6"
+  data-search-form
+>
+  <div data-error-summary hidden class="mb-6 rounded-ui border-2 border-error bg-surface p-4"></div>
+  <fieldset class="flex flex-wrap gap-x-6 gap-y-2">
+    <legend class="sr-only">Trip type</legend>
+    <label class="inline-flex min-h-6 items-center gap-2">
+      <input type="radio" name="trip" value="return" checked class="size-4 accent-primary" /> Return
+    </label>
+    <label class="inline-flex min-h-6 items-center gap-2">
+      <input type="radio" name="trip" value="oneway" class="size-4 accent-primary" /> One way
+    </label>
+    <label class="inline-flex min-h-6 items-center gap-2" data-trip-multi hidden>
+      <input type="radio" name="trip" value="multi" disabled class="size-4 accent-primary" /> Multi-city
+    </label>
+  </fieldset>
+
+  <div class="mt-4 grid gap-4 md:grid-cols-2 lg:grid-cols-4" data-route>
+    <div class="relative" data-location-combobox="from">
+      <label for="search-from" class="block text-sm font-medium">From</label>
+      <input
+        id="search-from"
+        name="from"
+        type="text"
+        required
+        autocomplete="off"
+        spellcheck="false"
+        pattern="[A-Za-z]{3}"
+        title="A 3-letter airport or city code, for example LON"
+        aria-describedby="search-location-hint"
+        data-error-path="/from /originLocationCode"
+        class="mt-1 block w-full rounded-ui border border-muted/60 bg-surface px-3 py-2 aria-invalid:border-error"
+      />
+      <input type="hidden" data-combobox-value />
+    </div>
+    <div class="relative" data-location-combobox="to">
+      <label for="search-to" class="block text-sm font-medium">To</label>
+      <input
+        id="search-to"
+        name="to"
+        type="text"
+        required
+        autocomplete="off"
+        spellcheck="false"
+        pattern="[A-Za-z]{3}"
+        title="A 3-letter airport or city code, for example NYC"
+        aria-describedby="search-location-hint"
+        data-error-path="/to /destinationLocationCode"
+        class="mt-1 block w-full rounded-ui border border-muted/60 bg-surface px-3 py-2 aria-invalid:border-error"
+      />
+      <input type="hidden" data-combobox-value />
+    </div>
+    <div class="grid grid-cols-2 gap-4 md:col-span-2" data-date-range>
+      <div>
+        <label for="search-depart" class="block text-sm font-medium">Departure</label>
+        <input
+          id="search-depart"
+          name="depart"
+          type="date"
+          required
+          data-date="depart"
+          data-error-path="/depart /departureDate"
+          class="mt-1 block w-full rounded-ui border border-muted/60 bg-surface px-3 py-2 aria-invalid:border-error"
+        />
+      </div>
+      <div data-return-field>
+        <label for="search-return" class="block text-sm font-medium">Return</label>
+        <input
+          id="search-return"
+          name="return"
+          type="date"
+          data-date="return"
+          data-error-path="/return /returnDate"
+          class="mt-1 block w-full rounded-ui border border-muted/60 bg-surface px-3 py-2 aria-invalid:border-error"
+        />
+      </div>
+    </div>
+    <p id="search-location-hint" class="text-sm text-muted md:col-span-2 lg:col-span-4">
+      A city or airport name, or its 3-letter code.
+    </p>
+  </div>
+
+  <div class="mt-4" data-legs-section hidden>
+    <input type="hidden" name="legs" disabled data-legs-value />
+    <ol class="space-y-4" data-legs></ol>
+    <p class="mt-4">
+      <button
+        type="button"
+        data-action="add-leg"
+        class="min-h-6 rounded-ui border border-primary px-4 py-2 font-medium text-primary hover:bg-surface"
+      >
+        Add another flight
+      </button>
+    </p>
+  </div>
+
+  <div class="mt-4 flex flex-wrap items-end gap-4">
+    <div class="relative" data-passenger-picker>
+      <button
+        type="button"
+        hidden
+        aria-expanded="false"
+        aria-controls="search-passengers"
+        data-passenger-toggle
+        class="min-h-6 rounded-ui border border-muted/60 bg-surface px-3 py-2 text-left"
+      >
+        <span class="block text-sm font-medium">Passengers</span>
+        <span data-passenger-summary>1 adult</span>
+      </button>
+      <fieldset
+        id="search-passengers"
+        data-passenger-panel
+        class="rounded-ui border border-muted/30 bg-surface p-4"
+      >
+        <legend class="px-1 text-sm font-medium">Passengers</legend>
+        <div class="mt-2 flex items-center justify-between gap-4" data-stepper="adults">
+          <label for="search-adults"
+            >Adults <span class="block text-sm text-muted">12 years and over</span></label
+          >
+          <div class="flex items-center gap-2">
+            <button
+              type="button"
+              hidden
+              data-step="-1"
+              aria-label="Fewer adults"
+              aria-controls="search-adults"
+              class="size-8 rounded-ui border border-primary text-primary aria-disabled:opacity-40"
+            >
+              −
+            </button>
+            <input
+              id="search-adults"
+              name="adults"
+              type="number"
+              value="1"
+              min="1"
+              max="9"
+              inputmode="numeric"
+              required
+              data-passengers="adults"
+              data-error-path="/adults"
+              class="w-14 rounded-ui border border-muted/60 bg-surface px-2 py-1 text-center aria-invalid:border-error"
+            />
+            <button
+              type="button"
+              hidden
+              data-step="1"
+              aria-label="More adults"
+              aria-controls="search-adults"
+              class="size-8 rounded-ui border border-primary text-primary aria-disabled:opacity-40"
+            >
+              +
+            </button>
+          </div>
+        </div>
+        <div class="mt-3 flex items-center justify-between gap-4" data-stepper="children">
+          <label for="search-children"
+            >Children <span class="block text-sm text-muted">2 to 11 years</span></label
+          >
+          <div class="flex items-center gap-2">
+            <button
+              type="button"
+              hidden
+              data-step="-1"
+              aria-label="Fewer children"
+              aria-controls="search-children"
+              class="size-8 rounded-ui border border-primary text-primary aria-disabled:opacity-40"
+            >
+              −
+            </button>
+            <input
+              id="search-children"
+              name="children"
+              type="number"
+              value="0"
+              min="0"
+              max="8"
+              inputmode="numeric"
+              required
+              data-passengers="children"
+              data-error-path="/children"
+              class="w-14 rounded-ui border border-muted/60 bg-surface px-2 py-1 text-center aria-invalid:border-error"
+            />
+            <button
+              type="button"
+              hidden
+              data-step="1"
+              aria-label="More children"
+              aria-controls="search-children"
+              class="size-8 rounded-ui border border-primary text-primary aria-disabled:opacity-40"
+            >
+              +
+            </button>
+          </div>
+        </div>
+        <div class="mt-3 flex items-center justify-between gap-4" data-stepper="infants">
+          <label for="search-infants">
+            Infants <span class="block text-sm text-muted">Under 2, on an adult's lap</span>
+          </label>
+          <div class="flex items-center gap-2">
+            <button
+              type="button"
+              hidden
+              data-step="-1"
+              aria-label="Fewer infants"
+              aria-controls="search-infants"
+              class="size-8 rounded-ui border border-primary text-primary aria-disabled:opacity-40"
+            >
+              −
+            </button>
+            <input
+              id="search-infants"
+              name="infants"
+              type="number"
+              value="0"
+              min="0"
+              max="9"
+              inputmode="numeric"
+              required
+              data-passengers="infants"
+              data-error-path="/infants"
+              class="w-14 rounded-ui border border-muted/60 bg-surface px-2 py-1 text-center aria-invalid:border-error"
+            />
+            <button
+              type="button"
+              hidden
+              data-step="1"
+              aria-label="More infants"
+              aria-controls="search-infants"
+              class="size-8 rounded-ui border border-primary text-primary aria-disabled:opacity-40"
+            >
+              +
+            </button>
+          </div>
+        </div>
+        <p class="mt-3 text-sm text-muted">At most 9 seats (adults and children); one infant per adult.</p>
+        <p class="mt-3 text-right">
+          <button
+            type="button"
+            hidden
+            data-passenger-done
+            class="min-h-6 rounded-ui bg-primary px-4 py-1 font-medium text-on-primary hover:opacity-90"
+          >
+            Done
+          </button>
+        </p>
+      </fieldset>
+    </div>
+    <div>
+      <label for="search-cabin" class="block text-sm font-medium">Cabin</label>
+      <select
+        id="search-cabin"
+        name="cabin"
+        data-error-path="/cabin /travelClass"
+        class="mt-1 block rounded-ui border border-muted/60 bg-surface px-3 py-2"
+      >
+        <option value="ECONOMY" selected>Economy</option>
+        <option value="PREMIUM_ECONOMY">Premium economy</option>
+        <option value="BUSINESS">Business</option>
+        <option value="FIRST">First</option>
+      </select>
+    </div>
+    <button
+      type="submit"
+      class="min-h-6 rounded-ui bg-primary px-6 py-2 font-medium text-on-primary hover:opacity-90 sm:ml-auto"
+    >
+      Search flights
+    </button>
+  </div>
+</form>
+
+<template id="tpl-search-leg">
+  <li data-leg>
+    <fieldset class="grid gap-4 rounded-ui border border-muted/30 p-4 md:grid-cols-[1fr_1fr_auto_auto]">
+      <legend class="px-1 text-sm font-semibold" data-field="title">Flight 1</legend>
+      <div class="relative" data-location-combobox="leg-from">
+        <label class="block text-sm font-medium">From</label>
+        <input
+          type="text"
+          autocomplete="off"
+          spellcheck="false"
+          class="mt-1 block w-full rounded-ui border border-muted/60 bg-surface px-3 py-2 aria-invalid:border-error"
+        />
+        <input type="hidden" data-combobox-value />
+      </div>
+      <div class="relative" data-location-combobox="leg-to">
+        <label class="block text-sm font-medium">To</label>
+        <input
+          type="text"
+          autocomplete="off"
+          spellcheck="false"
+          class="mt-1 block w-full rounded-ui border border-muted/60 bg-surface px-3 py-2 aria-invalid:border-error"
+        />
+        <input type="hidden" data-combobox-value />
+      </div>
+      <div>
+        <label class="block text-sm font-medium">Date</label>
+        <input
+          type="date"
+          data-leg-date
+          class="mt-1 block w-full rounded-ui border border-muted/60 bg-surface px-3 py-2 aria-invalid:border-error"
+        />
+      </div>
+      <p class="self-end">
+        <button
+          type="button"
+          data-action="remove-leg"
+          data-field-aria-label="removeLabel"
+          class="min-h-6 rounded-ui px-3 py-2 text-sm font-medium text-primary underline"
+        >
+          Remove
+        </button>
+      </p>
+    </fieldset>
+  </li>
+</template>
+
+<template id="tpl-location-option">
+  <li
+    role="option"
+    aria-selected="false"
+    class="flex cursor-pointer items-baseline gap-3 px-3 py-2 hover:bg-panel aria-selected:bg-primary aria-selected:text-on-primary"
+  >
+    <span class="w-10 shrink-0 font-mono font-semibold" data-field="code"></span>
+    <span class="min-w-0">
+      <span class="block" data-field="title"></span>
+      <span class="block text-sm" data-field="detail"></span>
+    </span>
+  </li>
+</template>
