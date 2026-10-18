@@ -551,3 +551,101 @@ export const LEGAL_STRINGS = Object.freeze({
     },
   ]),
 });
+
+// ---- Dashboard and the create-OTA wizard (PFE-008) -----------------------------------------------------------
+
+/** `/dashboard`: the OTAs of the signed-in account (README §2 Signed in). */
+export const DASHBOARD_STRINGS = Object.freeze({
+  title: "My OTAs",
+  intro: "Every OTA you are a member of, with its status, its plan and your role in it.",
+  createOta: "Create an OTA",
+  listLabel: "Your OTAs",
+  key: "Key",
+  plan: "Plan",
+  role: "Your role",
+  storefront: "Storefront",
+  testMode: "Test mode",
+  emptyTitle: "You have no OTA yet",
+  empty:
+    "Create your first OTA: choose its name and key, and Velexis sets up its storefront, its OTA admin and its test keys. Every OTA starts in test mode.",
+  emptyInvited: "Invited to someone else's OTA? Open the link in the invitation e-mail.",
+  verifyFirst: "Verify your e-mail address before you create an OTA.",
+  verifyLink: "Verify your e-mail address",
+  unavailableTitle: "Your OTAs could not be loaded",
+});
+
+/** The steps of the create-OTA wizard, in order. */
+export const WIZARD_STEP_LABELS = Object.freeze({
+  details: "OTA details",
+  plan: "Plan",
+  review: "Review",
+});
+
+/** `/otas/new`: the create-OTA wizard (PF-10). */
+export const WIZARD_STRINGS = Object.freeze({
+  title: "Create an OTA",
+  intro:
+    "Three short steps: your OTA's details, its plan and a last check. Your OTA starts in test mode, so no booking or payment is real until you go live.",
+  progressLabel: "Steps",
+  stepOf: (step: number, total: number) => `Step ${step} of ${total}`,
+  nameLabel: "OTA name",
+  nameHint: "The name your customers see. You can change it later.",
+  nameRequired: "Enter a name for your OTA.",
+  nameTooLong: "Use at most 100 characters for the name.",
+  keyLabel: "OTA key",
+  keyHint:
+    "3 to 30 lower-case letters and digits, starting with a letter. It is part of your storefront address and cannot be changed later.",
+  keyRequired: "Enter a key for your OTA.",
+  keyInvalid: "Use 3 to 30 lower-case letters (a–z) and digits, starting with a letter.",
+  /** The storefront address the key gets: `<key>.<STOREFRONT_BASE_DOMAIN>`. */
+  keyAddress: (host: string) => `Storefront address: ${host}`,
+  keyPlaceholder: "yourkey",
+  keyChecking: "Checking whether this key is free…",
+  keyAvailable: "This key is available.",
+  keyTaken: "This key is taken: another OTA already uses it. Choose another one.",
+  keyReserved: "This key is reserved by Velexis. Choose another one.",
+  keyUnchecked: "This key could not be checked just now. It is checked again when you create the OTA.",
+  keyUnavailable:
+    "This key is not available any more: another OTA took it in the meantime, or it is reserved. Choose another one.",
+  countryLabel: "Country",
+  countryHint: "Where your business is registered. You can change it later.",
+  countryPlaceholder: "Choose a country",
+  countryRequired: "Choose the country of your business.",
+  countryUnknown: "Choose a country from the list.",
+  currencyLabel: "Default currency",
+  currencyHint: "The currency your storefront sells in. It cannot be changed later.",
+  currencyPlaceholder: "Choose a currency",
+  currencyRequired: "Choose the default currency of your OTA.",
+  currencyUnknown: "Choose a currency from the list.",
+  timeZoneLabel: "Time zone",
+  timeZoneHint: "For the dates and times of your OTA admin. You can change it later.",
+  timeZonePlaceholder: "Choose a time zone",
+  timeZoneRequired: "Choose the time zone of your OTA.",
+  timeZoneUnknown: "Choose a time zone from the list.",
+  planLegend: "Choose a plan",
+  earlyAccessOnly:
+    "While Velexis is in early access, every new OTA starts on the early access plan. When paid plans open, you choose one on the billing page.",
+  plansUnavailable:
+    "The plan details could not be loaded just now. Your OTA starts on the early access plan all the same.",
+  plansMissing: "The plans could not be loaded just now. Reload the page to try again.",
+  planRequired: "Choose a plan.",
+  price: "Price",
+  perMonth: "per month",
+  reviewIntro:
+    "Check the details before you create the OTA. The key and the default currency cannot be changed afterwards.",
+  storefrontAddress: "Storefront address",
+  change: "Change",
+  /** Read after "Change" by screen readers only, so each button has its own name. */
+  changeWhat: (what: string) => ` ${what}`,
+  back: "Back",
+  next: "Continue",
+  submit: "Create OTA",
+  submitting: "Creating your OTA…",
+  /** `UNPROCESSABLE` with `details.reason = "tenant_limit"` (PF-10 AC4), with `details.limit` when the API sent it. */
+  tenantLimit: (limit: number | undefined) =>
+    limit === undefined
+      ? "You already own the most OTAs one account can have. An OTA whose set-up failed does not count. Contact Velexis support if you need more."
+      : `You already own ${counted(limit, "OTA", "OTAs")}, the most one account can have. An OTA whose set-up failed does not count. Contact Velexis support if you need more.`,
+  formExpired: "This form has expired. Reload the page and try again.",
+  rateLimited: "Too many requests in a short time. Wait a minute, then try again.",
+});

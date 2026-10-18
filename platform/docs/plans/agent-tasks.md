@@ -888,7 +888,8 @@ Common commands: backend `pnpm --filter @velexis/platform-backend test`, `test:i
   - The sessions table marks the current session and revoking another removes it [PF-06 AC1]; a stale profile edit shows the reload message [PF-07 AC1].
 - **Verify:** `pnpm --filter @velexis/platform-frontend test`
 
-### PFE-008 · Build the dashboard and the create-OTA wizard
+### PFE-008 · Build the dashboard and the create-OTA wizard ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-frontend
 - **Milestone:** M1
 - **Depends on:** PFE-006, PBE-018
