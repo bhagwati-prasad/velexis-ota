@@ -1,7 +1,7 @@
 // The tenant lifecycle use cases (platform/docs/architecture.md §2.1: ProvisioningModule, layer 2; PADR-0001). PBE-018
 // brings `createTenant` (platform/docs/flows/signup-and-create-ota.md steps 5 to 7, scope PF-10 and PF-40): the checks,
-// then one transaction that writes the six rows of a new OTA. The dispatch of its job (PBE-019), the retries and the
-// key reveal (PBE-023), suspend, resume, migrate and go-live (later tasks) follow.
+// then one transaction that writes the six rows of a new OTA; PBE-019 dispatches its job after the commit. The retries
+// and the key reveal (PBE-023), suspend, resume, migrate and go-live (later tasks) follow.
 //
 // createTenant, in order:
 //
@@ -20,8 +20,13 @@
 //      `<key>.<STOREFRONT_BASE_DOMAIN>`, the `provision` job (`queued`, 5 attempts) and the audit row `tenant.created`.
 //    Any error rolls all of it back. A key taken by a concurrent creation between the check and the insert fails on
 //    the unique index, which also answers `409 TENANT_KEY_UNAVAILABLE`.
-// 4. The answer is `202 {tenant, provisioningJob {id, status: "queued"}, checkoutUrl: null}`. The job stays `queued`
-//    until PBE-019 dispatches it after the commit.
+// 4. After the commit the job is dispatched (dispatcher.ts, PBE-019): before M5 the gate is open, so it becomes
+//    `running` (attempt 1) and `tenant.provision` goes to the OTA worker. The OTA exists once the transaction has
+//    committed, so a failed dispatch never fails the call: it is logged (`provisioning.dispatch_failed`) and the job
+//    stays `queued` for the reconciler (PBE-023). An error answer here would make the portal retry, and the retry
+//    would find the key taken by this very OTA.
+// 5. The answer is `202 {tenant, provisioningJob {id, status}, checkoutUrl: null}`, with the job's status after the
+//    dispatch: `running`, or `queued` when it did not go out.
 //
 // The operation is idempotent through the global IdempotencyInterceptor (`x-idempotent: true`, PBE-009): a retry with
 // the same `Idempotency-Key` and body gets the stored `202` without running this again, and while Redis is down the
@@ -30,6 +35,7 @@ import { Inject, Injectable } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import type { components } from "@velexis/api-types/platform";
 import { AppError, type FieldError } from "@velexis/errors";
+import { InjectPinoLogger, PinoLogger } from "nestjs-pino";
 import type { PlatformTransaction } from "../audit/audit.repository";
 import { AuditService } from "../audit/audit.service";
 import { AccountsRepository } from "../auth/accounts.repository";
@@ -45,7 +51,8 @@ import { MembershipsRepository } from "../memberships/memberships.repository";
 import { isReservedTenantKey, storefrontHost } from "../tenants/tenant-key";
 import { TENANT_KEY_CONSTRAINTS, TenantsRepository } from "../tenants/tenants.repository";
 import { toTenant } from "../tenants/tenants.service";
-import { ProvisioningJobsRepository } from "./provisioning-jobs.repository";
+import { ProvisioningDispatcher } from "./dispatcher";
+import { ProvisioningJobsRepository, type ProvisioningJobStatus } from "./provisioning-jobs.repository";
 
 export type CreateTenantRequest = components["schemas"]["CreateTenantRequest"];
 export type TenantCreated = components["schemas"]["TenantCreated"];
@@ -93,11 +100,13 @@ export class LifecycleService {
     private readonly subscriptions: SubscriptionsRepository,
     private readonly domains: DomainsRepository,
     private readonly jobs: ProvisioningJobsRepository,
+    private readonly dispatcher: ProvisioningDispatcher,
     private readonly audit: AuditService,
     private readonly features: FeatureSwitches,
     private readonly ids: IdGenerator,
     private readonly clock: Clock,
     @Inject(PLATFORM_DB) private readonly db: PlatformDb,
+    @InjectPinoLogger(LifecycleService.name) private readonly logger: PinoLogger,
     config: ConfigService<PlatformBackendConfig, true>,
   ) {
     this.baseDomain = config.get("STOREFRONT_BASE_DOMAIN", { infer: true });
@@ -112,13 +121,31 @@ export class LifecycleService {
       throw new Error("createTenant with FEATURE_STRIPE_BILLING on is not implemented before PBE-044");
     }
     await this.checkReferences(request);
+    let created: TenantCreated;
     try {
-      return await runInTransaction(this.db, (trx) => this.create(trx, accountId, request));
+      created = await runInTransaction(this.db, (trx) => this.create(trx, accountId, request));
     } catch (error) {
       if (isKeyConflict(error)) {
         throw keyUnavailable(error);
       }
       throw error;
+    }
+    const status = await this.dispatchAfterCreate(created);
+    return { ...created, provisioningJob: { ...created.provisioningJob, status } };
+  }
+
+  /**
+   * Dispatches the job of an OTA that has just been created (step 4 of the file header) and returns the job's status
+   * afterwards. Never rejects: the OTA is committed, and the reconciler dispatches a job left `queued`.
+   */
+  private async dispatchAfterCreate(created: TenantCreated): Promise<ProvisioningJobStatus> {
+    const { id: jobId, status } = created.provisioningJob;
+    try {
+      const result = await this.dispatcher.dispatch(jobId);
+      return result.dispatched ? "running" : (result.status ?? status);
+    } catch (error) {
+      this.logger.warn({ jobId, tenantId: created.tenant.id, err: error }, "provisioning.dispatch_failed");
+      return status;
     }
   }
 

@@ -458,7 +458,8 @@ Common commands: backend `pnpm --filter @velexis/platform-backend test`, `test:i
   - The same `Idempotency-Key` replays the `202`; another body with that key answers 409; with Redis down the call answers 503 before writing.
 - **Verify:** `pnpm --filter @velexis/platform-backend test && pnpm --filter @velexis/platform-backend test:int -- provisioning`
 
-### PBE-019 · Implement provisioning dispatch and a fake OTA worker for tests
+### PBE-019 · Implement provisioning dispatch and a fake OTA worker for tests ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-backend
 - **Milestone:** M1
 - **Depends on:** PBE-018, PBE-004

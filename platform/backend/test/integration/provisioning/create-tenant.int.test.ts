@@ -7,8 +7,10 @@
 // Concurrency is made deterministic as in members.int.test.ts: a transaction of the test holds the accounts' rows
 // while the requests start, and lets them go once every request waits for a lock.
 import { randomUUID } from "node:crypto";
+import provisionFixture from "@velexis/api-types/fixtures/jobs/tenant-provision.json";
+import { validateJob } from "@velexis/api-types/jobs";
 import { sql } from "@velexis/db";
-import { expectResponseToMatch } from "@velexis/testing";
+import { expectResponseToMatch, responseChecker } from "@velexis/testing";
 import { Redis } from "ioredis";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { PlatformTransaction } from "../../../src/audit/audit.repository";
@@ -20,6 +22,7 @@ import {
   MembershipsRepository,
   type NewOwnerMembership,
 } from "../../../src/memberships/memberships.repository";
+import { DISPATCH_LEASE_MS } from "../../../src/provisioning/dispatcher";
 import { TenantsRepository } from "../../../src/tenants/tenants.repository";
 import { insertAccount, insertPlan, insertTenant, testId } from "../../builders/platform-rows";
 import { insertMembership, insertOta, TEST_BASE_DOMAIN } from "../../builders/tenants";
@@ -79,6 +82,10 @@ beforeAll(async () => {
       "VALUES ($1, 'FR', 60, 120)",
     [TIME_ZONE],
   );
+  // Here, not in the first test: parse the platform document for expectResponseToMatch, and compile the job message
+  // schemas that the dispatch after each creation checks with validateJob (PBE-019).
+  responseChecker("platform");
+  validateJob("tenant.provision", provisionFixture);
 }, 60_000);
 
 afterAll(async () => {
@@ -225,7 +232,7 @@ async function whileAccountsHeld(
 }
 
 describe("createTenant", () => {
-  it("[PBE-018 AC1] writes the tenant, its owner membership, subscription, sub-domain and queued job, and the audit row tenant.created, in one call [PF-10 AC2]", async () => {
+  it("[PBE-018 AC1] writes the tenant, its owner membership, subscription, sub-domain and provision job, and the audit row tenant.created, in one call [PF-10 AC2]", async () => {
     const founder = await account();
     const before = await counts();
     const now = t.clock.now();
@@ -262,7 +269,8 @@ describe("createTenant", () => {
         version: 1,
         myRole: "owner",
       },
-      provisioningJob: { id: answer.provisioningJob.id, status: "queued" },
+      // Dispatched right after the commit (PBE-019): the gate of a manual trial is open.
+      provisioningJob: { id: answer.provisioningJob.id, status: "running" },
       checkoutUrl: null,
     });
 
@@ -298,17 +306,20 @@ describe("createTenant", () => {
     expect(String(rows.tenant_memberships[0]?.["id"])).toMatch(/^stf_[0-9A-HJKMNP-TV-Z]{26}$/);
     expect(rows.subscriptions).toHaveLength(1);
     expect(rows.tenant_domains).toHaveLength(1);
+    // Inserted `queued` with no attempt made, then dispatched after the commit (PBE-019): attempt 1 is running.
     expect(rows.provisioning_jobs).toEqual([
       expect.objectContaining({
         id: answer.provisioningJob.id,
         kind: "provision",
-        status: "queued",
-        step: null,
-        attempt: 0,
+        status: "running",
+        step: "dispatch",
+        attempt: 1,
         max_attempts: 5,
         scheduled_at: now,
-        started_at: null,
+        started_at: now,
+        locked_until: new Date(now.getTime() + DISPATCH_LEASE_MS),
         requested_by_account_id: founder,
+        created_at: now,
       }),
     ]);
     const subscriptionId = rows.subscriptions[0]?.["id"];
