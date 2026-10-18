@@ -732,7 +732,8 @@ The OTA backend gets its contract extensions, request pipeline, tenancy, Amadeus
   - The bundle has no top-level side effects (importing it performs no `fetch` and touches no global except the IIFE's `window.Velexis`).
 - **Verify:** `pnpm --filter @velexis/ota-sdk build && pnpm --filter @velexis/ota-sdk test`
 
-### OFE-002 · Write the shared storefront modules: client, config, dom, format, forms, errors, i18n, url
+### OFE-002 · Write the shared storefront modules: client, config, dom, format, forms, errors, i18n, url ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-frontend
 - **Milestone:** M2
 - **Depends on:** OFE-001, SDK-004

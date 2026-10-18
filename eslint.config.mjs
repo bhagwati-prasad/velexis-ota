@@ -234,14 +234,23 @@ export default tseslint.config(
     },
   },
 
-  // Browser code: the storefront and the SDK never write untrusted HTML (conventions §4).
+  // Browser code: the storefront and the SDK never write untrusted HTML (conventions §4). Data reaches the storefront's
+  // pages only through textContent and allowlisted attributes (ota/frontend/src/lib/dom.js); `el.innerHTML = data`
+  // fails here (ota/frontend/test/lint.test.js). The plugin's default sinks (innerHTML, outerHTML,
+  // insertAdjacentHTML, document.write, createContextualFragment, setHTMLUnsafe, import()) are joined by three more
+  // HTML parsers: an iframe's `srcdoc`, `Document.parseHTMLUnsafe` and `DOMParser.parseFromString` (its nodes run
+  // their event handlers once they are moved into the page).
   {
     files: BROWSER_JS,
     plugins: { "no-unsanitized": noUnsanitized },
     languageOptions: { globals: { ...globals.browser }, sourceType: "module" },
     rules: {
-      "no-unsanitized/method": "error",
-      "no-unsanitized/property": "error",
+      "no-unsanitized/method": [
+        "error",
+        {},
+        { parseHTMLUnsafe: { properties: [0] }, parseFromString: { properties: [0] } },
+      ],
+      "no-unsanitized/property": ["error", {}, { srcdoc: {} }],
       "no-restricted-syntax": [
         "error",
         {

@@ -12,6 +12,9 @@
     "test": "vitest run",
     "lint": "eslint ."
   },
+  "dependencies": {
+    "@velexis/ota-sdk": "workspace:*"
+  },
   "devDependencies": {
     "@tailwindcss/vite": "4.1.18",
     "eslint": "9.39.5",

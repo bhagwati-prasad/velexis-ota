@@ -58,15 +58,15 @@ ota/frontend/
     boot.js                   shared start-up of every page (§5.1)
     lib/client.js             the single SDK client (cookie mode)
     lib/config.js             storefront.get with the 5-minute sessionStorage cache
-    lib/dom.js                $, $$, clone(templateId), fill(el, data) via textContent, on()
+    lib/dom.js                $, $$, clone(templateId), fill(el, data) via textContent and allowlisted attributes, on()
     lib/format.js             money, dates, durations with Intl
     lib/forms.js              serialisation, fieldErrors → fields, error summary, submit state
     lib/errors.js             VelexisError → page state (PRICE_CHANGED, SOLD_OUT, *_EXPIRED, …)
-    lib/i18n.js               UI strings (English), error code → message
+    lib/i18n.js               UI strings (English, Intl.PluralRules), page-state texts, field-error messages by code
     lib/theme.js              branding → CSS custom properties, contrast checks, fonts, favicon
     lib/session.js            auth.getSession, account menu
     lib/blocks.js             content-page blocks → DOM (createElement only)
-    lib/url.js                query helpers, safe `next` redirects
+    lib/url.js                query helpers (comma lists, replaceState), one-time token parameters, safe links and `next` redirects
     components/               header, footer, test-banner, location-combobox, passenger-picker, date-range,
                               offer-card, itinerary, filters, sort, load-more, fare-families, price-breakdown,
                               stepper, traveller-form, contact-form, ancillary-picker, error-summary, dialog, live-region
@@ -121,8 +121,13 @@ E-mail links point at these URLs (`/account/verify.html?token=…`, `/account/re
 - **Components are small ES modules** in `src/components/` with one export, `mount(root, props)`, that returns an object with `update(props)` and `destroy()` where needed. No component holds global state; pages pass data down and listen to `CustomEvent`s.
 - **Markup lives in HTML.** Repeated items (offer card, segment, traveller form, document row) are `<template>` elements in `partials/templates/*.html`, included at build time by a 20-line Vite plugin (`<!-- @include partials/templates/offer-card.html -->`, `transformIndexHtml`). Shared header and footer are partials too, so they are in the static HTML.
 - **Rendering**: `clone("tpl-offer-card")` then `fill(el, data)`, which sets `textContent` and safe attributes by `data-field` names. `innerHTML` with data is forbidden (ESLint `no-unsanitized`).
+  - `data-field="carrier.name"` sets the element's `textContent` from that path of `data` (own properties only); `data-field-<attribute>="path"` sets one attribute from an allowlist: text attributes (`alt`, `title`, `aria-label`, `datetime`, `value`, …), boolean ones (`hidden`, `disabled`, `checked`, `selected`, `open`), `data-*`, and `href` (on `<a>` and `<area>`) / `src` (on `<img>`) checked by `safeUrl` (same-origin paths, `?…`, `#…`; `href` also `https:`, `mailto:`, `tel:`). Any other attribute (`on*`, `style`, `srcdoc`, `class`, …), and a URL attribute of any other element (a script, frame or stylesheet), throws.
+  - A path missing from `data` keeps the template's own text or attribute, `null` empties it, and an object throws: money, dates and durations are formatted with `lib/format.js` first.
 - **Forms**: native elements and validation attributes first; `lib/forms.js` maps API `fieldErrors` onto fields (`aria-invalid`, `aria-describedby`) and builds the error summary that receives focus.
-- **Errors** are shown from `VelexisError.code` through `lib/i18n.js`; `PRICE_CHANGED`, `SOLD_OUT`, `SEARCH_EXPIRED`, `OFFER_EXPIRED`, `CHECKOUT_EXPIRED` and `SUPPLIER_TIMEOUT` have dedicated UI states ([conventions §4](../../docs/mvp/conventions.md#4-vanilla-storefront-otafrontend)).
+  - A field error's JSON pointer finds its control through `data-error-path` (one or more pointers separated by spaces, for example `data-error-path="/originLocationCode"` on the visible combobox), else by `name`: the pointer's segments joined with dots (`/travelers/0/firstName` → `travelers.0.firstName`), or the parameter name for `/query/…` and the other parameter locations. Errors without a visible control are listed in the summary only.
+  - A field's message follows the field, or the label that wraps it, or ends the fieldset of a radio or checkbox group. The summary is the form's `[data-error-summary]` element, or one created at the top of the form; its links focus the fields. Messages come from `lib/i18n.js` by code and never repeat the rejected value. `clearFieldErrors` removes exactly what `showFieldErrors` added, and leaves any `aria-invalid` the page set itself.
+  - `withSubmitState(form, task)` marks the form `aria-busy`, its submit buttons `aria-disabled` (they keep focus) with their `data-busy-label` text, and ignores a second submit while the first runs.
+- **Errors** are shown from `VelexisError.code` through `lib/i18n.js`; `PRICE_CHANGED`, `SOLD_OUT`, `SEARCH_EXPIRED`, `OFFER_EXPIRED`, `CHECKOUT_EXPIRED` and `SUPPLIER_TIMEOUT` have dedicated UI states ([conventions §4](../../docs/mvp/conventions.md#4-vanilla-storefront-otafrontend)). `pageStateFor(error)` of `lib/errors.js` names the state (`suspended` and `unknown-host` replace the page; the others are inline), with its text, `retry`, `retryAfterSeconds`, `fieldErrors` and `details`; `ABORTED` (a call the page cancelled) is the `aborted` state, which pages ignore.
 - **Dialogs** use the native `<dialog>` element (focus trap and Escape for free).
 
 ## 6. Theming
@@ -197,7 +202,7 @@ Images carry width and height, results render 20 at a time, and search shows a s
 
 - **CSP** comes from Caddy for every storefront host ([`deploy/caddy/Caddyfile`](../../deploy/caddy/Caddyfile)): `default-src 'self'`, scripts from self and Stripe only, `style-src 'self'`, `img-src 'self' data:`, `font-src 'self'`, `connect-src 'self' https://api.stripe.com`, Stripe frames only, `worker-src 'none'` (no service worker can be registered on the origin), `frame-ancestors 'none'`. The build therefore has **no inline scripts or styles**: Vite's module-preload polyfill is off and `build.assetsInlineLimit` is 0, so no font becomes a `data:` URI.
 - **No tokens in JavaScript.** Cookie mode only; the SDK throws if a key or token is passed. The only JS-readable cookie is `__Host-vx_csrf`, which is not a credential. `sessionStorage` and `localStorage` hold only the public configuration and the currency choice.
-- **No `innerHTML` with data**; content pages arrive as parsed blocks and are built with `createElement`. Links in blocks are re-checked in the browser (`https:`, `mailto:`, `tel:`, relative `/p/…` only); external ones get `rel="noopener noreferrer"`.
+- **No `innerHTML` with data**: ESLint `no-unsanitized` fails every storefront file that writes data through `innerHTML`, `outerHTML`, `insertAdjacentHTML`, `document.write`, `createContextualFragment`, `setHTMLUnsafe`, `Document.parseHTMLUnsafe`, `DOMParser.parseFromString` or an iframe's `srcdoc` (`test/lint.test.js`); content pages arrive as parsed blocks and are built with `createElement`. Links in blocks are re-checked in the browser (`https:`, `mailto:`, `tel:`, relative `/p/…` only); external ones get `rel="noopener noreferrer"`.
 - **Redirects**: a `next` parameter must be a relative path starting with a single `/`; anything else goes to `/`.
 - **Tokens in URLs**: verification and reset tokens are read once and removed from the address bar with `history.replaceState`; the referrer policy is `strict-origin-when-cross-origin`.
 - **Stripe** ([flow](../docs/flows/checkout-stripe.md)): Stripe.js is a static `<script>` tag from `https://js.stripe.com` in `checkout/pay-card.html` only, never bundled or self-hosted; the Payment Element keeps card data inside Stripe's iframes; `stripeAccount` is set in Connect mode; the Appearance API takes the OTA colours.
@@ -262,7 +267,8 @@ The variables are listed in [`.env.example`](.env.example) (`STOREFRONT_DEV_PORT
 
 | Level | Where | What |
 |---|---|---|
-| Unit | `ota/frontend/test/*.test.js` (Vitest + happy-dom) | `lib/format` (money, local times, durations), `lib/forms` (field errors, summary focus), `lib/theme` (contrast fallback), `lib/blocks` (unknown link schemes dropped), `lib/url` (`next` validation), components (combobox keyboard, filters → query string, stepper) |
+| Unit | `ota/frontend/test/*.test.js` (Vitest + happy-dom) | `lib/format` (money, local times, durations), `lib/forms` (field errors, summary focus), `lib/config` (5-minute cache, throwing `sessionStorage`), `lib/dom` (attribute allowlist), `lib/errors` (code → page state), `lib/i18n` (plural forms), `lib/theme` (contrast fallback), `lib/blocks` (unknown link schemes dropped), `lib/url` (`next` validation), components (combobox keyboard, filters → query string, stepper) |
+| Lint | `test/lint.test.js` | `el.innerHTML = data` and the other HTML sinks fail lint in every storefront file, tests included |
 | Configuration | `test/csp.test.js` | The preview CSP equals the CSP in `deploy/caddy/Caddyfile`, so E2E runs see production headers; the build (made with the real `vite.config.js` in a scratch folder) has no inline script or style and no development value |
 | Build tools | `test/budgets.test.js`, `test/vite-plugins.test.js` | The budget script on fixture folders (a breach exits 1 and names the file); page inputs, partials, and the dev and preview servers against a fake OTA API (proxy headers, 400, 404 and 503 answers) |
 | End to end | `tools/e2e/specs/storefront/*.e2e.ts` (Playwright + `@axe-core/playwright`) | Against `vite preview` (production build) proxied to the local OTA backend, the Amadeus stub, Mailpit, Stripe test mode |
