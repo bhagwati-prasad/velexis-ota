@@ -541,7 +541,8 @@ The OTA backend gets its contract extensions, request pipeline, tenancy, Amadeus
   - An expired priced offer answers 410 `OFFER_EXPIRED`; customer responses carry no net amount.
 - **Verify:** `pnpm --filter @velexis/ota-backend test -- shopping && pnpm --filter @velexis/ota-backend test:int -- shopping`
 
-### OBE-024 · Add the scheduler framework and the offers.purge job
+### OBE-024 · Add the scheduler framework and the offers.purge job ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-backend
 - **Milestone:** M2
 - **Depends on:** OBE-023, OBE-002

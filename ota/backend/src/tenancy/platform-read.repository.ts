@@ -5,8 +5,9 @@
 // in front of it, and when Redis is down the lookups come here directly. API keys joined in OBE-011 (`apiKeyByPrefix`,
 // for the key verifier), verified storefront domains in OBE-012 (`tenantIdByStorefrontHost`, for the tenant
 // resolver), the Amadeus connection and the shared Amadeus account in OBE-017 (`amadeusConnection`,
-// `amadeusAccountById`, for the connection resolver of src/amadeus/); later tasks add memberships and payment
-// connections to this class.
+// `amadeusAccountById`, for the connection resolver of src/amadeus/), the tenants a scheduled job fans out to in
+// OBE-024 (`tenantIdsByStatus`, for src/jobs/fan-out.ts); later tasks add memberships and payment connections to this
+// class.
 import { Inject, Injectable } from "@nestjs/common";
 import {
   assertTenantSchema,
@@ -24,6 +25,7 @@ import {
   TENANT_STATUSES,
   UnexpectedPlatformValueError,
   type PlatformTenant,
+  type TenantStatus,
 } from "./platform-read.types";
 
 /** Kysely over the pool of velexis_ota_app for the schema-qualified platform and reference tables. */
@@ -249,6 +251,26 @@ export class PlatformReadRepository {
       trx.selectFrom("platform.tenants").select(TENANT_COLUMNS).where("key", "=", key).executeTakeFirst(),
     );
     return row === undefined ? null : toPlatformTenant(row);
+  }
+
+  /**
+   * The ids of the tenants whose status is one of `statuses`, in id order: the targets of the worker's scheduled
+   * fan-outs (OADR-0014 point 1, OBE-024), which resolve each tenant through the cache afterwards. No status, no
+   * query; a status outside the CHECK list of `platform.tenants.status` is a programming error (TypeError).
+   */
+  async tenantIdsByStatus(statuses: readonly TenantStatus[]): Promise<string[]> {
+    const wanted = [...new Set(statuses)];
+    const unknown = wanted.find((status) => !isOneOf(status, TENANT_STATUSES));
+    if (unknown !== undefined) {
+      throw new TypeError(`tenantIdsByStatus: ${JSON.stringify(unknown)} is not a tenant status`);
+    }
+    if (wanted.length === 0) {
+      return [];
+    }
+    const rows = await this.read((trx) =>
+      trx.selectFrom("platform.tenants").select("id").where("status", "in", wanted).orderBy("id").execute(),
+    );
+    return rows.map((row) => row.id);
   }
 
   /**

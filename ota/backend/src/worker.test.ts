@@ -1,15 +1,20 @@
 // Start-up of the worker and its health port without PostgreSQL or Redis (the probes connect on the first readiness
-// check only). Readiness with real dependencies: test/integration/health.
+// check only; the BullMQ queues, the scheduler registration and the vx:invalidate subscriber try a Redis where nothing
+// listens). Readiness with real dependencies: test/integration/health.
 import { ConfigService } from "@nestjs/config";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { exchange } from "../test/helpers/http";
 import { MemorySink } from "../test/helpers/log-sink";
-import { freePort, occupiedPort } from "../test/helpers/ports";
+import { freePort, occupiedPort, unreachableRedisUrl } from "../test/helpers/ports";
 import { Clock } from "./common/clock";
 import { IdGenerator } from "./common/ids";
 import { startWorker, WORKER_HOST, type RunningWorker } from "./worker";
 
-/** Dummy values; nothing connects to them in these tests. */
+/**
+ * Dummy values; nothing connects to them in these tests. A worker that starts gets `unreachableRedisUrl()` instead of
+ * this REDIS_URL: at start-up it registers its job schedulers and connects its vx:invalidate subscriber (OBE-024),
+ * which must not reach a Redis without a password (CI's) and leave a scheduler there.
+ */
 const ENV = {
   APP_ENV: "test",
   DATABASE_URL: "postgres://velexis_ota_app:dummy@127.0.0.1:5432/velexis",
@@ -27,7 +32,10 @@ afterEach(async () => {
 
 async function runningWorker(sink = new MemorySink()): Promise<{ worker: RunningWorker; port: number }> {
   const port = await freePort();
-  const worker = await startWorker({ env: { ...ENV, HEALTH_PORT: String(port) }, logDestination: sink });
+  const worker = await startWorker({
+    env: { ...ENV, REDIS_URL: await unreachableRedisUrl(), HEALTH_PORT: String(port) },
+    logDestination: sink,
+  });
   if (worker === undefined) {
     throw new Error(`the worker did not start:\n${sink.text()}`);
   }
@@ -70,7 +78,10 @@ describe("startWorker", () => {
     const sink = new MemorySink();
     const port = await freePort();
 
-    const worker = await startWorker({ env: { ...ENV, HEALTH_PORT: String(port) }, logDestination: sink });
+    const worker = await startWorker({
+      env: { ...ENV, REDIS_URL: await unreachableRedisUrl(), HEALTH_PORT: String(port) },
+      logDestination: sink,
+    });
 
     expect(worker?.health).toMatchObject({ address: WORKER_HOST, port });
     expect(sink.records()).toContainEqual(
@@ -91,7 +102,7 @@ describe("startWorker", () => {
     cleanups.push(taken.release);
 
     const worker = await startWorker({
-      env: { ...ENV, HEALTH_PORT: String(taken.port) },
+      env: { ...ENV, REDIS_URL: await unreachableRedisUrl(), HEALTH_PORT: String(taken.port) },
       logDestination: sink,
     });
     if (worker !== undefined) {

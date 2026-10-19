@@ -30,8 +30,8 @@
 // A fill that races an invalidation must not put the old row back: the platform publishes after its commit, so a
 // lookup that read PostgreSQL before the commit may write after the subscriber deleted the key. Every invalidation
 // first bumps `generation` (in this process, which also runs the subscriber); a fill that started under an older
-// generation is not written, and one whose write lands after a bump is deleted again. Fills of other processes (none
-// in the MVP: only the API fills) are bounded by the TTL.
+// generation is not written, and one whose write lands after a bump is deleted again. Every process that fills the
+// cache (the API, and the worker's jobs since OBE-024) runs its own subscriber for this reason.
 import { Inject, Injectable } from "@nestjs/common";
 import type { InvalidationEvent } from "@velexis/api-types/jobs";
 import { InvalidTenantSchemaError, isTenantSchema } from "@velexis/db";
