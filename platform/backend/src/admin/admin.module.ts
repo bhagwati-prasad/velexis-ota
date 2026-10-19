@@ -20,12 +20,15 @@
 //   its notes and legal name (PBE-029), over the exported repositories of TenantsModule, the global MembershipsModule
 //   (members and invitations), BillingModule (the subscription), SupplierConnectionsModule and PaymentConnectionsModule
 //   (the connections), DomainsModule, ProvisioningModule's jobs repository and AuditModule (the audit rows).
-//   ProvisioningJobsRepository (stateless) is provided here on its own rather than by importing ProvisioningModule: its
-//   static part would be a second module instance next to `ProvisioningModule.forApi()`, with a second
-//   ProvisioningDispatcher, and the API must have exactly one.
+// - AdminJobsController and AdminJobsService: the tenant jobs (list, detail, retry, cancel) over ProvisioningModule's
+//   repository and dispatcher and TenantsModule's repository, and the queues of both backends through QueueInspector
+//   (BullMQ read-only on RedisModule's command client, but for the retry of a failed platform job) (PBE-031).
+//   ProvisioningModule comes in as `ProvisioningModule.forApi()`, the very object AppModule imports, so the API has
+//   one ProvisioningModule instance and exactly one ProvisioningDispatcher; its static part exports the jobs
+//   repository the tenant detail reads too.
 //
-// Later tasks add the lifecycle actions, jobs and queues (PBE-030, PBE-031) and the other areas of
-// platform/docs/api-inventory-admin.md, one controller per area. The admin bootstrap commands of dist/cli.js
+// Later tasks add the tenant lifecycle actions (PBE-030) and the other areas of platform/docs/api-inventory-admin.md,
+// one controller per area. The admin bootstrap commands of dist/cli.js
 // (`admin:grant`, `admin:reset-mfa`, admin-cli.commands.ts) run outside this module, in an application context of
 // their own.
 import { Module } from "@nestjs/common";
@@ -37,7 +40,7 @@ import { QueuesModule } from "../common/queues/queues.module";
 import { DomainsModule } from "../domains/domains.module";
 import { NotificationsModule } from "../notifications/notifications.module";
 import { PaymentConnectionsModule } from "../payment-connections/payment-connections.module";
-import { ProvisioningJobsRepository } from "../provisioning/provisioning-jobs.repository";
+import { ProvisioningModule } from "../provisioning/provisioning.module";
 import { SupplierConnectionsModule } from "../supplier-connections/supplier-connections.module";
 import { TenantsModule } from "../tenants/tenants.module";
 import { AdminAccountsController } from "./admin-accounts.controller";
@@ -50,8 +53,11 @@ import { AdminAuthService } from "./admin-auth.service";
 import { AdminDashboardController } from "./admin-dashboard.controller";
 import { AdminDashboardRepository } from "./admin-dashboard.repository";
 import { AdminDashboardService } from "./admin-dashboard.service";
+import { AdminJobsController } from "./admin-jobs.controller";
+import { AdminJobsService } from "./admin-jobs.service";
 import { AdminTenantsController } from "./admin-tenants.controller";
 import { AdminTenantsService } from "./admin-tenants.service";
+import { QueueInspector } from "./queue-inspector";
 
 @Module({
   imports: [
@@ -61,6 +67,8 @@ import { AdminTenantsService } from "./admin-tenants.service";
     NotificationsModule,
     QueuesModule,
     SupplierConnectionsModule.forApi(),
+    // The very object AppModule imports (`forApi()` returns one object), so Nest builds the module once.
+    ProvisioningModule.forApi(),
     TenantsModule,
     BillingModule,
     DomainsModule,
@@ -74,6 +82,7 @@ import { AdminTenantsService } from "./admin-tenants.service";
     AdminAuditController,
     AdminDashboardController,
     AdminTenantsController,
+    AdminJobsController,
   ],
   providers: [
     AdminAuthService,
@@ -81,7 +90,8 @@ import { AdminTenantsService } from "./admin-tenants.service";
     AdminDashboardRepository,
     AdminDashboardService,
     AdminTenantsService,
-    ProvisioningJobsRepository,
+    AdminJobsService,
+    QueueInspector,
   ],
 })
 export class AdminModule {}

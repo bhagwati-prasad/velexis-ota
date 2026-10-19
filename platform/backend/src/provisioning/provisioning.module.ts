@@ -101,13 +101,21 @@ export class ProvisioningWorkerModule {}
   exports: [ProvisioningJobsRepository, ProvisioningDispatcher],
 })
 export class ProvisioningModule {
-  /** The module with the portal's lifecycle routes, for AppModule. */
+  /** The one `forApi()` module object of the process. */
+  private static apiModule: DynamicModule | undefined;
+
+  /**
+   * The module with the portal's lifecycle routes, for AppModule; AdminModule imports it too, for the jobs repository
+   * and the dispatcher (PBE-031). It is one object for every caller: Nest tells dynamic modules apart by reference, so
+   * both imports share one module instance, and the API has exactly one ProvisioningDispatcher.
+   */
   static forApi(): DynamicModule {
-    return {
+    ProvisioningModule.apiModule ??= {
       module: ProvisioningModule,
       controllers: [LifecycleController],
       providers: [LifecycleService, OnboardingService, OnboardingRepository],
     };
+    return ProvisioningModule.apiModule;
   }
 
   /** The module with the tenant-event processor and the post-steps, for WorkerModule. */

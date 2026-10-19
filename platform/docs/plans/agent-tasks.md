@@ -692,7 +692,8 @@ Common commands: backend `pnpm --filter @velexis/platform-backend test`, `test:i
   - With a `silent` fake worker, a suspend job ends `failed` after the reconciler's attempts (FakeClock past each lease) and the tenant stays `suspended`; the same holds for a resume job and an `active` tenant [PADR-0001 item 7].
 - **Verify:** `pnpm --filter @velexis/platform-backend test:int -- provisioning admin`
 
-### PBE-031 · Implement admin provisioning jobs and queue inspection
+### PBE-031 · Implement admin provisioning jobs and queue inspection ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-backend
 - **Milestone:** M1
 - **Depends on:** PBE-023, PBE-028
