@@ -5,10 +5,10 @@
 // the process's Redis connections and the InvalidationPublisher (RedisModule, global), the rate limits and the
 // idempotency interceptor (PBE-009), and the API's `vx:invalidate` subscriber, which hands each event to the caches of
 // the API marked `@InvalidationListener()` (PBE-027). The worker imports `CommonModule.forWorker()`: Clock, ids, the
-// worker's own pool and the envelope encryption, without the request pipeline; a CLI command `CommonModule.forCli()`,
-// the same with the CLI's own small pool (PBE-028). Later tasks add the Stripe pieces here. TenantRoleGuard's
-// membership read (`TenantMembershipLookup`) comes from the global MembershipsModule, which AppModule imports next to
-// it (PBE-017).
+// worker's own pool, the envelope encryption and the `purge.daily` handler (PBE-034), without the request pipeline; a
+// CLI command `CommonModule.forCli()`, Clock, ids, the CLI's own small pool and the envelope encryption (PBE-028).
+// Later tasks add the Stripe pieces here. TenantRoleGuard's membership read (`TenantMembershipLookup`) comes from the
+// global MembershipsModule, which AppModule imports next to it (PBE-017).
 import { Global, Module, type DynamicModule } from "@nestjs/common";
 import { APP_FILTER, APP_GUARD, APP_INTERCEPTOR, DiscoveryModule } from "@nestjs/core";
 import { ClsMiddleware } from "nestjs-cls";
@@ -32,6 +32,8 @@ import { jsonBodyParser } from "./http/raw-body";
 import { RequestContext, requestContextModule } from "./http/request-context";
 import { AccountRateLimitGuard, RateLimitGuard, throttlerModule } from "./http/throttler.config";
 import { IdGenerator } from "./ids";
+import { PurgeRepository } from "./purge.repository";
+import { PurgeScheduler } from "./purge.scheduler";
 import { InvalidationSubscriber } from "./redis/invalidation.subscriber";
 import { RedisModule } from "./redis/redis.module";
 
@@ -124,14 +126,22 @@ export class CommonModule {
 
   /**
    * The worker's common providers (WorkerModule): Clock, ids, the worker's pool of velexis_platform_app (5
-   * connections, `application_name` platform-worker) and the envelope encryption. No request pipeline: the worker
-   * serves no API.
+   * connections, `application_name` platform-worker) and the envelope encryption, and the `@MaintenanceJob` handler
+   * of `purge.daily` (PBE-034), whose tables belong to several modules. No request pipeline: the worker serves no
+   * API.
    */
   static forWorker(): DynamicModule {
     return {
       module: CommonModule,
       imports: [RedisModule],
-      providers: [Clock, IdGenerator, ...platformDatabaseProviders("worker"), ...cryptoProviders()],
+      providers: [
+        Clock,
+        IdGenerator,
+        ...platformDatabaseProviders("worker"),
+        ...cryptoProviders(),
+        PurgeRepository,
+        PurgeScheduler,
+      ],
       exports: [Clock, IdGenerator, PLATFORM_DB, EnvelopeService],
     };
   }

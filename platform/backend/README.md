@@ -39,7 +39,7 @@ platform/backend/
 │   ├── main.ts                     HTTP entry (helmet, cookie-parser, trust proxy loopback, Nest's body parser off)
 │   ├── worker.ts                   BullMQ processors and schedulers, health server on HEALTH_PORT
 │   ├── cli.ts                      the command dispatcher: admin:grant, admin:reset-mfa (loaded only when one runs,
-│   │                               PBE-028), dev:seed
+│   │                               PBE-028), dev:seed (PBE-034)
 │   ├── app.module.ts, worker.module.ts
 │   ├── config.ts                   @velexis/config schema of every variable below
 │   ├── common/
@@ -56,6 +56,8 @@ platform/backend/
 │   │   │                           scheduler.registry.ts (the job schedulers, registered at worker start),
 │   │   │                           maintenance.processor.ts (the one platform-maintenance processor, PBE-021)
 │   │   ├── clock.ts, ids.ts        injectable Clock and prefixed-ULID generator (`IdGenerator.new("ten")`)
+│   │   ├── purge.scheduler.ts      `purge.daily`: the rows past their retention, in batches of 1 000; its deletes in
+│   │   │                           purge.repository.ts (PBE-034)
 │   │   ├── crypto.provider.ts      EnvelopeService: @velexis/crypto envelopes on the KEKs of MASTER_KEY_DIR (PBE-011)
 │   │   ├── database.ts             each process's pool of velexis_platform_app and `PLATFORM_DB` (Kysely) (PBE-012,
 │   │   │                           PBE-011); a CLI command's pool of 2, `application_name` platform-cli (PBE-028)
@@ -105,6 +107,7 @@ platform/backend/
 │   │                               admin-tenants.{controller,service,mapper}.ts (search, detail, notes) (PBE-029);
 │   │                               admin-jobs.{controller,service}.ts (tenant jobs and queues) and
 │   │                               queue-inspector.ts (BullMQ counts of both backends' queues) (PBE-031)
+│   ├── dev/                        dev-seed.command.ts: `dev:seed`, development data, refused in production (PBE-034)
 │   └── health/
 └── test/
     ├── support/app.ts              createTestApp(): the API on a test database clone and Redis, for Supertest (PBE-008)
@@ -150,7 +153,7 @@ Loaded and validated by `src/config.ts` (`@velexis/config`); the process refuses
 | `STOREFRONT_BASE_DOMAIN` | yes | `ota.example.com` | `<key>.<base>` sub-domains, `ask` rule | M1 |
 | `STOREFRONT_IPV4`, `STOREFRONT_IPV6` | M5 | `203.0.113.10`, `2001:db8::10` | Apex records shown to owners and checked by DNS verification (new) | M5 |
 | `DNS_RESOLVERS` | M5 | `1.1.1.1,8.8.8.8` | Resolvers for domain verification (new) | M5 |
-| `AMADEUS_BASE_URL_TEST`, `AMADEUS_BASE_URL_LIVE` | no | `https://test.travel.api.amadeus.com`, `https://travel.api.amadeus.com` | Hosts used to verify OTA-owned credentials; the stub `http://127.0.0.1:4900` in development (same names as the OTA backend) | M5 |
+| `AMADEUS_BASE_URL_TEST`, `AMADEUS_BASE_URL_LIVE` | no | `https://test.travel.api.amadeus.com`, `https://travel.api.amadeus.com` | Hosts used to verify OTA-owned credentials; the stub `http://127.0.0.1:4900` in development (same names as the OTA backend). `dev:seed` reads `AMADEUS_BASE_URL_TEST` (default the stub) for the test account it creates | M1 (`dev:seed`), M5 |
 | `STRIPE_SECRET_KEY` | M5 | `sk_test_dummy` | Velexis account: Billing, Connect token exchange, balance transactions | M5 |
 | `STRIPE_BILLING_WEBHOOK_SECRET` | M5 | `whsec_dummy_billing` | `/webhooks/stripe/billing` | M5 |
 | `STRIPE_CONNECT_CLIENT_ID` | M5 | `ca_dummy` | Connect Standard OAuth | M5 |
@@ -176,7 +179,7 @@ Full table in [`../docs/architecture.md`](../docs/architecture.md) §5. Summary:
 | `platform-domains` | Both | `domains/domain-checks.processor.ts` |
 | `platform-connections` | Both | `supplier-connections/verification.processor.ts`: the queue's one processor, by job name (`amadeus_account.verify` since PBE-020; `credentials.verify` of Amadeus and Stripe credentials joins it in M5) |
 | `platform-settlements` | Both | `settlements/settlements.processor.ts` |
-| `platform-maintenance` | Both | `common/queues/maintenance.processor.ts`: one processor for the schedulers (reconciler, usage flush, purges, pool level, invitations expiry, Stripe event sweep, billing jobs), which runs each job with the `@MaintenanceJob` handler of the owning module (`api-keys/usage-flush.processor.ts` since PBE-021, `memberships/invitations-expire.scheduler.ts` since PBE-026, `supplier-connections/pool-level.scheduler.ts` since PBE-020, `provisioning/reconciler.scheduler.ts` and `provisioning/purge-reveals.scheduler.ts` since PBE-023) |
+| `platform-maintenance` | Both | `common/queues/maintenance.processor.ts`: one processor for the schedulers (reconciler, usage flush, purges, pool level, invitations expiry, Stripe event sweep, billing jobs), which runs each job with the `@MaintenanceJob` handler of the owning module (`api-keys/usage-flush.processor.ts` since PBE-021, `memberships/invitations-expire.scheduler.ts` since PBE-026, `supplier-connections/pool-level.scheduler.ts` since PBE-020, `provisioning/reconciler.scheduler.ts` and `provisioning/purge-reveals.scheduler.ts` since PBE-023, `common/purge.scheduler.ts` since PBE-034) |
 
 The queues are opened by `QueuesModule` (PBE-009): BullMQ prefix `vx`, the process's BullMQ connection of `RedisModule`, and the defaults of ADR-0009 (`attempts: 5`, exponential backoff from 30 s, failed jobs kept 30 days, completed ones 1 day). A processor uses `@Processor(PLATFORM_QUEUE.<topic>, platformWorkerOptions(…))` for the concurrency of [`../docs/architecture.md`](../docs/architecture.md) §5. The worker only consumes; the API only produces.
 
@@ -283,6 +286,11 @@ The e-mail processor has one scheduler of its own, on its own queue (PADR-0013 i
 - **Rules** (`onboardingChecklist`, pure): the caller's `email_verified_at` and `mfa_enabled`; the tenant `active` (`ota_active` and `storefront_open`); initial keys revealed (`provisioning_jobs.revealed_at`) or any key of the OTA with `created_by_account_id`; the `test` supplier connection `active`; an invitation that is not `revoked` or more than one `active` member; a Stripe subscription `trialing` or `active`; a `verified` custom storefront domain; the `test` payment connection `connect_standard` or `api_keys` and `active`, or `velexis` with a `verified` payout account; a `live` supplier connection in any status or `storefront_environment = 'live'`.
 - **Read.** One statement of `OnboardingRepository` (the tenant, its primary domain, the caller's account and the `test` Stripe connection, plus one sub-query per other fact, each bound to the OTA) in one `START TRANSACTION READ ONLY` transaction that `OnboardingService` opens: one snapshot, and PostgreSQL refuses any write. The facts of the M5 items are read whatever the switches say; the switches only filter the answer. Nothing is written, cached, audited or logged.
 
+### Daily purge and the development seed (PBE-034, [architecture §5](../docs/architecture.md#5-worker-queues-and-schedules), [Amadeus flow §A](../docs/flows/amadeus-connection.md#a-velexis-shared-account-and-office-pool-platform-admin-m1) item 4)
+
+- **Purge** (`purge.daily`, daily at 02:50 UTC, `src/common/purge.scheduler.ts` over `purge.repository.ts`, provided by `CommonModule.forWorker()`): deletes, with cut-offs of the Clock's time of the run minus each retention, `account_tokens` used (`consumed_at`) or expired (`expires_at`) more than 7 days ago, `account_sessions` expired more than 30 days ago (a family ends at most 30 days after its first row, so its whole family has ended; a family goes generation by generation, and deleting a row clears the `replaced_by_id` before it), `sent` `email_outbox` rows sent more than 30 days ago, `processed` `stripe_events` processed more than 90 days ago and final `credential_submissions` (`applied`, `failed`, `superseded`) finished more than 90 days ago. A final row's own time counts (`sent_at`, `processed_at`, `finished_at`), `updated_at` only for a row without it; every other status stays. Each table goes in batches of 1 000 rows, one `DELETE … WHERE id IN (SELECT … LIMIT 1000 FOR UPDATE SKIP LOCKED)` and transaction each, until a batch deletes fewer (rows another transaction holds wait for the next run; at most 1 000 batches per table and run, `purge.capped`). `platform_audit_log` is never purged (append-only; velexis_platform_app cannot delete from it), and the run writes no audit row. Log `purge.daily` with the count per table, never a row's content; the job's result holds the counts. A database failure fails the job and BullMQ tries again; committed batches stay done.
+- **`dev:seed`** (`src/dev/dev-seed.command.ts`, run through `dist/cli.js`, §5): development and tests only; `APP_ENV=production` exits 1 before any connection, so nothing is written. It creates, each only when missing: the platform admin `admin@example.com` (`active`, verified, `is_platform_admin`, a random password hashed with Argon2id, TOTP MFA on with the secret envelope-encrypted as MfaService stores it), printing the password and the `otpauth://` set-up URI once on stdout, never logged, audited or stored in clear (an existing account of that address is never changed); the Velexis test Amadeus account at `AMADEUS_BASE_URL_TEST` (default the stub `http://127.0.0.1:4900`; `https` or the loopback stub only, as the column's CHECK) with client id `velexis-dev-seed` and a random client secret (envelope-encrypted, never printed), verified as the `amadeus_account.verify` job does (a token makes it `active` with `last_verified_at` and publishes the `amadeus_account` invalidation; no answer leaves it `pending_verification` with `last_error`, and a later run verifies it again; an account an admin configured or disabled is left alone, never verified or changed); and the offices `DEV1A0001` to `DEV1A0010` (`available`) in that account's pool, skipping ids the pool holds. Each change writes its audit row (actor `system`, label `cli dev:seed by <user>`): `admin.granted`, `amadeus_account.created`, `amadeus_account.verified` (or `verification_failed`), `amadeus_office.added`. A second run changes nothing, prints no secret and writes no audit row. Exit `0` when the admin, the active account and the ten offices are in place, `1` after a refusal, an invalid configuration or with what is still missing on stderr (the stub not running, a test account that is disabled or not `active` and not the seed's own, an existing `admin@example.com` that is not a platform admin with MFA), `2` for any argument.
+
 ## 5. Commands
 
 Run from the repository root (`pnpm --filter @velexis/platform-backend <script>`), or the root shortcuts of [`AGENTS.md`](../../AGENTS.md#10-commands-cheat-sheet).
@@ -298,7 +306,7 @@ Run from the repository root (`pnpm --filter @velexis/platform-backend <script>`
 | `pnpm contracts:lint` / `pnpm contracts:generate` | Lint the OpenAPI document / regenerate `@velexis/api-types/platform` and `@velexis/errors/platform` |
 | `pnpm dev:keys` | Create local key files in `.local/keys/` (master key, pepper, JWT keys) |
 | `pnpm --filter @velexis/platform-backend ref:load` | Shortcut for `pnpm db:seed:reference`: loads the vendored datasets of `tools/reference-data` into `reference` (idempotent upserts, [ADR-0024](../../docs/mvp/adr/0024-reference-data-sources-and-loader.md)). The backend has no loader of its own. |
-| `pnpm --filter @velexis/platform-backend dev:seed` | Development only (refused when `APP_ENV=production`): an admin account with MFA (prints its TOTP set-up URI), a Velexis test Amadeus account pointing at the stub, 10 test offices. The `early_access` plan comes from migration `0002`. |
+| `pnpm --filter @velexis/platform-backend dev:seed` | Development only (refused with exit `1` and nothing written when `APP_ENV=production`): builds, then runs `node dist/cli.js dev:seed`. Creates once the platform admin `admin@example.com` with MFA and prints its password and TOTP set-up URI (shown once: add the URI to an authenticator app), the Velexis test Amadeus account at `AMADEUS_BASE_URL_TEST` (the stub), verified, and the 10 test offices `DEV1A0001` to `DEV1A0010`; a second run changes nothing (§4, "Daily purge and the development seed"). Start the Amadeus stub first: without it the account stays `pending_verification` and the command exits `1` until a run with the stub up. The `early_access` plan comes from migration `0002`. |
 | `node dist/cli.js help` | List the CLI commands. Exit codes: `0` done (or nothing to do), `1` the command failed or refused, `2` no or unknown command, or wrong arguments (never echoed) |
 | `node dist/cli.js admin:grant <email> [--operator <name>]` | Grant platform admin to an existing `active` account with a verified address and MFA (exit `1` with the reason otherwise; exit `0` without a change for an admin already); one audit row `admin.granted` with `actor_type = 'system'` and the operator. `--operator` defaults to the user of the process: on the VM (`sudo velexis-run platform node dist/cli.js admin:grant <email> --operator <your name>`) pass it, as the command runs as `velexis-platform` |
 | `node dist/cli.js admin:reset-mfa <email> [--operator <name>]` | Emergency MFA reset of a platform admin who lost the authenticator and the recovery codes: MFA off, recovery codes deleted, every session revoked, `staffdeny` written, the account e-mailed; one audit row `account.mfa_reset` (`system`, the operator). Refuses accounts that are not admins (exit `1`) |
@@ -308,9 +316,10 @@ Run from the repository root (`pnpm --filter @velexis/platform-backend <script>`
 ## 6. Local development
 
 1. Install Node 22, pnpm 9, PostgreSQL 16, Redis 7, Mailpit and the Stripe CLI natively; run `deploy/scripts/dev-setup.sh` (roles and database) and `pnpm install`.
-2. `pnpm dev:keys`, copy `.env.example` to `.env.local`, then `pnpm db:migrate`, `pnpm db:seed:reference` (the same as `ref:load`) and `dev:seed`.
-3. Start the Amadeus stub (`pnpm stub:amadeus`) and the OTA worker when working on provisioning; `pnpm --filter @velexis/platform-backend dev`.
-4. Mailpit UI at `http://127.0.0.1:8025` shows every platform e-mail.
+2. `pnpm dev:keys`, copy `.env.example` to `.env.local`, then `pnpm db:migrate` and `pnpm db:seed:reference` (the same as `ref:load`).
+3. Start the Amadeus stub (`pnpm stub:amadeus`), then run `pnpm --filter @velexis/platform-backend dev:seed` once (keep the printed password and TOTP URI: they are shown once).
+4. Start the OTA worker when working on provisioning; `pnpm --filter @velexis/platform-backend dev`.
+5. Mailpit UI at `http://127.0.0.1:8025` shows every platform e-mail.
 
 ## 7. OpenAPI document
 

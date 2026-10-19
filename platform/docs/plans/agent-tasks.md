@@ -749,7 +749,8 @@ Common commands: backend `pnpm --filter @velexis/platform-backend test`, `test:i
   - Editing a Stripe-billed subscription answers 409.
 - **Verify:** `pnpm --filter @velexis/platform-backend test:int -- admin`
 
-### PBE-034 · Add the daily purge and the dev:seed command
+### PBE-034 · Add the daily purge and the dev:seed command ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-backend
 - **Milestone:** M1
 - **Depends on:** PBE-020, PBE-023, PBE-026, X-026
