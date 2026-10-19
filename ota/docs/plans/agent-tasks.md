@@ -811,7 +811,8 @@ The OTA backend gets its contract extensions, request pipeline, tenancy, Amadeus
   - Each state of §4 renders for its error code.
 - **Verify:** `pnpm --filter @velexis/ota-frontend test && pnpm --filter @velexis/ota-frontend build`
 
-### OFE-006 · Build the offer page with fare families and pricing
+### OFE-006 · Build the offer page with fare families and pricing ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-frontend
 - **Milestone:** M2
 - **Depends on:** OFE-005, OBE-022, OBE-023

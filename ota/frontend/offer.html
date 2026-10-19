@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="robots" content="noindex" />
+    <title>Flight details</title>
+    <meta
+      name="description"
+      content="Check your flights, compare the fares and continue with the one you want."
+    />
+    <link rel="stylesheet" href="/src/styles/main.css" />
+    <script type="module" src="/src/pages/offer.js"></script>
+  </head>
+  <body class="flex min-h-screen flex-col bg-surface font-body text-ink antialiased">
+    <!-- @include partials/noscript.html -->
+    <!-- @include partials/test-banner.html -->
+    <!-- @include partials/header.html -->
+    <main
+      id="main"
+      tabindex="-1"
+      class="mx-auto w-full max-w-6xl flex-1 px-4 py-8 focus:outline-none"
+      data-offer-page
+    >
+      <p class="mb-3">
+        <a
+          href="/"
+          hidden
+          class="min-h-6 font-medium text-primary underline underline-offset-4"
+          data-back-link
+          >Back to results</a
+        >
+      </p>
+      <h1 class="font-heading text-2xl font-semibold sm:text-3xl" data-offer-title>Flight details</h1>
+      <p class="mt-2 text-muted" data-offer-summary></p>
+
+      <div data-offer-state></div>
+
+      <div class="mt-6 space-y-4" aria-hidden="true" data-offer-loading hidden>
+        <div class="h-24 rounded-ui bg-panel motion-safe:animate-pulse"></div>
+        <div class="h-40 rounded-ui bg-panel motion-safe:animate-pulse"></div>
+        <div class="h-24 rounded-ui bg-panel motion-safe:animate-pulse"></div>
+      </div>
+
+      <div class="mt-6 grid items-start gap-6 lg:grid-cols-[1fr_18rem]" data-offer-content hidden>
+        <div class="min-w-0 space-y-8">
+          <section aria-labelledby="flights-title">
+            <h2 id="flights-title" class="font-heading text-xl font-semibold">Your flights</h2>
+            <ol
+              class="mt-3 space-y-4 rounded-ui border border-muted/30 bg-surface p-4"
+              data-offer-itineraries
+            ></ol>
+            <h3 class="mt-6 font-heading text-lg font-semibold">Flight details</h3>
+            <ol class="mt-3 space-y-4" data-offer-segments></ol>
+          </section>
+
+          <section aria-labelledby="baggage-title">
+            <h2 id="baggage-title" class="font-heading text-xl font-semibold">Baggage</h2>
+            <ul class="mt-3 grid gap-3 sm:grid-cols-2" data-offer-baggage></ul>
+            <p class="mt-3 text-sm text-muted" data-offer-baggage-note>
+              The airline confirms the baggage allowance at the next step.
+            </p>
+          </section>
+
+          <section aria-labelledby="fares-title">
+            <form novalidate data-fare-form>
+              <fieldset>
+                <legend>
+                  <h2 id="fares-title" class="font-heading text-xl font-semibold">Choose your fare</h2>
+                </legend>
+                <p class="mt-1 text-sm text-muted" data-fares-status></p>
+                <ul class="mt-4 grid gap-4 md:grid-cols-2 xl:grid-cols-3" data-fare-families></ul>
+              </fieldset>
+              <div data-price-state></div>
+              <p class="mt-4 font-medium" data-selected-fare></p>
+              <p class="mt-3">
+                <button
+                  type="submit"
+                  data-busy-label="Confirming the price…"
+                  class="min-h-6 rounded-ui bg-primary px-5 py-2 font-medium text-on-primary hover:opacity-90 aria-disabled:opacity-60"
+                >
+                  Continue with this fare
+                </button>
+              </p>
+            </form>
+          </section>
+        </div>
+
+        <aside
+          aria-labelledby="price-title"
+          class="rounded-ui border border-muted/30 bg-panel p-4 lg:sticky lg:top-4"
+        >
+          <h2 id="price-title" class="font-heading text-lg font-semibold">Price</h2>
+          <p class="mt-2 font-heading text-3xl font-semibold" data-offer-price></p>
+          <p class="text-sm text-muted" data-offer-price-note></p>
+          <p class="text-sm text-muted" data-offer-per-adult hidden></p>
+          <p class="mt-2 text-sm font-medium" data-offer-seats hidden></p>
+          <p class="mt-3 text-sm text-muted">
+            This is the price of your search. The airline confirms it, with any booking fees, at the next
+            step.
+          </p>
+        </aside>
+      </div>
+    </main>
+    <!-- @include partials/footer.html -->
+
+    <!-- @include partials/templates/offer-card.html -->
+    <!-- @include partials/templates/segment.html -->
+    <!-- @include partials/templates/fare-family.html -->
+    <template id="tpl-baggage">
+      <li class="rounded-ui bg-panel p-3 text-sm" data-baggage>
+        <p class="font-medium" data-field="traveller"></p>
+        <p data-field="checked"></p>
+        <p data-field="cabin" data-field-hidden="noCabin"></p>
+      </li>
+    </template>
+    <template id="tpl-state-link">
+      <p class="mt-4">
+        <a
+          class="font-medium text-primary underline underline-offset-4"
+          data-state-link
+          data-field="label"
+          data-field-href="href"
+        ></a>
+      </p>
+    </template>
+    <!-- @include partials/states.html -->
+  </body>
+</html>
