@@ -731,7 +731,8 @@ Common commands: backend `pnpm --filter @velexis/platform-backend test`, `test:i
   - Every state-changing admin endpoint of this task writes exactly one audit row with `actor_type = 'platform_admin'`.
 - **Verify:** `pnpm --filter @velexis/platform-backend test && pnpm --filter @velexis/platform-backend test:int -- admin`
 
-### PBE-033 · Implement admin plans and manual subscriptions
+### PBE-033 · Implement admin plans and manual subscriptions ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-backend
 - **Milestone:** M1
 - **Depends on:** PBE-028, PBE-017

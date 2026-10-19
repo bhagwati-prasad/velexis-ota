@@ -34,13 +34,8 @@ export const PENDING_OPERATIONS: readonly PendingOperation[] = Object.freeze([
   { operationId: "adminSetConnectionStatus", task: "PBE-030" },
 
   // PBE-066: admin plans and subscriptions, Amadeus accounts and offices, accounts, platform admins and audit (the
-  // Amadeus accounts and offices are bound since PBE-020, the accounts, platform admins and audit since PBE-032).
-  { operationId: "adminListPlans", task: "PBE-033" },
-  { operationId: "adminCreatePlan", task: "PBE-033" },
-  { operationId: "adminUpdatePlan", task: "PBE-033" },
-  { operationId: "adminListSubscriptions", task: "PBE-033" },
-  { operationId: "adminGetSubscription", task: "PBE-033" },
-  { operationId: "adminUpdateManualSubscription", task: "PBE-033" },
+  // Amadeus accounts and offices are bound since PBE-020, the accounts, platform admins and audit since PBE-032, the
+  // plans and subscriptions since PBE-033).
 
   // PBE-037: the M4 console token and Amadeus settings, and the M3 statement descriptor.
   { operationId: "createConsoleToken", task: "PBE-039" },

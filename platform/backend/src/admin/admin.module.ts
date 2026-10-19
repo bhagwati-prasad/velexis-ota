@@ -26,6 +26,10 @@
 //   ProvisioningModule comes in as `ProvisioningModule.forApi()`, the very object AppModule imports, so the API has
 //   one ProvisioningModule instance and exactly one ProvisioningDispatcher; its static part exports the jobs
 //   repository the tenant detail reads too.
+// - AdminBillingController: the plans (BillingModule's PlansService) and the subscriptions (PBE-033). The
+//   subscriptions' SubscriptionsService (`billing/subscriptions.service.ts`) is provided here, not by BillingModule:
+//   its manual edit also moves the tenant's plan through TenantsModule's repository, and BillingModule may not import
+//   TenantsModule, a module of its own layer (architecture §2.2).
 //
 // Later tasks add the tenant lifecycle actions (PBE-030) and the other areas of platform/docs/api-inventory-admin.md,
 // one controller per area. The admin bootstrap commands of dist/cli.js
@@ -36,6 +40,7 @@ import { AccountsModule } from "../accounts/accounts.module";
 import { AuditModule } from "../audit/audit.module";
 import { AuthModule } from "../auth/auth.module";
 import { BillingModule } from "../billing/billing.module";
+import { SubscriptionsService } from "../billing/subscriptions.service";
 import { QueuesModule } from "../common/queues/queues.module";
 import { DomainsModule } from "../domains/domains.module";
 import { NotificationsModule } from "../notifications/notifications.module";
@@ -50,6 +55,7 @@ import { AdminAmadeusController } from "./admin-amadeus.controller";
 import { AdminAuditController } from "./admin-audit.controller";
 import { AdminAuthController } from "./admin-auth.controller";
 import { AdminAuthService } from "./admin-auth.service";
+import { AdminBillingController } from "./admin-billing.controller";
 import { AdminDashboardController } from "./admin-dashboard.controller";
 import { AdminDashboardRepository } from "./admin-dashboard.repository";
 import { AdminDashboardService } from "./admin-dashboard.service";
@@ -83,6 +89,7 @@ import { QueueInspector } from "./queue-inspector";
     AdminDashboardController,
     AdminTenantsController,
     AdminJobsController,
+    AdminBillingController,
   ],
   providers: [
     AdminAuthService,
@@ -92,6 +99,7 @@ import { QueueInspector } from "./queue-inspector";
     AdminTenantsService,
     AdminJobsService,
     QueueInspector,
+    SubscriptionsService,
   ],
 })
 export class AdminModule {}

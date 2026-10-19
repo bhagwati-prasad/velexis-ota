@@ -1,11 +1,12 @@
 // The `tenants` repository (platform/docs/architecture.md §2.1: TenantsModule owns the table): the key check, the
 // lists and reads of the portal and the profile update (PBE-017), the row of a new OTA, which ProvisioningModule
 // writes in the create-OTA transaction (PBE-018), the two writes of its post-steps (PBE-022): the mirrored schema
-// version and the activation, and the failure of a provisioning and the owner's retry (PBE-023), and the platform
-// admin's OTA search and its edit of the legal name and the internal notes (PBE-029). Kysely on the process's
-// `PLATFORM_DB`, schema-qualified tables (ADR-0005). The reads join what an answer shows next to the tenant row: the
-// caller's role from the active membership (listTenants), the oldest active owner's e-mail address (the admin search)
-// and the primary storefront host from `tenant_domains`, read only. `reference.countries`,
+// version and the activation, and the failure of a provisioning and the owner's retry (PBE-023), the platform
+// admin's OTA search and its edit of the legal name and the internal notes (PBE-029), and the plan that follows the
+// admin's change of a manual subscription (PBE-033). Kysely on the process's `PLATFORM_DB`, schema-qualified tables
+// (ADR-0005). The reads join what an answer shows next to the tenant row: the caller's role from the active
+// membership (listTenants), the oldest active owner's e-mail address (the admin search) and the primary storefront
+// host from `tenant_domains`, read only. `reference.countries`,
 // `reference.currencies` and `reference.time_zones` are read for the checks of a new OTA and a profile update (the
 // reference tables are read directly, architecture §2.1).
 import { Inject, Injectable } from "@nestjs/common";
@@ -405,6 +406,35 @@ export class TenantsRepository {
       .returning("id")
       .executeTakeFirst();
     return row !== undefined;
+  }
+
+  /**
+   * Puts the tenant on the plan `planCode` in `trx` (PBE-033: the plan of its current manual subscription, which the
+   * platform admin changed), with `version + 1`, only when its plan differs: `Tenant.planCode` is part of the versioned
+   * tenant. The row stays locked for the rest of the transaction. Returns the previous plan code when this call
+   * changed the tenant, otherwise `undefined`.
+   */
+  async setPlanCode(
+    trx: PlatformTransaction,
+    tenantId: string,
+    planCode: string,
+    now: Date,
+  ): Promise<string | undefined> {
+    const current = await trx
+      .selectFrom("platform.tenants")
+      .select("plan_code")
+      .where("id", "=", tenantId)
+      .forUpdate()
+      .executeTakeFirst();
+    if (current === undefined || current.plan_code === planCode) {
+      return undefined;
+    }
+    await trx
+      .updateTable("platform.tenants")
+      .set({ plan_code: planCode, version: sql<number>`version + 1`, updated_at: now })
+      .where("id", "=", tenantId)
+      .execute();
+    return current.plan_code;
   }
 
   /** True when `code` is a country of `reference.countries`. */
