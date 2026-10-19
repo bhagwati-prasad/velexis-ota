@@ -709,7 +709,8 @@ Common commands: backend `pnpm --filter @velexis/platform-backend test`, `test:i
   - Queue counts match jobs added in the test; retry on `ota-tenant-ops` answers 403 [PF-84].
 - **Verify:** `pnpm --filter @velexis/platform-backend test:int -- admin`
 
-### PBE-032 · Implement admin accounts, platform admins and the audit log
+### PBE-032 · Implement admin accounts, platform admins and the audit log ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-backend
 - **Milestone:** M1
 - **Depends on:** PBE-028, PBE-016

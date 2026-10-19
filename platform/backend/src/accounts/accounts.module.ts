@@ -10,7 +10,8 @@
 // through the abstract `MfaVerification` of auth/mfa-challenge.store.ts, which this module provides, so AuthModule
 // never imports AccountsModule (architecture §2.2, as MembershipsModule provides TenantMembershipLookup). It also
 // exports MfaService itself for AdminModule's sign-in (PBE-028: the admin's challenge and step-up codes go through the
-// same checks). Nothing else uses it as a global.
+// same checks). Nothing else uses it as a global. AdminModule imports it for RecoveryCodesRepository: the admin's MFA
+// reset of an account deletes its recovery codes (PBE-032).
 import { Global, Module } from "@nestjs/common";
 import { AuditModule } from "../audit/audit.module";
 import { AuthModule } from "../auth/auth.module";
@@ -32,6 +33,6 @@ import { RecoveryCodesRepository } from "./recovery-codes.repository";
     MfaService,
     { provide: MfaVerification, useExisting: MfaService },
   ],
-  exports: [MfaVerification, MfaService],
+  exports: [MfaVerification, MfaService, RecoveryCodesRepository],
 })
 export class AccountsModule {}
