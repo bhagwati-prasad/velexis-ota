@@ -652,7 +652,8 @@ Common commands: backend `pnpm --filter @velexis/platform-backend test`, `test:i
   - `admin:grant` refuses an account without MFA and grants a verified one with MFA, writing one audit row.
 - **Verify:** `pnpm --filter @velexis/platform-backend build && pnpm --filter @velexis/platform-backend test:int -- admin`
 
-### PBE-029 · Implement the admin dashboard and tenant views
+### PBE-029 · Implement the admin dashboard and tenant views ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-backend
 - **Milestone:** M1
 - **Depends on:** PBE-028, PBE-022

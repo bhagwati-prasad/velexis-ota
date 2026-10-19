@@ -4,7 +4,8 @@
 // tenant-event consumer and the post-steps (the job with its tenant, the step log, the result, the reveal ciphertext,
 // the transition to `succeeded`) and the mirror of the tenant's migration ledger in `tenant_schema_migrations`, the
 // module's other table; PBE-023 the writes of the failure handler (back to `queued` with a backoff, or `failed`), the
-// reads and the lease extension of the reconciler, the setup progress and the one-time key reveal with its purge.
+// reads and the lease extension of the reconciler, the setup progress and the one-time key reveal with its purge;
+// PBE-029 the recent jobs of a tenant for the platform admin's tenant detail.
 // Kysely on the process's `PLATFORM_DB`, schema-qualified tables (ADR-0005). Times are the service's `Clock`, never the
 // database's `now()`, so leases follow the FakeClock in tests.
 import { Inject, Injectable } from "@nestjs/common";
@@ -20,6 +21,33 @@ export type ProvisioningJobKind =
 
 /** The states of `provisioning_jobs.status` (migration 0001); `queued` and `running` are the active ones. */
 export type ProvisioningJobStatus = "queued" | "running" | "succeeded" | "failed" | "canceled";
+
+/**
+ * The kinds the API shows (`ProvisioningJobKind` of the OpenAPI document, PADR-0001 item 8); the other kinds of the
+ * table are post-MVP, and nothing creates them yet.
+ */
+export const API_JOB_KINDS = Object.freeze([
+  "provision",
+  "migrate",
+  "suspend",
+  "resume",
+] as const satisfies readonly ProvisioningJobKind[]);
+
+/** A job as the platform admin's lists show it (`AdminProvisioningJob`): never the payload, result or ciphertext. */
+export interface AdminJobRow {
+  readonly id: string;
+  readonly tenant_id: string;
+  readonly tenant_key: string;
+  readonly kind: string;
+  readonly status: string;
+  readonly step: string | null;
+  readonly attempt: number;
+  readonly max_attempts: number;
+  readonly error: string | null;
+  readonly scheduled_at: Date;
+  readonly started_at: Date | null;
+  readonly finished_at: Date | null;
+}
 
 /** The attempts a provisioning job may make before it fails for good (provisioning flow, PADR-0001). */
 export const PROVISION_MAX_ATTEMPTS = 5;
@@ -617,6 +645,37 @@ export class ProvisioningJobsRepository {
       .limit(1)
       .executeTakeFirst();
     return row === undefined ? undefined : toProgressJob(row);
+  }
+
+  /**
+   * The last `limit` jobs of `tenantId` of the kinds the API shows (API_JOB_KINDS), newest first (`created_at`, then
+   * id), as the platform admin's tenant detail lists them (PBE-029, `adminGetTenant`). Read only; the columns never
+   * include the payload, the result or the reveal ciphertext.
+   */
+  async recentForTenant(tenantId: string, limit: number): Promise<AdminJobRow[]> {
+    return this.db
+      .selectFrom("platform.provisioning_jobs as j")
+      .innerJoin("platform.tenants as t", "t.id", "j.tenant_id")
+      .select([
+        "j.id",
+        "j.tenant_id",
+        "t.key as tenant_key",
+        "j.kind",
+        "j.status",
+        "j.step",
+        "j.attempt",
+        "j.max_attempts",
+        "j.error",
+        "j.scheduled_at",
+        "j.started_at",
+        "j.finished_at",
+      ])
+      .where("j.tenant_id", "=", tenantId)
+      .where("j.kind", "in", API_JOB_KINDS)
+      .orderBy("j.created_at", "desc")
+      .orderBy("j.id", "desc")
+      .limit(limit)
+      .execute();
   }
 
   /** Job `jobId` as the setup progress shows it, read on `db`; `undefined` for an unknown job. */

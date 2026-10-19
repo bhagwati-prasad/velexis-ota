@@ -2,12 +2,17 @@
 // in the caller's transaction, so an audit row commits or rolls back with the change it records (PADR-0006, Audit
 // item 1). The table is append-only by privilege: velexis_platform_app may insert and select, never update, delete or
 // truncate (migration 0002), so this class has no method that changes a row. The admin's audit search and CSV export
-// (adminListAudit, adminExportAudit) read the table through `audit-query.service.ts` (PBE-032).
+// (adminListAudit, adminExportAudit) read the table through `audit-query.service.ts` (PBE-032); the recent rows of one
+// OTA, which the admin's tenant detail shows (PBE-029), are read here (`recentForTenant`).
 import { Injectable } from "@nestjs/common";
-import type { PlatformDatabase, ReferenceDatabase, Transaction } from "@velexis/db";
+import type { PlatformDatabase, ReferenceDatabase, Selectable, Transaction } from "@velexis/db";
+import type { PlatformDb } from "../common/database";
 
 /** A transaction on the platform and reference schemas, opened by the caller (`platformDb.transaction()`). */
 export type PlatformTransaction = Transaction<PlatformDatabase & ReferenceDatabase>;
+
+/** A stored `platform_audit_log` row (`id` a decimal string, `details` the parsed jsonb, redacted when written). */
+export type AuditLogRecord = Selectable<PlatformDatabase["platform.platform_audit_log"]>;
 
 /** One row to insert, already redacted, with the column names of `platform.platform_audit_log`. */
 export interface AuditRowInsert {
@@ -69,5 +74,23 @@ export class AuditRepository {
       .returning(["id", "created_at"])
       .executeTakeFirstOrThrow();
     return { id: inserted.id, createdAt: inserted.created_at };
+  }
+
+  /**
+   * The last `limit` rows about the OTA `tenantId` (`tenant_id`), newest first (the identity `id` grows with every
+   * insert), read on `db` (the pool, or the caller's transaction).
+   */
+  async recentForTenant(
+    db: PlatformDb | PlatformTransaction,
+    tenantId: string,
+    limit: number,
+  ): Promise<AuditLogRecord[]> {
+    return db
+      .selectFrom("platform.platform_audit_log")
+      .selectAll()
+      .where("tenant_id", "=", tenantId)
+      .orderBy("id", "desc")
+      .limit(limit)
+      .execute();
   }
 }
