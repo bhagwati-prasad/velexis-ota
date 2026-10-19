@@ -116,6 +116,17 @@ export interface CreatedPricedOffer {
   readonly location: string;
 }
 
+/** A stored priced offer as the checkout module reads it (`PricedOffersService.forCheckout`). */
+export interface CheckoutPricedOffer {
+  readonly row: PricedOfferRow;
+  /** The customer who priced it, else the customer of its search; `null` for a guest. */
+  readonly owner: string | null;
+  /** The minor units of its currency, as its amounts are rounded. */
+  readonly minorUnits: number;
+  /** The priced offer in customer scope: selling amounts only. */
+  readonly pricedOffer: PricedOffer;
+}
+
 type JsonObject = Record<string, unknown>;
 const isRecord = (value: unknown): value is JsonObject =>
   typeof value === "object" && value !== null && !Array.isArray(value);
@@ -646,6 +657,29 @@ export class PricedOffersService {
       const stored = await this.storedLoad(trx, first.row, "fareRules", load, now);
       return fareRuleSetOf(first.row.id, first.row.currency, fareRulesFromLoad(first.priced.parts, stored));
     });
+  }
+
+  // ---- For the checkout (OBE-036) ------------------------------------------------------------------------------------
+
+  /**
+   * A stored priced offer as the checkout module reads it, in the caller's transaction: the row, its owner (the
+   * snapshot's customer, `null` for a guest), the currency's minor units, and the PricedOffer in customer scope (a
+   * checkout never shows net amounts, in console scope either). No access or expiry check: checkout.create applies
+   * them, and a checkout stays readable after its priced offer's `expires_at`. `undefined` for an unknown id.
+   */
+  async forCheckout(
+    trx: TenantTransaction,
+    pricedOfferId: string,
+    acceptLanguage?: string,
+  ): Promise<CheckoutPricedOffer | undefined> {
+    const row = await this.repository.byId(trx, pricedOfferId);
+    if (row === undefined) {
+      return undefined;
+    }
+    const snapshot = snapshotOf(row.response);
+    const language = new ReferenceNames(displayLanguage(acceptLanguage));
+    const pricedOffer = await this.answer(trx, row, "customer", language, this.clock.now());
+    return { row, owner: snapshot.customerId, minorUnits: snapshot.minorUnits, pricedOffer };
   }
 
   // ---- Shared ------------------------------------------------------------------------------------------------------

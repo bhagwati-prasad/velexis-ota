@@ -997,7 +997,8 @@ Checkout, customer accounts in cookies, Stripe on the Velexis account, the airli
   - `account.preferences.get` answers 501 `NOT_IMPLEMENTED`.
 - **Verify:** `pnpm --filter @velexis/ota-backend test:int -- account`
 
-### OBE-036 · Implement checkout create, get, travellers, contacts and remarks
+### OBE-036 · Implement checkout create, get, travellers, contacts and remarks ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-backend
 - **Milestone:** M3
 - **Depends on:** OBE-023, OBE-031, OBE-014
