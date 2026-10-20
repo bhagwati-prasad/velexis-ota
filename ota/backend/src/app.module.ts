@@ -29,6 +29,7 @@ import { CheckoutModule } from "./checkout/checkout.module";
 import { API_APP, type ApiConfig } from "./config";
 import { HealthModule } from "./health/health.module";
 import { IdentityModule } from "./identity/identity.module";
+import { NotificationsModule } from "./notifications/notifications.module";
 import { PaymentsModule } from "./payments/payments.module";
 import { ReferenceModule } from "./reference/reference.module";
 import { ShoppingModule } from "./shopping/shopping.module";
@@ -86,6 +87,9 @@ export class AppModule implements NestModule {
         // The rate limits of architecture §8, counted in Redis (OBE-013).
         rateLimitModule(),
         HealthModule.forApi(),
+        // The e-mail outbox (OBE-030), global: a use case queues an e-mail with OutboxService in its transaction; the
+        // worker sends it.
+        NotificationsModule.forApi(),
         // Customer tokens and sessions (OBE-031): the customer guard below verifies the tokens with its key.
         IdentityModule,
         // The operations of the OTA document, one module per context (conventions §2).

@@ -12,7 +12,7 @@ import { dirname, join } from "node:path";
 import { parseEnv } from "node:util";
 import { ConfigError } from "@velexis/config";
 import { describe, expect, it, vi } from "vitest";
-import { testApiCredentials, testApiVariables } from "../test/helpers/api-env";
+import { testApiCredentials, testApiVariables, testWorkerVariables } from "../test/helpers/api-env";
 import {
   apiConfigSchema,
   APP_DIR,
@@ -34,9 +34,18 @@ const SHARED = {
 } as const;
 const PROVISIONER_URL = "postgres://velexis_provisioner:dummy-provisioner-password@127.0.0.1:5432/velexis";
 const MIGRATOR_URL = "postgres://velexis_migrator:dummy-migrator-password@127.0.0.1:5432/velexis";
-const WORKER_ENV = { ...SHARED, DATABASE_PROVISIONER_URL: PROVISIONER_URL } as const;
+/** The worker's variables besides the services (OBE-030): the key folder, the base domain and the e-mail settings. */
+const WORKER_VARIABLES = testWorkerVariables();
+const WORKER_ENV = { ...SHARED, DATABASE_PROVISIONER_URL: PROVISIONER_URL, ...WORKER_VARIABLES } as const;
 /** The API-only variables (OBE-011): a random edge secret and a pepper file of this test process. */
 const API_ONLY = testApiVariables();
+/** The API's variables that the worker does not read: the caller credentials and the API's public URL. */
+const API_ONLY_NAMES = [
+  "VELEXIS_EDGE_SECRET",
+  "API_KEY_PEPPER_FILE",
+  "JWT_PRIVATE_KEY_FILE",
+  "PUBLIC_OTA_API_URL",
+];
 const API_ENV = { ...SHARED, ...API_ONLY } as const;
 
 function configErrorOf(run: () => unknown): ConfigError {
@@ -146,13 +155,21 @@ describe("the privileged DSNs", () => {
       "DATABASE_URL",
       "HEALTH_PORT",
       "LOG_LEVEL",
+      "MAIL_FROM",
+      "MASTER_KEY_CURRENT",
+      "MASTER_KEY_DIR",
+      "OPS_ALERT_EMAIL",
+      "PUBLIC_OTA_ADMIN_URL",
       "REDIS_URL",
+      "SMTP_URL",
+      "STOREFRONT_BASE_DOMAIN",
     ]);
     expect(JSON.stringify(config)).not.toContain("velexis_migrator");
   });
 
   it("make the worker refuse to start without DATABASE_PROVISIONER_URL [OBE-001 AC3]", () => {
-    const error = configErrorOf(() => loadWorkerConfig(SHARED));
+    const { DATABASE_PROVISIONER_URL: _omitted, ...withoutProvisioner } = WORKER_ENV;
+    const error = configErrorOf(() => loadWorkerConfig(withoutProvisioner));
 
     expect(error.problems).toEqual([
       { variable: "DATABASE_PROVISIONER_URL", reason: "is required but missing" },
@@ -185,6 +202,7 @@ describe("values", () => {
       DATABASE_URL: SHARED.DATABASE_URL,
       REDIS_URL: SHARED.REDIS_URL,
       DATABASE_PROVISIONER_URL: PROVISIONER_URL,
+      ...WORKER_VARIABLES,
     });
 
     expect(api).toEqual({
@@ -206,6 +224,7 @@ describe("values", () => {
     const secret = "dummy-secret-that-must-never-be-printed";
     const error = configErrorOf(() =>
       loadWorkerConfig({
+        ...WORKER_VARIABLES,
         APP_ENV: "staging",
         LOG_LEVEL: "verbose",
         DATABASE_URL: `mysql://user:${secret}@127.0.0.1/velexis`,
@@ -270,7 +289,7 @@ describe("the caller credentials of the API (OBE-011)", () => {
       "STOREFRONT_BASE_DOMAIN",
       "VELEXIS_EDGE_SECRET",
     ]);
-    for (const name of Object.keys(API_ONLY)) {
+    for (const name of API_ONLY_NAMES) {
       expect(worker).not.toHaveProperty(name);
     }
   });
@@ -347,7 +366,7 @@ describe("the caller credentials of the API (OBE-011)", () => {
 });
 
 describe("the envelope keys and the Amadeus base URLs of the API (OBE-017, OBE-014)", () => {
-  it("require a key folder that exists and a current KEK id local:v<N>; the worker reads neither", () => {
+  it("require a key folder that exists and a current KEK id local:v<N>, in both processes (OBE-030)", () => {
     const missingDir = join(tmpdir(), `velexis-ota-no-keys-${process.pid}`);
     for (const [name, value] of [
       ["MASTER_KEY_DIR", missingDir],
@@ -358,12 +377,15 @@ describe("the envelope keys and the Amadeus base URLs of the API (OBE-017, OBE-0
       ["MASTER_KEY_CURRENT", "kms:key-1"],
     ] as const) {
       const error = configErrorOf(() => loadApiConfig({ ...API_ENV, [name]: value }));
+      const workerError = configErrorOf(() => loadWorkerConfig({ ...WORKER_ENV, [name]: value }));
 
       expect([value, error.problems.map((problem) => problem.variable)]).toEqual([value, [name]]);
+      expect([value, workerError.problems.map((problem) => problem.variable)]).toEqual([value, [name]]);
     }
+    // The worker decrypts the secret values of the e-mails it sends (OBE-030); the Amadeus overrides stay the API's.
     const worker = loadWorkerConfig({ ...WORKER_ENV, ...API_ONLY });
-    expect(worker).not.toHaveProperty("MASTER_KEY_DIR");
-    expect(worker).not.toHaveProperty("MASTER_KEY_CURRENT");
+    expect(worker.MASTER_KEY_DIR).toBe(testApiCredentials().masterKeyDir);
+    expect(worker.MASTER_KEY_CURRENT).toBe("local:v1");
     expect(worker).not.toHaveProperty("AMADEUS_BASE_URL_TEST");
   });
 
@@ -449,6 +471,65 @@ describe("the Stripe keys of the Velexis account (OBE-038)", () => {
   });
 });
 
+describe("the e-mail settings of the worker (OBE-030)", () => {
+  const EMAIL_SETTINGS = ["SMTP_URL", "MAIL_FROM", "OPS_ALERT_EMAIL", "PUBLIC_OTA_ADMIN_URL"];
+
+  it("are required by the worker and never read by the API", () => {
+    const rest = Object.fromEntries(
+      Object.entries(WORKER_ENV).filter(([name]) => !EMAIL_SETTINGS.includes(name)),
+    );
+    const error = configErrorOf(() => loadWorkerConfig(rest));
+    const api = loadApiConfig({ ...API_ENV, ...WORKER_VARIABLES });
+
+    expect(error.problems.map((problem) => problem.variable).sort()).toEqual([
+      "MAIL_FROM",
+      "OPS_ALERT_EMAIL",
+      "PUBLIC_OTA_ADMIN_URL",
+      "SMTP_URL",
+    ]);
+    for (const name of EMAIL_SETTINGS) {
+      expect(api).not.toHaveProperty(name);
+    }
+  });
+
+  it("accept a sender with or without a display name, and refuse one that is not one line with one address", () => {
+    for (const value of [
+      "no-reply@mail.ota.example.com",
+      "Velexis OTA <no-reply@mail.ota.example.com>",
+      '"Velexis OTA" <no-reply@mail.ota.example.com>',
+    ]) {
+      expect(loadWorkerConfig({ ...WORKER_ENV, MAIL_FROM: value }).MAIL_FROM).toBe(value);
+    }
+    for (const value of [
+      "Velexis OTA",
+      "a@example.com, b@example.com",
+      "Velexis <a@example.com>, <b@example.com>",
+      "Velexis\r\nBcc: x@example.com <a@example.com>",
+    ]) {
+      const error = configErrorOf(() => loadWorkerConfig({ ...WORKER_ENV, MAIL_FROM: value }));
+
+      expect([value, error.problems.map((problem) => problem.variable)]).toEqual([value, ["MAIL_FROM"]]);
+    }
+  });
+
+  it("refuse an SMTP URL that is not smtp(s), an ops address that is not one plain address, and a non-http admin URL", () => {
+    for (const [name, value] of [
+      ["SMTP_URL", "http://127.0.0.1:1025"],
+      ["SMTP_URL", "not a url"],
+      ["OPS_ALERT_EMAIL", "Ops <ops@example.com>"],
+      ["OPS_ALERT_EMAIL", "ops@example.com, other@example.com"],
+      ["PUBLIC_OTA_ADMIN_URL", "ftp://admin.ota.example.com"],
+    ] as const) {
+      const error = configErrorOf(() => loadWorkerConfig({ ...WORKER_ENV, [name]: value }));
+
+      expect([value, error.problems.map((problem) => problem.variable)]).toEqual([value, [name]]);
+    }
+    expect(
+      loadWorkerConfig({ ...WORKER_ENV, SMTP_URL: "smtps://user:dummy@smtp.example.com:465" }).SMTP_URL,
+    ).toBe("smtps://user:dummy@smtp.example.com:465");
+  });
+});
+
 describe("example and template files", () => {
   it("accept the local values of the root and app .env.example files", () => {
     const local = {
@@ -476,7 +557,10 @@ describe("example and template files", () => {
         JWT_PRIVATE_KEY_FILE: jwtKeyFile,
         MASTER_KEY_DIR: join(root, local["MASTER_KEY_DIR"] ?? "missing"),
       });
-      const worker = loadWorkerConfig(local);
+      const worker = loadWorkerConfig({
+        ...local,
+        MASTER_KEY_DIR: join(root, local["MASTER_KEY_DIR"] ?? "missing"),
+      });
 
       expect(local["API_KEY_PEPPER_FILE"]).toBe(".local/keys/api-key-pepper");
       expect(local["JWT_PRIVATE_KEY_FILE"]).toBe(".local/keys/ota-jwt-ed25519.pem");
@@ -489,6 +573,10 @@ describe("example and template files", () => {
       expect(api.STOREFRONT_BASE_DOMAIN).toBe("ota.example.com");
       expect(worker.HEALTH_PORT).toBe(4001);
       expect(worker.DATABASE_PROVISIONER_URL).toContain("velexis_provisioner");
+      // OBE-030: Mailpit, and a sender on the Velexis-controlled sending domain.
+      expect(worker.SMTP_URL).toBe("smtp://127.0.0.1:1025");
+      expect(worker.MAIL_FROM).toMatch(/<no-reply@mail\.ota\.example\.com>$/);
+      expect(worker.STOREFRONT_BASE_DOMAIN).toBe("ota.example.com");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -514,7 +602,9 @@ describe("example and template files", () => {
     expect(api.APP_ENV).toBe("production");
     // Empty in the template: the connection's or the shared account's base_url is used on the VM.
     expect([api.AMADEUS_BASE_URL_TEST, api.AMADEUS_BASE_URL_LIVE]).toEqual([undefined, undefined]);
-    expect(loadWorkerConfig({ ...shared, ...worker }).APP_ENV).toBe("production");
+    expect(
+      loadWorkerConfig({ ...shared, ...worker, MASTER_KEY_DIR: testApiCredentials().masterKeyDir }).APP_ENV,
+    ).toBe("production");
     // PORT and HEALTH_PORT are set by the velexis-ota-api and velexis-ota-worker units.
     for (const name of Object.keys(apiConfigSchema).filter((variable) => variable !== "PORT")) {
       expect(shared).toHaveProperty(name);

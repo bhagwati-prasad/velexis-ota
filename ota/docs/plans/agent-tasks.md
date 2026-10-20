@@ -890,7 +890,8 @@ Checkout, customer accounts in cookies, Stripe on the Velexis account, the airli
   - `pnpm --filter @velexis/ota-sdk generate` leaves no diff and the SDK tests pass.
 - **Verify:** `pnpm contracts:lint && pnpm contracts:generate && pnpm --filter @velexis/ota-backend test -- contract && pnpm --filter @velexis/ota-sdk generate && git diff --exit-code ota/sdk/src/internal/operations.js && pnpm --filter @velexis/ota-sdk test`
 
-### OBE-030 · Add the notifications outbox, template registry, renderer, mailer and sweep
+### OBE-030 · Add the notifications outbox, template registry, renderer, mailer and sweep ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-backend
 - **Milestone:** M3
 - **Depends on:** OBE-024, OBE-014, X-025

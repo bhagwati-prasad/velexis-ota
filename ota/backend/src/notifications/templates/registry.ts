@@ -3,6 +3,13 @@
 // `<key>.{subject,html,txt}.hbs` in this folder. OBE-030 and OBE-055 add the default files and refine the allow-lists
 // of the keys they write; the provisioning seed (provisioning/seeds/templates.seed.ts) copies the defaults that exist
 // into a new tenant's `notification_templates`, and every key without a row uses the code default at send time.
+//
+// Where the values of a key's variables come from (OBE-030):
+//   - `brand.*`: the renderer, from the tenant's `storefront_settings` and storefront host (BRAND_VARIABLE_PREFIX);
+//   - the key's `links`: the renderer, which builds each on the tenant's storefront host from a secret value of the
+//     e-mail (`/account/verify.html?token=…`, OADR-0015 point 5); the secret travels only encrypted
+//     (`notifications.secret_payload_ciphertext`) and the link exists only while the e-mail is rendered;
+//   - everything else: the code that queues the e-mail (`callerVariables`), stored in `notifications.payload`.
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 
@@ -52,6 +59,21 @@ export interface SampleData {
   readonly [name: string]: SampleValue;
 }
 
+/**
+ * A link variable: the renderer builds it as `<storefront URL><path>?<param>=<the secret value>` on the tenant's
+ * storefront host (OADR-0015 point 5) from the e-mail's secret value `secret`.
+ */
+export interface TemplateLink {
+  /** The allow-listed variable the link fills, such as `verifyUrl`. */
+  readonly variable: string;
+  /** The storefront page, such as `/account/verify.html`. */
+  readonly path: string;
+  /** The query parameter that carries the secret, such as `token`. */
+  readonly param: string;
+  /** The name of the secret value in the e-mail's `secretData`, such as `token`. */
+  readonly secret: string;
+}
+
 /** What the code knows about one key. */
 export interface TemplateDefinition {
   readonly key: TemplateKey;
@@ -60,7 +82,17 @@ export interface TemplateDefinition {
   readonly variables: readonly TemplateVariable[];
   /** Render data for the console preview and the default-template tests. Example values only, never real data. */
   readonly sampleData: SampleData;
+  /**
+   * The names of the secret values an e-mail of this key carries (`secretData`), each required: tokens that only a
+   * link built by the renderer holds. Stored encrypted, erased when the e-mail reaches a final status.
+   */
+  readonly secrets: readonly string[];
+  /** The link variables the renderer builds from those secrets. */
+  readonly links: readonly TemplateLink[];
 }
+
+/** The variables whose names start with this are filled by the renderer from the tenant's settings. */
+export const BRAND_VARIABLE_PREFIX = "brand.";
 
 const variable = (name: string, description: string): TemplateVariable =>
   Object.freeze({ name, description });
@@ -138,17 +170,24 @@ const SAMPLE_STAFF_BOOKING: SampleData = {
   consoleUrl: "https://admin.ota.example.com/bookings/bkg_01J9ZA2B4C6D8E0F2G4H6J8K0M",
 };
 
+/** The link of an account e-mail: `<storefront>/<page>?token=<the e-mail's secret token>`. */
+const tokenLink = (variableName: string, path: string): TemplateLink =>
+  Object.freeze({ variable: variableName, path, param: "token", secret: "token" });
+
 function define(
   key: TemplateKey,
   audience: TemplateAudience,
   variables: readonly TemplateVariable[],
   sampleData: SampleData,
+  links: readonly TemplateLink[] = [],
 ): TemplateDefinition {
   return Object.freeze({
     key,
     audience,
     variables: Object.freeze([...BRAND_VARIABLES, ...variables]),
     sampleData: Object.freeze({ brand: SAMPLE_BRAND, ...sampleData }),
+    secrets: Object.freeze([...new Set(links.map((link) => link.secret))]),
+    links: Object.freeze([...links]),
   });
 }
 
@@ -170,6 +209,7 @@ export const TEMPLATE_REGISTRY: Readonly<Record<TemplateKey, TemplateDefinition>
       verifyUrl: "https://demo.ota.example.com/account/verify.html?token=sample",
       expiresAt: "2026-11-02T10:00:00Z",
     },
+    [tokenLink("verifyUrl", "/account/verify.html")],
   ),
   "auth.password_reset": define(
     "auth.password_reset",
@@ -187,6 +227,7 @@ export const TEMPLATE_REGISTRY: Readonly<Record<TemplateKey, TemplateDefinition>
       resetUrl: "https://demo.ota.example.com/account/reset-password.html?token=sample",
       expiresAt: "2026-11-01T11:00:00Z",
     },
+    [tokenLink("resetUrl", "/account/reset-password.html")],
   ),
   "booking.confirmed": define("booking.confirmed", "traveller", BOOKING_VARIABLES, {
     booking: SAMPLE_BOOKING,
@@ -270,8 +311,20 @@ export const TEMPLATE_REGISTRY: Readonly<Record<TemplateKey, TemplateDefinition>
 });
 
 /**
- * The folder of the code defaults: this one. The build must copy the `.hbs` files next to `registry.js` when the
- * first defaults are added (OBE-030); a folder without them simply has no defaults.
+ * The variables the code that queues an e-mail of `key` passes (stored in `notifications.payload`): the allow-list
+ * without the brand and the links, which the renderer fills.
+ */
+export function callerVariables(key: TemplateKey): readonly TemplateVariable[] {
+  const definition = TEMPLATE_REGISTRY[key];
+  const links = new Set(definition.links.map((link) => link.variable));
+  return definition.variables.filter(
+    (entry) => !entry.name.startsWith(BRAND_VARIABLE_PREFIX) && !links.has(entry.name),
+  );
+}
+
+/**
+ * The folder of the code defaults: this one. The build copies the `.hbs` files next to `registry.js`
+ * (`dist/notifications/templates`, package.json `build`); a folder without them simply has no defaults.
  */
 export const DEFAULT_TEMPLATES_DIR = __dirname;
 

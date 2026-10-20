@@ -45,6 +45,8 @@ import {
 } from "./schedulers";
 
 const PURGE = "offers.purge";
+/** The outbox sweep of OBE-030. */
+const SWEEP = "notifications.sweep";
 const ALPHA = "ten_01JALPHA0000000000000000AA";
 const BETA = "ten_01JBETA00000000000000000BB";
 /** The 15-minute iteration of the tests: 2026-01-15T10:15:00Z (FakeClock's day). */
@@ -137,10 +139,16 @@ const purgeSchedule = () => {
 
 describe("the schedules", () => {
   it("declare offers.purge every 15 minutes for active and suspended tenants, in UTC", () => {
-    expect(OTA_SCHEDULES.map((schedule) => schedule.id)).toEqual([PURGE]);
+    expect(OTA_SCHEDULES.map((schedule) => schedule.id)).toEqual([PURGE, SWEEP]);
     expect(purgeSchedule()).toMatchObject({
       pattern: "*/15 * * * *",
       milestone: "M2",
+      statuses: ["active", "suspended"],
+    });
+    // OBE-030: the outbox sweep every minute, for suspended tenants too (OADR-0014 point 4).
+    expect(scheduleById(SWEEP)).toMatchObject({
+      pattern: "* * * * *",
+      milestone: "M3",
       statuses: ["active", "suspended"],
     });
     for (const schedule of OTA_SCHEDULES) {
@@ -163,8 +171,13 @@ describe("the schedules", () => {
       { pattern: "*/15 * * * *", tz: SCHEDULE_TIME_ZONE },
       { name: FAN_OUT_JOB, data: { task: PURGE } },
     );
+    expect(upsertJobScheduler).toHaveBeenCalledWith(
+      SWEEP,
+      { pattern: "* * * * *", tz: SCHEDULE_TIME_ZONE },
+      { name: FAN_OUT_JOB, data: { task: SWEEP } },
+    );
     expect(removeJobScheduler).toHaveBeenCalledExactlyOnceWith("offers.legacy_sweep");
-    expect(result).toEqual({ registered: [PURGE], removed: ["offers.legacy_sweep"] });
+    expect(result).toEqual({ registered: [PURGE, SWEEP], removed: ["offers.legacy_sweep"] });
   });
 
   it("wait at start-up only for a BullMQ connection that is still making its first attempt", async () => {

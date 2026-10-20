@@ -162,6 +162,9 @@ importers:
       express:
         specifier: 5.2.1
         version: 5.2.1
+      handlebars:
+        specifier: 4.7.10
+        version: 4.7.10
       helmet:
         specifier: 8.3.0
         version: 8.3.0
@@ -177,6 +180,9 @@ importers:
       nestjs-pino:
         specifier: 4.6.1
         version: 4.6.1(@nestjs/common@11.2.7(reflect-metadata@0.2.2)(rxjs@7.8.2))(pino-http@10.5.0)(pino@9.14.0)(rxjs@7.8.2)
+      nodemailer:
+        specifier: 6.10.1
+        version: 6.10.1
       pino:
         specifier: 9.14.0
         version: 9.14.0
@@ -205,6 +211,9 @@ importers:
       '@types/node':
         specifier: 22.20.5
         version: 22.20.5
+      '@types/nodemailer':
+        specifier: 6.4.24
+        version: 6.4.24
       '@types/supertest':
         specifier: 7.2.1
         version: 7.2.1
