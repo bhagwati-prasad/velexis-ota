@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { performance } from "node:perf_hooks";
 import { ConfigError } from "@velexis/config";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { readStubCliConfig, startStubCli } from "../src/cli";
 import {
   AMADEUS_SPEC_FILES,
@@ -54,8 +54,26 @@ interface SearchBody {
 
 const servers: StubServer[] = [];
 
+/** The specifications of this file's stubs, with every operation's request validators compiled in the hook below. */
+const stubSpecs = new AmadeusSpecs();
+/** What compiling each operation's request validators threw, by operation name (undefined: nothing). */
+const prepareThrew = new Map<string, unknown>();
+beforeAll(() => {
+  for (const op of STUB_OPERATIONS) {
+    try {
+      stubSpecs.prepare(op.spec);
+      prepareThrew.set(op.name, undefined);
+    } catch (error) {
+      prepareThrew.set(op.name, error);
+    }
+  }
+  // A stub compiles an operation's body validator on its first request (README "Request validation"): about 0.6 s on
+  // an idle CPU for the twelve, up to 5 s when CI runs every package at once on 4 CPUs, which then landed in the first
+  // test of each operation. Here it has a budget of its own; the route-table test asserts what it found.
+}, 60_000);
+
 async function startStub(options: Partial<StubServerOptions> = {}): Promise<StubServer> {
-  const server = await createStubServer({ port: 0, ...options });
+  const server = await createStubServer({ port: 0, specs: stubSpecs, ...options });
   servers.push(server);
   return server;
 }
@@ -645,12 +663,12 @@ describe("request validation", () => {
       );
     }
 
-    // Each operation's request validator compiles against its specification.
-    const specs = new AmadeusSpecs();
+    // Each operation's request validator compiles against its specification (compiled in the file's beforeAll).
+    expect([...prepareThrew.keys()]).toEqual(STUB_OPERATIONS.map((op) => op.name));
     for (const op of STUB_OPERATIONS) {
-      expect(() => specs.prepare(op.spec), op.name).not.toThrow();
+      expect(prepareThrew.get(op.name), op.name).toBeUndefined();
     }
-    expect(specs.danglingRefs()).toEqual([
+    expect(stubSpecs.danglingRefs()).toEqual([
       "FlightOffersSearch_v2_Version_1.0_swagger_specification.json#/definitions/LoyaltyProgram",
       "FlightOffersSearch_v2_Version_1.0_swagger_specification.json#/definitions/commissionValue",
     ]);
