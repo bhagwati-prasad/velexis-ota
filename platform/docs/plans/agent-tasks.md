@@ -766,8 +766,8 @@ Common commands: backend `pnpm --filter @velexis/platform-backend test`, `test:i
   - Running `dev:seed` twice creates no duplicates; with `APP_ENV=production` it exits 1 without writing.
 - **Verify:** `pnpm --filter @velexis/platform-backend test:int -- common dev`
 
-### PBE-035 · Prove provisioning end to end with the real OTA worker
-- **Status:** in progress (branch claude/intelligent-bardeen-90hhu7; pending: AC2's first GitHub CI run of the new `test:xb` step after `Build` in `build-test` (workflow_dispatch by the integrator))
+### PBE-035 · Prove provisioning end to end with the real OTA worker ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-backend
 - **Milestone:** M1
 - **Depends on:** PBE-023, PBE-034
