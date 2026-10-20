@@ -1045,3 +1045,143 @@ export const API_KEYS_STRINGS = Object.freeze({
   formExpired: "This form has expired. Reload the page and try again.",
   rateLimited: "Too many changes in a short time. Wait a minute, then try again.",
 });
+
+// ---- The team page and invitation acceptance (PFE-012) ------------------------------------------------------
+
+/** `/otas/[tenantId]/team`, `MembersTable` and `InviteForm` (PF-20, PF-21). */
+export const TEAM_STRINGS = Object.freeze({
+  title: "Team",
+  intro: "The people who work on this OTA, in the portal and in the OTA admin, each with a role.",
+  readOnly:
+    "Only owners and admins invite people, change roles or remove members. You can leave the OTA yourself.",
+  membersTitle: "Members",
+  membersCaption: "Members of this OTA",
+  membersEmpty: "This OTA has no members to show.",
+  name: "Name",
+  email: "E-mail address",
+  role: "Role",
+  mfa: "Two-factor",
+  joined: "Joined",
+  actions: "Actions",
+  you: "(you)",
+  mfaOn: "On",
+  mfaOff: "Off",
+  /** The label of a member's role selector, for screen readers. */
+  roleOf: (name: string) => `Role of ${name}`,
+  changeRole: "Change role",
+  changingRole: "Changing…",
+  /** Read after "Change role" by screen readers only, so each row's button has its own name. */
+  changeRoleOf: (name: string) => ` of ${name}`,
+  roleChanged: (name: string, role: string) => `${name} is now ${role}.`,
+  remove: "Remove",
+  /** Read after "Remove" by screen readers only, so each row's button has its own name. */
+  removeWho: (name: string) => ` ${name}`,
+  removeTitle: (name: string) => `Remove ${name} from the team?`,
+  removeDescription:
+    "They lose access to this OTA in the portal at once, and in the OTA admin within a minute. You can invite them again later.",
+  removeConfirm: "Remove member",
+  removed: "The member was removed from the team.",
+  leave: "Leave this OTA",
+  leaveTitle: "Leave this OTA?",
+  leaveDescription:
+    "You lose access to this OTA in the portal at once, and in the OTA admin within a minute. An owner or an admin can invite you again.",
+  leaveConfirm: "Leave the OTA",
+  stale: "Someone else changed this member in the meantime. Reload the page, then try again.",
+  memberGone: "This person is not a member of this OTA any more. Reload the page to see the current team.",
+  notMember: "You are not a member of this OTA any more.",
+  forbidden: "Your role in this OTA does not allow this change. Reload the page to see what you can do.",
+  mfaRequired:
+    "Making someone an owner needs a code from your authenticator app: turn on two-factor authentication first.",
+  mfaLink: "Set up two-factor authentication",
+  stepUpCancelled: "The role was not changed: it needs a code from your authenticator app.",
+  reload: "Reload the page",
+  formExpired: "This form has expired. Reload the page and try again.",
+  rateLimited: "Too many changes in a short time. Wait a minute, then try again.",
+  membersUnavailableTitle: "The members could not be loaded",
+  invitationsTitle: "Pending invitations",
+  invitationsIntro: "Invitations that are waiting to be accepted. Each one holds a seat of your plan.",
+  invitationsCaption: "Pending invitations",
+  invitationsEmpty: "No invitation is waiting to be accepted.",
+  invitedBy: "Invited by",
+  formerMember: "A former member",
+  expires: "Link expires",
+  resend: "Send again",
+  resending: "Sending…",
+  /** Read after "Send again" or "Revoke" by screen readers only, so each row's buttons have their own names. */
+  invitationTo: (email: string) => ` the invitation to ${email}`,
+  resent:
+    "The invitation was sent again with a new link that works for 7 days. The old link no longer works.",
+  revoke: "Revoke",
+  revokeTitle: "Revoke this invitation?",
+  revokeDescription: (email: string) =>
+    `The link sent to ${email} stops working at once, and its seat becomes free. You can invite the address again later.`,
+  revokeConfirm: "Revoke invitation",
+  revoked: "The invitation was revoked.",
+  notPending: "This invitation is no longer waiting to be accepted. Reload the page to see the current list.",
+  invitationGone: "This invitation does not exist any more. Reload the page to see the current list.",
+  invitationsUnavailableTitle: "The invitations could not be loaded",
+  inviteTitle: "Invite someone",
+  inviteIntro:
+    "We e-mail them a link that works for 7 days. They sign in, or create an account, with this address to join.",
+  emailLabel: "E-mail address",
+  emailHint: "The address the invitation goes to. Only an account with this verified address can accept it.",
+  emailRequired: "Enter the e-mail address to invite.",
+  emailInvalid: "Enter a valid e-mail address, like name@example.com.",
+  roleLabel: "Role",
+  roleHint:
+    "Owners and admins manage the OTA and its team; agents work on bookings in the OTA admin; finance members see billing and payments; viewers only read.",
+  roleHintAdmin: "Only an owner can invite owners and admins.",
+  roleRequired: "Choose a role.",
+  roleNotAllowed: "Choose one of the roles in the list.",
+  invite: "Send the invitation",
+  inviting: "Sending…",
+  invited: "The invitation is on its way. It shows under pending invitations until it is accepted.",
+  /** `PLAN_LIMIT_REACHED` with `details.limit` and `details.used` (PF-20 AC2). */
+  seatLimit: (used: number, limit: number) =>
+    `Your plan includes ${counted(limit, "team seat", "team seats")}, and ${COUNT_FORMAT.format(used)} ${
+      used === 1 ? "is" : "are"
+    } taken by members and pending invitations. Revoke an invitation or remove a member to free a seat.`,
+});
+
+/** `/invitations/accept`: one invitation, before and after sign-in (PF-20 AC3). */
+export const INVITATION_STRINGS = Object.freeze({
+  pageTitle: "Your invitation",
+  /** The page's heading, with the OTA's name from `lookupInvitation`. */
+  title: (tenantName: string) => `Join ${tenantName}`,
+  intro: (inviter: string | null, tenantName: string) =>
+    inviter === null
+      ? `You are invited to join the team of ${tenantName} on Velexis.`
+      : `${inviter} invited you to join the team of ${tenantName} on Velexis.`,
+  detailsLabel: "The invitation",
+  ota: "OTA",
+  role: "Role",
+  invitedAddress: "Invited address",
+  expires: "Link expires",
+  signedOut: "Sign in, or create an account, with the invited address to accept the invitation.",
+  signIn: "Sign in to accept",
+  signUp: "Create an account",
+  signUpHint:
+    "New to Velexis? Create an account with the invited address and verify it, then sign in and open the invitation link again.",
+  signedInAs: (email: string) => `You are signed in as ${email}.`,
+  accept: "Accept the invitation",
+  /** `INVITATION_EMAIL_MISMATCH`, naming the address the invitation was sent to (PF-20 AC3). */
+  mismatchTitle: "This invitation is for another address",
+  mismatch: (invited: string) =>
+    `This invitation was sent to ${invited}. Sign in with that address to accept it.`,
+  switchAccount: "Sign out and sign in with the invited address",
+  unverifiedTitle: "Verify your e-mail address first",
+  unverified:
+    "Verify the address of your account before you accept the invitation, then open this page again.",
+  verifyLink: "Verify your e-mail address",
+  alreadyMember: "You are already a member of this OTA.",
+  dashboardLink: "Go to my OTAs",
+  invalidTitle: "This invitation cannot be used",
+  invalid:
+    "This invitation has expired, was revoked or was already used. Ask the person who invited you to send it again.",
+  linkMissingTitle: "Open the link from your invitation e-mail",
+  linkMissing:
+    "To accept an invitation, open the link in the invitation e-mail. This page keeps it for 15 minutes; after that, open the link again.",
+  unavailableTitle: "The invitation could not be loaded",
+  failedTitle: "The invitation could not be accepted",
+  rateLimited: "Too many attempts from your network. Wait a few minutes, then open the page again.",
+});

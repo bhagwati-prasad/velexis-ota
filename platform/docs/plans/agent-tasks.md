@@ -969,7 +969,8 @@ Common commands: backend `pnpm --filter @velexis/platform-backend test`, `test:i
   - Roll shows the new key and the old key's expiry [PF-30 AC4]; "last used" is displayed [PF-30 AC5].
 - **Verify:** `pnpm --filter @velexis/platform-frontend test`
 
-### PFE-012 · Build the team page and invitation acceptance
+### PFE-012 · Build the team page and invitation acceptance ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-frontend
 - **Milestone:** M1
 - **Depends on:** PFE-010, PBE-026

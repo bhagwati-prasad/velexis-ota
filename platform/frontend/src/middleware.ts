@@ -1,7 +1,7 @@
 // Portal middleware (README §6 and §7): runs before every page, server action and route handler except the health
 // routes and static files. It refreshes an expired access token before anything renders, moves the single-use token
-// of an e-mail link (`/reset-password?token=…`) into its cookie, sends people without a session away from the
-// signed-in area, and sets the per-request nonce-based Content-Security-Policy.
+// of an e-mail link (`/reset-password?token=…`, `/invitations/accept?token=…`) into its cookie, sends people without
+// a session away from the signed-in area, and sets the per-request nonce-based Content-Security-Policy.
 import "server-only";
 
 import { NextResponse, type NextRequest } from "next/server";
@@ -11,11 +11,13 @@ import { getConfig, type PortalConfig } from "@/lib/config";
 import { NONCE_HEADER, contentSecurityPolicy, createNonce } from "@/lib/csp";
 import {
   ACCESS_TOKEN_COOKIE,
+  INVITATION_COOKIE,
   PASSWORD_RESET_COOKIE,
   REFRESH_TOKEN_COOKIE,
   accessTokenClaims,
   clearedCookie,
   clearedSessionCookies,
+  invitationCookie,
   isAccessTokenFresh,
   passwordResetCookie,
   refresh,
@@ -70,6 +72,7 @@ interface TokenLink {
  */
 const TOKEN_LINKS: Readonly<Record<string, TokenLink>> = Object.freeze({
   "/reset-password": { cookie: PASSWORD_RESET_COOKIE, write: passwordResetCookie },
+  "/invitations/accept": { cookie: INVITATION_COOKIE, write: invitationCookie },
 });
 
 /** `OpaqueToken` of the platform document: a longer token cannot be one Velexis issued. */
