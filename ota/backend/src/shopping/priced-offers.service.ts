@@ -31,7 +31,11 @@
 // with `fareRules`), else from what an earlier call loaded, else they call Flight Offers Price once more for the
 // same Amadeus offers with that `include` and store the result in the snapshot (the first load wins, so `anc_` ids
 // never change once answered). A fare that is gone by then (`SOLD_OUT`) answers `410 OFFER_EXPIRED`: price again.
+//
+// repriceForCheckout (OBE-042): checkout.complete prices the offers of an old priced offer again (or one whose
+// travellers carry discount data) and stores the answer as a child priced offer with the same `store` step.
 import { Injectable } from "@nestjs/common";
+import type { components } from "@velexis/api-types";
 import { AppError } from "@velexis/errors";
 import { redactPayload } from "@velexis/logger";
 import { PinoLogger } from "nestjs-pino";
@@ -126,6 +130,18 @@ export interface CheckoutPricedOffer {
   /** The priced offer in customer scope: selling amounts only. */
   readonly pricedOffer: PricedOffer;
 }
+
+/** A re-pricing of checkout.complete (`PricedOffersService.repriceForCheckout`). */
+export interface RepricedOffer {
+  /** The priced offer the checkout was buying. */
+  readonly previous: CheckoutPricedOffer;
+  /** The new priced offer, a child of `previous`. */
+  readonly current: CheckoutPricedOffer;
+  /** The Amadeus `warnings` of the pricing answer. */
+  readonly warnings: unknown;
+}
+
+type AmadeusTraveler = components["schemas"]["AmadeusTraveler"];
 
 type JsonObject = Record<string, unknown>;
 const isRecord = (value: unknown): value is JsonObject =>
@@ -356,6 +372,7 @@ export class PricedOffersService {
     reply: AmadeusResponse<unknown>,
     scope: OfferScope,
     language: ReferenceNames,
+    parentPricedOfferId: string | null = null,
   ): Promise<PricedOffer> {
     const answer = readPricingReply(reply.body);
     const confirmed = confirmedOffersOf(
@@ -404,7 +421,7 @@ export class PricedOffersService {
       id,
       environment: tenant.environment,
       offer_id: (prepared.offers[0] as OfferRow).id,
-      parent_priced_offer_id: null,
+      parent_priced_offer_id: parentPricedOfferId,
       offer_ids: prepared.offers.map((row) => row.id),
       include_credit_card_fees: prepared.include.includes("credit-card-fees"),
       include_bags: prepared.include.includes("bags"),
@@ -680,6 +697,78 @@ export class PricedOffersService {
     const language = new ReferenceNames(displayLanguage(acceptLanguage));
     const pricedOffer = await this.answer(trx, row, "customer", language, this.clock.now());
     return { row, owner: snapshot.customerId, minorUnits: snapshot.minorUnits, pricedOffer };
+  }
+
+  /**
+   * For checkout.complete (OBE-042, contract step 4): prices the Amadeus offers of a stored priced offer again (Flight
+   * Offers Price outside any transaction, with `travelers` when the checkout's travellers carry discount data) and
+   * stores the confirmed price as a new priced offer, a child of the old one (`parent_priced_offer_id`), priced with
+   * the same channel, owner, include flags and today's rules exactly as flights.price prices one. Answers both, as
+   * `forCheckout` reads them, and the Amadeus warnings of the call. A fare that is gone is `409 SOLD_OUT`.
+   */
+  async repriceForCheckout(input: {
+    readonly pricedOfferId: string;
+    readonly travelers?: readonly AmadeusTraveler[] | undefined;
+    readonly bookingId: string;
+    readonly acceptLanguage?: string | undefined;
+  }): Promise<RepricedOffer> {
+    const tenant = this.tenants.require();
+    const language = new ReferenceNames(displayLanguage(input.acceptLanguage));
+    const first = await this.tx.run(async (trx) => {
+      const row = await this.repository.byId(trx, input.pricedOfferId);
+      const settings = await this.repository.settings(trx);
+      if (row === undefined || settings === undefined) {
+        throw new Error("the priced offer of a checkout is missing");
+      }
+      const priced = await this.pricedParts(trx, row);
+      const travelers = input.travelers ?? [];
+      const prepared: PreparedPricing = {
+        offers: priced.offerRows,
+        request: {
+          data: {
+            type: "flight-offers-pricing",
+            flightOffers: priced.offerRows.map((offer) => offer.payload),
+            ...(travelers.length === 0 ? {} : { travelers: [...travelers] }),
+            additionalInformation: { fareRules: priced.snapshot.fareRules },
+          },
+        },
+        include: priced.snapshot.include,
+        forceClass: row.forceClass,
+        fareRules: priced.snapshot.fareRules,
+        currency: row.currency,
+        minorUnits: priced.snapshot.minorUnits,
+        offerTtlMinutes: settings.offerTtlMinutes,
+        channel: priced.snapshot.channel,
+        customerId: priced.snapshot.customerId,
+      };
+      return { row, prepared };
+    });
+    const reply = await this.amadeus.quoteAirOffers(
+      {
+        tenantId: tenant.tenantId,
+        environment: tenant.environment,
+        operation: "checkout.complete",
+        requestId: this.tenants.requestId() ?? tenant.requestId,
+        bookingId: input.bookingId,
+      },
+      {
+        body: first.prepared.request as unknown as Parameters<AmadeusClient["quoteAirOffers"]>[1]["body"],
+        query: pricingQuery(first.prepared.include, first.prepared.forceClass),
+      },
+    );
+    return await this.tx.run(async (trx) => {
+      const stored = await this.store(trx, tenant, first.prepared, reply, "customer", language, first.row.id);
+      const previous = await this.forCheckout(trx, first.row.id, input.acceptLanguage);
+      const current = await this.forCheckout(trx, stored.id, input.acceptLanguage);
+      if (previous === undefined || current === undefined) {
+        throw new Error("a re-priced offer is not readable in its own tenant");
+      }
+      this.logger.info(
+        { pricedOfferId: current.row.id, parentPricedOfferId: previous.row.id, bookingId: input.bookingId },
+        "pricing.repriced",
+      );
+      return { previous, current, warnings: readPricingReply(reply.body).warnings };
+    });
   }
 
   // ---- Shared ------------------------------------------------------------------------------------------------------

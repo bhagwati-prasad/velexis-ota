@@ -1109,7 +1109,8 @@ Checkout, customer accounts in cookies, Stripe on the Velexis account, the airli
   - The stub's request log never contains a full card number (test).
 - **Verify:** `pnpm --filter @velexis/amadeus-stub build && pnpm --filter @velexis/amadeus-stub test`
 
-### OBE-042 · Build the booking orchestrator and checkout.complete for Stripe
+### OBE-042 · Build the booking orchestrator and checkout.complete for Stripe ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-backend
 - **Milestone:** M3
 - **Depends on:** OBE-038, OBE-041, OBE-030

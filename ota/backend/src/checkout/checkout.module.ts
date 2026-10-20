@@ -2,10 +2,12 @@
 // aggregate opened from a priced offer (ShoppingModule's PricedOffersService) for a signed-in customer (IdentityModule's
 // CustomerContext) or a guest, with its travellers (documents and discount cards sealed with the KEKs of
 // MASTER_KEY_DIR, traveller-documents.ts), contacts and special requests, in the tenant's `checkouts` and
-// `checkout_*` tables through the tenancy module's `TenantTx`. The extras (OBE-037) and checkout.complete (OBE-042)
+// `checkout_*` tables through the tenancy module's `TenantTx`. checkout.complete (OBE-042) is the bookings module's
+// BookingOrchestrator behind this module's route (BookingsModule never imports this module); the extras (OBE-037)
 // join it; the payment steps (PaymentsModule, OBE-038) read a checkout through the exported `CheckoutService`, with its
 // access rules and progress. API only; the worker never imports it.
 import { Module } from "@nestjs/common";
+import { BookingsModule } from "../bookings/bookings.module";
 import { RequestContext } from "../common/http/request-context";
 import { IdentityModule } from "../identity/identity.module";
 import { ShoppingModule } from "../shopping/shopping.module";
@@ -16,7 +18,7 @@ import { CheckoutService } from "./checkout.service";
 import { checkoutKeyProvider, TravelerDocuments } from "./traveler-documents";
 
 @Module({
-  imports: [TenancyModule.forApi(), IdentityModule, ShoppingModule],
+  imports: [TenancyModule.forApi(), IdentityModule, ShoppingModule, BookingsModule],
   controllers: [CheckoutController],
   // RequestContext only reads the request context (nestjs-cls): this module's instance sees the scope the guards set.
   providers: [checkoutKeyProvider, TravelerDocuments, CheckoutRepository, CheckoutService, RequestContext],

@@ -22,19 +22,14 @@ import { PricingModule } from "../pricing/pricing.module";
 import { ShoppingModule } from "../shopping/shopping.module";
 import { TenancyModule } from "../tenancy/tenancy.module";
 import { CardFees } from "./card-fees";
-import { PAYMENT_GATEWAY } from "./payment-gateway";
+import { PaymentGatewayModule } from "./payment-gateway.module";
 import { PaymentsController } from "./payments.controller";
 import { PaymentsRepository } from "./payments.repository";
 import { PaymentsService } from "./payments.service";
-import { StripeClientFactory } from "./stripe/stripe-client.factory";
-import { StripeGateway } from "./stripe/stripe.gateway";
 
-@Module({
-  imports: [TenancyModule.forApi()],
-  providers: [StripeClientFactory, StripeGateway, { provide: PAYMENT_GATEWAY, useExisting: StripeGateway }],
-  exports: [PAYMENT_GATEWAY],
-})
-export class PaymentGatewayModule {}
+// PaymentGatewayModule has a file of its own (payment-gateway.module.ts): BookingsModule imports it, and CheckoutModule
+// imports BookingsModule, so this file (which imports CheckoutModule) must not be on that path (OBE-042).
+export { PaymentGatewayModule };
 
 @Module({
   imports: [

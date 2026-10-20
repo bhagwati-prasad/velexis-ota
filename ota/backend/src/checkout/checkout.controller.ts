@@ -5,8 +5,15 @@
 // validation interceptor checked the input against the OTA document, and the idempotency interceptor stores
 // checkout.create's `201` under its `Idempotency-Key` (the `PUT`s are idempotent by themselves). Every answer is the
 // whole checkout with `ETag: "<version>"` and `Cache-Control: no-store`; `If-Match` goes to the service.
+//
+// `checkout.complete` (completeCheckout, `x-scope: both`; OBE-042) hands the checkout to the bookings module's
+// BookingOrchestrator; its `Idempotency-Key` is required (the OTA document's IdempotencyKey parameter, checked by the
+// validation interceptor), and the idempotency interceptor replays a same-key retry without a second order. The answer
+// is `201` CheckoutCompletion with `Location: /v1/bookings/<bkg_…>` and `Cache-Control: no-store`.
 import { Controller, Get, Post, Put, Res } from "@nestjs/common";
 import type { Response } from "express";
+import { BookingOrchestrator } from "../bookings/booking-orchestrator.service";
+import type { CheckoutCompletion } from "../bookings/order-recorder";
 import {
   OpenApiInput,
   OpenApiOperation,
@@ -32,7 +39,10 @@ function answer(res: Response, checkout: Checkout): Checkout {
 
 @Controller("v1/checkouts")
 export class CheckoutController {
-  constructor(private readonly checkouts: CheckoutService) {}
+  constructor(
+    private readonly checkouts: CheckoutService,
+    private readonly bookings: BookingOrchestrator,
+  ) {}
 
   @Post()
   @OpenApiOperation("createCheckout")
@@ -100,5 +110,21 @@ export class CheckoutController {
       body: bodyOf("setCheckoutRemarks", input.body),
     });
     return answer(res, checkout);
+  }
+
+  @Post(":checkoutId/complete")
+  @OpenApiOperation("completeCheckout")
+  async complete(
+    @OpenApiInput() input: ValidatedInput<"completeCheckout">,
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<CheckoutCompletion> {
+    const completion = await this.bookings.complete({
+      checkoutId: input.path.checkoutId,
+      body: bodyOf("completeCheckout", input.body),
+      acceptLanguage: input.headers["Accept-Language"],
+    });
+    res.setHeader("Location", `/v1/bookings/${completion.booking.id}`);
+    res.setHeader("Cache-Control", CHECKOUT_CACHE_CONTROL);
+    return completion;
   }
 }
