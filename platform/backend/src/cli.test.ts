@@ -100,10 +100,12 @@ describe("the admin commands (PBE-028)", () => {
   }, 60_000);
 
   it("[PBE-028] registers admin:grant and admin:reset-mfa, which take an e-mail address and an operator", () => {
+    // dev:seed (PBE-034) follows them and takes no argument.
     expect(CLI_COMMANDS.map((command) => `${command.name} ${command.args}`.trim())).toEqual([
       "help",
       "admin:grant <email> [--operator <name>]",
       "admin:reset-mfa <email> [--operator <name>]",
+      "dev:seed",
     ]);
   });
 
@@ -113,5 +115,25 @@ describe("the admin commands (PBE-028)", () => {
       expect(run.stderr).toContain(`Usage: node dist/cli.js ${run.name} <email> [--operator <name>]`);
       expect(run.stdout).toBe("");
     }
+  });
+});
+
+describe("dev:seed (PBE-034)", () => {
+  let withArgument: { code: number; stdout: string; stderr: string };
+
+  beforeAll(async () => {
+    // The first run loads dev/dev-seed.command.ts (Nest and the modules of its application context): a few seconds
+    // of compiling under a loaded CI runner, bounded here rather than in a test.
+    const output = buffers();
+    const code = await runCli(["dev:seed", "Secret-Value 1!"], output);
+    withArgument = { code, stdout: output.stdout.text, stderr: output.stderr.text };
+  }, 60_000);
+
+  it("[PBE-034] answers a usage error for any argument before any configuration is read, without echoing it", () => {
+    expect(withArgument.code).toBe(EXIT_USAGE);
+    expect(withArgument.stderr).toBe(
+      "dev:seed: the command takes no arguments.\nUsage: node dist/cli.js dev:seed\n",
+    );
+    expect(withArgument.stdout).toBe("");
   });
 });

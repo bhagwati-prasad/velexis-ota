@@ -12,6 +12,7 @@
 //
 // `listForTenant` reads a tenant's connections without the ciphertext column (the portal's list, PBE-027), and
 // `toAmadeusConnection` is the API's `AmadeusConnection` of a row: never the client secret or any ciphertext.
+// `setStatus` is the platform admin's switch of a connection (PBE-030, `adminSetConnectionStatus`).
 import { Inject, Injectable } from "@nestjs/common";
 import type { components } from "@velexis/api-types/platform";
 import { sql, type PlatformDatabase, type Selectable } from "@velexis/db";
@@ -29,6 +30,32 @@ export type SupplierConnectionView = Omit<SupplierConnectionRecord, "client_secr
 
 /** The supplier of every connection today. */
 export const AMADEUS_PROVIDER = "amadeus";
+
+/** The columns of a `SupplierConnectionView`: every column but the client secret's ciphertext, never selected. */
+const SUPPLIER_CONNECTION_VIEW_COLUMNS = [
+  "id",
+  "tenant_id",
+  "provider",
+  "environment",
+  "credential_source",
+  "amadeus_account_id",
+  "base_url",
+  "client_id",
+  "encryption_key_id",
+  "office_ids",
+  "default_office_id",
+  "queuing_office_id",
+  "owner_office_id",
+  "ticketing_defaults",
+  "monitored_queues",
+  "status",
+  "last_verified_at",
+  "last_error",
+  "created_by_account_id",
+  "version",
+  "created_at",
+  "updated_at",
+] as const;
 
 /** A tenant as an assignment needs it. */
 export interface ConnectionTenant {
@@ -122,30 +149,7 @@ export class SupplierConnectionsRepository {
   ): Promise<SupplierConnectionView[]> {
     return db
       .selectFrom("platform.supplier_connections")
-      .select([
-        "id",
-        "tenant_id",
-        "provider",
-        "environment",
-        "credential_source",
-        "amadeus_account_id",
-        "base_url",
-        "client_id",
-        "encryption_key_id",
-        "office_ids",
-        "default_office_id",
-        "queuing_office_id",
-        "owner_office_id",
-        "ticketing_defaults",
-        "monitored_queues",
-        "status",
-        "last_verified_at",
-        "last_error",
-        "created_by_account_id",
-        "version",
-        "created_at",
-        "updated_at",
-      ])
+      .select(SUPPLIER_CONNECTION_VIEW_COLUMNS)
       .where("tenant_id", "=", tenantId)
       .where("provider", "=", AMADEUS_PROVIDER)
       .orderBy(sql`environment = 'live'`)
@@ -245,6 +249,25 @@ export class SupplierConnectionsRepository {
       .where("id", "=", id)
       .where("credential_source", "=", "velexis")
       .returningAll()
+      .executeTakeFirstOrThrow();
+  }
+
+  /**
+   * Sets the status of a connection locked by `lockForTenant` (PBE-030, `adminSetConnectionStatus`: `disabled`, or back
+   * to `active`), with `version + 1`, in `trx`. Offices, settings and credentials stay as they are; the row comes back
+   * without the client secret's ciphertext.
+   */
+  async setStatus(
+    trx: PlatformTransaction,
+    id: string,
+    status: "active" | "disabled",
+    now: Date,
+  ): Promise<SupplierConnectionView> {
+    return trx
+      .updateTable("platform.supplier_connections")
+      .set((eb) => ({ status, version: eb("version", "+", 1), updated_at: now }))
+      .where("id", "=", id)
+      .returning(SUPPLIER_CONNECTION_VIEW_COLUMNS)
       .executeTakeFirstOrThrow();
   }
 }

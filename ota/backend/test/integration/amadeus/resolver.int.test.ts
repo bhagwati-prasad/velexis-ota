@@ -266,7 +266,29 @@ describe("the resolved connection", () => {
 
     const cachedConnection = await redis.client.get(redisKeys.conn("amadeus", tenantId, "test").key);
     const cachedAccount = await redis.client.get(redisKeys.amadeusAccount(testAccount.id).key);
-    const values = await Promise.all((await redis.client.keys("*")).map((name) => redis.client.get(name)));
+    // Every value of every key, whatever its type: since OBE-030 the API also opens its BullMQ queues, whose metadata
+    // are hashes.
+    const values = await Promise.all(
+      (await redis.client.keys("*")).map(async (name) => {
+        const type = await redis.client.type(name);
+        if (type === "string") {
+          return (await redis.client.get(name)) ?? "";
+        }
+        if (type === "hash") {
+          return JSON.stringify(await redis.client.hgetall(name));
+        }
+        if (type === "list") {
+          return JSON.stringify(await redis.client.lrange(name, 0, -1));
+        }
+        if (type === "set") {
+          return JSON.stringify(await redis.client.smembers(name));
+        }
+        if (type === "zset") {
+          return JSON.stringify(await redis.client.zrange(name, 0, -1));
+        }
+        return JSON.stringify(await redis.client.xrange(name, "-", "+"));
+      }),
+    );
 
     expect(JSON.parse(cachedConnection ?? "null")).toMatchObject({
       v: 1,

@@ -6,9 +6,10 @@
 //
 // It is global for one reason: TenantRoleGuard, a global guard of CommonModule (layer 0) that must run between the
 // auth guards and RecentMfaGuard (API_GUARDS), reads the caller's membership on every tenant request through the
-// abstract `TenantMembershipLookup`, which this module provides with its repository. It also exports the repository
-// for the modules of a higher layer, which import MembershipsModule for it (ProvisioningModule writes the owner
-// membership of a new OTA, PBE-018); modules of the same layer never use it (layering rule of architecture §2.2).
+// abstract `TenantMembershipLookup`, which this module provides with its repository. It also exports the two
+// repositories for the modules of a higher layer, which import MembershipsModule for them (ProvisioningModule writes
+// the owner membership of a new OTA, PBE-018; the platform admin's tenant detail reads the members and the pending
+// invitations, PBE-029); modules of the same layer never use them (layering rule of architecture §2.2).
 import { Global, Module, type DynamicModule } from "@nestjs/common";
 import { AuditModule } from "../audit/audit.module";
 import { TenantMembershipLookup } from "../common/auth/tenant-role.guard";
@@ -43,7 +44,7 @@ export class MembershipsWorkerModule {}
     InvitationsService,
     { provide: TenantMembershipLookup, useExisting: MembershipsRepository },
   ],
-  exports: [TenantMembershipLookup, MembershipsRepository],
+  exports: [TenantMembershipLookup, MembershipsRepository, InvitationsRepository],
 })
 export class MembershipsModule {
   /** The module with the `invitations.expire` handler of the `platform-maintenance` processor, for WorkerModule. */

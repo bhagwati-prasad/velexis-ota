@@ -33,5 +33,7 @@ import { UpsellService } from "./upsell.service";
     PricedOffersRepository,
     RequestContext,
   ],
+  // The checkout opens from a stored priced offer and renders its flights and prices (OBE-036).
+  exports: [PricedOffersService],
 })
 export class ShoppingModule {}

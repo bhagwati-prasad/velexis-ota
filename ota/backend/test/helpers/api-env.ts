@@ -14,6 +14,8 @@
 //   .local/keys/ota-jwt-ed25519.pem (mode 0600), in the same folder and created the same way, so tokens one test process
 //   signs verify in the applications it starts.
 // - STOREFRONT_BASE_DOMAIN and PUBLIC_OTA_API_URL: the development values of ota/backend/.env.example.
+// - The worker's variables (`testWorkerVariables`, OBE-030): the same key folder and base domain, and the e-mail
+//   settings of ota/backend/.env.example.
 //
 // Nothing here is a real secret, and nothing is committed.
 import { generateKeyPairSync, randomBytes, randomInt } from "node:crypto";
@@ -113,6 +115,26 @@ export function testApiVariables(): Readonly<Record<string, string>> {
     PUBLIC_OTA_API_URL: "http://localhost:4000",
     MASTER_KEY_DIR: masterKeyDir,
     MASTER_KEY_CURRENT: TEST_MASTER_KEY_CURRENT,
+  });
+}
+
+/** The development sender of ota/backend/.env.example's shape: the notifications module replaces its display name. */
+export const TEST_MAIL_FROM = '"Velexis OTA (test)" <no-reply@mail.ota.example.com>';
+
+/**
+ * The worker's variables besides the services and the provisioner DSN (OBE-030): the key folder and the storefront
+ * base domain it shares with the API, and the e-mail settings with the development values of ota/backend/.env.example
+ * (SMTP_URL is Mailpit's development port; a test that sends e-mail passes its own).
+ */
+export function testWorkerVariables(): Readonly<Record<string, string>> {
+  return Object.freeze({
+    MASTER_KEY_DIR: testApiCredentials().masterKeyDir,
+    MASTER_KEY_CURRENT: TEST_MASTER_KEY_CURRENT,
+    STOREFRONT_BASE_DOMAIN: TEST_STOREFRONT_BASE_DOMAIN,
+    SMTP_URL: "smtp://127.0.0.1:1025",
+    MAIL_FROM: TEST_MAIL_FROM,
+    OPS_ALERT_EMAIL: "ops@example.com",
+    PUBLIC_OTA_ADMIN_URL: "http://localhost:3002",
   });
 }
 

@@ -64,6 +64,21 @@ export function can(role: TenantRole, action: PortalAction): boolean {
   return (PORTAL_ACTIONS[action] as readonly TenantRole[]).includes(role);
 }
 
+/**
+ * A member of `actorRole` may invite, change or remove a member of `targetRole` (scope §1.2, PF-20 AC1, PF-21 AC1;
+ * `canManageRole` of the platform backend): owners manage every role, admins manage agents, finance members and
+ * viewers, the other roles manage nobody. The API checks it again, and the last-owner rule on top of it.
+ */
+export function canManageRole(actorRole: TenantRole, targetRole: TenantRole): boolean {
+  const privileged = targetRole === "owner" || targetRole === "admin";
+  return can(actorRole, privileged ? "manageOwnersAndAdmins" : "manageTeam");
+}
+
+/** The roles a member of `actorRole` may give in an invitation or a role change, most powerful first. */
+export function assignableRoles(actorRole: TenantRole): TenantRole[] {
+  return TENANT_ROLES.filter((role) => canManageRole(actorRole, role));
+}
+
 // ---- Navigation -----------------------------------------------------------------------------------------------
 
 /** The navigation entries of one OTA, in display order. */

@@ -652,7 +652,8 @@ Common commands: backend `pnpm --filter @velexis/platform-backend test`, `test:i
   - `admin:grant` refuses an account without MFA and grants a verified one with MFA, writing one audit row.
 - **Verify:** `pnpm --filter @velexis/platform-backend build && pnpm --filter @velexis/platform-backend test:int -- admin`
 
-### PBE-029 · Implement the admin dashboard and tenant views
+### PBE-029 · Implement the admin dashboard and tenant views ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-backend
 - **Milestone:** M1
 - **Depends on:** PBE-028, PBE-022
@@ -670,7 +671,8 @@ Common commands: backend `pnpm --filter @velexis/platform-backend test`, `test:i
   - With all switches off, the M5 dashboard counters are `null`.
 - **Verify:** `pnpm --filter @velexis/platform-backend test:int -- admin`
 
-### PBE-030 · Implement suspend, resume, migrate and connection status
+### PBE-030 · Implement suspend, resume, migrate and connection status ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-backend
 - **Milestone:** M1
 - **Depends on:** PBE-029, PBE-019, PBE-023
@@ -691,7 +693,8 @@ Common commands: backend `pnpm --filter @velexis/platform-backend test`, `test:i
   - With a `silent` fake worker, a suspend job ends `failed` after the reconciler's attempts (FakeClock past each lease) and the tenant stays `suspended`; the same holds for a resume job and an `active` tenant [PADR-0001 item 7].
 - **Verify:** `pnpm --filter @velexis/platform-backend test:int -- provisioning admin`
 
-### PBE-031 · Implement admin provisioning jobs and queue inspection
+### PBE-031 · Implement admin provisioning jobs and queue inspection ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-backend
 - **Milestone:** M1
 - **Depends on:** PBE-023, PBE-028
@@ -709,7 +712,8 @@ Common commands: backend `pnpm --filter @velexis/platform-backend test`, `test:i
   - Queue counts match jobs added in the test; retry on `ota-tenant-ops` answers 403 [PF-84].
 - **Verify:** `pnpm --filter @velexis/platform-backend test:int -- admin`
 
-### PBE-032 · Implement admin accounts, platform admins and the audit log
+### PBE-032 · Implement admin accounts, platform admins and the audit log ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-backend
 - **Milestone:** M1
 - **Depends on:** PBE-028, PBE-016
@@ -728,7 +732,8 @@ Common commands: backend `pnpm --filter @velexis/platform-backend test`, `test:i
   - Every state-changing admin endpoint of this task writes exactly one audit row with `actor_type = 'platform_admin'`.
 - **Verify:** `pnpm --filter @velexis/platform-backend test && pnpm --filter @velexis/platform-backend test:int -- admin`
 
-### PBE-033 · Implement admin plans and manual subscriptions
+### PBE-033 · Implement admin plans and manual subscriptions ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-backend
 - **Milestone:** M1
 - **Depends on:** PBE-028, PBE-017
@@ -745,7 +750,8 @@ Common commands: backend `pnpm --filter @velexis/platform-backend test`, `test:i
   - Editing a Stripe-billed subscription answers 409.
 - **Verify:** `pnpm --filter @velexis/platform-backend test:int -- admin`
 
-### PBE-034 · Add the daily purge and the dev:seed command
+### PBE-034 · Add the daily purge and the dev:seed command ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-backend
 - **Milestone:** M1
 - **Depends on:** PBE-020, PBE-023, PBE-026, X-026
@@ -760,7 +766,8 @@ Common commands: backend `pnpm --filter @velexis/platform-backend test`, `test:i
   - Running `dev:seed` twice creates no duplicates; with `APP_ENV=production` it exits 1 without writing.
 - **Verify:** `pnpm --filter @velexis/platform-backend test:int -- common dev`
 
-### PBE-035 · Prove provisioning end to end with the real OTA worker
+### PBE-035 · Prove provisioning end to end with the real OTA worker ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-backend
 - **Milestone:** M1
 - **Depends on:** PBE-023, PBE-034
@@ -908,7 +915,8 @@ Common commands: backend `pnpm --filter @velexis/platform-backend test`, `test:i
   - Before M5 the plan step shows only `early_access` [PF-10 AC3]; the tenant-limit error is shown [PF-10 AC4].
 - **Verify:** `pnpm --filter @velexis/platform-frontend test`
 
-### PFE-009 · Build the setup page with progress, retry and key reveal
+### PFE-009 · Build the setup page with progress, retry and key reveal ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-frontend
 - **Milestone:** M1
 - **Depends on:** PFE-008, PBE-023
@@ -925,7 +933,8 @@ Common commands: backend `pnpm --filter @velexis/platform-backend test`, `test:i
   - The revealed keys render once and are not in the page after a reload [PF-11 AC3].
 - **Verify:** `pnpm --filter @velexis/platform-frontend test`
 
-### PFE-010 · Build the OTA dashboard, onboarding checklist and settings
+### PFE-010 · Build the OTA dashboard, onboarding checklist and settings ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-frontend
 - **Milestone:** M1
 - **Depends on:** PFE-008, PBE-024
@@ -942,7 +951,8 @@ Common commands: backend `pnpm --filter @velexis/platform-backend test`, `test:i
   - A suspended tenant shows the banner with its reason.
 - **Verify:** `pnpm --filter @velexis/platform-frontend test`
 
-### PFE-011 · Build the API keys page
+### PFE-011 · Build the API keys page ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-frontend
 - **Milestone:** M1
 - **Depends on:** PFE-010, PBE-021
@@ -959,7 +969,8 @@ Common commands: backend `pnpm --filter @velexis/platform-backend test`, `test:i
   - Roll shows the new key and the old key's expiry [PF-30 AC4]; "last used" is displayed [PF-30 AC5].
 - **Verify:** `pnpm --filter @velexis/platform-frontend test`
 
-### PFE-012 · Build the team page and invitation acceptance
+### PFE-012 · Build the team page and invitation acceptance ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-frontend
 - **Milestone:** M1
 - **Depends on:** PFE-010, PBE-026
@@ -1049,7 +1060,8 @@ Common commands: backend `pnpm --filter @velexis/platform-backend test`, `test:i
   - Every mocked API call, the sign-in calls included, carries `X-Velexis-End-User-IP` from the right-most `X-Forwarded-For` entry, `X-Velexis-End-User-Agent` and `X-Velexis-Bff-Key` [PADR-0019].
 - **Verify:** `pnpm --filter @velexis/platform-admin test && pnpm --filter @velexis/platform-admin typecheck`
 
-### PAD-003 · Add the admin shell, reason and step-up dialogs and data tables
+### PAD-003 · Add the admin shell, reason and step-up dialogs and data tables ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-admin
 - **Milestone:** M1
 - **Depends on:** PAD-002
@@ -1067,7 +1079,8 @@ Common commands: backend `pnpm --filter @velexis/platform-backend test`, `test:i
   - Changing a filter updates the URL and keeps the other filters.
 - **Verify:** `pnpm --filter @velexis/platform-admin test`
 
-### PAD-004 · Build the admin dashboard and the tenant list and detail pages
+### PAD-004 · Build the admin dashboard and the tenant list and detail pages ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-admin
 - **Milestone:** M1
 - **Depends on:** PAD-003, PBE-029

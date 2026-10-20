@@ -78,22 +78,6 @@ function trustProxy(defaultValue: readonly string[]): EnvVar<readonly string[]> 
   };
 }
 
-/** Variables of both processes. */
-const sharedSchema = {
-  APP_ENV: env.enum(["development", "test", "production"] as const),
-  LOG_LEVEL: env.enum(["debug", "info", "warn", "error"] as const, { default: "info" }),
-  // Role velexis_ota_app: DML on tenant schemas, SELECT on reference and on selected platform tables (ADR-0004).
-  DATABASE_URL: env.url({ protocols: POSTGRES_PROTOCOLS }),
-  REDIS_URL: env.url({ protocols: REDIS_PROTOCOLS }),
-} as const;
-
-/**
- * The storefront edge credential (ADR-0018): at least 24 characters of `[A-Za-z0-9_-]`. provision-vm.sh generates 48
- * hex characters, the development value of the `.env.example` files has 25; an empty value and the unsubstituted
- * `@@EDGE_SECRET@@` placeholder of the deploy template are refused.
- */
-const EDGE_SECRET = /^[A-Za-z0-9_-]{24,}$/;
-
 /**
  * A host name in lower case, without a trailing dot, of at least two labels: the rule of `redis.keys.ts` and of the
  * `domain` invalidation event (PADR-0004 item 1).
@@ -103,6 +87,87 @@ const HOST_NAME =
 
 /** `MASTER_KEY_CURRENT`: a KEK id of `LocalFileKeyProvider`, `local:v<N>` with N >= 1 and no leading zeros. */
 const KEK_ID = /^local:v[1-9][0-9]{0,8}$/;
+
+/**
+ * An e-mail address without anchors: the `email` format of ajv-formats ("full" mode, the one the OpenAPI validation
+ * uses; dot-atom local part, two or more labels), as the platform backend's configuration has it.
+ */
+const ADDRESS =
+  "[a-z0-9!#$%&'*+/=?^_`{|}~-]+(?:\\.[a-z0-9!#$%&'*+/=?^_`{|}~-]+)*@(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\\.)+[a-z0-9](?:[a-z0-9-]*[a-z0-9])?";
+
+/**
+ * One e-mail address as the OTA backend sends to it: the `email` format of the OpenAPI validation, ASCII only and at
+ * most 254 characters. Nothing SMTP or Nodemailer could read as several addresses, a display name or a comment passes
+ * (no spaces, quotes, angle brackets, commas, parentheses or line breaks).
+ */
+export const EMAIL_ADDRESS = new RegExp(`^(?=.{3,254}$)${ADDRESS}$`, "i");
+
+/**
+ * MAIL_FROM: an address, or a display name and the address in angle brackets (`"Velexis OTA" <no-reply@…>`,
+ * `Velexis OTA <no-reply@…>`). One line, one address. The notifications module sends from its address with the OTA's
+ * brand name as the display name (OADR-0013 item 5); the display name here is used only where no brand is known.
+ */
+export const MAIL_FROM_PATTERN = new RegExp(
+  `^(?:${ADDRESS}|(?:"[^"\\\\\\r\\n]*"|[^"<>,;:@\\\\\\r\\n]*?)\\s*<${ADDRESS}>)$`,
+  "i",
+);
+
+/**
+ * The keys of the Velexis Stripe account per environment (ADR-0011 (A), OADR-0010 point 1): a secret or restricted key
+ * (`sk_…`, `rk_…`) and a publishable key (`pk_…`) of that mode, so a live key never sits in a test variable or the
+ * other way round. Each is optional: an environment without both keys has no `velexis`-mode payments (`424
+ * PAYMENT_PROVIDER_NOT_CONFIGURED`, and `storefront.get` lists no payment method), so the API starts on a VM whose
+ * Stripe keys are not filled in yet (provision-vm.sh: "Stripe when needed"); the live keys stay empty until the M6
+ * launch checklist. A refused value is named, never printed (@velexis/config).
+ */
+export const STRIPE_KEY_PATTERNS = Object.freeze({
+  secret: { test: /^(?:sk|rk)_test_[A-Za-z0-9_]+$/, live: /^(?:sk|rk)_live_[A-Za-z0-9_]+$/ },
+  publishable: { test: /^pk_test_[A-Za-z0-9_]+$/, live: /^pk_live_[A-Za-z0-9_]+$/ },
+});
+
+/**
+ * A Stripe webhook signing secret (`whsec_…`, OADR-0010 point 4): the Dashboard's and the Stripe CLI's secrets are
+ * `whsec_` and letters and digits; the base64 characters are accepted too. A refused value is named, never printed.
+ */
+export const STRIPE_WEBHOOK_SECRET_PATTERN = /^whsec_[A-Za-z0-9+/=_-]{8,}$/;
+
+/** Variables of both processes. */
+const sharedSchema = {
+  APP_ENV: env.enum(["development", "test", "production"] as const),
+  LOG_LEVEL: env.enum(["debug", "info", "warn", "error"] as const, { default: "info" }),
+  // Role velexis_ota_app: DML on tenant schemas, SELECT on reference and on selected platform tables (ADR-0004).
+  DATABASE_URL: env.url({ protocols: POSTGRES_PROTOCOLS }),
+  REDIS_URL: env.url({ protocols: REDIS_PROTOCOLS }),
+  // The OTA zone's key folder (ADR-0010, ADR-0026): every `master-v<N>.key` in it is the KEK `local:v<N>`, and
+  // MASTER_KEY_CURRENT names the one that wraps new data keys (identical copies of the platform zone's files, so the
+  // OTA backend decrypts the Amadeus secrets the platform encrypted). The API loads them in the Amadeus module
+  // (OBE-017: client secrets, cached access tokens), the HTTP module (OBE-014: idempotent replays that carry a token in
+  // `idempotency_keys.response_ciphertext`), the checkout module (OBE-036: travellers' documents) and the notifications
+  // module (OBE-030: the secret variables of an e-mail it queues); the worker in the notifications module, which
+  // decrypts `notifications.secret_payload_ciphertext` to render an e-mail.
+  MASTER_KEY_DIR: env.dir(),
+  MASTER_KEY_CURRENT: env.string({ pattern: KEK_ID }),
+  // `<key>.<STOREFRONT_BASE_DOMAIN>` is a tenant's storefront sub-domain (ADR-0018, OADR-0009 point 2): the API
+  // resolves edge requests by it, and the worker builds the links of e-mails on it (OADR-0015 point 5, OBE-030).
+  STOREFRONT_BASE_DOMAIN: env.string({ pattern: HOST_NAME }),
+  // The Velexis Stripe account (OBE-038; STRIPE_KEY_PATTERNS above): the keys of `velexis`-mode payments (and of
+  // `connect_standard` from M5) per environment. Only the payments module reads them
+  // (src/payments/stripe/stripe-client.factory.ts): the API creates, reads and updates PaymentIntents and hands the
+  // publishable key to the storefront through storefront.get; the worker reads the PaymentIntents, charges, refunds and
+  // disputes of the webhook events again (OBE-039, OADR-0010 point 5), and from OBE-040 voids, captures and refunds.
+  // Both units read ota-backend.env, which holds them.
+  STRIPE_SECRET_KEY_TEST: env.string({ pattern: STRIPE_KEY_PATTERNS.secret.test, optional: true }),
+  STRIPE_PUBLISHABLE_KEY_TEST: env.string({ pattern: STRIPE_KEY_PATTERNS.publishable.test, optional: true }),
+  STRIPE_SECRET_KEY_LIVE: env.string({ pattern: STRIPE_KEY_PATTERNS.secret.live, optional: true }),
+  STRIPE_PUBLISHABLE_KEY_LIVE: env.string({ pattern: STRIPE_KEY_PATTERNS.publishable.live, optional: true }),
+} as const;
+
+/**
+ * The storefront edge credential (ADR-0018): at least 24 characters of `[A-Za-z0-9_-]`. provision-vm.sh generates 48
+ * hex characters, the development value of the `.env.example` files has 25; an empty value and the unsubstituted
+ * `@@EDGE_SECRET@@` placeholder of the deploy template are refused.
+ */
+const EDGE_SECRET = /^[A-Za-z0-9_-]{24,}$/;
 
 /**
  * The DER length of an Ed25519 private key in PKCS#8 (`openssl genpkey -algorithm ed25519`, `pnpm dev:keys`): the
@@ -172,22 +237,23 @@ export const apiConfigSchema = {
   // folder, never the platform's key. Checked here and read once by the identity module's TokenService, which refuses
   // a key that is not Ed25519. Only the API signs and verifies tokens; the worker does not read it.
   JWT_PRIVATE_KEY_FILE: env.secretFile({ minBytes: JWT_PRIVATE_KEY_MIN_BYTES, encoding: "pem" }),
-  // `<key>.<STOREFRONT_BASE_DOMAIN>` is a tenant's storefront sub-domain (ADR-0018, OADR-0009 point 2).
-  STOREFRONT_BASE_DOMAIN: env.string({ pattern: HOST_NAME }),
   // The API's public origin, for absolute URLs given to key callers (asset and file links; ADR-0018).
   PUBLIC_OTA_API_URL: env.url({ protocols: ["https:", "http:"] }),
-  // The OTA zone's key folder (ADR-0010, ADR-0026): every `master-v<N>.key` in it is the KEK `local:v<N>`, and
-  // MASTER_KEY_CURRENT names the one that wraps new data keys (identical copies of the platform zone's files, so the
-  // OTA backend decrypts the Amadeus secrets the platform encrypted). The Amadeus module loads them once when it
-  // starts (OBE-017): it decrypts client secrets and encrypts the cached access tokens. The HTTP module loads them too
-  // (OBE-014): the idempotency service encrypts the replays that carry a token into
-  // `idempotency_keys.response_ciphertext`. The worker adds both variables with its first encrypted value.
-  MASTER_KEY_DIR: env.dir(),
-  MASTER_KEY_CURRENT: env.string({ pattern: KEK_ID }),
   // Optional overrides of the Amadeus host per environment (the stub, http://127.0.0.1:4900, in development and CI);
   // empty on the VM, where the connection's or the shared account's base_url is used (OADR-0001 point 4).
   AMADEUS_BASE_URL_TEST: amadeusBaseUrl(),
   AMADEUS_BASE_URL_LIVE: amadeusBaseUrl(),
+  // The signing secrets of the Velexis account's webhook endpoints, `/webhooks/stripe/velexis/{test,live}` (OBE-039,
+  // OADR-0010 point 4). Optional: an environment without its secret refuses every delivery with `400` (Stripe keeps
+  // sending it, so nothing is lost once the secret is set); the live one stays empty until the M6 launch checklist.
+  // Only the webhook receiver reads them (src/payments/webhooks/webhook-receiver.service.ts); never logged.
+  STRIPE_WEBHOOK_SECRET_VELEXIS_TEST: env.string({ pattern: STRIPE_WEBHOOK_SECRET_PATTERN, optional: true }),
+  STRIPE_WEBHOOK_SECRET_VELEXIS_LIVE: env.string({ pattern: STRIPE_WEBHOOK_SECRET_PATTERN, optional: true }),
+  // The global kill switch of the airline-card method (ADR-0011, OADR-0004 point 1; OBE-050), `false` by default
+  // (`true`, `false`, `1` or `0`; anything else is refused at start-up). Off, checkout.createPayment refuses
+  // `airline_card` (`403 FEATURE_DISABLED`) and storefront.get never lists it, whatever the tenants' settings say.
+  // `true` in development and CI only until the M6 security review (OBE-086); `false` in the deploy template.
+  AIRLINE_CARD_ENABLED: env.bool({ default: false }),
 } as const;
 
 /** The worker process (`dist/worker.js`, unit velexis-ota-worker). */
@@ -198,6 +264,15 @@ export const workerConfigSchema = {
   // Role velexis_provisioner: tenant provisioning and migrations (CREATE on the database, owner of the tenant schemas,
   // nothing on platform or reference; ADR-0004). /etc/velexis/ota-worker.env on the VM. Never used to serve requests.
   DATABASE_PROVISIONER_URL: env.url({ protocols: POSTGRES_PROTOCOLS }),
+  // E-mail (ADR-0017, OADR-0013 item 5): only the worker sends, through SMTP (Mailpit `smtp://127.0.0.1:1025` in
+  // development), from the address of MAIL_FROM with the OTA's brand name as the display name.
+  SMTP_URL: env.url({ protocols: ["smtp:", "smtps:"] }),
+  MAIL_FROM: env.string({ pattern: MAIL_FROM_PATTERN }),
+  // Velexis ops, one plain address: the recipient of the operational alerts of the OTA backend (airline-card abuse,
+  // refused Amadeus credentials; OADR-0004). The tasks that raise them read it from the notifications module.
+  OPS_ALERT_EMAIL: env.string({ pattern: EMAIL_ADDRESS }),
+  // The OTA admin's public base URL: the links of staff alert e-mails (OADR-0013 item 4).
+  PUBLIC_OTA_ADMIN_URL: env.url({ protocols: ["https:", "http:"] }),
 } as const;
 
 /** The variables both processes read: what shared modules such as `health` may use. */

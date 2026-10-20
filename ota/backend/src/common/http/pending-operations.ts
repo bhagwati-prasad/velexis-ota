@@ -38,16 +38,6 @@ export const PENDING_OPERATIONS: Readonly<Partial<Record<OtaOperationId, Pending
   // Flights
   searchFlightAvailabilities: "deferred",
   // Checkout and payments
-  createCheckout: "OBE-036",
-  getCheckout: "OBE-036",
-  setCheckoutTravelers: "OBE-036",
-  setCheckoutContacts: "OBE-036",
-  setCheckoutRemarks: "OBE-036",
-  setCheckoutAncillaries: "OBE-037",
-  createCheckoutPayment: "OBE-038",
-  getPayment: "OBE-038",
-  updatePayment: "OBE-038",
-  completeCheckout: "OBE-042",
   completeCheckoutWithAirlineCard: "OBE-051",
   // Customer bookings
   listBookings: "OBE-046",

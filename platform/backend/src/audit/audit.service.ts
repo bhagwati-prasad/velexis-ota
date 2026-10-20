@@ -16,9 +16,15 @@
 // user agent, and the request id is the one the job carries (`entry.requestId`), if any.
 import { Injectable, Optional } from "@nestjs/common";
 import { redactPayload } from "@velexis/logger";
+import type { PlatformDb } from "../common/database";
 import { RequestContext, type ActorType } from "../common/http/request-context";
 import { isAuditAction, isAuditTargetType, type AuditAction, type AuditTargetType } from "./audit-actions";
-import { AuditRepository, type AuditRowInserted, type PlatformTransaction } from "./audit.repository";
+import {
+  AuditRepository,
+  type AuditLogRecord,
+  type AuditRowInserted,
+  type PlatformTransaction,
+} from "./audit.repository";
 
 /** A plain object of values to record (`before`, `after`); it is redacted before it is stored. */
 export type AuditValues = Readonly<Record<string, unknown>>;
@@ -163,5 +169,17 @@ export class AuditService {
       userAgent: context?.userAgent ?? null,
       detailsJson: JSON.stringify(auditDetails(entry)),
     });
+  }
+
+  /**
+   * The last `limit` rows about the OTA `tenantId`, newest first, read on `db` (the platform admin's tenant detail,
+   * PBE-029). The rows were redacted when they were written, so they are returned as stored.
+   */
+  recentForTenant(
+    db: PlatformDb | PlatformTransaction,
+    tenantId: string,
+    limit: number,
+  ): Promise<AuditLogRecord[]> {
+    return this.repository.recentForTenant(db, tenantId, limit);
   }
 }

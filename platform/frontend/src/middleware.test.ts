@@ -592,6 +592,73 @@ describe("token links (PFE-006)", () => {
   });
 });
 
+describe("invitation links (PFE-012)", () => {
+  /** An invitation token as the e-mail carries it (`iv_` + 43 characters; a dummy, never a real one). */
+  const INVITE_TOKEN = "iv_PFE012dummyInvitationTokenNeverRealValue00";
+
+  /** Where the page of a token link takes the browser (its refresh and its fallback link agree). */
+  async function refreshTarget(response: NextResponse): Promise<string> {
+    const html = await response.clone().text();
+    const refresh = /<meta http-equiv="refresh" content="0; url=([^"]*)">/.exec(html)?.[1];
+    const link = /<a href="([^"]*)">/.exec(html)?.[1];
+    expect(link).toBe(refresh);
+    return (refresh ?? "").replaceAll("&amp;", "&");
+  }
+
+  it("[PFE-012 AC3] the accept URL loses its token after the first request: the token moves into __Host-vxp_invite", async () => {
+    const response = await middleware(request(`/invitations/accept?token=${INVITE_TOKEN}`));
+
+    // The same answer as a reset link: a page without script that refreshes at once to the URL without the token.
+    expect(response.status).toBe(200);
+    expect(response.headers.get("location")).toBeNull();
+    const html = await response.clone().text();
+    expect(html).not.toMatch(/<script|<form/i);
+    expect(await refreshTarget(response)).toBe("https://platform.example.com/invitations/accept");
+    expect(html).not.toContain(INVITE_TOKEN);
+    // One cookie: the token, HttpOnly, Secure, SameSite=Strict, 15 minutes, no Domain (the __Host- prefix).
+    const [line, ...others] = setCookies(response);
+    expect(others).toEqual([]);
+    expect(
+      line
+        ?.split("; ")
+        .filter((attribute) => !attribute.startsWith("Expires="))
+        .sort(),
+    ).toEqual(
+      [
+        `__Host-vxp_invite=${INVITE_TOKEN}`,
+        "HttpOnly",
+        "Max-Age=900",
+        "Path=/",
+        "SameSite=strict",
+        "Secure",
+      ].sort(),
+    );
+    expect(response.headers.get("referrer-policy")).toBe("no-referrer");
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("[PFE-012 AC3] passes the clean URL through to the page, and keeps the other query parameters", async () => {
+    const clean = await middleware(
+      request("/invitations/accept", { cookies: { "__Host-vxp_invite": INVITE_TOKEN } }),
+    );
+    expect(isPassedThrough(clean)).toBe(true);
+    expect(forwardedCookies(clean).get("__Host-vxp_invite")).toBe(INVITE_TOKEN);
+    expect(setCookies(clean)).toEqual([]);
+
+    const withQuery = await middleware(request(`/invitations/accept?lang=en&token=${INVITE_TOKEN}`));
+    expect(await refreshTarget(withQuery)).toBe("https://platform.example.com/invitations/accept?lang=en");
+
+    // An empty or over-long token deletes an older invitation cookie, so the page says the link is no good.
+    const empty = await middleware(
+      request("/invitations/accept?token=", { cookies: { "__Host-vxp_invite": INVITE_TOKEN } }),
+    );
+    expect(setCookies(empty)).toEqual([
+      "__Host-vxp_invite=; Path=/; Max-Age=0; Secure; HttpOnly; SameSite=strict",
+    ]);
+  });
+});
+
 describe("request id", () => {
   it("keeps a valid X-Request-Id and creates one when there is none", async () => {
     const kept = await middleware(request("/", { headers: { "X-Request-Id": "req_from_caddy_0001" } }));

@@ -5,6 +5,10 @@
 // (on the process's Redis client), the vx:invalidate subscriber, the tenant resolver and the tenant context that the
 // global `TenantGuard` uses, and `TenantTx` over the same pool.
 //
+// The worker's module has the platform repository, and since OBE-024 the same caches, subscriber, tenant context and
+// `TenantTx` for its jobs (OADR-0014 point 5): a job resolves its tenant through `tenant:<id>` as the API does and
+// opens its context with `TenantContext.run`. Caller classification and tenant resolution stay the API's.
+//
 // The API imports `TenancyModule.forApi()`, the worker `TenancyModule.forWorker()`. A module that needs the repository
 // imports the same call again. Each call returns the same module object, and Nest 11 tells dynamic modules apart by
 // reference, so a process builds the module once and holds one pool however many modules import it.
@@ -122,6 +126,7 @@ export class TenancyModule {
     return TenancyModule.forApp(API_APP);
   }
 
+  /** The worker's module: the platform repository, and the caches, tenant context and `TenantTx` of its jobs. */
   static forWorker(): DynamicModule {
     return TenancyModule.forApp(WORKER_APP);
   }
@@ -139,30 +144,31 @@ export class TenancyModule {
             ApiKeyVerifier,
             CallerResolver,
             CallerContext,
-            PlatformCache,
-            InvalidationSubscriber,
             TenantResolver,
-            TenantContext,
-            tenantDbProvider,
-            TenantTx,
           ]
         : [];
       dynamicModule = {
         module: TenancyModule,
-        imports: api ? [RedisModule] : [],
+        imports: [RedisModule],
         providers: [
           { provide: TENANCY_APP, useValue: app },
           poolProvider,
           platformDbProvider,
           OtaPoolCloser,
           PlatformReadRepository,
+          PlatformCache,
+          InvalidationSubscriber,
+          TenantContext,
+          tenantDbProvider,
+          TenantTx,
           ...requests,
         ],
         exports: [
           PlatformReadRepository,
-          ...(api
-            ? [CallerResolver, CallerContext, PlatformCache, TenantResolver, TenantContext, TenantTx]
-            : []),
+          PlatformCache,
+          TenantContext,
+          TenantTx,
+          ...(api ? [CallerResolver, CallerContext, TenantResolver] : []),
         ],
       };
       TenancyModule.modules.set(app, dynamicModule);

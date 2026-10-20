@@ -1,7 +1,8 @@
 // Contract test of OBE-009: the spec-first changes of ota/docs/api-changes.md §1, §2, §5 and §6 in the OTA document
 // (openapi/velexis-ota-booking-api.openapi.yaml) and the milestone of every original operation (ota/docs/scope.md §3).
 // OBE-029 adds the airline-card method (§3.1), the edge-only operation completeCheckoutWithAirlineCard (§3.2), the
-// payment account modes of StorefrontPaymentConfig (§4) and PAYMENT_ATTEMPTS_EXCEEDED (§6).
+// payment account modes of StorefrontPaymentConfig (§4) and PAYMENT_ATTEMPTS_EXCEEDED (§6). OBE-039 adds the webhook
+// receiver of the Velexis Stripe account, receiveStripeVelexisWebhook (api-changes-console-and-internal.md §5).
 //
 // The 96 operations of the original design are read from the frozen copy under docs/velexis-sdk/openapi/, so the
 // counts asserted here (77 MVP, 19 deferred, 63 customer-scope) never change when later spec tasks add operations.
@@ -1130,6 +1131,119 @@ describe("airline-card method and payment account modes (api-changes §3, §4, �
     expect(ERROR_CATALOGUE[code].description).toBe(
       "Too many airline-card attempts on this checkout; start a new checkout or use another method.",
     );
+  });
+});
+
+// ---- OBE-039: the webhook receiver of the Velexis Stripe account (api-changes part 2 §5, OADR-0010 point 4) ------
+
+const VELEXIS_WEBHOOK = "receiveStripeVelexisWebhook";
+
+describe("receiveStripeVelexisWebhook (api-changes-console-and-internal §5)", () => {
+  it("documents POST /webhooks/stripe/velexis/{environment}: tag Internal, x-internal, x-milestone M3, no x-sdk-method, no credential [OBE-039]", () => {
+    const op = operation(VELEXIS_WEBHOOK);
+    expect([op.method, op.path]).toEqual(["post", "/webhooks/stripe/velexis/{environment}"]);
+    expect(op.spec["tags"]).toEqual(["Internal"]);
+    expect(op.spec["x-internal"]).toBe(true);
+    expect(op.spec["x-milestone"]).toBe("M3");
+    expect(op.spec).not.toHaveProperty("x-sdk-method");
+    expect(op.spec).not.toHaveProperty("x-sdk-exclude");
+    expect(op.spec).not.toHaveProperty("x-edge-only");
+    expect(op.spec).not.toHaveProperty("x-permission");
+    // Stripe sends no credential: no API key, edge credential, token or cookie alternative (the caller guard's
+    // @WebhookRoute lets it through anonymous, and the receiver checks the signature itself).
+    expect(op.spec["security"]).toEqual([]);
+    expect(op.spec["x-scope"]).toBe("internal");
+    expect(op.spec["x-tenant-tables"]).toEqual(["payments", "payment_events"]);
+    expect(op.spec["x-platform-tables"]).toEqual(["tenants"]);
+    // The operations index carries it for route parity, without an SDK method.
+    const indexed = otaOperations.find((entry) => entry.operationId === VELEXIS_WEBHOOK);
+    expect(indexed).toEqual({
+      operationId: VELEXIS_WEBHOOK,
+      method: "post",
+      path: "/webhooks/stripe/velexis/{environment}",
+      sdkMethod: null,
+      scope: "internal",
+      tags: ["Internal"],
+      internal: true,
+      milestone: "M3",
+      edgeOnly: false,
+      permission: null,
+    } satisfies ApiOperation<string>);
+  });
+
+  it("takes the environment as test or live, requires Stripe-Signature and documents the Stripe event body [OBE-039]", () => {
+    const op = operation(VELEXIS_WEBHOOK);
+    const parameters = (op.spec["parameters"] as Json[]).map((parameter) => ({
+      name: parameter["name"],
+      in: parameter["in"],
+      required: parameter["required"],
+      schema: parameter["schema"],
+    }));
+    expect(parameters).toEqual([
+      { name: "environment", in: "path", required: true, schema: { type: "string", enum: ["test", "live"] } },
+      {
+        name: "Stripe-Signature",
+        in: "header",
+        required: true,
+        schema: { type: "string", minLength: 1, maxLength: 2048 },
+      },
+    ]);
+    // Compiles only while the generated types say so.
+    type Parameters = operations["receiveStripeVelexisWebhook"]["parameters"];
+    const environments: Parameters["path"]["environment"][] = ["test", "live"];
+    const header: Parameters["header"] = { "Stripe-Signature": "t=1,v1=00" };
+    expect([environments, Object.keys(header)]).toEqual([["test", "live"], ["Stripe-Signature"]]);
+    const body = objectAt(op.spec, "requestBody");
+    expect(body["required"]).toBe(true);
+    expect(objectAt(body, "content", "application/json", "schema")).toEqual({
+      $ref: "#/components/schemas/StripeWebhookEvent",
+    });
+    const event = objectAt(working, "components", "schemas", "StripeWebhookEvent");
+    expect(event["required"]).toEqual(["id", "object", "type", "livemode", "data"]);
+    const stripeEvent: components["schemas"]["StripeWebhookEvent"] = {
+      id: "evt_example",
+      object: "event",
+      type: "charge.refunded",
+      livemode: false,
+      data: { object: { id: "ch_example" } },
+    };
+    expect(stripeEvent.object).toBe("event");
+  });
+
+  it("answers 200 with an acknowledgement, 400, 500 and 503, and lists exactly those error codes [OBE-039]", () => {
+    const op = operation(VELEXIS_WEBHOOK);
+    expect(Object.keys(objectAt(op.spec, "responses")).sort()).toEqual(["200", "400", "500", "503"]);
+    expect(op.spec["x-error-codes"]).toEqual([
+      "VALIDATION_FAILED",
+      "INVALID_REQUEST",
+      "INTERNAL_ERROR",
+      "SERVICE_UNAVAILABLE",
+    ]);
+    for (const code of op.spec["x-error-codes"] as ErrorCode[]) {
+      const status = String(ERROR_CATALOGUE[code].status);
+      expect([code, status in objectAt(op.spec, "responses")]).toEqual([code, true]);
+    }
+    expect(responseExample(VELEXIS_WEBHOOK, "200")).toEqual({ received: true });
+    expect(checker.check(VELEXIS_WEBHOOK, { status: 200, body: { received: true } })).toEqual([]);
+    expect(checker.check(VELEXIS_WEBHOOK, { status: 200, body: { received: false } })).not.toEqual([]);
+    const signatureRefused = {
+      error: {
+        code: "INVALID_REQUEST",
+        message: "The Stripe signature of the request is not valid.",
+        status: 400,
+        requestId: "req_01JA2Z9W5K7Q3M8N4P6R2T0V1X",
+        details: { reason: "signature_invalid" },
+      },
+    };
+    expect(checker.check(VELEXIS_WEBHOOK, { status: 400, body: signatureRefused })).toEqual([]);
+  });
+
+  it("adds the Internal tag with a description and a tag group of its own [OBE-039]", () => {
+    const tags = working["tags"] as Json[];
+    const internal = tags.find((tag) => tag["name"] === "Internal");
+    expect(typeof internal?.["description"]).toBe("string");
+    const groups = working["x-tagGroups"] as Json[];
+    expect(groups.find((group) => group["name"] === "Internal")?.["tags"]).toEqual(["Internal"]);
   });
 });
 
