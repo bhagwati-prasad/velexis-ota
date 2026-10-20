@@ -933,7 +933,8 @@ Common commands: backend `pnpm --filter @velexis/platform-backend test`, `test:i
   - The revealed keys render once and are not in the page after a reload [PF-11 AC3].
 - **Verify:** `pnpm --filter @velexis/platform-frontend test`
 
-### PFE-010 · Build the OTA dashboard, onboarding checklist and settings
+### PFE-010 · Build the OTA dashboard, onboarding checklist and settings ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-frontend
 - **Milestone:** M1
 - **Depends on:** PFE-008, PBE-024

@@ -719,3 +719,100 @@ export const SETUP_STRINGS = Object.freeze({
   suspendedText: "The OTA dashboard has the details.",
   unavailableTitle: "The set-up could not be loaded",
 });
+
+// ---- OTA dashboard, onboarding checklist and settings (PFE-010) ----------------------------------------------
+
+/** `otas/[tenantId]/layout.tsx` and the pages below it (README §2 Signed in). */
+export const OTA_STRINGS = Object.freeze({
+  unavailableTitle: "This OTA could not be loaded",
+});
+
+/** `/otas/[tenantId]`: the OTA dashboard (README §2, PF-12). */
+export const OTA_DASHBOARD_STRINGS = Object.freeze({
+  intro: "The status of your OTA, its storefront and the steps that are left before your first booking.",
+  detailsLabel: "About this OTA",
+  key: "Key",
+  role: "Your role",
+  defaultCurrency: "Default currency",
+  editProfile: "Edit the OTA profile",
+  storefrontTitle: "Storefront",
+  storefrontIntro: "Where your customers search, book and pay.",
+  storefrontPending: "The storefront opens when the set-up is done.",
+  setupInProgress: "Velexis is still setting up this OTA.",
+  setupFailed: "The set-up of this OTA failed.",
+  setupLink: "Open the set-up page",
+  checklistUnavailableTitle: "The checklist could not be loaded",
+});
+
+/** `OnboardingChecklist`: the items of `getOnboarding` (PADR-0018, PF-12). */
+export const ONBOARDING_STRINGS = Object.freeze({
+  title: "Get your OTA ready",
+  intro: "The steps from set-up to your first booking. Each one links to the page where you do it.",
+  progress: (done: number, total: number) =>
+    `${COUNT_FORMAT.format(done)} of ${COUNT_FORMAT.format(total)} done`,
+  done: "Done",
+  toDo: "To do",
+  allDone: "Every step is done. Your OTA is ready.",
+  empty: "There is nothing to do right now.",
+});
+
+/** `NotAllowed`: a page of an OTA that the caller's role may not open (scope §1.2). */
+export const NOT_ALLOWED_STRINGS = Object.freeze({
+  title: "You cannot open this page",
+  /** The caller's role in words (`ROLE_LABELS`). */
+  intro: (role: string) => `Your role in this OTA is ${role}, and this page is not part of it.`,
+  askOwner: "If you need it, ask an owner or an admin of this OTA to change your role.",
+  backToOverview: "Back to the OTA overview",
+});
+
+/** `/otas/[tenantId]/settings`: the OTA profile (PF-13). */
+export const SETTINGS_STRINGS = Object.freeze({
+  title: "OTA settings",
+  intro:
+    "The profile of your OTA. The storefront's branding and currencies are set in the OTA admin, not here.",
+  profileLegend: "Profile",
+  nameLabel: "OTA name",
+  nameHint: "The name your customers see.",
+  nameRequired: "Enter a name for your OTA.",
+  nameTooLong: "Use at most 100 characters for the name.",
+  legalNameLabel: "Legal name",
+  legalNameHint:
+    "The company behind the OTA, as it appears on invoices. Leave it empty if there is none yet.",
+  legalNameTooLong: "Use at most 200 characters for the legal name.",
+  supportEmailLabel: "Support e-mail address",
+  supportEmailHint: "Where your customers can reach you. Leave it empty if there is none yet.",
+  supportEmailInvalid: "Enter a valid e-mail address, like support@example.com.",
+  countryLabel: "Country",
+  countryHint: "Where your business is registered.",
+  countryPlaceholder: "Choose a country",
+  countryRequired: "Choose the country of your business.",
+  countryUnknown: "Choose a country from the list.",
+  timeZoneLabel: "Time zone",
+  timeZoneHint: "For the dates and times of your OTA admin.",
+  timeZoneRequired: "Choose the time zone of your OTA.",
+  timeZoneUnknown: "Choose a time zone from the list.",
+  fixedTitle: "Set when the OTA was created",
+  fixedIntro: "These cannot be changed.",
+  keyLabel: "OTA key",
+  keyHint: "Part of the storefront address.",
+  currencyLabel: "Default currency",
+  currencyHint: "The currency the storefront sells in.",
+  submit: "Save changes",
+  submitting: "Saving…",
+  saved: "The profile is saved.",
+  readOnlyTitle: "The profile cannot be changed right now",
+  /** Why the profile is read-only, for each status but `active` (only an active OTA can be edited). */
+  readOnly: Object.freeze({
+    provisioning: "Velexis is still setting up this OTA. You can change its profile once the set-up is done.",
+    suspended: "This OTA is suspended, so its profile is read-only until it is resumed.",
+    failed: "The set-up of this OTA failed, so its profile cannot be changed.",
+  }),
+  notActive: "This OTA is not active any more, so its profile cannot be changed. Reload the page to see why.",
+  stale:
+    "Someone else changed this profile in the meantime. Reload the page to see their changes, then make yours again.",
+  reload: "Reload the page",
+  forbidden: "Your role in this OTA does not allow changing its profile any more. Reload the page.",
+  removed: "You are not a member of this OTA any more.",
+  formExpired: "This form has expired. Reload the page and try again.",
+  rateLimited: "Too many changes in a short time. Wait a minute, then try again.",
+});
