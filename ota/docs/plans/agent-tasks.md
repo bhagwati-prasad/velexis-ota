@@ -575,7 +575,8 @@ The OTA backend gets its contract extensions, request pipeline, tenancy, Amadeus
   - `amadeus:ping` against the stub prints `ok` and exits 0; with bad credentials it exits 1 with `SUPPLIER_NOT_CONFIGURED`.
 - **Verify:** `pnpm --filter @velexis/ota-backend test -- health`
 
-### OBE-026 · Prove tenant resolution and shopping isolation across two tenants
+### OBE-026 · Prove tenant resolution and shopping isolation across two tenants ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-backend
 - **Milestone:** M2
 - **Depends on:** OBE-023, OBE-016, OBE-015, OBE-007
