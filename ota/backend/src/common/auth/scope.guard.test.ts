@@ -75,10 +75,26 @@ describe("the operations index", () => {
 
   it("knows a scope for every operation of the OTA document", () => {
     const unscoped = otaOperations.filter(
-      (operation) => !["customer", "both", "console"].includes(String(operation.scope)),
+      (operation) =>
+        !operation.internal && !["customer", "both", "console"].includes(String(operation.scope)),
     );
 
     expect(unscoped.map((operation) => operation.operationId)).toEqual([]);
+  });
+
+  // The x-internal operations (the Stripe webhook receivers since OBE-039) have `x-scope: internal`, as in the platform
+  // document: their anonymous caller is left alone by the guard, and a request that brings a credential is refused.
+  it("gives every x-internal operation the scope internal, which no credential reaches [OBE-039]", () => {
+    const internal = otaOperations.filter((operation) => operation.internal);
+
+    expect(internal.map((operation) => [operation.operationId, operation.scope])).toEqual([
+      ["receiveStripeVelexisWebhook", "internal"],
+    ]);
+    for (const caller of [EDGE, PUBLISHABLE, SECRET, AUTOMATION_READER]) {
+      expect(() => requestScope(scopedOperation("receiveStripeVelexisWebhook"), caller, undefined)).toThrow(
+        expect.objectContaining({ code: "SCOPE_NOT_ALLOWED", details: { reason: "no_scope" } }),
+      );
+    }
   });
 });
 

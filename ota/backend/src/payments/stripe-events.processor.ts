@@ -1,0 +1,670 @@
+// The consumer of `ota-stripe-events` (OBE-039; OADR-0010 point 5, ADR-0011 (A) "webhooks", architecture flow (d)). It
+// runs in the worker only. The webhook receiver (webhooks/webhook-receiver.service.ts) stored the event as a
+// `payment_events` row and queued `stripe.event {tenantId, paymentEventId}` with the Stripe event id as job id; this
+// processor never trusts the event body. Per job:
+//
+//   1. the tenant through the platform cache (`active` or `suspended`, as the receiver; otherwise skipped), then, in
+//      its context, the stored event and its payment;
+//   2. the object is read again from Stripe, with the Velexis key of the payment's environment (the events of the
+//      `velexis` endpoint are about objects of the Velexis account, whatever the tenant's connection says now, so a
+//      connection switched or disabled since never stops a capture or a refund from being recorded):
+//        payment_intent.amount_capturable_updated, .succeeded, .payment_failed, .canceled
+//                                   the PaymentIntent (with its payment method and latest charge): authorised,
+//                                   captured, declined (back to requires_payment_method with the decline code) or
+//                                   cancelled, as payment-state.ts allows from the row's status;
+//        charge.refunded, charge.refund.updated
+//                                   the charge and its refunds: each refund row of the payment (by Stripe id, else by
+//                                   the `refund_id` Velexis wrote in it) takes its state, and the payment its captured
+//                                   and refunded amounts and `captured`, `partially_refunded` or `refunded`;
+//        charge.dispute.created     the dispute: a `payment.dispute_created` event and a staff alert (outbox
+//                                   `staff.manual_review` to `ops_alert_email`, else OPS_ALERT_EMAIL; disputes are
+//                                   alerted, not managed, in the MVP);
+//      other types are stored by the receiver and ignored here;
+//   3. the state read is applied in one short transaction under the row's lock and with its `version`
+//      (PaymentsRepository.updatePayment, updateRefund), with a `payment_events` row (`source = webhook`) per change.
+//      The Stripe calls happen outside any transaction (architecture §4).
+//
+// An object whose metadata names another tenant, environment or payment is a security event (logged without the
+// object) and changes nothing. A Stripe failure that can pass (connection, timeout, 5xx, rate limit) fails the job for
+// BullMQ's retries; a permanent one (the object does not exist on the account, a refused request) fails it at once
+// (`UnrecoverableError`). Processing twice is harmless: the second run finds the row in the state Stripe reports and
+// writes nothing. Log lines carry ids, types, statuses and Stripe's error codes, never an object of Stripe.
+import { OnWorkerEvent, Processor, WorkerHost } from "@nestjs/bullmq";
+import { Injectable } from "@nestjs/common";
+import { ConfigService } from "@nestjs/config";
+import { redactPayload } from "@velexis/logger";
+import { UnrecoverableError, type Job } from "bullmq";
+import { InjectPinoLogger, PinoLogger } from "nestjs-pino";
+import Stripe from "stripe";
+import { Clock } from "../common/clock";
+import { IdGenerator } from "../common/ids";
+import { OTA_QUEUE, otaWorkerOptions } from "../common/queues/queue-names";
+import { EMAIL_ADDRESS, type WorkerConfig } from "../config";
+import { jobTenant } from "../jobs/fan-out";
+import { OutboxService } from "../notifications/outbox.service";
+import { PlatformCache } from "../tenancy/platform-cache";
+import { TenantContext } from "../tenancy/tenant-context";
+import { TenantTx, type TenantTransaction } from "../tenancy/tenant-tx";
+import type { GatewayState } from "./payment-gateway";
+import {
+  matchRefund,
+  providerStateUpdate,
+  refundedState,
+  refundUpdate,
+  type ProviderRefund,
+} from "./payment-state";
+import { PaymentsRepository, type PaymentEventRow, type PaymentRow } from "./payments.repository";
+import { StripeClientFactory } from "./stripe/stripe-client.factory";
+import { fromMinorUnits, stateOfPaymentIntent } from "./stripe/stripe.gateway";
+import {
+  STRIPE_EVENT_JOB,
+  VELEXIS_ENDPOINT,
+  WEBHOOK_TENANT_STATUSES,
+  type StripeEventJobData,
+} from "./webhooks/webhook-receiver.service";
+
+/** The PaymentIntent events whose PaymentIntent is read again and applied. */
+export const PAYMENT_INTENT_EVENTS: readonly string[] = Object.freeze([
+  "payment_intent.amount_capturable_updated",
+  "payment_intent.succeeded",
+  "payment_intent.payment_failed",
+  "payment_intent.canceled",
+]);
+
+/** The refund events whose charge and refunds are read again and applied. */
+export const REFUND_EVENTS: readonly string[] = Object.freeze(["charge.refunded", "charge.refund.updated"]);
+
+/** The dispute event that raises a staff alert. */
+export const DISPUTE_CREATED = "charge.dispute.created";
+
+/** The refunds of a charge read at most (Stripe's page limit); a charge has a handful. */
+export const REFUNDS_PAGE_LIMIT = 100;
+
+/** The template and dedupe key of the dispute alert. */
+const DISPUTE_ALERT_TEMPLATE = "staff.manual_review";
+const disputeDedupeKey = (disputeId: string): string => `staff.dispute:${disputeId}`;
+
+const TENANT_ID = /^ten_[0-9A-Za-z_]{1,60}$/;
+const PAYMENT_EVENT_ID = /^pev_[0-9A-Za-z_]{1,60}$/;
+const STRIPE_ID = /^[a-z]{2,8}_[0-9A-Za-z_]{1,250}$/;
+const REFUND_ID = /^rfd_[0-9A-Za-z_]{1,60}$/;
+
+/** The payload of a `stripe.event` job, or `undefined` when it is not one (extra fields included). */
+export function parseStripeEventJobData(data: unknown): StripeEventJobData | undefined {
+  if (typeof data !== "object" || data === null || Array.isArray(data) || Object.keys(data).length !== 2) {
+    return undefined;
+  }
+  const { tenantId, paymentEventId } = data as Record<string, unknown>;
+  return typeof tenantId === "string" &&
+    TENANT_ID.test(tenantId) &&
+    typeof paymentEventId === "string" &&
+    PAYMENT_EVENT_ID.test(paymentEventId)
+    ? { tenantId, paymentEventId }
+    : undefined;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** A Stripe reference: the id string, or the id of an expanded object. */
+function referenceOf(value: unknown): string | null {
+  const id = isRecord(value) ? value["id"] : value;
+  return typeof id === "string" && STRIPE_ID.test(id) ? id : null;
+}
+
+/** What the processor reads of a stored webhook payload (webhook-receiver.service.ts, `storedPayloadOf`). */
+export interface StoredEventFacts {
+  readonly endpoint: string | null;
+  /** The Stripe event type, from the row's `type` (`webhook.<type>`). */
+  readonly type: string;
+  readonly objectId: string | null;
+  readonly paymentIntentId: string | null;
+  readonly chargeId: string | null;
+}
+
+/** The facts of a stored webhook event. */
+export function storedFactsOf(event: Pick<PaymentEventRow, "type" | "payload">): StoredEventFacts {
+  const payload = isRecord(event.payload) ? event.payload : {};
+  const object = isRecord(payload["object"]) ? payload["object"] : {};
+  return {
+    endpoint: typeof payload["endpoint"] === "string" ? payload["endpoint"] : null,
+    type: event.type.startsWith("webhook.") ? event.type.slice("webhook.".length) : event.type,
+    objectId: referenceOf(object["id"]),
+    paymentIntentId: referenceOf(payload["paymentIntentId"]),
+    chargeId: referenceOf(payload["chargeId"]),
+  };
+}
+
+/** What one `stripe.event` job did. */
+export type StripeEventOutcome =
+  "applied" | "unchanged" | "stale" | "ignored" | "mismatch" | "alerted" | "missing";
+
+/** What a finished `stripe.event` job returns (BullMQ keeps it with the job): ids and the outcome, never more. */
+export type StripeEventResult =
+  | {
+      readonly tenantId: string;
+      readonly paymentEventId: string;
+      readonly type: string | null;
+      readonly outcome: StripeEventOutcome;
+    }
+  | { readonly tenantId: string; readonly outcome: "skipped"; readonly reason: string };
+
+/** The event, its payment and the payment's currency minor units, as read at the start of a job. */
+interface StoredEvent {
+  readonly event: PaymentEventRow;
+  readonly facts: StoredEventFacts;
+  readonly payment: PaymentRow;
+  readonly minorUnits: number;
+}
+
+/** The Velexis keys of a Stripe object's metadata, as strings or `undefined`. */
+function metadataOf(object: {
+  metadata?: Stripe.Metadata | null;
+}): Readonly<Record<string, string | undefined>> {
+  return isRecord(object.metadata) ? (object.metadata as Record<string, string | undefined>) : {};
+}
+
+/** Applies the state of a stored Stripe event, read again from Stripe, inside the tenant's context (file header). */
+@Injectable()
+export class StripeEventHandler {
+  constructor(
+    private readonly tx: TenantTx,
+    private readonly tenants: TenantContext,
+    private readonly repository: PaymentsRepository,
+    private readonly clients: StripeClientFactory,
+    private readonly outbox: OutboxService,
+    private readonly config: ConfigService<WorkerConfig, true>,
+    private readonly clock: Clock,
+    private readonly ids: IdGenerator,
+    @InjectPinoLogger(StripeEventHandler.name) private readonly logger: PinoLogger,
+  ) {}
+
+  async handle(
+    paymentEventId: string,
+  ): Promise<{ readonly type: string | null; readonly outcome: StripeEventOutcome }> {
+    const stored = await this.tx.run((trx) => this.read(trx, paymentEventId));
+    if (stored === undefined) {
+      this.logger.warn({ paymentEventId }, "payments.stripe_event_missing");
+      return { type: null, outcome: "missing" };
+    }
+    const { facts, payment } = stored;
+    const handled =
+      PAYMENT_INTENT_EVENTS.includes(facts.type) ||
+      REFUND_EVENTS.includes(facts.type) ||
+      facts.type === DISPUTE_CREATED;
+    if (!handled || facts.endpoint !== VELEXIS_ENDPOINT || payment.provider !== "stripe") {
+      this.logger.debug({ paymentEventId, type: facts.type }, "payments.stripe_event_ignored");
+      return { type: facts.type, outcome: "ignored" };
+    }
+    const environment = payment.environment === "live" ? "live" : "test";
+    const client = this.clients.velexisClient(environment);
+    if (client === undefined) {
+      // A configuration gap that a restart with the keys repairs: BullMQ retries the job meanwhile.
+      this.logger.error({ paymentEventId, environment }, "payments.stripe_event_not_configured");
+      throw new Error(`no Stripe keys of the Velexis account for ${environment}`);
+    }
+    let outcome: StripeEventOutcome;
+    if (PAYMENT_INTENT_EVENTS.includes(facts.type)) {
+      outcome = await this.paymentIntent(client, stored);
+    } else if (REFUND_EVENTS.includes(facts.type)) {
+      outcome = await this.refunds(client, stored);
+    } else {
+      outcome = await this.dispute(client, stored);
+    }
+    this.logger.info(
+      { paymentEventId, paymentId: payment.id, type: facts.type, outcome },
+      "payments.stripe_event_processed",
+    );
+    return { type: facts.type, outcome };
+  }
+
+  private async read(trx: TenantTransaction, paymentEventId: string): Promise<StoredEvent | undefined> {
+    const event = await this.repository.event(trx, paymentEventId);
+    if (event === undefined || event.source !== "webhook") {
+      return undefined;
+    }
+    const payment = await this.repository.payment(trx, event.paymentId);
+    if (payment === undefined) {
+      return undefined;
+    }
+    const minorUnits = (await this.repository.currencyMinorUnits(trx, payment.currency)) ?? 2;
+    return { event, facts: storedFactsOf(event), payment, minorUnits };
+  }
+
+  // ---- PaymentIntents --------------------------------------------------------------------------------------------
+
+  private async paymentIntent(client: Stripe, stored: StoredEvent): Promise<StripeEventOutcome> {
+    const { payment, facts } = stored;
+    const intentId = payment.providerPaymentId ?? facts.paymentIntentId;
+    if (intentId === null) {
+      return "ignored";
+    }
+    const intent = await this.stripe("paymentIntents.retrieve", stored, () =>
+      client.paymentIntents.retrieve(intentId, { expand: ["payment_method", "latest_charge"] }),
+    );
+    if (!this.isOurs(metadataOf(intent), payment) || intent.id !== intentId) {
+      return this.mismatch(stored, "payment_intent_metadata");
+    }
+    return await this.applyIntent(stored, stateOfPaymentIntent(intent, stored.minorUnits));
+  }
+
+  /** Applies a PaymentIntent's state under the row's lock and with its `version`. */
+  private async applyIntent(stored: StoredEvent, state: GatewayState): Promise<StripeEventOutcome> {
+    return await this.tx.run(async (trx) => {
+      const now = this.clock.now();
+      const current = await this.repository.payment(trx, stored.payment.id, true);
+      if (current === undefined) {
+        return "missing";
+      }
+      const update = providerStateUpdate(current, state, now);
+      if (update.kind === "unchanged") {
+        return "unchanged";
+      }
+      if (update.kind === "refused") {
+        this.logger.info(
+          { paymentId: current.id, from: update.from, to: update.to, paymentEventId: stored.event.id },
+          "payments.provider_state_not_applied",
+        );
+        return "stale";
+      }
+      if (!(await this.repository.updatePayment(trx, current.id, current.version, update.values))) {
+        throw new Error("the payment changed while its locked row was updated");
+      }
+      const amount =
+        update.status === "authorized"
+          ? update.values["amount_authorized"]
+          : update.status === "captured"
+            ? update.values["amount_captured"]
+            : undefined;
+      await this.event(trx, current, stored, {
+        type: `payment.${update.status}`,
+        statusFrom: current.status,
+        statusTo: update.status,
+        amount: typeof amount === "string" ? amount : undefined,
+        payload: {
+          cardBrand: state.card?.brand ?? null,
+          cardLast4: state.card?.last4 ?? null,
+          threeDSecure: state.threeDSecure?.status ?? null,
+          failureCode: state.failure?.code ?? null,
+          declineCode: state.failure?.declineCode ?? null,
+        },
+        now,
+      });
+      return "applied";
+    });
+  }
+
+  // ---- Refunds ---------------------------------------------------------------------------------------------------
+
+  private async refunds(client: Stripe, stored: StoredEvent): Promise<StripeEventOutcome> {
+    const { facts, payment } = stored;
+    let chargeId = facts.type === "charge.refunded" ? facts.objectId : facts.chargeId;
+    if (facts.type === "charge.refund.updated" && facts.objectId !== null) {
+      const refundId = facts.objectId;
+      const refund = await this.stripe("refunds.retrieve", stored, () => client.refunds.retrieve(refundId));
+      chargeId = referenceOf(refund.charge) ?? chargeId;
+    }
+    if (chargeId === null) {
+      return "ignored";
+    }
+    const id = chargeId;
+    const charge = await this.stripe("charges.retrieve", stored, () => client.charges.retrieve(id));
+    const intentId = payment.providerPaymentId ?? facts.paymentIntentId;
+    const chargeMetadata = metadataOf(charge);
+    if (
+      intentId === null ||
+      referenceOf(charge.payment_intent) !== intentId ||
+      (chargeMetadata["payment_id"] !== undefined && !this.isOurs(chargeMetadata, payment))
+    ) {
+      return this.mismatch(stored, "charge");
+    }
+    const listed = await this.stripe("refunds.list", stored, () =>
+      client.refunds.list({ charge: id, limit: REFUNDS_PAGE_LIMIT }),
+    );
+    const refunds: ProviderRefund[] = listed.data.map((refund) => {
+      const refundMetadata = metadataOf(refund);
+      const ownRefundId = refundMetadata["refund_id"];
+      return {
+        providerRefundId: refund.id,
+        status: refund.status,
+        amount: fromMinorUnits(refund.amount, stored.minorUnits),
+        failureReason:
+          typeof refund.failure_reason === "string" && /^[a-z0-9_]{1,64}$/.test(refund.failure_reason)
+            ? refund.failure_reason
+            : null,
+        refundId: ownRefundId !== undefined && REFUND_ID.test(ownRefundId) ? ownRefundId : null,
+      };
+    });
+    return await this.applyRefunds(stored, refunds, {
+      amountCaptured: fromMinorUnits(charge.amount_captured, stored.minorUnits),
+      amountRefunded: fromMinorUnits(charge.amount_refunded, stored.minorUnits),
+    });
+  }
+
+  /** Applies the refunds and the charge's amounts under the rows' locks and with their `version`. */
+  private async applyRefunds(
+    stored: StoredEvent,
+    refunds: readonly ProviderRefund[],
+    charge: { readonly amountCaptured: string; readonly amountRefunded: string },
+  ): Promise<StripeEventOutcome> {
+    return await this.tx.run(async (trx) => {
+      const now = this.clock.now();
+      const current = await this.repository.payment(trx, stored.payment.id, true);
+      if (current === undefined) {
+        return "missing";
+      }
+      const rows = await this.repository.refundsOfPayment(trx, current.id);
+      let changed = false;
+      for (const refund of refunds) {
+        const row = matchRefund(rows, refund);
+        if (row === undefined) {
+          // A refund made outside Velexis (the Stripe Dashboard): the payment's amounts below still follow the charge.
+          this.logger.warn(
+            { paymentId: current.id, providerRefundId: refund.providerRefundId },
+            "payments.refund_unmatched",
+          );
+          continue;
+        }
+        const update = refundUpdate(row, refund, now);
+        if (update === undefined) {
+          continue;
+        }
+        if (!(await this.repository.updateRefund(trx, row.id, row.version, update.values))) {
+          throw new Error("the refund changed while its locked row was updated");
+        }
+        changed = true;
+        if (update.status !== row.status) {
+          await this.event(trx, current, stored, {
+            type: `refund.${update.status}`,
+            statusFrom: row.status,
+            statusTo: update.status,
+            amount: row.amount,
+            payload: { refundId: row.id, providerRefundId: refund.providerRefundId },
+            now,
+          });
+        }
+      }
+      const paymentUpdate = refundedState(current, charge, now);
+      if (paymentUpdate !== undefined) {
+        if (!(await this.repository.updatePayment(trx, current.id, current.version, paymentUpdate.values))) {
+          throw new Error("the payment changed while its locked row was updated");
+        }
+        changed = true;
+        await this.event(trx, current, stored, {
+          type: `payment.${paymentUpdate.status}`,
+          statusFrom: current.status,
+          statusTo: paymentUpdate.status,
+          amount: String(paymentUpdate.values["amount_refunded"]),
+          payload: { amountCaptured: paymentUpdate.values["amount_captured"] },
+          now,
+        });
+      }
+      return changed ? "applied" : "unchanged";
+    });
+  }
+
+  // ---- Disputes --------------------------------------------------------------------------------------------------
+
+  private async dispute(client: Stripe, stored: StoredEvent): Promise<StripeEventOutcome> {
+    const { facts, payment } = stored;
+    const disputeId = facts.objectId;
+    if (disputeId === null) {
+      return "ignored";
+    }
+    const dispute = await this.stripe("disputes.retrieve", stored, () => client.disputes.retrieve(disputeId));
+    const intentId = payment.providerPaymentId ?? facts.paymentIntentId;
+    if (intentId === null || referenceOf(dispute.payment_intent) !== intentId) {
+      return this.mismatch(stored, "dispute");
+    }
+    const currency = /^[a-z]{3}$/.test(dispute.currency) ? dispute.currency.toUpperCase() : payment.currency;
+    const amount = fromMinorUnits(dispute.amount, stored.minorUnits);
+    const dueBy = dispute.evidence_details?.due_by ?? null;
+    const evidenceDueBy = typeof dueBy === "number" ? new Date(dueBy * 1000).toISOString() : null;
+    const reason = /^[a-z_]{1,64}$/.test(dispute.reason) ? dispute.reason : "unknown";
+    const outcome = await this.tx.run(async (trx): Promise<StripeEventOutcome> => {
+      const now = this.clock.now();
+      // The payment's row lock serialises two jobs about the same dispute (two events, or a job BullMQ runs again
+      // after a stall), so the check below sees the other one's event and the dispute is recorded once.
+      const current = await this.repository.payment(trx, payment.id, true);
+      if (current === undefined) {
+        return "missing";
+      }
+      if (
+        await this.repository.hasEvent(trx, current.id, "payment.dispute_created", "disputeId", dispute.id)
+      ) {
+        return "unchanged";
+      }
+      await this.event(trx, current, stored, {
+        type: "payment.dispute_created",
+        amount,
+        currency,
+        payload: {
+          disputeId: dispute.id,
+          chargeId: referenceOf(dispute.charge),
+          reason,
+          status: dispute.status,
+          evidenceDueBy,
+        },
+        now,
+      });
+      await this.alert(trx, current, {
+        disputeId: dispute.id,
+        reason,
+        amount,
+        currency,
+        evidenceDueBy,
+      });
+      return "alerted";
+    });
+    if (outcome === "alerted") {
+      this.logger.warn(
+        { paymentId: payment.id, disputeId: dispute.id, reason, evidenceDueBy },
+        "payments.dispute_created",
+      );
+    }
+    return outcome;
+  }
+
+  /** The staff alert of a dispute (outbox `staff.manual_review`, once per dispute). */
+  private async alert(
+    trx: TenantTransaction,
+    payment: PaymentRow,
+    dispute: {
+      readonly disputeId: string;
+      readonly reason: string;
+      readonly amount: string;
+      readonly currency: string;
+      readonly evidenceDueBy: string | null;
+    },
+  ): Promise<void> {
+    const facts = await this.repository.alertFacts(trx, payment.bookingId);
+    const ownAddress = facts.opsAlertEmail !== null && EMAIL_ADDRESS.test(facts.opsAlertEmail);
+    if (facts.opsAlertEmail !== null && !ownAddress) {
+      this.logger.warn({ paymentId: payment.id }, "payments.ops_alert_email_invalid");
+    }
+    const to =
+      ownAddress && facts.opsAlertEmail !== null ? facts.opsAlertEmail : this.config.get("OPS_ALERT_EMAIL");
+    const adminUrl = this.config.get("PUBLIC_OTA_ADMIN_URL");
+    const consolePath =
+      payment.bookingId === null ? `payments/${payment.id}` : `bookings/${payment.bookingId}`;
+    const consoleUrl = new URL(consolePath, adminUrl.endsWith("/") ? adminUrl : `${adminUrl}/`).toString();
+    // The deadline only: in `velexis` mode the dispute is on the Velexis Stripe account, whose Dashboard the OTA's
+    // staff cannot open, so the alert does not send them there.
+    const due =
+      dispute.evidenceDueBy === null ? "" : ` Stripe needs the evidence by ${dispute.evidenceDueBy}.`;
+    await this.outbox.enqueue(trx, {
+      templateKey: DISPUTE_ALERT_TEMPLATE,
+      to,
+      locale: facts.defaultLocale ?? "en",
+      data: {
+        booking: {
+          reference: facts.bookingReference ?? "",
+          recordLocator: facts.recordLocator ?? "",
+          consoleUrl,
+        },
+        review: {
+          reason:
+            `The card payment ${payment.id} (${dispute.amount} ${dispute.currency}) is disputed at Stripe: ` +
+            `dispute ${dispute.disputeId}, reason ${dispute.reason}.${due}`,
+        },
+      },
+      dedupeKey: disputeDedupeKey(dispute.disputeId),
+      recipientType: "staff",
+      bookingId: payment.bookingId,
+    });
+  }
+
+  // ---- Shared ----------------------------------------------------------------------------------------------------
+
+  /** Whether a Stripe object's Velexis metadata names this tenant, this environment and this payment. */
+  private isOurs(metadata: Readonly<Record<string, string | undefined>>, payment: PaymentRow): boolean {
+    const tenant = this.tenants.require();
+    return (
+      metadata["payment_id"] === payment.id &&
+      metadata["velexis_tenant_id"] === tenant.tenantId &&
+      metadata["velexis_environment"] === payment.environment
+    );
+  }
+
+  /** An object read from Stripe that is not this payment's: a security event, nothing changes. */
+  private mismatch(stored: StoredEvent, check: string): StripeEventOutcome {
+    this.logger.warn(
+      {
+        securityEvent: "payments.stripe_event_mismatch",
+        check,
+        paymentId: stored.payment.id,
+        paymentEventId: stored.event.id,
+        type: stored.facts.type,
+      },
+      "payments.stripe_event_mismatch",
+    );
+    return "mismatch";
+  }
+
+  /** Runs one Stripe read; a failure that can pass is retried by BullMQ, a permanent one ends the job. */
+  private async stripe<T>(operation: string, stored: StoredEvent, run: () => Promise<T>): Promise<T> {
+    try {
+      return await run();
+    } catch (error) {
+      if (!(error instanceof Stripe.errors.StripeError)) {
+        throw error;
+      }
+      const statusCode = typeof error.statusCode === "number" ? error.statusCode : null;
+      this.logger.warn(
+        {
+          operation,
+          paymentEventId: stored.event.id,
+          stripeErrorType: error.type,
+          stripeCode: typeof error.code === "string" ? error.code : null,
+          statusCode,
+          stripeRequestId: typeof error.requestId === "string" ? error.requestId : null,
+        },
+        "payments.stripe_event_read_failed",
+      );
+      const message = `Stripe ${operation} failed: ${error.type}${statusCode === null ? "" : `, HTTP ${statusCode}`}`;
+      const permanent = statusCode !== null && statusCode >= 400 && statusCode < 500 && statusCode !== 429;
+      throw permanent ? new UnrecoverableError(message) : new Error(message);
+    }
+  }
+
+  /** Appends a `payment_events` row (`source = webhook`) for a change the event caused. */
+  private async event(
+    trx: TenantTransaction,
+    payment: PaymentRow,
+    stored: StoredEvent,
+    event: {
+      readonly type: string;
+      readonly statusFrom?: string | undefined;
+      readonly statusTo?: string | undefined;
+      readonly amount?: string | undefined;
+      readonly currency?: string | undefined;
+      readonly payload?: Record<string, unknown>;
+      readonly now: Date;
+    },
+  ): Promise<void> {
+    await this.repository.insertEvent(trx, {
+      id: this.ids.newId("pev"),
+      payment_id: payment.id,
+      type: event.type,
+      source: "webhook",
+      status_from: event.statusFrom ?? null,
+      status_to: event.statusTo ?? null,
+      amount: event.amount ?? null,
+      currency: event.amount === undefined ? null : (event.currency ?? payment.currency),
+      payload: JSON.stringify(
+        redactPayload({
+          ...event.payload,
+          providerEventId: stored.event.providerEventId,
+          paymentEventId: stored.event.id,
+        }),
+      ),
+      created_at: event.now,
+      updated_at: event.now,
+    });
+  }
+}
+
+/**
+ * The consumer of `ota-stripe-events` (architecture §6, concurrency 4): `stripe.event {tenantId, paymentEventId}`
+ * applies one stored event (see the file header); any other job fails at once.
+ */
+@Processor(OTA_QUEUE.stripeEvents, otaWorkerOptions(OTA_QUEUE.stripeEvents))
+export class StripeEventsProcessor extends WorkerHost {
+  /** The message of the last worker error logged, so a Redis outage is logged once, not on every reconnection. */
+  private lastWorkerError: string | undefined;
+
+  constructor(
+    private readonly handler: StripeEventHandler,
+    private readonly cache: PlatformCache,
+    private readonly tenants: TenantContext,
+    @InjectPinoLogger(StripeEventsProcessor.name) private readonly logger: PinoLogger,
+  ) {
+    super();
+  }
+
+  async process(job: Job): Promise<StripeEventResult> {
+    const data = job.name === STRIPE_EVENT_JOB ? parseStripeEventJobData(job.data) : undefined;
+    if (data === undefined) {
+      this.logger.error(
+        { queue: job.queueName, jobId: job.id, jobName: String(job.name).slice(0, 64) },
+        "payments.stripe_event_job_invalid",
+      );
+      throw new UnrecoverableError("the job is not stripe.event {tenantId, paymentEventId}");
+    }
+    const tenant = await this.cache.tenantById(data.tenantId);
+    if (tenant === null || !WEBHOOK_TENANT_STATUSES.includes(tenant.status)) {
+      const reason = tenant === null ? "tenant_not_found" : `tenant_${tenant.status}`;
+      this.logger.warn({ tenantId: data.tenantId, reason }, "payments.stripe_event_tenant_skipped");
+      return { tenantId: data.tenantId, outcome: "skipped", reason };
+    }
+    const { type, outcome } = await this.tenants.run(jobTenant(tenant, job), () =>
+      this.handler.handle(data.paymentEventId),
+    );
+    return { tenantId: tenant.id, paymentEventId: data.paymentEventId, type, outcome };
+  }
+
+  /** A job failed: logged with its id and attempt and the error's name, never the error (it may quote SQL). */
+  @OnWorkerEvent("failed")
+  onFailed(job: Job | undefined, error: Error): void {
+    this.logger.error(
+      { queue: OTA_QUEUE.stripeEvents, jobId: job?.id, attempt: job?.attemptsMade, code: error.name },
+      "payments.stripe_event_job_failed",
+    );
+  }
+
+  /** Errors of the worker itself (its Redis connections); job failures are the `failed` events above. */
+  @OnWorkerEvent("error")
+  onWorkerError(error: Error): void {
+    if (error.message !== this.lastWorkerError) {
+      this.lastWorkerError = error.message;
+      this.logger.error({ queue: OTA_QUEUE.stripeEvents, err: error }, "queue.worker_error");
+    }
+  }
+
+  /** A job became active: the worker's connection works again, so the next error is logged. */
+  @OnWorkerEvent("active")
+  onActive(): void {
+    this.lastWorkerError = undefined;
+  }
+}

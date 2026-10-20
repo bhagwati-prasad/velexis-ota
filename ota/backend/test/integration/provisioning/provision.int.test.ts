@@ -37,6 +37,7 @@ import { loadWorkerConfig } from "../../../src/config";
 import { ProvisioningService, TENANT_MIGRATIONS_DIR } from "../../../src/provisioning/provisioning.service";
 import { TenantOpsProcessor } from "../../../src/provisioning/tenant-ops.processor";
 import { createWorkerApp, createWorkerLogger, WorkerModule } from "../../../src/worker.module";
+import { testWorkerVariables } from "../../helpers/api-env";
 import { MemorySink } from "../../helpers/log-sink";
 import { useNextApplicationLoggerOutsideRequests } from "../../helpers/nest-pino";
 
@@ -83,6 +84,7 @@ beforeAll(async () => {
     max: 2,
   });
   const config = loadWorkerConfig({
+    ...testWorkerVariables(),
     APP_ENV: "test",
     DATABASE_URL: db.urlFor("ota"),
     DATABASE_PROVISIONER_URL: db.urlFor("provisioner"),

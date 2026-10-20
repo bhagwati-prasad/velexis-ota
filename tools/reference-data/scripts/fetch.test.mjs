@@ -15,7 +15,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
-import { afterAll, describe, expect, test } from "vitest";
+import { afterAll, beforeAll, describe, expect, test } from "vitest";
 
 import {
   ATTRIBUTION,
@@ -999,44 +999,60 @@ function runOffline(/** @type {string[]} */ ...args) {
 }
 
 describe("the committed snapshot", () => {
-  test("`fetch.mjs --check` validates the committed files offline and exits 0 [X-017 AC1]", () => {
-    const result = runOffline("--check");
-    expect(result.stderr).toBe("");
-    expect(result.status).toBe(0);
-    expect(result.stdout).toMatch(/fetch --check .*: OK/);
-  });
+  // Each `--check` below validates the whole snapshot (two of them in a child process): about 0.4 s each on an idle
+  // CPU, but up to 5.3 s when CI runs every package at once on 4 CPUs. They run once here, with their own budget, and
+  // the three tests that follow assert what they returned.
+  /** @type {ReturnType<typeof runOffline>} `fetch.mjs --check` on the committed files. */
+  let committedCheck;
+  /** @type {{ result: ReturnType<typeof runOffline>, cdgLine: number }} `--check` on a copy with CDG at latitude 95. */
+  let editedCheck;
+  /** @type {{ attribution: string[], size: string[] }} checkSnapshot's problems without the attribution, then at 3 MB. */
+  let limitProblems;
+  beforeAll(() => {
+    committedCheck = runOffline("--check");
 
-  test("`fetch.mjs --check` exits 1 when a generated file was edited by hand or breaks a CHECK [X-017 AC1]", () => {
-    const dir = mkdtempSync(path.join(scratch, "check-"));
-    cpSync(DATA_DIR, path.join(dir, "data"), { recursive: true });
-    cpSync(SOURCES_FILE, path.join(dir, "SOURCES.md"));
-    const airports = path.join(dir, "data", "airports.csv");
+    const edited = mkdtempSync(path.join(scratch, "check-"));
+    cpSync(DATA_DIR, path.join(edited, "data"), { recursive: true });
+    cpSync(SOURCES_FILE, path.join(edited, "SOURCES.md"));
+    const airports = path.join(edited, "data", "airports.csv");
     const lines = readFileSync(airports, "utf8").split("\n");
     const cdg = lines.findIndex((l) => l.startsWith("CDG,"));
     const fields = lines[cdg].split(",");
     fields[7] = "95"; // latitude
     lines[cdg] = fields.join(",");
     writeFileSync(airports, lines.join("\n"));
+    editedCheck = { result: runOffline("--check", "--data", path.join(edited, "data")), cdgLine: cdg + 1 };
 
-    const result = runOffline("--check", "--data", path.join(dir, "data"));
+    const limits = mkdtempSync(path.join(scratch, "check-limits-"));
+    const dataDir = path.join(limits, "data");
+    cpSync(DATA_DIR, dataDir, { recursive: true });
+    const markdown = readFileSync(SOURCES_FILE, "utf8");
+    writeFileSync(path.join(limits, "SOURCES.md"), markdown.replaceAll(ATTRIBUTION, "Contains data"));
+    const attribution = checkSnapshot(dataDir).problems;
+    writeFileSync(path.join(limits, "SOURCES.md"), markdown);
+    writeFileSync(path.join(dataDir, "padding.bin"), Buffer.alloc(MAX_DATA_BYTES - 1_000_000));
+    limitProblems = { attribution, size: checkSnapshot(dataDir).problems };
+  }, 60_000);
+
+  test("`fetch.mjs --check` validates the committed files offline and exits 0 [X-017 AC1]", () => {
+    const result = committedCheck;
+    expect(result.stderr).toBe("");
+    expect(result.status).toBe(0);
+    expect(result.stdout).toMatch(/fetch --check .*: OK/);
+  });
+
+  test("`fetch.mjs --check` exits 1 when a generated file was edited by hand or breaks a CHECK [X-017 AC1]", () => {
+    const { result, cdgLine } = editedCheck;
     expect(result.status).toBe(1);
-    expect(result.stderr).toContain(`airports.csv:${cdg + 1}: latitude 95 is outside -90..90`);
+    expect(result.stderr).toContain(`airports.csv:${cdgLine}: latitude 95 is outside -90..90`);
     expect(result.stderr).toContain("airports.csv: SHA-256 differs from SOURCES.md");
   });
 
   test("`--check` fails when SOURCES.md loses the attribution line or data/ reaches 3 MB [X-017 AC1]", () => {
-    const dir = mkdtempSync(path.join(scratch, "check-limits-"));
-    const dataDir = path.join(dir, "data");
-    cpSync(DATA_DIR, dataDir, { recursive: true });
-    const markdown = readFileSync(SOURCES_FILE, "utf8");
-    writeFileSync(path.join(dir, "SOURCES.md"), markdown.replaceAll(ATTRIBUTION, "Contains data"));
-    expect(checkSnapshot(dataDir).problems).toEqual([
+    expect(limitProblems.attribution).toEqual([
       `SOURCES.md: the attribution line "${ATTRIBUTION}" is missing`,
     ]);
-
-    writeFileSync(path.join(dir, "SOURCES.md"), markdown);
-    writeFileSync(path.join(dataDir, "padding.bin"), Buffer.alloc(MAX_DATA_BYTES - 1_000_000));
-    expect(checkSnapshot(dataDir).problems).toEqual([
+    expect(limitProblems.size).toEqual([
       expect.stringMatching(new RegExp(`^data/: [0-9]+ bytes, the limit is ${MAX_DATA_BYTES}$`)),
     ]);
   });

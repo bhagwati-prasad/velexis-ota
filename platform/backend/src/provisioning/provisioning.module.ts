@@ -2,11 +2,15 @@
 // `tenant_schema_migrations`, and the tenant lifecycle use cases that span the resource modules of layer 1, so those
 // stay simple (architecture §2.2). PBE-018 brings the create-OTA transaction, PBE-019 the dispatch to the OTA worker,
 // PBE-022 the tenant-event consumer and the post-steps, PBE-023 the failure handler, the reconciler, the purge of
-// unrevealed keys and the portal's setup progress, retry and one-time key reveal; the later lifecycle actions follow.
+// unrevealed keys and the portal's setup progress, retry and one-time key reveal, PBE-030 the suspension, resume and
+// migration of an OTA and the switch of its connections (SuspensionService, MigrateService); go-live (M5) follows.
 //
 // - The static module holds what the API uses: the jobs repository, ProvisioningDispatcher (on the `ota-tenant-ops`
-//   queue of QueuesModule), and the layer-1 modules whose repositories the use cases write through (AuthModule for the
-//   account, TenantsModule, the global MembershipsModule, BillingModule, DomainsModule) and AuditModule.
+//   queue of QueuesModule), SuspensionService and MigrateService (exported for the platform admin's routes and, from
+//   M5, billing sync), and the layer-1 modules whose repositories the use cases write through (AuthModule for the
+//   account, TenantsModule, the global MembershipsModule, BillingModule, DomainsModule, SupplierConnectionsModule and
+//   PaymentConnectionsModule for the connections), NotificationsModule (the owners' e-mails, the ops alerts) and
+//   AuditModule.
 // - `ProvisioningModule.forApi()` (AppModule) adds the portal's lifecycle routes, LifecycleService, and
 //   OnboardingService with its read-only OnboardingRepository (the checklist of PADR-0018, PBE-024).
 // - `ProvisioningModule.forWorker()` (WorkerModule) is the worker's part, in a module of its own (ProvisioningWorker-
@@ -14,9 +18,10 @@
 //   `platform-tenant-events` (TenantEventsProcessor), the post-steps it runs (PostStepsRunner and the six steps of
 //   post-steps/), the failure handler both it and the reconciler end failed attempts with, the dispatcher, and the
 //   `@MaintenanceJob` handlers of `provisioning.reconcile` and `provisioning.purge_reveals`, which the one
-//   `platform-maintenance` processor runs. They write through the repositories of the layer-1 modules they import
-//   (ApiKeysModule, SupplierConnectionsModule, PaymentConnectionsModule) and through TenantsRepository and
-//   MembershipsRepository, provided here on their own because their modules carry the portal's routes.
+//   `platform-maintenance` processor runs, and SuspensionService and MigrateService, which take the migrate, suspend
+//   and resume answers. They write through the repositories of the layer-1 modules they import (ApiKeysModule,
+//   SupplierConnectionsModule, PaymentConnectionsModule) and through TenantsRepository, MembershipsRepository and
+//   SubscriptionsRepository, provided here on their own because their modules carry the portal's routes.
 //   NotificationsModule queues the e-mails (ops alerts, `tenant.welcome`, `tenant.provisioning_failed`) and AuditModule
 //   writes the audit rows.
 //
@@ -27,6 +32,7 @@ import { ApiKeysModule } from "../api-keys/api-keys.module";
 import { AuditModule } from "../audit/audit.module";
 import { AuthModule } from "../auth/auth.module";
 import { BillingModule } from "../billing/billing.module";
+import { SubscriptionsRepository } from "../billing/subscriptions.repository";
 import { QueuesModule } from "../common/queues/queues.module";
 import { DomainsModule } from "../domains/domains.module";
 import { MembershipsModule } from "../memberships/memberships.module";
@@ -40,6 +46,7 @@ import { ProvisioningDispatcher } from "./dispatcher";
 import { ProvisioningFailureHandler } from "./failure-handler";
 import { LifecycleController } from "./lifecycle.controller";
 import { LifecycleService } from "./lifecycle.service";
+import { MigrateService } from "./migrate.service";
 import { OnboardingRepository } from "./onboarding.repository";
 import { OnboardingService } from "./onboarding.service";
 import { ActivateStep } from "./post-steps/activate.step";
@@ -52,11 +59,13 @@ import { RecordMigrationsStep } from "./post-steps/record-migrations.step";
 import { ProvisioningJobsRepository } from "./provisioning-jobs.repository";
 import { PurgeRevealsScheduler } from "./purge-reveals.scheduler";
 import { ReconcilerScheduler } from "./reconciler.scheduler";
+import { SuspensionService } from "./suspension.service";
 import { TenantEventsProcessor } from "./tenant-events.processor";
 
 /**
  * The worker's part of ProvisioningModule (`ProvisioningModule.forWorker()`): the `platform-tenant-events` processor,
- * the post-steps, the failure handler, the reconciler and the purge of unrevealed keys.
+ * the post-steps, the failure handler, the reconciler, the purge of unrevealed keys, and the suspension and migrate
+ * services that take the OTA worker's other answers.
  */
 @Module({
   imports: [
@@ -71,6 +80,7 @@ import { TenantEventsProcessor } from "./tenant-events.processor";
     ProvisioningJobsRepository,
     TenantsRepository,
     MembershipsRepository,
+    SubscriptionsRepository,
     RecordMigrationsStep,
     AssignAmadeusOfficeStep,
     CreatePaymentConnectionStep,
@@ -80,6 +90,8 @@ import { TenantEventsProcessor } from "./tenant-events.processor";
     PostStepsRunner,
     ProvisioningDispatcher,
     ProvisioningFailureHandler,
+    SuspensionService,
+    MigrateService,
     TenantEventsProcessor,
     ReconcilerScheduler,
     PurgeRevealsScheduler,
@@ -96,9 +108,12 @@ export class ProvisioningWorkerModule {}
     MembershipsModule,
     BillingModule,
     DomainsModule,
+    SupplierConnectionsModule,
+    PaymentConnectionsModule,
+    NotificationsModule,
   ],
-  providers: [ProvisioningJobsRepository, ProvisioningDispatcher],
-  exports: [ProvisioningJobsRepository, ProvisioningDispatcher],
+  providers: [ProvisioningJobsRepository, ProvisioningDispatcher, SuspensionService, MigrateService],
+  exports: [ProvisioningJobsRepository, ProvisioningDispatcher, SuspensionService, MigrateService],
 })
 export class ProvisioningModule {
   /** The one `forApi()` module object of the process. */

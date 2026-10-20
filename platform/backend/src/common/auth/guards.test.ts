@@ -12,7 +12,7 @@ import { platformOperations, type ApiOperation } from "@velexis/api-types/operat
 import { AppError } from "@velexis/errors";
 import { FakeClock } from "@velexis/testing";
 import { ClsService } from "nestjs-cls";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import { createTestJwtKeyFile } from "../../../test/support/jwt-key";
 import { TokenService, type AccessTokenClaims, type AccessTokenInput } from "../../auth/token.service";
@@ -141,6 +141,12 @@ const keyFile = createTestJwtKeyFile();
 afterAll(() => {
   keyFile.remove();
 });
+
+// Parsing the platform document is the slow part of the first harness(): a few hundred milliseconds on an idle CPU,
+// close to 4 s when CI runs every package at once on 4 CPUs. It is done once here, with a budget of its own.
+beforeAll(() => {
+  documentWithFeature();
+}, 60_000);
 
 /** The guards of API_GUARDS, built as Nest builds them, with switches from `features` and FEATURE_* otherwise off. */
 function harness(features: Partial<Record<FeatureName, boolean>> = {}) {

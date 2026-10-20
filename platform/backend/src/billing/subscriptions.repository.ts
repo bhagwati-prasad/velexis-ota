@@ -209,10 +209,14 @@ export class SubscriptionsRepository {
 
   /**
    * The subscription of `tenantId` that the portal shows: the current one, or, when there is none, the latest one
-   * (after a cancellation, the canceled one); `undefined` for a tenant without any.
+   * (after a cancellation, the canceled one); `undefined` for a tenant without any. Read on `db`: the pool, or the
+   * caller's transaction (PBE-030: the resume of a billing suspension reads it under the tenant's row lock).
    */
-  async findShownForTenant(tenantId: string): Promise<SubscriptionRow | undefined> {
-    return this.db
+  async findShownForTenant(
+    tenantId: string,
+    db: PlatformDb | PlatformTransaction = this.db,
+  ): Promise<SubscriptionRow | undefined> {
+    return db
       .selectFrom("platform.subscriptions as s")
       .innerJoin("platform.plans as p", "p.code", "s.plan_code")
       .innerJoin("platform.tenants as t", "t.id", "s.tenant_id")

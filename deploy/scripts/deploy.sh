@@ -14,7 +14,8 @@
 #   maintenance page root-owned under /var/lib/velexis/system/<sha>/ -> from the snapshot, validate a changed
 #   Caddyfile and install the units, then install the root-owned scripts -> move to releases/<sha> (root:velexis,
 #   read-only) -> migrations (platform, reference, tenant fan-out; expand-phase files) -> reference data, both as
-#   transient units with a dynamic user (run_transient) -> switch the `current` symlink -> restart workers, APIs,
+#   transient units with a dynamic user (run_transient), and between them the fan-out report published as the OTA
+#   zone (velexis-run ota ... tenants:report-migrations) -> switch the `current` symlink -> restart workers, APIs,
 #   front ends one at a time with health checks -> reload Caddy -> prune old releases (never the active one nor the
 #   --rollback target). Any failed health check rolls back: the previous release's snapshot (units, Caddyfile) is
 #   re-installed, then `current` is switched back and the units restart.
@@ -22,14 +23,17 @@
 # Tests only (deploy/scripts/test/deploy.test.sh). With VELEXIS_ROOT=<absolute folder> every path of this script
 # (/srv/velexis, /etc/velexis, /var/lib/velexis, /var/lib/velexis-migrate, /var/log/velexis, /usr/local/sbin,
 # /etc/systemd/system, /etc/caddy and the lock in /run) moves under that folder, the script runs without root and
-# hands files over to the calling user and group instead of root:root and root:velexis, and it takes three more
+# hands files over to the calling user and group instead of root:root and root:velexis, and it takes four more
 # overrides:
 #   SYSTEMCTL      the systemctl to call (required with VELEXIS_ROOT; fake-systemctl.sh in the test)
 #   RUN_TRANSIENT  a command that replaces the transient systemd-run unit of run_transient (required with
 #                  VELEXIS_ROOT). It gets the env file (under VELEXIS_ROOT), the working folder and the command.
+#   VELEXIS_RUN    a command that replaces /usr/local/sbin/velexis-run (run-as.sh, ADR-0026 item 6) for the fan-out
+#                  report (required with VELEXIS_ROOT). It gets the zone and the command, as velexis-run does.
 #   HEALTH_HOST    the address of the health checks (default 127.0.0.1)
-# Without VELEXIS_ROOT (the VM) the three have no effect: systemctl, systemd-run and 127.0.0.1 are fixed. sudo's
-# env_reset drops all four anyway, and the sudoers rule of the deploy user has no SETENV tag.
+# Without VELEXIS_ROOT (the VM) the four have no effect: systemctl, systemd-run, /usr/local/sbin/velexis-run and
+# 127.0.0.1 are fixed. sudo's env_reset drops all five anyway, and the sudoers rule of the deploy user has no SETENV
+# tag.
 # HEALTH_TIMEOUT (seconds per unit, default 90) applies in both modes.
 # =====================================================================================================
 set -euo pipefail
@@ -42,6 +46,7 @@ if [ -n "$R" ]; then
   [ -d "$R" ] || { echo "velexis-deploy: VELEXIS_ROOT $R is not a folder" >&2; exit 2; }
   [ -n "${SYSTEMCTL:-}" ] || { echo "velexis-deploy: with VELEXIS_ROOT, SYSTEMCTL must name the stand-in for systemctl" >&2; exit 2; }
   [ -n "${RUN_TRANSIENT:-}" ] || { echo "velexis-deploy: with VELEXIS_ROOT, RUN_TRANSIENT must name the stand-in for systemd-run" >&2; exit 2; }
+  [ -n "${VELEXIS_RUN:-}" ] || { echo "velexis-deploy: with VELEXIS_ROOT, VELEXIS_RUN must name the stand-in for velexis-run" >&2; exit 2; }
   HEALTH_HOST="${HEALTH_HOST:-127.0.0.1}"
   OWNER="$(id -un)"
   OWNER_GROUP="$(id -gn)"
@@ -49,6 +54,7 @@ if [ -n "$R" ]; then
 else
   SYSTEMCTL=systemctl
   RUN_TRANSIENT=""
+  VELEXIS_RUN=/usr/local/sbin/velexis-run        # run-as.sh, installed by provision-vm.sh and by every deploy
   HEALTH_HOST=127.0.0.1
   OWNER=root                                     # owner of everything root installs
   OWNER_GROUP=root
@@ -144,6 +150,29 @@ keep_migrate_report() { # the fan-out report, from the transient unit's state fo
   install -m 0600 -o "$OWNER" -g "$OWNER_GROUP" "$f" "$LIB/migrate-$SHA.json"
   install -m 0600 -o "$OWNER" -g "$OWNER_GROUP" "$f" "$LOG_DIR/migrate-$SHA.json"
   rm -f "$f"
+}
+
+# The fan-out report goes to the platform as tenant.migrated / tenant.migration_failed events (OADR-0007 item 7,
+# OBE-007), published by the new release's own OTA CLI as the OTA zone user: velexis-run ota copies the installed
+# velexis-ota-worker unit, so the command gets ota-backend.env and ota-worker.env (REDIS_URL, the velexis_ota_app DSN)
+# and never the migrator DSN. The report holds schema names, versions and error texts, no secret, so the zone user may
+# read it (mode 0644 in /var/lib/velexis, which is 0711). velexis-run starts the command in the running release's
+# ota-backend/ (the unit's WorkingDirectory), so a VM without one, the first deploy, skips the step; every later
+# report re-sends the full ledger of every migrated schema. Returns non-zero when the events were not published.
+report_tenant_migrations() {
+  local report="$LIB/migrate-$SHA.json"
+  [ -f "$REL/ota-backend/dist/cli.js" ] || return 0
+  if [ ! -f "$report" ] || [ -L "$report" ]; then
+    log "no tenant migration report of $SHA to publish"
+    return 0
+  fi
+  if [ ! -d "$CURRENT/ota-backend" ]; then
+    log "skip the tenant migration report: no running release has ota-backend/ for velexis-run ota (the next deploy's report sends every ledger)"
+    return 0
+  fi
+  chmod 0644 "$report" || return 1
+  log "report tenant migrations (velexis-run ota, $REL/ota-backend/dist/cli.js)"
+  "$VELEXIS_RUN" ota node "$REL/ota-backend/dist/cli.js" tenants:report-migrations --report "$report"
 }
 
 wait_healthy() { # port; health checks are local, so no proxy of the environment applies
@@ -422,6 +451,12 @@ if [ -f "$REL/db/dist/cli/migrate.js" ]; then
     die "migrations failed; the previous release keeps running (expand-only migrations are N-1 compatible)"
   }
   keep_migrate_report
+  # Still before the switch: a report that is not published stops the deploy like a failed migration. Deploying again
+  # repeats the fan-out (nothing is applied twice) and the report.
+  report_tenant_migrations || {
+    restore_running_system_files
+    die "publishing the tenant migration report failed; the previous release keeps running (deploy again to repeat the fan-out and the report)"
+  }
 fi
 
 # ---- 3. reference data (only when the vendored datasets changed) -------------------------------------------
