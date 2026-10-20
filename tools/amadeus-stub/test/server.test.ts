@@ -891,8 +891,9 @@ describe("scenarios and magic values", () => {
  * Milliseconds the calling thread spent on `run`, less the time it was ready to run but waited for a CPU: the
  * second field of Linux's /proc/thread-self/schedstat, in nanoseconds. Time spent reading files or waiting on other
  * threads still counts. CI runs every package's tests at once on 4 CPUs, and there the wall clock of a start was
- * mostly that wait (1.06 to 1.31 s for a start that takes about 0.1 s on an idle CPU). Where the file cannot be read
- * (not Linux), the wall clock.
+ * mostly that wait (1.06 to 1.31 s for a start that takes about 0.1 s on an idle CPU). Both readings are taken inside
+ * the timed window, so the wait subtracted never exceeds the wait within it: any error makes the result larger. Where
+ * the file cannot be read (not Linux), the wall clock.
  */
 async function elapsedWithoutCpuWait(run: () => Promise<unknown>): Promise<number> {
   const runQueueWaitMs = (): number | undefined => {
@@ -903,11 +904,11 @@ async function elapsedWithoutCpuWait(run: () => Promise<unknown>): Promise<numbe
       return undefined;
     }
   };
-  const waitedBefore = runQueueWaitMs();
   const started = performance.now();
+  const waitedBefore = runQueueWaitMs();
   await run();
-  const elapsed = performance.now() - started;
   const waitedAfter = runQueueWaitMs();
+  const elapsed = performance.now() - started;
   return waitedBefore === undefined || waitedAfter === undefined
     ? elapsed
     : elapsed - (waitedAfter - waitedBefore);
