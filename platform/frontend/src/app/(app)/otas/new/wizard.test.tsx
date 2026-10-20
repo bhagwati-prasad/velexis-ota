@@ -288,7 +288,8 @@ const OPEN_WIZARD_TIMEOUT_MS = 30_000;
 
 /**
  * How long a test waits for what a server action answers: the live key check (`checkKeyAvailability`) or a submit
- * (`createOta`), each a round trip through the real `lib/api.ts` and a re-render of the wizard's 850 options.
+ * (`createOta`), each a round trip through the real `lib/api.ts` and a re-render of the wizard (not of its select
+ * options, which are memoised).
  * Testing Library's 1 s default is enough on an idle machine, but not on a loaded CI runner next to the other
  * packages' tests (it ran out once at the tenant-limit alert). The test's own 5 s budget is unchanged; this only
  * lets a wait that is going to succeed finish inside it.
