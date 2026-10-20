@@ -1,7 +1,8 @@
 // The worker's module graph and application context (README §2, §4). `worker.ts` creates it and serves /health/* on
 // 127.0.0.1:HEALTH_PORT; the BullMQ processors and schedulers join here, never in the API: the `ota-tenant-ops`
 // consumer of ProvisioningModule (OBE-005) is the first, the schedulers and the `ota-maintenance` consumer of
-// JobsModule (OBE-024) the second, the `ota-notifications` consumer of NotificationsModule (OBE-030) the third.
+// JobsModule (OBE-024) the second, the `ota-notifications` consumer of NotificationsModule (OBE-030) the third, the
+// `ota-stripe-events` consumer of PaymentsWorkerModule (OBE-039) the fourth.
 import { Module, type DynamicModule, type INestApplicationContext, type Type } from "@nestjs/common";
 import { ConfigModule } from "@nestjs/config";
 import { NestFactory } from "@nestjs/core";
@@ -16,6 +17,7 @@ import { WORKER_APP, type WorkerConfig } from "./config";
 import { HealthModule } from "./health/health.module";
 import { JobsModule } from "./jobs/jobs.module";
 import { NotificationsModule } from "./notifications/notifications.module";
+import { PaymentsWorkerModule } from "./payments/payments.module";
 import { ProvisioningModule } from "./provisioning/provisioning.module";
 import { TenancyModule } from "./tenancy/tenancy.module";
 
@@ -62,6 +64,8 @@ export class WorkerModule {
         // The e-mail outbox (global: OutboxService), the SMTP gateway, the ota-notifications consumer and the
         // notifications.sweep handler that JobsModule's runner finds (OBE-030).
         NotificationsModule.forWorker(),
+        // The ota-stripe-events consumer: the webhook events read again from Stripe and applied (OBE-039).
+        PaymentsWorkerModule,
       ],
     };
   }

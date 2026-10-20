@@ -132,6 +132,8 @@ describe("the privileged DSNs", () => {
       "STRIPE_PUBLISHABLE_KEY_TEST",
       "STRIPE_SECRET_KEY_LIVE",
       "STRIPE_SECRET_KEY_TEST",
+      "STRIPE_WEBHOOK_SECRET_VELEXIS_LIVE",
+      "STRIPE_WEBHOOK_SECRET_VELEXIS_TEST",
       "TRUST_PROXY",
       "VELEXIS_EDGE_SECRET",
     ]);
@@ -163,6 +165,10 @@ describe("the privileged DSNs", () => {
       "REDIS_URL",
       "SMTP_URL",
       "STOREFRONT_BASE_DOMAIN",
+      "STRIPE_PUBLISHABLE_KEY_LIVE",
+      "STRIPE_PUBLISHABLE_KEY_TEST",
+      "STRIPE_SECRET_KEY_LIVE",
+      "STRIPE_SECRET_KEY_TEST",
     ]);
     expect(JSON.stringify(config)).not.toContain("velexis_migrator");
   });
@@ -429,17 +435,23 @@ describe("the Stripe keys of the Velexis account (OBE-038)", () => {
   /** Keys of the documented shapes, built at run time; none is a real key. */
   const fake = (prefix: string): string => `${prefix}_${"0123456789abcdefABCDEF".repeat(2)}`;
 
-  it("are optional, so the API starts without them; the worker reads none of them", () => {
+  // OBE-038 gave the keys to the API only. Since OBE-039 the worker reads them too: its stripe.event processor reads
+  // the webhook events' PaymentIntents, charges, refunds and disputes again from Stripe (OADR-0010 point 5), so the
+  // keys moved to the variables of both processes (both units read ota-backend.env, which holds them).
+  it("are optional in both processes, so neither needs them to start; the worker reads them since OBE-039", () => {
     const api = loadApiConfig(API_ENV);
+    const worker = loadWorkerConfig(WORKER_ENV);
 
-    expect([
-      api.STRIPE_SECRET_KEY_TEST,
-      api.STRIPE_PUBLISHABLE_KEY_TEST,
-      api.STRIPE_SECRET_KEY_LIVE,
-      api.STRIPE_PUBLISHABLE_KEY_LIVE,
-    ]).toEqual([undefined, undefined, undefined, undefined]);
-    const worker = loadWorkerConfig({ ...WORKER_ENV, STRIPE_SECRET_KEY_TEST: fake("sk_test") });
-    expect(worker).not.toHaveProperty("STRIPE_SECRET_KEY_TEST");
+    for (const config of [api, worker]) {
+      expect([
+        config.STRIPE_SECRET_KEY_TEST,
+        config.STRIPE_PUBLISHABLE_KEY_TEST,
+        config.STRIPE_SECRET_KEY_LIVE,
+        config.STRIPE_PUBLISHABLE_KEY_LIVE,
+      ]).toEqual([undefined, undefined, undefined, undefined]);
+    }
+    const keys = { STRIPE_SECRET_KEY_TEST: fake("sk_test"), STRIPE_PUBLISHABLE_KEY_TEST: fake("pk_test") };
+    expect(loadWorkerConfig({ ...WORKER_ENV, ...keys })).toMatchObject(keys);
   });
 
   it("accept secret, restricted and publishable keys of their own mode", () => {
@@ -451,6 +463,7 @@ describe("the Stripe keys of the Velexis account (OBE-038)", () => {
     };
 
     expect(loadApiConfig({ ...API_ENV, ...keys })).toMatchObject(keys);
+    expect(loadWorkerConfig({ ...WORKER_ENV, ...keys })).toMatchObject(keys);
   });
 
   it("refuse a key of the other mode or of the other kind, and never print it", () => {
@@ -463,9 +476,57 @@ describe("the Stripe keys of the Velexis account (OBE-038)", () => {
       ["STRIPE_PUBLISHABLE_KEY_LIVE", fake("pk_test")],
       ["STRIPE_SECRET_KEY_TEST", "sk_test_with spaces"],
     ] as const) {
-      const error = configErrorOf(() => loadApiConfig({ ...API_ENV, [name]: value }));
+      for (const load of [
+        () => loadApiConfig({ ...API_ENV, [name]: value }),
+        () => loadWorkerConfig({ ...WORKER_ENV, [name]: value }),
+      ]) {
+        const error = configErrorOf(load);
 
-      expect([value, error.problems.map((problem) => problem.variable)]).toEqual([value, [name]]);
+        expect([value, error.problems.map((problem) => problem.variable)]).toEqual([value, [name]]);
+        expect(error.message).not.toContain(value);
+      }
+    }
+  });
+});
+
+describe("the webhook signing secrets of the Velexis account (OBE-039)", () => {
+  /** Secrets of the documented shape, built at run time; none is a real secret. */
+  const fakeSecret = (body = "0123456789abcdefABCDEF"): string => `whsec_${body.repeat(2)}`;
+
+  it("are optional and read by the API only, which refuses deliveries of an environment without its secret", () => {
+    const api = loadApiConfig(API_ENV);
+    expect([api.STRIPE_WEBHOOK_SECRET_VELEXIS_TEST, api.STRIPE_WEBHOOK_SECRET_VELEXIS_LIVE]).toEqual([
+      undefined,
+      undefined,
+    ]);
+    const worker = loadWorkerConfig({ ...WORKER_ENV, STRIPE_WEBHOOK_SECRET_VELEXIS_TEST: fakeSecret() });
+    expect(worker).not.toHaveProperty("STRIPE_WEBHOOK_SECRET_VELEXIS_TEST");
+  });
+
+  it("accept whsec_ secrets of letters, digits and the base64 characters", () => {
+    const secrets = {
+      STRIPE_WEBHOOK_SECRET_VELEXIS_TEST: fakeSecret(),
+      STRIPE_WEBHOOK_SECRET_VELEXIS_LIVE: fakeSecret("Ab+/=_-9"),
+    };
+
+    expect(loadApiConfig({ ...API_ENV, ...secrets })).toMatchObject(secrets);
+  });
+
+  it("refuse anything else, and never print it", () => {
+    for (const value of [
+      `sk_test_${"0123456789abcdef".repeat(2)}`,
+      "whsec_ab",
+      "whsec_short",
+      `whsec_${"a".repeat(20)} x`,
+    ]) {
+      const error = configErrorOf(() =>
+        loadApiConfig({ ...API_ENV, STRIPE_WEBHOOK_SECRET_VELEXIS_TEST: value }),
+      );
+
+      expect([value, error.problems.map((problem) => problem.variable)]).toEqual([
+        value,
+        ["STRIPE_WEBHOOK_SECRET_VELEXIS_TEST"],
+      ]);
       expect(error.message).not.toContain(value);
     }
   });

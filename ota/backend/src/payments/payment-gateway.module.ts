@@ -12,6 +12,7 @@ import { StripeGateway } from "./stripe/stripe.gateway";
 @Module({
   imports: [TenancyModule.forApi()],
   providers: [StripeClientFactory, StripeGateway, { provide: PAYMENT_GATEWAY, useExisting: StripeGateway }],
-  exports: [PAYMENT_GATEWAY],
+  // The client factory too: the webhook receiver reads a dispute's PaymentIntent with the endpoint's Velexis key (OBE-039).
+  exports: [PAYMENT_GATEWAY, StripeClientFactory],
 })
 export class PaymentGatewayModule {}

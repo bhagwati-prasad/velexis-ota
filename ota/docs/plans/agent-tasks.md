@@ -1056,7 +1056,8 @@ Checkout, customer accounts in cookies, Stripe on the Velexis account, the airli
   - `storefront.get` shows `accountMode: "velexis"` and the merchant name; no secret key appears in any response.
 - **Verify:** `pnpm --filter @velexis/ota-backend test -- payments && pnpm --filter @velexis/ota-backend test:int -- payments`
 
-### OBE-039 · Receive Stripe webhooks and process them with re-fetch
+### OBE-039 · Receive Stripe webhooks and process them with re-fetch ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-backend
 - **Milestone:** M3
 - **Depends on:** OBE-038, X-028
