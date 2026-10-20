@@ -887,11 +887,35 @@ describe("scenarios and magic values", () => {
   });
 });
 
+/**
+ * Milliseconds the calling thread spent on `run`, less the time it was ready to run but waited for a CPU: the
+ * second field of Linux's /proc/thread-self/schedstat, in nanoseconds. Time spent reading files or waiting on other
+ * threads still counts. CI runs every package's tests at once on 4 CPUs, and there the wall clock of a start was
+ * mostly that wait (1.06 to 1.31 s for a start that takes about 0.1 s on an idle CPU). Where the file cannot be read
+ * (not Linux), the wall clock.
+ */
+async function elapsedWithoutCpuWait(run: () => Promise<unknown>): Promise<number> {
+  const runQueueWaitMs = (): number | undefined => {
+    try {
+      const nanoseconds = Number(readFileSync("/proc/thread-self/schedstat", "utf8").trim().split(" ")[1]);
+      return Number.isFinite(nanoseconds) ? nanoseconds / 1e6 : undefined;
+    } catch {
+      return undefined;
+    }
+  };
+  const waitedBefore = runQueueWaitMs();
+  const started = performance.now();
+  await run();
+  const elapsed = performance.now() - started;
+  const waitedAfter = runQueueWaitMs();
+  return waitedBefore === undefined || waitedAfter === undefined
+    ? elapsed
+    : elapsed - (waitedAfter - waitedBefore);
+}
+
 describe("server lifecycle and CLI", () => {
   it("starts in under 1 s, specifications and fixtures included [X-026 AC5]", async () => {
-    const started = performance.now();
-    await startStub({ specs: new AmadeusSpecs() });
-    expect(performance.now() - started).toBeLessThan(1000);
+    expect(await elapsedWithoutCpuWait(() => startStub({ specs: new AmadeusSpecs() }))).toBeLessThan(1000);
   });
 
   it("frees its port on close(), even while a response is held [X-026 AC5]", async () => {
