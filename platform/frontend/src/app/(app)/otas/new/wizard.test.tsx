@@ -286,6 +286,15 @@ class RedirectBoundary extends Component<{ readonly children: ReactNode }, { rea
  */
 const OPEN_WIZARD_TIMEOUT_MS = 30_000;
 
+/**
+ * How long a test waits for what a server action answers: the live key check (`checkKeyAvailability`) or a submit
+ * (`createOta`), each a round trip through the real `lib/api.ts` and a re-render of the wizard's 850 options.
+ * Testing Library's 1 s default is enough on an idle machine, but not on a loaded CI runner next to the other
+ * packages' tests (it ran out once at the tenant-limit alert). The test's own 5 s budget is unchanged; this only
+ * lets a wait that is going to succeed finish inside it.
+ */
+const ACTION_WAIT = { timeout: 3_000 } as const;
+
 /** Renders `/otas/new` inside the redirect boundary; React reports a caught redirect on the console. */
 async function openWizard(): Promise<void> {
   vi.spyOn(console, "error").mockImplementation(() => undefined);
@@ -294,7 +303,7 @@ async function openWizard(): Promise<void> {
 }
 
 async function redirectedTo(): Promise<string> {
-  const status = await screen.findByText(/^Redirected to /);
+  const status = await screen.findByText(/^Redirected to /, {}, ACTION_WAIT);
   return status.textContent?.replace(/^Redirected to /, "") ?? "";
 }
 
@@ -403,7 +412,7 @@ async function fillDetails(details: Details = {}): Promise<void> {
   await typeKey(details.key ?? "acme");
   type(WIZARD_STRINGS.countryLabel, details.countryCode ?? "NO");
   type(WIZARD_STRINGS.currencyLabel, details.defaultCurrency ?? "EUR");
-  await waitFor(() => expect(keyStatus().dataset["status"]).not.toBe("checking"));
+  await waitFor(() => expect(keyStatus().dataset["status"]).not.toBe("checking"), ACTION_WAIT);
 }
 
 /** Fills step 1, accepts the preselected plan and lands on the review. */
@@ -546,7 +555,7 @@ describe("/otas/new: KeyAvailabilityField and checkKeyAvailability", () => {
         vi.useRealTimers();
       }
 
-      await waitFor(() => expect(keyStatus().textContent).toBe(WIZARD_STRINGS.keyTaken));
+      await waitFor(() => expect(keyStatus().textContent).toBe(WIZARD_STRINGS.keyTaken), ACTION_WAIT);
       expect(keyStatus().textContent).toContain("taken");
       expect(keyStatus().dataset["status"]).toBe("taken");
       // The status is announced (a live region) and read with the field.
@@ -586,10 +595,10 @@ describe("/otas/new: KeyAvailabilityField and checkKeyAvailability", () => {
       expect(calls("GET", "/v1/tenants/key-availability")).toHaveLength(0);
 
       await typeKey("admin");
-      await waitFor(() => expect(keyStatus().textContent).toBe(WIZARD_STRINGS.keyReserved));
+      await waitFor(() => expect(keyStatus().textContent).toBe(WIZARD_STRINGS.keyReserved), ACTION_WAIT);
 
       await typeKey("acme");
-      await waitFor(() => expect(keyStatus().textContent).toBe(WIZARD_STRINGS.keyAvailable));
+      await waitFor(() => expect(keyStatus().textContent).toBe(WIZARD_STRINGS.keyAvailable), ACTION_WAIT);
       expect(screen.getByText(WIZARD_STRINGS.keyAddress("acme.ota.example.com"))).toBeTruthy();
       expect(
         calls("GET", "/v1/tenants/key-availability").map((call) => new URL(call.url).searchParams.get("key")),
@@ -611,9 +620,9 @@ describe("/otas/new: KeyAvailabilityField and checkKeyAvailability", () => {
 
       // "acme" is checked, and the person types "nordic" while that answer is still on its way.
       await typeKey("acme");
-      await waitFor(() => expect(answerAcme).toBeDefined());
+      await waitFor(() => expect(answerAcme).toBeDefined(), ACTION_WAIT);
       await typeKey("nordic");
-      await waitFor(() => expect(keyStatus().textContent).toBe(WIZARD_STRINGS.keyTaken));
+      await waitFor(() => expect(keyStatus().textContent).toBe(WIZARD_STRINGS.keyTaken), ACTION_WAIT);
 
       // The late answer for "acme" (free) arrives last and changes nothing: "nordic" stays taken.
       await act(async () => {
@@ -710,7 +719,7 @@ describe("/otas/new: the wizard and the createOta action", () => {
         .closest("form") as HTMLFormElement;
       fireEvent.submit(form);
       fireEvent.submit(form);
-      await waitFor(() => expect(calls("POST", "/v1/tenants")).toHaveLength(1));
+      await waitFor(() => expect(calls("POST", "/v1/tenants")).toHaveLength(1), ACTION_WAIT);
       // The first never got an answer (the connection dropped); the queued second goes out with the same key.
       failFirst?.(new TypeError("fetch failed: socket hang up"));
 
@@ -788,11 +797,11 @@ describe("/otas/new: the wizard and the createOta action", () => {
       await goToReview();
       press(WIZARD_STRINGS.submit);
 
-      const summary = await screen.findByRole("alert");
+      const summary = await screen.findByRole("alert", {}, ACTION_WAIT);
       expect(within(summary).getByRole("listitem").textContent).toBe(WIZARD_STRINGS.tenantLimit(3));
       expect(summary.textContent).toContain("You already own 3 OTAs");
       expect(summary.textContent).not.toContain("The API's own text");
-      await waitFor(() => expect(document.activeElement).toBe(summary));
+      await waitFor(() => expect(document.activeElement).toBe(summary), ACTION_WAIT);
       expect(currentStep()).toBe(WIZARD_STEP_LABELS.review);
       expect(navigation.redirect).not.toHaveBeenCalled();
 
@@ -810,11 +819,11 @@ describe("/otas/new: the wizard and the createOta action", () => {
       await goToReview();
       press(WIZARD_STRINGS.submit);
 
-      await waitFor(() => expect(currentStep()).toBe(WIZARD_STEP_LABELS.details));
+      await waitFor(() => expect(currentStep()).toBe(WIZARD_STEP_LABELS.details), ACTION_WAIT);
       expect(descriptionsOf(control(WIZARD_STRINGS.keyLabel))).toContain(WIZARD_STRINGS.keyUnavailable);
       const summary = screen.getByRole("alert");
       expect(within(summary).getByRole("link", { name: WIZARD_STRINGS.keyUnavailable })).toBeTruthy();
-      await waitFor(() => expect(document.activeElement).toBe(summary));
+      await waitFor(() => expect(document.activeElement).toBe(summary), ACTION_WAIT);
       // The person's details stay.
       expect(control(WIZARD_STRINGS.nameLabel).value).toBe("Acme Travel");
       expect(control(WIZARD_STRINGS.countryLabel).value).toBe("NO");
@@ -826,7 +835,7 @@ describe("/otas/new: the wizard and the createOta action", () => {
 
       // A new key drops the old message at the field and gets its own live check, so the person sees it is free.
       await typeKey("acmetours");
-      await waitFor(() => expect(keyStatus().textContent).toBe(WIZARD_STRINGS.keyAvailable));
+      await waitFor(() => expect(keyStatus().textContent).toBe(WIZARD_STRINGS.keyAvailable), ACTION_WAIT);
       expect(control(WIZARD_STRINGS.keyLabel).getAttribute("aria-invalid")).toBeNull();
       expect(descriptionsOf(control(WIZARD_STRINGS.keyLabel))).not.toContain(WIZARD_STRINGS.keyUnavailable);
       press(WIZARD_STRINGS.next);
@@ -872,7 +881,7 @@ describe("/otas/new: the wizard and the createOta action", () => {
       await goToReview();
       press(WIZARD_STRINGS.submit);
 
-      await waitFor(() => expect(currentStep()).toBe(WIZARD_STEP_LABELS.details));
+      await waitFor(() => expect(currentStep()).toBe(WIZARD_STEP_LABELS.details), ACTION_WAIT);
       expect(descriptionsOf(control(WIZARD_STRINGS.countryLabel))).toContain(WIZARD_STRINGS.countryUnknown);
       expect(descriptionsOf(control(WIZARD_STRINGS.timeZoneLabel))).toContain(WIZARD_STRINGS.timeZoneUnknown);
       expect(screen.getByRole("alert").textContent).not.toContain("The API's own field text");
