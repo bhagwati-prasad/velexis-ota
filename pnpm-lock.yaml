@@ -189,6 +189,9 @@ importers:
       rxjs:
         specifier: 7.8.2
         version: 7.8.2
+      stripe:
+        specifier: 18.5.0
+        version: 18.5.0(@types/node@22.20.5)
       yaml:
         specifier: 2.9.1
         version: 2.9.1

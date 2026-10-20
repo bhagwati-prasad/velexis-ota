@@ -8,8 +8,8 @@
 // 2. `storefrontFor` adds the caller-specific parts on every request, so whichever caller fills the cache first never
 //    decides what the others get: asset URLs as same-origin `/api/v1/assets/…` paths for the hosted storefront's edge
 //    (its CSP allows images from its own origin only) and absolute `PUBLIC_OTA_API_URL` URLs for key callers
-//    (OADR-0012 point 3). From OBE-050 it adds `airline_card` and `payment.airlineCard` for the edge only; until then
-//    `airlineCard` is always null.
+//    (OADR-0012 point 3), and the payment account (OBE-038, below). From OBE-050 it adds `airline_card` and
+//    `payment.airlineCard` for the edge only; until then `airlineCard` is always null.
 //
 // The contract requires values the settings row of a new tenant does not have yet (the OTA admin edits them from M4,
 // OBE-070). Each has a documented default, so the configuration of a freshly provisioned tenant is complete and valid:
@@ -22,8 +22,16 @@
 // Never published: the operational columns (booking queue, `ops_alert_email`, TTLs, payment timing, search defaults)
 // are not even read by the repository. Platform data: the tenant's name (`payment.merchantName`) and, from the
 // tenant key and STOREFRONT_BASE_DOMAIN, its storefront sub-domain as `primaryUrl` and `domains`; verified custom
-// domains (M5) are not read yet. The payment section stays a placeholder with no method (`supportedMethods: []`) until
-// OBE-038 fills it from the payment connection; plan-gated features are not gated yet (no plan data is read in M2).
+// domains (M5) are not read yet; plan-gated features are not gated yet (no plan data is read in M2).
+//
+// Payment (api-changes §4, OADR-0010 point 1; OBE-038). The cached part carries the settings' side of
+// StorefrontPaymentConfig (card brands, 3-D Secure, merchant country) with the OTA's name as `merchantName`, and no
+// method. `storefrontFor` completes it per request with the account the payment gateway serves for the tenant's
+// environment (read through the 60-second connection cache, so a platform change shows without waiting for this
+// cache): in `velexis` mode the Velexis publishable key of the environment, `merchantName` "Velexis on behalf of <OTA
+// name>", the connection's statement descriptor suffix and its methods (`card`); without an account that can take
+// payments the section stays without a method (`supportedMethods: []`, an empty `publishableKey`), and
+// checkout.createPayment answers `424 PAYMENT_PROVIDER_NOT_CONFIGURED`. No secret key is ever part of it.
 import type { components } from "@velexis/api-types";
 import { codeBadge, displayLanguage, ReferenceNames, toCurrency } from "../reference/reference.mapper";
 import type { CurrencyRow, StorefrontAssetRow, StorefrontSettingsRow } from "./storefront.repository";
@@ -105,6 +113,56 @@ export interface StorefrontAudience {
   readonly caller: StorefrontCaller;
   /** PUBLIC_OTA_API_URL: the origin (and optional path) of the absolute asset URLs given to key callers. */
   readonly publicApiUrl: string;
+  /**
+   * The payment account of the tenant's environment (the payment gateway's `findAccount`), or `null`/absent when none
+   * can take payments: the payment section then has no method.
+   */
+  readonly payment?: StorefrontPaymentAccount | null | undefined;
+}
+
+/** The payment methods `storefront.get` may list for the payment account (what checkout.createPayment takes). */
+const ACCOUNT_METHODS: readonly Payment["supportedMethods"][number][] = ["card"];
+
+/** The public side of a payment account (no secret): what StorefrontPaymentConfig shows of it. */
+export interface StorefrontPaymentAccount {
+  readonly provider: "stripe";
+  readonly accountMode: Payment["accountMode"];
+  /** The publishable key of the environment (Velexis's in `velexis` and `connect_standard` mode). */
+  readonly publishableKey: string;
+  /** `acct_…` in `connect_standard` mode, else `null`. */
+  readonly accountId: string | null;
+  /** The statement descriptor suffix (`velexis` mode), else `null`. */
+  readonly statementDescriptor: string | null;
+  /** The methods the account takes. */
+  readonly methods: readonly string[];
+}
+
+/** The text before the OTA's name in `merchantName` when Velexis takes the payment (`velexis` mode). */
+export const VELEXIS_MERCHANT_PREFIX = "Velexis on behalf of";
+
+/**
+ * The payment section for one request: the cached part (the OTA's name as `merchantName`, no method) completed with the
+ * account, see the file header. `airlineCard` is added by OBE-050.
+ */
+export function paymentConfigFor(
+  base: StorefrontBase["payment"],
+  account: StorefrontPaymentAccount | null | undefined,
+): Payment {
+  if (account === null || account === undefined) {
+    return { ...base, airlineCard: null };
+  }
+  const velexis = account.accountMode === "velexis";
+  return {
+    ...base,
+    provider: account.provider,
+    accountMode: account.accountMode,
+    publishableKey: account.publishableKey,
+    accountId: account.accountMode === "connect_standard" ? account.accountId : null,
+    merchantName: velexis ? `${VELEXIS_MERCHANT_PREFIX} ${base.merchantName}` : base.merchantName,
+    statementDescriptor: velexis ? account.statementDescriptor : null,
+    supportedMethods: ACCOUNT_METHODS.filter((method) => account.methods.includes(method)),
+    airlineCard: null,
+  };
 }
 
 /* ------------------------------------------------------------------------------------------------
@@ -790,7 +848,7 @@ export function toCachedStorefront(source: StorefrontSource, locale?: string): C
     features: featuresOf(settings),
     auth: authOf(settings),
     payment: {
-      // A placeholder without any method until OBE-038 reads the payment connection (Velexis mode).
+      // Without a method: `storefrontFor` adds the payment account of the request (`paymentConfigFor`).
       provider: "stripe",
       environment,
       accountMode: "velexis",
@@ -853,7 +911,8 @@ export function brandInitials(name: string, tenantKey: string): string {
 
 /**
  * The response of `storefront.get` for one caller: the cached part with the asset URLs of that caller (a `data:`
- * badge for a missing logo or favicon) and the payment fields that differ per caller.
+ * badge for a missing logo or favicon), the payment account of the request, and the payment fields that differ per
+ * caller.
  */
 export function storefrontFor(entry: CachedStorefront, audience: StorefrontAudience): StorefrontConfig {
   const { config, assets } = entry;
@@ -871,7 +930,7 @@ export function storefrontFor(entry: CachedStorefront, audience: StorefrontAudie
     },
     seo: { ...config.seo, ogImageUrl: url(assets.ogImage) },
     // `airline_card` and `airlineCard` for the edge, when the flag and AIRLINE_CARD_ENABLED are on: OBE-050.
-    payment: { ...config.payment, airlineCard: null },
+    payment: paymentConfigFor(config.payment, audience.payment),
   };
 }
 

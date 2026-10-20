@@ -542,6 +542,87 @@ describe("a configured tenant", () => {
   });
 });
 
+describe("the payment account (OBE-038)", () => {
+  const entry = toCachedStorefront(source(seededRow()));
+  /** The Velexis account of the test environment, as the payment gateway gives it (no secret). */
+  const velexis = {
+    provider: "stripe" as const,
+    accountMode: "velexis" as const,
+    publishableKey: "pk_test_publishable_key_of_the_velexis_account",
+    accountId: null,
+    statementDescriptor: "ALPHA TRAVEL",
+    methods: ["card"],
+  };
+
+  it("shows Velexis as the merchant on behalf of the OTA in velexis mode, for the edge and key callers [OBE-038 AC3]", () => {
+    for (const audience of [EDGE, KEY]) {
+      const config = storefrontFor(entry, { ...audience, payment: velexis });
+
+      expectValid(config);
+      expect(config.payment).toEqual({
+        provider: "stripe",
+        environment: "test",
+        accountMode: "velexis",
+        publishableKey: velexis.publishableKey,
+        accountId: null,
+        merchantName: "Velexis on behalf of Alpha Travel Holding",
+        statementDescriptor: "ALPHA TRAVEL",
+        supportedMethods: ["card"],
+        cardBrands: ["VISA", "MASTERCARD", "AMERICAN_EXPRESS"],
+        pspCardBrands: [
+          { amadeus: "VISA", psp: "visa", label: "Visa" },
+          { amadeus: "MASTERCARD", psp: "mastercard", label: "Mastercard" },
+          { amadeus: "AMERICAN_EXPRESS", psp: "amex", label: "American Express" },
+        ],
+        merchantCountry: "US",
+        threeDSecure: "always",
+        airlineCard: null,
+      });
+    }
+  });
+
+  it("keeps the section without a method when no account can take payments", () => {
+    for (const payment of [null, undefined]) {
+      const config = storefrontFor(entry, { ...EDGE, payment });
+
+      expect(config.payment).toMatchObject({
+        accountMode: "velexis",
+        publishableKey: "",
+        merchantName: "Alpha Travel Holding",
+        statementDescriptor: null,
+        supportedMethods: [],
+        airlineCard: null,
+      });
+    }
+  });
+
+  it("lists only the methods checkout.createPayment takes, and leaves the cached entry unchanged", () => {
+    const config = storefrontFor(entry, {
+      ...KEY,
+      payment: { ...velexis, methods: ["paypal", "card", "bank_transfer"] },
+    });
+    const without = storefrontFor(entry, KEY);
+
+    expect(config.payment.supportedMethods).toEqual(["card"]);
+    expect(without.payment.supportedMethods).toEqual([]);
+    expect(entry.config.payment.merchantName).toBe("Alpha Travel Holding");
+  });
+
+  it("names the OTA as the merchant of its own account (connect_standard, M5) with Stripe.js's account id", () => {
+    const config = storefrontFor(entry, {
+      ...EDGE,
+      payment: { ...velexis, accountMode: "connect_standard", accountId: "acct_test_alpha" },
+    });
+
+    expect(config.payment).toMatchObject({
+      accountMode: "connect_standard",
+      accountId: "acct_test_alpha",
+      merchantName: "Alpha Travel Holding",
+      statementDescriptor: null,
+    });
+  });
+});
+
 describe("locales", () => {
   it("negotiates Accept-Language against the supported locales, else the default one", () => {
     const supported = ["en-GB", "fr-FR", "de"];

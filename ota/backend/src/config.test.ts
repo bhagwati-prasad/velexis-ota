@@ -119,6 +119,10 @@ describe("the privileged DSNs", () => {
       "PUBLIC_OTA_API_URL",
       "REDIS_URL",
       "STOREFRONT_BASE_DOMAIN",
+      "STRIPE_PUBLISHABLE_KEY_LIVE",
+      "STRIPE_PUBLISHABLE_KEY_TEST",
+      "STRIPE_SECRET_KEY_LIVE",
+      "STRIPE_SECRET_KEY_TEST",
       "TRUST_PROXY",
       "VELEXIS_EDGE_SECRET",
     ]);
@@ -395,6 +399,52 @@ describe("the envelope keys and the Amadeus base URLs of the API (OBE-017, OBE-0
         ["AMADEUS_BASE_URL_LIVE"],
       ]);
       expect(error.message).not.toContain("dummy-password");
+    }
+  });
+});
+
+describe("the Stripe keys of the Velexis account (OBE-038)", () => {
+  /** Keys of the documented shapes, built at run time; none is a real key. */
+  const fake = (prefix: string): string => `${prefix}_${"0123456789abcdefABCDEF".repeat(2)}`;
+
+  it("are optional, so the API starts without them; the worker reads none of them", () => {
+    const api = loadApiConfig(API_ENV);
+
+    expect([
+      api.STRIPE_SECRET_KEY_TEST,
+      api.STRIPE_PUBLISHABLE_KEY_TEST,
+      api.STRIPE_SECRET_KEY_LIVE,
+      api.STRIPE_PUBLISHABLE_KEY_LIVE,
+    ]).toEqual([undefined, undefined, undefined, undefined]);
+    const worker = loadWorkerConfig({ ...WORKER_ENV, STRIPE_SECRET_KEY_TEST: fake("sk_test") });
+    expect(worker).not.toHaveProperty("STRIPE_SECRET_KEY_TEST");
+  });
+
+  it("accept secret, restricted and publishable keys of their own mode", () => {
+    const keys = {
+      STRIPE_SECRET_KEY_TEST: fake("sk_test"),
+      STRIPE_PUBLISHABLE_KEY_TEST: fake("pk_test"),
+      STRIPE_SECRET_KEY_LIVE: fake("rk_live"),
+      STRIPE_PUBLISHABLE_KEY_LIVE: fake("pk_live"),
+    };
+
+    expect(loadApiConfig({ ...API_ENV, ...keys })).toMatchObject(keys);
+  });
+
+  it("refuse a key of the other mode or of the other kind, and never print it", () => {
+    for (const [name, value] of [
+      ["STRIPE_SECRET_KEY_TEST", fake("sk_live")],
+      ["STRIPE_SECRET_KEY_TEST", fake("pk_test")],
+      ["STRIPE_PUBLISHABLE_KEY_TEST", fake("pk_live")],
+      ["STRIPE_PUBLISHABLE_KEY_TEST", fake("sk_test")],
+      ["STRIPE_SECRET_KEY_LIVE", fake("sk_test")],
+      ["STRIPE_PUBLISHABLE_KEY_LIVE", fake("pk_test")],
+      ["STRIPE_SECRET_KEY_TEST", "sk_test_with spaces"],
+    ] as const) {
+      const error = configErrorOf(() => loadApiConfig({ ...API_ENV, [name]: value }));
+
+      expect([value, error.problems.map((problem) => problem.variable)]).toEqual([value, [name]]);
+      expect(error.message).not.toContain(value);
     }
   });
 });

@@ -17,6 +17,10 @@
 // Redis down: entries are neither read nor written, and every request reads PostgreSQL (architecture §10). A missing
 // settings row (a schema whose provisioning did not seed it) is answered as a tenant that is not ready:
 // `403 TENANT_SUSPENDED`, the storefront's maintenance page.
+//
+// The payment account (OBE-038) is not part of the entry: every request asks the payment gateway for the account of
+// the tenant's environment (its connection is cached for 60 seconds and dropped on the platform's `connection`
+// invalidation), and `storefrontFor` adds it, so a change of the connection shows within that minute.
 import { Inject, Injectable } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { AppError } from "@velexis/errors";
@@ -25,6 +29,7 @@ import { PinoLogger } from "nestjs-pino";
 import { redisKeys, type RedisKey } from "../common/redis/redis.keys";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
 import type { ApiConfig } from "../config";
+import { PAYMENT_GATEWAY, type GatewayAccount, type PaymentGateway } from "../payments/payment-gateway";
 import { PlatformCache } from "../tenancy/platform-cache";
 import { TenantContext, type RequestTenant } from "../tenancy/tenant-context";
 import { TenantTx } from "../tenancy/tenant-tx";
@@ -61,6 +66,7 @@ export class StorefrontService {
     private readonly repository: StorefrontRepository,
     private readonly platform: PlatformCache,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
+    @Inject(PAYMENT_GATEWAY) private readonly payments: PaymentGateway,
     config: ConfigService<ApiConfig, true>,
     private readonly logger: PinoLogger,
   ) {
@@ -72,7 +78,28 @@ export class StorefrontService {
   /** `storefront.get` for `caller`, in the locale `Accept-Language` asks for (else the default one). */
   async get(caller: StorefrontCaller, acceptLanguage: string | undefined): Promise<StorefrontConfig> {
     const entry = await this.entry(acceptLanguage);
-    return storefrontFor(entry, { caller, publicApiUrl: this.publicApiUrl });
+    const payment = await this.paymentAccount(this.tenants.require());
+    return storefrontFor(entry, { caller, publicApiUrl: this.publicApiUrl, payment });
+  }
+
+  /**
+   * The payment account of the tenant's environment; `null` when none can take payments, and when the platform row
+   * cannot be read now (PostgreSQL down: the configuration still answers from the cache, without a payment method).
+   */
+  private async paymentAccount(tenant: RequestTenant): Promise<GatewayAccount | null> {
+    try {
+      return await this.payments.findAccount({
+        tenantId: tenant.tenantId,
+        environment: tenant.environment,
+        requestId: this.tenants.requestId() ?? tenant.requestId,
+      });
+    } catch (error) {
+      if (error instanceof AppError && error.code === "SERVICE_UNAVAILABLE") {
+        this.logger.warn({ tenantId: tenant.tenantId }, "storefront.payment_account_unavailable");
+        return null;
+      }
+      throw error;
+    }
   }
 
   /** The caller-independent configuration of the request's tenant and environment for `Accept-Language`. */

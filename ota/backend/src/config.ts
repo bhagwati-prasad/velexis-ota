@@ -154,6 +154,19 @@ function amadeusBaseUrl(): EnvVar<string | undefined> {
   };
 }
 
+/**
+ * The keys of the Velexis Stripe account per environment (ADR-0011 (A), OADR-0010 point 1): a secret or restricted key
+ * (`sk_…`, `rk_…`) and a publishable key (`pk_…`) of that mode, so a live key never sits in a test variable or the
+ * other way round. Each is optional: an environment without both keys has no `velexis`-mode payments (`424
+ * PAYMENT_PROVIDER_NOT_CONFIGURED`, and `storefront.get` lists no payment method), so the API starts on a VM whose
+ * Stripe keys are not filled in yet (provision-vm.sh: "Stripe when needed"); the live keys stay empty until the M6
+ * launch checklist. A refused value is named, never printed (@velexis/config).
+ */
+export const STRIPE_KEY_PATTERNS = Object.freeze({
+  secret: { test: /^(?:sk|rk)_test_[A-Za-z0-9_]+$/, live: /^(?:sk|rk)_live_[A-Za-z0-9_]+$/ },
+  publishable: { test: /^pk_test_[A-Za-z0-9_]+$/, live: /^pk_live_[A-Za-z0-9_]+$/ },
+});
+
 /** The API process (`dist/main.js`, unit velexis-ota-api). */
 export const apiConfigSchema = {
   ...sharedSchema,
@@ -188,6 +201,13 @@ export const apiConfigSchema = {
   // empty on the VM, where the connection's or the shared account's base_url is used (OADR-0001 point 4).
   AMADEUS_BASE_URL_TEST: amadeusBaseUrl(),
   AMADEUS_BASE_URL_LIVE: amadeusBaseUrl(),
+  // The Velexis Stripe account (OBE-038; STRIPE_KEY_PATTERNS above): the keys of `velexis`-mode payments (and of
+  // `connect_standard` from M5) per environment. Only the payments module reads them
+  // (src/payments/stripe/stripe-client.factory.ts); the publishable key reaches the storefront through storefront.get.
+  STRIPE_SECRET_KEY_TEST: env.string({ pattern: STRIPE_KEY_PATTERNS.secret.test, optional: true }),
+  STRIPE_PUBLISHABLE_KEY_TEST: env.string({ pattern: STRIPE_KEY_PATTERNS.publishable.test, optional: true }),
+  STRIPE_SECRET_KEY_LIVE: env.string({ pattern: STRIPE_KEY_PATTERNS.secret.live, optional: true }),
+  STRIPE_PUBLISHABLE_KEY_LIVE: env.string({ pattern: STRIPE_KEY_PATTERNS.publishable.live, optional: true }),
 } as const;
 
 /** The worker process (`dist/worker.js`, unit velexis-ota-worker). */

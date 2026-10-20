@@ -1034,7 +1034,8 @@ Checkout, customer accounts in cookies, Stripe on the Velexis account, the airli
   - A mismatching `expectedTotal` answers 409 and changes nothing.
 - **Verify:** `pnpm --filter @velexis/ota-backend test:int -- checkout`
 
-### OBE-038 · Add the Stripe gateway and the checkout payment endpoints in Velexis mode
+### OBE-038 · Add the Stripe gateway and the checkout payment endpoints in Velexis mode ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-backend
 - **Milestone:** M3
 - **Depends on:** OBE-036, OBE-029
