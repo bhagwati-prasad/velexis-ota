@@ -10,7 +10,8 @@
 //     the capture and the void (OBE-042), and the webhook receiver for the Velexis Stripe clients (OBE-039).
 //   - `PaymentsModule`: the controller and the service of the payment steps, which read the checkout
 //     (CheckoutModule's `CheckoutService`, its access rules and progress), the priced offer (ShoppingModule), the
-//     `payment_card` fee rules (PricingModule) and, for an Amadeus card fee, the Amadeus client (AmadeusModule); and the
+//     `payment_card` fee rules (PricingModule) and, for an Amadeus card fee, the Amadeus client (AmadeusModule); the
+//     inert `AirlineCardGateway` of the airline-card method (OBE-050; API only: it reads AIRLINE_CARD_ENABLED); and the
 //     receiver of the Velexis Stripe account's webhooks (OBE-039, webhooks/), which stores each event and queues it on
 //     `ota-stripe-events`.
 //   - `PaymentsWorkerModule` (worker only, OBE-039): the `ota-stripe-events` consumer (stripe-events.processor.ts),
@@ -28,6 +29,7 @@ import { IdentityModule } from "../identity/identity.module";
 import { PricingModule } from "../pricing/pricing.module";
 import { ShoppingModule } from "../shopping/shopping.module";
 import { TenancyModule } from "../tenancy/tenancy.module";
+import { AirlineCardGateway } from "./airline-card/airline-card.gateway";
 import { CardFees } from "./card-fees";
 import { PaymentGatewayModule } from "./payment-gateway.module";
 import { PaymentsController } from "./payments.controller";
@@ -55,7 +57,14 @@ export { PaymentGatewayModule };
   ],
   controllers: [PaymentsController, StripeVelexisWebhookController],
   // RequestContext only reads the request context (nestjs-cls): this module's instance sees the scope the guards set.
-  providers: [PaymentsService, PaymentsRepository, CardFees, RequestContext, WebhookReceiverService],
+  providers: [
+    PaymentsService,
+    PaymentsRepository,
+    CardFees,
+    AirlineCardGateway,
+    RequestContext,
+    WebhookReceiverService,
+  ],
 })
 export class PaymentsModule {}
 

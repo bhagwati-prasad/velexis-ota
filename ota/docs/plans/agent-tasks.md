@@ -1253,7 +1253,8 @@ Checkout, customer accounts in cookies, Stripe on the Velexis account, the airli
   - Cancelling an airline-card booking makes no Stripe call and writes the `payment_events` row.
 - **Verify:** `pnpm --filter @velexis/ota-backend test -- bookings && pnpm --filter @velexis/ota-backend test:int -- bookings`
 
-### OBE-050 · Add the airline-card gateway, SensitiveCard and net pricing
+### OBE-050 · Add the airline-card gateway, SensitiveCard and net pricing ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-backend
 - **Milestone:** M3
 - **Depends on:** OBE-038

@@ -115,6 +115,7 @@ describe("the privileged DSNs", () => {
     });
 
     expect(Object.keys(config).sort()).toEqual([
+      "AIRLINE_CARD_ENABLED",
       "AMADEUS_BASE_URL_LIVE",
       "AMADEUS_BASE_URL_TEST",
       "API_KEY_PEPPER_FILE",
@@ -218,6 +219,7 @@ describe("values", () => {
       REDIS_URL: SHARED.REDIS_URL,
       PORT: 4000,
       TRUST_PROXY: ["loopback"],
+      AIRLINE_CARD_ENABLED: false,
       ...API_ONLY,
     });
     expect(worker.HEALTH_PORT).toBe(4001);
@@ -588,6 +590,34 @@ describe("the e-mail settings of the worker (OBE-030)", () => {
     expect(
       loadWorkerConfig({ ...WORKER_ENV, SMTP_URL: "smtps://user:dummy@smtp.example.com:465" }).SMTP_URL,
     ).toBe("smtps://user:dummy@smtp.example.com:465");
+  });
+});
+
+describe("the airline card's kill switch", () => {
+  it("is off by default and in the deploy template, on in development, and only for true, false, 1 or 0 [OBE-050 AC1]", () => {
+    expect(loadApiConfig(API_ENV).AIRLINE_CARD_ENABLED).toBe(false);
+    for (const [raw, value] of [
+      ["true", true],
+      ["1", true],
+      ["false", false],
+      ["0", false],
+    ] as const) {
+      expect([raw, loadApiConfig({ ...API_ENV, AIRLINE_CARD_ENABLED: raw }).AIRLINE_CARD_ENABLED]).toEqual([
+        raw,
+        value,
+      ]);
+    }
+    for (const raw of ["yes", "on", "TRUE "]) {
+      const error = configErrorOf(() => loadApiConfig({ ...API_ENV, AIRLINE_CARD_ENABLED: raw }));
+      expect(error.problems.map((problem) => problem.variable)).toEqual(["AIRLINE_CARD_ENABLED"]);
+    }
+    // Production keeps the switch off until the M6 security review (OBE-086); development and CI turn it on.
+    expect(renderedTemplate("ota-backend.env.example")["AIRLINE_CARD_ENABLED"]).toBe("false");
+    expect(readEnvFile(join(APP_DIR, ".env.example"))["AIRLINE_CARD_ENABLED"]).toBe("true");
+    // The worker never reads it.
+    expect(loadWorkerConfig({ ...WORKER_ENV, AIRLINE_CARD_ENABLED: "true" })).not.toHaveProperty(
+      "AIRLINE_CARD_ENABLED",
+    );
   });
 });
 

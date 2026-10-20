@@ -249,6 +249,11 @@ export const apiConfigSchema = {
   // Only the webhook receiver reads them (src/payments/webhooks/webhook-receiver.service.ts); never logged.
   STRIPE_WEBHOOK_SECRET_VELEXIS_TEST: env.string({ pattern: STRIPE_WEBHOOK_SECRET_PATTERN, optional: true }),
   STRIPE_WEBHOOK_SECRET_VELEXIS_LIVE: env.string({ pattern: STRIPE_WEBHOOK_SECRET_PATTERN, optional: true }),
+  // The global kill switch of the airline-card method (ADR-0011, OADR-0004 point 1; OBE-050), `false` by default
+  // (`true`, `false`, `1` or `0`; anything else is refused at start-up). Off, checkout.createPayment refuses
+  // `airline_card` (`403 FEATURE_DISABLED`) and storefront.get never lists it, whatever the tenants' settings say.
+  // `true` in development and CI only until the M6 security review (OBE-086); `false` in the deploy template.
+  AIRLINE_CARD_ENABLED: env.bool({ default: false }),
 } as const;
 
 /** The worker process (`dist/worker.js`, unit velexis-ota-worker). */

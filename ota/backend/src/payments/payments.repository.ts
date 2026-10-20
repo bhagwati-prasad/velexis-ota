@@ -1,10 +1,11 @@
 // The tenant repository of payments (OBE-038; db README §2.1, ota/docs/data-model.md): `payments` and their append-only
 // `payment_events`, which the payments module owns, plus what the payment steps read or change of tables it does not
 // own: the checkout a payment is for (locked while a payment step changes its totals, status and expiry), the
-// storefront settings the payment follows (3-D Secure, accepted brands), the minor units of a currency and the
-// countries of airports (the card fee's rule facts). Like every tenant repository it takes the `tenantTx` transaction
-// first, never opens one and never names a tenant schema. Amounts are read as text (`numeric::text`), never as
-// JavaScript numbers; jsonb is written as JSON text.
+// storefront settings the payment follows (3-D Secure, accepted brands, the airline card of each environment), the
+// prices of the checkout's extras (its totals in the pricing mode of the method, OBE-050), the minor units of a
+// currency and the countries of airports (the card fee's rule facts). Like every tenant repository it takes the
+// `tenantTx` transaction first, never opens one and never names a tenant schema. Amounts are read as text
+// (`numeric::text`), never as JavaScript numbers; jsonb is written as JSON text.
 //
 // OBE-039 adds what the Stripe webhooks need (payments/webhooks/, stripe-events.processor.ts): the payment of a
 // PaymentIntent, the webhook's `payment_events` row written once per provider event id (`payment_events_provider_uq`),
@@ -20,6 +21,9 @@ export interface PaymentSettingsRow {
   readonly require3ds: boolean;
   readonly acceptedCardBrands: readonly string[];
   readonly paymentTiming: string;
+  /** `airline_card_enabled_test` and `_live` (OBE-050). */
+  readonly airlineCardEnabledTest: boolean;
+  readonly airlineCardEnabledLive: boolean;
 }
 
 /** The checkout columns a payment step reads and changes. */
@@ -36,8 +40,18 @@ export interface PaymentCheckoutRow {
   readonly feesAmount: string;
   readonly totalAmount: string;
   readonly paymentBrand: string | null;
+  /** `markup_rules` or `net` (checkout/pricing-mode.ts). */
+  readonly pricingMode: string;
   readonly expiresAt: Date;
   readonly version: number;
+}
+
+/** The two prices of one extra of a checkout (`checkout_ancillaries`). */
+export interface CheckoutSelectionPricesRow {
+  /** The selling price of the selection. */
+  readonly priceAmount: string;
+  /** The Amadeus price of the selection. */
+  readonly netAmount: string;
 }
 
 /** A `payments` row, with the access columns of its checkout. */
@@ -130,6 +144,8 @@ export class PaymentsRepository {
         "require_3ds as require3ds",
         "accepted_card_brands as acceptedCardBrands",
         "payment_timing as paymentTiming",
+        "airline_card_enabled_test as airlineCardEnabledTest",
+        "airline_card_enabled_live as airlineCardEnabledLive",
       ])
       .executeTakeFirst();
   }
@@ -146,6 +162,7 @@ export class PaymentsRepository {
         "is_guest as isGuest",
         "priced_offer_id as pricedOfferId",
         "payment_brand as paymentBrand",
+        "pricing_mode as pricingMode",
         "expires_at as expiresAt",
         "version",
         sql<string>`currency::text`.as("currency"),
@@ -159,6 +176,20 @@ export class PaymentsRepository {
       query = query.forUpdate();
     }
     return await query.executeTakeFirst();
+  }
+
+  /** The selling and Amadeus prices of the checkout's extras, in their order. */
+  async selectionPrices(trx: TenantTransaction, checkoutId: string): Promise<CheckoutSelectionPricesRow[]> {
+    return await trx
+      .selectFrom("checkout_ancillaries")
+      .select([
+        sql<string>`price_amount::text`.as("priceAmount"),
+        sql<string>`net_amount::text`.as("netAmount"),
+      ])
+      .where("checkout_id", "=", checkoutId)
+      .orderBy("created_at")
+      .orderBy("id")
+      .execute();
   }
 
   /** Changes the checkout after a payment step and bumps its `version`. */
