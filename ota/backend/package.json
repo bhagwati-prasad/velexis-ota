@@ -19,6 +19,7 @@
     "dev:tsc": "tsc -p tsconfig.build.json --watch --preserveWatchOutput",
     "dev:api": "node --watch --enable-source-maps dist/main.js",
     "dev:worker": "node --watch --enable-source-maps dist/worker.js",
+    "dev:seed": "pnpm run build && node --enable-source-maps dist/cli.js dev:seed",
     "test": "vitest run",
     "test:int": "vitest run --config vitest.int.config.ts",
     "typecheck": "tsc --noEmit",

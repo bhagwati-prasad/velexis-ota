@@ -472,7 +472,7 @@ Every Node app reads its configuration through `@velexis/config`, which validate
 | `HEALTH_PORT` | worker | | | worker | | | 3101, 4001 |
 | `TRUST_PROXY` | API | | | API | | | Express `trust proxy`, default `loopback` (Caddy on the VM); presets, addresses or CIDR ranges only |
 | `DATABASE_URL` | ✓ | | | ✓ | | | Role `velexis_platform_app` / `velexis_ota_app` |
-| `DATABASE_MIGRATOR_URL` | deploy only | | | deploy only | | | Role `velexis_migrator` (`migrator.env`, root only; local `pnpm db:migrate`) |
+| `DATABASE_MIGRATOR_URL` | deploy only | | | deploy only | | | Role `velexis_migrator` (`migrator.env`, root only; local `pnpm db:migrate` and, development only, the OTA backend's `dev:seed`, OBE-007) |
 | `DATABASE_PROVISIONER_URL` | | | | worker | | | Role `velexis_provisioner`: tenant schemas only ([ADR-0004](adr/0004-postgresql-schema-per-tenant.md)) |
 | `REDIS_URL` | ✓ | | | ✓ | | | `redis://:password@127.0.0.1:6379/0` |
 | `MASTER_KEY_DIR`, `MASTER_KEY_CURRENT` | ✓ | | | ✓ | | | The zone's key directory, `local:v1` |

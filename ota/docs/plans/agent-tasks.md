@@ -210,7 +210,8 @@ The OTA side of M1 is the provisioning worker (OF-11): the platform's `tenant.pr
   - `tenant.migrate` on a schema at N-1 applies the pending file and reports the full ledger.
 - **Verify:** `pnpm --filter @velexis/ota-backend test && pnpm --filter @velexis/ota-backend test:int -- provisioning`
 
-### OBE-007 · Add the tenants:report-migrations and dev:seed commands and run the report at deploy
+### OBE-007 · Add the tenants:report-migrations and dev:seed commands and run the report at deploy ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-backend
 - **Milestone:** M1
 - **Depends on:** OBE-006, PBE-034, X-005, X-023, X-033

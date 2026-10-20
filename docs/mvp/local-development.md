@@ -48,6 +48,16 @@ What [`pnpm dev:keys`](../../tools/dev/README.md) does: it creates `.local/keys/
 
 Per-app overrides go into `<app>/.env.local` (for example the OTA backend's `DATABASE_URL` with the `velexis_ota_app` role and its own `JWT_PRIVATE_KEY_FILE`). The precedence is: real environment, then `<app>/.env.local`, then the root `.env.local` (`@velexis/config`, task X-002).
 
+**Development data** (once, after the setup above; both commands refuse `APP_ENV=production`, write nothing then, and change nothing on a second run):
+
+```bash
+pnpm stub:amadeus &                                      # the platform seed verifies its test Amadeus account against it
+pnpm --filter @velexis/platform-backend dev:seed         # platform admin admin@example.com (MFA), test Amadeus account, 10 test offices
+pnpm --filter @velexis/ota-backend dev:seed              # the demo OTA tenant_demo on demo.ota.example.com, with two test API keys
+```
+
+The OTA backend's `dev:seed` ([`ota/backend/README.md`](../../ota/backend/README.md) §5, task OBE-007) needs the platform's first. As a development-only exception to "the OTA backend never writes platform tables", it writes as `velexis_migrator` (`DATABASE_MIGRATOR_URL` of the root `.env.local`): the tenant `demo` ("Demo Travel"), its storefront sub-domain `demo.<STOREFRONT_BASE_DOMAIN>`, an Amadeus test connection through the Velexis test account with one of its test offices, a `velexis` Stripe test payment connection and a `pk_test_…` and an `sk_test_…` key hashed with `.local/keys/api-key-pepper`. It then provisions `tenant_demo` through the OTA worker's own provisioning function (`DATABASE_PROVISIONER_URL`), sets the tenant `active` and prints the two keys **once**: copy them then (SDK callers send `X-Api-Key`; a lost key is revoked or rolled in the portal). The storefront dev server serves the demo OTA without a key.
+
 ## 3. Daily work
 
 ```bash
@@ -73,6 +83,8 @@ Useful database commands:
 ```bash
 psql postgres://velexis_migrator:dev_migrator@127.0.0.1:5432/velexis            # owner of platform and reference, DDL allowed
 pnpm db:migrate:tenants                                                          # apply tenant migrations to every tenant schema
+pnpm --filter @velexis/db exec node dist/cli/migrate.js tenants --dir ../../ota/backend/migrations/tenant --report "$PWD/.local/migrate.json"
+node ota/backend/dist/cli.js tenants:report-migrations --report .local/migrate.json  # publish the report as a deploy does (OBE-007)
 pnpm --filter @velexis/db exec node dist/cli/migrate.js tenant --schema tenant_demo --dir ../../ota/backend/migrations/tenant --create
 pnpm db:codegen                                                                  # after a migration: regenerate Kysely types, commit them
 ```
