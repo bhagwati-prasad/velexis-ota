@@ -915,7 +915,8 @@ Common commands: backend `pnpm --filter @velexis/platform-backend test`, `test:i
   - Before M5 the plan step shows only `early_access` [PF-10 AC3]; the tenant-limit error is shown [PF-10 AC4].
 - **Verify:** `pnpm --filter @velexis/platform-frontend test`
 
-### PFE-009 · Build the setup page with progress, retry and key reveal
+### PFE-009 · Build the setup page with progress, retry and key reveal ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-frontend
 - **Milestone:** M1
 - **Depends on:** PFE-008, PBE-023

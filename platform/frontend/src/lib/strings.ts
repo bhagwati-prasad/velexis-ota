@@ -649,3 +649,73 @@ export const WIZARD_STRINGS = Object.freeze({
   formExpired: "This form has expired. Reload the page and try again.",
   rateLimited: "Too many requests in a short time. Wait a minute, then try again.",
 });
+
+// ---- The set-up page (PFE-009) -------------------------------------------------------------------------------
+
+/**
+ * The set-up steps of `getProvisioning`, in the order they run: the OTA worker's, then the platform's post-steps
+ * (platform/docs/flows/provisioning.md §2 and §3). A step the portal does not know yet shows its own name.
+ */
+export const SETUP_STEP_LABELS: Readonly<Record<string, string>> = Object.freeze({
+  create_schema: "Create the OTA's database",
+  run_migrations: "Build the database tables",
+  seed_defaults: "Add the default settings",
+  record_migrations: "Record the database version",
+  assign_amadeus_office: "Connect an Amadeus test office",
+  create_payment_connection: "Set up Stripe test payments",
+  issue_api_keys: "Create the test API keys",
+  activate: "Activate the OTA",
+  notify: "Send the welcome e-mail",
+});
+
+/** `/otas/[tenantId]/setup` and `ProvisioningProgress` (PF-11). */
+export const SETUP_STRINGS = Object.freeze({
+  title: "OTA set-up",
+  intro:
+    "Velexis builds your OTA: its database, an Amadeus test office, Stripe test payments and its test API keys. This usually takes less than a minute. You can leave this page and come back.",
+  stepsTitle: "Set-up steps",
+  stepRunning: "In progress",
+  stepWaiting: "Waiting",
+  stepNotRun: "Not run",
+  /** The live summary of the progress, announced when it changes. */
+  summaryQueued: "Waiting for the set-up to start.",
+  summaryRunning: (done: number, total: number) => `Setting up your OTA: ${done} of ${total} steps done.`,
+  summaryRetrying: (attempt: number, maxAttempts: number) =>
+    `Attempt ${attempt} of ${maxAttempts} did not finish. Velexis tries again automatically in a moment.`,
+  summaryActive: "Your OTA is ready.",
+  summaryFailed: "The set-up failed.",
+  summaryCanceled: "The set-up was canceled.",
+  summarySuspended: "This OTA is suspended.",
+  pollFailed: "The progress could not be refreshed just now. Trying again…",
+  pollStoppedTitle: "The progress could not be loaded",
+  readyTitle: "Your OTA is ready",
+  readyText:
+    "Your storefront runs in test mode: bookings and payments are not real until your OTA goes live.",
+  storefrontLink: "Open your storefront",
+  dashboardLink: "Go to the OTA dashboard",
+  keysTitle: "Test API keys",
+  keysIntro:
+    "During the set-up Velexis created a publishable and a secret test key for your OTA. They can be shown once, within 24 hours of the set-up.",
+  reveal: "Reveal the test keys",
+  revealing: "Revealing…",
+  revealedTitle: "Your test API keys",
+  revealedHint:
+    "The publishable key goes into your storefront's browser code; keep the secret key on your server.",
+  publishableKeyLabel: "Publishable test key",
+  secretKeyLabel: "Secret test key",
+  apiKeysLink: "Go to API keys",
+  keysOwnerOnly: "An owner of this OTA can reveal the test API keys made during the set-up.",
+  failedTitle: "The set-up failed",
+  /** The step the set-up stopped at, by its label. */
+  failedAt: (step: string) => `It stopped at the step “${step}”.`,
+  failedAttempts: (attempt: number, maxAttempts: number) => `Attempts made: ${attempt} of ${maxAttempts}.`,
+  failedHelp: "Velexis has been told and is looking into it.",
+  failedReference: (jobId: string) => `Reference for support: ${jobId}`,
+  retry: "Retry the set-up",
+  retrying: "Starting a new attempt…",
+  retryHint: "A retry starts a new set-up attempt and shows its progress here.",
+  retryOwnerOnly: "Only an owner of this OTA can retry the set-up.",
+  canceledText: "Contact Velexis support to finish the set-up of this OTA.",
+  suspendedText: "The OTA dashboard has the details.",
+  unavailableTitle: "The set-up could not be loaded",
+});
