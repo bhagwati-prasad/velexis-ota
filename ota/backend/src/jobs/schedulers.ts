@@ -4,7 +4,8 @@
 // (`offers.purge`). Each iteration adds one small `fan-out` job (`{task: "<schedule id>"}`); the maintenance processor
 // (fan-out.ts) lists the schedule's target tenants and enqueues one `<schedule id>` job per tenant, with a
 // deterministic id, which the module that owns the work handles (`@TenantJob("<schedule id>")`). Schedules join this
-// list with the task that adds their work (M3: checkouts.expire, notifications.sweep, …; M4: queues.poll).
+// list with the task that adds their work (M3: notifications.sweep with OBE-030, checkouts.expire, …; M4:
+// queues.poll).
 //
 // Target tenants (OADR-0014 point 4): a schedule names the statuses it runs for, `active` and possibly `suspended`
 // (suspended tenants keep their obligations to paid travellers, but nothing that starts new supplier activity runs for
@@ -90,6 +91,15 @@ export const OTA_SCHEDULES: readonly ScheduleDefinition[] = Object.freeze([
     statuses: ["active", "suspended"],
     description:
       "Delete expired searches (with their offers, upsells and priced offers) unless a checkout references one of their priced offers",
+  }),
+  schedule({
+    id: "notifications.sweep",
+    pattern: "* * * * *",
+    milestone: "M3",
+    // The e-mails of a suspended OTA's existing bookings and accounts are still sent (OADR-0014 point 4).
+    statuses: ["active", "suspended"],
+    description:
+      "Enqueue notify {tenantId} for each tenant with a due outbox row (a lost enqueue, a retry that became due, an abandoned claim)",
   }),
 ]);
 

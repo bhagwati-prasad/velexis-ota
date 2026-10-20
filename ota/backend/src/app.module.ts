@@ -29,6 +29,8 @@ import { CheckoutModule } from "./checkout/checkout.module";
 import { API_APP, type ApiConfig } from "./config";
 import { HealthModule } from "./health/health.module";
 import { IdentityModule } from "./identity/identity.module";
+import { NotificationsModule } from "./notifications/notifications.module";
+import { PaymentsModule } from "./payments/payments.module";
 import { ReferenceModule } from "./reference/reference.module";
 import { ShoppingModule } from "./shopping/shopping.module";
 import { StorefrontModule } from "./storefront/storefront.module";
@@ -85,6 +87,9 @@ export class AppModule implements NestModule {
         // The rate limits of architecture §8, counted in Redis (OBE-013).
         rateLimitModule(),
         HealthModule.forApi(),
+        // The e-mail outbox (OBE-030), global: a use case queues an e-mail with OutboxService in its transaction; the
+        // worker sends it.
+        NotificationsModule.forApi(),
         // Customer tokens and sessions (OBE-031): the customer guard below verifies the tokens with its key.
         IdentityModule,
         // The operations of the OTA document, one module per context (conventions §2).
@@ -92,6 +97,7 @@ export class AppModule implements NestModule {
         StorefrontModule,
         ShoppingModule,
         CheckoutModule,
+        PaymentsModule,
       ],
       // Global guards run in this order (architecture §3 steps 4–10): who is calling (OADR-0009 point 1), for which
       // tenant (points 2 and 3), whether the caller may call the operation and in which scope, the signed-in customer

@@ -41,8 +41,10 @@ import {
 } from "../../../src/jobs/fan-out";
 import { JOB_BATCH_LIMITS } from "../../../src/jobs/limits";
 import { FAN_OUT_JOB } from "../../../src/jobs/schedulers";
+import { NOTIFICATIONS_SWEEP_JOB } from "../../../src/notifications/notifications.processor";
 import { OFFERS_PURGE_JOB } from "../../../src/shopping/offers-purge.processor";
 import { createWorkerApp, createWorkerLogger, WorkerModule } from "../../../src/worker.module";
+import { testWorkerVariables } from "../../helpers/api-env";
 import { MemorySink } from "../../helpers/log-sink";
 import { useNextApplicationLoggerOutsideRequests } from "../../helpers/nest-pino";
 
@@ -111,6 +113,7 @@ beforeAll(async () => {
   tenants.delta = await insertTenant("delta", "failed");
 
   const config = loadWorkerConfig({
+    ...testWorkerVariables(),
     APP_ENV: "test",
     DATABASE_URL: db.urlFor("ota"),
     DATABASE_PROVISIONER_URL: db.urlFor("provisioner"),
@@ -333,29 +336,44 @@ async function remaining(schema: TenantSchemaName, shopping: Shopping): Promise<
 const ALL = { searches: 1, offers: 2, upsells: 1, pricedOffers: 2 };
 const NONE = { searches: 0, offers: 0, upsells: 0, pricedOffers: 0 };
 
+/** The scheduler of offers.purge among those registered at start-up (the outbox sweep of OBE-030 is the other). */
+const purgeScheduler = (): JobSchedulerJson | undefined =>
+  registered.find((scheduler) => scheduler.key === OFFERS_PURGE_JOB);
+
 describe("the schedulers", () => {
   it("register offers.purge on ota-maintenance at start-up: every 15 minutes, in UTC, as a fan-out job", () => {
-    expect(registered).toEqual([
+    expect(registered.map((scheduler) => scheduler.key).sort()).toEqual([
+      NOTIFICATIONS_SWEEP_JOB,
+      OFFERS_PURGE_JOB,
+    ]);
+    expect(purgeScheduler()).toEqual(
       expect.objectContaining({
         key: OFFERS_PURGE_JOB,
         pattern: "*/15 * * * *",
         tz: "UTC",
         template: expect.objectContaining({ data: { task: OFFERS_PURGE_JOB } }),
       }),
-    ]);
-    expect(registered[0]?.name).toBe(FAN_OUT_JOB);
+    );
+    expect(purgeScheduler()?.name).toBe(FAN_OUT_JOB);
     expect(sink.records()).toContainEqual(
-      expect.objectContaining({ msg: "scheduler.registered", registered: [OFFERS_PURGE_JOB], removed: [] }),
+      expect.objectContaining({
+        msg: "scheduler.registered",
+        registered: [OFFERS_PURGE_JOB, NOTIFICATIONS_SWEEP_JOB],
+        removed: [],
+      }),
     );
   });
 
   it("add each iteration's fan-out job with the quarter hour it is due as prevMillis, the bucket of its jobs", () => {
-    const next = registered[0]?.next;
+    const next = purgeScheduler()?.next;
     expect(next).toBeTypeOf("number");
     const due = next ?? 0;
     expect(due % (15 * MINUTE_MS)).toBe(0);
-    expect(firstIterations).toHaveLength(1);
-    const [first] = firstIterations;
+    const purgeIterations = firstIterations.filter(
+      (queued) => (queued.data as { task?: unknown }).task === OFFERS_PURGE_JOB,
+    );
+    expect(purgeIterations).toHaveLength(1);
+    const [first] = purgeIterations;
     expect(first?.id).toBe(`repeat:${OFFERS_PURGE_JOB}:${due}`);
     expect(first?.data).toEqual({ task: OFFERS_PURGE_JOB });
     // The bucket of the iteration's per-tenant jobs is its due minute, whenever a worker takes the job.

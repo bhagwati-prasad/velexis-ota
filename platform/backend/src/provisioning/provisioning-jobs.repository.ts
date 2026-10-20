@@ -11,7 +11,8 @@
 //
 // PBE-031 adds the platform admin's jobs page: the filtered list and the detail (neither ever selects the reveal
 // columns), the locked read of an admin retry or cancel, the payload of a new job (a retry copies its failed job's),
-// and the cancel of a `queued` job.
+// and the cancel of a `queued` job. PBE-030 adds the cancel of the active `suspend` or `resume` job that a new
+// suspension or resume of the same tenant supersedes.
 import { Inject, Injectable } from "@nestjs/common";
 import type { ProvisioningStepRecord, TenantMigrationRecord } from "@velexis/api-types/jobs";
 import { sql } from "@velexis/db";
@@ -138,7 +139,10 @@ export interface StepLogWrite {
 export interface TenantMigrationMirror {
   readonly tenantId: string;
   readonly schemaName: string;
-  /** The job whose event reported the ledger (`runner_id`). */
+  /**
+   * The job whose event reported the ledger, or the deploy run of a fan-out report (`runner_id` of a version mirrored
+   * for the first time; a version mirrored before keeps the runner that reported it first, the run that applied it).
+   */
   readonly runnerId: string;
   readonly migration: TenantMigrationRecord;
   readonly now: Date;
@@ -838,7 +842,10 @@ export class ProvisioningJobsRepository {
 
   /**
    * Mirrors one row of a tenant schema's ledger into `tenant_schema_migrations` in `trx` (`applied`): an upsert on
-   * `(tenant_id, version)`, so a second report of the same ledger changes nothing but the times it carries.
+   * `(tenant_id, version)`, so a second report of the same ledger changes nothing but the times it carries. Every
+   * report carries the schema's full ledger (PBE-030: a `migrate` job's and the deploy fan-out's too), so a version
+   * mirrored before keeps its `runner_id`, the job or deploy run that applied it ("Deployment / job that ran it"); only
+   * a version without a runner yet takes this report's.
    */
   async upsertTenantMigration(trx: PlatformTransaction, mirror: TenantMigrationMirror): Promise<void> {
     const { migration } = mirror;
@@ -850,7 +857,6 @@ export class ProvisioningJobsRepository {
       checksum: migration.checksum,
       phase: migration.phase,
       status: "applied",
-      runner_id: mirror.runnerId,
       started_at: startedAt,
       finished_at: finishedAt,
       duration_ms: migration.durationMs,
@@ -859,8 +865,19 @@ export class ProvisioningJobsRepository {
     };
     await trx
       .insertInto("platform.tenant_schema_migrations")
-      .values({ ...values, tenant_id: mirror.tenantId, version: migration.version, created_at: mirror.now })
-      .onConflict((conflict) => conflict.columns(["tenant_id", "version"]).doUpdateSet(values))
+      .values({
+        ...values,
+        runner_id: mirror.runnerId,
+        tenant_id: mirror.tenantId,
+        version: migration.version,
+        created_at: mirror.now,
+      })
+      .onConflict((conflict) =>
+        conflict.columns(["tenant_id", "version"]).doUpdateSet({
+          ...values,
+          runner_id: sql<string>`coalesce(platform.tenant_schema_migrations.runner_id, excluded.runner_id)`,
+        }),
+      )
       .execute();
   }
 
@@ -982,6 +999,40 @@ export class ProvisioningJobsRepository {
       .returning("id")
       .executeTakeFirst();
     return row !== undefined;
+  }
+
+  /**
+   * Cancels the active (`queued` or `running`) job of `kind` of `tenantId` in `trx`, so a new job of the kind can be
+   * inserted (`provisioning_jobs_active_uq` allows one): `canceled`, `finished_at`, no lease, the error
+   * `SUPERSEDED: …` naming `supersededBy` (PBE-030: a suspension or a resume while the previous job of its kind still
+   * waits for the OTA worker's answer). A late answer of the canceled job is then ignored, and the reconciler never
+   * takes it up again. Returns the ids of the jobs canceled (none or one).
+   */
+  async supersedeActive(
+    trx: PlatformTransaction,
+    supersede: {
+      readonly tenantId: string;
+      readonly kind: ProvisioningJobKind;
+      readonly supersededBy: string;
+      readonly now: Date;
+    },
+  ): Promise<string[]> {
+    const rows = await trx
+      .updateTable("platform.provisioning_jobs")
+      .set({
+        status: "canceled" satisfies ProvisioningJobStatus,
+        finished_at: supersede.now,
+        locked_until: null,
+        locked_by: null,
+        error: `SUPERSEDED: The ${supersede.kind} job ${supersede.supersededBy} replaced this job before its answer.`,
+        updated_at: supersede.now,
+      })
+      .where("tenant_id", "=", supersede.tenantId)
+      .where("kind", "=", supersede.kind)
+      .where("status", "in", ["queued", "running"] satisfies ProvisioningJobStatus[])
+      .returning("id")
+      .execute();
+    return rows.map((row) => row.id);
   }
 }
 

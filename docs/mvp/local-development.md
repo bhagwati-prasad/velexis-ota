@@ -48,6 +48,16 @@ What [`pnpm dev:keys`](../../tools/dev/README.md) does: it creates `.local/keys/
 
 Per-app overrides go into `<app>/.env.local` (for example the OTA backend's `DATABASE_URL` with the `velexis_ota_app` role and its own `JWT_PRIVATE_KEY_FILE`). The precedence is: real environment, then `<app>/.env.local`, then the root `.env.local` (`@velexis/config`, task X-002).
 
+**Development data** (once, after the setup above; both commands refuse `APP_ENV=production`, write nothing then, and change nothing on a second run):
+
+```bash
+pnpm stub:amadeus &                                      # the platform seed verifies its test Amadeus account against it
+pnpm --filter @velexis/platform-backend dev:seed         # platform admin admin@example.com (MFA), test Amadeus account, 10 test offices
+pnpm --filter @velexis/ota-backend dev:seed              # the demo OTA tenant_demo on demo.ota.example.com, with two test API keys
+```
+
+The OTA backend's `dev:seed` ([`ota/backend/README.md`](../../ota/backend/README.md) §5, task OBE-007) needs the platform's first. As a development-only exception to "the OTA backend never writes platform tables", it writes as `velexis_migrator` (`DATABASE_MIGRATOR_URL` of the root `.env.local`): the tenant `demo` ("Demo Travel"), its storefront sub-domain `demo.<STOREFRONT_BASE_DOMAIN>`, an Amadeus test connection through the Velexis test account with one of its test offices, a `velexis` Stripe test payment connection and a `pk_test_…` and an `sk_test_…` key hashed with `.local/keys/api-key-pepper`. It then provisions `tenant_demo` through the OTA worker's own provisioning function (`DATABASE_PROVISIONER_URL`), sets the tenant `active` and prints the two keys **once**: copy them then (SDK callers send `X-Api-Key`; a lost key is revoked or rolled in the portal). The storefront dev server serves the demo OTA without a key.
+
 ## 3. Daily work
 
 ```bash
@@ -73,6 +83,8 @@ Useful database commands:
 ```bash
 psql postgres://velexis_migrator:dev_migrator@127.0.0.1:5432/velexis            # owner of platform and reference, DDL allowed
 pnpm db:migrate:tenants                                                          # apply tenant migrations to every tenant schema
+pnpm --filter @velexis/db exec node dist/cli/migrate.js tenants --dir ../../ota/backend/migrations/tenant --report "$PWD/.local/migrate.json"
+node ota/backend/dist/cli.js tenants:report-migrations --report .local/migrate.json  # publish the report as a deploy does (OBE-007)
 pnpm --filter @velexis/db exec node dist/cli/migrate.js tenant --schema tenant_demo --dir ../../ota/backend/migrations/tenant --create
 pnpm db:codegen                                                                  # after a migration: regenerate Kysely types, commit them
 ```
@@ -141,6 +153,8 @@ bash tools/dev/stripe-listen.sh --print-secrets    # only print the .env.local l
 | Types and lint | `pnpm typecheck`, `pnpm lint`, `pnpm format:check` | nothing running |
 | Plans | `pnpm plan:lint` | nothing |
 | Local setup scripts | `node --test tools/dev/dev-keys.test.mjs`, `shellcheck -S style deploy/scripts/dev-setup.sh tools/dev/stripe-listen.sh` | nothing (the `dev-setup` CI job also runs §2 on a clean runner; no CI job checks `stripe-listen.sh` yet) |
+
+`pnpm test` runs four packages at a time (`turbo run test --concurrency=4`, also in CI). The tests' time budgets (Vitest's 5 s per test, the explicit budgets of setup hooks) assume CPUs that ten packages' test workers do not share: at Turborepo's default of ten on CI's 4 CPUs, UI tests that take 0.3 s on an idle machine took 5 s and failed, while four at a time takes the same total time with every such test under 2.5 s.
 
 Integration tests build one migrated template database per run (platform, reference, `tenant_alpha`, `tenant_beta`) as `velexis_test_admin`, then clone it per test file, so tests never touch your `velexis` development data.
 

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # =====================================================================================================
-# deploy.test.sh — tests deploy/scripts/deploy.sh (velexis-deploy) without root, systemd or a VM (task X-023).
+# deploy.test.sh — tests deploy/scripts/deploy.sh (velexis-deploy) without root, systemd or a VM (task X-023; the
+# tenant migration report step of OBE-007).
 #
 #   bash deploy/scripts/test/deploy.test.sh
 #
@@ -16,13 +17,19 @@
 #                  unit's port, healthy or not depending on the flag file FAKE_UNHEALTHY in their release
 #   RUN_TRANSIENT  a stand-in for the transient systemd-run unit (bin/run-transient): runs the command in its folder
 #                  with a clean environment made of the env file, as systemd's EnvironmentFile= does
+#   VELEXIS_RUN    a stand-in for velexis-run (bin/velexis-run): records its arguments, then runs the command the way
+#                  run-as.sh runs it for the ota zone, from the installed velexis-ota-worker unit (its WorkingDirectory
+#                  in the running release, refused with exit 125 when there is none, and a clean environment made of
+#                  its EnvironmentFile= lines)
 #   HEALTH_HOST    a random 127.x.y.z address, so the app ports (3000-3002, 3100, 3101, 4000, 4001) never collide
 #                  with anything listening on 127.0.0.1
 # with a fake `caddy` (validate only) and `journalctl` first on PATH. Fake releases are folders like the ones
 # pack-release.sh builds: RELEASE.json, SHA256SUMS of every file, a copy of this repository's deploy/ folder,
 # migrations, reference data, the five app folders and a storefront, with a fake migration CLI
 # (db/dist/cli/migrate.js) and a fake reference loader (reference-data/dist/cli/load.js) that record their
-# arguments, folder and which DSN variables they got (never a value). A release can carry a marker line in
+# arguments, folder and which DSN variables they got (never a value), and, in a release made with `ota-cli`, a fake OTA
+# CLI (ota-backend/dist/cli.js) that records the same for tenants:report-migrations and fails in a release made with
+# `report-fail`. A release can carry a marker line in
 # velexis-ota-api.service and in the Caddyfile, so the test sees whose unit file is installed, whose was loaded by
 # the last daemon-reload, which one each restart used, and whose Caddyfile is live.
 #
@@ -51,6 +58,12 @@
 #       one, even when the active release is the oldest, and never the release --rollback would switch to; these
 #       deploys reach the VM root through a symbolic link (like /srv -> /data/srv), so the active release is found
 #       by its sha, not by its path;
+#   13. the tenant migration report (OBE-007, every check ends with [OBE-007 AC4]): the first deploy (r1, no running
+#       release) skips it; a second deploy of the same sha repeats the fan-out and the report; a release with an OTA
+#       CLI publishes it after the fan-out and before the switch, with its own cli.js, the report of its sha (made
+#       readable, 0644, for the OTA zone user), as the ota zone with ota-backend.env and ota-worker.env and never the
+#       migrator DSN; a failing report stops the deploy and leaves the previous release current; a release without
+#       ota-backend/ skips the step;
 #   and over the whole run: no DSN or secret of the env files in any output, command line or log, no unit used
 #   without a daemon-reload after its file changed, and no call that fake-systemctl.sh does not know.
 #
@@ -113,7 +126,7 @@ PREFIX="$(cd "$PREFIX" && pwd -P)"
 ROOT="$PREFIX/root"   # the VM
 VM_ROOT="$ROOT"       # VELEXIS_ROOT of deploy.sh: the VM, from case 12 on through a symbolic link
 STATE="$PREFIX/state" # FAKE_STATE of fake-systemctl.sh, the fake apps and the fake CLIs
-FAKEBIN="$PREFIX/bin" # caddy, journalctl, run-transient and node, first on deploy.sh's PATH
+FAKEBIN="$PREFIX/bin" # caddy, journalctl, run-transient, velexis-run and node, first on deploy.sh's PATH
 BUILD="$PREFIX/build" # fake releases as the build job leaves them
 OUT="$PREFIX/out"     # every output of deploy.sh
 mkdir -p "$ROOT" "$STATE" "$FAKEBIN" "$BUILD" "$OUT"
@@ -220,7 +233,47 @@ unset RUN_TRANSIENT_CLEAN
 cd "$dir"
 exec "$@"
 SH
-chmod 0755 "$FAKEBIN/caddy" "$FAKEBIN/journalctl" "$FAKEBIN/run-transient"
+cat >"$FAKEBIN/velexis-run" <<'SH'
+#!/usr/bin/env bash
+# deploy.test.sh's VELEXIS_RUN: velexis-run (deploy/scripts/run-as.sh) for the ota zone without root or systemd. It
+# records its arguments, the release `current` points at and the mode of the --report file to velexis-run.log, then
+# runs the command as run-as.sh would from the installed velexis-ota-worker unit: in its WorkingDirectory (under
+# VELEXIS_ROOT; exit 125 when the running release has no such folder, as run-as.sh refuses), with a clean environment
+# made of its EnvironmentFile= files (a missing one fails, as systemd does) and NODE_ENV, and returns its exit code.
+set -euo pipefail
+if [ "${VELEXIS_RUN_CLEAN:-}" != 1 ]; then
+  exec env -i VELEXIS_RUN_CLEAN=1 PATH="$PATH" FAKE_STATE="$FAKE_STATE" VELEXIS_ROOT="$VELEXIS_ROOT" bash "$0" "$@"
+fi
+zone="${1:-}"
+shift || true
+current="$(readlink -e "$VELEXIS_ROOT/srv/velexis/current" 2>/dev/null || true)"
+report=""
+previous=""
+for arg in "$@"; do
+  [ "$previous" != --report ] || report="$arg"
+  previous="$arg"
+done
+mode=none
+[ -z "$report" ] || mode="$(stat -c %a "$report" 2>/dev/null || echo missing)"
+printf 'zone=%s current=%s report-mode=%s argv=%s\n' "$zone" "$(basename "${current:-none}")" "$mode" "$*" \
+  >>"$FAKE_STATE/velexis-run.log"
+[ "$zone" = ota ] || { echo "fake velexis-run: only the ota zone" >&2; exit 125; }
+unit="$VELEXIS_ROOT/etc/systemd/system/velexis-ota-worker.service"
+[ -f "$unit" ] || { echo "velexis-run: $unit is not installed" >&2; exit 125; }
+workdir="$VELEXIS_ROOT$(sed -n 's/^WorkingDirectory=-\{0,1\}//p' "$unit" | tail -n 1)"
+[ -d "$workdir" ] || { echo "velexis-run: the active release has no $workdir" >&2; exit 125; }
+while IFS= read -r env_file; do
+  [ -f "$VELEXIS_ROOT$env_file" ] || { echo "velexis-run: $env_file does not exist" >&2; exit 1; }
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in [A-Za-z_]*=*) export "${line?}" ;; esac
+  done <"$VELEXIS_ROOT$env_file"
+done < <(sed -n 's/^EnvironmentFile=//p' "$unit")
+export NODE_ENV=production
+unset VELEXIS_RUN_CLEAN
+cd "$workdir"
+exec "$@"
+SH
+chmod 0755 "$FAKEBIN/caddy" "$FAKEBIN/journalctl" "$FAKEBIN/run-transient" "$FAKEBIN/velexis-run"
 
 # ---- the health host --------------------------------------------------------------------------------------------
 ports_free() { # host -> 0 when every app port can be bound there
@@ -337,6 +390,40 @@ JS
         printf '# Optional overrides; nothing is required.\n# X023_OPTIONAL=1\n' \
           >"$dir/deploy/env/${opt#optional-template=}.env.example" ;;
       oldest) mtime=$((NOW - 7200)) ;;
+      ota-cli)
+        cat >"$dir/ota-backend/dist/cli.js" <<'JS'
+"use strict";
+// Fake OTA CLI of deploy/scripts/test/deploy.test.sh (OBE-007): records its arguments, release, folder, which DSN and
+// Redis variables it got (never a value) and whether the --report file is a JSON report; fails in a release with
+// FAKE_REPORT_FAIL, as tenants:report-migrations does when Redis refuses the events.
+const fs = require("fs");
+const path = require("path");
+const args = process.argv.slice(2);
+const release = path.resolve(__dirname, "..", "..");
+const has = (name) => ((process.env[name] ?? "") !== "" ? "yes" : "no");
+let report = "none";
+const at = args.indexOf("--report");
+if (at >= 0) {
+  try {
+    report = Array.isArray(JSON.parse(fs.readFileSync(args[at + 1], "utf8")).applied) ? "json" : "other";
+  } catch {
+    report = "unreadable";
+  }
+}
+fs.appendFileSync(
+  path.join(process.env.FAKE_STATE, "oneoff.log"),
+  `report argv=${args.join(" ")} release=${path.basename(release)} cwd=${process.cwd()} ` +
+    `migrator-dsn=${has("DATABASE_MIGRATOR_URL")} app-dsn=${has("DATABASE_URL")} redis=${has("REDIS_URL")} ` +
+    `report=${report} node-env=${process.env.NODE_ENV ?? ""}\n`,
+);
+if (fs.existsSync(path.join(release, "FAKE_REPORT_FAIL"))) {
+  process.stderr.write("tenants:report-migrations: Redis refused the events (fake)\n");
+  process.exit(1);
+}
+JS
+        ;;
+      report-fail) : >"$dir/FAKE_REPORT_FAIL" ;;
+      no-ota-backend) rm -rf "${dir:?}/ota-backend" ;;
       *) die "make_release: unknown option $opt" ;;
     esac
   done
@@ -360,21 +447,24 @@ upload() { # sha: what the deploy job's rsync does
 RUNS=0
 lines_of() { if [ -f "$1" ]; then wc -l <"$1"; else echo 0; fi; }
 since() { tail -n "+$(($2 + 1))" "$1" 2>/dev/null || true; } # file count -> lines appended after the first count
-deploy() { # args -> DEPLOY_RC, DEPLOY_LOG; CALLS, ONEOFFS, TRANSIENTS, VALIDATES: what this run did
-  local c0 o0 t0 v0
+deploy() { # args -> DEPLOY_RC, DEPLOY_LOG; CALLS, ONEOFFS, TRANSIENTS, VRUNS, VALIDATES: what this run did
+  local c0 o0 t0 r0 v0
   RUNS=$((RUNS + 1))
   DEPLOY_LOG="$OUT/deploy-$RUNS.log"
   c0="$(lines_of "$STATE/systemctl.log")"
   o0="$(lines_of "$STATE/oneoff.log")"
   t0="$(lines_of "$STATE/run-transient.log")"
+  r0="$(lines_of "$STATE/velexis-run.log")"
   v0="$(lines_of "$STATE/caddy.log")"
   DEPLOY_RC=0
-  env VELEXIS_ROOT="$VM_ROOT" SYSTEMCTL="$FAKE_SYSTEMCTL" RUN_TRANSIENT="$FAKEBIN/run-transient" HEALTH_HOST="$HOST" \
-    HEALTH_TIMEOUT=2 FAKE_STATE="$STATE" PATH="$FAKEBIN:$PATH" bash "$DEPLOY_SH" "$@" \
+  env VELEXIS_ROOT="$VM_ROOT" SYSTEMCTL="$FAKE_SYSTEMCTL" RUN_TRANSIENT="$FAKEBIN/run-transient" \
+    VELEXIS_RUN="$FAKEBIN/velexis-run" HEALTH_HOST="$HOST" HEALTH_TIMEOUT=2 FAKE_STATE="$STATE" PATH="$FAKEBIN:$PATH" \
+    bash "$DEPLOY_SH" "$@" \
     </dev/null >"$DEPLOY_LOG" 2>&1 || DEPLOY_RC=$?
   CALLS="$(since "$STATE/systemctl.log" "$c0")"
   ONEOFFS="$(since "$STATE/oneoff.log" "$o0")"
   TRANSIENTS="$(since "$STATE/run-transient.log" "$t0")"
+  VRUNS="$(since "$STATE/velexis-run.log" "$r0")"
   VALIDATES="$(since "$STATE/caddy.log" "$v0")"
   printf -- '--- velexis-deploy %s: exit %s (%s)\n' "$*" "$DEPLOY_RC" \
     "$(tail -n 1 "$DEPLOY_LOG" | sed -e 's/^\[[^]]*\] //' -e "s#$PREFIX#<tmp>#g" | cut -c1-150)"
@@ -514,7 +604,7 @@ check "a sha without an upload is refused [X-023 AC1]" no_upload_refused
 
 # ---- 1. happy path ----------------------------------------------------------------------------------------------
 step "1. Happy path: release r1"
-make_release r1 unit=r1 caddy=r1
+make_release r1 unit=r1 caddy=r1 ota-cli
 R1="$BUILT"
 REL1="$SRV/releases/$R1"
 upload "$R1"
@@ -562,6 +652,12 @@ check "each one-off ran through RUN_TRANSIENT with exactly its own env file (mig
 check "the fan-out report is kept root-only in /var/lib/velexis and /var/log/velexis and leaves the state folder [X-023 AC1]" \
   r1_report_kept
 check "the reference data checksum is recorded and the history names r1 [X-023 AC1]" r1_recorded
+first_report_skipped() {
+  output_has "skip the tenant migration report: no running release has ota-backend/ for velexis-run ota" &&
+    [ -z "$VRUNS" ] && ! printf '%s\n' "$ONEOFFS" | grep -q '^report '
+}
+check "the first deploy (no running release, so velexis-run ota has no working folder) skips the tenant migration report [OBE-007 AC4]" \
+  first_report_skipped
 deploy --status
 status_r1() { rc_is 0 && output_has "current: $REL1" && [ "$(grep -c ' active$' "$DEPLOY_LOG")" = 7 ]; }
 check "--status shows current releases/r1 and seven active units [X-023 AC1]" status_r1
@@ -588,6 +684,13 @@ check "it changes nothing: release, current, snapshot, units, Caddyfile, mainten
 check "no daemon-reload, no Caddy reload, the reference data is not loaded again, the unused upload is removed [X-023 AC1]" \
   again_quiet
 check "the units restart on r1 and stay healthy [X-023 AC1]" again_serving
+again_reported() {
+  [ "$(printf '%s\n' "$ONEOFFS" | cut -d' ' -f1-2 | paste -sd' ' -)" = \
+    "migrate argv=platform migrate argv=reference migrate argv=tenants report argv=tenants:report-migrations" ] &&
+    [ "$VRUNS" = "zone=ota current=$R1 report-mode=644 argv=node $REL1/ota-backend/dist/cli.js tenants:report-migrations --report $LIB/migrate-$R1.json" ]
+}
+check "deploying the same sha again repeats the tenant fan-out and the report (nothing is applied twice) [OBE-007 AC4]" \
+  again_reported
 
 # ---- 3. tampered upload ------------------------------------------------------------------------------------------------
 step "3. A tampered upload, and an upload with a file that SHA256SUMS does not list"
@@ -847,6 +950,67 @@ check "the deploy after that (r11) prunes back to five: r5 and r9, no longer the
 deploy --status
 status_r11() { rc_is 0 && output_has "current: $SRV/releases/$R11" && [ "$(grep -c ' active$' "$DEPLOY_LOG")" = 7 ]; }
 check "--status shows releases/r11 (the resolved path) and seven active units [X-023 AC1]" status_r11
+
+# ---- 13. tenant migration report ----------------------------------------------------------------------------------------------
+step "13. The tenant migration report (OBE-007): after the fan-out, before the switch, as the OTA zone"
+make_release r12 ota-cli
+R12="$BUILT"
+upload "$R12"
+deploy "$R12"
+report_line() { printf '%s\n' "$ONEOFFS" | grep '^report ' || true; }
+r12_done() { rc_is 0 && current_is "$R12" && output_has "report tenant migrations (velexis-run ota, "; }
+r12_after_fanout() {
+  [ "$(printf '%s\n' "$ONEOFFS" | cut -d' ' -f1-2 | paste -sd' ' -)" = \
+    "migrate argv=platform migrate argv=reference migrate argv=tenants report argv=tenants:report-migrations" ]
+}
+r12_own_cli() {
+  [ "$VRUNS" = "zone=ota current=$R11 report-mode=644 argv=node $VM_ROOT/srv/velexis/releases/$R12/ota-backend/dist/cli.js tenants:report-migrations --report $VM_ROOT/var/lib/velexis/migrate-$R12.json" ] &&
+    [[ "$(report_line)" == "report argv=tenants:report-migrations --report $VM_ROOT/var/lib/velexis/migrate-$R12.json release=$R12 cwd=$SRV/releases/$R11/ota-backend "* ]]
+}
+r12_ota_zone_env() {
+  [[ "$(report_line)" == *" migrator-dsn=no app-dsn=yes redis=yes report=json node-env=production" ]] &&
+    printf '%s\n' "$TRANSIENTS" | grep -q '/etc/velexis/migrator.env ' &&
+    ! printf '%s\n' "$TRANSIENTS" | grep -q 'tenants:report-migrations'
+}
+r12_report_modes() { [ "$(stat -c %a "$LIB/migrate-$R12.json")" = 644 ] && [ "$(stat -c %a "$LOGS/migrate-$R12.json")" = 600 ]; }
+r12_switched_after() { [ "$(restart_field velexis-ota-worker release)" = "$R12" ] && restarted_all_in_order && serving "$R12"; }
+check "exit 0, current points at r12, and the report step ran [OBE-007 AC4]" r12_done
+check "the report ran right after the tenant fan-out (platform, reference, tenants, then the report) [OBE-007 AC4]" r12_after_fanout
+check "before the switch (current was still r11), through velexis-run ota with r12's own cli.js and the report of r12's sha [OBE-007 AC4]" \
+  r12_own_cli
+check "as the OTA zone: ota-backend.env and ota-worker.env (DATABASE_URL, REDIS_URL), never the migrator DSN, never as a migration unit [OBE-007 AC4]" \
+  r12_ota_zone_env
+check "the report in /var/lib/velexis is readable (0644) for the OTA zone user, the copy in /var/log/velexis stays 0600 [OBE-007 AC4]" \
+  r12_report_modes
+check "the units then restart on r12 and answer for it [OBE-007 AC4]" r12_switched_after
+
+make_release r13 unit=r13 ota-cli report-fail
+R13="$BUILT"
+upload "$R13"
+PIDS_BEFORE="$(app_pids)"
+deploy "$R13"
+r13_failed() {
+  rc_is 1 && output_has "publishing the tenant migration report failed; the previous release keeps running" &&
+    [[ "$(report_line)" == "report argv=tenants:report-migrations --report $VM_ROOT/var/lib/velexis/migrate-$R13.json release=$R13 "* ]]
+}
+r13_no_switch() {
+  current_is "$R12" && no_call '^(restart|enable) ' && [ "$(app_pids)" = "$PIDS_BEFORE" ] && serving "$R12" &&
+    output_has "re-install the units and Caddyfile of the running release $R12" && unit_marker_is "" && loaded_marker_is ""
+}
+check "a failing report: exit 1, 'publishing the tenant migration report failed; the previous release keeps running' [OBE-007 AC4]" \
+  r13_failed
+check "a failing report leaves r12 current: no switch, no restart, r12's units re-installed from its snapshot [OBE-007 AC4]" \
+  r13_no_switch
+
+make_release r14 no-ota-backend
+R14="$BUILT"
+upload "$R14"
+deploy "$R14"
+r14_skipped() {
+  rc_is 0 && current_is "$R14" && [ -z "$VRUNS" ] && [ -z "$(report_line)" ] && not output_has "report tenant migrations" &&
+    printf '%s\n' "$ONEOFFS" | grep -q '^migrate argv=tenants '
+}
+check "a release without ota-backend/ runs the fan-out but skips the report step [OBE-007 AC4]" r14_skipped
 
 # ---- over the whole run -----------------------------------------------------------------------------------------------------
 step "Over the whole run"

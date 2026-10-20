@@ -3,11 +3,14 @@
 // listens). Readiness with real dependencies: test/integration/health.
 import { ConfigService } from "@nestjs/config";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { testWorkerVariables } from "../test/helpers/api-env";
 import { exchange } from "../test/helpers/http";
 import { MemorySink } from "../test/helpers/log-sink";
 import { freePort, occupiedPort, unreachableRedisUrl } from "../test/helpers/ports";
 import { Clock } from "./common/clock";
 import { IdGenerator } from "./common/ids";
+import { NotificationsProcessor } from "./notifications/notifications.processor";
+import { OutboxService } from "./notifications/outbox.service";
 import { startWorker, WORKER_HOST, type RunningWorker } from "./worker";
 
 /**
@@ -20,6 +23,8 @@ const ENV = {
   DATABASE_URL: "postgres://velexis_ota_app:dummy@127.0.0.1:5432/velexis",
   REDIS_URL: "redis://:dummy@127.0.0.1:6379/0",
   DATABASE_PROVISIONER_URL: "postgres://velexis_provisioner:dummy@127.0.0.1:5432/velexis",
+  // The key folder, base domain and e-mail settings of the notifications module (OBE-030); nothing is sent here.
+  ...testWorkerVariables(),
 } as const;
 
 const cleanups: Array<() => Promise<void>> = [];
@@ -171,5 +176,12 @@ describe("the worker's module graph", () => {
 
     expect(worker.app.get(Clock).now()).toBeInstanceOf(Date);
     expect(worker.app.get(IdGenerator).newId("job")).toMatch(/^job_[0-9A-HJKMNP-TV-Z]{26}$/);
+  });
+
+  it("provides the e-mail outbox and the ota-notifications consumer (OBE-030)", async () => {
+    const { worker } = await runningWorker();
+
+    expect(worker.app.get(OutboxService, { strict: false })).toBeInstanceOf(OutboxService);
+    expect(worker.app.get(NotificationsProcessor, { strict: false })).toBeInstanceOf(NotificationsProcessor);
   });
 });

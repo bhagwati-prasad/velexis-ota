@@ -253,6 +253,23 @@ export function safeNextPath(next: string | null | undefined): string | undefine
   return `${url.pathname}${url.search}${url.hash}`;
 }
 
+/** `EmailAddress` of the platform document. */
+const PREFILL_EMAIL_MAX_LENGTH = 254;
+
+/**
+ * The address of `?email=` that the sign-in and sign-up pages prefill (the links of an invitation, PFE-012): the
+ * trimmed value when it has 1 to 254 characters and no control character, otherwise `undefined`. It only fills a
+ * field; the person can change it, and the API checks what is sent.
+ */
+export function prefillEmail(value: string | null | undefined): string | undefined {
+  const email = typeof value === "string" ? value.trim() : "";
+  // eslint-disable-next-line no-control-regex -- control characters are exactly what is refused here
+  if (email === "" || email.length > PREFILL_EMAIL_MAX_LENGTH || /[\u0000-\u001f\u007f]/.test(email)) {
+    return undefined;
+  }
+  return email;
+}
+
 // ---- Refresh ------------------------------------------------------------------------------------------------
 
 /** How long the outcome of a refresh is reused for the same refresh token after it settled. */

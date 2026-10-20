@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  memo,
   startTransition,
   useActionState,
   useEffect,
@@ -105,6 +106,30 @@ function isOption(options: readonly SelectOption[], value: string): boolean {
 function labelOf(options: readonly SelectOption[], value: string): string {
   return options.find((option) => option.value === value)?.label ?? value;
 }
+
+/**
+ * The `<option>`s of a select: its placeholder, then `options`. Memoised, so that typing in another field (each
+ * keystroke renders the wizard) does not render the some 850 options of the three selects again; their lists come
+ * from the page and do not change while the wizard is open.
+ */
+const SelectOptions = memo(function SelectOptions({
+  placeholder,
+  options,
+}: {
+  readonly placeholder: string;
+  readonly options: readonly SelectOption[];
+}) {
+  return (
+    <>
+      <option value="">{placeholder}</option>
+      {options.map((option) => (
+        <option key={option.value} value={option.value}>
+          {option.label}
+        </option>
+      ))}
+    </>
+  );
+});
 
 const SELECT_CLASSES = cn(
   "border-input flex h-9 w-full min-w-0 rounded-md border bg-transparent px-3 py-1 text-base shadow-xs outline-none md:text-sm",
@@ -370,12 +395,7 @@ export function Wizard({
               autoComplete="country"
               className={SELECT_CLASSES}
             >
-              <option value="">{WIZARD_STRINGS.countryPlaceholder}</option>
-              {countries.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
+              <SelectOptions placeholder={WIZARD_STRINGS.countryPlaceholder} options={countries} />
             </select>
           )}
         </FormField>
@@ -392,12 +412,7 @@ export function Wizard({
               onChange={(event) => setValue("defaultCurrency", event.target.value)}
               className={SELECT_CLASSES}
             >
-              <option value="">{WIZARD_STRINGS.currencyPlaceholder}</option>
-              {currencies.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
+              <SelectOptions placeholder={WIZARD_STRINGS.currencyPlaceholder} options={currencies} />
             </select>
           )}
         </FormField>
@@ -414,12 +429,7 @@ export function Wizard({
               onChange={(event) => setValue("timeZone", event.target.value)}
               className={SELECT_CLASSES}
             >
-              <option value="">{WIZARD_STRINGS.timeZonePlaceholder}</option>
-              {timeZones.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
+              <SelectOptions placeholder={WIZARD_STRINGS.timeZonePlaceholder} options={timeZones} />
             </select>
           )}
         </FormField>

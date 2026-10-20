@@ -3,7 +3,7 @@
 // @velexis/testing (X-015) later replaces this with per-file databases.
 import { defineConfig, env, loadDevEnvFiles } from "@velexis/config";
 import { APP_DIR } from "../../src/config";
-import { testApiVariables } from "../helpers/api-env";
+import { testApiVariables, testWorkerVariables } from "../helpers/api-env";
 
 export interface IntegrationEnv {
   /**
@@ -11,7 +11,10 @@ export interface IntegrationEnv {
    * process's edge secret and pepper file, test/helpers/api-env.ts); PORT stays at its default (4000).
    */
   readonly api: Readonly<Record<string, string>>;
-  /** Variables for `startWorker({ env })`: the API's plus the provisioner DSN; HEALTH_PORT stays at 4001. */
+  /**
+   * Variables for `startWorker({ env })`: the API's plus the provisioner DSN and the worker's e-mail settings
+   * (OBE-030); HEALTH_PORT stays at 4001.
+   */
   readonly worker: Readonly<Record<string, string>>;
 }
 
@@ -28,5 +31,8 @@ export function integrationEnv(): IntegrationEnv {
     REDIS_URL: services.REDIS_URL,
     ...testApiVariables(),
   };
-  return { api, worker: { ...api, DATABASE_PROVISIONER_URL: services.DATABASE_PROVISIONER_URL } };
+  return {
+    api,
+    worker: { ...api, ...testWorkerVariables(), DATABASE_PROVISIONER_URL: services.DATABASE_PROVISIONER_URL },
+  };
 }

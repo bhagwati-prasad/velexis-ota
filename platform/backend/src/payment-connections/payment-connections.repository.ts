@@ -7,8 +7,9 @@
 //
 // M1 brings the `velexis` test row of a new OTA, which the provisioning post-step `create_payment_connection` inserts
 // (PBE-022, flows/stripe-payments-account.md §A step 1), and the portal's list, read without the ciphertext columns
-// (`listForTenant`, PBE-027); the descriptor update (PBE-038), go-live's live row and the M5 modes (Connect Standard,
-// API keys) add their reads and writes.
+// (`listForTenant`, PBE-027), and the platform admin's switch of a connection's status (`lockForTenant` and
+// `setStatus`, PBE-030, `adminSetConnectionStatus`); the descriptor update (PBE-038), go-live's live row and the M5
+// modes (Connect Standard, API keys) add their reads and writes.
 import { Inject, Injectable } from "@nestjs/common";
 import { sql, type PlatformDatabase, type Selectable } from "@velexis/db";
 import type { PlatformTransaction } from "../audit/audit.repository";
@@ -28,6 +29,32 @@ export type PaymentConnectionView = Omit<
 
 /** The payment provider of every connection in the MVP. */
 export const STRIPE_PROVIDER = "stripe";
+
+/** The columns of a `PaymentConnectionView`: every column but the secrets' ciphertexts, which are never selected. */
+const PAYMENT_CONNECTION_VIEW_COLUMNS = [
+  "id",
+  "tenant_id",
+  "provider",
+  "environment",
+  "account_mode",
+  "account_reference",
+  "publishable_key",
+  "encryption_key_id",
+  "supported_methods",
+  "capture_mode",
+  "is_default",
+  "status",
+  "statement_descriptor_suffix",
+  "capabilities",
+  "connected_at",
+  "disconnected_at",
+  "last_verified_at",
+  "last_error",
+  "created_by_account_id",
+  "version",
+  "created_at",
+  "updated_at",
+] as const;
 
 /** The environments of a payment connection (they match the API key environments). */
 export type PaymentEnvironment = "test" | "live";
@@ -90,30 +117,7 @@ export class PaymentConnectionsRepository {
   ): Promise<PaymentConnectionView[]> {
     return db
       .selectFrom("platform.payment_provider_connections")
-      .select([
-        "id",
-        "tenant_id",
-        "provider",
-        "environment",
-        "account_mode",
-        "account_reference",
-        "publishable_key",
-        "encryption_key_id",
-        "supported_methods",
-        "capture_mode",
-        "is_default",
-        "status",
-        "statement_descriptor_suffix",
-        "capabilities",
-        "connected_at",
-        "disconnected_at",
-        "last_verified_at",
-        "last_error",
-        "created_by_account_id",
-        "version",
-        "created_at",
-        "updated_at",
-      ])
+      .select(PAYMENT_CONNECTION_VIEW_COLUMNS)
       .where("tenant_id", "=", tenantId)
       .where("provider", "=", STRIPE_PROVIDER)
       .orderBy(sql`environment = 'live'`)
@@ -134,5 +138,42 @@ export class PaymentConnectionsRepository {
       .where("provider", "=", STRIPE_PROVIDER)
       .where("environment", "=", environment)
       .executeTakeFirst();
+  }
+
+  /**
+   * The tenant's Stripe connection of `environment`, locked for the rest of `trx` (`FOR UPDATE`), read without the
+   * secrets' ciphertexts.
+   */
+  async lockForTenant(
+    trx: PlatformTransaction,
+    tenantId: string,
+    environment: PaymentEnvironment,
+  ): Promise<PaymentConnectionView | undefined> {
+    return trx
+      .selectFrom("platform.payment_provider_connections")
+      .select(PAYMENT_CONNECTION_VIEW_COLUMNS)
+      .where("tenant_id", "=", tenantId)
+      .where("provider", "=", STRIPE_PROVIDER)
+      .where("environment", "=", environment)
+      .forUpdate()
+      .executeTakeFirst();
+  }
+
+  /**
+   * Sets the status of a connection locked by `lockForTenant` (`disabled`, or back to `active`), with `version + 1`, in
+   * `trx`. The mode, the account and the secrets stay as they are; the row comes back without the ciphertexts.
+   */
+  async setStatus(
+    trx: PlatformTransaction,
+    id: string,
+    status: "active" | "disabled",
+    now: Date,
+  ): Promise<PaymentConnectionView> {
+    return trx
+      .updateTable("platform.payment_provider_connections")
+      .set((eb) => ({ status, version: eb("version", "+", 1), updated_at: now }))
+      .where("id", "=", id)
+      .returning(PAYMENT_CONNECTION_VIEW_COLUMNS)
+      .executeTakeFirstOrThrow();
   }
 }

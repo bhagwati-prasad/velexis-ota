@@ -21,7 +21,7 @@ import { FakeClock } from "@velexis/testing";
 import { UnrecoverableError, type Job, type Queue } from "bullmq";
 import { LoggerModule, type PinoLogger } from "nestjs-pino";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { testApiVariables } from "../../test/helpers/api-env";
+import { testApiVariables, testWorkerVariables } from "../../test/helpers/api-env";
 import { MemorySink } from "../../test/helpers/log-sink";
 import { unreachableRedisUrl } from "../../test/helpers/ports";
 import { AppModule, createApiApp, createApiLogger } from "../app.module";
@@ -127,7 +127,11 @@ describe("the provisioner database", () => {
   });
 
   it("is built from the worker's configuration: its DSN, a pool of 2 named ota-worker-provisioner, not connected [OBE-005 AC4]", async () => {
-    const worker = loadWorkerConfig({ ...SHARED, DATABASE_PROVISIONER_URL: PROVISIONER_URL });
+    const worker = loadWorkerConfig({
+      ...SHARED,
+      ...testWorkerVariables(),
+      DATABASE_PROVISIONER_URL: PROVISIONER_URL,
+    });
 
     const app = await provisionerGraph(worker);
 
@@ -160,6 +164,7 @@ describe("the provisioner database", () => {
       });
       const workerConfig = loadWorkerConfig({
         ...SHARED,
+        ...testWorkerVariables(),
         REDIS_URL: redisUrl,
         DATABASE_PROVISIONER_URL: PROVISIONER_URL,
       });

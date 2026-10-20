@@ -361,6 +361,50 @@ export class CheckoutRepository {
     }
   }
 
+  /** Replaces the extras of a checkout with `rows` (checkout.setAncillaries, OBE-037), inserted in their order. */
+  async replaceAncillaries(
+    trx: TenantTransaction,
+    checkoutId: string,
+    rows: readonly Insertable<CheckoutDb["checkout_ancillaries"]>[],
+  ): Promise<void> {
+    await trx.deleteFrom("checkout_ancillaries").where("checkout_id", "=", checkoutId).execute();
+    if (rows.length > 0) {
+      await trx
+        .insertInto("checkout_ancillaries")
+        .values([...rows])
+        .execute();
+    }
+  }
+
+  /**
+   * Moves a checkout onto the priced offer it buys now with its amounts (checkout.setAncillaries, OBE-037) and bumps
+   * its `version`; `total_amount = offer_amount + ancillaries_amount + fees_amount` (the table's CHECK).
+   */
+  async setPricing(
+    trx: TenantTransaction,
+    checkoutId: string,
+    values: {
+      readonly pricedOfferId: string;
+      readonly offerAmount: string;
+      readonly ancillariesAmount: string;
+      readonly totalAmount: string;
+      readonly now: Date;
+    },
+  ): Promise<void> {
+    await trx
+      .updateTable("checkouts")
+      .set({
+        priced_offer_id: values.pricedOfferId,
+        offer_amount: values.offerAmount,
+        ancillaries_amount: values.ancillariesAmount,
+        total_amount: values.totalAmount,
+        version: sql`version + 1`,
+        updated_at: values.now,
+      })
+      .where("id", "=", checkoutId)
+      .execute();
+  }
+
   /** Bumps the checkout's `version` after a step changed it (`checkouts.version` counts child changes too). */
   async touch(trx: TenantTransaction, checkoutId: string, now: Date): Promise<void> {
     await trx

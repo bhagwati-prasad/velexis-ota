@@ -3,7 +3,7 @@ import Link from "next/link";
 
 import { SignInForm } from "@/app/(auth)/sign-in/sign-in-form";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { safeNextPath } from "@/lib/session";
+import { prefillEmail, safeNextPath } from "@/lib/session";
 import { ERROR_MESSAGES, SIGN_IN_STRINGS } from "@/lib/strings";
 
 export const metadata: Metadata = { title: "Sign in" };
@@ -42,15 +42,29 @@ function noticeOf(params: Record<string, string | string[] | undefined>): Notice
   return undefined;
 }
 
+/** `path` with the query parameters of `values` that have a value. */
+function linkWith(path: string, values: Readonly<Record<string, string | undefined>>): string {
+  const query = new URLSearchParams();
+  for (const [name, value] of Object.entries(values)) {
+    if (value !== undefined) {
+      query.set(name, value);
+    }
+  }
+  const search = query.toString();
+  return search === "" ? path : `${path}?${search}`;
+}
+
 /**
  * `/sign-in` (README §2 Auth and §6, PF-03): e-mail and password. `next` is the path to return to after sign-in;
  * only a relative path on the portal is kept (`safeNextPath`), so `next=https://evil.example/x` or
  * `next=//evil.example` lead to `/dashboard` like no `next` at all. The page always shows the form: whether a
- * session cookie still works is for the API to say, not for the page to guess.
+ * session cookie still works is for the API to say, not for the page to guess. `email` prefills the address
+ * (`prefillEmail`; the sign-in link of an invitation, PFE-012), and the sign-up link keeps it and `next`.
  */
 export default async function SignInPage({ searchParams }: { searchParams: SearchParams }) {
   const params = await searchParams;
   const next = safeNextPath(single(params.next));
+  const email = prefillEmail(single(params.email));
   const notice = noticeOf(params);
   return (
     <main
@@ -72,11 +86,11 @@ export default async function SignInPage({ searchParams }: { searchParams: Searc
           <AlertDescription>{notice.text}</AlertDescription>
         </Alert>
       )}
-      <SignInForm next={next} />
+      <SignInForm next={next} email={email} />
       <p className="text-sm text-muted-foreground">
         {SIGN_IN_STRINGS.noAccount}{" "}
         <Link
-          href="/sign-up"
+          href={linkWith("/sign-up", { email, next })}
           prefetch={false}
           className="font-medium text-foreground underline underline-offset-4"
         >

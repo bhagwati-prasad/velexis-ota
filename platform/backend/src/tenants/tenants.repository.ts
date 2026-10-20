@@ -2,8 +2,9 @@
 // lists and reads of the portal and the profile update (PBE-017), the row of a new OTA, which ProvisioningModule
 // writes in the create-OTA transaction (PBE-018), the two writes of its post-steps (PBE-022): the mirrored schema
 // version and the activation, and the failure of a provisioning and the owner's retry (PBE-023), the platform
-// admin's OTA search and its edit of the legal name and the internal notes (PBE-029), and the plan that follows the
-// admin's change of a manual subscription (PBE-033). Kysely on the process's `PLATFORM_DB`, schema-qualified tables
+// admin's OTA search and its edit of the legal name and the internal notes (PBE-029), the plan that follows the
+// admin's change of a manual subscription (PBE-033), and the status switch of a suspension and a resume (PBE-030,
+// PADR-0014). Kysely on the process's `PLATFORM_DB`, schema-qualified tables
 // (ADR-0005). The reads join what an answer shows next to the tenant row: the caller's role from the active
 // membership (listTenants), the oldest active owner's e-mail address (the admin search) and the primary storefront
 // host from `tenant_domains`, read only. `reference.countries`,
@@ -403,6 +404,48 @@ export class TenantsRepository {
       .set({ status: "provisioning", version: sql<number>`version + 1`, updated_at: now })
       .where("id", "=", tenantId)
       .where("status", "=", "failed")
+      .returning("id")
+      .executeTakeFirst();
+    return row !== undefined;
+  }
+
+  /**
+   * The suspension of an OTA (PBE-030, PADR-0014 item 2) in `trx`: `active → suspended`, `suspended_at = now`,
+   * `suspension_reason`, `version + 1`, only while the tenant is `active`. True when this call changed the tenant.
+   */
+  async suspend(trx: PlatformTransaction, tenantId: string, reason: string, now: Date): Promise<boolean> {
+    const row = await trx
+      .updateTable("platform.tenants")
+      .set({
+        status: "suspended",
+        suspended_at: now,
+        suspension_reason: reason,
+        version: sql<number>`version + 1`,
+        updated_at: now,
+      })
+      .where("id", "=", tenantId)
+      .where("status", "=", "active")
+      .returning("id")
+      .executeTakeFirst();
+    return row !== undefined;
+  }
+
+  /**
+   * The resume of a suspended OTA (PBE-030, PADR-0014 item 4) in `trx`: `suspended → active`, the suspension fields
+   * cleared, `version + 1`, only while the tenant is `suspended`. True when this call changed the tenant.
+   */
+  async resume(trx: PlatformTransaction, tenantId: string, now: Date): Promise<boolean> {
+    const row = await trx
+      .updateTable("platform.tenants")
+      .set({
+        status: "active",
+        suspended_at: null,
+        suspension_reason: null,
+        version: sql<number>`version + 1`,
+        updated_at: now,
+      })
+      .where("id", "=", tenantId)
+      .where("status", "=", "suspended")
       .returning("id")
       .executeTakeFirst();
     return row !== undefined;

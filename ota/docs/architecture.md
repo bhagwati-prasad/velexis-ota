@@ -52,11 +52,15 @@ flowchart TB
   end
   identity --> tenancy
   storefront --> tenancy
+  storefront --> payments
   shopping --> amadeus
   shopping --> pricing
   checkout --> shopping
   checkout --> pricing
   payments --> checkout
+  payments --> shopping
+  payments --> pricing
+  payments --> amadeus
   bookings --> checkout
   bookings --> payments
   bookings --> amadeus

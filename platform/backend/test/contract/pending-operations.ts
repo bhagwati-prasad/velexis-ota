@@ -25,13 +25,9 @@ export const PENDING_OPERATIONS: readonly PendingOperation[] = Object.freeze([
   // since PBE-026, the setup progress, retry and key reveal since PBE-023, getOnboarding since PBE-024, listDomains,
   // listAmadeusConnections and listPaymentConnections since PBE-027).
 
-  // PBE-007: admin auth and dashboard, tenants, provisioning jobs and queues (the admin auth operations are bound since
-  // PBE-028, the dashboard and the tenant search, detail and edit since PBE-029, the provisioning jobs and queues
-  // since PBE-031).
-  { operationId: "adminSuspendTenant", task: "PBE-030" },
-  { operationId: "adminResumeTenant", task: "PBE-030" },
-  { operationId: "adminMigrateTenant", task: "PBE-030" },
-  { operationId: "adminSetConnectionStatus", task: "PBE-030" },
+  // PBE-007: admin auth and dashboard, tenants, provisioning jobs and queues are all bound (the admin auth operations
+  // since PBE-028, the dashboard and the tenant search, detail and edit since PBE-029, suspend, resume, migrate and the
+  // connection status since PBE-030, the provisioning jobs and queues since PBE-031).
 
   // PBE-066: admin plans and subscriptions, Amadeus accounts and offices, accounts, platform admins and audit (the
   // Amadeus accounts and offices are bound since PBE-020, the accounts, platform admins and audit since PBE-032, the
