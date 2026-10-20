@@ -1,10 +1,17 @@
 // The tenant repository of payments (OBE-038; db README §2.1, ota/docs/data-model.md): `payments` and their append-only
 // `payment_events`, which the payments module owns, plus what the payment steps read or change of tables it does not
 // own: the checkout a payment is for (locked while a payment step changes its totals, status and expiry), the
-// storefront settings the payment follows (3-D Secure, accepted brands), the minor units of a currency and the
-// countries of airports (the card fee's rule facts). Like every tenant repository it takes the `tenantTx` transaction
-// first, never opens one and never names a tenant schema. Amounts are read as text (`numeric::text`), never as
-// JavaScript numbers; jsonb is written as JSON text.
+// storefront settings the payment follows (3-D Secure, accepted brands, the airline card of each environment), the
+// prices of the checkout's extras (its totals in the pricing mode of the method, OBE-050), the minor units of a
+// currency and the countries of airports (the card fee's rule facts). Like every tenant repository it takes the
+// `tenantTx` transaction first, never opens one and never names a tenant schema. Amounts are read as text
+// (`numeric::text`), never as JavaScript numbers; jsonb is written as JSON text.
+//
+// OBE-039 adds what the Stripe webhooks need (payments/webhooks/, stripe-events.processor.ts): the payment of a
+// PaymentIntent, the webhook's `payment_events` row written once per provider event id (`payment_events_provider_uq`),
+// the stored event read back by the processor, the payment's `refunds` rows (whose final state comes from the webhooks;
+// OBE-040 creates them) with their `version` lock, and the staff alert's facts (`ops_alert_email`, the default locale and
+// the booking's reference).
 import { Injectable } from "@nestjs/common";
 import { sql, type Insertable, type TenantDatabase, type Updateable } from "@velexis/db";
 import type { TenantTransaction } from "../tenancy/tenant-tx";
@@ -14,6 +21,9 @@ export interface PaymentSettingsRow {
   readonly require3ds: boolean;
   readonly acceptedCardBrands: readonly string[];
   readonly paymentTiming: string;
+  /** `airline_card_enabled_test` and `_live` (OBE-050). */
+  readonly airlineCardEnabledTest: boolean;
+  readonly airlineCardEnabledLive: boolean;
 }
 
 /** The checkout columns a payment step reads and changes. */
@@ -30,8 +40,18 @@ export interface PaymentCheckoutRow {
   readonly feesAmount: string;
   readonly totalAmount: string;
   readonly paymentBrand: string | null;
+  /** `markup_rules` or `net` (checkout/pricing-mode.ts). */
+  readonly pricingMode: string;
   readonly expiresAt: Date;
   readonly version: number;
+}
+
+/** The two prices of one extra of a checkout (`checkout_ancillaries`). */
+export interface CheckoutSelectionPricesRow {
+  /** The selling price of the selection. */
+  readonly priceAmount: string;
+  /** The Amadeus price of the selection. */
+  readonly netAmount: string;
 }
 
 /** A `payments` row, with the access columns of its checkout. */
@@ -74,6 +94,41 @@ export interface PaymentRow {
   readonly checkoutIsGuest: boolean;
 }
 
+/** A stored `payment_events` row, as the Stripe event processor reads it back (OBE-039). */
+export interface PaymentEventRow {
+  readonly id: string;
+  readonly paymentId: string;
+  readonly type: string;
+  readonly source: string;
+  readonly providerEventId: string | null;
+  readonly payload: unknown;
+  readonly createdAt: Date;
+}
+
+/** A `refunds` row, as the Stripe event processor applies a refund's state to it (OBE-039). */
+export interface RefundRow {
+  readonly id: string;
+  readonly paymentId: string;
+  readonly currency: string;
+  readonly amount: string;
+  readonly status: string;
+  readonly providerRefundId: string | null;
+  readonly failureReason: string | null;
+  readonly processedAt: Date | null;
+  readonly version: number;
+}
+
+/** What a staff alert about a payment needs (OBE-039): where it goes, in which locale, and the booking it names. */
+export interface PaymentAlertFacts {
+  /** `storefront_settings.ops_alert_email`, or `null` when the OTA set none. */
+  readonly opsAlertEmail: string | null;
+  /** `storefront_settings.default_locale`, or `null` without a settings row. */
+  readonly defaultLocale: string | null;
+  /** The booking's reference and record locator, when the payment has a booking. */
+  readonly bookingReference: string | null;
+  readonly recordLocator: string | null;
+}
+
 /** The payment states of a checkout that a new payment replaces (cancelled before they are confirmed). */
 export const REPLACEABLE_STATUSES = ["requires_payment_method", "requires_action"] as const;
 
@@ -89,6 +144,8 @@ export class PaymentsRepository {
         "require_3ds as require3ds",
         "accepted_card_brands as acceptedCardBrands",
         "payment_timing as paymentTiming",
+        "airline_card_enabled_test as airlineCardEnabledTest",
+        "airline_card_enabled_live as airlineCardEnabledLive",
       ])
       .executeTakeFirst();
   }
@@ -105,6 +162,7 @@ export class PaymentsRepository {
         "is_guest as isGuest",
         "priced_offer_id as pricedOfferId",
         "payment_brand as paymentBrand",
+        "pricing_mode as pricingMode",
         "expires_at as expiresAt",
         "version",
         sql<string>`currency::text`.as("currency"),
@@ -118,6 +176,20 @@ export class PaymentsRepository {
       query = query.forUpdate();
     }
     return await query.executeTakeFirst();
+  }
+
+  /** The selling and Amadeus prices of the checkout's extras, in their order. */
+  async selectionPrices(trx: TenantTransaction, checkoutId: string): Promise<CheckoutSelectionPricesRow[]> {
+    return await trx
+      .selectFrom("checkout_ancillaries")
+      .select([
+        sql<string>`price_amount::text`.as("priceAmount"),
+        sql<string>`net_amount::text`.as("netAmount"),
+      ])
+      .where("checkout_id", "=", checkoutId)
+      .orderBy("created_at")
+      .orderBy("id")
+      .execute();
   }
 
   /** Changes the checkout after a payment step and bumps its `version`. */
@@ -232,6 +304,152 @@ export class PaymentsRepository {
   /** Appends a payment event (`payment_events` is append-only: `updated_at` equals `created_at`). */
   async insertEvent(trx: TenantTransaction, row: Insertable<Db["payment_events"]>): Promise<void> {
     await trx.insertInto("payment_events").values(row).execute();
+  }
+
+  /** The id of the payment of `provider` whose provider payment id (PaymentIntent) is `providerPaymentId`. */
+  async paymentIdByProviderId(
+    trx: TenantTransaction,
+    provider: string,
+    providerPaymentId: string,
+  ): Promise<string | undefined> {
+    const row = await trx
+      .selectFrom("payments")
+      .select("id")
+      .where("provider", "=", provider)
+      .where("provider_payment_id", "=", providerPaymentId)
+      .executeTakeFirst();
+    return row?.id;
+  }
+
+  /**
+   * Appends a payment event that carries a provider event id, once: a second row with the same `provider_event_id`
+   * inserts nothing (`payment_events_provider_uq`, also against a concurrent insert, which this one waits for).
+   * Answers whether this call inserted it.
+   */
+  async insertProviderEvent(trx: TenantTransaction, row: Insertable<Db["payment_events"]>): Promise<boolean> {
+    if (row.provider_event_id === null || row.provider_event_id === undefined) {
+      throw new Error("insertProviderEvent: a provider event needs its provider_event_id");
+    }
+    const inserted = await trx
+      .insertInto("payment_events")
+      .values(row)
+      .onConflict((conflict) =>
+        conflict.column("provider_event_id").where("provider_event_id", "is not", null).doNothing(),
+      )
+      .returning("id")
+      .executeTakeFirst();
+    return inserted !== undefined;
+  }
+
+  /** The id of the payment event stored for the provider event `providerEventId`, if any. */
+  async eventIdByProviderEventId(
+    trx: TenantTransaction,
+    providerEventId: string,
+  ): Promise<string | undefined> {
+    const row = await trx
+      .selectFrom("payment_events")
+      .select("id")
+      .where("provider_event_id", "=", providerEventId)
+      .executeTakeFirst();
+    return row?.id;
+  }
+
+  /** The payment event `id`, or `undefined`. */
+  async event(trx: TenantTransaction, id: string): Promise<PaymentEventRow | undefined> {
+    return await trx
+      .selectFrom("payment_events")
+      .select([
+        "id",
+        "payment_id as paymentId",
+        "type",
+        "source",
+        "provider_event_id as providerEventId",
+        "payload",
+        "created_at as createdAt",
+      ])
+      .where("id", "=", id)
+      .executeTakeFirst();
+  }
+
+  /** Whether the payment has an event of `type` whose payload's `key` is `value` (a step already recorded). */
+  async hasEvent(
+    trx: TenantTransaction,
+    paymentId: string,
+    type: string,
+    key: string,
+    value: string,
+  ): Promise<boolean> {
+    const row = await trx
+      .selectFrom("payment_events")
+      .select("id")
+      .where("payment_id", "=", paymentId)
+      .where("type", "=", type)
+      .where(sql<string>`payload ->> ${key}`, "=", value)
+      .executeTakeFirst();
+    return row !== undefined;
+  }
+
+  /** The refunds of a payment, oldest first, locked `FOR UPDATE`. */
+  async refundsOfPayment(trx: TenantTransaction, paymentId: string): Promise<RefundRow[]> {
+    return await trx
+      .selectFrom("refunds")
+      .select([
+        "id",
+        "payment_id as paymentId",
+        "status",
+        "provider_refund_id as providerRefundId",
+        "failure_reason as failureReason",
+        "processed_at as processedAt",
+        "version",
+        sql<string>`currency::text`.as("currency"),
+        sql<string>`amount::text`.as("amount"),
+      ])
+      .where("payment_id", "=", paymentId)
+      .orderBy("created_at")
+      .orderBy("id")
+      .forUpdate()
+      .execute();
+  }
+
+  /**
+   * Changes the refund `id` if its `version` is still `expectedVersion`, and bumps it; answers whether it did (a
+   * concurrent change answers `false` and changes nothing).
+   */
+  async updateRefund(
+    trx: TenantTransaction,
+    id: string,
+    expectedVersion: number,
+    values: Omit<Updateable<Db["refunds"]>, "version" | "id">,
+  ): Promise<boolean> {
+    const result = await trx
+      .updateTable("refunds")
+      .set({ ...values, version: sql`version + 1` })
+      .where("id", "=", id)
+      .where("version", "=", expectedVersion)
+      .executeTakeFirst();
+    return result.numUpdatedRows > 0n;
+  }
+
+  /** The facts of a staff alert about a payment: the alert address, the locale and the booking `bookingId`. */
+  async alertFacts(trx: TenantTransaction, bookingId: string | null): Promise<PaymentAlertFacts> {
+    const settings = await trx
+      .selectFrom("storefront_settings")
+      .select(["ops_alert_email as opsAlertEmail", "default_locale as defaultLocale"])
+      .executeTakeFirst();
+    const booking =
+      bookingId === null
+        ? undefined
+        : await trx
+            .selectFrom("bookings")
+            .select(["reference", "record_locator as recordLocator"])
+            .where("id", "=", bookingId)
+            .executeTakeFirst();
+    return {
+      opsAlertEmail: settings?.opsAlertEmail ?? null,
+      defaultLocale: settings?.defaultLocale ?? null,
+      bookingReference: booking?.reference ?? null,
+      recordLocator: booking?.recordLocator ?? null,
+    };
   }
 
   /** `reference.currencies.minor_units` of `code`, or `null` for an unknown currency. */

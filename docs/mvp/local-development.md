@@ -154,6 +154,8 @@ bash tools/dev/stripe-listen.sh --print-secrets    # only print the .env.local l
 | Plans | `pnpm plan:lint` | nothing |
 | Local setup scripts | `node --test tools/dev/dev-keys.test.mjs`, `shellcheck -S style deploy/scripts/dev-setup.sh tools/dev/stripe-listen.sh` | nothing (the `dev-setup` CI job also runs §2 on a clean runner; no CI job checks `stripe-listen.sh` yet) |
 
+`pnpm test` runs four packages at a time (`turbo run test --concurrency=4`, also in CI). The tests' time budgets (Vitest's 5 s per test, the explicit budgets of setup hooks) assume CPUs that ten packages' test workers do not share: at Turborepo's default of ten on CI's 4 CPUs, UI tests that take 0.3 s on an idle machine took 5 s and failed, while four at a time takes the same total time with every such test under 2.5 s.
+
 Integration tests build one migrated template database per run (platform, reference, `tenant_alpha`, `tenant_beta`) as `velexis_test_admin`, then clone it per test file, so tests never touch your `velexis` development data.
 
 ## 8. Trying the Caddyfile locally (optional)

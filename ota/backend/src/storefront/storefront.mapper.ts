@@ -8,8 +8,7 @@
 // 2. `storefrontFor` adds the caller-specific parts on every request, so whichever caller fills the cache first never
 //    decides what the others get: asset URLs as same-origin `/api/v1/assets/…` paths for the hosted storefront's edge
 //    (its CSP allows images from its own origin only) and absolute `PUBLIC_OTA_API_URL` URLs for key callers
-//    (OADR-0012 point 3), and the payment account (OBE-038, below). From OBE-050 it adds `airline_card` and
-//    `payment.airlineCard` for the edge only; until then `airlineCard` is always null.
+//    (OADR-0012 point 3), the payment account (OBE-038, below) and the airline card (OBE-050, below).
 //
 // The contract requires values the settings row of a new tenant does not have yet (the OTA admin edits them from M4,
 // OBE-070). Each has a documented default, so the configuration of a freshly provisioned tenant is complete and valid:
@@ -32,6 +31,14 @@
 // name>", the connection's statement descriptor suffix and its methods (`card`); without an account that can take
 // payments the section stays without a method (`supportedMethods: []`, an empty `publishableKey`), and
 // checkout.createPayment answers `424 PAYMENT_PROVIDER_NOT_CONFIGURED`. No secret key is ever part of it.
+//
+// Airline card (api-changes §4, OADR-0004 point 1, OADR-0017 point 7; OBE-050). The cache entry keeps only the tenant's
+// setting for its environment (`airlineCardEnabled`, from `airline_card_enabled_<env>`). `storefrontFor` decides per
+// request: `airline_card` is appended to `supportedMethods` and `payment.airlineCard` is filled (`enabled`, the
+// accepted brands, `chargedBy: "airline"` and the localised notice) only when the caller is the storefront edge, the
+// global switch `AIRLINE_CARD_ENABLED` is on and the entry's flag is on. The completion is edge-only, so `pk_` and
+// `sk_` callers never see the method, whichever caller filled the cache; for them `airlineCard` is always null. The
+// method does not need a Stripe account: the airline charges the card.
 import type { components } from "@velexis/api-types";
 import { codeBadge, displayLanguage, ReferenceNames, toCurrency } from "../reference/reference.mapper";
 import type { CurrencyRow, StorefrontAssetRow, StorefrontSettingsRow } from "./storefront.repository";
@@ -52,6 +59,7 @@ type Consent = Schemas["StorefrontConsent"];
 type ConsentCategory = Schemas["StorefrontConsentCategory"];
 type Font = Schemas["StorefrontFont"];
 type CardBrand = Schemas["StorefrontCardBrand"];
+type AirlineCard = Schemas["StorefrontAirlineCard"];
 type PaymentBrand = Schemas["AmadeusPaymentBrand"];
 export type StorefrontFontFamily = Schemas["StorefrontFontFamily"];
 
@@ -86,7 +94,7 @@ export interface CachedStorefront {
   readonly locale: string;
   readonly config: StorefrontBase;
   readonly assets: StorefrontAssetRefs;
-  /** `airline_card_enabled_<env>` of the settings, for the edge-only airline-card fields of OBE-050. */
+  /** `airline_card_enabled_<env>` of the settings, for the edge-only airline-card fields (`airlineCardFor`). */
   readonly airlineCardEnabled: boolean;
 }
 
@@ -118,6 +126,8 @@ export interface StorefrontAudience {
    * can take payments: the payment section then has no method.
    */
   readonly payment?: StorefrontPaymentAccount | null | undefined;
+  /** AIRLINE_CARD_ENABLED, the global switch of the airline card (absent: off). */
+  readonly airlineCardSwitch?: boolean | undefined;
 }
 
 /** The payment methods `storefront.get` may list for the payment account (what checkout.createPayment takes). */
@@ -142,14 +152,16 @@ export const VELEXIS_MERCHANT_PREFIX = "Velexis on behalf of";
 
 /**
  * The payment section for one request: the cached part (the OTA's name as `merchantName`, no method) completed with the
- * account, see the file header. `airlineCard` is added by OBE-050.
+ * account and the airline card of the caller (`airlineCardFor`), see the file header.
  */
 export function paymentConfigFor(
   base: StorefrontBase["payment"],
   account: StorefrontPaymentAccount | null | undefined,
+  airlineCard: AirlineCard | null = null,
 ): Payment {
+  const airlineMethods: Payment["supportedMethods"] = airlineCard === null ? [] : ["airline_card"];
   if (account === null || account === undefined) {
-    return { ...base, airlineCard: null };
+    return { ...base, supportedMethods: airlineMethods, airlineCard };
   }
   const velexis = account.accountMode === "velexis";
   return {
@@ -160,8 +172,44 @@ export function paymentConfigFor(
     accountId: account.accountMode === "connect_standard" ? account.accountId : null,
     merchantName: velexis ? `${VELEXIS_MERCHANT_PREFIX} ${base.merchantName}` : base.merchantName,
     statementDescriptor: velexis ? account.statementDescriptor : null,
-    supportedMethods: ACCOUNT_METHODS.filter((method) => account.methods.includes(method)),
-    airlineCard: null,
+    supportedMethods: [
+      ...ACCOUNT_METHODS.filter((method) => account.methods.includes(method)),
+      ...airlineMethods,
+    ],
+    airlineCard,
+  };
+}
+
+/** The notice shown before the airline-card form, by primary language (api-changes §4); English otherwise. */
+export const AIRLINE_CARD_NOTICES: Readonly<Record<string, string>> = Object.freeze({
+  en: "The airline charges your card. The price is the airline's price.",
+  de: "Die Fluggesellschaft belastet Ihre Karte. Es gilt der Preis der Fluggesellschaft.",
+  es: "La aerolínea carga el importe en tu tarjeta. El precio es el de la aerolínea.",
+  fr: "La compagnie aérienne débite votre carte. Le prix est celui de la compagnie aérienne.",
+  it: "La compagnia aerea addebita l'importo sulla tua carta. Il prezzo è quello della compagnia aerea.",
+  nl: "De luchtvaartmaatschappij belast uw kaart. De prijs is die van de luchtvaartmaatschappij.",
+  pt: "A companhia aérea cobra o seu cartão. O preço é o da companhia aérea.",
+});
+
+/** The airline-card notice in `locale` (its primary language subtag), else in English. */
+export function airlineCardNotice(locale: string): string {
+  const language = locale.split("-")[0]?.toLowerCase() ?? "";
+  return AIRLINE_CARD_NOTICES[language] ?? AIRLINE_CARD_NOTICES["en"] ?? "";
+}
+
+/**
+ * The airline card of one request (see the file header): for the storefront edge only, when the global switch and the
+ * tenant's setting of the entry's environment are both on; `null` for every key caller.
+ */
+export function airlineCardFor(entry: CachedStorefront, audience: StorefrontAudience): AirlineCard | null {
+  if (audience.caller !== "edge" || audience.airlineCardSwitch !== true || !entry.airlineCardEnabled) {
+    return null;
+  }
+  return {
+    enabled: true,
+    cardBrands: entry.config.payment.pspCardBrands.map((brand) => ({ ...brand })),
+    chargedBy: "airline",
+    notice: airlineCardNotice(entry.locale),
   };
 }
 
@@ -929,8 +977,8 @@ export function storefrontFor(entry: CachedStorefront, audience: StorefrontAudie
       faviconUrl: url(assets.favicon) ?? codeBadge(initials, "square"),
     },
     seo: { ...config.seo, ogImageUrl: url(assets.ogImage) },
-    // `airline_card` and `airlineCard` for the edge, when the flag and AIRLINE_CARD_ENABLED are on: OBE-050.
-    payment: paymentConfigFor(config.payment, audience.payment),
+    // `airline_card` and `airlineCard` for the edge only, when the flag and AIRLINE_CARD_ENABLED are on.
+    payment: paymentConfigFor(config.payment, audience.payment, airlineCardFor(entry, audience)),
   };
 }
 

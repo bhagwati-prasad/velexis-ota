@@ -20,7 +20,9 @@
 //
 // The payment account (OBE-038) is not part of the entry: every request asks the payment gateway for the account of
 // the tenant's environment (its connection is cached for 60 seconds and dropped on the platform's `connection`
-// invalidation), and `storefrontFor` adds it, so a change of the connection shows within that minute.
+// invalidation), and `storefrontFor` adds it, so a change of the connection shows within that minute. Nor is the
+// airline card's global switch (`AIRLINE_CARD_ENABLED`, OBE-050): `storefrontFor` adds the edge-only airline card from
+// it and the entry's flag on every request, so no caller's answer is ever taken from another's.
 import { Inject, Injectable } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { AppError } from "@velexis/errors";
@@ -59,6 +61,7 @@ const REDIS_DOWN: ReadonlySet<string> = new Set(["reconnecting", "close", "end"]
 export class StorefrontService {
   private readonly storefrontBaseDomain: string;
   private readonly publicApiUrl: string;
+  private readonly airlineCardSwitch: boolean;
 
   constructor(
     private readonly tx: TenantTx,
@@ -72,6 +75,7 @@ export class StorefrontService {
   ) {
     this.storefrontBaseDomain = config.get("STOREFRONT_BASE_DOMAIN", { infer: true });
     this.publicApiUrl = config.get("PUBLIC_OTA_API_URL", { infer: true });
+    this.airlineCardSwitch = config.get("AIRLINE_CARD_ENABLED", { infer: true });
     logger.setContext(StorefrontService.name);
   }
 
@@ -79,7 +83,12 @@ export class StorefrontService {
   async get(caller: StorefrontCaller, acceptLanguage: string | undefined): Promise<StorefrontConfig> {
     const entry = await this.entry(acceptLanguage);
     const payment = await this.paymentAccount(this.tenants.require());
-    return storefrontFor(entry, { caller, publicApiUrl: this.publicApiUrl, payment });
+    return storefrontFor(entry, {
+      caller,
+      publicApiUrl: this.publicApiUrl,
+      payment,
+      airlineCardSwitch: this.airlineCardSwitch,
+    });
   }
 
   /**
