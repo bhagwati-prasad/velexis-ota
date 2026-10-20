@@ -766,8 +766,8 @@ Common commands: backend `pnpm --filter @velexis/platform-backend test`, `test:i
   - Running `dev:seed` twice creates no duplicates; with `APP_ENV=production` it exits 1 without writing.
 - **Verify:** `pnpm --filter @velexis/platform-backend test:int -- common dev`
 
-### PBE-035 · Prove provisioning end to end with the real OTA worker
-- **Status:** in progress (branch claude/intelligent-bardeen-90hhu7; pending: AC2's first GitHub CI run of the new `test:xb` step after `Build` in `build-test` (workflow_dispatch by the integrator))
+### PBE-035 · Prove provisioning end to end with the real OTA worker ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-backend
 - **Milestone:** M1
 - **Depends on:** PBE-023, PBE-034
@@ -951,7 +951,8 @@ Common commands: backend `pnpm --filter @velexis/platform-backend test`, `test:i
   - A suspended tenant shows the banner with its reason.
 - **Verify:** `pnpm --filter @velexis/platform-frontend test`
 
-### PFE-011 · Build the API keys page
+### PFE-011 · Build the API keys page ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-frontend
 - **Milestone:** M1
 - **Depends on:** PFE-010, PBE-021
@@ -968,7 +969,8 @@ Common commands: backend `pnpm --filter @velexis/platform-backend test`, `test:i
   - Roll shows the new key and the old key's expiry [PF-30 AC4]; "last used" is displayed [PF-30 AC5].
 - **Verify:** `pnpm --filter @velexis/platform-frontend test`
 
-### PFE-012 · Build the team page and invitation acceptance
+### PFE-012 · Build the team page and invitation acceptance ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-frontend
 - **Milestone:** M1
 - **Depends on:** PFE-010, PBE-026
@@ -1077,7 +1079,8 @@ Common commands: backend `pnpm --filter @velexis/platform-backend test`, `test:i
   - Changing a filter updates the URL and keeps the other filters.
 - **Verify:** `pnpm --filter @velexis/platform-admin test`
 
-### PAD-004 · Build the admin dashboard and the tenant list and detail pages
+### PAD-004 · Build the admin dashboard and the tenant list and detail pages ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-admin
 - **Milestone:** M1
 - **Depends on:** PAD-003, PBE-029

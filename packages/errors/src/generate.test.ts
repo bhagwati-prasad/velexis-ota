@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { runInThisContext } from "node:vm";
 import ts from "typescript";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { stringify } from "yaml";
 import type { ErrorCatalogueEntry } from "./index.js";
 
@@ -201,27 +201,52 @@ describe("scripts/generate.mjs", () => {
     expect(existsSync(out)).toBe(false);
   });
 
-  it("adds the platform catalogue once the document exists: shared codes keep the OTA entry", async () => {
-    const { root, out } = makeTree("platform", {
-      ota: document(OTA_CATALOGUE),
-      platform: document({
-        NOT_FOUND: { status: 404, description: "Not found, or not visible to the caller." },
-        REAUTH_REQUIRED: { status: 401, description: "Sensitive action needs a fresh TOTP step-up." },
-        VALIDATION_FAILED: { status: 400, description: "Schema validation failed." },
+  /** A run of the generator on a scratch tree, its catalogue.ts and that file's TypeScript errors. */
+  interface Generated {
+    readonly run: Run;
+    readonly content: string;
+    readonly diagnostics: readonly string[];
+  }
+  let withPlatform: Generated;
+  let withoutPlatform: Generated;
+  beforeAll(async () => {
+    const generate = async (
+      name: string,
+      documents: { ota?: string; platform?: string },
+    ): Promise<Generated> => {
+      const { root, out } = makeTree(name, documents);
+      const run = await runGenerate(["--root", root, "--out", out]);
+      const file = join(out, "catalogue.ts");
+      return existsSync(file)
+        ? { run, content: readFileSync(file, "utf8"), diagnostics: compile(file) }
+        : { run, content: "", diagnostics: ["catalogue.ts was not written"] };
+    };
+    [withPlatform, withoutPlatform] = await Promise.all([
+      generate("platform", {
+        ota: document(OTA_CATALOGUE),
+        platform: document({
+          NOT_FOUND: { status: 404, description: "Not found, or not visible to the caller." },
+          REAUTH_REQUIRED: { status: 401, description: "Sensitive action needs a fresh TOTP step-up." },
+          VALIDATION_FAILED: { status: 400, description: "Schema validation failed." },
+        }),
       }),
-    });
-    const run = await runGenerate(["--root", root, "--out", out]);
+      generate("no-platform", { ota: document(OTA_CATALOGUE) }),
+    ]);
+    // Compiling each catalogue.ts with TypeScript (its standard library first) is the expensive part: about 0.5 s on
+    // an idle CPU, more than 5 s when CI runs every package at once on 4 CPUs. The two tests below assert the results.
+  }, 60_000);
+
+  it("adds the platform catalogue once the document exists: shared codes keep the OTA entry", () => {
+    const { run, content, diagnostics } = withPlatform;
     expect(run.stderr).toBe("");
     expect(run.code).toBe(0);
     expect(run.stdout).toContain("4 error codes (3 OTA, 3 platform)");
 
-    const file = join(out, "catalogue.ts");
-    const content = readFileSync(file, "utf8");
     expect(content).toContain(`//          ${PLATFORM_PATH} (3 codes, 1 only there)`);
     expect(content).toContain(
       'export type PlatformErrorCode =\n  | "NOT_FOUND"\n  | "REAUTH_REQUIRED"\n  | "VALIDATION_FAILED";',
     );
-    expect(compile(file)).toEqual([]);
+    expect(diagnostics).toEqual([]);
 
     const catalogue = loadCatalogue(content);
     expect(catalogue.OTA_ERROR_CODES).toEqual(["VALIDATION_FAILED", "NOT_FOUND", "INTERNAL_ERROR"]);
@@ -247,20 +272,17 @@ describe("scripts/generate.mjs", () => {
     expect(Object.isFrozen(catalogue.PLATFORM_ERROR_CODES)).toBe(true);
   });
 
-  it("leaves PlatformErrorCode empty while the platform document does not exist", async () => {
-    const { root, out } = makeTree("no-platform", { ota: document(OTA_CATALOGUE) });
-    const run = await runGenerate(["--root", root, "--out", out]);
+  it("leaves PlatformErrorCode empty while the platform document does not exist", () => {
+    const { run, content, diagnostics } = withoutPlatform;
     expect(run.stderr).toBe("");
     expect(run.code).toBe(0);
     expect(run.stdout).toContain(
       `"platform": ${PLATFORM_PATH} does not exist yet; the platform plan creates it in M1 (ADR-0006).`,
     );
 
-    const file = join(out, "catalogue.ts");
-    const content = readFileSync(file, "utf8");
     expect(content).toContain(`//          ${PLATFORM_PATH}, which does not exist yet:`);
     expect(content).toContain("export type PlatformErrorCode = never;");
-    expect(compile(file)).toEqual([]);
+    expect(diagnostics).toEqual([]);
     const catalogue = loadCatalogue(content);
     expect(catalogue.PLATFORM_ERROR_CODES).toEqual([]);
     expect(Object.keys(catalogue.ERROR_CATALOGUE)).toEqual([

@@ -5,7 +5,7 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   AmadeusSpecs,
   CARD_NUMBER_MASK,
@@ -73,8 +73,19 @@ interface QueueBody {
 
 const servers: StubServer[] = [];
 
+/** The specifications of this file's stubs, with every operation's request validators compiled in the hook below. */
+const stubSpecs = new AmadeusSpecs();
+beforeAll(() => {
+  for (const op of STUB_OPERATIONS) {
+    stubSpecs.prepare(op.spec);
+  }
+  // A stub compiles an operation's body validator on its first request (README "Request validation"): about 0.6 s on
+  // an idle CPU for the twelve, several seconds when CI runs every package at once on 4 CPUs, which then landed in the
+  // first test of each operation. Here it has a budget of its own.
+}, 60_000);
+
 async function startStub(options: Partial<StubServerOptions> = {}): Promise<StubServer> {
-  const server = await createStubServer({ port: 0, ...options });
+  const server = await createStubServer({ port: 0, specs: stubSpecs, ...options });
   servers.push(server);
   return server;
 }

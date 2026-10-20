@@ -42,11 +42,16 @@ function summaryOf(state: SignInState): FormErrorItem[] {
 export interface SignInFormProps {
   /** The validated return path after sign-in (`safeNextPath`); the action checks it again. */
   readonly next?: string | undefined;
+  /** The address to prefill: `?email=` of an invitation's sign-in link (PFE-012). */
+  readonly email?: string | undefined;
 }
 
 /** E-mail and password. After a refused submission the address stays; the password never comes back. */
-export function SignInForm({ next }: SignInFormProps) {
-  const [state, dispatch, pending] = useActionState(signIn, INITIAL_STATE);
+export function SignInForm({ next, email }: SignInFormProps) {
+  const [state, dispatch, pending] = useActionState(
+    signIn,
+    email === undefined ? INITIAL_STATE : { ...INITIAL_STATE, values: { email } },
+  );
   // A new array per answer, so the summary takes the focus again after each refused submission.
   const summary = useMemo(() => summaryOf(state), [state]);
   return (

@@ -575,7 +575,8 @@ The OTA backend gets its contract extensions, request pipeline, tenancy, Amadeus
   - `amadeus:ping` against the stub prints `ok` and exits 0; with bad credentials it exits 1 with `SUPPLIER_NOT_CONFIGURED`.
 - **Verify:** `pnpm --filter @velexis/ota-backend test -- health`
 
-### OBE-026 · Prove tenant resolution and shopping isolation across two tenants
+### OBE-026 · Prove tenant resolution and shopping isolation across two tenants ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-backend
 - **Milestone:** M2
 - **Depends on:** OBE-023, OBE-016, OBE-015, OBE-007
@@ -1020,7 +1021,8 @@ Checkout, customer accounts in cookies, Stripe on the Velexis account, the airli
   - Tenant B gets 404 for tenant A's `chk_` id; an expired checkout answers 410.
 - **Verify:** `pnpm --filter @velexis/ota-backend test -- checkout && pnpm --filter @velexis/ota-backend test:int -- checkout`
 
-### OBE-037 · Implement checkout.setAncillaries with re-pricing and service fees
+### OBE-037 · Implement checkout.setAncillaries with re-pricing and service fees ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-backend
 - **Milestone:** M3
 - **Depends on:** OBE-036
@@ -1056,7 +1058,8 @@ Checkout, customer accounts in cookies, Stripe on the Velexis account, the airli
   - `storefront.get` shows `accountMode: "velexis"` and the merchant name; no secret key appears in any response.
 - **Verify:** `pnpm --filter @velexis/ota-backend test -- payments && pnpm --filter @velexis/ota-backend test:int -- payments`
 
-### OBE-039 · Receive Stripe webhooks and process them with re-fetch
+### OBE-039 · Receive Stripe webhooks and process them with re-fetch ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-backend
 - **Milestone:** M3
 - **Depends on:** OBE-038, X-028
@@ -1109,7 +1112,8 @@ Checkout, customer accounts in cookies, Stripe on the Velexis account, the airli
   - The stub's request log never contains a full card number (test).
 - **Verify:** `pnpm --filter @velexis/amadeus-stub build && pnpm --filter @velexis/amadeus-stub test`
 
-### OBE-042 · Build the booking orchestrator and checkout.complete for Stripe
+### OBE-042 · Build the booking orchestrator and checkout.complete for Stripe ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-backend
 - **Milestone:** M3
 - **Depends on:** OBE-038, OBE-041, OBE-030
@@ -1250,7 +1254,8 @@ Checkout, customer accounts in cookies, Stripe on the Velexis account, the airli
   - Cancelling an airline-card booking makes no Stripe call and writes the `payment_events` row.
 - **Verify:** `pnpm --filter @velexis/ota-backend test -- bookings && pnpm --filter @velexis/ota-backend test:int -- bookings`
 
-### OBE-050 · Add the airline-card gateway, SensitiveCard and net pricing
+### OBE-050 · Add the airline-card gateway, SensitiveCard and net pricing ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-backend
 - **Milestone:** M3
 - **Depends on:** OBE-038

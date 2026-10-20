@@ -31,6 +31,12 @@
  * `verifyMfa`, `stepUp`, `enableMfa` or `completeStripeConnect` that is ever logged goes under one of those two keys
  * (`logger.warn({ mfa: body }, …)`), never under a generic one.
  *
+ * The airline card's paths (ota/docs/architecture.md §9, OADR-0004 point 2; OBE-050): the whole `card` object of the
+ * airline-card completion body (the `card` paths above), and its fields `holderName`, `expiryMonth` and `expiryYear` at
+ * the top level and one level down for a card flattened into another object (`number` and `securityCode` are covered
+ * by the card paths and `securityCode`); the headers the storefront edge and Stripe send, `x-velexis-edge`,
+ * `x-csrf-token`, `x-booking-token` and `stripe-signature`. A payout account's `holderName` is censored too.
+ *
  * Every path costs time on every line (about 0.1 ms per line for this list): log events, not loops.
  */
 
@@ -73,6 +79,9 @@ export const REDACT_PATHS: readonly string[] = Object.freeze([
   "card",
   "creditCard",
   "formOfPayments",
+  "holderName",
+  "expiryMonth",
+  "expiryYear",
 
   // Depth 2: the same keys one level down, and the code and state of an MFA or OAuth body at the top level.
   "*.password",
@@ -108,13 +117,17 @@ export const REDACT_PATHS: readonly string[] = Object.freeze([
   "*.card",
   "*.creditCard",
   "*.formOfPayments",
+  "*.holderName",
+  "*.expiryMonth",
+  "*.expiryYear",
   "mfa.code",
   "mfa.state",
   "oauth.code",
   "oauth.state",
 
-  // Depth 3: credential headers (also the first-party edge header and the platform's BFF key of PADR-0019), card
-  // numbers, the code and state of an MFA or OAuth body one level down, card objects.
+  // Depth 3: credential headers (also the first-party edge header, the platform's BFF key of PADR-0019 and the
+  // signature of a Stripe webhook), card numbers, the code and state of an MFA or OAuth body one level down, card
+  // objects.
   "req.headers.authorization",
   "req.headers.cookie",
   'res.headers["set-cookie"]',
@@ -123,6 +136,7 @@ export const REDACT_PATHS: readonly string[] = Object.freeze([
   'req.headers["x-booking-token"]',
   'req.headers["x-velexis-edge"]',
   'req.headers["x-velexis-bff-key"]',
+  'req.headers["stripe-signature"]',
   "*.card.number",
   "*.creditCard.number",
   "documents[*].number",

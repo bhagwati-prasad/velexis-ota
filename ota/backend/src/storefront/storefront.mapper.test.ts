@@ -9,6 +9,8 @@ import { OTA_OPENAPI_DOCUMENT } from "../common/http/openapi-validation.intercep
 import { newId } from "../common/ids";
 import {
   acceptedLocales,
+  AIRLINE_CARD_NOTICES,
+  airlineCardNotice,
   assetUrl,
   brandInitials,
   BUNDLED_FONTS,
@@ -459,15 +461,39 @@ describe("a configured tenant", () => {
     expect(entry.airlineCardEnabled).toBe(false); // live, and only airline_card_enabled_test is on
   });
 
-  it("keeps the airline card out of every answer until OBE-050 adds it for the edge", () => {
+  it("keeps the airline card out of every answer while AIRLINE_CARD_ENABLED is off, the setting on or not [OBE-050 AC1]", () => {
     const testEntry = toCachedStorefront(source(settings, { assets }));
 
     expect(testEntry.airlineCardEnabled).toBe(true);
-    for (const audience of [EDGE, KEY]) {
+    for (const audience of [EDGE, KEY, { ...EDGE, airlineCardSwitch: false }]) {
       const { payment } = storefrontFor(testEntry, audience);
       expect(payment.airlineCard).toBeNull();
       expect(payment.supportedMethods).not.toContain("airline_card");
     }
+  });
+
+  it("shows the airline card to the edge only, from one cached entry, when both switches are on [OBE-050 AC1]", () => {
+    const testEntry = toCachedStorefront(source(settings, { assets }));
+    const stored = encodeCachedStorefront(testEntry);
+
+    const forEdge = storefrontFor(testEntry, { ...EDGE, airlineCardSwitch: true });
+    const forKeyCaller = storefrontFor(testEntry, { ...KEY, airlineCardSwitch: true });
+
+    expectValid(forEdge);
+    expectValid(forKeyCaller);
+    expect(forEdge.payment.supportedMethods).toEqual(["airline_card"]);
+    expect(forEdge.payment.airlineCard).toEqual({
+      enabled: true,
+      cardBrands: forEdge.payment.pspCardBrands,
+      chargedBy: "airline",
+      notice: "The airline charges your card. The price is the airline's price.",
+    });
+    expect(forKeyCaller.payment.supportedMethods).toEqual([]);
+    expect(forKeyCaller.payment.airlineCard).toBeNull();
+    // Decided per request: the cached entry holds the setting's flag only, never a caller's answer.
+    expect(encodeCachedStorefront(testEntry)).toBe(stored);
+    expect(stored).not.toContain("airline_card");
+    expect(stored).not.toContain("The airline charges");
   });
 
   it("publishes no operational column of the settings [OBE-016 AC2]", () => {
@@ -593,6 +619,49 @@ describe("the payment account (OBE-038)", () => {
         supportedMethods: [],
         airlineCard: null,
       });
+    }
+  });
+
+  it("adds the airline card after the account's methods for the edge, and only there [OBE-050 AC1]", () => {
+    const flagged = toCachedStorefront(source(seededRow({ airlineCardEnabledTest: true })));
+    const switchOn = { airlineCardSwitch: true, payment: velexis };
+
+    const forEdge = storefrontFor(flagged, { ...EDGE, ...switchOn });
+    const forKeyCaller = storefrontFor(flagged, { ...KEY, ...switchOn });
+    const settingOff = storefrontFor(entry, { ...EDGE, ...switchOn });
+    const live = storefrontFor(
+      toCachedStorefront(source(seededRow({ airlineCardEnabledTest: true }), { environment: "live" })),
+      { ...EDGE, ...switchOn },
+    );
+
+    expectValid(forEdge);
+    expect(forEdge.payment.supportedMethods).toEqual(["card", "airline_card"]);
+    expect(forEdge.payment.airlineCard).toMatchObject({ enabled: true, chargedBy: "airline" });
+    expect(forEdge.payment.airlineCard?.cardBrands.map((brand) => brand.amadeus)).toEqual([
+      "VISA",
+      "MASTERCARD",
+      "AMERICAN_EXPRESS",
+    ]);
+    for (const config of [forKeyCaller, settingOff, live]) {
+      expect(config.payment.supportedMethods).toEqual(["card"]);
+      expect(config.payment.airlineCard).toBeNull();
+    }
+  });
+
+  it("gives the airline-card notice in the entry's language, English otherwise", () => {
+    const notices = Object.fromEntries(
+      ["fr-FR", "de", "es-419", "ja", "en-GB"].map((locale) => [locale, airlineCardNotice(locale)]),
+    );
+
+    expect(notices).toEqual({
+      "fr-FR": AIRLINE_CARD_NOTICES["fr"],
+      de: AIRLINE_CARD_NOTICES["de"],
+      "es-419": AIRLINE_CARD_NOTICES["es"],
+      ja: AIRLINE_CARD_NOTICES["en"],
+      "en-GB": AIRLINE_CARD_NOTICES["en"],
+    });
+    for (const notice of Object.values(AIRLINE_CARD_NOTICES)) {
+      expect(notice.length).toBeGreaterThan(10);
     }
   });
 

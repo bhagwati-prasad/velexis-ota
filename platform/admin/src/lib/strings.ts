@@ -347,3 +347,298 @@ export const STATUS_LABELS = Object.freeze({
     void: "Void",
   },
 });
+
+// ---- Dashboard, tenant list and tenant detail (PAD-004) ---------------------------------------------------------
+
+/** A count in the admin's English: "1,042". */
+export function formatCount(count: number): string {
+  return COUNT_FORMAT.format(count);
+}
+
+/** The environments of the office pool and of the Amadeus and payment connections (`Environment`). */
+export const SUPPLIER_ENVIRONMENT_LABELS = Object.freeze({ test: "Test", live: "Live" });
+
+/** `/`: the counters of `adminGetDashboard`, each linking to the list behind it (README §2). */
+export const DASHBOARD_STRINGS = Object.freeze({
+  title: "Dashboard",
+  intro: "The state of the fleet right now. Every count opens the list behind it.",
+  unavailableTitle: "The dashboard could not be loaded",
+  tenantsTitle: "OTAs by status",
+  provisioningTitle: "Failed provisioning",
+  provisioningFailed: (count: number) =>
+    count === 1 ? "tenant job failed in the last 24 hours" : "tenant jobs failed in the last 24 hours",
+  provisioningHint: "The list shows every failed tenant job, newest first.",
+  queuesTitle: "Failed jobs per queue",
+  queuesIntro: "Failed BullMQ jobs of each platform queue.",
+  failedJobs: (count: number) => (count === 1 ? "failed job" : "failed jobs"),
+  officePoolTitle: "Amadeus office pool",
+  officePoolIntro: "The offices of the Velexis Amadeus account of each environment.",
+  officePoolEmpty: "There is no Velexis Amadeus account yet, so the office pool is empty.",
+  officePoolAccountsLink: "Set up the Amadeus accounts",
+  available: "available",
+  assigned: "assigned",
+  /** Below 3 available offices (PADR-0012): new OTAs would wait for one. */
+  poolLow: (environment: string, count: number) =>
+    `Only ${counted(count, "office is", "offices are")} available in ${environment}. Add offices to the pool before new OTAs have to wait for one.`,
+});
+
+/** `/tenants`: the search of `adminListTenants` (PF-81). */
+export const TENANT_LIST_STRINGS = Object.freeze({
+  title: "Tenants",
+  intro:
+    "Every OTA in any status, newest first. Search by key, name or the e-mail address of an owner; the address of this page keeps the filters, so a search can be shared.",
+  filtersLabel: "Tenant filters",
+  searchLabel: "Search",
+  searchPlaceholder: "Key, name or owner e-mail",
+  statusLabel: "Status",
+  planLabel: "Plan",
+  retiredPlan: (name: string) => `${name} (retired)`,
+  caption: "Tenants",
+  empty: "No OTA matches these filters.",
+  columnOta: "OTA",
+  columnStatus: "Status",
+  columnPlan: "Plan",
+  columnOwner: "Owner e-mail",
+  columnCreated: "Created",
+  columnActivated: "Set up",
+  noOwner: "No active owner",
+  notYet: "Not yet",
+  invalidFilters: "The filters in this address are not valid. Clear them and search again.",
+  showAll: "Show every tenant",
+  unavailableTitle: "The tenants could not be loaded",
+});
+
+/** The tabs of `/tenants/[tenantId]`, in display order (README §2). */
+export const TENANT_TAB_LABELS = Object.freeze({
+  overview: "Overview",
+  members: "Members and invitations",
+  subscription: "Subscription and invoices",
+  connections: "Connections",
+  domains: "Domains",
+  jobs: "Provisioning jobs",
+  audit: "Audit",
+});
+
+/** `/tenants/[tenantId]`: the control-plane view of `adminGetTenant` (PF-81). */
+export const TENANT_DETAIL_STRINGS = Object.freeze({
+  title: "Tenant",
+  backToList: "All tenants",
+  unavailableTitle: "This tenant could not be loaded",
+  tabsLabel: "Tenant details",
+  none: "None",
+  notSet: "Not set",
+  notYet: "Not yet",
+  yes: "Yes",
+  no: "No",
+  // Overview
+  id: "Tenant id",
+  key: "Key",
+  name: "Name",
+  legalName: "Legal name",
+  status: "Status",
+  suspendedAt: "Suspended",
+  suspensionReason: "Suspension reason",
+  billingNotice: "Billing notice",
+  plan: "Plan",
+  defaultCurrency: "Default currency",
+  country: "Country",
+  timeZone: "Time zone",
+  supportEmail: "Support e-mail",
+  storefrontEnvironment: "Storefront environment",
+  primaryHost: "Primary host",
+  schemaVersion: "Schema version",
+  created: "Created",
+  activated: "Set up",
+  liveSince: "Live since",
+  version: "Version",
+  notesTitle: "Internal notes",
+  notesHint: "Only Velexis staff see these notes; the OTA never does.",
+  noNotes: "No notes.",
+  // Members and invitations
+  membersTitle: "Members",
+  membersCaption: "Active members, oldest first",
+  membersEmpty: "This OTA has no active member.",
+  memberName: "Name",
+  memberEmail: "E-mail",
+  memberRole: "Role",
+  memberStatus: "Status",
+  memberMfa: "Two-factor",
+  memberJoined: "Joined",
+  mfaOn: "On",
+  mfaOff: "Off",
+  invitationsTitle: "Pending invitations",
+  invitationsCaption: "Pending invitations, newest first",
+  invitationsEmpty: "No invitation is waiting.",
+  invitationEmail: "E-mail",
+  invitationRole: "Role",
+  invitationStatus: "Status",
+  invitedBy: "Invited by",
+  inviterRemoved: "An account that no longer exists",
+  invitationExpires: "Expires",
+  invitationSent: "Sent",
+  // Subscription and invoices
+  subscriptionTitle: "Subscription",
+  noSubscription: "This OTA has no subscription.",
+  subscriptionId: "Subscription id",
+  subscriptionPlan: "Plan",
+  subscriptionStatus: "Status",
+  billingProvider: "Billing",
+  billingInterval: "Interval",
+  trialEnds: "Trial ends",
+  periodEnds: "Current period ends",
+  cancelAtPeriodEnd: "Cancels at period end",
+  banner: "Portal banner",
+  invoicesTitle: "Invoices",
+  invoicesIntro:
+    "The invoices and Stripe events of the subscription are on its page. A manual trial has none; Stripe Billing adds them from M5.",
+  invoicesLink: "Invoices and Stripe events of this subscription",
+  // Connections
+  connectionsIntro:
+    "The connections are masked as the portal shows them: no secret, ciphertext or token is ever part of this page.",
+  amadeusTitle: "Amadeus",
+  amadeusEmpty: "This OTA has no Amadeus connection.",
+  paymentsTitle: "Payments",
+  paymentsEmpty: "This OTA has no payment connection.",
+  connectionTitle: (provider: string, environment: string) => `${provider}, ${environment}`,
+  connectionId: "Connection id",
+  environment: "Environment",
+  connectionStatus: "Status",
+  credentialSource: "Credentials",
+  offices: "Offices",
+  defaultOffice: "Default office",
+  queuingOffice: "Queuing office",
+  ownerOffice: "Owner office",
+  clientId: "Client id",
+  lastVerified: "Last verified",
+  lastError: "Last error",
+  pendingSubmission: "Credential submission",
+  accountMode: "Account",
+  accountReference: "Stripe account",
+  publishableKey: "Publishable key",
+  statementDescriptor: "Statement descriptor suffix",
+  chargesEnabled: "Charges enabled",
+  payoutsEnabled: "Payouts enabled",
+  detailsSubmitted: "Details submitted",
+  connectedAt: "Connected",
+  disconnectedAt: "Disconnected",
+  // Domains
+  domainsCaption: "Storefront hosts",
+  domainsEmpty: "This OTA has no domain.",
+  hostname: "Host name",
+  domainKind: "Kind",
+  domainPurpose: "Purpose",
+  primary: "Primary",
+  verification: "Verification",
+  tls: "TLS",
+  tlsExpires: "TLS expires",
+  lastChecked: "Last checked",
+  lastCheckError: "Last check",
+  // Provisioning jobs
+  jobsCaption: "The last 20 tenant jobs, newest first",
+  jobsEmpty: "This OTA has no tenant job yet.",
+  job: "Job",
+  jobKind: "Kind",
+  jobStatus: "Status",
+  jobStep: "Step",
+  jobAttempts: "Attempts",
+  attemptsOf: (attempt: number, maxAttempts: number) =>
+    `${COUNT_FORMAT.format(attempt)} of ${COUNT_FORMAT.format(maxAttempts)}`,
+  jobError: "Last error",
+  jobScheduled: "Scheduled",
+  jobStarted: "Started",
+  jobFinished: "Finished",
+  allJobs: "All jobs of this OTA",
+  // Audit
+  auditCaption: "The last 50 audit rows of this OTA, newest first",
+  auditEmpty: "This OTA has no audit row yet.",
+  auditWhen: "When",
+  auditActor: "Actor",
+  auditAction: "Action",
+  auditTarget: "Target",
+  auditRequest: "Request id",
+  auditIp: "IP address",
+  auditDetails: "Details",
+  auditDetailsOf: (id: string) => `Details of audit row ${id}`,
+  fullAudit: "Full audit log of this OTA",
+});
+
+/** The roles of the members and invitations of an OTA (`TenantRole`). */
+export const ROLE_LABELS = Object.freeze({
+  owner: "Owner",
+  admin: "Admin",
+  agent: "Agent",
+  finance: "Finance",
+  viewer: "Viewer",
+});
+
+/** Why an OTA is suspended (`SuspensionReason`, PADR-0014). */
+export const SUSPENSION_REASON_LABELS = Object.freeze({
+  billing: "Billing: the subscription is unpaid",
+  abuse: "Abuse",
+  request: "The OTA asked for it",
+  admin: "Velexis decision",
+});
+
+/** The billing banner of the tenant row (`BillingNotice`). */
+export const BILLING_NOTICE_LABELS = Object.freeze({
+  past_due: "A payment failed",
+  trial_ending: "The trial ends soon",
+});
+
+/** The billing banner of the portal for a subscription (`Subscription.banner`). */
+export const SUBSCRIPTION_BANNER_LABELS = Object.freeze({
+  past_due: "A payment failed",
+  trial_ending: "The trial ends soon",
+  canceled: "Canceled",
+});
+
+/** Who bills a subscription (`Subscription.billingProvider`). */
+export const BILLING_PROVIDER_LABELS = Object.freeze({
+  manual: "Manual (no Stripe)",
+  stripe: "Stripe Billing",
+});
+
+/** `BillingInterval`. */
+export const BILLING_INTERVAL_LABELS = Object.freeze({ month: "Monthly", year: "Yearly" });
+
+/** Whose Amadeus credentials a connection uses (`AmadeusConnection.credentialSource`). */
+export const CREDENTIAL_SOURCE_LABELS = Object.freeze({
+  velexis: "Velexis account, office from the pool",
+  tenant: "The OTA's own credentials",
+});
+
+/** Which Stripe account a payment connection charges on (`PaymentConnection.accountMode`). */
+export const PAYMENT_ACCOUNT_MODE_LABELS = Object.freeze({
+  velexis: "Velexis Stripe account",
+  connect_standard: "The OTA's account through Stripe Connect",
+  api_keys: "The OTA's account through its own API keys",
+});
+
+/** The payment providers of a payment connection (`PaymentConnection.provider`). */
+export const PAYMENT_PROVIDER_LABELS = Object.freeze({ stripe: "Stripe" });
+
+/** `Domain.kind`. */
+export const DOMAIN_KIND_LABELS = Object.freeze({ subdomain: "Sub-domain", custom: "Custom domain" });
+
+/** `Domain.purpose`. */
+export const DOMAIN_PURPOSE_LABELS = Object.freeze({
+  storefront: "Storefront",
+  api: "API",
+  console: "Console",
+});
+
+/** `ProvisioningJobKind` (PADR-0001 item 8). */
+export const JOB_KIND_LABELS = Object.freeze({
+  provision: "Set-up",
+  migrate: "Migration",
+  suspend: "Suspension",
+  resume: "Resumption",
+});
+
+/** `AuditActorType`. */
+export const AUDIT_ACTOR_LABELS = Object.freeze({
+  account: "Portal user",
+  platform_admin: "Platform admin",
+  api_key: "API key",
+  system: "System",
+});

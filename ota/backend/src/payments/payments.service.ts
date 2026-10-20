@@ -5,9 +5,8 @@
 // (architecture §4).
 //
 // createPayment {method: "card", termsAccepted: true, card?}:
-//   1. checks without data: only `card` is taken in this release (`airline_card`: `403 FEATURE_DISABLED`,
-//      `details.feature = "airlineCard"`, until OBE-050; the wallets and PayPal: `403 FEATURE_DISABLED`), and only
-//      Stripe (`provider` naming another: `424 PAYMENT_PROVIDER_NOT_CONFIGURED`);
+//   1. checks without data: `card` and `airline_card` (below) are taken in this release (the wallets and PayPal: `403
+//      FEATURE_DISABLED`), and only Stripe (`provider` naming another: `424 PAYMENT_PROVIDER_NOT_CONFIGURED`);
 //   2. the checkout as checkout.get answers it (access as the checkout's own, `404` otherwise): completed `409
 //      CHECKOUT_ALREADY_COMPLETED`, expired or abandoned `410 CHECKOUT_EXPIRED`, travellers or contacts missing `422
 //      CHECKOUT_INCOMPLETE` with the missing fields as `fieldErrors` (money is never taken before the data is valid);
@@ -18,7 +17,10 @@
 //      (`requires_payment_method`, `capture_method = manual`, the checkout total with the card fee, the hint) with
 //      its `payment_events` row, and sets the checkout `payment_pending`, `terms_accepted_at`, the card fee and the
 //      total, and its expiry 15 minutes later (`expires_at + 15 min` on the first payment, at least `now + 15 min`
-//      on a later one); it **commits before** the PaymentIntent exists (OADR-0010 point 2), so a webhook always finds
+//      on a later one). A checkout an airline-card payment had switched to the airline's price gets its selling price
+//      back (`pricing_mode = markup_rules`, checkout/pricing-mode.ts: the priced offer's selling total and the extras'
+//      selling prices, the card fee with the OTA's own `payment_card` fees). The transaction **commits before** the
+//      PaymentIntent exists (OADR-0010 point 2), so a webhook always finds
 //      the row through `metadata.payment_id`. A row left by an earlier attempt whose Stripe call failed (no
 //      PaymentIntent, same amounts and hint) is used again instead, so its `pi:create:<pay_id>` key is sent again and
 //      a PaymentIntent Stripe did create for the lost answer is the one that comes back;
@@ -30,20 +32,41 @@
 //      failed (best effort: a failure is logged; the payments queue of OBE-040 voids what is left), and a second
 //      transaction stores the new PaymentIntent id; the answer is `201` with the client secret and the publishable key.
 //
+// createPayment {method: "airline_card", termsAccepted: true, card?} (OBE-050; OADR-0004 points 1, 4 and 5,
+// ota/docs/flows/checkout-airline-card.md §3 steps 1–2): the airline charges the card through Amadeus, so no payment
+// provider is called (airline-card/airline-card.gateway.ts).
+//   1. `403 FEATURE_DISABLED` (`details.feature = "airlineCard"`) while the global switch `AIRLINE_CARD_ENABLED` is
+//      off; `403 SCOPE_NOT_ALLOWED` (`details.reason = "edge_only"`) for every caller but the hosted storefront's edge
+//      (the completion is edge-only, so `pk_` and `sk_` callers, console scope included, may not prepare it either);
+//      `400 VALIDATION_FAILED` for a `provider` (`/provider`: it must be absent); `returnUrl` and `savePaymentMethod`
+//      are ignored;
+//   2. the checkout as for a card (`409`, `410`, `422 CHECKOUT_INCOMPLETE`), `403 FEATURE_DISABLED` while the tenant's
+//      `storefront_settings.airline_card_enabled_<env>` is off, and a card hint's brand must be accepted (`422
+//      UNPROCESSABLE`); its Amadeus credit-card fee is quoted as for a card (card-fees.ts, between transactions);
+//   3. one transaction locks the checkout, cancels its other unconfirmed payments (an authorised Stripe payment is
+//      voided after the commit, as above), inserts the `payments` row (`provider = airline`, `method = airline_card`,
+//      `capture_method = automatic`, `requires_payment_method`, the hint; no provider id, expiry, 3-D Secure or stored
+//      next action: `payments_airline_card_ck`) and switches the checkout to the airline's price: `pricing_mode =
+//      net`, the priced offer's Amadeus total and the extras' Amadeus prices, and as card fee the Amadeus fee alone (no
+//      OTA markup, no OTA fee: OADR-0005 point 9), with the status, terms and expiry of a card payment;
+//   4. the answer is `201` with `nextAction.type = airline_card_form`, no client secret and no publishable key: the
+//      storefront shows its own card form and calls checkout.completeWithAirlineCard (OBE-051).
+//
 // getPayment: the payment of a checkout the caller may read (access as the checkout's, in the request's environment,
 // `404` otherwise, another tenant's id included). A payment that is not final is read again from Stripe first
 // (`requires_payment_method` and `requires_action` always, which also gives their client secret; `processing` when its
 // last change is older than 5 seconds), and the state is applied with the row's `version`; a Stripe outage answers
 // the stored state. `clientSecret` is given only while the payment can still be confirmed, never stored.
 //
-// updatePayment {card: {brand, bin?}}: only an unconfirmed Stripe card payment (`409 PAYMENT_NOT_UPDATABLE` with
-// `details.status`) of a checkout that is neither completed (`409`) nor expired (`410`), a brand the storefront accepts
-// (`422 UNPROCESSABLE`). The same hint again changes nothing (no quote, no provider call). Otherwise the fee is quoted
-// for the hint (card-fees.ts), the PaymentIntent's amount is set (`pi:update:<pay_id>:<version>`), and one transaction
-// stores the amount, the fee and the hint with a `payment_events` row (`payment.amount_updated`), and the checkout's
-// card fee, total and brand (its `version` + 1). A row that changed meanwhile starts the step again. A failed Stripe
-// update moves the payment's `version` on (`payment.provider_error`), so the next update never sends a key that Stripe
-// may have used for another amount, or keeps a 5xx for.
+// updatePayment {card: {brand, bin?}}: only an unconfirmed Stripe card payment or airline-card payment (`409
+// PAYMENT_NOT_UPDATABLE` with `details.status`) of a checkout that is neither completed (`409`) nor expired (`410`), a
+// brand the storefront accepts (`422 UNPROCESSABLE`). The same hint again changes nothing (no quote, no provider call).
+// Otherwise the fee is quoted for the hint (card-fees.ts; for an airline card the Amadeus fee alone, in the checkout's
+// `net` pricing), the PaymentIntent's amount is set (`pi:update:<pay_id>:<version>`; an airline-card payment has no
+// provider to tell), and one transaction stores the amount, the fee and the hint with a `payment_events` row
+// (`payment.amount_updated`), and the checkout's card fee, total and brand (its `version` + 1). A row that changed
+// meanwhile starts the step again. A failed Stripe update moves the payment's `version` on (`payment.provider_error`),
+// so the next update never sends a key that Stripe may have used for another amount, or keeps a 5xx for.
 import { Inject, Injectable } from "@nestjs/common";
 import type { components } from "@velexis/api-types";
 import { AppError } from "@velexis/errors";
@@ -51,6 +74,15 @@ import { redactPayload } from "@velexis/logger";
 import { PinoLogger } from "nestjs-pino";
 import { effectiveStatus, type Checkout } from "../checkout/checkout.mapper";
 import { CheckoutService } from "../checkout/checkout.service";
+import {
+  baseAmountsFor,
+  baseTotalOf,
+  cardFeeFor,
+  checkoutTotalOf,
+  pricingModeOf,
+  type CheckoutBaseAmounts,
+  type PricingMode,
+} from "../checkout/pricing-mode";
 import { CustomerContext } from "../common/auth/customer.guard";
 import { Clock } from "../common/clock";
 import { RequestContext } from "../common/http/request-context";
@@ -60,6 +92,13 @@ import { PricedOffersService, type CheckoutPricedOffer } from "../shopping/price
 import { CallerContext } from "../tenancy/caller-resolver";
 import { TenantContext, type RequestTenant } from "../tenancy/tenant-context";
 import { TenantTx, type TenantTransaction } from "../tenancy/tenant-tx";
+import {
+  AIRLINE_CARD_METHOD,
+  AIRLINE_CARD_THREE_D_SECURE,
+  AIRLINE_PROVIDER,
+  AirlineCardGateway,
+  airlineCardNextAction,
+} from "./airline-card/airline-card.gateway";
 import { CardFees, type CardFeePlan, type CardFeeQuote, type CardHint } from "./card-fees";
 import {
   failureKeptForKey,
@@ -158,6 +197,14 @@ export function nextActionOf(status: string): NonNullable<Payment["nextAction"]>
   return { type: status === "processing" ? "wait" : "none", redirectUrl: null };
 }
 
+/**
+ * The `payments.next_action` a status change writes: none on an airline-card payment, whose next action is derived from
+ * its status (`payments_airline_card_ck` refuses a stored one).
+ */
+function nextActionColumn(row: Pick<PaymentRow, "provider">, status: string): string | null {
+  return row.provider === AIRLINE_PROVIDER ? null : JSON.stringify(nextActionOf(status));
+}
+
 const THREE_DS_STATUSES: readonly Payment["threeDSecure"]["status"][] = [
   "not_required",
   "pending",
@@ -210,6 +257,9 @@ export function toPayment(row: PaymentRow, view: PaymentView): Payment {
   const at = (date: Date | null): string | null => date?.toISOString() ?? null;
   const confirmable = CONFIRMABLE.has(row.status);
   const hintBrand = isHintBrand(row.cardBrand) ? row.cardBrand : null;
+  // An airline-card payment has no provider: no client secret, no 3-D Secure, and its next action is the storefront's
+  // own card form (airline-card.gateway.ts).
+  const airline = row.provider === AIRLINE_PROVIDER;
   const payment: Payment = {
     id: row.id,
     checkoutId: row.checkoutId,
@@ -226,11 +276,11 @@ export function toPayment(row: PaymentRow, view: PaymentView): Payment {
     amountAuthorized: money(row.amountAuthorized, currency, units),
     amountCaptured: money(row.amountCaptured, currency, units),
     amountRefunded: money(row.amountRefunded, currency, units),
-    clientSecret: confirmable ? view.clientSecret : null,
-    providerPublicKey: view.publishableKey,
-    providerPaymentId: row.providerPaymentId,
+    clientSecret: confirmable && !airline ? view.clientSecret : null,
+    providerPublicKey: airline ? null : view.publishableKey,
+    providerPaymentId: airline ? null : row.providerPaymentId,
     redirectUrl: null,
-    nextAction: nextActionOf(row.status),
+    nextAction: airline ? airlineCardNextAction(row.status) : nextActionOf(row.status),
     card:
       row.cardLast4 === null
         ? null
@@ -241,7 +291,7 @@ export function toPayment(row: PaymentRow, view: PaymentView): Payment {
             expMonth: row.cardExpMonth,
             expYear: row.cardExpYear,
           },
-    threeDSecure: threeDSecureOf(row.threeDs),
+    threeDSecure: airline ? { ...AIRLINE_CARD_THREE_D_SECURE } : threeDSecureOf(row.threeDs),
     failure:
       row.failureCode === null
         ? null
@@ -332,7 +382,23 @@ const notFound = (): AppError => new AppError("NOT_FOUND", { message: "No paymen
 interface CreatePlan {
   readonly settings: PaymentSettingsRow;
   readonly quote: CardFeeQuote | undefined;
+  /** The checkout's offer and extras in the pricing mode of the method (checkout/pricing-mode.ts). */
+  readonly amounts: CheckoutBaseAmounts;
 }
+
+/** What the first transaction of a createPayment prepares. */
+interface PreparedCreate {
+  readonly settings: PaymentSettingsRow;
+  readonly amounts: CheckoutBaseAmounts;
+  readonly cardPlan?: CardFeePlan;
+}
+
+/** The `403 SCOPE_NOT_ALLOWED` of a payment step only the hosted storefront's edge may take (scope.guard.ts). */
+const edgeOnly = (): AppError =>
+  new AppError("SCOPE_NOT_ALLOWED", {
+    message: "The airline card is available on the hosted storefront only.",
+    details: { reason: "edge_only" },
+  });
 
 @Injectable()
 export class PaymentsService {
@@ -347,6 +413,7 @@ export class PaymentsService {
     private readonly repository: PaymentsRepository,
     private readonly cardFees: CardFees,
     @Inject(PAYMENT_GATEWAY) private readonly gateway: PaymentGateway,
+    private readonly airlineCard: AirlineCardGateway,
     private readonly clock: Clock,
     private readonly ids: IdGenerator,
     private readonly logger: PinoLogger,
@@ -360,11 +427,8 @@ export class PaymentsService {
     const tenant = this.tenants.require();
     const ctx = this.gatewayContext(tenant);
     const body = input.body;
-    if (body.method === "airline_card") {
-      throw new AppError("FEATURE_DISABLED", {
-        message: "The airline card is not enabled for this storefront.",
-        details: { feature: "airlineCard" },
-      });
+    if (body.method === AIRLINE_CARD_METHOD) {
+      return await this.createAirlineCard(input, tenant, ctx);
     }
     if (body.method !== "card") {
       throw new AppError("FEATURE_DISABLED", {
@@ -387,28 +451,15 @@ export class PaymentsService {
           details: { feature: "card" },
         });
       }
-      const { settings, cardPlan } = await this.tx.run(
-        async (trx): Promise<{ settings: PaymentSettingsRow; cardPlan?: CardFeePlan }> => {
-          const settings = await this.settingsOf(trx, tenant);
-          if (hint === undefined) {
-            return { settings };
-          }
-          this.checkBrand(settings, hint.brand);
-          const checkout = await this.checkoutOf(trx, view.id);
-          const priced = await this.pricedOfferOf(trx, checkout.pricedOfferId, input.acceptLanguage);
-          const now = this.clock.now();
-          return {
-            settings,
-            cardPlan: await this.cardFees.prepare(trx, priced, hint, this.baseAmount(checkout), now),
-          };
-        },
+      const { settings, amounts, cardPlan } = await this.tx.run((trx) =>
+        this.prepareCreate(trx, tenant, view.id, "markup_rules", hint, input.acceptLanguage),
       );
       const quote =
         cardPlan === undefined
           ? undefined
           : await this.cardFees.quote(ctx, cardPlan, "checkout.createPayment");
       const created = await this.tx.run((trx) =>
-        this.insertPayment(trx, tenant, view, account, { settings, quote }),
+        this.insertPayment(trx, tenant, view, account, { settings, quote, amounts }),
       );
       if (created === undefined) {
         continue;
@@ -499,27 +550,14 @@ export class PaymentsService {
     plan: CreatePlan,
   ): Promise<{ readonly payment: GatewayPayment; readonly replaced: readonly PaymentRow[] } | undefined> {
     const now = this.clock.now();
-    const checkout = await this.repository.checkout(trx, view.id, true);
-    if (checkout === undefined || checkout.version !== view.version) {
+    const checkout = await this.lockedPayable(trx, view, now);
+    if (checkout === undefined) {
       return undefined;
     }
-    const status = effectiveStatus(checkout, now);
-    if (status === "completed") {
-      throw new AppError("CHECKOUT_ALREADY_COMPLETED");
-    }
-    if (status !== "open" && status !== "payment_pending") {
-      throw new AppError("CHECKOUT_EXPIRED");
-    }
     const minorUnits = await this.minorUnitsOf(trx, checkout.currency);
-    const { quote, settings } = plan;
-    const fee = new Money(quote?.total ?? "0").toFixed(minorUnits);
-    const total = new Money(this.baseAmount(checkout)).plus(fee).toFixed(minorUnits);
-    if (!new Money(total).isPositive()) {
-      throw new AppError("UNPROCESSABLE", {
-        message: "The checkout has nothing to pay.",
-        details: { reason: "nothing_to_pay" },
-      });
-    }
+    const { quote, settings, amounts } = plan;
+    const fee = cardFeeFor("markup_rules", quote, minorUnits);
+    const total = this.payableTotal(amounts, fee, minorUnits);
     const brand = quote?.brand ?? null;
     const bin = quote?.bin ?? null;
     const open = await this.repository.paymentsOfCheckout(trx, checkout.id, [
@@ -540,30 +578,12 @@ export class PaymentsService {
         row.cardBrand === brand &&
         row.cardBin === bin,
     );
-    const replaced: PaymentRow[] = [];
-    for (const row of open) {
-      if (row === reusable) {
-        continue;
-      }
-      replaced.push(row);
-      if (row.status === "authorized") {
-        // Cancelled once Stripe voided it (`cancelAtProvider`).
-        continue;
-      }
-      await this.repository.updatePayment(trx, row.id, row.version, {
-        status: "canceled",
-        canceled_at: now,
-        next_action: JSON.stringify(nextActionOf("canceled")),
-        updated_at: now,
-      });
-      await this.event(trx, row, {
-        type: "payment.replaced",
-        statusFrom: row.status,
-        statusTo: "canceled",
-        payload: { replacedBy: reusable?.id ?? null },
-        now,
-      });
-    }
+    const replaced = await this.replaceOpen(
+      trx,
+      open.filter((row) => row !== reusable),
+      reusable?.id ?? null,
+      now,
+    );
     let payment: GatewayPayment;
     if (reusable !== undefined) {
       payment = this.gatewayPaymentOf(reusable, minorUnits);
@@ -617,6 +637,10 @@ export class PaymentsService {
     await this.repository.updateCheckout(trx, checkout.id, {
       status: "payment_pending",
       terms_accepted_at: now,
+      // The selling price again, when an airline-card payment had switched the checkout to the airline's.
+      pricing_mode: "markup_rules",
+      offer_amount: amounts.offer,
+      ancillaries_amount: amounts.ancillaries,
       fees_amount: fee,
       total_amount: total,
       payment_brand: brand,
@@ -624,6 +648,104 @@ export class PaymentsService {
       updated_at: now,
     });
     return { payment, replaced };
+  }
+
+  /**
+   * The checkout of step 3, locked, if it is still the version step 2 read (`undefined` otherwise: the step starts
+   * again) and can still be paid.
+   */
+  private async lockedPayable(
+    trx: TenantTransaction,
+    view: Checkout,
+    now: Date,
+  ): Promise<PaymentCheckoutRow | undefined> {
+    const checkout = await this.repository.checkout(trx, view.id, true);
+    if (checkout === undefined || checkout.version !== view.version) {
+      return undefined;
+    }
+    const status = effectiveStatus(checkout, now);
+    if (status === "completed") {
+      throw new AppError("CHECKOUT_ALREADY_COMPLETED");
+    }
+    if (status !== "open" && status !== "payment_pending") {
+      throw new AppError("CHECKOUT_EXPIRED");
+    }
+    return checkout;
+  }
+
+  /** The amount of a new payment: `offer + ancillaries + fee`, which must be positive (`422 UNPROCESSABLE`). */
+  private payableTotal(amounts: CheckoutBaseAmounts, fee: string, minorUnits: number): string {
+    const total = checkoutTotalOf(amounts, fee, minorUnits);
+    if (!new Money(total).isPositive()) {
+      throw new AppError("UNPROCESSABLE", {
+        message: "The checkout has nothing to pay.",
+        details: { reason: "nothing_to_pay" },
+      });
+    }
+    return total;
+  }
+
+  /**
+   * Cancels the checkout's unconfirmed payments a new one replaces (`payment.replaced`) and answers every replaced row;
+   * an authorised one is cancelled once Stripe voided it (`cancelAtProvider`, after the commit).
+   */
+  private async replaceOpen(
+    trx: TenantTransaction,
+    rows: readonly PaymentRow[],
+    replacedBy: string | null,
+    now: Date,
+  ): Promise<PaymentRow[]> {
+    const replaced: PaymentRow[] = [];
+    for (const row of rows) {
+      replaced.push(row);
+      if (row.status === "authorized") {
+        continue;
+      }
+      await this.repository.updatePayment(trx, row.id, row.version, {
+        status: "canceled",
+        canceled_at: now,
+        next_action: nextActionColumn(row, "canceled"),
+        updated_at: now,
+      });
+      await this.event(trx, row, {
+        type: "payment.replaced",
+        statusFrom: row.status,
+        statusTo: "canceled",
+        payload: { replacedBy },
+        now,
+      });
+    }
+    return replaced;
+  }
+
+  /**
+   * The first transaction of createPayment: the settings, the checkout's offer and extras in `mode` and, for a card
+   * hint of an accepted brand, the plan of its card fee on them.
+   */
+  private async prepareCreate(
+    trx: TenantTransaction,
+    tenant: RequestTenant,
+    checkoutId: string,
+    mode: PricingMode,
+    hint: CardHint | undefined,
+    acceptLanguage: string | undefined,
+    check?: (settings: PaymentSettingsRow) => void,
+  ): Promise<PreparedCreate> {
+    const settings = await this.settingsOf(trx, tenant);
+    check?.(settings);
+    const checkout = await this.checkoutOf(trx, checkoutId);
+    const amounts = await this.baseAmountsOf(trx, checkout, mode, acceptLanguage);
+    if (hint === undefined) {
+      return { settings, amounts };
+    }
+    this.checkBrand(settings, hint.brand);
+    const priced = await this.pricedOfferOf(trx, checkout.pricedOfferId, acceptLanguage);
+    const now = this.clock.now();
+    return {
+      settings,
+      amounts,
+      cardPlan: await this.cardFees.prepare(trx, priced, hint, baseTotalOf(amounts), now),
+    };
   }
 
   /**
@@ -680,6 +802,156 @@ export class PaymentsService {
       }
       throw error;
     }
+  }
+
+  // ---- checkout.createPayment {method: "airline_card"} -----------------------------------------------------------
+
+  /** The airline-card payment of a checkout (see the file header): no provider call, the airline's price. */
+  private async createAirlineCard(
+    input: CreatePaymentInput,
+    tenant: RequestTenant,
+    ctx: GatewayContext,
+  ): Promise<Payment> {
+    const body = input.body;
+    this.airlineCard.assertGloballyEnabled();
+    if (this.callers.get()?.type !== "edge") {
+      throw edgeOnly();
+    }
+    if (body.provider !== undefined) {
+      // The document's PaymentCreateRequest refuses it already; kept for a caller of the service without the HTTP
+      // validation.
+      throw new AppError("VALIDATION_FAILED", {
+        fieldErrors: [
+          {
+            path: "/provider",
+            code: "not",
+            message: "No payment provider takes the airline card: omit provider.",
+          },
+        ],
+      });
+    }
+    const hint: CardHint | undefined =
+      body.card === undefined ? undefined : { brand: body.card.brand, bin: body.card.bin };
+    for (let attempt = 1; attempt <= STEP_ATTEMPTS; attempt += 1) {
+      const view = await this.checkouts.get(input.checkoutId, input.acceptLanguage);
+      this.checkPayable(view);
+      const { amounts, cardPlan } = await this.tx.run((trx) =>
+        this.prepareCreate(trx, tenant, view.id, "net", hint, input.acceptLanguage, (settings) => {
+          this.airlineCard.assertEnabled(tenant.environment, settings);
+        }),
+      );
+      const quote =
+        cardPlan === undefined
+          ? undefined
+          : await this.cardFees.quote(ctx, cardPlan, "checkout.createPayment");
+      const created = await this.tx.run((trx) =>
+        this.insertAirlinePayment(trx, tenant, view, { amounts, quote }),
+      );
+      if (created === undefined) {
+        continue;
+      }
+      // An authorised Stripe payment of the checkout is voided at Stripe (no provider has the new one).
+      await this.cancelAtProvider(ctx, created.replaced);
+      this.logger.info(
+        {
+          paymentId: created.row.id,
+          checkoutId: view.id,
+          method: AIRLINE_CARD_METHOD,
+          cardFeeSource: quote?.source ?? null,
+          replaced: created.replaced.length,
+        },
+        "payments.created",
+      );
+      return toPayment(created.row, {
+        minorUnits: created.minorUnits,
+        clientSecret: null,
+        publishableKey: null,
+      });
+    }
+    throw new AppError("CONFLICT", {
+      message: "The checkout changed while the payment was created; try again.",
+    });
+  }
+
+  /**
+   * Step 3 of an airline-card payment: the other unconfirmed payments cancelled, the `payments` row of the gateway
+   * (`payments_airline_card_ck`), and the checkout at the airline's price (`pricing_mode = net`); `undefined` when the
+   * checkout changed since it was read.
+   */
+  private async insertAirlinePayment(
+    trx: TenantTransaction,
+    tenant: RequestTenant,
+    view: Checkout,
+    plan: { readonly amounts: CheckoutBaseAmounts; readonly quote: CardFeeQuote | undefined },
+  ): Promise<
+    | { readonly row: PaymentRow; readonly minorUnits: number; readonly replaced: readonly PaymentRow[] }
+    | undefined
+  > {
+    const now = this.clock.now();
+    const checkout = await this.lockedPayable(trx, view, now);
+    if (checkout === undefined) {
+      return undefined;
+    }
+    const minorUnits = await this.minorUnitsOf(trx, checkout.currency);
+    const { amounts, quote } = plan;
+    // The engine is bypassed: the Amadeus card fee alone, never the OTA's `payment_card` fees (OADR-0005 point 9).
+    const fee = cardFeeFor("net", quote, minorUnits);
+    const total = this.payableTotal(amounts, fee, minorUnits);
+    const brand = quote?.brand ?? null;
+    const bin = quote?.bin ?? null;
+    const id = this.ids.newId("pay");
+    const open = await this.repository.paymentsOfCheckout(trx, checkout.id, [
+      ...REPLACEABLE_STATUSES,
+      "authorized",
+    ]);
+    const replaced = await this.replaceOpen(trx, open, id, now);
+    await this.repository.insertPayment(trx, {
+      ...this.airlineCard.createSession(),
+      id,
+      environment: tenant.environment,
+      checkout_id: checkout.id,
+      customer_id: checkout.customerId,
+      currency: checkout.currency,
+      amount: total,
+      card_fee_amount: fee,
+      card_brand: brand,
+      card_bin: bin,
+      metadata: JSON.stringify({}),
+      version: 1,
+      created_at: now,
+      updated_at: now,
+    });
+    const row = await this.repository.payment(trx, id);
+    if (row === undefined) {
+      throw new Error("a payment of this transaction is not readable");
+    }
+    await this.event(trx, row, {
+      type: "payment.created",
+      statusTo: "requires_payment_method",
+      payload: {
+        checkoutId: checkout.id,
+        method: AIRLINE_CARD_METHOD,
+        pricingMode: "net",
+        cardBrand: brand,
+        cardFee: fee,
+        cardFeeSource: quote?.source ?? null,
+        replaced: replaced.map((entry) => entry.id),
+      },
+      now,
+    });
+    await this.repository.updateCheckout(trx, checkout.id, {
+      status: "payment_pending",
+      terms_accepted_at: now,
+      pricing_mode: "net",
+      offer_amount: amounts.offer,
+      ancillaries_amount: amounts.ancillaries,
+      fees_amount: fee,
+      total_amount: total,
+      payment_brand: brand,
+      expires_at: extendedExpiry(checkout, now),
+      updated_at: now,
+    });
+    return { row, minorUnits, replaced };
   }
 
   /** Cancels the PaymentIntents of replaced payments at Stripe (best effort; OBE-040 voids what is left). */
@@ -816,8 +1088,16 @@ export class PaymentsService {
       const first = await this.tx.run(async (trx) => {
         const now = this.clock.now();
         const row = await this.readable(trx, tenant, input.paymentId);
-        if (row.provider !== "stripe" || row.method !== "card" || row.checkoutId === null) {
+        const airline = row.provider === AIRLINE_PROVIDER && row.method === AIRLINE_CARD_METHOD;
+        if (!(airline || (row.provider === "stripe" && row.method === "card")) || row.checkoutId === null) {
           throw new AppError("PAYMENT_NOT_UPDATABLE", { details: { status: apiStatusOf(row.status) } });
+        }
+        if (airline) {
+          // As createPayment: the airline card is the hosted storefront's, while both switches are on.
+          this.airlineCard.assertGloballyEnabled();
+          if (this.callers.get()?.type !== "edge") {
+            throw edgeOnly();
+          }
         }
         if (row.status !== "requires_payment_method") {
           throw new AppError("PAYMENT_NOT_UPDATABLE", {
@@ -833,14 +1113,20 @@ export class PaymentsService {
         if (status !== "open" && status !== "payment_pending") {
           throw new AppError("CHECKOUT_EXPIRED");
         }
-        this.checkBrand(await this.settingsOf(trx, tenant), hint.brand);
+        const settings = await this.settingsOf(trx, tenant);
+        if (airline) {
+          this.airlineCard.assertEnabled(tenant.environment, settings);
+        }
+        this.checkBrand(settings, hint.brand);
         const minorUnits = await this.minorUnitsOf(trx, row.currency);
         if (row.cardBrand === hint.brand && row.cardBin === (hint.bin ?? null)) {
           return { kind: "same" as const, row, minorUnits };
         }
+        const mode = pricingModeOf(row.method);
+        const amounts = await this.baseAmountsOf(trx, checkout, mode, input.acceptLanguage);
         const priced = await this.pricedOfferOf(trx, checkout.pricedOfferId, input.acceptLanguage);
-        const plan = await this.cardFees.prepare(trx, priced, hint, this.baseAmount(checkout), now);
-        return { kind: "quote" as const, row, checkout, plan, minorUnits };
+        const plan = await this.cardFees.prepare(trx, priced, hint, baseTotalOf(amounts), now);
+        return { kind: "quote" as const, row, checkout, mode, amounts, plan, minorUnits };
       });
       if (first.kind === "same") {
         return toPayment(first.row, {
@@ -849,11 +1135,16 @@ export class PaymentsService {
           publishableKey: await this.publishableKeyOf(ctx, first.row),
         });
       }
-      const { row, checkout, plan, minorUnits } = first;
+      const { row, checkout, mode, amounts, plan, minorUnits } = first;
       const quote = await this.cardFees.quote(ctx, plan, "checkout.updatePayment");
-      const fee = new Money(quote.total).toFixed(minorUnits);
-      const total = new Money(this.baseAmount(checkout)).plus(fee).toFixed(minorUnits);
-      if (row.providerPaymentId !== null && !new Money(total).equals(row.amount)) {
+      const fee = cardFeeFor(mode, quote, minorUnits);
+      const total = checkoutTotalOf(amounts, fee, minorUnits);
+      // An airline-card payment has no provider payment to change.
+      if (
+        row.provider === "stripe" &&
+        row.providerPaymentId !== null &&
+        !new Money(total).equals(row.amount)
+      ) {
         try {
           await this.gateway.updateAmount(ctx, this.gatewayPaymentOf(row, minorUnits), total);
         } catch (error) {
@@ -896,6 +1187,9 @@ export class PaymentsService {
           now,
         });
         await this.repository.updateCheckout(trx, lockedCheckout.id, {
+          // The amounts of the payment's pricing mode (unchanged for a card on the selling price).
+          offer_amount: amounts.offer,
+          ancillaries_amount: amounts.ancillaries,
           fees_amount: fee,
           total_amount: total,
           payment_brand: quote.brand,
@@ -967,9 +1261,30 @@ export class PaymentsService {
     };
   }
 
-  /** The amount charged before the card fee: the offer and the extras. */
-  private baseAmount(checkout: PaymentCheckoutRow): string {
-    return new Money(checkout.offerAmount).plus(checkout.ancillariesAmount).toString();
+  /**
+   * The checkout's offer and extras in `mode` (checkout/pricing-mode.ts). The selling price is the checkout's own
+   * columns while it is in `markup_rules` (the steps that change the offer or the extras keep them), and the priced
+   * offer's selling total and the extras' selling prices when a card payment brings it back from `net`. The airline's
+   * price is always read again from the priced offer's `net_total` and the extras' `net_amount`, so it never depends on
+   * a step that wrote the selling amounts meanwhile.
+   */
+  private async baseAmountsOf(
+    trx: TenantTransaction,
+    checkout: PaymentCheckoutRow,
+    mode: PricingMode,
+    acceptLanguage: string | undefined,
+  ): Promise<CheckoutBaseAmounts> {
+    if (mode === "markup_rules" && checkout.pricingMode === "markup_rules") {
+      return { offer: checkout.offerAmount, ancillaries: checkout.ancillariesAmount };
+    }
+    const priced = await this.pricedOfferOf(trx, checkout.pricedOfferId, acceptLanguage);
+    const selections = await this.repository.selectionPrices(trx, checkout.id);
+    return baseAmountsFor(
+      mode,
+      { sellingTotal: priced.row.sellingTotal, netTotal: priced.row.netTotal },
+      selections,
+      await this.minorUnitsOf(trx, checkout.currency),
+    );
   }
 
   /** The publishable key for a payment's front end: the current account's, when it is the payment's connection. */

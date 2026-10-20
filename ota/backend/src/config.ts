@@ -112,6 +112,25 @@ export const MAIL_FROM_PATTERN = new RegExp(
   "i",
 );
 
+/**
+ * The keys of the Velexis Stripe account per environment (ADR-0011 (A), OADR-0010 point 1): a secret or restricted key
+ * (`sk_…`, `rk_…`) and a publishable key (`pk_…`) of that mode, so a live key never sits in a test variable or the
+ * other way round. Each is optional: an environment without both keys has no `velexis`-mode payments (`424
+ * PAYMENT_PROVIDER_NOT_CONFIGURED`, and `storefront.get` lists no payment method), so the API starts on a VM whose
+ * Stripe keys are not filled in yet (provision-vm.sh: "Stripe when needed"); the live keys stay empty until the M6
+ * launch checklist. A refused value is named, never printed (@velexis/config).
+ */
+export const STRIPE_KEY_PATTERNS = Object.freeze({
+  secret: { test: /^(?:sk|rk)_test_[A-Za-z0-9_]+$/, live: /^(?:sk|rk)_live_[A-Za-z0-9_]+$/ },
+  publishable: { test: /^pk_test_[A-Za-z0-9_]+$/, live: /^pk_live_[A-Za-z0-9_]+$/ },
+});
+
+/**
+ * A Stripe webhook signing secret (`whsec_…`, OADR-0010 point 4): the Dashboard's and the Stripe CLI's secrets are
+ * `whsec_` and letters and digits; the base64 characters are accepted too. A refused value is named, never printed.
+ */
+export const STRIPE_WEBHOOK_SECRET_PATTERN = /^whsec_[A-Za-z0-9+/=_-]{8,}$/;
+
 /** Variables of both processes. */
 const sharedSchema = {
   APP_ENV: env.enum(["development", "test", "production"] as const),
@@ -131,6 +150,16 @@ const sharedSchema = {
   // `<key>.<STOREFRONT_BASE_DOMAIN>` is a tenant's storefront sub-domain (ADR-0018, OADR-0009 point 2): the API
   // resolves edge requests by it, and the worker builds the links of e-mails on it (OADR-0015 point 5, OBE-030).
   STOREFRONT_BASE_DOMAIN: env.string({ pattern: HOST_NAME }),
+  // The Velexis Stripe account (OBE-038; STRIPE_KEY_PATTERNS above): the keys of `velexis`-mode payments (and of
+  // `connect_standard` from M5) per environment. Only the payments module reads them
+  // (src/payments/stripe/stripe-client.factory.ts): the API creates, reads and updates PaymentIntents and hands the
+  // publishable key to the storefront through storefront.get; the worker reads the PaymentIntents, charges, refunds and
+  // disputes of the webhook events again (OBE-039, OADR-0010 point 5), and from OBE-040 voids, captures and refunds.
+  // Both units read ota-backend.env, which holds them.
+  STRIPE_SECRET_KEY_TEST: env.string({ pattern: STRIPE_KEY_PATTERNS.secret.test, optional: true }),
+  STRIPE_PUBLISHABLE_KEY_TEST: env.string({ pattern: STRIPE_KEY_PATTERNS.publishable.test, optional: true }),
+  STRIPE_SECRET_KEY_LIVE: env.string({ pattern: STRIPE_KEY_PATTERNS.secret.live, optional: true }),
+  STRIPE_PUBLISHABLE_KEY_LIVE: env.string({ pattern: STRIPE_KEY_PATTERNS.publishable.live, optional: true }),
 } as const;
 
 /**
@@ -190,19 +219,6 @@ function amadeusBaseUrl(): EnvVar<string | undefined> {
   };
 }
 
-/**
- * The keys of the Velexis Stripe account per environment (ADR-0011 (A), OADR-0010 point 1): a secret or restricted key
- * (`sk_…`, `rk_…`) and a publishable key (`pk_…`) of that mode, so a live key never sits in a test variable or the
- * other way round. Each is optional: an environment without both keys has no `velexis`-mode payments (`424
- * PAYMENT_PROVIDER_NOT_CONFIGURED`, and `storefront.get` lists no payment method), so the API starts on a VM whose
- * Stripe keys are not filled in yet (provision-vm.sh: "Stripe when needed"); the live keys stay empty until the M6
- * launch checklist. A refused value is named, never printed (@velexis/config).
- */
-export const STRIPE_KEY_PATTERNS = Object.freeze({
-  secret: { test: /^(?:sk|rk)_test_[A-Za-z0-9_]+$/, live: /^(?:sk|rk)_live_[A-Za-z0-9_]+$/ },
-  publishable: { test: /^pk_test_[A-Za-z0-9_]+$/, live: /^pk_live_[A-Za-z0-9_]+$/ },
-});
-
 /** The API process (`dist/main.js`, unit velexis-ota-api). */
 export const apiConfigSchema = {
   ...sharedSchema,
@@ -227,13 +243,17 @@ export const apiConfigSchema = {
   // empty on the VM, where the connection's or the shared account's base_url is used (OADR-0001 point 4).
   AMADEUS_BASE_URL_TEST: amadeusBaseUrl(),
   AMADEUS_BASE_URL_LIVE: amadeusBaseUrl(),
-  // The Velexis Stripe account (OBE-038; STRIPE_KEY_PATTERNS above): the keys of `velexis`-mode payments (and of
-  // `connect_standard` from M5) per environment. Only the payments module reads them
-  // (src/payments/stripe/stripe-client.factory.ts); the publishable key reaches the storefront through storefront.get.
-  STRIPE_SECRET_KEY_TEST: env.string({ pattern: STRIPE_KEY_PATTERNS.secret.test, optional: true }),
-  STRIPE_PUBLISHABLE_KEY_TEST: env.string({ pattern: STRIPE_KEY_PATTERNS.publishable.test, optional: true }),
-  STRIPE_SECRET_KEY_LIVE: env.string({ pattern: STRIPE_KEY_PATTERNS.secret.live, optional: true }),
-  STRIPE_PUBLISHABLE_KEY_LIVE: env.string({ pattern: STRIPE_KEY_PATTERNS.publishable.live, optional: true }),
+  // The signing secrets of the Velexis account's webhook endpoints, `/webhooks/stripe/velexis/{test,live}` (OBE-039,
+  // OADR-0010 point 4). Optional: an environment without its secret refuses every delivery with `400` (Stripe keeps
+  // sending it, so nothing is lost once the secret is set); the live one stays empty until the M6 launch checklist.
+  // Only the webhook receiver reads them (src/payments/webhooks/webhook-receiver.service.ts); never logged.
+  STRIPE_WEBHOOK_SECRET_VELEXIS_TEST: env.string({ pattern: STRIPE_WEBHOOK_SECRET_PATTERN, optional: true }),
+  STRIPE_WEBHOOK_SECRET_VELEXIS_LIVE: env.string({ pattern: STRIPE_WEBHOOK_SECRET_PATTERN, optional: true }),
+  // The global kill switch of the airline-card method (ADR-0011, OADR-0004 point 1; OBE-050), `false` by default
+  // (`true`, `false`, `1` or `0`; anything else is refused at start-up). Off, checkout.createPayment refuses
+  // `airline_card` (`403 FEATURE_DISABLED`) and storefront.get never lists it, whatever the tenants' settings say.
+  // `true` in development and CI only until the M6 security review (OBE-086); `false` in the deploy template.
+  AIRLINE_CARD_ENABLED: env.bool({ default: false }),
 } as const;
 
 /** The worker process (`dist/worker.js`, unit velexis-ota-worker). */

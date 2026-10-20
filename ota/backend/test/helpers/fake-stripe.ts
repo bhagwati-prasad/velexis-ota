@@ -15,6 +15,11 @@
 // (and keeps their answers for their keys) but closes the connections instead of answering (the answer is lost), and
 // `fail(n, "server_error")` answers them with a 500 `api_error`, which a POST's key keeps. `onRequest` runs before
 // each answer, for assertions about what the caller had done before it called Stripe.
+//
+// The webhook processor's reads (OBE-039) are served from what the test puts in `charges`, `refunds` and `disputes`
+// (Stripe's JSON, as the fixtures of @velexis/testing/stripe hold it): `GET /v1/charges/{id}`, `GET /v1/refunds/{id}`,
+// `GET /v1/refunds?charge=…` (a list) and `GET /v1/disputes/{id}`; a refund created with `POST /v1/refunds` is kept in
+// `refunds` too.
 import { randomBytes } from "node:crypto";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { Global, Module, type DynamicModule } from "@nestjs/common";
@@ -43,6 +48,9 @@ export type FakePaymentIntent = Record<string, unknown> & {
   amount: number;
 };
 
+/** Another Stripe object the fake serves (a charge, refund or dispute): Stripe's JSON with its id. */
+export type FakeStripeObject = Record<string, unknown> & { readonly id: string };
+
 /** How the next requests fail. */
 export type FakeStripeFailure = "drop" | "lost" | "server_error";
 
@@ -52,6 +60,10 @@ export interface FakeStripe {
   readonly requests: FakeStripeRequest[];
   /** The PaymentIntents by id. */
   readonly intents: Map<string, FakePaymentIntent>;
+  /** The charges, refunds and disputes by id, as the test puts them (OBE-039). */
+  readonly charges: Map<string, FakeStripeObject>;
+  readonly refunds: Map<string, FakeStripeObject>;
+  readonly disputes: Map<string, FakeStripeObject>;
   /** The next `count` requests fail as `failure` says. */
   fail(count: number, failure: FakeStripeFailure): void;
   /** Runs before each answer (after the request was recorded); its rejection fails that request with a 500. */
@@ -135,6 +147,9 @@ const text = (value: FormValue | undefined): string | undefined =>
 export async function startFakeStripe(): Promise<FakeStripe> {
   const requests: FakeStripeRequest[] = [];
   const intents = new Map<string, FakePaymentIntent>();
+  const charges = new Map<string, FakeStripeObject>();
+  const refunds = new Map<string, FakeStripeObject>();
+  const disputes = new Map<string, FakeStripeObject>();
   const replays = new Map<
     string,
     { readonly body: string; readonly status: number; readonly answer: unknown }
@@ -221,17 +236,40 @@ export async function startFakeStripe(): Promise<FakeStripe> {
       }
     }
     if (method === "POST" && path === "/v1/refunds") {
-      return {
-        status: 200,
-        body: {
-          id: `re_test_${randomBytes(12).toString("hex")}`,
-          object: "refund",
-          amount: Number(text(form["amount"])),
-          status: "pending",
-          payment_intent: text(form["payment_intent"]) ?? null,
-          metadata: isPlainObject(form["metadata"]) ? form["metadata"] : {},
-        },
+      const refund: FakeStripeObject = {
+        id: `re_test_${randomBytes(12).toString("hex")}`,
+        object: "refund",
+        amount: Number(text(form["amount"])),
+        status: "pending",
+        payment_intent: text(form["payment_intent"]) ?? null,
+        metadata: isPlainObject(form["metadata"]) ? form["metadata"] : {},
       };
+      refunds.set(refund.id, refund);
+      return { status: 200, body: refund };
+    }
+    if (method === "GET" && path === "/v1/refunds") {
+      const charge = text(query["charge"]);
+      const data = [...refunds.values()].filter(
+        (refund) => charge === undefined || refund["charge"] === charge,
+      );
+      return { status: 200, body: { object: "list", data, has_more: false, url: "/v1/refunds" } };
+    }
+    const other = /^\/v1\/(charges|refunds|disputes)\/([A-Za-z0-9_]+)$/.exec(path);
+    if (method === "GET" && other !== null) {
+      const store = other[1] === "charges" ? charges : other[1] === "refunds" ? refunds : disputes;
+      const found = store.get(other[2] ?? "");
+      return found === undefined
+        ? {
+            status: 404,
+            body: {
+              error: {
+                type: "invalid_request_error",
+                code: "resource_missing",
+                message: `No such ${other[1]}`,
+              },
+            },
+          }
+        : { status: 200, body: found };
     }
     return {
       status: 404,
@@ -313,6 +351,9 @@ export async function startFakeStripe(): Promise<FakeStripe> {
     endpoint: Object.freeze({ host: "127.0.0.1", port, protocol: "http" as const }),
     requests,
     intents,
+    charges,
+    refunds,
+    disputes,
     fail(count, failure) {
       failures = [...failures, ...Array.from({ length: count }, () => failure)];
     },

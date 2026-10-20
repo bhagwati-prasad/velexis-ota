@@ -45,10 +45,16 @@ function summaryOf(state: SignUpState): FormErrorItem[] {
 
 /**
  * The sign-up form: full name, e-mail, password and the terms checkbox. After a refused submission the fields
- * keep what was typed, except the password, which is never sent back to the browser.
+ * keep what was typed, except the password, which is never sent back to the browser. `email` prefills the address
+ * (`?email=` of an invitation's sign-up link, PFE-012).
  */
-export function SignUpForm() {
-  const [state, dispatch, pending] = useActionState(signUp, INITIAL_SIGN_UP_STATE);
+export function SignUpForm({ email }: { readonly email?: string | undefined } = {}) {
+  const [state, dispatch, pending] = useActionState(
+    signUp,
+    email === undefined
+      ? INITIAL_SIGN_UP_STATE
+      : { ...INITIAL_SIGN_UP_STATE, values: { ...INITIAL_SIGN_UP_STATE.values, email } },
+  );
   // A new array per answer, so the summary takes the focus again after each refused submission.
   const summary = useMemo(() => summaryOf(state), [state]);
   return (
