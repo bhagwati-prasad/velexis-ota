@@ -21,6 +21,7 @@
     "dev:seed": "pnpm run build && node --enable-source-maps dist/cli.js dev:seed",
     "test": "vitest run",
     "test:int": "vitest run --config vitest.int.config.ts",
+    "test:xb": "vitest run --config vitest.xb.config.ts",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "clean": "rm -rf dist coverage",

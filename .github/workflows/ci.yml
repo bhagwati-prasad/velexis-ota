@@ -463,6 +463,12 @@ jobs:
       - name: Build
         run: pnpm build
 
+      # PBE-035, PADR-0017 item 2: test:xb starts the BUILT OTA backend (ota/backend/dist/), which only the Build
+      # step above produces: pnpm test:int builds each package's dependencies only, and ota/backend is none of
+      # platform/backend's. Without the build the suite fails at once and names the build command.
+      - name: Cross-backend tests (platform with the built OTA worker)
+        run: pnpm --filter @velexis/platform-backend test:xb
+
       - name: Pack a release folder (dry run of deploy/scripts/pack-release.sh)
         run: |
           RELEASE_SHA="${GITHUB_SHA}" bash deploy/scripts/pack-release.sh /tmp/release

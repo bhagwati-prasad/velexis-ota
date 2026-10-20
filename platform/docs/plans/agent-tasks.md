@@ -766,6 +766,7 @@ Common commands: backend `pnpm --filter @velexis/platform-backend test`, `test:i
 - **Verify:** `pnpm --filter @velexis/platform-backend test:int -- common dev`
 
 ### PBE-035 · Prove provisioning end to end with the real OTA worker
+- **Status:** in progress (branch claude/intelligent-bardeen-90hhu7; pending: AC2's first GitHub CI run of the new `test:xb` step after `Build` in `build-test` (workflow_dispatch by the integrator))
 - **Component:** platform-backend
 - **Milestone:** M1
 - **Depends on:** PBE-023, PBE-034
