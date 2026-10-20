@@ -1,6 +1,11 @@
+import type { components as OtaComponents } from "@velexis/api-types";
 import type { PlatformErrorCode } from "@velexis/errors";
 
 import type { AccountNavId, OtaNavId, TenantRole } from "@/lib/roles";
+
+/** `ConsoleApiKeyScope` and `StaffPermission` of the OTA contract (the scopes of a secret API key, PADR-0005). */
+type ConsoleApiKeyScope = OtaComponents["schemas"]["ConsoleApiKeyScope"];
+type StaffPermission = OtaComponents["schemas"]["StaffPermission"];
 
 /**
  * The portal's user-facing text (English). Kept in one module so a translation can be added later (ADR-0014).
@@ -813,6 +818,230 @@ export const SETTINGS_STRINGS = Object.freeze({
   reload: "Reload the page",
   forbidden: "Your role in this OTA does not allow changing its profile any more. Reload the page.",
   removed: "You are not a member of this OTA any more.",
+  formExpired: "This form has expired. Reload the page and try again.",
+  rateLimited: "Too many changes in a short time. Wait a minute, then try again.",
+});
+
+// ---- API keys (PFE-011) ----------------------------------------------------------------------------------------
+
+/** The environments of a key, as its tab and its texts name them. */
+const KEY_ENVIRONMENT_WORDS: Readonly<Record<"test" | "live", string>> = Object.freeze({
+  test: "test",
+  live: "live",
+});
+
+/** The kinds of a key (`ApiKeyKind` of the platform document). */
+export const API_KEY_KIND_LABELS: Readonly<Record<"publishable" | "secret", string>> = Object.freeze({
+  publishable: "Publishable",
+  secret: "Secret",
+});
+
+/** The uses of a secret key: the `ConsoleApiKeyScope` values of the OTA contract (PADR-0005 item 6). */
+export const API_KEY_SCOPE_STRINGS: Readonly<
+  Record<ConsoleApiKeyScope, { readonly label: string; readonly hint: string }>
+> = Object.freeze({
+  storefront: Object.freeze({
+    label: "Storefront",
+    hint: "Customer operations only: search, book and pay. Every console operation refuses the key, even with a staff token. For the server of a storefront.",
+  }),
+  console: Object.freeze({
+    label: "Console with a staff token",
+    hint: "Console operations for a staff member who signed in: their role decides what they may do. For a back office of your own.",
+  }),
+  "console:automation": Object.freeze({
+    label: "Console automation",
+    hint: "Console operations without a staff token, with exactly the permissions you choose below. For one job or integration.",
+  }),
+});
+
+/** The `StaffPermission` values of the OTA contract, in words; a new value fails the type check until it has one. */
+export const STAFF_PERMISSION_LABELS: Readonly<Record<StaffPermission, string>> = Object.freeze({
+  "bookings:read": "Read bookings",
+  "bookings:write": "Change bookings",
+  "bookings:issue": "Issue tickets",
+  "bookings:cancel": "Cancel bookings",
+  "customers:read": "Read customers",
+  "queues:read": "Read the work queues",
+  "supplier_requests:read": "Read the supplier request log",
+  "amadeus:read": "Read the Amadeus settings",
+  "amadeus:write": "Change the Amadeus settings",
+  "settings:read": "Read the OTA settings",
+  "settings:write": "Change the OTA settings",
+  "payments:read": "Read payments",
+  "payments:capture": "Capture payments",
+  "payments:refund": "Refund payments",
+});
+
+/** How long the old key keeps working after a roll (`expireOldIn` of `rollApiKey`). */
+export const ROLL_EXPIRY_LABELS: Readonly<Record<"now" | "1h" | "24h" | "7d", string>> = Object.freeze({
+  now: "Now: the old key stops working at once",
+  "1h": "In 1 hour",
+  "24h": "In 24 hours",
+  "7d": "In 7 days",
+});
+
+/** The optional expiry of a new key. */
+export const KEY_EXPIRY_LABELS: Readonly<Record<"never" | "7d" | "30d" | "90d" | "365d", string>> =
+  Object.freeze({
+    never: "No expiry",
+    "7d": "In 7 days",
+    "30d": "In 30 days",
+    "90d": "In 90 days",
+    "365d": "In 1 year",
+  });
+
+/** `/otas/[tenantId]/api-keys`: the API keys of an OTA (PF-30). */
+export const API_KEYS_STRINGS = Object.freeze({
+  title: "API keys",
+  intro:
+    "Keys for the Velexis booking API, for your own storefront, back office or automation. Each key is shown once, when it is created or rolled; Velexis keeps only a fingerprint of it.",
+  environmentsLabel: "Environment",
+  /** The tab of an environment's keys. */
+  tab: (environment: "test" | "live") => (environment === "test" ? "Test keys" : "Live keys"),
+  listTitle: (environment: "test" | "live") => (environment === "test" ? "Test keys" : "Live keys"),
+  listIntro:
+    "“Last used” comes from the booking API and can be up to 5 minutes behind. Revoked keys stay listed, because the audit log refers to them.",
+  listCaption: (environment: "test" | "live") => `${KEY_ENVIRONMENT_WORDS[environment]} API keys`,
+  empty: "There is no key yet. Create one below.",
+  listUnavailableTitle: "The keys could not be loaded",
+  readOnlyTitle: "The keys cannot be changed right now",
+  /** Why the keys are read-only, for each status but `active` (PADR-0014 item 5). */
+  readOnly: Object.freeze({
+    provisioning:
+      "Velexis is still setting up this OTA. You can create and change keys once the set-up is done.",
+    suspended:
+      "This OTA is suspended, so its keys are read-only until it is resumed. The keys stay valid, but the booking API refuses requests while the OTA is suspended.",
+    failed: "The set-up of this OTA failed, so it has no keys to change.",
+  }),
+  // The table
+  columnName: "Name",
+  columnKind: "Kind",
+  columnKey: "Key",
+  columnAccess: "Access",
+  columnCreated: "Created",
+  columnLastUsed: "Last used",
+  columnExpires: "Expires",
+  columnStatus: "Status",
+  columnActions: "Actions",
+  /** The visible part of a key: its prefix and its last four characters. */
+  maskedKey: (prefix: string, last4: string) => `${prefix}…${last4}`,
+  noOrigins: "No browser origin: works only from a server",
+  createdBy: (fullName: string) => `by ${fullName}`,
+  createdAtSetup: "at set-up",
+  neverUsed: "Never",
+  noExpiry: "No expiry",
+  stateActive: "Active",
+  stateExpired: "Expired",
+  stateRevoked: "Revoked",
+  edit: "Edit",
+  roll: "Roll",
+  revoke: "Revoke",
+  /** Read after the action's name by screen readers only, so each row's buttons have their own names. */
+  actionTarget: (name: string, masked: string) => ` ${name} (${masked})`,
+  // Create
+  createTitle: (environment: "test" | "live") => `Create a ${KEY_ENVIRONMENT_WORDS[environment]} key`,
+  createIntro:
+    "Choose a publishable key for code that runs in a browser, or a secret key for a server. Kind and access cannot change later: roll or create a new key instead.",
+  nameLabel: "Name",
+  nameHint: "For you and your team, such as “Storefront production”.",
+  nameRequired: "Enter a name for the key.",
+  nameTooLong: "Use at most 100 characters for the name.",
+  kindLegend: "Kind",
+  kindSecret: "Secret key",
+  kindSecretHint: "For servers only (sk_). Never put it in a browser or an app.",
+  kindPublishable: "Publishable key",
+  kindPublishableHint:
+    "Safe in a browser (pk_): it can only search, book and pay as a customer, and only from the origins you list.",
+  kindRequired: "Choose the kind of key.",
+  expiryLabel: "Expiry",
+  expiryHint: "Optional. The key stops working at that time; you can roll it before.",
+  expiryInvalid: "Choose an expiry from the list.",
+  submit: "Create the key",
+  submitting: "Creating the key…",
+  createdTitle: (kind: "publishable" | "secret", environment: "test" | "live") =>
+    `Your new ${API_KEY_KIND_LABELS[kind].toLowerCase()} ${KEY_ENVIRONMENT_WORDS[environment]} key`,
+  createdKeyLabel: (name: string) => `Key “${name}”`,
+  createdListed: (masked: string) => `In the list it shows as ${masked}.`,
+  recommendedTitle: "Recommended set-ups",
+  recommended: Object.freeze([
+    "A storefront deployment: a secret key scoped Storefront, on the storefront's server.",
+    "A back office of your own: a secret key scoped Console with a staff token; staff sign in, and their role decides what they may do.",
+    "Each automation job: its own secret key scoped Console automation, with the fewest permissions the job needs.",
+    "Code in a browser: a publishable key that lists the exact origins of your site.",
+  ]),
+  // Origins
+  originsLegend: "Allowed origins",
+  originsHint: (environment: "test" | "live") =>
+    environment === "test"
+      ? "The exact addresses of the sites that may use the key from a browser, such as https://www.example.com. On test keys http://localhost:<port> and http://127.0.0.1:<port> work too. At most 20. With none, the key works only without a browser (from a server)."
+      : "The exact addresses of the sites that may use the key from a browser, such as https://www.example.com (https only). At most 20. With none, the key works only without a browser (from a server).",
+  originLabel: (position: number) => `Origin ${position}`,
+  addOrigin: "Add an origin",
+  removeOrigin: "Remove",
+  /** Read after "Remove" by screen readers only. */
+  removeOriginTarget: (position: number) => ` origin ${position}`,
+  originWildcard: "Wildcards are not allowed: list each origin exactly, like https://www.example.com.",
+  originInvalid:
+    "Enter an origin only: the scheme and the host, with a port if needed, and nothing after it (no path or trailing slash).",
+  originInsecure: (environment: "test" | "live") =>
+    environment === "test"
+      ? "Use https. Plain http works only for http://localhost:<port> and http://127.0.0.1:<port>."
+      : "Use https: live keys accept https origins only.",
+  originNotCanonical:
+    "Write the origin as a browser sends it: in lower case, without the default port and without a trailing slash.",
+  originDuplicate: "This origin is listed twice.",
+  originsTooMany: "List at most 20 origins.",
+  // Scopes
+  scopesLegend: "What the key may do",
+  scopesHint: "These cannot change later. Choose the least the key needs.",
+  permissionsLegend: "Permissions",
+  permissionsHint: "Only for Console automation: the key acts with exactly these permissions, nothing more.",
+  permissionsWithoutAutomation:
+    "Permissions apply only to Console automation keys. Choose Console automation, or clear the permissions.",
+  automationNeedsPermission: "Choose at least one permission for a Console automation key.",
+  scopeRequired: "Choose what the key may do.",
+  scopeCombination:
+    "This combination is not allowed. Choose one use and, for Console automation, its permissions.",
+  scopeUnknown: "One of the chosen permissions is not known. Reload the page and try again.",
+  // Edit
+  editTitle: (name: string) => `Edit “${name}”`,
+  editIntro:
+    "You can change the name and, for a publishable key, its origins. Kind and access stay as they are.",
+  editSubmit: "Save changes",
+  editSubmitting: "Saving…",
+  saved: "The key is saved.",
+  cancel: "Cancel",
+  // Roll
+  rollTitle: (name: string) => `Roll “${name}”`,
+  rollIntro:
+    "Rolling creates a new key with the same name, kind and access, shown once, and sets when the old key stops working, so you can switch your deployments without downtime.",
+  rollLegend: "The old key stops working",
+  rollSubmit: "Roll the key",
+  rollSubmitting: "Rolling…",
+  rolledTitle: (name: string) => `The new key for “${name}”`,
+  rolledKeyLabel: (kind: "publishable" | "secret") => `New ${API_KEY_KIND_LABELS[kind].toLowerCase()} key`,
+  /** The old key's expiry after a roll; `at` is the formatted `previous.expiresAt`. */
+  oldKeyStopped: (masked: string) => `The old key ${masked} stopped working at `,
+  oldKeyWorksUntil: (masked: string) => `The old key ${masked} keeps working until `,
+  oldKeySwitch: "Switch your deployments to the new key before then.",
+  // Revoke
+  revokeTitle: (name: string) => `Revoke “${name}”?`,
+  revokeDescription: (masked: string) =>
+    `Requests with ${masked} stop working within a minute. A revoked key can never be used again: create a new key if you need one.`,
+  revokeConfirm: "Revoke the key",
+  revoking: "Revoking…",
+  revoked: "The key is revoked.",
+  // Failures
+  planLimit: (limit: number | undefined, used: number | undefined) =>
+    limit === undefined
+      ? "Your plan's limit of API keys is reached. Revoke a key you no longer need, or upgrade the plan."
+      : `Your plan allows ${counted(limit, "working API key", "working API keys")}${used === undefined ? "" : `, and ${COUNT_FORMAT.format(used)} ${used === 1 ? "is" : "are"} in use`}. Keys that are revoked or expired do not count. Revoke a key you no longer need, or upgrade the plan.`,
+  rollPlanLimit: (limit: number | undefined) =>
+    `While the old key keeps working, both keys count against your plan${limit === undefined ? "" : `'s ${counted(limit, "key", "keys")}`}. Roll with “Now”, or revoke a key you no longer need first.`,
+  revokedMeanwhile: "This key was revoked in the meantime, so it cannot be changed. Reload the page.",
+  notActive: "This OTA is not active any more, so its keys cannot be changed. Reload the page to see why.",
+  forbidden: "Your role in this OTA does not allow managing its API keys any more. Reload the page.",
+  removed: "This key or this OTA is not available to you any more. Reload the page.",
   formExpired: "This form has expired. Reload the page and try again.",
   rateLimited: "Too many changes in a short time. Wait a minute, then try again.",
 });

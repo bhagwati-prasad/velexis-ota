@@ -951,7 +951,8 @@ Common commands: backend `pnpm --filter @velexis/platform-backend test`, `test:i
   - A suspended tenant shows the banner with its reason.
 - **Verify:** `pnpm --filter @velexis/platform-frontend test`
 
-### PFE-011 · Build the API keys page
+### PFE-011 · Build the API keys page ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-frontend
 - **Milestone:** M1
 - **Depends on:** PFE-010, PBE-021
