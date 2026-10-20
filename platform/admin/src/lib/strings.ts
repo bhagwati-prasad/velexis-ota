@@ -148,3 +148,202 @@ export const MFA_STRINGS = Object.freeze({
   /** `RATE_LIMITED` of adminVerifyMfa (10 attempts per account per 10 minutes), with the wait of `Retry-After`. */
   rateLimitedFor: (seconds: number) => `Too many codes were tried. Try again in ${waitTime(seconds)}.`,
 });
+
+// ---- Console shell and shared components (PAD-003) --------------------------------------------------------------
+
+/** The signed-in shell (`AdminShell`, `(app)/layout.tsx`). */
+export const SHELL_STRINGS = Object.freeze({
+  productName: "Velexis admin",
+  navigationLabel: "Admin",
+  environmentLabel: "Environment",
+  signedInAs: "Signed in as",
+  signOut: "Sign out",
+  unavailableTitle: "The admin console could not be loaded",
+});
+
+/** The badge of `APP_ENV` in the shell, so nobody mistakes production for a test system. */
+export const ENVIRONMENT_LABELS = Object.freeze({
+  development: "Development",
+  test: "Test",
+  production: "Production",
+});
+
+/** The groups of the navigation, in display order (README §2). */
+export const NAV_SECTION_LABELS = Object.freeze({
+  overview: "Overview",
+  tenants: "OTAs",
+  billing: "Plans and billing",
+  amadeus: "Amadeus",
+  payments: "Payments",
+  people: "People and audit",
+});
+
+/** One entry per area of README §2. */
+export const NAV_LABELS = Object.freeze({
+  dashboard: "Dashboard",
+  tenants: "Tenants",
+  provisioningJobs: "Provisioning jobs",
+  queues: "Queues",
+  plans: "Plans",
+  subscriptions: "Subscriptions",
+  invoices: "Invoices",
+  stripeEvents: "Stripe events",
+  amadeusAccounts: "Amadeus accounts",
+  amadeusOffices: "Office pool",
+  settlements: "Settlements",
+  domains: "Domains",
+  accounts: "Accounts",
+  admins: "Platform admins",
+  audit: "Audit log",
+});
+
+/** `StepUpDialog`: the TOTP prompt of a sensitive action (README §4). */
+export const STEP_UP_STRINGS = Object.freeze({
+  title: "Confirm with your authenticator app",
+  description:
+    "This action needs a confirmation with your authenticator app in the last 15 minutes. Enter the 6-digit code it shows now to continue.",
+  codeLabel: "Authentication code",
+  codeHint: "The 6-digit code your authenticator app shows now.",
+  codeFormat: "Enter the 6 digits of the code from your authenticator app.",
+  submit: "Confirm",
+  submitting: "Checking…",
+  cancel: "Cancel",
+  /** `RATE_LIMITED` of adminStepUp (10 attempts per account per 10 minutes), with the wait of `Retry-After`. */
+  rateLimitedFor: (seconds: number) => `Too many codes were tried. Try again in ${waitTime(seconds)}.`,
+});
+
+/** The bounds of `AdminReason` in the platform document (PADR-0006 item 5). */
+export const REASON_MIN_LENGTH = 5;
+export const REASON_MAX_LENGTH = 500;
+
+/** `ReasonDialog`: the mandatory reason of a **reason** action, stored in the audit log. */
+export const REASON_STRINGS = Object.freeze({
+  label: "Reason",
+  hint: `Between ${REASON_MIN_LENGTH} and ${REASON_MAX_LENGTH} characters. It is stored in the audit log with your name.`,
+  required: "Enter a reason.",
+  tooShort: `Enter a reason of at least ${REASON_MIN_LENGTH} characters.`,
+  tooLong: `Enter a reason of at most ${REASON_MAX_LENGTH} characters.`,
+  counter: (count: number) => `${COUNT_FORMAT.format(count)} of ${REASON_MAX_LENGTH} characters`,
+  cancel: "Cancel",
+});
+
+/** `ConfirmDialog`. */
+export const CONFIRM_STRINGS = Object.freeze({
+  cancel: "Cancel",
+});
+
+/** `DataTable`: the empty table and the cursor paging. */
+export const TABLE_STRINGS = Object.freeze({
+  empty: "Nothing matches.",
+  paginationLabel: "Pages",
+  firstPage: "First page",
+  nextPage: "Next page",
+});
+
+/** `FilterBar`. */
+export const FILTER_STRINGS = Object.freeze({
+  label: "Filters",
+  search: "Search",
+  any: "Any",
+  clear: "Clear filters",
+});
+
+/** `RevealPanel`: details revealed for a short time (the payout account, README §4). */
+export const REVEAL_STRINGS = Object.freeze({
+  /** How long the details stay, counted down on screen. */
+  hidesIn: (seconds: number) => `Hidden again in ${counted(seconds, "second", "seconds")}.`,
+  warning:
+    "Read the details from the screen. They are not copied anywhere, and they hide again after 60 seconds. Revealing them is in the audit log.",
+  hideNow: "Hide now",
+  hidden: "The details are hidden again. Reveal them again if you still need them.",
+});
+
+/** `MaskedValue`: what a screen reader says for `•••• 7947`. */
+export const MASKED_STRINGS = Object.freeze({
+  endingIn: (label: string, last4: string) => `${label} ending in ${last4}`,
+  hidden: (label: string) => `${label}, hidden`,
+});
+
+/** `JsonView`. */
+export const JSON_STRINGS = Object.freeze({
+  empty: "None",
+  unreadable: "This value cannot be shown.",
+});
+
+/**
+ * The label of every status `StatusBadge` shows, by kind (`status-badge.tsx` checks that every status of the platform
+ * document has one).
+ */
+export const STATUS_LABELS = Object.freeze({
+  tenant: { provisioning: "Setting up", active: "Active", suspended: "Suspended", failed: "Set-up failed" },
+  job: { queued: "Queued", running: "Running", succeeded: "Done", failed: "Failed", canceled: "Canceled" },
+  jobStep: { succeeded: "Done", failed: "Failed", skipped: "Skipped" },
+  bullmq: {
+    waiting: "Waiting",
+    prioritized: "Prioritized",
+    "waiting-children": "Waiting for children",
+    delayed: "Delayed",
+    active: "Active",
+    completed: "Completed",
+    failed: "Failed",
+    unknown: "Unknown",
+  },
+  amadeusConnection: {
+    pending_verification: "Pending",
+    active: "Active",
+    invalid_credentials: "Invalid credentials",
+    disabled: "Disabled",
+  },
+  amadeusAccount: {
+    pending_verification: "Not verified",
+    active: "Active",
+    invalid_credentials: "Invalid credentials",
+    disabled: "Disabled",
+  },
+  amadeusOffice: { available: "Available", assigned: "Assigned", releasing: "Releasing", retired: "Retired" },
+  paymentConnection: { pending: "Pending", active: "Active", disabled: "Disabled", error: "Error" },
+  credentialSubmission: {
+    pending: "Pending",
+    verifying: "Verifying",
+    applied: "Applied",
+    failed: "Failed",
+    superseded: "Superseded",
+  },
+  domain: { pending: "Pending", verified: "Verified", failed: "Failed" },
+  tls: { pending: "Pending", issued: "Issued", failed: "Failed", expired: "Expired" },
+  subscription: {
+    trialing: "Trial",
+    active: "Active",
+    past_due: "Past due",
+    paused: "Paused",
+    canceled: "Canceled",
+    incomplete: "Incomplete",
+    incomplete_expired: "Expired",
+    unpaid: "Unpaid",
+  },
+  invoice: { draft: "Draft", open: "Open", paid: "Paid", void: "Void", uncollectible: "Uncollectible" },
+  stripeEvent: {
+    received: "Received",
+    processing: "Processing",
+    processed: "Processed",
+    ignored: "Ignored",
+    failed: "Failed",
+  },
+  membership: { active: "Active", suspended: "Suspended", removed: "Removed" },
+  invitation: { pending: "Pending", accepted: "Accepted", revoked: "Revoked", expired: "Expired" },
+  account: {
+    pending_verification: "Not verified",
+    active: "Active",
+    locked: "Locked",
+    disabled: "Disabled",
+    deleted: "Deleted",
+  },
+  payoutAccount: { pending_review: "Pending review", verified: "Verified", rejected: "Rejected" },
+  settlement: {
+    draft: "Draft",
+    approved: "Approved",
+    paid: "Paid",
+    carried_forward: "Carried forward",
+    void: "Void",
+  },
+});

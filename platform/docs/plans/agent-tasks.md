@@ -1056,7 +1056,8 @@ Common commands: backend `pnpm --filter @velexis/platform-backend test`, `test:i
   - Every mocked API call, the sign-in calls included, carries `X-Velexis-End-User-IP` from the right-most `X-Forwarded-For` entry, `X-Velexis-End-User-Agent` and `X-Velexis-Bff-Key` [PADR-0019].
 - **Verify:** `pnpm --filter @velexis/platform-admin test && pnpm --filter @velexis/platform-admin typecheck`
 
-### PAD-003 · Add the admin shell, reason and step-up dialogs and data tables
+### PAD-003 · Add the admin shell, reason and step-up dialogs and data tables ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-admin
 - **Milestone:** M1
 - **Depends on:** PAD-002
