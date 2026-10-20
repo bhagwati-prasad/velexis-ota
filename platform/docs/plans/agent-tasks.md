@@ -671,7 +671,8 @@ Common commands: backend `pnpm --filter @velexis/platform-backend test`, `test:i
   - With all switches off, the M5 dashboard counters are `null`.
 - **Verify:** `pnpm --filter @velexis/platform-backend test:int -- admin`
 
-### PBE-030 · Implement suspend, resume, migrate and connection status
+### PBE-030 · Implement suspend, resume, migrate and connection status ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-backend
 - **Milestone:** M1
 - **Depends on:** PBE-029, PBE-019, PBE-023

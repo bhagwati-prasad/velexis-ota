@@ -19,7 +19,9 @@
 // - AdminTenantsController and AdminTenantsService: the OTA search, the control-plane view of one OTA and the edit of
 //   its notes and legal name (PBE-029), over the exported repositories of TenantsModule, the global MembershipsModule
 //   (members and invitations), BillingModule (the subscription), SupplierConnectionsModule and PaymentConnectionsModule
-//   (the connections), DomainsModule, ProvisioningModule's jobs repository and AuditModule (the audit rows).
+//   (the connections), DomainsModule, ProvisioningModule's jobs repository and AuditModule (the audit rows); and the
+//   lifecycle actions (suspend, resume, migrate, connection status; PBE-030) over ProvisioningModule's exported
+//   SuspensionService and MigrateService.
 // - AdminJobsController and AdminJobsService: the tenant jobs (list, detail, retry, cancel) over ProvisioningModule's
 //   repository and dispatcher and TenantsModule's repository, and the queues of both backends through QueueInspector
 //   (BullMQ read-only on RedisModule's command client, but for the retry of a failed platform job) (PBE-031).
@@ -31,10 +33,9 @@
 //   its manual edit also moves the tenant's plan through TenantsModule's repository, and BillingModule may not import
 //   TenantsModule, a module of its own layer (architecture §2.2).
 //
-// Later tasks add the tenant lifecycle actions (PBE-030) and the other areas of platform/docs/api-inventory-admin.md,
-// one controller per area. The admin bootstrap commands of dist/cli.js
-// (`admin:grant`, `admin:reset-mfa`, admin-cli.commands.ts) run outside this module, in an application context of
-// their own.
+// Later tasks add the other areas of platform/docs/api-inventory-admin.md, one controller per area. The admin
+// bootstrap commands of dist/cli.js (`admin:grant`, `admin:reset-mfa`, admin-cli.commands.ts) run outside this module,
+// in an application context of their own.
 import { Module } from "@nestjs/common";
 import { AccountsModule } from "../accounts/accounts.module";
 import { AuditModule } from "../audit/audit.module";
