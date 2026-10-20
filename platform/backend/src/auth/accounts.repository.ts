@@ -13,6 +13,13 @@
 // `tenants`, read only, as MembershipsRepository reads `accounts` next to a membership). The MFA settings (PBE-015)
 // are read and changed here for AccountsModule's MfaService: `enableMfa` and `disableMfa` change what the `Account`
 // shows, so they add one to `version`, as `grantPlatformAdmin` (the admin bootstrap, PBE-028) does.
+//
+// The platform admin's account support (PBE-032, admin/admin-accounts.service.ts) reads accounts as `AdminAccount`
+// shows them (`searchForAdmin`, `findAdminAccount`, `lockAdminAccount`, `listPlatformAdmins`) and changes their status
+// (`setStatus`, `version + 1`), their lockout (`clearLockout`, bookkeeping like the sign-in counters, so `version`
+// stays) and their admin flag (`revokePlatformAdmin`, `version + 1`). `lockActivePlatformAdmins` locks every active
+// platform admin, so two admins who disable or revoke each other at the same time run one after the other and never
+// leave Velexis without an admin.
 import { Injectable } from "@nestjs/common";
 import { sql, type PlatformDatabase, type Selectable } from "@velexis/db";
 import type { PlatformTransaction } from "../audit/audit.repository";
@@ -178,6 +185,58 @@ export interface EnabledMfa {
   /** The KEK that wraps its data key (`encryption_key_id`). */
   readonly kekId: string;
   readonly now: Date;
+}
+
+/** An account as the platform admin's `AdminAccount` shows it, with its erasure time (PBE-032). */
+export type AdminAccountRecord = Pick<
+  AccountRecord,
+  | "id"
+  | "email"
+  | "email_verified_at"
+  | "full_name"
+  | "locale"
+  | "time_zone"
+  | "status"
+  | "mfa_enabled"
+  | "mfa_enabled_at"
+  | "is_platform_admin"
+  | "failed_login_count"
+  | "locked_until"
+  | "last_login_at"
+  | "created_at"
+  | "version"
+  | "deleted_at"
+>;
+
+const ADMIN_ACCOUNT_COLUMNS = [
+  "id",
+  "email",
+  "email_verified_at",
+  "full_name",
+  "locale",
+  "time_zone",
+  "status",
+  "mfa_enabled",
+  "mfa_enabled_at",
+  "is_platform_admin",
+  "failed_login_count",
+  "locked_until",
+  "last_login_at",
+  "created_at",
+  "version",
+  "deleted_at",
+] as const;
+
+/** The filters of the admin's account search. */
+export interface AdminAccountSearch {
+  /** Part of the e-mail address or the name, matched ignoring letter case; `%`, `_` and `\` match themselves. */
+  readonly q?: string | undefined;
+  readonly status?: AccountStatus | undefined;
+}
+
+/** `text` as a LIKE pattern that matches it anywhere: `%`, `_` and the escape character `\` stand for themselves. */
+export function containsPattern(text: string): string {
+  return `%${text.replace(/[\\%_]/g, (character) => `\\${character}`)}%`;
 }
 
 /** The condition "not locked out at `now`": `locked_until` is unset or has passed. */
@@ -459,7 +518,18 @@ export class AccountsRepository {
     if (account === undefined) {
       return undefined;
     }
-    const memberships = await db
+    return { ...account, memberships: await this.listActiveMemberships(db, accountId) };
+  }
+
+  /**
+   * The **active** memberships of account `accountId` in OTAs that members may see, oldest first, with what
+   * `AccountMembership` shows of each OTA, read on `db` (the portal's account and the admin's account detail).
+   */
+  async listActiveMemberships(
+    db: PlatformTransaction | PlatformDb,
+    accountId: string,
+  ): Promise<AccountMembershipRecord[]> {
+    return db
       .selectFrom("platform.tenant_memberships as m")
       .innerJoin("platform.tenants as t", "t.id", "m.tenant_id")
       .select([
@@ -477,7 +547,6 @@ export class AccountsRepository {
       .orderBy("m.created_at")
       .orderBy("m.id")
       .execute();
-    return { ...account, memberships };
   }
 
   /** The credentials of account `accountId`, read on `db`; `undefined` when there is no such account. */
@@ -566,5 +635,148 @@ export class AccountsRepository {
       .where("name", "=", name)
       .executeTakeFirst();
     return row !== undefined;
+  }
+
+  /**
+   * Up to `limit` accounts of the admin's search, newest first (`created_at`, then id), read on `db`: `q` matches
+   * part of the e-mail address or the name ignoring letter case, `status` filters, and with `afterId` only the
+   * accounts after that one in this order are read (the cursor's account; the comparison runs in SQL, so the
+   * microseconds of `created_at` count).
+   */
+  async searchForAdmin(
+    db: PlatformTransaction | PlatformDb,
+    search: AdminAccountSearch,
+    afterId: string | undefined,
+    limit: number,
+  ): Promise<AdminAccountRecord[]> {
+    let query = db.selectFrom("platform.accounts").select(ADMIN_ACCOUNT_COLUMNS);
+    if (search.q !== undefined) {
+      const pattern = containsPattern(search.q);
+      query = query.where((eb) => eb.or([eb("email", "ilike", pattern), eb("full_name", "ilike", pattern)]));
+    }
+    if (search.status !== undefined) {
+      query = query.where("status", "=", search.status);
+    }
+    if (afterId !== undefined) {
+      query = query.where(
+        sql<boolean>`(created_at, id) < (SELECT anchor.created_at, anchor.id FROM platform.accounts AS anchor WHERE anchor.id = ${afterId})`,
+      );
+    }
+    return query.orderBy("created_at", "desc").orderBy("id", "desc").limit(limit).execute();
+  }
+
+  /** The account `accountId` as `AdminAccount` shows it, read on `db`; `undefined` when there is no such account. */
+  async findAdminAccount(
+    db: PlatformTransaction | PlatformDb,
+    accountId: string,
+  ): Promise<AdminAccountRecord | undefined> {
+    return db
+      .selectFrom("platform.accounts")
+      .select(ADMIN_ACCOUNT_COLUMNS)
+      .where("id", "=", accountId)
+      .executeTakeFirst();
+  }
+
+  /** The account `accountId` as `AdminAccount` shows it, locked for the rest of `trx` (`FOR UPDATE`). */
+  async lockAdminAccount(
+    trx: PlatformTransaction,
+    accountId: string,
+  ): Promise<AdminAccountRecord | undefined> {
+    return trx
+      .selectFrom("platform.accounts")
+      .select(ADMIN_ACCOUNT_COLUMNS)
+      .where("id", "=", accountId)
+      .forUpdate()
+      .executeTakeFirst();
+  }
+
+  /** How many active platform admins there are (`active`, not erased, `is_platform_admin`), read on `db`. */
+  async countActivePlatformAdmins(db: PlatformTransaction | PlatformDb): Promise<number> {
+    const row = await db
+      .selectFrom("platform.accounts")
+      .select((eb) => eb.fn.countAll<string>().as("admins"))
+      .where("is_platform_admin", "=", true)
+      .where("status", "=", "active" satisfies AccountStatus)
+      .where("deleted_at", "is", null)
+      .executeTakeFirstOrThrow();
+    return Number(row.admins);
+  }
+
+  /**
+   * Locks every active platform admin for the rest of `trx` (`FOR UPDATE`, in id order, so two callers never wait
+   * for each other in a cycle) and returns their ids. A row that stops being an active admin while the lock is awaited
+   * is left out (PostgreSQL checks the condition again on the new row version).
+   */
+  async lockActivePlatformAdmins(trx: PlatformTransaction): Promise<string[]> {
+    const rows = await trx
+      .selectFrom("platform.accounts")
+      .select("id")
+      .where("is_platform_admin", "=", true)
+      .where("status", "=", "active" satisfies AccountStatus)
+      .where("deleted_at", "is", null)
+      .orderBy("id")
+      .forUpdate()
+      .execute();
+    return rows.map((row) => row.id);
+  }
+
+  /**
+   * Moves account `accountId` from one of the states `from` to `to` at `now`, with `version + 1` (the `AdminAccount`
+   * shows the status), in `trx`. Returns `false` when the account is in none of the states `from` (nothing changed).
+   */
+  async setStatus(
+    trx: PlatformTransaction,
+    accountId: string,
+    from: readonly AccountStatus[],
+    to: AccountStatus,
+    now: Date,
+  ): Promise<boolean> {
+    const updated = await trx
+      .updateTable("platform.accounts")
+      .set({ status: to, version: sql<number>`version + 1`, updated_at: now })
+      .where("id", "=", accountId)
+      .where("status", "in", from)
+      .returning("id")
+      .executeTakeFirst();
+    return updated !== undefined;
+  }
+
+  /**
+   * Ends the sign-in lockout of `accountId` at `now`, in `trx` (adminUnlockAccount): the failure count and
+   * `locked_until` are cleared, so the next sign-in with the right password works. Bookkeeping, like the sign-in
+   * counters: `version` stays.
+   */
+  async clearLockout(trx: PlatformTransaction, accountId: string, now: Date): Promise<void> {
+    await trx
+      .updateTable("platform.accounts")
+      .set({ failed_login_count: 0, locked_until: null, updated_at: now })
+      .where("id", "=", accountId)
+      .execute();
+  }
+
+  /**
+   * Takes the platform admin rights from `accountId` at `now`, with `version + 1`, in `trx` (adminRevokeAdmin).
+   * Returns `false` when it was not a platform admin (nothing changed).
+   */
+  async revokePlatformAdmin(trx: PlatformTransaction, accountId: string, now: Date): Promise<boolean> {
+    const updated = await trx
+      .updateTable("platform.accounts")
+      .set({ is_platform_admin: false, version: sql<number>`version + 1`, updated_at: now })
+      .where("id", "=", accountId)
+      .where("is_platform_admin", "=", true)
+      .returning("id")
+      .executeTakeFirst();
+    return updated !== undefined;
+  }
+
+  /** Every account with `is_platform_admin`, by name (then id), read on `db` (adminListAdmins). */
+  async listPlatformAdmins(db: PlatformTransaction | PlatformDb): Promise<AdminAccountRecord[]> {
+    return db
+      .selectFrom("platform.accounts")
+      .select(ADMIN_ACCOUNT_COLUMNS)
+      .where("is_platform_admin", "=", true)
+      .orderBy("full_name")
+      .orderBy("id")
+      .execute();
   }
 }

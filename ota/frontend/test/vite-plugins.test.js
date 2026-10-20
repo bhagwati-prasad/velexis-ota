@@ -260,7 +260,7 @@ describe("the dev and preview servers behave like Caddy for one tenant", () => {
       server: { host: "127.0.0.1", port: 0, open: false, hmr: false, watch: null },
     });
     await devServer.listen();
-  });
+  }, 60_000); // a production build of every page, then the preview and dev servers: about 2 s idle, several times that next to the other packages' tests on a CI runner
 
   afterAll(async () => {
     await previewServer?.close();

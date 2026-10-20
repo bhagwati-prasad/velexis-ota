@@ -132,6 +132,10 @@ describe("expectResponseToMatch on the OTA document", () => {
     // use (the Booking schema pulls in much of the document, so Ajv takes seconds on a busy runner), so that work
     // runs here under PARSE_TIMEOUT_MS and not inside a test body on the default bound.
     responseChecker("ota").check("getBooking", { status: 200, body: {} });
+    // The same for the platform document, which the last test of this block reads once it exists.
+    if (existsSync(join(REPO_ROOT, API_DOCUMENTS.platform))) {
+      responseChecker("platform");
+    }
   }, PARSE_TIMEOUT_MS);
 
   it("fails getBooking 200 with { foo: 1 }, naming the missing required properties [X-015 AC4]", () => {

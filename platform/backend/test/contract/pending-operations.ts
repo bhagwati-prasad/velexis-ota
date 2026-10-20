@@ -25,43 +25,13 @@ export const PENDING_OPERATIONS: readonly PendingOperation[] = Object.freeze([
   // since PBE-026, the setup progress, retry and key reveal since PBE-023, getOnboarding since PBE-024, listDomains,
   // listAmadeusConnections and listPaymentConnections since PBE-027).
 
-  // PBE-007: admin auth and dashboard, tenants, provisioning jobs and queues (the admin auth operations are bound since
-  // PBE-028).
-  { operationId: "adminGetDashboard", task: "PBE-029" },
-  { operationId: "adminListTenants", task: "PBE-029" },
-  { operationId: "adminGetTenant", task: "PBE-029" },
-  { operationId: "adminUpdateTenant", task: "PBE-029" },
-  { operationId: "adminSuspendTenant", task: "PBE-030" },
-  { operationId: "adminResumeTenant", task: "PBE-030" },
-  { operationId: "adminMigrateTenant", task: "PBE-030" },
-  { operationId: "adminSetConnectionStatus", task: "PBE-030" },
-  { operationId: "adminListProvisioningJobs", task: "PBE-031" },
-  { operationId: "adminGetProvisioningJob", task: "PBE-031" },
-  { operationId: "adminRetryProvisioningJob", task: "PBE-031" },
-  { operationId: "adminCancelProvisioningJob", task: "PBE-031" },
-  { operationId: "adminListQueues", task: "PBE-031" },
-  { operationId: "adminListFailedQueueJobs", task: "PBE-031" },
-  { operationId: "adminRetryQueueJob", task: "PBE-031" },
+  // PBE-007: admin auth and dashboard, tenants, provisioning jobs and queues are all bound (the admin auth operations
+  // since PBE-028, the dashboard and the tenant search, detail and edit since PBE-029, suspend, resume, migrate and the
+  // connection status since PBE-030, the provisioning jobs and queues since PBE-031).
 
   // PBE-066: admin plans and subscriptions, Amadeus accounts and offices, accounts, platform admins and audit (the
-  // Amadeus accounts and offices are bound since PBE-020).
-  { operationId: "adminListPlans", task: "PBE-033" },
-  { operationId: "adminCreatePlan", task: "PBE-033" },
-  { operationId: "adminUpdatePlan", task: "PBE-033" },
-  { operationId: "adminListSubscriptions", task: "PBE-033" },
-  { operationId: "adminGetSubscription", task: "PBE-033" },
-  { operationId: "adminUpdateManualSubscription", task: "PBE-033" },
-  { operationId: "adminListAccounts", task: "PBE-032" },
-  { operationId: "adminGetAccount", task: "PBE-032" },
-  { operationId: "adminDisableAccount", task: "PBE-032" },
-  { operationId: "adminEnableAccount", task: "PBE-032" },
-  { operationId: "adminUnlockAccount", task: "PBE-032" },
-  { operationId: "adminResetAccountMfa", task: "PBE-032" },
-  { operationId: "adminListAdmins", task: "PBE-032" },
-  { operationId: "adminGrantAdmin", task: "PBE-032" },
-  { operationId: "adminRevokeAdmin", task: "PBE-032" },
-  { operationId: "adminListAudit", task: "PBE-032" },
-  { operationId: "adminExportAudit", task: "PBE-032" },
+  // Amadeus accounts and offices are bound since PBE-020, the accounts, platform admins and audit since PBE-032, the
+  // plans and subscriptions since PBE-033).
 
   // PBE-037: the M4 console token and Amadeus settings, and the M3 statement descriptor.
   { operationId: "createConsoleToken", task: "PBE-039" },

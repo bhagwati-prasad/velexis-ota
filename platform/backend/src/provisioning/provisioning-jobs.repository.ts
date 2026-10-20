@@ -4,9 +4,15 @@
 // tenant-event consumer and the post-steps (the job with its tenant, the step log, the result, the reveal ciphertext,
 // the transition to `succeeded`) and the mirror of the tenant's migration ledger in `tenant_schema_migrations`, the
 // module's other table; PBE-023 the writes of the failure handler (back to `queued` with a backoff, or `failed`), the
-// reads and the lease extension of the reconciler, the setup progress and the one-time key reveal with its purge.
+// reads and the lease extension of the reconciler, the setup progress and the one-time key reveal with its purge;
+// PBE-029 the recent jobs of a tenant for the platform admin's tenant detail.
 // Kysely on the process's `PLATFORM_DB`, schema-qualified tables (ADR-0005). Times are the service's `Clock`, never the
 // database's `now()`, so leases follow the FakeClock in tests.
+//
+// PBE-031 adds the platform admin's jobs page: the filtered list and the detail (neither ever selects the reveal
+// columns), the locked read of an admin retry or cancel, the payload of a new job (a retry copies its failed job's),
+// and the cancel of a `queued` job. PBE-030 adds the cancel of the active `suspend` or `resume` job that a new
+// suspension or resume of the same tenant supersedes.
 import { Inject, Injectable } from "@nestjs/common";
 import type { ProvisioningStepRecord, TenantMigrationRecord } from "@velexis/api-types/jobs";
 import { sql } from "@velexis/db";
@@ -20,6 +26,33 @@ export type ProvisioningJobKind =
 
 /** The states of `provisioning_jobs.status` (migration 0001); `queued` and `running` are the active ones. */
 export type ProvisioningJobStatus = "queued" | "running" | "succeeded" | "failed" | "canceled";
+
+/**
+ * The kinds the API shows (`ProvisioningJobKind` of the OpenAPI document, PADR-0001 item 8); the other kinds of the
+ * table are post-MVP, and nothing creates them yet.
+ */
+export const API_JOB_KINDS = Object.freeze([
+  "provision",
+  "migrate",
+  "suspend",
+  "resume",
+] as const satisfies readonly ProvisioningJobKind[]);
+
+/** A job as the platform admin's lists show it (`AdminProvisioningJob`): never the payload, result or ciphertext. */
+export interface AdminJobRow {
+  readonly id: string;
+  readonly tenant_id: string;
+  readonly tenant_key: string;
+  readonly kind: string;
+  readonly status: string;
+  readonly step: string | null;
+  readonly attempt: number;
+  readonly max_attempts: number;
+  readonly error: string | null;
+  readonly scheduled_at: Date;
+  readonly started_at: Date | null;
+  readonly finished_at: Date | null;
+}
 
 /** The attempts a provisioning job may make before it fails for good (provisioning flow, PADR-0001). */
 export const PROVISION_MAX_ATTEMPTS = 5;
@@ -37,6 +70,8 @@ export interface NewProvisioningJob {
   readonly requestedByAccountId: string | null;
   /** The time of the request: `scheduled_at` (it may start at once), `created_at` and `updated_at`. */
   readonly now: Date;
+  /** The job's input (ids and options only, ADR-0009 item 10); `{}` when absent. */
+  readonly payload?: Readonly<Record<string, unknown>>;
 }
 
 /** What the API answers about a job it has just queued (`TenantCreated.provisioningJob`). */
@@ -104,7 +139,10 @@ export interface StepLogWrite {
 export interface TenantMigrationMirror {
   readonly tenantId: string;
   readonly schemaName: string;
-  /** The job whose event reported the ledger (`runner_id`). */
+  /**
+   * The job whose event reported the ledger, or the deploy run of a fan-out report (`runner_id` of a version mirrored
+   * for the first time; a version mirrored before keeps the runner that reported it first, the run that applied it).
+   */
   readonly runnerId: string;
   readonly migration: TenantMigrationRecord;
   readonly now: Date;
@@ -181,6 +219,83 @@ export interface RevealJobRow {
   readonly reveal_ciphertext: Buffer | null;
 }
 
+/** The filters of the platform admin's job list (PBE-031, `adminListProvisioningJobs`); each one absent matches all. */
+export interface AdminJobsFilter {
+  /** The kinds listed at all: those the API shows. */
+  readonly kinds: readonly ProvisioningJobKind[];
+  readonly status?: ProvisioningJobStatus | undefined;
+  readonly kind?: ProvisioningJobKind | undefined;
+  readonly tenantId?: string | undefined;
+}
+
+/** A job as the platform admin's list shows it (`AdminProvisioningJob`), with its tenant's key. */
+export interface AdminJobListRow {
+  readonly id: string;
+  readonly tenant_id: string;
+  readonly tenant_key: string;
+  readonly kind: ProvisioningJobKind;
+  readonly status: ProvisioningJobStatus;
+  readonly step: string | null;
+  readonly attempt: number;
+  readonly max_attempts: number;
+  readonly error: string | null;
+  readonly scheduled_at: Date;
+  readonly started_at: Date | null;
+  readonly finished_at: Date | null;
+}
+
+/**
+ * A job as the platform admin's detail shows it (`AdminProvisioningJobDetail`): the list's columns, the step log, the
+ * input, the output and the lease. Never the reveal columns (`reveal_ciphertext`, its KEK id).
+ */
+export interface AdminJobDetailRow extends AdminJobListRow {
+  /** The step log, as stored. */
+  readonly steps: unknown;
+  /** The input, as stored. */
+  readonly payload: unknown;
+  /** The output, as stored; `null` before the first post-step. */
+  readonly result: unknown;
+  readonly locked_until: Date | null;
+}
+
+/** A job as an admin retry or cancel reads it, with its row locked: the job, its input and its tenant. */
+export interface AdminLockedJobRow {
+  readonly id: string;
+  readonly tenant_id: string;
+  readonly kind: ProvisioningJobKind;
+  readonly status: ProvisioningJobStatus;
+  readonly attempt: number;
+  readonly payload: unknown;
+  readonly error: string | null;
+  readonly tenant_key: string;
+  readonly tenant_status: string;
+}
+
+/** The columns of an `AdminJobListRow` (never a reveal column). */
+const ADMIN_JOB_LIST_COLUMNS = [
+  "j.id",
+  "j.tenant_id",
+  "t.key as tenant_key",
+  "j.kind",
+  "j.status",
+  "j.step",
+  "j.attempt",
+  "j.max_attempts",
+  "j.error",
+  "j.scheduled_at",
+  "j.started_at",
+  "j.finished_at",
+] as const;
+
+/** The columns of an `AdminJobDetailRow` (never a reveal column). */
+const ADMIN_JOB_DETAIL_COLUMNS = [
+  ...ADMIN_JOB_LIST_COLUMNS,
+  "j.steps",
+  "j.payload",
+  "j.result",
+  "j.locked_until",
+] as const;
+
 /** The columns of a `LockedJobRow`. */
 const LOCKED_JOB_COLUMNS = [
   "j.id",
@@ -232,8 +347,9 @@ export class ProvisioningJobsRepository {
   constructor(@Inject(PLATFORM_DB) private readonly db: PlatformDb) {}
 
   /**
-   * Inserts `job` in `trx`, `queued` with no attempt made yet, `max_attempts = 5`, an empty step log and payload, and
-   * `scheduled_at = now`. A second active job of the same kind for the tenant fails on `provisioning_jobs_active_uq`.
+   * Inserts `job` in `trx`, `queued` with no attempt made yet, `max_attempts = 5`, an empty step log, the job's payload
+   * (`{}` without one), and `scheduled_at = now`. A second active job of the same kind for the tenant fails on
+   * `provisioning_jobs_active_uq`.
    */
   async insertQueued(trx: PlatformTransaction, job: NewProvisioningJob): Promise<QueuedJobRow> {
     const row = await trx
@@ -245,6 +361,8 @@ export class ProvisioningJobsRepository {
         status: "queued" satisfies ProvisioningJobStatus,
         attempt: 0,
         max_attempts: PROVISION_MAX_ATTEMPTS,
+        // jsonb is written as JSON text.
+        ...(job.payload === undefined ? {} : { payload: JSON.stringify(job.payload) }),
         scheduled_at: job.now,
         requested_by_account_id: job.requestedByAccountId,
         created_at: job.now,
@@ -619,6 +737,37 @@ export class ProvisioningJobsRepository {
     return row === undefined ? undefined : toProgressJob(row);
   }
 
+  /**
+   * The last `limit` jobs of `tenantId` of the kinds the API shows (API_JOB_KINDS), newest first (`created_at`, then
+   * id), as the platform admin's tenant detail lists them (PBE-029, `adminGetTenant`). Read only; the columns never
+   * include the payload, the result or the reveal ciphertext.
+   */
+  async recentForTenant(tenantId: string, limit: number): Promise<AdminJobRow[]> {
+    return this.db
+      .selectFrom("platform.provisioning_jobs as j")
+      .innerJoin("platform.tenants as t", "t.id", "j.tenant_id")
+      .select([
+        "j.id",
+        "j.tenant_id",
+        "t.key as tenant_key",
+        "j.kind",
+        "j.status",
+        "j.step",
+        "j.attempt",
+        "j.max_attempts",
+        "j.error",
+        "j.scheduled_at",
+        "j.started_at",
+        "j.finished_at",
+      ])
+      .where("j.tenant_id", "=", tenantId)
+      .where("j.kind", "in", API_JOB_KINDS)
+      .orderBy("j.created_at", "desc")
+      .orderBy("j.id", "desc")
+      .limit(limit)
+      .execute();
+  }
+
   /** Job `jobId` as the setup progress shows it, read on `db`; `undefined` for an unknown job. */
   async findProgress(
     jobId: string,
@@ -693,7 +842,10 @@ export class ProvisioningJobsRepository {
 
   /**
    * Mirrors one row of a tenant schema's ledger into `tenant_schema_migrations` in `trx` (`applied`): an upsert on
-   * `(tenant_id, version)`, so a second report of the same ledger changes nothing but the times it carries.
+   * `(tenant_id, version)`, so a second report of the same ledger changes nothing but the times it carries. Every
+   * report carries the schema's full ledger (PBE-030: a `migrate` job's and the deploy fan-out's too), so a version
+   * mirrored before keeps its `runner_id`, the job or deploy run that applied it ("Deployment / job that ran it"); only
+   * a version without a runner yet takes this report's.
    */
   async upsertTenantMigration(trx: PlatformTransaction, mirror: TenantMigrationMirror): Promise<void> {
     const { migration } = mirror;
@@ -705,7 +857,6 @@ export class ProvisioningJobsRepository {
       checksum: migration.checksum,
       phase: migration.phase,
       status: "applied",
-      runner_id: mirror.runnerId,
       started_at: startedAt,
       finished_at: finishedAt,
       duration_ms: migration.durationMs,
@@ -714,10 +865,195 @@ export class ProvisioningJobsRepository {
     };
     await trx
       .insertInto("platform.tenant_schema_migrations")
-      .values({ ...values, tenant_id: mirror.tenantId, version: migration.version, created_at: mirror.now })
-      .onConflict((conflict) => conflict.columns(["tenant_id", "version"]).doUpdateSet(values))
+      .values({
+        ...values,
+        runner_id: mirror.runnerId,
+        tenant_id: mirror.tenantId,
+        version: migration.version,
+        created_at: mirror.now,
+      })
+      .onConflict((conflict) =>
+        conflict.columns(["tenant_id", "version"]).doUpdateSet({
+          ...values,
+          runner_id: sql<string>`coalesce(platform.tenant_schema_migrations.runner_id, excluded.runner_id)`,
+        }),
+      )
       .execute();
   }
+
+  /**
+   * One page of the platform admin's job list (PBE-031): the jobs of `filter`, newest first (`created_at`, then id),
+   * after the job `afterJobId` of the previous page (compared by its own `created_at` and id, read in the same query, so
+   * the database's microseconds never fall between two pages), at most `limit`. Read only, on the pool.
+   */
+  async listForAdmin(
+    filter: AdminJobsFilter,
+    afterJobId: string | undefined,
+    limit: number,
+  ): Promise<AdminJobListRow[]> {
+    if (filter.kinds.length === 0) {
+      return [];
+    }
+    let query = this.db
+      .selectFrom("platform.provisioning_jobs as j")
+      .innerJoin("platform.tenants as t", "t.id", "j.tenant_id")
+      .select(ADMIN_JOB_LIST_COLUMNS)
+      .where("j.kind", "in", [...filter.kinds]);
+    if (filter.status !== undefined) {
+      query = query.where("j.status", "=", filter.status);
+    }
+    if (filter.kind !== undefined) {
+      query = query.where("j.kind", "=", filter.kind);
+    }
+    if (filter.tenantId !== undefined) {
+      query = query.where("j.tenant_id", "=", filter.tenantId);
+    }
+    if (afterJobId !== undefined) {
+      query = query.where(
+        (eb) => eb.refTuple("j.created_at", "j.id"),
+        "<",
+        (eb) =>
+          eb
+            .selectFrom("platform.provisioning_jobs as c")
+            .select(["c.created_at", "c.id"])
+            .where("c.id", "=", afterJobId)
+            .$asTuple("created_at", "id"),
+      );
+    }
+    const rows = await query.orderBy("j.created_at", "desc").orderBy("j.id", "desc").limit(limit).execute();
+    return rows.map(toAdminJobListRow);
+  }
+
+  /** True when job `jobId` exists (the platform admin list's cursor check). */
+  async exists(jobId: string): Promise<boolean> {
+    const row = await this.db
+      .selectFrom("platform.provisioning_jobs")
+      .select("id")
+      .where("id", "=", jobId)
+      .executeTakeFirst();
+    return row !== undefined;
+  }
+
+  /** Job `jobId` as the platform admin's detail shows it, read on `db`; `undefined` for an unknown job. */
+  async findForAdmin(
+    jobId: string,
+    db: PlatformDb | PlatformTransaction = this.db,
+  ): Promise<AdminJobDetailRow | undefined> {
+    const row = await db
+      .selectFrom("platform.provisioning_jobs as j")
+      .innerJoin("platform.tenants as t", "t.id", "j.tenant_id")
+      .select(ADMIN_JOB_DETAIL_COLUMNS)
+      .where("j.id", "=", jobId)
+      .executeTakeFirst();
+    return row === undefined ? undefined : { ...row, ...toAdminJobListRow(row) };
+  }
+
+  /**
+   * Job `jobId` with its input and its tenant's key and status, read in `trx` with the job's row locked (`FOR UPDATE OF
+   * j`): the read of an admin retry or cancel, so it runs after (or before) a dispatch, a failure or the post-steps of
+   * the same job, never between them. `undefined` for an unknown job.
+   */
+  async lockForAdmin(trx: PlatformTransaction, jobId: string): Promise<AdminLockedJobRow | undefined> {
+    const row = await trx
+      .selectFrom("platform.provisioning_jobs as j")
+      .innerJoin("platform.tenants as t", "t.id", "j.tenant_id")
+      .select([
+        "j.id",
+        "j.tenant_id",
+        "j.kind",
+        "j.status",
+        "j.attempt",
+        "j.payload",
+        "j.error",
+        "t.key as tenant_key",
+        "t.status as tenant_status",
+      ])
+      .where("j.id", "=", jobId)
+      .forUpdate("j")
+      .executeTakeFirst();
+    if (row === undefined) {
+      return undefined;
+    }
+    return { ...row, kind: row.kind as ProvisioningJobKind, status: row.status as ProvisioningJobStatus };
+  }
+
+  /**
+   * The admin's cancel of a job locked by `lockForAdmin`, in `trx`: `queued → canceled`, `finished_at`, no lease, only
+   * while it is `queued`. False when it changed meanwhile (no row changed).
+   */
+  async markCanceled(
+    trx: PlatformTransaction,
+    cancel: { readonly jobId: string; readonly now: Date },
+  ): Promise<boolean> {
+    const row = await trx
+      .updateTable("platform.provisioning_jobs")
+      .set({
+        status: "canceled" satisfies ProvisioningJobStatus,
+        finished_at: cancel.now,
+        locked_until: null,
+        locked_by: null,
+        updated_at: cancel.now,
+      })
+      .where("id", "=", cancel.jobId)
+      .where("status", "=", "queued" satisfies ProvisioningJobStatus)
+      .returning("id")
+      .executeTakeFirst();
+    return row !== undefined;
+  }
+
+  /**
+   * Cancels the active (`queued` or `running`) job of `kind` of `tenantId` in `trx`, so a new job of the kind can be
+   * inserted (`provisioning_jobs_active_uq` allows one): `canceled`, `finished_at`, no lease, the error
+   * `SUPERSEDED: …` naming `supersededBy` (PBE-030: a suspension or a resume while the previous job of its kind still
+   * waits for the OTA worker's answer). A late answer of the canceled job is then ignored, and the reconciler never
+   * takes it up again. Returns the ids of the jobs canceled (none or one).
+   */
+  async supersedeActive(
+    trx: PlatformTransaction,
+    supersede: {
+      readonly tenantId: string;
+      readonly kind: ProvisioningJobKind;
+      readonly supersededBy: string;
+      readonly now: Date;
+    },
+  ): Promise<string[]> {
+    const rows = await trx
+      .updateTable("platform.provisioning_jobs")
+      .set({
+        status: "canceled" satisfies ProvisioningJobStatus,
+        finished_at: supersede.now,
+        locked_until: null,
+        locked_by: null,
+        error: `SUPERSEDED: The ${supersede.kind} job ${supersede.supersededBy} replaced this job before its answer.`,
+        updated_at: supersede.now,
+      })
+      .where("tenant_id", "=", supersede.tenantId)
+      .where("kind", "=", supersede.kind)
+      .where("status", "in", ["queued", "running"] satisfies ProvisioningJobStatus[])
+      .returning("id")
+      .execute();
+    return rows.map((row) => row.id);
+  }
+}
+
+/** The row of an `AdminJobListRow` query, typed. */
+function toAdminJobListRow(
+  row: Omit<AdminJobListRow, "kind" | "status"> & { kind: string; status: string },
+): AdminJobListRow {
+  return {
+    id: row.id,
+    tenant_id: row.tenant_id,
+    tenant_key: row.tenant_key,
+    kind: row.kind as ProvisioningJobKind,
+    status: row.status as ProvisioningJobStatus,
+    step: row.step,
+    attempt: row.attempt,
+    max_attempts: row.max_attempts,
+    error: row.error,
+    scheduled_at: row.scheduled_at,
+    started_at: row.started_at,
+    finished_at: row.finished_at,
+  };
 }
 
 /** The row of a `ProgressJobRow` query, typed. */

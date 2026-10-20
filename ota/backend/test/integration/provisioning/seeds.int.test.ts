@@ -11,6 +11,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { newId } from "../../../src/common/ids";
 import { APP_DIR } from "../../../src/config";
 import {
+  loadTemplateDefaults,
   TEMPLATE_KEYS,
   TEMPLATE_PARTS,
   TEMPLATE_REGISTRY,
@@ -115,9 +116,17 @@ async function seededRows(schema: string) {
 
 describe("seedTenant", () => {
   it("creates one settings row and one default markup rule on a fresh schema; a second run changes nothing [OBE-004 AC1]", async () => {
+    // The code defaults that ship: OBE-030's account e-mails; OBE-055 adds the booking and staff ones.
+    const shipped = (await loadTemplateDefaults()).map((source) => source.key);
+    expect(shipped).toEqual(expect.arrayContaining(["auth.verify_email", "auth.password_reset"]));
+
     const first = await tenantTx(provisioner, SCHEMAS.fresh, (trx) => seedTenant(trx, TENANT, { now: NOW }));
 
-    expect(first).toEqual({ storefrontSettings: true, defaultMarkupRule: true, notificationTemplates: [] });
+    expect(first).toEqual({
+      storefrontSettings: true,
+      defaultMarkupRule: true,
+      notificationTemplates: shipped,
+    });
     const rows = await seededRows(SCHEMAS.fresh);
     expect(rows.settings).toHaveLength(1);
     expect(rows.settings[0]).toMatchObject({
@@ -151,8 +160,10 @@ describe("seedTenant", () => {
     expect(rule?.id).toMatch(new RegExp(`^mkr_${ULID}$`));
     // The id's timestamp part comes from `now`.
     expect(rule?.id.slice(0, 14)).toBe(newId("mkr", NOW).slice(0, 14));
-    // No code default exists yet (OBE-030 and OBE-055 add them): every key uses the code fallback.
-    expect(rows.templates).toEqual([]);
+    // One system row per shipped default; every other key uses the code fallback at send time.
+    expect(rows.templates.map((row) => [row.key, row.locale, row.is_system, row.is_active])).toEqual(
+      [...shipped].sort().map((key) => [key, "en", true, true]),
+    );
 
     const second = await tenantTx(provisioner, SCHEMAS.fresh, (trx) =>
       seedTenant(trx, TENANT, { now: LATER }),

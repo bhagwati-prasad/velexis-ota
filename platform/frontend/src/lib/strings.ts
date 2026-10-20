@@ -1,6 +1,11 @@
+import type { components as OtaComponents } from "@velexis/api-types";
 import type { PlatformErrorCode } from "@velexis/errors";
 
 import type { AccountNavId, OtaNavId, TenantRole } from "@/lib/roles";
+
+/** `ConsoleApiKeyScope` and `StaffPermission` of the OTA contract (the scopes of a secret API key, PADR-0005). */
+type ConsoleApiKeyScope = OtaComponents["schemas"]["ConsoleApiKeyScope"];
+type StaffPermission = OtaComponents["schemas"]["StaffPermission"];
 
 /**
  * The portal's user-facing text (English). Kept in one module so a translation can be added later (ADR-0014).
@@ -648,4 +653,535 @@ export const WIZARD_STRINGS = Object.freeze({
       : `You already own ${counted(limit, "OTA", "OTAs")}, the most one account can have. An OTA whose set-up failed does not count. Contact Velexis support if you need more.`,
   formExpired: "This form has expired. Reload the page and try again.",
   rateLimited: "Too many requests in a short time. Wait a minute, then try again.",
+});
+
+// ---- The set-up page (PFE-009) -------------------------------------------------------------------------------
+
+/**
+ * The set-up steps of `getProvisioning`, in the order they run: the OTA worker's, then the platform's post-steps
+ * (platform/docs/flows/provisioning.md §2 and §3). A step the portal does not know yet shows its own name.
+ */
+export const SETUP_STEP_LABELS: Readonly<Record<string, string>> = Object.freeze({
+  create_schema: "Create the OTA's database",
+  run_migrations: "Build the database tables",
+  seed_defaults: "Add the default settings",
+  record_migrations: "Record the database version",
+  assign_amadeus_office: "Connect an Amadeus test office",
+  create_payment_connection: "Set up Stripe test payments",
+  issue_api_keys: "Create the test API keys",
+  activate: "Activate the OTA",
+  notify: "Send the welcome e-mail",
+});
+
+/** `/otas/[tenantId]/setup` and `ProvisioningProgress` (PF-11). */
+export const SETUP_STRINGS = Object.freeze({
+  title: "OTA set-up",
+  intro:
+    "Velexis builds your OTA: its database, an Amadeus test office, Stripe test payments and its test API keys. This usually takes less than a minute. You can leave this page and come back.",
+  stepsTitle: "Set-up steps",
+  stepRunning: "In progress",
+  stepWaiting: "Waiting",
+  stepNotRun: "Not run",
+  /** The live summary of the progress, announced when it changes. */
+  summaryQueued: "Waiting for the set-up to start.",
+  summaryRunning: (done: number, total: number) => `Setting up your OTA: ${done} of ${total} steps done.`,
+  summaryRetrying: (attempt: number, maxAttempts: number) =>
+    `Attempt ${attempt} of ${maxAttempts} did not finish. Velexis tries again automatically in a moment.`,
+  summaryActive: "Your OTA is ready.",
+  summaryFailed: "The set-up failed.",
+  summaryCanceled: "The set-up was canceled.",
+  summarySuspended: "This OTA is suspended.",
+  pollFailed: "The progress could not be refreshed just now. Trying again…",
+  pollStoppedTitle: "The progress could not be loaded",
+  readyTitle: "Your OTA is ready",
+  readyText:
+    "Your storefront runs in test mode: bookings and payments are not real until your OTA goes live.",
+  storefrontLink: "Open your storefront",
+  dashboardLink: "Go to the OTA dashboard",
+  keysTitle: "Test API keys",
+  keysIntro:
+    "During the set-up Velexis created a publishable and a secret test key for your OTA. They can be shown once, within 24 hours of the set-up.",
+  reveal: "Reveal the test keys",
+  revealing: "Revealing…",
+  revealedTitle: "Your test API keys",
+  revealedHint:
+    "The publishable key goes into your storefront's browser code; keep the secret key on your server.",
+  publishableKeyLabel: "Publishable test key",
+  secretKeyLabel: "Secret test key",
+  apiKeysLink: "Go to API keys",
+  keysOwnerOnly: "An owner of this OTA can reveal the test API keys made during the set-up.",
+  failedTitle: "The set-up failed",
+  /** The step the set-up stopped at, by its label. */
+  failedAt: (step: string) => `It stopped at the step “${step}”.`,
+  failedAttempts: (attempt: number, maxAttempts: number) => `Attempts made: ${attempt} of ${maxAttempts}.`,
+  failedHelp: "Velexis has been told and is looking into it.",
+  failedReference: (jobId: string) => `Reference for support: ${jobId}`,
+  retry: "Retry the set-up",
+  retrying: "Starting a new attempt…",
+  retryHint: "A retry starts a new set-up attempt and shows its progress here.",
+  retryOwnerOnly: "Only an owner of this OTA can retry the set-up.",
+  canceledText: "Contact Velexis support to finish the set-up of this OTA.",
+  suspendedText: "The OTA dashboard has the details.",
+  unavailableTitle: "The set-up could not be loaded",
+});
+
+// ---- OTA dashboard, onboarding checklist and settings (PFE-010) ----------------------------------------------
+
+/** `otas/[tenantId]/layout.tsx` and the pages below it (README §2 Signed in). */
+export const OTA_STRINGS = Object.freeze({
+  unavailableTitle: "This OTA could not be loaded",
+});
+
+/** `/otas/[tenantId]`: the OTA dashboard (README §2, PF-12). */
+export const OTA_DASHBOARD_STRINGS = Object.freeze({
+  intro: "The status of your OTA, its storefront and the steps that are left before your first booking.",
+  detailsLabel: "About this OTA",
+  key: "Key",
+  role: "Your role",
+  defaultCurrency: "Default currency",
+  editProfile: "Edit the OTA profile",
+  storefrontTitle: "Storefront",
+  storefrontIntro: "Where your customers search, book and pay.",
+  storefrontPending: "The storefront opens when the set-up is done.",
+  setupInProgress: "Velexis is still setting up this OTA.",
+  setupFailed: "The set-up of this OTA failed.",
+  setupLink: "Open the set-up page",
+  checklistUnavailableTitle: "The checklist could not be loaded",
+});
+
+/** `OnboardingChecklist`: the items of `getOnboarding` (PADR-0018, PF-12). */
+export const ONBOARDING_STRINGS = Object.freeze({
+  title: "Get your OTA ready",
+  intro: "The steps from set-up to your first booking. Each one links to the page where you do it.",
+  progress: (done: number, total: number) =>
+    `${COUNT_FORMAT.format(done)} of ${COUNT_FORMAT.format(total)} done`,
+  done: "Done",
+  toDo: "To do",
+  allDone: "Every step is done. Your OTA is ready.",
+  empty: "There is nothing to do right now.",
+});
+
+/** `NotAllowed`: a page of an OTA that the caller's role may not open (scope §1.2). */
+export const NOT_ALLOWED_STRINGS = Object.freeze({
+  title: "You cannot open this page",
+  /** The caller's role in words (`ROLE_LABELS`). */
+  intro: (role: string) => `Your role in this OTA is ${role}, and this page is not part of it.`,
+  askOwner: "If you need it, ask an owner or an admin of this OTA to change your role.",
+  backToOverview: "Back to the OTA overview",
+});
+
+/** `/otas/[tenantId]/settings`: the OTA profile (PF-13). */
+export const SETTINGS_STRINGS = Object.freeze({
+  title: "OTA settings",
+  intro:
+    "The profile of your OTA. The storefront's branding and currencies are set in the OTA admin, not here.",
+  profileLegend: "Profile",
+  nameLabel: "OTA name",
+  nameHint: "The name your customers see.",
+  nameRequired: "Enter a name for your OTA.",
+  nameTooLong: "Use at most 100 characters for the name.",
+  legalNameLabel: "Legal name",
+  legalNameHint:
+    "The company behind the OTA, as it appears on invoices. Leave it empty if there is none yet.",
+  legalNameTooLong: "Use at most 200 characters for the legal name.",
+  supportEmailLabel: "Support e-mail address",
+  supportEmailHint: "Where your customers can reach you. Leave it empty if there is none yet.",
+  supportEmailInvalid: "Enter a valid e-mail address, like support@example.com.",
+  countryLabel: "Country",
+  countryHint: "Where your business is registered.",
+  countryPlaceholder: "Choose a country",
+  countryRequired: "Choose the country of your business.",
+  countryUnknown: "Choose a country from the list.",
+  timeZoneLabel: "Time zone",
+  timeZoneHint: "For the dates and times of your OTA admin.",
+  timeZoneRequired: "Choose the time zone of your OTA.",
+  timeZoneUnknown: "Choose a time zone from the list.",
+  fixedTitle: "Set when the OTA was created",
+  fixedIntro: "These cannot be changed.",
+  keyLabel: "OTA key",
+  keyHint: "Part of the storefront address.",
+  currencyLabel: "Default currency",
+  currencyHint: "The currency the storefront sells in.",
+  submit: "Save changes",
+  submitting: "Saving…",
+  saved: "The profile is saved.",
+  readOnlyTitle: "The profile cannot be changed right now",
+  /** Why the profile is read-only, for each status but `active` (only an active OTA can be edited). */
+  readOnly: Object.freeze({
+    provisioning: "Velexis is still setting up this OTA. You can change its profile once the set-up is done.",
+    suspended: "This OTA is suspended, so its profile is read-only until it is resumed.",
+    failed: "The set-up of this OTA failed, so its profile cannot be changed.",
+  }),
+  notActive: "This OTA is not active any more, so its profile cannot be changed. Reload the page to see why.",
+  stale:
+    "Someone else changed this profile in the meantime. Reload the page to see their changes, then make yours again.",
+  reload: "Reload the page",
+  forbidden: "Your role in this OTA does not allow changing its profile any more. Reload the page.",
+  removed: "You are not a member of this OTA any more.",
+  formExpired: "This form has expired. Reload the page and try again.",
+  rateLimited: "Too many changes in a short time. Wait a minute, then try again.",
+});
+
+// ---- API keys (PFE-011) ----------------------------------------------------------------------------------------
+
+/** The environments of a key, as its tab and its texts name them. */
+const KEY_ENVIRONMENT_WORDS: Readonly<Record<"test" | "live", string>> = Object.freeze({
+  test: "test",
+  live: "live",
+});
+
+/** The kinds of a key (`ApiKeyKind` of the platform document). */
+export const API_KEY_KIND_LABELS: Readonly<Record<"publishable" | "secret", string>> = Object.freeze({
+  publishable: "Publishable",
+  secret: "Secret",
+});
+
+/** The uses of a secret key: the `ConsoleApiKeyScope` values of the OTA contract (PADR-0005 item 6). */
+export const API_KEY_SCOPE_STRINGS: Readonly<
+  Record<ConsoleApiKeyScope, { readonly label: string; readonly hint: string }>
+> = Object.freeze({
+  storefront: Object.freeze({
+    label: "Storefront",
+    hint: "Customer operations only: search, book and pay. Every console operation refuses the key, even with a staff token. For the server of a storefront.",
+  }),
+  console: Object.freeze({
+    label: "Console with a staff token",
+    hint: "Console operations for a staff member who signed in: their role decides what they may do. For a back office of your own.",
+  }),
+  "console:automation": Object.freeze({
+    label: "Console automation",
+    hint: "Console operations without a staff token, with exactly the permissions you choose below. For one job or integration.",
+  }),
+});
+
+/** The `StaffPermission` values of the OTA contract, in words; a new value fails the type check until it has one. */
+export const STAFF_PERMISSION_LABELS: Readonly<Record<StaffPermission, string>> = Object.freeze({
+  "bookings:read": "Read bookings",
+  "bookings:write": "Change bookings",
+  "bookings:issue": "Issue tickets",
+  "bookings:cancel": "Cancel bookings",
+  "customers:read": "Read customers",
+  "queues:read": "Read the work queues",
+  "supplier_requests:read": "Read the supplier request log",
+  "amadeus:read": "Read the Amadeus settings",
+  "amadeus:write": "Change the Amadeus settings",
+  "settings:read": "Read the OTA settings",
+  "settings:write": "Change the OTA settings",
+  "payments:read": "Read payments",
+  "payments:capture": "Capture payments",
+  "payments:refund": "Refund payments",
+});
+
+/** How long the old key keeps working after a roll (`expireOldIn` of `rollApiKey`). */
+export const ROLL_EXPIRY_LABELS: Readonly<Record<"now" | "1h" | "24h" | "7d", string>> = Object.freeze({
+  now: "Now: the old key stops working at once",
+  "1h": "In 1 hour",
+  "24h": "In 24 hours",
+  "7d": "In 7 days",
+});
+
+/** The optional expiry of a new key. */
+export const KEY_EXPIRY_LABELS: Readonly<Record<"never" | "7d" | "30d" | "90d" | "365d", string>> =
+  Object.freeze({
+    never: "No expiry",
+    "7d": "In 7 days",
+    "30d": "In 30 days",
+    "90d": "In 90 days",
+    "365d": "In 1 year",
+  });
+
+/** `/otas/[tenantId]/api-keys`: the API keys of an OTA (PF-30). */
+export const API_KEYS_STRINGS = Object.freeze({
+  title: "API keys",
+  intro:
+    "Keys for the Velexis booking API, for your own storefront, back office or automation. Each key is shown once, when it is created or rolled; Velexis keeps only a fingerprint of it.",
+  environmentsLabel: "Environment",
+  /** The tab of an environment's keys. */
+  tab: (environment: "test" | "live") => (environment === "test" ? "Test keys" : "Live keys"),
+  listTitle: (environment: "test" | "live") => (environment === "test" ? "Test keys" : "Live keys"),
+  listIntro:
+    "“Last used” comes from the booking API and can be up to 5 minutes behind. Revoked keys stay listed, because the audit log refers to them.",
+  listCaption: (environment: "test" | "live") => `${KEY_ENVIRONMENT_WORDS[environment]} API keys`,
+  empty: "There is no key yet. Create one below.",
+  listUnavailableTitle: "The keys could not be loaded",
+  readOnlyTitle: "The keys cannot be changed right now",
+  /** Why the keys are read-only, for each status but `active` (PADR-0014 item 5). */
+  readOnly: Object.freeze({
+    provisioning:
+      "Velexis is still setting up this OTA. You can create and change keys once the set-up is done.",
+    suspended:
+      "This OTA is suspended, so its keys are read-only until it is resumed. The keys stay valid, but the booking API refuses requests while the OTA is suspended.",
+    failed: "The set-up of this OTA failed, so it has no keys to change.",
+  }),
+  // The table
+  columnName: "Name",
+  columnKind: "Kind",
+  columnKey: "Key",
+  columnAccess: "Access",
+  columnCreated: "Created",
+  columnLastUsed: "Last used",
+  columnExpires: "Expires",
+  columnStatus: "Status",
+  columnActions: "Actions",
+  /** The visible part of a key: its prefix and its last four characters. */
+  maskedKey: (prefix: string, last4: string) => `${prefix}…${last4}`,
+  noOrigins: "No browser origin: works only from a server",
+  createdBy: (fullName: string) => `by ${fullName}`,
+  createdAtSetup: "at set-up",
+  neverUsed: "Never",
+  noExpiry: "No expiry",
+  stateActive: "Active",
+  stateExpired: "Expired",
+  stateRevoked: "Revoked",
+  edit: "Edit",
+  roll: "Roll",
+  revoke: "Revoke",
+  /** Read after the action's name by screen readers only, so each row's buttons have their own names. */
+  actionTarget: (name: string, masked: string) => ` ${name} (${masked})`,
+  // Create
+  createTitle: (environment: "test" | "live") => `Create a ${KEY_ENVIRONMENT_WORDS[environment]} key`,
+  createIntro:
+    "Choose a publishable key for code that runs in a browser, or a secret key for a server. Kind and access cannot change later: roll or create a new key instead.",
+  nameLabel: "Name",
+  nameHint: "For you and your team, such as “Storefront production”.",
+  nameRequired: "Enter a name for the key.",
+  nameTooLong: "Use at most 100 characters for the name.",
+  kindLegend: "Kind",
+  kindSecret: "Secret key",
+  kindSecretHint: "For servers only (sk_). Never put it in a browser or an app.",
+  kindPublishable: "Publishable key",
+  kindPublishableHint:
+    "Safe in a browser (pk_): it can only search, book and pay as a customer, and only from the origins you list.",
+  kindRequired: "Choose the kind of key.",
+  expiryLabel: "Expiry",
+  expiryHint: "Optional. The key stops working at that time; you can roll it before.",
+  expiryInvalid: "Choose an expiry from the list.",
+  submit: "Create the key",
+  submitting: "Creating the key…",
+  createdTitle: (kind: "publishable" | "secret", environment: "test" | "live") =>
+    `Your new ${API_KEY_KIND_LABELS[kind].toLowerCase()} ${KEY_ENVIRONMENT_WORDS[environment]} key`,
+  createdKeyLabel: (name: string) => `Key “${name}”`,
+  createdListed: (masked: string) => `In the list it shows as ${masked}.`,
+  recommendedTitle: "Recommended set-ups",
+  recommended: Object.freeze([
+    "A storefront deployment: a secret key scoped Storefront, on the storefront's server.",
+    "A back office of your own: a secret key scoped Console with a staff token; staff sign in, and their role decides what they may do.",
+    "Each automation job: its own secret key scoped Console automation, with the fewest permissions the job needs.",
+    "Code in a browser: a publishable key that lists the exact origins of your site.",
+  ]),
+  // Origins
+  originsLegend: "Allowed origins",
+  originsHint: (environment: "test" | "live") =>
+    environment === "test"
+      ? "The exact addresses of the sites that may use the key from a browser, such as https://www.example.com. On test keys http://localhost:<port> and http://127.0.0.1:<port> work too. At most 20. With none, the key works only without a browser (from a server)."
+      : "The exact addresses of the sites that may use the key from a browser, such as https://www.example.com (https only). At most 20. With none, the key works only without a browser (from a server).",
+  originLabel: (position: number) => `Origin ${position}`,
+  addOrigin: "Add an origin",
+  removeOrigin: "Remove",
+  /** Read after "Remove" by screen readers only. */
+  removeOriginTarget: (position: number) => ` origin ${position}`,
+  originWildcard: "Wildcards are not allowed: list each origin exactly, like https://www.example.com.",
+  originInvalid:
+    "Enter an origin only: the scheme and the host, with a port if needed, and nothing after it (no path or trailing slash).",
+  originInsecure: (environment: "test" | "live") =>
+    environment === "test"
+      ? "Use https. Plain http works only for http://localhost:<port> and http://127.0.0.1:<port>."
+      : "Use https: live keys accept https origins only.",
+  originNotCanonical:
+    "Write the origin as a browser sends it: in lower case, without the default port and without a trailing slash.",
+  originDuplicate: "This origin is listed twice.",
+  originsTooMany: "List at most 20 origins.",
+  // Scopes
+  scopesLegend: "What the key may do",
+  scopesHint: "These cannot change later. Choose the least the key needs.",
+  permissionsLegend: "Permissions",
+  permissionsHint: "Only for Console automation: the key acts with exactly these permissions, nothing more.",
+  permissionsWithoutAutomation:
+    "Permissions apply only to Console automation keys. Choose Console automation, or clear the permissions.",
+  automationNeedsPermission: "Choose at least one permission for a Console automation key.",
+  scopeRequired: "Choose what the key may do.",
+  scopeCombination:
+    "This combination is not allowed. Choose one use and, for Console automation, its permissions.",
+  scopeUnknown: "One of the chosen permissions is not known. Reload the page and try again.",
+  // Edit
+  editTitle: (name: string) => `Edit “${name}”`,
+  editIntro:
+    "You can change the name and, for a publishable key, its origins. Kind and access stay as they are.",
+  editSubmit: "Save changes",
+  editSubmitting: "Saving…",
+  saved: "The key is saved.",
+  cancel: "Cancel",
+  // Roll
+  rollTitle: (name: string) => `Roll “${name}”`,
+  rollIntro:
+    "Rolling creates a new key with the same name, kind and access, shown once, and sets when the old key stops working, so you can switch your deployments without downtime.",
+  rollLegend: "The old key stops working",
+  rollSubmit: "Roll the key",
+  rollSubmitting: "Rolling…",
+  rolledTitle: (name: string) => `The new key for “${name}”`,
+  rolledKeyLabel: (kind: "publishable" | "secret") => `New ${API_KEY_KIND_LABELS[kind].toLowerCase()} key`,
+  /** The old key's expiry after a roll; `at` is the formatted `previous.expiresAt`. */
+  oldKeyStopped: (masked: string) => `The old key ${masked} stopped working at `,
+  oldKeyWorksUntil: (masked: string) => `The old key ${masked} keeps working until `,
+  oldKeySwitch: "Switch your deployments to the new key before then.",
+  // Revoke
+  revokeTitle: (name: string) => `Revoke “${name}”?`,
+  revokeDescription: (masked: string) =>
+    `Requests with ${masked} stop working within a minute. A revoked key can never be used again: create a new key if you need one.`,
+  revokeConfirm: "Revoke the key",
+  revoking: "Revoking…",
+  revoked: "The key is revoked.",
+  // Failures
+  planLimit: (limit: number | undefined, used: number | undefined) =>
+    limit === undefined
+      ? "Your plan's limit of API keys is reached. Revoke a key you no longer need, or upgrade the plan."
+      : `Your plan allows ${counted(limit, "working API key", "working API keys")}${used === undefined ? "" : `, and ${COUNT_FORMAT.format(used)} ${used === 1 ? "is" : "are"} in use`}. Keys that are revoked or expired do not count. Revoke a key you no longer need, or upgrade the plan.`,
+  rollPlanLimit: (limit: number | undefined) =>
+    `While the old key keeps working, both keys count against your plan${limit === undefined ? "" : `'s ${counted(limit, "key", "keys")}`}. Roll with “Now”, or revoke a key you no longer need first.`,
+  revokedMeanwhile: "This key was revoked in the meantime, so it cannot be changed. Reload the page.",
+  notActive: "This OTA is not active any more, so its keys cannot be changed. Reload the page to see why.",
+  forbidden: "Your role in this OTA does not allow managing its API keys any more. Reload the page.",
+  removed: "This key or this OTA is not available to you any more. Reload the page.",
+  formExpired: "This form has expired. Reload the page and try again.",
+  rateLimited: "Too many changes in a short time. Wait a minute, then try again.",
+});
+
+// ---- The team page and invitation acceptance (PFE-012) ------------------------------------------------------
+
+/** `/otas/[tenantId]/team`, `MembersTable` and `InviteForm` (PF-20, PF-21). */
+export const TEAM_STRINGS = Object.freeze({
+  title: "Team",
+  intro: "The people who work on this OTA, in the portal and in the OTA admin, each with a role.",
+  readOnly:
+    "Only owners and admins invite people, change roles or remove members. You can leave the OTA yourself.",
+  membersTitle: "Members",
+  membersCaption: "Members of this OTA",
+  membersEmpty: "This OTA has no members to show.",
+  name: "Name",
+  email: "E-mail address",
+  role: "Role",
+  mfa: "Two-factor",
+  joined: "Joined",
+  actions: "Actions",
+  you: "(you)",
+  mfaOn: "On",
+  mfaOff: "Off",
+  /** The label of a member's role selector, for screen readers. */
+  roleOf: (name: string) => `Role of ${name}`,
+  changeRole: "Change role",
+  changingRole: "Changing…",
+  /** Read after "Change role" by screen readers only, so each row's button has its own name. */
+  changeRoleOf: (name: string) => ` of ${name}`,
+  roleChanged: (name: string, role: string) => `${name} is now ${role}.`,
+  remove: "Remove",
+  /** Read after "Remove" by screen readers only, so each row's button has its own name. */
+  removeWho: (name: string) => ` ${name}`,
+  removeTitle: (name: string) => `Remove ${name} from the team?`,
+  removeDescription:
+    "They lose access to this OTA in the portal at once, and in the OTA admin within a minute. You can invite them again later.",
+  removeConfirm: "Remove member",
+  removed: "The member was removed from the team.",
+  leave: "Leave this OTA",
+  leaveTitle: "Leave this OTA?",
+  leaveDescription:
+    "You lose access to this OTA in the portal at once, and in the OTA admin within a minute. An owner or an admin can invite you again.",
+  leaveConfirm: "Leave the OTA",
+  stale: "Someone else changed this member in the meantime. Reload the page, then try again.",
+  memberGone: "This person is not a member of this OTA any more. Reload the page to see the current team.",
+  notMember: "You are not a member of this OTA any more.",
+  forbidden: "Your role in this OTA does not allow this change. Reload the page to see what you can do.",
+  mfaRequired:
+    "Making someone an owner needs a code from your authenticator app: turn on two-factor authentication first.",
+  mfaLink: "Set up two-factor authentication",
+  stepUpCancelled: "The role was not changed: it needs a code from your authenticator app.",
+  reload: "Reload the page",
+  formExpired: "This form has expired. Reload the page and try again.",
+  rateLimited: "Too many changes in a short time. Wait a minute, then try again.",
+  membersUnavailableTitle: "The members could not be loaded",
+  invitationsTitle: "Pending invitations",
+  invitationsIntro: "Invitations that are waiting to be accepted. Each one holds a seat of your plan.",
+  invitationsCaption: "Pending invitations",
+  invitationsEmpty: "No invitation is waiting to be accepted.",
+  invitedBy: "Invited by",
+  formerMember: "A former member",
+  expires: "Link expires",
+  resend: "Send again",
+  resending: "Sending…",
+  /** Read after "Send again" or "Revoke" by screen readers only, so each row's buttons have their own names. */
+  invitationTo: (email: string) => ` the invitation to ${email}`,
+  resent:
+    "The invitation was sent again with a new link that works for 7 days. The old link no longer works.",
+  revoke: "Revoke",
+  revokeTitle: "Revoke this invitation?",
+  revokeDescription: (email: string) =>
+    `The link sent to ${email} stops working at once, and its seat becomes free. You can invite the address again later.`,
+  revokeConfirm: "Revoke invitation",
+  revoked: "The invitation was revoked.",
+  notPending: "This invitation is no longer waiting to be accepted. Reload the page to see the current list.",
+  invitationGone: "This invitation does not exist any more. Reload the page to see the current list.",
+  invitationsUnavailableTitle: "The invitations could not be loaded",
+  inviteTitle: "Invite someone",
+  inviteIntro:
+    "We e-mail them a link that works for 7 days. They sign in, or create an account, with this address to join.",
+  emailLabel: "E-mail address",
+  emailHint: "The address the invitation goes to. Only an account with this verified address can accept it.",
+  emailRequired: "Enter the e-mail address to invite.",
+  emailInvalid: "Enter a valid e-mail address, like name@example.com.",
+  roleLabel: "Role",
+  roleHint:
+    "Owners and admins manage the OTA and its team; agents work on bookings in the OTA admin; finance members see billing and payments; viewers only read.",
+  roleHintAdmin: "Only an owner can invite owners and admins.",
+  roleRequired: "Choose a role.",
+  roleNotAllowed: "Choose one of the roles in the list.",
+  invite: "Send the invitation",
+  inviting: "Sending…",
+  invited: "The invitation is on its way. It shows under pending invitations until it is accepted.",
+  /** `PLAN_LIMIT_REACHED` with `details.limit` and `details.used` (PF-20 AC2). */
+  seatLimit: (used: number, limit: number) =>
+    `Your plan includes ${counted(limit, "team seat", "team seats")}, and ${COUNT_FORMAT.format(used)} ${
+      used === 1 ? "is" : "are"
+    } taken by members and pending invitations. Revoke an invitation or remove a member to free a seat.`,
+});
+
+/** `/invitations/accept`: one invitation, before and after sign-in (PF-20 AC3). */
+export const INVITATION_STRINGS = Object.freeze({
+  pageTitle: "Your invitation",
+  /** The page's heading, with the OTA's name from `lookupInvitation`. */
+  title: (tenantName: string) => `Join ${tenantName}`,
+  intro: (inviter: string | null, tenantName: string) =>
+    inviter === null
+      ? `You are invited to join the team of ${tenantName} on Velexis.`
+      : `${inviter} invited you to join the team of ${tenantName} on Velexis.`,
+  detailsLabel: "The invitation",
+  ota: "OTA",
+  role: "Role",
+  invitedAddress: "Invited address",
+  expires: "Link expires",
+  signedOut: "Sign in, or create an account, with the invited address to accept the invitation.",
+  signIn: "Sign in to accept",
+  signUp: "Create an account",
+  signUpHint:
+    "New to Velexis? Create an account with the invited address and verify it, then sign in and open the invitation link again.",
+  signedInAs: (email: string) => `You are signed in as ${email}.`,
+  accept: "Accept the invitation",
+  /** `INVITATION_EMAIL_MISMATCH`, naming the address the invitation was sent to (PF-20 AC3). */
+  mismatchTitle: "This invitation is for another address",
+  mismatch: (invited: string) =>
+    `This invitation was sent to ${invited}. Sign in with that address to accept it.`,
+  switchAccount: "Sign out and sign in with the invited address",
+  unverifiedTitle: "Verify your e-mail address first",
+  unverified:
+    "Verify the address of your account before you accept the invitation, then open this page again.",
+  verifyLink: "Verify your e-mail address",
+  alreadyMember: "You are already a member of this OTA.",
+  dashboardLink: "Go to my OTAs",
+  invalidTitle: "This invitation cannot be used",
+  invalid:
+    "This invitation has expired, was revoked or was already used. Ask the person who invited you to send it again.",
+  linkMissingTitle: "Open the link from your invitation e-mail",
+  linkMissing:
+    "To accept an invitation, open the link in the invitation e-mail. This page keeps it for 15 minutes; after that, open the link again.",
+  unavailableTitle: "The invitation could not be loaded",
+  failedTitle: "The invitation could not be accepted",
+  rateLimited: "Too many attempts from your network. Wait a few minutes, then open the page again.",
 });

@@ -1,0 +1,35 @@
+<template id="tpl-fare-family">
+  <li
+    class="flex flex-col rounded-ui border-2 border-muted/30 bg-surface p-4 has-checked:border-primary"
+    data-fare-family
+    data-field-data-offer-id="offerId"
+  >
+    <label class="flex min-h-6 cursor-pointer items-start gap-3">
+      <input
+        type="radio"
+        name="fare"
+        class="mt-1 size-5 shrink-0 accent-primary"
+        data-field-value="offerId"
+        data-field-checked="checked"
+      />
+      <span class="flex-1">
+        <span class="block font-heading text-lg font-semibold" data-field="name"></span>
+        <span class="block text-xl font-semibold" data-field="price"></span>
+        <span
+          class="block text-sm text-muted"
+          data-field="difference"
+          data-field-hidden="noDifference"
+        ></span>
+      </span>
+    </label>
+    <ul class="mt-3 space-y-1 border-t border-muted/30 pt-3 text-sm" data-fare-features></ul>
+  </li>
+</template>
+
+<template id="tpl-fare-feature">
+  <li data-field-data-status="status">
+    <span class="font-medium" data-field="label"></span>
+    <span data-field="statusText"></span>
+    <span class="block text-muted" data-field="detail" data-field-hidden="noDetail"></span>
+  </li>
+</template>

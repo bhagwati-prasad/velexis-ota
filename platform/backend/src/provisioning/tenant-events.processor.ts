@@ -10,20 +10,32 @@
 //    paths and rules, never the values.
 // 2. `tenant.provisioned` runs the post-steps (PostStepsRunner). `tenant.provision_failed` goes to the failure handler
 //    (failure-handler.ts, PBE-023), which re-queues the job with a backoff when the OTA worker says the failure is
-//    retryable and attempts are left, and otherwise fails it (and the tenant). The migrate, suspend and resume answers
-//    wait for their task (PBE-030); until then they complete without effect (`provisioning.event_not_handled`).
+//    retryable and attempts are left, and otherwise fails it (and the tenant). PBE-030 adds the other answers:
+//    - `tenant.migrated` mirrors the ledger and `tenants.schema_version` (MigrateService.recordMigrated), also for a
+//      report of the deploy fan-out (`jobId: null`); the answer of a `migrate` job's current attempt also finishes the
+//      job. A stale or unknown attempt of a known `migrate` job still mirrors (the ledger is the schema's, and the
+//      version never goes back), but leaves the job alone;
+//    - `tenant.migration_failed` of a `migrate` job goes to the failure handler (retryable as the OTA worker says,
+//      absent counting as not retryable; the job fails with an `ops.alert`, never the tenant's status, PADR-0001 item
+//      7); one of the deploy fan-out alerts ops (MigrateService.recordFanOutFailure);
+//    - `tenant.suspended` and `tenant.resumed` mark their `suspend` or `resume` job `succeeded`
+//      (SuspensionService.markAnswered), whatever the tenant's status is now (PADR-0014 item 7).
 // 3. The event's dispatch attempt is read from its BullMQ id `<jobId>-<attempt>` (`parseBullmqJobId`), the id the OTA
 //    worker gives every answer. The job is loaded with its tenant, and the event is ignored (the BullMQ job completes,
 //    `provisioning.event_ignored` with the reason) when:
 //    - its id has another shape or names another job (`unknown_attempt`), or no such job exists (`unknown_job`);
-//    - the job is not a `provision` job (`other_kind`);
+//    - the job is not of the event's kind (`other_kind`: `provision` for the provisioning answers, `migrate`,
+//      `suspend`, `resume` for the others);
 //    - its attempt is older than the job's (`stale_attempt`: a late answer of a re-dispatched job) or newer
 //      (`unknown_attempt`: no dispatch made it);
 //    - for `tenant.provisioned`: the job is `failed` or `canceled`, or `succeeded` with every post-step done
 //      (`finished`). A `succeeded` job whose `notify` step has not run yet (a crash between `activate` and `notify`) is
 //      not finished: the run resumes at `notify`;
-//    - for `tenant.provision_failed`: the job is not `running` at that attempt any more (`not_running`: the reconciler
-//      counted the attempt as lost already, or it finished), which the failure handler checks under the job's lock.
+//    - for `tenant.provision_failed` and `tenant.migration_failed`: the job is not `running` at that attempt any more
+//      (`not_running`: the reconciler counted the attempt as lost already, or it finished), which the failure handler
+//      checks under the job's lock; for `tenant.suspended` and `tenant.resumed`: the job is no longer active
+//      (`finished`, checked under the job's lock);
+//    - a fan-out report names no tenant the platform has (`unknown_tenant`).
 //    An event about another tenant than its job's, or with another schema name, breaks the contract: it fails at once
 //    (`UnrecoverableError`), like an invalid message.
 // 4. The runner re-checks the job under its row lock before each step (two deliveries of one event, a re-dispatch
@@ -41,13 +53,22 @@ import {
   validateJob,
   type ProvisioningStepRecord,
   type TenantEvent,
+  type TenantMigratedEvent,
+  type TenantMigrationFailedEvent,
   type TenantProvisionedEvent,
   type TenantProvisionFailedEvent,
+  type TenantResumedEvent,
+  type TenantSuspendedEvent,
 } from "@velexis/api-types/jobs";
 import { UnrecoverableError, type Job, type JobsOptions } from "bullmq";
 import { InjectPinoLogger, PinoLogger } from "nestjs-pino";
 import { PLATFORM_QUEUE, platformWorkerOptions } from "../common/queues/queue-names";
-import { ProvisioningFailureHandler, type FailureIgnoredReason } from "./failure-handler";
+import {
+  ProvisioningFailureHandler,
+  type FailureIgnoredReason,
+  type FailureOutcome,
+} from "./failure-handler";
+import { MIGRATE_OTA_STEP, MigrateService } from "./migrate.service";
 import {
   PostStepError,
   PostStepsRunner,
@@ -56,13 +77,18 @@ import {
   type PostStepsRunResult,
   type PostStepsStopReason,
 } from "./post-steps/post-steps.runner";
-import { ProvisioningJobsRepository, type PostStepJobRow } from "./provisioning-jobs.repository";
+import {
+  ProvisioningJobsRepository,
+  type PostStepJobRow,
+  type ProvisioningJobKind,
+} from "./provisioning-jobs.repository";
+import { SuspensionService } from "./suspension.service";
 
 /** Why an event was ignored. */
 export type TenantEventIgnoreReason =
-  | "not_handled"
   | "unknown_attempt"
   | "unknown_job"
+  | "unknown_tenant"
   | "other_kind"
   | "stale_attempt"
   | "finished"
@@ -73,10 +99,43 @@ export type TenantEventIgnoreReason =
 export type TenantEventOutcome =
   | { readonly outcome: "ignored"; readonly reason: TenantEventIgnoreReason }
   | { readonly outcome: "completed"; readonly steps: readonly PostStepRun[] }
-  /** `tenant.provision_failed`: the job went back to `queued` for another attempt. */
+  /** A `…_failed` answer: the job went back to `queued` for another attempt. */
   | { readonly outcome: "requeued"; readonly scheduledAt: string }
-  /** `tenant.provision_failed`: the job failed for good; `tenantFailed` when the tenant became `failed` with it. */
-  | { readonly outcome: "failed"; readonly tenantFailed: boolean };
+  /** A `…_failed` answer: the job failed for good; `tenantFailed` when the tenant became `failed` with it. */
+  | { readonly outcome: "failed"; readonly tenantFailed: boolean }
+  /** `tenant.migrated`: the ledger is mirrored; `jobSucceeded` when the answer finished its `migrate` job. */
+  | {
+      readonly outcome: "mirrored";
+      readonly schemaVersion: string;
+      readonly versionChanged: boolean;
+      readonly jobSucceeded: boolean;
+    }
+  /** `tenant.migration_failed` of the deploy fan-out: ops were alerted (`queued: false` for a second delivery). */
+  | { readonly outcome: "alerted"; readonly queued: boolean }
+  /** `tenant.suspended`, `tenant.resumed`: the job succeeded. */
+  | { readonly outcome: "succeeded" };
+
+/** The job kind of each answer that is not about provisioning. */
+export const ANSWER_JOB_KIND = Object.freeze({
+  "tenant.migrated": "migrate",
+  "tenant.migration_failed": "migrate",
+  "tenant.suspended": "suspend",
+  "tenant.resumed": "resume",
+} as const satisfies Record<string, ProvisioningJobKind>);
+
+/**
+ * Whether an answer of dispatch attempt `attempt` (`undefined`: its BullMQ id names no attempt of the job) is for the
+ * job's current attempt: `undefined` when it is, else `stale_attempt` or `unknown_attempt`.
+ */
+export function answerAttemptIgnoreReason(
+  job: Pick<PostStepJobRow, "attempt">,
+  attempt: number | undefined,
+): TenantEventIgnoreReason | undefined {
+  if (attempt === undefined || attempt > job.attempt) {
+    return "unknown_attempt";
+  }
+  return attempt < job.attempt ? "stale_attempt" : undefined;
+}
 
 /** The error message of post-steps whose BullMQ tries are exhausted (the step's code goes with it). */
 export const POST_STEPS_EXHAUSTED_MESSAGE =
@@ -160,6 +219,8 @@ export class TenantEventsProcessor extends WorkerHost {
     private readonly jobs: ProvisioningJobsRepository,
     private readonly runner: PostStepsRunner,
     private readonly failures: ProvisioningFailureHandler,
+    private readonly migrations: MigrateService,
+    private readonly suspensions: SuspensionService,
     @InjectPinoLogger(TenantEventsProcessor.name) private readonly logger: PinoLogger,
   ) {
     super();
@@ -173,14 +234,12 @@ export class TenantEventsProcessor extends WorkerHost {
       case "tenant.provision_failed":
         return this.provisionFailed(event, eventAttempt(job.id, event.jobId));
       case "tenant.migrated":
+        return this.migrated(event, eventAttempt(job.id, event.jobId));
       case "tenant.migration_failed":
+        return this.migrationFailed(event, eventAttempt(job.id, event.jobId));
       case "tenant.suspended":
       case "tenant.resumed":
-        this.logger.warn(
-          { event: event.name, jobId: event.jobId, tenantId: event.tenantId, requestId: event.requestId },
-          "provisioning.event_not_handled",
-        );
-        return { outcome: "ignored", reason: "not_handled" };
+        return this.housekeepingDone(event, eventAttempt(job.id, event.jobId));
     }
   }
 
@@ -282,9 +341,150 @@ export class TenantEventsProcessor extends WorkerHost {
       ...(step === undefined ? {} : { step }),
       requestId: event.requestId,
     });
+    return this.failureOutcome({ ...context, status: job.status, jobAttempt: job.attempt }, outcome);
+  }
+
+  /**
+   * `tenant.migrated` (step 2 of the file header): the ledger is mirrored, and the answer of the `migrate` job's
+   * current attempt also finishes the job.
+   */
+  async migrated(event: TenantMigratedEvent, attempt: number | undefined): Promise<TenantEventOutcome> {
+    const context = { event: event.name, jobId: event.jobId, tenantId: event.tenantId, attempt };
+    let answer: { readonly jobId: string; readonly attempt: number } | undefined;
+    if (event.jobId !== null) {
+      const job = await this.answeredJob(event.name, event.jobId, event.tenantId, context);
+      if ("outcome" in job) {
+        return job;
+      }
+      const reason = answerAttemptIgnoreReason(job, attempt);
+      if (reason === undefined && attempt !== undefined) {
+        answer = { jobId: job.id, attempt };
+      } else {
+        this.logger.info(
+          { ...context, status: job.status, jobAttempt: job.attempt, reason },
+          "provisioning.migrated_without_job",
+        );
+      }
+    }
+    const outcome = await this.migrations.recordMigrated(event, answer);
+    if (outcome.outcome === "ignored") {
+      return this.ignored(context, outcome.reason);
+    }
+    this.logger.info(
+      { ...context, requestId: event.requestId, ...outcome },
+      "provisioning.migrations_mirrored",
+    );
+    return outcome;
+  }
+
+  /**
+   * `tenant.migration_failed` (step 2 of the file header): a `migrate` job's answer goes to the failure handler, a
+   * report of the deploy fan-out alerts ops.
+   */
+  async migrationFailed(
+    event: TenantMigrationFailedEvent,
+    attempt: number | undefined,
+  ): Promise<TenantEventOutcome> {
+    const context = { event: event.name, jobId: event.jobId, tenantId: event.tenantId, attempt };
+    if (event.jobId === null) {
+      const outcome = await this.migrations.recordFanOutFailure(event);
+      if (outcome.outcome === "ignored") {
+        return this.ignored(context, outcome.reason);
+      }
+      this.logger.warn(
+        {
+          ...context,
+          requestId: event.requestId,
+          version: event.payload.version,
+          code: event.payload.error.code,
+          queued: outcome.queued,
+        },
+        "provisioning.fan_out_migration_failed",
+      );
+      return outcome;
+    }
+    const job = await this.answeredJob(event.name, event.jobId, event.tenantId, context);
+    if ("outcome" in job) {
+      return job;
+    }
+    const reason = answerAttemptIgnoreReason(job, attempt);
+    if (reason !== undefined || attempt === undefined) {
+      return this.ignored(
+        { ...context, status: job.status, jobAttempt: job.attempt },
+        reason ?? "unknown_attempt",
+      );
+    }
+    const outcome = await this.failures.handle({
+      jobId: job.id,
+      attempt,
+      error: event.payload.error,
+      // The contract: an absent `retryable` counts as false.
+      retryable: event.payload.retryable === true,
+      source: "event",
+      step: MIGRATE_OTA_STEP,
+      requestId: event.requestId,
+    });
+    return this.failureOutcome({ ...context, status: job.status, jobAttempt: job.attempt }, outcome);
+  }
+
+  /** `tenant.suspended` and `tenant.resumed` (step 2 of the file header): the job succeeds. */
+  async housekeepingDone(
+    event: TenantSuspendedEvent | TenantResumedEvent,
+    attempt: number | undefined,
+  ): Promise<TenantEventOutcome> {
+    const context = { event: event.name, jobId: event.jobId, tenantId: event.tenantId, attempt };
+    if (attempt === undefined) {
+      return this.ignored(context, "unknown_attempt");
+    }
+    const job = await this.answeredJob(event.name, event.jobId, event.tenantId, context);
+    if ("outcome" in job) {
+      return job;
+    }
+    const reason = answerAttemptIgnoreReason(job, attempt);
+    if (reason !== undefined) {
+      return this.ignored({ ...context, status: job.status, jobAttempt: job.attempt }, reason);
+    }
+    const outcome = await this.suspensions.markAnswered({
+      jobId: job.id,
+      attempt,
+      kind: ANSWER_JOB_KIND[event.name],
+    });
+    if (outcome.outcome === "ignored") {
+      return this.ignored({ ...context, status: job.status, jobAttempt: job.attempt }, outcome.reason);
+    }
+    this.logger.info({ ...context, requestId: event.requestId, kind: job.kind }, "provisioning.job_answered");
+    return outcome;
+  }
+
+  /**
+   * The job an answer of `name` names, when it exists and is of the answer's kind; otherwise the ignored outcome. An
+   * answer about another tenant than its job's fails at once (step 3 of the file header).
+   */
+  private async answeredJob(
+    name: keyof typeof ANSWER_JOB_KIND,
+    jobId: string,
+    tenantId: string,
+    context: Record<string, unknown>,
+  ): Promise<PostStepJobRow | TenantEventOutcome> {
+    const job = await this.jobs.findForEvent(jobId);
+    if (job === undefined) {
+      return this.ignored(context, "unknown_job");
+    }
+    if (job.tenant_id !== tenantId) {
+      this.logger.error({ ...context, jobTenantId: job.tenant_id }, "provisioning.event_mismatch");
+      throw new UnrecoverableError(`${name} names another tenant than its job`);
+    }
+    if (job.kind !== ANSWER_JOB_KIND[name]) {
+      return this.ignored({ ...context, kind: job.kind }, "other_kind");
+    }
+    return job;
+  }
+
+  /** The outcome of an answer the failure handler took. */
+  private failureOutcome(context: Record<string, unknown>, outcome: FailureOutcome): TenantEventOutcome {
     switch (outcome.outcome) {
       case "ignored":
-        return this.ignored({ ...context, status: job.status, jobAttempt: job.attempt }, outcome.reason);
+        return this.ignored(context, outcome.reason);
       case "requeued":
         return { outcome: "requeued", scheduledAt: outcome.scheduledAt.toISOString() };
       case "failed":

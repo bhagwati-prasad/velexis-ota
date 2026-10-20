@@ -1,15 +1,16 @@
 // dist/cli.js: one-off operator commands of the platform backend (README §5), run on the VM with
 // `sudo velexis-run platform node dist/cli.js <command>` and locally with `node dist/cli.js <command>`. This file is
 // the command dispatcher; each command is one entry of CLI_COMMANDS. PBE-028 adds `admin:grant` and
-// `admin:reset-mfa` (admin/admin-cli.commands.ts, loaded only when one of them runs), PBE-034 adds `dev:seed`. A
-// command that needs the database or Redis loads the configuration itself (`loadConfig`), so `help` works without
-// any.
+// `admin:reset-mfa` (admin/admin-cli.commands.ts, loaded only when one of them runs), PBE-034 adds `dev:seed`
+// (dev/dev-seed.command.ts, loaded the same way; development only). A command that needs the database or Redis loads
+// the configuration itself (`loadConfig`), so `help` works without any.
 //
 // Exit codes: 0 done, 1 the command failed, 2 usage error (no or unknown command, or wrong arguments).
 import type { EnvSource } from "@velexis/config";
 import { createLogger } from "@velexis/logger";
 import type * as AdminCliCommands from "./admin/admin-cli.commands";
 import { PLATFORM_PROCESSES } from "./config";
+import type * as DevSeedCommand from "./dev/dev-seed.command";
 
 /** Where the CLI writes (the process's stdout and stderr; tests pass buffers). */
 export interface CliOutput {
@@ -92,8 +93,32 @@ const adminResetMfaCommand: CliCommand = {
   },
 };
 
+/** The development seed, loaded when it runs (PBE-034; dev/dev-seed.command.ts). */
+function devSeedCommands(): Promise<typeof DevSeedCommand> {
+  return import("./dev/dev-seed.command.js");
+}
+
+/**
+ * `dev:seed`: development data, refused when APP_ENV=production (README §5 and §6; dev/dev-seed.command.ts): the
+ * platform admin admin@example.com with MFA, the Velexis test Amadeus account at the stub and 10 test offices.
+ */
+const devSeedCommand: CliCommand = {
+  name: "dev:seed",
+  args: "",
+  summary:
+    "Development only: a platform admin with MFA, the test Amadeus account at the stub, 10 test offices.",
+  async run(args, context) {
+    return (await devSeedCommands()).runDevSeed(args, context);
+  },
+};
+
 /** Every command of the CLI. Later tasks append theirs. */
-export const CLI_COMMANDS: readonly CliCommand[] = [helpCommand, adminGrantCommand, adminResetMfaCommand];
+export const CLI_COMMANDS: readonly CliCommand[] = [
+  helpCommand,
+  adminGrantCommand,
+  adminResetMfaCommand,
+  devSeedCommand,
+];
 
 /** `-h` and `--help` are spellings of `help`. */
 const HELP_ALIASES: ReadonlySet<string> = new Set(["-h", "--help"]);

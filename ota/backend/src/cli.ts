@@ -1,6 +1,11 @@
 // dist/cli.js: one-off commands of the OTA backend (README §5), run as `node dist/cli.js <command> [args]` (on the VM
-// through `velexis-run ota`). This file is the command registry: later tasks add `dev:seed`,
-// `tenants:report-migrations` and `amadeus:ping` to COMMANDS. Exit codes: 0 success, 1 error or unknown command.
+// through `velexis-run ota`). This file is the command registry: OBE-007 adds `tenants:report-migrations`
+// (provisioning/report-migrations.command.ts, the deploy step after the tenant fan-out) and `dev:seed`
+// (dev/dev-seed.command.ts, development only); later tasks add `amadeus:ping`. A command's module is loaded only when it
+// runs, so `help` needs neither a configuration nor a connection. Exit codes: 0 success, 1 error or unknown command.
+import type { EnvSource } from "@velexis/config";
+import type * as DevSeedCommand from "./dev/dev-seed.command";
+import type * as ReportMigrationsCommand from "./provisioning/report-migrations.command";
 
 /** Where the CLI writes: `process.stdout` and `process.stderr`, or a test's buffers. */
 export interface TextSink {
@@ -13,13 +18,19 @@ export interface CliStreams {
   readonly stderr: TextSink;
 }
 
+/** What a command gets besides its arguments: the streams and, in tests, its configuration variables. */
+export interface CliContext extends CliStreams {
+  /** The configuration variables instead of the process environment and the `.env.local` files (tests). */
+  readonly env?: EnvSource | undefined;
+}
+
 /** `runCli` options: the default streams are `process.stdout` and `process.stderr`. */
-export type CliIo = Partial<CliStreams>;
+export type CliIo = Partial<CliStreams> & { readonly env?: EnvSource | undefined };
 
 /** One command: a one-line summary for `help`, and its implementation. */
 export interface CliCommand {
   readonly summary: string;
-  run(args: readonly string[], io: CliStreams): Promise<number>;
+  run(args: readonly string[], io: CliContext): Promise<number>;
 }
 
 const PROGRAM = "node dist/cli.js";
@@ -32,6 +43,16 @@ function usage(): string {
   return `Usage: ${PROGRAM} <command> [arguments]\n\nCommands:\n${lines.join("\n")}\n`;
 }
 
+/** The deploy report command, loaded when it runs (provisioning/report-migrations.command.ts). */
+function reportMigrationsCommand(): Promise<typeof ReportMigrationsCommand> {
+  return import("./provisioning/report-migrations.command.js");
+}
+
+/** The development seed, loaded when it runs (dev/dev-seed.command.ts). */
+function devSeedCommand(): Promise<typeof DevSeedCommand> {
+  return import("./dev/dev-seed.command.js");
+}
+
 const COMMANDS: ReadonlyMap<string, CliCommand> = new Map<string, CliCommand>([
   [
     "help",
@@ -40,6 +61,25 @@ const COMMANDS: ReadonlyMap<string, CliCommand> = new Map<string, CliCommand>([
       run(_args, io) {
         io.stdout.write(usage());
         return Promise.resolve(0);
+      },
+    },
+  ],
+  [
+    "tenants:report-migrations",
+    {
+      summary:
+        "--report <file>: publish tenant.migrated / tenant.migration_failed per schema of a deploy fan-out report",
+      async run(args, io) {
+        return (await reportMigrationsCommand()).runReportMigrations(args, io);
+      },
+    },
+  ],
+  [
+    "dev:seed",
+    {
+      summary: "Development only: the demo OTA (tenant_demo) with its host, connections and test API keys",
+      async run(args, io) {
+        return (await devSeedCommand()).runDevSeed(args, io);
       },
     },
   ],
@@ -54,9 +94,10 @@ export const CLI_COMMANDS: readonly string[] = [...COMMANDS.keys()];
  * one line on stderr (its message only) with exit code 1.
  */
 export async function runCli(argv: readonly string[], options: CliIo = {}): Promise<number> {
-  const io: CliStreams = {
+  const io: CliContext = {
     stdout: options.stdout ?? process.stdout,
     stderr: options.stderr ?? process.stderr,
+    env: options.env,
   };
   const [name, ...args] = argv;
   if (name === undefined) {

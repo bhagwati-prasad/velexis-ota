@@ -28,7 +28,7 @@ import {
 } from "../../../src/tenancy/platform-read.repository";
 import { OTA_POOL, TenancyModule, type OtaPool } from "../../../src/tenancy/tenancy.module";
 import { createWorkerApp, createWorkerLogger, WorkerModule } from "../../../src/worker.module";
-import { testApiVariables } from "../../helpers/api-env";
+import { testApiVariables, testWorkerVariables } from "../../helpers/api-env";
 import { MemorySink } from "../../helpers/log-sink";
 import { unreachableRedisUrl } from "../../helpers/ports";
 
@@ -79,6 +79,7 @@ function tenancyOf(app: INestApplicationContext, sink: MemorySink): Tenancy {
 /** The worker graph (`WorkerModule.forRoot`) with `TenancyModule.forWorker()`, as the provisioning module imports it. */
 async function startWorkerTenancy(...extraImports: Type[]): Promise<Tenancy> {
   const config = loadWorkerConfig({
+    ...testWorkerVariables(),
     APP_ENV: "test",
     DATABASE_URL: db.urlFor("ota"),
     DATABASE_PROVISIONER_URL: db.urlFor("provisioner"),

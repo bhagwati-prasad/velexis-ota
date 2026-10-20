@@ -2688,6 +2688,32 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/webhooks/stripe/velexis/{environment}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Receive a Stripe event of the Velexis account
+         * @description The webhook endpoint of the Velexis Stripe account for one environment, which serves the `velexis` payment mode (ADR-0011 (A), OADR-0010 points 4 and 5). Stripe calls it; no SDK user does. Caddy forwards the body unchanged and the API keeps it as raw bytes (the raw body parser of `/webhooks/*`).
+         *
+         *     **Checks, in order.** (1) `Stripe-Signature` is verified on the raw body with the endpoint's secret (`STRIPE_WEBHOOK_SECRET_VELEXIS_TEST` or `…_LIVE`, Stripe's signature scheme with a 5-minute tolerance): a body changed after signing, another secret, a stale timestamp or an environment without a secret answer `400 INVALID_REQUEST` (`details.reason: signature_invalid`) before anything in the body is read. (2) The event's `livemode` must match `{environment}` (`true` only on `live`), and `metadata.velexis_environment`, wherever it is present, too. (3) The OTA comes from `metadata.velexis_tenant_id` of the event's object, because only Velexis creates PaymentIntents on this account; an object that carries no Velexis metadata (a dispute) takes it from its PaymentIntent, read from Stripe on the same account. (4) The payment is looked up by `metadata.payment_id`, then by the PaymentIntent id, inside that OTA only; a payment of another environment, or whose PaymentIntent is not the event's, is a mismatch.
+         *
+         *     **Effect.** In one transaction of the OTA's schema a `payment_events` row is written (`source = webhook`, `type = webhook.<event type>`, `provider_event_id` = the event id, a payload of ids, statuses and amounts only, never the client secret or card details); an event id that is already stored is a duplicate and writes nothing. Then `stripe.event {tenantId, paymentEventId}` is queued on `ota-stripe-events` with the event id as job id, so a duplicate queues no second job, and the answer is `200`. The worker reads the PaymentIntent, charge, refund or dispute again from Stripe and applies that state, never the event body.
+         *
+         *     **Acknowledged without effect** (`200`, nothing written, logged without the payload): an unknown OTA or payment, an OTA that is neither active nor suspended, and every mismatch of step 2 to 4, which is logged as a security event. **`503 SERVICE_UNAVAILABLE`** when the OTA cannot be looked up, the event cannot be queued, or the PaymentIntent of a dispute cannot be read, and **`500 INTERNAL_ERROR`** when the event cannot be stored: Stripe delivers it again either way, and the delivery that finds it stored queues it again.
+         */
+        post: operations["receiveStripeVelexisWebhook"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -12520,6 +12546,36 @@ export interface components {
             html: string | null;
             /** @description Rendered plain-text body. */
             text: string;
+        };
+        /** @description A Stripe event as Stripe delivers it to a webhook endpoint (Stripe's own field names, in snake_case). The receiver reads these fields after the signature check and the `metadata` and ids of `data.object`; the rest is ignored and never stored. */
+        StripeWebhookEvent: {
+            /** @description The event id (`evt_…`), unique across Stripe; the de-duplication key and the job id. */
+            id: string;
+            /** @enum {string} */
+            object: "event";
+            /** @description The event type. Processed: `payment_intent.amount_capturable_updated`, `payment_intent.succeeded`, `payment_intent.payment_failed`, `payment_intent.canceled`, `charge.refunded`, `charge.refund.updated` and `charge.dispute.created`; other types are stored and ignored. */
+            type: string;
+            /** @description `true` for a live-mode event; it must match the endpoint's environment. */
+            livemode: boolean;
+            /** @description When the event was created (Unix seconds). */
+            created?: number;
+            /** @description The Stripe API version the event is rendered in. */
+            api_version?: string | null;
+            data: {
+                /** @description The PaymentIntent, charge, refund or dispute the event is about, as it was when the event was created; it may be stale by the time it arrives. */
+                object: {
+                    [key: string]: unknown;
+                };
+            } & {
+                [key: string]: unknown;
+            };
+        } & {
+            [key: string]: unknown;
+        };
+        /** @description The answer to a webhook delivery that Stripe must not send again. */
+        WebhookAcknowledgement: {
+            /** @enum {boolean} */
+            received: true;
         };
     };
     responses: {
@@ -25133,6 +25189,75 @@ export interface operations {
             403: components["responses"]["ConsoleForbidden"];
             429: components["responses"]["RateLimited"];
             500: components["responses"]["InternalError"];
+        };
+    };
+    receiveStripeVelexisWebhook: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Stripe's signature of the raw body: `t=<unix seconds>,v1=<HMAC-SHA256 of "<t>.<body>">`, possibly with several `v1` entries during a secret rotation. */
+                "Stripe-Signature": string;
+            };
+            path: {
+                /**
+                 * @description The Stripe mode of the endpoint: `test` (Stripe test mode, `livemode: false`) or `live`. Each has its own webhook signing secret.
+                 * @example test
+                 */
+                environment: "test" | "live";
+            };
+            cookie?: never;
+        };
+        /** @description The Stripe event exactly as Stripe sent it. The signature covers these bytes, so the body is verified before it is parsed and is never re-serialised. */
+        requestBody: {
+            content: {
+                /**
+                 * @example {
+                 *       "id": "evt_1QExampleOnlyPiCapturable",
+                 *       "object": "event",
+                 *       "api_version": "2025-08-27.basil",
+                 *       "created": 1791799321,
+                 *       "livemode": false,
+                 *       "type": "payment_intent.amount_capturable_updated",
+                 *       "data": {
+                 *         "object": {
+                 *           "id": "pi_1QExampleOnlyPayment",
+                 *           "object": "payment_intent",
+                 *           "amount": 45210,
+                 *           "amount_capturable": 45210,
+                 *           "currency": "eur",
+                 *           "status": "requires_capture",
+                 *           "metadata": {
+                 *             "velexis_tenant_id": "ten_01JA2Z9W5K7Q3M8N4P6R2T0V1X",
+                 *             "velexis_environment": "test",
+                 *             "checkout_id": "chk_01JA2ZB1C3D5E7F9G1H3J5K7M9",
+                 *             "payment_id": "pay_01JA2ZB9X1Y3Z5A7B9C1D3E5F7"
+                 *           }
+                 *         }
+                 *       }
+                 *     }
+                 */
+                "application/json": components["schemas"]["StripeWebhookEvent"];
+            };
+        };
+        responses: {
+            /** @description The event is stored and queued, was already stored, or is acknowledged without effect (see the description). */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "received": true
+                     *     }
+                     */
+                    "application/json": components["schemas"]["WebhookAcknowledgement"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["ServiceUnavailable"];
         };
     };
 }
