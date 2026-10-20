@@ -9,6 +9,8 @@ import { OTA_OPENAPI_DOCUMENT } from "../common/http/openapi-validation.intercep
 import { newId } from "../common/ids";
 import {
   acceptedLocales,
+  AIRLINE_CARD_NOTICES,
+  airlineCardNotice,
   assetUrl,
   brandInitials,
   BUNDLED_FONTS,
@@ -459,15 +461,39 @@ describe("a configured tenant", () => {
     expect(entry.airlineCardEnabled).toBe(false); // live, and only airline_card_enabled_test is on
   });
 
-  it("keeps the airline card out of every answer until OBE-050 adds it for the edge", () => {
+  it("keeps the airline card out of every answer while AIRLINE_CARD_ENABLED is off, the setting on or not [OBE-050 AC1]", () => {
     const testEntry = toCachedStorefront(source(settings, { assets }));
 
     expect(testEntry.airlineCardEnabled).toBe(true);
-    for (const audience of [EDGE, KEY]) {
+    for (const audience of [EDGE, KEY, { ...EDGE, airlineCardSwitch: false }]) {
       const { payment } = storefrontFor(testEntry, audience);
       expect(payment.airlineCard).toBeNull();
       expect(payment.supportedMethods).not.toContain("airline_card");
     }
+  });
+
+  it("shows the airline card to the edge only, from one cached entry, when both switches are on [OBE-050 AC1]", () => {
+    const testEntry = toCachedStorefront(source(settings, { assets }));
+    const stored = encodeCachedStorefront(testEntry);
+
+    const forEdge = storefrontFor(testEntry, { ...EDGE, airlineCardSwitch: true });
+    const forKeyCaller = storefrontFor(testEntry, { ...KEY, airlineCardSwitch: true });
+
+    expectValid(forEdge);
+    expectValid(forKeyCaller);
+    expect(forEdge.payment.supportedMethods).toEqual(["airline_card"]);
+    expect(forEdge.payment.airlineCard).toEqual({
+      enabled: true,
+      cardBrands: forEdge.payment.pspCardBrands,
+      chargedBy: "airline",
+      notice: "The airline charges your card. The price is the airline's price.",
+    });
+    expect(forKeyCaller.payment.supportedMethods).toEqual([]);
+    expect(forKeyCaller.payment.airlineCard).toBeNull();
+    // Decided per request: the cached entry holds the setting's flag only, never a caller's answer.
+    expect(encodeCachedStorefront(testEntry)).toBe(stored);
+    expect(stored).not.toContain("airline_card");
+    expect(stored).not.toContain("The airline charges");
   });
 
   it("publishes no operational column of the settings [OBE-016 AC2]", () => {
@@ -539,6 +565,130 @@ describe("a configured tenant", () => {
     );
 
     expect(entryWithWrongKind.assets.favicon).toBeNull();
+  });
+});
+
+describe("the payment account (OBE-038)", () => {
+  const entry = toCachedStorefront(source(seededRow()));
+  /** The Velexis account of the test environment, as the payment gateway gives it (no secret). */
+  const velexis = {
+    provider: "stripe" as const,
+    accountMode: "velexis" as const,
+    publishableKey: "pk_test_publishable_key_of_the_velexis_account",
+    accountId: null,
+    statementDescriptor: "ALPHA TRAVEL",
+    methods: ["card"],
+  };
+
+  it("shows Velexis as the merchant on behalf of the OTA in velexis mode, for the edge and key callers [OBE-038 AC3]", () => {
+    for (const audience of [EDGE, KEY]) {
+      const config = storefrontFor(entry, { ...audience, payment: velexis });
+
+      expectValid(config);
+      expect(config.payment).toEqual({
+        provider: "stripe",
+        environment: "test",
+        accountMode: "velexis",
+        publishableKey: velexis.publishableKey,
+        accountId: null,
+        merchantName: "Velexis on behalf of Alpha Travel Holding",
+        statementDescriptor: "ALPHA TRAVEL",
+        supportedMethods: ["card"],
+        cardBrands: ["VISA", "MASTERCARD", "AMERICAN_EXPRESS"],
+        pspCardBrands: [
+          { amadeus: "VISA", psp: "visa", label: "Visa" },
+          { amadeus: "MASTERCARD", psp: "mastercard", label: "Mastercard" },
+          { amadeus: "AMERICAN_EXPRESS", psp: "amex", label: "American Express" },
+        ],
+        merchantCountry: "US",
+        threeDSecure: "always",
+        airlineCard: null,
+      });
+    }
+  });
+
+  it("keeps the section without a method when no account can take payments", () => {
+    for (const payment of [null, undefined]) {
+      const config = storefrontFor(entry, { ...EDGE, payment });
+
+      expect(config.payment).toMatchObject({
+        accountMode: "velexis",
+        publishableKey: "",
+        merchantName: "Alpha Travel Holding",
+        statementDescriptor: null,
+        supportedMethods: [],
+        airlineCard: null,
+      });
+    }
+  });
+
+  it("adds the airline card after the account's methods for the edge, and only there [OBE-050 AC1]", () => {
+    const flagged = toCachedStorefront(source(seededRow({ airlineCardEnabledTest: true })));
+    const switchOn = { airlineCardSwitch: true, payment: velexis };
+
+    const forEdge = storefrontFor(flagged, { ...EDGE, ...switchOn });
+    const forKeyCaller = storefrontFor(flagged, { ...KEY, ...switchOn });
+    const settingOff = storefrontFor(entry, { ...EDGE, ...switchOn });
+    const live = storefrontFor(
+      toCachedStorefront(source(seededRow({ airlineCardEnabledTest: true }), { environment: "live" })),
+      { ...EDGE, ...switchOn },
+    );
+
+    expectValid(forEdge);
+    expect(forEdge.payment.supportedMethods).toEqual(["card", "airline_card"]);
+    expect(forEdge.payment.airlineCard).toMatchObject({ enabled: true, chargedBy: "airline" });
+    expect(forEdge.payment.airlineCard?.cardBrands.map((brand) => brand.amadeus)).toEqual([
+      "VISA",
+      "MASTERCARD",
+      "AMERICAN_EXPRESS",
+    ]);
+    for (const config of [forKeyCaller, settingOff, live]) {
+      expect(config.payment.supportedMethods).toEqual(["card"]);
+      expect(config.payment.airlineCard).toBeNull();
+    }
+  });
+
+  it("gives the airline-card notice in the entry's language, English otherwise", () => {
+    const notices = Object.fromEntries(
+      ["fr-FR", "de", "es-419", "ja", "en-GB"].map((locale) => [locale, airlineCardNotice(locale)]),
+    );
+
+    expect(notices).toEqual({
+      "fr-FR": AIRLINE_CARD_NOTICES["fr"],
+      de: AIRLINE_CARD_NOTICES["de"],
+      "es-419": AIRLINE_CARD_NOTICES["es"],
+      ja: AIRLINE_CARD_NOTICES["en"],
+      "en-GB": AIRLINE_CARD_NOTICES["en"],
+    });
+    for (const notice of Object.values(AIRLINE_CARD_NOTICES)) {
+      expect(notice.length).toBeGreaterThan(10);
+    }
+  });
+
+  it("lists only the methods checkout.createPayment takes, and leaves the cached entry unchanged", () => {
+    const config = storefrontFor(entry, {
+      ...KEY,
+      payment: { ...velexis, methods: ["paypal", "card", "bank_transfer"] },
+    });
+    const without = storefrontFor(entry, KEY);
+
+    expect(config.payment.supportedMethods).toEqual(["card"]);
+    expect(without.payment.supportedMethods).toEqual([]);
+    expect(entry.config.payment.merchantName).toBe("Alpha Travel Holding");
+  });
+
+  it("names the OTA as the merchant of its own account (connect_standard, M5) with Stripe.js's account id", () => {
+    const config = storefrontFor(entry, {
+      ...EDGE,
+      payment: { ...velexis, accountMode: "connect_standard", accountId: "acct_test_alpha" },
+    });
+
+    expect(config.payment).toMatchObject({
+      accountMode: "connect_standard",
+      accountId: "acct_test_alpha",
+      merchantName: "Alpha Travel Holding",
+      statementDescriptor: null,
+    });
   });
 });
 

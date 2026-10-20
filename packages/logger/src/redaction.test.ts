@@ -446,6 +446,9 @@ describe("redaction through createLogger", () => {
       "card",
       "creditCard",
       "formOfPayments",
+      "holderName",
+      "expiryMonth",
+      "expiryYear",
     ]);
     const { logger, sink } = testLogger();
     for (const key of keys) {
@@ -676,7 +679,8 @@ describe("the platform's redaction paths (platform/docs/architecture.md §8)", (
     expect(sink.records()[0]).toMatchObject({
       tenantId: "ten_01",
       payoutAccount: {
-        holderName: "Acme Travel SL",
+        // `*.holderName` is an airline-card path since OBE-050: a payout account's holder is censored as well.
+        holderName: REDACT_CENSOR,
         iban: REDACT_CENSOR,
         accountNumber: REDACT_CENSOR,
         last4: "3333",
@@ -737,6 +741,126 @@ describe("the platform's redaction paths (platform/docs/architecture.md §8)", (
       message: "Stripe OAuth token exchange failed",
       stack: "Error: Stripe OAuth token exchange failed",
       code: "invalid_grant",
+    });
+  });
+});
+
+/** The airline card's field paths of ota/docs/architecture.md §9 (OBE-050), in the order of REDACT_PATHS. */
+const AIRLINE_CARD_KEYS = ["holderName", "expiryMonth", "expiryYear"] as const;
+const AIRLINE_CARD_FIELD_PATHS = [...AIRLINE_CARD_KEYS, ...AIRLINE_CARD_KEYS.map((key) => `*.${key}`)];
+/** The request headers of ota/docs/architecture.md §9 (OBE-050). */
+const AIRLINE_CARD_HEADERS = [
+  "x-velexis-edge",
+  "x-csrf-token",
+  "x-booking-token",
+  "stripe-signature",
+] as const;
+
+/** An airline-card completion body (AirlineCardCompletionRequest) with Visa's documented test PAN. */
+function airlineCardCompletionBody(): LogRecord {
+  return {
+    paymentId: "pay_01J9ZQ4V3K8M2N6P0R5T7W9XYZ",
+    expectedTotal: { amount: "412.30", currency: "EUR" },
+    card: {
+      brand: "VISA",
+      holderName: "Jorge Gonzales",
+      number: TEST_PAN,
+      expiryMonth: 12,
+      expiryYear: 2030,
+      securityCode: TEST_CVV,
+    },
+  };
+}
+
+describe("the airline card's redaction paths (ota/docs/architecture.md §9)", () => {
+  it("lists every airline-card path and header in REDACT_PATHS, in order from shallow to deep [OBE-050 AC3]", () => {
+    for (const path of [...AIRLINE_CARD_FIELD_PATHS, "card", "*.card", "*.*.card", "*.card.number"]) {
+      expect(REDACT_PATHS).toContain(path);
+    }
+    for (const name of AIRLINE_CARD_HEADERS) {
+      expect(REDACT_PATHS).toContain(`req.headers["${name}"]`);
+    }
+    const depths = REDACT_PATHS.map((path) => path.split(/\.|\[/).length);
+    expect(depths).toEqual([...depths].sort((a, b) => a - b));
+  });
+
+  for (const path of AIRLINE_CARD_FIELD_PATHS) {
+    it(`censors ${path} and keeps its sibling and the caller's object [OBE-050 AC3]`, () => {
+      const { logger, sink } = testLogger();
+      const value = path.endsWith("holderName") ? `Holder ${TEST_BEARER_TOKEN}` : 2030;
+      const { logged, keys } = objectAtPath(path, value);
+      const snapshot = structuredClone(logged);
+
+      logger.info(logged, "airline_card.sensitive");
+
+      const line = sink.lines[0] ?? "";
+      expect(line).not.toContain(TEST_BEARER_TOKEN);
+      expect(withoutVolatileFields(line)).not.toContain("2030");
+      const [record] = sink.records();
+      expect(readPath(record ?? {}, keys)).toBe(REDACT_CENSOR);
+      expect(readPath(record ?? {}, [...keys.slice(0, -1), "keep"])).toBe("visible");
+      expect(logged).toEqual(snapshot);
+    });
+  }
+
+  for (const name of AIRLINE_CARD_HEADERS) {
+    it(`censors the ${name} request header when a request's headers are logged [OBE-050 AC3]`, () => {
+      const { logger, sink } = testLogger();
+      // A child that passes req through unchanged shows that the path itself censors the header.
+      const identity = (value: unknown): unknown => value;
+      const headers = { [name]: TEST_BEARER_TOKEN, "content-type": "application/json" };
+
+      logger
+        .child({}, { serializers: { req: identity } })
+        .warn({ req: { method: "POST", headers } }, "edge.debug");
+
+      expect(sink.lines[0]).not.toContain(TEST_BEARER_TOKEN);
+      expect(sink.records()[0]).toMatchObject({
+        req: { headers: { [name]: REDACT_CENSOR, "content-type": "application/json" } },
+      });
+      expect(headers[name]).toBe(TEST_BEARER_TOKEN);
+    });
+  }
+
+  for (let depth = 1; depth <= 6; depth += 1) {
+    it(`logs an airline-card completion body nested at depth ${depth} without the card [OBE-050 AC3]`, () => {
+      const { logger, sink } = testLogger();
+      const logged = nestAt(depth, { body: airlineCardCompletionBody() });
+      const snapshot = structuredClone(logged);
+
+      logger.warn(logged, "airline_card.careless_debug");
+
+      const line = sink.lines[0] ?? "";
+      expectNoCardData(line);
+      expect(line).not.toContain("Jorge Gonzales");
+      const body = valueAt(JSON.parse(line) as LogRecord, depth, "body") as LogRecord;
+      expect(body["card"]).toBe(REDACT_CENSOR);
+      expect(body["paymentId"]).toBe("pay_01J9ZQ4V3K8M2N6P0R5T7W9XYZ");
+      expect(logged).toEqual(snapshot);
+    });
+  }
+
+  it("censors the holder and the expiry of a card flattened into a log object, at the top level and one down [OBE-050 AC3]", () => {
+    const { logger, sink } = testLogger();
+    const flattened = { brand: "VISA", holderName: "Jorge Gonzales", expiryMonth: 12, expiryYear: 2030 };
+
+    logger.warn({ ...flattened, attempt: { ...flattened, last4: "1111" } }, "airline_card.flattened");
+
+    const line = sink.lines[0] ?? "";
+    expect(line).not.toContain("Jorge Gonzales");
+    expect(withoutVolatileFields(line)).not.toContain("2030");
+    expect(sink.records()[0]).toMatchObject({
+      brand: "VISA",
+      holderName: REDACT_CENSOR,
+      expiryMonth: REDACT_CENSOR,
+      expiryYear: REDACT_CENSOR,
+      attempt: {
+        brand: "VISA",
+        holderName: REDACT_CENSOR,
+        expiryMonth: REDACT_CENSOR,
+        expiryYear: REDACT_CENSOR,
+        last4: "1111",
+      },
     });
   });
 });

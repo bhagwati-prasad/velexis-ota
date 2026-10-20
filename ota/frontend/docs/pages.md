@@ -92,16 +92,22 @@ Rendered by `boot()` and `lib/errors.js` before or instead of the page content: 
 
 **SDK calls**
 
-1. `flights.getOffer({ offerId, view: "full" })`: itinerary, segments, layovers, baggage, fare conditions summary.
+1. `flights.getOffer({ offerId })`: itinerary, segments, layovers, baggage, fare conditions summary. The operation has no `view` parameter: `GET /v1/flight-offers/{offerId}` always answers the full view.
 2. If `features.brandedFareUpsell`: `flights.upsell({ offerId })`, shown as fare-family cards (price difference, bags, changes, refunds, seat and meal inclusions as returned).
 3. On "Continue with this fare": `flights.price({ offerIds: [chosenOfferId], include: ["bags", "other-services", "detailed-fare-rules"] })` (60 s), then go to `/price.html?priced=prc_…`.
+
+- **Offer.** The heading names the route, the trip line gives the date of each bound and the travellers (from `travelerPricings`). Bounds and flights use the result card's rows and flight details (`components/itinerary.js`). Baggage has one row per traveller type, with checked and cabin bags from the fare of each flight: one text when every flight allows the same, else one per flight. Without fare details it falls back to the summary's adult allowance. The price box shows the API's search total, the travellers it is for, the price per adult and "3 seats left". Booking fees are added at pricing (OADR-0005 point 7), and the page says so.
+- **Fares** (`components/fare-families.js`, `partials/templates/fare-family.html`). Until the upsell answers, and without one, the original fare is one card without a radio button: its name (fare family, else cabin), total, bags, refund and change from the summary, and the lead traveller's amenities. Fare families come from the upsell's `comparison`, one card per column (base first). Each card is a radio button with the column's total and `priceDifference`; the sign is read from the text, never computed. One line per row says its status in words ("Included", "For a fee", "Not included", "Not known") and gives its detail. An upsell with fewer than two columns keeps the original fare alone. The chosen family is kept in the address (`fare=off_…`, left out for the original fare), so a reload or Retry keeps it.
+- **Links to the results.** If the page was opened from the results (a same-origin referrer at `/search.html`), "Back to results" returns to that address. The refreshed results are the same address without `search=`, so the search runs again with the same trip, filters and sort. Otherwise both links go to `/search.html?search=<the offer's searchId>`, whose page offers Refresh for an expired search. Without either, they go to the home page ("Search flights").
+- **Offer gone.** A `404` from `getOffer` reads as an expired fare: the purge removes offers after they expire, as `search.html` treats a vanished search. An address without a valid `off_…` id shows "We could not find this flight" without a call.
 
 | State | Shows |
 |---|---|
 | Upsell unavailable or failed | The original fare only, no error banner (upsell is optional) |
-| `410 OFFER_EXPIRED` | "This fare is no longer available" with a link back to refreshed results |
+| `410 OFFER_EXPIRED` (also `404`, and at pricing) | "This fare is no longer available" with a link back to refreshed results |
 | `409 SOLD_OUT` at pricing | "This flight just sold out", back to results |
 | `504` / `503` at pricing | Retry button; the chosen fare stays selected |
+| `503`, connection failure, `429` on `getOffer` | The shared state with Retry, which loads the offer again |
 
 ## 6. Price: `/price.html?priced=prc_…` (M2; checkout start M3)
 

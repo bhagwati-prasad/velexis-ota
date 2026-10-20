@@ -1,4 +1,5 @@
-// The `vx:invalidate` subscriber of the API (OADR-0009 point 4, platform architecture §6.3, OBE-012). The platform
+// The `vx:invalidate` subscriber of the API and the worker (OADR-0009 point 4, platform architecture §6.3, OBE-012,
+// OBE-024; see the last paragraph). The platform
 // publishes `{v: 1, type, …ids}` after the commit of every change to a row the OTA backend caches; this subscriber
 // validates each message with `validateInvalidation` (@velexis/api-types/jobs) and has the platform cache delete
 // exactly the keys of its type (`invalidatedKeys` of platform-cache.ts): tenant, domain, api_key, connection,
@@ -15,8 +16,11 @@
 // for the first connection attempt (at most 2.5 s): from then on it either listens or logs why it does not, and a
 // Redis that is down does not stop it from serving (cached lookups fall back to PostgreSQL).
 //
-// The cache lives in Redis, which every process shares, so one subscriber suffices: the API runs it. The worker reads
-// the platform tables directly (provisioning wants the current row) and caches nothing yet.
+// The cache lives in Redis, which every process shares, so one subscriber would delete every key; but each process
+// guards its own cache fills against invalidations that arrive meanwhile (platform-cache.ts), so each process that
+// fills the cache runs one: the API, and since OBE-024 the worker, whose jobs resolve their tenant through
+// `tenant:<id>` (OADR-0014 point 5). Deleting a key twice is harmless. Provisioning still reads the platform tables
+// directly: it wants the current row.
 import { Injectable, type OnApplicationBootstrap, type OnApplicationShutdown } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import {

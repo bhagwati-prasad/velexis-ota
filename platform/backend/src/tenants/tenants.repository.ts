@@ -1,10 +1,13 @@
 // The `tenants` repository (platform/docs/architecture.md §2.1: TenantsModule owns the table): the key check, the
 // lists and reads of the portal and the profile update (PBE-017), the row of a new OTA, which ProvisioningModule
 // writes in the create-OTA transaction (PBE-018), the two writes of its post-steps (PBE-022): the mirrored schema
-// version and the activation, and the failure of a provisioning and the owner's retry (PBE-023). Kysely on the
-// process's `PLATFORM_DB`, schema-qualified tables
+// version and the activation, and the failure of a provisioning and the owner's retry (PBE-023), the platform
+// admin's OTA search and its edit of the legal name and the internal notes (PBE-029), the plan that follows the
+// admin's change of a manual subscription (PBE-033), and the status switch of a suspension and a resume (PBE-030,
+// PADR-0014). Kysely on the process's `PLATFORM_DB`, schema-qualified tables
 // (ADR-0005). The reads join what an answer shows next to the tenant row: the caller's role from the active
-// membership (listTenants) and the primary storefront host from `tenant_domains`, read only. `reference.countries`,
+// membership (listTenants), the oldest active owner's e-mail address (the admin search) and the primary storefront
+// host from `tenant_domains`, read only. `reference.countries`,
 // `reference.currencies` and `reference.time_zones` are read for the checks of a new OTA and a profile update (the
 // reference tables are read directly, architecture §2.1).
 import { Inject, Injectable } from "@nestjs/common";
@@ -65,6 +68,34 @@ export interface TenantProfileChanges {
   readonly time_zone?: string;
 }
 
+/** The filters of the platform admin's OTA search (`adminListTenants`, PBE-029). */
+export interface AdminTenantFilter {
+  /** Part of the key, the name or the e-mail address of an active owner, compared case-insensitively. */
+  readonly q?: string | undefined;
+  readonly status?: string | undefined;
+  readonly planCode?: string | undefined;
+}
+
+/** One OTA of the platform admin's search, with the e-mail address of its oldest active owner. */
+export interface AdminTenantListRow {
+  readonly id: string;
+  readonly key: string;
+  readonly name: string;
+  readonly status: string;
+  readonly plan_code: string;
+  readonly created_at: Date;
+  readonly activated_at: Date | null;
+  /** `null` only when the OTA has no active owner left. */
+  readonly owner_email: string | null;
+}
+
+/** The fields of `adminUpdateTenant` (PBE-029); an absent field is not changed, `null` clears it. */
+export interface TenantAdminChanges {
+  readonly legal_name?: string | null;
+  /** The internal notes of Velexis staff, `metadata.notes`; `null` removes the key. */
+  readonly notes?: string | null;
+}
+
 @Injectable()
 export class TenantsRepository {
   constructor(@Inject(PLATFORM_DB) private readonly db: PlatformDb) {}
@@ -113,6 +144,86 @@ export class TenantsRepository {
       .orderBy("t.created_at")
       .orderBy("t.id")
       .execute();
+  }
+
+  /**
+   * One page of the platform admin's OTA search (PBE-029, `adminListTenants`): the tenants in the statuses of the
+   * OpenAPI document's `TenantStatus` (the statuses members see; a tenant being deprovisioned or deleted has no shape
+   * there), newest first (`created_at`, then id), after the tenant `afterId` when given; `limit` rows at most. `q`
+   * matches part of the key, the name or the e-mail address of an active owner, ignoring letter case (`strpos` on
+   * lower-cased text, so `%` and `_` are plain characters). The keyset compares with the cursor row's stored
+   * `created_at`, so no precision is lost and every tenant is on exactly one page. Read only.
+   */
+  async listForAdmin(
+    filter: AdminTenantFilter,
+    afterId: string | undefined,
+    limit: number,
+  ): Promise<AdminTenantListRow[]> {
+    let query = this.db
+      .selectFrom("platform.tenants as t")
+      .select((eb) => [
+        "t.id",
+        "t.key",
+        "t.name",
+        "t.status",
+        "t.plan_code",
+        "t.created_at",
+        "t.activated_at",
+        eb
+          .selectFrom("platform.tenant_memberships as m")
+          .innerJoin("platform.accounts as a", "a.id", "m.account_id")
+          .select("a.email")
+          .whereRef("m.tenant_id", "=", "t.id")
+          .where("m.role", "=", "owner")
+          .where("m.status", "=", "active")
+          .orderBy("m.created_at")
+          .orderBy("m.id")
+          .limit(1)
+          .$castTo<string | null>()
+          .as("owner_email"),
+      ])
+      .where("t.status", "in", MEMBER_VISIBLE_TENANT_STATUSES);
+    if (filter.status !== undefined) {
+      query = query.where("t.status", "=", filter.status);
+    }
+    if (filter.planCode !== undefined) {
+      query = query.where("t.plan_code", "=", filter.planCode);
+    }
+    const q = filter.q;
+    if (q !== undefined) {
+      query = query.where((eb) =>
+        eb.or([
+          sql<boolean>`strpos(lower(t.key), lower(${q})) > 0`,
+          sql<boolean>`strpos(lower(t.name), lower(${q})) > 0`,
+          eb.exists(
+            eb
+              .selectFrom("platform.tenant_memberships as o")
+              .innerJoin("platform.accounts as oa", "oa.id", "o.account_id")
+              .select(sql<number>`1`.as("found"))
+              .whereRef("o.tenant_id", "=", "t.id")
+              .where("o.role", "=", "owner")
+              .where("o.status", "=", "active")
+              .where(sql<boolean>`strpos(lower(oa.email), lower(${q})) > 0`),
+          ),
+        ]),
+      );
+    }
+    if (afterId !== undefined) {
+      query = query.where(
+        sql<boolean>`(t.created_at, t.id) < (SELECT c.created_at, c.id FROM platform.tenants c WHERE c.id = ${afterId})`,
+      );
+    }
+    return query.orderBy("t.created_at", "desc").orderBy("t.id", "desc").limit(limit).execute();
+  }
+
+  /** True when a tenant row `tenantId` exists, in any status (a cursor of the admin search names one). */
+  async exists(tenantId: string): Promise<boolean> {
+    const row = await this.db
+      .selectFrom("platform.tenants")
+      .select(sql<number>`1`.as("found"))
+      .where("id", "=", tenantId)
+      .executeTakeFirst();
+    return row !== undefined;
   }
 
   /** The tenant `tenantId` with its primary storefront host, read on `db` (the pool, or the caller's transaction). */
@@ -182,6 +293,40 @@ export class TenantsRepository {
     const row = await trx
       .updateTable("platform.tenants")
       .set({ ...changes, version: sql<number>`version + 1`, updated_at: now })
+      .where("id", "=", tenantId)
+      .returning("version")
+      .executeTakeFirstOrThrow();
+    return row.version;
+  }
+
+  /**
+   * Writes the platform admin's `changes` (PBE-029, `adminUpdateTenant`) of a row locked by `lockForUpdate`, with
+   * `version + 1` and `updated_at = now`, in `trx`: `legal_name`, and the `notes` key of `metadata` (set as a JSON
+   * string, or removed for `null`; the other keys of `metadata` stay). Returns the new version.
+   */
+  async updateAdminDetails(
+    trx: PlatformTransaction,
+    tenantId: string,
+    changes: TenantAdminChanges,
+    now: Date,
+  ): Promise<number> {
+    const { notes } = changes;
+    const row = await trx
+      .updateTable("platform.tenants")
+      .set({
+        ...(changes.legal_name === undefined ? {} : { legal_name: changes.legal_name }),
+        ...(notes === undefined
+          ? {}
+          : {
+              // jsonb is written as JSON text; `||` replaces the one key, `-` removes it.
+              metadata:
+                notes === null
+                  ? sql`metadata - 'notes'`
+                  : sql`metadata || ${JSON.stringify({ notes })}::jsonb`,
+            }),
+        version: sql<number>`version + 1`,
+        updated_at: now,
+      })
       .where("id", "=", tenantId)
       .returning("version")
       .executeTakeFirstOrThrow();
@@ -262,6 +407,77 @@ export class TenantsRepository {
       .returning("id")
       .executeTakeFirst();
     return row !== undefined;
+  }
+
+  /**
+   * The suspension of an OTA (PBE-030, PADR-0014 item 2) in `trx`: `active → suspended`, `suspended_at = now`,
+   * `suspension_reason`, `version + 1`, only while the tenant is `active`. True when this call changed the tenant.
+   */
+  async suspend(trx: PlatformTransaction, tenantId: string, reason: string, now: Date): Promise<boolean> {
+    const row = await trx
+      .updateTable("platform.tenants")
+      .set({
+        status: "suspended",
+        suspended_at: now,
+        suspension_reason: reason,
+        version: sql<number>`version + 1`,
+        updated_at: now,
+      })
+      .where("id", "=", tenantId)
+      .where("status", "=", "active")
+      .returning("id")
+      .executeTakeFirst();
+    return row !== undefined;
+  }
+
+  /**
+   * The resume of a suspended OTA (PBE-030, PADR-0014 item 4) in `trx`: `suspended → active`, the suspension fields
+   * cleared, `version + 1`, only while the tenant is `suspended`. True when this call changed the tenant.
+   */
+  async resume(trx: PlatformTransaction, tenantId: string, now: Date): Promise<boolean> {
+    const row = await trx
+      .updateTable("platform.tenants")
+      .set({
+        status: "active",
+        suspended_at: null,
+        suspension_reason: null,
+        version: sql<number>`version + 1`,
+        updated_at: now,
+      })
+      .where("id", "=", tenantId)
+      .where("status", "=", "suspended")
+      .returning("id")
+      .executeTakeFirst();
+    return row !== undefined;
+  }
+
+  /**
+   * Puts the tenant on the plan `planCode` in `trx` (PBE-033: the plan of its current manual subscription, which the
+   * platform admin changed), with `version + 1`, only when its plan differs: `Tenant.planCode` is part of the versioned
+   * tenant. The row stays locked for the rest of the transaction. Returns the previous plan code when this call
+   * changed the tenant, otherwise `undefined`.
+   */
+  async setPlanCode(
+    trx: PlatformTransaction,
+    tenantId: string,
+    planCode: string,
+    now: Date,
+  ): Promise<string | undefined> {
+    const current = await trx
+      .selectFrom("platform.tenants")
+      .select("plan_code")
+      .where("id", "=", tenantId)
+      .forUpdate()
+      .executeTakeFirst();
+    if (current === undefined || current.plan_code === planCode) {
+      return undefined;
+    }
+    await trx
+      .updateTable("platform.tenants")
+      .set({ plan_code: planCode, version: sql<number>`version + 1`, updated_at: now })
+      .where("id", "=", tenantId)
+      .execute();
+    return current.plan_code;
   }
 
   /** True when `code` is a country of `reference.countries`. */

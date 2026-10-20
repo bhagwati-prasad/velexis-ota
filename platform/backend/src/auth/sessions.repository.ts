@@ -200,6 +200,29 @@ export class SessionsRepository {
   }
 
   /**
+   * Revokes every row of every family of `accountId` of one `audience` that is not revoked yet, at `now` with `reason`,
+   * in `trx` (adminRevokeAdmin ends the account's admin sessions and keeps its portal sessions, PBE-032). Returns how
+   * many families had a row revoked.
+   */
+  async revokeAllOfAccountForAudience(
+    trx: PlatformTransaction,
+    accountId: string,
+    audience: SessionAudience,
+    reason: SessionRevokeReason,
+    now: Date,
+  ): Promise<number> {
+    const rows = await trx
+      .updateTable("platform.account_sessions")
+      .set({ revoked_at: now, revoke_reason: reason, updated_at: now })
+      .where("account_id", "=", accountId)
+      .where("audience", "=", audience)
+      .where("revoked_at", "is", null)
+      .returning("family_id")
+      .execute();
+    return new Set(rows.map((row) => row.family_id)).size;
+  }
+
+  /**
    * Revokes every row of every family of `accountId` except family `keptFamilyId` (the caller's own session of a
    * password change), as `revokeAllOfAccount` does. Returns how many families had a row revoked.
    */

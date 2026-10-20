@@ -5,8 +5,9 @@
 // in front of it, and when Redis is down the lookups come here directly. API keys joined in OBE-011 (`apiKeyByPrefix`,
 // for the key verifier), verified storefront domains in OBE-012 (`tenantIdByStorefrontHost`, for the tenant
 // resolver), the Amadeus connection and the shared Amadeus account in OBE-017 (`amadeusConnection`,
-// `amadeusAccountById`, for the connection resolver of src/amadeus/); later tasks add memberships and payment
-// connections to this class.
+// `amadeusAccountById`, for the connection resolver of src/amadeus/), the tenants a scheduled job fans out to in
+// OBE-024 (`tenantIdsByStatus`, for src/jobs/fan-out.ts), the default payment connection of an environment in OBE-038
+// (`paymentConnection`, for the Stripe gateway of src/payments/); later tasks add memberships to this class.
 import { Inject, Injectable } from "@nestjs/common";
 import {
   assertTenantSchema,
@@ -24,6 +25,7 @@ import {
   TENANT_STATUSES,
   UnexpectedPlatformValueError,
   type PlatformTenant,
+  type TenantStatus,
 } from "./platform-read.types";
 
 /** Kysely over the pool of velexis_ota_app for the schema-qualified platform and reference tables. */
@@ -212,6 +214,70 @@ type AmadeusAccountRow = Pick<
   (typeof AMADEUS_ACCOUNT_COLUMNS)[number]
 >;
 
+/** `platform.payment_provider_connections.provider` (the baseline CHECK). */
+export const PAYMENT_PROVIDERS = ["stripe", "adyen", "checkout_com", "paypal", "manual"] as const;
+export type PaymentProvider = (typeof PAYMENT_PROVIDERS)[number];
+
+/**
+ * `platform.payment_provider_connections.account_mode` (ADR-0011 (A)): whose Stripe account takes the payments, the
+ * Velexis account (`velexis`, M3) or the OTA's own (`connect_standard`, `api_keys`, M5).
+ */
+export const PAYMENT_ACCOUNT_MODES = ["velexis", "connect_standard", "api_keys"] as const;
+export type PaymentAccountMode = (typeof PAYMENT_ACCOUNT_MODES)[number];
+
+/** `platform.payment_provider_connections.status`: the health of the connection. */
+export const PAYMENT_CONNECTION_STATUSES = ["pending", "active", "disabled", "error"] as const;
+export type PaymentConnectionStatus = (typeof PAYMENT_CONNECTION_STATUSES)[number];
+
+/** `platform.payment_provider_connections.capture_mode`. */
+export const PAYMENT_CAPTURE_MODES = ["automatic", "manual"] as const;
+export type PaymentCaptureMode = (typeof PAYMENT_CAPTURE_MODES)[number];
+
+/**
+ * A tenant's default payment connection of one environment (`platform.payment_provider_connections`, OADR-0010 point
+ * 1), as far as the payment gateway relies on it (OBE-038): plain and JSON-safe, so the `conn:payment:` cache stores it
+ * as it is. The secret columns (`secret_ciphertext`, `webhook_secret_ciphertext`, which only the `api_keys` mode of M5
+ * fills) are never selected; the `velexis` mode uses Velexis's keys from the environment file.
+ */
+export interface PlatformPaymentConnection {
+  /** `ppc_` + ULID. */
+  readonly id: string;
+  readonly tenantId: string;
+  readonly provider: PaymentProvider;
+  readonly environment: AmadeusEnvironment;
+  readonly accountMode: PaymentAccountMode;
+  /** The OTA's `acct_…` (`connect_standard`, `api_keys`); `null` in `velexis` mode. */
+  readonly accountReference: string | null;
+  /** The OTA's own publishable key (`api_keys` mode only). */
+  readonly publishableKey: string | null;
+  /** The methods enabled on the connection (`card`, …). */
+  readonly supportedMethods: readonly string[];
+  readonly captureMode: PaymentCaptureMode;
+  readonly status: PaymentConnectionStatus;
+  /** The card statement descriptor suffix with the OTA's brand (`velexis` mode), or `null`. */
+  readonly statementDescriptorSuffix: string | null;
+}
+
+/** The columns of `platform.payment_provider_connections` that `PlatformPaymentConnection` maps. */
+const PAYMENT_CONNECTION_COLUMNS = [
+  "id",
+  "tenant_id",
+  "provider",
+  "environment",
+  "account_mode",
+  "account_reference",
+  "publishable_key",
+  "supported_methods",
+  "capture_mode",
+  "status",
+  "statement_descriptor_suffix",
+] as const;
+
+type PaymentConnectionRow = Pick<
+  Selectable<PlatformDatabase["platform.payment_provider_connections"]>,
+  (typeof PAYMENT_CONNECTION_COLUMNS)[number]
+>;
+
 /** A tenant id as the platform writes it (`ten_` and a ULID); anything else is unknown without a query. */
 const TENANT_ID_PATTERN = /^ten_[0-9A-Za-z]{1,60}$/;
 /** A shared Amadeus account id (`ama_` and a ULID). */
@@ -249,6 +315,26 @@ export class PlatformReadRepository {
       trx.selectFrom("platform.tenants").select(TENANT_COLUMNS).where("key", "=", key).executeTakeFirst(),
     );
     return row === undefined ? null : toPlatformTenant(row);
+  }
+
+  /**
+   * The ids of the tenants whose status is one of `statuses`, in id order: the targets of the worker's scheduled
+   * fan-outs (OADR-0014 point 1, OBE-024), which resolve each tenant through the cache afterwards. No status, no
+   * query; a status outside the CHECK list of `platform.tenants.status` is a programming error (TypeError).
+   */
+  async tenantIdsByStatus(statuses: readonly TenantStatus[]): Promise<string[]> {
+    const wanted = [...new Set(statuses)];
+    const unknown = wanted.find((status) => !isOneOf(status, TENANT_STATUSES));
+    if (unknown !== undefined) {
+      throw new TypeError(`tenantIdsByStatus: ${JSON.stringify(unknown)} is not a tenant status`);
+    }
+    if (wanted.length === 0) {
+      return [];
+    }
+    const rows = await this.read((trx) =>
+      trx.selectFrom("platform.tenants").select("id").where("status", "in", wanted).orderBy("id").execute(),
+    );
+    return rows.map((row) => row.id);
   }
 
   /**
@@ -333,6 +419,31 @@ export class PlatformReadRepository {
         .executeTakeFirst(),
     );
     return row === undefined ? null : toPlatformAmadeusAccount(row);
+  }
+
+  /**
+   * The tenant's default payment connection of `environment` (`platform.payment_provider_connections`, `is_default`:
+   * one per tenant and environment, `payment_provider_connections_default_uq`), whatever its provider, mode and status,
+   * or `null` when there is none: those are the payment gateway's checks (OBE-038). The secret columns are not read. A
+   * value that cannot be a tenant id or an environment is unknown without a query.
+   */
+  async paymentConnection(
+    tenantId: string,
+    environment: AmadeusEnvironment,
+  ): Promise<PlatformPaymentConnection | null> {
+    if (!TENANT_ID_PATTERN.test(tenantId) || !isOneOf(environment, AMADEUS_ENVIRONMENTS)) {
+      return null;
+    }
+    const row = await this.read((trx) =>
+      trx
+        .selectFrom("platform.payment_provider_connections")
+        .select(PAYMENT_CONNECTION_COLUMNS)
+        .where("tenant_id", "=", tenantId)
+        .where("environment", "=", environment)
+        .where("is_default", "=", true)
+        .executeTakeFirst(),
+    );
+    return row === undefined ? null : toPlatformPaymentConnection(row);
   }
 
   /**
@@ -436,6 +547,27 @@ function toPlatformAmadeusAccount(row: AmadeusAccountRow): PlatformAmadeusAccoun
     clientId: row.client_id,
     clientSecretCiphertext: row.client_secret_ciphertext.toString("base64"),
     status: oneOf(row.status, AMADEUS_CREDENTIAL_STATUSES, column("status"), row.id),
+  });
+}
+
+/**
+ * Maps a `platform.payment_provider_connections` row. A provider, environment, mode, capture mode or status outside the
+ * CHECK lists throws `UnexpectedPlatformValueError`; the method list becomes a frozen copy.
+ */
+function toPlatformPaymentConnection(row: PaymentConnectionRow): PlatformPaymentConnection {
+  const column = (name: string) => `platform.payment_provider_connections.${name}`;
+  return Object.freeze({
+    id: row.id,
+    tenantId: row.tenant_id,
+    provider: oneOf(row.provider, PAYMENT_PROVIDERS, column("provider"), row.id),
+    environment: oneOf(row.environment, AMADEUS_ENVIRONMENTS, column("environment"), row.id),
+    accountMode: oneOf(row.account_mode, PAYMENT_ACCOUNT_MODES, column("account_mode"), row.id),
+    accountReference: row.account_reference,
+    publishableKey: row.publishable_key,
+    supportedMethods: Object.freeze([...row.supported_methods]),
+    captureMode: oneOf(row.capture_mode, PAYMENT_CAPTURE_MODES, column("capture_mode"), row.id),
+    status: oneOf(row.status, PAYMENT_CONNECTION_STATUSES, column("status"), row.id),
+    statementDescriptorSuffix: row.statement_descriptor_suffix,
   });
 }
 
