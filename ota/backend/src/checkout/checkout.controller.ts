@@ -6,6 +6,9 @@
 // checkout.create's `201` under its `Idempotency-Key` (the `PUT`s are idempotent by themselves). Every answer is the
 // whole checkout with `ETag: "<version>"` and `Cache-Control: no-store`; `If-Match` goes to the service.
 //
+// `checkout.setAncillaries` (setCheckoutAncillaries, `x-scope: both`; OBE-037) is AncillariesService's: the extras
+// re-priced with Amadeus into a child priced offer, answered like the other steps.
+//
 // `checkout.complete` (completeCheckout, `x-scope: both`; OBE-042) hands the checkout to the bookings module's
 // BookingOrchestrator; its `Idempotency-Key` is required (the OTA document's IdempotencyKey parameter, checked by the
 // validation interceptor), and the idempotency interceptor replays a same-key retry without a second order. The answer
@@ -19,6 +22,7 @@ import {
   OpenApiOperation,
   type ValidatedInput,
 } from "../common/http/openapi-operation.decorator";
+import { AncillariesService } from "./ancillaries.service";
 import { CHECKOUT_CACHE_CONTROL, etagOf, type Checkout } from "./checkout.mapper";
 import { CheckoutService } from "./checkout.service";
 
@@ -42,6 +46,7 @@ export class CheckoutController {
   constructor(
     private readonly checkouts: CheckoutService,
     private readonly bookings: BookingOrchestrator,
+    private readonly ancillaries: AncillariesService,
   ) {}
 
   @Post()
@@ -93,6 +98,21 @@ export class CheckoutController {
       ifMatch: input.headers?.["If-Match"],
       acceptLanguage: input.headers?.["Accept-Language"],
       body: bodyOf("setCheckoutContacts", input.body),
+    });
+    return answer(res, checkout);
+  }
+
+  @Put(":checkoutId/ancillaries")
+  @OpenApiOperation("setCheckoutAncillaries")
+  async setAncillaries(
+    @OpenApiInput() input: ValidatedInput<"setCheckoutAncillaries">,
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<Checkout> {
+    const checkout = await this.ancillaries.setAncillaries({
+      checkoutId: input.path.checkoutId,
+      ifMatch: input.headers?.["If-Match"],
+      acceptLanguage: input.headers?.["Accept-Language"],
+      body: bodyOf("setCheckoutAncillaries", input.body),
     });
     return answer(res, checkout);
   }

@@ -21,6 +21,11 @@
 //      flights.getPricedOffer reads it. With `expectedTotal`, a confirmed total that differs answers `409
 //      PRICE_CHANGED` (`details.oldPrice`, `newPrice`, `pricedOfferId`) after the priced offer is stored.
 //
+// For checkout.setAncillaries (OBE-037): `ancillariesForCheckout` loads a checkout's base catalogue as getAncillaries
+// does, without the reader's access and expiry checks (the checkout applied its own); `storeServicesPricing` stores
+// the answer of Flight Offers Price for the base priced offer with the selected extras as a child priced offer
+// (`parent_priced_offer_id`) whose amounts are those of the flights only, the extras being the checkout's.
+//
 // Reads (getPricedOffer, getAncillaries, getFareRules): a priced offer is readable in its own environment; one with an
 // owner (priced by a signed-in customer, or of a customer's search) only by that customer and in console scope;
 // anything else, another tenant's id included, is `404`. After `expires_at` it is `410 OFFER_EXPIRED`. PostgreSQL
@@ -47,7 +52,10 @@ import { priceOffer } from "../pricing/pricing-engine";
 import {
   Money,
   PricingInputError,
+  type FeeLine,
+  type MoneyValue,
   type PricingChannel,
+  type PricingExtra,
   type PricingInput,
   type PricingResult,
 } from "../pricing/pricing.types";
@@ -64,6 +72,7 @@ import {
   tripTypeOf,
   type FlightOffer,
   type OfferScope,
+  type ParsedOffer,
 } from "./offers.mapper";
 import { OffersRepository, type OfferRow } from "./offers.repository";
 import { OffersService, offerDictionaries, parsedOfferOf, toOfferResponse } from "./offers.service";
@@ -192,6 +201,36 @@ interface PricingOutcome {
   readonly net: string;
   readonly markup: string;
   readonly selling: string;
+}
+
+/** The input of `storeServicesPricing` (checkout.setAncillaries, OBE-037). */
+export interface ServicesPricingInput {
+  /** The checkout's base priced offer (`forCheckout(…).row`). */
+  readonly base: PricedOfferRow;
+  /** The Flight Offers Price request as sent: the base's confirmed offers with the extras merged in. */
+  readonly request: AmadeusPricingRequest;
+  readonly include: readonly PricingInclude[];
+  /** Its answer. */
+  readonly reply: AmadeusResponse<unknown>;
+  /** The selected extras with their net amounts: one `ancillary_service` fee each (OADR-0005 point 7). */
+  readonly extras: readonly PricingExtra[];
+  /** `Accept-Language`: the names of the child as `forCheckout` reads it. */
+  readonly acceptLanguage?: string | undefined;
+}
+
+/** A child priced offer stored by `storeServicesPricing`. */
+export interface ServicesPricing {
+  /** The child, as `forCheckout` reads it. */
+  readonly priced: CheckoutPricedOffer;
+  /** Whether Amadeus moved a flight's net total (the flights were then priced again with today's rules). */
+  readonly fareChanged: boolean;
+  /** The `ancillary_service` fee lines of the extras, `extraRef` naming each line's extra. */
+  readonly extraFeeLines: readonly FeeLine[];
+}
+
+/** The pricing snapshot of a child priced offer: the base's, plus the extras it was priced with and their fees. */
+interface ServicesSnapshot extends PricingSnapshot {
+  readonly extras: { readonly extras: readonly PricingExtra[]; readonly feeLines: readonly FeeLine[] };
 }
 
 @Injectable()
@@ -462,6 +501,8 @@ export class PricedOffersService {
    * The engine on the confirmed offers (OADR-0005 point 7): each offer's markup at step `search`, as its results price
    * was computed; the fees at step `pricing` once, for the offers together (net totals summed, the carriers, cabins and
    * segments of all of them), so per-booking fees count once. One offer gives exactly the engine's `pricing` step.
+   * With `extras` (checkout.setAncillaries) the fees also hold one `ancillary_service` line per extra, and `selling`
+   * counts them.
    */
   private async priceConfirmed(
     trx: TenantTransaction,
@@ -469,6 +510,7 @@ export class PricedOffersService {
     confirmed: readonly ConfirmedOffer[],
     dictionaries: AmadeusDictionaries,
     now: Date,
+    extras: readonly PricingExtra[] = [],
   ): Promise<PricingOutcome> {
     const rules = await this.rules.loadActiveRules(trx);
     if (rules.invalidRules.length > 0) {
@@ -519,6 +561,7 @@ export class PricedOffersService {
       });
       const fees = priceOffer(combinedInput(inputs, confirmed, cityOf), rules.markupRules, rules.feeRules, {
         kind: "pricing",
+        ...(extras.length === 0 ? {} : { extras }),
       });
       const net = offers.reduce((total, offer) => total.plus(offer.net), new Money(0));
       const markup = offers.reduce((total, offer) => total.plus(offer.markup), new Money(0));
@@ -581,27 +624,34 @@ export class PricedOffersService {
   /** The ancillary catalogue: from the pricing answer, an earlier load, or one more Flight Offers Price call. */
   async ancillaries(pricedOfferId: string): Promise<AncillaryCatalogue> {
     const scope = this.offers.scope();
+    return await this.catalogue({ scope, view: scope, operation: "flights.getAncillaries" }, (trx) =>
+      this.readable(trx, pricedOfferId, scope, this.clock.now()),
+    );
+  }
+
+  /**
+   * The catalogue of `read`'s priced offer in the `view` scope, as flights.getAncillaries answers it; the storefront
+   * feature `ancillaries` is checked first in customer `scope`, and a load is a call of `operation`.
+   */
+  private async catalogue(
+    options: { readonly scope: OfferScope; readonly view: OfferScope; readonly operation: string },
+    read: (trx: TenantTransaction) => Promise<PricedOfferRow>,
+  ): Promise<AncillaryCatalogue> {
     const first = await this.tx.run(async (trx) => {
-      if (scope === "customer") {
-        const settings = await this.repository.settings(trx);
-        if (!ancillariesEnabled(settings?.features)) {
-          throw new AppError("FEATURE_DISABLED", {
-            message: "Ancillaries are not enabled for this storefront.",
-            details: { feature: "ancillaries" },
-          });
-        }
+      if (options.scope === "customer") {
+        await this.checkAncillariesFeature(trx);
       }
-      const row = await this.readable(trx, pricedOfferId, scope, this.clock.now());
+      const row = await read(trx);
       const priced = await this.pricedParts(trx, row);
       const source = catalogueSourceOf(row, priced.snapshot, priced.reply.included);
       return source === undefined
         ? { kind: "load" as const, row, priced }
-        : { kind: "ready" as const, catalogue: catalogueOf(row, priced, source, scope) };
+        : { kind: "ready" as const, catalogue: catalogueOf(row, priced, source, options.view) };
     });
     if (first.kind === "ready") {
       return first.catalogue;
     }
-    const reply = await this.reload(first.row, first.priced.offerRows, "flights.getAncillaries", {
+    const reply = await this.reload(first.row, first.priced.offerRows, options.operation, {
       include: ANCILLARY_INCLUDE,
       fareRules: false,
     });
@@ -632,8 +682,19 @@ export class PricedOffersService {
         loadedAt: new Date(stored.loadedAt),
         warnings: stored.warnings,
       };
-      return catalogueOf(first.row, first.priced, source, scope);
+      return catalogueOf(first.row, first.priced, source, options.view);
     });
+  }
+
+  /** `403 FEATURE_DISABLED` while the storefront sells no ancillaries (the feature `ancillaries`, on by default). */
+  private async checkAncillariesFeature(trx: TenantTransaction): Promise<void> {
+    const settings = await this.repository.settings(trx);
+    if (!ancillariesEnabled(settings?.features)) {
+      throw new AppError("FEATURE_DISABLED", {
+        message: "Ancillaries are not enabled for this storefront.",
+        details: { feature: "ancillaries" },
+      });
+    }
   }
 
   // ---- flights.getFareRules ------------------------------------------------------------------------------------------
@@ -674,6 +735,187 @@ export class PricedOffersService {
       const stored = await this.storedLoad(trx, first.row, "fareRules", load, now);
       return fareRuleSetOf(first.row.id, first.row.currency, fareRulesFromLoad(first.priced.parts, stored));
     });
+  }
+
+  // ---- For checkout.setAncillaries (OBE-037) -------------------------------------------------------------------------
+
+  /**
+   * The ancillary catalogue of a checkout's base priced offer, loaded as flights.getAncillaries loads it (`403
+   * FEATURE_DISABLED` in customer scope while the storefront sells no ancillaries), without the reader's access and
+   * expiry checks: the checkout applied its own, and a checkout may outlive its base priced offer's `expires_at`. In the
+   * console view (`netPrice` included): the checkout never answers it as it is.
+   */
+  async ancillariesForCheckout(pricedOfferId: string): Promise<AncillaryCatalogue> {
+    return await this.catalogue(
+      { scope: this.offers.scope(), view: "console", operation: "checkout.setAncillaries" },
+      async (trx) => {
+        const row = await this.repository.byId(trx, pricedOfferId);
+        if (row === undefined) {
+          throw new Error("the priced offer of a checkout is missing");
+        }
+        return row;
+      },
+    );
+  }
+
+  /**
+   * The feature check of `ancillariesForCheckout` without the catalogue (`403 FEATURE_DISABLED` in customer scope while
+   * the storefront sells no ancillaries): checkout.setAncillaries without selections needs no catalogue, so it never
+   * loads one from Amadeus.
+   */
+  async checkAncillariesForCheckout(): Promise<void> {
+    if (this.offers.scope() === "customer") {
+      await this.tx.run((trx) => this.checkAncillariesFeature(trx));
+    }
+  }
+
+  /**
+   * Stores the answer of Flight Offers Price for a checkout's base priced offer re-priced with the selected extras as a
+   * child priced offer (`parent_priced_offer_id` = the base), in the caller's transaction.
+   *
+   * The child's amounts are those of the flights only (its `selling_total` is what the checkout pays before its
+   * extras, as the base's): per offer the confirmed `grandTotal` minus the answer's `price.additionalServices`. When
+   * every offer's flight net is the base's, the base's markups and booking fees are kept, so a rule changed since the
+   * base pricing does not move a priced flight; otherwise the flights are priced again as flights.price prices them,
+   * with today's rules. The extras get their `ancillary_service` fee lines from the same engine run; the lines are kept
+   * in the child's snapshot (`extras`) and answered, never added to the child's amounts. The stored answer keeps the
+   * confirmed offers with their `additionalServices`, from which the order is created.
+   */
+  async storeServicesPricing(trx: TenantTransaction, input: ServicesPricingInput): Promise<ServicesPricing> {
+    const tenant = this.tenants.require();
+    const base = input.base;
+    const now = this.clock.now();
+    const settings = await this.repository.settings(trx);
+    if (settings === undefined) {
+      this.logger.warn({ tenantId: tenant.tenantId }, "pricing.settings_missing");
+      throw new AppError("TENANT_SUSPENDED", { message: "The storefront of this OTA is not ready yet." });
+    }
+    const priced = await this.pricedParts(trx, base);
+    const { snapshot } = priced;
+    const units = snapshot.minorUnits;
+    const answer = readPricingReply(input.reply.body);
+    const unreadable = (): AppError =>
+      new AppError("SUPPLIER_ERROR", { message: "The supplier's pricing answer could not be read." });
+    const confirmed = confirmedOffersOf(
+      priced.offerRows.map((row) => ({
+        id: row.id,
+        amadeusOfferId: row.amadeusOfferId,
+        currency: base.currency,
+      })),
+      answer.flightOffers,
+      parseOffer,
+    );
+    if (confirmed === undefined) {
+      throw unreadable();
+    }
+    // The flights as the engine prices them: the net without the extras.
+    const flights = confirmed.map((offer): ConfirmedOffer => {
+      const net = flightNetOf(offer, units);
+      if (net === undefined) {
+        throw unreadable();
+      }
+      return { ...offer, parsed: { ...offer.parsed, price: { ...offer.parsed.price, grandTotal: net } } };
+    });
+    const fareKept = flights.every((offer) => {
+      const before = snapshot.offers.find((entry) => entry.offerId === offer.offerId);
+      return before !== undefined && new Money(before.net).equals(offer.parsed.price.grandTotal);
+    });
+    const prepared: PreparedPricing = {
+      offers: priced.offerRows,
+      request: input.request,
+      include: input.include,
+      forceClass: base.forceClass,
+      fareRules: input.request.data.additionalInformation.fareRules,
+      currency: base.currency,
+      minorUnits: units,
+      offerTtlMinutes: settings.offerTtlMinutes,
+      channel: snapshot.channel,
+      customerId: snapshot.customerId,
+    };
+    const dictionaries = mergeDictionaries(
+      offerDictionaries(priced.offerRows),
+      amadeusDictionaries(answer.dictionaries),
+    );
+    const outcome = await this.priceConfirmed(trx, prepared, flights, dictionaries, now, input.extras);
+    const extraFeeLines = outcome.fees.feeLines.filter((line) => line.extraRef !== null);
+    const offers = fareKept ? snapshot.offers : outcome.offers;
+    const feeLines = fareKept
+      ? snapshot.feeLines
+      : outcome.fees.feeLines.filter((line) => line.extraRef === null);
+    const total = (values: readonly string[]): MoneyValue =>
+      values.reduce((sum, value) => sum.plus(value), new Money(0));
+    const net = total(offers.map((offer) => offer.net));
+    const markup = total(offers.map((offer) => offer.markup));
+    const fee = total(feeLines.map((line) => line.amount));
+    const selling = net.plus(markup).plus(fee);
+    const id = this.ids.newId("prc");
+    const lastTicketingDate = earliestTicketingDate(confirmed);
+    const bagsOrServices = input.include.includes("bags") || input.include.includes("other-services");
+    const earlier = catalogueSourceOf(base, snapshot, priced.reply.included);
+    const childSnapshot: ServicesSnapshot = {
+      version: 1,
+      searchId: snapshot.searchId,
+      customerId: snapshot.customerId,
+      channel: snapshot.channel,
+      include: [...input.include],
+      fareRules: prepared.fareRules,
+      forceClass: base.forceClass,
+      minorUnits: units,
+      resultsTotal: snapshot.resultsTotal,
+      offers,
+      feeLines,
+      // The options the base's catalogue has keep their `anc_` ids.
+      optionIds: bagsOrServices
+        ? this.optionIds(answer.included, confirmed, base.currency, units, earlier)
+        : {},
+      loads: {},
+      extras: { extras: input.extras, feeLines: extraFeeLines },
+    };
+    await this.repository.insert(trx, {
+      id,
+      environment: tenant.environment,
+      offer_id: base.offerId,
+      parent_priced_offer_id: base.id,
+      offer_ids: [...base.offerIds],
+      include_credit_card_fees: input.include.includes("credit-card-fees"),
+      include_bags: input.include.includes("bags"),
+      include_other_services: input.include.includes("other-services"),
+      include_detailed_fare_rules: input.include.includes("detailed-fare-rules"),
+      force_class: base.forceClass,
+      amadeus_request: JSON.stringify(redactPayload(input.request)),
+      response: JSON.stringify({
+        ...redactPayload(isRecord(input.reply.body) ? input.reply.body : {}),
+        [SNAPSHOT_KEY]: childSnapshot,
+      }),
+      booking_requirements:
+        answer.bookingRequirements === undefined ? null : JSON.stringify(answer.bookingRequirements),
+      price_changed: !new Money(snapshot.resultsTotal).plus(fee).equals(selling),
+      currency: base.currency,
+      net_total: net.toFixed(units),
+      taxes_total: outcome.taxes,
+      markup_amount: markup.toFixed(units),
+      fee_amount: fee.toFixed(units),
+      selling_total: selling.toFixed(units),
+      markup_rule_id: offers[0]?.markupRuleId ?? null,
+      last_ticketing_date: lastTicketingDate,
+      expires_at: pricedOfferExpiry(now, settings.offerTtlMinutes, lastTicketingDate),
+      created_at: now,
+      updated_at: now,
+    });
+    const child = await this.forCheckout(trx, id, input.acceptLanguage);
+    if (child === undefined) {
+      throw new Error("a stored priced offer is not readable in its own tenant");
+    }
+    this.logger.info(
+      {
+        pricedOfferId: id,
+        parentPricedOfferId: base.id,
+        extras: input.extras.length,
+        fareChanged: !fareKept,
+      },
+      "pricing.services_priced",
+    );
+    return { priced: child, fareChanged: !fareKept, extraFeeLines };
   }
 
   // ---- For the checkout (OBE-036) ------------------------------------------------------------------------------------
@@ -1095,4 +1337,44 @@ function fareRulesFromLoad(parts: readonly PricedOfferPart[], load: FareRulesLoa
     loadedAt: new Date(load.loadedAt),
     warnings: load.warnings,
   };
+}
+
+/** The amounts `priced_offers.net_total` (`numeric(12,2)`) holds stay below this. */
+const MAX_NET = new Money("1e10");
+
+/**
+ * Amadeus `price.additionalServices` of a confirmed offer, summed by type (`CHECKED_BAGS`, `SEATS`, …): what the
+ * airline charges for the extras of the request. Entries without a type or a plain decimal amount are left out.
+ */
+export function additionalServiceAmounts(payload: unknown): Map<string, MoneyValue> {
+  const price = isRecord(payload) ? payload["price"] : undefined;
+  const services =
+    isRecord(price) && Array.isArray(price["additionalServices"]) ? price["additionalServices"] : [];
+  const amounts = new Map<string, MoneyValue>();
+  for (const service of services) {
+    const type = isRecord(service) ? service["type"] : undefined;
+    const amount = isRecord(service) ? service["amount"] : undefined;
+    if (typeof type === "string" && typeof amount === "string" && /^\d+(?:\.\d+)?$/.test(amount)) {
+      amounts.set(type, (amounts.get(type) ?? new Money(0)).plus(amount));
+    }
+  }
+  return amounts;
+}
+
+/**
+ * The net total of a confirmed offer's flights: `grandTotal` (which includes the extras of the request) minus its
+ * `price.additionalServices`, in the currency's minor units; `undefined` when negative, finer or too large to store.
+ */
+export function flightNetOf(
+  offer: { readonly payload: unknown; readonly parsed: ParsedOffer },
+  minorUnits: number,
+): string | undefined {
+  const extras = [...additionalServiceAmounts(offer.payload).values()].reduce(
+    (sum, amount) => sum.plus(amount),
+    new Money(0),
+  );
+  const net = new Money(offer.parsed.price.grandTotal).minus(extras);
+  return net.isNegative() || net.decimalPlaces() > minorUnits || net.gte(MAX_NET)
+    ? undefined
+    : net.toFixed(minorUnits);
 }

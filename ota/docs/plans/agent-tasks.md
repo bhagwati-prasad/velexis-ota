@@ -1020,7 +1020,8 @@ Checkout, customer accounts in cookies, Stripe on the Velexis account, the airli
   - Tenant B gets 404 for tenant A's `chk_` id; an expired checkout answers 410.
 - **Verify:** `pnpm --filter @velexis/ota-backend test -- checkout && pnpm --filter @velexis/ota-backend test:int -- checkout`
 
-### OBE-037 · Implement checkout.setAncillaries with re-pricing and service fees
+### OBE-037 · Implement checkout.setAncillaries with re-pricing and service fees ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-backend
 - **Milestone:** M3
 - **Depends on:** OBE-036
