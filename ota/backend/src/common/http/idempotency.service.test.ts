@@ -261,6 +261,20 @@ describe("the scope of a record", () => {
     expect(idempotencyScope("live", visitor, "completeCheckout")).toBe(`live:${visitor}:completeCheckout`);
   });
 
+  it("is `service` for the OTA admin before a staff member is known, and the staff member after [OBE-060]", () => {
+    const service = { type: "service", id: "service" } as const;
+
+    expect(idempotencyPrincipal({ caller: service, actor: { type: "system", id: null } }, undefined)).toBe(
+      "service",
+    );
+    expect(
+      idempotencyPrincipal(
+        { caller: service, actor: { type: "staff", id: "stf_01JA4CH3G1K4N7R0U3X6A9D2F5" } },
+        undefined,
+      ),
+    ).toBe("stf_01JA4CH3G1K4N7R0U3X6A9D2F5");
+  });
+
   it("needs the CSRF cookie of a storefront visitor without a session: 403 CSRF_TOKEN_INVALID", () => {
     for (const cookie of [undefined, ""]) {
       const error = (() => {

@@ -1,6 +1,6 @@
 // Tenant resolution (OADR-0009 point 2, ota/docs/architecture.md §3.1, ADR-0018): the tenant and the environment of a
 // classified caller, read through the platform caches (platform-cache.ts). The tenant guard (common/auth/
-// tenant.guard.ts) runs it for every operation an edge or key caller reaches.
+// tenant.guard.ts) runs it for every operation an edge, key or service caller reaches.
 //
 //   edge  X-Velexis-Host = <key>.<STOREFRONT_BASE_DOMAIN>  → tenantkey:<key> → the tenant, whatever its status:
 //                                                            active is served; any other status is
@@ -10,6 +10,9 @@
 //                                                            purpose storefront, of an active tenant only
 //         environment: tenants.storefront_environment
 //   key   the key's tenant (tenant:<id>), active only       environment: the key's
+//   service the tenant the guard located (the staff token's tid, the portal token's or the refresh token's family's
+//         tenant; OBE-060), tenant:<id>, active only          environment: X-Velexis-Environment (the permission
+//                                                            guard checks that live is open to the tenant)
 //
 // An unknown host, an unverified or other-purpose domain, and a custom domain of a tenant that is not active all
 // answer `403 HOST_NOT_ALLOWED` (`details.reason: unknown`), so nothing about the tenant behind a host leaks. A host
@@ -20,7 +23,7 @@ import { isTenantSchema } from "@velexis/db";
 import { AppError } from "@velexis/errors";
 import { PinoLogger } from "nestjs-pino";
 import type { ApiConfig } from "../config";
-import type { EdgeCaller, KeyCaller } from "./caller-resolver";
+import type { EdgeCaller, KeyCaller, ServiceCaller } from "./caller-resolver";
 import { PlatformCache } from "./platform-cache";
 import { STOREFRONT_HOST_PATTERN } from "./platform-read.repository";
 import type { PlatformTenant } from "./platform-read.types";
@@ -56,6 +59,27 @@ export class TenantResolver {
    */
   async resolve(caller: EdgeCaller | KeyCaller): Promise<ResolvedTenant> {
     return caller.type === "edge" ? this.resolveHost(caller.host) : this.resolveKey(caller);
+  }
+
+  /**
+   * The tenant `tenantId` of a service request (OBE-060) in `environment`: active only (`403 TENANT_SUSPENDED`); a
+   * tenant that is not there is `401 UNAUTHENTICATED` (the staff credential that named it cannot be of this platform),
+   * `503 SERVICE_UNAVAILABLE` when PostgreSQL cannot be read on a cache miss.
+   */
+  async resolveService(
+    _caller: ServiceCaller,
+    tenantId: string,
+    environment: TenantEnvironment,
+  ): Promise<ResolvedTenant> {
+    const tenant = await this.cache.tenantById(tenantId);
+    if (tenant === null) {
+      this.logger.warn({ tenantId }, "tenant.service_tenant_missing");
+      throw new AppError("UNAUTHENTICATED");
+    }
+    if (tenant.status !== "active") {
+      throw new AppError("TENANT_SUSPENDED");
+    }
+    return { tenant, environment };
   }
 
   private async resolveHost(host: string): Promise<ResolvedTenant> {

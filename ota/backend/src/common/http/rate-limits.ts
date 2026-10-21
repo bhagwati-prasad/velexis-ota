@@ -13,11 +13,16 @@
 // - `ip`: the end user's IP (architecture §8). Caddy's client address (`req.ip`, `trust proxy loopback`) for the edge,
 //   publishable keys and public routes; for a secret key the valid `X-Velexis-End-User-IP` its server forwards (the
 //   contract's CustomerEndUserIp), else the connection's address, so one storefront server does not put every visitor
-//   in one bucket. The OTA admin's service caller joins with OBE-060. An IPv6 address counts for its /64, as
-//   @nestjs/throttler's own tracker does: one IPv6 user holds a whole /64;
+//   in one bucket; for the OTA admin's service caller the staff member's `X-Velexis-End-User-IP`, which the caller guard
+//   requires and checks (OBE-060, OADR-0011 point 9), so the console sign-ins of every OTA, which all arrive from the
+//   admin server, never share one bucket. An IPv6 address counts for its /64, as @nestjs/throttler's own tracker does:
+//   one IPv6 user holds a whole /64;
 // - `email`: the request body's `email`, trimmed and lower-cased (a body without one is not counted by that limit);
 // - `tenant`: the resolved tenant (tenant guard);
-// - `principal`: the API key (`key_…`); the staff session of the service caller joins with OBE-060;
+// - `principal`: the staff session (`asn_…`) of a request with a signed-in staff member (the staff guard, OBE-059),
+//   whatever its key; else the API key (`key_…`) of a key-only call (OBE-060, OADR-0011 point 9: 600 per minute per
+//   staff session or key). A service request without a staff member (console.auth.signIn, refresh, a sign-out by
+//   refresh token) has none and is not counted by it;
 // - `reference`: the tenant and the body's `bookingReference` (the lookup failures, counted by OBE-047).
 //
 // Trackers are SHA-256 digests in the Redis keys (`rl:<throttler>:<digest>`), so no IP or e-mail address is stored in
@@ -57,9 +62,11 @@ import { AppError } from "@velexis/errors";
 import type { Request } from "express";
 import type { Redis } from "ioredis";
 import { InjectPinoLogger, PinoLogger } from "nestjs-pino";
+import { ClsService } from "nestjs-cls";
 import { CallerContext, type Caller } from "../../tenancy/caller-resolver";
 import { TenancyModule } from "../../tenancy/tenancy.module";
 import { TenantContext } from "../../tenancy/tenant-context";
+import { StaffContext } from "../auth/staff.guard";
 import { REDIS_CLIENT } from "../redis/redis.module";
 import { RateLimitStoreUnavailableError, RedisThrottlerStorage } from "../redis/throttler-storage";
 import { OPENAPI_OPERATION } from "./openapi-operation.decorator";
@@ -71,7 +78,7 @@ const HOUR = 60 * MINUTE;
 export type RateLimitTracker = "ip" | "email" | "tenant" | "principal" | "reference";
 
 /** The callers a limit can count: the caller guard's types, with keys told apart by kind. */
-export type RateLimitedCaller = "edge" | "publishable" | "secret" | "anonymous";
+export type RateLimitedCaller = "edge" | "service" | "publishable" | "secret" | "anonymous";
 
 /** One limit of the table of architecture §8. */
 export interface RateLimit {
@@ -99,7 +106,8 @@ export const RATE_LIMITS = Object.freeze({
     limit: 10,
     windowSeconds: MINUTE,
     by: "ip",
-    callers: CUSTOMER_CALLERS,
+    // The service caller reaches console.auth.signIn only (the scope guard refuses it auth.signIn).
+    callers: Object.freeze([...CUSTOMER_CALLERS, "service"] as const),
     counts: "requests",
     row: "auth.signIn, console.auth.signIn",
   },
@@ -180,7 +188,7 @@ export const RATE_LIMITS = Object.freeze({
     limit: 600,
     windowSeconds: MINUTE,
     by: "principal",
-    callers: Object.freeze(["secret"] as const),
+    callers: Object.freeze(["secret", "service"] as const),
     counts: "requests",
     row: "Console operations",
   },
@@ -249,10 +257,11 @@ export function connectionIp(request: AddressedRequest): string {
 
 /**
  * The end user's IP of a request (architecture §8): a secret key's valid `X-Velexis-End-User-IP` (the contract
- * ignores an invalid one), else the connection's address. Other callers' headers are ignored.
+ * ignores an invalid one), the OTA admin's (the service caller's, which the caller guard requires valid), else the
+ * connection's address. Other callers' headers are ignored.
  */
 export function endUserIp(request: AddressedRequest, caller: Caller): string {
-  if (caller.type === "key" && caller.kind === "secret") {
+  if (caller.type === "service" || (caller.type === "key" && caller.kind === "secret")) {
     const value = request.headers[END_USER_IP_HEADER];
     const forwarded = typeof value === "string" ? value.trim() : "";
     if (isIP(forwarded) !== 0) {
@@ -267,6 +276,8 @@ export interface TrackerSources {
   readonly caller: Caller;
   /** The tenant the tenant guard resolved, when there is one. */
   readonly tenantId: string | undefined;
+  /** The staff session (`asn_…`) of the signed-in staff member the staff guard found, when there is one. */
+  readonly staffSessionId?: string | undefined;
   /** `endUserIp` of the request. */
   readonly ip: string;
   /** The parsed request body. */
@@ -293,6 +304,9 @@ export function trackerValue(by: RateLimitTracker, sources: TrackerSources): str
     case "tenant":
       return sources.tenantId;
     case "principal":
+      if (sources.staffSessionId !== undefined) {
+        return `staff:${sources.staffSessionId}`;
+      }
       return sources.caller.type === "key" ? sources.caller.keyId : undefined;
     case "reference": {
       const reference = bodyText(sources.body, "bookingReference")?.toUpperCase();
@@ -313,6 +327,8 @@ export interface RateLimitSources {
   readonly reflector: Reflector;
   readonly callers: Pick<CallerContext, "get">;
   readonly tenants: Pick<TenantContext, "get">;
+  /** The signed-in staff member (OBE-060); without it no request counts per staff session. */
+  readonly staff?: Pick<StaffContext, "get"> | undefined;
 }
 
 /** The tracker digest of limit `id` for the request in `execution`, or `undefined` when the limit does not count it. */
@@ -343,6 +359,7 @@ function trackerOf(
   const value = trackerValue(limit.by, {
     caller,
     tenantId: sources.tenants.get()?.tenantId,
+    staffSessionId: sources.staff?.get()?.family.id,
     ip: endUserIp(req, caller),
     body: req.body,
   });
@@ -384,9 +401,19 @@ export function rateLimitOptions(
 export function rateLimitModule(): ReturnType<typeof ThrottlerModule.forRootAsync> {
   return ThrottlerModule.forRootAsync({
     imports: [TenancyModule.forApi()],
-    inject: [Reflector, CallerContext, TenantContext, REDIS_CLIENT],
-    useFactory: (reflector: Reflector, callers: CallerContext, tenants: TenantContext, client: Redis) =>
-      rateLimitOptions({ reflector, callers, tenants }, new RedisThrottlerStorage(client)),
+    inject: [Reflector, CallerContext, TenantContext, ClsService, REDIS_CLIENT],
+    useFactory: (
+      reflector: Reflector,
+      callers: CallerContext,
+      tenants: TenantContext,
+      cls: ClsService,
+      client: Redis,
+    ) =>
+      rateLimitOptions(
+        // StaffContext is a typed view of the request context (nestjs-cls, global), as the staff guard's.
+        { reflector, callers, tenants, staff: new StaffContext(cls) },
+        new RedisThrottlerStorage(client),
+      ),
   });
 }
 

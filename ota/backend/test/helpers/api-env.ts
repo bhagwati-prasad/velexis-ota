@@ -1,6 +1,8 @@
 // Test support: the API-only variables of src/config.ts that tests cannot fill with a constant (OBE-011).
 //
 // - VELEXIS_EDGE_SECRET: 32 random bytes in hex, new in every test process.
+// - OTA_ADMIN_SERVICE_KEY (OBE-060): `sk_svc_` and 24 random bytes in hex, as provision-vm.sh generates it, new in every
+//   test process.
 // - API_KEY_PEPPER_FILE: a key file as `pnpm dev:keys` writes .local/keys/api-key-pepper (32 random bytes, base64,
 //   mode 0600), kept in the package's node_modules/.cache/test-keys/ (ignored by git and ESLint) and reused by every
 //   later run of this checkout. The first process that needs it creates it with an exclusive link, so concurrent test
@@ -28,6 +30,8 @@ import { APP_DIR } from "../../src/config";
 export interface TestApiCredentials {
   /** The value of VELEXIS_EDGE_SECRET. */
   readonly edgeSecret: string;
+  /** The value of OTA_ADMIN_SERVICE_KEY: the OTA admin's service key (OBE-060). */
+  readonly serviceKey: string;
   /** The absolute path of the pepper file (API_KEY_PEPPER_FILE). */
   readonly pepperFile: string;
   /** The decoded pepper: what `hashApiKey` of @velexis/crypto takes to compute a key's `key_hash`. */
@@ -95,6 +99,7 @@ export function testApiCredentials(): TestApiCredentials {
     }
     credentials = Object.freeze({
       edgeSecret: randomBytes(32).toString("hex"),
+      serviceKey: `sk_svc_${randomBytes(24).toString("hex")}`,
       pepperFile: PEPPER_FILE,
       pepper,
       masterKeyDir: KEY_DIR,
@@ -106,9 +111,10 @@ export function testApiCredentials(): TestApiCredentials {
 
 /** The API-only variables of src/config.ts with test values, to merge into an API environment. */
 export function testApiVariables(): Readonly<Record<string, string>> {
-  const { edgeSecret, pepperFile, masterKeyDir, jwtKeyFile } = testApiCredentials();
+  const { edgeSecret, serviceKey, pepperFile, masterKeyDir, jwtKeyFile } = testApiCredentials();
   return Object.freeze({
     VELEXIS_EDGE_SECRET: edgeSecret,
+    OTA_ADMIN_SERVICE_KEY: serviceKey,
     API_KEY_PEPPER_FILE: pepperFile,
     JWT_PRIVATE_KEY_FILE: jwtKeyFile,
     STOREFRONT_BASE_DOMAIN: TEST_STOREFRONT_BASE_DOMAIN,

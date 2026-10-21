@@ -252,7 +252,9 @@ export function idempotentOperations(document: OpenApiDocument): ReadonlySet<str
 /**
  * The principal of a request: its actor (`cus_…`, `stf_…`, `key_…`), or for a storefront visitor without a session
  * `edge-` and the first 16 hex characters of the SHA-256 of their `__Host-vx_csrf` cookie. An edge request without
- * the cookie is `403 CSRF_TOKEN_INVALID`, as the CSRF guard answers it.
+ * the cookie is `403 CSRF_TOKEN_INVALID`, as the CSRF guard answers it. The OTA admin's service caller before a staff
+ * member is known (console.auth.signIn and refresh, OBE-060) is `service`: its keys are the admin's random UUIDs, and
+ * the request hash holds the portal or refresh token, so no two staff members' calls ever replay each other.
  */
 export function idempotencyPrincipal(
   tenant: Pick<RequestTenant, "caller" | "actor">,
@@ -266,6 +268,9 @@ export function idempotencyPrincipal(
       throw new AppError("CSRF_TOKEN_INVALID", { details: { reason: "token_missing" } });
     }
     return `edge-${createHash("sha256").update(csrfCookie, "utf8").digest("hex").slice(0, 16)}`;
+  }
+  if (tenant.caller.type === "service") {
+    return "service";
   }
   throw new Error(`An idempotent request of a ${tenant.caller.type} caller has no principal`);
 }

@@ -170,6 +170,14 @@ const sharedSchema = {
 const EDGE_SECRET = /^[A-Za-z0-9_-]{24,}$/;
 
 /**
+ * The OTA admin's first-party service key (ADR-0008, OADR-0009 rule 1.2): `sk_` and at least 16 of `[A-Za-z0-9_]`, the
+ * pattern the OTA admin's own configuration checks (ota/admin/src/config.ts). provision-vm.sh generates `sk_svc_` and 48
+ * hex characters, the development value of the `.env.example` files is `sk_dev_…`; an empty value and the
+ * unsubstituted `@@OTA_ADMIN_SERVICE_KEY@@` placeholder are refused.
+ */
+export const SERVICE_KEY_PATTERN = /^sk_[A-Za-z0-9_]{16,}$/;
+
+/**
  * The DER length of an Ed25519 private key in PKCS#8 (`openssl genpkey -algorithm ed25519`, `pnpm dev:keys`): the
  * least JWT_PRIVATE_KEY_FILE may hold. The identity module's TokenService also checks that the key is Ed25519.
  */
@@ -228,6 +236,11 @@ export const apiConfigSchema = {
   // The shared secret Caddy sends in X-Velexis-Edge on every storefront /api/* request (ADR-0018, OADR-0009 rule
   // 1.1); compared in constant time by the caller guard, never logged. The same value is in caddy.env.
   VELEXIS_EDGE_SECRET: env.string({ pattern: EDGE_SECRET }),
+  // The OTA admin's first-party service key (OBE-060; ADR-0008, OADR-0009 rule 1.2, OADR-0011 point 4): `X-Api-Key`
+  // equal to it (constant time) on a direct loopback connection without X-Forwarded-For or X-Forwarded-Host is the
+  // service caller, which may call console operations only, with a staff token. The same value is in ota-admin.env;
+  // never logged (the logger redacts X-Api-Key).
+  OTA_ADMIN_SERVICE_KEY: env.string({ pattern: SERVICE_KEY_PATTERN }),
   // The HMAC pepper of API key hashes (PADR-0005 item 3): an identical copy of the platform's file in the OTA zone's
   // key folder (ADR-0026). Checked at start-up (mode 0400 or 0600, at least 32 bytes after base64 decoding); the
   // configuration holds the path, and the tenancy module reads the key once.

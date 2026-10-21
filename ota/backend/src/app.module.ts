@@ -18,6 +18,7 @@ import type { DestinationStream } from "pino";
 import { CallerGuard } from "./common/auth/caller.guard";
 import { CsrfGuard } from "./common/auth/csrf.guard";
 import { CustomerGuard } from "./common/auth/customer.guard";
+import { PermissionGuard } from "./common/auth/permission.guard";
 import { ScopeGuard } from "./common/auth/scope.guard";
 import { StaffGuard } from "./common/auth/staff.guard";
 import { TenantGuard } from "./common/auth/tenant.guard";
@@ -27,6 +28,8 @@ import { HttpModule } from "./common/http/http.module";
 import { RateLimitGuard, rateLimitModule } from "./common/http/rate-limits";
 import { requestIdOf } from "./common/http/request-context";
 import { CheckoutModule } from "./checkout/checkout.module";
+import { ConsoleModule } from "./console/console.module";
+import { StaffActionsInterceptor } from "./console/staff-actions.writer";
 import { API_APP, type ApiConfig } from "./config";
 import { HealthModule } from "./health/health.module";
 import { IdentityModule } from "./identity/identity.module";
@@ -94,6 +97,9 @@ export class AppModule implements NestModule {
         // Customer tokens and sessions (OBE-031): the customer guard below verifies the tokens with its key; staff
         // tokens and sessions (OBE-059): the staff guard below.
         IdentityModule,
+        // The console audit (OBE-060): the staff_actions writer, global, for the permission guard, the audit
+        // interceptor and the use cases of every module.
+        ConsoleModule,
         // The operations of the OTA document, one module per context (conventions §2).
         ReferenceModule,
         StorefrontModule,
@@ -104,9 +110,11 @@ export class AppModule implements NestModule {
       // Global guards run in this order (architecture §3 steps 4–10): who is calling (OADR-0009 point 1), for which
       // tenant (points 2 and 3), whether the caller may call the operation and in which scope, the signed-in customer
       // (step 8, OADR-0006 points 1 and 5) or, in console scope, staff member (step 8, OADR-0011 point 3), the CSRF
-      // check of state-changing edge requests (OADR-0006 point 3), then the rate limits. All of them run before
-      // validation.
-      // The key-usage interceptor records each successful request of an API key (OADR-0009 point 6).
+      // check of state-changing edge requests (OADR-0006 point 3), the rate limits, then the console permission and
+      // environment of the staff member or key (OADR-0011 points 4 to 6), which audits its refusals (OBE-060). All of
+      // them run before validation.
+      // The key-usage interceptor records each successful request of an API key (OADR-0009 point 6); the console audit
+      // writes the staff_actions row of each console call its use case did not write (OADR-0011 point 8).
       providers: [
         { provide: APP_GUARD, useClass: CallerGuard },
         { provide: APP_GUARD, useClass: TenantGuard },
@@ -115,8 +123,10 @@ export class AppModule implements NestModule {
         { provide: APP_GUARD, useClass: StaffGuard },
         { provide: APP_GUARD, useClass: CsrfGuard },
         { provide: APP_GUARD, useClass: RateLimitGuard },
+        { provide: APP_GUARD, useClass: PermissionGuard },
         KeyUsageRecorder,
         { provide: APP_INTERCEPTOR, useClass: KeyUsageInterceptor },
+        { provide: APP_INTERCEPTOR, useClass: StaffActionsInterceptor },
       ],
     };
   }

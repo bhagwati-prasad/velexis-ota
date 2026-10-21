@@ -42,6 +42,7 @@ const API_ONLY = testApiVariables();
 /** The API's variables that the worker does not read: the caller credentials and the API's public URL. */
 const API_ONLY_NAMES = [
   "VELEXIS_EDGE_SECRET",
+  "OTA_ADMIN_SERVICE_KEY",
   "API_KEY_PEPPER_FILE",
   "JWT_PRIVATE_KEY_FILE",
   "PUBLIC_OTA_API_URL",
@@ -70,11 +71,18 @@ function readEnvFile(path: string): Record<string, string> {
 /** What provision-vm.sh's `gen_secret` writes: `openssl rand -hex 24`, 48 hex characters (a dummy value here). */
 const GENERATED_SECRET = "0123456789abcdef".repeat(3);
 
+/**
+ * What provision-vm.sh generates for a placeholder: `sk_svc_` and a secret for the OTA admin's service key (its
+ * `OTA_ADMIN_SERVICE_KEY=sk_svc_$(gen_secret)`), a bare secret for every other one.
+ */
+const generatedValue = (placeholder: string): string =>
+  placeholder === "@@OTA_ADMIN_SERVICE_KEY@@" ? `sk_svc_${GENERATED_SECRET}` : GENERATED_SECRET;
+
 /** A deploy/env template with its `@@NAME@@` placeholders replaced, as provision-vm.sh does with generated values. */
 function renderedTemplate(name: string): Record<string, string> {
   const text = readFileSync(join(REPO_ROOT, "deploy/env", name), "utf8").replace(
     /@@[A-Z_]+@@/g,
-    GENERATED_SECRET,
+    generatedValue,
   );
   return Object.fromEntries(
     Object.entries(parseEnv(text)).filter((entry): entry is [string, string] => entry[1] !== undefined),
@@ -125,6 +133,7 @@ describe("the privileged DSNs", () => {
       "LOG_LEVEL",
       "MASTER_KEY_CURRENT",
       "MASTER_KEY_DIR",
+      "OTA_ADMIN_SERVICE_KEY",
       "PORT",
       "PUBLIC_OTA_API_URL",
       "REDIS_URL",
@@ -293,6 +302,7 @@ describe("the caller credentials of the API (OBE-011)", () => {
       "JWT_PRIVATE_KEY_FILE",
       "MASTER_KEY_CURRENT",
       "MASTER_KEY_DIR",
+      "OTA_ADMIN_SERVICE_KEY",
       "PUBLIC_OTA_API_URL",
       "STOREFRONT_BASE_DOMAIN",
       "VELEXIS_EDGE_SECRET",
@@ -309,6 +319,21 @@ describe("the caller credentials of the API (OBE-011)", () => {
       expect(error.problems.map((problem) => problem.variable)).toEqual(["VELEXIS_EDGE_SECRET"]);
       expect(error.message).not.toContain(value);
     }
+  });
+
+  it("refuse an empty or short service key and the deploy template's placeholder without printing either [OBE-060]", () => {
+    for (const value of [
+      "@@OTA_ADMIN_SERVICE_KEY@@",
+      "sk_short",
+      "pk_test_not_a_service_key_at_all",
+      "sk_with space_x",
+    ]) {
+      const error = configErrorOf(() => loadApiConfig({ ...API_ENV, OTA_ADMIN_SERVICE_KEY: value }));
+
+      expect(error.problems.map((problem) => problem.variable)).toEqual(["OTA_ADMIN_SERVICE_KEY"]);
+      expect(error.message).not.toContain(value);
+    }
+    expect(loadApiConfig(API_ENV).OTA_ADMIN_SERVICE_KEY).toBe(testApiCredentials().serviceKey);
   });
 
   it("refuse a pepper file that others may read, that is shorter than 32 bytes or that is missing", () => {

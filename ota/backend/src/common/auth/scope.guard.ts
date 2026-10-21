@@ -4,6 +4,9 @@
 // @velexis/api-types/operations) and compares them with the caller the caller guard classified (OBE-011):
 //
 //   x-edge-only and not the edge caller                          → 403 SCOPE_NOT_ALLOWED (reason edge_only)
+//   the OTA admin's service caller (OBE-060, OADR-0011 point 4): a `console` operation runs in console scope (its
+//     staff token and the role's permission are the staff and permission guards' business); any other operation
+//                                                                → 403 SCOPE_NOT_ALLOWED (service_console_only)
 //   customer scope (the default): the edge, `pk_` and `sk_` keys of any key scope, on `customer` and `both`
 //   console scope, asked for with `X-Velexis-Scope: console` on a `both` operation, or a `console` operation:
 //     the edge or a `pk_` key                                    → 403 SCOPE_NOT_ALLOWED (console_operation,
@@ -14,6 +17,10 @@
 //     (`x-permission: none`: console.auth.signIn, refresh,
 //     signOut, me), which needs a portal token, a refresh token
 //     or a staff session but no permission                       → console scope (the session guards check the token)
+//     any other `sk_` key with a bearer token on a `console`
+//     operation: a staff token (ConsoleApiKeyScope `console`)    → console scope; the staff guard verifies the token,
+//                                                                  the permission guard checks the staff member's role
+//                                                                  (OBE-060)
 //     any other `sk_` key without `console:automation`           → 403 SCOPE_NOT_ALLOWED, details.requiredScope
 //     a `console:automation` key without the operation's
 //     `x-permission` among its scopes                            → 403 FORBIDDEN, details.requiredPermission
@@ -22,11 +29,15 @@
 //
 // A secret key alone is customer scope on `both` operations, so storefront server code never receives net amounts
 // (OfferDataScope of the document). Key-only console calls get exactly the permissions listed on the key (B4 §1);
-// `both` operations have no `x-permission`, so `console:automation` alone opens their console view. The second way
-// into console scope, a staff token with a `console` key or with the OTA admin's service key, comes with the staff
-// sessions and console access rules (OBE-059, OBE-060), which extend this guard; until then a staff token opens
-// nothing. Session tokens are verified by the session guards after this one (step 8), so a customer token is not
-// known here.
+// `both` operations have no `x-permission`, so `console:automation` alone opens their console view. The other ways
+// into console scope are a staff token with a secret key not scoped `storefront`, and the OTA admin's service caller
+// with a staff token (OBE-059, OBE-060). Session tokens are verified by the session guards after this one (step 8):
+// here a bearer token on a console operation only means "a staff session is presented", and the staff guard refuses
+// it when it is not one. In the API's pipeline the guard leaves the checks of a key-only call on a `console` operation
+// (`console:automation` among the key's scopes, then the operation's `x-permission`) to the permission guard
+// (`deferPermission`), which runs after the rate limits and records the denial in `staff_actions` (OBE-060, OADR-0011
+// point 8); on a `both` operation in console scope this guard still refuses a key without `console:automation`, and
+// `requestScope` alone still answers both checks.
 //
 // The guard runs after the tenant guard, on handlers bound to an operation (`@OpenApiOperation`) only, like the tenant
 // guard: the anonymous caller of public and webhook routes, routes outside the document and the 501 routes of pending
@@ -36,6 +47,7 @@ import { Reflector } from "@nestjs/core";
 import { otaOperations, type ApiOperation, type OtaOperationId } from "@velexis/api-types/operations";
 import { AppError } from "@velexis/errors";
 import type { Request } from "express";
+import { bearerTokenOf } from "../../identity/token.service";
 import { CallerContext, type Caller } from "../../tenancy/caller-resolver";
 import { OPENAPI_OPERATION } from "../http/openapi-operation.decorator";
 import { RequestContext } from "../http/request-context";
@@ -51,7 +63,12 @@ export const AUTOMATION_SCOPE = "console:automation";
 
 /** Why a request was refused with `SCOPE_NOT_ALLOWED` (`details.reason`). */
 export type ScopeRefusal =
-  "edge_only" | "console_operation" | "console_scope_requested" | "storefront_key" | "no_scope";
+  | "edge_only"
+  | "console_operation"
+  | "console_scope_requested"
+  | "storefront_key"
+  | "service_console_only"
+  | "no_scope";
 
 /** What the guard needs of an operation of the index. */
 export type ScopedOperation = Pick<ApiOperation, "operationId" | "scope" | "edgeOnly" | "permission">;
@@ -77,11 +94,23 @@ const MESSAGES: Readonly<Record<ScopeRefusal, string>> = {
   console_operation: "This operation needs a secret key with console access.",
   console_scope_requested: "Console scope is not available to this caller on this operation.",
   storefront_key: "A secret key scoped storefront cannot call console operations.",
+  service_console_only: "The OTA admin's service key may call console operations only.",
   no_scope: "This operation cannot be called.",
 };
 
 function refused(reason: ScopeRefusal): AppError {
   return new AppError("SCOPE_NOT_ALLOWED", { message: MESSAGES[reason], details: { reason } });
+}
+
+/** What else `requestScope` weighs besides the operation, the caller and `X-Velexis-Scope`. */
+export interface ScopeOptions {
+  /** The request carries a bearer token: on a `console` operation a secret key's staff token (OBE-060). */
+  readonly staffToken?: boolean;
+  /**
+   * Leave a key-only call's `x-permission`, and on a `console` operation its `console:automation` scope, to the
+   * permission guard (which records the denial).
+   */
+  readonly deferPermission?: boolean;
 }
 
 /**
@@ -93,6 +122,7 @@ export function requestScope(
   operation: ScopedOperation,
   caller: ScopedCaller,
   requested: string | undefined,
+  options: ScopeOptions = {},
 ): RequestScope {
   if (operation.edgeOnly && caller.type !== "edge") {
     throw refused("edge_only");
@@ -101,6 +131,13 @@ export function requestScope(
   if (scope !== "customer" && scope !== "both" && scope !== "console") {
     // Every operation of the OTA document has an x-scope today; a credential never reaches one without it.
     throw refused("no_scope");
+  }
+  if (caller.type === "service") {
+    // OADR-0011 point 4: console operations only, whatever X-Velexis-Scope says.
+    if (scope !== "console") {
+      throw refused("service_console_only");
+    }
+    return "console";
   }
   if (scope !== "console" && requested !== "console") {
     return "customer";
@@ -111,7 +148,11 @@ export function requestScope(
   if (scope === "customer") {
     throw refused("console_scope_requested");
   }
-  return keyConsoleScope(operation, caller.scopes);
+  return keyConsoleScope(operation, caller.scopes, {
+    consoleOperation: scope === "console",
+    staffToken: scope === "console" && options.staffToken === true,
+    deferPermission: options.deferPermission === true,
+  });
 }
 
 /**
@@ -120,8 +161,20 @@ export function requestScope(
  */
 export const STAFF_SESSION_PERMISSION = "none";
 
-/** Console scope for a secret key without a staff token: `console:automation` and the operation's permission. */
-function keyConsoleScope(operation: ScopedOperation, scopes: readonly string[]): RequestScope {
+/**
+ * Console scope for a secret key: with a staff token on a console operation the staff member's role decides (the
+ * permission guard); without one, `console:automation` and the operation's permission (on a console operation the
+ * permission guard's checks when they are deferred).
+ */
+function keyConsoleScope(
+  operation: ScopedOperation,
+  scopes: readonly string[],
+  options: {
+    readonly consoleOperation: boolean;
+    readonly staffToken: boolean;
+    readonly deferPermission: boolean;
+  },
+): RequestScope {
   if (scopes.includes("storefront")) {
     throw refused("storefront_key");
   }
@@ -130,14 +183,24 @@ function keyConsoleScope(operation: ScopedOperation, scopes: readonly string[]):
     // document's console.auth.signIn preconditions); the staff session guards check the token they need (OBE-059).
     return "console";
   }
+  if (options.staffToken) {
+    // ConsoleApiKeyScope `console` (or none, or `console:automation`) with a staff token: the staff guard verifies the
+    // token (a bearer that is not a staff token of the tenant is 401), the permission guard the role (OBE-060).
+    return "console";
+  }
   if (!scopes.includes(AUTOMATION_SCOPE)) {
+    if (options.deferPermission && options.consoleOperation) {
+      // A key-only call on a console operation: the permission guard refuses it with the same answer after the rate
+      // limits, and records the denied attempt as the key (OADR-0011 point 8).
+      return "console";
+    }
     throw new AppError("SCOPE_NOT_ALLOWED", {
       message: "Console calls without a staff token need a secret key with the console:automation scope.",
       details: { requiredScope: AUTOMATION_SCOPE },
     });
   }
   const permission = operation.permission;
-  if (permission !== null && !scopes.includes(permission)) {
+  if (!options.deferPermission && permission !== null && !scopes.includes(permission)) {
     throw new AppError("FORBIDDEN", {
       message: "The API key does not have the permission this operation needs.",
       details: { requiredPermission: permission },
@@ -179,7 +242,13 @@ export class ScopeGuard implements CanActivate {
       return true;
     }
     const req = execution.switchToHttp().getRequest<Request>();
-    if (requestScope(scopedOperation(operationId), caller, header(req, SCOPE_HEADER)) === "console") {
+    const options: ScopeOptions = {
+      staffToken: bearerTokenOf(req.headers) !== undefined,
+      deferPermission: true,
+    };
+    if (
+      requestScope(scopedOperation(operationId), caller, header(req, SCOPE_HEADER), options) === "console"
+    ) {
       this.context.markConsoleScope();
     }
     return true;

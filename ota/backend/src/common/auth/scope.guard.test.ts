@@ -196,6 +196,69 @@ describe("console operations", () => {
   });
 });
 
+describe("the OTA admin's service caller (OBE-060)", () => {
+  const SERVICE: ScopedCaller = { type: "service", id: "service" };
+
+  it("runs console operations in console scope and refuses every other operation [OBE-060 AC1]", () => {
+    for (const operationId of ["consoleListBookings", "consoleGetMe", "consoleSignIn"] as const) {
+      expect(outcome(operationId, SERVICE)).toBe("console");
+    }
+    for (const operationId of ["signIn", "listAirlines", "createFlightSearch"] as const) {
+      expect(outcome(operationId, SERVICE)).toEqual(scopeRefused("service_console_only"));
+      expect(outcome(operationId, SERVICE, "console")).toEqual(scopeRefused("service_console_only"));
+    }
+    expect(outcome("completeCheckoutWithAirlineCard", SERVICE)).toEqual(scopeRefused("edge_only"));
+  });
+});
+
+describe("secret keys with a staff token (OBE-060)", () => {
+  it("run console operations in console scope for a console or unscoped key; the role decides later", () => {
+    for (const caller of [SECRET, CONSOLE_SECRET, AUTOMATION_QUEUES]) {
+      expect(
+        requestScope(scopedOperation("consoleCreateMarkupRule"), caller, undefined, { staffToken: true }),
+      ).toBe("console");
+    }
+    expect(() =>
+      requestScope(scopedOperation("consoleListBookings"), STOREFRONT_SECRET, undefined, {
+        staffToken: true,
+      }),
+    ).toThrow(expect.objectContaining({ code: "SCOPE_NOT_ALLOWED", details: { reason: "storefront_key" } }));
+    // A bearer on a shared operation is no staff token: the key-only rules stay.
+    expect(() =>
+      requestScope(scopedOperation("createFlightSearch"), CONSOLE_SECRET, "console", { staffToken: true }),
+    ).toThrow(expect.objectContaining({ details: { requiredScope: "console:automation" } }));
+  });
+
+  it("leave a key-only call's permission and, on console operations, its console:automation scope to the permission guard when asked to", () => {
+    expect(
+      requestScope(scopedOperation("consoleListBookings"), AUTOMATION_QUEUES, undefined, {
+        deferPermission: true,
+      }),
+    ).toBe("console");
+    // The permission guard answers it with the same 403 SCOPE_NOT_ALLOWED and audits it (permission.guard.test.ts).
+    expect(
+      requestScope(scopedOperation("consoleListBookings"), CONSOLE_SECRET, undefined, {
+        deferPermission: true,
+      }),
+    ).toBe("console");
+    // Without the deferral, and on a shared operation in any case, this guard refuses it itself.
+    expect(() => requestScope(scopedOperation("consoleListBookings"), CONSOLE_SECRET, undefined)).toThrow(
+      expect.objectContaining({ details: { requiredScope: "console:automation" } }),
+    );
+    expect(() =>
+      requestScope(scopedOperation("createFlightSearch"), CONSOLE_SECRET, "console", {
+        deferPermission: true,
+      }),
+    ).toThrow(expect.objectContaining({ details: { requiredScope: "console:automation" } }));
+    // A storefront key never reaches the permission guard.
+    expect(() =>
+      requestScope(scopedOperation("consoleListBookings"), STOREFRONT_SECRET, undefined, {
+        deferPermission: true,
+      }),
+    ).toThrow(expect.objectContaining({ details: { reason: "storefront_key" } }));
+  });
+});
+
 describe("an operation without x-scope", () => {
   it("is refused for every caller (none exists today)", () => {
     const unscoped: ScopedOperation = {

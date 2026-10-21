@@ -222,7 +222,8 @@ export class CustomerGuard implements CanActivate {
         "CustomerGuard ran without a caller in the request context; CallerGuard must run first",
       );
     }
-    if (caller.type === "anonymous" || this.context.isConsoleScope()) {
+    // The OTA admin's service caller reaches console operations only (scope guard, OBE-060): never a customer token.
+    if (caller.type === "anonymous" || caller.type === "service" || this.context.isConsoleScope()) {
       return true;
     }
     const requirement = this.requirementOf(operationId, caller.type);

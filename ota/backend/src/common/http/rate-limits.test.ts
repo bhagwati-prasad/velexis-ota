@@ -116,6 +116,13 @@ describe("endUserIp", () => {
     expect(endUserIp(request({ "X-Velexis-End-User-IP": " 2001:db8::42 " }), SECRET)).toBe("2001:db8::42");
   });
 
+  it("is the OTA admin's forwarded X-Velexis-End-User-IP for the service caller [OBE-060]", () => {
+    const service: Caller = { type: "service", id: "service" };
+
+    expect(endUserIp(request({ "X-Velexis-End-User-IP": "203.0.113.9" }), service)).toBe("203.0.113.9");
+    expect(endUserIp(request({ "X-Velexis-End-User-IP": "2001:db8::9" }), service)).toBe("2001:db8::9");
+  });
+
   it("is the connection's address for an invalid header, and for every other caller whatever it sends", () => {
     for (const value of ["", "not-an-ip", "203.0.113.7, 198.51.100.1", "203.0.113.300"]) {
       expect(endUserIp(request({ "X-Velexis-End-User-IP": value }), SECRET)).toBe("198.51.100.23");
@@ -160,6 +167,22 @@ describe("trackers", () => {
     expect(
       trackerValue("reference", sources({ body: { bookingReference: "VX7K2M" }, tenantId: undefined })),
     ).toBeUndefined();
+  });
+
+  it("count a signed-in staff member's session as the principal, whatever the key or service [OBE-060]", () => {
+    const service: Caller = { type: "service", id: "service" };
+    const session = "asn_01JA2Z9W5K7Q3M8N4P6R2T0V1F";
+
+    expect(trackerValue("principal", sources({ caller: SECRET, staffSessionId: session }))).toBe(
+      `staff:${session}`,
+    );
+    expect(trackerValue("principal", sources({ caller: service, staffSessionId: session }))).toBe(
+      `staff:${session}`,
+    );
+    // The service caller without a staff member (sign-in, refresh) counts against no console principal.
+    expect(trackerValue("principal", sources({ caller: service }))).toBeUndefined();
+    expect(RATE_LIMITS.console.callers).toEqual(["secret", "service"]);
+    expect(RATE_LIMITS.signIn.callers).toContain("service");
   });
 
   it("count a key as its principal, and the tenant of the request", () => {

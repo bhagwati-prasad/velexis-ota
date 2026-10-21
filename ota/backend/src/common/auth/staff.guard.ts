@@ -24,10 +24,16 @@
 // document makes a sign-out of an already-ended session a `204`.
 //
 // An accepted token makes the staff member the request's actor (`TenantContext.setActor`, `staff`/`stf_…`), and puts
-// the family and the membership into the request context (`StaffContext`), where services read them. The OTA admin's
-// service caller (OBE-060) adds that the service key needs a staff token on every console operation but the sign-in.
+// the family and the membership into the request context (`StaffContext`), where services read them.
+//
+// The OTA admin's service caller (OBE-060, OADR-0011 point 4) is checked the same way, with one difference: the
+// service key alone holds no permission, so every console operation but the four staff-session operations
+// (`x-permission: none`, whose requirement stays the document's) requires the staff token. Its tenant is the one the
+// tenant guard located from the token; a service sign-out whose credential named no tenant has none, and a token it
+// presents is then refused (`401 UNAUTHENTICATED`).
 import { Injectable, type CanActivate, type ExecutionContext } from "@nestjs/common";
 import { Reflector } from "@nestjs/core";
+import { otaOperations } from "@velexis/api-types/operations";
 import { AppError, isAppError } from "@velexis/errors";
 import type { Request } from "express";
 import { ClsService } from "nestjs-cls";
@@ -45,6 +51,7 @@ import { TenantContext } from "../../tenancy/tenant-context";
 import { OPENAPI_OPERATION } from "../http/openapi-operation.decorator";
 import { OpenApiDocument } from "../http/openapi-validation.interceptor";
 import { RequestContext } from "../http/request-context";
+import { STAFF_SESSION_PERMISSION } from "./scope.guard";
 
 /** Whether an operation takes a staff token from a key caller. */
 export type StaffRequirement = "required" | "optional" | "none";
@@ -65,6 +72,20 @@ export const EXPIRED_STAFF_TOKEN_AS_NONE: ReadonlySet<string> = new Set(["consol
  * token"). Every other operation answers what the checks answer.
  */
 export const ENDED_STAFF_SESSION_AS_NONE: ReadonlySet<string> = new Set(["consoleSignOut"]);
+
+/**
+ * True for the four staff-session operations (console.auth.signIn, refresh, signOut, me: `x-permission: none`), whose
+ * staff token requirement is the document's for every caller.
+ */
+export function isStaffSessionOperation(operationId: string): boolean {
+  return STAFF_SESSION_OPERATIONS.has(operationId);
+}
+
+const STAFF_SESSION_OPERATIONS: ReadonlySet<string> = new Set(
+  otaOperations
+    .filter((operation) => operation.scope === "console" && operation.permission === STAFF_SESSION_PERMISSION)
+    .map((operation) => operation.operationId),
+);
 
 /** The refusals of `StaffSessions.authenticate` that mean the token's session has ended (not a failure to check). */
 const ENDED_SESSION_CODES: ReadonlySet<string> = new Set(["UNAUTHENTICATED", "STAFF_MEMBERSHIP_INACTIVE"]);
@@ -232,10 +253,12 @@ export class StaffGuard implements CanActivate {
     if (caller === undefined) {
       throw new Error("StaffGuard ran without a caller in the request context; CallerGuard must run first");
     }
-    if (caller.type !== "key" || !this.context.isConsoleScope()) {
+    if ((caller.type !== "key" && caller.type !== "service") || !this.context.isConsoleScope()) {
       return true;
     }
-    const requirement = this.requirementOf(operationId);
+    const documented = this.requirementOf(operationId);
+    const requirement =
+      caller.type === "service" && !isStaffSessionOperation(operationId) ? "required" : documented;
     if (requirement === "none") {
       return true;
     }
@@ -246,7 +269,14 @@ export class StaffGuard implements CanActivate {
       }
       throw new AppError("UNAUTHENTICATED");
     }
-    const tenantId = this.tenants.require().tenantId;
+    // A key's tenant is always resolved; the service caller's only when its credential named one.
+    const tenantId =
+      caller.type === "service" ? this.tenants.get()?.tenantId : this.tenants.require().tenantId;
+    if (tenantId === undefined) {
+      // Only a service sign-out whose credentials named no tenant gets here (tenant.guard.ts).
+      this.logger.info({ reason: "no_tenant", callerType: caller.type }, "staff.token_refused");
+      throw new AppError("UNAUTHENTICATED");
+    }
     const verdict = await this.tokens.verify(token, tenantId);
     if (
       !verdict.ok &&

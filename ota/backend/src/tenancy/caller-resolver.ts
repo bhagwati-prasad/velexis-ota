@@ -1,14 +1,18 @@
 // Caller classification (OADR-0009 point 1, ota/docs/architecture.md §3.1): who sent a request, decided from its
 // headers before anything else of the request is used. `CallerGuard` (common/auth) runs it for every request and puts
-// the result in the request context (`CallerContext`); the tenant guard (OBE-012) and the scope guard (OBE-013) read
-// it from there, and modules never inspect these headers themselves.
+// the result in the request context (`CallerContext`); the tenant guard (OBE-012), the scope guard (OBE-013), the staff
+// and permission guards (OBE-059, OBE-060) read it from there, and modules never inspect these headers themselves.
 //
 // The order is the ADR's, and the first match decides:
 //
 //   X-Velexis-Edge and X-Api-Key together              → 400 INVALID_REQUEST (ambiguous)
 //   1.1 X-Velexis-Edge equals VELEXIS_EDGE_SECRET       → edge (X-Velexis-Host required, else 400 INVALID_REQUEST);
 //       compared in constant time, before any lookup; a wrong value is 401 INVALID_API_KEY
-//   1.2 X-Api-Key equals OTA_ADMIN_SERVICE_KEY on a direct loopback connection → service (OBE-060)
+//   1.2 X-Api-Key equals OTA_ADMIN_SERVICE_KEY on a direct loopback connection → service (OBE-060); compared in
+//       constant time, before any lookup. The same key on any other connection (through Caddy, which sets
+//       X-Forwarded-For and X-Forwarded-Host on every request it proxies, or from another host) is not the service: it
+//       is logged as a security event (`securityEvent: caller.service_key_not_direct`, never the value) and falls
+//       through to rule 1.3, which knows no such key (401 INVALID_API_KEY)
 //   1.3 X-Api-Key with a pk_ or sk_ prefix               → key (ApiKeyVerifier)
 //   1.4 a route marked public or webhook                 → anonymous (the route verifies what it serves)
 //   5   anything else                                    → 401 INVALID_API_KEY
@@ -70,8 +74,18 @@ export interface AnonymousCaller {
   readonly id: "anonymous";
 }
 
-/** The caller of a request. The service caller of the OTA admin joins with OBE-060. */
-export type Caller = EdgeCaller | KeyCaller | AnonymousCaller;
+/**
+ * The OTA admin's server (OBE-060, OADR-0009 rule 1.2): the service key on a direct loopback connection. It may call
+ * console operations only, with a staff token of the tenant (except console.auth.signIn), `X-Velexis-Environment` and
+ * the staff member's `X-Velexis-End-User-IP` (OADR-0011 point 4).
+ */
+export interface ServiceCaller {
+  readonly type: "service";
+  readonly id: "service";
+}
+
+/** The caller of a request. */
+export type Caller = EdgeCaller | ServiceCaller | KeyCaller | AnonymousCaller;
 
 /** What classification reads from a request. */
 export interface CallerRequest {
@@ -82,6 +96,7 @@ export interface CallerRequest {
 }
 
 const ANONYMOUS: AnonymousCaller = Object.freeze({ type: "anonymous", id: "anonymous" });
+const SERVICE: ServiceCaller = Object.freeze({ type: "service", id: "service" });
 
 /** A header's value; Node joins repeated headers of these names into one string. */
 function header(request: CallerRequest, name: string): string | undefined {
@@ -114,6 +129,7 @@ export function isDirectLocalRequest(request: CallerRequest): boolean {
 @Injectable()
 export class CallerResolver {
   private readonly edgeSecret: string;
+  private readonly serviceKey: string;
 
   constructor(
     config: ConfigService<ApiConfig, true>,
@@ -121,11 +137,13 @@ export class CallerResolver {
     private readonly logger: PinoLogger,
   ) {
     this.edgeSecret = config.get("VELEXIS_EDGE_SECRET", { infer: true });
+    this.serviceKey = config.get("OTA_ADMIN_SERVICE_KEY", { infer: true });
     logger.setContext(CallerResolver.name);
   }
 
   /**
-   * Classifies a request reaching a route with `access`. Resolves to its caller; throws `AppError`
+   * Classifies a request reaching a route with `access`. Resolves to its caller (the edge, the OTA admin's service, a
+   * key, or anonymous); throws `AppError`
    * `INVALID_REQUEST` (400), `INVALID_API_KEY` (401), or what the key verifier throws (`ORIGIN_NOT_ALLOWED`,
    * `SERVICE_UNAVAILABLE`).
    */
@@ -142,10 +160,24 @@ export class CallerResolver {
       return this.edgeCaller(request, edge);
     }
     if (apiKey !== undefined) {
+      if (timingSafeEqualStr(apiKey, this.serviceKey)) {
+        if (isDirectLocalRequest(request)) {
+          return SERVICE;
+        }
+        // Rule 1.2: the service key that did not come straight from a local process (through Caddy, or from another
+        // host) is a leaked key or a misconfigured admin. Never the value; the request goes on to rule 1.3 (401).
+        this.logger.warn(
+          {
+            securityEvent: "caller.service_key_not_direct",
+            reason: isLoopbackAddress(request.remoteAddress) ? "forwarded" : "not_loopback",
+          },
+          "caller.service_key_refused",
+        );
+      }
       if (apiKey.startsWith("pk_") || apiKey.startsWith("sk_")) {
         return this.keyCaller(request, apiKey);
       }
-      // Not a key the API serves: hosting keys (hk_) come after the MVP, the service key with OBE-060.
+      // Not a key the API serves: hosting keys (hk_) come after the MVP.
       this.logger.info({ reason: "unsupported_kind" }, "caller.api_key_refused");
       throw new AppError("INVALID_API_KEY");
     }

@@ -9,6 +9,7 @@ import { Module } from "@nestjs/common";
 import { CustomerContext } from "../common/auth/customer.guard";
 import { StaffContext } from "../common/auth/staff.guard";
 import { CookieWriter } from "../common/http/cookie-writer";
+import { RequestContext } from "../common/http/request-context";
 import { TenancyModule } from "../tenancy/tenancy.module";
 import { AuthController, RefreshIdempotencyHooks } from "./auth.controller";
 import { CustomersRepository } from "./customers.repository";
@@ -40,6 +41,9 @@ import { TokenService } from "./token.service";
     StaffAuthService,
     ConsoleSignInIdempotencyHooks,
     StaffContext,
+    // RequestContext only reads the request context (nestjs-cls): the staff auth handlers read the end user the caller
+    // guard decided (OBE-060).
+    RequestContext,
   ],
   exports: [TokenService, SessionsService, CustomerContext, StaffTokens, StaffSessions, StaffContext],
 })

@@ -33,7 +33,14 @@ import { ConfigService } from "@nestjs/config";
 import { generateToken, sha256Hex } from "@velexis/crypto";
 import { AppError } from "@velexis/errors";
 import type { Redis } from "ioredis";
-import { decodeProtectedHeader, errors as joseErrors, jwtVerify, SignJWT, type JWTPayload } from "jose";
+import {
+  decodeJwt,
+  decodeProtectedHeader,
+  errors as joseErrors,
+  jwtVerify,
+  SignJWT,
+  type JWTPayload,
+} from "jose";
 import { InjectPinoLogger, PinoLogger } from "nestjs-pino";
 import { Clock } from "../../common/clock";
 import { IdGenerator } from "../../common/ids";
@@ -495,6 +502,30 @@ export class StaffTokens {
   }
 
   /**
+   * The tenant (`tid`) of a staff access token signed with this key, also when it has expired; `undefined` for anything
+   * else (not a token, another key, a customer token). The tenant guard locates the tenant of an OTA admin request with
+   * it (OBE-060, OADR-0009 point 2: the service caller's tenant is its staff token's `tid`); the staff guard then
+   * verifies the token against that tenant as for any caller. The unverified `tid` only picks the tenant `verify`
+   * checks the token for.
+   */
+  async tenantOf(token: string): Promise<string | undefined> {
+    if (token.length === 0 || token.length > MAX_ACCESS_TOKEN_LENGTH) {
+      return undefined;
+    }
+    let claimed: unknown;
+    try {
+      claimed = decodeJwt(token)["tid"];
+    } catch {
+      return undefined;
+    }
+    if (typeof claimed !== "string" || !TENANT_ID.test(claimed)) {
+      return undefined;
+    }
+    const verdict = await this.verify(token, claimed);
+    return verdict.ok || verdict.reason === "expired" ? claimed : undefined;
+  }
+
+  /**
    * The verdict on `token` presented to tenant `tenantId`, as TokenService.verifyCustomerToken: the signature first,
    * then the claims; an expired token is `expired` only when it is a staff token of `tenantId`.
    */
@@ -665,6 +696,34 @@ export class StaffSessions {
       this.logger.warn({ reason: "unreadable" }, "staff.portal_token_refused");
     }
     return grant;
+  }
+
+  /**
+   * The grant of a portal token without taking it (`GET`), or `undefined` when it is unknown, used, expired or
+   * unreadable. The tenant guard reads the tenant of an OTA admin sign-in with it (OBE-060, OADR-0009 point 2: the
+   * redeemed portal token's tenant); console.auth.signIn still takes the token with `GETDEL`, after the rate limit, and
+   * checks its tenant against the request's.
+   */
+  async peekPortalToken(token: string): Promise<PortalTokenGrant | undefined> {
+    if (!PORTAL_TOKEN_PATTERN.test(token)) {
+      return undefined;
+    }
+    const [raw] = await this.command(() => this.redis.mget(redisKeys.portalToken(sha256Hex(token)).key));
+    return parsePortalToken(raw ?? null);
+  }
+
+  /**
+   * The family a refresh token names (`srt_<family ULID>…`), whatever the token's own state, or `undefined` when there
+   * is none. The tenant guard reads the tenant of an OTA admin refresh or sign-out with it (OBE-060); console.auth.
+   * refresh and signOut check the token itself.
+   */
+  async familyOf(refreshToken: string): Promise<StaffFamily | undefined> {
+    const presented = parseRefreshToken(refreshToken);
+    if (presented === undefined) {
+      return undefined;
+    }
+    const [raw] = await this.command(() => this.redis.mget(redisKeys.staffSession(presented.familyId).key));
+    return parseFamily(raw ?? null);
   }
 
   /** Opens a family for `member` (checked by the caller) with the staff member's user agent. */

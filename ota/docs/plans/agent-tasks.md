@@ -1705,7 +1705,8 @@ The console API (staff sign-in by portal token, bookings, PNR import, queues, cu
   - `console.auth.me` returns the permissions of scope §1.3 for each of the five roles.
 - **Verify:** `pnpm --filter @velexis/ota-backend test -- identity && pnpm --filter @velexis/ota-backend test:int -- console`
 
-### OBE-060 · Enforce service-key rules, environments, permissions and staff_actions
+### OBE-060 · Enforce service-key rules, environments, permissions and staff_actions ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-backend
 - **Milestone:** M4
 - **Depends on:** OBE-059

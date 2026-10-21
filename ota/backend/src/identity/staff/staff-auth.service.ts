@@ -13,15 +13,20 @@
 //   (`storefront_environment = live`, in the tenant row just read) also needs a token whose `mfa` flag is true, else
 //   `403 MFA_REQUIRED` (FIX-W23-STAFF): PADR-0008's MFA rule for live OTAs, which the platform checks before it issues
 //   the token; this is the backstop behind that check (a platform fault, or an OTA that went live within the token's
-//   60 s). Every refusal leaves the token used (`GETDEL`) and opens nothing. Success opens a family with
-//   the membership's current role, writes one `staff_actions` row `staff.sign_in` (the minimal insert until OBE-060
-//   brings the writer: actor, role, the session as target, request id, the end user's IP and user agent) and answers
-//   `ConsoleStaffSession`. The rate limit (10 per minute per end-user IP) is the operation's throttler (rate-limits.ts).
+//   60 s). A viewer asking for `live` is refused (`403 ENVIRONMENT_NOT_ALLOWED`, OBE-060) with a denied
+//   `staff.sign_in` row; that the tenant is live, when the OTA admin asks for it, is the permission guard's check,
+//   before the token is taken. Every refusal of this service leaves the token used (`GETDEL`) and opens nothing.
+//   Success opens a family with the membership's current role, writes one `staff_actions` row `staff.sign_in` (the
+//   console audit's row of console/staff-actions.writer.ts: actor, role, the session as target, request id, the end
+//   user's IP and user agent) and answers `ConsoleStaffSession`. The rate limit (10 per minute per end-user IP) is the
+//   operation's throttler (rate-limits.ts). For the OTA admin's service caller the request's tenant is the portal
+//   token's, which the tenant guard read (OBE-060).
 // - console.auth.refresh. The family of the refresh token must pass the revocation checks of staff-sessions.ts and
 //   its membership must be active with the family's role; then it rotates. A rotated token presented again revokes the
 //   family (`401 REFRESH_TOKEN_REUSED`); an unknown, ended or revoked one is `401 REFRESH_TOKEN_INVALID`; a removed or
 //   suspended member `403 STAFF_MEMBERSHIP_INACTIVE` (the family is revoked); a changed role ends the family too
-//   (`401 REFRESH_TOKEN_INVALID`: a new sign-in through the portal). The answer carries the current permissions.
+//   (`401 REFRESH_TOKEN_INVALID`: a new sign-in through the portal); a viewer's family refreshed for `live` is
+//   `403 ENVIRONMENT_NOT_ALLOWED` and stays as it was. The answer carries the current permissions.
 // - console.auth.signOut. `scope: current` (the default) ends the session of the access token, else the family of the
 //   refresh token in the body (a token the family issued; anything else changes nothing and still answers 204);
 //   `scope: all` also writes the membership's cut-off `staffdeny:member:<staffId>`, which ends every other session of
@@ -30,20 +35,20 @@
 //   (refresh, then retry); no credential at all is `401 UNAUTHENTICATED`. A valid access token whose session has
 //   already ended (signed out, revoked, cut off, its member removed) ends that family again and answers 204, as the
 //   document's "always 204 for an already-revoked token" says (`scope: all` then needs another credential).
-// - console.auth.me. The staff member, the tenant (the key's environment and the Amadeus connection of it, never its
-//   credentials), the role's permissions, the session and the environments, read on every call.
+// - console.auth.me. The staff member, the tenant (the request's environment and the Amadeus connection of it, never
+//   its credentials), the role's permissions, the session and the environments, read on every call.
 //
 // Permissions follow the role matrix of scope §1.3 (`ROLE_PERMISSIONS`); `environments` is `["test"]`, or
 // `["test", "live"]` for a live tenant (`storefront_environment = live`) and a role other than `viewer` (point 5).
 //
-// The platform's `account_sessions`, `last_login_at` and `last_active_at` are never written: the OTA backend never
-// writes a platform table (ADR-0003, OADR-0011 point 2). No token is logged.
-import { isIP } from "node:net";
+// The platform's `account_sessions`, `last_login_at` and `last_active_at`, which the contract's descriptions mention,
+// are never written: the OTA backend never writes a platform table (ADR-0003, OADR-0011 point 2). No token is logged.
 import { Injectable } from "@nestjs/common";
 import type { components } from "@velexis/api-types";
 import { AppError } from "@velexis/errors";
 import { InjectPinoLogger, PinoLogger } from "nestjs-pino";
 import { parseAmadeusConnection, AMADEUS_OFFICE_ID } from "../../amadeus/connection-resolver";
+import { assertRoleEnvironment, environmentsOf, permissionsOf } from "../../common/auth/roles";
 import { Clock } from "../../common/clock";
 import {
   IdempotencyHooksFor,
@@ -51,6 +56,7 @@ import {
   type IdempotentInput,
 } from "../../common/http/idempotency.service";
 import { IdGenerator } from "../../common/ids";
+import { staffActionRow } from "../../console/staff-actions.writer";
 import { PlatformCache } from "../../tenancy/platform-cache";
 import {
   PlatformReadRepository,
@@ -77,72 +83,15 @@ export type ConsoleStaffSession = Schemas["ConsoleStaffSession"];
 export type ConsoleStaffProfile = Schemas["ConsoleStaffProfile"];
 export type ConsoleTenant = Schemas["ConsoleTenant"];
 export type StaffMember = Schemas["StaffMember"];
-export type StaffPermission = Schemas["StaffPermission"];
-export type ConsoleEnvironment = ConsoleStaffSession["environments"][number];
-
-/** Every `StaffPermission`, in the document's order (the order of every permissions list answered). */
-export const STAFF_PERMISSIONS: readonly StaffPermission[] = Object.freeze([
-  "bookings:read",
-  "bookings:write",
-  "bookings:issue",
-  "bookings:cancel",
-  "customers:read",
-  "queues:read",
-  "supplier_requests:read",
-  "amadeus:read",
-  "amadeus:write",
-  "settings:read",
-  "settings:write",
-  "payments:read",
-  "payments:capture",
-  "payments:refund",
-]);
-
-/** Keeps the document's order of `granted`. */
-const inOrder = (granted: readonly StaffPermission[]): readonly StaffPermission[] =>
-  Object.freeze(STAFF_PERMISSIONS.filter((permission) => granted.includes(permission)));
-
-/** The role matrix of scope §1.3 (and of `StaffPermission`'s description). OBE-060 moves it to common/auth/roles.ts. */
-export const ROLE_PERMISSIONS: Readonly<Record<StaffRole, readonly StaffPermission[]>> = Object.freeze({
-  owner: STAFF_PERMISSIONS,
-  admin: STAFF_PERMISSIONS,
-  agent: inOrder([
-    "bookings:read",
-    "bookings:write",
-    "bookings:issue",
-    "bookings:cancel",
-    "customers:read",
-    "queues:read",
-    "supplier_requests:read",
-    "amadeus:read",
-    "payments:read",
-    "payments:capture",
-    "settings:read",
-  ]),
-  finance: inOrder([
-    "bookings:read",
-    "customers:read",
-    "supplier_requests:read",
-    "payments:read",
-    "payments:capture",
-    "payments:refund",
-    "settings:read",
-  ]),
-  viewer: inOrder(["bookings:read", "customers:read", "payments:read", "settings:read"]),
-});
-
-/** The permissions of `role`. */
-export function permissionsOf(role: StaffRole): StaffPermission[] {
-  return [...ROLE_PERMISSIONS[role]];
-}
-
-/** The environments a staff member may open (OADR-0011 point 5): live for a live tenant and a non-viewer role. */
-export function environmentsOf(
-  role: StaffRole,
-  storefrontEnvironment: PlatformTenant["storefrontEnvironment"],
-): ConsoleEnvironment[] {
-  return storefrontEnvironment === "live" && role !== "viewer" ? ["test", "live"] : ["test"];
-}
+// The role matrix of scope §1.3 lives in common/auth/roles.ts since OBE-060 (the permission guard checks it too).
+export {
+  environmentsOf,
+  permissionsOf,
+  ROLE_PERMISSIONS,
+  STAFF_PERMISSIONS,
+  type ConsoleEnvironment,
+  type StaffPermission,
+} from "../../common/auth/roles";
 
 /**
  * Whether a portal token is refused for the MFA rule of live OTAs (PADR-0008): the tenant is live
@@ -317,6 +266,9 @@ export class StaffAuthService {
       this.logger.warn({ reason: "mfa_required", staffId: member.id }, "staff.sign_in_refused");
       throw new AppError("MFA_REQUIRED");
     }
+    // OADR-0011 point 5 (OBE-060): a viewer is limited to test, whatever environment the request asked for; the refusal
+    // is a denied `staff.sign_in` row (point 8).
+    await this.assertSignInEnvironment(member, input);
     const issued = await this.sessions.open(member, input.userAgent);
     try {
       await this.recordSignIn(member, issued.family, input);
@@ -361,6 +313,7 @@ export class StaffAuthService {
         membership === "role_changed" ? "REFRESH_TOKEN_INVALID" : "STAFF_MEMBERSHIP_INACTIVE",
       );
     }
+    this.assertEnvironment(family.role, family.staffId, "staff.refresh_refused");
     const rotation = await this.sessions.rotate(family.id, presented.hash);
     if (rotation.outcome === "reused") {
       // Ids only: the token is never logged.
@@ -483,36 +436,69 @@ export class StaffAuthService {
   }
 
   /**
-   * The `staff_actions` row of a sign-in, in a transaction of its own (OADR-0011 point 8; the minimal insert until
-   * OBE-060's writer): no token, no portal token, nothing redacted because nothing sensitive is in it.
+   * The `staff_actions` row of a sign-in, in a transaction of its own (OADR-0011 point 8), built by the console audit's
+   * row builder (console/staff-actions.writer.ts, OBE-060): the staff member, the session as target (none for a denied
+   * sign-in, which opens no session), the outcome, the request id and the staff member's IP and user agent (for the OTA
+   * admin the forwarded ones); no token, no portal token.
    */
   private async recordSignIn(
     member: PlatformStaffMember,
-    family: StaffFamily,
+    family: StaffFamily | undefined,
     input: StaffSignInInput,
+    outcome: "succeeded" | "denied" = "succeeded",
   ): Promise<void> {
     const requestId = this.tenants.require().requestId;
-    await this.tx.run((trx) =>
-      trx
-        .insertInto("staff_actions")
-        .values({
-          id: this.ids.newId("sact"),
-          actor_type: "staff",
-          actor_id: member.id,
-          staff_id: member.id,
-          account_id: member.accountId,
-          staff_email: member.account.email,
-          staff_role: member.role,
-          action: "staff.sign_in",
-          target_type: "staff_session",
-          target_id: family.id,
-          outcome: "succeeded",
-          request_id: requestId === "" ? null : requestId,
-          ip_address: input.ip !== null && isIP(input.ip) !== 0 ? input.ip : null,
-          user_agent: input.userAgent,
-        })
-        .execute(),
+    const row = staffActionRow(
+      this.ids.newId("sact"),
+      {
+        action: "staff.sign_in",
+        outcome,
+        targetType: family === undefined ? null : "staff_session",
+        targetId: family?.id ?? null,
+      },
+      {
+        actor: {
+          type: "staff",
+          staffId: member.id,
+          accountId: member.accountId,
+          email: member.account.email,
+          role: member.role,
+        },
+        requestId: requestId === "" ? null : requestId,
+        ip: input.ip,
+        userAgent: input.userAgent,
+      },
     );
+    await this.tx.run((trx) => trx.insertInto("staff_actions").values(row).execute());
+  }
+
+  /**
+   * `403 ENVIRONMENT_NOT_ALLOWED` when `role` may not act in the request's environment (live for a viewer; roles.ts):
+   * nothing is opened or rotated, and the session stays as it was.
+   */
+  private assertEnvironment(role: StaffRole, staffId: string, event: string): void {
+    try {
+      assertRoleEnvironment(role, this.tenants.require().environment);
+    } catch (error) {
+      this.logger.info({ reason: "environment_not_allowed", staffId }, event);
+      throw error;
+    }
+  }
+
+  /**
+   * `assertEnvironment` for a sign-in: the refusal also writes a denied `staff.sign_in` row of the staff member
+   * (OADR-0011 point 8; the portal token is used up, no session is opened). A row that cannot be written is logged, and
+   * the refusal stands.
+   */
+  private async assertSignInEnvironment(member: PlatformStaffMember, input: StaffSignInInput): Promise<void> {
+    try {
+      this.assertEnvironment(member.role, member.id, "staff.sign_in_refused");
+    } catch (error) {
+      await this.recordSignIn(member, undefined, input, "denied").catch((writeError: unknown) => {
+        this.logger.error({ err: writeError, staffId: member.id }, "staff_actions.write_failed");
+      });
+      throw error;
+    }
   }
 
   /** The tenant row from the platform tables, past the cache (console.auth.signIn). */
