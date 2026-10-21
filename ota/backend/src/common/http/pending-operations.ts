@@ -40,7 +40,6 @@ export const PENDING_OPERATIONS: Readonly<Partial<Record<OtaOperationId, Pending
   // Checkout and payments
   completeCheckoutWithAirlineCard: "OBE-051",
   // Customer bookings
-  lookupBooking: "OBE-047",
   updateBooking: "OBE-048",
   quoteBookingCancellation: "OBE-049",
   cancelBooking: "OBE-049",

@@ -16,6 +16,10 @@
 // ConsoleModule imports this module for the console bookings reads (OBE-061): the repositories, the sealed booking
 // documents and the refresh of CustomerBookingsService are exported for them.
 //
+// Guest access (OBE-047): GuestAccessService issues the guest booking tokens of checkout.complete and bookings.lookup
+// (LookupController) and hands them out in `__Host-vx_bt` (CookieWriter, a plain provider without state, provided here
+// again) or the body; LookupAttempts counts the failed lookups in Redis (the global RedisModule's client).
+//
 // `BookingsWorkerModule` (worker only, OBE-044): the `ota-ticketing` consumer and the `ticketing.scan` handler
 // (ticketing.processor.ts, `@TenantJob`, found by the jobs module's runner) with the issuance retries of
 // ticketing.service.ts. It builds on the worker's tenancy module and the worker's Amadeus client
@@ -29,6 +33,7 @@ import { AmadeusModule, AmadeusWorkerModule } from "../amadeus/amadeus.module";
 import { CheckoutRepository } from "../checkout/checkout.repository";
 import { checkoutKeyProvider, TravelerDocuments } from "../checkout/traveler-documents";
 import { BookingAccessContext, BookingAccessGuard } from "../common/auth/booking-access.guard";
+import { CookieWriter } from "../common/http/cookie-writer";
 import { RequestContext } from "../common/http/request-context";
 import { QueuesModule } from "../common/queues/queues.module";
 import { IdentityModule } from "../identity/identity.module";
@@ -43,6 +48,8 @@ import { BookingOrchestrator, CompleteCheckoutIdempotencyHooks } from "./booking
 import { BookingsRepository } from "./bookings.repository";
 import { CustomerBookingsController } from "./customer-bookings.controller";
 import { CustomerBookingsService } from "./customer-bookings.service";
+import { GuestAccessRepository, GuestAccessService, LookupAttempts } from "./guest-access.service";
+import { LookupController } from "./lookup.controller";
 import { BookingTravelerDocuments, bookingsKeyProvider, OrderRecorder } from "./order-recorder";
 import { ReconcileProcessor, ReconcileScan } from "./reconcile.processor";
 import { ReconcileRepository, ReconcileService } from "./reconcile.service";
@@ -58,7 +65,7 @@ import { TicketingRepository, TicketingService } from "./ticketing.service";
     IdentityModule,
     QueuesModule,
   ],
-  controllers: [CustomerBookingsController],
+  controllers: [CustomerBookingsController, LookupController],
   providers: [
     BookingOrchestrator,
     CompleteCheckoutIdempotencyHooks,
@@ -66,6 +73,10 @@ import { TicketingRepository, TicketingService } from "./ticketing.service";
     CustomerBookingsService,
     BookingAccessContext,
     BookingAccessGuard,
+    GuestAccessService,
+    GuestAccessRepository,
+    LookupAttempts,
+    CookieWriter,
     BookingsRepository,
     OrderRecorder,
     bookingsKeyProvider,

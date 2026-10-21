@@ -65,6 +65,7 @@ import {
   reconcileJobId,
   type AdoptedClaim,
 } from "../../../src/bookings/reconcile.service";
+import { BOOKING_TOKEN_PATTERN } from "../../../src/common/auth/booking-access.guard";
 import { Clock } from "../../../src/common/clock";
 import { newId } from "../../../src/common/ids";
 import { OTA_QUEUE } from "../../../src/common/queues/queue-names";
@@ -226,6 +227,8 @@ interface CompletionBody {
     readonly payments: ReadonlyArray<{ readonly id: string; readonly status: string }>;
     readonly totals: { readonly total: { readonly amount: string; readonly currency: string } };
   };
+  readonly bookingToken: string | null;
+  readonly bookingTokenExpiresAt: string | null;
 }
 
 interface CheckoutBody {
@@ -775,7 +778,12 @@ describe("an order whose answer was lost but that exists (stub timeout)", () => 
     expect(firstJob?.name).toBe(RECONCILE_JOB);
     expect(firstJob?.data).toEqual({ tenantId: alphaId, bookingId: timedOut.bookingId });
     expect(firstJob?.opts.delay).toBe(30 * SECOND);
-    expect((timedOut.first.body as ErrorBody).error.details).toMatchObject({ replayed: false });
+    const firstDetails = (timedOut.first.body as ErrorBody).error.details;
+    // A guest's key caller gets the booking's guest token with the 504 (OBE-047), to follow the pending booking.
+    expect(firstDetails).toMatchObject({
+      bookingToken: expect.stringMatching(BOOKING_TOKEN_PATTERN),
+      replayed: false,
+    });
     // Same key while undecided: the same 504 with the same details, replayed, and never a second order.
     expect(blocked).toMatchObject({ outcome: "pending", attempts: 1, reason: "search_incomplete" });
     expect(afterBlocked).toMatchObject({ status: "pending", reconcile_attempts: 1, reconcile_outcome: null });
@@ -783,7 +791,12 @@ describe("an order whose answer was lost but that exists (stub timeout)", () => 
       expect(replay.status).toBe(504);
       expect((replay.body as ErrorBody).error).toMatchObject({
         code: "SUPPLIER_TIMEOUT",
-        details: { bookingId: timedOut.bookingId, bookingToken: null, replayed: true },
+        details: {
+          bookingId: timedOut.bookingId,
+          bookingToken: firstDetails?.["bookingToken"],
+          bookingTokenExpiresAt: firstDetails?.["bookingTokenExpiresAt"],
+          replayed: true,
+        },
       });
     }
     expect(amadeusCalls("createFlightOrders")).toHaveLength(1);
@@ -847,6 +860,13 @@ describe("an order whose answer was lost but that exists (stub timeout)", () => 
       expect.objectContaining({ id: timedOut.payment.id, status: "captured" }),
     ]);
     expect(completion.booking.totals.total).toEqual(timedOut.checkout.totals.total);
+    // The guest token of the first answer, again (OBE-047): its replays never issue another one.
+    const firstDetails = (timedOut.first.body as ErrorBody).error.details;
+    expect(completion.bookingToken).toMatch(BOOKING_TOKEN_PATTERN);
+    expect(completion).toMatchObject({
+      bookingToken: firstDetails?.["bookingToken"],
+      bookingTokenExpiresAt: firstDetails?.["bookingTokenExpiresAt"],
+    });
     expect(otherKey.status).toBe(409);
     expect((otherKey.body as ErrorBody).error).toMatchObject({
       code: "CHECKOUT_ALREADY_COMPLETED",

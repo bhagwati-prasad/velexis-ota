@@ -14,10 +14,14 @@
 //   that expired or was revoked                                         → 404 NOT_FOUND (the same answer as an
 //                                                                          unknown id)
 //
-// Guest tokens are compared by their SHA-256 (`booking_access_tokens.token_hash`, never the token) in the same read as
-// the booking. Where a request presents them is `presentedBookingTokens`: none until OBE-047 adds its sources, the
-// `bkg_<id>.<token>` entry of the requested booking in the edge's `__Host-vx_bt` cookie and the `X-Booking-Token` header
-// of key callers. Tokens are never logged.
+// Guest tokens (OBE-047, bookings/guest-access.service.ts issues them) are compared by their SHA-256
+// (`booking_access_tokens.token_hash`, never the token) in the same read as the booking. Where a request presents them
+// is `presentedBookingTokens` (OADR-0006 points 1 and 6): for the storefront edge, the `bkg_<id>.<token>` entry of the
+// requested booking in the `__Host-vx_bt` cookie (an `X-Booking-Token` header is ignored); for a key caller, the
+// `X-Booking-Token` header (cookies are ignored). Only a value of the issued shape (`vxbt_<env>_` and 43 base64url
+// characters) is looked up. A token of another booking never opens this one: the hash must be a token row of the
+// requested booking, so an entry moved to another booking's id, or another booking's token in the header, is `404`.
+// A request let in by a token records its use on the token row (`last_used_at`, `use_count`). Tokens are never logged.
 //
 // A path id that is not a booking id is left to the validation interceptor (`400 VALIDATION_FAILED`). The decision is
 // kept in the request context (`BookingAccessContext`), and the services ask it again for the booking they read
@@ -32,6 +36,7 @@ import { CallerContext, type Caller } from "../../tenancy/caller-resolver";
 import { TenantContext } from "../../tenancy/tenant-context";
 import { TenantTx } from "../../tenancy/tenant-tx";
 import { Clock } from "../clock";
+import { parseBookingTokens, STOREFRONT_COOKIES } from "../http/cookie-writer";
 import { CustomerContext } from "./customer.guard";
 
 /** A booking id of the path (`BookingId` of the document). */
@@ -71,16 +76,41 @@ export class BookingAccessContext {
   }
 }
 
+/** The guest token header of key callers, lower case as Node gives header names. */
+export const BOOKING_TOKEN_HEADER = "x-booking-token";
+
+/** A guest booking token as GuestAccessService issues it: `vxbt_<environment>_` and 256 random bits in base64url. */
+export const BOOKING_TOKEN_PATTERN = /^vxbt_(?:test|live)_[A-Za-z0-9_-]{43}$/;
+
+/** What `presentedBookingTokens` reads of a request. */
+export interface BookingTokenSources {
+  readonly headers: Readonly<Record<string, string | string[] | undefined>>;
+  /** The cookies as cookie-parser gives them. */
+  readonly cookies?: unknown;
+}
+
 /**
- * The guest booking tokens a request presents for `bookingId` (raw tokens, compared by hash). None until OBE-047 adds
- * the `__Host-vx_bt` cookie of the edge and the `X-Booking-Token` header of key callers.
+ * The guest booking tokens a request presents for `bookingId` (raw tokens, compared by hash; see the file header): the
+ * edge's `__Host-vx_bt` entry of the booking, a key caller's `X-Booking-Token`, nothing for any other caller. Values
+ * not of the issued shape are dropped.
  */
 export function presentedBookingTokens(
-  _req: Request,
-  _caller: Caller,
-  _bookingId: string,
+  req: BookingTokenSources,
+  caller: Caller,
+  bookingId: string,
 ): readonly string[] {
-  return [];
+  let presented: string[] = [];
+  if (caller.type === "edge") {
+    const cookies =
+      typeof req.cookies === "object" && req.cookies !== null ? (req.cookies as Record<string, unknown>) : {};
+    presented = parseBookingTokens(cookies[STOREFRONT_COOKIES.bookingTokens])
+      .filter((entry) => entry.bookingId === bookingId)
+      .map((entry) => entry.token);
+  } else if (caller.type === "key") {
+    const value = req.headers[BOOKING_TOKEN_HEADER];
+    presented = typeof value === "string" ? [value.trim()] : [];
+  }
+  return presented.filter((token) => BOOKING_TOKEN_PATTERN.test(token));
 }
 
 /** The SHA-256 (hex) of a guest token, as `booking_access_tokens.token_hash` stores it. */
@@ -123,20 +153,25 @@ export class BookingAccessGuard implements CanActivate {
     }
     const tenant = this.tenants.require();
     const now = this.clock.now();
-    const row = await this.tx.run((trx) =>
-      this.repository.bookingAccess(trx, bookingId, tokens.map(bookingTokenHash), now),
-    );
-    if (row === undefined || row.environment !== tenant.environment) {
+    const hashes = tokens.map(bookingTokenHash);
+    const via = await this.tx.run(async (trx): Promise<BookingAccessVia | undefined> => {
+      const row = await this.repository.bookingAccess(trx, bookingId, hashes, now);
+      if (row === undefined || row.environment !== tenant.environment) {
+        return undefined;
+      }
+      if (customer !== undefined && row.customerId !== null && row.customerId === customer.customerId) {
+        return "customer";
+      }
+      if (!row.tokenGranted) {
+        return undefined;
+      }
+      await this.repository.recordTokenUse(trx, bookingId, hashes, now);
+      return "booking_token";
+    });
+    if (via === undefined) {
       throw new AppError("NOT_FOUND");
     }
-    if (customer !== undefined && row.customerId !== null && row.customerId === customer.customerId) {
-      this.access.set({ bookingId, via: "customer" });
-      return true;
-    }
-    if (row.tokenGranted) {
-      this.access.set({ bookingId, via: "booking_token" });
-      return true;
-    }
-    throw new AppError("NOT_FOUND");
+    this.access.set({ bookingId, via });
+    return true;
   }
 }

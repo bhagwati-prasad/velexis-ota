@@ -1205,7 +1205,8 @@ Checkout, customer accounts in cookies, Stripe on the Velexis account, the airli
   - Staff-only events (notes) never appear in `bookings.listEvents`.
 - **Verify:** `pnpm --filter @velexis/ota-backend test -- bookings && pnpm --filter @velexis/ota-backend test:int -- bookings`
 
-### OBE-047 · Implement guest booking tokens and bookings.lookup
+### OBE-047 · Implement guest booking tokens and bookings.lookup ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-backend
 - **Milestone:** M3
 - **Depends on:** OBE-046

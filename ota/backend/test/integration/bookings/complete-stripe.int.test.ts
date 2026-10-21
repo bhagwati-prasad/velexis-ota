@@ -45,6 +45,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 import { PAYMENT_JOBS } from "../../../src/bookings/booking-orchestrator.service";
 import { BOOKING_REFERENCE_PATTERN } from "../../../src/bookings/booking-reference";
 import { OrderRecorder } from "../../../src/bookings/order-recorder";
+import { BOOKING_TOKEN_PATTERN } from "../../../src/common/auth/booking-access.guard";
 import { newId } from "../../../src/common/ids";
 import { OTA_QUEUE } from "../../../src/common/queues/queue-names";
 import { seedDefaultMarkupRule } from "../../../src/provisioning/seeds/markup-rules.seed";
@@ -653,7 +654,8 @@ describe("checkout.complete with a Stripe payment, for each ticketing policy", (
     expect(booking.recordLocator).toMatch(/^[A-Z0-9]{6}$/);
     expect(booking.tickets).toHaveLength(1);
     expect(booking.totals.total).toEqual(checkout.totals.total);
-    expect(completion.bookingToken).toBeNull();
+    // A guest booking: the key caller gets its guest token (OBE-047; test/integration/bookings/guest-access.int.test.ts).
+    expect(completion.bookingToken).toMatch(BOOKING_TOKEN_PATTERN);
 
     // Amadeus: one Flight Create Orders with issue=true, no Flight Order Issue.
     const creates = amadeusCalls("createFlightOrders");
@@ -878,7 +880,11 @@ describe("checkout.complete when Amadeus does not prove a refusal (OADR-0003)", 
   async function pendingBookingOf(res: { body: unknown }) {
     const error = (res.body as ErrorBody).error;
     expect(error.code).toBe("SUPPLIER_TIMEOUT");
-    expect(error.details).toMatchObject({ bookingToken: null, replayed: false });
+    // The guest follows the pending booking with its token (OBE-047).
+    expect(error.details).toMatchObject({
+      bookingToken: expect.stringMatching(BOOKING_TOKEN_PATTERN),
+      replayed: false,
+    });
     return await bookingRow(String(error.details?.["bookingId"]));
   }
 

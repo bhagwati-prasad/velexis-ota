@@ -10,7 +10,8 @@
 // partial indexes `bookings_customer_{upcoming,past,cancelled}_idx`, with keyset positions as UTC text with
 // microseconds (a JavaScript Date would lose them and skip or repeat rows); the booking access guard's read (the
 // booking's environment and customer, and whether a presented guest token hash is a live `booking_access_tokens` row
-// of it); the customer-visible events; the services, refunds and current documents of a booking; and what a refresh
+// of it, and since OBE-047 the use it records on that row); the list card of one booking (bookings.lookup's answer,
+// OBE-047); the customer-visible events; the services, refunds and current documents of a booking; and what a refresh
 // claims and writes (the `booking.sync_requested` events are the throttle; a refresh bumps `version` only when the
 // booking's status changed). City names come from `reference.airports` and `reference.cities`.
 //
@@ -833,31 +834,7 @@ export class BookingsRepository {
     const byDeparture = query.sort === "departure" || query.sort === "-departure";
     const direction = query.sort.startsWith("-") ? "desc" : "asc";
     const column = byDeparture ? "b.first_departure_at" : "b.created_at";
-    let select = trx
-      .selectFrom("bookings as b")
-      .select([
-        "b.id as id",
-        "b.reference as reference",
-        "b.status as status",
-        "b.record_locator as recordLocator",
-        "b.trip_type as tripType",
-        "b.first_departure_at as firstDepartureAt",
-        "b.last_arrival_at as lastArrivalAt",
-        "b.travelers_count as travelersCount",
-        "b.ticketing_status as ticketingStatus",
-        "b.lead_last_name as leadLastName",
-        "b.created_at as createdAt",
-        "b.cancelled_at as cancelledAt",
-        sql<string | null>`b.origin_iata::text`.as("originIata"),
-        sql<string | null>`b.destination_iata::text`.as("destinationIata"),
-        sql<string>`b.currency::text`.as("currency"),
-        sql<string>`b.total_amount::text`.as("totalAmount"),
-        firstDepartureLocalOf.as("firstDepartureLocal"),
-        sql<boolean>`EXISTS (
-          SELECT 1 FROM booking_events e WHERE e.booking_id = b.id AND e.type = 'booking.schedule_changed'
-        )`.as("hasScheduleChange"),
-        utcKeyOf(column).as("sortKey"),
-      ])
+    let select = this.summaryRows(trx, column)
       .where("b.environment", "=", query.environment)
       .where("b.customer_id", "=", query.customerId);
     switch (query.timeframe) {
@@ -900,6 +877,45 @@ export class BookingsRepository {
       ? select.orderBy("b.first_departure_at", direction)
       : select.orderBy("b.created_at", direction);
     return await ordered.orderBy("b.id", direction).limit(query.limit).execute();
+  }
+
+  /** The list card of the booking `id` of `environment` (bookings.lookup, OBE-047); `undefined` when there is none. */
+  async bookingSummary(
+    trx: TenantTransaction,
+    environment: string,
+    id: string,
+  ): Promise<BookingListRow | undefined> {
+    return await this.summaryRows(trx, "b.created_at")
+      .where("b.id", "=", id)
+      .where("b.environment", "=", environment)
+      .executeTakeFirst();
+  }
+
+  /** The columns of a list card (BookingListRow), with `sortColumn` as the keyset key. */
+  private summaryRows(trx: TenantTransaction, sortColumn: "b.first_departure_at" | "b.created_at") {
+    return trx.selectFrom("bookings as b").select([
+      "b.id as id",
+      "b.reference as reference",
+      "b.status as status",
+      "b.record_locator as recordLocator",
+      "b.trip_type as tripType",
+      "b.first_departure_at as firstDepartureAt",
+      "b.last_arrival_at as lastArrivalAt",
+      "b.travelers_count as travelersCount",
+      "b.ticketing_status as ticketingStatus",
+      "b.lead_last_name as leadLastName",
+      "b.created_at as createdAt",
+      "b.cancelled_at as cancelledAt",
+      sql<string | null>`b.origin_iata::text`.as("originIata"),
+      sql<string | null>`b.destination_iata::text`.as("destinationIata"),
+      sql<string>`b.currency::text`.as("currency"),
+      sql<string>`b.total_amount::text`.as("totalAmount"),
+      firstDepartureLocalOf.as("firstDepartureLocal"),
+      sql<boolean>`EXISTS (
+          SELECT 1 FROM booking_events e WHERE e.booking_id = b.id AND e.type = 'booking.schedule_changed'
+        )`.as("hasScheduleChange"),
+      utcKeyOf(sortColumn).as("sortKey"),
+    ]);
   }
 
   /** The segments of the bookings `ids`, in bound and segment order. */
@@ -985,6 +1001,29 @@ export class BookingsRepository {
       ])
       .where("b.id", "=", bookingId)
       .executeTakeFirst();
+  }
+
+  /**
+   * Records one authenticated request on the live tokens of booking `bookingId` among `tokenHashes` (OBE-047):
+   * `last_used_at` and `use_count + 1`.
+   */
+  async recordTokenUse(
+    trx: TenantTransaction,
+    bookingId: string,
+    tokenHashes: readonly string[],
+    now: Date,
+  ): Promise<void> {
+    if (tokenHashes.length === 0) {
+      return;
+    }
+    await trx
+      .updateTable("booking_access_tokens")
+      .set({ last_used_at: now, use_count: sql`use_count + 1`, updated_at: now })
+      .where("booking_id", "=", bookingId)
+      .where("token_hash", "in", [...tokenHashes])
+      .where("revoked_at", "is", null)
+      .where("expires_at", ">", now)
+      .execute();
   }
 
   /** The columns of the booking `id` the customer answers read besides `booking()`. */

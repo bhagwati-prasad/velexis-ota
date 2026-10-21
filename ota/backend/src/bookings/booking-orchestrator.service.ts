@@ -55,15 +55,23 @@
 //      booking `confirmed` with `ticketing_status = failed` and the next attempt 5 minutes later (OBE-044 retries).
 //
 // The answer is `201` CheckoutCompletion: the booking in customer scope (order-recorder.ts `toBooking`), the Amadeus
-// warnings of pricing, create and issue and ours. The guest booking token comes with OBE-047 (null until then).
+// warnings of pricing, create and issue and ours, and for a guest booking (no customer) its guest token (OBE-047,
+// guest-access.service.ts): valid for 30 days or until 7 days after the last flight, whichever is later, in
+// `bookingToken`/`bookingTokenExpiresAt` for a key caller, in the `__Host-vx_bt` cookie for the storefront edge (both
+// fields `null`). The `504 SUPPLIER_TIMEOUT` of an unknown outcome carries one too (`details.bookingToken`,
+// `details.bookingTokenExpiresAt`, or the cookie), so the guest can follow the pending booking; a customer's booking
+// never gets one. The token row is written in a short transaction of its own after the booking's, and handed out once
+// it committed; a token that cannot be written is logged and the answer goes out without it (the booking exists: the
+// guest can look it up), so it never costs the answer or the reconciliation's schedule.
 //
 // Same-key retries (OBE-043, OADR-0003 point 6, architecture-booking.md §5.2): the idempotency hooks of
 // completeCheckout (`CompleteCheckoutIdempotencyHooks`) link a stored `504 SUPPLIER_TIMEOUT` to its booking
 // (`resourceOf`), so the record is kept instead of released, and answer its replays from the booking
 // (`resolveReplay`): the same `504` with `details.replayed: true` while the booking is `pending`, then the final `201`
-// built from the booking once the reconciliation found the order, or the final `502 SUPPLIER_ERROR` ("nothing was
-// booked") once it proved it absent. A payment whose booking failed that way is not used again (`402
-// PAYMENT_REQUIRED`): its authorisation is being voided.
+// built from the booking once the reconciliation found the order (with the guest token of the stored `504`: its
+// details, or its `Set-Cookie`), or the final `502 SUPPLIER_ERROR` ("nothing was booked") once it proved it absent. A
+// payment whose booking failed that way is not used again (`402 PAYMENT_REQUIRED`): its authorisation is being
+// voided.
 import { InjectQueue } from "@nestjs/bullmq";
 import { Inject, Injectable } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
@@ -140,6 +148,13 @@ import { TenantContext, type RequestTenant } from "../tenancy/tenant-context";
 import { afterCommit, TenantTx, type TenantTransaction } from "../tenancy/tenant-tx";
 import { newBookingReference } from "./booking-reference";
 import { BookingsRepository, type BookingRow, type BookingSettingsRow } from "./bookings.repository";
+import {
+  completionTokenExpiry,
+  GuestAccessService,
+  NO_BOOKING_TOKEN,
+  type DeliveredBookingToken,
+  type IssuedBookingToken,
+} from "./guest-access.service";
 import {
   BookingTravelerDocuments,
   eventActorOf,
@@ -326,24 +341,53 @@ function ownWarning(title: string, detail: string): Warning {
   return { title, detail };
 }
 
-/** The answer to a checkout that already has a booking (steps 0 and 1). */
+/**
+ * The answer to a checkout that already has a booking (steps 0 and 1). A request with another key gets no guest
+ * token: the one of the first answer exists only there and in its replays.
+ */
 function existingBookingError(booking: { readonly id: string; readonly status: string }): AppError {
   if (booking.status === "pending") {
     return new AppError("SUPPLIER_TIMEOUT", {
       message: "We are confirming your booking with the airline. Do not book again.",
-      details: { bookingId: booking.id, bookingToken: null, bookingTokenExpiresAt: null, replayed: false },
+      details: { bookingId: booking.id, ...NO_BOOKING_TOKEN, replayed: false },
     });
   }
   return new AppError("CHECKOUT_ALREADY_COMPLETED", { details: { bookingId: booking.id } });
 }
 
-/** A `pending` booking whose order may exist (a lost answer): `504 SUPPLIER_TIMEOUT` with the booking. */
-function supplierTimeout(bookingId: string, cause?: unknown): AppError {
+/**
+ * A `pending` booking whose order may exist (a lost answer): `504 SUPPLIER_TIMEOUT` with the booking and, for a
+ * guest's key caller, its guest token.
+ */
+function supplierTimeout(
+  bookingId: string,
+  cause?: unknown,
+  token: DeliveredBookingToken = NO_BOOKING_TOKEN,
+): AppError {
   return new AppError("SUPPLIER_TIMEOUT", {
     message: "We are confirming your booking with the airline. Do not book again.",
-    details: { bookingId, bookingToken: null, bookingTokenExpiresAt: null, replayed: false },
+    details: {
+      bookingId,
+      bookingToken: token.bookingToken,
+      bookingTokenExpiresAt: token.bookingTokenExpiresAt,
+      replayed: false,
+    },
     cause,
   });
+}
+
+/**
+ * The guest token of a stored `504 SUPPLIER_TIMEOUT` (its `details`, as the first answer gave it), for the final `201`
+ * of its replays; none when the details hold none (a customer's booking, the edge, whose token is in the cookie).
+ */
+export function storedBookingTokenOf(response: IdempotencyResponse): DeliveredBookingToken {
+  const error = isRecord(response.body) ? response.body["error"] : undefined;
+  const details = isRecord(error) && isRecord(error["details"]) ? error["details"] : {};
+  const token = details["bookingToken"];
+  const expiresAt = details["bookingTokenExpiresAt"];
+  return typeof token === "string" && typeof expiresAt === "string"
+    ? { bookingToken: token, bookingTokenExpiresAt: expiresAt }
+    : NO_BOOKING_TOKEN;
 }
 
 /** A booking id as checkout.complete writes them. */
@@ -490,6 +534,7 @@ export class BookingOrchestrator {
     @InjectQueue(OTA_QUEUE.payments) private readonly paymentsQueue: Queue,
     @InjectQueue(OTA_QUEUE.bookings) private readonly bookingsQueue: Queue,
     private readonly reconcile: ReconcileRepository,
+    private readonly guestAccess: GuestAccessService,
     private readonly clock: Clock,
     private readonly ids: IdGenerator,
     private readonly logger: PinoLogger,
@@ -1414,12 +1459,13 @@ export class BookingOrchestrator {
     sent: { readonly repriced: Repriced | undefined; readonly issue: boolean },
     cause?: unknown,
   ): Promise<AppError> {
+    let pending: BookingRow | undefined;
     try {
-      await this.tx.run(async (trx) => {
+      pending = await this.tx.run(async (trx): Promise<BookingRow | undefined> => {
         const now = this.clock.now();
         const booking = await this.repository.booking(trx, claim.booking.id, true);
         if (booking === undefined || booking.status !== "pending") {
-          return;
+          return undefined;
         }
         if (sent.repriced !== undefined) {
           await this.moveToPricedOffer(trx, prepared, booking.id, sent.repriced, now);
@@ -1444,11 +1490,13 @@ export class BookingOrchestrator {
         });
         const job = reconcileJob(tenant.tenantId, booking.id, "first");
         afterCommit(trx, () => this.enqueue(tenant, this.bookingsQueue, job.name, job.data, job.opts));
+        return booking;
       });
     } catch (error) {
       this.logger.error({ bookingId: claim.booking.id, err: error }, "bookings.reconcile_not_scheduled");
     }
-    return supplierTimeout(claim.booking.id, cause);
+    // The guest follows the pending booking with its token (bookings.getTicketingStatus) until it is decided.
+    return supplierTimeout(claim.booking.id, cause, await this.guestTokenOf(pending));
   }
 
   /**
@@ -1777,27 +1825,61 @@ export class BookingOrchestrator {
 
   // ---- The answer --------------------------------------------------------------------------------------------------
 
+  /** The `201` of step 5: the booking read again, with the guest token of a guest booking (see the file header). */
   private async answer(
     tenant: RequestTenant,
     prepared: Prepared,
     bookingId: string,
     warnings: readonly Warning[],
   ): Promise<CheckoutCompletion> {
-    return await this.tx.run(async (trx) => {
-      const booking = await this.repository.booking(trx, bookingId);
-      if (booking === undefined) {
+    const { completion, booking } = await this.tx.run(async (trx) => {
+      const row = await this.repository.booking(trx, bookingId);
+      if (row === undefined) {
         throw new Error("a recorded booking is not readable");
       }
-      return await this.completionIn(trx, tenant, booking, {
-        checkoutId: prepared.checkout.id,
-        policy: prepared.policy,
-        minorUnits: prepared.minorUnits,
-        warnings,
-      });
+      return {
+        completion: await this.completionIn(trx, tenant, row, {
+          checkoutId: prepared.checkout.id,
+          policy: prepared.policy,
+          minorUnits: prepared.minorUnits,
+          warnings,
+        }),
+        booking: row,
+      };
     });
+    return { ...completion, ...(await this.guestTokenOf(booking)) };
   }
 
-  /** The CheckoutCompletion of a booking, read in `trx` (step 5's answer, and the replay of a decided booking). */
+  /**
+   * The guest token of a booking without a customer (`booking_created`), written in a short transaction of its own and
+   * handed out once it committed (a cookie or a body token never names a token that does not exist); none for a
+   * customer's booking. Best effort: the booking exists and is answered even when the token cannot be written or
+   * handed out (logged; the guest can still look the booking up).
+   */
+  private async guestTokenOf(booking: BookingRow | undefined): Promise<DeliveredBookingToken> {
+    if (booking === undefined || booking.customerId !== null) {
+      return NO_BOOKING_TOKEN;
+    }
+    try {
+      const issued: IssuedBookingToken = await this.tx.run((trx) =>
+        this.guestAccess.issue(trx, {
+          bookingId: booking.id,
+          environment: booking.environment,
+          issuedVia: "booking_created",
+          expiresAt: completionTokenExpiry(this.clock.now(), booking.lastArrivalAt),
+        }),
+      );
+      return this.guestAccess.deliver(issued);
+    } catch (error) {
+      this.logger.error({ bookingId: booking.id, err: error }, "bookings.guest_token_not_issued");
+      return NO_BOOKING_TOKEN;
+    }
+  }
+
+  /**
+   * The CheckoutCompletion of a booking, read in `trx` (step 5's answer, and the replay of a decided booking), without
+   * a guest token (the callers add theirs).
+   */
   private async completionIn(
     trx: TenantTransaction,
     tenant: RequestTenant,
@@ -1836,8 +1918,7 @@ export class BookingOrchestrator {
         minorUnits: answer.minorUnits,
         now,
       }),
-      bookingToken: null,
-      bookingTokenExpiresAt: null,
+      ...NO_BOOKING_TOKEN,
       warnings: [...answer.warnings],
     };
   }
@@ -1881,11 +1962,12 @@ export class BookingOrchestrator {
         warnings: [],
       });
       this.logger.info({ bookingId, status: booking.status }, "bookings.completion_replayed");
+      // The guest token of the first answer, as it gave it: in its details (a key caller) or its cookie (the edge).
       return {
         status: 201,
         headers: { location: `/v1/bookings/${booking.id}`, "cache-control": "no-store" },
-        setCookie: [],
-        body: completion,
+        setCookie: [...record.response.setCookie],
+        body: { ...completion, ...storedBookingTokenOf(record.response) },
       };
     });
   }
