@@ -992,3 +992,233 @@ export const ASSIGN_OFFICE_STRINGS = Object.freeze({
   officeAlreadyAssigned: "This OTA already has an office of this environment. Reload the page to see it.",
   notFound: "The office or the OTA no longer exists. Reload the page.",
 });
+
+// ---- Amadeus accounts and office pool (PAD-007) -------------------------------------------------------------------
+
+/** `/amadeus/accounts`: the Velexis Amadeus account of each environment (`adminListAmadeusAccounts`, PF-90). */
+export const AMADEUS_ACCOUNT_STRINGS = Object.freeze({
+  title: "Amadeus accounts",
+  intro:
+    "The Velexis Amadeus account of each environment. OTAs without their own Amadeus credentials search, book and ticket through it, each with an office of the pool. Entering or rotating credentials asks for a code from your authenticator app.",
+  unavailableTitle: "The Amadeus accounts could not be loaded",
+  environmentTitle: (environment: string) => `${environment} environment`,
+  noAccount: (environment: string) => `There is no Velexis Amadeus account for ${environment} yet.`,
+  noAccountTest: "New OTAs get a test office of its pool when they are set up.",
+  noAccountLive: "It is needed before the first OTA goes live.",
+  name: "Name",
+  status: "Verification",
+  baseUrl: "Amadeus host",
+  clientId: "Client id",
+  clientSecret: "Client secret",
+  /** The secret is never answered by the API, so the page only says that one is stored. */
+  secretStored: "Stored encrypted, never shown",
+  lastVerified: "Last verified",
+  lastError: "Last error",
+  never: "Never",
+  none: "None",
+  offices: "Offices of the pool",
+  officesCaption: (environment: string) => `Offices of the ${environment} pool by status`,
+  created: "Created",
+  accountId: "Account id",
+  /** The account is waiting for the verification job: the page asks the API again on its own. */
+  verifying:
+    "The credentials are being verified with an Amadeus token request. This page updates on its own when the result is in.",
+});
+
+/** The forms of `/amadeus/accounts`: create, edit, rotate the secret, verify, disable (README §2; PADR-0006 item 4). */
+export const AMADEUS_ACCOUNT_FORM_STRINGS = Object.freeze({
+  working: "Working…",
+  cancel: "Cancel",
+  // Create
+  create: (environment: string) => `Set up the ${environment} account`,
+  createTitle: (environment: string) => `New ${environment} account`,
+  createIntro:
+    "Enter the credentials Amadeus issued to Velexis for this environment. Saving asks for a code from your authenticator app; the credentials are then verified with an Amadeus token request.",
+  nameLabel: "Name",
+  nameHint: "The label of the account in this console, for example “Velexis test”.",
+  baseUrlLabel: "Amadeus host",
+  baseUrlHint:
+    "An https address, such as https://test.travel.api.amadeus.com. The local Amadeus stub (http://127.0.0.1:4900) works in development only.",
+  clientIdLabel: "Client id",
+  clientIdHint: "The API key of the Velexis application in Amadeus.",
+  clientSecretLabel: "Client secret",
+  clientSecretHint:
+    "The API secret of the Velexis application. It is stored encrypted and never shown again, not even here.",
+  save: "Save and verify",
+  saving: "Saving…",
+  created: (environment: string) =>
+    `The ${environment} account is saved. Its credentials are being verified with an Amadeus token request.`,
+  // Field problems
+  nameRequired: "Enter a name.",
+  nameTooLong: "Enter a name of at most 100 characters.",
+  baseUrlInvalid:
+    "Enter an https address of at most 300 characters, such as https://test.travel.api.amadeus.com.",
+  clientIdRequired: "Enter the client id.",
+  clientIdInvalid: "Enter a client id of at most 200 characters, without spaces.",
+  clientSecretRequired: "Enter the client secret.",
+  clientSecretTooLong: "Enter a client secret of at most 512 characters.",
+  /** `CONFLICT` (`environment_exists`) of a create. */
+  environmentExists:
+    "This environment already has a Velexis Amadeus account. Reload the page to see it, and rotate its secret there instead.",
+  // Edit details
+  edit: "Edit details",
+  editTitle: "Edit the account details",
+  editIntro:
+    "A new host or client id asks for a code from your authenticator app, and the account is verified again with it. A new name changes nothing else.",
+  clientIdKeepHint: (last4: string) =>
+    `Leave it empty to keep the current client id (ending in ${last4}). A new one is verified before the account is used again.`,
+  clientIdKeepHintUnknown: "Leave it empty to keep the current client id.",
+  saveDetails: "Save details",
+  edited: "The account details are saved.",
+  // Rotate the secret
+  rotate: "Rotate secret",
+  rotateTitle: "Rotate the client secret",
+  rotateIntro:
+    "Enter the new secret Amadeus issued. Saving asks for a code from your authenticator app; the account is then verified again with it. OTAs keep their offices.",
+  newSecretLabel: "New client secret",
+  newSecretHint: "It is stored encrypted and never shown again, not even here.",
+  saveSecret: "Save the new secret",
+  rotated: "The new secret is stored. The account is being verified with it.",
+  // Verify
+  verify: "Verify now",
+  verifyAndEnable: "Verify and enable",
+  verifyHint:
+    "Requests an Amadeus token with the stored credentials. A disabled account becomes active again when Amadeus accepts them.",
+  verifyQueued: "The verification is queued. This page updates when it has run.",
+  /** `SERVICE_UNAVAILABLE` of a verification: the job is its whole effect, and Redis did not take it. */
+  verifyUnavailable:
+    "The verification could not be queued: the platform API or its Redis does not answer. Try again in a few minutes.",
+  // Disable
+  disable: "Disable account",
+  disableTitle: (environment: string) => `Disable the ${environment} account?`,
+  disableDescription:
+    "Every OTA that uses the shared Velexis account in this environment loses Amadeus access until the account is verified again: searches, bookings and the ticketing of paid bookings stop. Office assignments stay as they are.",
+  disableConfirm: "Disable account",
+  disabled:
+    "The account is disabled. “Verify and enable” makes it active again once Amadeus accepts its credentials.",
+  // Failures
+  stale:
+    "Someone else changed this account since the page was loaded, so nothing was saved. Reload the page and try again.",
+  reload: "Reload the page",
+  accountGone: "This account no longer exists. Reload the page.",
+  formExpired: "This form is out of date. Reload the page and try again.",
+  rateLimitedFor: (seconds: number) => `Too many attempts. Try again in ${waitTime(seconds)}.`,
+});
+
+/** `/amadeus/offices`: the office pool of `adminListAmadeusOffices` (PF-90). */
+export const AMADEUS_OFFICE_STRINGS = Object.freeze({
+  title: "Office pool",
+  intro:
+    "The Amadeus offices of the Velexis accounts, oldest first. A new OTA gets an available test office when it is set up; an OTA whose set-up found the pool empty gets one here, or on its page. The address of this page keeps the filters, so a list can be shared.",
+  filtersLabel: "Office filters",
+  environmentLabel: "Environment",
+  statusLabel: "Status",
+  listTitle: "Offices",
+  caption: "Offices of the pool, oldest first",
+  empty: "No office matches these filters.",
+  columnOffice: "Office",
+  columnEnvironment: "Environment",
+  columnStatus: "Status",
+  columnOta: "OTA",
+  columnAssigned: "Assigned",
+  columnNotes: "Notes",
+  columnAdded: "Added",
+  columnActions: "Actions",
+  noOta: "None",
+  noNotes: "No notes",
+  releasingSince: "Releasing since",
+  invalidFilters: "The filters in this address are not valid. Clear them and try again.",
+  showAll: "Show every office",
+  unavailableTitle: "The office pool could not be loaded",
+});
+
+/** Add offices to the pool in bulk (`adminAddAmadeusOffices`). */
+export const ADD_OFFICES_STRINGS = Object.freeze({
+  title: "Add offices",
+  intro:
+    "Paste the office ids Amadeus issued, one per line. They are available at once. Ids the pool already holds, and ids repeated in the list, are skipped.",
+  accountLabel: "Account",
+  accountHint: "The Velexis Amadeus account whose pool gets the offices.",
+  accountOption: (name: string, environment: string) => `${name} (${environment})`,
+  officeIdsLabel: "Office ids",
+  officeIdsHint:
+    "One per line, 9 letters or digits each, such as NCE1A0955; up to 500 at a time. Lower case is upper-cased.",
+  notesLabel: "Notes (optional)",
+  notesHint: "Saved on every new office, for example the order reference.",
+  add: "Add offices",
+  adding: "Adding…",
+  noAccount: "There is no Velexis Amadeus account yet, so there is no pool to add offices to.",
+  accountsLink: "Set up the Amadeus accounts",
+  accountsUnavailable: "The Amadeus accounts could not be loaded, so offices cannot be added right now.",
+  officeIdsRequired: "Enter at least one office id.",
+  /** The line numbers (never the text) of the lines that are no office id. */
+  officeIdsInvalid: (lines: readonly number[]) =>
+    `${lines.length === 1 ? "Line" : "Lines"} ${lines.map((line) => COUNT_FORMAT.format(line)).join(", ")} ${lines.length === 1 ? "is" : "are"} not an office id of 9 letters or digits.`,
+  tooMany: "Enter at most 500 office ids at a time.",
+  notesTooLong: "Enter notes of at most 2,000 characters.",
+  accountInvalid: "Choose an account of the list.",
+  accountGone: "This account no longer exists. Reload the page.",
+  createdTitle: (count: number) =>
+    count === 0 ? "No office was added." : `${counted(count, "office was", "offices were")} added:`,
+  skippedTitle: (count: number) =>
+    `${counted(count, "id was", "ids were")} skipped (already in the pool, or repeated in the list):`,
+  createdCaption: "Added offices",
+  skippedCaption: "Skipped ids",
+  formExpired: "This form is out of date. Reload the page and try again.",
+  rateLimitedFor: (seconds: number) => `Too many attempts. Try again in ${waitTime(seconds)}.`,
+});
+
+/** The actions on one office of the pool: assign to an OTA, retire (**reason**), notes (`If-Match`). */
+export const OFFICE_ACTION_STRINGS = Object.freeze({
+  working: "Working…",
+  cancel: "Cancel",
+  /** The rest of a row button's accessible name, after its text, so each button names its office. */
+  officeSuffix: (officeId: string) => ` office ${officeId}`,
+  /** The same for "Edit notes": "Edit notes of office NCE1A0955". */
+  notesSuffix: (officeId: string) => ` of office ${officeId}`,
+  // Assign
+  assign: "Assign",
+  assignTitle: (officeId: string) => `Assign office ${officeId}`,
+  assignIntro:
+    "The OTA's Velexis Amadeus connection of this environment gets this office as its only office and becomes active; its owners get an e-mail.",
+  tenantLabel: "OTA",
+  tenantHint: "The OTA's key, such as acme, or its tenant id (ten_…).",
+  tenantRequired: "Enter the key or the tenant id of an OTA.",
+  tenantInvalid: "Enter an OTA key (lower-case letters and digits) or a tenant id (ten_ and 26 characters).",
+  tenantUnknown: "No OTA has this key. Check it on the tenant list.",
+  /** More than 1,000 OTAs contain the key in their key, name or owner's e-mail address (five lookup pages). */
+  tenantTooManyMatches:
+    "Too many OTAs contain this key to look it up here. Enter the OTA's tenant id (ten_…) from its page instead.",
+  assignConfirm: "Assign office",
+  assigning: "Assigning…",
+  assigned: (officeId: string, tenantKey: string) => `Office ${officeId} is assigned to ${tenantKey}.`,
+  connectionNow: "Its Amadeus connection is now:",
+  openTenant: "Open the OTA",
+  // Retire
+  retire: "Retire",
+  retireTitle: (officeId: string) => `Retire office ${officeId}?`,
+  retireDescription:
+    "The office leaves the pool for good and is never assigned again. Only an available office can be retired.",
+  retireConfirm: "Retire office",
+  retired: (officeId: string) => `Office ${officeId} is retired.`,
+  /** `CONFLICT` (`not_available`) of a retirement. */
+  notAvailable:
+    "Only an available office can be retired. This one was assigned or retired in the meantime: reload the page.",
+  // Notes
+  editNotes: "Edit notes",
+  notesTitle: (officeId: string) => `Notes of office ${officeId}`,
+  notesLabel: "Notes",
+  notesHint:
+    "Only Velexis staff see these notes, for example the commercial onboarding or the ticketing agreement. Leave the field empty to clear them.",
+  notesTooLong: "Enter notes of at most 2,000 characters.",
+  saveNotes: "Save notes",
+  saving: "Saving…",
+  notesSaved: (officeId: string) => `The notes of office ${officeId} are saved.`,
+  /** `412 PRECONDITION_FAILED`: the office changed since the page was loaded. */
+  stale:
+    "Someone else changed this office since the page was loaded, so your notes were not saved. Reload the page to see the current notes, then edit them again. Copy your text first if you need it.",
+  reload: "Reload the page",
+  officeGone: "This office no longer exists. Reload the page.",
+  formExpired: "This form is out of date. Reload the page and try again.",
+  rateLimitedFor: (seconds: number) => `Too many attempts. Try again in ${waitTime(seconds)}.`,
+});

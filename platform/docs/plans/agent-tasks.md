@@ -1132,7 +1132,8 @@ Common commands: backend `pnpm --filter @velexis/platform-backend test`, `test:i
   - OTA queues show counts and failures but no retry button [PF-84].
 - **Verify:** `pnpm --filter @velexis/platform-admin test`
 
-### PAD-007 · Build the Amadeus accounts and office pool pages
+### PAD-007 · Build the Amadeus accounts and office pool pages ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-admin
 - **Milestone:** M1
 - **Depends on:** PAD-003, PBE-020
