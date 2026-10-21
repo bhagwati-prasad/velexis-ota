@@ -880,7 +880,8 @@ Common commands: backend `pnpm --filter @velexis/platform-backend test`, `test:i
   - `/sign-out` with a foreign `Origin` answers 403.
 - **Verify:** `pnpm --filter @velexis/platform-frontend test`
 
-### PFE-007 · Build the account profile and security pages
+### PFE-007 · Build the account profile and security pages ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-frontend
 - **Milestone:** M1
 - **Depends on:** PFE-006

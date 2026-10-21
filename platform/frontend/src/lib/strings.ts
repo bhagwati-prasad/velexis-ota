@@ -1363,3 +1363,151 @@ export const BILLING_STRINGS = Object.freeze({
   none: "This OTA has no subscription. Contact Velexis support.",
   unavailableTitle: "The subscription could not be loaded",
 });
+
+// ---- Account profile and security (PFE-007) ------------------------------------------------------------------
+
+/** `/account`: the profile of the signed-in account (PF-07). */
+export const ACCOUNT_STRINGS = Object.freeze({
+  title: "Your profile",
+  intro: "Your name and how Velexis shows dates to you. These settings are yours alone, in every OTA.",
+  profileLegend: "Profile",
+  fullNameLabel: "Full name",
+  fullNameHint: "Shown to the other members of your OTAs and in the e-mails Velexis sends you.",
+  fullNameRequired: "Enter your full name.",
+  fullNameTooLong: "Use at most 200 characters for your name.",
+  emailLabel: "E-mail address",
+  emailHint:
+    "You sign in with this address, and invitations are sent to it. To change it, contact Velexis support.",
+  localeLabel: "Language and region",
+  localeHint: "Velexis is in English for now. Your choice is kept for e-mails and later translations.",
+  localeUnknown: "Choose a language from the list.",
+  timeZoneLabel: "Time zone",
+  timeZoneHint: "The portal shows your own dates and times in this zone.",
+  timeZoneRequired: "Choose your time zone.",
+  timeZoneUnknown: "Choose a time zone from the list.",
+  submit: "Save changes",
+  submitting: "Saving…",
+  saved: "Your profile is saved.",
+  /** `PRECONDITION_FAILED` of updateMe (PF-07 AC1): the profile changed since the page was loaded. */
+  stale:
+    "Your profile was changed in another tab or session since this page was loaded. Reload the page to see the current profile, then make your change again.",
+  reload: "Reload the page",
+  formExpired: "This form has expired. Reload the page and try again.",
+  rateLimited: "Too many changes in a short time. Wait a minute, then try again.",
+  unavailableTitle: "Your profile could not be loaded",
+});
+
+/** `/account/security`: password, two-factor authentication and sessions (PF-04, PF-06). */
+export const SECURITY_STRINGS = Object.freeze({
+  title: "Security",
+  intro: "Your password, two-factor authentication and the places where your account is signed in.",
+  // Password
+  passwordTitle: "Password",
+  passwordIntro:
+    "Changing your password signs out every other session of your account, OTA admin sessions included. This browser stays signed in.",
+  currentPasswordLabel: "Current password",
+  currentPasswordRequired: "Enter your current password.",
+  currentPasswordTooLong: "Enter a password of at most 256 characters.",
+  currentPasswordIncorrect: "Your current password is not correct.",
+  newPasswordLabel: "New password",
+  newPasswordHint: "At least 10 characters. Avoid common passwords and passwords you use elsewhere.",
+  passwordSubmit: "Change password",
+  passwordSubmitting: "Changing…",
+  passwordChanged:
+    "Your password is changed. Every other session of your account was signed out, and Velexis sent you an e-mail about it.",
+  passwordRateLimited: "Too many attempts in a short time. Wait a minute, then try again.",
+  // Two-factor authentication
+  mfaTitle: "Two-factor authentication",
+  mfaOffIntro:
+    "Protect your account with a code from an authenticator app, in addition to your password. Members of live OTAs need it to open the OTA admin.",
+  mfaStart: "Set up two-factor authentication",
+  mfaStarting: "Starting…",
+  mfaScanTitle: "1. Scan the QR code",
+  mfaScanIntro:
+    "Open your authenticator app (such as 1Password, Google Authenticator or Microsoft Authenticator), add an account and scan this code.",
+  mfaQrLabel: "QR code for your authenticator app",
+  mfaSecretLabel: "Or enter this key in the app",
+  mfaSecretHint: "Time-based, 6 digits, every 30 seconds.",
+  /** The pending set-up lives for `expiresIn` seconds (10 minutes, PADR-0008 MFA item 2). */
+  mfaExpiresIn: (minutes: number) =>
+    `Finish within ${minutes === 1 ? "1 minute" : `${minutes} minutes`}, or start again.`,
+  mfaConfirmTitle: "2. Enter the code from the app",
+  mfaCodeLabel: "Authentication code",
+  mfaCodeHint: "The 6-digit code your authenticator app shows now for Velexis.",
+  mfaCodeFormat: "Enter the 6 digits of the code from your authenticator app.",
+  mfaCodeInvalid:
+    "The code is not correct. Check that you scanned this QR code, that your phone's clock is right, and enter the newest code.",
+  mfaConfirm: "Turn on two-factor authentication",
+  mfaConfirming: "Checking…",
+  mfaCancel: "Cancel the set-up",
+  mfaSetupExpired: "The set-up expired before it was confirmed. Start it again to get a new QR code.",
+  mfaStartAgain: "Start again",
+  mfaAlreadyEnabled:
+    "Two-factor authentication was turned on in the meantime, maybe in another tab. Reload the page to see it.",
+  mfaOnIntro: "Two-factor authentication is on. Sign-ins and sensitive actions ask for a code from your app.",
+  mfaOnSince: "On since",
+  recoveryCodesTitle: "Your recovery codes",
+  recoveryCodesIntro:
+    "Each code signs you in once if you lose your phone. Keep them somewhere safe, apart from your phone, such as a password manager.",
+  recoveryCodeLabel: (position: number) => `Recovery code ${position}`,
+  replaceCodes: "Replace the recovery codes",
+  replaceCodesTitle: "Replace your recovery codes?",
+  replaceCodesDescription:
+    "You get ten new recovery codes, and your current codes stop working at once. You confirm it with a code from your authenticator app.",
+  replaceCodesConfirm: "Replace the codes",
+  replacingCodes: "Replacing…",
+  newRecoveryCodesTitle: "Your new recovery codes",
+  codesReplaced: "Your recovery codes are replaced. The old codes no longer work.",
+  turnOff: "Turn off two-factor authentication",
+  turnOffTitle: "Turn off two-factor authentication?",
+  turnOffDescription:
+    "Your account is then protected by your password alone, your recovery codes stop working, and you cannot open the OTA admin of a live OTA. You confirm it with a code from your authenticator app.",
+  turnOffConfirm: "Turn it off",
+  turningOff: "Turning off…",
+  turnedOff: "Two-factor authentication is off. You can set it up again at any time.",
+  turnOffCancelled:
+    "Two-factor authentication is still on: turning it off needs a code from your authenticator app.",
+  replaceCancelled: "Your recovery codes were not replaced: it needs a code from your authenticator app.",
+  platformAdminKeepsMfa: "As a Velexis platform admin, you must keep two-factor authentication on.",
+  mfaNotEnabled:
+    "Two-factor authentication is not on any more, maybe turned off in another tab. Reload the page to see it.",
+  mfaRateLimited: "Too many codes were tried. Wait a few minutes, then try again.",
+  mfaUnavailableTitle: "Your two-factor settings could not be loaded",
+  // Sessions
+  sessionsTitle: "Where you are signed in",
+  sessionsIntro:
+    "Every browser that is signed in to the portal or the platform admin with your account. Revoke a session you do not recognise, and change your password.",
+  sessionsCaption: "Active sessions",
+  sessionsEmpty: "No active session.",
+  device: "Device",
+  signedInTo: "Signed in to",
+  audiences: Object.freeze({ portal: "Portal", platform_admin: "Platform admin" }),
+  ipAddress: "IP address",
+  signedInAt: "Signed in",
+  lastUsed: "Last used",
+  notUsedYet: "Not since signing in",
+  actions: "Actions",
+  unknownDevice: "Unknown device",
+  unknownIp: "Unknown",
+  /** A device in words, from the browser's user agent ("Firefox on Windows"). */
+  deviceOn: (browser: string, system: string) => `${browser} on ${system}`,
+  thisBrowser: "This browser",
+  revoke: "Revoke",
+  revokeWhich: (device: string) => ` the session of ${device}`,
+  revokeTitle: "Revoke this session?",
+  revokeDescription: (device: string) =>
+    `${device} is signed out the next time it renews its session, within 15 minutes at most. To keep someone out, change your password too.`,
+  revokeConfirm: "Revoke session",
+  revoked: "The session is revoked.",
+  alreadyEnded: "That session had already ended.",
+  sessionsReload: "Reload the page",
+  sessionsUnavailableTitle: "Your sessions could not be loaded",
+  signOutEverywhere: "Sign out everywhere",
+  signOutEverywhereTitle: "Sign out everywhere?",
+  signOutEverywhereDescription:
+    "Every session of your account ends, this browser included: the portal, the platform admin and every OTA admin. You then sign in again here.",
+  signOutEverywhereConfirm: "Sign out everywhere",
+  signingOutEverywhere: "Signing out…",
+  rateLimited: "Too many changes in a short time. Wait a minute, then try again.",
+  formExpired: "This form has expired. Reload the page and try again.",
+});

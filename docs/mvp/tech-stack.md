@@ -44,6 +44,7 @@ Related: [`architecture.md`](architecture.md) (where each piece runs), [`convent
 | Passwords | `argon2` | 0.41+ | Argon2id with OWASP parameters ([ADR-0008](adr/0008-identity-accounts-customers-sessions.md)). |
 | Tokens | `jose` | 5.x | EdDSA JWT signing and verification. Works from CommonJS. |
 | MFA | `otplib` | 12.x | TOTP for portal and platform admin accounts. |
+| MFA set-up QR code | `qrcode` | 1.5.x | Encodes the `otpauth://` URI of a TOTP set-up on the server of the Next.js apps (`lib/qr.ts`), so the secret never goes to a third-party QR service or a browser-side encoder; the page draws the answer as an inline SVG. Nothing else on this page encodes QR codes. |
 | Encryption | Node `crypto` (built in) | — | AES-256-GCM envelope encryption, HMAC ([ADR-0010](adr/0010-secrets-envelope-encryption.md)). |
 | Ids | `ulid` | 3.x | Prefixed ULID ids from a CSPRNG (db README §2.1). |
 | Money | `decimal.js` | 10.x | Exact decimal arithmetic for prices, markups and fees. Never JS floats. |
@@ -92,7 +93,7 @@ Related: [`architecture.md`](architecture.md) (where each piece runs), [`convent
 |---|---|
 | Runtime | Node.js 22 (Next.js server) |
 | Framework | Next.js 15 App Router, React 19, TypeScript |
-| Key libraries | Tailwind CSS 4, shadcn/ui, `lucide-react`, `openapi-fetch` + `@velexis/api-types/platform`, `zod`, `server-only` |
+| Key libraries | Tailwind CSS 4, shadcn/ui, `lucide-react`, `openapi-fetch` + `@velexis/api-types/platform`, `zod`, `server-only`, `qrcode` (server side) |
 | Test tools | Vitest + Testing Library (client components), Playwright journeys in `tools/e2e` |
 | Build output | `.next/standalone` + `.next/static` + `public/` |
 | Port | 3000 |
