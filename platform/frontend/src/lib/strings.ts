@@ -1185,3 +1185,181 @@ export const INVITATION_STRINGS = Object.freeze({
   failedTitle: "The invitation could not be accepted",
   rateLimited: "Too many attempts from your network. Wait a few minutes, then open the page again.",
 });
+
+// ---- Domains, Amadeus, payments and billing (PFE-013) ---------------------------------------------------------
+
+/** What the last DNS check of a custom domain found missing (`lastCheckError`, flows/custom-domains.md step 3). */
+export const DNS_CHECK_ERRORS: Readonly<Record<string, string>> = Object.freeze({
+  txt_missing: "The TXT record was not found yet.",
+  txt_mismatch: "The TXT record was found, but its value is not the one above.",
+  cname_missing: "The CNAME record was not found yet.",
+  cname_wrong_target: "The CNAME record points to another address than the one above.",
+  a_wrong_address: "The A or AAAA record points to another address than the ones above.",
+  dns_timeout: "The DNS servers of the domain did not answer in time. Velexis checks again soon.",
+});
+
+/** `/otas/[tenantId]/domains` and `DnsRecordsTable` (PF-40; the custom domains of PF-41 with PFE-022). */
+export const DOMAINS_STRINGS = Object.freeze({
+  title: "Domains",
+  intro: "The addresses of your storefront. Links and e-mails to your customers use the primary address.",
+  subdomainTitle: "Velexis address",
+  subdomainIntro:
+    "Every OTA gets its own address on Velexis. Velexis manages its DNS records and its certificate, so there is nothing to set up.",
+  subdomainMissing: "This OTA has no Velexis address to show.",
+  primary: "Primary",
+  added: "Added",
+  customTitle: "Custom domains",
+  customIntro:
+    "Your own domains for the storefront, such as travel.example.com, each with the DNS records to create at your DNS provider.",
+  customEmpty: "This OTA has no custom domain.",
+  unavailableTitle: "The domains could not be loaded",
+  recordsCaption: (hostname: string) => `DNS records for ${hostname}`,
+  recordType: "Type",
+  recordName: "Name",
+  recordValue: "Value",
+  recordsNone: "No DNS record is needed for this address.",
+  verifyBy: "Verify by",
+  lastCheck: "Last check",
+  notChecked: "Not checked yet.",
+  checkPassed: "The records are in place.",
+  /** A `lastCheckError` the portal has no words for yet. */
+  checkFailed: "The records were not found yet.",
+});
+
+/** The environment of a connection in its summary ("test", "live"). */
+const CONNECTION_ENVIRONMENT_WORDS: Readonly<Record<string, string>> = KEY_ENVIRONMENT_WORDS;
+
+/**
+ * An environment in lower-case words; one the portal does not know yet (a newer API) in its raw form, so a card
+ * never reads "undefined" or calls another environment live.
+ */
+function connectionEnvironmentWords(environment: string): string {
+  return Object.hasOwn(CONNECTION_ENVIRONMENT_WORDS, environment)
+    ? (CONNECTION_ENVIRONMENT_WORDS[environment] ?? environment)
+    : environment.replaceAll("_", " ");
+}
+
+/** `ConnectionCard`: the Amadeus or Stripe connection of one environment (PF-50, PF-60; M5 parts with PFE-023/024). */
+export const CONNECTION_STRINGS = Object.freeze({
+  /** The card's heading: "Test environment", "Live environment". */
+  title: (environment: "test" | "live") => {
+    const words = connectionEnvironmentWords(environment);
+    return `${words.charAt(0).toUpperCase()}${words.slice(1)} environment`;
+  },
+  environment: (environment: "test" | "live") => connectionEnvironmentWords(environment),
+  /** The card's one-line summary: "Velexis test account, office NCE1A0955, active". */
+  summary: (parts: readonly string[]) => parts.join(", "),
+  account: "Account",
+  // Amadeus (supplier_connections).
+  amadeusAccount: (credentialSource: "velexis" | "tenant", environment: "test" | "live") =>
+    credentialSource === "velexis"
+      ? `Velexis ${connectionEnvironmentWords(environment)} account`
+      : "Your own Amadeus credentials",
+  amadeusOffices: (officeIds: readonly string[]) =>
+    officeIds.length === 0
+      ? "no office yet"
+      : `${officeIds.length === 1 ? "office" : "offices"} ${officeIds.join(", ")}`,
+  clientId: "Client id",
+  offices: "Offices",
+  officesNone: "None yet",
+  defaultOffice: "Default office",
+  queuingOffice: "Queuing office",
+  ownerOffice: "Owner office",
+  officeNotSet: "Not set",
+  lastVerified: "Last verified",
+  /** A Velexis connection without an office (PF-50 AC2: the office pool was empty at set-up). */
+  pendingOffice:
+    "Velexis assigns an Amadeus office to your OTA soon. Flight searches and bookings in this environment start working once it is assigned; you do not need to do anything.",
+  pendingCredentials: "Velexis is verifying the credentials of this connection.",
+  amadeusInvalid:
+    "Amadeus refused the credentials of this connection, so flight searches and bookings in this environment do not work. Contact Velexis support.",
+  amadeusDisabled:
+    "This connection is disabled, so flight searches and bookings in this environment do not work. Contact Velexis support.",
+  // Stripe (payment_provider_connections).
+  paymentAccount: Object.freeze({
+    velexis: "Velexis Stripe account",
+    connect_standard: "Your Stripe account (Stripe Connect)",
+    api_keys: "Your Stripe account (your API keys)",
+  }),
+  stripeAccount: "Stripe account id",
+  publishableKey: "Publishable key",
+  descriptor: "Card statement suffix",
+  descriptorNotSet: "Not set",
+  chargesEnabled: "Takes card payments",
+  payoutsEnabled: "Receives payouts",
+  detailsSubmitted: "Business details complete",
+  yes: "Yes",
+  no: "No",
+  connectedAt: "Connected",
+  disconnectedAt: "Disconnected",
+  webhookUrl: "Webhook URL",
+  velexisMode:
+    "Velexis takes your customers' card payments on its own Stripe account and transfers the money to you each month.",
+  testPayments: "In the test environment, payments use Stripe's test cards and no money moves.",
+  paymentPending: "Stripe has not finished setting up this account, so it cannot take payments yet.",
+  paymentDisabled:
+    "This connection is disabled, so the storefront cannot take card payments in this environment.",
+  paymentError:
+    "Stripe reported a problem with this account, so the storefront cannot take card payments in this environment. Contact Velexis support.",
+  // A submission of the OTA's own credentials or keys (M5).
+  submissionTitle: "Credentials you submitted",
+  submissionOpen:
+    "Velexis is verifying the credentials you submitted. The connection above stays in use until they are verified.",
+  submissionFailed: "The credentials you submitted could not be verified. The connection above stays in use.",
+});
+
+/** `/otas/[tenantId]/amadeus` (PF-50; live access and own credentials with PFE-023). */
+export const AMADEUS_STRINGS = Object.freeze({
+  title: "Amadeus",
+  intro:
+    "The Amadeus connection your storefront searches and books flights through, one per environment. Velexis connects the test environment when it sets up your OTA.",
+  empty: "This OTA has no Amadeus connection yet.",
+  unavailableTitle: "The Amadeus connections could not be loaded",
+});
+
+/** `/otas/[tenantId]/payments` (PF-60; your own Stripe account with PFE-024). */
+export const PAYMENTS_STRINGS = Object.freeze({
+  title: "Payments",
+  intro: "The Stripe account that takes your customers' card payments, one per environment.",
+  empty: "This OTA has no payment connection yet.",
+  unavailableTitle: "The payment connections could not be loaded",
+});
+
+/** `/otas/[tenantId]/billing` (PF-75; plans, Checkout and invoices with PFE-021). */
+export const BILLING_STRINGS = Object.freeze({
+  title: "Billing",
+  intro: "Your OTA's plan and its subscription with Velexis.",
+  subscriptionTitle: "Subscription",
+  plan: "Plan",
+  status: "Status",
+  billedBy: "Payment",
+  provider: Object.freeze({
+    manual: "Free trial, no payment details needed",
+    stripe: "By card, through Stripe",
+  }),
+  interval: "Billing interval",
+  intervals: Object.freeze({ month: "Monthly", year: "Yearly" }),
+  trialEnds: "Trial ends",
+  periodEnds: "Current period ends",
+  cancelAtPeriodEnd: "The subscription ends at the end of the current period.",
+  /** For a manual trial before M5 (PF-75). */
+  manualTrialTitle: "Paid plans arrive soon",
+  manualTrial:
+    "Until then your OTA runs on a free trial. Velexis e-mails the owners before the trial ends, so there is time to choose a plan.",
+  banners: Object.freeze({
+    past_due: Object.freeze({
+      title: "A payment failed",
+      text: "Update your payment details to keep your OTA running.",
+    }),
+    trial_ending: Object.freeze({
+      title: "Your trial ends soon",
+      text: "Choose a plan to keep your OTA running after the trial.",
+    }),
+    canceled: Object.freeze({
+      title: "The subscription is canceled",
+      text: "Choose a plan to keep using your OTA.",
+    }),
+  }),
+  none: "This OTA has no subscription. Contact Velexis support.",
+  unavailableTitle: "The subscription could not be loaded",
+});

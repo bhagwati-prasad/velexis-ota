@@ -986,7 +986,8 @@ Common commands: backend `pnpm --filter @velexis/platform-backend test`, `test:i
   - The accept URL loses its token after the first request.
 - **Verify:** `pnpm --filter @velexis/platform-frontend test`
 
-### PFE-013 · Build the read-only domains, Amadeus, payments and billing pages
+### PFE-013 · Build the read-only domains, Amadeus, payments and billing pages ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-frontend
 - **Milestone:** M1
 - **Depends on:** PFE-010, PBE-027, PBE-017
