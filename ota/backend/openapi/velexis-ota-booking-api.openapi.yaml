@@ -17341,18 +17341,29 @@ paths:
 
 
         **Validation.** Beyond the schema (a font outside the bundled list fails it: `400 VALIDATION_FAILED`):
-        currencies must exist in `reference.currencies` and the time zone in `reference.time_zones`; every `supported`
-        list contains its `default`; markets use supported currencies and locales; asset ids must name an asset of the
-        right kind (`logo`, `logo_dark`, `logo_square`, `favicon`, `og_image`); a legal link's `pageSlug` must name a
-        page of `storefront_pages`; `policies.paymentTiming` other than `authorize_before_booking` is refused in the
-        MVP. These answer `422 UNPROCESSABLE` with `details.reason` and `details.path` (the JSON pointer of the refused
-        field). Setting `airlineCard.enabledLive` to true answers `403 FEATURE_DISABLED` (`details.feature =
-        "airlineCard"`) while the global `AIRLINE_CARD_ENABLED` switch is off.
+        currencies must be active currencies of `reference.currencies` with at most 2 minor units (the precision of
+        stored amounts, as flights.search requires) and the time zone must exist in `reference.time_zones`; every
+        `supported` list contains its `default`; markets use supported currencies and locales; asset ids must name an
+        asset of the right kind (`logo`, `logo_dark`, `logo_square`, `favicon`, `og_image`); a legal link's `pageSlug`
+        must name a page of `storefront_pages`; `policies.paymentTiming` other than `authorize_before_booking` is
+        refused in the MVP. These answer `422 UNPROCESSABLE` with `details.reason` and `details.path` (the JSON
+        pointer of the refused field). Setting `airlineCard.enabledLive` to true answers `403 FEATURE_DISABLED`
+        (`details.feature = "airlineCard"`) while the global `AIRLINE_CARD_ENABLED` switch is off. The rules are
+        checked for the sections sent, against the saved settings with those sections replaced (so a market is checked
+        against the currencies and locales it will have), and the first refused field is answered. `details.reason` is
+        one of `unknown_time_zone`, `asset_not_found`, `asset_kind`, `default_not_supported` (a `supported` list
+        without its `default`), `unknown_currency` (not an active currency of `reference.currencies`),
+        `currency_not_supported` (a currency with more than 2 minor units, such as KWD), `unknown_country`,
+        `duplicate_market`, `market_not_listed` (`markets.default`), `market_currency_not_supported`,
+        `market_locale_not_supported`, `page_not_found`, `payment_timing_not_supported`, `duplicate_consent_category`
+        and `consent_category_required` (only `necessary` may be required).
 
 
-        **Warnings.** Turning the airline card on while active markup or fee rules exist answers `200` with a
-        `warnings` entry (`airline_card_net_price`): airline-card bookings are sold at the airline's price, without
-        markup or fees (OADR-0004).
+        **Warnings.** Turning the airline card on (in either environment) while active markup or fee rules that add
+        an amount exist answers `200` with a `warnings` entry (`airline_card_net_price`, `path` the flag turned on):
+        airline-card bookings are sold at the airline's price, without markup or fees (OADR-0004). A rule adds an
+        amount when it is active, has not ended (`activeUntil`) and has a percentage, a fixed amount or a minimum
+        other than zero, so the default rule at 0 % alone gives no warning.
 
 
         **Effect.** `version` + 1 and a new `ETag`; the storefront.get caches of both environments are deleted, so the
@@ -21844,9 +21855,10 @@ components:
                   requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
     SettingsUnprocessable:
       description: >-
-        The settings are well-formed but refused by a rule: unknown currency or time zone, a `supported` list without
-        its default, an asset of the wrong kind, an unknown page, a payment timing the MVP does not offer. Possible
-        codes: UNPROCESSABLE (`details.reason`, and `details.path`: the JSON pointer of the refused field).
+        The settings are well-formed but refused by a rule: unknown currency or time zone, a currency with more than 2
+        minor units, a `supported` list without its default, an asset of the wrong kind, an unknown page, a payment
+        timing the MVP does not offer. Possible codes: UNPROCESSABLE (`details.reason`, and `details.path`: the JSON
+        pointer of the refused field).
       headers:
         X-Request-Id:
           $ref: '#/components/headers/X-Request-Id'

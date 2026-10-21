@@ -1878,7 +1878,8 @@ The console API (staff sign-in by portal token, bookings, PNR import, queues, cu
   - Deleting the default rule answers 409; a viewer can list but not create.
 - **Verify:** `pnpm --filter @velexis/ota-backend test -- settings && pnpm --filter @velexis/ota-backend test:int -- settings`
 
-### OBE-070 · Implement storefront settings get and update
+### OBE-070 · Implement storefront settings get and update ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-backend
 - **Milestone:** M4
 - **Depends on:** OBE-060, OBE-016

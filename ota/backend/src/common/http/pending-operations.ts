@@ -77,7 +77,7 @@ export const PENDING_OPERATIONS: Readonly<Partial<Record<OtaOperationId, Pending
   consoleAmadeusIssueFlightOrder: "deferred",
   consoleAmadeusCancelFlightOrder: "deferred",
   consoleAmadeusPatchFlightOrder: "deferred",
-  // Console settings (OBE-058): markup and fee rules, storefront settings, notification templates
+  // Console settings (OBE-058): markup and fee rules, notification templates (the storefront settings: OBE-070)
   consoleListMarkupRules: "OBE-069",
   consoleCreateMarkupRule: "OBE-069",
   consoleGetMarkupRule: "OBE-069",
@@ -88,8 +88,6 @@ export const PENDING_OPERATIONS: Readonly<Partial<Record<OtaOperationId, Pending
   consoleGetFeeRule: "OBE-069",
   consoleUpdateFeeRule: "OBE-069",
   consoleDeleteFeeRule: "OBE-069",
-  consoleGetStorefrontSettings: "OBE-070",
-  consoleUpdateStorefrontSettings: "OBE-070",
   consoleListNotificationTemplates: "OBE-073",
   consoleGetNotificationTemplate: "OBE-073",
   consolePutNotificationTemplate: "OBE-073",

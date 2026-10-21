@@ -751,11 +751,14 @@ describe("the 17 console settings operations (api-changes part 2 §2.1–§2.3, 
     ).toEqual(["/header/Idempotency-Key required"]);
   });
 
-  it("lists the 17 operations in pending-operations.ts with the tasks that implement them [OBE-058 AC3]", () => {
+  it("lists the 17 operations in pending-operations.ts with the tasks that implement them until those are done [OBE-058 AC3]", () => {
+    // A task that implements its operations removes their entries (pending-operations.ts); route parity
+    // (route-parity.contract.test.ts) then requires their handlers.
+    const implemented: ReadonlySet<SettingsOperation["task"]> = new Set(["OBE-070"]);
     for (const { operationId, task } of SETTINGS_OPERATIONS) {
       expect([operationId, PENDING_OPERATIONS[operationId as keyof typeof PENDING_OPERATIONS]]).toEqual([
         operationId,
-        task,
+        implemented.has(task) ? undefined : task,
       ]);
     }
   });
