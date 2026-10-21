@@ -5,7 +5,7 @@
 // (fan-out.ts) lists the schedule's target tenants and enqueues one `<schedule id>` job per tenant, with a
 // deterministic id, which the module that owns the work handles (`@TenantJob("<schedule id>")`). Schedules join this
 // list with the task that adds their work (M3: notifications.sweep with OBE-030, payments.authorisation_watch with
-// OBE-040, checkouts.expire, …; M4: queues.poll).
+// OBE-040, ticketing.scan with OBE-044, checkouts.expire, …; M4: queues.poll).
 //
 // Target tenants (OADR-0014 point 4): a schedule names the statuses it runs for, `active` and possibly `suspended`
 // (suspended tenants keep their obligations to paid travellers, but nothing that starts new supplier activity runs for
@@ -109,6 +109,15 @@ export const OTA_SCHEDULES: readonly ScheduleDefinition[] = Object.freeze([
     statuses: ["active", "suspended"],
     description:
       "Alert staff, once per payment, about authorised, uncaptured Stripe payments whose authorisation is older than 5 days",
+  }),
+  schedule({
+    id: "ticketing.scan",
+    pattern: "*/5 * * * *",
+    milestone: "M3",
+    // Issuance retries continue for a suspended OTA's paid bookings (OADR-0008 point 8, OADR-0014 point 4).
+    statuses: ["active", "suspended"],
+    description:
+      "Enqueue ticketing.issue {tenantId, bookingId} for each booking whose issuance retry is due or whose claim was abandoned (bookings/ticketing.processor.ts)",
   }),
 ]);
 

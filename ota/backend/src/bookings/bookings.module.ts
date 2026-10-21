@@ -11,10 +11,16 @@
 // `ota-payments` queue from QueuesModule, OutboxService from the global NotificationsModule.
 //
 // The customer bookings reads (OBE-046): CustomerBookingsController over CustomerBookingsService, with the booking
-// access guard of common/auth (BookingAccessContext keeps its decision for the request). API only so far; the timeout
-// reconciliation (OBE-043) and the ticketing retries (OBE-044) join it.
+// access guard of common/auth (BookingAccessContext keeps its decision for the request). The timeout reconciliation
+// (OBE-043) joins it.
+//
+// `BookingsWorkerModule` (worker only, OBE-044): the `ota-ticketing` consumer and the `ticketing.scan` handler
+// (ticketing.processor.ts, `@TenantJob`, found by the jobs module's runner) with the issuance retries of
+// ticketing.service.ts. It builds on the worker's tenancy module and the worker's Amadeus client
+// (`AmadeusWorkerModule`), records tickets and events with the same OrderRecorder, and queues its e-mails through the
+// worker's global OutboxService.
 import { Module } from "@nestjs/common";
-import { AmadeusModule } from "../amadeus/amadeus.module";
+import { AmadeusModule, AmadeusWorkerModule } from "../amadeus/amadeus.module";
 import { CheckoutRepository } from "../checkout/checkout.repository";
 import { checkoutKeyProvider, TravelerDocuments } from "../checkout/traveler-documents";
 import { BookingAccessContext, BookingAccessGuard } from "../common/auth/booking-access.guard";
@@ -30,6 +36,8 @@ import { BookingsRepository } from "./bookings.repository";
 import { CustomerBookingsController } from "./customer-bookings.controller";
 import { CustomerBookingsService } from "./customer-bookings.service";
 import { BookingTravelerDocuments, bookingsKeyProvider, OrderRecorder } from "./order-recorder";
+import { TicketingProcessor, TicketingScan } from "./ticketing.processor";
+import { TicketingRepository, TicketingService } from "./ticketing.service";
 
 @Module({
   imports: [
@@ -60,3 +68,18 @@ import { BookingTravelerDocuments, bookingsKeyProvider, OrderRecorder } from "./
   exports: [BookingOrchestrator],
 })
 export class BookingsModule {}
+
+@Module({
+  imports: [TenancyModule.forWorker(), AmadeusWorkerModule, QueuesModule],
+  providers: [
+    BookingsRepository,
+    OrderRecorder,
+    bookingsKeyProvider,
+    BookingTravelerDocuments,
+    TicketingRepository,
+    TicketingService,
+    TicketingProcessor,
+    TicketingScan,
+  ],
+})
+export class BookingsWorkerModule {}

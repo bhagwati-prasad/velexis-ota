@@ -49,6 +49,8 @@ const PURGE = "offers.purge";
 const SWEEP = "notifications.sweep";
 /** The authorisation watch of OBE-040. */
 const WATCH = "payments.authorisation_watch";
+/** The ticketing scan of OBE-044. */
+const TICKETING = "ticketing.scan";
 const ALPHA = "ten_01JALPHA0000000000000000AA";
 const BETA = "ten_01JBETA00000000000000000BB";
 /** The 15-minute iteration of the tests: 2026-01-15T10:15:00Z (FakeClock's day). */
@@ -141,7 +143,7 @@ const purgeSchedule = () => {
 
 describe("the schedules", () => {
   it("declare offers.purge every 15 minutes for active and suspended tenants, in UTC", () => {
-    expect(OTA_SCHEDULES.map((schedule) => schedule.id)).toEqual([PURGE, SWEEP, WATCH]);
+    expect(OTA_SCHEDULES.map((schedule) => schedule.id)).toEqual([PURGE, SWEEP, WATCH, TICKETING]);
     expect(purgeSchedule()).toMatchObject({
       pattern: "*/15 * * * *",
       milestone: "M2",
@@ -156,6 +158,12 @@ describe("the schedules", () => {
     // OBE-040: the authorisation watch at 06:15 UTC every day, for suspended tenants too (OADR-0014 point 4).
     expect(scheduleById(WATCH)).toMatchObject({
       pattern: "15 6 * * *",
+      milestone: "M3",
+      statuses: ["active", "suspended"],
+    });
+    // OBE-044: the ticketing scan every 5 minutes, for suspended tenants too (OADR-0008 point 8).
+    expect(scheduleById(TICKETING)).toMatchObject({
+      pattern: "*/5 * * * *",
       milestone: "M3",
       statuses: ["active", "suspended"],
     });
@@ -189,8 +197,16 @@ describe("the schedules", () => {
       { pattern: "15 6 * * *", tz: SCHEDULE_TIME_ZONE },
       { name: FAN_OUT_JOB, data: { task: WATCH } },
     );
+    expect(upsertJobScheduler).toHaveBeenCalledWith(
+      TICKETING,
+      { pattern: "*/5 * * * *", tz: SCHEDULE_TIME_ZONE },
+      { name: FAN_OUT_JOB, data: { task: TICKETING } },
+    );
     expect(removeJobScheduler).toHaveBeenCalledExactlyOnceWith("offers.legacy_sweep");
-    expect(result).toEqual({ registered: [PURGE, SWEEP, WATCH], removed: ["offers.legacy_sweep"] });
+    expect(result).toEqual({
+      registered: [PURGE, SWEEP, WATCH, TICKETING],
+      removed: ["offers.legacy_sweep"],
+    });
   });
 
   it("wait at start-up only for a BullMQ connection that is still making its first attempt", async () => {

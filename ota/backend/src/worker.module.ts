@@ -2,7 +2,8 @@
 // 127.0.0.1:HEALTH_PORT; the BullMQ processors and schedulers join here, never in the API: the `ota-tenant-ops`
 // consumer of ProvisioningModule (OBE-005) is the first, the schedulers and the `ota-maintenance` consumer of
 // JobsModule (OBE-024) the second, the `ota-notifications` consumer of NotificationsModule (OBE-030) the third, the
-// `ota-stripe-events` consumer of PaymentsWorkerModule (OBE-039) the fourth.
+// `ota-stripe-events` consumer of PaymentsWorkerModule (OBE-039) the fourth, the `ota-ticketing` consumer of
+// BookingsWorkerModule (OBE-044) the fifth.
 import { Module, type DynamicModule, type INestApplicationContext, type Type } from "@nestjs/common";
 import { ConfigModule } from "@nestjs/config";
 import { NestFactory } from "@nestjs/core";
@@ -10,6 +11,7 @@ import { createLogger, type Logger } from "@velexis/logger";
 import { ClsModule } from "nestjs-cls";
 import { LoggerModule, Logger as NestPinoLogger } from "nestjs-pino";
 import type { DestinationStream } from "pino";
+import { BookingsWorkerModule } from "./bookings/bookings.module";
 import { CommonModule } from "./common/common.module";
 import { QueuesModule } from "./common/queues/queues.module";
 import { RedisModule } from "./common/redis/redis.module";
@@ -66,6 +68,8 @@ export class WorkerModule {
         NotificationsModule.forWorker(),
         // The ota-stripe-events consumer: the webhook events read again from Stripe and applied (OBE-039).
         PaymentsWorkerModule,
+        // The ota-ticketing consumer and the ticketing.scan handler: the issuance retries (OBE-044).
+        BookingsWorkerModule,
       ],
     };
   }

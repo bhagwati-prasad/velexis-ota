@@ -41,6 +41,7 @@ import {
 } from "../../../src/jobs/fan-out";
 import { JOB_BATCH_LIMITS } from "../../../src/jobs/limits";
 import { FAN_OUT_JOB } from "../../../src/jobs/schedulers";
+import { TICKETING_SCAN_JOB } from "../../../src/bookings/ticketing.processor";
 import { NOTIFICATIONS_SWEEP_JOB } from "../../../src/notifications/notifications.processor";
 import { AUTHORISATION_WATCH_JOB } from "../../../src/payments/authorisation-watch.processor";
 import { OFFERS_PURGE_JOB } from "../../../src/shopping/offers-purge.processor";
@@ -338,8 +339,8 @@ const ALL = { searches: 1, offers: 2, upsells: 1, pricedOffers: 2 };
 const NONE = { searches: 0, offers: 0, upsells: 0, pricedOffers: 0 };
 
 /**
- * The scheduler of offers.purge among those registered at start-up (the outbox sweep of OBE-030 and the authorisation
- * watch of OBE-040 are the others).
+ * The scheduler of offers.purge among those registered at start-up (the outbox sweep of OBE-030, the authorisation
+ * watch of OBE-040 and the ticketing scan of OBE-044 are the others).
  */
 const purgeScheduler = (): JobSchedulerJson | undefined =>
   registered.find((scheduler) => scheduler.key === OFFERS_PURGE_JOB);
@@ -350,6 +351,7 @@ describe("the schedulers", () => {
       NOTIFICATIONS_SWEEP_JOB,
       OFFERS_PURGE_JOB,
       AUTHORISATION_WATCH_JOB,
+      TICKETING_SCAN_JOB,
     ]);
     expect(purgeScheduler()).toEqual(
       expect.objectContaining({
@@ -363,7 +365,7 @@ describe("the schedulers", () => {
     expect(sink.records()).toContainEqual(
       expect.objectContaining({
         msg: "scheduler.registered",
-        registered: [OFFERS_PURGE_JOB, NOTIFICATIONS_SWEEP_JOB, AUTHORISATION_WATCH_JOB],
+        registered: [OFFERS_PURGE_JOB, NOTIFICATIONS_SWEEP_JOB, AUTHORISATION_WATCH_JOB, TICKETING_SCAN_JOB],
         removed: [],
       }),
     );

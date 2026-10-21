@@ -4,7 +4,10 @@
 // error mapping and `supplier_requests`. Business modules import this module and call the client, never `fetch`.
 //
 // It runs in the API: it reads the platform rows through the tenancy caches of `TenancyModule.forApi()` and keeps its
-// tokens, locks and buckets on the process's Redis client, and writes `supplier_requests` through its `TenantTx`. The
+// tokens, locks and buckets on the process's Redis client, and writes `supplier_requests` through its `TenantTx`.
+// `AmadeusWorkerModule` is the same client for the worker's jobs (OBE-044: the ticketing retries), on the worker's
+// tenancy module (`TenancyModule.forWorker()`); the worker has no AMADEUS_BASE_URL_* overrides, so its calls go to the
+// account's `base_url` (the stub's in development, as dev:seed writes it). The
 // KEKs of MASTER_KEY_DIR are loaded once, when the module starts: a missing current key, or a key file that group or
 // others may read, stops the start-up (@velexis/crypto `LocalFileKeyProvider`). They decrypt the client secrets the
 // platform encrypted and encrypt the cached tokens. The limits of limits.ts apply (nothing here provides
@@ -37,17 +40,28 @@ const amadeusFetch: FactoryProvider<AmadeusFetch> = {
   useFactory: (): AmadeusFetch => (input, init) => fetch(input, init),
 };
 
+/** The providers of both modules: one client per process kind, on that process's tenancy module. */
+const PROVIDERS = [
+  keyProvider,
+  amadeusFetch,
+  ConnectionResolver,
+  TokenProvider,
+  AmadeusRateLimiter,
+  SupplierRequestsRepository,
+  AmadeusClient,
+];
+
 @Module({
   imports: [TenancyModule.forApi()],
-  providers: [
-    keyProvider,
-    amadeusFetch,
-    ConnectionResolver,
-    TokenProvider,
-    AmadeusRateLimiter,
-    SupplierRequestsRepository,
-    AmadeusClient,
-  ],
+  providers: PROVIDERS,
   exports: [AmadeusClient, ConnectionResolver, TokenProvider],
 })
 export class AmadeusModule {}
+
+/** The worker's Amadeus client (see the file header); only worker modules import it. */
+@Module({
+  imports: [TenancyModule.forWorker()],
+  providers: PROVIDERS,
+  exports: [AmadeusClient],
+})
+export class AmadeusWorkerModule {}

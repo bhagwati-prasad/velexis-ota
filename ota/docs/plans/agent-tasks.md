@@ -1151,7 +1151,8 @@ Checkout, customer accounts in cookies, Stripe on the Velexis account, the airli
   - A PNR with the right name but no `VELEXIS` remark is never accepted.
 - **Verify:** `pnpm --filter @velexis/ota-backend test -- bookings && pnpm --filter @velexis/ota-backend test:int -- bookings`
 
-### OBE-044 · Retry ticketing until the deadline with resync
+### OBE-044 · Retry ticketing until the deadline with resync ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-backend
 - **Milestone:** M3
 - **Depends on:** OBE-042
