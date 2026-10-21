@@ -13,6 +13,8 @@
 // The customer bookings reads (OBE-046): CustomerBookingsController over CustomerBookingsService, with the booking
 // access guard of common/auth (BookingAccessContext keeps its decision for the request). The idempotency hooks of
 // checkout.complete (OBE-043: a stored `504` linked to its booking and answered from it on replays) are here too.
+// ConsoleModule imports this module for the console bookings reads (OBE-061): the repositories, the sealed booking
+// documents and the refresh of CustomerBookingsService are exported for them.
 //
 // `BookingsWorkerModule` (worker only, OBE-044): the `ota-ticketing` consumer and the `ticketing.scan` handler
 // (ticketing.processor.ts, `@TenantJob`, found by the jobs module's runner) with the issuance retries of
@@ -75,7 +77,14 @@ import { TicketingRepository, TicketingService } from "./ticketing.service";
     // RequestContext only reads the request context (nestjs-cls): this module's instance sees the scope the guards set.
     RequestContext,
   ],
-  exports: [BookingOrchestrator],
+  // The console bookings reads (OBE-061, console/console.module.ts) read the same rows and refresh orders the same way.
+  exports: [
+    BookingOrchestrator,
+    BookingsRepository,
+    BookingTravelerDocuments,
+    CustomerBookingsService,
+    PaymentsRepository,
+  ],
 })
 export class BookingsModule {}
 

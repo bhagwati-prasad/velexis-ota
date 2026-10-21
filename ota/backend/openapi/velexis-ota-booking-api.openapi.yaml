@@ -11153,6 +11153,14 @@ paths:
         over reference, record locators, contact e-mail and lead last name).
 
 
+        **Needs attention** (the OTA admin's work list): `ticketingStatus=failed,manual_review` (ticketing problems),
+        `reconcileOutcome=manual_review` (orders the supplier-timeout reconciliation could not settle,
+        bookings.reconcile_outcome), `ticketingDeadlineBefore` = now + 24 h with `status=confirmed,partially_ticketed`
+        (deadline within 24 hours), `cancellationRequested=true` (a cancellation request the booking has not been
+        cancelled for since) and `hasScheduleChange=true` (an airline schedule change since booking). Each is a filter
+        of its own, AND-ed with the others.
+
+
         **Sort**: `created`/`-created` (default `-created`), `departure`/`-departure`,
         `ticketingDeadline`/`-ticketingDeadline` (nulls last), `total`/`-total`. Cursor pagination (`cursor`, `limit` ≤
         100); `totalCount` is exact up to 10 000 and `null` above. Indexes used: bookings (status,
@@ -11185,6 +11193,7 @@ paths:
         - booking_travelers
         - booking_associated_records
         - booking_segments
+        - booking_events
         - customers
         - payments
         - refunds
@@ -11295,6 +11304,40 @@ paths:
           schema:
             type: string
             maxLength: 40
+        - name: reconcileOutcome
+          in: query
+          required: false
+          style: form
+          explode: false
+          description: >-
+            Outcome(s) of the reconciliation after a supplier timeout (bookings.reconcile_outcome), comma-separated:
+            `found` (the order was recorded), `not_found` (the booking failed), `manual_review` (staff decide, OADR-0003).
+            Bookings that were never reconciled have none and match no value.
+          schema:
+            type: array
+            uniqueItems: true
+            items:
+              type: string
+              enum:
+                - found
+                - not_found
+                - manual_review
+        - name: cancellationRequested
+          in: query
+          required: false
+          description: >-
+            `true`: only bookings with an open cancellation request (a `booking.cancellation_requested` event, booking
+            not cancelled since); `false`: only bookings without one.
+          schema:
+            type: boolean
+        - name: hasScheduleChange
+          in: query
+          required: false
+          description: >-
+            `true`: only bookings whose schedule changed since booking (a `booking.schedule_changed` event, the row's
+            `hasScheduleChange`); `false`: only bookings without a change.
+          schema:
+            type: boolean
         - name: q
           in: query
           required: false

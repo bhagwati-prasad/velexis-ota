@@ -5,23 +5,32 @@
 // It is global for that reason, as the e-mail outbox is: a module that audits a console action does not import it, and
 // the identity module, which this one would otherwise import for the staff context, does not need to.
 //
-// The console operations themselves (bookings, PNR import, queues, customers, supplier log, raw Amadeus reads,
-// payments, settings) join with OBE-061 to OBE-074.
+// The console operations themselves join with OBE-061 to OBE-074. Since OBE-061: console.bookings.list and get
+// (console-bookings.controller.ts), which read the bookings module's rows and refresh orders with its
+// CustomerBookingsService (BookingsModule exports them; it never imports this module). PNR import, queues, customers,
+// supplier log, raw Amadeus reads, payments and settings follow.
 import { Global, Module } from "@nestjs/common";
+import { BookingsModule } from "../bookings/bookings.module";
 import { StaffContext } from "../common/auth/staff.guard";
 import { RequestContext } from "../common/http/request-context";
 import { TenancyModule } from "../tenancy/tenancy.module";
+import { ConsoleBookingsController } from "./console-bookings.controller";
+import { ConsoleBookingsRepository } from "./console-bookings.repository";
+import { ConsoleBookingsService } from "./console-bookings.service";
 import { StaffActionsWriter } from "./staff-actions.writer";
 
 @Global()
 @Module({
-  imports: [TenancyModule.forApi()],
+  imports: [TenancyModule.forApi(), BookingsModule],
+  controllers: [ConsoleBookingsController],
   providers: [
     StaffActionsWriter,
     // Typed views of the request context (nestjs-cls), as the identity and HTTP modules provide them: stateless, so
     // these instances read the same request state as theirs.
     StaffContext,
     RequestContext,
+    ConsoleBookingsRepository,
+    ConsoleBookingsService,
   ],
   exports: [StaffActionsWriter],
 })

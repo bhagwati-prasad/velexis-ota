@@ -27,6 +27,10 @@
 // are the background sync's (OBE-045, order-diff.ts): a refresh does not compare segment times. Amadeus `404` (an order
 // purged after travel) keeps the stored data with a warning; other Amadeus errors are recorded in `sync_error` and
 // answered `502/503/504` (an error code the operation does not document becomes `502 SUPPLIER_ERROR`).
+//
+// console.bookings.get with `refresh=true` (OBE-061, console/console-bookings.service.ts) runs the same refresh
+// (`refresh`) with the console's throttle of 10 s (`throttleMs`); a staff member's call names them in its
+// `supplier_requests` row (`staff_id`).
 import { Injectable } from "@nestjs/common";
 import type { operations } from "@velexis/api-types";
 import { AppError, isAppError, type OtaErrorCode } from "@velexis/errors";
@@ -129,20 +133,20 @@ export const ORDER_NOT_FOUND_WARNING: Warning = Object.freeze({
   detail: "The airline no longer returns this order; the booking as last synchronised is shown.",
 });
 
-/** `sync_error` of a refresh whose order Amadeus no longer has. */
-const ORDER_NOT_FOUND = "ORDER_NOT_FOUND";
+/** `sync_error` of a refresh whose order Amadeus no longer has (also the console's `order_not_found`). */
+export const ORDER_NOT_FOUND = "ORDER_NOT_FOUND";
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
 /** The Amadeus query of a refresh. */
-interface RefreshQuery {
+export interface RefreshQuery {
   readonly include?: "bags"[] | undefined;
   readonly fareRules?: FareRuleType[] | undefined;
 }
 
 /** What a refresh did. */
-type RefreshOutcome =
+export type RefreshOutcome =
   | { readonly kind: "refreshed"; readonly warnings: readonly Warning[] }
   | { readonly kind: "throttled"; readonly retryAfterSeconds: number }
   | { readonly kind: "skipped" }
@@ -488,14 +492,18 @@ export class CustomerBookingsService {
     return units;
   }
 
-  /** One Flight Order Management GET of the booking's order, throttled (see the file header). */
-  private async refresh(
+  /**
+   * One Flight Order Management GET of the booking's order, throttled to one per `throttleMs` (60 s by default; see
+   * the file header). Also console.bookings.get's refresh (10 s).
+   */
+  async refresh(
     tenant: RequestTenant,
     bookingId: string,
     operation: string,
     query: RefreshQuery,
-    options: { readonly unlessFinal?: boolean } = {},
+    options: { readonly unlessFinal?: boolean; readonly throttleMs?: number } = {},
   ): Promise<RefreshOutcome> {
+    const throttleMs = options.throttleMs ?? REFRESH_THROTTLE_MS;
     const claim = await this.tx.run(async (trx) => {
       const row = await this.repository.lockForRefresh(trx, bookingId);
       if (row === undefined) {
@@ -516,8 +524,8 @@ export class CustomerBookingsService {
           return { kind: "skipped" } as const;
         }
       }
-      if (row.lastRefreshAt !== null && now.getTime() - row.lastRefreshAt.getTime() < REFRESH_THROTTLE_MS) {
-        const left = REFRESH_THROTTLE_MS - (now.getTime() - row.lastRefreshAt.getTime());
+      if (row.lastRefreshAt !== null && now.getTime() - row.lastRefreshAt.getTime() < throttleMs) {
+        const left = throttleMs - (now.getTime() - row.lastRefreshAt.getTime());
         return { kind: "throttled", retryAfterSeconds: Math.max(1, Math.ceil(left / 1000)) } as const;
       }
       await this.recorder.event(trx, bookingId, {
@@ -813,6 +821,7 @@ export class CustomerBookingsService {
       operation,
       requestId: this.requestId(tenant),
       bookingId,
+      ...(tenant.actor.type === "staff" && tenant.actor.id !== null ? { staffId: tenant.actor.id } : {}),
       ...(office === null ? {} : { orderOffice: office }),
     };
   }

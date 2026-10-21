@@ -50,8 +50,6 @@ export const PENDING_OPERATIONS: Readonly<Partial<Record<OtaOperationId, Pending
   addBookingAncillaries: "deferred",
   createBookingPayment: "deferred",
   // Console: bookings
-  consoleListBookings: "OBE-061",
-  consoleGetBooking: "OBE-061",
   consoleCreateBooking: "deferred",
   consoleRetrieveFlightOrder: "OBE-062",
   consolePatchBooking: "OBE-062",

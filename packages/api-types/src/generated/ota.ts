@@ -1793,6 +1793,8 @@ export interface paths {
          *
          *     **Filters** (combined with AND; list values are comma-separated and OR-ed): `status`, `ticketingStatus`, `ticketingDeadlineBefore` (bookings whose `bookings.ticketing_deadline_at` is before the instant — the *to issue* work list; combine with `status=confirmed,partially_ticketed`), `recordLocator` (main locator or any `booking_associated_records.reference`, incl. airline locators), `reference` (Velexis booking reference), `customerId`, `customerEmail` (customers.email or bookings.contact_email, case-insensitive exact), `travelerLastName` (prefix match on `booking_travelers` last names, case- and accent-insensitive), `departureFrom`/`departureTo` (first departure local date), `createdFrom`/`createdTo`, `paymentStatus` (derived from `payments`/`refunds`: unpaid, authorized, paid, partially_refunded, refunded, failed, not_applicable), `source` (bookings.channel), `validatingCarrier`, `createdByStaffId`, `tag` (bookings.tags) and `q` (free text over reference, record locators, contact e-mail and lead last name).
          *
+         *     **Needs attention** (the OTA admin's work list): `ticketingStatus=failed,manual_review` (ticketing problems), `reconcileOutcome=manual_review` (orders the supplier-timeout reconciliation could not settle, bookings.reconcile_outcome), `ticketingDeadlineBefore` = now + 24 h with `status=confirmed,partially_ticketed` (deadline within 24 hours), `cancellationRequested=true` (a cancellation request the booking has not been cancelled for since) and `hasScheduleChange=true` (an airline schedule change since booking). Each is a filter of its own, AND-ed with the others.
+         *
          *     **Sort**: `created`/`-created` (default `-created`), `departure`/`-departure`, `ticketingDeadline`/`-ticketingDeadline` (nulls last), `total`/`-total`. Cursor pagination (`cursor`, `limit` ≤ 100); `totalCount` is exact up to 10 000 and `null` above. Indexes used: bookings (status, ticketing_deadline_at), (created_at), (first_departure_at), (record_locator), (customer_id), booking_travelers (lower(last_name)), booking_associated_records (reference).
          *
          *     **What the console sees vs the customer**: net amount, markup and margin per row, guest bookings, failed bookings, the creating staff member and the supplier sync state — none of which `bookings.list` (customer scope) exposes. The environment is the key's (test keys list test bookings only).
@@ -20707,6 +20709,12 @@ export interface operations {
                 createdByStaffId?: string;
                 /** @description Staff tag (bookings.tags contains it). */
                 tag?: string;
+                /** @description Outcome(s) of the reconciliation after a supplier timeout (bookings.reconcile_outcome), comma-separated: `found` (the order was recorded), `not_found` (the booking failed), `manual_review` (staff decide, OADR-0003). Bookings that were never reconciled have none and match no value. */
+                reconcileOutcome?: ("found" | "not_found" | "manual_review")[];
+                /** @description `true`: only bookings with an open cancellation request (a `booking.cancellation_requested` event, booking not cancelled since); `false`: only bookings without one. */
+                cancellationRequested?: boolean;
+                /** @description `true`: only bookings whose schedule changed since booking (a `booking.schedule_changed` event, the row's `hasScheduleChange`); `false`: only bookings without a change. */
+                hasScheduleChange?: boolean;
                 /** @description Free text: reference, record locator, contact e-mail or lead traveller last name. */
                 q?: string;
                 /** @description Sort order (default `-created`). */

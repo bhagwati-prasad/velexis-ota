@@ -216,3 +216,15 @@ Webhook answers: `200` once the event is stored as a `payment_events` row (or is
 | Health, webhooks | 5 | none (`x-internal`) | M0, M3, M5 |
 
 After the changes the document has 96 + 39 = **135 operations**, of which 128 have an `x-sdk-method` (96 + 32). They arrive in M3 (OBE-029: 1, OBE-039: 1, OBE-054: 1) and M4 (OBE-058: 17 settings operations; OBE-090: 4 console payments, the 2 health endpoints and the 2 M5 webhooks, documented ahead of their handler; OBE-091: 8 page and asset operations and the 3 public ones). So the M4 document is complete at 135 operations; the M5 spec task OBE-076 adds only the billing notice field, and `pending-operations.ts` holds the 19 deferred operations and the two M5 webhooks at the M4 exit.
+
+## 7. Console bookings list: the needs-attention filters (OBE-061)
+
+The work list of the OTA admin ([`flows/console-operations.md`](flows/console-operations.md) §3 step 3) needs filters the original `consoleListBookings` (`console.bookings.list`) does not have. Three optional query parameters are added; the operation, its answers and the SDK method stay as they are (additive: [ADR-0006](../../docs/mvp/adr/0006-contract-first-openapi.md) Workflow step 1, and for the SDK's types [ADR-0019](../../docs/mvp/adr/0019-vanilla-js-sdk-jsdoc.md)):
+
+| Parameter | Schema | Meaning (tables) |
+|---|---|---|
+| `reconcileOutcome` | array of `found`, `not_found`, `manual_review` (comma-separated, OR-ed) | `bookings.reconcile_outcome` after a supplier timeout ([OADR-0003](adr/0003-booking-orchestration-and-supplier-timeout-recovery.md)); `manual_review` is the "staff decide" view |
+| `cancellationRequested` | boolean | `true`: a `booking_events` row `booking.cancellation_requested` and the booking not `cancelled` since; `false`: none open |
+| `hasScheduleChange` | boolean | `true`: a `booking_events` row `booking.schedule_changed` (the row's `hasScheduleChange`); `false`: none |
+
+With the existing `ticketingStatus=failed,manual_review` and `ticketingDeadlineBefore` = now + 24 h (with `status=confirmed,partially_ticketed`) they make the five needs-attention views; each is a filter of its own, AND-ed with the others. No new error code; the operation's description names the views, `booking_events` joins its `x-tenant-tables`, and the change-log row is in [`../backend/openapi/README.md`](../backend/openapi/README.md) §6.

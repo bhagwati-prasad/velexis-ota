@@ -1727,7 +1727,8 @@ The console API (staff sign-in by portal token, bookings, PNR import, queues, cu
   - `staff_actions` rows contain no token and no full document number (redaction test).
 - **Verify:** `pnpm --filter @velexis/ota-backend test && pnpm --filter @velexis/ota-backend test:int -- console`
 
-### OBE-061 · Implement console bookings list and get
+### OBE-061 · Implement console bookings list and get ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-backend
 - **Milestone:** M4
 - **Depends on:** OBE-060, OBE-046

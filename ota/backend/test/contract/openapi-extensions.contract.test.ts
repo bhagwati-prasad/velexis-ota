@@ -2,7 +2,8 @@
 // (openapi/velexis-ota-booking-api.openapi.yaml) and the milestone of every original operation (ota/docs/scope.md §3).
 // OBE-029 adds the airline-card method (§3.1), the edge-only operation completeCheckoutWithAirlineCard (§3.2), the
 // payment account modes of StorefrontPaymentConfig (§4) and PAYMENT_ATTEMPTS_EXCEEDED (§6). OBE-039 adds the webhook
-// receiver of the Velexis Stripe account, receiveStripeVelexisWebhook (api-changes-console-and-internal.md §5).
+// receiver of the Velexis Stripe account, receiveStripeVelexisWebhook (api-changes-console-and-internal.md §5). OBE-061
+// adds the needs-attention filters of consoleListBookings (api-changes-console-and-internal.md §7).
 //
 // The 96 operations of the original design are read from the frozen copy under docs/velexis-sdk/openapi/, so the
 // counts asserted here (77 MVP, 19 deferred, 63 customer-scope) never change when later spec tasks add operations.
@@ -1350,6 +1351,59 @@ describe("console auth (FIX-W23-STAFF)", () => {
     const example = objectAt(forbidden, "content", "application/json", "examples", code)["value"];
     expect(objectAt(example, "error")).toMatchObject({ code, status: 403 });
     expect(checker.check("consoleSignIn", { status: 403, body: example })).toEqual([]);
+  });
+});
+
+/** The needs-attention filters OBE-061 adds to consoleListBookings (api-changes-console-and-internal.md §7). */
+const NEEDS_ATTENTION_FILTERS = ["reconcileOutcome", "cancellationRequested", "hasScheduleChange"];
+
+type ConsoleListBookingsQuery = NonNullable<operations["consoleListBookings"]["parameters"]["query"]>;
+
+describe("console.bookings.list: the needs-attention filters (api-changes-console-and-internal §7)", () => {
+  it("adds reconcileOutcome, cancellationRequested and hasScheduleChange as optional query parameters, keeping every original one [OBE-061]", () => {
+    const list = operation("consoleListBookings");
+    const parameters = (list.spec["parameters"] as Json[] | undefined) ?? [];
+    const byName = new Map(parameters.map((parameter) => [parameter["name"], parameter]));
+    expect(byName.get("reconcileOutcome")).toMatchObject({
+      in: "query",
+      required: false,
+      style: "form",
+      explode: false,
+      schema: {
+        type: "array",
+        uniqueItems: true,
+        items: { type: "string", enum: ["found", "not_found", "manual_review"] },
+      },
+    });
+    for (const name of ["cancellationRequested", "hasScheduleChange"]) {
+      expect([name, byName.get(name)]).toMatchObject([
+        name,
+        { in: "query", required: false, schema: { type: "boolean" } },
+      ]);
+    }
+    // Additive: the frozen design has none of them, and each of its parameters is still there as it was.
+    const original = frozenOperations.find(({ operationId }) => operationId === "consoleListBookings");
+    const originalParameters = (original?.spec["parameters"] as Json[] | undefined) ?? [];
+    expect(originalParameters.length).toBeGreaterThan(0);
+    expect(
+      originalParameters.filter((parameter) => NEEDS_ATTENTION_FILTERS.includes(String(parameter["name"]))),
+    ).toEqual([]);
+    for (const parameter of originalParameters) {
+      expect(parameters).toContainEqual(parameter);
+    }
+    // The cancellation and schedule-change filters read booking_events; the description names the five views.
+    expect(list.spec["x-tenant-tables"]).toContain("booking_events");
+    const description = descriptionOf("consoleListBookings");
+    expect(description).toContain("**Needs attention**");
+    for (const name of NEEDS_ATTENTION_FILTERS) {
+      expect([name, description.includes(`\`${name}=`)]).toEqual([name, true]);
+    }
+    // Compiles only while the generated query type has the three filters with these types.
+    const query: Pick<
+      ConsoleListBookingsQuery,
+      "reconcileOutcome" | "cancellationRequested" | "hasScheduleChange"
+    > = { reconcileOutcome: ["manual_review"], cancellationRequested: true, hasScheduleChange: false };
+    expect(Object.keys(query)).toEqual(NEEDS_ATTENTION_FILTERS);
   });
 });
 

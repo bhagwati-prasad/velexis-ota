@@ -95,6 +95,7 @@ These need no SDK code (they come with the generated types), but storefront and 
 | `StaffPermission` | `settings:read`, `settings:write`, `payments:read`, `payments:capture`, `payments:refund` | part 2 §1 |
 | `ConsoleStaffSession` | `environments: ["test"] \| ["test", "live"]` | §5 |
 | `BookingLookupResult.bookingToken` | nullable (`null` in cookie mode) | §2.2 |
+| `console.bookings.list` params (`consoleListBookings` query) | `reconcileOutcome` (`found` \| `not_found` \| `manual_review`, list), `cancellationRequested`, `hasScheduleChange` (booleans): the needs-attention filters | part 2 §7 |
 
 ## 5. Error codes added to the catalogue
 
