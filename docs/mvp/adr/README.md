@@ -6,7 +6,7 @@ This folder holds the cross-cutting architecture decision records (ADRs) of the 
 
 | ADR | Title | Status | In one line |
 |---|---|---|---|
-| [0001](0001-record-architecture-decisions.md) | Record architecture decisions | Accepted | MADR-lite ADRs here and per component (PADR-, OADR-); `decisions.md` > ADRs > plans > code; planning-review revisions in place until M0 starts. |
+| [0001](0001-record-architecture-decisions.md) | Record architecture decisions | Accepted | MADR-lite ADRs here and per component (PADR-, OADR-); `decisions.md` > ADRs > plans > code; planning-review revisions in place until M0 starts; since then a new ADR supersedes, except dated in-place revisions that record a lead decision refining (not reversing) an ADR. |
 | [0002](0002-monorepo-pnpm-turborepo.md) | Monorepo with pnpm workspaces and Turborepo | Accepted | One repo, pnpm 9 workspaces, Turborepo 2, `@velexis/*` package names, dependency rules. |
 | [0003](0003-six-components-two-nestjs-backends.md) | Six components and two NestJS backends | Accepted | Control plane vs data plane, API + worker processes, queues and read-only access between backends. |
 | [0004](0004-postgresql-schema-per-tenant.md) | PostgreSQL schema per tenant | Accepted | Reuse the db README design with four database roles (migrator, provisioner, two app roles), no per-tenant roles and one local cluster. |
@@ -50,5 +50,5 @@ A bare ADR-NNNN always means a record in this folder.
 1. Copy the template from [ADR-0001](0001-record-architecture-decisions.md) into `NNNN-kebab-title.md`, using the next free number.
 2. Use status `Proposed` in the pull request. The developer sets `Accepted` on merge.
 3. Add a row to the index above.
-4. If it supersedes an ADR, set the old one's status to `Superseded by ADR-NNNN`.
+4. If it supersedes an ADR, set the old one's status to `Superseded by ADR-NNNN`. A lead decision that only refines an ADR is a dated revision of that ADR instead ([ADR-0001](0001-record-architecture-decisions.md) item 4).
 5. If it changes a product owner decision, edit [`../decisions.md`](../decisions.md) first.

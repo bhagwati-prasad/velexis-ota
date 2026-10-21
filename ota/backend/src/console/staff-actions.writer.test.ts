@@ -18,6 +18,7 @@ import type { Caller, CallerContext } from "../tenancy/caller-resolver";
 import type { RequestTenant, TenantContext } from "../tenancy/tenant-context";
 import type { TenantTransaction, TenantTx } from "../tenancy/tenant-tx";
 import {
+  auditedParams,
   consoleAction,
   consoleTarget,
   failureOutcome,
@@ -188,6 +189,29 @@ describe("the action, target and outcome of a console call", () => {
     expect(failureOutcome(new AppError("OFFICE_NOT_ALLOWED"))).toBe("denied");
     expect(failureOutcome(new AppError("NOT_FOUND"))).toBe("failed");
     expect(failureOutcome(new Error("boom"))).toBe("failed");
+    expect(failureOutcome(new AppError("VALIDATION_FAILED", { fieldErrors: [] }))).toBe("failed");
+  });
+
+  it("never takes a path parameter that request validation refused as the target, and keeps the others [FIX-W24-ADR AC3]", () => {
+    const params = { bookingId: `pasted ${randomBytes(4).toString("hex")}`, queueId: "12" };
+    const refusedPath = new AppError("VALIDATION_FAILED", {
+      fieldErrors: [
+        { path: "/path/bookingId", code: "pattern", message: "does not have the expected format" },
+        { path: "/query/limit", code: "type", message: "must be of type integer" },
+      ],
+    });
+    const refusedQuery = new AppError("VALIDATION_FAILED", {
+      fieldErrors: [{ path: "/query/limit", code: "type", message: "must be of type integer" }],
+    });
+
+    expect(auditedParams(params, refusedPath)).toEqual({ queueId: "12" });
+    expect(consoleTarget("consoleGetBooking", auditedParams(params, refusedPath))).toEqual({
+      targetType: null,
+      targetId: null,
+    });
+    expect(auditedParams(params, refusedQuery)).toEqual(params);
+    expect(auditedParams(params, new AppError("NOT_FOUND"))).toBe(params);
+    expect(auditedParams(undefined, refusedPath)).toBeUndefined();
   });
 });
 
@@ -363,9 +387,11 @@ describe("StaffActionsInterceptor", () => {
   class Handlers {
     list(): void {}
     me(): void {}
+    get(): void {}
   }
   Reflect.defineMetadata(OPENAPI_OPERATION, "consoleListBookings", Handlers.prototype.list);
   Reflect.defineMetadata(OPENAPI_OPERATION, "consoleGetMe", Handlers.prototype.me);
+  Reflect.defineMetadata(OPENAPI_OPERATION, "consoleGetBooking", Handlers.prototype.get);
 
   function interceptor(consoleScope = true) {
     const harness = writerHarness();
@@ -377,11 +403,11 @@ describe("StaffActionsInterceptor", () => {
     };
   }
 
-  const execution = (handler: () => void): ExecutionContext =>
+  const execution = (handler: () => void, params: Record<string, string> = {}): ExecutionContext =>
     ({
       getType: () => "http",
       getHandler: () => handler,
-      switchToHttp: () => ({ getRequest: () => ({ params: {} }) }),
+      switchToHttp: () => ({ getRequest: () => ({ params }) }),
     }) as unknown as ExecutionContext;
 
   const answering = (value: unknown): CallHandler => ({ handle: () => of(value) });
@@ -419,6 +445,50 @@ describe("StaffActionsInterceptor", () => {
     ).rejects.toMatchObject({ code: "OFFICE_NOT_ALLOWED" });
 
     expect([...notFound.rows, ...office.rows].map((row) => row["outcome"])).toEqual(["failed", "denied"]);
+  });
+
+  it("writes a failed row for a call that request validation refused inside it, with nothing of the request [FIX-W24-ADR AC3]", async () => {
+    // The validation interceptor runs inside this one (app.module.ts): its refusal arrives as the handler's error.
+    const pasted = `4111 ${randomBytes(4).toString("hex")}`;
+    const refusal = (path: string) =>
+      new AppError("VALIDATION_FAILED", {
+        fieldErrors: [{ path, code: "pattern", message: "does not have the expected format" }],
+      });
+    const badQuery = interceptor();
+    await expect(
+      lastValueFrom(
+        badQuery.interceptor.intercept(execution(Handlers.prototype.list), failing(refusal("/query/limit"))),
+      ),
+    ).rejects.toMatchObject({ code: "VALIDATION_FAILED" });
+    const badBody = interceptor();
+    await expect(
+      lastValueFrom(
+        badBody.interceptor.intercept(
+          execution(Handlers.prototype.get, { bookingId: "bkg_01JA2Z9W5K7Q3M8N4P6R2T0V1E" }),
+          failing(refusal("/name")),
+        ),
+      ),
+    ).rejects.toMatchObject({ code: "VALIDATION_FAILED" });
+    const badPath = interceptor();
+    await expect(
+      lastValueFrom(
+        badPath.interceptor.intercept(
+          execution(Handlers.prototype.get, { bookingId: pasted }),
+          failing(refusal("/path/bookingId")),
+        ),
+      ),
+    ).rejects.toMatchObject({ code: "VALIDATION_FAILED" });
+
+    const rows = [...badQuery.rows, ...badBody.rows, ...badPath.rows];
+    expect(rows.map((row) => [row["action"], row["outcome"], row["target_type"], row["target_id"]])).toEqual([
+      ["bookings.list", "failed", null, null],
+      ["bookings.get", "failed", "booking", "bkg_01JA2Z9W5K7Q3M8N4P6R2T0V1E"],
+      ["bookings.get", "failed", null, null],
+    ]);
+    for (const row of rows) {
+      expect(row).toMatchObject({ actor_type: "staff", before: null, after: null, reason: null });
+    }
+    expect(JSON.stringify(rows)).not.toContain(pasted);
   });
 
   it("leaves customer scope and the staff-session operations alone", async () => {

@@ -16,7 +16,7 @@ Related: [`scope.md`](scope.md), [`data-model.md`](data-model.md), [OADR-0005](a
 | `payments:capture` | Capture an authorised Stripe payment |
 | `payments:refund` | Refund a captured Stripe payment |
 
-Every console operation below carries `x-scope: console`, `x-permission`, the `VelexisEnvironment` header of part 1 §5, writes a `staff_actions` row, and uses the common console errors: `401 UNAUTHENTICATED` / `TOKEN_EXPIRED`, `403 FORBIDDEN` (`details.requiredPermission`), `403 SCOPE_NOT_ALLOWED`, `403 TENANT_SUSPENDED`, `404 NOT_FOUND`, `429 RATE_LIMITED`. Updates take `If-Match` (`412 PRECONDITION_FAILED`) and return `ETag`. Settings changes are environment-independent (one settings row per tenant), so `X-Velexis-Environment` only selects which test/live data a response shows, where it matters.
+Every console operation below carries `x-scope: console`, `x-permission`, the `VelexisEnvironment` header of part 1 §5, writes a `staff_actions` row when it changes something or is refused (a successful read writes none, [OADR-0011](adr/0011-console-access-staff-sessions-and-environments.md) point 8 as revised on 2026-10-21), and uses the common console errors: `401 UNAUTHENTICATED` / `TOKEN_EXPIRED`, `403 FORBIDDEN` (`details.requiredPermission`), `403 SCOPE_NOT_ALLOWED`, `403 TENANT_SUSPENDED`, `404 NOT_FOUND`, `429 RATE_LIMITED`. Updates take `If-Match` (`412 PRECONDITION_FAILED`) and return `ETag`. Settings changes are environment-independent (one settings row per tenant), so `X-Velexis-Environment` only selects which test/live data a response shows, where it matters.
 
 ## 2. (d) Console settings
 

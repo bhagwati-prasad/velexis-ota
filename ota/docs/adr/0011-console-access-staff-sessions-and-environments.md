@@ -3,7 +3,7 @@
 **Status:** Accepted
 **Date:** 2026-10-12
 **Deciders:** OTA backend tech lead. Decided during planning; revisit when third-party consoles need the password grant, when admin sub-roles are requested, or when raw Amadeus writes are needed by support.
-**Revisions:** 2026-10-12 (planning review): point 4 uses the "direct loopback, not through Caddy" test of OADR-0009; points 8 and 9 use the staff member's forwarded IP and user agent instead of the admin server's. 2026-10-21 (lead decision, recording OBE-059): point 3 names the fourth revocation key, the membership cut-off `staffdeny:member:<staffId>` (epoch ms, 12 h TTL) that `console.auth.signOut` with `scope: all` writes and the staff guard and `console.auth.refresh` check, so that signing out every session of a staff member needs no Redis scan; the Consequences and Alternatives say why.
+**Revisions:** 2026-10-12 (planning review): point 4 uses the "direct loopback, not through Caddy" test of OADR-0009; points 8 and 9 use the staff member's forwarded IP and user agent instead of the admin server's. 2026-10-21 (lead decision, recording OBE-059): point 3 names the fourth revocation key, the membership cut-off `staffdeny:member:<staffId>` (epoch ms, 12 h TTL) that `console.auth.signOut` with `scope: all` writes and the staff guard and `console.auth.refresh` check, so that signing out every session of a staff member needs no Redis scan; the Consequences and Alternatives say why. 2026-10-21 (lead decision, second batch): point 8 is narrowed from every console call to every state-changing console call and every refused console call; successful reads and the staff-session calls `console.auth.refresh`, `console.auth.signOut` and `console.auth.me` write no row. A refusal by request validation (`400 VALIDATION_FAILED`) is a refused call too, recorded with the action and the target only; the Consequences, Follow-ups and Alternatives follow.
 
 ## Context
 
@@ -23,7 +23,10 @@
 5. **Environments.** The OTA admin sends `X-Velexis-Environment`. `live` requires the tenant's `storefront_environment = live` (an active live Amadeus connection exists by then) and a role in `owner`, `admin`, `agent`, `finance`; `viewer` is limited to test. Otherwise `403 ENVIRONMENT_NOT_ALLOWED`. `ConsoleStaffSession.environments` tells the admin which to offer.
 6. **New permissions** `settings:read`, `settings:write`, `payments:read`, `payments:capture`, `payments:refund` with the role matrix of [`../scope.md`](../scope.md) §1.3. Settings writes are owner and admin only, because markups, fees and templates change revenue and customer communication.
 7. **Raw Amadeus access is read-only** in the MVP: the eight read operations (`amadeus:read`) are built; the four writes (`createFlightOrders`, `issueFlightOrder`, `patchFlightOrder`, `cancelFlightOrder`) answer `501 NOT_IMPLEMENTED`. Bookings are changed through `console.bookings.*`, which keeps payments, tickets, events and documents consistent.
-8. **Audit.** Every console call, including reads of sensitive data and denied attempts, writes one `staff_actions` row with actor, role, action, target, reason, redacted before/after, request id, IP and user agent. For the OTA admin these are the staff member's: the admin forwards `X-Velexis-End-User-IP` (the right-most `X-Forwarded-For` entry set by Caddy) and `X-Velexis-End-User-Agent` on every SDK call, and the backend honours them only for the service caller ([OADR-0009](0009-caller-and-tenant-resolution.md) point 8). Without them every row would show `127.0.0.1`.
+8. **Audit.** Every state-changing console call and every refused console call writes one `staff_actions` row with actor, role, action, target, reason, redacted before/after, request id, IP and user agent. For the OTA admin these are the staff member's: the admin forwards `X-Velexis-End-User-IP` (the right-most `X-Forwarded-For` entry set by Caddy) and `X-Velexis-End-User-Agent` on every SDK call, and the backend honours them only for the service caller ([OADR-0009](0009-caller-and-tenant-resolution.md) point 8). Without them every row would show `127.0.0.1`.
+   - **Changes** are written by their use case in the transaction of the change (`outcome = succeeded`); a change that fails is recorded as `failed` in a transaction of its own, since the failure rolls back the use case's row. `console.auth.signIn` writes its `staff.sign_in` row.
+   - **Refusals** are written in a transaction of their own: by the permission guard (`403 FORBIDDEN`, `ENVIRONMENT_NOT_ALLOWED`, `SCOPE_NOT_ALLOWED`: `denied`), by request validation and the idempotency check (`400 VALIDATION_FAILED`, `409 IDEMPOTENCY_KEY_REUSED`: `failed`, with the action and the target only, never the request's body, query or headers, and no target that validation refused) and by the use case (`denied` for a permission or office refusal, `failed` otherwise).
+   - **No row** for a successful read, or for the staff-session calls `console.auth.refresh`, `console.auth.signOut` and `console.auth.me` (the permission guard's refusal of one is a refused call), or for a request refused before its staff member or key is known (no, unknown, expired or revoked credential, a missing header): a row needs an actor (`staff_actions_actor_ck`), and the request's log line has the rest.
 9. **Rate limits**: 600 requests per minute per staff session or key; `console.auth.signIn` 10 per minute per end-user IP (the forwarded one for the service caller), so the sign-ins of all OTAs, which all arrive from the admin server, never share one bucket that a single client could exhaust.
 
 ## Consequences
@@ -34,23 +37,28 @@
 - A staff member's "sign out of every session" in the console is one key write, effective on the next console request or refresh of each other session, without knowing their family ids.
 - Settings and payments get explicit permissions instead of piggybacking on booking permissions.
 - No console path can create an Amadeus order that the OTA's books do not know about.
+- `staff_actions` holds what staff changed and what they were refused, including requests that never passed validation, without a row for each of the reads the OTA admin makes on every page.
 
 ### Negative
 
 - Staff sessions are lost if Redis loses data; staff click "Open console" again.
 - Viewers cannot look at live data, which some OTAs may want for accountants (they can use `finance`).
 - Support staff needing raw writes must use the Amadeus terminal until the writes are built.
+- A successful read leaves no `staff_actions` row.
 
 ### Follow-ups
 
 - Password grant and TOTP for third-party consoles, when requested.
 - Raw Amadeus writes with explicit audit and a booking import afterwards, when support needs them.
+- Point 8 as narrowed on 2026-10-21: the audit interceptor of OBE-060 still writes a `succeeded` row for a successful read (and for an idempotent replay), so `staff_actions` holds more rows than point 8 asks for until it is narrowed too.
+- Point 8 as narrowed on 2026-10-21: some refusals of a staff member or key that the request names write no row yet, only a log line: a `429 RATE_LIMITED` (the rate limits run before the permission guard, so that a client asking again and again is throttled before it fills the table), the staff guard's `403 STAFF_MEMBERSHIP_INACTIVE`, and the sign-in's `403 STAFF_MEMBERSHIP_INACTIVE`, `TENANT_SUSPENDED` and `MFA_REQUIRED`. Whether point 8 asks for rows for them is for the lead to decide.
 
 ## Alternatives considered
 
 - **30-day staff families like the portal.** The OTA admin handles payments and personal data; a shorter session limits the damage of a stolen cookie.
 - **Environment from a separate service key per environment.** Two keys for one process, and the choice belongs to the staff member, not the deployment.
 - **Reuse `bookings:write` for settings.** Agents would then change markups.
+- **A row for every console call** (point 8 until 2026-10-21, as OBE-060 built it). Most rows would be reads that change nothing, among which the changes and refusals an audit is read for are hard to find; the OTA backend's document already says of its bookings list "not audited per call" and of its booking detail "Viewing is not audited" (`consoleListBookings`, `consoleGetBooking`).
 - **Sign out every session of a member by finding their families** (a `SCAN` over `staffsess:*`, or a per-member set of family ids kept beside the families). A scan walks every staff family of every OTA on the shared Redis for one sign-out; a set is a second structure that must follow the families' creation, rotation, revocation and expiry. A cut-off is one write, read in the same `MGET` as the account cut-off, and expires on its own.
 
 ## References

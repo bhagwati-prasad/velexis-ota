@@ -114,7 +114,9 @@ export class AppModule implements NestModule {
       // environment of the staff member or key (OADR-0011 points 4 to 6), which audits its refusals (OBE-060). All of
       // them run before validation.
       // The key-usage interceptor records each successful request of an API key (OADR-0009 point 6); the console audit
-      // writes the staff_actions row of each console call its use case did not write (OADR-0011 point 8).
+      // writes the staff_actions row of a console call its use case did not write (OADR-0011 point 8). Nest applies the
+      // global enhancers of this module before those of the modules it imports, so these two run outside HttpModule's
+      // validation and idempotency interceptors, and the audit records the console calls those refuse.
       providers: [
         { provide: APP_GUARD, useClass: CallerGuard },
         { provide: APP_GUARD, useClass: TenantGuard },

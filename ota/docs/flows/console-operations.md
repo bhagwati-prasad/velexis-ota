@@ -66,7 +66,7 @@ sequenceDiagram
 4. **PNR import.** Staff enter a record locator. The backend checks the local unique index first, then calls Get Flight Order By Record Locator **with the tenant's office**, verifies the owner or queuing office is one of the tenant's, and creates a booking with `channel = import`, `pricing_mode` chosen by staff (`markup_rules`, `net`, `override`), no payment (`paymentStatus = not_applicable`).
 5. **Payments.** Capture is for authorised Stripe payments that were not captured automatically (`manual_review` policy, capture failures). Refunds are partial or full, with a reason; the webhook completes them. Airline-card payments cannot be refunded here (`422`, `details.reason = "refund_via_airline"`).
 6. **Settings.** Changes bump the row version, invalidate the storefront caches, and are audited with redacted before/after. A markup change applies to the next search.
-7. **Audit.** `staff_actions` row for every call, including reads of sensitive data (`booking.retrieve`, `customer.get`) and denied attempts (`outcome = denied`).
+7. **Audit.** A `staff_actions` row for every state-changing call and every refused one: changes (`outcome = succeeded`, or `failed` when they fail), denied attempts (`denied`), and requests refused by validation (`400 VALIDATION_FAILED`, `failed`, with the action and the target only). Successful reads and the session calls `console.auth.refresh`, `signOut` and `me` write none ([OADR-0011](../adr/0011-console-access-staff-sessions-and-environments.md) point 8, revised 2026-10-21).
 
 ## 4. Failure handling
 
@@ -91,6 +91,6 @@ All booking and payment tables, `queue_snapshots`, `customers` (read), `supplier
 
 - SSO: valid token once, second use `401`, token for another tenant `401`, MFA rule for live tenants.
 - Permission matrix of [`../scope.md`](../scope.md) §1.3 as a table-driven integration test over every console operation.
-- `staff_actions` row per call with redacted before/after (no full document numbers, no tokens).
+- `staff_actions` row per state-changing or refused call (validation refusals included) with redacted before/after (no full document numbers, no tokens, no value of a refused request).
 - Office isolation for import and raw calls with two tenants on the shared account.
 - Service key accepted only on a direct loopback connection without `X-Forwarded-For` (never through Caddy) and only with a staff token; the forwarded `X-Velexis-End-User-IP` and `-Agent` feed the sign-in throttle and `staff_actions` ([OADR-0009](../adr/0009-caller-and-tenant-resolution.md) rule 1.2 and point 8).

@@ -175,7 +175,7 @@ Acceptance criteria are refined per task in the plans. These are the ones every 
 | OF-06 | Ticketing | M3 | AC1: failed issuance is retried until 2 hours before the deadline, then staff are alerted. AC2: tickets are never issued twice (resync before every retry). |
 | OF-07 | My bookings and guest access | M3 | AC1: upcoming, past and cancelled lists match db README §10. AC2: guest lookup answers the same `404` for a wrong reference and a wrong name, and is rate limited. |
 | OF-08 | Change and cancel | M3 | AC1: contacts change at Amadeus and in the booking. AC2: release and void cancel the order and void or refund the payment once. |
-| OF-09 | Console | M4 | AC1: every console call writes `staff_actions`. AC2: permissions follow §1.3. AC3: PNR import accepts only the tenant's offices. |
+| OF-09 | Console | M4 | AC1: every state-changing and every refused console call writes `staff_actions` ([OADR-0011](adr/0011-console-access-staff-sessions-and-environments.md) point 8). AC2: permissions follow §1.3. AC3: PNR import accepts only the tenant's offices. |
 | OF-10 | Settings | M4 | AC1: markup and fee changes apply to the next search. AC2: storefront settings changes appear on the storefront within 5 minutes. AC3: templates that do not compile are refused with `422 TEMPLATE_INVALID`. |
 | OF-11 | Provisioning worker | M1 | AC1: `tenant.provision` creates the schema, applies all migrations, seeds defaults and grants in one transaction, and reports `tenant.provisioned`. AC2: re-running it is harmless. |
 | OF-12 | Own Stripe and own Amadeus | M5 | AC1: the gateways follow `account_mode` and `credential_source` with no code path per tenant. AC2: orders owned by a releasing Velexis office keep using the Velexis account. |

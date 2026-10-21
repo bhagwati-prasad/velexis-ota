@@ -3,7 +3,7 @@
 **Status:** Accepted
 **Date:** 2026-10-12
 **Deciders:** OTA frontend and SDK tech lead. Decided during planning; revisit when the OTA admin runs as more than one process, when the post-MVP `@velexis/ota-sdk/next` helpers ship, or when an OTA asks for a tenant-wide audit view or staff-assisted bookings.
-**Revisions:** 2026-10-12 (planning review): point 1 forwards the staff member's IP and user agent on every call; the service key is accepted only on a direct loopback connection.
+**Revisions:** 2026-10-12 (planning review): point 1 forwards the staff member's IP and user agent on every call; the service key is accepted only on a direct loopback connection. 2026-10-21 (lead decision, following [OADR-0011](0011-console-access-staff-sessions-and-environments.md) point 8 as narrowed that day): point 4 says the API writes `staff_actions` for every change and every refusal, not for every call.
 
 ## Context
 
@@ -45,7 +45,7 @@ Open points:
 4. **Permissions in the UI.**
    - `console.auth.me` is called once per request (React `cache`), and its `permissions` drive navigation and buttons.
    - Every server action begins with `requireStaff(permission)` for a clear early error.
-   - The API remains the authority (`403 FORBIDDEN`) and writes `staff_actions` for every call.
+   - The API remains the authority (`403 FORBIDDEN`) and writes `staff_actions` for every change and every refusal ([OADR-0011](0011-console-access-staff-sessions-and-environments.md) point 8).
 5. **Writes carry concurrency and idempotency data from the page.**
    - Updates send `ifMatch` = the `version` the page displayed.
    - Every state-changing dialog renders a fresh idempotency key in a hidden input, so a double click or a resubmitted form replays the same action instead of issuing or refunding twice.

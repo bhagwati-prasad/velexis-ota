@@ -3,7 +3,7 @@
 **Status:** Accepted
 **Date:** 2026-10-12
 **Deciders:** Product owner, lead architect
-**Revisions:** 2026-10-12 (planning review): component ADRs are named PADR-/OADR-; the planning-review rule of item 4.
+**Revisions:** 2026-10-12 (planning review): component ADRs are named PADR-/OADR-; the planning-review rule of item 4. 2026-10-21 (lead decision): item 4 gains the refinement exception: after the first merged M0 task an accepted ADR may still be revised in place, with a dated line in its **Revisions** field, when the revision records a decision of the lead (or of the product owner) that refines the ADR without reversing it, as the revisions of [OADR-0007](../../../ota/docs/adr/0007-tenant-migration-runner-and-provisioning-worker.md) of 2026-10-18 and of [OADR-0003](../../../ota/docs/adr/0003-booking-orchestration-and-supplier-timeout-recovery.md), [OADR-0011](../../../ota/docs/adr/0011-console-access-staff-sessions-and-environments.md) and [ADR-0008](0008-identity-accounts-customers-sessions.md) of 2026-10-21 did; reversing a decision still needs a new ADR that supersedes it. This revision is itself one.
 
 ## Context
 
@@ -22,7 +22,8 @@ The product owner's answers are recorded in [`../decisions.md`](../decisions.md)
    - A product owner decision changes in `decisions.md` first, then in the ADR that records it, then in the plans.
    - An accepted ADR is not rewritten. A new ADR supersedes it. The old one gets `Status: Superseded by ADR-NNNN` and keeps its text.
    - Typos, links and clarifications that do not change the decision may be edited in place.
-   - **Planning review exception.** Until the first M0 task is merged, an accepted ADR may be revised in place when a planning review finds a contradiction or a gap, so that readers do not have to chase superseding records for decisions nobody has implemented yet. Each such revision adds a dated line to the ADR's **Revisions** field that says what changed. From the first merged M0 task on, the superseding rule above applies without exception.
+   - **Planning review exception.** Until the first M0 task is merged, an accepted ADR may be revised in place when a planning review finds a contradiction or a gap, so that readers do not have to chase superseding records for decisions nobody has implemented yet. Each such revision adds a dated line to the ADR's **Revisions** field that says what changed. From the first merged M0 task on, the superseding rule above applies, with the one exception below.
+   - **Refinement exception** (from 2026-10-21). An accepted ADR may be revised in place when the revision records a decision of the lead (or of the product owner) that refines the ADR without reversing it: it narrows, completes or clarifies a point, or aligns it with what the implementation settled or with another ADR. The revision adds a dated line to the ADR's **Revisions** field that names the decision and the points it changed, and the changed points say what holds now. Reversing a decision, that is replacing what an ADR chose with something else, still needs a new ADR that supersedes it.
 5. **Decisions taken while planning or implementing** that `decisions.md` does not cover take the conservative, simple option for a solo developer on a single VM. They are recorded with `Status: Accepted` and a line "Decided during planning; revisit when …" (or "Decided during implementation; revisit when …") that names the trigger for revisiting them.
 6. **Agents may write ADRs.** An agent that needs a decision outside its task's scope writes the ADR in the same pull request, marked `Proposed`. The developer changes it to `Accepted` when the pull request is merged, or sends it back.
 7. **Template** (copy into a new file `NNNN-kebab-title.md`):
@@ -57,6 +58,7 @@ The product owner's answers are recorded in [`../decisions.md`](../decisions.md)
 
 - Writing ADRs takes time. We keep them short: one page is the target.
 - Two ADR locations (cross-cutting and component) need discipline. The index in [`README.md`](README.md) links both, and the PADR-/OADR- prefixes keep the numbers apart.
+- A refined ADR's text changes after it was implemented (item 4, refinement exception). Its dated **Revisions** lines say what changed and when, and the history keeps the earlier text; a reader who needs the original reads the ADR at that date.
 
 ### Follow-ups
 

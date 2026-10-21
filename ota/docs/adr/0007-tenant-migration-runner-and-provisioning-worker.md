@@ -3,7 +3,7 @@
 **Status:** Accepted
 **Date:** 2026-10-12
 **Deciders:** OTA backend tech lead. Decided during planning; revisit when tenant count makes the deploy fan-out slower than 10 minutes, when per-tenant roles are introduced, or when a second database cluster is added.
-**Revisions:** 2026-10-12 (planning review): item 7 names the release paths `deploy.sh` uses and the `velexis-run` step that OBE-007 adds to it. 2026-10-18 (owner decision): items 2 and 3 and the Consequences use `velexis_provisioner` and `DATABASE_PROVISIONER_URL` for the worker, as ADR-0004 and ADR-0021 say; no app process holds the migrator DSN.
+**Revisions:** 2026-10-12 (planning review): item 7 names the release paths `deploy.sh` uses and the `velexis-run` step that OBE-007 adds to it. 2026-10-18 (owner decision): items 2 and 3 and the Consequences use `velexis_provisioner` and `DATABASE_PROVISIONER_URL` for the worker, as ADR-0004 and ADR-0021 say; no app process holds the migrator DSN. 2026-10-21 (lead decision, second batch): point 8's checkout expiry on `tenant.suspend` skips a checkout whose booking is `pending`, checked again after the checkout row is locked, as `checkouts.expire` (OBE-056) and [OADR-0003](0003-booking-orchestration-and-supplier-timeout-recovery.md) point 10 do; its authorisation stays for the reconciler (OBE-043). A Consequence follows.
 
 ## Context
 
@@ -26,6 +26,8 @@ The OTA backend owns every tenant schema and its migrations ([`decisions.md`](..
    A schema is never dropped by the worker.
 7. **Deploy fan-out** is run by `velexis-deploy` before the switch, with the shared CLI (`migrate.js tenants --dir "$REL/migrations/tenant"`, concurrency 4, failure ratio 0.1, report `/var/lib/velexis/migrate-<sha>.json`, copied to `/var/log/velexis/`). Right after it, still before the switch, `velexis-run ota node "$REL/ota-backend/dist/cli.js" tenants:report-migrations --report /var/lib/velexis/migrate-<sha>.json` publishes one `tenant.migrated` / `tenant.migration_failed` per schema with `jobId = null` and the schema's full ledger. `velexis-run` ([ADR-0026](../../../docs/mvp/adr/0026-system-users-per-trust-zone.md) item 6) runs it as the OTA zone user with `ota-backend.env` and `ota-worker.env` (for `REDIS_URL`), never with the migrator DSN. A failed report stops the deploy like a failed migration; re-running it repeats both steps safely. OBE-007 adds the step to `deploy/scripts/deploy.sh` and its test. Workers restart before APIs. The code supports schema versions N-1 and N.
 8. **Housekeeping messages** `tenant.suspend` and `tenant.resume` are handled by the same consumer: expire open checkouts and void their authorisations, write or delete `staffdeny:tenant:<tenantId>`, and answer `tenant.suspended` / `tenant.resumed` ([PADR-0014](../../../platform/docs/adr/0014-tenant-suspension-and-resume.md)).
+
+   The expiry skips a checkout whose booking is `pending` (checkout.complete claimed it: the order is being created, or may exist after a `504 SUPPLIER_TIMEOUT`), as `checkouts.expire` (OBE-056) does: the checkout keeps its status and its authorisation, which only the reconciler (OBE-043) voids or captures ([OADR-0003](0003-booking-orchestration-and-supplier-timeout-recovery.md) point 10). The consumer checks the booking again after it has locked the checkout row (`FOR UPDATE`, the lock the claim takes), so a claim that commits while the suspension runs is never expired.
 9. **Local and test use.** `@velexis/testing` provisions `tenant_alpha` and `tenant_beta` through the same function the consumer uses, so tests exercise the real provisioning path.
 
 ## Consequences
@@ -41,6 +43,7 @@ The OTA backend owns every tenant schema and its migrations ([`decisions.md`](..
 - Default privileges are bound to the role that creates the tables; running a tenant migration as another role would leave tables without grants. The deploy fan-out connects as `velexis_migrator` (`DATABASE_MIGRATOR_URL`, never in an app process) and runs every tenant transaction with `SET LOCAL ROLE velexis_provisioner`, so tables keep one owner (ADR-0021); an integration test checks privileges on a table created by a later migration.
 - Seeds in code must stay compatible with every schema version they may run on (they run right after all migrations, so they always see the latest version).
 - The fan-out runs at deploy time and grows with the number of tenants (about 1 s per schema for small migrations).
+- A suspended tenant can keep a `payment_pending` checkout, and the authorisation behind it, until the reconciliation of its pending booking decides (point 8); `checkouts.expire`, which also runs for suspended tenants ([OADR-0014](0014-per-tenant-workers-and-schedulers.md) point 4), expires it afterwards if the booking failed.
 
 ### Follow-ups
 

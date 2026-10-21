@@ -1949,14 +1949,15 @@ The console API (staff sign-in by portal token, bookings, PNR import, queues, cu
 - **Milestone:** M4
 - **Depends on:** OBE-006, OBE-056, OBE-059
 - **Size:** M
-- **Read first:** ota/docs/flows/tenant-provisioning-worker.md §3 (`tenant.suspend`, `tenant.resume`) and §7; platform/docs/adr/0014-tenant-suspension-and-resume.md; ota/docs/adr/0014-per-tenant-workers-and-schedulers.md (point 4)
+- **Read first:** ota/docs/flows/tenant-provisioning-worker.md §3 (`tenant.suspend`, `tenant.resume`) and §7; platform/docs/adr/0014-tenant-suspension-and-resume.md; ota/docs/adr/0014-per-tenant-workers-and-schedulers.md (point 4); ota/docs/adr/0007-tenant-migration-runner-and-provisioning-worker.md (point 8, revision 2026-10-21); ota/docs/adr/0003-booking-orchestration-and-supplier-timeout-recovery.md (point 10)
 - **Files:** `ota/backend/src/provisioning/housekeeping.service.ts`, `ota/backend/src/provisioning/housekeeping.service.test.ts`, `ota/backend/src/provisioning/tenant-ops.processor.ts`, `ota/backend/test/integration/provisioning/suspend-resume.int.test.ts`
 - **Steps:**
-  1. `tenant.suspend {reason}`: re-read `tenants.status`; if still `suspended`, expire `open`/`payment_pending` checkouts and enqueue `payment.void` for their authorisations, write `staffdeny:tenant:<tenantId>` (epoch ms, 30 days), answer `tenant.suspended`. No-op (still answered) when the tenant is active again.
+  1. `tenant.suspend {reason}`: re-read `tenants.status`; if still `suspended`, expire `open`/`payment_pending` checkouts and enqueue `payment.void` for their authorisations, write `staffdeny:tenant:<tenantId>` (epoch ms, 30 days), answer `tenant.suspended`. No-op (still answered) when the tenant is active again. A checkout whose booking is `pending` (checkout.complete claimed it: the order is being created, or may exist after a `504 SUPPLIER_TIMEOUT`) is skipped, as `checkouts.expire` (OBE-056) skips it: it keeps its status and its authorisation, which only the reconciler (OBE-043) voids or captures (OADR-0003 point 10, OADR-0007 point 8). The expiry checks the booking again after it has locked the checkout row (`FOR UPDATE`, the lock the claim takes), as `CheckoutService.refuseWhileCompleting` does, so a claim that commits while the suspension runs is never expired.
   2. `tenant.resume`: if `active`, delete `staffdeny:tenant:<tenantId>`, answer `tenant.resumed`.
   3. Confirm the scheduler filters of OBE-024: the queue poller skips suspended tenants; ticketing, sync, reconciliation, refunds and transactional e-mails continue.
 - **Acceptance:**
   - Suspend expires an open checkout and enqueues its void; a staff session created before it is refused; the ticketing job still runs for a paid booking.
+  - Suspend skips a `payment_pending` checkout whose booking is `pending` with `reconcile_until` (an Amadeus `5xx` on Flight Create Orders): it keeps its status, its payment stays `authorized` with the booking and no `payment.void` job is queued for it, while the tenant's other open checkouts are expired; a checkout that a claim takes after the suspension selected it, before it locked the row, is not expired either.
   - Resume lets staff sign in again; both events validate against PBE-004's schemas.
 - **Verify:** `pnpm --filter @velexis/ota-backend test -- provisioning && pnpm --filter @velexis/ota-backend test:int -- provisioning`
 

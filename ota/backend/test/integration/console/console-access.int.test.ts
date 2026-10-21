@@ -756,4 +756,51 @@ describe("staff_actions rows", () => {
     expect(api.sink.text()).not.toContain(PASSPORT);
     expect(api.sink.text()).not.toContain(agent.accessToken);
   });
+
+  it("record a console call that request validation refuses as failed, with the action and target only [FIX-W24-ADR AC3]", async () => {
+    const owner = await signIn(await insertMember(alphaId, "owner"));
+    // Values a staff member might paste by mistake: made up per run, never stored.
+    const pastedQuery = `x${randomInt(10_000_000, 99_999_999)}`;
+    const pastedBody = `pw-${randomBytes(6).toString("hex")}`;
+    const pastedPath = `${PASSPORT}-${randomBytes(3).toString("hex")}`;
+
+    const badQuery = await owner.admin.get(`/__console/bookings?limit=${pastedQuery}`, owner.accessToken);
+    const badBody = await owner.admin.post(
+      "/__console/settings/markup-rules",
+      { name: pastedBody, password: pastedBody },
+      owner.accessToken,
+    );
+    const badPath = await owner.admin.get(`/__console/bookings/${pastedPath}`, owner.accessToken);
+
+    for (const res of [badQuery, badBody, badPath]) {
+      expect(answer(res)).toEqual([400, "VALIDATION_FAILED"]);
+    }
+    expect(badPath.body.error.fieldErrors).toEqual([
+      expect.objectContaining({ path: "/path/bookingId", code: "pattern" }),
+    ]);
+    const rows = await staffActions("tenant_alpha", { staffId: owner.member.staffId });
+    expect(rows.map((row) => [row["action"], row["outcome"], row["target_type"], row["target_id"]])).toEqual([
+      ["staff.sign_in", "succeeded", "staff_session", expect.any(String)],
+      ["bookings.list", "failed", null, null],
+      ["settings.markupRules.create", "failed", null, null],
+      ["bookings.get", "failed", null, null],
+    ]);
+    for (const row of rows.slice(1)) {
+      expect(row).toMatchObject({
+        actor_type: "staff",
+        actor_id: owner.member.staffId,
+        staff_role: "owner",
+        reason: null,
+        before: null,
+        after: null,
+        ip_address: owner.admin.ip,
+        user_agent: owner.admin.userAgent,
+        request_id: expect.any(String),
+      });
+    }
+    const stored = JSON.stringify(rows);
+    for (const pasted of [pastedQuery, pastedBody, pastedPath, PASSPORT]) {
+      expect(stored).not.toContain(pasted);
+    }
+  });
 });

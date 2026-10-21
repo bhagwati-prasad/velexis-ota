@@ -382,7 +382,7 @@ sequenceDiagram
   AD-->>U: page re-rendered by the server action
 ```
 
-Other console actions follow the same path: retrieve, patch with `If-Match`, cancel, notes, PNR lookup and import, queues, capture and refund. Every console call writes `staff_actions` ([db README §8](../velexis-sdk/db/README.md)).
+Other console actions follow the same path: retrieve, patch with `If-Match`, cancel, notes, PNR lookup and import, queues, capture and refund. Every state-changing console call and every refused one writes `staff_actions` ([db README §8](../velexis-sdk/db/README.md), [OADR-0011](../../ota/docs/adr/0011-console-access-staff-sessions-and-environments.md) point 8).
 
 ### (d) Stripe webhooks: platform billing vs OTA payments
 

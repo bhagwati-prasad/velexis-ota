@@ -1,7 +1,9 @@
-// The console audit (OBE-060; OADR-0011 point 8, flows/console-operations.md §3 step 7, db README §8): one
-// `staff_actions` row per console call, denied attempts included (`outcome = denied`), with the actor, the role, the
-// action, the target, the reason, the redacted before and after, the request id, and the end user's IP and user agent
-// (for the OTA admin's service caller the staff member's forwarded ones, never the admin server's 127.0.0.1).
+// The console audit (OBE-060; OADR-0011 point 8 as revised on 2026-10-21, flows/console-operations.md §3 step 7,
+// db README §8): `staff_actions` rows with the actor, the role, the action, the target, the reason, the redacted before
+// and after, the request id, and the end user's IP and user agent (for the OTA admin's service caller the staff
+// member's forwarded ones, never the admin server's 127.0.0.1). Point 8 asks for one row per state-changing console
+// call and one per refused console call (`outcome = denied` for a permission refusal, `failed` for any other); a
+// successful read and the staff-session calls console.auth.refresh, signOut and me need none.
 //
 // Who writes the row:
 //
@@ -11,13 +13,24 @@
 // - a denial of the permission guard (`403 FORBIDDEN`, `403 ENVIRONMENT_NOT_ALLOWED`, `403 SCOPE_NOT_ALLOWED` for a
 //   key-only call without `console:automation`) is written in a short transaction of its own (`recordDenial`): the
 //   request ends there;
-// - every other console call (reads above all) is written by `StaffActionsInterceptor` around the handler, in a short
-//   transaction of its own after it: `succeeded`, or `failed` (`denied` for a `403 FORBIDDEN`,
-//   `ENVIRONMENT_NOT_ALLOWED` or `OFFICE_NOT_ALLOWED` of the use case) when the handler threw, unless the use case
-//   wrote its row already. A succeeded call counts any row the use case wrote (`recorded()`); a failed one only a row
-//   that committed on its own (`recordAlone`), because a row written in the use case's transaction is gone when that
-//   transaction rolled back with the failure (and when it had committed before a later step failed, the call has both
-//   rows: what was done, and that the call failed). A read that cannot be audited fails (the database error's answer).
+// - every other console call is written by `StaffActionsInterceptor` around the handler, in a short transaction of its
+//   own after it: `failed` (`denied` for a `403 FORBIDDEN`, `ENVIRONMENT_NOT_ALLOWED` or `OFFICE_NOT_ALLOWED` of the use
+//   case) when it was refused or its handler threw, else `succeeded`, unless the use case wrote its row already. A
+//   succeeded call counts any row the use case wrote (`recorded()`); a failed one only a row that committed on its own
+//   (`recordAlone`), because a row written in the use case's transaction is gone when that transaction rolled back with
+//   the failure (and when it had committed before a later step failed, the call has both rows: what was done, and that
+//   the call failed). A call that cannot be audited fails (the database error's answer). The `succeeded` rows of calls
+//   whose use case writes none are reads today: OBE-060 audited every console call, and the interceptor still writes
+//   them although the revised point 8 no longer asks for them (left for the lead to decide, FIX-W24-ADR).
+//
+// The interceptor wraps the validation and idempotency interceptors: Nest applies the global enhancers of a module
+// before those of the modules it imports, so the interceptors of app.module.ts (key usage, then this one) run outside
+// those of HttpModule (validation, then idempotency). A console call that request validation refuses
+// (`400 VALIDATION_FAILED`, or `400 INVALID_REQUEST` for a body sent without a JSON media type) or the idempotency
+// interceptor refuses (a missing, reused or in-progress `Idempotency-Key`) reaches it as a failure, its use case never
+// having run, and is recorded as `failed` with its action and target only: the row never holds the request's body,
+// query or headers, and a path parameter that validation refused is not taken as the target (`auditedParams`). An
+// idempotent replay reaches it as a success of a call whose use case did not run in this request.
 //
 // Console calls are the requests in console scope (scope.guard.ts) on operations of the document. The four staff
 // session operations (`x-permission: none`: console.auth.signIn, refresh, signOut, me) are session plumbing, not
@@ -25,9 +38,10 @@
 // other three none (the OTA admin calls console.auth.me once per page); the permission guard's denials of them are
 // written as for any console call. A request whose actor is unknown (no staff member and no API key: a service request
 // whose credential named nobody) has no row: `staff_actions_actor_ck` needs an actor, and the log line has the rest.
-// Requests refused before the permission guard (an unknown or missing credential, a missing header, a key scoped
-// `storefront`) have no row either: no actor is known yet. Nor do requests the validation interceptor refuses
-// (`400 VALIDATION_FAILED`): it runs outside the audit interceptor, and their use case never ran.
+// Requests refused before the staff member or key is known (an unknown, missing, expired or revoked credential, a
+// missing header, a key scoped `storefront`, a body the body parsers refuse: malformed JSON or too large, answered
+// `400 INVALID_REQUEST` by middleware before any guard) have no row either, nor does a call the rate limits refuse
+// (`429 RATE_LIMITED`): the guards run before the interceptors, and the rate-limit guard before the permission guard.
 //
 // The actor (`ConsoleStaffAction.actor`, `staff_actions_actor_ck`): the signed-in staff member (`staff`, `stf_…`, with
 // the account, e-mail and role of the membership as the staff guard read it), else the API key of a key-only call
@@ -238,6 +252,31 @@ export function failureOutcome(error: unknown): StaffActionOutcome {
   return isAppError(error) && DENIAL_CODES.has(error.code) ? "denied" : "failed";
 }
 
+/** `/path/<name>` of a field error: a path parameter that request validation refused. */
+const PATH_POINTER = /^\/path\/([^/]+)/;
+
+/**
+ * The path parameters of a console call that `error` ended, as the audit may record them: without those a
+ * `400 VALIDATION_FAILED` names (`/path/<name>`), whose value is the caller's text rather than an id, so the row's
+ * target never holds it; every parameter otherwise. (A body pointer of the same shape drops the parameter too, which
+ * only costs the row its target.)
+ */
+export function auditedParams(
+  params: Readonly<Record<string, unknown>> | undefined,
+  error: unknown,
+): Readonly<Record<string, unknown>> | undefined {
+  if (params === undefined || !isAppError(error) || error.code !== "VALIDATION_FAILED") {
+    return params;
+  }
+  const refused = new Set(
+    (error.fieldErrors ?? []).flatMap((fieldError) => {
+      const name = PATH_POINTER.exec(fieldError.path)?.[1];
+      return name === undefined ? [] : [name.replaceAll("~1", "/").replaceAll("~0", "~")];
+    }),
+  );
+  return Object.fromEntries(Object.entries(params).filter(([name]) => !refused.has(name)));
+}
+
 /** The refusals that are denials (`outcome = denied`) rather than failures. */
 export const DENIAL_CODES: ReadonlySet<string> = new Set([
   "FORBIDDEN",
@@ -358,7 +397,7 @@ export class StaffActionsWriter {
    */
   async recordCall(
     operationId: string,
-    params: Request["params"] | undefined,
+    params: Readonly<Record<string, unknown>> | undefined,
     outcome: StaffActionOutcome,
   ): Promise<void> {
     const actor = this.requestActor();
@@ -377,8 +416,8 @@ export class StaffActionsWriter {
 
 /**
  * Audits every console call the use case did not audit itself (see the file header): global (`APP_INTERCEPTOR` in
- * app.module.ts, after validation and idempotency), on handlers bound to an operation, in console scope, except the
- * staff-session operations.
+ * app.module.ts, outside HttpModule's validation and idempotency interceptors, so their refusals are recorded as
+ * failures), on handlers bound to an operation, in console scope, except the staff-session operations.
  */
 @Injectable()
 export class StaffActionsInterceptor implements NestInterceptor {
@@ -404,7 +443,7 @@ export class StaffActionsInterceptor implements NestInterceptor {
         body = await lastValueFrom(next.handle(), { defaultValue: undefined });
       } catch (error) {
         await this.writer
-          .recordCall(operationId, params, failureOutcome(error))
+          .recordCall(operationId, auditedParams(params, error), failureOutcome(error))
           .catch((writeError: unknown) => {
             // The call's own error is the answer; the audit gap is logged.
             this.logger.error({ err: writeError, operationId }, "staff_actions.write_failed");

@@ -3,7 +3,7 @@
 **Status:** Accepted
 **Date:** 2026-10-12
 **Deciders:** OTA backend tech lead. Decided during planning; revisit when hosting keys (`hk_`) or custom API hosts are built, or when the OTA backend runs on more than one machine.
-**Revisions:** 2026-10-12 (planning review): rule 1.2 no longer trusts the socket address alone, because Caddy reaches the API from `127.0.0.1` too; the service caller's end-user headers (point 8).
+**Revisions:** 2026-10-12 (planning review): rule 1.2 no longer trusts the socket address alone, because Caddy reaches the API from `127.0.0.1` too; the service caller's end-user headers (point 8). 2026-10-21 (lead decision, second batch): point 7 lists the four staff revocation keys of [OADR-0011](0011-console-access-staff-sessions-and-environments.md) point 3 (the family's deny key and the account, tenant and member cut-offs) instead of two.
 
 ## Context
 
@@ -30,7 +30,7 @@ The contract resolves the tenant and environment from `X-Api-Key` (db README §5
 4. **Caches.** Redis keys `tenant:<id>`, `tenantkey:<key>`, `host:<hostname>`, `apikey:<prefix>`, `member:<accountId>:<tenantId>`, `conn:*` with a 60 s TTL; negative answers (unknown host or prefix) are cached for 10 s to absorb scans. A subscriber on `vx:invalidate` deletes the matching keys for every type of [platform architecture §6.3](../../../platform/docs/architecture.md#63-cache-invalidation-vxinvalidate), including `account`, `amadeus_account` and `plan`.
 5. **Degraded mode.** If Redis is down, lookups go to PostgreSQL directly (short platform transactions); if PostgreSQL is down, requests fail with `503`. Cached entries are never used past their TTL.
 6. **Key usage.** Each successful key request sets `apikey:used:<keyId>` (`{at, ip}`, TTL 1 day) at most once a minute per key; the platform worker flushes it ([architecture §4](../../../docs/mvp/architecture.md#4-data-ownership)).
-7. **Session tokens** must carry `tid` equal to the resolved tenant; staff tokens are also checked against `staffdeny:acct:<accountId>`, `staffdeny:tenant:<tenantId>` and the cached membership (active, role).
+7. **Session tokens** must carry `tid` equal to the resolved tenant; staff tokens are also checked against the four revocation keys of [OADR-0011](0011-console-access-staff-sessions-and-environments.md) point 3, `staffdeny:<familyId>`, `staffdeny:acct:<accountId>`, `staffdeny:tenant:<tenantId>` and `staffdeny:member:<staffId>`, and against the cached membership (active, role).
 8. **End-user context of the service caller.** The OTA admin sends `X-Velexis-End-User-IP` (the right-most `X-Forwarded-For` entry Caddy gave it) and `X-Velexis-End-User-Agent` on every call. They are honoured only for the **service** caller (required there: a missing or malformed IP answers `400 VALIDATION_FAILED`), for secret keys as the contract says, and ignored otherwise; the request context then carries that IP and user agent for throttling, lockout and audit ([OADR-0011](0011-console-access-staff-sessions-and-environments.md) points 8–9). The platform does the same for its portal and admin ([PADR-0019](../../../platform/docs/adr/0019-end-user-ip-forwarding-from-the-portal-and-admin.md)).
 
 ## Consequences
