@@ -775,6 +775,360 @@ export const QUEUE_DETAIL_STRINGS = Object.freeze({
   unavailable: QUEUE_LIST_STRINGS.unavailable,
 });
 
+// ---- Plans and subscriptions (PAD-008) ----------------------------------------------------------------------------
+
+/** A fee in basis points as a percentage with two decimals, in integer arithmetic: 150 → "1.50 %". */
+export function formatBasisPoints(bps: number): string {
+  const whole = Number.isSafeInteger(bps) ? Math.max(0, bps) : 0;
+  return `${COUNT_FORMAT.format(Math.floor(whole / 100))}.${String(whole % 100).padStart(2, "0")} %`;
+}
+
+/** The quotas of a plan (`PlanLimits`). */
+export interface PlanLimitsText {
+  readonly staffSeats: number;
+  readonly apiKeys: number;
+  readonly customDomains: number;
+  readonly liveMode: boolean;
+}
+
+/** What every plan page says about a plan: its state, the pricing page, its limits and its Stripe link. */
+export const PLAN_STRINGS = Object.freeze({
+  active: "Active",
+  retired: "Retired",
+  /** Public and active: the portal's pricing page and the create-OTA wizard offer it (PF-70). */
+  onPricingPage: "On the pricing page",
+  notPublic: "Not public",
+  retiredHidden: "Retired, not offered",
+  trialDays: (days: number) => (days === 0 ? "No trial" : counted(days, "day", "days")),
+  limits: (limits: PlanLimitsText) =>
+    [
+      counted(limits.staffSeats, "staff seat", "staff seats"),
+      counted(limits.apiKeys, "API key", "API keys"),
+      counted(limits.customDomains, "custom domain", "custom domains"),
+      limits.liveMode ? "may go live" : "test mode only",
+    ].join(", "),
+  tenantCount: (count: number) => counted(count, "OTA", "OTAs"),
+  noAnnual: "No yearly option",
+  stripeNotLinked: "Not linked",
+  stripeLinked: "Linked",
+  priceWarnings: (count: number) => counted(count, "price warning", "price warnings"),
+  featureOn: "On",
+  featureOff: "Off",
+  noFeatures: "None",
+});
+
+/** `/plans`: every plan of `adminListPlans` and the new-plan form (README §2). */
+export const PLAN_LIST_STRINGS = Object.freeze({
+  title: "Plans",
+  intro:
+    "Every plan, public or not and active or retired, in the order of the pricing page. The portal's pricing page and its create-OTA wizard offer the plans that are public and active.",
+  pricingPageLink: "Open the portal's pricing page",
+  caption: "Plans, in the order of the pricing page",
+  empty: "There is no plan yet.",
+  columnPlan: "Plan",
+  columnStatus: "Status",
+  columnPricing: "Pricing page",
+  columnMonthly: "Monthly",
+  columnAnnual: "Yearly",
+  columnTrial: "Free trial",
+  columnLimits: "Limits",
+  columnTenants: "OTAs",
+  columnStripe: "Stripe",
+  tenantsOf: (name: string) => `OTAs on ${name}`,
+  unavailableTitle: "The plans could not be loaded",
+});
+
+/** The create and edit forms of a plan (`adminCreatePlan`, `adminUpdatePlan`): structured fields, never raw JSON. */
+export const PLAN_FORM_STRINGS = Object.freeze({
+  newPlan: "New plan",
+  createTitle: "New plan",
+  createIntro:
+    "A new plan is active at once. Its code and its currency never change afterwards. The Stripe product and prices are linked with Stripe Billing (M5).",
+  editTitle: "Edit the plan",
+  editIntro:
+    "The code and the currency never change. New limits and features reach both backends within 60 seconds; existing OTAs on the plan get them too.",
+  codeLabel: "Code",
+  codeHint:
+    "The plan's permanent key: 2 to 40 lower-case letters, digits and underscores, starting with a letter (growth, early_access).",
+  codeInvalid:
+    "Enter a code of 2 to 40 lower-case letters, digits and underscores that starts with a letter.",
+  codeTaken: "A plan with this code exists already. Choose another code.",
+  nameLabel: "Name",
+  nameHint: "Shown on the pricing page, in the portal and here.",
+  nameRequired: "Enter a name.",
+  nameTooLong: "Enter a name of at most 100 characters.",
+  descriptionLabel: "Description (optional)",
+  descriptionHint: "One or two sentences for the pricing page. Leave it empty for none.",
+  descriptionTooLong: "Enter a description of at most 2,000 characters.",
+  currencyLabel: "Currency",
+  currencyHint: "The ISO 4217 code of both prices, such as EUR.",
+  currencyInvalid: "Enter the three capital letters of a currency code, such as EUR.",
+  currencyUnknown: "Velexis does not know this currency. Enter an ISO 4217 code such as EUR.",
+  pricesTitle: "Prices",
+  /** The currency of the price labels while a new plan's currency field is empty. */
+  noCurrency: "the plan's currency",
+  pricesIntro: (currency: string) =>
+    `Without tax, in ${currency}. Stripe charges the linked Stripe prices; these are what the pricing page shows.`,
+  monthlyPriceLabel: (currency: string) => `Monthly price (${currency})`,
+  monthlyPriceHint: "For example 149.00; 0.00 for a free plan.",
+  annualPriceLabel: (currency: string) => `Yearly price (${currency}, optional)`,
+  annualPriceHint: "For example 1490.00. Leave it empty for no yearly option.",
+  priceRequired: "Enter the monthly price, such as 149.00 (0.00 for a free plan).",
+  priceInvalid: "Enter an amount such as 149.00: up to 10 digits, with at most two decimals.",
+  priceCurrency: "The price must be in the plan's currency.",
+  trialDaysLabel: "Free trial (days)",
+  trialDaysHint: "The free days of an OTA's first subscription; 0 for none.",
+  trialDaysInvalid: "Enter a whole number of days from 0 to 365.",
+  limitsTitle: "Limits",
+  limitsIntro: "The quotas both backends enforce for every OTA on the plan.",
+  staffSeatsLabel: "Staff seats",
+  staffSeatsHint: "Active members plus pending invitations.",
+  apiKeysLabel: "API keys",
+  apiKeysHint: "Keys that are neither revoked nor expired.",
+  customDomainsLabel: "Custom domains",
+  customDomainsHint: "Custom storefront domains; 0 for none.",
+  countInvalid: "Enter a whole number, 0 or more.",
+  liveModeLabel: "OTAs on this plan may go live",
+  liveModeHint: "Without it, the OTAs on the plan stay in test mode.",
+  featuresTitle: "Features",
+  featuresIntro:
+    "The feature flags the plan unlocks, by name, each on or off. Remove a flag to leave it unset; empty rows are ignored.",
+  featuresEmpty: "No feature flag.",
+  featureName: (position: number) => `Name of feature ${position}`,
+  featureOn: (position: number) => `Feature ${position} is on`,
+  featureOnShort: "On",
+  addFeature: "Add a feature",
+  removeFeature: "Remove",
+  removeFeatureOf: (position: number) => ` feature ${position}`,
+  featureNameInvalid:
+    "Feature names start with a lower-case letter, followed by up to 63 letters and digits (queues, customReports).",
+  featureDuplicate: "Each feature can be listed only once.",
+  featuresTooMany: "A plan has at most 50 features.",
+  offerTitle: "Offer",
+  isPublicLabel: "Public: offer the plan on the pricing page and in the create-OTA wizard",
+  isPublicHint:
+    "The portal offers public plans while they are active. A plan that is not public can still be given to an OTA here.",
+  sortOrderLabel: "Order on the pricing page",
+  sortOrderHint: "Lowest first, from 0 to 10,000.",
+  sortOrderInvalid: "Enter a whole number from 0 to 10,000.",
+  settlementFeeLabel: "Settlement fee (basis points)",
+  settlementFeeHint:
+    "The Velexis fee on the net captured volume of payments on the Velexis Stripe account (M5): 150 is 1.50 %. From 0 to 10,000.",
+  settlementFeeInvalid: "Enter a whole number of basis points from 0 to 10,000.",
+  create: "Create plan",
+  creating: "Creating…",
+  save: "Save changes",
+  saving: "Saving…",
+  cancel: "Cancel",
+  created: (name: string) => `The plan ${name} is created and active.`,
+  createdPublic: "It is public, so the portal's pricing page and its create-OTA wizard offer it now.",
+  createdHidden:
+    "It is not public, so the pricing page does not show it. It can still be given to an OTA here.",
+  openPlan: "Open the plan",
+  saved: "The plan is saved.",
+  /** `412 PRECONDITION_FAILED`: the plan changed since the page was loaded. */
+  stale:
+    "Someone changed this plan since the page was loaded, so your changes were not saved. Reload the page to see the plan as it is now, then make your changes again.",
+  reload: "Reload the page",
+  planGone: "This plan no longer exists. Go back to the list of plans.",
+  formExpired: "This form is out of date. Reload the page and try again.",
+  rateLimitedFor: (seconds: number) => `Too many attempts. Try again in ${waitTime(seconds)}.`,
+});
+
+/** `/plans/[planCode]`: one plan of `adminListPlans`, its edit form and its retirement (README §2). */
+export const PLAN_DETAIL_STRINGS = Object.freeze({
+  title: "Plan",
+  backToList: "All plans",
+  unavailableTitle: "This plan could not be loaded",
+  summaryTitle: "Plan",
+  code: "Code",
+  currency: "Currency",
+  status: "Status",
+  pricingPage: "Pricing page",
+  monthlyPrice: "Monthly price",
+  annualPrice: "Yearly price",
+  trial: "Free trial",
+  limits: "Limits",
+  features: "Features",
+  settlementFee: "Settlement fee",
+  sortOrder: "Order on the pricing page",
+  tenants: "OTAs on the plan",
+  created: "Created",
+  updated: "Last changed",
+  version: "Version",
+  stripeTitle: "Stripe",
+  stripeIntro:
+    "Stripe Billing (M5) links a Stripe product and a monthly and a yearly price to the plan and compares them with it. Until then no price is linked, and no OTA checks out with Stripe.",
+  stripeProduct: "Stripe product",
+  stripePriceMonth: "Monthly Stripe price",
+  stripePriceYear: "Yearly Stripe price",
+  notLinked: "Not linked",
+  checkoutTitle: "Stripe Checkout",
+  checkoutMonth: "Monthly",
+  checkoutYear: "Yearly",
+  checkoutOpen: "Available",
+  checkoutClosed: "Not available",
+  warningsTitle: "Price warnings",
+  warningsIntro:
+    "Differences between the plan and its linked Stripe prices at the last comparison. They never block saving.",
+  warningsEmpty: "No price warning.",
+  warningsCaption: "Price warnings of the last comparison with Stripe",
+  warningField: "Price and attribute",
+  warningExpected: "The plan implies",
+  warningActual: "Stripe answered",
+  none: "None",
+  // Retire and reactivate (`isActive` of `adminUpdatePlan`)
+  lifecycleTitle: "Offer the plan",
+  retiredNotice:
+    "This plan is retired: the pricing page, the create-OTA wizard and manual subscriptions no longer offer it. The OTAs on it keep it.",
+  retire: "Retire plan",
+  retireTitle: (name: string) => `Retire ${name}?`,
+  retireDescription:
+    "The plan leaves the pricing page and the create-OTA wizard at once, and no manual subscription can be moved to it. The OTAs and subscriptions on the plan keep it.",
+  retireConfirm: "Retire plan",
+  retiredDone: "The plan is retired. The pricing page no longer shows it.",
+  reactivate: "Make the plan active again",
+  reactivateTitle: (name: string) => `Make ${name} active again?`,
+  reactivateDescription:
+    "The plan can be chosen again: when it is public, the pricing page and the create-OTA wizard offer it again at once.",
+  reactivateConfirm: "Make active",
+  reactivatedDone: "The plan is active again.",
+  working: "Working…",
+});
+
+/** `/subscriptions`: every subscription row of `adminListSubscriptions`. */
+export const SUBSCRIPTION_LIST_STRINGS = Object.freeze({
+  title: "Subscriptions",
+  intro:
+    "Every subscription of every OTA, current or ended, newest first. Before Stripe Billing (M5) every OTA has a manual trial. The address of this page keeps the filters, so a list can be shared.",
+  filtersLabel: "Subscription filters",
+  statusLabel: "Status",
+  providerLabel: "Billing",
+  planLabel: "Plan",
+  retiredPlan: (name: string) => `${name} (retired)`,
+  caption: "Subscriptions, newest first",
+  empty: "No subscription matches these filters.",
+  columnSubscription: "Subscription",
+  columnOta: "OTA",
+  columnPlan: "Plan",
+  columnStatus: "Status",
+  columnBilling: "Billing",
+  columnTrialEnds: "Trial ends",
+  columnPeriodEnds: "Period ends",
+  columnCreated: "Created",
+  none: "None",
+  invalidFilters: "The filters in this address are not valid. Clear them and try again.",
+  showAll: "Show every subscription",
+  unavailableTitle: "The subscriptions could not be loaded",
+});
+
+/** `/subscriptions/[subscriptionId]`: one subscription of `adminGetSubscription` with its invoices and Stripe events. */
+export const SUBSCRIPTION_DETAIL_STRINGS = Object.freeze({
+  title: "Subscription",
+  backToList: "All subscriptions",
+  unavailableTitle: "This subscription could not be loaded",
+  summaryTitle: "Subscription",
+  id: "Subscription id",
+  ota: "OTA",
+  plan: "Plan",
+  status: "Status",
+  billing: "Billing",
+  interval: "Interval",
+  trialEnds: "Trial ends",
+  periodStart: "Current period started",
+  periodEnd: "Current period ends",
+  cancelAtPeriodEnd: "Cancels at period end",
+  canceledAt: "Canceled",
+  stripeCustomer: "Stripe customer",
+  stripeSubscription: "Stripe subscription",
+  created: "Created",
+  version: "Version",
+  none: "None",
+  notYet: "Not yet",
+  yes: "Yes",
+  no: "No",
+  stripeBilledTitle: "Billed by Stripe",
+  stripeBilled:
+    "Stripe bills this subscription, so it cannot be edited here: the owners change it in the Stripe Customer Portal, and Stripe's webhooks keep this page up to date.",
+  invoicesTitle: "Invoices",
+  invoicesIntro: "The invoices of the subscription, newest first (at most 50). A manual trial has none.",
+  invoicesCaption: "Invoices, newest first",
+  invoicesEmpty: "No invoice.",
+  invoiceNumber: "Number",
+  invoiceStatus: "Status",
+  invoicePeriod: "Period",
+  invoiceTotal: "Total",
+  invoiceDue: "Amount due",
+  invoiceIssued: "Issued",
+  invoicePaid: "Paid",
+  invoiceLinks: "Stripe",
+  invoicePage: "Invoice page",
+  invoicePdf: "PDF",
+  invoicePageOf: (number: string) => ` of invoice ${number}`,
+  /** Between the two days of an invoice period: "Mar 1, 2027 to Apr 1, 2027". */
+  periodTo: "to",
+  eventsTitle: "Stripe events",
+  eventsIntro:
+    "The Stripe webhook events of the subscription's OTA, newest first (at most 50). A manual trial has none.",
+  eventsCaption: "Stripe events, newest first",
+  eventsEmpty: "No Stripe event.",
+  eventId: "Event",
+  eventType: "Type",
+  eventStatus: "Status",
+  eventAttempts: "Attempts",
+  eventError: "Last error",
+  eventReceived: "Received",
+  eventProcessed: "Processed",
+});
+
+/** "Edit manual subscription" (`adminUpdateManualSubscription`, **reason**, `If-Match`; PF-75). */
+export const MANUAL_SUBSCRIPTION_STRINGS = Object.freeze({
+  title: "Edit the manual subscription",
+  intro:
+    "A manual subscription is the trial of an OTA before Stripe Billing (M5). Change its plan, the end of its trial or its status; the reason is kept in the audit log with your name.",
+  planLabel: "Plan",
+  planHint:
+    "Active plans only; plans that are not public can be chosen too. A new plan applies to the OTA at once.",
+  currentPlan: (name: string) => `${name} (current)`,
+  retiredPlan: (name: string) => `${name} (current, retired)`,
+  trialEndLabel: "Trial ends on",
+  trialEndHint: (time: string) => `The date in UTC; the trial ends at ${time} UTC of that day, as now.`,
+  trialEndHintMidnight: "The date in UTC; the trial ends at the start of that day (00:00 UTC).",
+  trialEndInvalid: "Enter a valid date for the end of the trial.",
+  statusLabel: "Status",
+  statusHint: "“Canceled” ends the manual subscription; “Trial” reopens a canceled one.",
+  statusUnchanged: (label: string) => `${label} (current)`,
+  noChange: "Change the plan, the end of the trial or the status first.",
+  save: "Save changes…",
+  confirmTitle: "Save the changes to this subscription?",
+  confirmDescription: "These changes are saved, and the reason is kept in the audit log:",
+  changePlan: (from: string, to: string) => `Plan: ${from} → ${to}`,
+  changeTrialEnd: (from: string, to: string) => `Trial ends: ${from} → ${to}`,
+  changeStatus: (from: string, to: string) => `Status: ${from} → ${to}`,
+  confirm: "Save changes",
+  working: "Saving…",
+  saved: "The subscription is saved.",
+  savedTrialEnd: "The trial now ends:",
+  savedStatus: "Status now:",
+  savedPlan: "Plan now:",
+  /** `409 CONFLICT` by `details.reason`. */
+  stripeBilled:
+    "Stripe bills this subscription now, so it can no longer be edited here. Reload the page to see it.",
+  currentExists:
+    "This OTA already has another current subscription, so this one cannot be reopened as a trial.",
+  /** `422 UNPROCESSABLE` (`plan_not_active`). */
+  planNotActive: "This plan is retired or no longer exists. Choose an active plan.",
+  /** `412 PRECONDITION_FAILED`. */
+  stale:
+    "Someone changed this subscription since the page was loaded, so your changes were not saved. Reload the page to see it as it is now, then make your changes again.",
+  reload: "Reload the page",
+  subscriptionGone: "This subscription no longer exists. Go back to the list of subscriptions.",
+  formExpired: "This form is out of date. Reload the page and try again.",
+  plansUnavailable:
+    "The plans could not be loaded, so only the current plan can be kept. Reload the page to change it.",
+  rateLimitedFor: (seconds: number) => `Too many attempts. Try again in ${waitTime(seconds)}.`,
+});
+
 /** The roles of the members and invitations of an OTA (`TenantRole`). */
 export const ROLE_LABELS = Object.freeze({
   owner: "Owner",

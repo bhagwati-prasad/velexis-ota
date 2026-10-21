@@ -1148,7 +1148,8 @@ Common commands: backend `pnpm --filter @velexis/platform-backend test`, `test:i
   - Bulk add reports created and skipped ids.
 - **Verify:** `pnpm --filter @velexis/platform-admin test`
 
-### PAD-008 · Build the plans and subscriptions pages
+### PAD-008 · Build the plans and subscriptions pages ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-admin
 - **Milestone:** M1
 - **Depends on:** PAD-003, PBE-033
