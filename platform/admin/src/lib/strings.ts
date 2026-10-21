@@ -562,6 +562,219 @@ export const TENANT_DETAIL_STRINGS = Object.freeze({
   fullAudit: "Full audit log of this OTA",
 });
 
+// ---- Provisioning jobs and queues (PAD-006) ---------------------------------------------------------------------
+
+/**
+ * How long something has waited, in words: whole seconds under a minute, then minutes, then hours and minutes, then
+ * days and hours ("45 seconds", "4 minutes", "2 hours 5 minutes", "3 days 2 hours").
+ */
+export function formatAge(seconds: number): string {
+  const whole = Number.isFinite(seconds) ? Math.max(0, Math.floor(seconds)) : 0;
+  if (whole < 60) {
+    return counted(whole, "second", "seconds");
+  }
+  const minutes = Math.floor(whole / 60);
+  if (minutes < 60) {
+    return counted(minutes, "minute", "minutes");
+  }
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) {
+    const rest = minutes % 60;
+    return rest === 0
+      ? counted(hours, "hour", "hours")
+      : `${counted(hours, "hour", "hours")} ${counted(rest, "minute", "minutes")}`;
+  }
+  const days = Math.floor(hours / 24);
+  const rest = hours % 24;
+  return rest === 0
+    ? counted(days, "day", "days")
+    : `${counted(days, "day", "days")} ${counted(rest, "hour", "hours")}`;
+}
+
+/** `/provisioning-jobs`: the tenant jobs of `adminListProvisioningJobs` (PF-83). */
+export const JOB_LIST_STRINGS = Object.freeze({
+  title: "Provisioning jobs",
+  intro:
+    "The tenant jobs of every OTA (set-up, migration, suspension, resumption), newest first. The address of this page keeps the filters, so a list can be shared.",
+  filtersLabel: "Job filters",
+  statusLabel: "Status",
+  kindLabel: "Kind",
+  caption: "Provisioning jobs, newest first",
+  empty: "No job matches these filters.",
+  columnJob: "Job",
+  columnOta: "OTA",
+  columnKind: "Kind",
+  columnStatus: "Status",
+  columnStep: "Step",
+  columnAttempts: "Attempts",
+  columnError: "Last error",
+  columnScheduled: "Scheduled",
+  columnStarted: "Started",
+  columnFinished: "Finished",
+  attemptsOf: TENANT_DETAIL_STRINGS.attemptsOf,
+  notYet: "Not yet",
+  none: "None",
+  /** The list is limited to one OTA (`tenantId` in the address, from the jobs tab of a tenant). */
+  oneTenant: "Only the jobs of one OTA are shown.",
+  openTenant: "Open the OTA",
+  everyTenant: "Show the jobs of every OTA",
+  invalidFilters: "The filters in this address are not valid. Clear them and try again.",
+  showAll: "Show every job",
+  unavailableTitle: "The provisioning jobs could not be loaded",
+});
+
+/** `/provisioning-jobs/[jobId]`: one job of `adminGetProvisioningJob` with its step log (PF-83). */
+export const JOB_DETAIL_STRINGS = Object.freeze({
+  title: "Provisioning job",
+  backToList: "All provisioning jobs",
+  unavailableTitle: "This job could not be loaded",
+  none: "None",
+  notYet: "Not yet",
+  summaryTitle: "Job",
+  id: "Job id",
+  ota: "OTA",
+  kind: "Kind",
+  status: "Status",
+  step: "Current or last step",
+  attempts: "Attempts",
+  attemptsOf: TENANT_DETAIL_STRINGS.attemptsOf,
+  error: "Last error",
+  scheduled: "Scheduled",
+  scheduledHint: "The earliest start of the next attempt (the retry backoff).",
+  started: "First dispatch",
+  finished: "Finished",
+  lease: "Lease",
+  leaseUntil: "Held until",
+  noLease: "None: only a running job holds one.",
+  bullmqState: "BullMQ state",
+  notDispatched: "Not dispatched yet",
+  bullmqJob: "BullMQ job",
+  bullmqJobOn: "on",
+  stepsTitle: "Step log",
+  stepsIntro: "The finished steps of the OTA worker, then the platform's own steps after it, in order.",
+  stepsCaption: "Finished steps, in order",
+  stepsEmpty: "No step has finished yet.",
+  stepName: "Step",
+  stepStatus: "Status",
+  stepStarted: "Started",
+  stepFinished: "Finished",
+  stepError: "Error",
+  payloadTitle: "Input",
+  payloadIntro: "The job's input: ids and options only.",
+  payloadLabel: (jobId: string) => `Input of job ${jobId}`,
+  resultTitle: "Result",
+  resultIntro:
+    "The job's output, for example the ids of the API keys issued at set-up; none until the job ends. Keys that are shown once are never part of it.",
+  resultLabel: (jobId: string) => `Result of job ${jobId}`,
+});
+
+/** The actions of `/provisioning-jobs/[jobId]`: retry a failed job, cancel a queued one (PF-83). */
+export const JOB_ACTION_STRINGS = Object.freeze({
+  sectionTitle: "Actions",
+  noAction:
+    "Nothing to do here: only a failed job can be retried and only a queued job can be canceled. A running job ends on its own.",
+  working: "Working…",
+  retry: "Retry",
+  retryTitle: "Retry this job?",
+  retryDescription:
+    "A new job of the same kind starts for this OTA with the same input. This failed job stays as it is, as history.",
+  retryProvisionDescription:
+    "A new set-up job starts with the same input, and the OTA goes back to “Setting up”. When its schema already exists, only the platform's own steps run again. This failed job stays as it is, as history.",
+  retryConfirm: "Retry job",
+  retried: "A new job was started.",
+  cancel: "Cancel job",
+  cancelTitle: "Cancel this queued job?",
+  cancelDescription:
+    "The job is canceled and nothing more is sent to the OTA worker. The OTA's status does not change.",
+  cancelConfirm: "Cancel job",
+  keepJob: "Keep the job",
+  canceled: "The job is canceled.",
+  job: "Job",
+  stepOf: (step: string) => `step ${step}`,
+  /** A form field the admin cannot change (the hidden job id) is missing or invalid. */
+  formExpired: "This form is out of date. Reload the page and try again.",
+  jobGone: "This job no longer exists. Go back to the list of jobs.",
+  /** `PROVISIONING_NOT_RETRYABLE` by its `details.reason`. */
+  notFailed: "This job is no longer failed. Reload the page to see its status.",
+  tenantNotFailed:
+    "The OTA of this set-up job is no longer in the “Set-up failed” status, so its set-up cannot run again.",
+  jobActive:
+    "A job of this kind is already queued or running for this OTA. Wait for it to end, and retry only if it fails.",
+  /** `CONFLICT` (`not_queued`) of a cancel. */
+  notQueued:
+    "Only a queued job can be canceled. This one was dispatched or ended in the meantime: reload the page.",
+  rateLimitedFor: (seconds: number) => `Too many attempts. Try again in ${waitTime(seconds)}.`,
+});
+
+/** `/queues`: the BullMQ counts of `adminListQueues` (PF-84). */
+export const QUEUE_LIST_STRINGS = Object.freeze({
+  title: "Queues",
+  intro:
+    "The BullMQ queues of both backends right now: jobs waiting, running, delayed and failed, and how long the oldest waiting job has waited. Each queue opens its failed jobs.",
+  platformTitle: "Platform queues",
+  platformIntro: "Consumed by the platform worker. Their failed jobs can be retried here.",
+  otaTitle: "OTA queues",
+  otaIntro:
+    "Consumed by the OTA worker, ota-tenant-ops included. View only: their failed jobs are retried in the OTA admin or by the developer.",
+  columnQueue: "Queue",
+  columnWaiting: "Waiting",
+  columnActive: "Active",
+  columnDelayed: "Delayed",
+  columnFailed: "Failed",
+  columnOldest: "Oldest waiting",
+  noneWaiting: "None waiting",
+  empty: "No queue.",
+  unavailableTitle: "The queues could not be read",
+  /** `SERVICE_UNAVAILABLE`: the API is unreachable, or it cannot reach Redis. */
+  unavailable:
+    "The queues cannot be read right now: the platform API or its Redis does not answer. Try again in a few minutes.",
+});
+
+/** `/queues/[queue]`: the failed jobs of `adminListFailedQueueJobs` and the retry of platform jobs (PF-84). */
+export const QUEUE_DETAIL_STRINGS = Object.freeze({
+  backToList: "All queues",
+  platformOwner: "Platform queue",
+  otaOwner: "OTA queue, view only",
+  platformIntro:
+    "A retry moves the job back to waiting with a new attempt budget, and the platform worker runs it again. Every retry is in the audit log.",
+  otaNotice:
+    "This queue belongs to the OTA backend. Its failed jobs are shown here, but they are retried in the OTA admin or by the developer, not here.",
+  failedTitle: "Failed jobs",
+  failedIntro: "The most recent failures first, at most 50. A job's data holds ids only.",
+  caption: "Failed jobs, most recent failure first",
+  empty: "No failed job in this queue.",
+  columnId: "Job id",
+  columnName: "Name",
+  columnReason: "Failure reason",
+  columnAttempts: "Attempts made",
+  columnFailedAt: "Failed",
+  columnData: "Data",
+  columnAction: "Action",
+  noReason: "No reason recorded",
+  unknownTime: "Unknown",
+  dataLabel: (jobId: string) => `Data of job ${jobId}`,
+  /** A failed `ota-tenant-ops` job (`<jobId>-<attempt>`) links to its provisioning job, which can be retried. */
+  provisioningJob: "Provisioning job",
+  retry: "Retry",
+  /** The rest of the retry button's accessible name, after "Retry", for screen readers. */
+  retryJobSuffix: (jobId: string) => ` job ${jobId}`,
+  retryTitle: (jobId: string) => `Retry job ${jobId}?`,
+  retryDescription:
+    "The job goes back to waiting with a new attempt budget, and the platform worker runs it again. The retry is in the audit log.",
+  retryConfirm: "Retry job",
+  retried: (jobId: string) => `Job ${jobId} waits for the platform worker again.`,
+  working: "Working…",
+  formExpired: "This form is out of date. Reload the page and try again.",
+  /** `FORBIDDEN` (`ota_queue`). */
+  otaQueue: "OTA queues are view only here: their jobs are retried in the OTA admin or by the developer.",
+  /** `NOT_FOUND` of a retry: retried by someone else, or removed by BullMQ. */
+  jobGone:
+    "This job is no longer failed in this queue: it was retried or removed in the meantime. Reload the page.",
+  rateLimitedFor: (seconds: number) => `Too many attempts. Try again in ${waitTime(seconds)}.`,
+  unavailableTitle: "The failed jobs could not be read",
+  unavailable: QUEUE_LIST_STRINGS.unavailable,
+});
+
 /** The roles of the members and invitations of an OTA (`TenantRole`). */
 export const ROLE_LABELS = Object.freeze({
   owner: "Owner",

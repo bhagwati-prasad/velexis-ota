@@ -1115,7 +1115,8 @@ Common commands: backend `pnpm --filter @velexis/platform-backend test`, `test:i
   - Assigning an office turns the connection active on the page.
 - **Verify:** `pnpm --filter @velexis/platform-admin test`
 
-### PAD-006 · Build the provisioning jobs and queues pages
+### PAD-006 · Build the provisioning jobs and queues pages ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-admin
 - **Milestone:** M1
 - **Depends on:** PAD-003, PBE-031
