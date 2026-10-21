@@ -1077,7 +1077,8 @@ Checkout, customer accounts in cookies, Stripe on the Velexis account, the airli
   - The processor applies Stripe's re-fetched state even when the event body is stale (fixture with an old status).
 - **Verify:** `pnpm --filter @velexis/ota-backend test -- payments && pnpm --filter @velexis/ota-backend test -- contract && pnpm --filter @velexis/ota-backend test:int -- payments`
 
-### OBE-040 · Add the payments queue: voids, capture retries, refunds and the authorisation watch
+### OBE-040 · Add the payments queue: voids, capture retries, refunds and the authorisation watch ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-backend
 - **Milestone:** M3
 - **Depends on:** OBE-039, OBE-030

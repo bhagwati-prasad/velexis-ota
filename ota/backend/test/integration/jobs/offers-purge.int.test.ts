@@ -42,6 +42,7 @@ import {
 import { JOB_BATCH_LIMITS } from "../../../src/jobs/limits";
 import { FAN_OUT_JOB } from "../../../src/jobs/schedulers";
 import { NOTIFICATIONS_SWEEP_JOB } from "../../../src/notifications/notifications.processor";
+import { AUTHORISATION_WATCH_JOB } from "../../../src/payments/authorisation-watch.processor";
 import { OFFERS_PURGE_JOB } from "../../../src/shopping/offers-purge.processor";
 import { createWorkerApp, createWorkerLogger, WorkerModule } from "../../../src/worker.module";
 import { testWorkerVariables } from "../../helpers/api-env";
@@ -336,7 +337,10 @@ async function remaining(schema: TenantSchemaName, shopping: Shopping): Promise<
 const ALL = { searches: 1, offers: 2, upsells: 1, pricedOffers: 2 };
 const NONE = { searches: 0, offers: 0, upsells: 0, pricedOffers: 0 };
 
-/** The scheduler of offers.purge among those registered at start-up (the outbox sweep of OBE-030 is the other). */
+/**
+ * The scheduler of offers.purge among those registered at start-up (the outbox sweep of OBE-030 and the authorisation
+ * watch of OBE-040 are the others).
+ */
 const purgeScheduler = (): JobSchedulerJson | undefined =>
   registered.find((scheduler) => scheduler.key === OFFERS_PURGE_JOB);
 
@@ -345,6 +349,7 @@ describe("the schedulers", () => {
     expect(registered.map((scheduler) => scheduler.key).sort()).toEqual([
       NOTIFICATIONS_SWEEP_JOB,
       OFFERS_PURGE_JOB,
+      AUTHORISATION_WATCH_JOB,
     ]);
     expect(purgeScheduler()).toEqual(
       expect.objectContaining({
@@ -358,7 +363,7 @@ describe("the schedulers", () => {
     expect(sink.records()).toContainEqual(
       expect.objectContaining({
         msg: "scheduler.registered",
-        registered: [OFFERS_PURGE_JOB, NOTIFICATIONS_SWEEP_JOB],
+        registered: [OFFERS_PURGE_JOB, NOTIFICATIONS_SWEEP_JOB, AUTHORISATION_WATCH_JOB],
         removed: [],
       }),
     );

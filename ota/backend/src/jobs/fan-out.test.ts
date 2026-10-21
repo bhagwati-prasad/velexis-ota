@@ -47,6 +47,8 @@ import {
 const PURGE = "offers.purge";
 /** The outbox sweep of OBE-030. */
 const SWEEP = "notifications.sweep";
+/** The authorisation watch of OBE-040. */
+const WATCH = "payments.authorisation_watch";
 const ALPHA = "ten_01JALPHA0000000000000000AA";
 const BETA = "ten_01JBETA00000000000000000BB";
 /** The 15-minute iteration of the tests: 2026-01-15T10:15:00Z (FakeClock's day). */
@@ -139,7 +141,7 @@ const purgeSchedule = () => {
 
 describe("the schedules", () => {
   it("declare offers.purge every 15 minutes for active and suspended tenants, in UTC", () => {
-    expect(OTA_SCHEDULES.map((schedule) => schedule.id)).toEqual([PURGE, SWEEP]);
+    expect(OTA_SCHEDULES.map((schedule) => schedule.id)).toEqual([PURGE, SWEEP, WATCH]);
     expect(purgeSchedule()).toMatchObject({
       pattern: "*/15 * * * *",
       milestone: "M2",
@@ -148,6 +150,12 @@ describe("the schedules", () => {
     // OBE-030: the outbox sweep every minute, for suspended tenants too (OADR-0014 point 4).
     expect(scheduleById(SWEEP)).toMatchObject({
       pattern: "* * * * *",
+      milestone: "M3",
+      statuses: ["active", "suspended"],
+    });
+    // OBE-040: the authorisation watch at 06:15 UTC every day, for suspended tenants too (OADR-0014 point 4).
+    expect(scheduleById(WATCH)).toMatchObject({
+      pattern: "15 6 * * *",
       milestone: "M3",
       statuses: ["active", "suspended"],
     });
@@ -176,8 +184,13 @@ describe("the schedules", () => {
       { pattern: "* * * * *", tz: SCHEDULE_TIME_ZONE },
       { name: FAN_OUT_JOB, data: { task: SWEEP } },
     );
+    expect(upsertJobScheduler).toHaveBeenCalledWith(
+      WATCH,
+      { pattern: "15 6 * * *", tz: SCHEDULE_TIME_ZONE },
+      { name: FAN_OUT_JOB, data: { task: WATCH } },
+    );
     expect(removeJobScheduler).toHaveBeenCalledExactlyOnceWith("offers.legacy_sweep");
-    expect(result).toEqual({ registered: [PURGE, SWEEP], removed: ["offers.legacy_sweep"] });
+    expect(result).toEqual({ registered: [PURGE, SWEEP, WATCH], removed: ["offers.legacy_sweep"] });
   });
 
   it("wait at start-up only for a BullMQ connection that is still making its first attempt", async () => {

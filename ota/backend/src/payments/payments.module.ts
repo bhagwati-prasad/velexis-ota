@@ -16,10 +16,14 @@
 //     `ota-stripe-events`.
 //   - `PaymentsWorkerModule` (worker only, OBE-039): the `ota-stripe-events` consumer (stripe-events.processor.ts),
 //     which reads each stored event's object again from Stripe with the Velexis keys (StripeClientFactory) and applies
-//     it to the tenant's payments and refunds; its staff alerts go through the worker's global OutboxService. It builds
-//     on the worker's tenancy module, so it never imports `PaymentGatewayModule` (the API's tenancy module).
+//     it to the tenant's payments and refunds; its staff alerts go through the worker's global OutboxService. Since
+//     OBE-040 also the `ota-payments` consumer (payments.processor.ts: voids, capture retries, refund submissions through
+//     the PaymentGateway, with the refunds' claims of refunds.repository.ts) and the `payments.authorisation_watch`
+//     handler (authorisation-watch.processor.ts, `@TenantJob`, found by the jobs module's runner). It builds on the
+//     worker's tenancy module, so it never imports `PaymentGatewayModule` (the API's tenancy module): it provides the
+//     gateway itself, on the worker's platform caches.
 //
-// The API imports `PaymentsModule`, the worker `PaymentsWorkerModule`; the payments queue of OBE-040 joins the latter.
+// The API imports `PaymentsModule`, the worker `PaymentsWorkerModule`.
 import { Module } from "@nestjs/common";
 import { AmadeusModule } from "../amadeus/amadeus.module";
 import { CheckoutModule } from "../checkout/checkout.module";
@@ -30,13 +34,18 @@ import { PricingModule } from "../pricing/pricing.module";
 import { ShoppingModule } from "../shopping/shopping.module";
 import { TenancyModule } from "../tenancy/tenancy.module";
 import { AirlineCardGateway } from "./airline-card/airline-card.gateway";
+import { AuthorisationWatchProcessor } from "./authorisation-watch.processor";
 import { CardFees } from "./card-fees";
+import { PAYMENT_GATEWAY } from "./payment-gateway";
 import { PaymentGatewayModule } from "./payment-gateway.module";
 import { PaymentsController } from "./payments.controller";
+import { PaymentAlerts, PaymentJobsHandler, PaymentsProcessor } from "./payments.processor";
 import { PaymentsRepository } from "./payments.repository";
 import { PaymentsService } from "./payments.service";
+import { RefundsRepository } from "./refunds.repository";
 import { StripeEventHandler, StripeEventsProcessor } from "./stripe-events.processor";
 import { StripeClientFactory } from "./stripe/stripe-client.factory";
+import { StripeGateway } from "./stripe/stripe.gateway";
 import { StripeVelexisWebhookController } from "./webhooks/stripe-velexis-webhook.controller";
 import { WebhookReceiverService } from "./webhooks/webhook-receiver.service";
 
@@ -70,6 +79,19 @@ export class PaymentsModule {}
 
 @Module({
   imports: [TenancyModule.forWorker(), QueuesModule],
-  providers: [StripeClientFactory, PaymentsRepository, StripeEventHandler, StripeEventsProcessor],
+  providers: [
+    StripeClientFactory,
+    PaymentsRepository,
+    StripeEventHandler,
+    StripeEventsProcessor,
+    // The payments queue and the authorisation watch (OBE-040).
+    StripeGateway,
+    { provide: PAYMENT_GATEWAY, useExisting: StripeGateway },
+    RefundsRepository,
+    PaymentAlerts,
+    PaymentJobsHandler,
+    PaymentsProcessor,
+    AuthorisationWatchProcessor,
+  ],
 })
 export class PaymentsWorkerModule {}

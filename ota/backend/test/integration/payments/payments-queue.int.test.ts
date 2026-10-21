@@ -1,0 +1,975 @@
+// The payments queue end to end (OBE-040; OADR-0010 points 3 and 6, OADR-0008 points 6 and 7, OADR-0014 points 4–6),
+// against PostgreSQL 16, Redis 7 and a fake of the Stripe API. The worker's module graph runs in-process
+// (WorkerModule.forRoot, as dist/worker.js builds it): the `ota-payments` consumer (payments.processor.ts), which voids,
+// captures and refunds through the StripeGateway, the real `stripe` client pointed at the fake
+// (test/helpers/fake-stripe.ts), and the `payments.authorisation_watch` handler that the `ota-maintenance` runner finds.
+//
+// The file plays the producers: it adds the jobs the booking orchestration, the cancellation and the scheduler add
+// (`paymentJob`, `tenantJob`), and writes the rows those producers leave, as the platform (velexis_migrator: the tenants
+// and their Velexis-mode Stripe connection) and as the API (`tenantTx` as velexis_ota_app: payments, bookings, the
+// orchestrator's `payment.capture_failed` event, refunds through RefundsRepository). Each scenario runs in its
+// `beforeAll` hook, which adds its jobs and waits for the worker with a budget of its own; its tests read what it left.
+// The watch reads its time from `Clock`, which the watch's scenario points at a FakeClock.
+import { randomBytes } from "node:crypto";
+import { getQueueToken } from "@nestjs/bullmq";
+import { Module, type INestApplicationContext } from "@nestjs/common";
+import {
+  createPlatformDb,
+  createPool,
+  createTenantDb,
+  sql,
+  tenantTx,
+  type Kysely,
+  type PlatformDatabase,
+  type TenantDb,
+} from "@velexis/db";
+import { createTestDatabase, FakeClock, useRedis, type TestDatabase, type TestRedis } from "@velexis/testing";
+import type { Job, Queue } from "bullmq";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { Clock } from "../../../src/common/clock";
+import { newId } from "../../../src/common/ids";
+import { OTA_QUEUE } from "../../../src/common/queues/queue-names";
+import { loadWorkerConfig } from "../../../src/config";
+import { minuteBucket, tenantJob, tenantJobId } from "../../../src/jobs/fan-out";
+import { FAN_OUT_JOB } from "../../../src/jobs/schedulers";
+import {
+  AUTHORISATION_EXPIRING_EVENT,
+  AUTHORISATION_WATCH_JOB,
+} from "../../../src/payments/authorisation-watch.processor";
+import { PAYMENT_JOB, paymentJob, type PaymentJobResult } from "../../../src/payments/payments.processor";
+import { RefundsRepository, type CreateRefundResult } from "../../../src/payments/refunds.repository";
+import { STRIPE_MAX_NETWORK_RETRIES } from "../../../src/payments/stripe/stripe-client.factory";
+import { seedStorefrontSettings } from "../../../src/provisioning/seeds/storefront-settings.seed";
+import type { TenantTransaction } from "../../../src/tenancy/tenant-tx";
+import { createWorkerApp, createWorkerLogger, WorkerModule } from "../../../src/worker.module";
+import { testWorkerVariables } from "../../helpers/api-env";
+import {
+  startFakeStripe,
+  stripeEndpointModule,
+  type FakePaymentIntent,
+  type FakeStripe,
+} from "../../helpers/fake-stripe";
+import { MemorySink } from "../../helpers/log-sink";
+import { useNextApplicationLoggerOutsideRequests } from "../../helpers/nest-pino";
+
+/**
+ * Cloning the template and starting the worker's graph (BullMQ connections, the scheduler registration): a few seconds
+ * alone, more while every package's integration tests run on a 4-CPU CI runner. The bound only stops a hang.
+ */
+const SETUP_TIMEOUT_MS = 90_000;
+/** A scenario adds a few jobs and waits for the worker each time; the bound only stops one that hangs. */
+const SCENARIO_TIMEOUT_MS = 60_000;
+/** How long a scenario waits at most for the worker. */
+const WAIT_MS = 20_000;
+
+const OPS_ALERT_EMAIL = `ops-alerts-${randomBytes(4).toString("hex")}@alpha-travel.example`;
+const DAY_MS = 24 * 60 * 60_000;
+
+/** This run's Velexis test keys: Stripe's shapes, random, never a committed value. */
+const SECRET_KEY = `sk_test_${randomBytes(20).toString("hex")}`;
+const PUBLISHABLE_KEY = `pk_test_${randomBytes(20).toString("hex")}`;
+
+const quietPoolLogger = { error: (): void => undefined };
+
+let db: TestDatabase;
+let redis: TestRedis;
+let stripe: FakeStripe;
+let worker: INestApplicationContext;
+const workerSink = new MemorySink();
+let migratorPool: ReturnType<typeof createPool>;
+let migrator: Kysely<PlatformDatabase>;
+let otaPool: ReturnType<typeof createPool>;
+let tenantDb: TenantDb;
+let payments: Queue;
+let maintenance: Queue;
+let alphaId: string;
+let betaId: string;
+const refunds = new RefundsRepository();
+
+type TenantKey = "alpha" | "beta";
+
+const txOf =
+  (tenant: TenantKey) =>
+  <T>(run: (trx: TenantTransaction) => Promise<T>): Promise<T> =>
+    tenantTx(tenantDb, `tenant_${tenant}`, run);
+const alphaTx = txOf("alpha");
+
+/** A fresh Stripe-shaped id of this run (`pi_test_…`). */
+const stripeId = (prefix: string): string => `${prefix}_test_${randomBytes(10).toString("hex")}`;
+
+async function insertTenant(key: TenantKey, status: "active" | "suspended"): Promise<string> {
+  const id = newId("ten");
+  await migrator
+    .insertInto("platform.tenants")
+    .values({ id, key, name: `${key} Travel`, status, plan_code: "early_access" })
+    .execute();
+  // The Velexis-mode Stripe connection of the test environment, as the platform writes it.
+  await migrator
+    .insertInto("platform.payment_provider_connections")
+    .values({
+      id: newId("ppc"),
+      tenant_id: id,
+      provider: "stripe",
+      environment: "test",
+      account_mode: "velexis",
+      capture_mode: "manual",
+      is_default: true,
+      status: "active",
+    })
+    .execute();
+  return id;
+}
+
+interface PaymentSeed {
+  readonly status: string;
+  readonly intentId?: string | null;
+  readonly amountAuthorized?: string;
+  readonly amountCaptured?: string;
+  readonly bookingId?: string | null;
+  readonly authorizedAt?: Date | null;
+  readonly provider?: "stripe" | "airline";
+}
+
+/** A Stripe card payment of 452.10 EUR in `tenant`, as checkout.createPayment and the webhooks leave it. */
+async function insertPayment(seed: PaymentSeed, tenant: TenantKey = "alpha"): Promise<string> {
+  const id = newId("pay");
+  // An airline-card payment keeps no PSP reference, expiry or 3-D Secure data (payments_airline_card_ck).
+  const airline = seed.provider === "airline";
+  await txOf(tenant)(async (trx) => {
+    await trx
+      .insertInto("payments")
+      .values({
+        id,
+        environment: "test",
+        provider: airline ? "airline" : "stripe",
+        provider_connection_id: airline ? null : newId("ppc"),
+        provider_payment_id: airline ? null : seed.intentId === undefined ? stripeId("pi") : seed.intentId,
+        method: airline ? "airline_card" : "card",
+        capture_method: airline ? "automatic" : "manual",
+        currency: "EUR",
+        amount: "452.10",
+        amount_authorized:
+          seed.amountAuthorized ?? (seed.status === "requires_payment_method" ? "0" : "452.10"),
+        amount_captured: seed.amountCaptured ?? "0",
+        status: seed.status,
+        booking_id: seed.bookingId ?? null,
+        authorized_at: seed.authorizedAt ?? null,
+        three_ds: airline ? null : JSON.stringify({ required: false, status: "not_required", version: null }),
+        metadata: JSON.stringify({}),
+        version: 1,
+      })
+      .execute();
+  });
+  return id;
+}
+
+/** The PaymentIntent the fake Stripe API answers for a payment of tenant alpha. */
+function putIntent(intentId: string, paymentId: string, patch: Partial<FakePaymentIntent>): void {
+  stripe.intents.set(intentId, {
+    id: intentId,
+    object: "payment_intent",
+    status: "requires_capture",
+    amount: 45210,
+    amount_capturable: 45210,
+    amount_received: 0,
+    currency: "eur",
+    capture_method: "manual",
+    client_secret: `${intentId}_secret_${randomBytes(8).toString("hex")}`,
+    metadata: {
+      velexis_tenant_id: alphaId,
+      velexis_environment: "test",
+      checkout_id: newId("chk"),
+      payment_id: paymentId,
+    },
+    payment_method: {
+      id: stripeId("pm"),
+      object: "payment_method",
+      card: { brand: "visa", last4: "4242", exp_month: 12, exp_year: 2030 },
+    },
+    latest_charge: null,
+    last_payment_error: null,
+    livemode: false,
+    ...patch,
+  });
+}
+
+/** A Stripe payment of tenant alpha with its PaymentIntent in the fake. */
+async function stripePayment(
+  seed: PaymentSeed,
+  intent: Partial<FakePaymentIntent> = {},
+): Promise<{ id: string; intentId: string }> {
+  const intentId = stripeId("pi");
+  const id = await insertPayment({ ...seed, intentId });
+  putIntent(intentId, id, intent);
+  return { id, intentId };
+}
+
+/** A confirmed booking of tenant alpha whose capture failed (OBE-042): manual review, nothing paid yet. */
+async function insertBooking(status = "confirmed"): Promise<string> {
+  const id = newId("bkg");
+  const departure = new Date(Date.now() + 30 * DAY_MS);
+  await alphaTx(async (trx) => {
+    await trx
+      .insertInto("bookings")
+      .values({
+        id,
+        environment: "test",
+        reference: `VX${randomBytes(3).toString("hex").toUpperCase()}`,
+        status,
+        ticketing_status: status === "failed" ? "not_applicable" : "manual_review",
+        first_departure_at: departure,
+        last_arrival_at: new Date(departure.getTime() + 3 * 60 * 60_000),
+        currency: "EUR",
+        net_amount: "400.00",
+        total_amount: "440.00",
+        contact_email: "traveller@example.com",
+        lead_last_name: "SAMPLE",
+      })
+      .execute();
+  });
+  return id;
+}
+
+/** The `payment.capture_failed` event the orchestrator writes for a failed capture (booking-orchestrator.service.ts). */
+async function insertCaptureFailure(paymentId: string, bookingId: string, amount: string): Promise<void> {
+  await alphaTx(async (trx) => {
+    await trx
+      .insertInto("payment_events")
+      .values({
+        id: newId("pev"),
+        payment_id: paymentId,
+        type: "payment.capture_failed",
+        source: "api",
+        payload: JSON.stringify({ bookingId, amount }),
+      })
+      .execute();
+  });
+}
+
+/** Calls `check` every 25 ms until it returns a value other than `undefined`, at most WAIT_MS. */
+async function waitFor<T>(what: string, check: () => Promise<T | undefined>): Promise<T> {
+  const deadline = Date.now() + WAIT_MS;
+  for (;;) {
+    const value = await check();
+    if (value !== undefined) {
+      return value;
+    }
+    if (Date.now() > deadline) {
+      throw new Error(`waitFor: ${what} did not happen within ${WAIT_MS} ms`);
+    }
+    await new Promise((done) => setTimeout(done, 25));
+  }
+}
+
+/**
+ * Waits until the job `id` of `queue` has finished (completed or failed) and answers it. The state is read first and the
+ * job after it: BullMQ writes a job's result and moves it to its final set in one step, so a job read once that state is
+ * seen carries its return value, where a job read before could still lack it.
+ */
+async function finished(queue: Queue, id: string): Promise<Job> {
+  return await waitFor(`the job ${id}`, async () => {
+    const state = await queue.getJobState(id);
+    return state === "completed" || state === "failed" ? await queue.getJob(id) : undefined;
+  });
+}
+
+/** Adds a payments job as its producers do (`paymentJob`), or under another id, and waits for it. */
+async function runPaymentJob(
+  name: (typeof PAYMENT_JOB)[keyof typeof PAYMENT_JOB],
+  id: string,
+  jobId?: string,
+): Promise<Job> {
+  const spec = paymentJob(name, alphaId, id);
+  const opts = jobId === undefined ? spec.opts : { jobId };
+  await payments.add(spec.name, spec.data, opts);
+  return await finished(payments, opts.jobId);
+}
+
+/** The requests the fake Stripe API received for a path, by method. */
+const requestsTo = (method: string, path: string) =>
+  stripe.requests.filter((entry) => entry.method === method && entry.path === path);
+
+/** The Stripe requests about a PaymentIntent, its cancel and capture included. */
+const requestsAbout = (intentId: string) => stripe.requests.filter((entry) => entry.path.includes(intentId));
+
+interface PaymentState {
+  readonly status: string;
+  readonly version: number;
+  readonly amountCaptured: string;
+  readonly canceledAt: Date | null;
+  readonly capturedAt: Date | null;
+}
+
+async function paymentOf(id: string, tenant: TenantKey = "alpha"): Promise<PaymentState> {
+  return await txOf(tenant)(
+    async (trx) =>
+      await trx
+        .selectFrom("payments")
+        .select([
+          "status",
+          "version",
+          "canceled_at as canceledAt",
+          "captured_at as capturedAt",
+          sql<string>`amount_captured::text`.as("amountCaptured"),
+        ])
+        .where("id", "=", id)
+        .executeTakeFirstOrThrow(),
+  );
+}
+
+interface EventRow {
+  readonly type: string;
+  readonly source: string;
+  readonly statusFrom: string | null;
+  readonly statusTo: string | null;
+  readonly amount: string | null;
+  readonly payload: Record<string, unknown>;
+}
+
+/** The payment events of a payment in `tenant`, oldest first. */
+async function eventsOf(paymentId: string, tenant: TenantKey = "alpha"): Promise<EventRow[]> {
+  return await txOf(tenant)(
+    async (trx) =>
+      (await trx
+        .selectFrom("payment_events")
+        .select([
+          "type",
+          "source",
+          "status_from as statusFrom",
+          "status_to as statusTo",
+          sql<string | null>`amount::text`.as("amount"),
+          "payload",
+        ])
+        .where("payment_id", "=", paymentId)
+        .orderBy("created_at")
+        .orderBy("id")
+        .execute()) as EventRow[],
+  );
+}
+
+interface NotificationRow {
+  readonly templateKey: string;
+  readonly recipient: string;
+  readonly recipientType: string;
+  readonly dedupeKey: string | null;
+  readonly bookingId: string | null;
+  readonly payload: Record<string, unknown>;
+}
+
+/** The outbox rows of `tenant` whose dedupe key starts with `prefix`. */
+async function alertsLike(prefix: string, tenant: TenantKey = "alpha"): Promise<NotificationRow[]> {
+  return await txOf(tenant)(
+    async (trx) =>
+      (await trx
+        .selectFrom("notifications")
+        .select([
+          "template_key as templateKey",
+          "recipient",
+          "recipient_type as recipientType",
+          "dedupe_key as dedupeKey",
+          "booking_id as bookingId",
+          "payload",
+        ])
+        .where("dedupe_key", "like", `${prefix}%`)
+        .orderBy("dedupe_key")
+        .execute()) as NotificationRow[],
+  );
+}
+
+beforeAll(async () => {
+  db = await createTestDatabase();
+  redis = await useRedis();
+  stripe = await startFakeStripe();
+  migratorPool = createPool(db.urlFor("migrator"), {
+    applicationName: "ota-test-migrator",
+    logger: quietPoolLogger,
+    max: 2,
+  });
+  migrator = createPlatformDb<PlatformDatabase>(migratorPool);
+  otaPool = createPool(db.urlFor("ota"), {
+    applicationName: "ota-test-app",
+    logger: quietPoolLogger,
+    max: 3,
+  });
+  tenantDb = createTenantDb(otaPool, { appEnv: "test" });
+  alphaId = await insertTenant("alpha", "active");
+  betaId = await insertTenant("beta", "suspended");
+  for (const tenant of ["alpha", "beta"] as const) {
+    // The settings as the provisioning seed writes them, with the alert address an OTA sets in its admin.
+    await txOf(tenant)(async (trx) => {
+      await seedStorefrontSettings(trx, {
+        name: `${tenant} Travel`,
+        defaultCurrency: "EUR",
+        defaultLocale: "en",
+      });
+      await trx.updateTable("storefront_settings").set({ ops_alert_email: OPS_ALERT_EMAIL }).execute();
+    });
+  }
+
+  const config = loadWorkerConfig({
+    ...testWorkerVariables(),
+    STRIPE_SECRET_KEY_TEST: SECRET_KEY,
+    STRIPE_PUBLISHABLE_KEY_TEST: PUBLISHABLE_KEY,
+    APP_ENV: "test",
+    DATABASE_URL: db.urlFor("ota"),
+    DATABASE_PROVISIONER_URL: db.urlFor("provisioner"),
+    REDIS_URL: redis.url,
+  });
+  @Module({
+    imports: [
+      stripeEndpointModule(stripe.endpoint),
+      WorkerModule.forRoot(config, { logger: createWorkerLogger(config, workerSink) }),
+    ],
+  })
+  class WorkerRootModule {}
+  useNextApplicationLoggerOutsideRequests();
+  worker = await createWorkerApp(WorkerRootModule);
+  await worker.init();
+  payments = worker.get<Queue>(getQueueToken(OTA_QUEUE.payments), { strict: false });
+  maintenance = worker.get<Queue>(getQueueToken(OTA_QUEUE.maintenance), { strict: false });
+  // No scheduler iteration may fire while the file runs: the watch's scenario plays the scheduler.
+  for (const scheduler of await maintenance.getJobSchedulers(0, -1)) {
+    await maintenance.removeJobScheduler(scheduler.key);
+  }
+}, SETUP_TIMEOUT_MS);
+
+afterAll(async () => {
+  await worker?.close();
+  await stripe?.close();
+  await redis?.close();
+  await migratorPool?.end();
+  await otaPool?.end();
+  await db?.drop();
+}, SETUP_TIMEOUT_MS);
+
+describe("payment.void", () => {
+  let cancelled: { id: string; intentId: string };
+  let authorised: { id: string; intentId: string };
+  let booked: { id: string; intentId: string };
+  let jobs: Record<"cancelled" | "authorised" | "again" | "booked", Job>;
+  let versionBefore: number;
+
+  beforeAll(async () => {
+    cancelled = await stripePayment({ status: "canceled" }, { status: "canceled", amount_capturable: 0 });
+    versionBefore = (await paymentOf(cancelled.id)).version;
+    authorised = await stripePayment({ status: "authorized" });
+    // The authorisation of a booking whose order exists (a void asked for too late): it is captured, never voided.
+    booked = await stripePayment({ status: "authorized", bookingId: await insertBooking() });
+    const cancelledJob = await runPaymentJob(PAYMENT_JOB.void, cancelled.id);
+    const authorisedJob = await runPaymentJob(PAYMENT_JOB.void, authorised.id);
+    // The same payment voided again by another producer (another job id): the row moved, nothing is sent.
+    const again = await runPaymentJob(PAYMENT_JOB.void, authorised.id, `manual-void-${authorised.id}`);
+    const bookedJob = await runPaymentJob(PAYMENT_JOB.void, booked.id);
+    jobs = { cancelled: cancelledJob, authorised: authorisedJob, again, booked: bookedJob };
+  }, SCENARIO_TIMEOUT_MS);
+
+  it("makes no Stripe call for a payment that is already cancelled, and changes nothing [OBE-040 AC1]", async () => {
+    expect(await jobs.cancelled.getState()).toBe("completed");
+    expect(jobs.cancelled.returnvalue).toEqual({
+      tenantId: alphaId,
+      job: "payment.void",
+      id: cancelled.id,
+      outcome: "unchanged",
+    } satisfies PaymentJobResult);
+    expect(requestsAbout(cancelled.intentId)).toEqual([]);
+    expect((await paymentOf(cancelled.id)).version).toBe(versionBefore);
+    expect(await eventsOf(cancelled.id)).toEqual([]);
+  });
+
+  it("cancels an authorised PaymentIntent once, with the key pi:cancel:<pay_id>, and records the void", async () => {
+    expect(jobs.authorised.returnvalue).toMatchObject({ outcome: "applied" });
+    expect(jobs.again.returnvalue).toMatchObject({ outcome: "unchanged" });
+    const cancels = requestsTo("POST", `/v1/payment_intents/${authorised.intentId}/cancel`);
+    expect(cancels).toHaveLength(1);
+    expect(cancels[0]?.headers["idempotency-key"]).toBe(`pi:cancel:${authorised.id}`);
+    expect(await paymentOf(authorised.id)).toMatchObject({
+      status: "canceled",
+      canceledAt: expect.any(Date),
+    });
+    expect(await eventsOf(authorised.id)).toEqual([
+      expect.objectContaining({
+        type: "payment.voided",
+        source: "system",
+        statusFrom: "authorized",
+        statusTo: "canceled",
+        payload: expect.objectContaining({ job: "payment.void", jobId: `payment-void-${authorised.id}` }),
+      }),
+    ]);
+  });
+
+  it("makes no Stripe call for the authorisation of a confirmed booking, and leaves it authorised", async () => {
+    expect(jobs.booked.returnvalue).toMatchObject({ outcome: "unchanged" });
+    expect(requestsAbout(booked.intentId)).toEqual([]);
+    expect((await paymentOf(booked.id)).status).toBe("authorized");
+    expect(await eventsOf(booked.id)).toEqual([]);
+  });
+});
+
+describe("payment.capture_retry", () => {
+  let retried: { id: string; intentId: string; bookingId: string; job: Job };
+  let captured: { id: string; intentId: string; bookingId: string; job: Job };
+  let refused: { id: string; intentId: string; bookingId: string; job: Job };
+  let bookingGone: { id: string; intentId: string; job: Job };
+  let noBooking: { id: string; intentId: string; job: Job };
+  let authorisationGone: { id: string; intentId: string; bookingId: string; job: Job };
+
+  beforeAll(async () => {
+    // A capture that failed after the order: the orchestrator recorded the amount it tried (the booking's total).
+    const bookingId = await insertBooking();
+    const payment = await stripePayment({ status: "authorized", bookingId });
+    await insertCaptureFailure(payment.id, bookingId, "440.00");
+    retried = { ...payment, bookingId, job: await runPaymentJob(PAYMENT_JOB.captureRetry, payment.id) };
+
+    // Captured meanwhile (staff, or a capture whose answer was lost and the webhook saw): nothing to send, but the
+    // booking shows the payment.
+    const capturedBooking = await insertBooking();
+    const done = await stripePayment(
+      { status: "captured", amountCaptured: "452.10", bookingId: capturedBooking },
+      { status: "succeeded", amount_capturable: 0, amount_received: 45210 },
+    );
+    captured = {
+      ...done,
+      bookingId: capturedBooking,
+      job: await runPaymentJob(PAYMENT_JOB.captureRetry, done.id),
+    };
+
+    // Stripe answers the retry with a 5xx, which it keeps for the key: the PaymentIntent is read again, still not
+    // captured, so the staff are alerted and the job ends (once, then staff).
+    const failingBooking = await insertBooking();
+    const failing = await stripePayment({ status: "authorized", bookingId: failingBooking });
+    await insertCaptureFailure(failing.id, failingBooking, "452.10");
+    stripe.fail(1, "server_error");
+    refused = {
+      ...failing,
+      bookingId: failingBooking,
+      job: await runPaymentJob(PAYMENT_JOB.captureRetry, failing.id),
+    };
+
+    // The booking did not go ahead meanwhile: its payment is not captured.
+    const failedBooking = await insertBooking("failed");
+    const notNeeded = await stripePayment({ status: "authorized", bookingId: failedBooking });
+    bookingGone = { ...notNeeded, job: await runPaymentJob(PAYMENT_JOB.captureRetry, notNeeded.id) };
+
+    // A payment without a booking: no order exists, so nothing is captured (OADR-0008).
+    const unbooked = await stripePayment({ status: "authorized" });
+    noBooking = { ...unbooked, job: await runPaymentJob(PAYMENT_JOB.captureRetry, unbooked.id) };
+
+    // The authorisation was cancelled (expired at Stripe) while the booking stands: nothing to capture, staff decide.
+    const standing = await insertBooking();
+    const lapsed = await stripePayment(
+      { status: "canceled", bookingId: standing },
+      { status: "canceled", amount_capturable: 0 },
+    );
+    authorisationGone = {
+      ...lapsed,
+      bookingId: standing,
+      job: await runPaymentJob(PAYMENT_JOB.captureRetry, lapsed.id),
+    };
+  }, SCENARIO_TIMEOUT_MS);
+
+  it("captures the amount of the failed capture with its key, and shows the payment on the booking", async () => {
+    expect(retried.job.returnvalue).toMatchObject({ outcome: "applied" });
+    const captures = requestsTo("POST", `/v1/payment_intents/${retried.intentId}/capture`);
+    expect(captures).toHaveLength(1);
+    expect(captures[0]?.headers["idempotency-key"]).toBe(`pi:capture:${retried.id}:440.00`);
+    expect(captures[0]?.form).toMatchObject({ amount_to_capture: "44000" });
+    expect(await paymentOf(retried.id)).toMatchObject({
+      status: "captured",
+      amountCaptured: "440.00",
+      capturedAt: expect.any(Date),
+    });
+    expect((await eventsOf(retried.id)).map((event) => [event.type, event.source, event.amount])).toEqual([
+      ["payment.capture_failed", "api", null],
+      ["payment.captured", "system", "440.00"],
+    ]);
+    const booking = await alphaTx(async (trx) => ({
+      row: await trx
+        .selectFrom("bookings")
+        .select([sql<string>`amount_paid::text`.as("amountPaid"), "ticketing_status as ticketingStatus"])
+        .where("id", "=", retried.bookingId)
+        .executeTakeFirstOrThrow(),
+      events: await trx
+        .selectFrom("booking_events")
+        .select(["type", "actor_type as actorType", "visible_to_customer as visible", "data"])
+        .where("booking_id", "=", retried.bookingId)
+        .execute(),
+    }));
+    // Staff still issue the booking: the capture retry never changes its ticketing.
+    expect(booking.row).toEqual({ amountPaid: "440.00", ticketingStatus: "manual_review" });
+    expect(booking.events).toEqual([
+      {
+        type: "payment.captured",
+        actorType: "system",
+        visible: true,
+        data: { paymentId: retried.id, amount: "440.00" },
+      },
+    ]);
+  });
+
+  it("makes no Stripe call for a payment that is already captured, and shows it on the booking", async () => {
+    expect(captured.job.returnvalue).toMatchObject({ outcome: "unchanged" });
+    expect(requestsAbout(captured.intentId)).toEqual([]);
+    const booking = await alphaTx(async (trx) => ({
+      amountPaid: (
+        await trx
+          .selectFrom("bookings")
+          .select(sql<string>`amount_paid::text`.as("amountPaid"))
+          .where("id", "=", captured.bookingId)
+          .executeTakeFirstOrThrow()
+      ).amountPaid,
+      events: await trx
+        .selectFrom("booking_events")
+        .select("type")
+        .where("booking_id", "=", captured.bookingId)
+        .execute(),
+    }));
+    expect(booking).toEqual({ amountPaid: "452.10", events: [{ type: "payment.captured" }] });
+  });
+
+  it("makes no Stripe call for the payment of a booking that did not go ahead, or of no booking", async () => {
+    for (const payment of [bookingGone, noBooking]) {
+      expect(payment.job.returnvalue).toMatchObject({ outcome: "unchanged" });
+      expect(requestsAbout(payment.intentId)).toEqual([]);
+      expect((await paymentOf(payment.id)).status).toBe("authorized");
+    }
+  });
+
+  it("alerts the staff without a Stripe call when the authorisation of a standing booking is gone", async () => {
+    expect(authorisationGone.job.returnvalue).toMatchObject({ outcome: "failed" });
+    expect(requestsAbout(authorisationGone.intentId)).toEqual([]);
+    expect(
+      (await alertsLike(`staff.payment:${authorisationGone.id}:`)).map((alert) => alert.dedupeKey),
+    ).toEqual([`staff.payment:${authorisationGone.id}:capture_retry_failed`]);
+  });
+
+  it("alerts the staff once when the retry cannot capture, after reading the PaymentIntent again", async () => {
+    expect(await refused.job.getState()).toBe("completed");
+    expect(refused.job.returnvalue).toMatchObject({ outcome: "failed" });
+    // One capture of the job, which the SDK's one network retry sends again with the same key (Stripe replays the 5xx).
+    const captures = requestsTo("POST", `/v1/payment_intents/${refused.intentId}/capture`);
+    expect(captures).toHaveLength(1 + STRIPE_MAX_NETWORK_RETRIES);
+    expect(new Set(captures.map((call) => call.headers["idempotency-key"]))).toEqual(
+      new Set([`pi:capture:${refused.id}:452.10`]),
+    );
+    expect(requestsTo("GET", `/v1/payment_intents/${refused.intentId}`)).toHaveLength(1);
+    expect((await paymentOf(refused.id)).status).toBe("authorized");
+    const alerts = await alertsLike(`staff.payment:${refused.id}:`);
+    expect(alerts).toEqual([
+      expect.objectContaining({
+        templateKey: "staff.manual_review",
+        recipient: OPS_ALERT_EMAIL,
+        recipientType: "staff",
+        dedupeKey: `staff.payment:${refused.id}:capture_retry_failed`,
+        bookingId: refused.bookingId,
+      }),
+    ]);
+    expect(JSON.stringify(alerts[0]?.payload)).toContain(`bookings/${refused.bookingId}`);
+  });
+});
+
+describe("refunds", () => {
+  let paymentId: string;
+  let intentId: string;
+  let requests: Record<"tooMuch" | "first" | "rest" | "notCaptured" | "airline", CreateRefundResult>;
+  let refundId: string;
+  let first: Job;
+  let second: Job;
+  let later: Job;
+  let unknown: { refundId: string; job: Job };
+
+  beforeAll(async () => {
+    const payment = await stripePayment(
+      { status: "captured", amountCaptured: "452.10" },
+      { status: "succeeded", amount_capturable: 0, amount_received: 45210 },
+    );
+    paymentId = payment.id;
+    intentId = payment.intentId;
+    const authorised = await stripePayment({ status: "authorized" });
+    const airline = await insertPayment({
+      status: "captured",
+      provider: "airline",
+      amountCaptured: "452.10",
+    });
+    const ask = (id: string, amount: string, type: "customer" | "staff" = "customer") =>
+      alphaTx((trx) =>
+        refunds.create(trx, {
+          id: newId("rfd"),
+          paymentId: id,
+          amount,
+          reason: type === "customer" ? "booking_cancelled" : "goodwill",
+          requestedBy: { type, id: type === "customer" ? newId("cus") : newId("stf") },
+          now: new Date(),
+        }),
+      );
+    requests = {
+      tooMuch: await ask(paymentId, "452.11"),
+      first: await ask(paymentId, "300.00"),
+      // 152.10 are left: 300.00 are in flight.
+      rest: await ask(paymentId, "152.11", "staff"),
+      notCaptured: await ask(authorised.id, "10.00"),
+      airline: await ask(airline, "10.00"),
+    };
+    if (!requests.first.ok) {
+      throw new Error("the first refund was refused");
+    }
+    refundId = requests.first.refund.id;
+
+    // Two refund.submit jobs for the one row: the second runs while the first one's Stripe call is in flight, and
+    // its own retry comes after the first one recorded the Stripe refund.
+    let secondAdded = false;
+    stripe.onRequest(async (request) => {
+      if (request.method !== "POST" || request.path !== "/v1/refunds" || secondAdded) {
+        return;
+      }
+      secondAdded = true;
+      const spec = paymentJob(PAYMENT_JOB.refundSubmit, alphaId, refundId);
+      await payments.add(spec.name, spec.data, {
+        jobId: `second-refund-submit-${refundId}`,
+        attempts: 3,
+        backoff: { type: "fixed", delay: 1000 },
+      });
+      await waitFor("the second job's first attempt", async () => {
+        const job = await payments.getJob(`second-refund-submit-${refundId}`);
+        return job !== undefined && job.attemptsMade >= 1 ? true : undefined;
+      });
+    });
+    first = await runPaymentJob(PAYMENT_JOB.refundSubmit, refundId);
+    stripe.onRequest(undefined);
+    second = await finished(payments, `second-refund-submit-${refundId}`);
+    // A third job, after both: the row is sent, nothing goes to Stripe.
+    later = await runPaymentJob(PAYMENT_JOB.refundSubmit, refundId, `later-refund-submit-${refundId}`);
+
+    // A refund whose submission Stripe answers with a 5xx: the outcome is unknown, so the claim is released and the
+    // staff are alerted.
+    const other = await stripePayment(
+      { status: "captured", amountCaptured: "452.10" },
+      { status: "succeeded", amount_capturable: 0, amount_received: 45210 },
+    );
+    const asked = await ask(other.id, "50.00");
+    if (!asked.ok) {
+      throw new Error("the refund of the 5xx was refused");
+    }
+    stripe.fail(1, "server_error");
+    unknown = {
+      refundId: asked.refund.id,
+      job: await runPaymentJob(PAYMENT_JOB.refundSubmit, asked.refund.id),
+    };
+  }, SCENARIO_TIMEOUT_MS);
+
+  it("refuse an amount above the captured amount less the refunds in flight, and other payments", () => {
+    expect(requests.tooMuch).toEqual({ ok: false, reason: "amount_exceeds_captured", refundable: "452.10" });
+    expect(requests.rest).toEqual({ ok: false, reason: "amount_exceeds_captured", refundable: "152.10" });
+    expect(requests.notCaptured).toEqual({ ok: false, reason: "payment_not_refundable", refundable: null });
+    expect(requests.airline).toEqual({ ok: false, reason: "refund_via_airline", refundable: null });
+  });
+
+  it("store the requester, the reason and a refund.requested event", async () => {
+    const row = await alphaTx(
+      async (trx) =>
+        await trx
+          .selectFrom("refunds")
+          .select(["requested_by_type as type", "requested_by_id as by", "reason", "booking_id as bookingId"])
+          .where("id", "=", refundId)
+          .executeTakeFirstOrThrow(),
+    );
+    expect(row).toEqual({
+      type: "customer",
+      by: expect.stringMatching(/^cus_/),
+      reason: "booking_cancelled",
+      bookingId: null,
+    });
+    expect((await eventsOf(paymentId)).find((event) => event.type === "refund.requested")).toMatchObject({
+      source: "api",
+      statusTo: "pending",
+      amount: "300.00",
+      payload: { refundId, reason: "booking_cancelled", requestedByType: "customer" },
+    });
+  });
+
+  it("make one Stripe refund call for two refund.submit jobs of one row, with the key refund:<rfd_id> [OBE-040 AC2]", async () => {
+    const calls = requestsTo("POST", "/v1/refunds");
+    const ours = calls.filter((call) => call.headers["idempotency-key"] === `refund:${refundId}`);
+    expect(ours).toHaveLength(1);
+    expect(calls.filter((call) => call.form["payment_intent"] === intentId)).toHaveLength(1);
+    expect(ours[0]?.form).toMatchObject({
+      payment_intent: intentId,
+      amount: "30000",
+      metadata: {
+        refund_id: refundId,
+        payment_id: paymentId,
+        velexis_tenant_id: alphaId,
+        velexis_environment: "test",
+      },
+    });
+    expect(first.returnvalue).toMatchObject({ outcome: "applied" });
+    // The second job's first attempt found the first one's claim and left it; its retry found the refund recorded.
+    expect(workerSink.records()).toContainEqual(
+      expect.objectContaining({
+        msg: "payments.job_failed",
+        jobId: `second-refund-submit-${refundId}`,
+        code: "RefundSubmissionInFlightError",
+      }),
+    );
+    expect(await second.getState()).toBe("completed");
+    expect(second.returnvalue).toMatchObject({ outcome: "unchanged" });
+    expect(later.returnvalue).toMatchObject({ outcome: "unchanged" });
+  });
+
+  it("record the Stripe refund once and leave its final state to the webhook", async () => {
+    const row = await alphaTx(
+      async (trx) =>
+        await trx
+          .selectFrom("refunds")
+          .select(["status", "provider_refund_id as providerRefundId", "processed_at as processedAt"])
+          .where("id", "=", refundId)
+          .executeTakeFirstOrThrow(),
+    );
+    expect(row).toEqual({
+      status: "processing",
+      providerRefundId: expect.stringMatching(/^re_test_/),
+      processedAt: null,
+    });
+    expect((await eventsOf(paymentId)).filter((event) => event.type === "refund.submitted")).toEqual([
+      expect.objectContaining({
+        source: "system",
+        statusFrom: "processing",
+        statusTo: "processing",
+        amount: "300.00",
+        payload: expect.objectContaining({ refundId, providerRefundId: row.providerRefundId }),
+      }),
+    ]);
+    // The payment's refunded amount moves with the webhook (OBE-039), not with the submission.
+    expect((await paymentOf(paymentId)).status).toBe("captured");
+  });
+
+  it("release a submission whose outcome is unknown and alert the staff", async () => {
+    expect(unknown.job.returnvalue).toMatchObject({ outcome: "failed" });
+    const row = await alphaTx(
+      async (trx) =>
+        await trx
+          .selectFrom("refunds")
+          .select(["status", "provider_refund_id as providerRefundId"])
+          .where("id", "=", unknown.refundId)
+          .executeTakeFirstOrThrow(),
+    );
+    expect(row).toEqual({ status: "pending", providerRefundId: null });
+    // One submission, which the SDK's one network retry sends again with the same key (Stripe replays the 5xx).
+    expect(
+      requestsTo("POST", "/v1/refunds").filter(
+        (call) => call.headers["idempotency-key"] === `refund:${unknown.refundId}`,
+      ),
+    ).toHaveLength(1 + STRIPE_MAX_NETWORK_RETRIES);
+    expect((await alertsLike(`staff.refund:${unknown.refundId}:`)).map((alert) => alert.dedupeKey)).toEqual([
+      `staff.refund:${unknown.refundId}:not_submitted`,
+    ]);
+  });
+});
+
+describe("payments.authorisation_watch", () => {
+  const MINUTE_MS = 60_000;
+  /** Tomorrow at this minute: the watch's first run; later runs add days. */
+  const BASE = new Date(Math.floor(Date.now() / MINUTE_MS) * MINUTE_MS + DAY_MS);
+  const clock = new FakeClock(BASE);
+  let due: string;
+  let dueTomorrow: string;
+  let fresh: string;
+  let notAuthorised: string[];
+  let suspended: string;
+  const results: Job[] = [];
+
+  /** Runs the watch for `tenantId` at the clock's current minute, as the fan-out adds it, and waits for it. */
+  async function watch(tenantId: string): Promise<Job> {
+    const spec = tenantJob(AUTHORISATION_WATCH_JOB, tenantId, minuteBucket(clock.now()));
+    await maintenance.add(spec.name, spec.data, spec.opts);
+    const job = await finished(maintenance, spec.opts.jobId);
+    results.push(job);
+    return job;
+  }
+
+  beforeAll(async () => {
+    vi.spyOn(worker.get(Clock, { strict: false }), "now").mockImplementation(() => clock.now());
+    const at = (days: number) => new Date(BASE.getTime() - days * DAY_MS);
+    due = await insertPayment({ status: "authorized", authorizedAt: at(6) });
+    dueTomorrow = await insertPayment({ status: "authorized", authorizedAt: at(4.5) });
+    fresh = await insertPayment({ status: "authorized", authorizedAt: at(1) });
+    notAuthorised = [
+      await insertPayment({ status: "captured", amountCaptured: "452.10", authorizedAt: at(6) }),
+      await insertPayment({ status: "canceled", authorizedAt: at(6) }),
+      await insertPayment({ status: "requires_payment_method", intentId: stripeId("pi") }),
+    ];
+    suspended = await insertPayment({ status: "authorized", authorizedAt: at(6) }, "beta");
+
+    // The scheduler's iteration: the fan-out adds one job per active or suspended tenant.
+    const fanOut = await maintenance.add(
+      FAN_OUT_JOB,
+      { task: AUTHORISATION_WATCH_JOB },
+      { prevMillis: clock.now().getTime() },
+    );
+    await finished(maintenance, fanOut.id ?? "");
+    for (const tenantId of [alphaId, betaId]) {
+      results.push(
+        await finished(
+          maintenance,
+          tenantJobId(AUTHORISATION_WATCH_JOB, tenantId, minuteBucket(clock.now())),
+        ),
+      );
+    }
+    // The same day again (a later run, a continuation), then a day later.
+    clock.advance(MINUTE_MS);
+    await watch(alphaId);
+    clock.advance(DAY_MS);
+    await watch(alphaId);
+    await watch(betaId);
+  }, SCENARIO_TIMEOUT_MS);
+
+  it("alerts once per payment, whatever the runs, and only payments authorised more than 5 days ago [OBE-040 AC3]", async () => {
+    expect(results.map((job) => job.returnvalue as { counts?: unknown })).toEqual([
+      expect.objectContaining({ tenantId: alphaId, outcome: "done", counts: { payments: 1, alerts: 1 } }),
+      expect.objectContaining({ tenantId: betaId, outcome: "done", counts: { payments: 1, alerts: 1 } }),
+      expect.objectContaining({ tenantId: alphaId, counts: { payments: 0, alerts: 0 } }),
+      expect.objectContaining({ tenantId: alphaId, counts: { payments: 1, alerts: 1 } }),
+      expect.objectContaining({ tenantId: betaId, counts: { payments: 0, alerts: 0 } }),
+    ]);
+    const alerts = await alertsLike("staff.authorisation_watch:");
+    expect(alerts.map((alert) => alert.dedupeKey).sort()).toEqual(
+      [`staff.authorisation_watch:${due}`, `staff.authorisation_watch:${dueTomorrow}`].sort(),
+    );
+    for (const alert of alerts) {
+      expect(alert).toMatchObject({
+        templateKey: "staff.manual_review",
+        recipient: OPS_ALERT_EMAIL,
+        recipientType: "staff",
+      });
+    }
+    expect(
+      JSON.stringify(alerts.find((alert) => alert.dedupeKey?.endsWith(due) === true)?.payload),
+    ).toContain(`authorised at ${new Date(BASE.getTime() - 6 * DAY_MS).toISOString()}`);
+    for (const id of [due, dueTomorrow]) {
+      expect((await eventsOf(id)).map((event) => [event.type, event.source, event.amount])).toEqual([
+        [AUTHORISATION_EXPIRING_EVENT, "system", "452.10"],
+      ]);
+    }
+    for (const id of [fresh, ...notAuthorised]) {
+      expect(await eventsOf(id)).toEqual([]);
+    }
+  });
+
+  it("runs for suspended tenants too, in their own schema (OADR-0014 point 4)", async () => {
+    expect((await alertsLike("staff.authorisation_watch:", "beta")).map((alert) => alert.dedupeKey)).toEqual([
+      `staff.authorisation_watch:${suspended}`,
+    ]);
+    expect(await eventsOf(suspended, "beta")).toEqual([
+      expect.objectContaining({ type: AUTHORISATION_EXPIRING_EVENT }),
+    ]);
+  });
+});
+
+describe("the worker's log", () => {
+  it("never holds a Stripe key, a client secret or the alert address", () => {
+    const text = workerSink.text();
+    expect(text).toContain("payments.job_processed");
+    expect(text).not.toContain(SECRET_KEY);
+    expect(text).not.toContain("_secret_");
+    expect(text).not.toContain(OPS_ALERT_EMAIL);
+  });
+});
