@@ -10763,6 +10763,7 @@ paths:
         - ACCOUNT_LOCKED
         - RATE_LIMITED
         - INTERNAL_ERROR
+        - FEATURE_DISABLED
       x-scope: console
       x-permission: none
       x-milestone: M4
@@ -36296,6 +36297,7 @@ components:
         - tenant
         - permissions
         - session
+        - environments
       description: Result of console.auth.me.
       properties:
         staff:
@@ -36334,6 +36336,20 @@ components:
                 - string
                 - 'null'
               description: User agent at sign-in.
+        environments:
+          type: array
+          minItems: 1
+          maxItems: 2
+          uniqueItems: true
+          items:
+            type: string
+            enum:
+              - test
+              - live
+          description: >-
+            Environments the staff member may open in the OTA admin, as in ConsoleStaffSession: `["test"]`, or `["test",
+            "live"]` once the OTA is live and the role is not `viewer`. Read on every call, so a role change or the OTA
+            going live shows without a new sign-in.
     ConsolePaymentStatus:
       type: string
       enum:
@@ -42530,6 +42546,9 @@ components:
           createdAt: '2026-10-10T09:00:00Z'
           expiresAt: '2026-11-09T09:00:00Z'
           userAgent: Mozilla/5.0 (Macintosh; Intel Mac OS X 14_6) AppleWebKit/605.1.15
+        environments:
+          - test
+          - live
     ConsoleBookingExample:
       summary: Ticketed storefront booking (console view with net price, markup, sync state, audit)
       value:

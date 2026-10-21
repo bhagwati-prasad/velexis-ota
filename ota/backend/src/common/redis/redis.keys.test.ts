@@ -24,6 +24,7 @@ const CHECKOUT_ID = "chk_01M4TA4Z0A1B2C3D4E5F6G7H8J";
 const AMADEUS_ACCOUNT_ID = "ama_01M4TA5K6M7N8P9Q0R1S2T3V4W";
 const CONNECTION_ID = "sc_01M4TA6X7Y8Z9A0B1C2D3E4F5G";
 const FAMILY_ID = "sfm_01M4TA7H8J9K0M1N2P3Q4R5S6T";
+const STAFF_ID = "stf_01M4TA8V9W0X1Y2Z3A4B5C6D7E";
 const HASH = "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08";
 
 /** Arguments for every builder. Typed by the builder names, so a new builder does not compile until it is listed. */
@@ -44,6 +45,7 @@ const SAMPLES: Readonly<Record<RedisKeyBuilderName, readonly unknown[]>> = {
   staffDeny: [FAMILY_ID],
   staffDenyAccount: [ACCOUNT_ID],
   staffDenyTenant: [TENANT_ID],
+  staffDenyMember: [STAFF_ID],
   portalToken: [HASH],
   apiKeyUsed: [KEY_ID],
   throttle: ["signin", HASH, 60],
@@ -76,6 +78,7 @@ const EXPECTED: Readonly<Record<RedisKeyBuilderName, Omit<RedisKey, "key"> & { r
   staffDeny: { key: `staffdeny:${FAMILY_ID}`, ttlSeconds: 12 * 3600, kind: "shared" },
   staffDenyAccount: { key: `staffdeny:acct:${ACCOUNT_ID}`, ttlSeconds: 30 * 86400, kind: "shared" },
   staffDenyTenant: { key: `staffdeny:tenant:${TENANT_ID}`, ttlSeconds: 30 * 86400, kind: "shared" },
+  staffDenyMember: { key: `staffdeny:member:${STAFF_ID}`, ttlSeconds: 12 * 3600, kind: "shared" },
   portalToken: { key: `ptk:${HASH}`, ttlSeconds: 60, kind: "shared" },
   apiKeyUsed: { key: `apikey:used:${KEY_ID}`, ttlSeconds: 86400, kind: "shared" },
   throttle: { key: `rl:signin:${HASH}`, ttlSeconds: 60, kind: "shared" },
@@ -255,6 +258,7 @@ describe("redisKeys", () => {
       [() => redisKeys.throttle("amadeus", HASH, 2), /throttler must not be amadeus/],
       [() => redisKeys.throttle("sign in", HASH, 2), /throttler must be a throttler name/],
       [() => redisKeys.member(TENANT_ID, ACCOUNT_ID), /accountId must be an account id/],
+      [() => redisKeys.staffDenyMember(ACCOUNT_ID), /redisKeys\.staffDenyMember: staffId must be a staff id/],
       [() => redisKeys.tenantByKey("Acme"), /tenantKey must be a tenant key/],
     ];
     for (const [build, message] of refusals) {

@@ -19,6 +19,7 @@ import { CallerGuard } from "./common/auth/caller.guard";
 import { CsrfGuard } from "./common/auth/csrf.guard";
 import { CustomerGuard } from "./common/auth/customer.guard";
 import { ScopeGuard } from "./common/auth/scope.guard";
+import { StaffGuard } from "./common/auth/staff.guard";
 import { TenantGuard } from "./common/auth/tenant.guard";
 import { CommonModule } from "./common/common.module";
 import type { JsonBodyLimits } from "./common/http/body-parsers";
@@ -90,7 +91,8 @@ export class AppModule implements NestModule {
         // The e-mail outbox (OBE-030), global: a use case queues an e-mail with OutboxService in its transaction; the
         // worker sends it.
         NotificationsModule.forApi(),
-        // Customer tokens and sessions (OBE-031): the customer guard below verifies the tokens with its key.
+        // Customer tokens and sessions (OBE-031): the customer guard below verifies the tokens with its key; staff
+        // tokens and sessions (OBE-059): the staff guard below.
         IdentityModule,
         // The operations of the OTA document, one module per context (conventions §2).
         ReferenceModule,
@@ -101,14 +103,16 @@ export class AppModule implements NestModule {
       ],
       // Global guards run in this order (architecture §3 steps 4–10): who is calling (OADR-0009 point 1), for which
       // tenant (points 2 and 3), whether the caller may call the operation and in which scope, the signed-in customer
-      // (step 8, OADR-0006 points 1 and 5), the CSRF check of state-changing edge requests (OADR-0006 point 3), then
-      // the rate limits. All of them run before validation.
+      // (step 8, OADR-0006 points 1 and 5) or, in console scope, staff member (step 8, OADR-0011 point 3), the CSRF
+      // check of state-changing edge requests (OADR-0006 point 3), then the rate limits. All of them run before
+      // validation.
       // The key-usage interceptor records each successful request of an API key (OADR-0009 point 6).
       providers: [
         { provide: APP_GUARD, useClass: CallerGuard },
         { provide: APP_GUARD, useClass: TenantGuard },
         { provide: APP_GUARD, useClass: ScopeGuard },
         { provide: APP_GUARD, useClass: CustomerGuard },
+        { provide: APP_GUARD, useClass: StaffGuard },
         { provide: APP_GUARD, useClass: CsrfGuard },
         { provide: APP_GUARD, useClass: RateLimitGuard },
         KeyUsageRecorder,

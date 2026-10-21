@@ -1682,7 +1682,8 @@ The console API (staff sign-in by portal token, bookings, PNR import, queues, cu
   - The SDK parity test passes on this PR (two pending method entries); `pnpm --filter @velexis/ota-sdk generate` leaves no diff.
 - **Verify:** `pnpm contracts:lint && pnpm contracts:generate && pnpm --filter @velexis/ota-backend test -- contract && pnpm --filter @velexis/ota-sdk generate && git diff --exit-code ota/sdk/src/internal/operations.js && pnpm --filter @velexis/ota-sdk test`
 
-### OBE-059 · Implement staff sign-in by portal token and staff sessions in Redis
+### OBE-059 · Implement staff sign-in by portal token and staff sessions in Redis ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-backend
 - **Milestone:** M4
 - **Depends on:** OBE-031, OBE-058

@@ -10411,6 +10411,8 @@ export interface components {
                 /** @description User agent at sign-in. */
                 userAgent?: string | null;
             };
+            /** @description Environments the staff member may open in the OTA admin, as in ConsoleStaffSession: `["test"]`, or `["test", "live"]` once the OTA is live and the role is not `viewer`. Read on every call, so a role change or the OTA going live shows without a new sign-in. */
+            environments: ("test" | "live")[];
         };
         /**
          * @description Payment state derived from payments/refunds: `not_applicable` for console or imported bookings without a PSP payment (paid offline / on account).

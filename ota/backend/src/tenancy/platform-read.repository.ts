@@ -7,7 +7,8 @@
 // resolver), the Amadeus connection and the shared Amadeus account in OBE-017 (`amadeusConnection`,
 // `amadeusAccountById`, for the connection resolver of src/amadeus/), the tenants a scheduled job fans out to in
 // OBE-024 (`tenantIdsByStatus`, for src/jobs/fan-out.ts), the default payment connection of an environment in OBE-038
-// (`paymentConnection`, for the Stripe gateway of src/payments/); later tasks add memberships to this class.
+// (`paymentConnection`, for the Stripe gateway of src/payments/), and a staff member's membership with its account in
+// OBE-059 (`staffMember`, for the staff sessions of src/identity/staff/).
 import { Inject, Injectable } from "@nestjs/common";
 import {
   assertTenantSchema,
@@ -278,8 +279,79 @@ type PaymentConnectionRow = Pick<
   (typeof PAYMENT_CONNECTION_COLUMNS)[number]
 >;
 
+/** `platform.tenant_memberships.role`: the console roles (scope §1.3), the contract's `StaffRole`. */
+export const STAFF_ROLES = ["owner", "admin", "agent", "finance", "viewer"] as const;
+export type StaffRole = (typeof STAFF_ROLES)[number];
+
+/** `platform.tenant_memberships.status`. Only `active` members hold staff sessions (OADR-0011 point 3). */
+export const MEMBERSHIP_STATUSES = ["active", "suspended", "removed"] as const;
+export type MembershipStatus = (typeof MEMBERSHIP_STATUSES)[number];
+
+/** `platform.accounts.status`. Only `active` accounts sign in to the console. */
+export const ACCOUNT_STATUSES = ["pending_verification", "active", "locked", "disabled", "deleted"] as const;
+export type AccountStatus = (typeof ACCOUNT_STATUSES)[number];
+
+/**
+ * The portal account of a staff member (`platform.accounts`), as far as the console shows it. Only the columns
+ * velexis_ota_app may read (R__ota_read_access.sql): never the password hash, the TOTP secret or the security counters.
+ */
+export interface PlatformStaffAccount {
+  readonly email: string;
+  readonly fullName: string;
+  readonly locale: string;
+  readonly timeZone: string;
+  readonly mfaEnabled: boolean;
+  readonly status: AccountStatus;
+  /** ISO 8601 instant of the erasure, or `null`. */
+  readonly deletedAt: string | null;
+}
+
+/**
+ * A staff member of one tenant (`platform.tenant_memberships` with its `platform.accounts` row) and the tenant's
+ * business time zone (`platform.tenants.time_zone`, which `PlatformTenant` does not carry), as the staff sessions rely
+ * on them (OBE-059): plain and JSON-safe, so the `member:<accountId>:<tenantId>` cache stores it as it is. The
+ * `membership` and `account` invalidations delete that entry; a time zone change of the tenant shows within the
+ * cache's 60 s.
+ */
+export interface PlatformStaffMember {
+  /** `stf_` + ULID: the subject of the staff tokens. */
+  readonly id: string;
+  readonly tenantId: string;
+  readonly accountId: string;
+  readonly role: StaffRole;
+  readonly status: MembershipStatus;
+  /** ISO 8601 instant of the last console activity the platform recorded, or `null`. */
+  readonly lastActiveAt: string | null;
+  /** ISO 8601 instant of the membership's creation. */
+  readonly createdAt: string;
+  readonly account: PlatformStaffAccount;
+  /** `platform.tenants.time_zone`, an IANA zone (`ConsoleTenant.timeZone`). */
+  readonly tenantTimeZone: string;
+}
+
+/** The row `staffMember` reads: the membership, its account's readable columns and the tenant's time zone. */
+interface StaffMemberRow {
+  readonly id: string;
+  readonly tenant_id: string;
+  readonly account_id: string;
+  readonly role: string;
+  readonly status: string;
+  readonly last_active_at: Date | null;
+  readonly created_at: Date;
+  readonly email: string;
+  readonly full_name: string;
+  readonly locale: string;
+  readonly account_time_zone: string;
+  readonly mfa_enabled: boolean;
+  readonly account_status: string;
+  readonly deleted_at: Date | null;
+  readonly tenant_time_zone: string;
+}
+
 /** A tenant id as the platform writes it (`ten_` and a ULID); anything else is unknown without a query. */
 const TENANT_ID_PATTERN = /^ten_[0-9A-Za-z]{1,60}$/;
+/** An account id (`acc_` and a ULID). */
+const ACCOUNT_ID_PATTERN = /^acc_[0-9A-Za-z]{1,60}$/;
 /** A shared Amadeus account id (`ama_` and a ULID). */
 const AMADEUS_ACCOUNT_ID_PATTERN = /^ama_[0-9A-Za-z]{1,60}$/;
 
@@ -447,6 +519,45 @@ export class PlatformReadRepository {
   }
 
   /**
+   * The membership of account `accountId` in tenant `tenantId` (`tenant_memberships_tenant_account_uq`: at most one)
+   * with its account and the tenant's time zone, whatever their states, or `null` when there is none: status, role and
+   * account checks are the staff sessions' (OBE-059). A value that cannot be an account or tenant id is unknown
+   * without a query. Only the `accounts` columns granted to velexis_ota_app are named.
+   */
+  async staffMember(accountId: string, tenantId: string): Promise<PlatformStaffMember | null> {
+    if (!ACCOUNT_ID_PATTERN.test(accountId) || !TENANT_ID_PATTERN.test(tenantId)) {
+      return null;
+    }
+    const row: StaffMemberRow | undefined = await this.read((trx) =>
+      trx
+        .selectFrom("platform.tenant_memberships as m")
+        .innerJoin("platform.accounts as a", "a.id", "m.account_id")
+        .innerJoin("platform.tenants as t", "t.id", "m.tenant_id")
+        .select([
+          "m.id",
+          "m.tenant_id",
+          "m.account_id",
+          "m.role",
+          "m.status",
+          "m.last_active_at",
+          "m.created_at",
+          "a.email",
+          "a.full_name",
+          "a.locale",
+          "a.time_zone as account_time_zone",
+          "a.mfa_enabled",
+          "a.status as account_status",
+          "a.deleted_at",
+          "t.time_zone as tenant_time_zone",
+        ])
+        .where("m.account_id", "=", accountId)
+        .where("m.tenant_id", "=", tenantId)
+        .executeTakeFirst(),
+    );
+    return row === undefined ? null : toPlatformStaffMember(row);
+  }
+
+  /**
    * Runs `query` in its own read-only transaction (`START TRANSACTION READ ONLY`) with the short statement timeout.
    * Rows are mapped after the commit, so a refused row never keeps the transaction open.
    */
@@ -568,6 +679,33 @@ function toPlatformPaymentConnection(row: PaymentConnectionRow): PlatformPayment
     captureMode: oneOf(row.capture_mode, PAYMENT_CAPTURE_MODES, column("capture_mode"), row.id),
     status: oneOf(row.status, PAYMENT_CONNECTION_STATUSES, column("status"), row.id),
     statementDescriptorSuffix: row.statement_descriptor_suffix,
+  });
+}
+
+/**
+ * Maps a membership row. A role or a membership or account status outside the CHECK lists throws
+ * `UnexpectedPlatformValueError`; the timestamps become ISO strings.
+ */
+function toPlatformStaffMember(row: StaffMemberRow): PlatformStaffMember {
+  const membership = (name: string) => `platform.tenant_memberships.${name}`;
+  return Object.freeze({
+    id: row.id,
+    tenantId: row.tenant_id,
+    accountId: row.account_id,
+    role: oneOf(row.role, STAFF_ROLES, membership("role"), row.id),
+    status: oneOf(row.status, MEMBERSHIP_STATUSES, membership("status"), row.id),
+    lastActiveAt: row.last_active_at === null ? null : row.last_active_at.toISOString(),
+    createdAt: row.created_at.toISOString(),
+    account: Object.freeze({
+      email: row.email,
+      fullName: row.full_name,
+      locale: row.locale,
+      timeZone: row.account_time_zone,
+      mfaEnabled: row.mfa_enabled,
+      status: oneOf(row.account_status, ACCOUNT_STATUSES, "platform.accounts.status", row.account_id),
+      deletedAt: row.deleted_at === null ? null : row.deleted_at.toISOString(),
+    }),
+    tenantTimeZone: row.tenant_time_zone,
   });
 }
 

@@ -203,7 +203,8 @@ Shared keys follow the [cross-cutting table](../../docs/mvp/architecture.md#redi
 | `t:<tenantId>:<env>:search:<sha256>` | 30 s | Single flight for identical concurrent searches |
 | `t:<tenantId>:<env>:cxq:<bookingId>` | 10 min | Cancellation quote (the contract text calls it `cxq:{bookingId}`; the OTA keeps it under the tenant prefix) |
 | `t:<tenantId>:<env>:ac:chk:<checkoutId>` | 2 h | Airline-card attempts of one checkout (max 3) |
-| `staffsess:<familyId>`, `staffdeny:<familyId>` | family lifetime | Staff refresh families and revocations |
+| `staffsess:<familyId>`, `staffdeny:<familyId>` | family lifetime | Staff refresh families (`asn_…`, JSON with the SHA-256 of the current refresh token and of the rotated ones) and revocations |
+| `staffdeny:member:<staffId>` | family lifetime | Epoch-ms cut-off of `console.auth.signOut` with `scope: all`: the membership's families created before it are refused (OBE-059) |
 | `staffdeny:acct:<accountId>` (read) | 30 days | Platform's cross-boundary revocation ([PADR-0007](../../platform/docs/adr/0007-portal-to-ota-admin-sso-token.md)) |
 | `staffdeny:tenant:<tenantId>` | 30 days | Written on `tenant.suspend`: staff families of the tenant created before it are refused |
 | `ptk:<sha256>` (GETDEL) | 60 s | Portal token for staff SSO |

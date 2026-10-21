@@ -114,6 +114,7 @@ const PARTS = {
     rule: "a credential set id: the Amadeus account (ama_ + ULID) or the supplier connection (sc_ + ULID)",
   },
   familyId: { pattern: prefixedId("[a-z]{2,4}"), rule: "a staff session family id (a prefixed ULID)" },
+  staffId: { pattern: prefixedId("stf"), rule: "a staff id (stf_ + ULID)" },
   tenantKey: { pattern: /^[a-z][a-z0-9_]{1,39}$/, rule: "a tenant key (the CHECK of platform.tenants.key)" },
   hostname: {
     // PADR-0004 item 1, as the `domain` invalidation event: lower case, no trailing dot, not an IP address.
@@ -376,6 +377,15 @@ export const redisKeys = Object.freeze({
   staffDenyTenant: builder("shared", "staffdeny:tenant:<tenantId>", (tenantId: string) => ({
     segments: ["staffdeny", "tenant", part("staffDenyTenant", "tenantId", "tenantId", tenantId)],
     ttlSeconds: STAFF_DENY_TTL_SECONDS,
+  })),
+  /**
+   * `staffdeny:member:<staffId>`: the cut-off (epoch ms) of console.auth.signOut with `scope: all` (OBE-059): the staff
+   * families of the membership created before it are refused. It lives as long as a family can, so when it expires
+   * every family it refused has ended too.
+   */
+  staffDenyMember: builder("shared", "staffdeny:member:<staffId>", (staffId: string) => ({
+    segments: ["staffdeny", "member", part("staffDenyMember", "staffId", "staffId", staffId)],
+    ttlSeconds: STAFF_FAMILY_LIFETIME_SECONDS,
   })),
   /** `ptk:<sha256(token)>`: the platform's one-time portal token, taken with `GETDEL` (PADR-0007). */
   portalToken: builder("shared", "ptk:<sha256>", (tokenSha256: string) => ({

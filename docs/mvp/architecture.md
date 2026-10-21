@@ -214,7 +214,7 @@ Rules from [`decisions.md`](decisions.md) §5 and [ADR-0003](adr/0003-six-compon
 | `member:<accountId>:<tenantId>` | OTA backend (cache fill) | OTA backend | 60 s | `{type: "membership", accountId, tenantId}` |
 | `ptk:<sha256>` | Platform backend | OTA backend (`GETDEL`) | 60 s | single use |
 | `apikey:used:<keyId>` | OTA backend | Platform worker | 1 day | flushed every 5 minutes |
-| `staffsess:<familyId>`, `staffdeny:<familyId>` | OTA backend | OTA backend | family lifetime | — |
+| `staffsess:<familyId>`, `staffdeny:<familyId>`, `staffdeny:member:<staffId>` | OTA backend | OTA backend | family lifetime | — (the member cut-off of the console's "sign out of every session", OBE-059) |
 | `staffdeny:acct:<accountId>` | Platform backend, on sign out everywhere, password change or reset, MFA reset and account disable | OTA backend (staff guard and refresh) | 30 days | Epoch-ms cut-off: staff families created before it are refused ([PADR-0007](../../platform/docs/adr/0007-portal-to-ota-admin-sso-token.md)) |
 | `staffdeny:tenant:<tenantId>` | OTA worker, on `tenant.suspend` | OTA backend | 30 days | Deleted on `tenant.resume` ([OADR-0007](../../ota/docs/adr/0007-tenant-migration-runner-and-provisioning-worker.md)) |
 | `amadeus:token:<credId>:<env>`, `amadeus:tokenlock:<credId>:<env>` | OTA backend | OTA backend | `expires_in` − 60 s; lock 10 s | Per credential set, envelope-encrypted, shared by every OTA on the shared account ([ADR-0012](adr/0012-amadeus-account-model.md), [OADR-0001](../../ota/docs/adr/0001-amadeus-client-design.md)) |
