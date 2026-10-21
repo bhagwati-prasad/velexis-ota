@@ -1369,14 +1369,15 @@ Checkout, customer accounts in cookies, Stripe on the Velexis account, the airli
 - **Milestone:** M3
 - **Depends on:** OBE-040, OBE-047
 - **Size:** M
-- **Read first:** ota/docs/architecture.md §6 (`checkouts.expire`, `retention.daily`); ota/docs/data-model.md §6; ota/docs/adr/0014-per-tenant-workers-and-schedulers.md (points 2, 4)
+- **Read first:** ota/docs/architecture.md §6 (`checkouts.expire`, `retention.daily`); ota/docs/data-model.md §6; ota/docs/adr/0014-per-tenant-workers-and-schedulers.md (points 2, 4); ota/docs/adr/0003-booking-orchestration-and-supplier-timeout-recovery.md (points 9 and 10, revision 2026-10-21)
 - **Files:** `ota/backend/src/checkout/checkout-expiry.processor.ts`, `ota/backend/src/jobs/retention.processor.ts`, `ota/backend/src/jobs/retention.repository.ts`, `ota/backend/src/jobs/schedulers.ts`, `ota/backend/test/integration/jobs/expiry-retention.int.test.ts`
 - **Steps:**
-  1. `checkouts.expire` (1 minute): per tenant, at most 50 `open`/`payment_pending` checkouts past `expires_at` become `expired`; authorised payments get `payment.void`.
+  1. `checkouts.expire` (1 minute): per tenant, at most 50 `open`/`payment_pending` checkouts past `expires_at` become `expired`; authorised payments get `payment.void`. A checkout whose booking is `pending` (checkout.complete claimed it: the order is being created, or may exist after a `504 SUPPLIER_TIMEOUT`) is skipped, left out of the selection so it never uses up the batch: it keeps its status and its authorisation, which only the reconciler (OBE-043) voids or captures (OADR-0003 point 10). The job checks the booking again after it has locked the checkout row (`FOR UPDATE`, the lock the claim takes), as `CheckoutService.refuseWhileCompleting` does, so a claim that commits while the job runs is never expired. Once the reconciliation has decided (the booking `failed` with `checkout_id` cleared), such a checkout past `expires_at` is expired like any other.
   2. `retention.daily` (03:35 UTC): `supplier_requests` older than 90 days, `queue_snapshots` older than 30 days, expired `idempotency_keys`, customer sessions, reset tokens and booking access tokens expired more than 7 days ago; batches of 1 000; counts logged.
   3. Suspended tenants are included (obligations to paid travellers).
 - **Acceptance:**
   - An expired checkout with an authorised payment ends `expired` and its void job runs once (FakeClock).
+  - A checkout past `expires_at` whose booking is `pending` with `reconcile_until` (an Amadeus `5xx` on Flight Create Orders) is skipped: it keeps its status, its payment stays `authorized` with the booking, no `payment.void` job is queued, and with more such checkouts due than the batch of 50 the same run still expires the tenant's other due checkouts (FakeClock).
   - Retention deletes only rows past their limits and never touches bookings, payments, refunds, events, documents or staff actions.
 - **Verify:** `pnpm --filter @velexis/ota-backend test:int -- jobs`
 

@@ -37,7 +37,7 @@ sequenceDiagram
   OAD->>OA: console.auth.signIn {grantType: portal_token} with the service key
   OA->>R: GETDEL ptk:sha256
   OA->>P: re-read membership, role, account status (read-only)
-  OA-->>OAD: staff access + refresh tokens (tid, stf, roles)
+  OA-->>OAD: staff access + refresh tokens (typ staff, sub stf_…, tid, roles, sid)
   OAD-->>M: __Host- cookies on admin.ota.example.com, redirect /bookings
 ```
 

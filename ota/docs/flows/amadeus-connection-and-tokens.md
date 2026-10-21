@@ -92,6 +92,8 @@ Retries wait 300–800 ms with jitter. A `401` of any operation (writes included
 
 The codes decide for `4xx` answers, the first issue with a code of the table first; the table is the constant of `src/amadeus/error-mapper.ts` (OBE-018), which keeps every issue on the error's cause for the console's raw calls (`details.errors`).
 
+For **Flight Create Orders** the mapped code is not the answer to the caller. Once the request may have reached Amadeus, every answer that does not prove a refusal (a timeout, a reset or otherwise cut connection, any HTTP `5xx` including `500`, `502` and `503`, an answer that cannot be read) is an unknown outcome: the booking stays `pending` for the reconciliation and the answer is `504 SUPPLIER_TIMEOUT`. Only a `4xx` business refusal voids the payment; a connection that was never made and a `401`, `403` or `429` without a business code of the table count as not sent: the booking fails and the payment is kept ([OADR-0003](../adr/0003-booking-orchestration-and-supplier-timeout-recovery.md) point 9).
+
 ## 6. Logging
 
 - One `supplier_requests` row per call: operation (SDK method), Amadeus API and operation id, method, path without secrets, office, status, outcome, error codes, duration, `ama-request-id` correlation, request id, booking or search id, staff id. Bodies pass the shared redactor (documents and card numbers masked, CVV and tokens dropped, e-mails and phones masked) and are truncated to 64 KB (`truncated = true`).

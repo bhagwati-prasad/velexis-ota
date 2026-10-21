@@ -54,7 +54,7 @@ sequenceDiagram
     A-->>O: payment error
     O->>D: booking failed, payment failed (failure_code), attempt + 1
     O-->>B: 402 PAYMENT_DECLINED
-  else no answer in 60 s
+  else no answer in 60 s, an Amadeus 5xx or an unreadable answer
     O->>D: booking reconcile_until = now + 15 min
     O-->>B: 504 SUPPLIER_TIMEOUT {bookingId}
     W->>A: reconcile (queue + by-reference)

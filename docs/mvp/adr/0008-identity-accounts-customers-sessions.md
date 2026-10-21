@@ -3,7 +3,7 @@
 **Status:** Accepted
 **Date:** 2026-10-12
 **Deciders:** Product owner (httpOnly cookies + CSRF on the storefront, no tokens in browser JS), lead architect (realms, token formats, SSO handoff). Decided during planning where not in `decisions.md`; revisit when a third-party identity provider (Google, Microsoft, SAML) is required.
-**Revisions:** 2026-10-12 (planning review): cross-boundary revocation is the account-level cut-off `staffdeny:acct:<accountId>` of [PADR-0007](../../../platform/docs/adr/0007-portal-to-ota-admin-sso-token.md); a later third-party password grant is verified by the platform.
+**Revisions:** 2026-10-12 (planning review): cross-boundary revocation is the account-level cut-off `staffdeny:acct:<accountId>` of [PADR-0007](../../../platform/docs/adr/0007-portal-to-ota-admin-sso-token.md); a later third-party password grant is verified by the platform. 2026-10-21 (lead decision): the staff access token's claims are aligned with [OADR-0011](../../../ota/docs/adr/0011-console-access-staff-sessions-and-environments.md) point 2 and the OTA backend (OBE-059): `typ` (`staff`), `sub` (the staff id, the membership `stf_…`), `tid`, `roles` and `sid`; the separate `stf` claim is dropped, because `sub` already names the staff member (Common mechanics, SSO step 4).
 
 ## Context
 
@@ -40,7 +40,7 @@ The reference design puts portal accounts, memberships and API keys in `platform
 
 - **Passwords:** Argon2id (`argon2` package, OWASP parameters: m=19 MiB, t=2, p=1), at least 10 characters, checked against a top-10k breached-password list. No other complexity rules.
 - **MFA:** TOTP (`otplib`, 30 s steps, ±1 step). The secret is envelope-encrypted in `accounts.mfa_secret_ciphertext` ([ADR-0010](0010-secrets-envelope-encryption.md)). Ten one-time recovery codes are stored hashed. Optional for portal users, mandatory for platform admins.
-- **Access tokens** are JWTs signed with **EdDSA (Ed25519)** through `jose`, 15-minute lifetime, with `kid` headers so keys can rotate. The platform and the OTA backend have separate key pairs. Claims: `sub`, `typ` (`portal`, `staff` or `customer`), `tid` for tenant-bound tokens, `stf` and `roles` for staff, `sid` (session family).
+- **Access tokens** are JWTs signed with **EdDSA (Ed25519)** through `jose`, 15-minute lifetime, with `kid` headers so keys can rotate. The platform and the OTA backend have separate key pairs. Claims: `sub`, `typ` (`portal`, `staff` or `customer`), `tid` for tenant-bound tokens, `roles` for staff, `sid` (session family). In a staff token `sub` is the staff id (the membership, `stf_…`), so a staff token carries `typ`, `sub`, `tid`, `roles` and `sid`, and no separate `stf` claim ([OADR-0011](../../../ota/docs/adr/0011-console-access-staff-sessions-and-environments.md) point 2).
 - **Refresh tokens** are opaque 256-bit random values, stored only as SHA-256 hashes, rotated on every use. Reuse of a rotated token revokes the whole family, as the contract specifies.
 - **Lockout:** 5 failed sign-ins lock an identity for 15 minutes, plus IP-based rate limits in Redis.
 - **E-mail verification and password reset** use single-use hashed tokens, valid for 24 h and 1 h respectively.
@@ -64,7 +64,7 @@ Server actions get Next.js's built-in Origin check. Route handlers that change s
    - stores `SET ptk:<sha256> {accountId, tenantId, membershipId} EX 60 NX` in Redis.
 2. The portal returns a page that **auto-submits a POST form** with the token to `https://admin.ota.example.com/sso`. The token never appears in a URL, a log or a `Referer`.
 3. The OTA admin server calls `console.auth.signIn({ grantType: "portal_token", portalToken })` through the SDK, using its first-party service credential.
-4. The OTA backend redeems the token with `GETDEL`, so it works only once. It re-reads the membership and account status (read-only), then issues a staff access token (`tid`, `stf`, `roles`) and a refresh token.
+4. The OTA backend redeems the token with `GETDEL`, so it works only once. It re-reads the membership and account status (read-only), then issues a staff access token (`typ: staff`, `sub` = the membership's `stf_…`, `tid`, `roles`, `sid` = the refresh family) and a refresh token.
 5. **Staff refresh-token families live in Redis**, not in `platform.account_sessions`, because the OTA backend cannot write platform tables. The OTA backend revokes single families with `staffdeny:<familyId>`. The platform cannot know OTA family ids, so it writes an **account-level cut-off** instead: `staffdeny:acct:<accountId> = <epoch ms>` with a 30-day TTL, on sign out everywhere, password change or reset, MFA reset and account disable. The staff guard and the refresh endpoint refuse every family of that account created before the cut-off ([PADR-0007](../../../platform/docs/adr/0007-portal-to-ota-admin-sso-token.md) item 6, [OADR-0011](../../../ota/docs/adr/0011-console-access-staff-sessions-and-environments.md)).
 
 The OTA admin is multi-tenant, and the OTA is chosen after sign-in ([`decisions.md`](../decisions.md) §4):

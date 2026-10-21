@@ -56,7 +56,7 @@ sequenceDiagram
 | Message | OTA worker does | Answers |
 |---|---|---|
 | `tenant.migrate {targetVersion?}` | Same transaction as step 4 without creating the schema or seeding; applies pending files up to `targetVersion` | `tenant.migrated` / `tenant.migration_failed` |
-| `tenant.suspend {reason}` | Re-reads `tenants.status`; if still `suspended`: expires `open`/`payment_pending` checkouts and enqueues `payment.void` for their authorisations, writes `staffdeny:tenant:<tenantId>` (epoch ms, 30 days) so existing staff refreshes fail, and skips the tenant in the queue poller. Ticketing, sync, refunds and transactional e-mails continue ([PADR-0014](../../../platform/docs/adr/0014-tenant-suspension-and-resume.md)). No-op if the tenant is active again. | `tenant.suspended` |
+| `tenant.suspend {reason}` | Re-reads `tenants.status`; if still `suspended`: expires `open`/`payment_pending` checkouts and enqueues `payment.void` for their authorisations (except a checkout whose booking is `pending`: the order may exist, so its authorisation is left to the reconciliation, [OADR-0003](../adr/0003-booking-orchestration-and-supplier-timeout-recovery.md) point 10), writes `staffdeny:tenant:<tenantId>` (epoch ms, 30 days) so existing staff refreshes fail, and skips the tenant in the queue poller. Ticketing, sync, refunds and transactional e-mails continue ([PADR-0014](../../../platform/docs/adr/0014-tenant-suspension-and-resume.md)). No-op if the tenant is active again. | `tenant.suspended` |
 | `tenant.resume` | Re-reads the status; if `active`: deletes `staffdeny:tenant:<tenantId>`; schedulers pick the tenant up on their next run | `tenant.resumed` |
 
 ## 4. Deploy fan-out

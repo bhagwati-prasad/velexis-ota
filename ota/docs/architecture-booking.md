@@ -21,8 +21,8 @@ stateDiagram-v2
   [*] --> pending: claim (T1)
   pending --> confirmed: order created
   pending --> ticketed: order created with tickets
-  pending --> failed: Amadeus rejected / reconcile found nothing (Stripe)
-  pending --> pending: timeout, reconciling (max 15 min)
+  pending --> failed: Amadeus refused (4xx) or request not sent / reconcile found nothing (Stripe)
+  pending --> pending: unknown outcome (timeout, 5xx, unreadable answer), reconciling (max 15 min)
   confirmed --> ticketed: issued
   confirmed --> partially_ticketed: some tickets
   partially_ticketed --> ticketed: rest issued
@@ -80,6 +80,7 @@ Failure outcomes, as the contract fixes them:
 | Payment not authorised | none | unchanged | open | `402 PAYMENT_REQUIRED` / `PAYMENT_DECLINED` |
 | Re-price is higher, or an extra is no longer confirmed | `failed` (console only) | voided | moved to the new priced offer, extras and totals | `409 PRICE_CHANGED` |
 | Amadeus rejects (a `4xx`: sold out, data) | `failed` | voided | open | `409 SOLD_OUT`, `422 TRAVELER_DATA_INVALID`, `502 SUPPLIER_ERROR` |
+| The request never reached the order (token, rate limits, a connection never made, an Amadeus `401`, `403` or `429` without a business code) | `failed` | unchanged (authorised) | `payment_pending` | The error, e.g. `503 SUPPLIER_UNAVAILABLE` ([OADR-0003](adr/0003-booking-orchestration-and-supplier-timeout-recovery.md) point 9) |
 | Capture fails after the order exists | `confirmed`, `ticketing_status = manual_review` | `authorized`, `payment.capture_retry` queued, staff alerted | completed | `201` with a warning |
 | Issue fails | `confirmed`, `ticketing_status = failed` | captured | completed | `201`, ticketing job retries |
 | Amadeus timeout, `5xx` or unreadable answer on create | `pending`, reconciling | unchanged | `payment_pending`, locked | `504 SUPPLIER_TIMEOUT` (§4) |
@@ -130,12 +131,12 @@ Differences from the Stripe path:
 | 3-D Secure | Stripe | None in the MVP |
 | Issue flag | Per ticketing policy | Always `issue = true` |
 | A decline | Stripe error before completion | Amadeus payment error → `402 PAYMENT_DECLINED`, booking `failed`, attempt counted |
-| Timeout | Reconcile, then void if not found | Reconcile, then **manual review** if not found (the card may have been charged) |
+| Timeout, `5xx` or unreadable answer | Reconcile, then void if not found | Reconcile, then **manual review** if not found (the card may have been charged) |
 | Refund | Stripe refund by the console | Done by the airline when the ticket is voided or refunded |
 
 ## 4. `SUPPLIER_TIMEOUT` recovery
 
-A timeout or network error **after** the create-order request was sent means "the order may exist", and so does every other answer that does not prove a refusal: an Amadeus `5xx` (500, 502, 503, 504) or an answer that cannot be read. Only an Amadeus `4xx` business refusal fails the booking and voids the authorisation. The backend never sends Flight Create Orders again for that checkout, and while the booking is `pending` the checkout cannot change: its set steps, `checkout.createPayment` and `checkout.updatePayment` answer `409 CHECKOUT_BEING_COMPLETED` (`details.bookingId`).
+A timeout or network error **after** the create-order request was sent means "the order may exist", and so does every other answer that does not prove a refusal: an Amadeus `5xx` (500, 502, 503, 504) or an answer that cannot be read. Only an Amadeus `4xx` business refusal fails the booking with its authorisation voided; a request that never reached the order fails the booking and keeps the authorisation ([OADR-0003](adr/0003-booking-orchestration-and-supplier-timeout-recovery.md) point 9). The backend never sends Flight Create Orders again for that checkout, and while the booking is `pending` the checkout cannot change: its set steps, `checkout.createPayment` and `checkout.updatePayment` answer `409 CHECKOUT_BEING_COMPLETED` (`details.bookingId`), and the checkout expiry leaves its authorisation to the reconciliation (OADR-0003 point 10).
 
 ```mermaid
 sequenceDiagram
@@ -210,7 +211,7 @@ For `checkout.complete`, `checkout.completeWithAirlineCard` and `bookings.cancel
 | Stripe create PaymentIntent | `Idempotency-Key: pi:create:<pay_id>` |
 | Stripe capture, cancel | `pi:capture:<pay_id>:<amount>`, `pi:cancel:<pay_id>` |
 | Stripe refund | `refund:<rfd_id>` |
-| Amadeus Flight Create Orders | Not idempotent: at most once per checkout (claim), reconciled on timeout |
+| Amadeus Flight Create Orders | Not idempotent: at most once per checkout (claim), reconciled on an unknown outcome (timeout, `5xx`, unreadable answer) |
 | Amadeus Flight Order Issue | Booking state lock + resync before retry; never two issue calls in flight |
 | Amadeus PATCH, DELETE | `If-Match` on the booking; Amadeus 2552 → `409 VERSION_CONFLICT` |
 | Amadeus reads, token | Retried once on timeout or `5xx` |

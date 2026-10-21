@@ -371,7 +371,7 @@ sequenceDiagram
   O->>R: GETDEL ptk:sha256
   O->>P: membership, role, account status
   O->>R: staff refresh family
-  O-->>AD: staff access token (tid, stf, roles) and refresh token
+  O-->>AD: staff access token (typ staff, sub stf_..., tid, roles, sid) and refresh token
   AD-->>U: httpOnly host-only cookies, redirect to /bookings
   U->>AD: Issue tickets for bkg_...
   AD->>O: console.bookings.issue (service key, staff token, Idempotency-Key, environment)

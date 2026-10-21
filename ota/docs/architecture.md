@@ -94,7 +94,7 @@ Every request passes the same chain. The order matters: tenant and caller are kn
 | 5 | `TenantGuard` (tenancy) | Loads the tenant from Redis or the platform tables; only `active` is served (`403 TENANT_SUSPENDED`), except the worker paths of [PADR-0014](../../platform/docs/adr/0014-tenant-suspension-and-resume.md) |
 | 6 | OpenAPI validation interceptor | Ajv on path, query, headers, body; `400 VALIDATION_FAILED` with field paths, never values |
 | 7 | `ScopeGuard` | Compares the caller with the operation's `x-scope` and the MVP extensions (`x-edge-only`, console permissions) |
-| 8 | Session guards | Customer (cookie or bearer), staff (bearer + Redis family + `staffdeny:acct:*`), booking token (cookie or header); `tid` must equal the tenant |
+| 8 | Session guards | Customer (cookie or bearer), staff (bearer + Redis family + the four deny keys `staffdeny:<familyId>`, `staffdeny:acct:*`, `staffdeny:tenant:*`, `staffdeny:member:*` of [OADR-0011](adr/0011-console-access-staff-sessions-and-environments.md) point 3), booking token (cookie or header); `tid` must equal the tenant |
 | 9 | `CsrfGuard` | Edge callers on `POST`, `PUT`, `PATCH`, `DELETE`: `X-CSRF-Token` equals `__Host-vx_csrf`, and `Origin` matches the verified host |
 | 10 | Throttler | Redis-backed limits of §8 |
 | 11 | Idempotency interceptor | Store and replay of state-changing calls ([`architecture-booking.md`](architecture-booking.md) §4) |
@@ -177,7 +177,7 @@ BullMQ prefix `vx`, defaults of [ADR-0009](../../docs/mvp/adr/0009-background-jo
 
 | Scheduler | Every (UTC) | Fans out to | Milestone |
 |---|---|---|---|
-| `checkouts.expire` | 1 min | Per tenant: expire `open`/`payment_pending` checkouts past `expires_at`, enqueue `payment.void` | M3 |
+| `checkouts.expire` | 1 min | Per tenant: expire `open`/`payment_pending` checkouts past `expires_at`, enqueue `payment.void`; a checkout whose booking is `pending` is skipped, its authorisation left to the reconciliation ([OADR-0003](adr/0003-booking-orchestration-and-supplier-timeout-recovery.md) point 10) | M3 |
 | `bookings.reconcile_scan` | 1 min | `booking.reconcile` for `pending` bookings with `reconcile_until` set | M3 |
 | `ticketing.scan` | 5 min | `ticketing.issue` for bookings with `ticketing_next_attempt_at` due; deadline alerts | M3 |
 | `bookings.sync_scan` | 10 min | `booking.sync` for the oldest synced active bookings (20 per tenant per run) | M3 |

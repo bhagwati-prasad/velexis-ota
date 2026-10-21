@@ -43,7 +43,7 @@ sequenceDiagram
 
 | Area | SDK methods | Permission | Amadeus | Notes |
 |---|---|---|---|---|
-| Session | `console.auth.signIn` (portal token), `.refresh`, `.signOut`, `.me` | — | — | Staff families in Redis; `staffdeny:acct:*` honoured; password grant later |
+| Session | `console.auth.signIn` (portal token), `.refresh`, `.signOut`, `.me` | — | — | Staff families in Redis; the four `staffdeny` keys honoured ([OADR-0011](../adr/0011-console-access-staff-sessions-and-environments.md) point 3); password grant later |
 | Bookings list and detail | `console.bookings.list`, `.get` | `bookings:read` | — (`refresh=true`: GET) | Indexes lead with `environment`; filters of db README §10 |
 | Amadeus order view | `console.bookings.retrieve` | `bookings:read` | Flight Order Management GET | Net prices, full documents (decrypted for display, never logged) |
 | Patch | `console.bookings.patch` | `bookings:write` | PATCH | `If-Match`; 2552 → `409 VERSION_CONFLICT` |
@@ -75,6 +75,7 @@ sequenceDiagram
 | Portal token unknown, used or expired | `401 PORTAL_TOKEN_INVALID` → back to the portal |
 | Membership removed or suspended | `403 STAFF_MEMBERSHIP_INACTIVE`; sessions refused within 60 s (`membership` invalidation) |
 | "Sign out everywhere" on the portal | `staffdeny:acct:<id>` makes the guard and refresh refuse older families |
+| "Sign out of every session" in the console (`console.auth.signOut`, `scope: all`) | `staffdeny:member:<staffId>` (epoch ms, 12 h) makes the guard and refresh refuse the staff member's older families in this OTA |
 | Missing permission | `403 FORBIDDEN` (`details.requiredPermission`), `staff_actions` outcome `denied` |
 | Office of another OTA | `403 OFFICE_NOT_ALLOWED` |
 | Capture after authorisation expiry | `402 PAYMENT_DECLINED`; staff contact the traveller |
