@@ -1,17 +1,24 @@
 // The customer auth operations (`x-scope: customer`; OBE-033 for sign-in, refresh, sign-out and getSession; OBE-032 for
-// sign-up, e-mail verification and its resend; OBE-034 adds the passwords here): thin handlers over SignInService,
-// SignUpService, VerificationService and SessionsService. The global guards resolved the caller, the tenant and the
-// scope, the customer guard read the access token where the operation takes one, the CSRF guard checked the edge's
-// POSTs, the rate limits counted the request (`signIn`: 10 per minute per end-user IP; `signUp` and
-// `resendEmailVerification`: 5 per hour per IP and 3 per hour per address), the validation interceptor checked the
-// input against the OTA document and the idempotency interceptor stores each POST's answer under its
-// `Idempotency-Key` (sign-in's and sign-up's without the password in their hash).
+// sign-up, e-mail verification and its resend; OBE-034 for the password reset and change): thin handlers over
+// SignInService, SignUpService, VerificationService, PasswordService and SessionsService. The global guards resolved
+// the caller, the tenant and the scope, the customer guard read the access token where the operation takes one, the
+// CSRF guard checked the edge's POSTs, the rate limits counted the request (`signIn`: 10 per minute per end-user IP;
+// `signUp`, `resendEmailVerification` and `requestPasswordReset`: 5 per hour per IP and 3 per hour per address), the
+// validation interceptor checked the input against the OTA document and the idempotency interceptor stores each POST's
+// answer under its `Idempotency-Key` (sign-in's, sign-up's and the password operations' without the passwords in their
+// hash).
 //
 // auth.signUp answers `201` with `Location: /v1/account`; the session it opens goes into the edge's cookies with a new
 // CSRF value (`session: null` in the body, api-changes §2.2) or into the body for key callers. auth.verifyEmail
 // answers `200 EmailVerificationResult` and opens no session. auth.resendVerification answers the same `202
 // AuthAcceptedResult` whatever it did (the document's anti-enumeration rule); a signed-in customer's token or cookie
 // names the account, else the body's `email`.
+//
+// auth.requestPasswordReset answers the same `202 AuthAcceptedResult` whatever it did (the document's
+// anti-enumeration rule). auth.resetPassword answers `PasswordResetResult`: the session it opens goes into the edge's
+// cookies with a new CSRF value (`session: null` in the body, api-changes §2.2) or into the body for key callers.
+// auth.changePassword answers like sign-in (`AuthSessionInfo` with the rotated session in the edge's cookies and a new
+// CSRF value, `AuthSessionResult` for key callers); a locked address's `423` carries `Retry-After`.
 //
 // Two modes (OADR-0006 points 1, 4 and 5; api-changes §2.2):
 //
@@ -35,6 +42,7 @@
 // auth.getSession answers `AuthSessionInfo` in both modes. Every answer is `Cache-Control: no-store` (`private,
 // no-store` for getSession, as the document asks). A locked address's `423` carries `Retry-After`.
 import { Controller, Get, HttpCode, Injectable, Post, Req, Res } from "@nestjs/common";
+import type { components } from "@velexis/api-types";
 import { AppError, isAppError } from "@velexis/errors";
 import type { Request, Response } from "express";
 import { CLS_REQ, ClsService } from "nestjs-cls";
@@ -50,13 +58,16 @@ import {
   OpenApiOperation,
   type ValidatedInput,
 } from "../common/http/openapi-operation.decorator";
+import { RequestContext } from "../common/http/request-context";
 import { CallerContext } from "../tenancy/caller-resolver";
 import {
   RESEND_ACCEPTED,
   toAuthSessionInfo,
   toAuthSessionResult,
   toAuthSignUpResult,
+  toCustomer,
   toEmailVerificationResult,
+  toSession,
   type AuthAcceptedResult,
   type AuthSessionInfo,
   type AuthSessionResult,
@@ -64,6 +75,7 @@ import {
   type EmailVerificationResult,
 } from "./customers.mapper";
 import { AccountLockedError } from "./lockout";
+import { PASSWORD_RESET_ACCEPTED, PasswordService } from "./password.service";
 import { SessionsService, type SessionWithTokens } from "./sessions.service";
 import { SignInService } from "./sign-in.service";
 import { SignUpService } from "./sign-up.service";
@@ -75,6 +87,8 @@ export const AUTH_CACHE_CONTROL = "no-store";
 export const SESSION_CACHE_CONTROL = "private, no-store";
 /** `Location` of auth.signUp's `201`: the new customer is the caller's account. */
 export const ACCOUNT_LOCATION = "/v1/account";
+
+type PasswordResetResult = components["schemas"]["PasswordResetResult"];
 
 /** The refresh cookie as cookie-parser gives it; anything but a non-empty string is no token. */
 function refreshCookieOf(cookies: unknown): string | undefined {
@@ -124,10 +138,12 @@ export class AuthController {
     private readonly signIns: SignInService,
     private readonly signUps: SignUpService,
     private readonly verifications: VerificationService,
+    private readonly passwords: PasswordService,
     private readonly sessions: SessionsService,
     private readonly cookies: CookieWriter,
     private readonly customers: CustomerContext,
     private readonly callers: CallerContext,
+    private readonly context: RequestContext,
   ) {}
 
   @Post("sign-up")
@@ -295,6 +311,82 @@ export class AuthController {
     const principal = this.customers.require();
     const view = await this.sessions.current(principal);
     return toAuthSessionInfo(view.customer, view.details, principal.accessTokenExpiresAt);
+  }
+
+  @Post("password-resets")
+  @HttpCode(202)
+  @OpenApiOperation("requestPasswordReset")
+  async requestPasswordReset(
+    @OpenApiInput() input: ValidatedInput<"requestPasswordReset">,
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<AuthAcceptedResult> {
+    if (input.body === undefined) {
+      // The validation interceptor refuses a request without its required body; this is never reached.
+      throw new Error("requestPasswordReset without a validated body");
+    }
+    res.setHeader("Cache-Control", AUTH_CACHE_CONTROL);
+    // The end user the caller guard decided: Caddy's client address, or a secret key's `X-Velexis-End-User-IP`.
+    await this.passwords.requestReset({ email: input.body.email, requestedIp: this.context.endUser()?.ip });
+    return { ...PASSWORD_RESET_ACCEPTED };
+  }
+
+  @Post("password-resets/confirm")
+  @HttpCode(200)
+  @OpenApiOperation("resetPassword")
+  async resetPassword(
+    @OpenApiInput() input: ValidatedInput<"resetPassword">,
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<PasswordResetResult> {
+    if (input.body === undefined) {
+      // The validation interceptor refuses a request without its required body; this is never reached.
+      throw new Error("resetPassword without a validated body");
+    }
+    res.setHeader("Cache-Control", AUTH_CACHE_CONTROL);
+    const reset = await this.passwords.resetPassword({
+      token: input.body.token,
+      newPassword: input.body.newPassword,
+      signIn: input.body.signIn,
+      userAgent: this.endUserAgent(req, input.headers["X-Velexis-End-User-Agent"]),
+    });
+    if (reset.session === null) {
+      return { customer: toCustomer(reset.customer), session: null };
+    }
+    // OADR-0006 point 2: a reset that opens a session rotates the CSRF value, as a sign-in does.
+    const edge = this.cookies.setSession(res, reset.session.tokens, { rotateCsrf: true });
+    return { customer: toCustomer(reset.customer), session: edge ? null : toSession(reset.session.tokens) };
+  }
+
+  @Post("password/change")
+  @HttpCode(200)
+  @OpenApiOperation("changePassword")
+  async changePassword(
+    @OpenApiInput() input: ValidatedInput<"changePassword">,
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<AuthSessionResult | AuthSessionInfo> {
+    if (input.body === undefined) {
+      // The validation interceptor refuses a request without its required body; this is never reached.
+      throw new Error("changePassword without a validated body");
+    }
+    res.setHeader("Cache-Control", AUTH_CACHE_CONTROL);
+    // The customer guard requires the access token on this operation.
+    const principal = this.customers.require();
+    let changed: SessionWithTokens;
+    try {
+      changed = await this.passwords.changePassword({
+        principal,
+        currentPassword: input.body.currentPassword,
+        newPassword: input.body.newPassword,
+        signOutOtherSessions: input.body.signOutOtherSessions,
+      });
+    } catch (error) {
+      if (error instanceof AccountLockedError) {
+        res.setHeader("Retry-After", String(error.retryAfterSeconds));
+      }
+      throw error;
+    }
+    // OADR-0006 point 2: a password change rotates the CSRF value.
+    return this.answer(res, changed, { rotateCsrf: true });
   }
 
   /**

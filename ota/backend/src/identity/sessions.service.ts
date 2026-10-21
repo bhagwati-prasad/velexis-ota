@@ -15,7 +15,8 @@
 //   working too). An unknown, malformed, revoked or expired token, or a customer that may no longer hold a session
 //   (disabled, deleted), answers `401 REFRESH_TOKEN_INVALID` and changes nothing.
 // - `revokeFamily` and `revokeAllOfCustomer` end sessions in the caller's transaction (sign-out, password change,
-//   account deletion).
+//   account deletion); `rotateCurrent` rotates a live family by its id, without its refresh token (password change,
+//   OBE-034).
 //
 // The auth operations of OBE-033 build on these:
 //
@@ -158,8 +159,9 @@ export interface SessionTokens extends IssuedSession {
 export type SessionAuthMethod = "password" | "sign_up" | "password_reset";
 
 /**
- * How the sessions of this release are reported: the tenant schema keeps no column for how a family was opened, and
- * only auth.signIn opens families yet (OBE-033); sign-up and password reset (OBE-032, OBE-034) open theirs later.
+ * How the sessions of this release are reported: the tenant schema keeps no column for how a family was opened, so
+ * every family reports `password`, also those that auth.signUp (OBE-032) and auth.resetPassword (OBE-034) open;
+ * `sign_up` and `password_reset` need a column of their own first.
  */
 export const DEFAULT_AUTH_METHOD: SessionAuthMethod = "password";
 
@@ -492,6 +494,31 @@ export class SessionsService {
   ): Promise<number> {
     await this.sessions.lockCustomerForUpdate(trx, customerId);
     return this.sessions.revokeAllOfCustomer(trx, customerId, reason, this.clock.now(), exceptSessionId);
+  }
+
+  /**
+   * Rotates family `sessionId` of `customerId` in `trx` without its refresh token (auth.changePassword, OBE-034): its
+   * current generation gets a successor with a new token and the same end, and the token the caller held stops
+   * working (presented again, it is a reuse). The locks of `refresh`. `undefined`, and nothing changed, when the
+   * family is not the customer's or no longer live (signed out, revoked, past its end).
+   */
+  async rotateCurrent(
+    trx: TenantTransaction,
+    customerId: string,
+    sessionId: string,
+  ): Promise<IssuedSession | undefined> {
+    await this.sessions.lockCustomerForSessionChange(trx, customerId);
+    if (!(await this.sessions.lockFamily(trx, sessionId))) {
+      return undefined;
+    }
+    const head = await this.sessions.findFamilyHead(trx, sessionId);
+    // Read under the family's lock, which every rotation takes: the current generation cannot change meanwhile.
+    const current = await this.sessions.findCurrentGeneration(trx, sessionId);
+    const now = this.clock.now();
+    if (head?.customer_id !== customerId || current === undefined || !isLiveGeneration(current, now)) {
+      return undefined;
+    }
+    return this.rotate(trx, current, now);
   }
 
   /**

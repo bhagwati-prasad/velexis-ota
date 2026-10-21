@@ -4,9 +4,9 @@
 // app.module.ts fills). The auth operations live in AuthController: sign-in with its lockout, refresh, sign-out and
 // getSession (OBE-033); sign-up with its password rules (`CustomerPasswordPolicy`, the breached-password list read
 // once at start-up), e-mail verification and its resend (`VerificationService`, which account.update's address change
-// reuses; OBE-032); the passwords (OBE-034) add theirs. Staff sign-in by portal token, the staff sessions in Redis and
-// the request's signed-in staff member (`StaffContext`, which the global staff guard fills) are in `staff/` (OBE-059).
-// API only; the worker never imports it.
+// reuses; OBE-032); the password reset and change (`PasswordService`, with the same password rules; OBE-034). Staff
+// sign-in by portal token, the staff sessions in Redis and the request's signed-in staff member (`StaffContext`, which
+// the global staff guard fills) are in `staff/` (OBE-059). API only; the worker never imports it.
 import { Module } from "@nestjs/common";
 import { CustomerContext } from "../common/auth/customer.guard";
 import { StaffContext } from "../common/auth/staff.guard";
@@ -17,6 +17,12 @@ import { AuthController, RefreshIdempotencyHooks } from "./auth.controller";
 import { CustomersRepository } from "./customers.repository";
 import { SignInLockout } from "./lockout";
 import { CustomerPasswordPolicy } from "./password-policy";
+import { PasswordResetsRepository } from "./password-resets.repository";
+import {
+  ChangePasswordIdempotencyHooks,
+  PasswordService,
+  ResetPasswordIdempotencyHooks,
+} from "./password.service";
 import { SessionsRepository } from "./sessions.repository";
 import { SessionsService } from "./sessions.service";
 import { SignInIdempotencyHooks, SignInService } from "./sign-in.service";
@@ -43,6 +49,10 @@ import { VerificationService } from "./verification.service";
     VerificationService,
     SignUpService,
     SignUpIdempotencyHooks,
+    PasswordResetsRepository,
+    PasswordService,
+    ResetPasswordIdempotencyHooks,
+    ChangePasswordIdempotencyHooks,
     RefreshIdempotencyHooks,
     CustomerContext,
     CookieWriter,
