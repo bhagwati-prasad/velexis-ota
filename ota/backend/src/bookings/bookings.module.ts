@@ -8,12 +8,16 @@
 // through their repositories and the sealed traveller documents through TravelerDocuments, provided here again (plain
 // providers without state); the Stripe gateway comes from PaymentGatewayModule, the Amadeus client and the connection
 // resolver from AmadeusModule, the priced offers from ShoppingModule, the request's customer from IdentityModule, the
-// `ota-payments` queue from QueuesModule, OutboxService from the global NotificationsModule. API only so far; the
-// bookings reads (OBE-046), the timeout reconciliation (OBE-043) and the ticketing retries (OBE-044) join it.
+// `ota-payments` queue from QueuesModule, OutboxService from the global NotificationsModule.
+//
+// The customer bookings reads (OBE-046): CustomerBookingsController over CustomerBookingsService, with the booking
+// access guard of common/auth (BookingAccessContext keeps its decision for the request). API only so far; the timeout
+// reconciliation (OBE-043) and the ticketing retries (OBE-044) join it.
 import { Module } from "@nestjs/common";
 import { AmadeusModule } from "../amadeus/amadeus.module";
 import { CheckoutRepository } from "../checkout/checkout.repository";
 import { checkoutKeyProvider, TravelerDocuments } from "../checkout/traveler-documents";
+import { BookingAccessContext, BookingAccessGuard } from "../common/auth/booking-access.guard";
 import { RequestContext } from "../common/http/request-context";
 import { QueuesModule } from "../common/queues/queues.module";
 import { IdentityModule } from "../identity/identity.module";
@@ -23,6 +27,8 @@ import { ShoppingModule } from "../shopping/shopping.module";
 import { TenancyModule } from "../tenancy/tenancy.module";
 import { BookingOrchestrator } from "./booking-orchestrator.service";
 import { BookingsRepository } from "./bookings.repository";
+import { CustomerBookingsController } from "./customer-bookings.controller";
+import { CustomerBookingsService } from "./customer-bookings.service";
 import { BookingTravelerDocuments, bookingsKeyProvider, OrderRecorder } from "./order-recorder";
 
 @Module({
@@ -34,8 +40,12 @@ import { BookingTravelerDocuments, bookingsKeyProvider, OrderRecorder } from "./
     IdentityModule,
     QueuesModule,
   ],
+  controllers: [CustomerBookingsController],
   providers: [
     BookingOrchestrator,
+    CustomerBookingsService,
+    BookingAccessContext,
+    BookingAccessGuard,
     BookingsRepository,
     OrderRecorder,
     bookingsKeyProvider,

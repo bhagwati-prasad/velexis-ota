@@ -1184,7 +1184,8 @@ Checkout, customer accounts in cookies, Stripe on the Velexis account, the airli
   - A concurrent change of the booking (version bump) makes the sync retry instead of overwriting.
 - **Verify:** `pnpm --filter @velexis/ota-backend test -- bookings && pnpm --filter @velexis/ota-backend test:int -- bookings`
 
-### OBE-046 · Implement customer bookings: list, get, ticketing status, events and fare rules
+### OBE-046 · Implement customer bookings: list, get, ticketing status, events and fare rules ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-backend
 - **Milestone:** M3
 - **Depends on:** OBE-042, OBE-033

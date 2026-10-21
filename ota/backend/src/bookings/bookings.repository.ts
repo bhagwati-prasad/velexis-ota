@@ -6,6 +6,14 @@
 // payment's link to its booking, and the time zones of airports (local Amadeus times become instants in SQL, `AT TIME
 // ZONE`). The checkout and payment rows themselves are read through CheckoutRepository and PaymentsRepository.
 //
+// The customer reads (OBE-046, db README §10 "My trips"): a customer's bookings of one environment by tab on the
+// partial indexes `bookings_customer_{upcoming,past,cancelled}_idx`, with keyset positions as UTC text with
+// microseconds (a JavaScript Date would lose them and skip or repeat rows); the booking access guard's read (the
+// booking's environment and customer, and whether a presented guest token hash is a live `booking_access_tokens` row
+// of it); the customer-visible events; the services, refunds and current documents of a booking; and what a refresh
+// claims and writes (the `booking.sync_requested` events are the throttle; a refresh bumps `version` only when the
+// booking's status changed). City names come from `reference.airports` and `reference.cities`.
+//
 // Like every tenant repository it takes the `tenantTx` transaction first, never opens one and never names a tenant
 // schema. Amounts are read as text (`numeric::text`), dates and local date-times through `to_char`, never as
 // JavaScript numbers or local-time dates; jsonb is written as JSON text.
@@ -218,6 +226,203 @@ export interface ZonedLocal {
 
 /** The local date-time text of a `timestamp` column. */
 const LOCAL_FORMAT = `YYYY-MM-DD"T"HH24:MI:SS`;
+
+// ---- Customer reads (OBE-046) ---------------------------------------------------------------------------------------
+
+/** What the customer reads need of `storefront_settings`. */
+export interface CustomerBookingSettingsRow {
+  readonly ticketingPolicy: string;
+  /** The `features` jsonb (`{ancillaries, brandedFareUpsell, selfServiceCancellation}`), read defensively. */
+  readonly features: unknown;
+}
+
+/** A "My trips" tab of bookings.list (`timeframe`). */
+export type BookingTimeframe = "upcoming" | "past" | "cancelled" | "all";
+
+/** The order of bookings.list (`sort`). */
+export type BookingListSort = "departure" | "-departure" | "created" | "-created";
+
+/** The statuses of the upcoming and past tabs (db README §10; the partial indexes `bookings_customer_*_idx`). */
+export const ACTIVE_BOOKING_STATUSES = ["pending", "confirmed", "ticketed", "partially_ticketed"] as const;
+
+/** One page of a customer's bookings. */
+export interface BookingListQuery {
+  readonly environment: string;
+  readonly customerId: string;
+  readonly timeframe: BookingTimeframe;
+  readonly sort: BookingListSort;
+  /** `YYYY-MM-DD`: the local date of the first departure, inclusive. */
+  readonly departureFrom?: string | undefined;
+  readonly departureTo?: string | undefined;
+  /** ISO-8601 instants: `createdFrom` inclusive, `createdTo` exclusive. */
+  readonly createdFrom?: string | undefined;
+  readonly createdTo?: string | undefined;
+  /** The keyset position of the previous page: its last row's sort key (`sortKey`) and id. */
+  readonly after?: { readonly key: string; readonly id: string } | undefined;
+  /** Rows to read (the page size plus one, to know whether there is a next page). */
+  readonly limit: number;
+  readonly now: Date;
+}
+
+/** A booking of a list page. */
+export interface BookingListRow {
+  readonly id: string;
+  readonly reference: string;
+  readonly status: string;
+  readonly recordLocator: string | null;
+  readonly tripType: string | null;
+  readonly originIata: string | null;
+  readonly destinationIata: string | null;
+  readonly firstDepartureAt: Date;
+  readonly lastArrivalAt: Date;
+  /** `YYYY-MM-DDTHH:MM:SS`: the first segment's local departure, else the first departure in the origin's zone. */
+  readonly firstDepartureLocal: string;
+  readonly travelersCount: number;
+  readonly currency: string;
+  readonly totalAmount: string;
+  readonly ticketingStatus: string;
+  readonly leadLastName: string;
+  readonly hasScheduleChange: boolean;
+  readonly createdAt: Date;
+  readonly cancelledAt: Date | null;
+  /** The sort key in UTC with microseconds (`YYYY-MM-DDTHH:MM:SS.US`), the keyset position of the next page. */
+  readonly sortKey: string;
+}
+
+/** A segment of a list card. */
+export interface SummarySegmentRow {
+  readonly bookingId: string;
+  readonly itineraryIndex: number;
+  readonly departureIata: string;
+  readonly arrivalIata: string;
+  readonly departureLocal: string;
+  readonly arrivalLocal: string;
+  readonly carrierCode: string;
+}
+
+/** The lead traveller of a list card. */
+export interface LeadTravelerRow {
+  readonly bookingId: string;
+  readonly firstName: string;
+  readonly lastName: string;
+}
+
+/** What the booking access guard reads of a booking: where it lives, whose it is, and the presented tokens' grant. */
+export interface BookingAccessRow {
+  readonly environment: string;
+  readonly customerId: string | null;
+  readonly status: string;
+  /** One of the presented token hashes is a live `booking_access_tokens` row of this booking. */
+  readonly tokenGranted: boolean;
+}
+
+/** The `bookings` columns the customer answers read besides BookingRow. */
+export interface BookingDetailsRow {
+  readonly ticketingRequestedAt: Date | null;
+  readonly ticketingLastAttemptAt: Date | null;
+  readonly ticketingErrorCode: string | null;
+  readonly orderSnapshot: unknown;
+  readonly orderIncluded: unknown;
+  readonly orderDictionaries: unknown;
+  readonly syncError: string | null;
+  readonly cancelledBy: string | null;
+  /** The last refresh claim or sync of the booking (`booking.sync_requested` events, `last_synced_at`). */
+  readonly lastRefreshAt: Date | null;
+}
+
+/** A customer-visible `booking_events` row. */
+export interface BookingEventRow {
+  readonly id: string;
+  readonly bookingId: string;
+  readonly type: string;
+  readonly actorType: string;
+  readonly statusFrom: string | null;
+  readonly statusTo: string | null;
+  readonly summary: string | null;
+  readonly data: unknown;
+  readonly createdAt: Date;
+  /** `created_at` in UTC with microseconds, the keyset position of the next page. */
+  readonly sortKey: string;
+}
+
+/** A `booking_ancillaries` row with its traveller's and segment's Amadeus ids. */
+export interface BookingAncillaryRow {
+  readonly id: string;
+  readonly travelerId: string | null;
+  readonly segmentId: string | null;
+  readonly type: string;
+  readonly serviceCode: string | null;
+  readonly quantity: number;
+  readonly weight: number | null;
+  readonly weightUnit: string | null;
+  readonly seatNumber: string | null;
+  readonly currency: string | null;
+  readonly priceAmount: string;
+  readonly status: string;
+  readonly source: string;
+  readonly emdNumber: string | null;
+}
+
+/** A `refunds` row of a booking. */
+export interface BookingRefundRow {
+  readonly id: string;
+  readonly paymentId: string;
+  readonly currency: string;
+  readonly amount: string;
+  readonly penaltyAmount: string | null;
+  readonly reason: string;
+  readonly status: string;
+  readonly createdAt: Date;
+  readonly processedAt: Date | null;
+}
+
+/** A current `booking_documents` row (latest per kind and ticket, not superseded). */
+export interface BookingDocumentRow {
+  readonly id: string;
+  readonly ticketId: string | null;
+  readonly kind: string;
+  readonly status: string;
+  readonly locale: string;
+  readonly fileName: string;
+  readonly contentType: string;
+  readonly sizeBytes: number | null;
+  readonly invoiceNumber: string | null;
+  readonly createdAt: Date;
+}
+
+/** The booking a refresh claims, locked `FOR UPDATE`. */
+export interface RefreshClaimRow {
+  readonly status: string;
+  readonly amadeusOrderId: string | null;
+  readonly ownerOfficeId: string | null;
+  readonly lastRefreshAt: Date | null;
+  /** The booking's `version` at the claim: the record step writes nothing when another writer changed it since. */
+  readonly version: number;
+}
+
+/** The event type of a refresh claim (staff-only): the throttle of bookings.get, getTicketingStatus, getFareRules. */
+export const REFRESH_CLAIM_EVENT = "booking.sync_requested";
+
+/** A timestamptz column as UTC text with microseconds: the keyset positions of the lists. */
+const utcKeyOf = (column: string) =>
+  sql<string>`to_char(${sql.ref(column)} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US')`;
+
+/** The last refresh of booking `b`: the newest claim event or `last_synced_at`, whichever is later. */
+const lastRefreshOf = sql<Date | null>`greatest(b.last_synced_at, (
+  SELECT max(e.created_at) FROM booking_events e
+  WHERE e.booking_id = b.id AND e.type = ${REFRESH_CLAIM_EVENT}
+))`;
+
+/**
+ * The local first departure of booking `b`: its first segment's local time, else (a pending booking has no segment
+ * yet) `first_departure_at` in the origin airport's time zone (UTC when unknown).
+ */
+const firstDepartureLocalOf = sql<string>`coalesce(
+  (SELECT to_char(s.departure_local, ${LOCAL_FORMAT}) FROM booking_segments s
+    WHERE s.booking_id = b.id ORDER BY s.itinerary_index, s.segment_index LIMIT 1),
+  to_char(b.first_departure_at AT TIME ZONE coalesce(
+    (SELECT a.time_zone FROM reference.airports a WHERE a.iata_code = b.origin_iata), 'UTC'), ${LOCAL_FORMAT})
+)`;
 
 /** The payment states a checkout's active payment can be in (not cancelled, failed or refunded). */
 export const ACTIVE_PAYMENT_STATUSES = [
@@ -607,5 +812,396 @@ export class BookingsRepository {
       ORDER BY t.ord
     `.execute(trx);
     return rows.map((row) => row.at);
+  }
+
+  // ---- Customer reads (OBE-046) -------------------------------------------------------------------------------------
+
+  /** The settings the customer answers follow; `undefined` without a settings row. */
+  async customerSettings(trx: TenantTransaction): Promise<CustomerBookingSettingsRow | undefined> {
+    return await trx
+      .selectFrom("storefront_settings")
+      .select(["ticketing_policy as ticketingPolicy", "features"])
+      .executeTakeFirst();
+  }
+
+  /**
+   * One page of a customer's bookings of one environment (db README §10 "My trips"): upcoming = the active statuses
+   * whose last arrival is now or later, past = the active statuses whose last arrival has passed, cancelled, all =
+   * every status but `failed`; then the filters, the keyset position and the sort with the id as tie-breaker.
+   */
+  async customerBookings(trx: TenantTransaction, query: BookingListQuery): Promise<BookingListRow[]> {
+    const byDeparture = query.sort === "departure" || query.sort === "-departure";
+    const direction = query.sort.startsWith("-") ? "desc" : "asc";
+    const column = byDeparture ? "b.first_departure_at" : "b.created_at";
+    let select = trx
+      .selectFrom("bookings as b")
+      .select([
+        "b.id as id",
+        "b.reference as reference",
+        "b.status as status",
+        "b.record_locator as recordLocator",
+        "b.trip_type as tripType",
+        "b.first_departure_at as firstDepartureAt",
+        "b.last_arrival_at as lastArrivalAt",
+        "b.travelers_count as travelersCount",
+        "b.ticketing_status as ticketingStatus",
+        "b.lead_last_name as leadLastName",
+        "b.created_at as createdAt",
+        "b.cancelled_at as cancelledAt",
+        sql<string | null>`b.origin_iata::text`.as("originIata"),
+        sql<string | null>`b.destination_iata::text`.as("destinationIata"),
+        sql<string>`b.currency::text`.as("currency"),
+        sql<string>`b.total_amount::text`.as("totalAmount"),
+        firstDepartureLocalOf.as("firstDepartureLocal"),
+        sql<boolean>`EXISTS (
+          SELECT 1 FROM booking_events e WHERE e.booking_id = b.id AND e.type = 'booking.schedule_changed'
+        )`.as("hasScheduleChange"),
+        utcKeyOf(column).as("sortKey"),
+      ])
+      .where("b.environment", "=", query.environment)
+      .where("b.customer_id", "=", query.customerId);
+    switch (query.timeframe) {
+      case "upcoming":
+        select = select
+          .where("b.status", "in", [...ACTIVE_BOOKING_STATUSES])
+          .where("b.last_arrival_at", ">=", query.now);
+        break;
+      case "past":
+        select = select
+          .where("b.status", "in", [...ACTIVE_BOOKING_STATUSES])
+          .where("b.last_arrival_at", "<", query.now);
+        break;
+      case "cancelled":
+        select = select.where("b.status", "=", "cancelled");
+        break;
+      case "all":
+        select = select.where("b.status", "<>", "failed");
+        break;
+    }
+    if (query.departureFrom !== undefined) {
+      select = select.where(sql<boolean>`(${firstDepartureLocalOf})::date >= ${query.departureFrom}::date`);
+    }
+    if (query.departureTo !== undefined) {
+      select = select.where(sql<boolean>`(${firstDepartureLocalOf})::date <= ${query.departureTo}::date`);
+    }
+    if (query.createdFrom !== undefined) {
+      select = select.where(sql<boolean>`b.created_at >= ${query.createdFrom}::timestamptz`);
+    }
+    if (query.createdTo !== undefined) {
+      select = select.where(sql<boolean>`b.created_at < ${query.createdTo}::timestamptz`);
+    }
+    if (query.after !== undefined) {
+      const comparison = sql.raw(direction === "desc" ? "<" : ">");
+      select = select.where(
+        sql<boolean>`(${sql.ref(column)}, b.id) ${comparison} (${query.after.key}::timestamp AT TIME ZONE 'UTC', ${query.after.id})`,
+      );
+    }
+    const ordered = byDeparture
+      ? select.orderBy("b.first_departure_at", direction)
+      : select.orderBy("b.created_at", direction);
+    return await ordered.orderBy("b.id", direction).limit(query.limit).execute();
+  }
+
+  /** The segments of the bookings `ids`, in bound and segment order. */
+  async summarySegments(trx: TenantTransaction, ids: readonly string[]): Promise<SummarySegmentRow[]> {
+    if (ids.length === 0) {
+      return [];
+    }
+    return await trx
+      .selectFrom("booking_segments")
+      .select([
+        "booking_id as bookingId",
+        "itinerary_index as itineraryIndex",
+        "carrier_code as carrierCode",
+        sql<string>`departure_iata::text`.as("departureIata"),
+        sql<string>`arrival_iata::text`.as("arrivalIata"),
+        sql<string>`to_char(departure_local, ${LOCAL_FORMAT})`.as("departureLocal"),
+        sql<string>`to_char(arrival_local, ${LOCAL_FORMAT})`.as("arrivalLocal"),
+      ])
+      .where("booking_id", "in", [...ids])
+      .orderBy("booking_id")
+      .orderBy("itinerary_index")
+      .orderBy("segment_index")
+      .execute();
+  }
+
+  /** The lead traveller of each of the bookings `ids` (its first adult by Amadeus id, else its first traveller). */
+  async leadTravelers(trx: TenantTransaction, ids: readonly string[]): Promise<LeadTravelerRow[]> {
+    if (ids.length === 0) {
+      return [];
+    }
+    return await trx
+      .selectFrom("booking_travelers")
+      .distinctOn("booking_id")
+      .select(["booking_id as bookingId", "first_name as firstName", "last_name as lastName"])
+      .where("booking_id", "in", [...ids])
+      .orderBy("booking_id")
+      .orderBy(sql`traveler_type <> 'ADULT'`)
+      .orderBy(sql`length(amadeus_traveler_id)`)
+      .orderBy("amadeus_traveler_id")
+      .execute();
+  }
+
+  /** The city name of each known airport of `codes` (`reference.cities`, else the airport's own city name). */
+  async cityNames(trx: TenantTransaction, codes: readonly string[]): Promise<Map<string, string>> {
+    const wanted = [...new Set(codes.filter((code) => /^[A-Z]{3}$/.test(code)))];
+    if (wanted.length === 0) {
+      return new Map();
+    }
+    const rows = await trx
+      .selectFrom("reference.airports as a")
+      .leftJoin("reference.cities as c", "c.iata_code", "a.city_code")
+      .select([
+        sql<string>`a.iata_code::text`.as("code"),
+        sql<string | null>`coalesce(c.name, a.city_name)`.as("name"),
+      ])
+      .where("a.iata_code", "in", wanted)
+      .execute();
+    return new Map(rows.flatMap((row) => (row.name === null ? [] : [[row.code, row.name]])));
+  }
+
+  /**
+   * What the booking access guard decides on: the booking's environment, customer and status, and whether one of
+   * `tokenHashes` (SHA-256 hex of presented guest tokens) is a token of this booking that is neither revoked nor
+   * expired at `now`. `undefined` for an unknown id.
+   */
+  async bookingAccess(
+    trx: TenantTransaction,
+    bookingId: string,
+    tokenHashes: readonly string[],
+    now: Date,
+  ): Promise<BookingAccessRow | undefined> {
+    return await trx
+      .selectFrom("bookings as b")
+      .select([
+        "b.environment as environment",
+        "b.customer_id as customerId",
+        "b.status as status",
+        sql<boolean>`EXISTS (
+          SELECT 1 FROM booking_access_tokens t
+          WHERE t.booking_id = b.id AND t.token_hash = ANY(${[...tokenHashes]}::text[])
+            AND t.revoked_at IS NULL AND t.expires_at > ${now}
+        )`.as("tokenGranted"),
+      ])
+      .where("b.id", "=", bookingId)
+      .executeTakeFirst();
+  }
+
+  /** The columns of the booking `id` the customer answers read besides `booking()`. */
+  async bookingDetails(trx: TenantTransaction, id: string): Promise<BookingDetailsRow | undefined> {
+    return await trx
+      .selectFrom("bookings as b")
+      .select([
+        "b.ticketing_requested_at as ticketingRequestedAt",
+        "b.ticketing_last_attempt_at as ticketingLastAttemptAt",
+        "b.ticketing_error_code as ticketingErrorCode",
+        "b.order_snapshot as orderSnapshot",
+        "b.order_included as orderIncluded",
+        "b.order_dictionaries as orderDictionaries",
+        "b.sync_error as syncError",
+        "b.cancelled_by as cancelledBy",
+        lastRefreshOf.as("lastRefreshAt"),
+      ])
+      .where("b.id", "=", id)
+      .executeTakeFirst();
+  }
+
+  /** A page of the booking's customer-visible events, newest first, after the keyset position `after`. */
+  async customerEvents(
+    trx: TenantTransaction,
+    bookingId: string,
+    page: {
+      readonly after?: { readonly key: string; readonly id: string } | undefined;
+      readonly limit: number;
+    },
+  ): Promise<BookingEventRow[]> {
+    let select = trx
+      .selectFrom("booking_events as e")
+      .select([
+        "e.id as id",
+        "e.booking_id as bookingId",
+        "e.type as type",
+        "e.actor_type as actorType",
+        "e.status_from as statusFrom",
+        "e.status_to as statusTo",
+        "e.summary as summary",
+        "e.data as data",
+        "e.created_at as createdAt",
+        utcKeyOf("e.created_at").as("sortKey"),
+      ])
+      .where("e.booking_id", "=", bookingId)
+      .where("e.visible_to_customer", "=", true);
+    if (page.after !== undefined) {
+      select = select.where(
+        sql<boolean>`(e.created_at, e.id) < (${page.after.key}::timestamp AT TIME ZONE 'UTC', ${page.after.id})`,
+      );
+    }
+    return await select.orderBy("e.created_at", "desc").orderBy("e.id", "desc").limit(page.limit).execute();
+  }
+
+  /** The booking's additional services, with the Amadeus ids of their traveller and segment. */
+  async ancillaries(trx: TenantTransaction, bookingId: string): Promise<BookingAncillaryRow[]> {
+    return await trx
+      .selectFrom("booking_ancillaries as a")
+      .leftJoin("booking_travelers as t", "t.id", "a.booking_traveler_id")
+      .leftJoin("booking_segments as s", "s.id", "a.booking_segment_id")
+      .leftJoin("booking_tickets as k", "k.id", "a.emd_ticket_id")
+      .select([
+        "a.id as id",
+        "t.amadeus_traveler_id as travelerId",
+        "s.amadeus_segment_id as segmentId",
+        "a.type as type",
+        "a.service_code as serviceCode",
+        "a.quantity as quantity",
+        "a.weight as weight",
+        "a.weight_unit as weightUnit",
+        "a.seat_number as seatNumber",
+        "a.status as status",
+        "a.source as source",
+        "k.document_number as emdNumber",
+        sql<string | null>`a.currency::text`.as("currency"),
+        sql<string>`a.price_amount::text`.as("priceAmount"),
+      ])
+      .where("a.booking_id", "=", bookingId)
+      .orderBy("a.created_at")
+      .orderBy("a.id")
+      .execute();
+  }
+
+  /** The refunds of the booking, oldest first. */
+  async refundsOf(trx: TenantTransaction, bookingId: string): Promise<BookingRefundRow[]> {
+    return await trx
+      .selectFrom("refunds")
+      .select([
+        "id",
+        "payment_id as paymentId",
+        "reason",
+        "status",
+        "created_at as createdAt",
+        "processed_at as processedAt",
+        sql<string>`currency::text`.as("currency"),
+        sql<string>`amount::text`.as("amount"),
+        sql<string | null>`penalty_amount::text`.as("penaltyAmount"),
+      ])
+      .where("booking_id", "=", bookingId)
+      .orderBy("created_at")
+      .orderBy("id")
+      .execute();
+  }
+
+  /** The booking's current documents: the newest of each kind and ticket that is not superseded. */
+  async currentDocuments(trx: TenantTransaction, bookingId: string): Promise<BookingDocumentRow[]> {
+    return await trx
+      .selectFrom("booking_documents")
+      .distinctOn(["kind", "booking_ticket_id"])
+      .select([
+        "id",
+        "booking_ticket_id as ticketId",
+        "kind",
+        "status",
+        "locale",
+        "file_name as fileName",
+        "content_type as contentType",
+        "size_bytes as sizeBytes",
+        "invoice_number as invoiceNumber",
+        "created_at as createdAt",
+      ])
+      .where("booking_id", "=", bookingId)
+      .where("status", "<>", "superseded")
+      .orderBy("kind")
+      .orderBy("booking_ticket_id")
+      .orderBy("created_at", "desc")
+      .orderBy("id", "desc")
+      .execute();
+  }
+
+  /**
+   * The booking `id` locked `FOR UPDATE` for a refresh claim, with its last refresh; `undefined` when unknown.
+   *
+   * Two statements: the lock first, then the read. Under READ COMMITTED a statement sees what was committed when it
+   * started, so a read in the locking statement itself, which may have waited for a concurrent claim, would miss that
+   * claim's `booking.sync_requested` event and call Amadeus a second time.
+   */
+  async lockForRefresh(trx: TenantTransaction, id: string): Promise<RefreshClaimRow | undefined> {
+    const locked = await trx
+      .selectFrom("bookings")
+      .select("id")
+      .where("id", "=", id)
+      .forUpdate()
+      .executeTakeFirst();
+    if (locked === undefined) {
+      return undefined;
+    }
+    return await trx
+      .selectFrom("bookings as b")
+      .select([
+        "b.status as status",
+        "b.amadeus_order_id as amadeusOrderId",
+        "b.owner_office_id as ownerOfficeId",
+        "b.version as version",
+        lastRefreshOf.as("lastRefreshAt"),
+      ])
+      .where("b.id", "=", id)
+      .executeTakeFirst();
+  }
+
+  /**
+   * Writes what a refresh read of the order; bumps `version` only when `bumpVersion` (the booking's status or
+   * ticketing state changed). A refresh that only brings the snapshot up to date leaves the ETag as it is.
+   */
+  async updateSynced(
+    trx: TenantTransaction,
+    id: string,
+    values: Omit<Updateable<Db["bookings"]>, "version" | "id">,
+    bumpVersion: boolean,
+  ): Promise<void> {
+    await trx
+      .updateTable("bookings")
+      .set(bumpVersion ? { ...values, version: sql`version + 1` } : values)
+      .where("id", "=", id)
+      .execute();
+  }
+
+  /** Adds associated records a refresh found; one the booking has already (same reference and system) is kept. */
+  async insertAssociatedRecords(
+    trx: TenantTransaction,
+    rows: readonly Insertable<Db["booking_associated_records"]>[],
+  ): Promise<void> {
+    if (rows.length === 0) {
+      return;
+    }
+    await trx
+      .insertInto("booking_associated_records")
+      .values([...rows])
+      .onConflict((conflict) =>
+        conflict.columns(["booking_id", "reference", "origin_system_code"]).doNothing(),
+      )
+      .execute();
+  }
+
+  /** Records the Amadeus state of a segment (`bookingStatus`, `isFlown`) found by a refresh. */
+  async updateSegmentState(
+    trx: TenantTransaction,
+    segmentRowId: string,
+    state: { readonly status: string; readonly isFlown: boolean; readonly now: Date },
+  ): Promise<void> {
+    await trx
+      .updateTable("booking_segments")
+      .set({ status: state.status, is_flown: state.isFlown, updated_at: state.now })
+      .where("id", "=", segmentRowId)
+      .execute();
+  }
+
+  /** Records the Amadeus `documentStatus` of a ticket found by a refresh (VOID, REFUNDED, EXCHANGED …). */
+  async updateTicketStatus(
+    trx: TenantTransaction,
+    ticketId: string,
+    state: { readonly status: string; readonly now: Date },
+  ): Promise<void> {
+    await trx
+      .updateTable("booking_tickets")
+      .set({ status: state.status, updated_at: state.now })
+      .where("id", "=", ticketId)
+      .execute();
   }
 }
