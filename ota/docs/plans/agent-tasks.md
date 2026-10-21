@@ -1133,7 +1133,8 @@ Checkout, customer accounts in cookies, Stripe on the Velexis account, the airli
   - Two calls with the same key create one order; another key answers `409 CHECKOUT_ALREADY_COMPLETED`; no transaction is open during the Amadeus call (spy on the pool).
 - **Verify:** `pnpm --filter @velexis/ota-backend test -- bookings && pnpm --filter @velexis/ota-backend test:int -- bookings`
 
-### OBE-043 · Reconcile timed-out orders and replay the 504
+### OBE-043 · Reconcile timed-out orders and replay the 504 ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-backend
 - **Milestone:** M3
 - **Depends on:** OBE-042, OBE-040

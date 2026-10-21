@@ -167,8 +167,8 @@ sequenceDiagram
     W->>S: capture (Stripe) and issue per policy
     W->>D: outbox: confirmation e-mail
   else not found, Stripe
-    W->>S: void the authorisation
     W->>D: booking failed (SUPPLIER_TIMEOUT), checkout open, e-mail "not booked, not charged", staff alert
+    W->>S: payment.void on ota-payments: void the authorisation
   else not found, airline card
     W->>D: ticketing_status manual_review, reconcile_outcome manual_review, staff alert
   end
@@ -178,8 +178,12 @@ sequenceDiagram
 
 Rules:
 
-- The window and the cadence: first check after 30 s, then every minute, for 15 minutes. Each check costs one Queue List and at most three by-reference calls.
-- A PNR matches only if it carries the remark `VELEXIS <reference>`; a name match alone is never enough.
+- The window and the cadence: first check after 30 s, then every minute, for 15 minutes. Each check costs one Queue List and at most three by-reference calls. An attempt claims the booking (`FOR UPDATE SKIP LOCKED`, `reconcile_attempts + 1`, at most one attempt per 45 s), so the first job and a scan of the same minute make one search; only the attempt that still holds the claim may fail the booking.
+- The candidates: PNRs of the booking queue created from 1 minute before to 5 minutes after `create_order_started_at` (Queue List gives the minute, read in UTC unless it names an offset: an assumption to confirm with Amadeus with the queue convention, OADR-0003 follow-ups) whose travellers include the lead's last name, the closest in time first.
+- A PNR matches only if it carries the general remark `VELEXIS <reference>` with sub-type BACKOFFICE; a name match alone is never enough.
+- A search that could not be completed (Queue List or a read failed, other than a `404`; an order with the remark that cannot be read) decides nothing: the next attempt looks again, and past `reconcile_until` the staff are alerted once. Nothing is voided while the order may be in what could not be read.
+- Found: the order is recorded as step 3 records it (`reconcile_outcome = found`, the checkout `completed`, which releases its lock), then captured and issued per the policy (step 5 through the ticketing job's attempt, a resync first). Not found: the booking `failed` with its `checkout_id` cleared, the checkout `open` again (`expired` past its expiry), `payment.void` queued on `ota-payments`, `booking.not_confirmed` to the traveller, a staff alert; checkout.complete then refuses that payment (`402 PAYMENT_REQUIRED`) while its authorisation is voided.
+- A re-price that was accepted before the lost answer moves the booking and the checkout to the new priced offer at the timeout, so a found order is captured for the total it was booked at.
 - If the tenant has no booking queue configured, the order cannot be searched for: Stripe bookings are voided after 15 minutes and staff are told to check the office by hand (they can still import the PNR from the console).
 - Other operations that may have happened on a timeout: **issue** (resync with Flight Order Management before any retry), **cancel** (GET the order within 15 minutes, then apply the money step once), **patch** (resync, then let the caller retry with `If-Match`).
 
@@ -202,7 +206,7 @@ The interceptor runs after the guards and the validation interceptor, so an inva
 
 ### 5.2 Replay after a reconciliation
 
-For `checkout.complete`, `checkout.completeWithAirlineCard` and `bookings.cancel`, a stored `504` is not final. On replay the interceptor reads the linked booking (`resource_id`): still `pending` with `reconcile_until` in the future → the same `504`; decided → the final `201` built from the booking, or the final error.
+For `checkout.complete`, `checkout.completeWithAirlineCard` and `bookings.cancel`, a stored `504` is not final. On replay the interceptor reads the linked booking (`resource_id`): still `pending` (undecided, whatever the time) → the same `504` with `details.replayed: true`; decided → the final `201` built from the booking, or the final error. For `checkout.complete` (OBE-043, `CompleteCheckoutIdempotencyHooks`) the final error of a booking whose order was not found is `502 SUPPLIER_ERROR` (`details.bookingId`, `bookingStatus: failed`): nothing was booked and the authorisation is released; the booking's own `failure_code` stays `SUPPLIER_TIMEOUT`.
 
 ### 5.3 Downstream keys
 

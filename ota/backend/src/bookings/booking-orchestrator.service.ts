@@ -37,9 +37,11 @@
 //          answer in time, a reset connection, an Amadeus `5xx` (500, 502, 503, 504), an answer that cannot be read:
 //          the order may exist. The booking stays `pending` with the authorisation and its `checkout_id` (the
 //          checkout cannot change, CHECKOUT_BEING_COMPLETED, and is never completed a second time),
-//          `reconcile_until = create_order_started_at + 15 minutes` and the event `booking.supplier_timeout`, so the
-//          reconciliation of OBE-043 decides it; the answer is `504 SUPPLIER_TIMEOUT` with `details.bookingId`.
-//          Nothing is voided and Flight Create Orders is never sent again for the checkout.
+//          `reconcile_until = create_order_started_at + 15 minutes` and the event `booking.supplier_timeout`, and the
+//          first `booking.reconcile` is queued 30 seconds later (reconcile.service.ts decides it, OBE-043); a re-price
+//          that was accepted moves the booking and the checkout to the new priced offer now, as the order sent holds
+//          it. The answer is `504 SUPPLIER_TIMEOUT` with `details.bookingId`. Nothing is voided and Flight Create
+//          Orders is never sent again for the checkout.
 //   3. Record (T2): order-recorder.ts (`confirmed` or `ticketed`, children, events, redacted snapshot, deadline,
 //      outbox `booking.confirmed`), checkout `completed`. An order that cannot be recorded (an answer that cannot be
 //      read, a T2 that fails) exists at Amadeus: it is an unknown outcome as above (`504 SUPPLIER_TIMEOUT`).
@@ -53,11 +55,19 @@
 //
 // The answer is `201` CheckoutCompletion: the booking in customer scope (order-recorder.ts `toBooking`), the Amadeus
 // warnings of pricing, create and issue and ours. The guest booking token comes with OBE-047 (null until then).
+//
+// Same-key retries (OBE-043, OADR-0003 point 6, architecture-booking.md §5.2): the idempotency hooks of
+// completeCheckout (`CompleteCheckoutIdempotencyHooks`) link a stored `504 SUPPLIER_TIMEOUT` to its booking
+// (`resourceOf`), so the record is kept instead of released, and answer its replays from the booking
+// (`resolveReplay`): the same `504` with `details.replayed: true` while the booking is `pending`, then the final `201`
+// built from the booking once the reconciliation found the order, or the final `502 SUPPLIER_ERROR` ("nothing was
+// booked") once it proved it absent. A payment whose booking failed that way is not used again (`402
+// PAYMENT_REQUIRED`): its authorisation is being voided.
 import { InjectQueue } from "@nestjs/bullmq";
 import { Inject, Injectable } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import type { components } from "@velexis/api-types";
-import { AppError } from "@velexis/errors";
+import { AppError, toErrorEnvelope } from "@velexis/errors";
 import { redactPayload } from "@velexis/logger";
 import type { JobsOptions, Queue } from "bullmq";
 import { PinoLogger } from "nestjs-pino";
@@ -89,6 +99,13 @@ import { requirementsForPricedOffer } from "../checkout/requirements";
 import { TravelerDocuments } from "../checkout/traveler-documents";
 import { CustomerContext } from "../common/auth/customer.guard";
 import { Clock } from "../common/clock";
+import {
+  IdempotencyHooksFor,
+  type IdempotencyHooks,
+  type IdempotencyRecord,
+  type IdempotencyResource,
+  type IdempotencyResponse,
+} from "../common/http/idempotency.service";
 import { RequestContext } from "../common/http/request-context";
 import { IdGenerator } from "../common/ids";
 import { OTA_QUEUE } from "../common/queues/queue-names";
@@ -146,6 +163,14 @@ import {
   type OrderTraveler,
   type TicketingPolicy,
 } from "./order-request.builder";
+import {
+  CAPTURE_RETRY_DELAY_MS,
+  RECONCILE_WINDOW_MS,
+  reconcileJob,
+  ReconcileRepository,
+} from "./reconcile.service";
+
+export { CAPTURE_RETRY_DELAY_MS, RECONCILE_WINDOW_MS };
 
 type Schemas = components["schemas"];
 export type CheckoutCompleteRequest = Schemas["CheckoutCompleteRequest"];
@@ -160,12 +185,6 @@ export interface CompleteCheckoutInput {
 
 /** A priced offer older than this is priced again before the order (contract step 4, `repriceAfterMinutes`). */
 export const REPRICE_AFTER_MS = 10 * 60_000;
-
-/** How long after `create_order_started_at` the reconciliation looks for an order (OADR-0003 point 4). */
-export const RECONCILE_WINDOW_MS = 15 * 60_000;
-
-/** When `payment.capture_retry` runs after a failed capture (OADR-0008 point 7). */
-export const CAPTURE_RETRY_DELAY_MS = 10 * 60_000;
 
 /** How long a job enqueue after a commit may take before it is left to the jobs' own scans. */
 export const ENQUEUE_TIMEOUT_MS = 2000;
@@ -326,6 +345,47 @@ function supplierTimeout(bookingId: string, cause?: unknown): AppError {
   });
 }
 
+/** A booking id as checkout.complete writes them. */
+const BOOKING_ID = /^bkg_[0-9A-Za-z]{16,40}$/;
+
+/**
+ * The pending booking a stored answer of checkout.complete names: a `504 SUPPLIER_TIMEOUT` with `details.bookingId`
+ * (the idempotency `resourceOf` hook); `undefined` for any other answer.
+ */
+export function pendingBookingOf(response: IdempotencyResponse): IdempotencyResource | undefined {
+  const error = isRecord(response.body) ? response.body["error"] : undefined;
+  if (response.status !== 504 || !isRecord(error) || error["code"] !== "SUPPLIER_TIMEOUT") {
+    return undefined;
+  }
+  const bookingId = isRecord(error["details"]) ? error["details"]["bookingId"] : undefined;
+  return typeof bookingId === "string" && BOOKING_ID.test(bookingId)
+    ? { type: "booking", id: bookingId }
+    : undefined;
+}
+
+/** A stored `504 SUPPLIER_TIMEOUT` as its replays send it while the booking is undecided: `details.replayed: true`. */
+export function replayedTimeout(response: IdempotencyResponse): IdempotencyResponse {
+  const body = isRecord(response.body) ? response.body : {};
+  const error = isRecord(body["error"]) ? body["error"] : {};
+  const details = isRecord(error["details"]) ? error["details"] : {};
+  return {
+    ...response,
+    body: { ...body, error: { ...error, details: { ...details, replayed: true } } },
+  };
+}
+
+/**
+ * The final error of a checkout.complete whose booking failed after its `504` (the reconciliation proved the order
+ * absent): `502 SUPPLIER_ERROR`, the public code of a reconciled create-order that failed; nothing was booked and the
+ * authorisation is released.
+ */
+export function reconciledFailure(bookingId: string): AppError {
+  return new AppError("SUPPLIER_ERROR", {
+    message: "The airline did not confirm the booking. Nothing was booked and your payment was released.",
+    details: { bookingId, bookingStatus: "failed" },
+  });
+}
+
 /** The answer of a refused order (step 2), with the supplier issue kept for console scope. */
 export function rejectionAnswer(error: AppError, priceDetails: JsonObject): AppError {
   if (
@@ -427,6 +487,8 @@ export class BookingOrchestrator {
     @Inject(PAYMENT_GATEWAY) private readonly gateway: PaymentGateway,
     private readonly outbox: OutboxService,
     @InjectQueue(OTA_QUEUE.payments) private readonly paymentsQueue: Queue,
+    @InjectQueue(OTA_QUEUE.bookings) private readonly bookingsQueue: Queue,
+    private readonly reconcile: ReconcileRepository,
     private readonly clock: Clock,
     private readonly ids: IdGenerator,
     private readonly logger: PinoLogger,
@@ -557,7 +619,9 @@ export class BookingOrchestrator {
     }
     if (
       payment.providerPaymentId === null ||
-      ["canceled", "refunded", "partially_refunded"].includes(payment.status)
+      ["canceled", "refunded", "partially_refunded"].includes(payment.status) ||
+      // The reconciliation proved the order of this payment's booking absent: its authorisation is being voided.
+      (payment.bookingId !== null && (await this.reconcile.notFound(trx, payment.bookingId)))
     ) {
       throw new AppError("PAYMENT_REQUIRED", { message: "Pay for the checkout before completing it." });
     }
@@ -851,13 +915,16 @@ export class BookingOrchestrator {
         query: request.query,
       });
     } catch (error) {
-      throw await this.afterCreateFailure(tenant, ctx, prepared, claim, error, priced);
+      throw await this.afterCreateFailure(tenant, ctx, prepared, claim, error, { priced, repriced, issue });
     }
     const order = readCreatedOrder(reply.body);
     if (order === undefined) {
       // The order exists (a 2xx) but its answer cannot be recorded: it is found again like a lost answer (OBE-043).
       this.logger.error({ bookingId: booking.id }, "bookings.create_order_unreadable");
-      throw await this.unknownOutcome(tenant, prepared, claim, "create_order_unreadable");
+      throw await this.unknownOutcome(tenant, prepared, claim, "create_order_unreadable", {
+        repriced,
+        issue,
+      });
     }
     warnings.push(...order.warnings);
 
@@ -904,7 +971,7 @@ export class BookingOrchestrator {
       // The order exists at Amadeus, but T2 rolled back: the booking is still `pending` with its claim, and the
       // authorisation is untouched. It is answered and found again like a lost answer (OBE-043), never booked twice.
       this.logger.error({ bookingId: booking.id, err: error }, "bookings.record_failed");
-      throw await this.unknownOutcome(tenant, prepared, claim, "record_failed");
+      throw await this.unknownOutcome(tenant, prepared, claim, "record_failed", { repriced, issue });
     }
 
     // Step 4: money.
@@ -1300,8 +1367,13 @@ export class BookingOrchestrator {
     prepared: Prepared,
     claim: Claimed,
     error: unknown,
-    priced: CheckoutPricedOffer,
+    sent: {
+      readonly priced: CheckoutPricedOffer;
+      readonly repriced: Repriced | undefined;
+      readonly issue: boolean;
+    },
   ): Promise<unknown> {
+    const { priced } = sent;
     const kind = createFailureKind(error);
     const code = error instanceof AppError ? error.code : "INTERNAL_ERROR";
     this.logger.warn(
@@ -1309,7 +1381,7 @@ export class BookingOrchestrator {
       kind === "unknown" ? "bookings.create_order_timeout" : "bookings.create_order_failed",
     );
     if (kind === "unknown") {
-      return await this.unknownOutcome(tenant, prepared, claim, code, error);
+      return await this.unknownOutcome(tenant, prepared, claim, code, sent, error);
     }
     if (kind === "not_sent") {
       await this.failBooking(tenant, prepared, claim, { code, voided: false });
@@ -1327,15 +1399,18 @@ export class BookingOrchestrator {
   /**
    * The unknown outcome of step 2 (see the file header): the booking stays `pending` with its claim and the
    * authorisation, `reconcile_until = create_order_started_at + RECONCILE_WINDOW_MS` and the event
-   * `booking.supplier_timeout` (`reason`: the error code, or what could not be recorded); answers `504
-   * SUPPLIER_TIMEOUT`. Nothing is voided. The reconciliation of OBE-043 finds the booking by `reconcile_until`; a T
-   * that fails here is logged and the `504` stays the answer, as the booking is pending either way.
+   * `booking.supplier_timeout` (`reason`: the error code, or what could not be recorded); the booking holds what the
+   * order sent holds (an accepted re-price moves it and the checkout to the new priced offer, `issue_requested` is the
+   * flag sent), and the first `booking.reconcile` is queued after the commit, 30 seconds later (the scan of
+   * reconcile.processor.ts queues it all the same when Redis does not answer); answers `504 SUPPLIER_TIMEOUT`. Nothing
+   * is voided. A T that fails here is logged and the `504` stays the answer, as the booking is pending either way.
    */
   private async unknownOutcome(
     tenant: RequestTenant,
     prepared: Prepared,
     claim: Claimed,
     reason: string,
+    sent: { readonly repriced: Repriced | undefined; readonly issue: boolean },
     cause?: unknown,
   ): Promise<AppError> {
     try {
@@ -1345,9 +1420,16 @@ export class BookingOrchestrator {
         if (booking === undefined || booking.status !== "pending") {
           return;
         }
+        if (sent.repriced !== undefined) {
+          await this.moveToPricedOffer(trx, prepared, booking.id, sent.repriced, now);
+        }
         const started = booking.createOrderStartedAt ?? now;
         const until = new Date(started.getTime() + RECONCILE_WINDOW_MS);
-        await this.repository.updateBooking(trx, booking.id, { reconcile_until: until, updated_at: now });
+        await this.repository.updateBooking(trx, booking.id, {
+          reconcile_until: until,
+          issue_requested: sent.issue,
+          updated_at: now,
+        });
         await this.recorder.event(trx, booking.id, {
           type: "booking.supplier_timeout",
           actor: eventActorOf(tenant.actor),
@@ -1359,6 +1441,8 @@ export class BookingOrchestrator {
           requestId: this.requestId(tenant),
           now,
         });
+        const job = reconcileJob(tenant.tenantId, booking.id, "first");
+        afterCommit(trx, () => this.enqueue(tenant, this.bookingsQueue, job.name, job.data, job.opts));
       });
     } catch (error) {
       this.logger.error({ bookingId: claim.booking.id, err: error }, "bookings.reconcile_not_scheduled");
@@ -1385,6 +1469,7 @@ export class BookingOrchestrator {
       );
       await this.enqueue(
         tenant,
+        this.paymentsQueue,
         PAYMENT_JOBS.void,
         { tenantId: tenant.tenantId, id: payment.id },
         { jobId: `payment-void-${payment.id}` },
@@ -1533,6 +1618,7 @@ export class BookingOrchestrator {
         afterCommit(trx, () =>
           this.enqueue(
             tenant,
+            this.paymentsQueue,
             PAYMENT_JOBS.captureRetry,
             { tenantId: tenant.tenantId, id: claim.payment.id },
             { jobId: `capture-retry-${claim.payment.id}`, delay: CAPTURE_RETRY_DELAY_MS },
@@ -1694,40 +1780,108 @@ export class BookingOrchestrator {
     warnings: readonly Warning[],
   ): Promise<CheckoutCompletion> {
     return await this.tx.run(async (trx) => {
-      const now = this.clock.now();
       const booking = await this.repository.booking(trx, bookingId);
       if (booking === undefined) {
         throw new Error("a recorded booking is not readable");
       }
-      const children = await this.repository.children(trx, bookingId);
-      const travelers = [];
-      for (const row of children.travelers) {
-        const opened = await this.bookingDocuments.open(tenant.schemaName, row);
-        travelers.push({ row, documents: opened.documents, discounts: opened.discounts });
-      }
-      const payments = [];
-      for (const id of await this.repository.paymentIdsOf(trx, bookingId)) {
-        const row = await this.payments.payment(trx, id);
-        if (row !== undefined) {
-          payments.push(
-            toPayment(row, { minorUnits: prepared.minorUnits, clientSecret: null, publishableKey: null }),
-          );
-        }
-      }
-      return {
+      return await this.completionIn(trx, tenant, booking, {
         checkoutId: prepared.checkout.id,
-        booking: toBooking({
-          booking,
-          children,
-          travelers,
-          payments,
-          policy: prepared.policy,
-          minorUnits: prepared.minorUnits,
-          now,
-        }),
-        bookingToken: null,
-        bookingTokenExpiresAt: null,
-        warnings: [...warnings],
+        policy: prepared.policy,
+        minorUnits: prepared.minorUnits,
+        warnings,
+      });
+    });
+  }
+
+  /** The CheckoutCompletion of a booking, read in `trx` (step 5's answer, and the replay of a decided booking). */
+  private async completionIn(
+    trx: TenantTransaction,
+    tenant: RequestTenant,
+    booking: BookingRow,
+    answer: {
+      readonly checkoutId: string;
+      readonly policy: TicketingPolicy;
+      readonly minorUnits: number;
+      readonly warnings: readonly Warning[];
+    },
+  ): Promise<CheckoutCompletion> {
+    const now = this.clock.now();
+    const children = await this.repository.children(trx, booking.id);
+    const travelers = [];
+    for (const row of children.travelers) {
+      const opened = await this.bookingDocuments.open(tenant.schemaName, row);
+      travelers.push({ row, documents: opened.documents, discounts: opened.discounts });
+    }
+    const payments = [];
+    for (const id of await this.repository.paymentIdsOf(trx, booking.id)) {
+      const row = await this.payments.payment(trx, id);
+      if (row !== undefined) {
+        payments.push(
+          toPayment(row, { minorUnits: answer.minorUnits, clientSecret: null, publishableKey: null }),
+        );
+      }
+    }
+    return {
+      checkoutId: answer.checkoutId,
+      booking: toBooking({
+        booking,
+        children,
+        travelers,
+        payments,
+        policy: answer.policy,
+        minorUnits: answer.minorUnits,
+        now,
+      }),
+      bookingToken: null,
+      bookingTokenExpiresAt: null,
+      warnings: [...answer.warnings],
+    };
+  }
+
+  // ---- Same-key retries (OBE-043) ----------------------------------------------------------------------------------
+
+  /**
+   * The answer to a same-key retry of a checkout.complete whose stored answer is a `504` linked to its booking (the
+   * idempotency `resolveReplay` hook; see the file header): the same `504` (`replayed: true`) while the booking is
+   * `pending`, the final `502 SUPPLIER_ERROR` once it failed, else the final `201` built from the booking. `undefined`
+   * (the stored answer) for any other record, or a booking this request cannot read.
+   */
+  async replay(record: IdempotencyRecord): Promise<IdempotencyResponse | undefined> {
+    if (record.resource?.type !== "booking" || record.response.status !== 504) {
+      return undefined;
+    }
+    const bookingId = record.resource.id;
+    const tenant = this.tenants.require();
+    return await this.tx.run(async (trx): Promise<IdempotencyResponse | undefined> => {
+      const booking = await this.repository.booking(trx, bookingId);
+      if (booking === undefined || booking.environment !== tenant.environment) {
+        return undefined;
+      }
+      if (booking.status === "pending") {
+        return replayedTimeout(record.response);
+      }
+      if (booking.status === "failed") {
+        const { status, body } = toErrorEnvelope(reconciledFailure(booking.id), this.requestId(tenant), {
+          exposeSupplier: this.requestContext.isConsoleScope(),
+        });
+        return { status, headers: { "cache-control": "no-store" }, setCookie: [], body };
+      }
+      if (booking.checkoutId === null) {
+        return undefined;
+      }
+      const settings = await this.repository.settings(trx);
+      const completion = await this.completionIn(trx, tenant, booking, {
+        checkoutId: booking.checkoutId,
+        policy: POLICIES.find((entry) => entry === settings?.ticketingPolicy) ?? "issue_after_payment",
+        minorUnits: (await this.payments.currencyMinorUnits(trx, booking.currency)) ?? 2,
+        warnings: [],
+      });
+      this.logger.info({ bookingId, status: booking.status }, "bookings.completion_replayed");
+      return {
+        status: 201,
+        headers: { location: `/v1/bookings/${booking.id}`, "cache-control": "no-store" },
+        setCookie: [],
+        body: completion,
       };
     });
   }
@@ -1794,15 +1948,19 @@ export class BookingOrchestrator {
     }
   }
 
-  /** Adds a job to `ota-payments`; never throws (a failure or a Redis that does not answer is logged). */
+  /**
+   * Adds a job to `ota-payments` or `ota-bookings`; never throws (a failure or a Redis that does not answer is logged:
+   * the jobs' own scans find the work).
+   */
   private async enqueue(
     tenant: RequestTenant,
+    queue: Queue,
     name: string,
-    data: PaymentJobData,
+    data: PaymentJobData | { readonly tenantId: string; readonly bookingId: string },
     opts: JobsOptions,
   ): Promise<void> {
     let timer: NodeJS.Timeout | undefined;
-    const added = this.paymentsQueue.add(name, data, opts).then(
+    const added = queue.add(name, data, opts).then(
       () => true,
       (error: unknown) => {
         this.logger.warn({ tenantId: tenant.tenantId, job: name, err: error }, "bookings.enqueue_failed");
@@ -1882,6 +2040,25 @@ export class BookingOrchestrator {
 
   private money(amount: string, currency: string, minorUnits: number): MoneyAmount {
     return { amount: new Money(amount).toFixed(minorUnits), currency };
+  }
+}
+
+/**
+ * The idempotency hooks of checkout.complete (OBE-043; idempotency.service.ts): a stored `504 SUPPLIER_TIMEOUT` is
+ * linked to its pending booking and kept, and its same-key replays are answered from the booking
+ * (`BookingOrchestrator.replay`; see the file header).
+ */
+@Injectable()
+@IdempotencyHooksFor(["completeCheckout"])
+export class CompleteCheckoutIdempotencyHooks implements IdempotencyHooks {
+  constructor(private readonly orchestrator: BookingOrchestrator) {}
+
+  resourceOf(response: IdempotencyResponse): IdempotencyResource | undefined {
+    return pendingBookingOf(response);
+  }
+
+  resolveReplay(record: IdempotencyRecord): Promise<IdempotencyResponse | undefined> {
+    return this.orchestrator.replay(record);
   }
 }
 

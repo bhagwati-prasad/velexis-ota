@@ -11,14 +11,17 @@
 // `ota-payments` queue from QueuesModule, OutboxService from the global NotificationsModule.
 //
 // The customer bookings reads (OBE-046): CustomerBookingsController over CustomerBookingsService, with the booking
-// access guard of common/auth (BookingAccessContext keeps its decision for the request). The timeout reconciliation
-// (OBE-043) joins it.
+// access guard of common/auth (BookingAccessContext keeps its decision for the request). The idempotency hooks of
+// checkout.complete (OBE-043: a stored `504` linked to its booking and answered from it on replays) are here too.
 //
 // `BookingsWorkerModule` (worker only, OBE-044): the `ota-ticketing` consumer and the `ticketing.scan` handler
 // (ticketing.processor.ts, `@TenantJob`, found by the jobs module's runner) with the issuance retries of
 // ticketing.service.ts. It builds on the worker's tenancy module and the worker's Amadeus client
 // (`AmadeusWorkerModule`), records tickets and events with the same OrderRecorder, and queues its e-mails through the
-// worker's global OutboxService.
+// worker's global OutboxService. Since OBE-043 also the `ota-bookings` consumer and the `bookings.reconcile_scan`
+// handler (reconcile.processor.ts) with the timeout reconciliation of reconcile.service.ts, which reads the checkout
+// (CheckoutRepository, TravelerDocuments) and captures through the PaymentGateway; like PaymentsWorkerModule it
+// provides the gateway itself on the worker's platform caches, never PaymentGatewayModule (the API's tenancy module).
 import { Module } from "@nestjs/common";
 import { AmadeusModule, AmadeusWorkerModule } from "../amadeus/amadeus.module";
 import { CheckoutRepository } from "../checkout/checkout.repository";
@@ -27,15 +30,20 @@ import { BookingAccessContext, BookingAccessGuard } from "../common/auth/booking
 import { RequestContext } from "../common/http/request-context";
 import { QueuesModule } from "../common/queues/queues.module";
 import { IdentityModule } from "../identity/identity.module";
+import { PAYMENT_GATEWAY } from "../payments/payment-gateway";
 import { PaymentGatewayModule } from "../payments/payment-gateway.module";
 import { PaymentsRepository } from "../payments/payments.repository";
+import { StripeClientFactory } from "../payments/stripe/stripe-client.factory";
+import { StripeGateway } from "../payments/stripe/stripe.gateway";
 import { ShoppingModule } from "../shopping/shopping.module";
 import { TenancyModule } from "../tenancy/tenancy.module";
-import { BookingOrchestrator } from "./booking-orchestrator.service";
+import { BookingOrchestrator, CompleteCheckoutIdempotencyHooks } from "./booking-orchestrator.service";
 import { BookingsRepository } from "./bookings.repository";
 import { CustomerBookingsController } from "./customer-bookings.controller";
 import { CustomerBookingsService } from "./customer-bookings.service";
 import { BookingTravelerDocuments, bookingsKeyProvider, OrderRecorder } from "./order-recorder";
+import { ReconcileProcessor, ReconcileScan } from "./reconcile.processor";
+import { ReconcileRepository, ReconcileService } from "./reconcile.service";
 import { TicketingProcessor, TicketingScan } from "./ticketing.processor";
 import { TicketingRepository, TicketingService } from "./ticketing.service";
 
@@ -51,6 +59,8 @@ import { TicketingRepository, TicketingService } from "./ticketing.service";
   controllers: [CustomerBookingsController],
   providers: [
     BookingOrchestrator,
+    CompleteCheckoutIdempotencyHooks,
+    ReconcileRepository,
     CustomerBookingsService,
     BookingAccessContext,
     BookingAccessGuard,
@@ -80,6 +90,18 @@ export class BookingsModule {}
     TicketingService,
     TicketingProcessor,
     TicketingScan,
+    // The timeout reconciliation (OBE-043).
+    ReconcileRepository,
+    ReconcileService,
+    ReconcileProcessor,
+    ReconcileScan,
+    CheckoutRepository,
+    checkoutKeyProvider,
+    TravelerDocuments,
+    PaymentsRepository,
+    StripeClientFactory,
+    StripeGateway,
+    { provide: PAYMENT_GATEWAY, useExisting: StripeGateway },
   ],
 })
 export class BookingsWorkerModule {}

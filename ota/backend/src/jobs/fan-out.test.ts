@@ -51,6 +51,8 @@ const SWEEP = "notifications.sweep";
 const WATCH = "payments.authorisation_watch";
 /** The ticketing scan of OBE-044. */
 const TICKETING = "ticketing.scan";
+/** The reconciliation scan of OBE-043. */
+const RECONCILE = "bookings.reconcile_scan";
 const ALPHA = "ten_01JALPHA0000000000000000AA";
 const BETA = "ten_01JBETA00000000000000000BB";
 /** The 15-minute iteration of the tests: 2026-01-15T10:15:00Z (FakeClock's day). */
@@ -143,7 +145,7 @@ const purgeSchedule = () => {
 
 describe("the schedules", () => {
   it("declare offers.purge every 15 minutes for active and suspended tenants, in UTC", () => {
-    expect(OTA_SCHEDULES.map((schedule) => schedule.id)).toEqual([PURGE, SWEEP, WATCH, TICKETING]);
+    expect(OTA_SCHEDULES.map((schedule) => schedule.id)).toEqual([PURGE, SWEEP, WATCH, TICKETING, RECONCILE]);
     expect(purgeSchedule()).toMatchObject({
       pattern: "*/15 * * * *",
       milestone: "M2",
@@ -164,6 +166,12 @@ describe("the schedules", () => {
     // OBE-044: the ticketing scan every 5 minutes, for suspended tenants too (OADR-0008 point 8).
     expect(scheduleById(TICKETING)).toMatchObject({
       pattern: "*/5 * * * *",
+      milestone: "M3",
+      statuses: ["active", "suspended"],
+    });
+    // OBE-043: the reconciliation scan every minute, for suspended tenants too (OADR-0003 point 5).
+    expect(scheduleById(RECONCILE)).toMatchObject({
+      pattern: "* * * * *",
       milestone: "M3",
       statuses: ["active", "suspended"],
     });
@@ -202,9 +210,14 @@ describe("the schedules", () => {
       { pattern: "*/5 * * * *", tz: SCHEDULE_TIME_ZONE },
       { name: FAN_OUT_JOB, data: { task: TICKETING } },
     );
+    expect(upsertJobScheduler).toHaveBeenCalledWith(
+      RECONCILE,
+      { pattern: "* * * * *", tz: SCHEDULE_TIME_ZONE },
+      { name: FAN_OUT_JOB, data: { task: RECONCILE } },
+    );
     expect(removeJobScheduler).toHaveBeenCalledExactlyOnceWith("offers.legacy_sweep");
     expect(result).toEqual({
-      registered: [PURGE, SWEEP, WATCH, TICKETING],
+      registered: [PURGE, SWEEP, WATCH, TICKETING, RECONCILE],
       removed: ["offers.legacy_sweep"],
     });
   });

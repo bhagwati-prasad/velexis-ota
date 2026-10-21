@@ -30,7 +30,9 @@
 //
 // Per-operation hooks come from providers decorated with `@IdempotencyHooksFor([...operationIds])`, found when the
 // module starts: `hashInput` (OBE-051 hashes the airline card as `{brand, last4}`), `resourceOf` and `resolveReplay`
-// (OBE-043 rebuilds a stored `504 SUPPLIER_TIMEOUT` from the linked booking).
+// (OBE-043: `CompleteCheckoutIdempotencyHooks` of bookings/booking-orchestrator.service.ts links a stored `504
+// SUPPLIER_TIMEOUT` of checkout.complete to its pending booking and answers its replays from the booking: the same
+// `504`, `details.replayed: true`, while the booking is pending, then the final `201` or the final error).
 import { createHash } from "node:crypto";
 import { Inject, Injectable, type FactoryProvider, type OnModuleInit } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
@@ -144,8 +146,10 @@ export interface IdempotencyHooks {
    */
   resourceOf?(response: IdempotencyResponse): IdempotencyResource | undefined;
   /**
-   * The answer a replay sends for a stored record; `undefined` replays the stored answer. OBE-043 answers the same
-   * `504` while the linked booking is undecided, then the final `201` built from the booking or the final error.
+   * The answer a replay sends for a stored record; `undefined` replays the stored answer. checkout.complete's hook
+   * (OBE-043) answers the same `504` while the linked booking is undecided, then the final `201` built from the booking
+   * or the final error. It runs in the replaying request's context (its tenant, `TenantTx`), never in a transaction of
+   * the service's.
    */
   resolveReplay?(record: IdempotencyRecord): Promise<IdempotencyResponse | undefined>;
 }
