@@ -1,9 +1,17 @@
-// The customer auth operations (`x-scope: customer`; OBE-033 for sign-in, refresh, sign-out and getSession; OBE-032 and
-// OBE-034 add sign-up, verification and passwords here): thin handlers over SignInService and SessionsService. The
-// global guards resolved the caller, the tenant and the scope, the customer guard read the access token where the
-// operation takes one, the CSRF guard checked the edge's POSTs, the rate limits counted the request (`signIn`: 10 per
-// minute per end-user IP), the validation interceptor checked the input against the OTA document and the idempotency
-// interceptor stores each POST's answer under its `Idempotency-Key` (sign-in's without the password in its hash).
+// The customer auth operations (`x-scope: customer`; OBE-033 for sign-in, refresh, sign-out and getSession; OBE-032 for
+// sign-up, e-mail verification and its resend; OBE-034 adds the passwords here): thin handlers over SignInService,
+// SignUpService, VerificationService and SessionsService. The global guards resolved the caller, the tenant and the
+// scope, the customer guard read the access token where the operation takes one, the CSRF guard checked the edge's
+// POSTs, the rate limits counted the request (`signIn`: 10 per minute per end-user IP; `signUp` and
+// `resendEmailVerification`: 5 per hour per IP and 3 per hour per address), the validation interceptor checked the
+// input against the OTA document and the idempotency interceptor stores each POST's answer under its
+// `Idempotency-Key` (sign-in's and sign-up's without the password in their hash).
+//
+// auth.signUp answers `201` with `Location: /v1/account`; the session it opens goes into the edge's cookies with a new
+// CSRF value (`session: null` in the body, api-changes §2.2) or into the body for key callers. auth.verifyEmail
+// answers `200 EmailVerificationResult` and opens no session. auth.resendVerification answers the same `202
+// AuthAcceptedResult` whatever it did (the document's anti-enumeration rule); a signed-in customer's token or cookie
+// names the account, else the body's `email`.
 //
 // Two modes (OADR-0006 points 1, 4 and 5; api-changes §2.2):
 //
@@ -44,19 +52,29 @@ import {
 } from "../common/http/openapi-operation.decorator";
 import { CallerContext } from "../tenancy/caller-resolver";
 import {
+  RESEND_ACCEPTED,
   toAuthSessionInfo,
   toAuthSessionResult,
+  toAuthSignUpResult,
+  toEmailVerificationResult,
+  type AuthAcceptedResult,
   type AuthSessionInfo,
   type AuthSessionResult,
+  type AuthSignUpResult,
+  type EmailVerificationResult,
 } from "./customers.mapper";
 import { AccountLockedError } from "./lockout";
 import { SessionsService, type SessionWithTokens } from "./sessions.service";
 import { SignInService } from "./sign-in.service";
+import { SignUpService } from "./sign-up.service";
+import { VerificationService } from "./verification.service";
 
 /** `Cache-Control` of the answers of sign-in, refresh and sign-out: they open, rotate or end a session. */
 export const AUTH_CACHE_CONTROL = "no-store";
 /** `Cache-Control` of auth.getSession (the document: never cached). */
 export const SESSION_CACHE_CONTROL = "private, no-store";
+/** `Location` of auth.signUp's `201`: the new customer is the caller's account. */
+export const ACCOUNT_LOCATION = "/v1/account";
 
 /** The refresh cookie as cookie-parser gives it; anything but a non-empty string is no token. */
 function refreshCookieOf(cookies: unknown): string | undefined {
@@ -104,11 +122,76 @@ export class RefreshIdempotencyHooks implements IdempotencyHooks {
 export class AuthController {
   constructor(
     private readonly signIns: SignInService,
+    private readonly signUps: SignUpService,
+    private readonly verifications: VerificationService,
     private readonly sessions: SessionsService,
     private readonly cookies: CookieWriter,
     private readonly customers: CustomerContext,
     private readonly callers: CallerContext,
   ) {}
+
+  @Post("sign-up")
+  @HttpCode(201)
+  @OpenApiOperation("signUp")
+  async signUp(
+    @OpenApiInput() input: ValidatedInput<"signUp">,
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<AuthSignUpResult> {
+    if (input.body === undefined) {
+      // The validation interceptor refuses a request without its required body; this is never reached.
+      throw new Error("signUp without a validated body");
+    }
+    res.setHeader("Cache-Control", AUTH_CACHE_CONTROL);
+    const { body } = input;
+    const signedUp = await this.signUps.signUp({
+      email: body.email,
+      password: body.password,
+      firstName: body.firstName,
+      lastName: body.lastName,
+      marketingConsent: body.marketingConsent,
+      termsVersion: body.termsVersion,
+      locale: body.locale,
+      currency: body.currency,
+      returnPath: body.returnPath,
+      acceptLanguage: input.headers["Accept-Language"],
+      userAgent: this.endUserAgent(req, input.headers["X-Velexis-End-User-Agent"]),
+    });
+    res.setHeader("Location", ACCOUNT_LOCATION);
+    // OADR-0006 point 2: a sign-up that opens a session rotates the CSRF value, as a sign-in does.
+    const edge = this.cookies.setSession(res, signedUp.session, { rotateCsrf: true });
+    return toAuthSignUpResult(signedUp.customer, edge ? null : signedUp.session, signedUp.verification);
+  }
+
+  @Post("email-verification/confirm")
+  @HttpCode(200)
+  @OpenApiOperation("verifyEmail")
+  async verifyEmail(
+    @OpenApiInput() input: ValidatedInput<"verifyEmail">,
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<EmailVerificationResult> {
+    if (input.body === undefined) {
+      // The validation interceptor refuses a request without its required body; this is never reached.
+      throw new Error("verifyEmail without a validated body");
+    }
+    res.setHeader("Cache-Control", AUTH_CACHE_CONTROL);
+    return toEmailVerificationResult(await this.verifications.verify(input.body.token));
+  }
+
+  @Post("email-verification/resend")
+  @HttpCode(202)
+  @OpenApiOperation("resendEmailVerification")
+  async resendVerification(
+    @OpenApiInput() input: ValidatedInput<"resendEmailVerification">,
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<AuthAcceptedResult> {
+    res.setHeader("Cache-Control", AUTH_CACHE_CONTROL);
+    await this.verifications.resend({
+      customerId: this.customers.get()?.customerId,
+      email: input.body?.email,
+    });
+    return { ...RESEND_ACCEPTED };
+  }
 
   @Post("sign-in")
   @HttpCode(200)

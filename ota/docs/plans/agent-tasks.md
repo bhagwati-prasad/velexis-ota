@@ -930,7 +930,8 @@ Checkout, customer accounts in cookies, Stripe on the Velexis account, the airli
   - Cookies carry `__Host-`, `Secure`, `HttpOnly`, `SameSite=Lax`, `Path=/` and no `Domain`; key callers never receive `Set-Cookie`.
 - **Verify:** `pnpm --filter @velexis/ota-backend test -- identity && pnpm --filter @velexis/ota-backend test:int -- identity`
 
-### OBE-032 · Implement customer sign-up, e-mail verification and resend
+### OBE-032 · Implement customer sign-up, e-mail verification and resend ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-backend
 - **Milestone:** M3
 - **Depends on:** OBE-031, OBE-030

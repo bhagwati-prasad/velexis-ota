@@ -18,6 +18,11 @@ const PACKAGE_DIR = join(APP_DIR, "node_modules", ".cache", `entry-points-${rand
 const OUT_DIR = join(PACKAGE_DIR, "dist");
 /** The folders of the package's published files that the processes read at run time. */
 const RUNTIME_FOLDERS = ["openapi", "migrations"] as const;
+/**
+ * The files `pnpm build` copies from `src/` into `dist/` beside the compiled code (package.json's build script): the
+ * API reads the breached-password list when its identity module is built (OBE-032), the worker the e-mail templates.
+ */
+const BUILD_ASSETS = ["notifications/templates", "identity/breached-passwords.txt"] as const;
 /** Compiling the package with type information takes a few seconds, more on a busy CI runner. */
 const COMPILE_TIMEOUT_MS = 30_000;
 const services = integrationEnv();
@@ -90,6 +95,12 @@ beforeAll(() => {
   expect(errors.map((diagnostic) => ts.flattenDiagnosticMessageText(diagnostic.messageText, "\n"))).toEqual(
     [],
   );
+  for (const asset of BUILD_ASSETS) {
+    cpSync(join(APP_DIR, "src", asset), join(OUT_DIR, asset), {
+      recursive: true,
+      filter: (path) => !path.endsWith(".ts"),
+    });
+  }
 }, COMPILE_TIMEOUT_MS);
 
 afterAll(() => {

@@ -1,12 +1,16 @@
-// The customer and session answers of the auth operations (OBE-033; the document's `Customer`, `Session`,
-// `AuthSessionResult`, `AuthSessionInfo` and `AuthSessionDetails`; OADR-0006 point 4):
+// The customer and session answers of the auth operations (OBE-033 for sign-in, OBE-032 for sign-up and e-mail
+// verification; the document's `Customer`, `Session`, `AuthSessionResult`, `AuthSessionInfo`, `AuthSessionDetails`,
+// `AuthSignUpResult`, `EmailVerificationResult` and `AuthAcceptedResult`; OADR-0006 point 4):
 //
-// - token (bearer) mode, key callers: `AuthSessionResult`, the customer and the session's tokens;
+// - token (bearer) mode, key callers: `AuthSessionResult`, the customer and the session's tokens; sign-up's
+//   `AuthSignUpResult` holds the tokens in `session`;
 // - edge mode, the hosted storefront: `AuthSessionInfo`, the customer and the session's metadata, never a token (the
-//   tokens travel in the httpOnly cookies of the cookie writer). auth.getSession answers it to every caller.
+//   tokens travel in the httpOnly cookies of the cookie writer); sign-up's `session` is `null`. auth.getSession answers
+//   `AuthSessionInfo` to every caller.
 //
-// Only the columns of the contract are shown: no password hash, no identity, no internal column. Times are ISO 8601
-// instants in UTC.
+// Only the columns of the contract are shown: no password hash, no identity, no internal column, no verification
+// token. Times are ISO 8601 instants in UTC. The address a verification e-mail went to is shown masked
+// (`a***.b***@example.com`).
 import type { components } from "@velexis/api-types";
 import type { CustomerRecord } from "./customers.repository";
 import type { SessionDetails, SessionTokens } from "./sessions.service";
@@ -17,6 +21,10 @@ export type Session = Schemas["Session"];
 export type AuthSessionResult = Schemas["AuthSessionResult"];
 export type AuthSessionInfo = Schemas["AuthSessionInfo"];
 export type AuthSessionDetails = Schemas["AuthSessionDetails"];
+export type AuthSignUpResult = Schemas["AuthSignUpResult"];
+export type EmailVerificationStatus = Schemas["EmailVerificationStatus"];
+export type EmailVerificationResult = Schemas["EmailVerificationResult"];
+export type AuthAcceptedResult = Schemas["AuthAcceptedResult"];
 
 type MarketingConsentSource = Customer["marketingConsent"]["source"];
 
@@ -111,3 +119,78 @@ export function toAuthSessionInfo(
 ): AuthSessionInfo {
   return { customer: toCustomer(customer), session: toSessionDetails(details, accessTokenExpiresAt) };
 }
+
+/**
+ * `address` as a verification answer shows it: the first character of each dot-separated part of the local part, then
+ * `***`, and the domain (`anna.berg@example.com` → `a***.b***@example.com`).
+ */
+export function maskedAddress(address: string): string {
+  const at = address.lastIndexOf("@");
+  const local = at < 0 ? address : address.slice(0, at);
+  const domain = at < 0 ? "" : address.slice(at);
+  const masked = local
+    .split(".")
+    .map((part) => (part === "" ? "" : `${[...part][0] ?? ""}***`))
+    .join(".");
+  return `${masked}${domain}`;
+}
+
+/** What the answers say about the verification e-mail of a sign-up. */
+export interface VerificationSent {
+  readonly policy: EmailVerificationStatus["policy"];
+  /** The address the e-mail went to (shown masked). */
+  readonly sentTo: string;
+  /** When the link expires (24 hours after it was issued). */
+  readonly expiresAt: Date;
+}
+
+/**
+ * auth.signUp's answer: the customer, the session's tokens for a key caller (`null` for the edge, whose tokens are in
+ * the cookies, or when no session was opened) and the verification e-mail.
+ */
+export function toAuthSignUpResult(
+  customer: CustomerRecord,
+  tokens: SessionTokens | null,
+  verification: VerificationSent,
+): AuthSignUpResult {
+  return {
+    customer: toCustomer(customer),
+    session: tokens === null ? null : toSession(tokens),
+    emailVerification: {
+      policy: verification.policy,
+      verified: customer.email_verified_at !== null,
+      sentTo: maskedAddress(verification.sentTo),
+      expiresAt: verification.expiresAt.toISOString(),
+    },
+  };
+}
+
+/** A confirmed address: what auth.verifyEmail answers. */
+export interface VerifiedEmail {
+  readonly customer: CustomerRecord;
+  readonly verifiedEmail: string;
+  readonly emailChanged: boolean;
+  readonly claimedGuestBookings: number;
+  /** The `returnPath` of sign-up or resend; this OTA keeps none (the storefront's pages carry their own `next`). */
+  readonly returnPath: string | null;
+}
+
+/** auth.verifyEmail's answer. */
+export function toEmailVerificationResult(verified: VerifiedEmail): EmailVerificationResult {
+  return {
+    customer: toCustomer(verified.customer),
+    verifiedEmail: verified.verifiedEmail,
+    emailChanged: verified.emailChanged,
+    claimedGuestBookings: verified.claimedGuestBookings,
+    returnPath: verified.returnPath,
+  };
+}
+
+/**
+ * auth.resendVerification's one answer, whether or not the address has an account, is verified already or got an
+ * e-mail (the document's anti-enumeration rule).
+ */
+export const RESEND_ACCEPTED: AuthAcceptedResult = Object.freeze({
+  status: "accepted",
+  message: "If an unverified account exists for this address, we have sent a new verification link.",
+});

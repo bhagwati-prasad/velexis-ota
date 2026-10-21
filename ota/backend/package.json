@@ -14,7 +14,7 @@
     "openapi"
   ],
   "scripts": {
-    "build": "rm -rf dist && tsc -p tsconfig.build.json && node -e \"require('node:fs').cpSync('src/notifications/templates', 'dist/notifications/templates', { recursive: true, filter: (path) => !path.endsWith('.ts') })\" && node -e \"for (const entry of ['main', 'worker', 'cli']) require('node:fs').accessSync('dist/' + entry + '.js')\"",
+    "build": "rm -rf dist && tsc -p tsconfig.build.json && node -e \"require('node:fs').cpSync('src/notifications/templates', 'dist/notifications/templates', { recursive: true, filter: (path) => !path.endsWith('.ts') })\" && node -e \"require('node:fs').cpSync('src/identity/breached-passwords.txt', 'dist/identity/breached-passwords.txt')\" && node -e \"for (const entry of ['main', 'worker', 'cli']) require('node:fs').accessSync('dist/' + entry + '.js')\"",
     "dev": "pnpm run build && pnpm run \"/^dev:(tsc|api|worker)$/\"",
     "dev:tsc": "tsc -p tsconfig.build.json --watch --preserveWatchOutput",
     "dev:api": "node --watch --enable-source-maps dist/main.js",

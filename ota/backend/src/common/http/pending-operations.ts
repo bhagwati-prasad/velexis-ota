@@ -16,9 +16,6 @@ export const PENDING_OPERATIONS: Readonly<Partial<Record<OtaOperationId, Pending
   // Storefront
   resolveStorefrontHost: "deferred",
   // Customer auth
-  signUp: "OBE-032",
-  verifyEmail: "OBE-032",
-  resendEmailVerification: "OBE-032",
   requestPasswordReset: "OBE-034",
   resetPassword: "OBE-034",
   changePassword: "OBE-034",
