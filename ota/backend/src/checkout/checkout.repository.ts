@@ -1,10 +1,12 @@
 // The tenant repository of checkouts (OBE-036; ota/docs/data-model.md §2 and §4, db README §2.1): `checkouts` and
 // their `checkout_travelers`, `checkout_contacts`, `checkout_ancillaries` and `checkout_remarks`, which the checkout
 // module owns, plus the reads it needs of tables it does not own: the storefront settings a checkout follows, the
-// signed-in customer (verification and the contact prefill), and the booking of a completed checkout. Like every
-// tenant repository it takes the `tenantTx` transaction first, never opens one and never names a tenant schema.
-// Amounts are read as text (`numeric::text`), dates through `to_char`, never as JavaScript numbers or local-time dates;
-// jsonb is written as JSON text.
+// signed-in customer (verification and the contact prefill), and the booking of a checkout (completed, or `pending`
+// while checkout.complete completes it, which locks the checkout's steps). checkout.complete also sets the extras'
+// prices again when it re-prices them (`updateAncillary`, `deleteAncillaries`). Like every tenant repository it takes
+// the `tenantTx` transaction first, never opens one and never names a tenant schema. Amounts are read as text
+// (`numeric::text`), dates through `to_char`, never as JavaScript numbers or local-time dates; jsonb is written as
+// JSON text.
 import { Injectable } from "@nestjs/common";
 import { sql, type Insertable, type TenantDatabase, type Updateable } from "@velexis/db";
 import type { TenantTransaction } from "../tenancy/tenant-tx";
@@ -41,6 +43,8 @@ export interface CheckoutRow {
   readonly basePricedOfferId: string;
   readonly pricedOfferId: string;
   readonly status: string;
+  /** `markup_rules` (the selling price) or `net` (the airline's price: an airline-card payment; pricing-mode.ts). */
+  readonly pricingMode: string;
   readonly currency: string;
   readonly offerAmount: string;
   readonly ancillariesAmount: string;
@@ -106,7 +110,10 @@ export interface CheckoutAncillaryRow {
   readonly weightUnit: string | null;
   readonly seatNumber: string | null;
   readonly currency: string;
+  /** The selling price: the Amadeus price plus the `ancillary_service` fee lines (OADR-0005 point 7). */
   readonly priceAmount: string;
+  /** The Amadeus price, which a checkout at the airline's price (`pricing_mode = net`) pays. */
+  readonly netAmount: string;
   readonly details: unknown;
 }
 
@@ -213,6 +220,7 @@ export class CheckoutRepository {
         "base_priced_offer_id as basePricedOfferId",
         "priced_offer_id as pricedOfferId",
         "status",
+        "pricing_mode as pricingMode",
         "payment_brand as paymentBrand",
         "locale",
         "terms_accepted_at as termsAcceptedAt",
@@ -302,6 +310,7 @@ export class CheckoutRepository {
         "details",
         sql<string>`currency::text`.as("currency"),
         sql<string>`price_amount::text`.as("priceAmount"),
+        sql<string>`net_amount::text`.as("netAmount"),
       ])
       .where("checkout_id", "=", checkoutId)
       .orderBy("created_at")
@@ -376,6 +385,36 @@ export class CheckoutRepository {
     }
   }
 
+  /** Sets the prices of one extra of the checkout again (a re-pricing of checkout.complete, OBE-042). */
+  async updateAncillary(
+    trx: TenantTransaction,
+    checkoutId: string,
+    id: string,
+    values: Pick<
+      Updateable<CheckoutDb["checkout_ancillaries"]>,
+      "price_amount" | "net_amount" | "details" | "updated_at"
+    >,
+  ): Promise<void> {
+    await trx
+      .updateTable("checkout_ancillaries")
+      .set(values)
+      .where("checkout_id", "=", checkoutId)
+      .where("id", "=", id)
+      .execute();
+  }
+
+  /** Removes extras of the checkout that Amadeus no longer confirms (a re-pricing of checkout.complete). */
+  async deleteAncillaries(trx: TenantTransaction, checkoutId: string, ids: readonly string[]): Promise<void> {
+    if (ids.length === 0) {
+      return;
+    }
+    await trx
+      .deleteFrom("checkout_ancillaries")
+      .where("checkout_id", "=", checkoutId)
+      .where("id", "in", [...ids])
+      .execute();
+  }
+
   /**
    * Moves a checkout onto the priced offer it buys now with its amounts (checkout.setAncillaries, OBE-037) and bumps
    * its `version`; `total_amount = offer_amount + ancillaries_amount + fees_amount` (the table's CHECK).
@@ -422,5 +461,20 @@ export class CheckoutRepository {
       .where("checkout_id", "=", checkoutId)
       .executeTakeFirst();
     return row?.id ?? null;
+  }
+
+  /**
+   * The booking that holds the checkout (`bookings.checkout_id` is unique; a failed booking clears it), with its
+   * status: `pending` from checkout.complete's claim until the order is recorded or the booking fails.
+   */
+  async bookingOf(
+    trx: TenantTransaction,
+    checkoutId: string,
+  ): Promise<{ readonly id: string; readonly status: string } | undefined> {
+    return await trx
+      .selectFrom("bookings")
+      .select(["id", "status"])
+      .where("checkout_id", "=", checkoutId)
+      .executeTakeFirst();
   }
 }

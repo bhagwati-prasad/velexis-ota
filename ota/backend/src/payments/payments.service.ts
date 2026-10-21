@@ -7,9 +7,12 @@
 // createPayment {method: "card", termsAccepted: true, card?}:
 //   1. checks without data: `card` and `airline_card` (below) are taken in this release (the wallets and PayPal: `403
 //      FEATURE_DISABLED`), and only Stripe (`provider` naming another: `424 PAYMENT_PROVIDER_NOT_CONFIGURED`);
-//   2. the checkout as checkout.get answers it (access as the checkout's own, `404` otherwise): completed `409
-//      CHECKOUT_ALREADY_COMPLETED`, expired or abandoned `410 CHECKOUT_EXPIRED`, travellers or contacts missing `422
-//      CHECKOUT_INCOMPLETE` with the missing fields as `fieldErrors` (money is never taken before the data is valid);
+//   2. the checkout as checkout.get answers it (access as the checkout's own, `404` otherwise): while checkout.complete
+//      completes it (its booking is `pending`) `409 CHECKOUT_BEING_COMPLETED` with `details.bookingId`, so no payment
+//      ever replaces (and voids) the authorisation a booking is being made with (CheckoutService.refuseWhileCompleting,
+//      again under the lock of step 3); completed `409 CHECKOUT_ALREADY_COMPLETED`, expired or abandoned `410
+//      CHECKOUT_EXPIRED`, travellers or contacts missing `422 CHECKOUT_INCOMPLETE` with the missing fields as
+//      `fieldErrors` (money is never taken before the data is valid);
 //      the tenant's Stripe account (`424 PAYMENT_PROVIDER_NOT_CONFIGURED`, the gateway); a card hint's brand must be
 //      accepted (`422 UNPROCESSABLE`) and its fee is quoted (card-fees.ts; Amadeus between transactions);
 //   3. one transaction locks the checkout (a checkout changed since step 2 starts again), cancels the checkout's
@@ -58,15 +61,17 @@
 // last change is older than 5 seconds), and the state is applied with the row's `version`; a Stripe outage answers
 // the stored state. `clientSecret` is given only while the payment can still be confirmed, never stored.
 //
-// updatePayment {card: {brand, bin?}}: only an unconfirmed Stripe card payment or airline-card payment (`409
-// PAYMENT_NOT_UPDATABLE` with `details.status`) of a checkout that is neither completed (`409`) nor expired (`410`), a
-// brand the storefront accepts (`422 UNPROCESSABLE`). The same hint again changes nothing (no quote, no provider call).
-// Otherwise the fee is quoted for the hint (card-fees.ts; for an airline card the Amadeus fee alone, in the checkout's
-// `net` pricing), the PaymentIntent's amount is set (`pi:update:<pay_id>:<version>`; an airline-card payment has no
-// provider to tell), and one transaction stores the amount, the fee and the hint with a `payment_events` row
-// (`payment.amount_updated`), and the checkout's card fee, total and brand (its `version` + 1). A row that changed
-// meanwhile starts the step again. A failed Stripe update moves the payment's `version` on (`payment.provider_error`),
-// so the next update never sends a key that Stripe may have used for another amount, or keeps a 5xx for.
+// updatePayment {card: {brand, bin?}}: only a Stripe card payment or airline-card payment of a checkout that
+// checkout.complete is not completing (`409 CHECKOUT_BEING_COMPLETED`, before the provider call and again under the
+// lock), unconfirmed (`409 PAYMENT_NOT_UPDATABLE` with `details.status`), of a checkout that is neither completed
+// (`409`) nor expired (`410`), a brand the storefront accepts (`422 UNPROCESSABLE`). The same hint again changes
+// nothing (no quote, no provider call). Otherwise the fee is quoted for the hint (card-fees.ts; for an airline card
+// the Amadeus fee alone, in the checkout's `net` pricing), the PaymentIntent's amount is set
+// (`pi:update:<pay_id>:<version>`; an airline-card payment has no provider to tell), and one transaction stores the
+// amount, the fee and the hint with a `payment_events` row (`payment.amount_updated`), and the checkout's card fee,
+// total and brand (its `version` + 1). A row that changed meanwhile starts the step again. A failed Stripe update moves
+// the payment's `version` on (`payment.provider_error`), so the next update never sends a key that Stripe may have
+// used for another amount, or keeps a 5xx for.
 import { Inject, Injectable } from "@nestjs/common";
 import type { components } from "@velexis/api-types";
 import { AppError } from "@velexis/errors";
@@ -443,6 +448,7 @@ export class PaymentsService {
       body.card === undefined ? undefined : { brand: body.card.brand, bin: body.card.bin };
     for (let attempt = 1; attempt <= STEP_ATTEMPTS; attempt += 1) {
       const view = await this.checkouts.get(input.checkoutId, input.acceptLanguage);
+      await this.refuseWhileCompleting(view.id);
       this.checkPayable(view);
       const account = await this.gateway.account(ctx);
       if (!account.methods.includes("card")) {
@@ -520,6 +526,14 @@ export class PaymentsService {
     throw new AppError("CONFLICT", {
       message: "The checkout changed while the payment was created; try again.",
     });
+  }
+
+  /**
+   * `409 CHECKOUT_BEING_COMPLETED` while checkout.complete completes the checkout (its booking is `pending`), before
+   * any provider or Amadeus call; the locked transaction of the step checks again (CheckoutService).
+   */
+  private async refuseWhileCompleting(checkoutId: string): Promise<void> {
+    await this.tx.run((trx) => this.checkouts.refuseWhileCompleting(trx, checkoutId));
   }
 
   /** The checkout must be open or payment pending, not expired, with its travellers and contacts complete. */
@@ -660,7 +674,12 @@ export class PaymentsService {
     now: Date,
   ): Promise<PaymentCheckoutRow | undefined> {
     const checkout = await this.repository.checkout(trx, view.id, true);
-    if (checkout === undefined || checkout.version !== view.version) {
+    if (checkout === undefined) {
+      return undefined;
+    }
+    // Under the lock checkout.complete's claim takes too: a payment never replaces the one a booking is being made with.
+    await this.checkouts.refuseWhileCompleting(trx, checkout.id);
+    if (checkout.version !== view.version) {
       return undefined;
     }
     const status = effectiveStatus(checkout, now);
@@ -834,6 +853,7 @@ export class PaymentsService {
       body.card === undefined ? undefined : { brand: body.card.brand, bin: body.card.bin };
     for (let attempt = 1; attempt <= STEP_ATTEMPTS; attempt += 1) {
       const view = await this.checkouts.get(input.checkoutId, input.acceptLanguage);
+      await this.refuseWhileCompleting(view.id);
       this.checkPayable(view);
       const { amounts, cardPlan } = await this.tx.run((trx) =>
         this.prepareCreate(trx, tenant, view.id, "net", hint, input.acceptLanguage, (settings) => {
@@ -1099,6 +1119,7 @@ export class PaymentsService {
             throw edgeOnly();
           }
         }
+        await this.checkouts.refuseWhileCompleting(trx, row.checkoutId);
         if (row.status !== "requires_payment_method") {
           throw new AppError("PAYMENT_NOT_UPDATABLE", {
             message: "The payment can no longer be changed: create a new payment.",
@@ -1157,6 +1178,9 @@ export class PaymentsService {
       const updated = await this.tx.run(async (trx) => {
         const now = this.clock.now();
         const lockedCheckout = await this.repository.checkout(trx, checkout.id, true);
+        if (lockedCheckout !== undefined) {
+          await this.checkouts.refuseWhileCompleting(trx, lockedCheckout.id);
+        }
         const locked = await this.repository.payment(trx, row.id, true);
         if (
           lockedCheckout === undefined ||

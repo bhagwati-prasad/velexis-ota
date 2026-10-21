@@ -24,10 +24,12 @@
 // which its own schema does not have). A customer's checkout is readable by that customer, in console scope and with a
 // secret key (the OTA's server); a guest checkout by anyone holding its unguessable `chk_` id with the OTA's
 // credential (a capability URL: answers never carry a document number or a payment secret). The `set*` steps lock the
-// row (`FOR UPDATE`), refuse a completed checkout (`409 CHECKOUT_ALREADY_COMPLETED`, `details.bookingId`) and an
-// expired or abandoned one (`410 CHECKOUT_EXPIRED`), compare `If-Match` (`412 PRECONDITION_FAILED`), check the data
-// against the requirements (requirements.ts; all or nothing), replace their part, bump `checkouts.version` and answer
-// the whole checkout from the same transaction.
+// row (`FOR UPDATE`), refuse a checkout that checkout.complete is completing (`409 CHECKOUT_BEING_COMPLETED`,
+// `details.bookingId`: its booking is `pending`; `refuseWhileCompleting`, which checkout.setAncillaries,
+// checkout.createPayment and checkout.updatePayment call too), a completed checkout (`409 CHECKOUT_ALREADY_COMPLETED`,
+// `details.bookingId`) and an expired or abandoned one (`410 CHECKOUT_EXPIRED`), compare `If-Match` (`412
+// PRECONDITION_FAILED`), check the data against the requirements (requirements.ts; all or nothing), replace their
+// part, bump `checkouts.version` and answer the whole checkout from the same transaction.
 import { Injectable } from "@nestjs/common";
 import { AppError } from "@velexis/errors";
 import { PinoLogger } from "nestjs-pino";
@@ -120,6 +122,14 @@ export function checkoutLocaleOf(
 }
 
 const notFound = (): AppError => new AppError("NOT_FOUND", { message: "No checkout with this id." });
+
+/** `409 CHECKOUT_BEING_COMPLETED` with the pending booking (`CheckoutService.refuseWhileCompleting`). */
+export function checkoutBeingCompleted(bookingId: string): AppError {
+  return new AppError("CHECKOUT_BEING_COMPLETED", {
+    message: "We are confirming your booking with the airline; the checkout cannot change meanwhile.",
+    details: { bookingId },
+  });
+}
 
 const travelerIndexOf = (error: FieldError): number =>
   Number(/^\/travelers\/(\d+)/.exec(error.path)?.[1] ?? 0);
@@ -434,6 +444,23 @@ export class CheckoutService {
 
   // ---- Shared ------------------------------------------------------------------------------------------------------
 
+  /**
+   * Refuses a change to a checkout that has a booking (OADR-0003 point 2): `409 CHECKOUT_BEING_COMPLETED` while
+   * checkout.complete's claim is `pending` (its order is being created, or looked for after a `504`), `409
+   * CHECKOUT_ALREADY_COMPLETED` once the booking is recorded. A failed booking clears its `checkout_id` and holds
+   * nothing. A step calls it in the transaction that locked the checkout (`FOR UPDATE`): the claim locks the checkout
+   * too, so a change and a claim never overlap; a step that calls Amadeus or Stripe first also calls it before them.
+   */
+  async refuseWhileCompleting(trx: TenantTransaction, checkoutId: string): Promise<void> {
+    const booking = await this.repository.bookingOf(trx, checkoutId);
+    if (booking === undefined) {
+      return;
+    }
+    throw booking.status === "pending"
+      ? checkoutBeingCompleted(booking.id)
+      : new AppError("CHECKOUT_ALREADY_COMPLETED", { details: { bookingId: booking.id } });
+  }
+
   /** One step that changes a checkout, in one transaction, answering the checkout after it. */
   private async step<B>(
     input: CheckoutStepInput<B>,
@@ -443,6 +470,7 @@ export class CheckoutService {
     return await this.tx.run(async (trx) => {
       const now = this.clock.now();
       const checkout = await this.readable(trx, tenant, input.checkoutId, true);
+      await this.refuseWhileCompleting(trx, checkout.id);
       const status = effectiveStatus(checkout, now);
       if (status === "completed") {
         const bookingId = await this.repository.bookingIdOf(trx, checkout.id);

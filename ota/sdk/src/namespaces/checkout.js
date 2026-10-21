@@ -339,7 +339,7 @@ export function createCheckoutApi(core) {
      * @throws {AuthenticationError} `INVALID_API_KEY`, `TOKEN_EXPIRED`
      * @throws {PermissionError} `ORIGIN_NOT_ALLOWED`, `TENANT_SUSPENDED`
      * @throws {NotFoundError} `NOT_FOUND`
-     * @throws {ConflictError} `CHECKOUT_ALREADY_COMPLETED`
+     * @throws {ConflictError} `CHECKOUT_ALREADY_COMPLETED`, `CHECKOUT_BEING_COMPLETED` (`details.bookingId`: `complete` is creating or confirming its booking; nothing can change until it is decided)
      * @throws {ExpiredError} `CHECKOUT_EXPIRED`
      * @throws {VelexisError} `PRECONDITION_FAILED` (412, stale `ifMatch`)
      * @throws {RateLimitError} `RATE_LIMITED`
@@ -359,7 +359,7 @@ export function createCheckoutApi(core) {
      * @throws {AuthenticationError} `INVALID_API_KEY`, `TOKEN_EXPIRED`
      * @throws {PermissionError} `ORIGIN_NOT_ALLOWED`, `TENANT_SUSPENDED`
      * @throws {NotFoundError} `NOT_FOUND`
-     * @throws {ConflictError} `CHECKOUT_ALREADY_COMPLETED`
+     * @throws {ConflictError} `CHECKOUT_ALREADY_COMPLETED`, `CHECKOUT_BEING_COMPLETED` (`details.bookingId`: `complete` is creating or confirming its booking; nothing can change until it is decided)
      * @throws {ExpiredError} `CHECKOUT_EXPIRED`
      * @throws {VelexisError} `PRECONDITION_FAILED` (412, stale `ifMatch`)
      * @throws {RateLimitError} `RATE_LIMITED`
@@ -382,7 +382,7 @@ export function createCheckoutApi(core) {
      * @throws {NotFoundError} `NOT_FOUND`
      * @throws {PriceChangedError} `PRICE_CHANGED` (checkout unchanged: call again with `expectedTotal` = `newPrice`)
      * @throws {SoldOutError} `SOLD_OUT`
-     * @throws {ConflictError} `CHECKOUT_ALREADY_COMPLETED`
+     * @throws {ConflictError} `CHECKOUT_ALREADY_COMPLETED`, `CHECKOUT_BEING_COMPLETED` (`details.bookingId`: `complete` is creating or confirming its booking; nothing can change until it is decided)
      * @throws {ExpiredError} `CHECKOUT_EXPIRED`, `OFFER_EXPIRED`
      * @throws {VelexisError} `PRECONDITION_FAILED` (412, stale `ifMatch`)
      * @throws {RateLimitError} `RATE_LIMITED`
@@ -402,7 +402,7 @@ export function createCheckoutApi(core) {
      * @throws {AuthenticationError} `INVALID_API_KEY`, `TOKEN_EXPIRED`
      * @throws {PermissionError} `ORIGIN_NOT_ALLOWED`, `TENANT_SUSPENDED`
      * @throws {NotFoundError} `NOT_FOUND`
-     * @throws {ConflictError} `CHECKOUT_ALREADY_COMPLETED`
+     * @throws {ConflictError} `CHECKOUT_ALREADY_COMPLETED`, `CHECKOUT_BEING_COMPLETED` (`details.bookingId`: `complete` is creating or confirming its booking; nothing can change until it is decided)
      * @throws {ExpiredError} `CHECKOUT_EXPIRED`
      * @throws {VelexisError} `PRECONDITION_FAILED` (412, stale `ifMatch`)
      * @throws {RateLimitError} `RATE_LIMITED`
@@ -426,7 +426,7 @@ export function createCheckoutApi(core) {
      * @throws {PermissionError} `ORIGIN_NOT_ALLOWED`, `TENANT_SUSPENDED`, `FEATURE_DISABLED` (method not enabled), `SCOPE_NOT_ALLOWED` (`airline_card` from a key caller)
      * @throws {NotFoundError} `NOT_FOUND`
      * @throws {PriceChangedError} `PRICE_CHANGED` (the fare moved while the card fee was fetched; checkout updated)
-     * @throws {ConflictError} `CHECKOUT_ALREADY_COMPLETED`, `IDEMPOTENCY_KEY_REUSED`
+     * @throws {ConflictError} `CHECKOUT_ALREADY_COMPLETED`, `IDEMPOTENCY_KEY_REUSED`, `CHECKOUT_BEING_COMPLETED` (`details.bookingId`: `complete` is creating or confirming its booking; nothing can change until it is decided)
      * @throws {ExpiredError} `CHECKOUT_EXPIRED`
      * @throws {RateLimitError} `RATE_LIMITED`
      * @throws {SupplierError} `PAYMENT_PROVIDER_NOT_CONFIGURED`, `SUPPLIER_NOT_CONFIGURED` (424), `PAYMENT_PROVIDER_ERROR`, `SUPPLIER_ERROR` (502), `SUPPLIER_UNAVAILABLE` (503), `SUPPLIER_TIMEOUT` (504)
@@ -448,7 +448,7 @@ export function createCheckoutApi(core) {
      * @throws {AuthenticationError} `INVALID_API_KEY`, `TOKEN_EXPIRED`
      * @throws {PermissionError} `ORIGIN_NOT_ALLOWED`, `TENANT_SUSPENDED`
      * @throws {NotFoundError} `NOT_FOUND`
-     * @throws {ConflictError} `PAYMENT_NOT_UPDATABLE` (`details.status`: create a new payment), `CHECKOUT_ALREADY_COMPLETED`
+     * @throws {ConflictError} `PAYMENT_NOT_UPDATABLE` (`details.status`: create a new payment), `CHECKOUT_ALREADY_COMPLETED`, `CHECKOUT_BEING_COMPLETED` (`details.bookingId`: `complete` is creating or confirming its booking; nothing can change until it is decided)
      * @throws {PriceChangedError} `PRICE_CHANGED` (checkout moved to the new price and this payment was cancelled)
      * @throws {ExpiredError} `CHECKOUT_EXPIRED`
      * @throws {RateLimitError} `RATE_LIMITED`

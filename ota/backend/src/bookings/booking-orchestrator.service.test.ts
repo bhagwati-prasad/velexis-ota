@@ -1,9 +1,9 @@
 // The decisions of the booking orchestrator (OBE-042, booking-orchestrator.service.ts and order-recorder.ts) that do
 // not need a service: how a Flight Create Orders failure is classified (refused → void, not sent → keep the
-// authorisation, no answer → pending), what the client is answered, how a created order is read, which booking and
-// ticketing status its tickets give for each ticketing policy, the ticketing deadline and the segments recorded. The
-// Amadeus errors are the client's own (error-mapper.ts), the answers the Amadeus stub's synthetic fixtures. The flow
-// itself, with PostgreSQL, Redis, the stub and the fake Stripe API, is test/integration/bookings.
+// authorisation, unknown → pending; OADR-0003), what the client is answered, how a created order is read, which
+// booking and ticketing status its tickets give for each ticketing policy, the ticketing deadline and the segments
+// recorded. The Amadeus errors are the client's own (error-mapper.ts), the answers the Amadeus stub's synthetic
+// fixtures. The flow itself, with PostgreSQL, Redis, the stub and the fake Stripe API, is test/integration/bookings.
 import { AppError } from "@velexis/errors";
 import { describe, expect, it } from "vitest";
 import { amadeusFixtureBody, buildCreatedOrderBody } from "../../test/builders/bookings";
@@ -47,33 +47,49 @@ const offerOf = (body: Record<string, unknown>): ParsedOffer => {
 };
 
 describe("a failed Flight Create Orders", () => {
-  it("[OBE-042 AC2] counts an Amadeus refusal as refused: the authorisation is voided", () => {
+  // OADR-0003 (FIX-W22): only an Amadeus 4xx business refusal proves that no order was created. An Amadeus 5xx (141
+  // SYSTEM ERROR included) and a 502 or 503 were counted as a refusal and as "not sent" before; they are unknown now.
+  it("[OBE-042 AC2] counts an Amadeus 4xx business refusal as refused: the authorisation is voided", () => {
     for (const error of [
       httpError(400, 34651),
       httpError(400, 37200),
       httpError(400, 4926),
       httpError(400, 9112),
+      httpError(400, 2552),
       httpError(400),
-      mapAmadeusError("createFlightOrders", { kind: "http", status: 500, issues: [{ code: 141 }] }),
+      httpError(404),
     ]) {
       expect([error.code, createFailureKind(error)]).toEqual([error.code, "rejected"]);
     }
   });
 
-  it("counts a timeout or a reset connection as unknown: the order may exist, the booking stays pending", () => {
-    expect(createFailureKind(mapAmadeusError("createFlightOrders", { kind: "timeout" }))).toBe("unknown");
-    expect(
-      createFailureKind(mapAmadeusError("createFlightOrders", { kind: "network", code: "ECONNRESET" })),
-    ).toBe("unknown");
-    expect(createFailureKind(httpError(504))).toBe("unknown");
+  it("[FIX-W22 AC4] counts every answer that does not prove a refusal as unknown: the order may exist, the booking stays pending", () => {
+    for (const error of [
+      mapAmadeusError("createFlightOrders", { kind: "timeout" }),
+      mapAmadeusError("createFlightOrders", { kind: "network", code: "ECONNRESET" }),
+      mapAmadeusError("createFlightOrders", { kind: "network", code: "UND_ERR_SOCKET" }),
+      mapAmadeusError("createFlightOrders", { kind: "network" }),
+      httpError(504),
+      httpError(500, 141),
+      httpError(500),
+      httpError(502),
+      httpError(503),
+      // A 2xx whose body is not JSON, and a status Amadeus never gives: the request was received.
+      httpError(201),
+      httpError(302),
+    ]) {
+      expect([error.code, createFailureKind(error)]).toEqual([error.code, "unknown"]);
+    }
   });
 
-  it("counts what never reached the order as not sent: the authorisation is kept", () => {
+  it("counts what never reached the order, or was refused before it was processed, as not sent: the authorisation is kept", () => {
     const tokenTimeout = new AppError("SUPPLIER_TIMEOUT", { cause: new Error("token request failed") });
     for (const error of [
       mapAmadeusError("createFlightOrders", { kind: "network", code: "ECONNREFUSED" }),
-      httpError(503),
+      mapAmadeusError("createFlightOrders", { kind: "network", code: "ENOTFOUND" }),
       httpError(429),
+      httpError(401),
+      httpError(403),
       tokenTimeout,
       new AppError("RATE_LIMITED"),
       new AppError("SERVICE_UNAVAILABLE"),

@@ -17,24 +17,32 @@
 //      lead traveller; the payment is linked to it. `bookings.checkout_id` is UNIQUE: a concurrent claim of the same
 //      checkout fails there and answers as step 0 does for a booking.
 //   2. Call. A priced offer that expired, is older than REPRICE_AFTER_MS, or whose travellers carry discount data is
-//      priced again (PricedOffersService.repriceForCheckout: a child priced offer). A higher total (or one above
-//      `expectedTotal`): the checkout moves to the new priced offer and totals, the authorisation is voided, the
-//      booking `failed`, `409 PRICE_CHANGED` (`details.oldPrice`, `newPrice`, `pricedOfferId`). A lower one is accepted
-//      (only it is captured; warning `PRICE_DECREASED`). Then Flight Create Orders (order-request.builder.ts). Its
-//      outcomes:
-//        - rejected (sold out, data, price, a supplier error): the authorisation is voided, the booking `failed`
-//          (`checkout_id` cleared, so the checkout stays open and can be completed again with a new payment), and
-//          `409 SOLD_OUT`, `409 PRICE_CHANGED`, `422 TRAVELER_DATA_INVALID`, `502 TICKETING_FAILED` or
-//          `502 SUPPLIER_ERROR`;
-//        - not sent (the token request, the rate limits, a gateway that did not pass the request on): the booking
-//          `failed`, the authorisation kept and the checkout still `payment_pending`, the error answered (a retry
-//          runs again);
-//        - no answer (timeout, connection reset, an answer that cannot be read): the booking stays `pending` and the
-//          answer is `504 SUPPLIER_TIMEOUT` with `details.bookingId`; the reconciliation of OBE-043 decides it.
+//      priced again (a child priced offer): without extras PricedOffersService.repriceForCheckout; with the checkout's
+//      extras (setAncillaries) the base priced offer's offers with the same additional services again, stored with
+//      PricedOffersService.storeServicesPricing (`repriceWithExtras`), so that the new priced offer, the totals and the
+//      order keep them. A higher total (or one above `expectedTotal`), or an extra that Amadeus no longer confirms (it
+//      refuses one, or answers without one): the checkout moves to the new priced offer, extras and totals, the
+//      authorisation is voided, the booking `failed`, `409 PRICE_CHANGED` (`details.oldPrice`, `newPrice`,
+//      `pricedOfferId`, and `reason: extras_unavailable` for an extra): never a booking without the extras the
+//      customer chose and paid for. A lower one is accepted (only it is captured; warning `PRICE_DECREASED`). Then
+//      Flight Create Orders (order-request.builder.ts). Its outcomes (`createFailureKind`):
+//        - rejected (Amadeus answered a `4xx` business refusal: sold out, data, price, ticketing): the authorisation
+//          is voided, the booking `failed` (`checkout_id` cleared, so the checkout stays open and can be completed
+//          again with a new payment), and `409 SOLD_OUT`, `409 PRICE_CHANGED`, `422 TRAVELER_DATA_INVALID`,
+//          `502 TICKETING_FAILED` or `502 SUPPLIER_ERROR`;
+//        - not sent (the token request, the rate limits, a connection never made, an Amadeus `401`, `403` or `429`
+//          that refused the request before processing it): the booking `failed`, the authorisation kept and the
+//          checkout still `payment_pending`, the error answered (a retry runs again);
+//        - unknown (OADR-0003 points 2 and 4): every other answer once the request may have reached Amadeus — no
+//          answer in time, a reset connection, an Amadeus `5xx` (500, 502, 503, 504), an answer that cannot be read:
+//          the order may exist. The booking stays `pending` with the authorisation and its `checkout_id` (the
+//          checkout cannot change, CHECKOUT_BEING_COMPLETED, and is never completed a second time),
+//          `reconcile_until = create_order_started_at + 15 minutes` and the event `booking.supplier_timeout`, so the
+//          reconciliation of OBE-043 decides it; the answer is `504 SUPPLIER_TIMEOUT` with `details.bookingId`.
+//          Nothing is voided and Flight Create Orders is never sent again for the checkout.
 //   3. Record (T2): order-recorder.ts (`confirmed` or `ticketed`, children, events, redacted snapshot, deadline,
 //      outbox `booking.confirmed`), checkout `completed`. An order that cannot be recorded (an answer that cannot be
-//      read, a T2 that fails) exists at Amadeus: the booking stays `pending` and the answer is `504 SUPPLIER_TIMEOUT`,
-//      as for a lost answer.
+//      read, a T2 that fails) exists at Amadeus: it is an unknown outcome as above (`504 SUPPLIER_TIMEOUT`).
 //   4. Money. Stripe capture (`pi:capture:<pay_id>:<amount>`) unless the policy is `manual_review` and no ticket was
 //      issued (staff issue from the console, which captures first; the staff are alerted). A failed capture leaves the
 //      booking `confirmed` with `ticketing_status = manual_review` (a ticketed one keeps `issued`), queues
@@ -57,8 +65,26 @@ import { AmadeusClient, type AmadeusResponse } from "../amadeus/amadeus.client";
 import type { AmadeusCallContext } from "../amadeus/call-context";
 import { ConnectionResolver, type ResolvedAmadeusConnection } from "../amadeus/connection-resolver";
 import { AmadeusCallError } from "../amadeus/error-mapper";
+import {
+  buildServicesRequest,
+  extraNets,
+  extrasMissingFrom,
+  pricingExtrasOf,
+  SERVICES_INCLUDE,
+  servicesErrorOf,
+  storedExtrasOf,
+  storedOffersOf,
+  type ServiceExtra,
+  type ServicesRequest,
+} from "../checkout/ancillaries.service";
 import { effectiveStatus, progressOf, type TravelerView } from "../checkout/checkout.mapper";
 import { CheckoutRepository, type CheckoutChildren, type CheckoutRow } from "../checkout/checkout.repository";
+import {
+  baseAmountsFor,
+  isPricingMode,
+  type PricingMode,
+  type SelectionPrices,
+} from "../checkout/pricing-mode";
 import { requirementsForPricedOffer } from "../checkout/requirements";
 import { TravelerDocuments } from "../checkout/traveler-documents";
 import { CustomerContext } from "../common/auth/customer.guard";
@@ -77,10 +103,20 @@ import {
 } from "../payments/payment-gateway";
 import { PaymentsRepository, type PaymentRow } from "../payments/payments.repository";
 import { stateValues, toPayment } from "../payments/payments.service";
-import { Money } from "../pricing/pricing.types";
+import { Money, type FeeLine } from "../pricing/pricing.types";
 import { parseOffer, type ParsedOffer } from "../shopping/offers.mapper";
-import { readPricingReply, snapshotOf, warningsOf } from "../shopping/priced-offers.mapper";
-import { PricedOffersService, type CheckoutPricedOffer } from "../shopping/priced-offers.service";
+import {
+  confirmedOffersOf as confirmedPricingOffersOf,
+  pricingQuery,
+  readPricingReply,
+  snapshotOf,
+  warningsOf,
+} from "../shopping/priced-offers.mapper";
+import {
+  PricedOffersService,
+  type CheckoutPricedOffer,
+  type ServicesPricing,
+} from "../shopping/priced-offers.service";
 import { CallerContext } from "../tenancy/caller-resolver";
 import { TenantContext, type RequestTenant } from "../tenancy/tenant-context";
 import { afterCommit, TenantTx, type TenantTransaction } from "../tenancy/tenant-tx";
@@ -125,6 +161,9 @@ export interface CompleteCheckoutInput {
 /** A priced offer older than this is priced again before the order (contract step 4, `repriceAfterMinutes`). */
 export const REPRICE_AFTER_MS = 10 * 60_000;
 
+/** How long after `create_order_started_at` the reconciliation looks for an order (OADR-0003 point 4). */
+export const RECONCILE_WINDOW_MS = 15 * 60_000;
+
 /** When `payment.capture_retry` runs after a failed capture (OADR-0008 point 7). */
 export const CAPTURE_RETRY_DELAY_MS = 10 * 60_000;
 
@@ -155,19 +194,36 @@ const MAX_FIELD_ERRORS = 50;
 const POLICIES: readonly TicketingPolicy[] = ["issue_at_booking", "issue_after_payment", "manual_review"];
 
 /**
- * The codes of an Amadeus answer that refused the order (error-mapper.ts): the authorisation is voided (step 2).
- * SUPPLIER_ERROR (a 5xx, a 401 after the client's retry, an answer that is not JSON) counts as a refusal too, as the
- * task's step 2 lists it with the rejections.
+ * The codes of an Amadeus `4xx` answer that refused the order as a business decision (error-mapper.ts): Amadeus
+ * processed the request and did not create the order, so the authorisation is voided (step 2). A `5xx` is never one
+ * of them, whatever its code (OADR-0003: the order may exist).
  */
 const REJECTION_CODES: ReadonlySet<string> = new Set([
   "SOLD_OUT",
   "PRICE_CHANGED",
   "TRAVELER_DATA_INVALID",
   "SUPPLIER_REJECTED",
-  "SUPPLIER_ERROR",
   "TICKETING_FAILED",
   "PAYMENT_DECLINED",
   "VERSION_CONFLICT",
+]);
+
+/**
+ * The socket and TLS errors of a connection that was never made (the name, the address or the certificate failed):
+ * the request cannot have reached Amadeus. Any other network error may have cut an answer off.
+ */
+const NOT_CONNECTED_CODES: ReadonlySet<string> = new Set([
+  "ECONNREFUSED",
+  "ENOTFOUND",
+  "EAI_AGAIN",
+  "EHOSTUNREACH",
+  "ENETUNREACH",
+  "UND_ERR_CONNECT_TIMEOUT",
+  "CERT_HAS_EXPIRED",
+  "DEPTH_ZERO_SELF_SIGNED_CERT",
+  "SELF_SIGNED_CERT_IN_CHAIN",
+  "UNABLE_TO_VERIFY_LEAF_SIGNATURE",
+  "ERR_TLS_CERT_ALTNAME_INVALID",
 ]);
 
 type JsonObject = Record<string, unknown>;
@@ -193,6 +249,43 @@ interface Prepared {
 interface Claimed {
   readonly booking: BookingRow;
   readonly payment: PaymentRow;
+}
+
+/** The travellers a re-price sends (`pricingTravelersOf`), as Flight Offers Price takes them. */
+type AmadeusTravelers = Parameters<typeof buildServicesRequest>[2];
+
+/** The new prices of one stored extra after a re-price: selling and Amadeus price, its `ancillary_service` lines. */
+interface ExtraPrices extends SelectionPrices {
+  readonly feeLines: readonly FeeLine[];
+}
+
+/** A re-pricing of step 2: the new priced offer and, per stored extra in their order, its new prices or `undefined`. */
+interface RepriceQuote {
+  readonly priced: CheckoutPricedOffer;
+  /** The Amadeus `warnings` of the pricing answer. */
+  readonly warnings: unknown;
+  readonly extras: ReadonlyArray<ExtraPrices | undefined>;
+}
+
+/** Where a re-price moves the checkout (and, when accepted, its booking): amounts in its pricing mode. */
+interface Repriced {
+  readonly priced: CheckoutPricedOffer;
+  readonly offer: string;
+  readonly ancillaries: string;
+  /** Σ of the confirmed extras' Amadeus prices (`bookings.net_services_amount`). */
+  readonly netServices: string;
+  readonly total: string;
+  /** The stored extras with their new prices (`details` as JSON text), and those Amadeus no longer confirms. */
+  readonly extras: {
+    readonly update: ReadonlyArray<{
+      readonly id: string;
+      readonly priceAmount: string;
+      readonly netAmount: string;
+      readonly details: string;
+    }>;
+    readonly remove: readonly string[];
+  };
+  readonly warnings: Warning[];
 }
 
 /** The unique constraints of `bookings` a claim can hit. */
@@ -284,20 +377,32 @@ export function notSentAnswer(error: unknown): unknown {
 export type CreateFailureKind = "rejected" | "not_sent" | "unknown";
 
 /**
- * Only an error whose cause is the order call's own AmadeusCallError says anything about the order: a timeout or a
- * reset connection (`SUPPLIER_TIMEOUT`) may have created it (`unknown`); a refusal of REJECTION_CODES did not create it
- * (`rejected`); a gateway that did not pass the request on (`SUPPLIER_UNAVAILABLE`: 502, 503, 429, a refused
- * connection) did not either (`not_sent`). Every other error was raised before the request left this process (the
- * token request, the rate limiter, the office checks, a bug): `not_sent`.
+ * How a Flight Create Orders call failed (OADR-0003: only an answer that proves the order was not created may fail
+ * the booking). Only an error whose cause is the order call's own AmadeusCallError says anything about the order:
+ *   - no answer: a connection never made (NOT_CONNECTED_CODES) did not reach Amadeus (`not_sent`); a timeout, a reset
+ *     or any other network error may have created the order (`unknown`);
+ *   - an Amadeus `4xx`: a business refusal of REJECTION_CODES did not create it (`rejected`); a `401`, `403` or `429`
+ *     refused the request before processing it (`not_sent`);
+ *   - anything else (a `5xx`, 500, 502, 503 and 504 included, an answer that is not JSON, another status): the order
+ *     may exist (`unknown`).
+ * Every other error was raised before the request left this process (the token request, the rate limiter, the
+ * office checks, a bug): `not_sent`.
  */
 export function createFailureKind(error: unknown): CreateFailureKind {
   if (!(error instanceof AppError) || !(error.cause instanceof AmadeusCallError)) {
     return "not_sent";
   }
-  if (error.code === "SUPPLIER_TIMEOUT") {
-    return "unknown";
+  const cause = error.cause;
+  const status = cause.httpStatus;
+  if (status === undefined) {
+    const notConnected =
+      cause.outcome === "network_error" && cause.code !== undefined && NOT_CONNECTED_CODES.has(cause.code);
+    return notConnected ? "not_sent" : "unknown";
   }
-  return REJECTION_CODES.has(error.code) ? "rejected" : "not_sent";
+  if (status >= 400 && status < 500) {
+    return REJECTION_CODES.has(error.code) ? "rejected" : "not_sent";
+  }
+  return "unknown";
 }
 
 @Injectable()
@@ -613,6 +718,9 @@ export class BookingOrchestrator {
     ]);
     const departure = firstDeparture ?? now;
     const amounts = netAmountsOf(priced, prepared.minorUnits);
+    const netServices = prepared.children.ancillaries
+      .reduce((sum, row) => sum.plus(row.netAmount), new Money(0))
+      .toFixed(prepared.minorUnits);
     const lead =
       prepared.travelers.find((view) => view.row.travelerType !== "HELD_INFANT") ?? prepared.travelers[0];
     const primary =
@@ -646,9 +754,11 @@ export class BookingOrchestrator {
       currency: checkout.currency,
       pricing_mode: prepared.pricingMode,
       markup_rule_id: priced.row.markupRuleId,
-      net_amount: priced.row.netTotal,
+      // The Amadeus total with the booked services (a child priced offer's net is its flights'), as the column holds.
+      net_amount: new Money(priced.row.netTotal).plus(netServices).toFixed(prepared.minorUnits),
       net_base_amount: amounts.base,
       net_fees_amount: amounts.fees,
+      net_services_amount: netServices,
       markup_amount: priced.row.markupAmount,
       fees_amount: priced.row.feeAmount,
       card_fee_amount: checkout.feesAmount,
@@ -700,14 +810,13 @@ export class BookingOrchestrator {
     const warnings: Warning[] = [];
     let priced = prepared.priced;
     let total = prepared.checkout.totalAmount;
-    let repriced = false;
+    let repriced: Repriced | undefined;
     try {
-      const outcome = await this.repriceIfNeeded(tenant, ctx, prepared, claim, input);
-      if (outcome !== undefined) {
-        priced = outcome.priced;
-        total = outcome.total;
-        repriced = true;
-        warnings.push(...outcome.warnings);
+      repriced = await this.repriceIfNeeded(tenant, ctx, prepared, claim, input);
+      if (repriced !== undefined) {
+        priced = repriced.priced;
+        total = repriced.total;
+        warnings.push(...repriced.warnings);
       }
     } catch (error) {
       if (error instanceof AppError) {
@@ -748,7 +857,7 @@ export class BookingOrchestrator {
     if (order === undefined) {
       // The order exists (a 2xx) but its answer cannot be recorded: it is found again like a lost answer (OBE-043).
       this.logger.error({ bookingId: booking.id }, "bookings.create_order_unreadable");
-      throw supplierTimeout(booking.id);
+      throw await this.unknownOutcome(tenant, prepared, claim, "create_order_unreadable");
     }
     warnings.push(...order.warnings);
 
@@ -760,8 +869,8 @@ export class BookingOrchestrator {
         if (locked === undefined || locked.status !== "pending") {
           throw new Error("a claimed booking left `pending` during its own request");
         }
-        if (repriced) {
-          await this.moveToPricedOffer(trx, prepared, booking.id, priced, total, now);
+        if (repriced !== undefined) {
+          await this.moveToPricedOffer(trx, prepared, booking.id, repriced, now);
         }
         const current = await this.repository.booking(trx, booking.id);
         if (current === undefined) {
@@ -795,7 +904,7 @@ export class BookingOrchestrator {
       // The order exists at Amadeus, but T2 rolled back: the booking is still `pending` with its claim, and the
       // authorisation is untouched. It is answered and found again like a lost answer (OBE-043), never booked twice.
       this.logger.error({ bookingId: booking.id, err: error }, "bookings.record_failed");
-      throw supplierTimeout(booking.id);
+      throw await this.unknownOutcome(tenant, prepared, claim, "record_failed");
     }
 
     // Step 4: money.
@@ -826,7 +935,8 @@ export class BookingOrchestrator {
         status: completion.booking.status,
         ticketingStatus: completion.booking.ticketing.status,
         policy: prepared.policy,
-        repriced,
+        // Whether step 2 priced the offers again; never the re-priced offer itself (it holds Amadeus's answer).
+        repriced: repriced !== undefined,
       },
       "bookings.completed",
     );
@@ -835,14 +945,18 @@ export class BookingOrchestrator {
 
   // ---- Step 2: re-price --------------------------------------------------------------------------------------------
 
-  /** The re-price of step 2, or `undefined` when the priced offer is still good. Throws the refusals. */
+  /**
+   * The re-price of step 2, or `undefined` when the priced offer is still good (see the file header). The new prices
+   * are compared in the checkout's pricing mode (pricing-mode.ts): a higher total, or an extra Amadeus no longer
+   * confirms, voids the authorisation, fails the booking, moves the checkout and answers `409 PRICE_CHANGED`.
+   */
   private async repriceIfNeeded(
     tenant: RequestTenant,
     ctx: GatewayContext,
     prepared: Prepared,
     claim: Claimed,
     input: CompleteCheckoutInput,
-  ): Promise<{ priced: CheckoutPricedOffer; total: string; warnings: Warning[] } | undefined> {
+  ): Promise<Repriced | undefined> {
     const now = this.clock.now();
     const { priced, checkout, minorUnits } = prepared;
     const discounts = prepared.travelers.some((view) => view.discounts.length > 0);
@@ -852,59 +966,77 @@ export class BookingOrchestrator {
     if (!stale && !discounts) {
       return undefined;
     }
-    let repriced;
-    try {
-      repriced = await this.pricedOffers.repriceForCheckout({
-        pricedOfferId: priced.row.id,
-        travelers: discounts
-          ? (pricingTravelersOf(prepared.travelers.map(orderTravelerOf)) as Parameters<
-              PricedOffersService["repriceForCheckout"]
-            >[0]["travelers"])
-          : undefined,
-        bookingId: claim.booking.id,
-        acceptLanguage: input.acceptLanguage,
-      });
-    } catch (error) {
-      if (error instanceof AppError && error.code === "SOLD_OUT") {
-        await this.failBooking(tenant, prepared, claim, {
-          code: "SOLD_OUT",
-          voided: await this.voidPayment(tenant, ctx, prepared, claim.payment),
-        });
-        throw error;
-      }
-      // A read that did not answer: nothing was booked, the authorisation stays for a retry.
-      await this.failBooking(tenant, prepared, claim, {
-        code: error instanceof AppError ? error.code : "INTERNAL_ERROR",
-        voided: false,
-      });
-      throw notSentAnswer(error);
-    }
-    const current = repriced.current;
-    const newTotal = new Money(current.row.sellingTotal)
-      .plus(checkout.ancillariesAmount)
+    const travelers = discounts
+      ? (pricingTravelersOf(prepared.travelers.map(orderTravelerOf)) as unknown as AmadeusTravelers)
+      : undefined;
+    const rows = prepared.children.ancillaries;
+    const quote =
+      rows.length === 0
+        ? await this.repriceFlights(tenant, ctx, prepared, claim, input, travelers)
+        : await this.repriceWithExtras(tenant, ctx, prepared, claim, input, travelers);
+    const kept = rows.flatMap((row, index) => {
+      const price = quote.extras[index];
+      return price === undefined ? [] : [{ row, price }];
+    });
+    const dropped = rows.filter((_, index) => quote.extras[index] === undefined);
+    const mode: PricingMode = isPricingMode(prepared.pricingMode) ? prepared.pricingMode : "markup_rules";
+    const amounts = baseAmountsFor(
+      mode,
+      { sellingTotal: quote.priced.row.sellingTotal, netTotal: quote.priced.row.netTotal },
+      kept.map((entry) => entry.price),
+      minorUnits,
+    );
+    const newTotal = new Money(amounts.offer)
+      .plus(amounts.ancillaries)
       .plus(checkout.feesAmount)
       .toFixed(minorUnits);
+    const moved: Omit<Repriced, "warnings"> = {
+      priced: quote.priced,
+      offer: amounts.offer,
+      ancillaries: amounts.ancillaries,
+      netServices: kept
+        .reduce((sum, entry) => sum.plus(entry.price.netAmount), new Money(0))
+        .toFixed(minorUnits),
+      total: newTotal,
+      extras: {
+        update: kept.map(({ row, price }) => ({
+          id: row.id,
+          priceAmount: price.priceAmount,
+          netAmount: price.netAmount,
+          details: JSON.stringify({
+            ...(isRecord(row.details) ? row.details : {}),
+            feeLines: price.feeLines,
+          }),
+        })),
+        remove: dropped.map((row) => row.id),
+      },
+    };
     const expected = input.body.expectedTotal;
     const higher =
       new Money(newTotal).greaterThan(checkout.totalAmount) ||
       (expected !== undefined && new Money(newTotal).greaterThan(expected.amount));
-    if (higher) {
+    if (higher || dropped.length > 0) {
+      // Never booked without an extra the customer chose and paid for: the price-changed path of the contract.
       const voided = await this.voidPayment(tenant, ctx, prepared, claim.payment);
       await this.failBooking(tenant, prepared, claim, {
         code: "PRICE_CHANGED",
         voided,
-        moveTo: { priced: current, total: newTotal },
+        moveTo: { ...moved, warnings: [] },
       });
       throw new AppError("PRICE_CHANGED", {
-        message: "The airline changed the price. Please review the new total.",
+        message:
+          dropped.length > 0
+            ? "An extra you chose is no longer available. Please review your booking."
+            : "The airline changed the price. Please review the new total.",
         details: {
           oldPrice: expected ?? this.money(checkout.totalAmount, checkout.currency, minorUnits),
           newPrice: this.money(newTotal, checkout.currency, minorUnits),
-          pricedOfferId: current.row.id,
+          pricedOfferId: quote.priced.row.id,
+          ...(dropped.length > 0 ? { reason: "extras_unavailable" } : {}),
         },
       });
     }
-    const warnings = warningsOf(repriced.warnings);
+    const warnings = warningsOf(quote.warnings);
     if (new Money(newTotal).lessThan(checkout.totalAmount)) {
       warnings.push(
         ownWarning(
@@ -913,36 +1045,248 @@ export class BookingOrchestrator {
         ),
       );
     }
-    return { priced: current, total: newTotal, warnings };
+    return { ...moved, warnings };
   }
 
-  /** The booking and the checkout follow an accepted re-price (in T2). */
+  /**
+   * The flights alone priced again (PricedOffersService.repriceForCheckout: the search offers, a child priced offer
+   * priced as flights.price prices one); every stored extra counts as not confirmed (`extras` all `undefined`).
+   */
+  private async repriceFlights(
+    tenant: RequestTenant,
+    ctx: GatewayContext,
+    prepared: Prepared,
+    claim: Claimed,
+    input: CompleteCheckoutInput,
+    travelers: AmadeusTravelers | undefined,
+  ): Promise<RepriceQuote> {
+    try {
+      const repriced = await this.pricedOffers.repriceForCheckout({
+        pricedOfferId: prepared.priced.row.id,
+        travelers: travelers as Parameters<PricedOffersService["repriceForCheckout"]>[0]["travelers"],
+        bookingId: claim.booking.id,
+        acceptLanguage: input.acceptLanguage,
+      });
+      return {
+        priced: repriced.current,
+        warnings: repriced.warnings,
+        extras: prepared.children.ancillaries.map(() => undefined),
+      };
+    } catch (error) {
+      throw await this.repriceFailed(tenant, ctx, prepared, claim, error);
+    }
+  }
+
+  /**
+   * The base priced offer's confirmed offers priced again with the checkout's extras (the same additional services as
+   * checkout.setAncillaries sent: `storedExtrasOf`, `buildServicesRequest`), stored as a child of the base as
+   * checkout.setAncillaries stores one (PricedOffersService.storeServicesPricing). Each extra gets its new net
+   * (`extraNets`) and `ancillary_service` fee lines; one the answer does not carry is not confirmed (`undefined`). When
+   * Amadeus refuses an extra (4926, 32171 on it), the flights are priced again alone and no extra is confirmed.
+   */
+  private async repriceWithExtras(
+    tenant: RequestTenant,
+    ctx: GatewayContext,
+    prepared: Prepared,
+    claim: Claimed,
+    input: CompleteCheckoutInput,
+    travelers: AmadeusTravelers | undefined,
+  ): Promise<RepriceQuote> {
+    const { checkout } = prepared;
+    const base = await this.tx.run((trx) =>
+      this.pricedOffers.forCheckout(trx, checkout.basePricedOfferId, input.acceptLanguage),
+    );
+    if (base === undefined) {
+      throw new Error("the base priced offer of a checkout is missing");
+    }
+    const stored = storedOffersOf(base.row);
+    const extras = storedExtrasOf(prepared.children.ancillaries, stored);
+    if (extras === undefined) {
+      throw new Error("the extras of a checkout cannot be read back");
+    }
+    let request: ServicesRequest;
+    try {
+      request = buildServicesRequest(
+        stored,
+        extras,
+        travelers ?? [],
+        snapshotOf(base.row.response).fareRules,
+      );
+    } catch (error) {
+      if (error instanceof AppError && error.code === "ANCILLARY_NOT_AVAILABLE") {
+        // The stored offers lack an extra's traveller or segment: it cannot be booked as chosen.
+        return await this.repriceFlights(tenant, ctx, prepared, claim, input, travelers);
+      }
+      throw error;
+    }
+    let reply: AmadeusResponse<unknown>;
+    try {
+      reply = await this.amadeus.quoteAirOffers(
+        {
+          tenantId: tenant.tenantId,
+          environment: tenant.environment,
+          operation: "checkout.complete",
+          requestId: this.requestId(tenant),
+          bookingId: claim.booking.id,
+        },
+        {
+          body: request.request as unknown as Parameters<AmadeusClient["quoteAirOffers"]>[1]["body"],
+          query: pricingQuery(SERVICES_INCLUDE, base.row.forceClass),
+        },
+      );
+    } catch (error) {
+      const mapped = servicesErrorOf(error, request.pointers, extras);
+      if (mapped instanceof AppError && mapped.code === "ANCILLARY_NOT_AVAILABLE") {
+        this.logger.warn({ bookingId: claim.booking.id, extras: extras.length }, "bookings.extras_refused");
+        return await this.repriceFlights(tenant, ctx, prepared, claim, input, travelers);
+      }
+      throw await this.repriceFailed(tenant, ctx, prepared, claim, error);
+    }
+    const units = base.minorUnits;
+    let child: ServicesPricing;
+    let kept: ServiceExtra[];
+    let nets: string[];
+    try {
+      const confirmed = confirmedPricingOffersOf(
+        stored.map((offer) => ({
+          id: offer.offerId,
+          amadeusOfferId: offer.amadeusOfferId,
+          currency: base.row.currency,
+        })),
+        readPricingReply(reply.body).flightOffers,
+        parseOffer,
+      );
+      if (confirmed === undefined) {
+        throw new AppError("SUPPLIER_ERROR", { message: "The supplier's pricing answer could not be read." });
+      }
+      const missing = new Set(extrasMissingFrom(extras, confirmed).map((extra) => extra.index));
+      // `extraNets` places each net at its extra's index: the confirmed extras, numbered again.
+      kept = extras
+        .filter((extra) => !missing.has(extra.index))
+        .map((extra, position) => ({ ...extra, index: position }));
+      nets = extraNets(kept, confirmed, units);
+      const extrasToPrice = pricingExtrasOf(kept, nets);
+      child = await this.tx.run((trx) =>
+        this.pricedOffers.storeServicesPricing(trx, {
+          base: base.row,
+          request: request.request,
+          include: SERVICES_INCLUDE,
+          reply,
+          extras: extrasToPrice,
+          acceptLanguage: input.acceptLanguage,
+        }),
+      );
+    } catch (error) {
+      throw await this.repriceFailed(tenant, ctx, prepared, claim, error);
+    }
+    const prices = new Map(
+      kept.map((extra, position): [string, ExtraPrices] => {
+        const net = new Money(nets[position] ?? 0);
+        const feeLines = child.extraFeeLines.filter((line) => line.extraRef === extra.ref);
+        return [
+          extra.ref,
+          {
+            priceAmount: feeLines.reduce((sum, line) => sum.plus(line.amount), net).toFixed(units),
+            netAmount: net.toFixed(units),
+            feeLines,
+          },
+        ];
+      }),
+    );
+    this.logger.info(
+      {
+        bookingId: claim.booking.id,
+        pricedOfferId: child.priced.row.id,
+        extras: extras.length,
+        kept: kept.length,
+      },
+      "bookings.repriced_with_extras",
+    );
+    return {
+      priced: child.priced,
+      warnings: readPricingReply(reply.body).warnings,
+      extras: extras.map((extra) => prices.get(extra.ref)),
+    };
+  }
+
+  /**
+   * A re-pricing that failed: a fare that is gone voids the authorisation (`409 SOLD_OUT`); any other failure (a read
+   * that did not answer, an answer that could not be read or priced) books nothing and keeps the authorisation for a
+   * retry, answered in the operation's codes (`notSentAnswer`). The booking is `failed` either way.
+   */
+  private async repriceFailed(
+    tenant: RequestTenant,
+    ctx: GatewayContext,
+    prepared: Prepared,
+    claim: Claimed,
+    error: unknown,
+  ): Promise<unknown> {
+    if (error instanceof AppError && error.code === "SOLD_OUT") {
+      await this.failBooking(tenant, prepared, claim, {
+        code: "SOLD_OUT",
+        voided: await this.voidPayment(tenant, ctx, prepared, claim.payment),
+      });
+      return error;
+    }
+    await this.failBooking(tenant, prepared, claim, {
+      code: error instanceof AppError ? error.code : "INTERNAL_ERROR",
+      voided: false,
+    });
+    return notSentAnswer(error);
+  }
+
+  /** The booking and the checkout follow an accepted re-price (in T2), the checkout's extras with their new prices. */
   private async moveToPricedOffer(
     trx: TenantTransaction,
     prepared: Prepared,
     bookingId: string,
-    priced: CheckoutPricedOffer,
-    total: string,
+    repriced: Repriced,
     now: Date,
   ): Promise<void> {
+    const { priced } = repriced;
     const amounts = netAmountsOf(priced, prepared.minorUnits);
     await this.repository.updateBooking(trx, bookingId, {
       priced_offer_id: priced.row.id,
-      net_amount: priced.row.netTotal,
+      net_amount: new Money(priced.row.netTotal).plus(repriced.netServices).toFixed(prepared.minorUnits),
       net_base_amount: amounts.base,
       net_fees_amount: amounts.fees,
+      net_services_amount: repriced.netServices,
       taxes_amount: amounts.taxes,
       markup_amount: priced.row.markupAmount,
       markup_rule_id: priced.row.markupRuleId,
       fees_amount: priced.row.feeAmount,
-      total_amount: total,
+      ancillaries_amount: repriced.ancillaries,
+      total_amount: repriced.total,
       last_ticketing_date: priced.row.lastTicketingDate,
       updated_at: now,
     });
-    await this.repository.updateCheckout(trx, prepared.checkout.id, {
-      priced_offer_id: priced.row.id,
-      offer_amount: priced.row.sellingTotal,
-      total_amount: total,
+    await this.moveCheckout(trx, prepared, repriced, now);
+  }
+
+  /** The checkout on a re-priced offer: its extras' new prices (the others removed) and its amounts. */
+  private async moveCheckout(
+    trx: TenantTransaction,
+    prepared: Prepared,
+    repriced: Omit<Repriced, "warnings">,
+    now: Date,
+    status?: string,
+  ): Promise<void> {
+    const checkoutId = prepared.checkout.id;
+    for (const extra of repriced.extras.update) {
+      await this.checkouts.updateAncillary(trx, checkoutId, extra.id, {
+        price_amount: extra.priceAmount,
+        net_amount: extra.netAmount,
+        details: extra.details,
+        updated_at: now,
+      });
+    }
+    await this.checkouts.deleteAncillaries(trx, checkoutId, repriced.extras.remove);
+    await this.repository.updateCheckout(trx, checkoutId, {
+      ...(status === undefined ? {} : { status }),
+      priced_offer_id: repriced.priced.row.id,
+      offer_amount: repriced.offer,
+      ancillaries_amount: repriced.ancillaries,
+      total_amount: repriced.total,
       updated_at: now,
     });
   }
@@ -965,7 +1309,7 @@ export class BookingOrchestrator {
       kind === "unknown" ? "bookings.create_order_timeout" : "bookings.create_order_failed",
     );
     if (kind === "unknown") {
-      return supplierTimeout(claim.booking.id, error);
+      return await this.unknownOutcome(tenant, prepared, claim, code, error);
     }
     if (kind === "not_sent") {
       await this.failBooking(tenant, prepared, claim, { code, voided: false });
@@ -978,6 +1322,48 @@ export class BookingOrchestrator {
       oldPrice: this.money(checkout.totalAmount, checkout.currency, minorUnits),
       pricedOfferId: priced.row.id,
     });
+  }
+
+  /**
+   * The unknown outcome of step 2 (see the file header): the booking stays `pending` with its claim and the
+   * authorisation, `reconcile_until = create_order_started_at + RECONCILE_WINDOW_MS` and the event
+   * `booking.supplier_timeout` (`reason`: the error code, or what could not be recorded); answers `504
+   * SUPPLIER_TIMEOUT`. Nothing is voided. The reconciliation of OBE-043 finds the booking by `reconcile_until`; a T
+   * that fails here is logged and the `504` stays the answer, as the booking is pending either way.
+   */
+  private async unknownOutcome(
+    tenant: RequestTenant,
+    prepared: Prepared,
+    claim: Claimed,
+    reason: string,
+    cause?: unknown,
+  ): Promise<AppError> {
+    try {
+      await this.tx.run(async (trx) => {
+        const now = this.clock.now();
+        const booking = await this.repository.booking(trx, claim.booking.id, true);
+        if (booking === undefined || booking.status !== "pending") {
+          return;
+        }
+        const started = booking.createOrderStartedAt ?? now;
+        const until = new Date(started.getTime() + RECONCILE_WINDOW_MS);
+        await this.repository.updateBooking(trx, booking.id, { reconcile_until: until, updated_at: now });
+        await this.recorder.event(trx, booking.id, {
+          type: "booking.supplier_timeout",
+          actor: eventActorOf(tenant.actor),
+          statusFrom: "pending",
+          statusTo: "pending",
+          summary: `Amadeus did not confirm booking ${booking.reference}; the order is looked for until ${until.toISOString()}.`,
+          data: { checkoutId: prepared.checkout.id, reason, reconcileUntil: until.toISOString() },
+          visibleToCustomer: false,
+          requestId: this.requestId(tenant),
+          now,
+        });
+      });
+    } catch (error) {
+      this.logger.error({ bookingId: claim.booking.id, err: error }, "bookings.reconcile_not_scheduled");
+    }
+    return supplierTimeout(claim.booking.id, cause);
   }
 
   /**
@@ -1020,7 +1406,7 @@ export class BookingOrchestrator {
       readonly code: string;
       /** The provider's state after a void, `null` when the void call failed, `false` when nothing was voided. */
       readonly voided: GatewayState | null | false;
-      readonly moveTo?: { readonly priced: CheckoutPricedOffer; readonly total: string };
+      readonly moveTo?: Repriced;
     },
   ): Promise<void> {
     await this.tx.run(async (trx) => {
@@ -1069,17 +1455,11 @@ export class BookingOrchestrator {
           });
         }
       }
-      await this.repository.updateCheckout(trx, prepared.checkout.id, {
-        status: "open",
-        ...(failure.moveTo === undefined
-          ? {}
-          : {
-              priced_offer_id: failure.moveTo.priced.row.id,
-              offer_amount: failure.moveTo.priced.row.sellingTotal,
-              total_amount: failure.moveTo.total,
-            }),
-        updated_at: now,
-      });
+      if (failure.moveTo === undefined) {
+        await this.repository.updateCheckout(trx, prepared.checkout.id, { status: "open", updated_at: now });
+      } else {
+        await this.moveCheckout(trx, prepared, failure.moveTo, now, "open");
+      }
     });
   }
 

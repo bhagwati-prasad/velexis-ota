@@ -1,15 +1,17 @@
 // The airline-card payment method before the card is typed (OBE-050; OADR-0004 points 1, 4 and 5,
 // ota/docs/flows/checkout-airline-card.md §1 and §3 steps 1–2, ota/docs/api-changes.md §3.1 and §4): its two switches
 // and its caller, the airline's price on the checkout (`pricing_mode = net`), the payment row without a provider, the
-// Amadeus card fee of updatePayment, the way back to the selling price with a card, another tenant's `404`, and
-// storefront.get's edge-only airline card decided per request from one shared cache entry.
+// Amadeus card fee of updatePayment, the way back to the selling price with a card, another tenant's `404`,
+// storefront.get's edge-only airline card decided per request from one shared cache entry, and the extras of
+// checkout.setAncillaries priced in each pricing mode (FIX-W22).
 //
 // Against PostgreSQL 16, Redis 7, the Amadeus stub and the fake Stripe API (test/helpers/fake-stripe.ts): two API
 // applications on one cloned database, `api` with AIRLINE_CARD_ENABLED=true and `apiOff` with the switch at its
 // default (off). Alpha has the `velexis` test payment connection, the airline card on for the test environment, a 10 %
-// markup rule and a 0.50 EUR VISA surcharge (so the selling and the airline's price differ); beta has neither the
-// connection nor the airline card. Every checkout opens from a priced offer of the stub's Madrid–Paris Orly offer 2
-// (moved 60 days ahead), with its traveller and contact. Every answer is checked against the OTA document.
+// markup rule, a 0.50 EUR VISA surcharge and a 2.50 EUR `ancillary_service` fee per extra (so the selling and the
+// airline's price differ); beta has neither the connection nor the airline card. Every checkout opens from a priced
+// offer of the stub's Madrid–Paris Orly offer 2 (moved 60 days ahead), with its traveller and contact. Every answer is
+// checked against the OTA document.
 import { randomBytes } from "node:crypto";
 import { encryptValue, hashApiKey, type KeyProvider } from "@velexis/crypto";
 import {
@@ -56,6 +58,8 @@ const ALPHA_ORIGIN = "https://shop.alpha-travel.example";
 const FLIGHT_DATE = dateFromToday(60);
 const LAST_TICKETING_DATE = dateFromToday(30);
 const NOTICE = "The airline charges your card. The price is the airline's price.";
+/** Alpha's `ancillary_service` fee per extra, at the selling price only. */
+const EXTRA_FEE = "2.50";
 
 /** The Velexis account's test keys of this run: Stripe's shapes, random, never a real key. */
 const SECRET_KEY = `sk_test_${randomBytes(20).toString("hex")}`;
@@ -200,6 +204,7 @@ interface PaymentBody {
 interface CheckoutBody {
   readonly id: string;
   readonly status: string;
+  readonly pricedOfferId: string;
   readonly totals: {
     readonly offer: MoneyBody;
     readonly ancillaries: MoneyBody;
@@ -335,6 +340,43 @@ const createPayment = (app: TestApp, headers: Record<string, string>, checkoutId
 const updatePayment = (headers: Record<string, string>, paymentId: string, body: object) =>
   request(api.server).patch(`/v1/payments/${paymentId}`).set(headers).send(body);
 
+/**
+ * Adds the stub's one-checked-bag option of the checkout's catalogue with checkout.setAncillaries on the edge (OBE-037);
+ * answers the option's Amadeus price (markup rules have no ancillary scope, so the catalogue shows it) and the answer.
+ */
+async function addCatalogueBag(
+  checkout: CheckoutBody,
+): Promise<{ readonly bagNet: string; readonly body: CheckoutBody }> {
+  const catalogue = await request(api.server)
+    .get(`/v1/priced-offers/${checkout.pricedOfferId}/ancillaries`)
+    .set(edgeRead());
+  expect(catalogue.status).toBe(200);
+  const bag = (
+    catalogue.body as { checkedBags: Array<{ id: string; quantity: number | null; price: MoneyBody }> }
+  ).checkedBags.find((option) => option.quantity === 1);
+  if (bag === undefined) {
+    throw new Error("the stub's catalogue has no one-bag option");
+  }
+  const res = await request(api.server)
+    .put(`/v1/checkouts/${checkout.id}/ancillaries`)
+    .set(edgeWrite())
+    .send({ selections: [{ optionId: bag.id, travelerId: "1" }] });
+  expect(res.status).toBe(200);
+  expectResponseToMatch("setCheckoutAncillaries", res);
+  return { bagNet: bag.price.amount, body: res.body as CheckoutBody };
+}
+
+/** The checkout's extras: their selling and Amadeus prices. */
+async function extraPrices(checkoutId: string) {
+  return await alphaTx((trx) =>
+    trx
+      .selectFrom("checkout_ancillaries")
+      .select([sql<string>`price_amount::text`.as("price"), sql<string>`net_amount::text`.as("net")])
+      .where("checkout_id", "=", checkoutId)
+      .execute(),
+  );
+}
+
 const AIRLINE = { method: "airline_card", termsAccepted: true } as const;
 const CARD = { method: "card", termsAccepted: true } as const;
 
@@ -399,6 +441,8 @@ beforeAll(async () => {
     ["updatePayment", [200, 403, 404]],
     ["getCheckout", [200]],
     ["getStorefront", [200]],
+    ["getPricedOfferAncillaries", [200]],
+    ["setCheckoutAncillaries", [200]],
   ] as const) {
     for (const status of statuses) {
       checker.check(operationId, { status, body: {} });
@@ -463,6 +507,21 @@ beforeAll(async () => {
         calculation: "fixed",
         fixed_amount: "0.50",
         currency: "EUR",
+      })
+      .execute();
+    // Each extra costs 2.50 EUR more at the selling price (OADR-0005 point 7); the airline's price has no such fee.
+    await trx
+      .insertInto("fee_rules")
+      .values({
+        id: newId("fee"),
+        name: "Extras",
+        label: "Extras service fee",
+        fee_type: "ancillary_service",
+        scope: JSON.stringify({}),
+        calculation: "fixed",
+        fixed_amount: EXTRA_FEE,
+        currency: "EUR",
+        applies_per: "booking",
       })
       .execute();
     // The OTA turned the airline card on for its test environment (console settings, OBE-070).
@@ -898,5 +957,60 @@ describe("an airline-card payment", () => {
     expect(await paymentRows("alpha", checkout.id)).toEqual(rowsBefore);
     expect(await pricingOf(checkout.id)).toEqual(before);
     expect(stripe.requests).toEqual([]);
+  });
+});
+
+describe("the extras of a checkout in each pricing mode (FIX-W22)", () => {
+  it("[FIX-W22 AC2] prices an extra at the airline's price as the fare: its Amadeus price, no markup and no service fee, the airline-card payment's amount", async () => {
+    const checkout = await newCheckout();
+    expect((await createPayment(api, edgeWrite(), checkout.id, AIRLINE)).status).toBe(201);
+
+    const { bagNet, body } = await addCatalogueBag(checkout);
+
+    const net = await pricingOf(checkout.id);
+    // The child priced offer's Amadeus total and the bag's Amadeus price: what the airline charges.
+    expect(net).toMatchObject({
+      pricingMode: "net",
+      offer: net.netTotal,
+      ancillaries: bagNet,
+      fees: "0.00",
+      total: sum(net.netTotal, bagNet),
+    });
+    expect(Number(net.sellingTotal)).toBeGreaterThan(Number(net.netTotal));
+    expect(body.totals).toMatchObject({
+      offer: { amount: net.netTotal },
+      ancillaries: { amount: bagNet },
+      total: { amount: net.total },
+    });
+    // The row keeps the selling price too, for a card chosen later.
+    expect(await extraPrices(checkout.id)).toEqual([{ price: sum(bagNet, EXTRA_FEE), net: bagNet }]);
+    // The airline-card payment the storefront creates now charges exactly these totals, which stay as they are.
+    const payment = await createPayment(api, edgeWrite(), checkout.id, AIRLINE);
+    expect(payment.status).toBe(201);
+    expect((payment.body as PaymentBody).amount).toEqual({ amount: net.total, currency: "EUR" });
+    expect(await pricingOf(checkout.id)).toEqual(net);
+  });
+
+  it("[FIX-W22 AC2] prices an extra at the selling price with a card: the service fee on the extra, the markup on the fare, the card payment's amount", async () => {
+    const checkout = await newCheckout();
+    expect((await createPayment(api, edgeWrite(), checkout.id, CARD)).status).toBe(201);
+
+    const { bagNet, body } = await addCatalogueBag(checkout);
+
+    const selling = await pricingOf(checkout.id);
+    expect(selling).toMatchObject({
+      pricingMode: "markup_rules",
+      offer: selling.sellingTotal,
+      ancillaries: sum(bagNet, EXTRA_FEE),
+      fees: "0.00",
+      total: sum(selling.sellingTotal, bagNet, EXTRA_FEE),
+    });
+    expect(Number(selling.sellingTotal)).toBeGreaterThan(Number(selling.netTotal));
+    expect(body.totals).toMatchObject({ total: { amount: selling.total } });
+    expect(await extraPrices(checkout.id)).toEqual([{ price: sum(bagNet, EXTRA_FEE), net: bagNet }]);
+    const payment = await createPayment(api, edgeWrite(), checkout.id, CARD);
+    expect(payment.status).toBe(201);
+    expect((payment.body as PaymentBody).amount).toEqual({ amount: selling.total, currency: "EUR" });
+    expect(await pricingOf(checkout.id)).toEqual(selling);
   });
 });

@@ -65,7 +65,7 @@ sequenceDiagram
 
 ## 3. Steps
 
-1. **Choose the method.** `checkout.createPayment {method: "airline_card"}` switches the checkout to `pricing_mode = net`: totals become the Amadeus total of the priced offer and its Amadeus-priced extras, with no OTA markup and no OTA fees. The storefront shows this amount and the notice from `storefront.get` (`payment.airlineCard.notice`). Switching back to `card` restores the selling price.
+1. **Choose the method.** `checkout.createPayment {method: "airline_card"}` switches the checkout to `pricing_mode = net`: totals become the Amadeus total of the priced offer and its Amadeus-priced extras, with no OTA markup and no OTA fees. `checkout.setAncillaries` on such a checkout prices the extras the same way (their Amadeus price, no `ancillary_service` fee), so the totals stay the amount the airline charges. The storefront shows this amount and the notice from `storefront.get` (`payment.airlineCard.notice`). Switching back to `card` restores the selling price.
 2. **Card fee.** The page's own card form (no third-party script, no iframe) reports brand and BIN as soon as six digits are typed; `checkout.updatePayment` quotes the Amadeus credit-card fee for them. BIN and last 4 may be stored ([ADR-0011](../../../docs/mvp/adr/0011-payments-stripe-and-airline-card.md) §B.5).
 3. **Submit.** The form posts with `checkout.completeWithAirlineCard`; the SDK never retries this method automatically (no `maxRetries` on it) and never logs its arguments.
 4. **Validate.** Schema (Ajv errors carry paths only), Luhn, expiry not in the past, brand accepted. The card object is wrapped in a `SensitiveCard` instance whose `toJSON`, `toString` and inspect hooks return `"[redacted card]"` ([OADR-0004](../adr/0004-airline-card-data-handling.md)).
@@ -82,7 +82,8 @@ sequenceDiagram
 | Price changed at re-price | `failed` (console only) | unchanged | `409 PRICE_CHANGED`; the card is discarded, the traveller confirms and types it again |
 | Sold out, data invalid | `failed` | `failed` | `409 SOLD_OUT`, `422 TRAVELER_DATA_INVALID` |
 | Order created but no tickets in the answer | `confirmed`, ticketing `manual_review` | `processing` | `201` with a warning; staff check the order (the card cannot be used again) |
-| Timeout | `pending`, reconciling | `processing` | `504`; found → `201` on replay; not found → `manual_review`, never `failed` automatically |
+| Timeout, Amadeus `5xx` or an unreadable answer | `pending`, reconciling | `processing` | `504`; found → `201` on replay; not found → `manual_review`, never `failed` automatically |
+| Another completion's booking is `pending` | that booking | unchanged | `504 SUPPLIER_TIMEOUT` with its `bookingId` (OADR-0003 point 2); the card is never sent. The other checkout steps answer `409 CHECKOUT_BEING_COMPLETED` |
 | Repeated declines from one IP or tenant | — | — | Rate limits, staff alert `staff.airline_card_alert`, Velexis ops alert |
 
 ## 5. Tables

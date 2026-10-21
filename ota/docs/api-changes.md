@@ -234,3 +234,4 @@ Added to `x-error-catalogue` (and so to `@velexis/errors`) in the task that firs
 | `TEMPLATE_INVALID` | 422 | The notification template does not compile or uses a variable that is not allowed (`details.errors`). | Console settings (M4) |
 | `ASSET_INVALID` | 422 | The uploaded file has a type, size or dimensions that are not allowed (`details.reason`). | Console settings (M4) |
 | `NOT_IMPLEMENTED` | 501 | The operation is part of the contract but not available yet (`details.milestone`). | Route-parity allow-list (M2) |
+| `CHECKOUT_BEING_COMPLETED` | 409 | The checkout is being completed: its booking (`details.bookingId`) is pending while the order is created or looked for; nothing of the checkout can change until it is decided. | The checkout set steps, `checkout.createPayment`, `checkout.updatePayment` (M3, FIX-W22) |

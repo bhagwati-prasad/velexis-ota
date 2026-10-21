@@ -54,7 +54,7 @@ sequenceDiagram
 5. **Confirm.** Stripe.js confirms the payment in the browser; card data goes from the browser to Stripe only. The page then calls `checkout.complete`; it does not wait for the webhook, because `complete` re-reads the PaymentIntent.
 6. **Complete.** Claim, re-price if needed, Flight Create Orders with `formOfPayments` from the storefront settings (OTA-merchant model: `other.method`), record, capture (`pi:capture:<pay_id>:<amount>`), then issue per the ticketing policy ([`../architecture-booking.md`](../architecture-booking.md) §2).
 7. **After.** The outbox holds `booking.confirmed`; the worker sends it with the itinerary. When tickets exist, `booking.ticketed` follows with e-ticket receipts ([`ticketing-and-documents.md`](ticketing-and-documents.md)).
-8. **Expiry.** An unfinished checkout expires after `checkout_ttl_minutes` (extended by 15 minutes when a payment is created); the `checkouts.expire` job voids its authorisation.
+8. **Expiry.** An unfinished checkout expires after `checkout_ttl_minutes` (extended by 15 minutes when a payment is created); the `checkouts.expire` job voids its authorisation, except while the checkout's booking is `pending`: the order may exist, so only the reconciliation decides about that authorisation ([OADR-0003](../adr/0003-booking-orchestration-and-supplier-timeout-recovery.md)).
 
 ## 3. Failure handling
 
@@ -64,9 +64,10 @@ sequenceDiagram
 | Stripe unreachable at payment creation | `502 PAYMENT_PROVIDER_ERROR`, nothing charged | Retry |
 | 3-D Secure failed or card declined | Stripe.js error; payment stays `requires_payment_method` | Try another card |
 | `complete` before authorisation | `402 PAYMENT_REQUIRED` | Payment step again |
-| Total changed at re-price | `409 PRICE_CHANGED`, authorisation voided, checkout on the new price | New price, pay again |
+| Total changed at re-price (the extras are priced again with the fare), or an extra no longer confirmed | `409 PRICE_CHANGED`, authorisation voided, checkout on the new price (an extra that is gone removed, `details.reason = extras_unavailable`) | New price, pay again |
 | Sold out at order creation | `409 SOLD_OUT`, authorisation voided, booking `failed` (console only) | Back to results |
-| Amadeus timeout | `504 SUPPLIER_TIMEOUT` with `bookingId`; reconciliation ([OADR-0003](../adr/0003-booking-orchestration-and-supplier-timeout-recovery.md)) | "We are confirming your booking" page that polls `bookings.getTicketingStatus` |
+| Amadeus timeout, `5xx` or unreadable answer at order creation | `504 SUPPLIER_TIMEOUT` with `bookingId`; booking `pending` with `reconcile_until`, nothing voided; reconciliation ([OADR-0003](../adr/0003-booking-orchestration-and-supplier-timeout-recovery.md)) | "We are confirming your booking" page that polls `bookings.getTicketingStatus` |
+| A checkout step while its booking is `pending` | `409 CHECKOUT_BEING_COMPLETED` with `bookingId`; nothing changes | The same confirmation page |
 | Capture fails after the order exists | Booking `confirmed`, ticketing `manual_review`, capture retried, staff alerted | Confirmation with "tickets are being issued" |
 | Issue fails | Booking `confirmed`, ticketing `failed`, retries until the deadline | Same |
 | Webhook before the payment row has the PaymentIntent id | Lookup by `metadata.payment_id` | — |

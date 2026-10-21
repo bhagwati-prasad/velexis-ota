@@ -35,7 +35,8 @@ import {
 } from "@velexis/testing";
 import { startAmadeusStub, stubScenario, type AmadeusStub } from "@velexis/testing/amadeus";
 import request from "supertest";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { AmadeusClient } from "../../../src/amadeus/amadeus.client";
 import { newId } from "../../../src/common/ids";
 import { Money } from "../../../src/pricing/pricing.types";
 import { seedDefaultMarkupRule } from "../../../src/provisioning/seeds/markup-rules.seed";
@@ -711,6 +712,41 @@ describe("checkout.setAncillaries", () => {
     ]);
     expect(pricingCalls()).toBe(calls);
     expect((await checkoutRows(checkout.id)).checkout).toMatchObject({ version: 1 });
+  });
+
+  it("[FIX-W22 AC1] answers 422 ANCILLARY_NOT_AVAILABLE when Amadeus answers without a selected extra: it would be paid for and not booked", async () => {
+    const { checkout, bag, priority } = fixture;
+    // Amadeus answers the pricing, but the fare details no longer carry the bag.
+    const client = api.app.get(AmadeusClient, { strict: false });
+    const real = client.quoteAirOffers.bind(client);
+    vi.spyOn(client, "quoteAirOffers").mockImplementation(async (context, input) => {
+      const reply = await real(context, input);
+      const offers = (reply.body as { data: { flightOffers: unknown[] } }).data.flightOffers;
+      for (const offer of offers as Array<{ travelerPricings: Array<{ fareDetailsBySegment: object[] }> }>) {
+        for (const detail of offer.travelerPricings.flatMap((pricing) => pricing.fareDetailsBySegment)) {
+          const services = (detail as { additionalServices?: Record<string, unknown> }).additionalServices;
+          delete services?.["chargeableCheckedBags"];
+        }
+      }
+      return reply;
+    });
+
+    const res = await setAncillaries(checkout.id, {
+      selections: [
+        { optionId: priority.id, travelerId: "1" },
+        { optionId: bag.id, travelerId: "1" },
+      ],
+    });
+
+    expect(res.status).toBe(422);
+    expectResponseToMatch("setCheckoutAncillaries", res);
+    expect((res.body as ErrorBody).error).toMatchObject({
+      code: "ANCILLARY_NOT_AVAILABLE",
+      details: { selectionIndex: 1, reason: "rejected_by_airline" },
+    });
+    const rows = await checkoutRows(checkout.id);
+    expect(rows.checkout).toMatchObject({ version: 1, priced_offer_id: checkout.pricedOfferId });
+    expect(rows.ancillaries).toEqual([]);
   });
 
   it("answers 409 SOLD_OUT when the fare is gone, and changes nothing", async () => {

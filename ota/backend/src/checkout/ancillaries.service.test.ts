@@ -16,12 +16,16 @@ import {
   buildServicesRequest,
   checkoutTotalOf,
   extraNets,
+  extrasMissingFrom,
   planExtras,
+  pricingExtrasOf,
   selectionOfPointer,
   servicesErrorOf,
+  storedExtrasOf,
   travelersOf,
   type PlannedExtra,
 } from "./ancillaries.service";
+import type { CheckoutAncillaryRow } from "./checkout.repository";
 
 type Schemas = components["schemas"];
 type AncillaryCatalogue = Schemas["AncillaryCatalogue"];
@@ -666,5 +670,123 @@ describe("servicesErrorOf and selectionOfPointer", () => {
     );
     const bug = new TypeError("bug");
     expect(servicesErrorOf(bug, pointers, extras)).toBe(bug);
+  });
+});
+
+describe("the extras of a checkout at checkout.complete's re-pricing (FIX-W22)", () => {
+  const extras = plan([
+    { optionId: BAG.id, travelerId: "1" },
+    { optionId: FAST_TRACK.id, travelerId: "1" },
+    { optionId: SEAT.id, travelerId: "1", seatNumber: "12C" },
+  ]);
+  const nets = ["30.00", "12.00", "8.00"];
+
+  /** The rows `ancillaryRows` writes for `extras`, as CheckoutRepository reads them back. */
+  function storedRows(): CheckoutAncillaryRow[] {
+    let next = 0;
+    const { rows } = ancillaryRows({
+      checkoutId: "chk_01JA4CC3B6E9H2L5N8R1U4X7A0",
+      currency: "EUR",
+      minorUnits: 2,
+      extras,
+      nets,
+      feeLines: [],
+      travelerRowIds: new Map([["1", "ctr_01JA4CC3B6E9H2L5N8R1U4X7A0"]]),
+      now: new Date("2026-10-20T08:00:00Z"),
+      newId: () => `can_01JA4CC3B6E9H2L5N8R1U4X7A${String((next += 1))}`,
+    });
+    return rows.map((row) => ({
+      id: String(row.id),
+      checkoutTravelerId: row.checkout_traveler_id ?? null,
+      segmentId: row.segment_id ?? null,
+      type: String(row.type),
+      serviceCode: row.service_code ?? null,
+      quantity: Number(row.quantity),
+      weight: row.weight ?? null,
+      weightUnit: row.weight_unit ?? null,
+      seatNumber: row.seat_number ?? null,
+      currency: "EUR",
+      priceAmount: String(row.price_amount),
+      netAmount: String(row.net_amount),
+      details: JSON.parse(String(row.details)) as unknown,
+    }));
+  }
+
+  it("[FIX-W22 AC1] reads the stored extras back as the same additional services, the stored net as their share", () => {
+    const stored = storedExtrasOf(storedRows(), [{ offerId: OFFER, amadeusOfferId: "2" }]);
+
+    expect(stored).toEqual(
+      extras.map((extra, index) => ({
+        index: extra.index,
+        ref: extra.ref,
+        type: extra.type,
+        amadeusOfferId: extra.amadeusOfferId,
+        travelerId: extra.travelerId,
+        segmentIds: extra.segmentIds,
+        quantity: extra.quantity,
+        weight: extra.weight,
+        weightUnit: extra.weightUnit,
+        serviceName: extra.serviceName,
+        seatNumber: extra.seatNumber,
+        cataloguePrice: nets[index],
+      })),
+    );
+    // The same Flight Offers Price request as checkout.setAncillaries sent.
+    expect(buildServicesRequest([storedOffer()], stored ?? [], [], true).request).toEqual(
+      buildServicesRequest([storedOffer()], extras, [], true).request,
+    );
+    expect(pricingExtrasOf(stored ?? [], nets)).toEqual([
+      { ref: "selection:0", amount: "30.00", travelers: 1, segments: 2 },
+      { ref: "selection:1", amount: "12.00", travelers: 1, segments: 1 },
+      { ref: "selection:2", amount: "8.00", travelers: 1, segments: 1 },
+    ]);
+  });
+
+  it("[FIX-W22 AC1] cannot read back an extra without its offer, traveller, segments, service or seat", () => {
+    const offers = [{ offerId: OFFER, amadeusOfferId: "2" }];
+    const [bag, service, seat] = storedRows();
+    if (bag === undefined || service === undefined || seat === undefined) {
+      throw new Error("three rows were written");
+    }
+    expect(storedExtrasOf([bag], [{ offerId: "off_other", amadeusOfferId: "9" }])).toBeUndefined();
+    expect(
+      storedExtrasOf([{ ...bag, details: { ...(bag.details as object), travelerId: 1 } }], offers),
+    ).toBeUndefined();
+    expect(storedExtrasOf([{ ...bag, details: {}, segmentId: null }], offers)).toBeUndefined();
+    expect(storedExtrasOf([{ ...service, serviceCode: null }], offers)).toBeUndefined();
+    expect(storedExtrasOf([{ ...seat, seatNumber: null }], offers)).toBeUndefined();
+    expect(storedExtrasOf([{ ...bag, type: "LOUNGE" }], offers)).toBeUndefined();
+    expect(storedExtrasOf([], offers)).toEqual([]);
+  });
+
+  it("[FIX-W22 AC1] finds the extras an answer no longer carries on one of their segments", () => {
+    const { request } = buildServicesRequest([storedOffer()], extras, [], true);
+    const echoed = { amadeusOfferId: "2", payload: request.data.flightOffers[0] };
+    expect(extrasMissingFrom(extras, [echoed])).toEqual([]);
+
+    const answered = structuredClone(echoed);
+    const details = (
+      answered.payload as {
+        travelerPricings: Array<{ fareDetailsBySegment: Array<Record<string, unknown>> }>;
+      }
+    ).travelerPricings[0]?.fareDetailsBySegment;
+    // Segment 4 lost the bag and the seat; segment 3 lost FAST_TRACK.
+    if (details?.[0] === undefined || details[1] === undefined) {
+      throw new Error("the fixture flies two segments");
+    }
+    details[0]["additionalServices"] = { chargeableCheckedBags: { quantity: 1 }, otherServices: [] };
+    details[1]["additionalServices"] = { otherServices: ["PRIORITY_BOARDING"] };
+    expect(extrasMissingFrom(extras, [answered]).map((extra) => extra.ref)).toEqual([
+      "selection:0",
+      "selection:1",
+      "selection:2",
+    ]);
+    // A seat Amadeus echoes by number counts, an answer without the offer carries nothing.
+    details[1]["additionalServices"] = {
+      chargeableCheckedBags: { quantity: 1 },
+      chargeableSeatNumber: "12C",
+    };
+    expect(extrasMissingFrom(extras, [answered]).map((extra) => extra.ref)).toEqual(["selection:1"]);
+    expect(extrasMissingFrom(extras, [])).toHaveLength(3);
   });
 });

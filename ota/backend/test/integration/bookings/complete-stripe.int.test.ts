@@ -10,6 +10,10 @@
 // the checkout and payment tests do), with its traveller and contact, and a payment whose PaymentIntent the test then
 // confirms on the fake as Stripe.js would (`requires_capture` for the checkout total). The Stripe keys are built at
 // run time. Every answer is checked against the OTA document (`expectResponseToMatch`).
+//
+// FIX-W22 (OADR-0003): an Amadeus 5xx on Flight Create Orders is an unknown outcome, not a refusal, so its test now
+// expects the pending booking and the `504` instead of a void and a `502`; the re-price of a checkout with extras, and
+// the lock of a checkout whose booking is pending, have tests of their own (the last describes).
 import { randomBytes } from "node:crypto";
 import { getQueueToken } from "@nestjs/bullmq";
 import { encryptValue, hashApiKey, type KeyProvider } from "@velexis/crypto";
@@ -47,6 +51,8 @@ import type { TenantTransaction } from "../../../src/tenancy/tenant-tx";
 import { buildStripeConfirmation } from "../../builders/bookings";
 import { buildContactInput, buildTravelerInput, dateFromToday } from "../../builders/checkouts";
 import { newApiKey, testApiCredentials, testKeyProvider } from "../../helpers/api-env";
+import { AmadeusClient } from "../../../src/amadeus/amadeus.client";
+import { mapAmadeusError } from "../../../src/amadeus/error-mapper";
 import { startFakeStripe, stripeEndpointModule, type FakeStripe } from "../../helpers/fake-stripe";
 import { OPENAPI_SETUP_TIMEOUT_MS, preloadOpenApiDocument } from "../../helpers/openapi";
 import { createTestApp, type TestApp } from "../../support/create-test-app";
@@ -194,7 +200,9 @@ interface CheckoutBody {
   readonly id: string;
   readonly status: string;
   readonly pricedOfferId: string;
-  readonly totals: { readonly total: Money };
+  readonly basePricedOfferId?: string;
+  readonly version?: number;
+  readonly totals: { readonly total: Money; readonly offer?: Money; readonly ancillaries?: Money };
 }
 
 interface PaymentBody {
@@ -335,9 +343,13 @@ async function bookingRow(bookingId: string) {
         "ticketing_error_code",
         "failure_code",
         "create_order_started_at",
+        "reconcile_until",
         "order_snapshot",
         "queuing_office_id",
+        "priced_offer_id",
         sql<string>`total_amount::text`.as("total"),
+        sql<string>`ancillaries_amount::text`.as("ancillaries"),
+        sql<string | null>`net_services_amount::text`.as("netServices"),
         sql<string>`amount_paid::text`.as("paid"),
       ])
       .where("id", "=", bookingId)
@@ -364,6 +376,19 @@ async function eventTypes(bookingId: string): Promise<string[]> {
   return rows.map((row) => row.type).sort();
 }
 
+/** The `reason` of a booking's `booking.supplier_timeout` event (what made the outcome unknown). */
+async function supplierTimeoutReason(bookingId: string): Promise<unknown> {
+  const row = await alphaTx((trx) =>
+    trx
+      .selectFrom("booking_events")
+      .select("data")
+      .where("booking_id", "=", bookingId)
+      .where("type", "=", "booking.supplier_timeout")
+      .executeTakeFirstOrThrow(),
+  );
+  return (row.data as { reason?: unknown }).reason;
+}
+
 async function paymentRow(paymentId: string) {
   return await alphaTx((trx) =>
     trx
@@ -378,10 +403,121 @@ async function checkoutRow(checkoutId: string) {
   return await alphaTx((trx) =>
     trx
       .selectFrom("checkouts")
-      .select(["status", "priced_offer_id", sql<string>`total_amount::text`.as("total")])
+      .select([
+        "status",
+        "priced_offer_id",
+        "version",
+        sql<string>`offer_amount::text`.as("offer"),
+        sql<string>`ancillaries_amount::text`.as("ancillaries"),
+        sql<string>`total_amount::text`.as("total"),
+        sql<boolean>`total_amount = offer_amount + ancillaries_amount + fees_amount`.as("balanced"),
+      ])
       .where("id", "=", checkoutId)
       .executeTakeFirstOrThrow(),
   );
+}
+
+/** The checkout's extras (`checkout_ancillaries`), in their order. */
+async function extraRows(checkoutId: string) {
+  return await alphaTx((trx) =>
+    trx
+      .selectFrom("checkout_ancillaries")
+      .select([
+        "id",
+        "type",
+        sql<string>`price_amount::text`.as("price"),
+        sql<string>`net_amount::text`.as("net"),
+      ])
+      .where("checkout_id", "=", checkoutId)
+      .orderBy("created_at")
+      .execute(),
+  );
+}
+
+/** The parent of a priced offer. */
+async function parentOf(pricedOfferId: string): Promise<string | null> {
+  const row = await alphaTx((trx) =>
+    trx
+      .selectFrom("priced_offers")
+      .select("parent_priced_offer_id")
+      .where("id", "=", pricedOfferId)
+      .executeTakeFirstOrThrow(),
+  );
+  return row.parent_priced_offer_id;
+}
+
+/** The request bodies the API sent to Amadeus for a booking (`supplier_requests`, redacted), by operation id. */
+async function supplierRequestBodies(bookingId: string, operationId: string): Promise<unknown[]> {
+  const rows = await alphaTx((trx) =>
+    trx
+      .selectFrom("supplier_requests")
+      .select(["request_body"])
+      .where("booking_id", "=", bookingId)
+      .where("amadeus_operation_id", "=", operationId)
+      .orderBy("created_at")
+      .execute(),
+  );
+  return rows.map((row) => row.request_body);
+}
+
+/** The `additionalServices` of every fare detail of a Flight Offers Price or Flight Create Orders request body. */
+function additionalServicesOf(body: unknown): unknown[] {
+  const offers = (body as { data?: { flightOffers?: unknown[] } }).data?.flightOffers ?? [];
+  return offers.flatMap((offer) =>
+    ((offer as { travelerPricings?: unknown[] }).travelerPricings ?? []).flatMap((pricing) =>
+      ((pricing as { fareDetailsBySegment?: unknown[] }).fareDetailsBySegment ?? []).flatMap((detail) => {
+        const services = (detail as { additionalServices?: unknown }).additionalServices;
+        return services === undefined ? [] : [services];
+      }),
+    ),
+  );
+}
+
+interface CatalogueOption {
+  readonly id: string;
+  readonly quantity: number | null;
+  readonly price: Money | null;
+}
+
+/** The one-bag option of a priced offer's catalogue (the stub's 1 checked bag). */
+async function oneBagOf(pricedOfferId: string): Promise<CatalogueOption> {
+  const res = await request(api.server).get(`/v1/priced-offers/${pricedOfferId}/ancillaries`).set(headers());
+  expect(res.status).toBe(200);
+  const bag = (res.body as { checkedBags: CatalogueOption[] }).checkedBags.find(
+    (option) => option.quantity === 1,
+  );
+  if (bag === undefined) {
+    throw new Error("the stub's catalogue has no one-bag option");
+  }
+  return bag;
+}
+
+/** The checkout with one checked bag added by checkout.setAncillaries. */
+async function withBag(checkout: CheckoutBody): Promise<CheckoutBody> {
+  const bag = await oneBagOf(checkout.pricedOfferId);
+  const res = await request(api.server)
+    .put(`/v1/checkouts/${checkout.id}/ancillaries`)
+    .set(headers())
+    .send({ selections: [{ optionId: bag.id, travelerId: "1" }] });
+  expect(res.status).toBe(200);
+  return res.body as CheckoutBody;
+}
+
+/** Makes a priced offer older than the re-price threshold (ten minutes). */
+async function ageOffer(pricedOfferId: string): Promise<void> {
+  await alphaTx((trx) =>
+    trx
+      .updateTable("priced_offers")
+      .set({ created_at: sql<Date>`now() - interval '11 minutes'` })
+      .where("id", "=", pricedOfferId)
+      .execute(),
+  );
+}
+
+/** The `payment.void` job of a payment on `ota-payments`, if one was queued. */
+async function queuedVoid(paymentId: string) {
+  const queue = api.app.get<Queue>(getQueueToken(OTA_QUEUE.payments), { strict: false });
+  return (await queue.getJob(`payment-void-${paymentId}`)) ?? undefined;
 }
 
 async function notifications(bookingId: string) {
@@ -412,10 +548,13 @@ beforeAll(async () => {
     ["priceFlightOffers", [201]],
     ["createCheckout", [201]],
     ["getCheckout", [200]],
-    ["setCheckoutTravelers", [200]],
-    ["setCheckoutContacts", [200]],
-    ["setCheckoutRemarks", [200]],
-    ["createCheckoutPayment", [201]],
+    ["setCheckoutTravelers", [200, 409]],
+    ["setCheckoutContacts", [200, 409]],
+    ["setCheckoutRemarks", [200, 409]],
+    ["createCheckoutPayment", [201, 409]],
+    ["getPricedOfferAncillaries", [200]],
+    ["setCheckoutAncillaries", [200, 409]],
+    ["updatePayment", [409]],
     ["completeCheckout", [201, 400, 402, 409, 422, 502, 504]],
   ] as const) {
     for (const status of statuses) {
@@ -704,20 +843,6 @@ describe("checkout.complete when Amadeus refuses the order", () => {
     expect((await checkoutRow(checkout.id)).status).toBe("completed");
   });
 
-  it("[OBE-042 AC2] answers 502 SUPPLIER_ERROR on an Amadeus system error, after voiding the authorisation", async () => {
-    await setPolicy("issue_at_booking");
-    const { checkout, payment } = await paidCheckout();
-
-    const res = await complete(checkout.id, { extra: stubScenario("server-error") });
-
-    expect(res.status).toBe(502);
-    expectResponseToMatch("completeCheckout", res);
-    expect((res.body as ErrorBody).error.code).toBe("SUPPLIER_ERROR");
-    expect(stripePosts("/cancel")).toHaveLength(1);
-    expect(await paymentRow(payment.id)).toMatchObject({ status: "canceled" });
-    expect((await checkoutRow(checkout.id)).status).toBe("open");
-  });
-
   it("[OBE-042 AC2] queues payment.void when the void itself fails, and still fails the booking and reopens the checkout", async () => {
     const { checkout, payment } = await paidCheckout();
     stripe.onRequest((req) => {
@@ -741,6 +866,423 @@ describe("checkout.complete when Amadeus refuses the order", () => {
     const [failed] = await bookingsOfCheckout(checkout.id);
     expect(failed).toMatchObject({ status: "failed", checkout_id: null, failure_code: "SOLD_OUT" });
     expect((await checkoutRow(checkout.id)).status).toBe("open");
+  });
+});
+
+describe("checkout.complete when Amadeus does not prove a refusal (OADR-0003)", () => {
+  /** The booking of a `504` answer, as stored. */
+  async function pendingBookingOf(res: { body: unknown }) {
+    const error = (res.body as ErrorBody).error;
+    expect(error.code).toBe("SUPPLIER_TIMEOUT");
+    expect(error.details).toMatchObject({ bookingToken: null, replayed: false });
+    return await bookingRow(String(error.details?.["bookingId"]));
+  }
+
+  it("[FIX-W22 AC4] answers 504 SUPPLIER_TIMEOUT on an Amadeus 500: the booking stays pending for the reconciliation, nothing is voided, no second order", async () => {
+    await setPolicy("issue_at_booking");
+    const { checkout, payment } = await paidCheckout();
+
+    const res = await complete(checkout.id, { extra: stubScenario("server-error") });
+
+    expect(res.status).toBe(504);
+    expectResponseToMatch("completeCheckout", res);
+    const booking = await pendingBookingOf(res);
+    // The order may exist: the claim stays, with the checkout, until the reconciliation (OBE-043) decides it.
+    expect(booking).toMatchObject({ status: "pending", checkout_id: checkout.id, record_locator: null });
+    expect(booking.reconcile_until?.getTime()).toBe(
+      (booking.create_order_started_at?.getTime() ?? 0) + 15 * 60_000,
+    );
+    expect(await eventTypes(booking.id)).toEqual([
+      "booking.create_order_started",
+      "booking.supplier_timeout",
+    ]);
+    expect(stripePosts("/cancel")).toHaveLength(0);
+    expect(stripePosts("/capture")).toHaveLength(0);
+    expect(stripe.intents.get(payment.providerPaymentId ?? "")?.status).toBe("requires_capture");
+    expect(await paymentRow(payment.id)).toMatchObject({ status: "authorized", booking_id: booking.id });
+    expect((await checkoutRow(checkout.id)).status).toBe("payment_pending");
+    expect(await queuedVoid(payment.id)).toBeUndefined();
+
+    // Another key, or the same one, finds the pending booking: the same 504 and never a second Flight Create Orders.
+    const again = await complete(checkout.id);
+
+    expect(again.status).toBe(504);
+    expectResponseToMatch("completeCheckout", again);
+    expect((again.body as ErrorBody).error.details).toMatchObject({ bookingId: booking.id });
+    expect(amadeusCalls("createFlightOrders")).toHaveLength(1);
+    expect(stripePosts("/cancel")).toHaveLength(0);
+  });
+
+  it("[FIX-W22 AC4] answers 504 SUPPLIER_TIMEOUT on an Amadeus 503 too: a gateway answer proves nothing about the order", async () => {
+    const { checkout, payment } = await paidCheckout();
+    const realFetch = globalThis.fetch;
+    const creates: string[] = [];
+    vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
+      const url = input instanceof Request ? input.url : String(input);
+      if (url.startsWith(stub.url) && new URL(url).pathname === "/v1/booking/flight-orders") {
+        creates.push(url);
+        const body = { errors: [{ status: 503, code: 141, title: "SYSTEM ERROR HAS OCCURRED" }] };
+        return Promise.resolve(
+          new Response(JSON.stringify(body), {
+            status: 503,
+            headers: { "content-type": "application/vnd.amadeus+json" },
+          }),
+        );
+      }
+      return realFetch(input, init);
+    });
+
+    const res = await complete(checkout.id);
+
+    expect(res.status).toBe(504);
+    expectResponseToMatch("completeCheckout", res);
+    const booking = await pendingBookingOf(res);
+    expect(booking).toMatchObject({ status: "pending", checkout_id: checkout.id });
+    expect(booking.reconcile_until).not.toBeNull();
+    expect(stripePosts("/cancel")).toHaveLength(0);
+    expect(await paymentRow(payment.id)).toMatchObject({ status: "authorized" });
+
+    const again = await complete(checkout.id);
+
+    expect(again.status).toBe(504);
+    expect(creates).toHaveLength(1);
+  });
+
+  // The other answers that prove nothing: no answer at all, and a 2xx that cannot be read (the order may well exist).
+  it.each([
+    {
+      answer: "a connection reset while waiting for the answer",
+      reason: "SUPPLIER_TIMEOUT",
+      respond: (): Promise<Response> =>
+        Promise.reject(
+          new TypeError("fetch failed", {
+            cause: Object.assign(new Error("read ECONNRESET"), { code: "ECONNRESET" }),
+          }),
+        ),
+    },
+    {
+      answer: "a 2xx answer that is not JSON",
+      reason: "SUPPLIER_ERROR",
+      respond: (): Promise<Response> =>
+        Promise.resolve(
+          new Response("<html>order received</html>", {
+            status: 201,
+            headers: { "content-type": "text/html" },
+          }),
+        ),
+    },
+    {
+      answer: "a created order whose answer cannot be read",
+      reason: "create_order_unreadable",
+      respond: (): Promise<Response> =>
+        Promise.resolve(
+          new Response(JSON.stringify({ data: { type: "flight-order", id: "eJzTd9f3NjIJdgMADeQCtg" } }), {
+            status: 201,
+            headers: { "content-type": "application/vnd.amadeus+json" },
+          }),
+        ),
+    },
+  ])(
+    "[FIX-W22 AC4] answers 504 SUPPLIER_TIMEOUT on $answer: pending with reconcile_until, nothing voided",
+    async ({ reason, respond }) => {
+      const { checkout, payment } = await paidCheckout();
+      const realFetch = globalThis.fetch;
+      let creates = 0;
+      vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
+        const url = input instanceof Request ? input.url : String(input);
+        if (url.startsWith(stub.url) && new URL(url).pathname === "/v1/booking/flight-orders") {
+          creates += 1;
+          return respond();
+        }
+        return realFetch(input, init);
+      });
+
+      const res = await complete(checkout.id);
+
+      expect(res.status).toBe(504);
+      expectResponseToMatch("completeCheckout", res);
+      const booking = await pendingBookingOf(res);
+      expect(booking).toMatchObject({ status: "pending", checkout_id: checkout.id, record_locator: null });
+      expect(booking.reconcile_until?.getTime()).toBe(
+        (booking.create_order_started_at?.getTime() ?? 0) + 15 * 60_000,
+      );
+      expect(await supplierTimeoutReason(booking.id)).toBe(reason);
+      expect(stripePosts("/cancel")).toHaveLength(0);
+      expect(await paymentRow(payment.id)).toMatchObject({ status: "authorized", booking_id: booking.id });
+      expect((await checkoutRow(checkout.id)).status).toBe("payment_pending");
+
+      const again = await complete(checkout.id);
+
+      expect(again.status).toBe(504);
+      expect(creates).toBe(1);
+    },
+  );
+
+  it("[OBE-042 AC2] still voids the authorisation and reopens the checkout for an Amadeus 4xx refusal", async () => {
+    const { checkout, payment } = await paidCheckout();
+
+    const refused = await complete(checkout.id, { extra: stubScenario("sold-out") });
+
+    expect(refused.status).toBe(409);
+    const [failed] = await bookingsOfCheckout(checkout.id);
+    expect(failed).toMatchObject({ status: "failed", checkout_id: null });
+    expect((await bookingRow(failed?.id ?? "")).reconcile_until).toBeNull();
+    expect(await paymentRow(payment.id)).toMatchObject({ status: "canceled" });
+    expect((await checkoutRow(checkout.id)).status).toBe("open");
+  });
+});
+
+describe("a checkout whose booking is pending (FIX-W22)", () => {
+  it("[FIX-W22 AC3] refuses travellers, contacts, special requests, extras, a new payment and a payment update with 409 CHECKOUT_BEING_COMPLETED", async () => {
+    const { checkout, payment } = await paidCheckout();
+    const bag = await oneBagOf(checkout.pricedOfferId);
+    // An Amadeus 500 leaves the claim pending (the order may exist), as during the call itself.
+    const timedOut = await complete(checkout.id, { extra: stubScenario("server-error") });
+    expect(timedOut.status).toBe(504);
+    const bookingId = String((timedOut.body as ErrorBody).error.details?.["bookingId"]);
+    const before = await checkoutRow(checkout.id);
+    stub.clearRequests();
+    stripe.reset();
+
+    const answers = [
+      [
+        "setCheckoutTravelers",
+        await request(api.server)
+          .put(`/v1/checkouts/${checkout.id}/travelers`)
+          .set(headers())
+          .send({ travelers: [buildTravelerInput()] }),
+      ],
+      [
+        "setCheckoutContacts",
+        await request(api.server)
+          .put(`/v1/checkouts/${checkout.id}/contacts`)
+          .set(headers())
+          .send({ contacts: [buildContactInput()] }),
+      ],
+      [
+        "setCheckoutRemarks",
+        await request(api.server)
+          .put(`/v1/checkouts/${checkout.id}/remarks`)
+          .set(headers())
+          .send({ remarks: [] }),
+      ],
+      [
+        "setCheckoutAncillaries",
+        await request(api.server)
+          .put(`/v1/checkouts/${checkout.id}/ancillaries`)
+          .set(headers())
+          .send({ selections: [{ optionId: bag.id, travelerId: "1" }] }),
+      ],
+      [
+        "createCheckoutPayment",
+        await request(api.server)
+          .post(`/v1/checkouts/${checkout.id}/payments`)
+          .set({ ...headers(), "Idempotency-Key": idempotencyKey() })
+          .send({ method: "card", termsAccepted: true }),
+      ],
+      [
+        "updatePayment",
+        await request(api.server)
+          .patch(`/v1/payments/${payment.id}`)
+          .set(headers())
+          .send({ card: { brand: "VISA", bin: "424242" } }),
+      ],
+    ] as const;
+
+    for (const [operationId, res] of answers) {
+      expect([operationId, res.status]).toEqual([operationId, 409]);
+      expectResponseToMatch(operationId, res);
+      expect([operationId, res.body]).toEqual([
+        operationId,
+        {
+          error: expect.objectContaining({
+            code: "CHECKOUT_BEING_COMPLETED",
+            status: 409,
+            details: { bookingId },
+          }),
+        },
+      ]);
+    }
+    // Nothing changed, nothing was priced or charged, and the authorisation of the booking is still there.
+    expect(await checkoutRow(checkout.id)).toEqual(before);
+    expect(stub.requests()).toEqual([]);
+    expect(stripe.requests).toEqual([]);
+    expect(await paymentRow(payment.id)).toMatchObject({ status: "authorized", booking_id: bookingId });
+    expect(await bookingRow(bookingId)).toMatchObject({ status: "pending", checkout_id: checkout.id });
+  });
+});
+
+describe("checkout.complete re-pricing a checkout with extras (FIX-W22)", () => {
+  it("[FIX-W22 AC1] prices the offers again with the same extras past the threshold: the order and the booking totals keep them", async () => {
+    const withExtras = await withBag(fresh);
+    const total = withExtras.totals.total.amount;
+    const ancillaries = withExtras.totals.ancillaries?.amount ?? "";
+    expect(Number(ancillaries)).toBeGreaterThan(0);
+    const payment = await payCheckout(withExtras);
+    await ageOffer(withExtras.pricedOfferId);
+    stub.clearRequests();
+
+    const res = await complete(withExtras.id);
+
+    expect(res.status).toBe(201);
+    expectResponseToMatch("completeCheckout", res);
+    const { booking } = res.body as CompletionBody & {
+      booking: { totals: { total: Money; ancillaries: Money } };
+    };
+    expect(booking.totals).toMatchObject({
+      total: { amount: total, currency: "EUR" },
+      ancillaries: { amount: ancillaries, currency: "EUR" },
+    });
+    // One Flight Offers Price with the bag, then the order with it, from the new priced offer.
+    expect(amadeusCalls("quoteAirOffers")).toHaveLength(1);
+    const [pricing] = await supplierRequestBodies(booking.id, "quoteAirOffers");
+    expect(additionalServicesOf(pricing)).toContainEqual(
+      expect.objectContaining({ chargeableCheckedBags: expect.objectContaining({ quantity: 1 }) }),
+    );
+    const [order] = await supplierRequestBodies(booking.id, "createFligtOrders");
+    expect(additionalServicesOf(order)).toEqual(additionalServicesOf(pricing));
+    const after = await checkoutRow(withExtras.id);
+    expect(after.priced_offer_id).not.toBe(withExtras.pricedOfferId);
+    expect(await parentOf(after.priced_offer_id)).toBe(withExtras.basePricedOfferId);
+    expect(after).toMatchObject({ status: "completed", total, ancillaries, balanced: true });
+    expect(await extraRows(withExtras.id)).toEqual([
+      expect.objectContaining({ type: "CHECKED_BAGS", price: ancillaries }),
+    ]);
+    expect(await bookingRow(booking.id)).toMatchObject({
+      status: "ticketed",
+      priced_offer_id: after.priced_offer_id,
+      total,
+      ancillaries,
+      netServices: ancillaries,
+      paid: total,
+    });
+    expect(await paymentRow(payment.id)).toMatchObject({ status: "captured", captured: total });
+    // The log line says that the offers were priced again, never what Amadeus answered (AGENTS.md §8: no bodies).
+    const completed = api.sink
+      .records()
+      .filter((line) => line["msg"] === "bookings.completed" && line["bookingId"] === booking.id);
+    expect(completed).toEqual([expect.objectContaining({ repriced: true })]);
+    expect(JSON.stringify(completed)).not.toContain("travelerPricings");
+  });
+
+  it("[FIX-W22 AC1] answers 409 PRICE_CHANGED for a higher price with the extras: the checkout moves with them, nothing is booked", async () => {
+    const withExtras = await withBag(fresh);
+    const payment = await payCheckout(withExtras);
+    await ageOffer(withExtras.pricedOfferId);
+
+    const res = await complete(withExtras.id, { extra: stubScenario("price-changed") });
+
+    expect(res.status).toBe(409);
+    expectResponseToMatch("completeCheckout", res);
+    const error = (res.body as ErrorBody).error;
+    expect(error.code).toBe("PRICE_CHANGED");
+    const after = await checkoutRow(withExtras.id);
+    expect(error.details).toMatchObject({
+      oldPrice: withExtras.totals.total,
+      newPrice: { amount: after.total, currency: "EUR" },
+      pricedOfferId: after.priced_offer_id,
+    });
+    expect(error.details).not.toHaveProperty("reason");
+    // The new priced offer is the fare with the bag again; the bag keeps its price.
+    expect(await parentOf(after.priced_offer_id)).toBe(withExtras.basePricedOfferId);
+    expect(after).toMatchObject({
+      status: "open",
+      ancillaries: withExtras.totals.ancillaries?.amount,
+      balanced: true,
+    });
+    expect(Number(after.total)).toBeGreaterThan(Number(withExtras.totals.total.amount));
+    expect(await extraRows(withExtras.id)).toHaveLength(1);
+    expect(amadeusCalls("createFlightOrders")).toHaveLength(0);
+    expect(await paymentRow(payment.id)).toMatchObject({ status: "canceled" });
+  });
+
+  /** Lets the API's Amadeus client change the answer, or the failure, of its Flight Offers Price calls with extras. */
+  function onPricingWithExtras(change: (body: Record<string, unknown>) => void | never): void {
+    const client = api.app.get(AmadeusClient, { strict: false });
+    const real = client.quoteAirOffers.bind(client);
+    vi.spyOn(client, "quoteAirOffers").mockImplementation(async (context, input) => {
+      const reply = await real(context, input);
+      if (additionalServicesOf(input.body).length > 0) {
+        change(reply.body as Record<string, unknown>);
+      }
+      return reply;
+    });
+  }
+
+  it("[FIX-W22 AC1] never books without an extra Amadeus no longer confirms: 409 PRICE_CHANGED, the extra removed, the authorisation voided", async () => {
+    const withExtras = await withBag(fresh);
+    const payment = await payCheckout(withExtras);
+    await ageOffer(withExtras.pricedOfferId);
+    // Amadeus answers the pricing without the bag.
+    onPricingWithExtras((body) => {
+      for (const services of additionalServicesOf(body)) {
+        delete (services as Record<string, unknown>)["chargeableCheckedBags"];
+      }
+    });
+
+    const res = await complete(withExtras.id);
+
+    expect(res.status).toBe(409);
+    expectResponseToMatch("completeCheckout", res);
+    const error = (res.body as ErrorBody).error;
+    const after = await checkoutRow(withExtras.id);
+    expect(error).toMatchObject({
+      code: "PRICE_CHANGED",
+      details: {
+        reason: "extras_unavailable",
+        oldPrice: withExtras.totals.total,
+        newPrice: { amount: after.total, currency: "EUR" },
+        pricedOfferId: after.priced_offer_id,
+      },
+    });
+    expect(after).toMatchObject({ status: "open", ancillaries: "0.00", balanced: true });
+    expect(after.total).toBe(withExtras.totals.offer?.amount);
+    expect(await extraRows(withExtras.id)).toEqual([]);
+    expect(amadeusCalls("createFlightOrders")).toHaveLength(0);
+    expect(await paymentRow(payment.id)).toMatchObject({ status: "canceled" });
+  });
+
+  it("[FIX-W22 AC1] prices the flights alone when Amadeus refuses an extra, and answers 409 PRICE_CHANGED without it", async () => {
+    const withExtras = await withBag(fresh);
+    const payment = await payCheckout(withExtras);
+    await ageOffer(withExtras.pricedOfferId);
+    const client = api.app.get(AmadeusClient, { strict: false });
+    const real = client.quoteAirOffers.bind(client);
+    vi.spyOn(client, "quoteAirOffers").mockImplementation(async (context, input) => {
+      if (additionalServicesOf(input.body).length > 0) {
+        throw mapAmadeusError("quoteAirOffers", {
+          kind: "http",
+          status: 400,
+          issues: [
+            {
+              status: 400,
+              code: 4926,
+              title: "INVALID DATA RECEIVED",
+              source: {
+                pointer: "/data/flightOffers/0/travelerPricings/0/fareDetailsBySegment/0/additionalServices",
+              },
+            },
+          ],
+        });
+      }
+      return await real(context, input);
+    });
+
+    const res = await complete(withExtras.id);
+
+    expect(res.status).toBe(409);
+    expectResponseToMatch("completeCheckout", res);
+    const after = await checkoutRow(withExtras.id);
+    expect((res.body as ErrorBody).error).toMatchObject({
+      code: "PRICE_CHANGED",
+      details: { reason: "extras_unavailable", pricedOfferId: after.priced_offer_id },
+    });
+    // The flights priced again without extras (a child of the priced offer the checkout was buying).
+    expect(await parentOf(after.priced_offer_id)).toBe(withExtras.pricedOfferId);
+    expect(after).toMatchObject({ status: "open", ancillaries: "0.00", balanced: true });
+    expect(await extraRows(withExtras.id)).toEqual([]);
+    expect(amadeusCalls("createFlightOrders")).toHaveLength(0);
+    expect(await paymentRow(payment.id)).toMatchObject({ status: "canceled" });
   });
 });
 
@@ -849,11 +1391,17 @@ describe("checkout.complete after the order exists", () => {
     expect(error.code).toBe("SUPPLIER_TIMEOUT");
     const bookingId = String(error.details?.["bookingId"]);
     // The order exists at Amadeus; T2 rolled back, so the claim is all that is stored: nothing voided or captured.
-    expect(await bookingRow(bookingId)).toMatchObject({
+    const booking = await bookingRow(bookingId);
+    expect(booking).toMatchObject({
       status: "pending",
       checkout_id: checkout.id,
       record_locator: null,
     });
+    // An unknown outcome like a lost answer (FIX-W22, OADR-0003 point 4): the reconciliation looks for it.
+    expect(booking.reconcile_until?.getTime()).toBe(
+      (booking.create_order_started_at?.getTime() ?? 0) + 15 * 60_000,
+    );
+    expect(await supplierTimeoutReason(bookingId)).toBe("record_failed");
     expect(stripePosts("/cancel")).toHaveLength(0);
     expect(stripePosts("/capture")).toHaveLength(0);
     expect(await paymentRow(payment.id)).toMatchObject({ status: "authorized", booking_id: bookingId });
@@ -976,16 +1524,6 @@ describe("checkout.complete refusals before anything is booked", () => {
 });
 
 describe("checkout.complete with a priced offer older than ten minutes", () => {
-  async function ageOffer(pricedOfferId: string): Promise<void> {
-    await alphaTx((trx) =>
-      trx
-        .updateTable("priced_offers")
-        .set({ created_at: sql<Date>`now() - interval '11 minutes'` })
-        .where("id", "=", pricedOfferId)
-        .execute(),
-    );
-  }
-
   it("prices the offers again and books the same price on the new priced offer", async () => {
     const { checkout } = await paidCheckout();
     await ageOffer(checkout.pricedOfferId);

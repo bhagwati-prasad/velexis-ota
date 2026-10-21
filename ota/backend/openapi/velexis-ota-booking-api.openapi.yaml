@@ -6426,6 +6426,7 @@ paths:
         - HOST_NOT_ALLOWED
         - NOT_FOUND
         - CHECKOUT_ALREADY_COMPLETED
+        - CHECKOUT_BEING_COMPLETED
         - CHECKOUT_EXPIRED
         - PRECONDITION_FAILED
         - TRAVELER_DATA_INVALID
@@ -6590,6 +6591,7 @@ paths:
         - HOST_NOT_ALLOWED
         - NOT_FOUND
         - CHECKOUT_ALREADY_COMPLETED
+        - CHECKOUT_BEING_COMPLETED
         - CHECKOUT_EXPIRED
         - PRECONDITION_FAILED
         - CONTACT_DATA_INVALID
@@ -6761,6 +6763,7 @@ paths:
         - FEATURE_DISABLED
         - NOT_FOUND
         - CHECKOUT_ALREADY_COMPLETED
+        - CHECKOUT_BEING_COMPLETED
         - PRICE_CHANGED
         - SOLD_OUT
         - CHECKOUT_EXPIRED
@@ -6895,6 +6898,7 @@ paths:
         - HOST_NOT_ALLOWED
         - NOT_FOUND
         - CHECKOUT_ALREADY_COMPLETED
+        - CHECKOUT_BEING_COMPLETED
         - CHECKOUT_EXPIRED
         - PRECONDITION_FAILED
         - RATE_LIMITED
@@ -7058,6 +7062,7 @@ paths:
         - NOT_FOUND
         - IDEMPOTENCY_KEY_REUSED
         - CHECKOUT_ALREADY_COMPLETED
+        - CHECKOUT_BEING_COMPLETED
         - PRICE_CHANGED
         - CHECKOUT_EXPIRED
         - CHECKOUT_INCOMPLETE
@@ -7365,6 +7370,7 @@ paths:
         - HOST_NOT_ALLOWED
         - NOT_FOUND
         - CHECKOUT_ALREADY_COMPLETED
+        - CHECKOUT_BEING_COMPLETED
         - PAYMENT_NOT_UPDATABLE
         - PRICE_CHANGED
         - CHECKOUT_EXPIRED
@@ -7472,8 +7478,10 @@ paths:
         (quoteAirOffers) with the offers, `additionalServices`, `data.travelers` and `forceClass`. A higher selling
         total (or one above `expectedTotal`) → `409 PRICE_CHANGED` (`details.oldPrice`, `details.newPrice`,
         `details.pricedOfferId`): the checkout moves to the new priced offer and totals, the authorisation is voided,
-        nothing is booked — create a new payment and complete again. A lower total is accepted (only the lower amount is
-        captured; a `PRICE_DECREASED` warning is returned).
+        nothing is booked — create a new payment and complete again. The checkout's extras are priced again with the
+        offers; an extra Amadeus no longer confirms is never dropped silently: it answers the same `409 PRICE_CHANGED`
+        with `details.reason = "extras_unavailable"`, and the checkout moves without that extra. A lower total is
+        accepted (only the lower amount is captured; a `PRICE_DECREASED` warning is returned).
 
 
         **5. Create the order.** **Flight Create Orders** `POST /v1/booking/flight-orders?issue={issue}`
@@ -7524,7 +7532,12 @@ paths:
         guests — store it like the 201 token), a reconciliation job looks for the order in the queuing office (Queue
         List / Flight Order Management) for up to 15 minutes, then confirms it or voids the payment and marks it failed.
         Poll bookings.getTicketingStatus until `bookingStatus` leaves `pending`; never re-book with a new key. Retrying
-        with the same key is safe and only replays (step 1).
+        with the same key is safe and only replays (step 1). Once the Flight Create Orders request may have reached
+        Amadeus, every answer that does not prove a refusal (no answer in time, a reset connection, an Amadeus `5xx`
+        such as 500, 502 or 503, an answer that cannot be read) is this `504`, never a rejection: only an Amadeus `4xx`
+        business refusal voids the authorisation and reopens the checkout. While the booking is `pending` the checkout
+        cannot change: its set steps, checkout.createPayment and checkout.updatePayment answer `409
+        CHECKOUT_BEING_COMPLETED` (`details.bookingId`).
 
 
         **Response.** `201` + `Location: /v1/bookings/{id}` with the booking (customer scope) and, for guests, a
@@ -7894,7 +7907,9 @@ paths:
         and hosting keys and the OTA admin's service key get `403 SCOPE_NOT_ALLOWED`. `paymentId` is the checkout's
         active `airline_card` payment, created by checkout.createPayment (`422 UNPROCESSABLE` otherwise), and
         `expectedTotal` is its amount, the amount the airline will charge (`409 PAYMENT_AMOUNT_MISMATCH` otherwise).
-        Checkout state, travellers and contacts are checked as by checkout.complete.
+        Checkout state, travellers and contacts are checked as by checkout.complete: a `pending` booking of the
+        checkout (another completion is creating its order or looking for it) answers `504 SUPPLIER_TIMEOUT` with its
+        `details.bookingId`, and the card is never sent.
 
 
         **2. The card.** `card` (`x-sensitive`) exists only in memory for this request: it is never logged, stored,
@@ -20740,7 +20755,9 @@ components:
         (`details.oldPrice`, `details.newPrice`, `details.pricedOfferId` — the checkout already points to the new priced
         offer after createPayment / updatePayment / complete; setAncillaries leaves it unchanged), SOLD_OUT,
         PAYMENT_AMOUNT_MISMATCH (`details.paymentAmount`, `details.checkoutTotal`), PAYMENT_NOT_UPDATABLE
-        (`details.status`), IDEMPOTENCY_KEY_REUSED.
+        (`details.status`), IDEMPOTENCY_KEY_REUSED, CHECKOUT_BEING_COMPLETED (`details.bookingId`: the pending booking
+        of a checkout that checkout.complete claimed; the set steps, createPayment and updatePayment refuse every
+        change until that booking is decided).
       headers:
         X-Request-Id:
           $ref: '#/components/headers/X-Request-Id'
@@ -20818,6 +20835,16 @@ components:
                   message: The Idempotency-Key was already used with a different request body.
                   status: 409
                   requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+            CHECKOUT_BEING_COMPLETED:
+              summary: CHECKOUT_BEING_COMPLETED
+              value:
+                error:
+                  code: CHECKOUT_BEING_COMPLETED
+                  message: We are confirming your booking with the airline; the checkout cannot change meanwhile.
+                  status: 409
+                  requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+                  details:
+                    bookingId: bkg_01JA4CG3S8W1Z4C7F0H3L6P9T2
     CheckoutUnprocessable:
       description: >-
         Checkout data or a selection violates a booking requirement or business rule. Possible codes (see the
@@ -45552,6 +45579,13 @@ x-error-catalogue:
     status: 422
     description: >-
       The notification template does not compile or uses a variable that is not allowed (details.errors).
+  CHECKOUT_BEING_COMPLETED:
+    status: 409
+    description: >-
+      The checkout is being completed: checkout.complete claimed it, and its booking (details.bookingId) is pending
+      while the order is created or, after 504 SUPPLIER_TIMEOUT, looked for in the queuing office. Nothing of the
+      checkout (travellers, contacts, extras, special requests, payments) can change until the booking is decided;
+      the checkout is then completed or open again. Check the booking status, then read the checkout again.
 x-new-tenant-tables:
   customer_consents: >-
     Append-only log of consent events per customer (marketing opt-in/opt-out, terms and privacy policy acceptance) with

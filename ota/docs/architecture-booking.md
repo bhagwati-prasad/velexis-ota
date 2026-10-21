@@ -56,8 +56,8 @@ sequenceDiagram
   O->>S: retrieve PaymentIntent (must be requires_capture, amount = total)
   O->>D: T1 lock checkout, insert booking pending, commit
   opt priced offer older than 10 min or expired
-    O->>A: Flight Offers Price
-    Note over O: higher total: void, 409 PRICE_CHANGED, booking failed (audit only)
+    O->>A: Flight Offers Price (with the checkout's extras in additionalServices)
+    Note over O: higher total or an extra not confirmed: void, 409 PRICE_CHANGED, booking failed (audit only)
   end
   O->>A: Flight Create Orders (issue per policy, remark VELEXIS ref, automatedProcess queue)
   A-->>O: order (id, record locator)
@@ -78,11 +78,12 @@ Failure outcomes, as the contract fixes them:
 | Situation | Booking | Payment | Checkout | Answer |
 |---|---|---|---|---|
 | Payment not authorised | none | unchanged | open | `402 PAYMENT_REQUIRED` / `PAYMENT_DECLINED` |
-| Re-price is higher | `failed` (console only) | voided | moved to the new priced offer | `409 PRICE_CHANGED` |
-| Amadeus rejects (sold out, data) | `failed` | voided | open | `409 SOLD_OUT`, `422 TRAVELER_DATA_INVALID`, `502 SUPPLIER_ERROR` |
+| Re-price is higher, or an extra is no longer confirmed | `failed` (console only) | voided | moved to the new priced offer, extras and totals | `409 PRICE_CHANGED` |
+| Amadeus rejects (a `4xx`: sold out, data) | `failed` | voided | open | `409 SOLD_OUT`, `422 TRAVELER_DATA_INVALID`, `502 SUPPLIER_ERROR` |
 | Capture fails after the order exists | `confirmed`, `ticketing_status = manual_review` | `authorized`, `payment.capture_retry` queued, staff alerted | completed | `201` with a warning |
 | Issue fails | `confirmed`, `ticketing_status = failed` | captured | completed | `201`, ticketing job retries |
-| Amadeus timeout on create | `pending`, reconciling | unchanged | `payment_pending` | `504 SUPPLIER_TIMEOUT` (§4) |
+| Amadeus timeout, `5xx` or unreadable answer on create | `pending`, reconciling | unchanged | `payment_pending`, locked | `504 SUPPLIER_TIMEOUT` (§4) |
+| A checkout step while the booking is `pending` | unchanged | unchanged | unchanged | `409 CHECKOUT_BEING_COMPLETED` |
 
 ## 3. Airline-card booking (`checkout.completeWithAirlineCard`)
 
@@ -134,7 +135,7 @@ Differences from the Stripe path:
 
 ## 4. `SUPPLIER_TIMEOUT` recovery
 
-A timeout or network error **after** the create-order request was sent means "the order may exist". The backend never sends Flight Create Orders again for that checkout.
+A timeout or network error **after** the create-order request was sent means "the order may exist", and so does every other answer that does not prove a refusal: an Amadeus `5xx` (500, 502, 503, 504) or an answer that cannot be read. Only an Amadeus `4xx` business refusal fails the booking and voids the authorisation. The backend never sends Flight Create Orders again for that checkout, and while the booking is `pending` the checkout cannot change: its set steps, `checkout.createPayment` and `checkout.updatePayment` answer `409 CHECKOUT_BEING_COMPLETED` (`details.bookingId`).
 
 ```mermaid
 sequenceDiagram

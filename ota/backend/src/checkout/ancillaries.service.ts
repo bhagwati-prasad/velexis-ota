@@ -3,8 +3,10 @@
 // cabin bags, other services (PRIORITY_BOARDING, AIRPORT_CHECKIN, FAST_TRACK) and chargeable seats.
 //
 //   1. the checkout as checkout.get reads it (access as the checkout's, `404` otherwise, another tenant's id included):
-//      completed `409 CHECKOUT_ALREADY_COMPLETED` (`details.bookingId`), expired or abandoned `410 CHECKOUT_EXPIRED`, a
-//      stale `If-Match` `412 PRECONDITION_FAILED`;
+//      while checkout.complete completes it (its booking is `pending`) `409 CHECKOUT_BEING_COMPLETED` with
+//      `details.bookingId` (CheckoutService.refuseWhileCompleting, before any Amadeus call), completed `409
+//      CHECKOUT_ALREADY_COMPLETED` (`details.bookingId`), expired or abandoned `410 CHECKOUT_EXPIRED`, a stale
+//      `If-Match` `412 PRECONDITION_FAILED`;
 //   2. the catalogue of the checkout's base priced offer, as flights.getAncillaries loads it (`403 FEATURE_DISABLED` in
 //      customer scope while the storefront sells no ancillaries); each selection must be one of its options, by
 //      `optionId` or explicitly by `type` (with `serviceName`, `seatNumber`, `quantity`, `weight`), for a traveller
@@ -18,21 +20,27 @@
 //      the travellers entered so far (name, date of birth, gender) and `include=bags,other-services`
 //      (`buildServicesRequest`). Amadeus errors 4926 and 32171 on a selection are `422 ANCILLARY_NOT_AVAILABLE`
 //      (`rejected_by_airline`, `seat_unavailable` for a seat), `409 SOLD_OUT` and the timeouts and outages stay as the
-//      client maps them, anything else is `502 SUPPLIER_ERROR` (`servicesErrorOf`). An empty `selections` reverts to
+//      client maps them, anything else is `502 SUPPLIER_ERROR` (`servicesErrorOf`); an answer whose fare details no
+//      longer carry a selection is `422 ANCILLARY_NOT_AVAILABLE` too (`extrasMissingFrom`: the order is created from
+//      those offers verbatim, so the extra would be paid for and not booked). An empty `selections` reverts to
 //      the base priced offer without a call, unless the base priced offer expired: then it is priced again without
 //      extras;
-//   4. one transaction locks the checkout and checks it again (state and `If-Match`), stores the answer as a child
-//      priced offer (`parent_priced_offer_id` = the base; PricedOffersService.storeServicesPricing: the flights keep
-//      the base's markup and booking fees while Amadeus confirms their net, otherwise they are priced again), and
-//      prices the extras: each extra's net is Amadeus's `price.additionalServices` of its kind, shared over the
-//      extras of that kind by their catalogue prices, or the catalogue price where Amadeus states none (`extraNets`),
-//      plus one `ancillary_service` fee per extra from the engine (OADR-0005 point 7). The checkout's totals follow:
-//      `offer` = the child's selling total (the flights), `ancillaries` = Σ of the extras' selling prices, the card
-//      fee unchanged, `total = offer + ancillaries + cardFee` (the `checkouts_total_ck` CHECK). With `expectedTotal`, a
-//      new total that differs answers `409 PRICE_CHANGED` (`details.oldPrice` = the expected total, `newPrice`,
-//      `pricedOfferId` = the stored child) and the checkout is left unchanged: its priced offer, extras, totals and
-//      `version`. Otherwise `checkout_ancillaries` are replaced, `checkouts.priced_offer_id` points at the child and the
-//      `version` is bumped; the answer is the whole checkout.
+//   4. one transaction locks the checkout and checks it again (a `pending` booking, state and `If-Match`), stores the
+//      answer as a child priced offer (`parent_priced_offer_id` = the base; PricedOffersService.storeServicesPricing:
+//      the flights keep the base's markup and booking fees while Amadeus confirms their net, otherwise they are priced
+//      again), and prices the extras: each extra's net is Amadeus's `price.additionalServices` of its kind, shared over
+//      the extras of that kind by their catalogue prices, or the catalogue price where Amadeus states none
+//      (`extraNets`), plus one `ancillary_service` fee per extra from the engine (OADR-0005 point 7); a row keeps both
+//      (`price_amount` and `net_amount`). The checkout's totals follow its pricing mode (pricing-mode.ts), as
+//      checkout.createPayment and checkout.updatePayment compute them: at the selling price (`markup_rules`) `offer` =
+//      the child's selling total (the flights) and `ancillaries` = Σ of the extras' selling prices; at the airline's
+//      price (`net`, an airline-card payment, OBE-050 and OADR-0005 point 9) `offer` = the child's Amadeus total and
+//      `ancillaries` = Σ of the extras' Amadeus prices, no markup and no `ancillary_service` fee, so the totals stay
+//      the amount the airline charges. The card fee is unchanged, `total = offer + ancillaries + cardFee` (the
+//      `checkouts_total_ck` CHECK). With `expectedTotal`, a new total that differs answers `409 PRICE_CHANGED`
+//      (`details.oldPrice` = the expected total, `newPrice`, `pricedOfferId` = the stored child) and the checkout is
+//      left unchanged: its priced offer, extras, totals and `version`. Otherwise `checkout_ancillaries` are replaced,
+//      `checkouts.priced_offer_id` points at the child and the `version` is bumped; the answer is the whole checkout.
 //
 // The checkout's payment is not touched (the payments module reads the checkout, not the other way round): a payment
 // that is not confirmed yet is re-quoted by checkout.updatePayment or replaced by checkout.createPayment, whose
@@ -67,8 +75,15 @@ import {
 import { TenantContext, type RequestTenant } from "../tenancy/tenant-context";
 import { TenantTx, type TenantTransaction } from "../tenancy/tenant-tx";
 import { effectiveStatus, ifMatchSatisfied, type Checkout } from "./checkout.mapper";
-import { CheckoutRepository } from "./checkout.repository";
+import { CheckoutRepository, type CheckoutAncillaryRow } from "./checkout.repository";
 import { CheckoutService, type CheckoutStepInput } from "./checkout.service";
+import {
+  baseAmountsFor,
+  isPricingMode,
+  type PricedTotals,
+  type PricingMode,
+  type SelectionPrices,
+} from "./pricing-mode";
 
 type Schemas = components["schemas"];
 export type CheckoutAncillariesRequest = Schemas["CheckoutAncillariesRequest"];
@@ -133,6 +148,27 @@ export interface PlannedExtra {
   /** The catalogue's price of the option (net: ancillaries carry no markup); `null` for a seat. */
   readonly cataloguePrice: string | null;
 }
+
+/**
+ * What the Amadeus request, the reading of its answer and the nets need of an extra: a PlannedExtra of
+ * checkout.setAncillaries, or an extra the checkout stored, read back for the re-pricing of checkout.complete
+ * (`storedExtrasOf`).
+ */
+export type ServiceExtra = Pick<
+  PlannedExtra,
+  | "index"
+  | "ref"
+  | "type"
+  | "amadeusOfferId"
+  | "travelerId"
+  | "segmentIds"
+  | "quantity"
+  | "weight"
+  | "weightUnit"
+  | "serviceName"
+  | "seatNumber"
+  | "cataloguePrice"
+>;
 
 // ---- Selections ----------------------------------------------------------------------------------------------------
 
@@ -396,7 +432,7 @@ export function travelersOf(travelers: Checkout["travelers"]): AmadeusTraveler[]
  */
 export function buildServicesRequest(
   offers: ReadonlyArray<{ readonly amadeusOfferId: string; readonly payload: unknown }>,
-  extras: readonly PlannedExtra[],
+  extras: readonly ServiceExtra[],
   travelers: readonly AmadeusTraveler[],
   fareRules: boolean,
 ): ServicesRequest {
@@ -408,7 +444,7 @@ export function buildServicesRequest(
       }
     }
   }
-  const slotOfDetail = (extra: PlannedExtra, segmentId: string): FareDetailSlot | undefined => {
+  const slotOfDetail = (extra: ServiceExtra, segmentId: string): FareDetailSlot | undefined => {
     const offerIndex = offers.findIndex((offer) => offer.amadeusOfferId === extra.amadeusOfferId);
     const payload = payloads[offerIndex];
     const pricings = records(isRecord(payload) ? payload["travelerPricings"] : undefined);
@@ -486,7 +522,7 @@ const MEMBER_TYPES: ReadonlyArray<readonly [string, AncillaryType]> = [
 export function selectionOfPointer(
   pointer: unknown,
   pointers: ReadonlyMap<string, readonly number[]>,
-  extras: readonly PlannedExtra[],
+  extras: readonly ServiceExtra[],
 ): number | undefined {
   if (typeof pointer !== "string") {
     return undefined;
@@ -510,7 +546,7 @@ export function selectionOfPointer(
 export function servicesErrorOf(
   error: unknown,
   pointers: ReadonlyMap<string, readonly number[]>,
-  extras: readonly PlannedExtra[],
+  extras: readonly ServiceExtra[],
 ): unknown {
   if (!(error instanceof AppError) || SUPPLIER_CODES_KEPT.has(error.code)) {
     return error;
@@ -567,7 +603,7 @@ export function servicesErrorOf(
  * not selected.
  */
 export function extraNets(
-  extras: readonly PlannedExtra[],
+  extras: readonly ServiceExtra[],
   confirmed: ReadonlyArray<{ readonly amadeusOfferId: string; readonly payload: unknown }>,
   minorUnits: number,
 ): string[] {
@@ -601,6 +637,112 @@ export function extraNets(
   return nets;
 }
 
+/** The extras as the engine prices their `ancillary_service` fees: one traveller each, on their segments, at their net. */
+export function pricingExtrasOf(extras: readonly ServiceExtra[], nets: readonly string[]): PricingExtra[] {
+  return extras.map((extra, position) => ({
+    ref: extra.ref,
+    amount: nets[position] ?? "0",
+    travelers: 1,
+    segments: Math.max(1, extra.segmentIds.length),
+  }));
+}
+
+// ---- What an answer carries -----------------------------------------------------------------------------------------
+
+/** The `additionalServices` members of a fare detail that hold an extra of each kind (`buildServicesRequest`). */
+const MEMBERS_OF: Readonly<Record<AncillaryType, readonly string[]>> = Object.freeze({
+  CHECKED_BAGS: ["chargeableCheckedBags"],
+  CABIN_BAGS: ["chargeableCabinBags"],
+  SEATS: ["chargeableSeat", "chargeableSeatNumber"],
+  OTHER_SERVICES: ["otherServices"],
+});
+
+/**
+ * The extras a Flight Offers Price answer does not carry: an extra whose fare detail, in its confirmed offer for its
+ * traveller, lacks its `additionalServices` member (a service: its name) on one of its segments. The order is created
+ * from the confirmed offers verbatim, so an extra the answer lacks would not be booked.
+ */
+export function extrasMissingFrom(
+  extras: readonly ServiceExtra[],
+  confirmed: ReadonlyArray<{ readonly amadeusOfferId: string; readonly payload: unknown }>,
+): ServiceExtra[] {
+  return extras.filter((extra) => {
+    const payload = confirmed.find((offer) => offer.amadeusOfferId === extra.amadeusOfferId)?.payload;
+    const pricing = records(isRecord(payload) ? payload["travelerPricings"] : undefined).find(
+      (entry) => entry["travelerId"] === extra.travelerId,
+    );
+    const details = records(pricing?.["fareDetailsBySegment"]);
+    const carried = extra.segmentIds.every((segmentId) => {
+      const services = details.find((detail) => detail["segmentId"] === segmentId)?.["additionalServices"];
+      if (!isRecord(services)) {
+        return false;
+      }
+      if (extra.type === "OTHER_SERVICES") {
+        const names = services["otherServices"];
+        return Array.isArray(names) && names.includes(extra.serviceName);
+      }
+      return MEMBERS_OF[extra.type].some(
+        (member) => isRecord(services[member]) || typeof services[member] === "string",
+      );
+    });
+    return !carried;
+  });
+}
+
+// ---- The extras of a checkout, read back ----------------------------------------------------------------------------
+
+const ANCILLARY_TYPES: ReadonlySet<string> = new Set(Object.keys(MEMBERS_OF));
+
+const strings = (value: unknown): string[] | undefined =>
+  Array.isArray(value) && value.every((item) => typeof item === "string") ? (value as string[]) : undefined;
+
+/**
+ * The extras the checkout stored (`checkout_ancillaries`, as `ancillaryRows` wrote them), read back in their order for
+ * the re-pricing of checkout.complete: the Amadeus offer from the priced offer's offers (`details.offerId`), the
+ * traveller and segments from `details`, the service and the seat from their columns, and the stored net as the
+ * catalogue price (the share of an Amadeus amount, `extraNets`). `undefined` when a row cannot be read back: such a
+ * checkout is never booked without its extras.
+ */
+export function storedExtrasOf(
+  rows: readonly CheckoutAncillaryRow[],
+  offers: ReadonlyArray<{ readonly offerId: string; readonly amadeusOfferId: string }>,
+): ServiceExtra[] | undefined {
+  const extras: ServiceExtra[] = [];
+  for (const [index, row] of rows.entries()) {
+    const details = isRecord(row.details) ? row.details : {};
+    const offer = offers.find((entry) => entry.offerId === details["offerId"]);
+    const travelerId = details["travelerId"];
+    const segmentIds = strings(details["segmentIds"]) ?? (row.segmentId === null ? [] : [row.segmentId]);
+    const type = row.type as AncillaryType;
+    if (
+      !ANCILLARY_TYPES.has(row.type) ||
+      offer === undefined ||
+      typeof travelerId !== "string" ||
+      segmentIds.length === 0 ||
+      (type === "OTHER_SERVICES" && row.serviceCode === null) ||
+      (type === "SEATS" && row.seatNumber === null)
+    ) {
+      return undefined;
+    }
+    const bags = BAGS.has(type);
+    extras.push({
+      index,
+      ref: `selection:${index}`,
+      type,
+      amadeusOfferId: offer.amadeusOfferId,
+      travelerId,
+      segmentIds,
+      quantity: row.quantity,
+      weight: bags ? row.weight : null,
+      weightUnit: bags ? row.weightUnit : null,
+      serviceName: type === "OTHER_SERVICES" ? (row.serviceCode as ServiceName) : null,
+      seatNumber: type === "SEATS" ? row.seatNumber : null,
+      cataloguePrice: row.netAmount,
+    });
+  }
+  return extras;
+}
+
 /** What `ancillaryRows` needs besides the extras. */
 export interface AncillaryRowsInput {
   readonly checkoutId: string;
@@ -626,14 +768,18 @@ export interface AncillaryRowsInput {
 export function ancillaryRows(input: AncillaryRowsInput): {
   readonly rows: CheckoutAncillaryInsert[];
   readonly total: string;
+  /** Each row's selling and Amadeus price, in their order (pricing-mode.ts `baseAmountsFor`). */
+  readonly prices: readonly SelectionPrices[];
 } {
   const units = input.minorUnits;
   let total: MoneyValue = new Money(0);
+  const prices: SelectionPrices[] = [];
   const rows = input.extras.map((extra, position): CheckoutAncillaryInsert => {
     const net = new Money(input.nets[position] ?? 0);
     const lines = input.feeLines.filter((line) => line.extraRef === extra.ref);
     const selling = lines.reduce((sum, line) => sum.plus(line.amount), net);
     total = total.plus(selling);
+    prices.push({ priceAmount: selling.toFixed(units), netAmount: net.toFixed(units) });
     const travelerRowId = input.travelerRowIds.get(extra.travelerId);
     if (travelerRowId === undefined) {
       throw new Error("an extra's traveller is not a traveller of the checkout");
@@ -670,7 +816,7 @@ export function ancillaryRows(input: AncillaryRowsInput): {
       updated_at: input.now,
     };
   });
-  return { rows, total: total.toFixed(units) };
+  return { rows, total: total.toFixed(units), prices };
 }
 
 /**
@@ -729,8 +875,8 @@ function checkChangeable(
   }
 }
 
-/** The base priced offer's confirmed Amadeus offers (net, verbatim), in the order of its offers. */
-function storedOffersOf(row: PricedOfferRow): ConfirmedOffer[] {
+/** A priced offer's confirmed Amadeus offers (net, verbatim), in the order of its offers. */
+export function storedOffersOf(row: PricedOfferRow): ConfirmedOffer[] {
   const snapshot = snapshotOf(row.response);
   const confirmed = confirmedOffersOf(
     snapshot.offers.map((offer) => ({
@@ -767,6 +913,8 @@ export class AncillariesService {
   async setAncillaries(input: CheckoutStepInput<CheckoutAncillariesRequest>): Promise<Checkout> {
     const tenant = this.tenants.require();
     const view = await this.checkouts.get(input.checkoutId, input.acceptLanguage);
+    // Before any Amadeus call; step 4 checks again under the lock.
+    await this.tx.run((trx) => this.checkouts.refuseWhileCompleting(trx, view.id));
     checkChangeable(view, input.ifMatch);
     let extras: PlannedExtra[] = [];
     if (input.body.selections.length === 0) {
@@ -855,18 +1003,18 @@ export class AncillariesService {
     if (confirmed === undefined) {
       throw new AppError("SUPPLIER_ERROR", { message: "The supplier's pricing answer could not be read." });
     }
+    // An extra the answer does not carry would be paid for and never booked (the order is created from these offers).
+    const missing = extrasMissingFrom(extras, confirmed)[0];
+    if (missing !== undefined) {
+      throw missing.type === "SEATS"
+        ? unavailable(missing.index, "seat_unavailable", "This seat cannot be booked.", {
+            seatNumber: missing.seatNumber,
+            segmentId: missing.segmentIds[0],
+          })
+        : unavailable(missing.index, "rejected_by_airline", "The airline rejected this extra.");
+    }
     const nets = extraNets(extras, confirmed, base.minorUnits);
-    return {
-      request,
-      reply,
-      nets,
-      extras: extras.map((extra, position) => ({
-        ref: extra.ref,
-        amount: nets[position] ?? "0",
-        travelers: 1,
-        segments: Math.max(1, extra.segmentIds.length),
-      })),
-    };
+    return { request, reply, nets, extras: pricingExtrasOf(extras, nets) };
   }
 
   /** Step 4 (see the file header), in one transaction. */
@@ -882,6 +1030,7 @@ export class AncillariesService {
     if (checkout === undefined) {
       throw new AppError("NOT_FOUND", { message: "No checkout with this id." });
     }
+    await this.checkouts.refuseWhileCompleting(trx, checkout.id);
     const status = effectiveStatus(checkout, now);
     checkChangeable(
       {
@@ -893,10 +1042,10 @@ export class AncillariesService {
     );
     const units = base.minorUnits;
     let pricedOfferId = base.row.id;
-    let offerAmount = base.row.sellingTotal;
+    let priced: PricedTotals = { sellingTotal: base.row.sellingTotal, netTotal: base.row.netTotal };
     let fareChanged = false;
     let rows: CheckoutAncillaryInsert[] = [];
-    let ancillaries = new Money(0).toFixed(units);
+    let prices: readonly SelectionPrices[] = [];
     if (quote !== undefined) {
       const stored = await this.pricedOffers.storeServicesPricing(trx, {
         base: base.row,
@@ -907,7 +1056,7 @@ export class AncillariesService {
         acceptLanguage: input.acceptLanguage,
       });
       pricedOfferId = stored.priced.row.id;
-      offerAmount = stored.priced.row.sellingTotal;
+      priced = { sellingTotal: stored.priced.row.sellingTotal, netTotal: stored.priced.row.netTotal };
       fareChanged = stored.fareChanged;
       const travelers = await this.repository.travelers(trx, checkout.id);
       const built = ancillaryRows({
@@ -922,9 +1071,12 @@ export class AncillariesService {
         newId: () => this.ids.newId("can"),
       });
       rows = built.rows;
-      ancillaries = built.total;
+      prices = built.prices;
     }
-    const offer = new Money(offerAmount).toFixed(units);
+    // The checkout's pricing mode decides which price its totals hold (pricing-mode.ts, OBE-050): the selling price,
+    // or for an airline-card payment the airline's, as checkout.createPayment and checkout.updatePayment compute it.
+    const mode: PricingMode = isPricingMode(checkout.pricingMode) ? checkout.pricingMode : "markup_rules";
+    const { offer, ancillaries } = baseAmountsFor(mode, priced, prices, units);
     const total = checkoutTotalOf(offer, ancillaries, checkout.feesAmount, units);
     const expected = input.body.expectedTotal;
     if (

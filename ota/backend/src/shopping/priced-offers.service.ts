@@ -38,7 +38,10 @@
 // never change once answered). A fare that is gone by then (`SOLD_OUT`) answers `410 OFFER_EXPIRED`: price again.
 //
 // repriceForCheckout (OBE-042): checkout.complete prices the offers of an old priced offer again (or one whose
-// travellers carry discount data) and stores the answer as a child priced offer with the same `store` step.
+// travellers carry discount data) and stores the answer as a child priced offer with the same `store` step. A checkout
+// with extras is priced again with them instead (FIX-W22): the orchestrator sends the base priced offer's offers with
+// the same `additionalServices` as checkout.setAncillaries and stores the answer with `storeServicesPricing`, so the
+// new priced offer, the totals and the order keep the extras.
 import { Injectable } from "@nestjs/common";
 import type { components } from "@velexis/api-types";
 import { AppError } from "@velexis/errors";
