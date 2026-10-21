@@ -1,6 +1,7 @@
 // checkout.complete for Stripe payments (completeCheckout, `x-scope: both`; OBE-042; ota/docs/architecture-booking.md
 // §1 and §2, OADR-0003 points 1–3, OADR-0008 points 1 and 7, ota/docs/flows/checkout-stripe.md §2 steps 5–7 and §3).
-// Five steps; no database transaction stays open across an Amadeus or Stripe call (OADR-0003 point 1).
+// Five steps; no database transaction stays open across an Amadeus or Stripe call (OADR-0003 point 1), and a
+// transaction that locks the booking and its payment locks the booking first, then the payment (OADR-0003 point 11).
 //
 //   0. Read (T0) and the PaymentIntent. The checkout as its own checkout.get reads it (environment and access, `404`
 //      otherwise); a booking of the checkout answers `409 CHECKOUT_ALREADY_COMPLETED` (`details.bookingId`), or, while
@@ -1635,6 +1636,9 @@ export class BookingOrchestrator {
     }
     await this.tx.run(async (trx) => {
       const now = this.clock.now();
+      // The lock order of a transaction that changes a booking and its payment: the booking first, then the payment
+      // (OADR-0003 point 11), as the failed capture above, failBooking and the reconciliation take them.
+      await this.repository.booking(trx, claim.booking.id, true);
       const payment = await this.payments.payment(trx, claim.payment.id, true);
       if (payment !== undefined && payment.status !== "captured") {
         const { values } = stateValues(payment, state, now);

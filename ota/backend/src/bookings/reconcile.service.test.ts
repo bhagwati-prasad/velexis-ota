@@ -15,6 +15,7 @@ import {
   replayedTimeout,
 } from "./booking-orchestrator.service";
 import {
+  adoptedReconcileUntil,
   carriesVelexisRemark,
   comparableName,
   orderOfBooking,
@@ -22,6 +23,7 @@ import {
   queueCandidates,
   queueCreationOf,
   queueRecordLocatorOf,
+  RECONCILE_ADOPT_AFTER_MS,
   RECONCILE_CLAIM_GAP_MS,
   RECONCILE_FIRST_DELAY_MS,
   RECONCILE_JOB,
@@ -31,6 +33,7 @@ import {
   reconcileDecision,
   reconcileJob,
   reconcileJobId,
+  staleClaimBefore,
   type ReconcileBookingRow,
 } from "./reconcile.service";
 
@@ -238,6 +241,29 @@ describe("an attempt", () => {
     expect(reconcileDecision("no_queue", true)).toBe("fail");
     // The order may be in what could not be read: nothing is voided for it.
     expect(reconcileDecision("incomplete", true)).toBe("wait");
+  });
+
+  it("[FIX-W24-BOOKINGS AC3] counts a claim without reconcile_until as stale only once its attempt started more than 2 minutes ago", () => {
+    const now = new Date(STARTED.getTime() + 2 * MINUTE);
+
+    expect(RECONCILE_ADOPT_AFTER_MS).toBe(2 * MINUTE);
+    // The adoption takes claims started strictly before this instant: exactly 2 minutes ago is still fresh.
+    expect(staleClaimBefore(now).getTime()).toBe(STARTED.getTime());
+    expect(staleClaimBefore(new Date(now.getTime() + 1)).getTime()).toBeGreaterThan(STARTED.getTime());
+    // Until it is adopted, an attempt does not touch it: its request may still be in flight.
+    expect(reconcileClaimSkip(bookingRow({ reconcileUntil: null }), now)).toBe("not_reconciling");
+  });
+
+  it("[FIX-W24-BOOKINGS AC1] gives an adopted claim the normal window from its adoption, and claims it at once", () => {
+    const adoptedAt = new Date(STARTED.getTime() + 2 * MINUTE + 1000);
+    const until = adoptedReconcileUntil(adoptedAt);
+
+    expect(until.getTime()).toBe(adoptedAt.getTime() + RECONCILE_WINDOW_MS);
+    // Adopted: reconciled like any unknown outcome, the first attempt in the scan's own minute.
+    expect(reconcileClaimSkip(bookingRow({ reconcileUntil: until }), adoptedAt)).toBeUndefined();
+    // Not proven absent before the deadline of the adoption, whatever the claim's age.
+    expect(reconcileDecision("absent", adoptedAt.getTime() >= until.getTime())).toBe("wait");
+    expect(reconcileDecision("absent", true)).toBe("fail");
   });
 
   it("decides within the 15 minutes of OADR-0003, the orchestration's own window", () => {

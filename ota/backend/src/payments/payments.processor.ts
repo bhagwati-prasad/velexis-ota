@@ -12,7 +12,9 @@
 // obligations to paid travellers, OADR-0014 point 4; any other is skipped), then re-reads its row in a tenant
 // transaction and does nothing when the state already moved (OADR-0010 point 6). The Stripe call goes through the
 // PaymentGateway (StripeGateway, the payment's environment) outside any transaction, with the idempotency keys of
-// OADR-0010 point 3, and its result is applied in a short transaction under the row's lock and with its `version`:
+// OADR-0010 point 3, and its result is applied in a short transaction under the row's lock and with its `version`; a
+// transaction that also changes the payment's booking, or writes a row that references it, locks the booking first,
+// then the payment (lead decision of 2026-10-21, OADR-0003 point 11):
 //
 //   payment.void            a payment that is not confirmed or `authorized`, with a PaymentIntent: `pi:cancel:<pay_id>`,
 //                           then `canceled` (`payment.voided`). Captured, cancelled, failed or airline-card payments
@@ -70,7 +72,7 @@ import {
   type PaymentGateway,
 } from "./payment-gateway";
 import { providerStateUpdate } from "./payment-state";
-import { PaymentsRepository, type PaymentRow } from "./payments.repository";
+import { PaymentsRepository, type LockedBookingRow, type PaymentRow } from "./payments.repository";
 import { RefundsRepository, refundSubmission, type RefundJobRow } from "./refunds.repository";
 import { StripeCallError, StripeMetadataMismatchError } from "./stripe/stripe.gateway";
 
@@ -516,7 +518,10 @@ export class PaymentJobsHandler {
     }
     if (CAPTURED_STATUSES.includes(payment.status)) {
       // Captured meanwhile (a capture whose answer was lost, seen by the webhook; staff): the booking shows it.
-      await this.tx.run((trx) => this.recordBookingPayment(trx, payment, payment.amountCaptured, attempt));
+      await this.tx.run(async (trx) => {
+        const booking = await this.lockBookingOf(trx, payment);
+        await this.recordBookingPayment(trx, booking, payment, payment.amountCaptured, attempt);
+      });
       return "unchanged";
     }
     if (payment.status !== "authorized") {
@@ -611,7 +616,8 @@ export class PaymentJobsHandler {
 
   /**
    * Applies a PaymentIntent state under the row's lock and with its `version` (payment-state.ts says what it may
-   * change), with a payment event; a capture also shows on the booking.
+   * change), with a payment event; a capture also shows on the booking, whose lock is taken first (the lock order of a
+   * transaction that locks a booking and its payment: the booking, then the payment; OADR-0003 point 11).
    */
   private async applyState(
     read: ReadPayment,
@@ -621,6 +627,7 @@ export class PaymentJobsHandler {
   ): Promise<PaymentJobOutcome> {
     return await this.tx.run(async (trx) => {
       const now = this.clock.now();
+      const booking = call === "capture" ? await this.lockBookingOf(trx, read.payment) : undefined;
       const current = await this.payments.payment(trx, read.payment.id, true);
       if (current === undefined) {
         return "missing";
@@ -653,7 +660,7 @@ export class PaymentJobsHandler {
       }
       if (call === "capture" && state.status === "captured") {
         const captured = Money.min(new Money(state.amountReceived), new Money(current.amount)).toFixed(2);
-        if (await this.recordBookingPayment(trx, current, captured, attempt)) {
+        if (await this.recordBookingPayment(trx, booking, current, captured, attempt)) {
           outcome = "applied";
         }
       }
@@ -662,11 +669,28 @@ export class PaymentJobsHandler {
   }
 
   /**
-   * Shows a capture on the payment's booking: `amount_paid` (captured payments) and a `payment.captured` booking event
-   * the customer sees, once (nothing when the booking shows the amount already). Answers whether it changed the booking.
+   * The payment's booking, locked `FOR UPDATE` before the payment is (`PaymentsRepository.lockBookings`); `undefined`
+   * without one.
+   */
+  private async lockBookingOf(
+    trx: TenantTransaction,
+    payment: Pick<PaymentRow, "bookingId">,
+  ): Promise<LockedBookingRow | undefined> {
+    if (payment.bookingId === null) {
+      return undefined;
+    }
+    const [booking] = await this.payments.lockBookings(trx, [payment.bookingId], "update");
+    return booking;
+  }
+
+  /**
+   * Shows a capture on the payment's booking, which the transaction locked before the payment (`lockBookingOf`):
+   * `amount_paid` (captured payments) and a `payment.captured` booking event the customer sees, once (nothing when the
+   * booking shows the amount already). Answers whether it changed the booking.
    */
   private async recordBookingPayment(
     trx: TenantTransaction,
+    booking: LockedBookingRow | undefined,
     payment: Pick<PaymentRow, "id" | "bookingId">,
     captured: string,
     attempt: PaymentJobAttempt,
@@ -674,13 +698,12 @@ export class PaymentJobsHandler {
     if (payment.bookingId === null || !new Money(captured).greaterThan(0)) {
       return false;
     }
-    const booking = await trx
-      .selectFrom("bookings")
-      .select(["id", sql<string>`amount_paid::text`.as("amountPaid")])
-      .where("id", "=", payment.bookingId)
-      .forUpdate()
-      .executeTakeFirst();
-    if (booking === undefined || new Money(booking.amountPaid).greaterThanOrEqualTo(captured)) {
+    if (booking?.id !== payment.bookingId) {
+      // Not the booking this transaction locked first: it is never locked after the payment.
+      this.logger.warn({ paymentId: payment.id }, "payments.booking_not_locked");
+      return false;
+    }
+    if (new Money(booking.amountPaid).greaterThanOrEqualTo(captured)) {
       return false;
     }
     const now = this.clock.now();
@@ -863,6 +886,11 @@ export class PaymentJobsHandler {
   ): Promise<void> {
     if (payment === undefined) {
       return;
+    }
+    // The alert's outbox row references the payment's booking, and the payment event the payment (their foreign keys
+    // take FOR KEY SHARE on both): the booking's lock comes first (OADR-0003 point 11).
+    if (payment.bookingId !== null) {
+      await this.payments.lockBookings(trx, [payment.bookingId], "key share");
     }
     const { code } = failure;
     await this.paymentEvent(trx, payment, attempt, now, {

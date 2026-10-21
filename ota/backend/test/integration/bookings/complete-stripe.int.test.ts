@@ -14,6 +14,9 @@
 // FIX-W22 (OADR-0003): an Amadeus 5xx on Flight Create Orders is an unknown outcome, not a refusal, so its test now
 // expects the pending booking and the `504` instead of a void and a `502`; the re-price of a checkout with extras, and
 // the lock of a checkout whose booking is pending, have tests of their own (the last describes).
+//
+// FIX-W24-BOOKINGS (lead decision of 2026-10-21, OADR-0003 point 11): the capture's transaction locks the booking
+// before the payment, proven with a second transaction that holds the booking (test/helpers/lock-order.ts).
 import { randomBytes } from "node:crypto";
 import { getQueueToken } from "@nestjs/bullmq";
 import { encryptValue, hashApiKey, type KeyProvider } from "@velexis/crypto";
@@ -54,6 +57,7 @@ import { newApiKey, testApiCredentials, testKeyProvider } from "../../helpers/ap
 import { AmadeusClient } from "../../../src/amadeus/amadeus.client";
 import { mapAmadeusError } from "../../../src/amadeus/error-mapper";
 import { startFakeStripe, stripeEndpointModule, type FakeStripe } from "../../helpers/fake-stripe";
+import { probeLockOrder, type LockOrderProbe } from "../../helpers/lock-order";
 import { OPENAPI_SETUP_TIMEOUT_MS, preloadOpenApiDocument } from "../../helpers/openapi";
 import { createTestApp, type TestApp } from "../../support/create-test-app";
 
@@ -1374,6 +1378,41 @@ describe("checkout.complete idempotency and transactions", () => {
       expect.stringMatching(/\/capture$/),
     ]);
     expect(atStripe.every((entry) => entry.inUse === 0)).toBe(true);
+  });
+});
+
+describe("checkout.complete's lock order (FIX-W24-BOOKINGS)", () => {
+  it("[FIX-W24-BOOKINGS AC5] locks the booking before the payment in the capture's transaction: the payment is free while it waits", async () => {
+    const { checkout, payment } = await paidCheckout();
+    // When Stripe is asked to capture (no transaction open: OBE-042 AC3), the probe takes the booking. The capture's
+    // transaction then waits for it; the probe checks that it waits without the payment's lock, and lets it go.
+    let probe: LockOrderProbe | undefined;
+    stripe.onRequest(async (req) => {
+      if (req.method !== "POST" || !req.path.endsWith("/capture") || probe !== undefined) {
+        return;
+      }
+      const { bookingId } = await alphaTx((trx) =>
+        trx
+          .selectFrom("payments")
+          .select("booking_id as bookingId")
+          .where("id", "=", payment.id)
+          .executeTakeFirstOrThrow(),
+      );
+      if (bookingId === null) {
+        throw new Error("the payment has no booking at its capture");
+      }
+      probe = probeLockOrder(tenantDb, "tenant_alpha", { bookingId, paymentId: payment.id });
+      await probe.locked;
+    });
+
+    const res = await complete(checkout.id);
+
+    expect(res.status).toBe(201);
+    expectResponseToMatch("completeCheckout", res);
+    expect(await probe?.result).toEqual({ waiterSeen: true, paymentFree: true });
+    const { booking } = res.body as CompletionBody;
+    expect(await paymentRow(payment.id)).toMatchObject({ status: "captured", booking_id: booking.id });
+    expect((await bookingRow(booking.id)).paid).toBe(checkout.totals.total.amount);
   });
 });
 

@@ -16,6 +16,10 @@
 // the per-tenant `bookings.reconcile_scan` job of its minute. The Amadeus token buckets are emptied of their state
 // before each scenario (the worker's clock goes back between scenarios, which would freeze a bucket's refill).
 //
+// FIX-W24-BOOKINGS (lead decision of 2026-10-21): the last two scenarios make a stale claim, a completion whose
+// unknown-outcome write fails (`staleClaim`), and let the scan adopt it after 2 minutes, then reconcile it like any
+// unknown outcome.
+//
 // Each scenario runs in its `beforeAll` hook, with a budget of its own, and keeps what it saw; its tests read it.
 // Every API answer is checked against the OTA document (`expectResponseToMatch`). The Stripe keys and the Amadeus
 // credentials are built at run time.
@@ -48,10 +52,19 @@ import request from "supertest";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { AmadeusClient } from "../../../src/amadeus/amadeus.client";
 import { newBookingReference } from "../../../src/bookings/booking-reference";
-import { readCreatedOrder } from "../../../src/bookings/order-recorder";
+import { OrderRecorder, readCreatedOrder } from "../../../src/bookings/order-recorder";
 import { buildCreateOrderRequest } from "../../../src/bookings/order-request.builder";
-import { RECONCILE_SCAN_JOB, type ReconcileJobResult } from "../../../src/bookings/reconcile.processor";
-import { RECONCILE_JOB, reconcileJobId } from "../../../src/bookings/reconcile.service";
+import {
+  RECONCILE_SCAN_JOB,
+  ReconcileScan,
+  type ReconcileJobResult,
+} from "../../../src/bookings/reconcile.processor";
+import {
+  RECONCILE_ADOPTED_EVENT,
+  RECONCILE_JOB,
+  reconcileJobId,
+  type AdoptedClaim,
+} from "../../../src/bookings/reconcile.service";
 import { Clock } from "../../../src/common/clock";
 import { newId } from "../../../src/common/ids";
 import { OTA_QUEUE } from "../../../src/common/queues/queue-names";
@@ -278,8 +291,11 @@ async function newPricedOffer(): Promise<string> {
   return (priced.body as { id: string }).id;
 }
 
-/** A guest checkout of alpha with its traveller (last name SAMPLE) and contact, paid with a confirmed card payment. */
-async function paidCheckout(): Promise<{
+/**
+ * A guest checkout of alpha with its traveller (last name SAMPLE, or `lastName`) and contact, paid with a confirmed card
+ * payment.
+ */
+async function paidCheckout(lastName?: string): Promise<{
   readonly checkout: CheckoutBody;
   readonly payment: PaymentBody;
   readonly contactEmail: string;
@@ -291,10 +307,13 @@ async function paidCheckout(): Promise<{
     .send({ pricedOfferId });
   expect(created.status).toBe(201);
   const checkoutId = (created.body as CheckoutBody).id;
+  const traveler = buildTravelerInput();
   const travelers = await request(api.server)
     .put(`/v1/checkouts/${checkoutId}/travelers`)
     .set(headers())
-    .send({ travelers: [buildTravelerInput()] });
+    .send({
+      travelers: [lastName === undefined ? traveler : { ...traveler, name: { ...traveler.name, lastName } }],
+    });
   expect(travelers.status).toBe(200);
   const contact = buildContactInput();
   const contacts = await request(api.server)
@@ -411,6 +430,15 @@ const amadeusCalls = (operation: string) => stub.requests().filter((entry) => en
 const stripePosts = (suffix: string) =>
   stripe.requests.filter((req) => req.method === "POST" && req.path.endsWith(suffix));
 
+/**
+ * The POSTs about one payment's PaymentIntent (`stripePosts`): a scenario that ends with a not-found decision leaves its
+ * `payment.void` to the worker, whose cancel can reach the fake after the next scenario's `stripe.reset()`.
+ */
+const stripePostsOf = (payment: PaymentBody, suffix: string) =>
+  stripePosts(suffix).filter(
+    (req) => payment.providerPaymentId !== null && req.path.includes(`/${payment.providerPaymentId}/`),
+  );
+
 /** The job with this id once the worker has finished it, completed (a failed attempt names its reason). */
 async function finished(queue: Queue, id: string): Promise<Job> {
   let found: Job | undefined;
@@ -459,15 +487,21 @@ async function firstAttempt(bookingId: string, at: Date): Promise<ReconcileJobRe
 }
 
 /**
- * One `bookings.reconcile_scan` of alpha at `at`, as the fan-out enqueues it, and the booking's `booking.reconcile` it
- * added. A scan job of the same minute left by an earlier scenario is removed first, so this one runs.
+ * One `bookings.reconcile_scan` of alpha at `at`, as the fan-out enqueues it: its counts (`adopted`, `due`). A scan job
+ * of the same minute left by an earlier scenario or step is removed first, so this one runs.
  */
-async function scanAttempt(bookingId: string, at: Date): Promise<ReconcileJobResult> {
+async function scan(at: Date): Promise<Record<string, number>> {
   clock.set(at);
-  const scan = tenantJob(RECONCILE_SCAN_JOB, alphaId, minuteBucket(at));
-  await (await maintenance.getJob(scan.opts.jobId))?.remove();
-  await maintenance.add(scan.name, scan.data, scan.opts);
-  await finished(maintenance, scan.opts.jobId);
+  const job = tenantJob(RECONCILE_SCAN_JOB, alphaId, minuteBucket(at));
+  await (await maintenance.getJob(job.opts.jobId))?.remove();
+  await maintenance.add(job.name, job.data, job.opts);
+  return ((await finished(maintenance, job.opts.jobId)).returnvalue as { counts: Record<string, number> })
+    .counts;
+}
+
+/** One `bookings.reconcile_scan` of alpha at `at` (`scan`), and the booking's `booking.reconcile` it added. */
+async function scanAttempt(bookingId: string, at: Date): Promise<ReconcileJobResult> {
+  await scan(at);
   const job = await finished(bookingsQueue, reconcileJobId(bookingId, minuteBucket(at)));
   expect(job.name).toBe(RECONCILE_JOB);
   return job.returnvalue as ReconcileJobResult;
@@ -496,16 +530,17 @@ interface TimedOut {
 
 /**
  * A paid checkout completed with the stub's `scenario` on Flight Create Orders: the `504` and its pending booking.
- * `prepare` changes the paid checkout before its completion.
+ * `prepare` changes the paid checkout before its completion; `lastName` is its lead traveller's (SAMPLE otherwise).
  */
 async function timedOutCompletion(
   scenario: "timeout" | "timeout-lost",
   prepare?: (checkout: CheckoutBody) => Promise<void>,
+  lastName?: string,
 ): Promise<TimedOut> {
   await resetRateLimits();
   stub.setDefaultScenario("success");
   stripe.reset();
-  const { checkout, payment, contactEmail } = await paidCheckout();
+  const { checkout, payment, contactEmail } = await paidCheckout(lastName);
   await prepare?.(checkout);
   stub.clearRequests();
   const key = idempotencyKey();
@@ -517,6 +552,41 @@ async function timedOutCompletion(
     throw new Error("a pending booking without create_order_started_at");
   }
   return { checkout, payment, contactEmail, key, first, bookingId, started };
+}
+
+/**
+ * A stale claim (FIX-W24-BOOKINGS): a completion whose unknown-outcome write fails, as `bookings.reconcile_not_scheduled`
+ * logs it. The API's OrderRecorder refuses the `booking.supplier_timeout` event, so that transaction rolls back: the
+ * booking stays `pending` without `reconcile_until`, without the event and without its first `booking.reconcile`, its
+ * checkout locked and its authorisation held, and the answer is still the `504`. The stub's `scenario` decides whether
+ * the order exists; `lastName` is the lead traveller's (`timedOutCompletion`).
+ */
+async function staleClaim(scenario: "timeout" | "timeout-lost", lastName?: string): Promise<TimedOut> {
+  const recorder = api.app.get(OrderRecorder, { strict: false });
+  const record = recorder.event.bind(recorder);
+  const refused = vi.spyOn(recorder, "event").mockImplementation(async (trx, bookingId, event) => {
+    if (event.type === "booking.supplier_timeout") {
+      throw new Error("the unknown-outcome write failed in the test");
+    }
+    await record(trx, bookingId, event);
+  });
+  try {
+    return await timedOutCompletion(scenario, undefined, lastName);
+  } finally {
+    refused.mockRestore();
+  }
+}
+
+/** The `booking.reconcile_adopted` events of a booking. */
+async function adoptedEvents(bookingId: string) {
+  return await alphaTx((trx) =>
+    trx
+      .selectFrom("booking_events")
+      .select(["actor_type as actorType", "visible_to_customer as visible", "data"])
+      .where("booking_id", "=", bookingId)
+      .where("type", "=", RECONCILE_ADOPTED_EVENT)
+      .execute(),
+  );
 }
 
 /** A decoy order on alpha's booking queue, created through the worker's Amadeus client: its record locator. */
@@ -996,6 +1066,208 @@ describe("a re-price accepted before the lost answer", () => {
     expect(decision).toMatchObject({ outcome: "not_found", voids: 1 });
     // Reopened on the priced offer the order was sent with.
     expect(reopened).toMatchObject({ status: "open", priced_offer_id: moved.priced_offer_id });
+    expect(amadeusCalls("createFlightOrders")).toHaveLength(1);
+  });
+});
+
+describe("a stale claim whose order exists (FIX-W24-BOOKINGS, stub timeout)", () => {
+  let timedOut: TimedOut;
+  let stale: Awaited<ReturnType<typeof bookingRow>>;
+  let firstJob: Job | undefined;
+  let freshScans: Array<Record<string, number>>;
+  let freshRows: Array<Awaited<ReturnType<typeof bookingRow>>>;
+  let freshJobs: Array<Job | undefined>;
+  let adoptedAt: Date;
+  let adoptingScan: Record<string, number>;
+  let found: ReconcileJobResult;
+  let decided: Awaited<ReturnType<typeof bookingRow>>;
+  let laterScan: Record<string, number>;
+  let finalReplay: Answer;
+
+  beforeAll(async () => {
+    useWorkerClock();
+    // A last name of its own: the earlier scenarios' orders and decoys (all SAMPLE) are on the booking queue too, and
+    // Queue List gives their creation to the minute only, so they could tie with this order for the search's three
+    // reads (RECONCILE_MAX_READS) and leave it unread.
+    timedOut = await staleClaim("timeout", "ADOPTED");
+    stale = await bookingRow(timedOut.bookingId);
+    firstJob = await firstJobOf(timedOut.bookingId);
+    // A claim younger than 2 minutes may still have its request in flight: the scans of 1 and of exactly 2 minutes
+    // after it leave it alone.
+    freshScans = [];
+    freshRows = [];
+    freshJobs = [];
+    for (const at of [after(timedOut.started, MINUTE), after(timedOut.started, 2 * MINUTE)]) {
+      freshScans.push(await scan(at));
+      freshRows.push(await bookingRow(timedOut.bookingId));
+      freshJobs.push(
+        (await bookingsQueue.getJob(reconcileJobId(timedOut.bookingId, minuteBucket(at)))) ?? undefined,
+      );
+    }
+    // The scan after the 2 minutes adopts it, and its booking.reconcile finds the order the lost answer created.
+    adoptedAt = after(timedOut.started, 2 * MINUTE + SECOND);
+    adoptingScan = await scan(adoptedAt);
+    found = (await finished(bookingsQueue, reconcileJobId(timedOut.bookingId, minuteBucket(adoptedAt))))
+      .returnvalue as ReconcileJobResult;
+    decided = await bookingRow(timedOut.bookingId);
+    laterScan = await scan(after(timedOut.started, 3 * MINUTE + SECOND));
+    finalReplay = await complete(timedOut.checkout.id, { key: timedOut.key });
+  }, SCENARIO_TIMEOUT_MS);
+
+  it("[FIX-W24-BOOKINGS AC3] leaves a claim without reconcile_until alone for 2 minutes: no adoption, no job, no event", async () => {
+    // The failed write left nothing for the reconciliation: no deadline, no first job, no event.
+    expect(stale).toMatchObject({ status: "pending", reconcile_until: null, reconcile_attempts: 0 });
+    expect(firstJob).toBeUndefined();
+    expect(await eventTypes(timedOut.bookingId)).not.toContain("booking.supplier_timeout");
+    expect(freshScans.map((counts) => counts["adopted"])).toEqual([0, 0]);
+    for (const row of freshRows) {
+      expect(row).toMatchObject({ status: "pending", reconcile_until: null, reconcile_attempts: 0 });
+    }
+    expect(freshJobs).toEqual([undefined, undefined]);
+  });
+
+  it("[FIX-W24-BOOKINGS AC1] adopts it after 2 minutes and reconciles it to confirmed: found in the queuing office, captured, issued", async () => {
+    expect(adoptingScan).toMatchObject({ adopted: 1 });
+    expect(decided.reconcile_until?.getTime()).toBe(adoptedAt.getTime() + 15 * MINUTE);
+    expect(found).toMatchObject({ outcome: "found", attempts: 1, captured: true, status: "ticketed" });
+    expect(decided).toMatchObject({
+      status: "ticketed",
+      ticketing_status: "issued",
+      reconcile_outcome: "found",
+      reconcile_attempts: 1,
+      checkout_id: timedOut.checkout.id,
+      paid: decided.total,
+    });
+    // The order was looked for in the booking queue before anything was decided, and read by its record locator.
+    expect(amadeusCalls("listQueue")).toHaveLength(1);
+    expect(amadeusCalls("getFlightOrderByReference").map((read) => read.query["reference"])).toContain(
+      decided.record_locator,
+    );
+    expect(await checkoutStatus(timedOut.checkout.id)).toBe("completed");
+    expect(await paymentRow(timedOut.payment.id)).toMatchObject({ status: "captured" });
+    expect(stripePostsOf(timedOut.payment, "/capture")).toHaveLength(1);
+    expect(stripePostsOf(timedOut.payment, "/cancel")).toHaveLength(0);
+    expect(await adoptedEvents(timedOut.bookingId)).toEqual([
+      {
+        actorType: "system",
+        visible: false,
+        data: {
+          reason: "stale_claim",
+          createOrderStartedAt: timedOut.started.toISOString(),
+          reconcileUntil: new Date(adoptedAt.getTime() + 15 * MINUTE).toISOString(),
+        },
+      },
+    ]);
+    expect(laterScan).toMatchObject({ adopted: 0 });
+    // The same key's replay follows the booking: the final 201, and still one Flight Create Orders.
+    expect(finalReplay.status).toBe(201);
+    expect((finalReplay.body as CompletionBody).booking).toMatchObject({
+      id: timedOut.bookingId,
+      status: "ticketed",
+    });
+    expect(amadeusCalls("createFlightOrders")).toHaveLength(1);
+  });
+});
+
+describe("a stale claim whose order was never created (FIX-W24-BOOKINGS, stub timeout-lost)", () => {
+  let timedOut: TimedOut;
+  let concurrent: { readonly first: AdoptedClaim[]; readonly second: AdoptedClaim[] };
+  let afterRollback: Awaited<ReturnType<typeof bookingRow>>;
+  let adoptedAt: Date;
+  let firstScan: { readonly counts: Record<string, number>; readonly attempt: ReconcileJobResult };
+  let secondScan: { readonly counts: Record<string, number>; readonly attempt: ReconcileJobResult };
+  let undecided: Awaited<ReturnType<typeof bookingRow>>;
+  let undecidedCheckout: string;
+  let cancelsBefore: number;
+  let decision: ReconcileJobResult;
+  let decided: Awaited<ReturnType<typeof bookingRow>>;
+  let voidJob: Job;
+  let finalReplay: Answer;
+
+  /** A scan of alpha at `at`: its counts and the attempt of the booking's booking.reconcile it added. */
+  async function scanned(at: Date) {
+    const counts = await scan(at);
+    const attempt = (await finished(bookingsQueue, reconcileJobId(timedOut.bookingId, minuteBucket(at))))
+      .returnvalue as ReconcileJobResult;
+    return { counts, attempt };
+  }
+
+  beforeAll(async () => {
+    useWorkerClock();
+    timedOut = await staleClaim("timeout-lost");
+    adoptedAt = after(timedOut.started, 2 * MINUTE + SECOND);
+    // Two scans at once: the second runs while the first holds the claim it adopts, and adopts nothing. The first's
+    // transaction is then rolled back, so the scans below find the claim as the failed write left it.
+    const scanner = worker.get(ReconcileScan, { strict: false });
+    const rollback = new Error("rolled back by the test");
+    let seen: typeof concurrent | undefined;
+    await alphaTx(async (trx) => {
+      const first = await scanner.adopt(trx, adoptedAt, "reconcile-test-first");
+      const second = await alphaTx((other) => scanner.adopt(other, adoptedAt, "reconcile-test-second"));
+      seen = { first, second };
+      throw rollback;
+    }).catch((error: unknown) => {
+      if (error !== rollback) {
+        throw error;
+      }
+    });
+    if (seen === undefined) {
+      throw new Error("the concurrent adoption did not run");
+    }
+    concurrent = seen;
+    afterRollback = await bookingRow(timedOut.bookingId);
+    // Two scans a minute apart: the first adopts the claim, the second only reconciles it; both find nothing yet.
+    firstScan = await scanned(adoptedAt);
+    secondScan = await scanned(after(timedOut.started, 3 * MINUTE + 2 * SECOND));
+    undecided = await bookingRow(timedOut.bookingId);
+    undecidedCheckout = await checkoutStatus(timedOut.checkout.id);
+    cancelsBefore = stripePostsOf(timedOut.payment, "/cancel").length;
+    // 15 minutes after the adoption the order is proven absent.
+    decision = (await scanned(new Date(adoptedAt.getTime() + 15 * MINUTE))).attempt;
+    decided = await bookingRow(timedOut.bookingId);
+    voidJob = await finished(paymentsQueue, `payment-void-${timedOut.payment.id}`);
+    finalReplay = await complete(timedOut.checkout.id, { key: timedOut.key });
+  }, SCENARIO_TIMEOUT_MS);
+
+  it("[FIX-W24-BOOKINGS AC4] adopts the claim once, whatever the scans: two at once and two a minute apart", async () => {
+    expect(concurrent.first.map((claim) => claim.id)).toEqual([timedOut.bookingId]);
+    expect(concurrent.second).toEqual([]);
+    expect(afterRollback).toMatchObject({ reconcile_until: null, reconcile_attempts: 0 });
+    expect(firstScan.counts).toMatchObject({ adopted: 1 });
+    expect(secondScan.counts).toMatchObject({ adopted: 0 });
+    expect(firstScan.attempt).toMatchObject({ outcome: "pending", attempts: 1, reason: "not_found_yet" });
+    expect(secondScan.attempt).toMatchObject({ outcome: "pending", attempts: 2, reason: "not_found_yet" });
+    expect(undecided).toMatchObject({ status: "pending", reconcile_outcome: null });
+    expect(undecided.reconcile_until?.getTime()).toBe(adoptedAt.getTime() + 15 * MINUTE);
+    expect(await adoptedEvents(timedOut.bookingId)).toHaveLength(1);
+  });
+
+  it("[FIX-W24-BOOKINGS AC2] voids and reopens the checkout only once the order is proven absent, 15 minutes after the adoption", async () => {
+    // Before the deadline nothing was voided and the checkout stayed locked; each attempt looked for the order in the
+    // booking queue.
+    expect(cancelsBefore).toBe(0);
+    expect(undecidedCheckout).toBe("payment_pending");
+    expect(amadeusCalls("listQueue")).toHaveLength(3);
+    expect(decision).toMatchObject({ outcome: "not_found", attempts: 3, voids: 1 });
+    expect(decided).toMatchObject({
+      status: "failed",
+      checkout_id: null,
+      failure_code: "SUPPLIER_TIMEOUT",
+      reconcile_outcome: "not_found",
+      record_locator: null,
+    });
+    expect(voidJob.returnvalue).toMatchObject({ outcome: "applied" });
+    const cancels = stripePostsOf(timedOut.payment, "/cancel");
+    expect(cancels).toHaveLength(1);
+    expect(cancels[0]?.headers["idempotency-key"]).toBe(`pi:cancel:${timedOut.payment.id}`);
+    expect(stripePostsOf(timedOut.payment, "/capture")).toHaveLength(0);
+    expect(await paymentRow(timedOut.payment.id)).toMatchObject({ status: "canceled" });
+    expect(await checkoutStatus(timedOut.checkout.id)).toBe("open");
+    expect(finalReplay.status).toBe(502);
+    expect((finalReplay.body as ErrorBody).error).toMatchObject({
+      code: "SUPPLIER_ERROR",
+      details: { bookingId: timedOut.bookingId, bookingStatus: "failed" },
+    });
     expect(amadeusCalls("createFlightOrders")).toHaveLength(1);
   });
 });

@@ -8,7 +8,10 @@
 // (`staff.manual_review` to `ops_alert_email`, else OPS_ALERT_EMAIL; dedupe key `staff.authorisation_watch:<pay_id>`),
 // in one transaction, and the next runs leave out payments that have the event. The batch (at most
 // AUTHORISATION_WATCH_BATCH payments, oldest authorisation first) is locked with `FOR UPDATE SKIP LOCKED`, so two jobs of
-// one tenant at once (a continuation and a new run) alert different payments; a full batch asks the runner for more.
+// one tenant at once (a continuation and a new run) alert different payments; a full batch of candidates that alerted at
+// least one payment asks the runner for more (a candidate another job holds is skipped, and the next run finds it).
+// The alert's outbox row references the payment's booking, so the bookings are locked (`FOR KEY SHARE`) before the
+// payments: the lock order of a transaction that locks a booking and its payment (OADR-0003 point 11).
 // The time comes from `Clock`. The job logs counts only.
 import { Injectable } from "@nestjs/common";
 import { sql } from "@velexis/db";
@@ -50,18 +53,56 @@ export interface DueAuthorisation {
   readonly authorizedAt: Date;
 }
 
+/** What `dueAuthorisations` found. */
+export interface DueAuthorisations {
+  /** The payments locked for the alerts. */
+  readonly payments: DueAuthorisation[];
+  /** The candidates filled the batch (`limit`): more payments may be due after them. */
+  readonly full: boolean;
+}
+
 /**
  * At most `limit` authorised, uncaptured Stripe payments of the transaction's tenant authorised at `cutoff` or before
- * and not alerted yet, oldest first, locked `FOR UPDATE SKIP LOCKED`.
+ * and not alerted yet, oldest first, locked `FOR UPDATE SKIP LOCKED`. Their bookings are locked first (`FOR KEY
+ * SHARE`, `lockBookings`; see the file header): the candidates are read without a lock, their bookings locked, then
+ * the payments locked and checked again; a payment another job holds is skipped.
  */
 export async function dueAuthorisations(
   trx: TenantTransaction,
+  payments: Pick<PaymentsRepository, "lockBookings">,
   cutoff: Date,
   limit: number,
-): Promise<DueAuthorisation[]> {
+): Promise<DueAuthorisations> {
   const authorizedAt = sql<Date>`coalesce(p.authorized_at, p.created_at)`;
-  return await trx
-    .selectFrom("payments as p")
+  const due = () =>
+    trx
+      .selectFrom("payments as p")
+      .where("p.provider", "=", "stripe")
+      .where("p.status", "=", "authorized")
+      .where(sql<boolean>`p.amount_captured = 0`)
+      .where(sql<boolean>`${authorizedAt} <= ${cutoff}`)
+      .where(({ not, exists, selectFrom }) =>
+        not(
+          exists(
+            selectFrom("payment_events as e")
+              .select(sql<number>`1`.as("alerted"))
+              .whereRef("e.payment_id", "=", "p.id")
+              .where("e.type", "=", AUTHORISATION_EXPIRING_EVENT),
+          ),
+        ),
+      )
+      .orderBy(authorizedAt)
+      .orderBy("p.id");
+  const candidates = await due().select(["p.id as id", "p.booking_id as bookingId"]).limit(limit).execute();
+  if (candidates.length === 0) {
+    return { payments: [], full: false };
+  }
+  await payments.lockBookings(
+    trx,
+    candidates.flatMap((candidate) => (candidate.bookingId === null ? [] : [candidate.bookingId])),
+    "key share",
+  );
+  const locked = await due()
     .select([
       "p.id as id",
       "p.environment as environment",
@@ -70,26 +111,15 @@ export async function dueAuthorisations(
       sql<string>`p.amount_authorized::text`.as("amountAuthorized"),
       authorizedAt.as("authorizedAt"),
     ])
-    .where("p.provider", "=", "stripe")
-    .where("p.status", "=", "authorized")
-    .where(sql<boolean>`p.amount_captured = 0`)
-    .where(sql<boolean>`${authorizedAt} <= ${cutoff}`)
-    .where(({ not, exists, selectFrom }) =>
-      not(
-        exists(
-          selectFrom("payment_events as e")
-            .select(sql<number>`1`.as("alerted"))
-            .whereRef("e.payment_id", "=", "p.id")
-            .where("e.type", "=", AUTHORISATION_EXPIRING_EVENT),
-        ),
-      ),
+    .where(
+      "p.id",
+      "in",
+      candidates.map((candidate) => candidate.id),
     )
-    .orderBy(authorizedAt)
-    .orderBy("p.id")
-    .limit(limit)
     .forUpdate("p")
     .skipLocked()
     .execute();
+  return { payments: locked, full: candidates.length >= limit };
 }
 
 /** The reason of a payment's alert: its ids, amount and dates, and what staff should do. */
@@ -125,10 +155,10 @@ export class AuthorisationWatchProcessor implements TenantJobHandler {
   async run(tenant: PlatformTenant, job: Job): Promise<TenantJobOutcome> {
     const now = this.clock.now();
     const cutoff = new Date(now.getTime() - AUTHORISATION_WATCH_AGE_MS);
-    const counts = await this.tx.run(async (trx): Promise<AuthorisationWatchCounts> => {
-      const due = await dueAuthorisations(trx, cutoff, AUTHORISATION_WATCH_BATCH);
+    const { counts, full } = await this.tx.run(async (trx) => {
+      const due = await dueAuthorisations(trx, this.payments, cutoff, AUTHORISATION_WATCH_BATCH);
       let alerts = 0;
-      for (const payment of due) {
+      for (const payment of due.payments) {
         await this.payments.insertEvent(trx, {
           id: this.ids.newId("pev"),
           payment_id: payment.id,
@@ -149,11 +179,14 @@ export class AuthorisationWatchProcessor implements TenantJobHandler {
         });
         alerts += queued ? 1 : 0;
       }
-      return { payments: due.length, alerts };
+      const found: AuthorisationWatchCounts = { payments: due.payments.length, alerts };
+      return { counts: found, full: due.full };
     });
     if (counts.payments > 0) {
       this.logger.info({ tenantId: tenant.id, ...counts }, "payments.authorisations_expiring");
     }
-    return { more: counts.payments >= AUTHORISATION_WATCH_BATCH, counts };
+    // A full batch asks for more, unless every candidate was held by another job (it alerts them, and a continuation
+    // would only find them again).
+    return { more: full && counts.payments > 0, counts };
   }
 }

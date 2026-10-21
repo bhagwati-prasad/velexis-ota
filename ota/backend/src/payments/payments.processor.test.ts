@@ -379,9 +379,35 @@ describe("PaymentsProcessor", () => {
   });
 });
 
-/** The handler with doubles: a transaction that is never used for SQL, the repositories and the gateway. */
-function handler(options: { payment?: PaymentRow | undefined; refund?: RefundJobRow | undefined } = {}) {
-  const trx = {} as TenantTransaction;
+/** A transaction double whose every read (`selectFrom(…)…executeTakeFirst()`) answers `row`; it runs no SQL. */
+function readsOnly(row: Readonly<Record<string, unknown>>): TenantTransaction {
+  const builder: Record<string, unknown> = new Proxy(
+    {},
+    {
+      get: (_target, property) =>
+        property === "executeTakeFirst"
+          ? () => Promise.resolve(row)
+          : property === "then"
+            ? undefined
+            : () => builder,
+    },
+  );
+  return builder as unknown as TenantTransaction;
+}
+
+/**
+ * The handler with doubles: a transaction that is never used for SQL (or `trx`), the repositories and the gateway.
+ * `lockBookings` answers `lockedBookings`.
+ */
+function handler(
+  options: {
+    payment?: PaymentRow | undefined;
+    refund?: RefundJobRow | undefined;
+    trx?: TenantTransaction;
+    lockedBookings?: ReadonlyArray<{ id: string; amountPaid: string }>;
+  } = {},
+) {
+  const trx = options.trx ?? ({} as TenantTransaction);
   const clock = new FakeClock();
   const gateway = {
     void: vi.fn(),
@@ -391,6 +417,7 @@ function handler(options: { payment?: PaymentRow | undefined; refund?: RefundJob
   };
   const payments = {
     payment: vi.fn(() => Promise.resolve(options.payment)),
+    lockBookings: vi.fn(() => Promise.resolve([...(options.lockedBookings ?? [])])),
     currencyMinorUnits: vi.fn(() => Promise.resolve(2)),
     updatePayment: vi.fn(() => Promise.resolve(true)),
     insertEvent: vi.fn(() => Promise.resolve()),
@@ -428,6 +455,44 @@ describe("PaymentJobsHandler", () => {
       expect(gateway.refresh).not.toHaveBeenCalled();
       expect(payments.updatePayment).not.toHaveBeenCalled();
     }
+  });
+
+  it("[FIX-W24-BOOKINGS AC6] locks the payment's booking before the payment when a capture retry applies its capture", async () => {
+    const bookingId = "bkg_01JBPAYMENTS0000000000000";
+    const { instance, gateway, payments } = handler({
+      payment: paymentRow({ bookingId }),
+      // The job's reads (the booking's status, the failed capture's amount) through a transaction double.
+      trx: readsOnly({ status: "confirmed", amount: "452.10" }),
+      // The booking shows the amount already: the job records nothing more on it.
+      lockedBookings: [{ id: bookingId, amountPaid: "452.10" }],
+    });
+    gateway.capture.mockResolvedValue(intentState("captured"));
+
+    expect(await instance.run(PAYMENT_JOB.captureRetry, PAYMENT_ID, ATTEMPT)).toBe("applied");
+    expect(payments.lockBookings).toHaveBeenCalledExactlyOnceWith(expect.anything(), [bookingId], "update");
+    const lockedPayment = payments.payment.mock.calls.findIndex((call: unknown[]) => call[2] === true);
+    expect(lockedPayment).toBeGreaterThanOrEqual(0);
+    // The booking first, then the payment (OADR-0003 point 11).
+    expect(payments.lockBookings.mock.invocationCallOrder[0]).toBeLessThan(
+      payments.payment.mock.invocationCallOrder[lockedPayment] ?? 0,
+    );
+    expect(payments.updatePayment).toHaveBeenCalledExactlyOnceWith(
+      expect.anything(),
+      PAYMENT_ID,
+      3,
+      expect.objectContaining({ status: "captured" }),
+    );
+  });
+
+  it("locks no booking for a void: it changes the payment alone", async () => {
+    const { instance, gateway, payments } = handler({
+      payment: paymentRow({ bookingId: "bkg_01JBPAYMENTS0000000000000" }),
+      trx: readsOnly({ status: "failed" }),
+    });
+    gateway.void.mockResolvedValue(intentState("canceled"));
+
+    expect(await instance.run(PAYMENT_JOB.void, PAYMENT_ID, ATTEMPT)).toBe("applied");
+    expect(payments.lockBookings).not.toHaveBeenCalled();
   });
 
   it("voids an authorised payment through the gateway, in the payment's environment, with the job as request id", async () => {

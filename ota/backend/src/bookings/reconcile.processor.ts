@@ -15,9 +15,13 @@
 // name fails at once.
 //
 // `bookings.reconcile_scan` (every minute, jobs/schedulers.ts) runs per tenant on `ota-maintenance`, for `active` and
-// `suspended` tenants: it lists the bookings still to decide (ReconcileRepository.dueBookingIds: `pending` with
-// `reconcile_until` and no outcome, the order sent at least 30 seconds ago), at most RECONCILE_SCAN_BATCH, the earliest
-// deadline first, and enqueues `booking.reconcile` for each with the deterministic id
+// `suspended` tenants. In one transaction it first adopts the stale claims (ReconcileRepository.adoptStaleClaims, lead
+// decision of 2026-10-21: `pending` bookings without `reconcile_until` whose create-order attempt started more than 2
+// minutes ago, because their process died or their unknown-outcome write failed; each gets `reconcile_until = now + 15
+// minutes` and the event `booking.reconcile_adopted`, once), then lists the bookings still to decide
+// (ReconcileRepository.dueBookingIds: `pending` with `reconcile_until` and no outcome, the order sent at least 30
+// seconds ago, the adopted ones included), at most RECONCILE_SCAN_BATCH of each, the earliest deadline first, and
+// after the commit enqueues `booking.reconcile` for each with the deterministic id
 // `booking.reconcile:<bkg_…>:<minute bucket>`, so two runs of one scheduler iteration add each booking once.
 import { InjectQueue, OnWorkerEvent, Processor, WorkerHost } from "@nestjs/bullmq";
 import { Injectable } from "@nestjs/common";
@@ -36,14 +40,18 @@ import {
 import { PlatformCache } from "../tenancy/platform-cache";
 import type { PlatformTenant, TenantStatus } from "../tenancy/platform-read.types";
 import { TenantContext } from "../tenancy/tenant-context";
-import { TenantTx } from "../tenancy/tenant-tx";
+import { TenantTx, type TenantTransaction } from "../tenancy/tenant-tx";
+import { OrderRecorder } from "./order-recorder";
 import {
   parseReconcileJobData,
+  RECONCILE_ADOPT_AFTER_MS,
+  RECONCILE_ADOPTED_EVENT,
   RECONCILE_JOB,
   RECONCILE_SCAN_JOB,
   reconcileJob,
   ReconcileRepository,
   ReconcileService,
+  type AdoptedClaim,
   type ReconcileOutcome,
 } from "./reconcile.service";
 import { jobRequestId } from "./ticketing.processor";
@@ -132,8 +140,8 @@ export class ReconcileProcessor extends WorkerHost {
 }
 
 /**
- * `bookings.reconcile_scan` for one tenant (every minute, fanned out by jobs/fan-out.ts): enqueues `booking.reconcile`
- * for each booking still to decide (see the file header).
+ * `bookings.reconcile_scan` for one tenant (every minute, fanned out by jobs/fan-out.ts): adopts the stale claims, then
+ * enqueues `booking.reconcile` for each booking still to decide (see the file header).
  */
 @Injectable()
 @TenantJob(RECONCILE_SCAN_JOB)
@@ -141,20 +149,61 @@ export class ReconcileScan implements TenantJobHandler {
   constructor(
     private readonly tx: TenantTx,
     private readonly repository: ReconcileRepository,
+    private readonly recorder: OrderRecorder,
     private readonly clock: Clock,
     @InjectQueue(OTA_QUEUE.bookings) private readonly queue: Queue,
+    @InjectPinoLogger(ReconcileScan.name) private readonly logger: PinoLogger,
   ) {}
 
   async run(tenant: PlatformTenant, job: Job): Promise<TenantJobOutcome> {
     const now = this.clock.now();
-    const due = await this.tx.run((trx) =>
-      this.repository.dueBookingIds(trx, { now, limit: RECONCILE_SCAN_BATCH }),
-    );
+    const requestId = jobRequestId(job);
+    const { adopted, due } = await this.tx.run(async (trx) => {
+      const claims = await this.adopt(trx, now, requestId);
+      return {
+        adopted: claims,
+        due: await this.repository.dueBookingIds(trx, { now, limit: RECONCILE_SCAN_BATCH }),
+      };
+    });
+    for (const claim of adopted) {
+      this.logger.warn(
+        { tenantId: tenant.id, bookingId: claim.id, startedAt: claim.createOrderStartedAt.toISOString() },
+        "bookings.reconcile_adopted",
+      );
+    }
     if (due.length > 0) {
       // The runner validated the payload; the bucket of the fan-out makes the ids of this run's jobs.
       const bucket = parseTenantJobData(job.data)?.bucket ?? minuteBucket(now);
       await this.queue.addBulk(due.map((bookingId) => reconcileJob(tenant.id, bookingId, bucket)));
     }
-    return { more: false, counts: { due: due.length } };
+    return { more: false, counts: { adopted: adopted.length, due: due.length } };
+  }
+
+  /**
+   * Adopts the stale claims of `now` in `trx` (ReconcileRepository.adoptStaleClaims, see the file header), with the
+   * event `booking.reconcile_adopted` of each, as the system; `requestId` names the scan job. Answers the claims adopted.
+   */
+  async adopt(trx: TenantTransaction, now: Date, requestId: string): Promise<AdoptedClaim[]> {
+    const adopted = await this.repository.adoptStaleClaims(trx, { now, limit: RECONCILE_SCAN_BATCH });
+    for (const claim of adopted) {
+      await this.recorder.event(trx, claim.id, {
+        type: RECONCILE_ADOPTED_EVENT,
+        actor: { type: "system", id: null },
+        statusFrom: "pending",
+        statusTo: "pending",
+        summary:
+          `Booking ${claim.reference} was claimed more than ${RECONCILE_ADOPT_AFTER_MS / 60_000} minutes ago without ` +
+          `an outcome; the order is looked for until ${claim.reconcileUntil.toISOString()}.`,
+        data: {
+          reason: "stale_claim",
+          createOrderStartedAt: claim.createOrderStartedAt.toISOString(),
+          reconcileUntil: claim.reconcileUntil.toISOString(),
+        },
+        visibleToCustomer: false,
+        requestId,
+        now,
+      });
+    }
+    return adopted;
   }
 }

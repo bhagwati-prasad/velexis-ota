@@ -22,7 +22,9 @@
 //      other types are stored by the receiver and ignored here;
 //   3. the state read is applied in one short transaction under the row's lock and with its `version`
 //      (PaymentsRepository.updatePayment, updateRefund), with a `payment_events` row (`source = webhook`) per change.
-//      The Stripe calls happen outside any transaction (architecture §4).
+//      The Stripe calls happen outside any transaction (architecture §4). A dispute's transaction, whose alert
+//      references the payment's booking, locks the booking first (`FOR KEY SHARE`), then the payment: the lock order of
+//      a transaction that locks both (OADR-0003 point 11).
 //
 // An object whose metadata names another tenant, environment or payment is a security event (logged without the
 // object) and changes nothing. A Stripe failure that can pass (connection, timeout, 5xx, rate limit) fails the job for
@@ -424,6 +426,11 @@ export class StripeEventHandler {
     const reason = /^[a-z_]{1,64}$/.test(dispute.reason) ? dispute.reason : "unknown";
     const outcome = await this.tx.run(async (trx): Promise<StripeEventOutcome> => {
       const now = this.clock.now();
+      // The alert's outbox row references the payment's booking (its foreign key takes FOR KEY SHARE on it): the
+      // booking's lock comes before the payment's, the lock order of a transaction that locks both (OADR-0003 point 11).
+      if (payment.bookingId !== null) {
+        await this.repository.lockBookings(trx, [payment.bookingId], "key share");
+      }
       // The payment's row lock serialises two jobs about the same dispute (two events, or a job BullMQ runs again
       // after a stall), so the check below sees the other one's event and the dispute is recorded once.
       const current = await this.repository.payment(trx, payment.id, true);

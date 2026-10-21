@@ -12,6 +12,10 @@
 // the stored event read back by the processor, the payment's `refunds` rows (whose final state comes from the webhooks;
 // OBE-040 creates them) with their `version` lock, and the staff alert's facts (`ops_alert_email`, the default locale and
 // the booking's reference).
+//
+// The lock order (lead decision of 2026-10-21, OADR-0003 point 11): a transaction that locks a booking and its payment
+// locks the booking first, then the payment. `lockBookings` takes the booking's lock for the payment jobs and alerts
+// that change a booking, or write a row that references one, under a payment's lock.
 import { Injectable } from "@nestjs/common";
 import { sql, type Insertable, type TenantDatabase, type Updateable } from "@velexis/db";
 import type { TenantTransaction } from "../tenancy/tenant-tx";
@@ -128,6 +132,20 @@ export interface PaymentAlertFacts {
   readonly bookingReference: string | null;
   readonly recordLocator: string | null;
 }
+
+/** A booking a payment transaction locked before the payment (`lockBookings`). */
+export interface LockedBookingRow {
+  readonly id: string;
+  /** `bookings.amount_paid`, as text. */
+  readonly amountPaid: string;
+}
+
+/**
+ * How `lockBookings` locks: `update` (`FOR UPDATE`) when the transaction changes the booking; `key share` (`FOR KEY
+ * SHARE`) when it only writes a row that references it (an outbox row, a booking event), whose foreign key takes that
+ * lock at the end of the insert anyway.
+ */
+export type BookingLockMode = "update" | "key share";
 
 /** The payment states of a checkout that a new payment replaces (cancelled before they are confirmed). */
 export const REPLACEABLE_STATUSES = ["requires_payment_method", "requires_action"] as const;
@@ -251,6 +269,28 @@ export class PaymentsRepository {
       query = query.forUpdate(["p"]);
     }
     return await query.executeTakeFirst();
+  }
+
+  /**
+   * Locks the bookings `ids` (in id order) before the transaction locks their payments: every transaction that locks a
+   * booking and its payment takes the booking first, then the payment (OADR-0003 point 11), so two of them never wait
+   * for each other in a circle. `mode` says how (BookingLockMode). Answers the bookings found, in id order.
+   */
+  async lockBookings(
+    trx: TenantTransaction,
+    ids: readonly string[],
+    mode: BookingLockMode,
+  ): Promise<LockedBookingRow[]> {
+    const wanted = [...new Set(ids)].sort();
+    if (wanted.length === 0) {
+      return [];
+    }
+    const query = trx
+      .selectFrom("bookings")
+      .select(["id", sql<string>`amount_paid::text`.as("amountPaid")])
+      .where("id", "in", wanted)
+      .orderBy("id");
+    return await (mode === "update" ? query.forUpdate() : query.forKeyShare()).execute();
   }
 
   /** The checkout's payments in one of `statuses`, oldest first, locked `FOR UPDATE`. */

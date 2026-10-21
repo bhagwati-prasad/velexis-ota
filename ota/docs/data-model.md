@@ -69,7 +69,7 @@ Every table belongs to exactly one module, which owns its repository. Other modu
 
 | Change | Why |
 |---|---|
-| `bookings.create_order_started_at` | Set at the claim, just before Flight Create Orders. The reconciler looks for PNRs created around this instant. |
+| `bookings.create_order_started_at` | Set at the claim, just before Flight Create Orders. The reconciler looks for PNRs created around this instant, and adopts a `pending` booking without `reconcile_until` once this instant is more than 2 minutes old (a stale claim: `reconcile_until = now + 15 min`; [OADR-0003](adr/0003-booking-orchestration-and-supplier-timeout-recovery.md) point 4). |
 | `bookings.reconcile_until`, `reconcile_attempts`, `reconcile_outcome` (`found`, `not_found`, `manual_review`) | The contract promises a decision within 15 minutes after `504 SUPPLIER_TIMEOUT`. These columns hold the deadline, the progress and the result, so the idempotent replay and the console can show them ([OADR-0003](adr/0003-booking-orchestration-and-supplier-timeout-recovery.md)). |
 | Partial index `bookings_reconcile_idx` on `reconcile_until` where `status = 'pending'` | The scan runs every minute and must touch only pending rows. The table is small when `0002` runs (M2), so a plain `CREATE INDEX` in the transaction is fine. |
 

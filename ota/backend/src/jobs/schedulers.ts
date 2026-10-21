@@ -127,7 +127,7 @@ export const OTA_SCHEDULES: readonly ScheduleDefinition[] = Object.freeze([
     // (OADR-0003 point 5, OADR-0014 point 4).
     statuses: ["active", "suspended"],
     description:
-      "Enqueue booking.reconcile {tenantId, bookingId} for each pending booking with reconcile_until that is not decided yet (bookings/reconcile.processor.ts)",
+      "Adopt pending bookings claimed more than 2 minutes ago without reconcile_until, then enqueue booking.reconcile {tenantId, bookingId} for each pending booking with reconcile_until that is not decided yet (bookings/reconcile.processor.ts)",
   }),
 ]);
 

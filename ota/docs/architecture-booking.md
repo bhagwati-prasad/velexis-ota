@@ -6,7 +6,7 @@ Related: [`architecture.md`](architecture.md), [OADR-0003](adr/0003-booking-orch
 
 ## 1. The orchestration in five steps
 
-Every booking, whatever the payment method, goes through the same steps in `bookings/booking-orchestrator.service.ts`. No database transaction stays open across an Amadeus or Stripe call.
+Every booking, whatever the payment method, goes through the same steps in `bookings/booking-orchestrator.service.ts`. No database transaction stays open across an Amadeus or Stripe call, and a transaction that locks both a booking and its payment locks the **booking first, then the payment** ([OADR-0003](adr/0003-booking-orchestration-and-supplier-timeout-recovery.md) point 11, lead decision of 2026-10-21): the claim, the failure, the capture and its failure here, the reconciliation's decisions (§4), and the payment jobs of `ota-payments`. A payment transaction that only writes a row referencing the booking (an outbox alert, a refund) takes the booking's `FOR KEY SHARE` before the payment, as that row's foreign key takes it anyway.
 
 | Step | Transaction | Does |
 |---|---|---|
@@ -178,6 +178,7 @@ sequenceDiagram
 
 Rules:
 
+- **Stale claims** (lead decision of 2026-10-21, OADR-0003 point 4): a booking can be `pending` without `reconcile_until` when the process died between the claim and Flight Create Orders, or when the unknown-outcome write failed (`bookings.reconcile_not_scheduled`). The scan adopts every such booking whose create-order attempt (`create_order_started_at`) started **more than 2 minutes** ago: `reconcile_until = now + 15 min`, event `booking.reconcile_adopted` (staff only), in the scan's transaction with `FOR UPDATE SKIP LOCKED`, so two scans adopt it once. It is then reconciled like any unknown outcome: searched for in the queuing office first, voided and its checkout reopened only once it is proven absent. A younger claim is left alone, as its request may still be in flight.
 - The window and the cadence: first check after 30 s, then every minute, for 15 minutes. Each check costs one Queue List and at most three by-reference calls. An attempt claims the booking (`FOR UPDATE SKIP LOCKED`, `reconcile_attempts + 1`, at most one attempt per 45 s), so the first job and a scan of the same minute make one search; only the attempt that still holds the claim may fail the booking.
 - The candidates: PNRs of the booking queue created from 1 minute before to 5 minutes after `create_order_started_at` (Queue List gives the minute, read in UTC unless it names an offset: an assumption to confirm with Amadeus with the queue convention, OADR-0003 follow-ups) whose travellers include the lead's last name, the closest in time first.
 - A PNR matches only if it carries the general remark `VELEXIS <reference>` with sub-type BACKOFFICE; a name match alone is never enough.

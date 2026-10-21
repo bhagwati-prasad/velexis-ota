@@ -10,6 +10,10 @@
 // orchestrator's `payment.capture_failed` event, refunds through RefundsRepository). Each scenario runs in its
 // `beforeAll` hook, which adds its jobs and waits for the worker with a budget of its own; its tests read what it left.
 // The watch reads its time from `Clock`, which the watch's scenario points at a FakeClock.
+//
+// FIX-W24-BOOKINGS (lead decision of 2026-10-21, OADR-0003 point 11): the capture retry, the watch and a refund request
+// lock a payment's booking before the payment, proven with a second transaction that holds the booking
+// (test/helpers/lock-order.ts).
 import { randomBytes } from "node:crypto";
 import { getQueueToken } from "@nestjs/bullmq";
 import { Module, type INestApplicationContext } from "@nestjs/common";
@@ -49,6 +53,7 @@ import {
   type FakePaymentIntent,
   type FakeStripe,
 } from "../../helpers/fake-stripe";
+import { probeLockOrder, type LockOrderObservation } from "../../helpers/lock-order";
 import { MemorySink } from "../../helpers/log-sink";
 import { useNextApplicationLoggerOutsideRequests } from "../../helpers/nest-pino";
 
@@ -961,6 +966,117 @@ describe("payments.authorisation_watch", () => {
     expect(await eventsOf(suspended, "beta")).toEqual([
       expect.objectContaining({ type: AUTHORISATION_EXPIRING_EVENT }),
     ]);
+  });
+});
+
+describe("the lock order of a booking and its payment (FIX-W24-BOOKINGS)", () => {
+  let retry: { readonly paymentId: string; readonly bookingId: string; readonly job: Job };
+  let retrySeen: LockOrderObservation;
+  let watched: { readonly paymentId: string; readonly bookingId: string; readonly job: Job };
+  let watchSeen: LockOrderObservation;
+  let refunded: { readonly bookingId: string; readonly result: CreateRefundResult };
+  let refundSeen: LockOrderObservation;
+
+  beforeAll(async () => {
+    // A capture retry while another transaction holds the payment's booking (test/helpers/lock-order.ts): the job's
+    // transaction waits for the booking before it locks the payment, then captures and shows it on the booking.
+    const bookingId = await insertBooking();
+    const payment = await stripePayment({ status: "authorized", bookingId });
+    await insertCaptureFailure(payment.id, bookingId, "440.00");
+    const retryProbe = probeLockOrder(tenantDb, "tenant_alpha", { bookingId, paymentId: payment.id });
+    await retryProbe.locked;
+    const [retryJob, seenByRetry] = await Promise.all([
+      runPaymentJob(PAYMENT_JOB.captureRetry, payment.id),
+      retryProbe.result,
+    ]);
+    retry = { paymentId: payment.id, bookingId, job: retryJob };
+    retrySeen = seenByRetry;
+
+    // The authorisation watch alerts about the payment of a booking (its outbox row references the booking): it locks
+    // the booking before the payment too. Only this payment is due at the watch's time (the others are alerted, newer,
+    // or not authorised).
+    const clock = new FakeClock(new Date());
+    vi.spyOn(worker.get(Clock, { strict: false }), "now").mockImplementation(() => clock.now());
+    const watchedBooking = await insertBooking();
+    const watchedPayment = await insertPayment({
+      status: "authorized",
+      bookingId: watchedBooking,
+      authorizedAt: new Date(clock.now().getTime() - 6 * DAY_MS),
+    });
+    const watchProbe = probeLockOrder(tenantDb, "tenant_alpha", {
+      bookingId: watchedBooking,
+      paymentId: watchedPayment,
+    });
+    await watchProbe.locked;
+    const spec = tenantJob(AUTHORISATION_WATCH_JOB, alphaId, minuteBucket(clock.now()));
+    await maintenance.add(spec.name, spec.data, spec.opts);
+    const [watchJob, seenByWatch] = await Promise.all([
+      finished(maintenance, spec.opts.jobId),
+      watchProbe.result,
+    ]);
+    watched = { paymentId: watchedPayment, bookingId: watchedBooking, job: watchJob };
+    watchSeen = seenByWatch;
+
+    // A refund asked for through RefundsRepository.create (the cancellation of OBE-049, the console of OBE-068): its
+    // row references the booking, so the booking is locked before the payment there too.
+    const refundedBooking = await insertBooking();
+    const refundedPayment = await stripePayment(
+      { status: "captured", amountCaptured: "452.10", bookingId: refundedBooking },
+      { status: "succeeded", amount_capturable: 0, amount_received: 45210 },
+    );
+    const refundProbe = probeLockOrder(tenantDb, "tenant_alpha", {
+      bookingId: refundedBooking,
+      paymentId: refundedPayment.id,
+    });
+    await refundProbe.locked;
+    const [result, seenByRefund] = await Promise.all([
+      alphaTx((trx) =>
+        refunds.create(trx, {
+          id: newId("rfd"),
+          paymentId: refundedPayment.id,
+          amount: "100.00",
+          reason: "booking_cancelled",
+          requestedBy: { type: "system", id: null },
+          now: new Date(),
+        }),
+      ),
+      refundProbe.result,
+    ]);
+    refunded = { bookingId: refundedBooking, result };
+    refundSeen = seenByRefund;
+  }, SCENARIO_TIMEOUT_MS);
+
+  it("[FIX-W24-BOOKINGS AC6] payment.capture_retry locks the booking before the payment: the payment is free while it waits", async () => {
+    expect(retrySeen).toEqual({ waiterSeen: true, paymentFree: true });
+    expect(retry.job.returnvalue).toMatchObject({ outcome: "applied" });
+    expect(await paymentOf(retry.paymentId)).toMatchObject({ status: "captured", amountCaptured: "440.00" });
+    const amountPaid = await alphaTx(
+      async (trx) =>
+        (
+          await trx
+            .selectFrom("bookings")
+            .select(sql<string>`amount_paid::text`.as("amountPaid"))
+            .where("id", "=", retry.bookingId)
+            .executeTakeFirstOrThrow()
+        ).amountPaid,
+    );
+    expect(amountPaid).toBe("440.00");
+  });
+
+  it("[FIX-W24-BOOKINGS AC6] the authorisation watch locks the booking before the payment it alerts about", async () => {
+    expect(watchSeen).toEqual({ waiterSeen: true, paymentFree: true });
+    expect(watched.job.returnvalue).toMatchObject({ outcome: "done", counts: { payments: 1, alerts: 1 } });
+    expect(await alertsLike(`staff.authorisation_watch:${watched.paymentId}`)).toEqual([
+      expect.objectContaining({ bookingId: watched.bookingId, recipientType: "staff" }),
+    ]);
+  });
+
+  it("[FIX-W24-BOOKINGS AC6] a refund request locks the booking its row references before the payment", () => {
+    expect(refundSeen).toEqual({ waiterSeen: true, paymentFree: true });
+    expect(refunded.result).toMatchObject({
+      ok: true,
+      refund: { bookingId: refunded.bookingId, amount: "100.00", status: "pending" },
+    });
   });
 });
 

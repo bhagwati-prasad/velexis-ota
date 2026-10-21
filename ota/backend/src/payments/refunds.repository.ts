@@ -7,7 +7,9 @@
 // A refund is asked for with `create` in the caller's transaction, which then queues `refund.submit {tenantId, id}` after
 // its commit (`paymentJob` of payments.processor.ts):
 //
-//   - the payment is locked (`FOR UPDATE`), so two requests for one payment are checked one after the other;
+//   - the payment is locked (`FOR UPDATE`), so two requests for one payment are checked one after the other; the
+//     booking the refund row references is locked first (`FOR KEY SHARE`, which that row's foreign key takes anyway),
+//     the lock order of a transaction that locks a booking and its payment (OADR-0003 point 11);
 //   - only a Stripe payment that is `captured` or `partially_refunded` can be refunded (an airline-card payment is
 //     refunded by the airline: `refund_via_airline`);
 //   - the amount is a positive decimal with at most the currency's minor units, and at most what is still refundable:
@@ -175,10 +177,26 @@ type Db = TenantDatabase;
 @Injectable()
 export class RefundsRepository {
   /**
-   * Asks for a refund in `trx` (see the file header): locks the payment, checks it and the amount, and inserts the
-   * `pending` row with a `refund.requested` payment event. The caller queues `refund.submit` after the commit.
+   * Asks for a refund in `trx` (see the file header): locks the booking the row references (`FOR KEY SHARE`), then the
+   * payment, checks it and the amount, and inserts the `pending` row with a `refund.requested` payment event. The
+   * caller queues `refund.submit` after the commit.
    */
   async create(trx: TenantTransaction, input: NewRefund): Promise<CreateRefundResult> {
+    // The booking first, then the payment (OADR-0003 point 11): the refund row's foreign key would take the booking's
+    // FOR KEY SHARE after the payment's lock otherwise. A refundable payment's booking is set before its capture.
+    const bookingId =
+      input.bookingId === undefined
+        ? ((
+            await trx
+              .selectFrom("payments")
+              .select("booking_id as bookingId")
+              .where("id", "=", input.paymentId)
+              .executeTakeFirst()
+          )?.bookingId ?? null)
+        : input.bookingId;
+    if (bookingId !== null) {
+      await trx.selectFrom("bookings").select("id").where("id", "=", bookingId).forKeyShare().execute();
+    }
     const payment = await trx
       .selectFrom("payments")
       .select([
@@ -225,7 +243,7 @@ export class RefundsRepository {
       .values({
         id: input.id,
         payment_id: payment.id,
-        booking_id: input.bookingId === undefined ? payment.bookingId : input.bookingId,
+        booking_id: bookingId,
         currency: payment.currency,
         amount,
         supplier_refund_amount: input.supplierRefundAmount ?? null,

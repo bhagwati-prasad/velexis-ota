@@ -6,7 +6,18 @@
 // checkout.complete (booking-orchestrator.service.ts) leaves such a booking `pending` with its claim, its checkout
 // (locked: CHECKOUT_BEING_COMPLETED) and the authorisation, sets `reconcile_until = create_order_started_at + 15
 // minutes` and queues the first `booking.reconcile` 30 seconds later; `bookings.reconcile_scan` (every minute) queues
-// the others. One attempt:
+// the others.
+//
+// A claim nobody decides (lead decision of 2026-10-21, OADR-0003 point 4): when the process died between the claim and
+// Flight Create Orders, or the unknown-outcome write itself failed (`bookings.reconcile_not_scheduled`), the booking is
+// `pending` without `reconcile_until`, its checkout locked and its authorisation held. The scan adopts such a booking
+// once its create-order attempt (`create_order_started_at`, the claim) started more than RECONCILE_ADOPT_AFTER_MS ago
+// (`adoptStaleClaims`: `reconcile_until = now + 15 minutes`, the event `booking.reconcile_adopted`), and it is then
+// reconciled like any unknown outcome: the order may exist, so it is looked for first, and voided only once it is
+// proven absent. A younger claim is left alone, as its request may still be in flight.
+//
+// A transaction here that locks the booking and its payment locks the booking first, then the payment (OADR-0003
+// point 11). One attempt:
 //
 //   1. Claim (T1). The booking is locked `FOR UPDATE SKIP LOCKED` and checked again, whatever the job said: `pending`,
 //      `reconcile_until` set, no `reconcile_outcome`, its order sent at least RECONCILE_FIRST_DELAY_MS ago, and no
@@ -97,6 +108,15 @@ export const RECONCILE_WINDOW_MS = 15 * 60_000;
 
 /** The first attempt comes this long after the order was sent (the delay of the first `booking.reconcile`). */
 export const RECONCILE_FIRST_DELAY_MS = 30_000;
+
+/**
+ * A `pending` booking without `reconcile_until` whose create-order attempt started more than this long ago is adopted
+ * by the scan (lead decision of 2026-10-21): no request of checkout.complete is still in flight after it.
+ */
+export const RECONCILE_ADOPT_AFTER_MS = 2 * 60_000;
+
+/** The event of an adopted claim (`booking_events.type`, staff only). */
+export const RECONCILE_ADOPTED_EVENT = "booking.reconcile_adopted";
 
 /**
  * The shortest time between two attempts of one booking: the first job and a scan job of the same minute, or two
@@ -351,9 +371,82 @@ export interface ReconcilePaymentRow {
   readonly providerPaymentId: string | null;
 }
 
+/** A claim the scan adopted (`adoptStaleClaims`). */
+export interface AdoptedClaim {
+  readonly id: string;
+  readonly reference: string;
+  readonly createOrderStartedAt: Date;
+  /** `now + RECONCILE_WINDOW_MS`: the adoption's deadline. */
+  readonly reconcileUntil: Date;
+}
+
+/** Before this instant a claim without `reconcile_until` is stale at `now` (RECONCILE_ADOPT_AFTER_MS). */
+export function staleClaimBefore(now: Date): Date {
+  return new Date(now.getTime() - RECONCILE_ADOPT_AFTER_MS);
+}
+
+/** The `reconcile_until` of a claim adopted at `now`: the normal window, from the adoption. */
+export function adoptedReconcileUntil(now: Date): Date {
+  return new Date(now.getTime() + RECONCILE_WINDOW_MS);
+}
+
 /** The reconciliation's queries (tenant repository: the `tenantTx` transaction first, never a schema name). */
 @Injectable()
 export class ReconcileRepository {
+  /**
+   * Adopts the stale claims of `now` (see the file header): the `pending` bookings without `reconcile_until` or an
+   * outcome whose create-order attempt started before `staleClaimBefore(now)`, at most `limit`, the oldest first, locked
+   * `FOR UPDATE SKIP LOCKED` (a booking another transaction holds, such as its own request's, is left to a later scan),
+   * get `reconcile_until = now + RECONCILE_WINDOW_MS`. A claim is adopted once: an adopted booking has its
+   * `reconcile_until`, and a concurrent scan skips the rows this one holds. Answers what it adopted; the caller writes
+   * their events in the same transaction. `bookings_status_idx` (environment, status) serves it.
+   */
+  async adoptStaleClaims(
+    trx: TenantTransaction,
+    query: { readonly now: Date; readonly limit: number },
+  ): Promise<AdoptedClaim[]> {
+    const rows = await trx
+      .selectFrom("bookings")
+      .select(["id", "reference", "create_order_started_at as createOrderStartedAt"])
+      .where("environment", "in", ["test", "live"])
+      .where("status", "=", "pending")
+      .where("reconcile_until", "is", null)
+      .where("reconcile_outcome", "is", null)
+      .where("create_order_started_at", "<", staleClaimBefore(query.now))
+      .orderBy("create_order_started_at")
+      .orderBy("id")
+      .limit(query.limit)
+      .forUpdate()
+      .skipLocked()
+      .execute();
+    const reconcileUntil = adoptedReconcileUntil(query.now);
+    const adopted = rows.flatMap((row): AdoptedClaim[] =>
+      row.createOrderStartedAt === null
+        ? []
+        : [
+            {
+              id: row.id,
+              reference: row.reference,
+              createOrderStartedAt: row.createOrderStartedAt,
+              reconcileUntil,
+            },
+          ],
+    );
+    if (adopted.length > 0) {
+      // As checkout.complete's unknown outcome writes it (a new ETag: the booking's state changed).
+      await trx
+        .updateTable("bookings")
+        .set({ reconcile_until: reconcileUntil, updated_at: query.now, version: sql`version + 1` })
+        .where(
+          "id",
+          "in",
+          adopted.map((claim) => claim.id),
+        )
+        .execute();
+    }
+    return adopted;
+  }
+
   /**
    * The ids of the bookings the reconciliation still has to decide at `now` (`pending`, `reconcile_until` set, no
    * outcome, the order sent at least RECONCILE_FIRST_DELAY_MS ago), the earliest deadline first, at most `limit`. The
@@ -468,7 +561,10 @@ export type ReconcileSkip =
   /** No such booking in the tenant, or another transaction holds it. */
   | "not_claimable"
   | "not_pending"
-  /** Pending without `reconcile_until`: its checkout.complete is still under way. */
+  /**
+   * Pending without `reconcile_until`: its checkout.complete is still under way, or the scan has not adopted its stale
+   * claim yet (RECONCILE_ADOPT_AFTER_MS).
+   */
   | "not_reconciling"
   | "decided"
   /** Sent less than RECONCILE_FIRST_DELAY_MS ago, or attempted less than RECONCILE_CLAIM_GAP_MS ago. */
