@@ -119,7 +119,9 @@
         "$TURBO_ROOT$/.env.example",
         "$TURBO_ROOT$/platform/frontend/.env.example",
         "$TURBO_ROOT$/deploy/env/platform-admin.env.example",
-        "$TURBO_ROOT$/deploy/systemd/velexis-platform-admin.service"
+        "$TURBO_ROOT$/deploy/systemd/velexis-platform-admin.service",
+        "$TURBO_ROOT$/platform/backend/openapi/**",
+        "$TURBO_ROOT$/platform/backend/src/audit/audit-actions.ts"
       ],
       "outputs": ["coverage/**"]
     },

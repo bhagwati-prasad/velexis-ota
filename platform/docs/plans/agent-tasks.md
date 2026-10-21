@@ -1164,7 +1164,8 @@ Common commands: backend `pnpm --filter @velexis/platform-backend test`, `test:i
   - A manual trial end date can be moved with a reason [PF-75]; the edit form is absent for Stripe-billed rows.
 - **Verify:** `pnpm --filter @velexis/platform-admin test`
 
-### PAD-009 · Build the accounts, platform admins and audit pages
+### PAD-009 · Build the accounts, platform admins and audit pages ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-admin
 - **Milestone:** M1
 - **Depends on:** PAD-003, PBE-032

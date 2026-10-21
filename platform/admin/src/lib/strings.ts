@@ -1129,6 +1129,231 @@ export const MANUAL_SUBSCRIPTION_STRINGS = Object.freeze({
   rateLimitedFor: (seconds: number) => `Too many attempts. Try again in ${waitTime(seconds)}.`,
 });
 
+// ---- Accounts, platform admins and the audit log (PAD-009) ------------------------------------------------------
+
+/** `/accounts`: the search of `adminListAccounts` (PF-87). */
+export const ACCOUNT_LIST_STRINGS = Object.freeze({
+  title: "Accounts",
+  intro:
+    "Every account of the portal and of this admin, newest first. Search by part of the e-mail address or the name; the address of this page keeps the filters, so a search can be shared.",
+  filtersLabel: "Account filters",
+  searchLabel: "Search",
+  searchPlaceholder: "E-mail address or name",
+  statusLabel: "Status",
+  caption: "Accounts, newest first",
+  empty: "No account matches these filters.",
+  columnAccount: "Account",
+  columnStatus: "Status",
+  columnMfa: "Two-factor",
+  columnAdmin: "Platform admin",
+  columnLastLogin: "Last sign-in",
+  columnCreated: "Created",
+  mfaOn: "On",
+  mfaOff: "Off",
+  yes: "Yes",
+  no: "No",
+  never: "Never",
+  invalidFilters: "The filters in this address are not valid. Clear them and search again.",
+  showAll: "Show every account",
+  unavailableTitle: "The accounts could not be loaded",
+});
+
+/** `/accounts/[accountId]`: one account of `adminGetAccount` (PF-87). */
+export const ACCOUNT_DETAIL_STRINGS = Object.freeze({
+  title: "Account",
+  backToList: "All accounts",
+  unavailableTitle: "This account could not be loaded",
+  none: "None",
+  never: "Never",
+  yes: "Yes",
+  no: "No",
+  accountTitle: "Account",
+  id: "Account id",
+  email: "E-mail address",
+  emailVerified: "E-mail address verified",
+  name: "Name",
+  locale: "Language",
+  timeZone: "Time zone",
+  status: "Status",
+  mfa: "Two-factor authentication",
+  mfaOnSince: "On since",
+  mfaOn: "On",
+  mfaOff: "Off",
+  platformAdmin: "Platform admin",
+  failedLogins: "Failed sign-ins in a row",
+  lockedUntil: "Locked until",
+  notLocked: "Not locked",
+  lastLogin: "Last sign-in",
+  created: "Created",
+  version: "Version",
+  sessionsTitle: "Sessions",
+  activeSessions: (count: number) =>
+    count === 0 ? "No active session" : counted(count, "active session", "active sessions"),
+  sessionsHint:
+    "Sign-ins to the portal and to this admin that are neither signed out nor expired. Disabling the account or resetting its two-factor authentication ends all of them.",
+  membershipsTitle: "Memberships",
+  membershipsCaption: "Active memberships, one per OTA",
+  membershipsEmpty: "This account is a member of no OTA.",
+  membershipOta: "OTA",
+  membershipName: "Name",
+  membershipStatus: "OTA status",
+  membershipRole: "Role",
+  auditTitle: "Recent audit",
+  auditIntro: "The last 50 rows this account acted in or that are about it, newest first.",
+  actorAudit: "Everything this account did",
+  targetAudit: "Everything done to this account",
+});
+
+/** The actions of `/accounts/[accountId]` (`adminUnlockAccount`, `adminDisableAccount`, …; PF-87). */
+export const ACCOUNT_ACTION_STRINGS = Object.freeze({
+  sectionTitle: "Actions",
+  sectionIntro:
+    "Every action is in the audit log with your name; disabling, enabling and resetting two-factor authentication also keep your reason there.",
+  working: "Working…",
+  noAction: "Nothing to do here: this account is deleted.",
+  statusNow: "Status now:",
+  unlock: "Unlock",
+  unlockTitle: (name: string) => `Unlock ${name}?`,
+  unlockDescription:
+    "This clears the failed sign-in count and the lockout, so the next sign-in with the right password works. It needs no reason; the audit log keeps the counts before and after.",
+  unlockConfirm: "Unlock account",
+  unlocked: "The account is unlocked.",
+  disable: "Disable",
+  disableTitle: (name: string) => `Disable ${name}?`,
+  disableDescription:
+    "The person can no longer sign in to the portal, to this admin or to any OTA admin, and every session ends at once. Nothing is deleted, and the account can be enabled again.",
+  disableConfirm: "Disable account",
+  disabled: "The account is disabled.",
+  enable: "Enable",
+  enableTitle: (name: string) => `Enable ${name}?`,
+  enableDescription:
+    "The person can sign in again. The sessions that ended when the account was disabled stay ended.",
+  enableConfirm: "Enable account",
+  enabled: "The account is enabled again.",
+  resetMfa: "Reset two-factor",
+  resetMfaTitle: (name: string) => `Reset the two-factor authentication of ${name}?`,
+  resetMfaDescription:
+    "Only after you have checked the person's identity outside Velexis; write in the reason how. Two-factor authentication is turned off, the recovery codes are deleted, every session ends and the person gets an e-mail. You confirm with a code from your authenticator app.",
+  resetMfaConfirm: "Reset two-factor authentication",
+  mfaReset: "Two-factor authentication is turned off for this account, and the person got an e-mail.",
+  /** Why an action is not offered. */
+  selfNote: "This is your own account: it cannot be disabled here.",
+  adminResetNote:
+    "This account is a platform admin, so its two-factor authentication cannot be reset here. Another admin revokes the admin rights first, or the developer runs admin:reset-mfa on the VM.",
+  /** A form field the admin cannot change (the hidden account id) is missing or invalid. */
+  formExpired: "This form is out of date. Reload the page and try again.",
+  accountGone: "This account no longer exists. Go back to the list of accounts.",
+  /** `FORBIDDEN` by its `details.reason`. */
+  self: "You cannot do this to your own account.",
+  lastAdmin: "This is the last active platform admin, so it cannot be disabled.",
+  platformAdmin:
+    "This account is a platform admin, so its two-factor authentication cannot be reset here. Revoke the admin rights first.",
+  /** `CONFLICT` by its `details.reason`. */
+  notEnabled: "This account is already disabled or deleted. Reload the page to see its status.",
+  notDisabled: "Only a disabled account can be enabled. Reload the page to see its status.",
+  mfaNotEnabled: "This account has no two-factor authentication to reset. Reload the page.",
+  rateLimitedFor: (seconds: number) => `Too many attempts. Try again in ${waitTime(seconds)}.`,
+});
+
+/** `/admins`: the platform admins of `adminListAdmins`, granted and revoked here (PF-86). */
+export const ADMIN_LIST_STRINGS = Object.freeze({
+  title: "Platform admins",
+  intro:
+    "The accounts that can sign in to this admin, by name. Every admin uses two-factor authentication on every sign-in; granting and revoking ask for a code from your authenticator app.",
+  caption: "Platform admins, by name",
+  empty: "No platform admin.",
+  columnName: "Name",
+  columnEmail: "E-mail address",
+  columnMfa: "Two-factor",
+  columnLastLogin: "Last sign-in",
+  columnAction: "Action",
+  mfaOn: "On",
+  mfaOff: "Off",
+  never: "Never",
+  you: "You",
+  unavailableTitle: "The platform admins could not be loaded",
+  working: "Working…",
+  grant: "Grant admin rights",
+  grantTitle: "Grant platform admin rights",
+  grantDescription:
+    "The account must already exist, be active, have a verified e-mail address and use two-factor authentication. The new admin signs in on this admin's own address; their portal sessions stay as they are. You confirm with a code from your authenticator app.",
+  emailLabel: "E-mail address of the account",
+  emailHint: "The address the person signs in to the portal with.",
+  grantConfirm: "Grant admin rights",
+  granted: (name: string) => `${name} is now a platform admin.`,
+  emailInvalid: "Enter the e-mail address of an existing account, like name@example.com.",
+  revoke: "Revoke",
+  /** The rest of the revoke button's accessible name, after "Revoke", for screen readers. */
+  revokeSuffix: (name: string) => ` the admin rights of ${name}`,
+  revokeTitle: (name: string) => `Revoke the admin rights of ${name}?`,
+  revokeDescription:
+    "Their admin sessions end at once and they can no longer sign in here. Their portal account and its sessions stay as they are. You confirm with a code from your authenticator app.",
+  revokeConfirm: "Revoke admin rights",
+  revoked: (name: string) => `${name} is no longer a platform admin.`,
+  /** Why the revoke button is disabled. */
+  selfNote: "You cannot revoke your own admin rights.",
+  lastAdminNote: "The last platform admin cannot be revoked.",
+  formExpired: "This form is out of date. Reload the page and try again.",
+  /** `NOT_FOUND` of a grant: no account has the address. */
+  noAccount: "No account has this e-mail address. The person signs up in the portal first.",
+  /** `NOT_FOUND` of a revoke. */
+  notAdmin: "This account is no longer a platform admin. Reload the page.",
+  /** `CONFLICT` (`already_admin`). */
+  alreadyAdmin: "This account is already a platform admin.",
+  /** `UNPROCESSABLE` by its `details.reason`. */
+  accountNotActive: "This account is not active: it is locked, disabled or deleted.",
+  emailNotVerified: "This account has not verified its e-mail address yet.",
+  mfaNotEnabled:
+    "This account does not use two-factor authentication. The person turns it on in the portal first.",
+  /** `FORBIDDEN` by its `details.reason`. */
+  self: "You cannot revoke your own admin rights.",
+  lastAdmin: "This is the last active platform admin, so the rights cannot be revoked.",
+  rateLimitedFor: (seconds: number) => `Too many attempts. Try again in ${waitTime(seconds)}.`,
+});
+
+/** `/audit`: the search of `adminListAudit` and the CSV export (PF-85). */
+export const AUDIT_STRINGS = Object.freeze({
+  title: "Audit log",
+  intro:
+    "Every change of the platform and every sensitive read, newest first. The address of this page keeps the filters, so a search can be shared. Times and the period are in UTC.",
+  filtersLabel: "Audit filters",
+  tenantLabel: "OTA (tenant id)",
+  tenantPlaceholder: "ten_…",
+  actorAccountLabel: "Acting account (account id)",
+  actorAccountPlaceholder: "acc_…",
+  actorTypeLabel: "Actor",
+  actionLabel: "Action",
+  targetTypeLabel: "Target kind",
+  targetIdLabel: "Target id",
+  fromLabel: "From (UTC)",
+  toLabel: "To (UTC, included)",
+  caption: "Audit rows, newest first",
+  empty: "No audit row matches these filters.",
+  columnWhen: "When",
+  columnOta: "OTA",
+  columnActor: "Actor",
+  columnAction: "Action",
+  columnTarget: "Target",
+  columnRequest: "Request",
+  columnClient: "IP and browser",
+  columnDetails: "Details",
+  none: "None",
+  detailsOf: (id: string) => `Details of audit row ${id}`,
+  invalidFilters: "The filters in this address are not valid. Clear them and search again.",
+  periodOrder: "The first day of the period is after its last day. Choose the period again.",
+  showAll: "Show the whole audit log",
+  unavailableTitle: "The audit log could not be loaded",
+  exportTitle: "Export CSV",
+  exportIntro:
+    "The rows of these filters as a CSV file, newest first, at most 100,000 rows. The export is itself written to the audit log, and the file holds e-mail and IP addresses: keep it safe.",
+  exportLink: "Download CSV",
+  exportNeedsPeriod: "Choose a period (from and to) to export: at most one year.",
+  exportTooLong: "The period is longer than one year. Choose at most one year to export.",
+  /** The plain-text answers of `/audit/export.csv` when there is no file. */
+  exportInvalid: "The filters of this export are not valid. Go back to the audit log and choose them again.",
+  exportFailed: (message: string) => `The audit log could not be exported. ${message}`,
+});
+
 /** The roles of the members and invitations of an OTA (`TenantRole`). */
 export const ROLE_LABELS = Object.freeze({
   owner: "Owner",

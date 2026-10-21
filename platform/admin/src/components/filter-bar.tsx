@@ -41,7 +41,18 @@ export interface SelectFilterField {
   readonly anyLabel?: string;
 }
 
-export type FilterField = SearchFilterField | SelectFilterField;
+/**
+ * A calendar day (`YYYY-MM-DD`, the value of `<input type="date">`), such as the period of the audit search; applied
+ * when the admin submits the filters, as a search is.
+ */
+export interface DateFilterField {
+  readonly kind: "date";
+  /** The query parameter of the page. */
+  readonly name: string;
+  readonly label: string;
+}
+
+export type FilterField = SearchFilterField | SelectFilterField | DateFilterField;
 
 /**
  * The longest free text a search filter takes unless its field says otherwise: the `maxLength` of `q` in
@@ -87,9 +98,9 @@ export interface FilterBarProps {
 
 /**
  * The filters of a list page (README §4): their values live in the URL's search params, so a filtered list is a link
- * an admin can share (PF-81). A select applies at once and a search applies on submit; either way the other filters
- * and parameters stay, and the cursor goes (the list starts again on its first page). The server component of the
- * page reads the same params and calls the list operation with them.
+ * an admin can share (PF-81). A select applies at once, and a search or a date applies on submit; either way the other
+ * filters and parameters stay, and the cursor goes (the list starts again on its first page). The server component of
+ * the page reads the same params and calls the list operation with them.
  *
  * Without JavaScript the form is a plain GET form with the other parameters as hidden fields, so it still works.
  */
@@ -162,6 +173,18 @@ export function FilterBar({ fields, label = FILTER_STRINGS.label, className }: F
                 onChange={(event) => {
                   const typed = event.currentTarget.value;
                   setValues((current) => ({ ...current, [field.name]: typed }));
+                }}
+              />
+            ) : field.kind === "date" ? (
+              <Input
+                id={id}
+                name={field.name}
+                type="date"
+                value={value}
+                className="w-44"
+                onChange={(event) => {
+                  const picked = event.currentTarget.value;
+                  setValues((current) => ({ ...current, [field.name]: picked }));
                 }}
               />
             ) : (
