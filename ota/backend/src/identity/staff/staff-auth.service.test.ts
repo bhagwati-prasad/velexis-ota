@@ -30,6 +30,7 @@ import { TokenService } from "../token.service";
 import {
   ConsoleSignInIdempotencyHooks,
   environmentsOf,
+  mfaRequiredFor,
   permissionsOf,
   ROLE_PERMISSIONS,
   StaffAuthService,
@@ -912,6 +913,68 @@ describe("StaffAuthService", () => {
     sessions.accountCutOffValue = issuedAt - 1;
     expect((await service.signIn(signInInput(token))).session.subject.id).toBe(STAFF_ID);
     expect(JSON.stringify(lines)).not.toContain(token);
+  });
+
+  it("refuses a portal token without MFA for a live tenant with 403 MFA_REQUIRED and opens nothing [FIX-W23-STAFF AC2]", async () => {
+    const { service, sessions, rows, tenant, lines } = serviceHarness();
+    tenant.value = tenantRow({ storefrontEnvironment: "live" });
+    sessions.grant = grantFor({ mfa: false });
+    const token = portalToken();
+
+    const refused = await refusal(service.signIn(signInInput(token)));
+
+    expect(refused).toEqual({ answer: "403 MFA_REQUIRED", details: undefined });
+    // Taken (GETDEL) before the checks: the refused token cannot be presented again.
+    expect(sessions.grant).toBeUndefined();
+    expect((await refusal(service.signIn(signInInput(token)))).answer).toBe("401 PORTAL_TOKEN_INVALID");
+    expect(sessions.opened).toEqual([]);
+    expect(sessions.revoked).toEqual([]);
+    expect(rows).toEqual([]);
+    expect(lines[0]).toEqual({
+      msg: "staff.sign_in_refused",
+      fields: { reason: "mfa_required", staffId: STAFF_ID },
+    });
+    expect(JSON.stringify(lines)).not.toContain(token);
+  });
+
+  it("checks the MFA rule after the membership and the tenant status [FIX-W23-STAFF AC2]", async () => {
+    const { service, sessions, tenant } = serviceHarness();
+
+    sessions.grant = grantFor({ mfa: false });
+    sessions.freshMemberValue = member({ status: "removed" });
+    tenant.value = tenantRow({ storefrontEnvironment: "live" });
+    expect((await refusal(service.signIn(signInInput()))).answer).toBe("403 STAFF_MEMBERSHIP_INACTIVE");
+    sessions.grant = grantFor({ mfa: false });
+    sessions.freshMemberValue = member();
+    tenant.value = tenantRow({ storefrontEnvironment: "live", status: "suspended" });
+    expect((await refusal(service.signIn(signInInput()))).answer).toBe("403 TENANT_SUSPENDED");
+    expect(sessions.opened).toEqual([]);
+  });
+
+  it("signs in to a live tenant with an MFA token, and to a test tenant with or without one [FIX-W23-STAFF AC2]", async () => {
+    const { service, sessions, rows, tenant } = serviceHarness();
+
+    tenant.value = tenantRow({ storefrontEnvironment: "live" });
+    sessions.grant = grantFor({ mfa: true });
+    const live = await service.signIn(signInInput());
+    tenant.value = tenantRow({ storefrontEnvironment: "test" });
+    sessions.grant = grantFor({ mfa: false });
+    const testWithout = await service.signIn(signInInput());
+    sessions.grant = grantFor({ mfa: true });
+    const testWith = await service.signIn(signInInput());
+
+    expect(live.environments).toEqual(["test", "live"]);
+    expect(testWithout.environments).toEqual(["test"]);
+    expect(testWith.environments).toEqual(["test"]);
+    expect(sessions.opened).toHaveLength(3);
+    expect(rows).toHaveLength(3);
+  });
+
+  it("needs the token's mfa flag for live tenants only [FIX-W23-STAFF AC2]", () => {
+    expect(mfaRequiredFor({ storefrontEnvironment: "live" }, { mfa: false })).toBe(true);
+    expect(mfaRequiredFor({ storefrontEnvironment: "live" }, { mfa: true })).toBe(false);
+    expect(mfaRequiredFor({ storefrontEnvironment: "test" }, { mfa: false })).toBe(false);
+    expect(mfaRequiredFor({ storefrontEnvironment: "test" }, { mfa: true })).toBe(false);
   });
 
   it("opens a session with the membership's current role and writes the staff.sign_in row", async () => {

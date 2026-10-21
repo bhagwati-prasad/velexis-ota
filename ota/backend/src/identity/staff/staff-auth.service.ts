@@ -9,7 +9,11 @@
 //   the account's `staffdeny:acct:<accountId>` cut-off (flows/console-operations.md §1) answer
 //   `401 PORTAL_TOKEN_INVALID`. Then, from the platform tables (past the 60 s caches): the membership named by the
 //   token must still be the account's membership in this tenant, `active`, of an `active` account
-//   (`403 STAFF_MEMBERSHIP_INACTIVE`), and the tenant `active` (`403 TENANT_SUSPENDED`). Success opens a family with
+//   (`403 STAFF_MEMBERSHIP_INACTIVE`), and the tenant `active` (`403 TENANT_SUSPENDED`). A live tenant
+//   (`storefront_environment = live`, in the tenant row just read) also needs a token whose `mfa` flag is true, else
+//   `403 MFA_REQUIRED` (FIX-W23-STAFF): PADR-0008's MFA rule for live OTAs, which the platform checks before it issues
+//   the token; this is the backstop behind that check (a platform fault, or an OTA that went live within the token's
+//   60 s). Every refusal leaves the token used (`GETDEL`) and opens nothing. Success opens a family with
 //   the membership's current role, writes one `staff_actions` row `staff.sign_in` (the minimal insert until OBE-060
 //   brings the writer: actor, role, the session as target, request id, the end user's IP and user agent) and answers
 //   `ConsoleStaffSession`. The rate limit (10 per minute per end-user IP) is the operation's throttler (rate-limits.ts).
@@ -32,8 +36,8 @@
 // Permissions follow the role matrix of scope §1.3 (`ROLE_PERMISSIONS`); `environments` is `["test"]`, or
 // `["test", "live"]` for a live tenant (`storefront_environment = live`) and a role other than `viewer` (point 5).
 //
-// The platform's `account_sessions`, `last_login_at` and `last_active_at`, which the contract's descriptions mention,
-// are never written: the OTA backend never writes a platform table (ADR-0003, OADR-0011 point 2). No token is logged.
+// The platform's `account_sessions`, `last_login_at` and `last_active_at` are never written: the OTA backend never
+// writes a platform table (ADR-0003, OADR-0011 point 2). No token is logged.
 import { isIP } from "node:net";
 import { Injectable } from "@nestjs/common";
 import type { components } from "@velexis/api-types";
@@ -63,6 +67,7 @@ import {
   parseRefreshToken,
   StaffSessions,
   StaffTokens,
+  type PortalTokenGrant,
   type StaffFamily,
 } from "./staff-sessions";
 
@@ -137,6 +142,17 @@ export function environmentsOf(
   storefrontEnvironment: PlatformTenant["storefrontEnvironment"],
 ): ConsoleEnvironment[] {
   return storefrontEnvironment === "live" && role !== "viewer" ? ["test", "live"] : ["test"];
+}
+
+/**
+ * Whether a portal token is refused for the MFA rule of live OTAs (PADR-0008): the tenant is live
+ * (`storefront_environment = live`) and the token does not say that the account has MFA enabled.
+ */
+export function mfaRequiredFor(
+  tenant: Pick<PlatformTenant, "storefrontEnvironment">,
+  grant: Pick<PortalTokenGrant, "mfa">,
+): boolean {
+  return tenant.storefrontEnvironment === "live" && grant.mfa !== true;
 }
 
 /** The contract's `StaffMember` of a membership. */
@@ -294,6 +310,12 @@ export class StaffAuthService {
     if (tenant === null || tenant.status !== "active") {
       this.logger.info({ reason: "tenant_not_active", staffId: member.id }, "staff.sign_in_refused");
       throw new AppError("TENANT_SUSPENDED");
+    }
+    if (mfaRequiredFor(tenant, grant)) {
+      // The platform issues no such token for a live OTA (PADR-0008), so this one is a warning: the OTA went live within
+      // the token's 60 s, or the platform's check failed. The token is used up; no session is opened.
+      this.logger.warn({ reason: "mfa_required", staffId: member.id }, "staff.sign_in_refused");
+      throw new AppError("MFA_REQUIRED");
     }
     const issued = await this.sessions.open(member, input.userAgent);
     try {

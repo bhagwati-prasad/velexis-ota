@@ -1247,6 +1247,112 @@ describe("receiveStripeVelexisWebhook (api-changes-console-and-internal §5)", (
   });
 });
 
+// ---- FIX-W23-STAFF: the console auth operations as the ADRs and the code have them (ADR-0003, ADR-0008, OADR-0011,
+// PADR-0007, PADR-0008) ---------------------------------------------------------------------------------------------
+
+const CONSOLE_AUTH = ["consoleSignIn", "consoleRefreshSession", "consoleSignOut", "consoleGetMe"] as const;
+
+/** The description of an operation, folded onto one line. */
+const descriptionOf = (operationId: string): string =>
+  String(operation(operationId).spec["description"]).replace(/\s+/g, " ");
+
+/** What the original descriptions said the OTA backend writes to the platform tables (ADR-0003 forbids it). */
+const PLATFORM_WRITES = [
+  "Inserts `platform.account_sessions`",
+  "`platform.account_sessions.revoked_at`",
+  "`platform.account_sessions.rotated_at`",
+  "updates `accounts.last_login_at`",
+  "sets `tenant_memberships.last_active_at`",
+  "Updates `tenant_memberships.last_active_at`",
+];
+
+describe("console auth (FIX-W23-STAFF)", () => {
+  it("describes no platform write, the staff token's claims without an environment, and staff.sign_in [FIX-W23-STAFF AC1]", () => {
+    for (const operationId of CONSOLE_AUTH) {
+      const text = descriptionOf(operationId);
+      expect([operationId, PLATFORM_WRITES.filter((phrase) => text.includes(phrase))]).toEqual([
+        operationId,
+        [],
+      ]);
+      expect([operationId, text.toLowerCase().includes("no platform table is written")]).toEqual([
+        operationId,
+        true,
+      ]);
+    }
+    const signIn = descriptionOf("consoleSignIn");
+    for (const claim of ["`typ` (`staff`)", "`sub` (`stf_…`", "`tid`", "`roles`", "`sid`"]) {
+      expect([claim, signIn.includes(claim)]).toEqual([claim, true]);
+    }
+    // The environment is chosen per request (OADR-0011 point 5); the original `acc`, `ten` and `env` claims are gone.
+    expect(signIn).toContain("It carries no environment");
+    expect(signIn).not.toMatch(/`(acc|ten|env)`/);
+    expect(signIn).toContain("`action = staff.sign_in`");
+    expect(signIn).not.toContain("auth.sign_in");
+  });
+
+  it("names the revocation keys of OADR-0011 and the sign-out order of the code [FIX-W23-STAFF AC1]", () => {
+    const keys = [
+      "staffdeny:<familyId>",
+      "staffdeny:acct:<accountId>",
+      "staffdeny:tenant:<tenantId>",
+      "staffdeny:member:<staffId>",
+    ];
+    for (const operationId of ["consoleRefreshSession", "consoleGetMe"]) {
+      const text = descriptionOf(operationId);
+      expect([operationId, keys.filter((key) => !text.includes(key))]).toEqual([operationId, []]);
+    }
+    const signOut = descriptionOf("consoleSignOut");
+    const accessToken = signOut.indexOf("the session of the staff access token");
+    const refreshToken = signOut.indexOf("the session that issued the body's `refreshToken`");
+    const ended = signOut.indexOf("the session of a valid access token whose session has already ended");
+    expect(accessToken).toBeGreaterThan(-1);
+    expect(refreshToken).toBeGreaterThan(accessToken);
+    expect(ended).toBeGreaterThan(refreshToken);
+    expect(signOut).toContain("`staffdeny:member:<staffId>`");
+  });
+
+  it("describes the tenant writes and the role change as the code has them [FIX-W23-STAFF AC1]", () => {
+    // The required Idempotency-Key stores the rotated pair in the tenant's idempotency_keys (idempotency.service.ts).
+    const refresh = descriptionOf("consoleRefreshSession");
+    expect(refresh).toContain("`idempotency_keys`, the only tenant table written");
+    expect(refresh).not.toContain("no tenant table");
+    // Only the sign-in writes a staff_actions row; the sign-out writes none (staff-auth.service.ts).
+    expect(descriptionOf("consoleSignOut")).not.toContain("staff_actions");
+    // The staff guard ends a session whose role changed (staff-sessions.ts `role_changed`): no new environments then.
+    const environments = String(
+      objectAt(working, "components", "schemas", "ConsoleStaffProfile", "properties", "environments")[
+        "description"
+      ],
+    ).replace(/\s+/g, " ");
+    expect(environments).not.toContain("a role change or the OTA going live shows");
+    expect(environments).toContain("a role change ends the session instead (`401 UNAUTHENTICATED`");
+  });
+
+  it("lists TOKEN_EXPIRED on consoleSignOut, which answers it to an expired access token alone [FIX-W23-STAFF AC1]", () => {
+    const signOut = operation("consoleSignOut");
+    expect(signOut.spec["x-error-codes"]).toContain("TOKEN_EXPIRED");
+    expect(ERROR_CATALOGUE.TOKEN_EXPIRED.status).toBe(401);
+    expect(objectAt(signOut.spec, "responses")["401"]).toBeDefined();
+    expect(descriptionOf("consoleSignOut")).toContain("`401 TOKEN_EXPIRED`");
+  });
+
+  it("adds MFA_REQUIRED (403) to the catalogue and to consoleSignIn, with an example that validates [FIX-W23-STAFF AC2]", () => {
+    // Compiles only while the code is a member of the generated union.
+    const code: ErrorCode = "MFA_REQUIRED";
+    // The platform document has the code with the same status (PADR-0008); a code of both keeps the OTA entry.
+    expect(ERROR_CATALOGUE[code]).toMatchObject({ status: 403, source: "ota" });
+    expect(OTA_ERROR_CODES).toContain(code);
+    expect(objectAt(working, "x-error-catalogue", code)["status"]).toBe(403);
+    expect(operation("consoleSignIn").spec["x-error-codes"]).toContain(code);
+    expect(descriptionOf("consoleSignIn")).toContain("`403 MFA_REQUIRED`");
+    const forbidden = objectAt(working, "components", "responses", "ConsoleForbidden");
+    expect(String(forbidden["description"])).toContain("MFA_REQUIRED");
+    const example = objectAt(forbidden, "content", "application/json", "examples", code)["value"];
+    expect(objectAt(example, "error")).toMatchObject({ code, status: 403 });
+    expect(checker.check("consoleSignIn", { status: 403, body: example })).toEqual([]);
+  });
+});
+
 describe("the frozen original", () => {
   it("is unchanged under docs/velexis-sdk: same bytes, no MVP extension [OBE-009 AC2]", () => {
     const sha256 = createHash("sha256").update(readFileSync(FROZEN_DOCUMENT)).digest("hex");

@@ -5,8 +5,11 @@
 // every role), stores portal tokens as the platform's createConsoleToken does (`SET ptk:<sha256> … EX 60 NX`, PBE-039),
 // and starts the API in-process. Every answer is checked against the OTA document (`expectResponseToMatch`). Each
 // client calls from an IP address of its own (`X-Velexis-End-User-IP`), so the sign-in limit of 10 per minute per IP
-// never mixes the tests. Tokens and names are made up per run; no value is a secret.
+// never mixes the tests. FIX-W23-STAFF adds the MFA rule of live tenants (PADR-0008; flows §6): a portal token whose
+// `mfa` flag is false signs in to the test tenant alpha but not to the live tenant beta. Tokens and names are made up
+// per run; no value is a secret.
 import { randomBytes, randomInt, randomUUID } from "node:crypto";
+import type { ConfigService } from "@nestjs/config";
 import { INVALIDATION_CHANNEL, type InvalidationEvent } from "@velexis/api-types/jobs";
 import { hashApiKey, sha256Hex } from "@velexis/crypto";
 import {
@@ -22,14 +25,18 @@ import {
 import {
   createTestDatabase,
   expectResponseToMatch,
+  FakeClock,
   useRedis,
   type TestDatabase,
   type TestRedis,
 } from "@velexis/testing";
 import request, { type Response } from "supertest";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import type { Clock } from "../../../src/common/clock";
 import { newId } from "../../../src/common/ids";
 import { redisKeys } from "../../../src/common/redis/redis.keys";
+import type { ApiConfig } from "../../../src/config";
+import { StaffTokens } from "../../../src/identity/staff/staff-sessions";
 import type { OtaPool } from "../../../src/tenancy/tenancy.module";
 import { newApiKey, testApiCredentials } from "../../helpers/api-env";
 import { OPENAPI_SETUP_TIMEOUT_MS, preloadOpenApiDocument } from "../../helpers/openapi";
@@ -198,8 +205,16 @@ async function insertMember(tenantId: string, role: Role, accountId?: string): P
   return { accountId: account, staffId, tenantId, email };
 }
 
-/** Stores a portal token for `member` as the platform's API does (issued now, unless `issuedAt` says otherwise). */
-async function portalTokenFor(member: Member, role: Role = "agent", issuedAt = new Date()): Promise<string> {
+/**
+ * Stores a portal token for `member` as the platform's API does (issued now, unless `issuedAt` says otherwise; `mfa`
+ * is the token's flag that the account has MFA enabled).
+ */
+async function portalTokenFor(
+  member: Member,
+  role: Role = "agent",
+  issuedAt = new Date(),
+  mfa = true,
+): Promise<string> {
   const token = newPortalToken();
   const value = JSON.stringify({
     v: 1,
@@ -207,7 +222,7 @@ async function portalTokenFor(member: Member, role: Role = "agent", issuedAt = n
     tenantId: member.tenantId,
     membershipId: member.staffId,
     role,
-    mfa: true,
+    mfa,
     issuedAt: issuedAt.toISOString(),
     requestId: randomUUID(),
   });
@@ -500,6 +515,53 @@ describe("console.auth.signIn", () => {
     expect(me.body.environments).toEqual(["test", "live"]);
   });
 
+  it("refuses a portal token without MFA for a live OTA with 403 MFA_REQUIRED: the token stays used, nothing opens [FIX-W23-STAFF AC2]", async () => {
+    const member = await insertMember(betaId, "agent");
+    const client = new ConsoleClient(betaKey);
+    const token = await portalTokenFor(member, "agent", new Date(), false);
+
+    const refused = await client.signIn(token);
+    const again = await client.signIn(token);
+
+    expect(answer(refused)).toEqual([403, "MFA_REQUIRED"]);
+    expectResponseToMatch("consoleSignIn", refused);
+    expect(refused.headers["cache-control"]).toBe("no-store");
+    expect(refused.body.error.details).toBeUndefined();
+    // GETDEL: the refused token is gone, so presenting it again is an unknown token.
+    expect(await redis.client.exists(redisKeys.portalToken(sha256Hex(token)).key)).toBe(0);
+    expect(answer(again)).toEqual([401, "PORTAL_TOKEN_INVALID"]);
+    // No session and no staff_actions row for the refused sign-in.
+    // This file's Redis database is its own (useRedis), so the families listed are this file's.
+    const families = await redis.client.keys("staffsess:*");
+    const stored = families.length === 0 ? [] : await redis.client.mget(...families);
+    expect(stored.filter((value) => value?.includes(member.staffId))).toEqual([]);
+    const rows = await tenantTx(tenantDb, "tenant_beta" as TenantSchema, (trx) =>
+      trx.selectFrom("staff_actions").select("id").where("staff_id", "=", member.staffId).execute(),
+    );
+    expect(rows).toEqual([]);
+    // With MFA (a token the platform issues once MFA is on) the same member signs in, live offered.
+    const withMfa = await client.signIn(await portalTokenFor(member, "agent", new Date(), true));
+    expect(answer(withMfa)).toEqual([200, undefined]);
+    expect(withMfa.body.environments).toEqual(["test", "live"]);
+    const after = await redis.client.mget(...(await redis.client.keys("staffsess:*")));
+    expect(after.filter((value) => value?.includes(member.staffId))).toHaveLength(1);
+  });
+
+  it("signs in to a test OTA with or without MFA on the portal token [FIX-W23-STAFF AC2]", async () => {
+    const member = await insertMember(alphaId, "agent");
+    const client = new ConsoleClient();
+
+    const without = await client.signIn(await portalTokenFor(member, "agent", new Date(), false));
+    const withMfa = await client.signIn(await portalTokenFor(member, "agent", new Date(), true));
+
+    for (const res of [without, withMfa]) {
+      expect(answer(res)).toEqual([200, undefined]);
+      expectResponseToMatch("consoleSignIn", res);
+      expect(res.body.environments).toEqual(["test"]);
+      expect(res.body.session.subject).toEqual({ type: "staff", id: member.staffId, roles: ["agent"] });
+    }
+  });
+
   it("counts sign-ins per end-user IP: the eleventh in a minute answers 429", async () => {
     const client = new ConsoleClient();
     const answers: Response[] = [];
@@ -762,6 +824,27 @@ describe("console.auth.signOut", () => {
     expect(byRemoved.status).toBe(204);
     expect(await redis.client.exists(redisKeys.staffSession(gone.familyId).key)).toBe(0);
     expect(await redis.client.exists(redisKeys.staffDeny(gone.familyId).key)).toBe(1);
+  });
+
+  it("answers 401 TOKEN_EXPIRED to an expired access token alone, as its x-error-codes say; with the refresh token it signs out [FIX-W23-STAFF AC1]", async () => {
+    const member = await insertMember(alphaId, "agent");
+    const { client, accessToken, refreshToken, familyId } = await signIn(member);
+    // The same claims, signed with the API's key by a clock 20 minutes back: expired 5 minutes ago.
+    const past = new FakeClock(new Date(Date.now() - 20 * 60 * 1000));
+    const tokens = new StaffTokens(
+      { get: () => testApiCredentials().jwtKeyFile } as unknown as ConfigService<ApiConfig, true>,
+      past as unknown as Clock,
+    );
+    const expired = (await tokens.sign({ sub: member.staffId, tid: alphaId, sid: familyId, role: "agent" }))
+      .token;
+
+    const alone = await client.signOut({}, expired);
+    const withRefresh = await client.signOut({ refreshToken }, expired);
+
+    expect(answer(alone)).toEqual([401, "TOKEN_EXPIRED"]);
+    expectResponseToMatch("consoleSignOut", alone);
+    expect(withRefresh.status).toBe(204);
+    expect(answer(await client.me(accessToken))).toEqual([401, "UNAUTHENTICATED"]);
   });
 
   it("ends a session by its refresh token alone; an unknown one is a no-op 204 and no credential 401", async () => {

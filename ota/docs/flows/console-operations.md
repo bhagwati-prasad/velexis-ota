@@ -60,7 +60,7 @@ sequenceDiagram
 
 ## 3. Steps for the main tasks
 
-1. **Sign in.** The OTA admin has no sign-in page: without a session it redirects to `https://platform.example.com/console?tenant=<id>`. The portal token is single use and expires in 60 seconds. Live tenants require MFA on the portal account; the platform checks it before it issues the token ([PADR-0007](../../../platform/docs/adr/0007-portal-to-ota-admin-sso-token.md), [PADR-0008](../../../platform/docs/adr/0008-email-verification-and-mfa-policy.md)).
+1. **Sign in.** The OTA admin has no sign-in page: without a session it redirects to `https://platform.example.com/console?tenant=<id>`. The portal token is single use and expires in 60 seconds. Live tenants require MFA on the portal account; the platform checks it before it issues the token ([PADR-0007](../../../platform/docs/adr/0007-portal-to-ota-admin-sso-token.md), [PADR-0008](../../../platform/docs/adr/0008-email-verification-and-mfa-policy.md)), and `console.auth.signIn` checks the token's `mfa` flag again for a live tenant (`403 MFA_REQUIRED`).
 2. **Environment.** The admin's switch sends `X-Velexis-Environment`. `live` needs a live tenant and a role other than `viewer` ([OADR-0011](../adr/0011-console-access-staff-sessions-and-environments.md)).
 3. **Work list.** Default filters: `ticketingStatus in (failed, manual_review)`, `reconcile_outcome = manual_review`, deadlines within 24 hours, cancellation requests, schedule changes. These are the "needs attention" views.
 4. **PNR import.** Staff enter a record locator. The backend checks the local unique index first, then calls Get Flight Order By Record Locator **with the tenant's office**, verifies the owner or queuing office is one of the tenant's, and creates a booking with `channel = import`, `pricing_mode` chosen by staff (`markup_rules`, `net`, `override`), no payment (`paymentStatus = not_applicable`).
@@ -73,6 +73,7 @@ sequenceDiagram
 | Situation | Answer |
 |---|---|
 | Portal token unknown, used or expired | `401 PORTAL_TOKEN_INVALID` → back to the portal |
+| Live tenant, portal token without MFA (`mfa` not true) | `403 MFA_REQUIRED`; the token stays used → set up MFA in the portal, then open the console again |
 | Membership removed or suspended | `403 STAFF_MEMBERSHIP_INACTIVE`; sessions refused within 60 s (`membership` invalidation) |
 | "Sign out everywhere" on the portal | `staffdeny:acct:<id>` makes the guard and refresh refuse older families |
 | "Sign out of every session" in the console (`console.auth.signOut`, `scope: all`) | `staffdeny:member:<staffId>` (epoch ms, 12 h) makes the guard and refresh refuse the staff member's older families in this OTA |

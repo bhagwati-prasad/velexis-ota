@@ -1691,13 +1691,13 @@ export interface paths {
          * Sign in to the console (staff session)
          * @description Creates a tenant-scoped **staff session** for a portal account that is a member of the OTA identified by `X-Api-Key`.
          *
-         *     **Grants.** `grantType = password`: portal e-mail + password (Argon2id hash in `platform.accounts.password_hash`); when `accounts.mfa_enabled`, `mfaCode` (TOTP, ±1 step) is required, otherwise `401 STAFF_MFA_REQUIRED` (`details.reason = missing | invalid`) — the SDK caller shows the TOTP field and repeats the call. `grantType = portal_token`: exchange of the one-time token the Velexis portal issues when the user clicks *Open console* for this OTA (single use, 60 s, bound to the tenant; MFA was already done in the portal); unknown/used/expired/other tenant → `401 PORTAL_TOKEN_INVALID`.
+         *     **Grants.** `grantType = portal_token` is the grant of the MVP: the one-time token the Velexis portal issues when the user clicks *Open console* for this OTA (PADR-0007: single use, 60 s, bound to the tenant and the membership; the platform checked the account, the membership, the tenant and the MFA rule of live OTAs before it issued it). The token is taken from Redis with `GETDEL`, so it works once whatever the outcome of the sign-in; an unknown, used, expired or unreadable token, a token of another OTA, and a token issued at or before the account's cut-off `staffdeny:acct:<accountId>` (written by the platform on sign out everywhere, a password change or reset, an MFA reset or a disabled account) answer `401 PORTAL_TOKEN_INVALID`. `grantType = password` answers `403 FEATURE_DISABLED` (`details.feature = "passwordGrant"`, OADR-0011 point 1). When it is built for third-party consoles, the platform verifies the password and the TOTP code (`401 INVALID_CREDENTIALS`, `401 STAFF_MFA_REQUIRED` with `details.reason = missing | invalid`, `423 ACCOUNT_LOCKED`) and the OTA backend never reads a password hash or an MFA secret (ADR-0008).
          *
-         *     **Preconditions.** Secret key only (`sk_test_…`/`sk_live_…`): the console runs sign-in in a Next.js server action / route handler and stores the tokens in httpOnly cookies; a publishable key, or a secret key scoped `storefront` (see ConsoleApiKeyScope), → `403 SCOPE_NOT_ALLOWED`. The tenant must be `active` (`403 TENANT_SUSPENDED`); the account must be `active` and have an `active` row in `platform.tenant_memberships` for this tenant (`403 STAFF_MEMBERSHIP_INACTIVE`). Five consecutive failures lock the account for 15 minutes (`accounts.failed_login_count`, `locked_until` → `423 ACCOUNT_LOCKED` with `Retry-After`); sign-in is also rate-limited per IP and e-mail (`429`). Wrong e-mail and wrong password answer the same `401 INVALID_CREDENTIALS`.
+         *     **Checks.** After the token, from the platform tables (read only, past the 60 s caches): the membership the token names must still be the account's membership in this OTA, `active`, of an `active` account (`403 STAFF_MEMBERSHIP_INACTIVE`); the OTA must be `active` (`403 TENANT_SUSPENDED`); and when the OTA is live (`platform.tenants.storefront_environment = live`), the token must say that the account has MFA enabled (its `mfa` flag), otherwise `403 MFA_REQUIRED`: the MFA rule of live OTAs (PADR-0008), checked again here behind the platform's own check. A refused token stays used. Callers: a secret key (`sk_…`) not scoped `storefront`, or the OTA admin's service key; a publishable key or a secret key scoped `storefront` (see ConsoleApiKeyScope) → `403 SCOPE_NOT_ALLOWED`. The console signs in from its server and keeps the tokens in httpOnly cookies. Rate-limited to 10 sign-ins per minute per end-user IP (the `X-Velexis-End-User-IP` of a secret key or the service key, else the connection's address; `429 RATE_LIMITED`), so the sign-ins of all OTAs, which arrive from the OTA admin's server, never share one bucket (OADR-0011 point 9).
          *
-         *     **Side effects.** Inserts `platform.account_sessions` (refresh-token SHA-256 hash, new rotation `family_id`, `active_tenant_id` = this tenant, user agent, IP), updates `accounts.last_login_at` / resets `failed_login_count`, sets `tenant_memberships.last_active_at`, and appends a tenant `staff_actions` row (`action = auth.sign_in`, outcome `succeeded` | `failed` | `denied`; failed attempts are recorded with the e-mail snapshot only). The access token is a JWT (15 min) with `sub = stf_…`, `acc`, `ten`, `env` (test|live from the key), `roles` and `scope = console`; the refresh token is opaque and rotating (`Session.refreshTokenExpiresAt`). Staff tokens are only accepted together with a secret key of the same tenant and environment.
+         *     **Session.** Success opens a staff session in Redis (`staffsess:<familyId>`, OADR-0011 point 2) with the membership's current role and an absolute lifetime of 12 hours, writes one tenant `staff_actions` row (`action = staff.sign_in`, target the session, the staff member's IP and user agent, never a token) and answers ConsoleStaffSession. The access token is an EdDSA JWT valid for 15 minutes with the claims `typ` (`staff`), `sub` (`stf_…`, the membership), `tid` (the tenant), `roles` (the membership's role) and `sid` (`asn_…`, the session). It carries no environment: each console call chooses its own (`X-Velexis-Environment` with the OTA admin's service key, the key's environment otherwise; OADR-0011 point 5). The refresh token is opaque and rotating (console.auth.refresh); `session.refreshTokenExpiresAt` is the session's absolute end. Staff tokens are accepted only with a key of the tenant they name (`tid`). No platform table is written (ADR-0003, OADR-0011 point 2): no `platform.account_sessions` row, no `accounts.last_login_at`, no `tenant_memberships.last_active_at`.
          *
-         *     **Idempotency.** `Idempotency-Key` is required; a retry with the same key and body within 60 s returns the same session (stored in `idempotency_keys` with the token pair encrypted), a different body → `409 IDEMPOTENCY_KEY_REUSED`.
+         *     **Idempotency.** `Idempotency-Key` is required: a retry with the same key and body within 24 hours replays the stored answer (kept encrypted, it carries the tokens) instead of failing on the used portal token; a different body → `409 IDEMPOTENCY_KEY_REUSED`.
          *
          *     No Amadeus call. Console scope only; customers sign in with `auth.signIn`.
          */
@@ -1719,11 +1719,11 @@ export interface paths {
         put?: never;
         /**
          * Refresh a staff session
-         * @description Exchanges a staff refresh token for a new access token and a **new** refresh token (rotation: the old one is revoked, `platform.account_sessions.rotated_at` / `replaced_by_id`). Presenting an already-rotated token revokes the whole rotation family (`revoke_reason = rotation_reuse`) and answers `401 REFRESH_TOKEN_REUSED`; unknown/expired/revoked → `401 REFRESH_TOKEN_INVALID`.
+         * @description Exchanges a staff refresh token for a new access token and a **new** refresh token. The staff session lives in Redis (`staffsess:<familyId>`, OADR-0011 point 2), which keeps only SHA-256 hashes of its refresh tokens; the refresh token names its session. Rotation: the presented token must be the session's current one, which is replaced; presenting an already-rotated token ends the whole session (deleted, `staffdeny:<familyId>` written) and answers `401 REFRESH_TOKEN_REUSED`; an unknown, malformed, ended or revoked token, or one of another OTA, → `401 REFRESH_TOKEN_INVALID`. Rotation never extends the session: it ends 12 hours after sign-in (`session.refreshTokenExpiresAt`), and the staff member then opens the console from the portal again.
          *
-         *     Roles and permissions are **re-read** from `platform.tenant_memberships` on every refresh, so a role change or removal takes effect within one access-token lifetime (removed/suspended member → `403 STAFF_MEMBERSHIP_INACTIVE`, session revoked). The refresh token must belong to the tenant and environment of the secret key.
+         *     **Revocation checks** (OADR-0011 point 3; the staff-token guard makes the same on every console call): the session exists, belongs to this OTA, has not ended and is not in `staffdeny:<familyId>`, and it was created after the cut-offs `staffdeny:acct:<accountId>` (written by the platform on sign out everywhere, a password change or reset, an MFA reset or a disabled account; PADR-0007), `staffdeny:tenant:<tenantId>` (the OTA was suspended) and `staffdeny:member:<staffId>` (console.auth.signOut with `scope = all`); otherwise `401 REFRESH_TOKEN_INVALID`, and a session of this OTA that fails a check is ended. Then the membership (cached 60 s in Redis and dropped by the platform's membership and account invalidations): a removed or suspended member, or an account that is no longer active, → `403 STAFF_MEMBERSHIP_INACTIVE`; a changed role → `401 REFRESH_TOKEN_INVALID` (a new sign-in through the portal takes the new role); both end the session. So a removal or a role change takes effect on the next console call or refresh, within the 60 s of the cache. The answer carries the role's permissions and the environments the staff member may open; the new access token has the claims of console.auth.signIn's.
          *
-         *     The SDK calls this automatically when a console call fails with `TOKEN_EXPIRED` and the client was created with `refreshToken` **and `sessionKind: "staff"`** (refresh tokens are opaque, so the client option decides between this endpoint and the customer `auth.refresh`; `createServerClient({ as: "staff" })` of `@velexis/ota-sdk/next` sets it); the SDK passes `session` to `onSessionRefreshed` and the whole result (current role and permissions) to `onStaffSessionRefreshed`. Customer refresh tokens are unknown here (`401 REFRESH_TOKEN_INVALID`). The `@velexis/ota-sdk/next` middleware rotates the httpOnly cookies. `Idempotency-Key` makes a retried refresh return the same rotated pair for 60 s instead of tripping reuse detection. Updates `tenant_memberships.last_active_at`. No Amadeus call; no tenant table is written.
+         *     The SDK calls this automatically when a console call fails with `TOKEN_EXPIRED` and the client was created with `refreshToken` **and `sessionKind: "staff"`** (refresh tokens are opaque, so the client option decides between this endpoint and the customer `auth.refresh`; `createServerClient({ as: "staff" })` of `@velexis/ota-sdk/next` sets it); the SDK passes `session` to `onSessionRefreshed` and the whole result (current role and permissions) to `onStaffSessionRefreshed`. Customer refresh tokens are unknown here (`401 REFRESH_TOKEN_INVALID`). The `@velexis/ota-sdk/next` middleware rotates the httpOnly cookies. `Idempotency-Key` makes a retried refresh replay the same rotated pair for 24 hours instead of tripping reuse detection (the answer is kept encrypted in the tenant's `idempotency_keys`, the only tenant table written). No Amadeus call; no platform table is written (no `platform.account_sessions` row, no `tenant_memberships.last_active_at`; ADR-0003).
          */
         post: operations["consoleRefreshSession"];
         delete?: never;
@@ -1743,9 +1743,11 @@ export interface paths {
         put?: never;
         /**
          * Sign out of the console
-         * @description Revokes the current staff session (`scope = current`, default: the refresh token in the body or, when omitted, the session of the bearer token) or every session of the portal account in this OTA (`scope = all`, e.g. after a lost laptop). Revoked rows get `platform.account_sessions.revoked_at` and `revoke_reason = logout`; outstanding access tokens stay valid until they expire (≤ 15 min) unless `scope = all`, which also adds the session family ids to the Redis deny-list checked by the staff-token guard.
+         * @description Ends a staff session (`204`). Staff sessions live only in Redis (OADR-0011 point 2): ending one deletes `staffsess:<familyId>` and writes `staffdeny:<familyId>`, so its refresh token and its outstanding access tokens are refused from the next call on (the staff-token guard checks the session on every console call, OADR-0011 point 3).
          *
-         *     Callable with an expired access token: send the secret key alone plus `refreshToken` (the refresh token identifies the session, so no `console:automation` scope is needed; a key scoped `storefront` → `403 SCOPE_NOT_ALLOWED`). Always `204` for an already-revoked token (idempotent). Appends `staff_actions` (`action = auth.sign_out`). No Amadeus call. The Next.js handler clears the httpOnly cookies afterwards.
+         *     **Which session.** `scope = current` (the default) ends, in this order: the session of the staff access token (its `sid`) when the token is valid and its session still holds, whatever the body contains; without one, the session that issued the body's `refreshToken` (its current or an already-rotated token; a token that no session of this OTA issued changes nothing and still answers `204`); without either, the session of a valid access token whose session has already ended (signed out, revoked, cut off, its member removed), which is ended again: always `204` for an already-revoked session (idempotent). `scope = all` ends that session too and writes the cut-off `staffdeny:member:<staffId>` (the time of the sign-out), which ends every other session of the staff member in this OTA, e.g. after a lost laptop; it needs the access token of a session that still holds or that session's current refresh token, otherwise `401 UNAUTHENTICATED`.
+         *
+         *     Callable after the access token expired: an expired access token counts as none, so send the key with the `refreshToken` in the body (the refresh token identifies the session, so no `console:automation` scope is needed; a key scoped `storefront` → `403 SCOPE_NOT_ALLOWED`). An expired access token without a refresh token answers `401 TOKEN_EXPIRED` (refresh, then sign out with the new token); no credential at all `401 UNAUTHENTICATED`. No platform table is written (no `platform.account_sessions` row is revoked; ADR-0003). No Amadeus call. The Next.js handler clears the httpOnly cookies afterwards.
          */
         post: operations["consoleSignOut"];
         delete?: never;
@@ -1763,11 +1765,11 @@ export interface paths {
         };
         /**
          * Current staff member, tenant and permissions
-         * @description Returns the signed-in staff member (`platform.tenant_memberships` + `platform.accounts`), the OTA (`platform.tenants`, environment of the key, configured Amadeus offices from `platform.supplier_connections` — never credentials), the permissions derived from the role, and the current session. Use it in the console layout to render navigation and hide actions the role cannot perform.
+         * @description Returns the signed-in staff member (`platform.tenant_memberships` + `platform.accounts`), the OTA (`platform.tenants` in the environment of this request, with the Amadeus offices of that environment's connection from `platform.supplier_connections` — never credentials), the permissions derived from the role, the current staff session (kept in Redis, not a portal session; OADR-0011 point 2) and the environments the staff member may open, read on every call. Use it in the console layout to render navigation and hide actions the role cannot perform.
          *
          *     **Role → permissions** (StaffPermission). `owner`, `admin`: all permissions. `agent`: `bookings:read`, `bookings:write`, `bookings:issue`, `bookings:cancel`, `customers:read`, `queues:read`, `supplier_requests:read`, `amadeus:read`, `payments:read`, `payments:capture`, `settings:read`. `finance`: `bookings:read`, `customers:read`, `supplier_requests:read`, `payments:read`, `payments:capture`, `payments:refund`, `settings:read`. `viewer`: `bookings:read`, `customers:read`, `payments:read`, `settings:read`. `amadeus:write` (raw create/patch/issue/cancel) and `settings:write` are limited to `owner` and `admin`. `me` always needs a staff token. Console calls **without** a staff token are automation calls: they are accepted only from a secret key whose scopes include `console:automation`, act with exactly the permissions listed in the key's scopes (never every permission) and are attributed to the API key (`actor.type = api_key`); otherwise `403 SCOPE_NOT_ALLOWED` (`details.requiredScope`) or `403 FORBIDDEN` (`details.requiredPermission`). See ConsoleApiKeyScope.
          *
-         *     The membership is checked on every call (cached 60 s in Redis): a removed member gets `403 STAFF_MEMBERSHIP_INACTIVE`. Updates `tenant_memberships.last_active_at` (throttled to once per minute). No Amadeus call. Cache: `private, no-store`.
+         *     Without a staff token `401 UNAUTHENTICATED`; with an expired one `401 TOKEN_EXPIRED` (refresh, then retry). The staff-token guard checks the session on every console call (OADR-0011 point 3: it exists, is not in `staffdeny:<familyId>` and was created after the cut-offs `staffdeny:acct:<accountId>`, `staffdeny:tenant:<tenantId>` and `staffdeny:member:<staffId>`, else `401 UNAUTHENTICATED`) and the membership (cached 60 s in Redis): a removed or suspended member gets `403 STAFF_MEMBERSHIP_INACTIVE`, a changed role `401 UNAUTHENTICATED` (sign in again through the portal). Reads only: no platform table is written (no `tenant_memberships.last_active_at`; ADR-0003). No Amadeus call. Cache: `private, no-store`.
          */
         get: operations["consoleGetMe"];
         put?: never;
@@ -10373,30 +10375,30 @@ export interface components {
                 queuingOfficeId: string | null;
             };
         };
-        /** @description Result of console sign-in / refresh: tokens (Session.subject.type = staff, roles) + staff, tenant, permissions and the environments the staff member may open. */
+        /** @description Result of console sign-in and refresh: the tokens of the staff session (`Session.subject.type = staff`, `roles` = the membership's role), the staff member, the OTA in the environment of the request, the role's permissions and the environments the staff member may open. */
         ConsoleStaffSession: {
-            /** @description Tokens. Store both in httpOnly cookies; never expose them to client components. */
+            /** @description Tokens. `accessToken` is a 15-minute staff JWT with the claims `typ` (`staff`), `sub` (`stf_…`), `tid`, `roles` and `sid` (the session, `asn_…`), and no environment claim; `refreshToken` is opaque and rotating; `refreshTokenExpiresAt` is the session's absolute end, 12 hours after sign-in, which refreshing never moves (OADR-0011 point 2). Store both in httpOnly cookies; never expose them to client components. */
             session: components["schemas"]["Session"];
             /** @description Signed-in staff member. */
             staff: components["schemas"]["StaffMember"];
-            /** @description OTA and environment. */
+            /** @description The OTA, in the environment of this request. */
             tenant: components["schemas"]["ConsoleTenant"];
             /** @description Effective permissions. */
             permissions: components["schemas"]["StaffPermission"][];
-            /** @description Environments the staff member may open in the OTA admin: `["test"]`, or `["test", "live"]` once the OTA is live and the role is not `viewer`. The admin shows its test/live switch from it and sends the chosen one in `X-Velexis-Environment`. */
+            /** @description Environments the staff member may open in the OTA admin: `["test"]`, or `["test", "live"]` once the OTA is live and the role is not `viewer`. The admin shows its test/live switch from it and sends the chosen one in `X-Velexis-Environment` on each call: the environment is chosen per request, never carried by the token (OADR-0011 point 5). */
             environments: ("test" | "live")[];
         };
         /** @description Result of console.auth.me. */
         ConsoleStaffProfile: {
             /** @description Signed-in staff member. */
             staff: components["schemas"]["StaffMember"];
-            /** @description OTA and environment. */
+            /** @description The OTA, in the environment of this request. */
             tenant: components["schemas"]["ConsoleTenant"];
             /** @description Effective permissions. */
             permissions: components["schemas"]["StaffPermission"][];
-            /** @description Current portal session (platform.account_sessions). */
+            /** @description The current staff session: kept in Redis by the OTA backend (OADR-0011 point 2), not a portal session of `platform.account_sessions`. */
             session: {
-                /** @description Session id. */
+                /** @description Session id, the `sid` claim of the staff access token. */
                 id: string;
                 /**
                  * Format: date-time
@@ -10405,13 +10407,13 @@ export interface components {
                 createdAt: string;
                 /**
                  * Format: date-time
-                 * @description Refresh-token expiry.
+                 * @description The session's absolute end, 12 hours after sign-in; refreshing never moves it.
                  */
                 expiresAt: string;
                 /** @description User agent at sign-in. */
                 userAgent?: string | null;
             };
-            /** @description Environments the staff member may open in the OTA admin, as in ConsoleStaffSession: `["test"]`, or `["test", "live"]` once the OTA is live and the role is not `viewer`. Read on every call, so a role change or the OTA going live shows without a new sign-in. */
+            /** @description Environments the staff member may open in the OTA admin, as in ConsoleStaffSession: `["test"]`, or `["test", "live"]` once the OTA is live and the role is not `viewer`. Read on every call, so the OTA going live shows without a new sign-in; a role change ends the session instead (`401 UNAUTHENTICATED`: sign in again through the portal, which opens a session with the new role). */
             environments: ("test" | "live")[];
         };
         /**
@@ -14714,7 +14716,7 @@ export interface components {
                 "application/json": components["schemas"]["ErrorResponse"];
             };
         };
-        /** @description The caller may not perform this console operation. Possible codes: FORBIDDEN (role lacks the permission, details.requiredPermission), SCOPE_NOT_ALLOWED (publishable key or customer token), TENANT_SUSPENDED, FEATURE_DISABLED, STAFF_MEMBERSHIP_INACTIVE, OFFICE_NOT_ALLOWED, ENVIRONMENT_NOT_ALLOWED (the OTA admin asked for `live` while the OTA is not live or for a test-only role). */
+        /** @description The caller may not perform this console operation. Possible codes: FORBIDDEN (role lacks the permission, details.requiredPermission), SCOPE_NOT_ALLOWED (publishable key or customer token), TENANT_SUSPENDED, FEATURE_DISABLED, STAFF_MEMBERSHIP_INACTIVE, OFFICE_NOT_ALLOWED, ENVIRONMENT_NOT_ALLOWED (the OTA admin asked for `live` while the OTA is not live or for a test-only role), MFA_REQUIRED (console.auth.signIn only: the OTA is live and the portal token says the account has no MFA). */
         ConsoleForbidden: {
             headers: {
                 "X-Request-Id": components["headers"]["X-Request-Id"];
