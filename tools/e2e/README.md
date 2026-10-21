@@ -183,7 +183,7 @@ All `devDependencies`, exact versions ([`tech-stack.md`](../../docs/mvp/tech-sta
 
 | Package | Version | Why |
 |---|---|---|
-| `@playwright/test` | 1.59.1 | The runner and Chromium driver (tech-stack: Playwright 1.5x) |
+| `@playwright/test` | 1.64.1 | The runner and Chromium driver (tech-stack: Playwright 1.6x) |
 | `@axe-core/playwright` | 4.13.0 | axe in the page (tech-stack: 4.x) |
 | `otplib` | 12.0.1 | TOTP codes, the library the platform backend uses (tech-stack: 12.x; upstream marks 12 deprecated in favour of 13) |
 | `@velexis/testing`, `@velexis/config`, `@velexis/api-types` | workspace | Mailpit client, builders, test roles and `dropDatabase`; the harness settings; the platform request and response types |

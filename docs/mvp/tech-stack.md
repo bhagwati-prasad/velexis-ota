@@ -21,7 +21,7 @@ Related: [`architecture.md`](architecture.md) (where each piece runs), [`convent
 | Caddy | **2.8** (2.8.x, Caddy apt; later 2.x after reading the release notes) | Automatic HTTPS, on-demand TLS with an `ask` endpoint, simple reverse proxy ([ADR-0018](adr/0018-hosted-storefront-custom-domains.md)). |
 | Ubuntu | **24.04 LTS** | Long support. Ships systemd 255. |
 | systemd | 255 (Ubuntu's) | Process supervision, sandboxing, journald logs, timers ([ADR-0007](adr/0007-single-vm-without-docker.md)). |
-| GitHub Actions | `actions/checkout` v4, `pnpm/action-setup` v4, `actions/setup-node` v4, `actions/cache` v4, `actions/upload-artifact` and `download-artifact` v4, each **pinned to a full commit SHA** with the tag in a comment | CI and manual deploys. Pinning keeps a moved tag from running new code next to the deploy key ([ADR-0023](adr/0023-release-artefact-and-deploy-user.md)). |
+| GitHub Actions | `actions/checkout` v4, `pnpm/action-setup` v5, `actions/setup-node` v4, `actions/cache` v4, `actions/upload-artifact` and `download-artifact` v4, each **pinned to a full commit SHA** with the tag in a comment | CI and manual deploys. Pinning keeps a moved tag from running new code next to the deploy key ([ADR-0023](adr/0023-release-artefact-and-deploy-user.md)). |
 
 ## 2. Libraries by concern
 
@@ -65,7 +65,7 @@ Related: [`architecture.md`](architecture.md) (where each piece runs), [`convent
 | Unit and integration tests | Vitest | 3.x (`vitest.workspace.ts`) | Fast, one runner for Node, Next.js components and plain JS ([ADR-0015](adr/0015-testing-strategy.md)). |
 | HTTP tests | Supertest | 7.x | Drives a NestJS app in-process over HTTP. |
 | DOM tests | `@testing-library/react`, `happy-dom` | 16.x / 17.x | React client components, and the storefront's DOM modules. |
-| End-to-end tests | Playwright + `@axe-core/playwright` | 1.5x / 4.x | Several origins, Stripe iframes, accessibility checks. |
+| End-to-end tests | Playwright + `@axe-core/playwright` | 1.6x / 4.x | Several origins, Stripe iframes, accessibility checks. |
 | Lint | ESLint (flat config) + `typescript-eslint` + `@next/eslint-plugin-next` + `eslint-config-prettier` | **9** / 8.x / 15.x / 10.x | One root `eslint.config.mjs`. |
 | Format | Prettier | 3.x | One formatting style. Not debated in reviews. |
 | Webhook development | Stripe CLI | 1.x | `stripe listen --forward-to`, test events. |
