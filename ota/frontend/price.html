@@ -1,0 +1,199 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="robots" content="noindex" />
+    <title>Your price</title>
+    <meta
+      name="description"
+      content="Check the confirmed price of your flights, what it includes and the rules for changes and refunds."
+    />
+    <link rel="stylesheet" href="/src/styles/main.css" />
+    <script type="module" src="/src/pages/price.js"></script>
+  </head>
+  <body class="flex min-h-screen flex-col bg-surface font-body text-ink antialiased">
+    <!-- @include partials/noscript.html -->
+    <!-- @include partials/test-banner.html -->
+    <!-- @include partials/header.html -->
+    <main
+      id="main"
+      tabindex="-1"
+      class="mx-auto w-full max-w-6xl flex-1 px-4 py-8 focus:outline-none"
+      data-price-page
+    >
+      <p class="mb-3">
+        <a
+          href="/"
+          hidden
+          class="min-h-6 font-medium text-primary underline underline-offset-4"
+          data-back-link
+          >Back to flight details</a
+        >
+      </p>
+      <h1 class="font-heading text-2xl font-semibold sm:text-3xl" data-price-title>Your price</h1>
+      <p class="mt-2 text-muted" data-price-summary></p>
+
+      <div data-price-state></div>
+
+      <div class="mt-6 space-y-4" aria-hidden="true" data-price-loading hidden>
+        <div class="h-24 rounded-ui bg-panel motion-safe:animate-pulse"></div>
+        <div class="h-48 rounded-ui bg-panel motion-safe:animate-pulse"></div>
+        <div class="h-24 rounded-ui bg-panel motion-safe:animate-pulse"></div>
+      </div>
+
+      <div class="mt-6 grid items-start gap-6 lg:grid-cols-[1fr_20rem]" data-price-content hidden>
+        <div class="min-w-0 space-y-8">
+          <section
+            class="rounded-ui border-2 border-warning bg-panel p-4"
+            aria-labelledby="price-changed-title"
+            data-price-changed
+            hidden
+          >
+            <h2 id="price-changed-title" class="font-heading text-xl font-semibold">
+              The airline changed the price
+            </h2>
+            <dl class="mt-3 grid grid-cols-2 gap-4">
+              <div>
+                <dt class="text-sm text-muted">Expected price</dt>
+                <dd class="text-lg font-semibold" data-price-old></dd>
+              </div>
+              <div>
+                <dt class="text-sm text-muted">Confirmed price</dt>
+                <dd class="text-lg font-semibold" data-price-new></dd>
+              </div>
+            </dl>
+            <p class="mt-2" data-price-difference></p>
+            <p class="mt-2 text-sm text-muted">
+              Continue only if the new price suits you, or go back and choose another flight.
+            </p>
+          </section>
+
+          <section aria-labelledby="flights-title">
+            <h2 id="flights-title" class="font-heading text-xl font-semibold">Your flights</h2>
+            <ol
+              class="mt-3 space-y-4 rounded-ui border border-muted/30 bg-surface p-4"
+              data-price-itineraries
+            ></ol>
+            <p class="mt-2 text-sm font-medium" data-price-fare></p>
+          </section>
+
+          <section aria-labelledby="breakdown-title">
+            <h2 id="breakdown-title" class="font-heading text-xl font-semibold">Price details</h2>
+            <div class="mt-3 rounded-ui border border-muted/30 bg-surface p-4" data-price-breakdown></div>
+            <p class="mt-2 text-sm text-muted">
+              A card fee may be added when you pay, depending on the card you use.
+            </p>
+          </section>
+
+          <section aria-labelledby="extras-title" data-price-extras hidden>
+            <h2 id="extras-title" class="font-heading text-xl font-semibold">Available in checkout</h2>
+            <ul class="mt-3 space-y-1" data-price-extras-list></ul>
+            <p class="mt-2 text-sm text-muted">
+              You can add them when you book. Prices are per traveller for the flights they cover.
+            </p>
+          </section>
+
+          <section aria-labelledby="requirements-title" data-price-requirements hidden>
+            <h2 id="requirements-title" class="font-heading text-xl font-semibold">What you need to book</h2>
+            <ul class="mt-3 list-disc space-y-1 pl-5" data-price-requirements-list></ul>
+          </section>
+
+          <section aria-labelledby="rules-title">
+            <details class="rounded-ui border border-muted/30 bg-surface p-4" data-fare-rules>
+              <summary class="min-h-6 cursor-pointer font-heading text-xl font-semibold">
+                <span id="rules-title">Changes and refunds</span>
+              </summary>
+              <p class="mt-3 text-sm text-muted" data-rules-loading hidden>Loading the fare rules…</p>
+              <ul class="mt-3 space-y-1" data-rules-summary></ul>
+              <ul class="mt-3 space-y-2" data-rules-categories></ul>
+              <p class="mt-3 text-sm text-muted" data-rules-unavailable hidden>
+                The airline has not published detailed rules for this fare.
+              </p>
+              <details class="mt-3" data-rules-notes hidden>
+                <summary class="min-h-6 cursor-pointer text-sm font-medium text-primary">
+                  The airline's full fare rules
+                </summary>
+                <ol class="mt-3 space-y-4" data-rules-notes-list></ol>
+              </details>
+              <div data-rules-state></div>
+            </details>
+          </section>
+        </div>
+
+        <aside
+          aria-labelledby="total-title"
+          class="rounded-ui border border-muted/30 bg-panel p-4 lg:sticky lg:top-4"
+        >
+          <h2 id="total-title" class="font-heading text-lg font-semibold">Total</h2>
+          <p class="mt-2 font-heading text-3xl font-semibold" data-price-total></p>
+          <p class="text-sm text-muted" data-price-total-note></p>
+          <ul class="mt-2 text-sm" data-price-conditions></ul>
+          <p
+            class="mt-3 text-sm font-medium data-expiring:text-warning"
+            role="timer"
+            data-price-countdown
+            hidden
+          ></p>
+          <div data-price-expired></div>
+          <p class="mt-4">
+            <button
+              type="button"
+              disabled
+              aria-describedby="checkout-note"
+              class="min-h-6 w-full rounded-ui bg-primary px-5 py-2 font-medium text-on-primary disabled:opacity-60"
+              data-continue
+            >
+              Continue to checkout
+            </button>
+          </p>
+          <p id="checkout-note" class="mt-2 text-sm text-muted" data-continue-note>Checkout opens soon.</p>
+        </aside>
+      </div>
+    </main>
+    <!-- @include partials/footer.html -->
+
+    <!-- @include partials/templates/offer-card.html -->
+    <!-- @include partials/templates/price-line.html -->
+    <template id="tpl-price-item">
+      <li class="flex flex-wrap justify-between gap-x-4" data-price-item>
+        <span data-field="label"></span>
+        <span class="font-medium" data-field="detail" data-field-hidden="noDetail"></span>
+      </li>
+    </template>
+    <template id="tpl-text-item">
+      <li data-field="text"></li>
+    </template>
+    <template id="tpl-rule">
+      <li data-rule data-field-data-category="category">
+        <span class="font-medium" data-field="label"></span>
+        <span data-field="status"></span>
+        <span
+          class="block text-sm whitespace-pre-line text-muted"
+          data-field="detail"
+          data-field-hidden="noDetail"
+        ></span>
+      </li>
+    </template>
+    <template id="tpl-rule-note">
+      <li data-rule-note>
+        <p class="font-medium" data-field="title"></p>
+        <div class="mt-1 space-y-2 text-sm" data-rule-note-texts></div>
+      </li>
+    </template>
+    <template id="tpl-rule-text">
+      <p class="whitespace-pre-line" data-field="text"></p>
+    </template>
+    <template id="tpl-state-link">
+      <p class="mt-4">
+        <a
+          class="font-medium text-primary underline underline-offset-4"
+          data-state-link
+          data-field="label"
+          data-field-href="href"
+        ></a>
+      </p>
+    </template>
+    <!-- @include partials/states.html -->
+  </body>
+</html>

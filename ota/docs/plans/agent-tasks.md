@@ -832,7 +832,8 @@ The OTA backend gets its contract extensions, request pipeline, tenancy, Amadeus
   - The states render for their codes (happy-dom tests).
 - **Verify:** `pnpm --filter @velexis/ota-frontend test && pnpm --filter @velexis/ota-frontend build`
 
-### OFE-007 · Build the price page with breakdown, extras preview and fare rules
+### OFE-007 · Build the price page with breakdown, extras preview and fare rules ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-frontend
 - **Milestone:** M2
 - **Depends on:** OFE-006

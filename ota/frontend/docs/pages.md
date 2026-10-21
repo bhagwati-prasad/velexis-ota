@@ -115,16 +115,25 @@ Rendered by `boot()` and `lib/errors.js` before or instead of the page content: 
 
 **SDK calls**
 
-1. `flights.getPricedOffer({ pricedOfferId })`: totals per traveller type, taxes, fees, `priceChanged`, booking requirements, expiry.
+1. `flights.getPricedOffer({ pricedOfferId })`: totals per traveller type, taxes, fees, `priceChange`, booking requirements, expiry.
 2. If `features.ancillaries`: `flights.getAncillaries({ pricedOfferId })`, shown as "Available in checkout: extra bags from EUR 35" (no selection here).
 3. `flights.getFareRules({ pricedOfferId })` in a disclosure ("Changes and refunds").
-4. "Continue": `checkout.create({ pricedOfferId })` (M3), then `/checkout.html?id=chk_…&step=travellers`. If `features.guestCheckout` is off and there is no session, go to `/account/sign-in.html?next=…` first.
+4. "Continue": `checkout.create({ pricedOfferId })` (M3), then `/checkout.html?id=chk_…&step=travellers`. If `features.guestCheckout` is off and there is no session, go to `/account/sign-in.html?next=…` first. Until OFE-011 wires it (M3), the button is there but disabled, with "Checkout opens soon".
+
+- **Price** (`components/price-breakdown.js`, `partials/templates/price-line.html`). "Price per traveller" has one line per traveller type from `price.breakdown.travelers` ("2 adults", "€441.20 each", with fare, taxes and fees); travellers of a type who pay different amounts get one line each ("Adult 1", "Adult 2"). Grouping compares the API's amounts as text; nothing is multiplied. "What the total includes" lists fares, taxes and charges, every fee line with its label (the OTA's fee rule label from `description`, else the fee type: "Ticketing fee", "Payment fee", "Airline fee", "Service fee"; [OADR-0005](../../docs/adr/0005-markup-and-fee-engine.md) point 7), extras already priced in, and the API's `price.total`, which the page never computes. The total box repeats the total, the travellers it is for and the conditions at a glance; a card fee may follow at payment, and the page says so.
+- **Trip and requirements.** The trip line, the bounds (`components/itinerary.js`) and the fare's name come from `offers`. "What you need to book" lists the travellers' names and what `bookingRequirements` asks for (e-mail, mobile phone, dates of birth, passport or ID card details, addresses).
+- **Extras** come from the catalogue: one line per kind (checked bags, cabin bags, each other service) with the lowest option price, compared as decimal text ("from €9.50"). Seats appear only with `features.seatSelection`. Without `features.ancillaries` no call is made; a failed call leaves the list out, without a banner.
+- **Fare rules.** The disclosure shows refund and change at a glance (allowed, free or up to a fee per traveller, not allowed, not known), one line per rule category of the airline with its circumstances, and the fare notes in a nested disclosure ("The airline's full fare rules"). Until `getFareRules` answers it shows the priced offer's embedded rules or `conditions`; if it fails, the embedded rules stay, else "The fare rules could not be loaded right now" with a Retry for the rules alone (none once the priced offer has expired or vanished).
+- **Countdown.** `role="timer"` text "Price held for 19:59", updated every second from `expiresAt` (not announced each second; the live region says it once with the price, or at five minutes left). At zero: "Price expired" with Re-price, a link to the offer page the flight was priced on (the same-origin referrer at `/offer.html`), else to `/offer.html?offer=<the first priced offer>`.
+- **Links.** "Back to flight details" is the same offer page link. A `404` from `getPricedOffer` reads as an expired fare (the purge removes priced offers after they expire); an address without a valid `prc_…` id shows "We could not find this price" without a call.
 
 | State | Shows |
 |---|---|
-| `priceChanged: true` | Old and new totals side by side, "The airline changed the price", explicit Continue |
+| `priceChange.changed: true` | Old and new totals side by side ("Expected price": the API's `oldPrice`, the results total plus the fees added at pricing, so a fee never reads as a change; "Confirmed price"), "The airline changed the price", the API's difference in words, explicit Continue ("Continue at the new price, €…") |
 | Expiry near | Countdown from `expiresAt`; after it, "Price expired" with Re-price (back to the offer) |
-| `410 OFFER_EXPIRED` | As on the offer page |
+| `410 OFFER_EXPIRED` (also `404`) | As on the offer page: "This fare is no longer available", with "Price this flight again" (the offer page), else "Search flights" |
+| `503`, connection failure, `429` on `getPricedOffer` | The shared state with Retry, which loads the price again |
+| Extras or fare rules unavailable | Extras: left out, no banner; fare rules: the embedded rules, else a message with Retry |
 | `403 EMAIL_NOT_VERIFIED` on `checkout.create` | "Verify your e-mail to book", Resend link (`auth.resendVerification`) |
 
 Seats: there is no seat map in the MVP ([scope §2.2](../../docs/scope.md#22-hosted-storefront-otafrontend)) and `features.seatSelection` stays off; seat-related services that the airline returns among other services are shown like any other service.

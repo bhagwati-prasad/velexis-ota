@@ -1,0 +1,24 @@
+<template id="tpl-price-section">
+  <section class="mt-4 first:mt-0" data-price-section data-field-data-section="name">
+    <h3 class="font-heading text-base font-semibold" data-field="title"></h3>
+    <dl class="mt-1 divide-y divide-muted/20" data-price-lines></dl>
+  </section>
+</template>
+
+<template id="tpl-price-line">
+  <div
+    class="flex items-baseline justify-between gap-4 py-2 data-[kind=total]:text-lg data-[kind=total]:font-semibold"
+    data-price-line
+    data-field-data-kind="kind"
+  >
+    <dt class="min-w-0">
+      <span class="block" data-field="label"></span>
+      <span
+        class="block text-sm font-normal text-muted"
+        data-field="detail"
+        data-field-hidden="noDetail"
+      ></span>
+    </dt>
+    <dd class="shrink-0 text-right font-medium tabular-nums" data-field="amount"></dd>
+  </div>
+</template>
