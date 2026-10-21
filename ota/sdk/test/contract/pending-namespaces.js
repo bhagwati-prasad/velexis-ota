@@ -3,8 +3,9 @@
 // methods of a client instance and skips what an entry here covers; the contract project (client.contract.ts) reads the
 // same list, so the per-method assertions of a pending method that the client does not have yet are skipped too, and
 // those of a pending method that it already has are checked. A method of the frozen contract is skipped only while the
-// client has no namespace of that name: SDK-011 writes every contract method of `console`, and all of them are checked,
-// while the namespace stays pending until SDK-012 adds `console.settings` and `console.payments`.
+// client has no namespace of that name: SDK-011 wrote every contract method of `console` (`auth`, `bookings`,
+// `queues`, `customers`, `supplierRequests`, `amadeus`: 32), and all of them are checked, while the namespace stays
+// pending for its MVP additions until SDK-012 adds `console.settings` and `console.payments` and removes the entry.
 //
 // An entry is either a whole namespace that no SDK task has written yet, or a single method of a namespace that is
 // already implemented, added to the document by a spec task after its namespace (for example `storefront.listPages`,
@@ -32,8 +33,8 @@ export const PENDING = Object.freeze(
     { entry: "account", task: "SDK-008" },
     {
       entry: "console",
-      task: "SDK-011",
-      note: "SDK-011 writes the contract's console methods and keeps the namespace pending; SDK-012 adds console.settings and console.payments",
+      task: "SDK-012",
+      note: "SDK-011 wrote the 32 contract methods of console, which the contract project checks; the namespace stays pending until SDK-012 adds console.settings and console.payments",
     },
   ]).map((entry) => Object.freeze(entry)),
 );

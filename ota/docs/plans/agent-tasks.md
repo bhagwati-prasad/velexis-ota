@@ -1983,7 +1983,8 @@ The console API (staff sign-in by portal token, bookings, PNR import, queues, cu
   - The parity and totals assertions of step 4 pass.
 - **Verify:** `pnpm --filter @velexis/ota-backend test -- contract && pnpm --filter @velexis/ota-backend test:int -- m4`
 
-### SDK-011 · Write the console namespace for auth, bookings, queues, customers, supplier log and raw Amadeus
+### SDK-011 · Write the console namespace for auth, bookings, queues, customers, supplier log and raw Amadeus ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-sdk
 - **Milestone:** M4
 - **Depends on:** SDK-006, OBE-058
