@@ -642,3 +642,140 @@ export const AUDIT_ACTOR_LABELS = Object.freeze({
   api_key: "API key",
   system: "System",
 });
+
+// ---- Tenant actions (PAD-005) -------------------------------------------------------------------------------------
+
+/** What every action form of `/tenants/[tenantId]` says (README §2 tenant key actions). */
+export const TENANT_ACTION_STRINGS = Object.freeze({
+  sectionTitle: "Actions",
+  sectionIntro:
+    "Every action is in the audit log with your name; suspending, resuming and changing a connection also keep your reason there.",
+  working: "Working…",
+  /** A form field the admin cannot change (a hidden id) is missing or invalid: the page is older than the form. */
+  formExpired: "This form is out of date. Reload the page and try again.",
+  reload: "Reload the page",
+  tenantGone: "This OTA no longer exists. Go back to the tenant list.",
+  /** `RATE_LIMITED` with the wait of `Retry-After`. */
+  rateLimitedFor: (seconds: number) => `Too many attempts. Try again in ${waitTime(seconds)}.`,
+  job: "Job",
+  stepOf: (step: string) => `step ${step}`,
+});
+
+/** Suspend and resume (`adminSuspendTenant`, `adminResumeTenant`; PADR-0014, PF-82). */
+export const LIFECYCLE_STRINGS = Object.freeze({
+  title: "Suspension",
+  suspend: "Suspend",
+  suspendTitle: (name: string) => `Suspend ${name}?`,
+  suspendDescription:
+    "The storefront and the OTA API answer that the OTA is suspended within 60 seconds, the OTA worker expires its open checkouts, and the owners get an e-mail. Paid bookings are still ticketed, and nothing is deleted.",
+  suspendConfirm: "Suspend OTA",
+  suspensionReasonLabel: "Kind of suspension",
+  suspensionReasonHint:
+    "Stored on the OTA and shown to its owners. Billing suspensions are set by billing sync only.",
+  suspensionReasonInvalid:
+    "Choose the kind of suspension: abuse, a request of the OTA, or a Velexis decision.",
+  resume: "Resume",
+  resumeTitle: (name: string) => `Resume ${name}?`,
+  resumeDescription:
+    "The storefront and the OTA API serve the OTA again within 60 seconds, and the owners get an e-mail.",
+  resumeBillingDescription:
+    "This OTA is suspended for billing: it can be resumed only while its subscription is in trial or active. Billing sync also resumes it on its own when the payment arrives.",
+  resumeConfirm: "Resume OTA",
+  /** Neither action applies to an OTA in set-up or whose set-up failed. */
+  notApplicable: "Only an active OTA can be suspended, and only a suspended one resumed.",
+  suspended: "The OTA is suspended.",
+  resumed: "The OTA is active again.",
+  newStatus: "Status now:",
+  notActive: "Only an active OTA can be suspended. Reload the page to see its current status.",
+  notSuspended: "Only a suspended OTA can be resumed. Reload the page to see its current status.",
+  subscriptionNotActive:
+    "This OTA is suspended for billing and its subscription is neither in trial nor active, so it cannot be resumed yet.",
+});
+
+/** Re-run the tenant migrations (`adminMigrateTenant`). */
+export const MIGRATE_STRINGS = Object.freeze({
+  title: "Tenant migrations",
+  intro: (schemaVersion: string) => `The OTA's schema is at ${schemaVersion}.`,
+  noSchema: "This OTA has no schema yet, so there is nothing to migrate.",
+  targetVersionLabel: "Target version (optional)",
+  targetVersionHint: "For example 0002_add_ticketing_queue. Leave it empty to apply every pending migration.",
+  targetVersionInvalid:
+    "Enter a migration version such as 0002_add_ticketing_queue, or leave the field empty.",
+  migrate: "Migrate",
+  migrateTitle: (name: string) => `Run the tenant migrations of ${name}?`,
+  migrateAll:
+    "A migrate job applies every pending tenant migration to the OTA's schema. Its result shows on the job; a failure never changes the OTA's status.",
+  migrateTo: (version: string) =>
+    `A migrate job applies the pending tenant migrations up to ${version} to the OTA's schema. Its result shows on the job; a failure never changes the OTA's status.`,
+  migrateConfirm: "Start migration",
+  started: "The migrate job is on its way to the OTA worker.",
+  migrateJobActive: "A migrate job of this OTA is already queued or running. Wait until it ends.",
+  schemaMissing: "This OTA has no schema yet, so there is nothing to migrate.",
+});
+
+/** Disable or enable a connection (`adminSetConnectionStatus`, **reason**). */
+export const CONNECTION_STATUS_STRINGS = Object.freeze({
+  disable: "Disable connection",
+  enable: "Enable connection",
+  /** Read after the button's text, so each button names its connection. */
+  of: (connection: string) => ` (${connection})`,
+  disableTitle: (connection: string) => `Disable the connection ${connection}?`,
+  enableTitle: (connection: string) => `Enable the connection ${connection}?`,
+  disableAmadeus:
+    "Every Amadeus call of the OTA in this environment stops until the connection is enabled again: searches, bookings, and the ticketing of paid bookings too.",
+  disablePayment: "The OTA can take no payment in this environment until the connection is enabled again.",
+  enableDescription: "The OTA can use the connection again within 60 seconds.",
+  disableConfirm: "Disable connection",
+  enableConfirm: "Enable connection",
+  statusNow: "The connection is now:",
+  notDisabled: "This connection is not disabled, so it cannot be enabled. Reload the page to see its status.",
+  /** `no_office`: a disabled Velexis connection without an office; this page offers "Assign office" only while pending. */
+  noOffice:
+    "This Amadeus connection has no office, so it cannot work again. Assign it an available office on the office pool page: that activates it.",
+  deauthorized:
+    "The OTA disconnected this Stripe account in Stripe, so the connection cannot work again until the OTA connects it in the portal.",
+  connectionGone: "This OTA has no such connection any more. Reload the page.",
+});
+
+/** The internal notes and the legal name (`adminUpdateTenant`, `If-Match`). */
+export const NOTES_STRINGS = Object.freeze({
+  edit: "Edit notes and legal name",
+  formTitle: "Edit notes and legal name",
+  legalNameLabel: "Legal name",
+  legalNameHint: "The legal entity of the OTA, used on invoices. Leave it empty to clear it.",
+  legalNameTooLong: "Enter a legal name of at most 200 characters.",
+  notesLabel: "Internal notes",
+  notesHint: "Only Velexis staff see these notes. Leave the field empty to clear them.",
+  notesTooLong: "Enter notes of at most 4,000 characters.",
+  save: "Save",
+  saving: "Saving…",
+  cancel: "Cancel",
+  saved: "The notes and the legal name are saved.",
+  /** `412 PRECONDITION_FAILED`: the OTA changed since the page was loaded (flows/platform-admin-operations.md, "Stale page"). */
+  stale:
+    "Someone else changed this OTA since the page was loaded, so your edit was not saved. Reload the page to see the current notes and legal name, then edit them again. Copy your text first if you need it.",
+});
+
+/** Assign an office of the pool to an OTA whose Amadeus connection waits for one (`adminAssignAmadeusOffice`). */
+export const ASSIGN_OFFICE_STRINGS = Object.freeze({
+  title: "Assign an office",
+  intro: (environment: string) =>
+    `This connection waits for an office: the pool of ${environment} was empty when the OTA was set up. Assign an available office to activate it; the owners get an e-mail.`,
+  officeLabel: "Office",
+  officeHint: "An available office of the Velexis Amadeus account of this environment.",
+  assign: "Assign office",
+  assigning: "Assigning…",
+  noneAvailable: "No office of this environment is available.",
+  poolLink: "Add offices to the pool",
+  unavailable: "The available offices could not be loaded. Reload the page, or open the office pool.",
+  poolPage: "Open the office pool",
+  assigned: (officeId: string) => `Office ${officeId} is assigned to the OTA.`,
+  statusNow: "The connection is now:",
+  officeInvalid: "Choose an office of the list.",
+  officeUnavailable:
+    "This office is no longer available: another OTA got it, or it was retired. Reload the page and choose another one.",
+  tenantCredentials:
+    "This OTA uses its own Amadeus credentials in this environment, so it needs no office of the pool.",
+  officeAlreadyAssigned: "This OTA already has an office of this environment. Reload the page to see it.",
+  notFound: "The office or the OTA no longer exists. Reload the page.",
+});

@@ -38,7 +38,11 @@ const settings = vi.hoisted(() => ({
 vi.mock("@/lib/config", () => ({ getConfig: () => settings }));
 
 import DashboardPage from "@/app/(app)/page";
+import { AssignOfficeForm } from "@/app/(app)/tenants/[tenantId]/assign-office-form";
+import { ConnectionStatusForm } from "@/app/(app)/tenants/[tenantId]/connection-status-form";
+import { NotesForm } from "@/app/(app)/tenants/[tenantId]/notes-form";
 import TenantDetailPage from "@/app/(app)/tenants/[tenantId]/page";
+import { MigrateForm, SuspendResumeForm } from "@/app/(app)/tenants/[tenantId]/suspend-form";
 import { TenantTabs } from "@/app/(app)/tenants/[tenantId]/tabs";
 import TenantsPage from "@/app/(app)/tenants/page";
 import { TenantTable } from "@/app/(app)/tenants/tenant-table";
@@ -547,13 +551,21 @@ async function openTenant(tenantId = TENANT_ID, search = ""): Promise<void> {
   render(await TenantDetailPage({ params: Promise.resolve({ tenantId }) }));
 }
 
-/** The client components these pages render: Next.js sends their props, not their output, to the browser. */
+/**
+ * The client components these pages render: Next.js sends their props, not their output, to the browser. The action
+ * forms of PAD-005 are among them, so their props are checked for secrets too.
+ */
 const CLIENT_COMPONENTS: ReadonlySet<unknown> = new Set<unknown>([
   TenantTabs,
   TenantTable,
   FilterBar,
   Link,
   ...Object.values(tableComponents),
+  SuspendResumeForm,
+  MigrateForm,
+  NotesForm,
+  ConnectionStatusForm,
+  AssignOfficeForm,
 ]);
 
 /**

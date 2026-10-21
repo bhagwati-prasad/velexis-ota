@@ -4,6 +4,10 @@ import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import type { ReactNode } from "react";
 
+import { AssignOfficeForm, type OfficeOption } from "@/app/(app)/tenants/[tenantId]/assign-office-form";
+import { ConnectionStatusForm } from "@/app/(app)/tenants/[tenantId]/connection-status-form";
+import { NotesForm } from "@/app/(app)/tenants/[tenantId]/notes-form";
+import { MigrateForm, SuspendResumeForm } from "@/app/(app)/tenants/[tenantId]/suspend-form";
 import { TenantTabs, type TenantTab } from "@/app/(app)/tenants/[tenantId]/tabs";
 import { DateTime } from "@/components/date-time";
 import { JsonView } from "@/components/json-view";
@@ -19,7 +23,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { platformApi } from "@/lib/api";
+import { platformApi, type PlatformApi } from "@/lib/api";
 import { errorMessage } from "@/lib/errors";
 import {
   AUDIT_ACTOR_LABELS,
@@ -30,12 +34,15 @@ import {
   DOMAIN_KIND_LABELS,
   DOMAIN_PURPOSE_LABELS,
   JOB_KIND_LABELS,
+  LIFECYCLE_STRINGS,
+  MIGRATE_STRINGS,
   PAYMENT_ACCOUNT_MODE_LABELS,
   PAYMENT_PROVIDER_LABELS,
   ROLE_LABELS,
   SUBSCRIPTION_BANNER_LABELS,
   SUPPLIER_ENVIRONMENT_LABELS,
   SUSPENSION_REASON_LABELS,
+  TENANT_ACTION_STRINGS,
   TENANT_DETAIL_STRINGS as S,
   TENANT_TAB_LABELS,
 } from "@/lib/strings";
@@ -238,6 +245,12 @@ function OverviewPanel({ tenant }: { readonly tenant: AdminTenant }) {
         ) : (
           <p className="text-sm whitespace-pre-wrap">{tenant.notes}</p>
         )}
+        <NotesForm
+          tenantId={tenant.id}
+          version={tenant.version}
+          notes={tenant.notes}
+          legalName={tenant.legalName}
+        />
       </Panel>
     </div>
   );
@@ -414,10 +427,64 @@ function OfficeId({ value }: { readonly value: string | null }) {
   return value === null ? <Muted>{S.notSet}</Muted> : <Mono>{value}</Mono>;
 }
 
-function AmadeusConnectionCard({ connection }: { readonly connection: AmadeusConnection }) {
-  const environment = labelOf(ENVIRONMENTS, connection.environment);
+/**
+ * The connection waits for an office of the pool: a `velexis` connection that provisioning (or a live request) left
+ * `pending_verification` without an office, because the pool was empty (flows/amadeus-connection.md).
+ */
+function needsOffice(connection: AmadeusConnection): boolean {
   return (
-    <Panel id={`connection-${connection.id}`} title={S.connectionTitle(S.amadeusTitle, environment)}>
+    connection.credentialSource === "velexis" &&
+    connection.status === "pending_verification" &&
+    connection.officeIds.length === 0
+  );
+}
+
+/** The available offices of the pool per environment, for the connections that wait for one. */
+type AvailableOffices = Readonly<Partial<Record<Schemas["Environment"], readonly OfficeOption[] | null>>>;
+
+/** The most offices one call lists (`limit` of `adminListAmadeusOffices`); the oldest come first. */
+const OFFICE_LIST_LIMIT = 200;
+
+/**
+ * `adminListAmadeusOffices` for the available offices of each environment whose Amadeus connection waits for an
+ * office (none for the others, so most pages make no such call). An environment whose list could not be loaded maps to
+ * `null`: the page still renders, and the form says so. Only the ids reach the form.
+ */
+async function availableOffices(
+  api: PlatformApi,
+  connections: readonly AmadeusConnection[],
+): Promise<AvailableOffices> {
+  const environments = [
+    ...new Set(connections.filter(needsOffice).map((connection) => connection.environment)),
+  ];
+  const lists = await Promise.all(
+    environments.map(async (environment) => {
+      const result = await api.GET("/v1/admin/amadeus-offices", {
+        params: { query: { environment, status: "available", limit: OFFICE_LIST_LIMIT } },
+      });
+      const offices: readonly OfficeOption[] | null =
+        result.error === undefined
+          ? result.data.data.map((office) => ({ id: office.id, officeId: office.officeId }))
+          : null;
+      return [environment, offices] as const;
+    }),
+  );
+  return Object.fromEntries(lists);
+}
+
+function AmadeusConnectionCard({
+  tenantId,
+  connection,
+  offices,
+}: {
+  readonly tenantId: string;
+  readonly connection: AmadeusConnection;
+  readonly offices: AvailableOffices;
+}) {
+  const environment = labelOf(ENVIRONMENTS, connection.environment);
+  const title = S.connectionTitle(S.amadeusTitle, environment);
+  return (
+    <Panel id={`connection-${connection.id}`} title={title}>
       <Fields>
         <Field label={S.connectionStatus}>
           <StatusBadge kind="amadeusConnection" status={connection.status} />
@@ -455,16 +522,40 @@ function AmadeusConnectionCard({ connection }: { readonly connection: AmadeusCon
           <Mono>{connection.id}</Mono>
         </Field>
       </Fields>
+      <ConnectionStatusForm
+        tenantId={tenantId}
+        kind="amadeus"
+        environment={connection.environment}
+        status={connection.status}
+        connectionLabel={title}
+      />
+      {connection.credentialSource === "velexis" ? (
+        // Rendered for every Velexis connection, so the outcome of an assignment stays when the page follows it.
+        <AssignOfficeForm
+          tenantId={tenantId}
+          environment={connection.environment}
+          environmentLabel={environment}
+          needsOffice={needsOffice(connection)}
+          offices={offices[connection.environment] ?? null}
+        />
+      ) : null}
     </Panel>
   );
 }
 
-function PaymentConnectionCard({ connection }: { readonly connection: PaymentConnection }) {
+function PaymentConnectionCard({
+  tenantId,
+  connection,
+}: {
+  readonly tenantId: string;
+  readonly connection: PaymentConnection;
+}) {
   const environment = labelOf(ENVIRONMENTS, connection.environment);
   const provider = labelOf(PAYMENT_PROVIDERS, connection.provider);
+  const title = S.connectionTitle(provider, environment);
   const { chargesEnabled, payoutsEnabled, detailsSubmitted } = connection.capabilities;
   return (
-    <Panel id={`connection-${connection.id}`} title={S.connectionTitle(provider, environment)}>
+    <Panel id={`connection-${connection.id}`} title={title}>
       <Fields>
         <Field label={S.connectionStatus}>
           <StatusBadge kind="paymentConnection" status={connection.status} />
@@ -511,16 +602,27 @@ function PaymentConnectionCard({ connection }: { readonly connection: PaymentCon
           <Mono>{connection.id}</Mono>
         </Field>
       </Fields>
+      <ConnectionStatusForm
+        tenantId={tenantId}
+        kind="payment"
+        environment={connection.environment}
+        status={connection.status}
+        connectionLabel={title}
+      />
     </Panel>
   );
 }
 
 function ConnectionsPanel({
+  tenantId,
   amadeus,
   payments,
+  offices,
 }: {
+  readonly tenantId: string;
   readonly amadeus: readonly AmadeusConnection[];
   readonly payments: readonly PaymentConnection[];
+  readonly offices: AvailableOffices;
 }) {
   return (
     <div className="grid gap-6">
@@ -531,14 +633,23 @@ function ConnectionsPanel({
             <p className="text-sm text-muted-foreground">{S.amadeusEmpty}</p>
           </Panel>
         ) : (
-          amadeus.map((connection) => <AmadeusConnectionCard key={connection.id} connection={connection} />)
+          amadeus.map((connection) => (
+            <AmadeusConnectionCard
+              key={connection.id}
+              tenantId={tenantId}
+              connection={connection}
+              offices={offices}
+            />
+          ))
         )}
         {payments.length === 0 ? (
           <Panel id="tenant-payments" title={S.paymentsTitle}>
             <p className="text-sm text-muted-foreground">{S.paymentsEmpty}</p>
           </Panel>
         ) : (
-          payments.map((connection) => <PaymentConnectionCard key={connection.id} connection={connection} />)
+          payments.map((connection) => (
+            <PaymentConnectionCard key={connection.id} tenantId={tenantId} connection={connection} />
+          ))
         )}
       </div>
     </div>
@@ -743,7 +854,7 @@ function AuditPanel({ tenantId, rows }: { readonly tenantId: string; readonly ro
  * output goes to the client component of the tabs, never the API answer, so a property the page does not show
  * (whatever the API might answer one day) never reaches the browser.
  */
-function tabsOf(detail: TenantDetail): TenantTab[] {
+function tabsOf(detail: TenantDetail, offices: AvailableOffices): TenantTab[] {
   const { tenant } = detail;
   return [
     { id: "overview", content: <OverviewPanel tenant={tenant} /> },
@@ -751,12 +862,58 @@ function tabsOf(detail: TenantDetail): TenantTab[] {
     { id: "subscription", content: <SubscriptionPanel subscription={detail.subscription} /> },
     {
       id: "connections",
-      content: <ConnectionsPanel amadeus={detail.amadeusConnections} payments={detail.paymentConnections} />,
+      content: (
+        <ConnectionsPanel
+          tenantId={tenant.id}
+          amadeus={detail.amadeusConnections}
+          payments={detail.paymentConnections}
+          offices={offices}
+        />
+      ),
     },
     { id: "domains", content: <DomainsPanel domains={detail.domains} /> },
     { id: "jobs", content: <JobsPanel tenantId={tenant.id} jobs={detail.recentJobs} /> },
     { id: "audit", content: <AuditPanel tenantId={tenant.id} rows={detail.recentAudit} /> },
   ];
+}
+
+/**
+ * The lifecycle actions above the tabs, so they are at hand on every tab (README §2 tenant key actions): suspend or
+ * resume (PADR-0014, PF-82) and migrate. Notes, connections and offices have their forms in their tabs.
+ */
+function ActionsPanel({ tenant }: { readonly tenant: AdminTenant }) {
+  return (
+    <section
+      aria-labelledby="tenant-actions"
+      className="grid gap-4 rounded-xl border bg-card p-5 text-card-foreground shadow-xs"
+    >
+      <div className="grid gap-1">
+        <h2 id="tenant-actions" className="text-lg font-semibold tracking-tight">
+          {TENANT_ACTION_STRINGS.sectionTitle}
+        </h2>
+        <p className="text-sm text-muted-foreground">{TENANT_ACTION_STRINGS.sectionIntro}</p>
+      </div>
+      <div className="grid gap-6 lg:grid-cols-2">
+        <section aria-labelledby="tenant-suspension" className="grid content-start gap-3">
+          <h3 id="tenant-suspension" className="text-base font-semibold">
+            {LIFECYCLE_STRINGS.title}
+          </h3>
+          <SuspendResumeForm
+            tenantId={tenant.id}
+            tenantName={tenant.name}
+            status={tenant.status}
+            suspensionReason={tenant.suspensionReason}
+          />
+        </section>
+        <section aria-labelledby="tenant-migrations" className="grid content-start gap-3">
+          <h3 id="tenant-migrations" className="text-base font-semibold">
+            {MIGRATE_STRINGS.title}
+          </h3>
+          <MigrateForm tenantId={tenant.id} tenantName={tenant.name} schemaVersion={tenant.schemaVersion} />
+        </section>
+      </div>
+    </section>
+  );
 }
 
 function BackLink() {
@@ -772,8 +929,13 @@ function BackLink() {
  * overview (with the internal notes), members and invitations, subscription and invoices, connections (masked:
  * Stripe account, publishable key and client id show their prefix and last four characters only), domains, the
  * last 20 tenant jobs and the last 50 audit rows. The API answers no secret, ciphertext, hash or token, and the page
- * renders only the fields it names. An id that is no tenant id, and an unknown one, render the not-found page. The
- * actions (suspend, resume, migrate, connections, notes, assign an office) arrive with PAD-005.
+ * renders only the fields it names. An id that is no tenant id, and an unknown one, render the not-found page.
+ *
+ * The actions (PAD-005, PF-82) are client forms with server actions (`actions.ts`): suspend or resume with a reason
+ * and migrate above the tabs, notes and legal name (`If-Match`) in the overview, disable or enable each connection
+ * with a reason, and, on an Amadeus connection that waits for an office, assign an available office of the pool,
+ * whose list this page loads only then. Each form gets only the fields it needs, and every success revalidates this
+ * page, so it shows the new status, connection and jobs.
  */
 export default async function TenantDetailPage({
   params,
@@ -804,6 +966,7 @@ export default async function TenantDetailPage({
   }
   const detail = result.data;
   const { tenant } = detail;
+  const offices = await availableOffices(api, detail.amadeusConnections);
   return (
     <div className="mx-auto grid max-w-6xl gap-6">
       <BackLink />
@@ -817,7 +980,8 @@ export default async function TenantDetailPage({
           <span className="font-mono">{tenant.primaryHost}</span>
         </p>
       </div>
-      <TenantTabs tabs={tabsOf(detail)} />
+      <ActionsPanel tenant={tenant} />
+      <TenantTabs tabs={tabsOf(detail, offices)} />
     </div>
   );
 }

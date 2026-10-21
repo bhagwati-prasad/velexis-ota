@@ -1096,7 +1096,8 @@ Common commands: backend `pnpm --filter @velexis/platform-backend test`, `test:i
   - The detail page shows every tab with data from `adminGetTenant` and no secret value.
 - **Verify:** `pnpm --filter @velexis/platform-admin test`
 
-### PAD-005 · Build the tenant actions in the platform admin
+### PAD-005 · Build the tenant actions in the platform admin ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-admin
 - **Milestone:** M1
 - **Depends on:** PAD-004, PBE-030, PBE-020
