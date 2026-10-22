@@ -69,9 +69,9 @@ sequenceDiagram
 **Refresh** ([OADR-0018](../docs/adr/0018-ota-admin-consumes-the-sdk-server-side.md)):
 
 1. `middleware.ts` (Node.js runtime) runs on every non-static request. When the access token expires within 60 s and a refresh cookie exists, it calls `console.auth.refresh` and writes both cookies on the response.
-2. Refreshes are **de-duplicated per refresh token** inside the admin process (an in-memory map of promises keyed by the token's SHA-256, kept 30 s), because parallel requests from one browser would otherwise present the same rotating token twice and the backend would revoke the family.
-3. Server components never refresh: their SDK client gets the access token only. If a call still fails with `TOKEN_EXPIRED`, the page redirects to `/auth/refresh?next=<path>`, a route handler that refreshes (de-duplicated) and redirects back.
-4. A refused refresh (`REFRESH_TOKEN_INVALID`, `REFRESH_TOKEN_REUSED`, `STAFF_MEMBERSHIP_INACTIVE`) clears the cookies and sends the user to the portal.
+2. Refreshes are **de-duplicated per refresh token** inside the admin process (`lib/refresh-dedup.ts`: an in-memory map of promises keyed by the token's SHA-256, kept 30 s), because parallel requests from one browser would otherwise present the same rotating token twice and the backend would revoke the family. The map sits on `globalThis` under a registered symbol, so the middleware's bundle and the app's bundles of the one process share it. A success and a final refusal are reused for 30 s; a failure that may pass (rate limit, API unavailable, network) is forgotten as soon as it settles, so the next request tries again. Every refresh goes through `refreshStaffSession` (`lib/velexis.ts`), with the service key only and `X-Velexis-Environment: test` (every session allows it, while `live` would be refused for a role or OTA that does not allow it); the environment cookie keeps the staff member's choice when the new session still allows it.
+3. Server components never refresh: their SDK client gets the access token only. If a call still fails with `TOKEN_EXPIRED`, the page redirects to `/auth/refresh?next=<path>`, a route handler that refreshes (de-duplicated) and redirects back (`getStaff()` does this for `console.auth.me`). Server actions start with `requireStaff(permission)`, which refreshes through the same de-duplication when the access token is missing or expires within 60 s and writes the new cookies before any call.
+4. A refused refresh (`REFRESH_TOKEN_INVALID`, `REFRESH_TOKEN_REUSED`, `STAFF_MEMBERSHIP_INACTIVE`, `TENANT_SUSPENDED`, `UNAUTHENTICATED`, `VALIDATION_FAILED`) clears the access, refresh and environment cookies and sends the user to the portal; the tenant cookie stays for that redirect.
 
 **Environment switch.** The header shows a TEST / LIVE switch when `session.environments` contains `live` (a live tenant and a role other than `viewer`). A server action validates the choice against the session and sets `__Host-vx_env`; every SDK client is built with that `environment`. The whole shell turns a warning colour in live mode, and destructive dialogs repeat "LIVE".
 
@@ -132,12 +132,15 @@ ota/admin/
       (console)/error.tsx        per-area error boundaries using lib/errors.ts
     components/ui/               shadcn/ui copies
     components/                  data-table, status-badge, money, json-view, confirm-dialog, env-banner, permission-gate
-    lib/velexis.ts               server-only: console client per request (service key, token, environment)
-    lib/session.ts               server-only: cookies, refresh with de-duplication, requireStaff()
-    lib/permissions.ts           permission constants, can(profile, permission)
+    lib/velexis.ts               server-only: console client per request (service key, token, environment, end-user
+                                 headers, response log), getConsole(), getStaff(), refreshStaffSession()
+    lib/session.ts               server-only: the four cookies, readSession(), redirects, requireStaff()
+    lib/refresh-dedup.ts         server-only: one refresh per refresh token in the process (SHA-256 key, 30 s)
+    lib/permissions.ts           permission constants, the role matrix, can(profile, permission)
     lib/errors.ts                VelexisError code → message, fieldErrors → form state
     lib/action-state.ts          ActionState type and helpers for useActionState
     lib/portal-links.ts          portal URLs for the tenant
+    test/fake-ota-api.ts         tests only: fake fetch for the real SDK, staff session builders, cookie jar
 ```
 
 ## 7. Data fetching and mutations
@@ -145,22 +148,22 @@ ota/admin/
 ```ts
 // src/lib/velexis.ts (server only)
 import "server-only";
-import { cache } from "react";
 import { createVelexisClient } from "@velexis/ota-sdk";
+import { headers } from "next/headers";
+import { cache } from "react";
 
 export const getConsole = cache(async () => {
   const s = await readSession();                          // cookies; throws a redirect to the portal when absent
-  return createVelexisClient({
-    secretKey: config.otaAdminServiceKey,                 // OTA_ADMIN_SERVICE_KEY
-    baseUrl: config.otaApiUrl,                            // http://127.0.0.1:4000
-    accessToken: s.accessToken,                           // no refreshToken here (§4)
-    sessionKind: "staff",
-    environment: s.environment,                           // "test" | "live"
-    headers: await endUserHeaders(),                      // X-Velexis-End-User-IP / -Agent from next/headers (§2)
-  }).console;
+  if (s.accessToken === undefined) redirectToRefresh();   // a server component cannot write rotated tokens (§4)
+  return createConsoleClient({                            // createVelexisClient({ ... }).console:
+    accessToken: s.accessToken,                           //   secretKey OTA_ADMIN_SERVICE_KEY, baseUrl OTA_API_URL,
+    environment: s.environment,                           //   sessionKind "staff", no refreshToken (§4), onResponse
+    incoming: await headers(),                            //   log line, X-Velexis-End-User-IP / -Agent (§2)
+  });
 });
 
-export const getStaff = cache(async () => (await getConsole()).auth.me());   // once per request
+// console.auth.me once per request; TOKEN_EXPIRED → /auth/refresh, an ended session → the portal
+export const getStaff = cache(async () => (await getConsole()).auth.me());
 ```
 
 - **Reads** happen in server components with `await getConsole()`. Every console call is personal and priced, so nothing is cached across requests (`cache: "no-store"` is the SDK default for console calls). List pages keep filters, sort and the cursor in `searchParams`, so views are shareable links.
@@ -189,7 +192,7 @@ export async function issueTickets(_: ActionState, form: FormData): Promise<Acti
 - Updates send `ifMatch` = the `version` the page displayed; `412 PRECONDITION_FAILED` asks the user to reload.
 - State-changing calls carry an idempotency key generated when the dialog or form is rendered (a hidden input), so a double submit or a retry replays the same action.
 - Long operations (issue, cancel, import, retrieve) use the SDK's 60 s timeout; the button shows progress with `useFormStatus`.
-- Server actions run where cookies can be written, so they may pass the refresh token to the SDK with `onStaffSessionRefreshed` writing the cookies back (through the same de-duplication).
+- Server actions run where cookies can be written, so `requireStaff()` refreshes before the action's first call when the access token is missing or expires within 60 s (through the same de-duplication, writing the new cookies) and hands back a client with the fresh token. That client never gets the refresh token: the SDK's own automatic refresh (`onStaffSessionRefreshed`) would go around the de-duplication. A `TOKEN_EXPIRED` in the middle of an action therefore becomes the action's error ("Your session expired. Reload the page to continue."), and the reload refreshes in the middleware.
 
 ## 8. Roles and permissions
 
@@ -255,7 +258,7 @@ pnpm --filter @velexis/ota-admin dev          # http://localhost:3002
 
 | Level | Where | What |
 |---|---|---|
-| Unit | `src/config.test.ts`, `src/lib/*.test.ts` (Vitest) | Configuration (missing or invalid variables, loopback `OTA_API_URL`, the env templates, `next.config.ts`, no `NEXT_PUBLIC_` variable), session cookie parsing, refresh de-duplication (two parallel refreshes → one SDK call), `can()` against the scope matrix, error mapping, portal links |
+| Unit | `src/config.test.ts`, `src/lib/*.test.ts` (Vitest) | Configuration (missing or invalid variables, loopback `OTA_API_URL`, the env templates, `next.config.ts`, no `NEXT_PUBLIC_` variable), session cookies and `requireStaff()`, refresh de-duplication (two parallel refreshes → one SDK call), the end-user headers on every SDK request (with the real SDK and the fake `fetch` of `src/test/fake-ota-api.ts`), `can()` against the table of scope §1.3 (read from `ota/docs/scope.md`), error mapping, portal links. `src/lib/velexis.test.ts` also runs `next build` on a fixture whose client component imports `lib/velexis.ts` and expects the `server-only` build error |
 | Route | `src/app/**/*.test.ts` | Route handlers called directly with a fake global `fetch` and fake timers: `/health/live`, `/health/ready` (OTA API up, refused, slower than 2 s, error status) |
 | Component | `src/**/*.test.tsx` (Vitest + Testing Library) | Filters to `searchParams`, confirmation dialogs (reason required, live warning), forms rendering `fieldErrors`, permission gating |
 | Server actions | `src/app/**/actions.test.ts` | With the SDK's `fetch` option pointing at a fake: right method and parameters, `ifMatch`, idempotency key reuse, error → action state |

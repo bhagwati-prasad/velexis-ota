@@ -2051,7 +2051,8 @@ The console API (staff sign-in by portal token, bookings, PNR import, queues, cu
   - The smoke run passes against the local stack and fails clearly (not hangs) when the API is down.
 - **Verify:** `pnpm --filter @velexis/ota-sdk test:smoke`
 
-### OAD-002 · Add the server-only SDK client, session cookies with refresh de-duplication and permissions
+### OAD-002 · Add the server-only SDK client, session cookies with refresh de-duplication and permissions ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-admin
 - **Milestone:** M4
 - **Depends on:** OAD-001, SDK-011

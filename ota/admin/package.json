@@ -14,6 +14,9 @@
   },
   "dependencies": {
     "@velexis/config": "workspace:*",
+    "@velexis/errors": "workspace:*",
+    "@velexis/logger": "workspace:*",
+    "@velexis/ota-sdk": "workspace:*",
     "lucide-react": "1.58.0",
     "next": "15.5.28",
     "react": "19.3.1",

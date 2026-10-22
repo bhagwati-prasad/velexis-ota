@@ -125,6 +125,18 @@
       ],
       "outputs": ["coverage/**"]
     },
+    "@velexis/ota-admin#test": {
+      "dependsOn": ["^build"],
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "$TURBO_ROOT$/.env.example",
+        "$TURBO_ROOT$/deploy/env/ota-admin.env.example",
+        "$TURBO_ROOT$/deploy/scripts/pack-release.sh",
+        "$TURBO_ROOT$/deploy/systemd/velexis-ota-admin.service",
+        "$TURBO_ROOT$/ota/docs/scope.md"
+      ],
+      "outputs": ["coverage/**"]
+    },
     "test:int": {
       "dependsOn": ["^build"],
       "cache": false,
