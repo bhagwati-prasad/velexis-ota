@@ -6,11 +6,14 @@
 // against the OTA document. Answers are `Cache-Control: private, no-store`, console.bookings.get with
 // `ETag: "<version>"` (the If-Match of patch, issue and cancel).
 //
-// console.bookings.retrieve, patch, resync and addNote (OBE-062), issue and cancel (OBE-063) and the PNR lookup and
-// import (OBE-064) join this controller. Nest registers a controller's routes in the order of its methods, and Express
-// tries them in that order: the literal `GET by-record-locator` must be declared before `GET :bookingId`, or the
-// get handler answers it (the route-parity test reads the router's order and fails then).
-import { Controller, Get, Res } from "@nestjs/common";
+// Since OBE-062: console.bookings.retrieve (`bookings:read`), patch, resync and addNote (`bookings:write`) over
+// ConsoleBookingActionsService (console-booking-actions.service.ts). patch and resync answer the booking's new `ETag`;
+// addNote answers `201` with `Location` (the booking, anchored at the note), and its `Idempotency-Key` is the
+// idempotency interceptor's. Issue and cancel (OBE-063) and the PNR lookup and import (OBE-064) join this controller.
+// Nest registers a controller's routes in the order of its methods, and Express tries them in that order: the literal
+// `GET by-record-locator` must be declared before `GET :bookingId`, or the get handler answers it (the route-parity
+// test reads the router's order and fails then).
+import { Controller, Get, HttpCode, Patch, Post, Res } from "@nestjs/common";
 import type { Response } from "express";
 import { bookingEtagOf } from "../bookings/bookings.mapper";
 import {
@@ -19,15 +22,32 @@ import {
   type ValidatedInput,
 } from "../common/http/openapi-operation.decorator";
 import {
+  ConsoleBookingActionsService,
+  type ConsoleBookingNote,
+  type ConsoleBookingResyncResult,
+  type ConsoleFlightOrderRetrieval,
+} from "./console-booking-actions.service";
+import {
   CONSOLE_BOOKING_CACHE_CONTROL,
   type ConsoleBooking,
   type ConsoleBookingPage,
 } from "./console-bookings.mapper";
 import { ConsoleBookingsService } from "./console-bookings.service";
 
+/** The validated body of an operation; the validation interceptor refuses a request without one, never reached. */
+function bodyOf<B>(operationId: string, body: B | undefined): B {
+  if (body === undefined) {
+    throw new Error(`${operationId} without a validated body`);
+  }
+  return body;
+}
+
 @Controller("v1/console/bookings")
 export class ConsoleBookingsController {
-  constructor(private readonly bookings: ConsoleBookingsService) {}
+  constructor(
+    private readonly bookings: ConsoleBookingsService,
+    private readonly actions: ConsoleBookingActionsService,
+  ) {}
 
   @Get()
   @OpenApiOperation("consoleListBookings")
@@ -53,5 +73,59 @@ export class ConsoleBookingsController {
     res.setHeader("ETag", bookingEtagOf(booking.version));
     res.setHeader("Cache-Control", CONSOLE_BOOKING_CACHE_CONTROL);
     return booking;
+  }
+
+  @Patch(":bookingId")
+  @OpenApiOperation("consolePatchBooking")
+  async patch(
+    @OpenApiInput() input: ValidatedInput<"consolePatchBooking">,
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<ConsoleBooking> {
+    const booking = await this.actions.patch(
+      input.path.bookingId,
+      input.headers["If-Match"],
+      bodyOf("consolePatchBooking", input.body),
+    );
+    res.setHeader("ETag", bookingEtagOf(booking.version));
+    res.setHeader("Cache-Control", CONSOLE_BOOKING_CACHE_CONTROL);
+    return booking;
+  }
+
+  @Post(":bookingId/resync")
+  @HttpCode(200)
+  @OpenApiOperation("consoleResyncBooking")
+  async resync(
+    @OpenApiInput() input: ValidatedInput<"consoleResyncBooking">,
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<ConsoleBookingResyncResult> {
+    const result = await this.actions.resync(input.path.bookingId, input.body ?? {});
+    res.setHeader("ETag", bookingEtagOf(result.booking.version));
+    res.setHeader("Cache-Control", CONSOLE_BOOKING_CACHE_CONTROL);
+    return result;
+  }
+
+  @Post(":bookingId/notes")
+  @OpenApiOperation("consoleAddBookingNote")
+  async addNote(
+    @OpenApiInput() input: ValidatedInput<"consoleAddBookingNote">,
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<ConsoleBookingNote> {
+    const note = await this.actions.addNote(
+      input.path.bookingId,
+      bodyOf("consoleAddBookingNote", input.body),
+    );
+    res.setHeader("Location", `/v1/console/bookings/${note.bookingId}#${note.id}`);
+    res.setHeader("Cache-Control", CONSOLE_BOOKING_CACHE_CONTROL);
+    return note;
+  }
+
+  @Get(":bookingId/amadeus-order")
+  @OpenApiOperation("consoleRetrieveFlightOrder")
+  async retrieve(
+    @OpenApiInput() input: ValidatedInput<"consoleRetrieveFlightOrder">,
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<ConsoleFlightOrderRetrieval> {
+    res.setHeader("Cache-Control", CONSOLE_BOOKING_CACHE_CONTROL);
+    return await this.actions.retrieve(input.path.bookingId, input.query ?? {});
   }
 }

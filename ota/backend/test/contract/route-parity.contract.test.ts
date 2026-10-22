@@ -517,9 +517,16 @@ describe("pending operations", () => {
     ).toBe(-1);
     expect(compareRoutePaths("/v1/console/bookings/{bookingId}", "/v1/console/bookings/imports")).toBe(1);
     expect(compareRoutePaths("/v1/a", "/v1/b")).toBe(0);
-    const order = routes.filter((route) => route.pending !== undefined).map((route) => route.path);
-    expect(order.indexOf("/v1/console/bookings/by-record-locator")).toBeLessThan(
-      order.indexOf("/v1/console/bookings/{bookingId}"),
+    // Since OBE-062 no pending operation sits at /v1/console/bookings/{bookingId} (consolePatchBooking was the last),
+    // so the 501 controller's order is checked on a list of its own; the application's own order is the
+    // "no route is shadowed" check of route parity above.
+    const controller = createNotImplementedController(
+      pendingRoutes({ consolePatchBooking: "OBE-062", consoleFindBookingByRecordLocator: "OBE-064" }),
+    );
+    const order = Object.getOwnPropertyNames(controller.prototype).filter((name) => name !== "constructor");
+    expect(order.indexOf("consoleFindBookingByRecordLocator")).toBeGreaterThanOrEqual(0);
+    expect(order.indexOf("consoleFindBookingByRecordLocator")).toBeLessThan(
+      order.indexOf("consolePatchBooking"),
     );
   });
 

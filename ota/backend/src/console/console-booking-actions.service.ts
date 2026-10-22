@@ -1,0 +1,1851 @@
+// The console booking actions (OBE-062; ota/docs/flows/console-operations.md §2 "Amadeus order view", "Patch",
+// "Resync, notes", OADR-0018 point 8 and its follow-up, the document's consoleRetrieveFlightOrder, consolePatchBooking,
+// consoleResyncBooking and consoleAddBookingNote): what OTA staff (or a `console:automation` key with the operation's
+// permission) do to one booking of the request's environment besides issuing and cancelling it (OBE-063). The
+// permission guard checked `bookings:read` or `bookings:write` and the environment before this runs (OBE-060); a
+// booking of the other environment, or an unknown id, answers `404 NOT_FOUND`. No transaction is open during an
+// Amadeus call (OADR-0003 point 1); the only row a use case locks is the booking (the lock order of OADR-0003 point 11
+// starts with the checkout, which none of these touches).
+//
+// - `retrieve` (`bookings:read`): one Flight Order Management GET of the booking's order (`include`, `fareRules`
+//   passed through) answered verbatim with the call's facts (ConsoleFlightOrderRetrieval): net prices and the full
+//   documents, which no other answer shows, never logged. Forms of payment pass the shared redactor all the same (no
+//   card number reaches the console, OADR-0018 point 8), and the dictionaries keep `carriers` and `aircraft` as in
+//   every booking answer (the document's location and currency entries cannot hold Amadeus's maps). With
+//   `updateSnapshot` (default) the answer also becomes the booking's `order_snapshot` (redacted),
+//   `order_dictionaries`, `order_included` (bags, fare rules), `last_synced_at` and clears `sync_error`, without the
+//   child tables (that is resync) and without a new `version`; a booking another writer changed while the order was
+//   read keeps its snapshot (`snapshotUpdated: false`). It is an audited read
+//   (OADR-0011 point 8 as decided on 2026-10-21: a supplier record): the use case writes its `order.retrieve` row (the
+//   document's action name) itself, with the booking, so it is there whatever the interceptor records for reads. A
+//   booking without an Amadeus order answers `409 BOOKING_NOT_MODIFIABLE`; an order Amadeus no longer has
+//   `404 NOT_FOUND` with `error.supplier`.
+//
+// - `patch` (`bookings:write`, `If-Match`): the travellers, contacts, remarks and ticketing agreement of the order
+//   (plan step 2), and the elements the document sends as given (forms of payment, automated processes, offices,
+//   commissions, forms of identification), through one Flight Order Management PATCH; `tags` and `metadata` are local
+//   only (no Amadeus call, any status, `booking.tags_updated`). Before anything is read or sent:
+//     · a `creditCard` form of payment (or a B2B wallet's virtual card) answers `403 FEATURE_DISABLED`
+//       (`details.feature = "consoleCardPayment"`): card data reaches the OTA only through the storefront's
+//       airline-card route (ADR-0011, OADR-0018 point 8 and its follow-up);
+//     · `flightOffers` (chargeable services, which re-price the booking), `tickets` and `associatedRecords` answer
+//       `403 FEATURE_DISABLED` (`details.feature = "consolePatchElements"`, `details.elements`): the MVP's patch
+//       does not re-price or rewrite tickets and records;
+//     · `ticketingAgreement.dateTime` and `segmentIds` are Amadeus outputs: `400 VALIDATION_FAILED` (`read_only`).
+//   Then (T1, the booking locked) the `If-Match` (`412 PRECONDITION_FAILED` when stale), a cancelled booking
+//   (`409 BOOKING_ALREADY_CANCELLED`) and one without an order (`409 BOOKING_NOT_MODIFIABLE`). Amadeus PATCH replaces
+//   each element it is sent, so the request is merged with the stored order first: each traveller sent over the
+//   stored one, every traveller of the booking going (`mergeTravelers`, default: its fields replace the stored ones,
+//   its name's parts too, a document replaces the stored one of its type and keeps its number when sent without one;
+//   `false`: the travellers as sent), the contacts by purpose (`mergeContacts`), and the remarks added to the stored
+//   ones, exact duplicates skipped (`mergeRemarks`; `false` replaces the lists sent; the `VELEXIS <reference>`
+//   BACKOFFICE remark is always kept). The data names the order's flight offers by id only, as the specification
+//   requires `flightOffers` and an id alone adds no service. The call: Amadeus 2552 answers
+//   `409 VERSION_CONFLICT` and other refusals `422 SUPPLIER_REJECTED` or `TRAVELER_DATA_INVALID`, nothing changed; a
+//   timeout (`504 SUPPLIER_TIMEOUT`, the outcome unknown) is followed by a resync of the booking (below, without the
+//   throttle), then answered 504. The record (T2): the answer becomes the snapshot, the contacts, remarks and
+//   order columns follow it (below), the travellers sent are stored as sent (documents sealed again; Amadeus answers
+//   may mask them), `tags`/`metadata`, `last_synced_at`, `version + 1`, the event `booking.patched` (visible to the
+//   customer when contacts or documents changed) and the `booking.patch` staff action with the redacted before and
+//   after. `notifyCustomer` has no e-mail template yet (the default templates are OBE-055's): the answer carries a
+//   warning instead.
+//
+// - `resync` (`bookings:write`): the refresh of console.bookings.get (CustomerBookingsService.refresh, OBE-046: the
+//   claim, one Flight Order Management GET, the tickets, the segments' state, the associated records, a status that is
+//   now ticketed, the snapshot; the console's throttle of 10 s answers `429 RATE_LIMITED`), then the projection of the
+//   stored order on the booking (T3, below), the event `booking.synced` and the `booking.resync` staff action. It
+//   answers the booking, the differences between the console views before and after (ConsoleSyncChange, JSON
+//   pointers into the booking), whether the status changed and the previous status. A booking without an order, or a
+//   cancelled one, answers `409 BOOKING_NOT_MODIFIABLE`; an order Amadeus no longer has `422 SUPPLIER_REJECTED`
+//   (`supplierSync.status = order_not_found`). The background sync's diff (schedule changes, cancellation by the
+//   airline) is OBE-045's, whose sync service this will call once it exists.
+//
+// - `addNote` (`bookings:write`, `Idempotency-Key`): a `staff.note` booking event, staff-only unless the staff member
+//   asks for `visibleToCustomer` (the document's option; the default keeps it out of bookings.listEvents), and the
+//   `booking.note` staff action (the note's id, never its text). The booking's `version` does not change.
+//
+// The projection of an order on the booking (patch, resync): the contacts are replaced by the order's when they differ
+// (the primary one keeps its purpose; its e-mail becomes `contact_email`); the remarks the order has and the booking
+// has not are added (by a staff member's patch: `created_by_staff_id`), those it no longer has are removed, matched by
+// kind, type and text (the `VELEXIS <reference>` remark is never removed); the ticketing agreement (and with it the
+// ticketing deadline, OADR-0008 point 3), automated processes, forms of payment (redacted), commissions, forms of
+// identification and offices follow the order's. A projection that changed something bumps `version`.
+//
+// Every copy of an order these actions keep (the snapshot, the PATCH request in `supplier_requests`, the staff
+// action's before and after, `form_of_identifications`) passes the shared redactor and has the numbers of its forms of
+// identification (passport, identity card, driving licence numbers, which that redactor does not know) cut to their
+// last 4, as console.bookings.get shows them (`keptOrderDataOf`, `maskedIdentifications`). Only Amadeus and the
+// retrieve's answer see them in full.
+import { Injectable } from "@nestjs/common";
+import type { components, operations } from "@velexis/api-types";
+import type { Insertable, TenantDatabase, Updateable } from "@velexis/db";
+import { AppError, isAppError, type FieldError, type OtaErrorCode } from "@velexis/errors";
+import { redactPayload } from "@velexis/logger";
+import { InjectPinoLogger, PinoLogger } from "nestjs-pino";
+import { AmadeusClient, requestPath, type PatchFlightOrderRequest } from "../amadeus/amadeus.client";
+import type { AmadeusCallContext } from "../amadeus/call-context";
+import { AmadeusCallError } from "../amadeus/error-mapper";
+import { AMADEUS_OPERATIONS } from "../amadeus/limits";
+import { VELEXIS_REMARK_PREFIX, velexisRemarkText } from "../bookings/booking-reference";
+import {
+  dictionariesOf,
+  offerFareRulesOf,
+  type FareRuleType,
+  type StoredFareRules,
+} from "../bookings/bookings.mapper";
+import {
+  BookingsRepository,
+  type BookingChildren,
+  type BookingContactRow,
+  type BookingRemarkRow,
+  type BookingRow,
+  type BookingTravelerRow,
+} from "../bookings/bookings.repository";
+import { CustomerBookingsService } from "../bookings/customer-bookings.service";
+import { BookingTravelerDocuments, deadlineLocalOf, eventActorOf } from "../bookings/order-recorder";
+import {
+  amadeusOrderContactOf,
+  amadeusTravelerOf,
+  VELEXIS_REMARK_SUBTYPE,
+} from "../bookings/order-request.builder";
+import type { AmadeusDiscount, StoredDocument } from "../checkout/traveler-documents";
+import { ifMatchSatisfied } from "../checkout/checkout.mapper";
+import { StaffContext } from "../common/auth/staff.guard";
+import { Clock } from "../common/clock";
+import { IdGenerator } from "../common/ids";
+import { TenantContext, type RequestTenant } from "../tenancy/tenant-context";
+import { TenantTx, type TenantTransaction } from "../tenancy/tenant-tx";
+import {
+  CONSOLE_REFRESH_THROTTLE_MS,
+  maskedIdentifications,
+  type ConsoleBooking,
+} from "./console-bookings.mapper";
+import {
+  ConsoleBookingsRepository,
+  STAFF_NOTE_EVENT,
+  type ConsoleBookingDetailsRow,
+} from "./console-bookings.repository";
+import { ConsoleBookingsService } from "./console-bookings.service";
+import { StaffActionsWriter } from "./staff-actions.writer";
+
+type Schemas = components["schemas"];
+export type ConsoleRetrieveQuery = NonNullable<
+  operations["consoleRetrieveFlightOrder"]["parameters"]["query"]
+>;
+export type ConsolePatchRequest = Schemas["ConsoleBookingPatchRequest"];
+export type ConsoleResyncRequest = Schemas["ConsoleBookingResyncRequest"];
+export type ConsoleNoteRequest = Schemas["ConsoleBookingNoteRequest"];
+export type ConsoleFlightOrderRetrieval = Schemas["ConsoleFlightOrderRetrieval"];
+export type ConsoleBookingResyncResult = Schemas["ConsoleBookingResyncResult"];
+export type ConsoleBookingNote = Schemas["ConsoleBookingNote"];
+export type ConsoleSyncChange = Schemas["ConsoleSyncChange"];
+type ConsoleActor = Schemas["ConsoleActor"];
+type Warning = Schemas["Warning"];
+
+type Db = TenantDatabase;
+type JsonObject = Record<string, unknown>;
+
+const isRecord = (value: unknown): value is JsonObject =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+const records = (value: unknown): JsonObject[] => (Array.isArray(value) ? value.filter(isRecord) : []);
+const strings = (value: unknown): string[] =>
+  Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+const text = (value: unknown): string | undefined =>
+  typeof value === "string" && value !== "" ? value : undefined;
+
+// ---- Names ----------------------------------------------------------------------------------------------------------
+
+/** The `staff_actions.action` of each action (the document's names). */
+export const CONSOLE_BOOKING_ACTIONS = Object.freeze({
+  retrieve: "order.retrieve",
+  patch: "booking.patch",
+  tagsUpdated: "booking.tags_updated",
+  resync: "booking.resync",
+  note: "booking.note",
+});
+
+/** The booking events the actions write (staff notes are `staff.note`, STAFF_NOTE_EVENT). */
+export const BOOKING_PATCHED_EVENT = "booking.patched";
+export const BOOKING_SYNCED_EVENT = "booking.synced";
+
+/** `supplier_requests.operation` of the actions' Amadeus calls. */
+const OPERATIONS = Object.freeze({
+  retrieve: "console.bookings.retrieve",
+  patch: "console.bookings.patch",
+  resync: "console.bookings.resync",
+});
+
+/** `details.feature` of the refusals of console.bookings.patch (`403 FEATURE_DISABLED`). */
+export const CONSOLE_CARD_PAYMENT_FEATURE = "consoleCardPayment";
+export const CONSOLE_PATCH_ELEMENTS_FEATURE = "consolePatchElements";
+
+/** The order elements a patch sends to Amadeus. */
+export const AMADEUS_PATCH_ELEMENTS = [
+  "travelers",
+  "contacts",
+  "remarks",
+  "formOfPayments",
+  "ticketingAgreement",
+  "automatedProcess",
+  "queuingOfficeId",
+  "ownerOfficeId",
+  "commissions",
+  "formOfIdentifications",
+] as const;
+type AmadeusPatchElement = (typeof AMADEUS_PATCH_ELEMENTS)[number];
+
+/** The elements of the document the MVP's patch refuses (`403 FEATURE_DISABLED`, see the file header). */
+export const UNSUPPORTED_PATCH_ELEMENTS = ["flightOffers", "tickets", "associatedRecords"] as const;
+
+/** The local-only elements (no Amadeus call). */
+export const LOCAL_PATCH_ELEMENTS = ["tags", "metadata"] as const;
+type LocalPatchElement = (typeof LOCAL_PATCH_ELEMENTS)[number];
+
+/** The warning of a patch with `notifyCustomer`, until the e-mail exists. */
+export const NOTIFICATION_NOT_SENT_WARNING: Warning = Object.freeze({
+  title: "CUSTOMER NOT NOTIFIED",
+  detail: "No e-mail was sent to the traveller about this change: tell them yourself.",
+});
+
+/**
+ * The client's errors each use case passes on: the codes its operation documents (`x-error-codes`), plus
+ * `503 SERVICE_UNAVAILABLE` (the client's rate limiter without Redis, the `503` every operation documents); any other
+ * becomes `502 SUPPLIER_ERROR`. console.bookings.retrieve documents no `OFFICE_NOT_ALLOWED` (as the refresh of
+ * console.bookings.get and resync, which map it the same way); console.bookings.patch does, for the offices it sends.
+ */
+const SUPPLIER_CODES: readonly OtaErrorCode[] = [
+  "SUPPLIER_REJECTED",
+  "SUPPLIER_NOT_CONFIGURED",
+  "RATE_LIMITED",
+  "SERVICE_UNAVAILABLE",
+  "SUPPLIER_ERROR",
+  "SUPPLIER_UNAVAILABLE",
+  "SUPPLIER_TIMEOUT",
+];
+const RETRIEVE_SUPPLIER_CODES: ReadonlySet<string> = new Set<OtaErrorCode>(SUPPLIER_CODES);
+const PATCH_SUPPLIER_CODES: ReadonlySet<string> = new Set<OtaErrorCode>([
+  ...SUPPLIER_CODES,
+  "OFFICE_NOT_ALLOWED",
+  "VERSION_CONFLICT",
+  "TRAVELER_DATA_INVALID",
+  "CONTACT_DATA_INVALID",
+]);
+
+/** The remark types `booking_remarks_sub_type_ck` accepts, by kind. */
+const REMARK_TYPES: Readonly<Record<RemarkKind, ReadonlySet<string>>> = Object.freeze({
+  general: new Set([
+    "GENERAL_MISCELLANEOUS",
+    "CONFIDENTIAL",
+    "INVOICE",
+    "QUALITY_CONTROL",
+    "BACKOFFICE",
+    "FULFILLMENT",
+    "ITINERARY",
+    "TICKETING_MISCELLANEOUS",
+    "TOUR_CODE",
+  ]),
+  airline: new Set([
+    "OTHER_SERVICE_INFORMATION",
+    "KEYWORD",
+    "OTHER_SERVICE",
+    "CLIENT_ID",
+    "ADVANCED_TICKET_TIME_LIMIT",
+  ]),
+});
+
+const CONTACT_PURPOSES: ReadonlySet<string> = new Set([
+  "STANDARD",
+  "INVOICE",
+  "STANDARD_WITHOUT_TRANSMISSION",
+]);
+const GENDERS: ReadonlySet<string> = new Set(["MALE", "FEMALE", "UNSPECIFIED", "UNDISCLOSED"]);
+const DOCUMENT_TYPES: ReadonlySet<string> = new Set([
+  "VISA",
+  "PASSPORT",
+  "IDENTITY_CARD",
+  "KNOWN_TRAVELER",
+  "REDRESS",
+]);
+/** The optional text fields of a sealed document (StoredDocument), in its order. */
+const DOCUMENT_FIELDS = [
+  "issuanceDate",
+  "expiryDate",
+  "issuanceCountry",
+  "issuanceLocation",
+  "nationality",
+  "birthPlace",
+  "validityCountry",
+  "birthCountry",
+] as const;
+
+// ---- Pure rules -----------------------------------------------------------------------------------------------------
+
+/** True when a list of forms of payment carries card data: a `creditCard`, or a B2B wallet's virtual card. */
+export function carriesCardData(formOfPayments: unknown): boolean {
+  return records(formOfPayments).some(
+    (entry) =>
+      entry["creditCard"] !== undefined ||
+      (isRecord(entry["b2bWallet"]) && entry["b2bWallet"]["virtualCreditCardDetails"] !== undefined),
+  );
+}
+
+/** The elements of a patch request, by kind (see the file header). */
+export function patchElementsOf(body: ConsolePatchRequest): {
+  readonly amadeus: AmadeusPatchElement[];
+  readonly local: LocalPatchElement[];
+  readonly unsupported: string[];
+} {
+  const sent = (name: string): boolean => (body as JsonObject)[name] !== undefined;
+  return {
+    amadeus: AMADEUS_PATCH_ELEMENTS.filter(sent),
+    local: LOCAL_PATCH_ELEMENTS.filter(sent),
+    unsupported: UNSUPPORTED_PATCH_ELEMENTS.filter(sent),
+  };
+}
+
+/**
+ * The refusals of a patch request that need no booking (see the file header): card data, the elements the MVP
+ * refuses, the ticketing agreement's read-only fields, and a body without any element. Throws the first.
+ */
+export function refusePatchRequest(body: ConsolePatchRequest): void {
+  if (carriesCardData(body.formOfPayments)) {
+    throw new AppError("FEATURE_DISABLED", {
+      message: "Card payments cannot be entered in the console.",
+      details: { feature: CONSOLE_CARD_PAYMENT_FEATURE },
+    });
+  }
+  const elements = patchElementsOf(body);
+  if (elements.unsupported.length > 0) {
+    throw new AppError("FEATURE_DISABLED", {
+      message: "These order elements cannot be changed from the console yet.",
+      details: { feature: CONSOLE_PATCH_ELEMENTS_FEATURE, elements: elements.unsupported },
+    });
+  }
+  const agreement = isRecord(body.ticketingAgreement) ? body.ticketingAgreement : {};
+  const readOnly: FieldError[] = (["dateTime", "segmentIds"] as const)
+    .filter((field) => agreement[field] !== undefined)
+    .map((field) => ({
+      path: `/ticketingAgreement/${field}`,
+      code: "read_only",
+      message: "Amadeus sets this field; send option and delay only.",
+    }));
+  if (readOnly.length > 0) {
+    throw new AppError("VALIDATION_FAILED", { fieldErrors: readOnly });
+  }
+  if (elements.amadeus.length === 0 && elements.local.length === 0) {
+    throw new AppError("VALIDATION_FAILED", {
+      fieldErrors: [
+        { path: "", code: "required", message: "Send at least one order element, tags or metadata." },
+      ],
+    });
+  }
+}
+
+/** The purpose of an Amadeus contact (`STANDARD` when it has none). */
+const purposeOf = (contact: JsonObject): string => text(contact["purpose"]) ?? "STANDARD";
+
+/**
+ * The contacts a patch sends: with `merge`, each contact sent replaces the stored one of its purpose and the others
+ * are kept; without, the list sent.
+ */
+export function mergeContacts(
+  stored: readonly JsonObject[],
+  sent: readonly JsonObject[],
+  merge: boolean,
+): JsonObject[] {
+  if (!merge) {
+    return sent.map((contact) => ({ ...contact }));
+  }
+  const byPurpose = new Map(sent.map((contact) => [purposeOf(contact), contact]));
+  const merged = stored.map((contact) => ({ ...(byPurpose.get(purposeOf(contact)) ?? contact) }));
+  const kept = new Set(stored.map(purposeOf));
+  return [
+    ...merged,
+    ...sent.filter((contact) => !kept.has(purposeOf(contact))).map((contact) => ({ ...contact })),
+  ];
+}
+
+type RemarkKind = "general" | "airline";
+
+/** The identity of a remark: kind, type, airline (airline remarks) and text in upper case. */
+export function remarkKey(kind: RemarkKind, remark: JsonObject): string {
+  const subType = text(remark["subType"]) ?? "";
+  const airline = kind === "airline" ? (text(remark["airlineCode"]) ?? "") : "";
+  return `${kind}|${subType}|${airline}|${(text(remark["text"]) ?? "").trim().toUpperCase()}`;
+}
+
+/** True for the `VELEXIS <reference>` back-office remark of an Amadeus `remarks.general` entry. */
+const isVelexisRemark = (remark: JsonObject): boolean =>
+  remark["subType"] === VELEXIS_REMARK_SUBTYPE &&
+  (text(remark["text"]) ?? "").startsWith(`${VELEXIS_REMARK_PREFIX} `);
+
+/**
+ * The remarks a patch sends (Amadeus replaces the whole `remarks` element, so both lists always go): with `merge`
+ * the stored remarks plus those sent that are not already there; without, each list sent replaces the stored list of
+ * its kind. The `VELEXIS <reference>` remark is kept in every case.
+ */
+export function mergeRemarks(
+  stored: unknown,
+  sent: {
+    readonly general?: readonly unknown[] | undefined;
+    readonly airline?: readonly unknown[] | undefined;
+  },
+  merge: boolean,
+  reference: string,
+): JsonObject {
+  const storedRemarks = isRecord(stored) ? stored : {};
+  const lists = {} as Record<RemarkKind, JsonObject[]>;
+  for (const kind of ["general", "airline"] as const) {
+    const before = records(storedRemarks[kind]);
+    const given = records(sent[kind]);
+    if (!merge) {
+      lists[kind] = sent[kind] === undefined ? before : given;
+      continue;
+    }
+    const seen = new Set(before.map((remark) => remarkKey(kind, remark)));
+    const added = given.filter((remark) => {
+      const key = remarkKey(kind, remark);
+      if (seen.has(key)) {
+        return false;
+      }
+      seen.add(key);
+      return true;
+    });
+    lists[kind] = [...before, ...added];
+  }
+  if (!lists.general.some(isVelexisRemark)) {
+    const kept = records(storedRemarks["general"]).find(isVelexisRemark);
+    lists.general.push(kept ?? { subType: VELEXIS_REMARK_SUBTYPE, text: velexisRemarkText(reference) });
+  }
+  return {
+    general: lists.general.map((remark) => ({ ...remark })),
+    ...(lists.airline.length > 0 ? { airline: lists.airline.map((remark) => ({ ...remark })) } : {}),
+  };
+}
+
+/** A traveller merge refused: a document sent without a number that the traveller does not have. */
+export interface MissingDocumentNumber {
+  /** The index of the document in the traveller's `documents` as sent. */
+  readonly index: number;
+}
+
+/**
+ * The documents of a merged traveller: each one sent (sent without `number`: with the number and fields of the stored
+ * document of its type, and issuing country when given), then, with `merge`, the stored ones of a type not sent.
+ */
+export function mergeDocuments(
+  stored: readonly JsonObject[],
+  sent: readonly JsonObject[],
+  merge: boolean,
+): { readonly documents: JsonObject[]; readonly missing: MissingDocumentNumber[] } {
+  const missing: MissingDocumentNumber[] = [];
+  const documents = sent.flatMap((document, index) => {
+    if (text(document["number"]) !== undefined) {
+      return [{ ...document }];
+    }
+    const kept = stored.find(
+      (candidate) =>
+        candidate["documentType"] === document["documentType"] &&
+        (document["issuanceCountry"] === undefined ||
+          candidate["issuanceCountry"] === document["issuanceCountry"]),
+    );
+    if (kept === undefined) {
+      missing.push({ index });
+      return [];
+    }
+    return [{ ...kept, ...document, number: kept["number"] }];
+  });
+  if (merge) {
+    const types = new Set(sent.map((document) => document["documentType"]));
+    documents.push(
+      ...stored.filter((document) => !types.has(document["documentType"])).map((d) => ({ ...d })),
+    );
+  }
+  return { documents, missing };
+}
+
+/**
+ * A traveller of a patch: with `merge`, the fields sent over the stored traveller (the name's parts one by one, the
+ * documents by `mergeDocuments`); without, the traveller as sent (a document without a number still keeps the
+ * stored one's).
+ */
+export function mergeTraveler(
+  stored: JsonObject,
+  sent: JsonObject,
+  merge: boolean,
+): { readonly traveler: JsonObject; readonly missing: MissingDocumentNumber[] } {
+  const traveler: JsonObject = merge ? { ...stored, ...sent } : { ...sent };
+  if (merge && isRecord(stored["name"]) && isRecord(sent["name"])) {
+    traveler["name"] = { ...stored["name"], ...sent["name"] };
+  }
+  let missing: MissingDocumentNumber[] = [];
+  if (Array.isArray(sent["documents"])) {
+    const documents = mergeDocuments(records(stored["documents"]), records(sent["documents"]), merge);
+    traveler["documents"] = documents.documents;
+    missing = documents.missing;
+  }
+  return { traveler, missing };
+}
+
+/** An Amadeus remark of an order, as `booking_remarks` stores it. */
+export interface OrderRemarkEntry {
+  readonly kind: RemarkKind;
+  readonly key: string;
+  readonly subType: string;
+  readonly text: string;
+  readonly category: string | null;
+  readonly airlineCode: string | null;
+  readonly keyword: string | null;
+  readonly travelerIds: string[];
+  readonly flightOfferIds: string[];
+}
+
+/** The remarks of an order's `remarks` element that `booking_remarks` can hold (known types, with a text). */
+export function orderRemarksOf(remarks: unknown): OrderRemarkEntry[] {
+  const element = isRecord(remarks) ? remarks : {};
+  return (["general", "airline"] as const).flatMap((kind) =>
+    records(element[kind]).flatMap((remark) => {
+      const subType = text(remark["subType"]);
+      const body = text(remark["text"]);
+      if (subType === undefined || body === undefined || !REMARK_TYPES[kind].has(subType)) {
+        return [];
+      }
+      const category = text(remark["category"]);
+      return [
+        {
+          kind,
+          key: remarkKey(kind, remark),
+          subType,
+          text: body,
+          category: category !== undefined && /^[A-Z]$/.test(category) ? category : null,
+          airlineCode: kind === "airline" ? (text(remark["airlineCode"]) ?? "YY") : null,
+          keyword: text(remark["keyword"]) ?? null,
+          travelerIds: strings(remark["travelerIds"]),
+          flightOfferIds: strings(remark["flightOfferIds"]),
+        },
+      ];
+    }),
+  );
+}
+
+/** The identity of a stored remark (`booking_remarks` has no airline code in BookingRemarkRow: matched without). */
+const rowKey = (row: BookingRemarkRow): string =>
+  `${row.kind}|${row.subType}|${row.text.trim().toUpperCase()}`;
+const entryKeyWithoutAirline = (entry: OrderRemarkEntry): string =>
+  `${entry.kind}|${entry.subType}|${entry.text.trim().toUpperCase()}`;
+
+/** True for the stored `VELEXIS <reference>` remark, which the projection never removes. */
+const isVelexisRow = (row: BookingRemarkRow): boolean =>
+  row.subType === VELEXIS_REMARK_SUBTYPE && row.text.startsWith(`${VELEXIS_REMARK_PREFIX} `);
+
+/**
+ * What the projection does to a booking's remarks for an order's remarks (see the file header): the order's remarks
+ * the booking has are kept (with their visibility and author), the others added, and the booking's remarks the order
+ * no longer has removed, the `VELEXIS <reference>` one excepted. Duplicates match one for one.
+ */
+export function planRemarks(
+  rows: readonly BookingRemarkRow[],
+  order: readonly OrderRemarkEntry[],
+): { readonly insert: OrderRemarkEntry[]; readonly remove: BookingRemarkRow[] } {
+  const remaining = [...rows];
+  const insert: OrderRemarkEntry[] = [];
+  for (const entry of order) {
+    const index = remaining.findIndex((row) => rowKey(row) === entryKeyWithoutAirline(entry));
+    if (index >= 0) {
+      remaining.splice(index, 1);
+    } else {
+      insert.push(entry);
+    }
+  }
+  return { insert, remove: remaining.filter((row) => !isVelexisRow(row)) };
+}
+
+/** A contact as `booking_contacts` stores it (without its ids and times). */
+export interface ContactValues {
+  readonly purpose: string;
+  readonly isPrimary: boolean;
+  readonly firstName: string | null;
+  readonly lastName: string | null;
+  readonly companyName: string | null;
+  readonly email: string | null;
+  readonly phones: JsonObject[];
+  readonly address: JsonObject | null;
+  readonly language: string | null;
+}
+
+/**
+ * The booking contacts of an order's contacts: the primary one is the first of `primaryPurpose` with an e-mail, else
+ * the first with an e-mail, else the first.
+ */
+export function contactValuesOf(contacts: readonly JsonObject[], primaryPurpose: string): ContactValues[] {
+  const values = contacts.map((contact) => {
+    const name = isRecord(contact["addresseeName"]) ? contact["addresseeName"] : {};
+    const purpose = purposeOf(contact);
+    return {
+      purpose: CONTACT_PURPOSES.has(purpose) ? purpose : "STANDARD",
+      isPrimary: false,
+      firstName: text(name["firstName"]) ?? null,
+      lastName: text(name["lastName"]) ?? null,
+      companyName: text(contact["companyName"]) ?? null,
+      email: text(contact["emailAddress"]) ?? null,
+      phones: records(contact["phones"]),
+      address: isRecord(contact["address"]) ? contact["address"] : null,
+      language: text(contact["language"]) ?? null,
+    };
+  });
+  const primary = Math.max(
+    0,
+    [
+      values.findIndex((value) => value.purpose === primaryPurpose && value.email !== null),
+      values.findIndex((value) => value.email !== null),
+    ].find((index) => index >= 0) ?? 0,
+  );
+  return values.map((value, index) => ({ ...value, isPrimary: index === primary }));
+}
+
+/** JSON text with sorted keys, so equal values compare equal whatever produced them. */
+export function canonicalJson(value: unknown): string {
+  const sort = (item: unknown): unknown => {
+    if (Array.isArray(item)) {
+      return item.map(sort);
+    }
+    if (isRecord(item)) {
+      return Object.fromEntries(
+        Object.keys(item)
+          .sort()
+          .map((key) => [key, sort(item[key])]),
+      );
+    }
+    return item;
+  };
+  return JSON.stringify(sort(value ?? null));
+}
+
+/** The stored contacts in the shape of `contactValuesOf`, to compare. */
+function storedContactValues(rows: readonly BookingContactRow[]): ContactValues[] {
+  return rows.map((row) => ({
+    purpose: row.purpose,
+    isPrimary: row.isPrimary,
+    firstName: row.firstName,
+    lastName: row.lastName,
+    companyName: row.companyName,
+    email: row.email,
+    phones: records(row.phones),
+    address: isRecord(row.address) ? row.address : null,
+    language: row.language,
+  }));
+}
+
+/** The order's flight offers named by id only (an id adds no service; the specification requires the element). */
+export function flightOfferRefsOf(
+  snapshot: unknown,
+  children: Pick<BookingChildren, "segments">,
+): JsonObject[] {
+  const fromSnapshot = isRecord(snapshot)
+    ? records(snapshot["flightOffers"]).flatMap((offer) => text(offer["id"]) ?? [])
+    : [];
+  const ids =
+    fromSnapshot.length > 0
+      ? fromSnapshot
+      : [...new Set(children.segments.map((segment) => segment.amadeusFlightOfferId))];
+  return (ids.length > 0 ? ids : ["1"]).map((id) => ({ type: "flight-offer", id }));
+}
+
+/**
+ * An order's `data` as Velexis keeps a copy of it (the snapshot, the PATCH request of the supplier log, the staff
+ * action): the shared redactor, then the numbers of its forms of identification (passport, identity card or driving
+ * licence numbers, which the shared redactor does not know) cut to their last 4, as console.bookings.get shows them.
+ */
+export function keptOrderDataOf(data: JsonObject): JsonObject {
+  const redacted = redactPayload(data);
+  return Array.isArray(redacted["formOfIdentifications"])
+    ? { ...redacted, formOfIdentifications: maskedIdentifications(redacted["formOfIdentifications"]) }
+    : redacted;
+}
+
+/**
+ * The Amadeus answer as console.bookings.retrieve returns it: verbatim, except that its forms of payment pass the
+ * shared redactor (no card number, OADR-0018 point 8) and its dictionaries keep `carriers` and `aircraft` only, as
+ * every booking answer does (`dictionariesOf`: the document's AmadeusLocationEntry and AmadeusCurrencyEntry require a
+ * member that Amadeus's maps by code never have).
+ */
+export function consoleOrderReplyOf(body: JsonObject): JsonObject {
+  const { dictionaries: raw, ...rest } = body;
+  const reply: JsonObject = { ...rest };
+  const data = body["data"];
+  if (isRecord(data) && data["formOfPayments"] !== undefined) {
+    reply["data"] = { ...data, formOfPayments: redactPayload(data["formOfPayments"]) };
+  }
+  const dictionaries = dictionariesOf(raw);
+  if (dictionaries !== null) {
+    reply["dictionaries"] = dictionaries;
+  }
+  return reply;
+}
+
+/** The differences between two console views of a booking that a resync can make (ConsoleSyncChange). */
+export function consoleSyncChanges(before: ConsoleBooking, after: ConsoleBooking): ConsoleSyncChange[] {
+  const changes: ConsoleSyncChange[] = [];
+  const compare = (path: string, label: string, previous: unknown, next: unknown): void => {
+    if (canonicalJson(previous) !== canonicalJson(next)) {
+      changes.push({ path, label, before: previous ?? null, after: next ?? null });
+    }
+  };
+  compare("/status", "Booking status", before.status, after.status);
+  compare("/ticketing/status", "Ticketing status", before.ticketing.status, after.ticketing.status);
+  after.tickets.forEach((ticket, index) => {
+    const previous = before.tickets.find((candidate) => candidate.documentNumber === ticket.documentNumber);
+    if (previous === undefined) {
+      changes.push({
+        path: `/tickets/${index}`,
+        label: `Ticket ${ticket.documentNumber}`,
+        before: null,
+        after: {
+          documentType: ticket.documentType,
+          documentNumber: ticket.documentNumber,
+          status: ticket.status,
+          travelerId: ticket.travelerId,
+        },
+      });
+      return;
+    }
+    compare(
+      `/tickets/${index}/status`,
+      `Ticket ${ticket.documentNumber} status`,
+      previous.status,
+      ticket.status,
+    );
+  });
+  const previousSegments = before.itineraries.flatMap((itinerary) => itinerary.segments);
+  after.itineraries.forEach((itinerary, itineraryIndex) => {
+    itinerary.segments.forEach((segment, segmentIndex) => {
+      const previous = previousSegments.find(
+        (candidate) => candidate.flightOfferId === segment.flightOfferId && candidate.id === segment.id,
+      );
+      if (previous === undefined) {
+        return;
+      }
+      const path = `/itineraries/${itineraryIndex}/segments/${segmentIndex}`;
+      compare(`${path}/status`, `${segment.flightNumber} status`, previous.status, segment.status);
+      compare(`${path}/isFlown`, `${segment.flightNumber} flown`, previous.isFlown, segment.isFlown);
+      compare(
+        `${path}/departure/at`,
+        `${segment.flightNumber} departure time`,
+        previous.departure.at,
+        segment.departure.at,
+      );
+      compare(
+        `${path}/arrival/at`,
+        `${segment.flightNumber} arrival time`,
+        previous.arrival.at,
+        segment.arrival.at,
+      );
+    });
+  });
+  const locators = (booking: ConsoleBooking) =>
+    booking.recordLocators.map((record) => `${record.originSystemCode}:${record.reference}`).sort();
+  compare("/recordLocators", "Record locators", locators(before), locators(after));
+  const contacts = (booking: ConsoleBooking) => booking.contacts.map(({ id: _id, ...contact }) => contact);
+  compare("/contacts", "Contacts", contacts(before), contacts(after));
+  const remarks = (booking: ConsoleBooking) =>
+    booking.remarks.map((remark) => ({
+      kind: remark.kind,
+      subType: remark.subType,
+      text: remark.text,
+      travelerIds: remark.travelerIds,
+    }));
+  compare("/remarks", "Remarks", remarks(before), remarks(after));
+  compare("/ticketingAgreement", "Ticketing agreement", before.ticketingAgreement, after.ticketingAgreement);
+  compare("/automatedProcess", "Automated processes", before.automatedProcess, after.automatedProcess);
+  compare("/formOfPayments", "Forms of payment", before.formOfPayments, after.formOfPayments);
+  compare("/queuingOfficeId", "Queuing office", before.queuingOfficeId, after.queuingOfficeId);
+  compare("/ownerOfficeId", "Owner office", before.ownerOfficeId, after.ownerOfficeId);
+  return changes;
+}
+
+/** A supplier error a use case passes on: codes the operation does not document become `502 SUPPLIER_ERROR`. */
+function documented(error: unknown, codes: ReadonlySet<string>): unknown {
+  if (!isAppError(error) || codes.has(error.code)) {
+    return error;
+  }
+  return new AppError("SUPPLIER_ERROR", {
+    ...(error.supplier === undefined ? {} : { supplier: error.supplier }),
+    cause: error,
+  });
+}
+
+/** True for an Amadeus `404` (an order Amadeus no longer has). */
+const isOrderNotFound = (error: unknown): error is AppError =>
+  isAppError(error) && error.cause instanceof AmadeusCallError && error.cause.httpStatus === 404;
+
+/** A sealed document as `booking_travelers` keeps it (StoredDocument), or `undefined` for one without a number. */
+function storedDocumentOf(document: JsonObject): StoredDocument | undefined {
+  const type = text(document["documentType"]);
+  const number = text(document["number"]);
+  if (type === undefined || number === undefined || !DOCUMENT_TYPES.has(type)) {
+    return undefined;
+  }
+  const stored: Record<string, unknown> = { documentType: type, number };
+  for (const field of DOCUMENT_FIELDS) {
+    const value = text(document[field]);
+    if (value !== undefined) {
+      stored[field] = value;
+    }
+  }
+  stored["holder"] = document["holder"] !== false;
+  return stored as unknown as StoredDocument;
+}
+
+const dateOrNull = (value: unknown): string | null =>
+  typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : null;
+const countryOrNull = (value: string | undefined): string | null =>
+  value !== undefined && /^[A-Z]{2}$/.test(value) ? value : null;
+
+/** The value of a name part: the merged traveller's when it has the key, else the stored one. */
+function namePart(name: JsonObject, key: string, stored: string | null): string | null {
+  return Object.prototype.hasOwnProperty.call(name, key) ? (text(name[key]) ?? null) : stored;
+}
+
+// ---- The service ----------------------------------------------------------------------------------------------------
+
+/** What T1 of a patch read and built. */
+interface PreparedPatch {
+  readonly orderId: string;
+  readonly office: string | null;
+  /** The booking as T1 read it (the before of a resync after a timeout). */
+  readonly previous: BookingState;
+  /** The Flight Order Management PATCH `data`. */
+  readonly data: JsonObject;
+  /** The stored values of the elements sent (the staff action's before). */
+  readonly before: JsonObject;
+  /** The travellers sent, merged, with their rows. */
+  readonly travelers: readonly { readonly row: BookingTravelerRow; readonly traveler: JsonObject }[];
+  /** The keys of the remarks the request sent (their new rows carry the staff member). */
+  readonly sentRemarkKeys: ReadonlySet<string>;
+}
+
+/** Why an order is projected on the booking. */
+type ProjectionCause = "patch" | "resync" | "patch_timeout";
+
+/** A booking's status and version before a synchronisation (the `booking.resync` staff action's before). */
+interface BookingState {
+  readonly status: string;
+  readonly version: number;
+}
+
+@Injectable()
+export class ConsoleBookingActionsService {
+  constructor(
+    private readonly tx: TenantTx,
+    private readonly bookings: BookingsRepository,
+    private readonly repository: ConsoleBookingsRepository,
+    private readonly travelerDocuments: BookingTravelerDocuments,
+    private readonly customerBookings: CustomerBookingsService,
+    private readonly consoleBookings: ConsoleBookingsService,
+    private readonly amadeus: AmadeusClient,
+    private readonly audit: StaffActionsWriter,
+    private readonly tenants: TenantContext,
+    private readonly staff: StaffContext,
+    private readonly ids: IdGenerator,
+    private readonly clock: Clock,
+    @InjectPinoLogger(ConsoleBookingActionsService.name) private readonly logger: PinoLogger,
+  ) {}
+
+  // ---- console.bookings.retrieve -----------------------------------------------------------------------------------
+
+  /** The verbatim Amadeus order of a booking (see the file header). */
+  async retrieve(bookingId: string, query: ConsoleRetrieveQuery): Promise<ConsoleFlightOrderRetrieval> {
+    const tenant = this.tenants.require();
+    const include: "bags"[] = [...(query.include ?? [])];
+    const fareRules: FareRuleType[] = [...(query.fareRules ?? [])];
+    const updateSnapshot = query.updateSnapshot !== false;
+    const claim = await this.tx.run(async (trx) => {
+      const booking = await this.bookingOfEnvironment(trx, tenant, bookingId);
+      return { orderId: this.requireOrder(booking), office: booking.ownerOfficeId, version: booking.version };
+    });
+    const amadeusQuery = {
+      ...(include.length > 0 ? { include: [...include] } : {}),
+      ...(fareRules.length > 0 ? { fareRules: [...fareRules] } : {}),
+    };
+    let reply;
+    try {
+      reply = await this.amadeus.getFlightOrder(
+        this.callContext(tenant, bookingId, OPERATIONS.retrieve, claim.office),
+        { flightOrderId: claim.orderId, query: amadeusQuery },
+      );
+    } catch (error) {
+      if (isOrderNotFound(error)) {
+        throw new AppError("NOT_FOUND", {
+          message: "Amadeus no longer has this order.",
+          ...(error.supplier === undefined ? {} : { supplier: error.supplier }),
+          cause: error,
+        });
+      }
+      throw documented(error, RETRIEVE_SUPPLIER_CODES);
+    }
+    const body: unknown = reply.body;
+    if (!isRecord(body) || !isRecord(body["data"])) {
+      throw new AppError("SUPPLIER_ERROR");
+    }
+    const supplierRequestId = reply.call.supplierRequestId;
+    if (supplierRequestId === null) {
+      // The answer names its supplier_requests row, which could not be written (the log line says why).
+      throw new Error("console.bookings.retrieve: the Amadeus call could not be recorded");
+    }
+    const retrievedAt = this.clock.now();
+    const data = body["data"];
+    const snapshotUpdated = await this.tx.run(async (trx) => {
+      let updated = false;
+      if (updateSnapshot) {
+        const booking = await this.bookings.booking(trx, bookingId, true);
+        const details = await this.bookings.bookingDetails(trx, bookingId);
+        if (booking !== undefined && details !== undefined && booking.version === claim.version) {
+          const included = isRecord(details.orderIncluded) ? { ...details.orderIncluded } : {};
+          if (include.length > 0) {
+            included["bags"] = isRecord(body["included"]) ? (body["included"]["bags"] ?? {}) : {};
+            included["bagsLoadedAt"] = retrievedAt.toISOString();
+          }
+          if (fareRules.length > 0) {
+            const rules: StoredFareRules = {
+              loadedAt: retrievedAt.toISOString(),
+              types: [...fareRules],
+              offers: offerFareRulesOf(data),
+            };
+            included["fareRules"] = rules;
+          }
+          await this.bookings.updateSynced(
+            trx,
+            bookingId,
+            {
+              order_snapshot: JSON.stringify(keptOrderDataOf(data)),
+              ...(body["dictionaries"] === undefined
+                ? {}
+                : { order_dictionaries: JSON.stringify(body["dictionaries"]) }),
+              order_included: JSON.stringify(redactPayload(included)),
+              last_synced_at: retrievedAt,
+              sync_error: null,
+              updated_at: retrievedAt,
+            },
+            false,
+          );
+          updated = true;
+        }
+      }
+      await this.audit.record(trx, {
+        action: CONSOLE_BOOKING_ACTIONS.retrieve,
+        targetType: "booking",
+        targetId: bookingId,
+        bookingId,
+        after: {
+          flightOrderId: claim.orderId,
+          include,
+          fareRules,
+          snapshotUpdated: updated,
+          supplierRequestId,
+        },
+      });
+      return updated;
+    });
+    const spec = AMADEUS_OPERATIONS.getFlightOrder;
+    return {
+      bookingId,
+      flightOrderId: claim.orderId,
+      retrievedAt: retrievedAt.toISOString(),
+      include,
+      fareRules,
+      snapshotUpdated,
+      call: {
+        supplierRequestId,
+        environment: tenant.environment,
+        officeId: reply.call.officeId,
+        amadeusApi: spec.api,
+        amadeusOperationId: spec.operationId,
+        httpMethod: spec.method,
+        path: requestPath(spec.path, { "flight-orderId": claim.orderId }, amadeusQuery),
+        httpStatus: reply.call.status,
+        durationMs: reply.call.durationMs,
+        correlationId: reply.call.correlationId,
+      },
+      amadeus: consoleOrderReplyOf(body) as ConsoleFlightOrderRetrieval["amadeus"],
+    };
+  }
+
+  // ---- console.bookings.patch --------------------------------------------------------------------------------------
+
+  /** Changes the booking's order and its local tags (see the file header); answers the console booking. */
+  async patch(bookingId: string, ifMatch: string, body: ConsolePatchRequest): Promise<ConsoleBooking> {
+    refusePatchRequest(body);
+    const tenant = this.tenants.require();
+    const elements = patchElementsOf(body);
+    if (elements.amadeus.length === 0) {
+      await this.tx.run((trx) => this.patchLocally(trx, tenant, bookingId, ifMatch, body));
+      return await this.answer(bookingId, body);
+    }
+    const prepared = await this.tx.run((trx) =>
+      this.preparePatch(trx, tenant, bookingId, ifMatch, body, elements.amadeus),
+    );
+    let reply;
+    try {
+      reply = await this.amadeus.patchFlightOrder(
+        this.callContext(tenant, bookingId, OPERATIONS.patch, prepared.office),
+        {
+          flightOrderId: prepared.orderId,
+          // Built from the validated request and the stored order (see preparePatch), as JSON.
+          body: { data: prepared.data } as unknown as PatchFlightOrderRequest["body"],
+        },
+        // The supplier log keeps the request as Velexis keeps an order (forms of identification cut, too).
+        { redactedRequest: { data: keptOrderDataOf(prepared.data) } },
+      );
+    } catch (error) {
+      if (isAppError(error) && error.code === "SUPPLIER_TIMEOUT") {
+        // The change may have happened at Amadeus: read the order back before answering, so the booking shows it.
+        await this.resyncAfterTimeout(tenant, bookingId, prepared);
+      }
+      throw documented(error, PATCH_SUPPLIER_CODES);
+    }
+    const replyBody: unknown = reply.body;
+    const replyData = isRecord(replyBody) && isRecord(replyBody["data"]) ? replyBody["data"] : undefined;
+    if (replyData === undefined) {
+      // A 2xx without an order: the change happened, its result is unknown here.
+      await this.resyncAfterTimeout(tenant, bookingId, prepared);
+      throw new AppError("SUPPLIER_ERROR");
+    }
+    await this.tx.run((trx) =>
+      this.recordPatch(trx, tenant, bookingId, body, elements.amadeus, prepared, {
+        data: replyData,
+        dictionaries: isRecord(replyBody) ? replyBody["dictionaries"] : undefined,
+        supplierRequestId: reply.call.supplierRequestId,
+      }),
+    );
+    return await this.answer(bookingId, body);
+  }
+
+  /** The console booking after a patch, with the warning of a `notifyCustomer` that sent nothing. */
+  private async answer(bookingId: string, body: ConsolePatchRequest): Promise<ConsoleBooking> {
+    const booking = await this.consoleBookings.get(bookingId, { refresh: false });
+    return body.notifyCustomer === true
+      ? { ...booking, warnings: [...(booking.warnings ?? []), { ...NOTIFICATION_NOT_SENT_WARNING }] }
+      : booking;
+  }
+
+  /** A patch of `tags` and `metadata` only: no Amadeus call, any status (see the file header). */
+  private async patchLocally(
+    trx: TenantTransaction,
+    tenant: RequestTenant,
+    bookingId: string,
+    ifMatch: string,
+    body: ConsolePatchRequest,
+  ): Promise<void> {
+    const booking = await this.bookingOfEnvironment(trx, tenant, bookingId, true);
+    this.requireVersion(booking, ifMatch);
+    const details = await this.repository.details(trx, bookingId);
+    const now = this.clock.now();
+    await this.bookings.updateBooking(trx, bookingId, {
+      ...(body.tags === undefined ? {} : { tags: [...body.tags] }),
+      ...(body.metadata === undefined ? {} : { metadata: JSON.stringify(body.metadata) }),
+      updated_at: now,
+    });
+    await this.audit.record(trx, {
+      action: CONSOLE_BOOKING_ACTIONS.tagsUpdated,
+      targetType: "booking",
+      targetId: bookingId,
+      bookingId,
+      reason: body.reason ?? null,
+      before: {
+        ...(body.tags === undefined ? {} : { tags: details?.tags ?? [] }),
+        ...(body.metadata === undefined ? {} : { metadata: booking.metadata }),
+      },
+      after: {
+        ...(body.tags === undefined ? {} : { tags: body.tags }),
+        ...(body.metadata === undefined ? {} : { metadata: body.metadata }),
+      },
+    });
+  }
+
+  /** T1 of a patch: the checks, and the PATCH data merged with the stored order (see the file header). */
+  private async preparePatch(
+    trx: TenantTransaction,
+    tenant: RequestTenant,
+    bookingId: string,
+    ifMatch: string,
+    body: ConsolePatchRequest,
+    elements: readonly AmadeusPatchElement[],
+  ): Promise<PreparedPatch> {
+    const booking = await this.bookingOfEnvironment(trx, tenant, bookingId, true);
+    this.requireVersion(booking, ifMatch);
+    if (booking.status === "cancelled") {
+      throw new AppError("BOOKING_ALREADY_CANCELLED");
+    }
+    const orderId = this.requireOrder(booking);
+    const stored = await this.bookings.bookingDetails(trx, bookingId);
+    const details = await this.repository.details(trx, bookingId);
+    if (stored === undefined || details === undefined) {
+      throw new AppError("NOT_FOUND");
+    }
+    const children = await this.bookings.children(trx, bookingId);
+    const snapshot = isRecord(stored.orderSnapshot) ? stored.orderSnapshot : {};
+    const data: JsonObject = {
+      type: "flight-order",
+      id: orderId,
+      flightOffers: flightOfferRefsOf(snapshot, children),
+    };
+    const before: JsonObject = {};
+    const travelers: { row: BookingTravelerRow; traveler: JsonObject }[] = [];
+    const sentRemarkKeys = new Set<string>();
+    for (const element of elements) {
+      switch (element) {
+        case "travelers": {
+          const merged = await this.mergedTravelers(tenant, children, body);
+          travelers.push(...merged.sent);
+          data["travelers"] = merged.travelers;
+          before["travelers"] = merged.before;
+          break;
+        }
+        case "contacts": {
+          const storedContacts = Array.isArray(snapshot["contacts"])
+            ? records(snapshot["contacts"])
+            : children.contacts.map((row) => amadeusOrderContactOf(row));
+          data["contacts"] = mergeContacts(
+            storedContacts,
+            records(body.contacts),
+            body.mergeContacts !== false,
+          );
+          before["contacts"] = storedContacts;
+          break;
+        }
+        case "remarks": {
+          const storedRemarks = isRecord(snapshot["remarks"])
+            ? snapshot["remarks"]
+            : {
+                general: children.remarks
+                  .filter((row) => row.kind === "general")
+                  .map((row) => ({
+                    subType: row.subType,
+                    text: row.text,
+                    ...(row.travelerIds.length > 0 ? { travelerIds: [...row.travelerIds] } : {}),
+                  })),
+              };
+          const sent = isRecord(body.remarks) ? body.remarks : {};
+          for (const kind of ["general", "airline"] as const) {
+            for (const remark of records(sent[kind])) {
+              sentRemarkKeys.add(remarkKey(kind, remark));
+            }
+          }
+          data["remarks"] = mergeRemarks(
+            storedRemarks,
+            {
+              general: Array.isArray(sent["general"]) ? sent["general"] : undefined,
+              airline: Array.isArray(sent["airline"]) ? sent["airline"] : undefined,
+            },
+            body.mergeRemarks !== false,
+            booking.reference,
+          );
+          before["remarks"] = storedRemarks;
+          break;
+        }
+        case "formOfPayments":
+        case "ticketingAgreement":
+        case "automatedProcess":
+        case "queuingOfficeId":
+        case "ownerOfficeId":
+        case "commissions":
+        case "formOfIdentifications": {
+          // Sent as given: Amadeus replaces the element with it.
+          data[element] = (body as JsonObject)[element];
+          before[element] = storedElementOf(element, booking, details);
+        }
+      }
+    }
+    return {
+      orderId,
+      office: booking.ownerOfficeId,
+      previous: { status: booking.status, version: booking.version },
+      data,
+      before,
+      travelers,
+      sentRemarkKeys,
+    };
+  }
+
+  /**
+   * The travellers of a patch (see the file header): Amadeus replaces the whole `travelers` element, so with
+   * `mergeTravelers` every traveller of the booking goes, those sent merged over the stored ones (documents decrypted
+   * in memory for the request only); without, the travellers as sent. `sent` are the travellers sent with their rows
+   * (what the record step stores), `before` their stored versions (the staff action's before, redacted there).
+   */
+  private async mergedTravelers(
+    tenant: RequestTenant,
+    children: BookingChildren,
+    body: ConsolePatchRequest,
+  ): Promise<{
+    readonly travelers: JsonObject[];
+    readonly sent: { row: BookingTravelerRow; traveler: JsonObject }[];
+    readonly before: JsonObject[];
+  }> {
+    const merge = body.mergeTravelers !== false;
+    const stored = new Map<string, JsonObject>();
+    for (const row of children.travelers) {
+      const opened = await this.travelerDocuments.open(tenant.schemaName, row);
+      stored.set(
+        row.amadeusTravelerId,
+        amadeusTravelerOf({
+          travelerId: row.amadeusTravelerId,
+          firstName: row.firstName,
+          middleName: row.middleName,
+          lastName: row.lastName,
+          secondLastName: row.secondLastName,
+          dateOfBirth: row.dateOfBirth,
+          gender: row.gender,
+          contact: row.contact,
+          documents: opened.documents,
+          discounts: opened.discounts,
+          loyaltyPrograms: row.loyaltyPrograms,
+          emergencyContact: row.emergencyContact,
+        }),
+      );
+    }
+    const sent: { row: BookingTravelerRow; traveler: JsonObject }[] = [];
+    const before: JsonObject[] = [];
+    for (const [index, traveler] of records(body.travelers).entries()) {
+      const row = children.travelers.find((candidate) => candidate.amadeusTravelerId === traveler["id"]);
+      const storedTraveler = row === undefined ? undefined : stored.get(row.amadeusTravelerId);
+      if (row === undefined || storedTraveler === undefined) {
+        throw new AppError("TRAVELER_DATA_INVALID", {
+          fieldErrors: [
+            {
+              path: `/travelers/${index}/id`,
+              code: "invalid",
+              message: "No traveller of the booking has this id.",
+            },
+          ],
+        });
+      }
+      const merged = mergeTraveler(storedTraveler, traveler, merge);
+      if (merged.missing.length > 0) {
+        throw new AppError("TRAVELER_DATA_INVALID", {
+          fieldErrors: merged.missing.map((missing) => ({
+            path: `/travelers/${index}/documents/${missing.index}/number`,
+            code: "required",
+            message: "The traveller has no document of this type to keep the number of.",
+          })),
+        });
+      }
+      before.push(storedTraveler);
+      sent.push({ row, traveler: merged.traveler });
+    }
+    const byId = new Map(sent.map((entry) => [entry.row.amadeusTravelerId, entry.traveler]));
+    return {
+      travelers: merge
+        ? children.travelers.flatMap((row): JsonObject[] => {
+            const traveler = byId.get(row.amadeusTravelerId) ?? stored.get(row.amadeusTravelerId);
+            return traveler === undefined ? [] : [traveler];
+          })
+        : sent.map((entry) => entry.traveler),
+      sent,
+      before,
+    };
+  }
+
+  /** T2 of a patch: the answer recorded on the booking (see the file header). */
+  private async recordPatch(
+    trx: TenantTransaction,
+    tenant: RequestTenant,
+    bookingId: string,
+    body: ConsolePatchRequest,
+    elements: readonly AmadeusPatchElement[],
+    prepared: PreparedPatch,
+    reply: {
+      readonly data: JsonObject;
+      readonly dictionaries: unknown;
+      readonly supplierRequestId: string | null;
+    },
+  ): Promise<void> {
+    const now = this.clock.now();
+    const booking = await this.bookings.booking(trx, bookingId, true);
+    const details = await this.repository.details(trx, bookingId);
+    if (booking === undefined || details === undefined) {
+      throw new AppError("NOT_FOUND");
+    }
+    const children = await this.bookings.children(trx, bookingId);
+    // The order as Amadeus answered it, with what was sent for an element the answer leaves out.
+    const order: JsonObject = { ...prepared.data, ...reply.data };
+    const projected = await this.projectOrder(trx, booking, details, children, order, {
+      staffId: this.staffId(),
+      sentRemarkKeys: prepared.sentRemarkKeys,
+      now,
+    });
+    const leadLastName = await this.storeTravelers(trx, tenant, booking, children, prepared.travelers, now);
+    await this.bookings.updateBooking(trx, bookingId, {
+      ...projected.values,
+      order_snapshot: JSON.stringify(keptOrderDataOf(reply.data)),
+      ...(reply.dictionaries === undefined ? {} : { order_dictionaries: JSON.stringify(reply.dictionaries) }),
+      ...(body.tags === undefined ? {} : { tags: [...body.tags] }),
+      ...(body.metadata === undefined ? {} : { metadata: JSON.stringify(body.metadata) }),
+      ...(leadLastName === undefined ? {} : { lead_last_name: leadLastName }),
+      last_synced_at: now,
+      sync_error: null,
+      updated_at: now,
+    });
+    const documentsChanged = prepared.travelers.some((entry) => Array.isArray(entry.traveler["documents"]));
+    const changed = [...elements, ...patchElementsOf(body).local];
+    await this.bookings.insertEvent(trx, {
+      id: this.ids.newId("evt"),
+      booking_id: bookingId,
+      type: BOOKING_PATCHED_EVENT,
+      actor_type: eventActorOf(tenant.actor).type,
+      actor_id: eventActorOf(tenant.actor).id,
+      status_from: booking.status,
+      status_to: booking.status,
+      summary: "Booking details updated.",
+      data: JSON.stringify(redactPayload({ elements: changed })),
+      visible_to_customer: elements.includes("contacts") || documentsChanged,
+      supplier_request_id: reply.supplierRequestId,
+      request_id: this.requestId(tenant),
+      created_at: now,
+      updated_at: now,
+    });
+    // What was sent: the travellers sent (merged), not the others the PATCH carried unchanged; the writer redacts it
+    // (documents), the forms of identification are cut here.
+    const sent = keptOrderDataOf(prepared.data);
+    const after: JsonObject = {};
+    for (const element of elements) {
+      after[element] =
+        element === "travelers" ? prepared.travelers.map((entry) => entry.traveler) : sent[element];
+    }
+    await this.audit.record(trx, {
+      action: CONSOLE_BOOKING_ACTIONS.patch,
+      targetType: "booking",
+      targetId: bookingId,
+      bookingId,
+      reason: body.reason ?? null,
+      before: {
+        ...prepared.before,
+        ...(body.tags === undefined ? {} : { tags: details.tags }),
+        ...(body.metadata === undefined ? {} : { metadata: booking.metadata }),
+      },
+      after: {
+        ...after,
+        ...(body.tags === undefined ? {} : { tags: body.tags }),
+        ...(body.metadata === undefined ? {} : { metadata: body.metadata }),
+      },
+    });
+  }
+
+  /**
+   * The travellers of a patch stored as sent (documents and discount cards sealed again for their rows); returns the
+   * lead traveller's new upper-case last name, or `undefined` when no traveller was sent.
+   */
+  private async storeTravelers(
+    trx: TenantTransaction,
+    tenant: RequestTenant,
+    booking: BookingRow,
+    children: BookingChildren,
+    travelers: PreparedPatch["travelers"],
+    now: Date,
+  ): Promise<string | undefined> {
+    if (travelers.length === 0) {
+      return undefined;
+    }
+    const lastNames = new Map(children.travelers.map((row) => [row.id, row.lastName]));
+    for (const { row, traveler } of travelers) {
+      const name = isRecord(traveler["name"]) ? traveler["name"] : {};
+      const documents = records(traveler["documents"]).flatMap(
+        (document) => storedDocumentOf(document) ?? [],
+      );
+      const discounts = records(traveler["discountEligibility"]) as AmadeusDiscount[];
+      const sealed = await this.travelerDocuments.seal(tenant.schemaName, row.id, documents, discounts);
+      const main = documents.find((document) => document.holder) ?? documents[0];
+      const lastName = namePart(name, "lastName", row.lastName) ?? row.lastName;
+      lastNames.set(row.id, lastName);
+      await this.repository.updateTraveler(trx, booking.id, row.id, {
+        first_name: namePart(name, "firstName", row.firstName) ?? row.firstName,
+        middle_name: namePart(name, "middleName", row.middleName),
+        last_name: lastName,
+        second_last_name: namePart(name, "secondLastName", row.secondLastName),
+        date_of_birth: Object.prototype.hasOwnProperty.call(traveler, "dateOfBirth")
+          ? dateOrNull(traveler["dateOfBirth"])
+          : row.dateOfBirth,
+        gender:
+          typeof traveler["gender"] === "string" && GENDERS.has(traveler["gender"])
+            ? traveler["gender"]
+            : row.gender,
+        contact: isRecord(traveler["contact"]) ? JSON.stringify(traveler["contact"]) : null,
+        loyalty_programs: JSON.stringify(records(traveler["loyaltyPrograms"])),
+        emergency_contact: isRecord(traveler["emergencyContact"])
+          ? JSON.stringify(traveler["emergencyContact"])
+          : null,
+        documents_ciphertext: sealed.documentsCiphertext,
+        discount_eligibility_ciphertext: sealed.discountEligibilityCiphertext,
+        encryption_key_id: sealed.encryptionKeyId,
+        document_type: main?.documentType ?? null,
+        document_last4: main === undefined ? null : main.number.slice(-4),
+        document_expiry_date: dateOrNull(main?.expiryDate),
+        document_issuance_country: countryOrNull(main?.issuanceCountry),
+        document_nationality: countryOrNull(main?.nationality),
+        updated_at: now,
+      });
+    }
+    // The lead traveller as the console list reads it: the first adult, by Amadeus id.
+    const lead = [...children.travelers].sort(
+      (a, b) =>
+        Number(a.travelerType !== "ADULT") - Number(b.travelerType !== "ADULT") ||
+        a.amadeusTravelerId.length - b.amadeusTravelerId.length ||
+        a.amadeusTravelerId.localeCompare(b.amadeusTravelerId),
+    )[0];
+    return lead === undefined ? undefined : (lastNames.get(lead.id) ?? lead.lastName).toUpperCase();
+  }
+
+  /**
+   * After a PATCH whose outcome is unknown: the refresh without its throttle and the projection of the order read, so
+   * the booking shows what Amadeus holds. Its failure is logged; the caller answers the original error.
+   */
+  private async resyncAfterTimeout(
+    tenant: RequestTenant,
+    bookingId: string,
+    prepared: Pick<PreparedPatch, "previous" | "sentRemarkKeys">,
+  ): Promise<void> {
+    try {
+      const outcome = await this.customerBookings.refresh(
+        tenant,
+        bookingId,
+        OPERATIONS.patch,
+        {},
+        { throttleMs: 0 },
+      );
+      if (outcome.kind === "refreshed" || outcome.kind === "superseded") {
+        // The staff member's remarks the PATCH may have added are theirs, as after a PATCH that answered.
+        await this.tx.run((trx) =>
+          this.recordResync(trx, tenant, bookingId, "patch_timeout", prepared.previous, {
+            staffId: this.staffId(),
+            sentRemarkKeys: prepared.sentRemarkKeys,
+          }),
+        );
+      }
+      this.logger.info({ bookingId, outcome: outcome.kind }, "console.bookings.patch_resynced");
+    } catch (error) {
+      this.logger.warn({ bookingId, err: error }, "console.bookings.patch_resync_failed");
+    }
+  }
+
+  // ---- console.bookings.resync -------------------------------------------------------------------------------------
+
+  /** The booking synchronised with its Amadeus order (see the file header). */
+  async resync(bookingId: string, body: ConsoleResyncRequest): Promise<ConsoleBookingResyncResult> {
+    const tenant = this.tenants.require();
+    await this.tx.run(async (trx) => {
+      const booking = await this.bookingOfEnvironment(trx, tenant, bookingId);
+      this.requireOrder(booking);
+      if (booking.status === "cancelled") {
+        throw new AppError("BOOKING_NOT_MODIFIABLE", {
+          message: "A cancelled booking has no order to synchronise.",
+          details: { status: booking.status },
+        });
+      }
+    });
+    const before = await this.consoleBookings.get(bookingId, { refresh: false });
+    const outcome = await this.customerBookings.refresh(
+      tenant,
+      bookingId,
+      OPERATIONS.resync,
+      { include: body.include, fareRules: body.fareRules },
+      { throttleMs: CONSOLE_REFRESH_THROTTLE_MS },
+    );
+    switch (outcome.kind) {
+      case "skipped":
+        throw new AppError("BOOKING_NOT_MODIFIABLE", { details: { status: before.status } });
+      case "throttled":
+        throw new AppError("RATE_LIMITED", {
+          message: "This booking was synchronised a moment ago: try again shortly.",
+          details: { retryAfterSeconds: outcome.retryAfterSeconds },
+        });
+      case "not_found":
+        throw new AppError("SUPPLIER_REJECTED", { message: "Amadeus no longer has this order." });
+      case "refreshed":
+      case "superseded":
+        break;
+    }
+    await this.tx.run((trx) =>
+      this.recordResync(
+        trx,
+        tenant,
+        bookingId,
+        "resync",
+        { status: before.status, version: before.version },
+        { staffId: null, sentRemarkKeys: new Set() },
+      ),
+    );
+    const synced = await this.consoleBookings.get(bookingId, { refresh: false });
+    const warnings = outcome.kind === "refreshed" ? outcome.warnings : [];
+    const after: ConsoleBooking =
+      outcome.kind === "refreshed"
+        ? {
+            ...synced,
+            syncStatus: "refreshed",
+            supplierSync: { ...synced.supplierSync, status: "refreshed" },
+            ...(warnings.length > 0 ? { warnings: [...(synced.warnings ?? []), ...warnings] } : {}),
+          }
+        : synced;
+    return {
+      booking: after,
+      changes: consoleSyncChanges(before, after),
+      statusChanged: before.status !== after.status,
+      previousStatus: before.status,
+    };
+  }
+
+  /**
+   * T3 of a resync (and of the resync after a timed-out patch): the stored order projected on the booking, the event
+   * `booking.synced` and the `booking.resync` staff action, whose before is `previous` (the booking before the refresh
+   * that read the order, which may have changed its status) and whose after is the booking now.
+   */
+  private async recordResync(
+    trx: TenantTransaction,
+    tenant: RequestTenant,
+    bookingId: string,
+    cause: ProjectionCause,
+    previous: BookingState,
+    remarks: { readonly staffId: string | null; readonly sentRemarkKeys: ReadonlySet<string> },
+  ): Promise<void> {
+    const now = this.clock.now();
+    const booking = await this.bookings.booking(trx, bookingId, true);
+    const stored = await this.bookings.bookingDetails(trx, bookingId);
+    const details = await this.repository.details(trx, bookingId);
+    if (booking === undefined || stored === undefined || details === undefined) {
+      throw new AppError("NOT_FOUND");
+    }
+    const children = await this.bookings.children(trx, bookingId);
+    const order = isRecord(stored.orderSnapshot) ? stored.orderSnapshot : {};
+    const projected = await this.projectOrder(trx, booking, details, children, order, { ...remarks, now });
+    if (projected.changed.length > 0) {
+      await this.bookings.updateBooking(trx, bookingId, { ...projected.values, updated_at: now });
+    }
+    await this.bookings.insertEvent(trx, {
+      id: this.ids.newId("evt"),
+      booking_id: bookingId,
+      type: BOOKING_SYNCED_EVENT,
+      actor_type: eventActorOf(tenant.actor).type,
+      actor_id: eventActorOf(tenant.actor).id,
+      status_from: booking.status,
+      status_to: booking.status,
+      summary: "Booking synchronised with the airline.",
+      data: JSON.stringify(redactPayload({ cause, elements: projected.changed })),
+      visible_to_customer: false,
+      request_id: this.requestId(tenant),
+      created_at: now,
+      updated_at: now,
+    });
+    await this.audit.record(trx, {
+      action: CONSOLE_BOOKING_ACTIONS.resync,
+      targetType: "booking",
+      targetId: bookingId,
+      bookingId,
+      reason: cause === "patch_timeout" ? "Synchronised after a patch whose outcome was unknown." : null,
+      before: { status: previous.status, version: previous.version },
+      after: {
+        status: booking.status,
+        version: booking.version + (projected.changed.length > 0 ? 1 : 0),
+        elements: projected.changed,
+      },
+    });
+  }
+
+  /**
+   * The projection of an order (`order`: an Amadeus `data`) on the booking (see the file header): writes the contacts
+   * and remarks, and returns the booking columns that change with the names of the elements that changed.
+   */
+  private async projectOrder(
+    trx: TenantTransaction,
+    booking: BookingRow,
+    details: ConsoleBookingDetailsRow,
+    children: BookingChildren,
+    order: JsonObject,
+    options: {
+      readonly staffId: string | null;
+      readonly sentRemarkKeys: ReadonlySet<string>;
+      readonly now: Date;
+    },
+  ): Promise<{ readonly values: Updateable<Db["bookings"]>; readonly changed: string[] }> {
+    const changed: string[] = [];
+    const values: Updateable<Db["bookings"]> = {};
+    const { now } = options;
+    if (Array.isArray(order["contacts"])) {
+      const primaryPurpose = children.contacts.find((row) => row.isPrimary)?.purpose ?? "STANDARD";
+      const contacts = contactValuesOf(records(order["contacts"]), primaryPurpose);
+      if (
+        contacts.length > 0 &&
+        canonicalJson(contacts) !== canonicalJson(storedContactValues(children.contacts))
+      ) {
+        await this.repository.replaceContacts(
+          trx,
+          booking.id,
+          contacts.map((contact, index) =>
+            contactRowOf(this.ids.newId("bco"), booking.id, contact, now, index),
+          ),
+        );
+        const primary = contacts.find((contact) => contact.isPrimary);
+        if (primary?.email !== null && primary?.email !== undefined) {
+          values.contact_email = primary.email;
+        }
+        changed.push("contacts");
+      }
+    }
+    if (isRecord(order["remarks"])) {
+      const plan = planRemarks(children.remarks, orderRemarksOf(order["remarks"]));
+      if (plan.insert.length > 0 || plan.remove.length > 0) {
+        await this.repository.deleteRemarks(
+          trx,
+          booking.id,
+          plan.remove.map((row) => row.id),
+        );
+        await this.bookings.insertChildren(trx, {
+          associatedRecords: [],
+          travelers: [],
+          contacts: [],
+          segments: [],
+          tickets: [],
+          remarks: plan.insert.map((entry, index) => ({
+            id: this.ids.newId("rmk"),
+            booking_id: booking.id,
+            kind: entry.kind,
+            sub_type: entry.subType,
+            category: entry.category,
+            airline_code: entry.airlineCode,
+            keyword: entry.keyword,
+            text: entry.text,
+            traveler_ids: entry.travelerIds,
+            flight_offer_ids: entry.flightOfferIds,
+            visible_to_customer: false,
+            created_by_staff_id: options.sentRemarkKeys.has(entry.key) ? options.staffId : null,
+            created_at: new Date(now.getTime() + index),
+            updated_at: now,
+          })),
+        });
+        changed.push("remarks");
+      }
+    }
+    const jsonColumns = [
+      ["ticketingAgreement", "ticketing_agreement", details.ticketingAgreement],
+      ["automatedProcess", "automated_process", details.automatedProcess],
+      ["formOfPayments", "form_of_payments", details.formOfPayments],
+      ["commissions", "commissions", details.commissions],
+      ["formOfIdentifications", "form_of_identifications", details.formOfIdentifications],
+    ] as const;
+    for (const [element, column, current] of jsonColumns) {
+      const raw = order[element];
+      const value = element === "ticketingAgreement" ? (isRecord(raw) ? raw : undefined) : records(raw);
+      if (raw === undefined || value === undefined) {
+        continue;
+      }
+      const next =
+        element === "formOfPayments"
+          ? redactPayload(value)
+          : element === "formOfIdentifications"
+            ? maskedIdentifications(value)
+            : value;
+      if (canonicalJson(next) !== canonicalJson(current)) {
+        values[column] = JSON.stringify(next);
+        changed.push(element);
+      }
+    }
+    if (changed.includes("ticketingAgreement")) {
+      const agreement = isRecord(order["ticketingAgreement"]) ? order["ticketingAgreement"] : null;
+      const local = deadlineLocalOf(booking.lastTicketingDate, agreement);
+      const settings = await this.bookings.settings(trx);
+      const [deadline] =
+        local === null || settings === undefined
+          ? [undefined]
+          : await this.bookings.instants(trx, [{ local, zone: settings.timeZone }]);
+      if (local === null || deadline !== undefined) {
+        values.ticketing_deadline_at = deadline ?? null;
+      }
+    }
+    for (const [element, column, current] of [
+      ["queuingOfficeId", "queuing_office_id", booking.queuingOfficeId],
+      ["ownerOfficeId", "owner_office_id", booking.ownerOfficeId],
+    ] as const) {
+      const office = text(order[element]);
+      if (office !== undefined && office !== current) {
+        values[column] = office;
+        changed.push(element);
+      }
+    }
+    return { values, changed };
+  }
+
+  // ---- console.bookings.addNote ------------------------------------------------------------------------------------
+
+  /** A staff note on the booking's timeline (see the file header). */
+  async addNote(bookingId: string, body: ConsoleNoteRequest): Promise<ConsoleBookingNote> {
+    const tenant = this.tenants.require();
+    return await this.tx.run(async (trx) => {
+      await this.bookingOfEnvironment(trx, tenant, bookingId);
+      const id = this.ids.newId("evt");
+      const now = this.clock.now();
+      const visibleToCustomer = body.visibleToCustomer === true;
+      const actor = eventActorOf(tenant.actor);
+      await this.bookings.insertEvent(trx, {
+        id,
+        booking_id: bookingId,
+        type: STAFF_NOTE_EVENT,
+        actor_type: actor.type,
+        actor_id: actor.id,
+        summary: body.text,
+        data: JSON.stringify(redactPayload({ text: body.text })),
+        visible_to_customer: visibleToCustomer,
+        request_id: this.requestId(tenant),
+        created_at: now,
+        updated_at: now,
+      });
+      // The note's id and visibility only: its text is the staff member's, possibly personal data.
+      await this.audit.record(trx, {
+        action: CONSOLE_BOOKING_ACTIONS.note,
+        targetType: "booking",
+        targetId: bookingId,
+        bookingId,
+        after: { noteId: id, visibleToCustomer },
+      });
+      return {
+        id,
+        bookingId,
+        text: body.text,
+        visibleToCustomer,
+        author: this.author(tenant),
+        createdAt: now.toISOString(),
+      };
+    });
+  }
+
+  /** The author of a note: the signed-in staff member, else the key of a key-only call. */
+  private author(tenant: RequestTenant): ConsoleActor {
+    const principal = this.staff.get();
+    if (principal !== undefined) {
+      return {
+        type: "staff",
+        id: principal.family.staffId,
+        name: principal.member.account.fullName,
+        email: principal.member.account.email,
+        role: principal.member.role,
+      };
+    }
+    return {
+      type: tenant.actor.type === "api_key" ? "api_key" : "system",
+      id: tenant.actor.type === "api_key" ? tenant.actor.id : null,
+      name: null,
+      email: null,
+      role: null,
+    };
+  }
+
+  // ---- Shared ------------------------------------------------------------------------------------------------------
+
+  /** The booking of the request's environment (`lock`: `FOR UPDATE`); another environment's or none is a 404. */
+  private async bookingOfEnvironment(
+    trx: TenantTransaction,
+    tenant: RequestTenant,
+    bookingId: string,
+    lock = false,
+  ): Promise<BookingRow> {
+    const booking = await this.bookings.booking(trx, bookingId, lock);
+    if (booking === undefined || booking.environment !== tenant.environment) {
+      throw new AppError("NOT_FOUND");
+    }
+    return booking;
+  }
+
+  /** The booking's Amadeus order id; a pending or failed booking has none (`409 BOOKING_NOT_MODIFIABLE`). */
+  private requireOrder(booking: BookingRow): string {
+    if (booking.amadeusOrderId === null || booking.status === "pending" || booking.status === "failed") {
+      throw new AppError("BOOKING_NOT_MODIFIABLE", {
+        message: "The booking has no Amadeus order.",
+        details: { status: booking.status },
+      });
+    }
+    return booking.amadeusOrderId;
+  }
+
+  /** `412 PRECONDITION_FAILED` unless `ifMatch` names the booking's version. */
+  private requireVersion(booking: BookingRow, ifMatch: string): void {
+    if (!ifMatchSatisfied(ifMatch, booking.version)) {
+      throw new AppError("PRECONDITION_FAILED", { details: { currentVersion: booking.version } });
+    }
+  }
+
+  private staffId(): string | null {
+    return this.staff.get()?.family.staffId ?? null;
+  }
+
+  private callContext(
+    tenant: RequestTenant,
+    bookingId: string,
+    operation: string,
+    office: string | null,
+  ): AmadeusCallContext {
+    return {
+      tenantId: tenant.tenantId,
+      environment: tenant.environment,
+      operation,
+      requestId: this.requestId(tenant),
+      bookingId,
+      ...(tenant.actor.type === "staff" && tenant.actor.id !== null ? { staffId: tenant.actor.id } : {}),
+      ...(office === null ? {} : { orderOffice: office }),
+    };
+  }
+
+  private requestId(tenant: RequestTenant): string {
+    return this.tenants.requestId() ?? tenant.requestId;
+  }
+}
+
+/** The stored value of an element sent as given (a patch's before). */
+function storedElementOf(
+  element: AmadeusPatchElement,
+  booking: BookingRow,
+  details: ConsoleBookingDetailsRow,
+): unknown {
+  switch (element) {
+    case "formOfPayments":
+      return details.formOfPayments;
+    case "ticketingAgreement":
+      return details.ticketingAgreement;
+    case "automatedProcess":
+      return details.automatedProcess;
+    case "commissions":
+      return details.commissions;
+    case "formOfIdentifications":
+      return maskedIdentifications(details.formOfIdentifications);
+    case "queuingOfficeId":
+      return booking.queuingOfficeId;
+    case "ownerOfficeId":
+      return booking.ownerOfficeId;
+    case "travelers":
+    case "contacts":
+    case "remarks":
+      // Merged with the stored order: preparePatch reads them itself.
+      return null;
+  }
+}
+
+/** The `booking_contacts` row of a projected contact, one millisecond apart from the previous (no position column). */
+function contactRowOf(
+  id: string,
+  bookingId: string,
+  contact: ContactValues,
+  now: Date,
+  index: number,
+): Insertable<Db["booking_contacts"]> {
+  return {
+    id,
+    booking_id: bookingId,
+    purpose: contact.purpose,
+    is_primary: contact.isPrimary,
+    first_name: contact.firstName,
+    last_name: contact.lastName,
+    company_name: contact.companyName,
+    email: contact.email,
+    phones: JSON.stringify(contact.phones),
+    address: contact.address === null ? null : JSON.stringify(contact.address),
+    language: contact.language,
+    created_at: new Date(now.getTime() + index),
+    updated_at: now,
+  };
+}

@@ -1748,7 +1748,8 @@ The console API (staff sign-in by portal token, bookings, PNR import, queues, cu
   - Test-environment staff never see live bookings; customer-scope fields such as net amounts appear only here.
 - **Verify:** `pnpm --filter @velexis/ota-backend test:int -- console`
 
-### OBE-062 · Implement console retrieve, patch, resync and notes
+### OBE-062 · Implement console retrieve, patch, resync and notes ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-backend
 - **Milestone:** M4
 - **Depends on:** OBE-061

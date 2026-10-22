@@ -24,10 +24,14 @@
 //   notes (`staff.note` events), the last Amadeus calls without their bodies, the last staff actions without their
 //   before and after, and the last Flight Order Management GET.
 //
+// - `replaceContacts`, `deleteRemarks`, `updateTraveler`: what the console booking actions (OBE-062,
+//   console-booking-actions.service.ts) write besides the rows BookingsRepository writes: a booking's contacts
+//   replaced by the order's, its remarks the order no longer has removed, and a traveller changed by a patch.
+//
 // Like every tenant repository it takes the `tenantTx` transaction first, never opens one and never names a tenant
 // schema. Amounts are read as text, local date-times through `to_char`.
 import { Injectable } from "@nestjs/common";
-import { sql } from "@velexis/db";
+import { sql, type Insertable, type TenantDatabase, type Updateable } from "@velexis/db";
 import type { TenantTransaction } from "../tenancy/tenant-tx";
 
 /** A SQL fragment of type `T` (Kysely's RawBuilder, which @velexis/db does not re-export by name). */
@@ -652,6 +656,53 @@ export class ConsoleBookingsRepository {
       .orderBy("created_at", "desc")
       .orderBy("id", "desc")
       .limit(limit)
+      .execute();
+  }
+
+  // ---- Writes of the console booking actions (OBE-062) ------------------------------------------------------------
+
+  /**
+   * Replaces the contacts of booking `bookingId` with `rows` (the primary one included): the old rows are deleted
+   * first, so the partial unique index of the primary contact never sees two.
+   */
+  async replaceContacts(
+    trx: TenantTransaction,
+    bookingId: string,
+    rows: readonly Insertable<TenantDatabase["booking_contacts"]>[],
+  ): Promise<void> {
+    await trx.deleteFrom("booking_contacts").where("booking_id", "=", bookingId).execute();
+    if (rows.length > 0) {
+      await trx
+        .insertInto("booking_contacts")
+        .values([...rows])
+        .execute();
+    }
+  }
+
+  /** Deletes the remarks `ids` of booking `bookingId`. */
+  async deleteRemarks(trx: TenantTransaction, bookingId: string, ids: readonly string[]): Promise<void> {
+    if (ids.length === 0) {
+      return;
+    }
+    await trx
+      .deleteFrom("booking_remarks")
+      .where("booking_id", "=", bookingId)
+      .where("id", "in", [...ids])
+      .execute();
+  }
+
+  /** Changes the traveller row `travelerRowId` of booking `bookingId`. */
+  async updateTraveler(
+    trx: TenantTransaction,
+    bookingId: string,
+    travelerRowId: string,
+    values: Omit<Updateable<TenantDatabase["booking_travelers"]>, "id" | "booking_id">,
+  ): Promise<void> {
+    await trx
+      .updateTable("booking_travelers")
+      .set(values)
+      .where("booking_id", "=", bookingId)
+      .where("id", "=", travelerRowId)
       .execute();
   }
 }
