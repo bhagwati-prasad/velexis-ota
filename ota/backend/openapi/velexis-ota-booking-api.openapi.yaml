@@ -96,7 +96,10 @@ tags:
       locales, currencies, markets, enabled features, payment-provider public configuration, legal links, support
       contact, cookie/consent requirements and SEO defaults. Served from the tenant's `storefront_settings` merged with
       platform data (tenant, domains, plan, payment-provider connection). `storefront.resolve` maps a host name to its
-      OTA for one Next.js deployment that serves several OTA domains with a hosting key.
+      OTA for one Next.js deployment that serves several OTA domains with a hosting key. The OTA's published content
+      pages (`storefront_pages`: terms, privacy, FAQ, about) come parsed into blocks from storefront.listPages and
+      storefront.getPage, and its uploaded images (`storefront_assets`) from the plain image URLs of getPublicAsset
+      (OADR-0012).
   - name: Customer auth
     description: >-
       End-customer identity of one OTA: sign-up with email + password, email verification, sign-in, rotating refresh
@@ -262,7 +265,8 @@ tags:
   - name: Console settings
     description: >-
       The OTA's settings, edited in the OTA admin: markup rules and fee rules (how net prices become selling prices,
-      OADR-0005), the storefront settings (brand, branding, locales, currencies, markets, features, policies, the
+      OADR-0005), the storefront's content pages and uploaded images (OADR-0012), the storefront settings (brand,
+      branding, locales, currencies, markets, features, policies, the
       airline card, legal, support, SEO, consent, operations; OADR-0012) and the e-mail templates (OADR-0013). Settings
       are shared by the test and live environments (one set per OTA). Reads need `settings:read`, changes
       `settings:write` (owner and admin only); every change and every refused call writes staff_actions, a successful
@@ -739,6 +743,333 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /v1/storefront/pages:
+    get:
+      operationId: listStorefrontPages
+      summary: List the published content pages
+      description: >-
+        Lists the OTA's published content pages (`storefront_pages` with `isPublished`, written in the OTA admin with
+        console.settings.pages.*) in one locale, for the storefront's footer and page index: `slug`, `title`, `kind`,
+        `showInFooter` and `sortOrder` of each, ordered by `sortOrder`, then `slug`. Not paginated (an OTA has a
+        handful of pages). The storefront shows a page at `/p/<slug>` with storefront.getPage.
+
+
+        **Locale.** The `locale` parameter, else the first locale of `Accept-Language` that the storefront offers
+        (`locales.supported` of the storefront settings), else the default locale (`locales.default`); a locale the
+        storefront does not offer counts as absent. A slug without a published page in that locale is listed with its
+        published page of the default locale, if it has one, so each slug appears at most once.
+
+
+        **Who may call.** Anonymous, like storefront.get: a publishable key from the browser, a secret key from server
+        code, a hosting key with `X-Velexis-Host`, or the hosted storefront's edge. Every caller gets the same list;
+        pages are shared by the test and live environments.
+
+
+        **Caching.** Cached in Redis per tenant, environment and locale for 5 minutes, and deleted whenever staff
+        create, change or delete a page, so a change shows within about 5 minutes on the hosted storefront (its
+        `sessionStorage` copy; OADR-0012 point 7). `Cache-Control: public, max-age=60, stale-while-revalidate=600` for
+        key callers, `private` in edge mode.
+
+
+        **Amadeus.** None. **Errors.** A suspended or not-yet-provisioned OTA answers `403 TENANT_SUSPENDED`; `403
+        HOST_NOT_ALLOWED` as storefront.get.
+      tags:
+        - Storefront
+      security:
+        - apiKey: []
+        - storefrontEdge: []
+      x-sdk-method: storefront.listPages
+      x-amadeus: []
+      x-tenant-tables:
+        - storefront_pages
+        - storefront_settings
+      x-platform-tables:
+        - tenants
+      x-error-codes:
+        - VALIDATION_FAILED
+        - INVALID_API_KEY
+        - ORIGIN_NOT_ALLOWED
+        - TENANT_SUSPENDED
+        - HOST_NOT_ALLOWED
+        - RATE_LIMITED
+        - INTERNAL_ERROR
+      x-scope: both
+      x-milestone: M4
+      parameters:
+        - $ref: '#/components/parameters/StorefrontPageLocale'
+        - $ref: '#/components/parameters/AcceptLanguage'
+        - $ref: '#/components/parameters/StorefrontHostHeader'
+        - $ref: '#/components/parameters/CustomerEndUserIp'
+        - $ref: '#/components/parameters/CustomerEndUserAgent'
+      responses:
+        '200':
+          description: The published pages of the locale.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+            Cache-Control:
+              description: >-
+                `public, max-age=60, stale-while-revalidate=600` for key callers, `private` in edge mode.
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StorefrontPageList'
+              example:
+                data:
+                  - slug: about-us
+                    title: About Acme Travel
+                    kind: about
+                    showInFooter: true
+                    sortOrder: 10
+                  - slug: terms
+                    title: Terms and conditions
+                    kind: terms
+                    showInFooter: true
+                    sortOrder: 20
+                  - slug: privacy
+                    title: Privacy policy
+                    kind: privacy
+                    showInFooter: true
+                    sortOrder: 30
+                  - slug: baggage-faq
+                    title: Baggage questions
+                    kind: faq
+                    showInFooter: false
+                    sortOrder: 100
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /v1/storefront/pages/{slug}:
+    get:
+      operationId: getStorefrontPage
+      summary: Get a published content page as blocks
+      description: >-
+        Returns one published content page with its body parsed on the server from the Markdown subset into blocks
+        (OADR-0012 point 5): `heading` (levels 2 to 4), `paragraph`, `list` (bullet or numbered, one level) and
+        `image`, which hold the inline nodes `text`, `strong`, `em` and `link` (StorefrontPageBlock). Render them with
+        `createElement` and `textContent` only, never `innerHTML` (conventions §4). Links are `https:`, `mailto:` or
+        `tel:` URLs or a relative `/p/<slug>`; a renderer checks them again. The storefront shows the page at
+        `/p/<slug>`.
+
+
+        **Locale.** Resolved as in storefront.listPages (`locale`, else `Accept-Language`, else the default locale):
+        the slug's page of that locale when it is published, else its page of the default locale when that one is
+        published; `locale` in the answer says which one was served. Otherwise `404 NOT_FOUND`, also for a page that is
+        not published (drafts are visible in the console only).
+
+
+        **Images.** An `image` block names a `page_image` asset (`assetId`) with its alt text and dimensions. Its `url`
+        is the asset's public URL (getPublicAsset) for the caller: a same-origin path
+        (`/api/v1/assets/<tenantKey>/<assetId>.<ext>`) for the hosted storefront's edge, so its `img-src 'self'` holds,
+        and an absolute URL on the API host for key callers (OADR-0012 point 3). The cache keeps the asset ids; the
+        URLs are added for each request.
+
+
+        **Who may call.** Anonymous, as storefront.listPages; every caller gets the same page, with its own image URLs.
+        **Caching.** Cached in Redis per tenant, environment, locale and slug for 5 minutes and deleted whenever staff
+        change the OTA's pages, as storefront.listPages; the same `Cache-Control`. **Amadeus.** None. **Errors.** `404
+        NOT_FOUND`, `403 TENANT_SUSPENDED`, `403 HOST_NOT_ALLOWED`.
+      tags:
+        - Storefront
+      security:
+        - apiKey: []
+        - storefrontEdge: []
+      x-sdk-method: storefront.getPage
+      x-amadeus: []
+      x-tenant-tables:
+        - storefront_pages
+        - storefront_assets
+        - storefront_settings
+      x-platform-tables:
+        - tenants
+      x-error-codes:
+        - VALIDATION_FAILED
+        - INVALID_API_KEY
+        - ORIGIN_NOT_ALLOWED
+        - TENANT_SUSPENDED
+        - HOST_NOT_ALLOWED
+        - NOT_FOUND
+        - RATE_LIMITED
+        - INTERNAL_ERROR
+      x-scope: both
+      x-milestone: M4
+      parameters:
+        - name: slug
+          in: path
+          required: true
+          description: Slug of the page, as in its storefront path `/p/<slug>`.
+          schema:
+            $ref: '#/components/schemas/StorefrontPageSlug'
+          example: terms
+        - $ref: '#/components/parameters/StorefrontPageLocale'
+        - $ref: '#/components/parameters/AcceptLanguage'
+        - $ref: '#/components/parameters/StorefrontHostHeader'
+        - $ref: '#/components/parameters/CustomerEndUserIp'
+        - $ref: '#/components/parameters/CustomerEndUserAgent'
+      responses:
+        '200':
+          description: The page with its body as blocks.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+            Cache-Control:
+              description: >-
+                `public, max-age=60, stale-while-revalidate=600` for key callers, `private` in edge mode.
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StorefrontPageContent'
+              examples:
+                terms:
+                  $ref: '#/components/examples/StorefrontPageContentExample'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /v1/assets/{tenantKey}/{assetId}.{ext}:
+    get:
+      operationId: getPublicAsset
+      summary: Get an uploaded storefront image (plain image URL)
+      description: >-
+        Serves an image the OTA's staff uploaded (`storefront_assets`, console.settings.assets.upload) at a plain image
+        URL: the logo, favicon and Open Graph URLs of storefront.get, the `image` blocks of storefront.getPage and
+        `StorefrontAsset.url` of the console point here. Not an SDK method (`x-sdk-exclude`): use the URL in `<img>`,
+        `<link rel="icon">` or `og:image`.
+
+
+        **No credential.** The OTA is the path's `tenantKey`, the file the one stored at upload
+        (`tenant_<key>/assets/<sha256>.<ext>` of the StorageAdapter, never re-encoded). A credential that comes with
+        the request is checked as on every route but does not choose the OTA: Caddy adds the edge header to every
+        `/api/*` request of a storefront host, where the hosted storefront loads `/api/v1/assets/…` same-origin.
+
+
+        **Availability.** Served while the OTA is `active` or `suspended` (a suspended storefront still shows its logo
+        on its maintenance page). An unknown OTA, an OTA in any other status, an unknown asset and an `ext` other than
+        the asset's answer `404 NOT_FOUND`. A deleted asset answers `404` from then on; browsers and caches may still
+        show their copy for its cache lifetime.
+
+
+        **Headers.** `Content-Type` is the type sniffed at upload; `Cache-Control: public, max-age=31536000,
+        immutable` (an id never changes content: a new image is a new asset), `X-Content-Type-Options: nosniff`,
+        `Content-Security-Policy: default-src 'none'` and `Content-Disposition: inline`, so a file opened directly
+        runs nothing (no SVG is ever stored; OADR-0012 points 2 and 3). Rate limit 120 per minute per IP. No Amadeus
+        call.
+      tags:
+        - Storefront
+      security: []
+      x-sdk-exclude: true
+      x-amadeus: []
+      x-tenant-tables:
+        - storefront_assets
+      x-platform-tables:
+        - tenants
+      x-error-codes:
+        - VALIDATION_FAILED
+        - INVALID_API_KEY
+        - NOT_FOUND
+        - RATE_LIMITED
+        - INTERNAL_ERROR
+      x-scope: both
+      x-milestone: M4
+      parameters:
+        - name: tenantKey
+          in: path
+          required: true
+          description: Tenant key of the OTA (`StorefrontConfig.tenantKey`).
+          schema:
+            type: string
+            pattern: ^[a-z][a-z0-9-]{1,39}$
+          example: acme
+        - name: assetId
+          in: path
+          required: true
+          description: Asset id (`ast_…`).
+          schema:
+            type: string
+            pattern: ^ast_[0-9A-Za-z]{16,40}$
+          example: ast_01JA6B2C3D4E5F6G7H8J9K0M1N
+        - name: ext
+          in: path
+          required: true
+          description: >-
+            File extension of the asset's type (`png`, `jpg`, `webp`, `ico`), as its URL carries it; another extension
+            answers `404`.
+          schema:
+            type: string
+            enum:
+              - png
+              - jpg
+              - webp
+              - ico
+          example: png
+      responses:
+        '200':
+          description: The image, as uploaded.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+            Cache-Control:
+              description: '`public, max-age=31536000, immutable`.'
+              schema:
+                type: string
+            X-Content-Type-Options:
+              description: '`nosniff`.'
+              schema:
+                type: string
+            Content-Security-Policy:
+              description: "`default-src 'none'`."
+              schema:
+                type: string
+            Content-Disposition:
+              description: '`inline`.'
+              schema:
+                type: string
+          content:
+            image/png:
+              schema:
+                type: string
+                contentMediaType: image/png
+            image/jpeg:
+              schema:
+                type: string
+                contentMediaType: image/jpeg
+            image/webp:
+              schema:
+                type: string
+                contentMediaType: image/webp
+            image/x-icon:
+              schema:
+                type: string
+                contentMediaType: image/x-icon
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '404':
           $ref: '#/components/responses/NotFound'
         '429':
@@ -17496,6 +17827,746 @@ paths:
           $ref: '#/components/responses/RateLimited'
         '500':
           $ref: '#/components/responses/InternalError'
+  /v1/console/settings/pages:
+    get:
+      operationId: consoleListStorefrontPages
+      summary: List the content pages
+      description: >-
+        Lists the OTA's content pages (`storefront_pages`, one per slug and locale), drafts included, ordered by
+        `sortOrder`, then `slug`, then `locale`, with cursor pagination. `locale` keeps the pages of one locale,
+        `published=true` only published pages and `published=false` only drafts. Each entry is the whole page, its
+        Markdown body included.
+
+
+        Pages are shared by the test and live environments (one set per OTA), so `X-Velexis-Environment` changes
+        nothing here. No Amadeus call. Permission `settings:read`. Not audited per call.
+
+
+        **Key-only calls.** Without a staff token the secret key must carry the `console:automation` scope and this
+        operation's permission in `platform.api_keys.scopes` — otherwise `403 SCOPE_NOT_ALLOWED`
+        (`details.requiredScope`) or `403 FORBIDDEN` (`details.requiredPermission`); such calls are audited as the API
+        key (see ConsoleApiKeyScope). A key scoped `storefront` is refused even with a staff token.
+      tags:
+        - Console settings
+      security:
+        - apiKey: []
+          staffAuth: []
+        - apiKey: []
+      x-sdk-method: console.settings.pages.list
+      x-amadeus: []
+      x-tenant-tables:
+        - storefront_pages
+        - staff_actions
+      x-error-codes:
+        - VALIDATION_FAILED
+        - UNAUTHENTICATED
+        - INVALID_API_KEY
+        - TOKEN_EXPIRED
+        - FORBIDDEN
+        - SCOPE_NOT_ALLOWED
+        - TENANT_SUSPENDED
+        - STAFF_MEMBERSHIP_INACTIVE
+        - ENVIRONMENT_NOT_ALLOWED
+        - RATE_LIMITED
+        - INTERNAL_ERROR
+      x-scope: console
+      x-permission: settings:read
+      x-milestone: M4
+      parameters:
+        - $ref: '#/components/parameters/ConsoleStorefrontPageLocaleFilter'
+        - $ref: '#/components/parameters/ConsoleStorefrontPagePublishedFilter'
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/AcceptLanguage'
+        - $ref: '#/components/parameters/VelexisEnvironment'
+        - $ref: '#/components/parameters/CustomerEndUserIp'
+        - $ref: '#/components/parameters/CustomerEndUserAgent'
+      responses:
+        '200':
+          description: One page of content pages.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StorefrontPagePage'
+              examples:
+                pages:
+                  $ref: '#/components/examples/StorefrontPagePageExample'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/ConsoleForbidden'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    post:
+      operationId: consoleCreateStorefrontPage
+      summary: Create a content page
+      description: >-
+        Creates a content page of the hosted storefront (OADR-0012 point 5). `slug`, `locale` and `title` are required;
+        omitted fields take their defaults: `kind` `content`, an empty `bodyMarkdown`, `isPublished` and
+        `showInFooter` false, `sortOrder` 100. One page per slug and locale: a translation is another page with the
+        same slug in another locale.
+
+
+        **Validation.** Beyond the schema: `locale` must be one of the storefront settings' `locales.supported`
+        (`details.reason = "locale_not_supported"`), and the body must keep to the Markdown subset of
+        StorefrontPageMarkdown: anything else answers `details.reason = "markdown_not_allowed"` with the 1-based
+        `details.line` of the first refused line, and an image of an asset that does not exist or is not a
+        `page_image` answers `asset_not_found` or `asset_kind`, with its `details.line`. These answer `422
+        UNPROCESSABLE` and nothing is saved. A page of the same slug and locale answers `409 CONFLICT`
+        (`details.reason = "page_exists"`).
+
+
+        **Effect.** The answer is the page with `version` 1 and its `ETag`. A page created published gets `publishedAt`
+        and is served by storefront.getPage at once: the page caches of both environments are deleted.
+
+
+        **Idempotency.** `Idempotency-Key` required (`idempotency_keys`, 24 h): a retry with the same key and body
+        returns the stored page; the same key with another body → `409 IDEMPOTENCY_KEY_REUSED`.
+
+
+        No Amadeus call. Permission `settings:write`; `staff_actions` records the new page.
+
+
+        **Key-only calls.** Without a staff token the secret key must carry the `console:automation` scope and this
+        operation's permission in `platform.api_keys.scopes` — otherwise `403 SCOPE_NOT_ALLOWED`
+        (`details.requiredScope`) or `403 FORBIDDEN` (`details.requiredPermission`); such calls are audited as the API
+        key (see ConsoleApiKeyScope). A key scoped `storefront` is refused even with a staff token.
+      tags:
+        - Console settings
+      security:
+        - apiKey: []
+          staffAuth: []
+        - apiKey: []
+      x-sdk-method: console.settings.pages.create
+      x-amadeus: []
+      x-tenant-tables:
+        - storefront_pages
+        - storefront_assets
+        - storefront_settings
+        - staff_actions
+        - idempotency_keys
+      x-error-codes:
+        - VALIDATION_FAILED
+        - UNAUTHENTICATED
+        - INVALID_API_KEY
+        - TOKEN_EXPIRED
+        - FORBIDDEN
+        - SCOPE_NOT_ALLOWED
+        - TENANT_SUSPENDED
+        - STAFF_MEMBERSHIP_INACTIVE
+        - ENVIRONMENT_NOT_ALLOWED
+        - CONFLICT
+        - IDEMPOTENCY_KEY_REUSED
+        - UNPROCESSABLE
+        - RATE_LIMITED
+        - INTERNAL_ERROR
+      x-scope: console
+      x-permission: settings:write
+      x-milestone: M4
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/AcceptLanguage'
+        - $ref: '#/components/parameters/VelexisEnvironment'
+        - $ref: '#/components/parameters/CustomerEndUserIp'
+        - $ref: '#/components/parameters/CustomerEndUserAgent'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StorefrontPageInput'
+            examples:
+              terms:
+                summary: Published terms in English, linked from the footer
+                value:
+                  slug: terms
+                  locale: en
+                  kind: terms
+                  title: Terms and conditions
+                  bodyMarkdown: |-
+                    ## Who we are
+
+                    Acme Travel Ltd sells flights as an agent of the airlines. Questions? Write to [help@acmetravel.com](mailto:help@acmetravel.com).
+                  isPublished: true
+                  showInFooter: true
+                  sortOrder: 20
+              draft:
+                summary: A draft FAQ page in French
+                value:
+                  slug: baggage-faq
+                  locale: fr
+                  kind: faq
+                  title: Questions sur les bagages
+      responses:
+        '201':
+          description: The content page was created.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+            Location:
+              $ref: '#/components/headers/Location'
+            ETag:
+              $ref: '#/components/headers/ETag'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StorefrontPage'
+              examples:
+                page:
+                  $ref: '#/components/examples/StorefrontPageExample'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/ConsoleForbidden'
+        '409':
+          $ref: '#/components/responses/StorefrontPageConflict'
+        '422':
+          $ref: '#/components/responses/StorefrontPageUnprocessable'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /v1/console/settings/pages/{pageId}:
+    get:
+      operationId: consoleGetStorefrontPage
+      summary: Get a content page
+      description: >-
+        Returns one content page as staff edit it, published or not, with its Markdown body. `ETag` = `"<version>"`:
+        pass it as `If-Match` to update or delete the page. No Amadeus call. Permission `settings:read`. Not audited
+        per call.
+
+
+        **Key-only calls.** Without a staff token the secret key must carry the `console:automation` scope and this
+        operation's permission in `platform.api_keys.scopes` — otherwise `403 SCOPE_NOT_ALLOWED`
+        (`details.requiredScope`) or `403 FORBIDDEN` (`details.requiredPermission`); such calls are audited as the API
+        key (see ConsoleApiKeyScope). A key scoped `storefront` is refused even with a staff token.
+      tags:
+        - Console settings
+      security:
+        - apiKey: []
+          staffAuth: []
+        - apiKey: []
+      x-sdk-method: console.settings.pages.get
+      x-amadeus: []
+      x-tenant-tables:
+        - storefront_pages
+        - staff_actions
+      x-error-codes:
+        - VALIDATION_FAILED
+        - UNAUTHENTICATED
+        - INVALID_API_KEY
+        - TOKEN_EXPIRED
+        - FORBIDDEN
+        - SCOPE_NOT_ALLOWED
+        - TENANT_SUSPENDED
+        - STAFF_MEMBERSHIP_INACTIVE
+        - ENVIRONMENT_NOT_ALLOWED
+        - NOT_FOUND
+        - RATE_LIMITED
+        - INTERNAL_ERROR
+      x-scope: console
+      x-permission: settings:read
+      x-milestone: M4
+      parameters:
+        - $ref: '#/components/parameters/ConsoleStorefrontPageId'
+        - $ref: '#/components/parameters/AcceptLanguage'
+        - $ref: '#/components/parameters/VelexisEnvironment'
+        - $ref: '#/components/parameters/CustomerEndUserIp'
+        - $ref: '#/components/parameters/CustomerEndUserAgent'
+      responses:
+        '200':
+          description: The content page.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+            ETag:
+              $ref: '#/components/headers/ETag'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StorefrontPage'
+              examples:
+                page:
+                  $ref: '#/components/examples/StorefrontPageExample'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/ConsoleForbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    patch:
+      operationId: consoleUpdateStorefrontPage
+      summary: Update a content page
+      description: >-
+        Changes any subset of a page's fields (`StorefrontPageUpdate`: `kind`, `title`, `bodyMarkdown`, `isPublished`,
+        `showInFooter`, `sortOrder`); fields not sent keep their value. `slug` and `locale` are fixed at creation, as
+        they make the page's address and the target of legal links: to move a page, create it under the new slug and
+        delete the old one. A body is checked as in console.settings.pages.create (`422 UNPROCESSABLE`:
+        `markdown_not_allowed` with `details.line`, `asset_not_found`, `asset_kind`).
+
+
+        **Publishing.** `isPublished: true` puts the page on the storefront (the first time also sets `publishedAt`);
+        `false` takes it off (storefront.getPage answers `404`) and keeps it as a draft. A page that a legal link names
+        may be unpublished; the link then leads to the storefront's not-found page until it is published again.
+
+
+        **Preconditions.** `If-Match` = the `ETag` of the page (`412 PRECONDITION_FAILED` when stale). The answer has
+        the new `version` and `ETag`; the page caches of both environments are deleted. No Amadeus call. Permission
+        `settings:write`; `staff_actions` records the page before and after.
+
+
+        **Key-only calls.** Without a staff token the secret key must carry the `console:automation` scope and this
+        operation's permission in `platform.api_keys.scopes` — otherwise `403 SCOPE_NOT_ALLOWED`
+        (`details.requiredScope`) or `403 FORBIDDEN` (`details.requiredPermission`); such calls are audited as the API
+        key (see ConsoleApiKeyScope). A key scoped `storefront` is refused even with a staff token.
+      tags:
+        - Console settings
+      security:
+        - apiKey: []
+          staffAuth: []
+        - apiKey: []
+      x-sdk-method: console.settings.pages.update
+      x-amadeus: []
+      x-tenant-tables:
+        - storefront_pages
+        - storefront_assets
+        - staff_actions
+      x-error-codes:
+        - VALIDATION_FAILED
+        - UNAUTHENTICATED
+        - INVALID_API_KEY
+        - TOKEN_EXPIRED
+        - FORBIDDEN
+        - SCOPE_NOT_ALLOWED
+        - TENANT_SUSPENDED
+        - STAFF_MEMBERSHIP_INACTIVE
+        - ENVIRONMENT_NOT_ALLOWED
+        - NOT_FOUND
+        - PRECONDITION_FAILED
+        - UNPROCESSABLE
+        - RATE_LIMITED
+        - INTERNAL_ERROR
+      x-scope: console
+      x-permission: settings:write
+      x-milestone: M4
+      parameters:
+        - $ref: '#/components/parameters/ConsoleStorefrontPageId'
+        - $ref: '#/components/parameters/IfMatch'
+        - $ref: '#/components/parameters/AcceptLanguage'
+        - $ref: '#/components/parameters/VelexisEnvironment'
+        - $ref: '#/components/parameters/CustomerEndUserIp'
+        - $ref: '#/components/parameters/CustomerEndUserAgent'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StorefrontPageUpdate'
+            examples:
+              publish:
+                summary: Publish a draft and list it in the footer
+                value:
+                  isPublished: true
+                  showInFooter: true
+              retitle:
+                summary: A new title and body
+                value:
+                  title: Baggage FAQ
+                  bodyMarkdown: |-
+                    ## How many bags may I take?
+
+                    It depends on your fare: see **Baggage** on your booking page.
+      responses:
+        '200':
+          description: The updated content page.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+            ETag:
+              $ref: '#/components/headers/ETag'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StorefrontPage'
+              examples:
+                page:
+                  $ref: '#/components/examples/StorefrontPageExample'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/ConsoleForbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '412':
+          $ref: '#/components/responses/PreconditionFailed'
+        '422':
+          $ref: '#/components/responses/StorefrontPageUnprocessable'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    delete:
+      operationId: consoleDeleteStorefrontPage
+      summary: Delete a content page
+      description: >-
+        Deletes a content page. A page whose slug a legal link of the storefront settings names
+        (`legal.links[].pageSlug`) cannot be deleted, in any locale (`409 CONFLICT`, `details.reason = "page_linked"`;
+        OADR-0012 point 6): change the link first (console.settings.storefront.update), or unpublish the page
+        (console.settings.pages.update) to take it off the storefront. The images the page showed stay uploaded assets
+        (console.settings.assets.delete removes them).
+
+
+        **Preconditions.** `If-Match` = the `ETag` of the page (`412 PRECONDITION_FAILED` when stale). The page caches
+        of both environments are deleted, and storefront.getPage answers `404` for the page. No Amadeus call.
+        Permission `settings:write`; `staff_actions` records the deleted page.
+
+
+        **Key-only calls.** Without a staff token the secret key must carry the `console:automation` scope and this
+        operation's permission in `platform.api_keys.scopes` — otherwise `403 SCOPE_NOT_ALLOWED`
+        (`details.requiredScope`) or `403 FORBIDDEN` (`details.requiredPermission`); such calls are audited as the API
+        key (see ConsoleApiKeyScope). A key scoped `storefront` is refused even with a staff token.
+      tags:
+        - Console settings
+      security:
+        - apiKey: []
+          staffAuth: []
+        - apiKey: []
+      x-sdk-method: console.settings.pages.delete
+      x-amadeus: []
+      x-tenant-tables:
+        - storefront_pages
+        - storefront_settings
+        - staff_actions
+      x-error-codes:
+        - VALIDATION_FAILED
+        - UNAUTHENTICATED
+        - INVALID_API_KEY
+        - TOKEN_EXPIRED
+        - FORBIDDEN
+        - SCOPE_NOT_ALLOWED
+        - TENANT_SUSPENDED
+        - STAFF_MEMBERSHIP_INACTIVE
+        - ENVIRONMENT_NOT_ALLOWED
+        - NOT_FOUND
+        - CONFLICT
+        - PRECONDITION_FAILED
+        - RATE_LIMITED
+        - INTERNAL_ERROR
+      x-scope: console
+      x-permission: settings:write
+      x-milestone: M4
+      parameters:
+        - $ref: '#/components/parameters/ConsoleStorefrontPageId'
+        - $ref: '#/components/parameters/IfMatch'
+        - $ref: '#/components/parameters/AcceptLanguage'
+        - $ref: '#/components/parameters/VelexisEnvironment'
+        - $ref: '#/components/parameters/CustomerEndUserIp'
+        - $ref: '#/components/parameters/CustomerEndUserAgent'
+      responses:
+        '204':
+          description: The content page was deleted.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/ConsoleForbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/StorefrontPageConflict'
+        '412':
+          $ref: '#/components/responses/PreconditionFailed'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /v1/console/settings/assets:
+    get:
+      operationId: consoleListStorefrontAssets
+      summary: List the uploaded storefront images
+      description: >-
+        Lists the OTA's uploaded images (`storefront_assets`), newest first (`createdAt` descending, then `id`), with
+        cursor pagination; `kind` keeps the assets of one kind. Each entry has the sniffed type, the size, the
+        dimensions, the original file name and the public `url` (getPublicAsset, absolute on the API host) to show it
+        with.
+
+
+        Assets are shared by the test and live environments (one set per OTA), so `X-Velexis-Environment` changes
+        nothing here. No Amadeus call. Permission `settings:read`. Not audited per call.
+
+
+        **Key-only calls.** Without a staff token the secret key must carry the `console:automation` scope and this
+        operation's permission in `platform.api_keys.scopes` — otherwise `403 SCOPE_NOT_ALLOWED`
+        (`details.requiredScope`) or `403 FORBIDDEN` (`details.requiredPermission`); such calls are audited as the API
+        key (see ConsoleApiKeyScope). A key scoped `storefront` is refused even with a staff token.
+      tags:
+        - Console settings
+      security:
+        - apiKey: []
+          staffAuth: []
+        - apiKey: []
+      x-sdk-method: console.settings.assets.list
+      x-amadeus: []
+      x-tenant-tables:
+        - storefront_assets
+        - staff_actions
+      x-platform-tables:
+        - tenants
+      x-error-codes:
+        - VALIDATION_FAILED
+        - UNAUTHENTICATED
+        - INVALID_API_KEY
+        - TOKEN_EXPIRED
+        - FORBIDDEN
+        - SCOPE_NOT_ALLOWED
+        - TENANT_SUSPENDED
+        - STAFF_MEMBERSHIP_INACTIVE
+        - ENVIRONMENT_NOT_ALLOWED
+        - RATE_LIMITED
+        - INTERNAL_ERROR
+      x-scope: console
+      x-permission: settings:read
+      x-milestone: M4
+      parameters:
+        - $ref: '#/components/parameters/ConsoleStorefrontAssetKindFilter'
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/AcceptLanguage'
+        - $ref: '#/components/parameters/VelexisEnvironment'
+        - $ref: '#/components/parameters/CustomerEndUserIp'
+        - $ref: '#/components/parameters/CustomerEndUserAgent'
+      responses:
+        '200':
+          description: One page of uploaded images.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StorefrontAssetPage'
+              examples:
+                assets:
+                  $ref: '#/components/examples/StorefrontAssetPageExample'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/ConsoleForbidden'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    post:
+      operationId: consoleUploadStorefrontAsset
+      summary: Upload a storefront image
+      description: >-
+        Uploads an image as `multipart/form-data` (StorefrontAssetUpload): the parts `file` (the image) and `kind`
+        (what it is for), and optionally `fileName` (the name shown in the console; by default the file part's own file
+        name). A missing, empty or unknown part answers `400 VALIDATION_FAILED`. The server reads the type from the
+        file's first bytes, never from the declared `Content-Type` or the file name, and the dimensions from the file
+        header (OADR-0012 point 2), then refuses with `422 ASSET_INVALID` and `details.reason`:
+
+
+        - `type`: anything but PNG, JPEG or WebP, or ICO for the kind `favicon` (no SVG, no CSS), and a file whose
+        header cannot be read;
+
+        - `size`: more than 1 MB (1 048 576 bytes);
+
+        - `dimensions`: a logo (`logo`, `logo_dark`, `logo_square`) larger than 2000 × 2000 pixels.
+
+
+        **Effect.** The file is stored unchanged under `tenant_<key>/assets/<sha256>.<ext>` of the StorageAdapter (it
+        is not re-encoded, so metadata such as EXIF stays in it; the OTA admin tells staff) and an immutable
+        `storefront_assets` row is written: a new image is always a new asset, with a new id and URL. The answer is the
+        asset with its public `url`. Reference it from the storefront settings (`branding.logoAssetId` and the other
+        `…AssetId` fields of its kind, console.settings.storefront.update) or, for a `page_image`, from a page body
+        (`![alt text](ast_…)`).
+
+
+        **Idempotency.** `Idempotency-Key` required (`idempotency_keys`, 24 h): a retry with the same key, file and
+        parts returns the stored asset; the same key with another upload → `409 IDEMPOTENCY_KEY_REUSED`.
+
+
+        No Amadeus call. Permission `settings:write`; `staff_actions` records the new asset's metadata, never the file.
+
+
+        **Key-only calls.** Without a staff token the secret key must carry the `console:automation` scope and this
+        operation's permission in `platform.api_keys.scopes` — otherwise `403 SCOPE_NOT_ALLOWED`
+        (`details.requiredScope`) or `403 FORBIDDEN` (`details.requiredPermission`); such calls are audited as the API
+        key (see ConsoleApiKeyScope). A key scoped `storefront` is refused even with a staff token.
+      tags:
+        - Console settings
+      security:
+        - apiKey: []
+          staffAuth: []
+        - apiKey: []
+      x-sdk-method: console.settings.assets.upload
+      x-amadeus: []
+      x-tenant-tables:
+        - storefront_assets
+        - staff_actions
+        - idempotency_keys
+      x-platform-tables:
+        - tenants
+      x-error-codes:
+        - VALIDATION_FAILED
+        - UNAUTHENTICATED
+        - INVALID_API_KEY
+        - TOKEN_EXPIRED
+        - FORBIDDEN
+        - SCOPE_NOT_ALLOWED
+        - TENANT_SUSPENDED
+        - STAFF_MEMBERSHIP_INACTIVE
+        - ENVIRONMENT_NOT_ALLOWED
+        - IDEMPOTENCY_KEY_REUSED
+        - ASSET_INVALID
+        - RATE_LIMITED
+        - INTERNAL_ERROR
+      x-scope: console
+      x-permission: settings:write
+      x-milestone: M4
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/AcceptLanguage'
+        - $ref: '#/components/parameters/VelexisEnvironment'
+        - $ref: '#/components/parameters/CustomerEndUserIp'
+        - $ref: '#/components/parameters/CustomerEndUserAgent'
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/StorefrontAssetUpload'
+            encoding:
+              file:
+                contentType: image/png, image/jpeg, image/webp, image/x-icon
+      responses:
+        '201':
+          description: The image was uploaded.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StorefrontAsset'
+              examples:
+                logo:
+                  $ref: '#/components/examples/StorefrontAssetExample'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/ConsoleForbidden'
+        '409':
+          $ref: '#/components/responses/StorefrontAssetConflict'
+        '422':
+          $ref: '#/components/responses/StorefrontAssetUnprocessable'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /v1/console/settings/assets/{assetId}:
+    delete:
+      operationId: consoleDeleteStorefrontAsset
+      summary: Delete a storefront image
+      description: >-
+        Deletes an uploaded image: its `storefront_assets` row and its stored file. An asset that the storefront
+        settings reference (`branding.logoAssetId`, `logoDarkAssetId`, `logoSquareAssetId`, `faviconAssetId`,
+        `seo.ogImageAssetId`) or that a page body shows answers `409 CONFLICT` with `details.reason = "asset_in_use"`,
+        `details.settingsPaths` (the JSON pointers of the settings fields) and `details.pageIds` (the pages that show
+        it): change those first. Its public URL answers `404` from then on; browsers and caches may keep their copy for
+        the cache lifetime of getPublicAsset.
+
+
+        Assets never change, so there is no `If-Match`. No Amadeus call. Permission `settings:write`; `staff_actions`
+        records the deleted asset's metadata.
+
+
+        **Key-only calls.** Without a staff token the secret key must carry the `console:automation` scope and this
+        operation's permission in `platform.api_keys.scopes` — otherwise `403 SCOPE_NOT_ALLOWED`
+        (`details.requiredScope`) or `403 FORBIDDEN` (`details.requiredPermission`); such calls are audited as the API
+        key (see ConsoleApiKeyScope). A key scoped `storefront` is refused even with a staff token.
+      tags:
+        - Console settings
+      security:
+        - apiKey: []
+          staffAuth: []
+        - apiKey: []
+      x-sdk-method: console.settings.assets.delete
+      x-amadeus: []
+      x-tenant-tables:
+        - storefront_assets
+        - storefront_settings
+        - storefront_pages
+        - staff_actions
+      x-error-codes:
+        - VALIDATION_FAILED
+        - UNAUTHENTICATED
+        - INVALID_API_KEY
+        - TOKEN_EXPIRED
+        - FORBIDDEN
+        - SCOPE_NOT_ALLOWED
+        - TENANT_SUSPENDED
+        - STAFF_MEMBERSHIP_INACTIVE
+        - ENVIRONMENT_NOT_ALLOWED
+        - NOT_FOUND
+        - CONFLICT
+        - RATE_LIMITED
+        - INTERNAL_ERROR
+      x-scope: console
+      x-permission: settings:write
+      x-milestone: M4
+      parameters:
+        - $ref: '#/components/parameters/ConsoleStorefrontAssetId'
+        - $ref: '#/components/parameters/AcceptLanguage'
+        - $ref: '#/components/parameters/VelexisEnvironment'
+        - $ref: '#/components/parameters/CustomerEndUserIp'
+        - $ref: '#/components/parameters/CustomerEndUserAgent'
+      responses:
+        '204':
+          description: The image was deleted.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/ConsoleForbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/StorefrontAssetConflict'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
   /v1/console/settings/notification-templates:
     get:
       operationId: consoleListNotificationTemplates
@@ -19696,6 +20767,53 @@ components:
       schema:
         type: string
         pattern: ^fee_[0-9A-Za-z]{16,40}$
+    ConsoleStorefrontPageId:
+      name: pageId
+      in: path
+      required: true
+      description: Content page id (`stp_…`).
+      schema:
+        type: string
+        pattern: ^stp_[0-9A-Za-z]{16,40}$
+    ConsoleStorefrontPageLocaleFilter:
+      name: locale
+      in: query
+      required: false
+      description: Only the pages of this locale.
+      schema:
+        $ref: '#/components/schemas/LocaleCode'
+    ConsoleStorefrontPagePublishedFilter:
+      name: published
+      in: query
+      required: false
+      description: '`true`: only published pages (`isPublished`); `false`: only drafts; absent: every page.'
+      schema:
+        type: boolean
+    ConsoleStorefrontAssetId:
+      name: assetId
+      in: path
+      required: true
+      description: Storefront asset id (`ast_…`).
+      schema:
+        type: string
+        pattern: ^ast_[0-9A-Za-z]{16,40}$
+    ConsoleStorefrontAssetKindFilter:
+      name: kind
+      in: query
+      required: false
+      description: Only the assets of this kind.
+      schema:
+        $ref: '#/components/schemas/StorefrontAssetKind'
+    StorefrontPageLocale:
+      name: locale
+      in: query
+      required: false
+      description: >-
+        Locale of the pages (BCP 47, such as `en` or `fr-CA`). Without it, the first locale of `Accept-Language` that
+        the storefront offers (`locales.supported`), else its default locale; a locale the storefront does not offer
+        counts as absent.
+      schema:
+        $ref: '#/components/schemas/LocaleCode'
     NotificationTemplateKeyPath:
       name: templateKey
       in: path
@@ -22887,6 +24005,174 @@ components:
                   requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
                   details:
                     environment: live
+    StorefrontPageConflict:
+      description: >-
+        The page change conflicts with the OTA's pages or settings. Possible codes: CONFLICT (`details.reason`:
+        `page_exists`, a page of this slug and locale exists; `page_linked`, a legal link names the page's slug, so no
+        page of that slug can be deleted), IDEMPOTENCY_KEY_REUSED.
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/X-Request-Id'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            CONFLICT:
+              summary: CONFLICT (page_exists)
+              value:
+                error:
+                  code: CONFLICT
+                  message: A page with this slug already exists in this locale.
+                  status: 409
+                  requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+                  details:
+                    reason: page_exists
+                    slug: terms
+                    locale: en
+            CONFLICT_PAGE_LINKED:
+              summary: CONFLICT (page_linked)
+              value:
+                error:
+                  code: CONFLICT
+                  message: A legal link of the storefront settings points to this page; change the link first.
+                  status: 409
+                  requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+                  details:
+                    reason: page_linked
+                    slug: terms
+            IDEMPOTENCY_KEY_REUSED:
+              summary: IDEMPOTENCY_KEY_REUSED
+              value:
+                error:
+                  code: IDEMPOTENCY_KEY_REUSED
+                  message: The Idempotency-Key was already used with a different request body.
+                  status: 409
+                  requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+    StorefrontPageUnprocessable:
+      description: >-
+        The page is well-formed but refused by a rule. Possible codes: UNPROCESSABLE (`details.reason`:
+        `markdown_not_allowed`, the body leaves the Markdown subset, with the 1-based `details.line`; `asset_not_found`
+        and `asset_kind`, an image that names no `page_image` asset, with `details.line`; `locale_not_supported`, a
+        locale outside the storefront settings' `locales.supported`).
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/X-Request-Id'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            UNPROCESSABLE:
+              summary: UNPROCESSABLE (markdown_not_allowed)
+              value:
+                error:
+                  code: UNPROCESSABLE
+                  message: Line 7 uses HTML, which content pages do not allow.
+                  status: 422
+                  requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+                  details:
+                    reason: markdown_not_allowed
+                    line: 7
+            UNPROCESSABLE_ASSET_KIND:
+              summary: UNPROCESSABLE (asset_kind)
+              value:
+                error:
+                  code: UNPROCESSABLE
+                  message: The image on line 12 is not a page image.
+                  status: 422
+                  requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+                  details:
+                    reason: asset_kind
+                    line: 12
+            UNPROCESSABLE_LOCALE:
+              summary: UNPROCESSABLE (locale_not_supported)
+              value:
+                error:
+                  code: UNPROCESSABLE
+                  message: The storefront does not offer the locale de.
+                  status: 422
+                  requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+                  details:
+                    reason: locale_not_supported
+    StorefrontAssetConflict:
+      description: >-
+        The asset change conflicts with the OTA's settings or pages. Possible codes: CONFLICT (`details.reason =
+        "asset_in_use"`: the storefront settings reference the asset, `details.settingsPaths`, or a page shows it,
+        `details.pageIds`), IDEMPOTENCY_KEY_REUSED.
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/X-Request-Id'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            CONFLICT:
+              summary: CONFLICT (asset_in_use)
+              value:
+                error:
+                  code: CONFLICT
+                  message: The image is in use by the storefront settings or a page; replace it there first.
+                  status: 409
+                  requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+                  details:
+                    reason: asset_in_use
+                    settingsPaths:
+                      - /branding/logoAssetId
+                    pageIds:
+                      - stp_01JA7Q1S3U5W7Y9A1C3E5G7J9L
+            IDEMPOTENCY_KEY_REUSED:
+              summary: IDEMPOTENCY_KEY_REUSED
+              value:
+                error:
+                  code: IDEMPOTENCY_KEY_REUSED
+                  message: The Idempotency-Key was already used with a different upload.
+                  status: 409
+                  requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+    StorefrontAssetUnprocessable:
+      description: >-
+        The uploaded file is not allowed. Possible codes: ASSET_INVALID (`details.reason`: `type`, not PNG, JPEG or
+        WebP, or ICO for a favicon, or unreadable; `size`, more than 1 MB; `dimensions`, a logo larger than 2000 × 2000
+        pixels).
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/X-Request-Id'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            ASSET_INVALID:
+              summary: ASSET_INVALID (type)
+              value:
+                error:
+                  code: ASSET_INVALID
+                  message: Upload a PNG, JPEG or WebP image; SVG files are not accepted.
+                  status: 422
+                  requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+                  details:
+                    reason: type
+            ASSET_INVALID_SIZE:
+              summary: ASSET_INVALID (size)
+              value:
+                error:
+                  code: ASSET_INVALID
+                  message: The image is larger than 1 MB.
+                  status: 422
+                  requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+                  details:
+                    reason: size
+            ASSET_INVALID_DIMENSIONS:
+              summary: ASSET_INVALID (dimensions)
+              value:
+                error:
+                  code: ASSET_INVALID
+                  message: A logo may be at most 2000 × 2000 pixels.
+                  status: 422
+                  requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+                  details:
+                    reason: dimensions
     TemplateUnprocessable:
       description: >-
         The template was refused. Possible codes: TEMPLATE_INVALID (it does not compile in strict mode or uses a
@@ -42209,6 +43495,612 @@ components:
               items:
                 $ref: '#/components/schemas/SettingsWarning'
               description: What staff should know about the saved settings (`airline_card_net_price`).
+    StorefrontPageKind:
+      type: string
+      enum:
+        - content
+        - terms
+        - privacy
+        - cookies
+        - refund_policy
+        - imprint
+        - faq
+        - about
+      description: >-
+        What a content page is for (`storefront_pages.kind`): `content` for any page, the legal kinds for the pages
+        that legal links of the storefront settings point to, `faq` and `about`.
+    StorefrontPageSlug:
+      type: string
+      minLength: 1
+      maxLength: 64
+      pattern: ^[a-z0-9]+(-[a-z0-9]+)*$
+      description: >-
+        URL slug of a content page, lower-case words joined by hyphens: the storefront shows the page at `/p/<slug>`,
+        and a legal link (`StorefrontLegalPageLink.pageSlug`) names it.
+      examples:
+        - terms
+        - baggage-faq
+    StorefrontPageMarkdown:
+      type: string
+      maxLength: 50000
+      description: >-
+        A page body in the Markdown subset of OADR-0012 point 5, at most 50 000 characters. Blocks are separated by
+        blank lines: headings `##`, `###` and `####` (levels 2 to 4; the page title is the level 1), paragraphs (the
+        lines of one paragraph are joined with a space), bullet lists (`- ` or `* `) and numbered lists (`1. `; the
+        first number is the list's start), one level deep, and an image alone on its line, `![alt text](ast_…)`
+        with an alt text of at most 300 characters, which names a `page_image` asset of the OTA. Inside headings,
+        paragraphs and list items: `**bold**` or `__bold__`, `*italic*` or `_italic_`, and links `[text](href)` to an
+        `https:`, `mailto:` or `tel:` URL of at most 2048 characters or a relative `/p/<slug>`; a backslash escapes a
+        Markdown character. Anything else is refused with `422 UNPROCESSABLE` (`details.reason =
+        "markdown_not_allowed"` and the 1-based `details.line`): HTML, tables, code, block quotes, rules, headings of
+        level 1, 5 or 6, nested lists, images inside text, reference links, a longer alt text or URL, and other URLs
+        (`http:`, `javascript:`, `data:`, other relative paths). storefront.getPage serves the body parsed into blocks
+        (StorefrontPageBlock), whose `alt` and `href` keep these limits.
+    StorefrontPage:
+      type: object
+      required:
+        - id
+        - slug
+        - locale
+        - kind
+        - title
+        - bodyMarkdown
+        - isPublished
+        - showInFooter
+        - sortOrder
+        - publishedAt
+        - version
+        - createdAt
+        - updatedAt
+      description: >-
+        A content page of the hosted storefront as staff edit it: a row of `storefront_pages`, one per slug and locale,
+        shared by the test and live environments (OADR-0012 point 5). Once published, storefront.listPages lists it
+        and storefront.getPage serves it as blocks.
+      properties:
+        id:
+          type: string
+          pattern: ^stp_[0-9A-Za-z]{16,40}$
+          description: Page id (`stp_` + ULID).
+        slug:
+          $ref: '#/components/schemas/StorefrontPageSlug'
+        locale:
+          $ref: '#/components/schemas/LocaleCode'
+        kind:
+          $ref: '#/components/schemas/StorefrontPageKind'
+        title:
+          type: string
+          minLength: 1
+          maxLength: 120
+          description: Page title (the page's level-1 heading and its document title).
+        bodyMarkdown:
+          $ref: '#/components/schemas/StorefrontPageMarkdown'
+        isPublished:
+          type: boolean
+          description: Served to the storefront; a page that is not published is a draft, visible in the console only.
+        showInFooter:
+          type: boolean
+          description: Listed in the storefront footer (storefront.listPages `showInFooter`).
+        sortOrder:
+          type: integer
+          minimum: 0
+          maximum: 10000
+          description: Order in the footer and the page lists, lower first.
+        publishedAt:
+          type:
+            - string
+            - 'null'
+          format: date-time
+          description: First publication; null for a page never published. It stays when the page is unpublished.
+        version:
+          type: integer
+          minimum: 1
+          description: Optimistic-locking counter; the `ETag` is `"<version>"`.
+        createdAt:
+          type: string
+          format: date-time
+          description: Creation.
+        updatedAt:
+          type: string
+          format: date-time
+          description: Last change.
+    StorefrontPageInput:
+      type: object
+      additionalProperties: false
+      required:
+        - slug
+        - locale
+        - title
+      description: >-
+        Body of console.settings.pages.create. Fields not sent take their defaults: `kind` `content`, an empty body,
+        `isPublished` and `showInFooter` false, `sortOrder` 100.
+      properties:
+        slug:
+          $ref: '#/components/schemas/StorefrontPageSlug'
+        locale:
+          $ref: '#/components/schemas/LocaleCode'
+        kind:
+          $ref: '#/components/schemas/StorefrontPageKind'
+        title:
+          type: string
+          minLength: 1
+          maxLength: 120
+          description: Page title.
+        bodyMarkdown:
+          $ref: '#/components/schemas/StorefrontPageMarkdown'
+        isPublished:
+          type: boolean
+          description: Publish the page at once (default false).
+        showInFooter:
+          type: boolean
+          description: List the page in the storefront footer (default false).
+        sortOrder:
+          type: integer
+          minimum: 0
+          maximum: 10000
+          description: Order in the footer and the page lists, lower first (default 100).
+    StorefrontPageUpdate:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      description: >-
+        Body of console.settings.pages.update: any subset of the page's writable fields; fields not sent keep their
+        value. `slug` and `locale` are fixed at creation (the page's address `/p/<slug>` and the target of legal links).
+      properties:
+        kind:
+          $ref: '#/components/schemas/StorefrontPageKind'
+        title:
+          type: string
+          minLength: 1
+          maxLength: 120
+          description: Page title.
+        bodyMarkdown:
+          $ref: '#/components/schemas/StorefrontPageMarkdown'
+        isPublished:
+          type: boolean
+          description: Publish the page (true) or take it off the storefront as a draft (false).
+        showInFooter:
+          type: boolean
+          description: List the page in the storefront footer.
+        sortOrder:
+          type: integer
+          minimum: 0
+          maximum: 10000
+          description: Order in the footer and the page lists, lower first.
+    StorefrontPagePage:
+      type: object
+      required:
+        - data
+        - page
+      description: A page of content pages, by `sortOrder`, then `slug`, then `locale`.
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/StorefrontPage'
+          description: Content pages.
+        page:
+          $ref: '#/components/schemas/PageInfo'
+          description: Pagination.
+    StorefrontPageSummary:
+      type: object
+      additionalProperties: false
+      required:
+        - slug
+        - title
+        - kind
+        - showInFooter
+        - sortOrder
+      description: A published content page in storefront.listPages.
+      properties:
+        slug:
+          $ref: '#/components/schemas/StorefrontPageSlug'
+        title:
+          type: string
+          minLength: 1
+          maxLength: 120
+          description: Page title, for the link text.
+        kind:
+          $ref: '#/components/schemas/StorefrontPageKind'
+        showInFooter:
+          type: boolean
+          description: The storefront lists the page in its footer.
+        sortOrder:
+          type: integer
+          minimum: 0
+          maximum: 10000
+          description: Order in the footer and the page lists, lower first.
+    StorefrontPageList:
+      type: object
+      additionalProperties: false
+      required:
+        - data
+      description: The published content pages of a locale, by `sortOrder`, then `slug`; each slug once.
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/StorefrontPageSummary'
+          description: Pages.
+    StorefrontPageContent:
+      type: object
+      additionalProperties: false
+      required:
+        - slug
+        - locale
+        - title
+        - kind
+        - blocks
+        - updatedAt
+      description: >-
+        A published content page for the storefront (storefront.getPage): its body parsed on the server into blocks,
+        which the storefront renders with `createElement` and `textContent`, never `innerHTML`.
+      properties:
+        slug:
+          $ref: '#/components/schemas/StorefrontPageSlug'
+        locale:
+          $ref: '#/components/schemas/LocaleCode'
+        title:
+          type: string
+          minLength: 1
+          maxLength: 120
+          description: Page title.
+        kind:
+          $ref: '#/components/schemas/StorefrontPageKind'
+        blocks:
+          type: array
+          items:
+            $ref: '#/components/schemas/StorefrontPageBlock'
+          description: The body, block by block, in order; empty for an empty body.
+        updatedAt:
+          type: string
+          format: date-time
+          description: Last change of the page.
+    StorefrontPageBlock:
+      description: >-
+        One block of a page body (`type`): a heading, a paragraph, a list or an image. Text lives only in `text` nodes
+        (StorefrontPageInline); nothing in a block is HTML.
+      oneOf:
+        - $ref: '#/components/schemas/StorefrontPageHeadingBlock'
+        - $ref: '#/components/schemas/StorefrontPageParagraphBlock'
+        - $ref: '#/components/schemas/StorefrontPageListBlock'
+        - $ref: '#/components/schemas/StorefrontPageImageBlock'
+      discriminator:
+        propertyName: type
+        mapping:
+          heading: '#/components/schemas/StorefrontPageHeadingBlock'
+          paragraph: '#/components/schemas/StorefrontPageParagraphBlock'
+          list: '#/components/schemas/StorefrontPageListBlock'
+          image: '#/components/schemas/StorefrontPageImageBlock'
+    StorefrontPageHeadingBlock:
+      type: object
+      additionalProperties: false
+      required:
+        - type
+        - level
+        - content
+      description: A heading (`##` to `####`).
+      properties:
+        type:
+          type: string
+          enum:
+            - heading
+        level:
+          type: integer
+          minimum: 2
+          maximum: 4
+          description: Heading level, 2 to 4 (the page title is the level 1).
+        content:
+          type: array
+          minItems: 1
+          items:
+            $ref: '#/components/schemas/StorefrontPageInline'
+          description: The heading's text.
+    StorefrontPageParagraphBlock:
+      type: object
+      additionalProperties: false
+      required:
+        - type
+        - content
+      description: A paragraph.
+      properties:
+        type:
+          type: string
+          enum:
+            - paragraph
+        content:
+          type: array
+          minItems: 1
+          items:
+            $ref: '#/components/schemas/StorefrontPageInline'
+          description: The paragraph's text.
+    StorefrontPageListBlock:
+      type: object
+      additionalProperties: false
+      required:
+        - type
+        - ordered
+        - start
+        - items
+      description: A bullet or numbered list, one level deep.
+      properties:
+        type:
+          type: string
+          enum:
+            - list
+        ordered:
+          type: boolean
+          description: A numbered list (`1. `) rather than a bullet list (`- `).
+        start:
+          type:
+            - integer
+            - 'null'
+          minimum: 0
+          description: The first number of a numbered list; null for a bullet list.
+        items:
+          type: array
+          minItems: 1
+          items:
+            $ref: '#/components/schemas/StorefrontPageListItem'
+          description: The list items, in order.
+    StorefrontPageListItem:
+      type: object
+      additionalProperties: false
+      required:
+        - content
+      description: One list item.
+      properties:
+        content:
+          type: array
+          minItems: 1
+          items:
+            $ref: '#/components/schemas/StorefrontPageInline'
+          description: The item's text.
+    StorefrontPageImageBlock:
+      type: object
+      additionalProperties: false
+      required:
+        - type
+        - assetId
+        - url
+        - alt
+        - width
+        - height
+      description: An image of a `page_image` asset (`![alt text](ast_…)` on a line of its own).
+      properties:
+        type:
+          type: string
+          enum:
+            - image
+        assetId:
+          type: string
+          pattern: ^ast_[0-9A-Za-z]{16,40}$
+          description: The asset (`storefront_assets`, kind `page_image`).
+        url:
+          type: string
+          format: uri-reference
+          description: >-
+            The asset's public URL (getPublicAsset): a same-origin path (`/api/v1/assets/<tenantKey>/<assetId>.<ext>`)
+            for the hosted storefront's edge, an absolute URL on the API host for key callers.
+        alt:
+          type: string
+          maxLength: 300
+          description: Alternative text; empty for a decorative image.
+        width:
+          type:
+            - integer
+            - 'null'
+          minimum: 1
+          description: Width in pixels, from the file header.
+        height:
+          type:
+            - integer
+            - 'null'
+          minimum: 1
+          description: Height in pixels, from the file header.
+    StorefrontPageInline:
+      description: >-
+        An inline node of a block (`type`): plain `text`, `strong` (bold) and `em` (italic) around other inline nodes,
+        or a `link` around text and emphasis (never another link).
+      oneOf:
+        - $ref: '#/components/schemas/StorefrontPageText'
+        - $ref: '#/components/schemas/StorefrontPageStrong'
+        - $ref: '#/components/schemas/StorefrontPageEmphasis'
+        - $ref: '#/components/schemas/StorefrontPageLink'
+      discriminator:
+        propertyName: type
+        mapping:
+          text: '#/components/schemas/StorefrontPageText'
+          strong: '#/components/schemas/StorefrontPageStrong'
+          em: '#/components/schemas/StorefrontPageEmphasis'
+          link: '#/components/schemas/StorefrontPageLink'
+    StorefrontPageText:
+      type: object
+      additionalProperties: false
+      required:
+        - type
+        - text
+      description: Plain text; set it with `textContent`.
+      properties:
+        type:
+          type: string
+          enum:
+            - text
+        text:
+          type: string
+          minLength: 1
+          description: The text, Markdown escapes removed.
+    StorefrontPageStrong:
+      type: object
+      additionalProperties: false
+      required:
+        - type
+        - content
+      description: Bold text (`**…**`).
+      properties:
+        type:
+          type: string
+          enum:
+            - strong
+        content:
+          type: array
+          minItems: 1
+          items:
+            $ref: '#/components/schemas/StorefrontPageInline'
+          description: What is bold.
+    StorefrontPageEmphasis:
+      type: object
+      additionalProperties: false
+      required:
+        - type
+        - content
+      description: Italic text (`*…*`).
+      properties:
+        type:
+          type: string
+          enum:
+            - em
+        content:
+          type: array
+          minItems: 1
+          items:
+            $ref: '#/components/schemas/StorefrontPageInline'
+          description: What is italic.
+    StorefrontPageLink:
+      type: object
+      additionalProperties: false
+      required:
+        - type
+        - href
+        - content
+      description: >-
+        A link (`[text](href)`). The storefront opens `https:` links with `rel="noopener noreferrer"` and checks the
+        scheme again before it sets `href`.
+      properties:
+        type:
+          type: string
+          enum:
+            - link
+        href:
+          type: string
+          maxLength: 2048
+          pattern: ^(https://\S+|mailto:\S+|tel:\S+|/p/[a-z0-9]+(-[a-z0-9]+)*)$
+          description: An `https:`, `mailto:` or `tel:` URL, or a content page of the storefront (`/p/<slug>`).
+        content:
+          type: array
+          minItems: 1
+          items:
+            $ref: '#/components/schemas/StorefrontPageInline'
+          description: The link text.
+    StorefrontAssetKind:
+      type: string
+      enum:
+        - logo
+        - logo_dark
+        - logo_square
+        - favicon
+        - og_image
+        - page_image
+      description: >-
+        What an uploaded image is for: the storefront settings reference `logo`, `logo_dark`, `logo_square` and
+        `favicon` assets in `branding` and `og_image` assets in `seo`; content pages show `page_image` assets.
+    StorefrontAsset:
+      type: object
+      required:
+        - id
+        - kind
+        - contentType
+        - sizeBytes
+        - width
+        - height
+        - fileName
+        - url
+        - createdAt
+      description: >-
+        An uploaded image (a row of `storefront_assets`; OADR-0012 point 2). Immutable: a new image is a new asset,
+        with a new id and URL. Shared by the test and live environments.
+      properties:
+        id:
+          type: string
+          pattern: ^ast_[0-9A-Za-z]{16,40}$
+          description: Asset id (`ast_` + ULID), part of its public URL.
+        kind:
+          $ref: '#/components/schemas/StorefrontAssetKind'
+        contentType:
+          type: string
+          enum:
+            - image/png
+            - image/jpeg
+            - image/webp
+            - image/x-icon
+          description: The type read from the file's bytes at upload (`image/x-icon` for favicons only).
+        sizeBytes:
+          type: integer
+          minimum: 1
+          maximum: 1048576
+          description: File size in bytes (at most 1 MB).
+        width:
+          type:
+            - integer
+            - 'null'
+          minimum: 1
+          description: Width in pixels, from the file header.
+        height:
+          type:
+            - integer
+            - 'null'
+          minimum: 1
+          description: Height in pixels, from the file header.
+        fileName:
+          type: string
+          minLength: 1
+          maxLength: 200
+          description: The file name shown in the console.
+        url:
+          type: string
+          format: uri
+          description: >-
+            The public URL (getPublicAsset): `<API host>/v1/assets/<tenantKey>/<id>.<ext>`, with the extension of
+            `contentType` (`png`, `jpg`, `webp`, `ico`).
+        createdAt:
+          type: string
+          format: date-time
+          description: Upload time.
+    StorefrontAssetPage:
+      type: object
+      required:
+        - data
+        - page
+      description: A page of uploaded images, newest first.
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/StorefrontAsset'
+          description: Assets.
+        page:
+          $ref: '#/components/schemas/PageInfo'
+          description: Pagination.
+    StorefrontAssetUpload:
+      type: object
+      additionalProperties: false
+      required:
+        - file
+        - kind
+      description: >-
+        The `multipart/form-data` body of console.settings.assets.upload: one part per property. The type of `file` is
+        read from its bytes; its declared `Content-Type` and file name extension are ignored.
+      properties:
+        file:
+          type: string
+          contentMediaType: application/octet-stream
+          description: The image file, at most 1 MB (PNG, JPEG or WebP; ICO for a favicon).
+        kind:
+          $ref: '#/components/schemas/StorefrontAssetKind'
+        fileName:
+          type: string
+          minLength: 1
+          maxLength: 200
+          description: The name shown in the console; by default the file name of the `file` part.
     NotificationTemplateKey:
       type: string
       enum:
@@ -46867,6 +48759,200 @@ components:
               Airline-card bookings are sold at the airline's price: your 2 active markup and fee rules do not apply to
               them.
             path: /airlineCard/enabledTest
+    StorefrontPageExample:
+      summary: A published content page
+      value:
+        id: stp_01JA7Q1S3U5W7Y9A1C3E5G7J9L
+        slug: terms
+        locale: en
+        kind: terms
+        title: Terms and conditions
+        bodyMarkdown: |-
+          ## Who we are
+
+          Acme Travel Ltd sells flights as an agent of the airlines. Questions? Write to [help@acmetravel.com](mailto:help@acmetravel.com).
+
+          ## Tickets
+
+          - **Tickets** are issued after payment.
+          - Read our [privacy policy](/p/privacy) and the airline's *conditions of carriage*.
+
+          ## Cancellations
+
+          1. Open your booking.
+          2. Choose *Cancel*.
+
+          ![Our team at the office](ast_01JA7P4R6T8V0X2Z4B6D8F0H2K)
+        isPublished: true
+        showInFooter: true
+        sortOrder: 20
+        publishedAt: '2026-10-14T08:00:00Z'
+        version: 4
+        createdAt: '2026-10-13T16:45:00Z'
+        updatedAt: '2026-10-19T11:20:00Z'
+    StorefrontPagePageExample:
+      summary: The pages in footer order, a draft included
+      value:
+        data:
+          - id: stp_01JA7Q0R2T4V6X8Z0B2D4F6H8K
+            slug: about-us
+            locale: en
+            kind: about
+            title: About Acme Travel
+            bodyMarkdown: Acme Travel has sold flights from London since 2009.
+            isPublished: true
+            showInFooter: true
+            sortOrder: 10
+            publishedAt: '2026-10-13T16:00:00Z'
+            version: 1
+            createdAt: '2026-10-13T16:00:00Z'
+            updatedAt: '2026-10-13T16:00:00Z'
+          - id: stp_01JA7Q2T4V6X8Z0B2D4F6H8K0M
+            slug: baggage-faq
+            locale: fr
+            kind: faq
+            title: Questions sur les bagages
+            bodyMarkdown: ''
+            isPublished: false
+            showInFooter: false
+            sortOrder: 100
+            publishedAt: null
+            version: 1
+            createdAt: '2026-10-20T09:10:00Z'
+            updatedAt: '2026-10-20T09:10:00Z'
+        page:
+          nextCursor: null
+          limit: 20
+    StorefrontPageContentExample:
+      summary: The terms page as blocks (a key caller's image URL)
+      value:
+        slug: terms
+        locale: en
+        title: Terms and conditions
+        kind: terms
+        blocks:
+          - type: heading
+            level: 2
+            content:
+              - type: text
+                text: Who we are
+          - type: paragraph
+            content:
+              - type: text
+                text: 'Acme Travel Ltd sells flights as an agent of the airlines. Questions? Write to '
+              - type: link
+                href: mailto:help@acmetravel.com
+                content:
+                  - type: text
+                    text: help@acmetravel.com
+              - type: text
+                text: .
+          - type: heading
+            level: 2
+            content:
+              - type: text
+                text: Tickets
+          - type: list
+            ordered: false
+            start: null
+            items:
+              - content:
+                  - type: strong
+                    content:
+                      - type: text
+                        text: Tickets
+                  - type: text
+                    text: ' are issued after payment.'
+              - content:
+                  - type: text
+                    text: 'Read our '
+                  - type: link
+                    href: /p/privacy
+                    content:
+                      - type: text
+                        text: privacy policy
+                  - type: text
+                    text: " and the airline's "
+                  - type: em
+                    content:
+                      - type: text
+                        text: conditions of carriage
+                  - type: text
+                    text: .
+          - type: heading
+            level: 2
+            content:
+              - type: text
+                text: Cancellations
+          - type: list
+            ordered: true
+            start: 1
+            items:
+              - content:
+                  - type: text
+                    text: Open your booking.
+              - content:
+                  - type: text
+                    text: 'Choose '
+                  - type: em
+                    content:
+                      - type: text
+                        text: Cancel
+                  - type: text
+                    text: .
+          - type: image
+            assetId: ast_01JA7P4R6T8V0X2Z4B6D8F0H2K
+            url: https://api.ota.example.com/v1/assets/acme/ast_01JA7P4R6T8V0X2Z4B6D8F0H2K.jpg
+            alt: Our team at the office
+            width: 1200
+            height: 800
+        updatedAt: '2026-10-19T11:20:00Z'
+    StorefrontAssetExample:
+      summary: An uploaded logo
+      value:
+        id: ast_01JA6B2C3D4E5F6G7H8J9K0M1N
+        kind: logo
+        contentType: image/png
+        sizeBytes: 48213
+        width: 640
+        height: 160
+        fileName: acme-logo.png
+        url: https://api.ota.example.com/v1/assets/acme/ast_01JA6B2C3D4E5F6G7H8J9K0M1N.png
+        createdAt: '2026-10-12T10:05:00Z'
+    StorefrontAssetPageExample:
+      summary: The uploaded images, newest first
+      value:
+        data:
+          - id: ast_01JA7P4R6T8V0X2Z4B6D8F0H2K
+            kind: page_image
+            contentType: image/jpeg
+            sizeBytes: 241877
+            width: 1200
+            height: 800
+            fileName: team.jpg
+            url: https://api.ota.example.com/v1/assets/acme/ast_01JA7P4R6T8V0X2Z4B6D8F0H2K.jpg
+            createdAt: '2026-10-13T16:30:00Z'
+          - id: ast_01JA6B2C3D4E5F6G7H8J9K0M3Q
+            kind: favicon
+            contentType: image/x-icon
+            sizeBytes: 15086
+            width: 48
+            height: 48
+            fileName: favicon.ico
+            url: https://api.ota.example.com/v1/assets/acme/ast_01JA6B2C3D4E5F6G7H8J9K0M3Q.ico
+            createdAt: '2026-10-12T10:07:00Z'
+          - id: ast_01JA6B2C3D4E5F6G7H8J9K0M1N
+            kind: logo
+            contentType: image/png
+            sizeBytes: 48213
+            width: 640
+            height: 160
+            fileName: acme-logo.png
+            url: https://api.ota.example.com/v1/assets/acme/ast_01JA6B2C3D4E5F6G7H8J9K0M1N.png
+            createdAt: '2026-10-12T10:05:00Z'
+        page:
+          nextCursor: null
+          limit: 20
     NotificationTemplateExample:
       summary: The OTA's own confirmation e-mail
       value:
@@ -47891,6 +49977,9 @@ x-error-catalogue:
     description: >-
       The OTA is live and the portal account has no multi-factor authentication (PADR-0008): console sign-in needs it.
       Turn on two-factor authentication in the Velexis portal, then open the console again.
+  ASSET_INVALID:
+    status: 422
+    description: The uploaded file has a type, size or dimensions that are not allowed (details.reason).
 x-new-tenant-tables:
   customer_consents: >-
     Append-only log of consent events per customer (marketing opt-in/opt-out, terms and privacy policy acceptance) with

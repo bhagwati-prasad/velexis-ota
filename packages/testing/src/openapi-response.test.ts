@@ -224,7 +224,17 @@ describe("expectResponseToMatch on the OTA document", () => {
           if (typeof operation.operationId !== "string") {
             continue;
           }
-          for (const status of Object.keys(operation.responses ?? {})) {
+          for (const [status, response] of Object.entries(operation.responses ?? {})) {
+            const content = (response as JsonObject)["content"];
+            const types = content !== null && typeof content === "object" ? Object.keys(content) : [];
+            if (types.length > 0 && !types.some((type) => /^application\/([\w.+-]+\+)?json\b/i.test(type))) {
+              // Documented with other media types only (getPublicAsset's images): the checker refuses to judge it,
+              // as for the fixture's PDF, so its test checks that body another way.
+              expect(() =>
+                checker.check(String(operation.operationId), { status: Number(status), body: "" }),
+              ).toThrow("has no JSON content");
+              continue;
+            }
             // A body that matches nothing: every schema is compiled and run; compile errors would throw.
             checker.check(operation.operationId, { status: Number(status), body: Symbol.for("nothing") });
             compiled += 1;

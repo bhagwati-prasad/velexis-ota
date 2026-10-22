@@ -43,8 +43,8 @@ The working OpenAPI document gains these operations (96 + 32 = 128 SDK methods).
 
 | `x-sdk-method` | HTTP | Parameters → result | Milestone | Notes |
 |---|---|---|---|---|
-| `storefront.listPages` | `GET /v1/storefront/pages` | `{ locale? }` → `{ data: [{ slug, title, kind, showInFooter, sortOrder }] }` | M4 | Published pages of the locale |
-| `storefront.getPage` | `GET /v1/storefront/pages/{slug}` | `{ slug, locale? }` → `{ slug, locale, title, kind, blocks[], updatedAt }` | M4 | `blocks` is a parsed tree; render with `textContent` only |
+| `storefront.listPages` | `GET /v1/storefront/pages` | `{ locale? }` → `StorefrontPageList` (`{ data: [{ slug, title, kind, showInFooter, sortOrder }] }`) | M4 | Published pages of the locale, each slug once, by `sortOrder`; a slug without a published page in the locale falls back to its page of the default locale. `locale` is a query parameter; without it the call's `Accept-Language` (the `locale` option), then the storefront's default locale. |
+| `storefront.getPage` | `GET /v1/storefront/pages/{slug}` | `{ slug, locale? }` → `StorefrontPageContent` (`{ slug, locale, title, kind, blocks[], updatedAt }`) | M4 | `blocks` is a parsed tree (`StorefrontPageBlock`: `heading`, `paragraph`, `list`, `image`, with inline `text`, `strong`, `em`, `link`); render with `textContent` only. The locale falls back as in `listPages`; a page that is not published answers `404`. An image's `url` is a same-origin `/api/v1/assets/…` path in cookie mode and an absolute URL for key callers. |
 | `checkout.completeWithAirlineCard` | `POST /v1/checkouts/{checkoutId}/airline-card-completion` | `CompleteWithAirlineCardParams`: `{ checkoutId, paymentId, expectedTotal, card: AirlineCard }` with `AirlineCard` = `{ brand, holderName, number, expiryMonth, expiryYear, securityCode }` → `CheckoutCompletion` | M3 | `x-edge-only`: hosted storefront only; key callers get `403 SCOPE_NOT_ALLOWED`. Idempotency key required (a new one per call); 90 s; never retried, never echoed (§2). `bookingToken` is `null` in cookie mode (§6). |
 
 ### 3.2 Console settings (`settings:read` / `settings:write`)
@@ -59,9 +59,13 @@ The working OpenAPI document gains these operations (96 + 32 = 128 SDK methods).
 | `console.settings.feeRules.{list,create,get,update,delete}` | `/v1/console/settings/fee-rules[/{feeRuleId}]` | Same shapes with `feeRuleId`, `FeeRule`, `FeeRuleInput`, `FeeRuleUpdate` |
 | `console.settings.storefront.get` | `GET /v1/console/settings/storefront` | `{}` → `StorefrontSettings` |
 | `console.settings.storefront.update` | `PATCH /v1/console/settings/storefront` | `{ ifMatch, ...StorefrontSettingsUpdate }` (whole sections of `StorefrontSettings`) → `StorefrontSettingsUpdateResult` (`StorefrontSettings` + `warnings[]`) |
-| `console.settings.pages.{list,create,get,update,delete}` | `/v1/console/settings/pages[/{pageId}]` | `StorefrontPage` (Markdown subset in `bodyMarkdown`) |
-| `console.settings.assets.list` | `GET /v1/console/settings/assets` | `{ kind?, cursor?, limit? }` → `Page<StorefrontAsset>` |
-| `console.settings.assets.upload` | `POST /v1/console/settings/assets` (multipart) | `{ file: Blob, kind, fileName? }` → `StorefrontAsset` |
+| `console.settings.pages.list` | `GET /v1/console/settings/pages` | `{ locale?, published?, cursor?, limit? }` → `Page<StorefrontPage>` (`StorefrontPagePage`, drafts included, by `sortOrder`, `slug`, `locale`) |
+| `console.settings.pages.create` | `POST …/pages` | `StorefrontPageInput` (`slug`, `locale`, `title`, `kind?`, `bodyMarkdown?`, `isPublished?`, `showInFooter?`, `sortOrder?`) → `StorefrontPage` |
+| `console.settings.pages.get` | `GET …/pages/{pageId}` | `{ pageId }` → `StorefrontPage` |
+| `console.settings.pages.update` | `PATCH …/pages/{pageId}` | `{ pageId, ifMatch, ...StorefrontPageUpdate }` (any subset of `kind`, `title`, `bodyMarkdown`, `isPublished`, `showInFooter`, `sortOrder`) → `StorefrontPage` |
+| `console.settings.pages.delete` | `DELETE …/pages/{pageId}` | `{ pageId, ifMatch }` → `void` |
+| `console.settings.assets.list` | `GET /v1/console/settings/assets` | `{ kind?, cursor?, limit? }` → `Page<StorefrontAsset>` (`StorefrontAssetPage`, newest first) |
+| `console.settings.assets.upload` | `POST /v1/console/settings/assets` (multipart) | `{ file: Blob, kind, fileName? }` (`StorefrontAssetUpload`) → `StorefrontAsset` |
 | `console.settings.assets.delete` | `DELETE /v1/console/settings/assets/{assetId}` | `{ assetId }` → `void` |
 | `console.settings.templates.list` | `GET /v1/console/settings/notification-templates` | `{}` → `NotificationTemplateList` (`{ data: NotificationTemplate[] }`, effective templates) |
 | `console.settings.templates.get` | `GET …/{templateKey}/{channel}/{locale}` | `{ templateKey, channel, locale }` → `NotificationTemplate` |
@@ -70,6 +74,8 @@ The working OpenAPI document gains these operations (96 + 32 = 128 SDK methods).
 | `console.settings.templates.reset` | `POST …/reset` | `{ templateKey, channel, locale }` → `NotificationTemplate` (code default) |
 
 Creates send an `Idempotency-Key`; updates and deletes are guarded by `ifMatch` instead, `templates.put` takes `ifMatch` only when the OTA already has its own template, and `templates.preview` and `templates.reset` are safe to repeat (`x-idempotent-by-design`). `templateKey` is a `NotificationTemplateKey`, `channel` is `email` and the fonts of `branding.fonts` are the `StorefrontFontFamily` values. Every console operation names the permission it needs in `x-permission` (`settings:read` or `settings:write` here; `none` for `console.auth.*`); `console.auth.me` returns the permissions of the signed-in staff member.
+
+Pages and assets (OBE-091; [OADR-0012](../../docs/adr/0012-storefront-settings-assets-and-pages.md)): `bodyMarkdown` is the Markdown subset of `StorefrontPageMarkdown` (headings 2–4, paragraphs, bold, italic, one-level lists, `https:`, `mailto:`, `tel:` and `/p/<slug>` links, images `![alt](ast_…)` of `page_image` assets; alt texts of at most 300 and URLs of at most 2048 characters); anything else answers `422 UNPROCESSABLE` with `details.line`. A page's `slug` and `locale` are fixed at creation; one page per slug and locale (`409 CONFLICT`, `page_exists`), and a page whose slug a legal link names cannot be deleted, in any locale (`page_linked`; change the link first, or unpublish the page). `assets.upload` sends an `Idempotency-Key` and the parts `file` and `kind`, and `fileName` when given; the server sniffs the type (PNG, JPEG, WebP; ICO for favicons; never SVG) and refuses with `422 ASSET_INVALID` (`details.reason`: `type`, `size`, `dimensions`). Assets never change, so `assets.delete` takes no `ifMatch`; an asset in use answers `409 CONFLICT` (`asset_in_use`). The asset files themselves are plain image URLs (`getPublicAsset`, `x-sdk-exclude`), not SDK methods.
 
 ### 3.3 Console payments (`payments:*`)
 

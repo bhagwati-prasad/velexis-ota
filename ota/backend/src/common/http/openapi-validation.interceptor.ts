@@ -1,6 +1,7 @@
 // Request validation against the OTA document (ADR-0006 "Runtime validation", architecture §3 step 6, conventions §2
 // and §6). At start-up the API parses ota/backend/openapi/velexis-ota-booking-api.openapi.yaml once and compiles, for
-// every operation, one Ajv validator per parameter location (path, query, header, cookie) and one for the JSON body.
+// every operation, one Ajv validator per parameter location (path, query, header, cookie) and one for the JSON body
+// (a `multipart/form-data` upload has none: its handler parses the parts and checks them).
 // The interceptor runs them for each request whose handler carries `@OpenApiOperation(...)` and answers
 // `400 VALIDATION_FAILED` with `fieldErrors` holding JSON pointers and Ajv keywords, never the rejected values (a body
 // may hold a password or a card number). Responses are not validated at run time; the tests do that
@@ -55,7 +56,10 @@ export interface OperationSpec {
   readonly scope: OperationScope | null;
   readonly internal: boolean;
   readonly parameters: readonly ParameterSpec[];
-  /** The `application/json` request body, when the operation has one. */
+  /**
+   * The `application/json` request body, when the operation has one; never a `multipart/form-data` body, which its
+   * handler parses and checks.
+   */
   readonly body: { readonly required: boolean; readonly schema: unknown } | undefined;
 }
 
@@ -363,6 +367,15 @@ export class OpenApiDocument {
     const body = this.resolve(raw);
     const content = isObject(body) && isObject(body["content"]) ? body["content"] : {};
     const media = content["application/json"];
+    if (
+      media === undefined &&
+      Object.keys(content).length === 1 &&
+      isObject(content["multipart/form-data"])
+    ) {
+      // A file upload (console.settings.assets.upload, OBE-091): no JSON body to validate here. Its handler reads the
+      // multipart stream itself, the only route that parses one, and checks the parts against the document (OBE-071).
+      return undefined;
+    }
     if (!isObject(media) || media["schema"] === undefined) {
       throw new Error(`${this.label}: the request body of ${operationId} has no application/json schema`);
     }

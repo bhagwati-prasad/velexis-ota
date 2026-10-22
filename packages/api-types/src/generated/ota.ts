@@ -62,6 +62,86 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/storefront/pages": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the published content pages
+         * @description Lists the OTA's published content pages (`storefront_pages` with `isPublished`, written in the OTA admin with console.settings.pages.*) in one locale, for the storefront's footer and page index: `slug`, `title`, `kind`, `showInFooter` and `sortOrder` of each, ordered by `sortOrder`, then `slug`. Not paginated (an OTA has a handful of pages). The storefront shows a page at `/p/<slug>` with storefront.getPage.
+         *
+         *     **Locale.** The `locale` parameter, else the first locale of `Accept-Language` that the storefront offers (`locales.supported` of the storefront settings), else the default locale (`locales.default`); a locale the storefront does not offer counts as absent. A slug without a published page in that locale is listed with its published page of the default locale, if it has one, so each slug appears at most once.
+         *
+         *     **Who may call.** Anonymous, like storefront.get: a publishable key from the browser, a secret key from server code, a hosting key with `X-Velexis-Host`, or the hosted storefront's edge. Every caller gets the same list; pages are shared by the test and live environments.
+         *
+         *     **Caching.** Cached in Redis per tenant, environment and locale for 5 minutes, and deleted whenever staff create, change or delete a page, so a change shows within about 5 minutes on the hosted storefront (its `sessionStorage` copy; OADR-0012 point 7). `Cache-Control: public, max-age=60, stale-while-revalidate=600` for key callers, `private` in edge mode.
+         *
+         *     **Amadeus.** None. **Errors.** A suspended or not-yet-provisioned OTA answers `403 TENANT_SUSPENDED`; `403 HOST_NOT_ALLOWED` as storefront.get.
+         */
+        get: operations["listStorefrontPages"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/storefront/pages/{slug}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get a published content page as blocks
+         * @description Returns one published content page with its body parsed on the server from the Markdown subset into blocks (OADR-0012 point 5): `heading` (levels 2 to 4), `paragraph`, `list` (bullet or numbered, one level) and `image`, which hold the inline nodes `text`, `strong`, `em` and `link` (StorefrontPageBlock). Render them with `createElement` and `textContent` only, never `innerHTML` (conventions §4). Links are `https:`, `mailto:` or `tel:` URLs or a relative `/p/<slug>`; a renderer checks them again. The storefront shows the page at `/p/<slug>`.
+         *
+         *     **Locale.** Resolved as in storefront.listPages (`locale`, else `Accept-Language`, else the default locale): the slug's page of that locale when it is published, else its page of the default locale when that one is published; `locale` in the answer says which one was served. Otherwise `404 NOT_FOUND`, also for a page that is not published (drafts are visible in the console only).
+         *
+         *     **Images.** An `image` block names a `page_image` asset (`assetId`) with its alt text and dimensions. Its `url` is the asset's public URL (getPublicAsset) for the caller: a same-origin path (`/api/v1/assets/<tenantKey>/<assetId>.<ext>`) for the hosted storefront's edge, so its `img-src 'self'` holds, and an absolute URL on the API host for key callers (OADR-0012 point 3). The cache keeps the asset ids; the URLs are added for each request.
+         *
+         *     **Who may call.** Anonymous, as storefront.listPages; every caller gets the same page, with its own image URLs. **Caching.** Cached in Redis per tenant, environment, locale and slug for 5 minutes and deleted whenever staff change the OTA's pages, as storefront.listPages; the same `Cache-Control`. **Amadeus.** None. **Errors.** `404 NOT_FOUND`, `403 TENANT_SUSPENDED`, `403 HOST_NOT_ALLOWED`.
+         */
+        get: operations["getStorefrontPage"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/assets/{tenantKey}/{assetId}.{ext}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get an uploaded storefront image (plain image URL)
+         * @description Serves an image the OTA's staff uploaded (`storefront_assets`, console.settings.assets.upload) at a plain image URL: the logo, favicon and Open Graph URLs of storefront.get, the `image` blocks of storefront.getPage and `StorefrontAsset.url` of the console point here. Not an SDK method (`x-sdk-exclude`): use the URL in `<img>`, `<link rel="icon">` or `og:image`.
+         *
+         *     **No credential.** The OTA is the path's `tenantKey`, the file the one stored at upload (`tenant_<key>/assets/<sha256>.<ext>` of the StorageAdapter, never re-encoded). A credential that comes with the request is checked as on every route but does not choose the OTA: Caddy adds the edge header to every `/api/*` request of a storefront host, where the hosted storefront loads `/api/v1/assets/…` same-origin.
+         *
+         *     **Availability.** Served while the OTA is `active` or `suspended` (a suspended storefront still shows its logo on its maintenance page). An unknown OTA, an OTA in any other status, an unknown asset and an `ext` other than the asset's answer `404 NOT_FOUND`. A deleted asset answers `404` from then on; browsers and caches may still show their copy for its cache lifetime.
+         *
+         *     **Headers.** `Content-Type` is the type sniffed at upload; `Cache-Control: public, max-age=31536000, immutable` (an id never changes content: a new image is a new asset), `X-Content-Type-Options: nosniff`, `Content-Security-Policy: default-src 'none'` and `Content-Disposition: inline`, so a file opened directly runs nothing (no SVG is ever stored; OADR-0012 points 2 and 3). Rate limit 120 per minute per IP. No Amadeus call.
+         */
+        get: operations["getPublicAsset"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/auth/sign-up": {
         parameters: {
             query?: never;
@@ -2588,6 +2668,148 @@ export interface paths {
          *     **Key-only calls.** Without a staff token the secret key must carry the `console:automation` scope and this operation's permission in `platform.api_keys.scopes` — otherwise `403 SCOPE_NOT_ALLOWED` (`details.requiredScope`) or `403 FORBIDDEN` (`details.requiredPermission`); such calls are audited as the API key (see ConsoleApiKeyScope). A key scoped `storefront` is refused even with a staff token.
          */
         patch: operations["consoleUpdateStorefrontSettings"];
+        trace?: never;
+    };
+    "/v1/console/settings/pages": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the content pages
+         * @description Lists the OTA's content pages (`storefront_pages`, one per slug and locale), drafts included, ordered by `sortOrder`, then `slug`, then `locale`, with cursor pagination. `locale` keeps the pages of one locale, `published=true` only published pages and `published=false` only drafts. Each entry is the whole page, its Markdown body included.
+         *
+         *     Pages are shared by the test and live environments (one set per OTA), so `X-Velexis-Environment` changes nothing here. No Amadeus call. Permission `settings:read`. Not audited per call.
+         *
+         *     **Key-only calls.** Without a staff token the secret key must carry the `console:automation` scope and this operation's permission in `platform.api_keys.scopes` — otherwise `403 SCOPE_NOT_ALLOWED` (`details.requiredScope`) or `403 FORBIDDEN` (`details.requiredPermission`); such calls are audited as the API key (see ConsoleApiKeyScope). A key scoped `storefront` is refused even with a staff token.
+         */
+        get: operations["consoleListStorefrontPages"];
+        put?: never;
+        /**
+         * Create a content page
+         * @description Creates a content page of the hosted storefront (OADR-0012 point 5). `slug`, `locale` and `title` are required; omitted fields take their defaults: `kind` `content`, an empty `bodyMarkdown`, `isPublished` and `showInFooter` false, `sortOrder` 100. One page per slug and locale: a translation is another page with the same slug in another locale.
+         *
+         *     **Validation.** Beyond the schema: `locale` must be one of the storefront settings' `locales.supported` (`details.reason = "locale_not_supported"`), and the body must keep to the Markdown subset of StorefrontPageMarkdown: anything else answers `details.reason = "markdown_not_allowed"` with the 1-based `details.line` of the first refused line, and an image of an asset that does not exist or is not a `page_image` answers `asset_not_found` or `asset_kind`, with its `details.line`. These answer `422 UNPROCESSABLE` and nothing is saved. A page of the same slug and locale answers `409 CONFLICT` (`details.reason = "page_exists"`).
+         *
+         *     **Effect.** The answer is the page with `version` 1 and its `ETag`. A page created published gets `publishedAt` and is served by storefront.getPage at once: the page caches of both environments are deleted.
+         *
+         *     **Idempotency.** `Idempotency-Key` required (`idempotency_keys`, 24 h): a retry with the same key and body returns the stored page; the same key with another body → `409 IDEMPOTENCY_KEY_REUSED`.
+         *
+         *     No Amadeus call. Permission `settings:write`; `staff_actions` records the new page.
+         *
+         *     **Key-only calls.** Without a staff token the secret key must carry the `console:automation` scope and this operation's permission in `platform.api_keys.scopes` — otherwise `403 SCOPE_NOT_ALLOWED` (`details.requiredScope`) or `403 FORBIDDEN` (`details.requiredPermission`); such calls are audited as the API key (see ConsoleApiKeyScope). A key scoped `storefront` is refused even with a staff token.
+         */
+        post: operations["consoleCreateStorefrontPage"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/console/settings/pages/{pageId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get a content page
+         * @description Returns one content page as staff edit it, published or not, with its Markdown body. `ETag` = `"<version>"`: pass it as `If-Match` to update or delete the page. No Amadeus call. Permission `settings:read`. Not audited per call.
+         *
+         *     **Key-only calls.** Without a staff token the secret key must carry the `console:automation` scope and this operation's permission in `platform.api_keys.scopes` — otherwise `403 SCOPE_NOT_ALLOWED` (`details.requiredScope`) or `403 FORBIDDEN` (`details.requiredPermission`); such calls are audited as the API key (see ConsoleApiKeyScope). A key scoped `storefront` is refused even with a staff token.
+         */
+        get: operations["consoleGetStorefrontPage"];
+        put?: never;
+        post?: never;
+        /**
+         * Delete a content page
+         * @description Deletes a content page. A page whose slug a legal link of the storefront settings names (`legal.links[].pageSlug`) cannot be deleted, in any locale (`409 CONFLICT`, `details.reason = "page_linked"`; OADR-0012 point 6): change the link first (console.settings.storefront.update), or unpublish the page (console.settings.pages.update) to take it off the storefront. The images the page showed stay uploaded assets (console.settings.assets.delete removes them).
+         *
+         *     **Preconditions.** `If-Match` = the `ETag` of the page (`412 PRECONDITION_FAILED` when stale). The page caches of both environments are deleted, and storefront.getPage answers `404` for the page. No Amadeus call. Permission `settings:write`; `staff_actions` records the deleted page.
+         *
+         *     **Key-only calls.** Without a staff token the secret key must carry the `console:automation` scope and this operation's permission in `platform.api_keys.scopes` — otherwise `403 SCOPE_NOT_ALLOWED` (`details.requiredScope`) or `403 FORBIDDEN` (`details.requiredPermission`); such calls are audited as the API key (see ConsoleApiKeyScope). A key scoped `storefront` is refused even with a staff token.
+         */
+        delete: operations["consoleDeleteStorefrontPage"];
+        options?: never;
+        head?: never;
+        /**
+         * Update a content page
+         * @description Changes any subset of a page's fields (`StorefrontPageUpdate`: `kind`, `title`, `bodyMarkdown`, `isPublished`, `showInFooter`, `sortOrder`); fields not sent keep their value. `slug` and `locale` are fixed at creation, as they make the page's address and the target of legal links: to move a page, create it under the new slug and delete the old one. A body is checked as in console.settings.pages.create (`422 UNPROCESSABLE`: `markdown_not_allowed` with `details.line`, `asset_not_found`, `asset_kind`).
+         *
+         *     **Publishing.** `isPublished: true` puts the page on the storefront (the first time also sets `publishedAt`); `false` takes it off (storefront.getPage answers `404`) and keeps it as a draft. A page that a legal link names may be unpublished; the link then leads to the storefront's not-found page until it is published again.
+         *
+         *     **Preconditions.** `If-Match` = the `ETag` of the page (`412 PRECONDITION_FAILED` when stale). The answer has the new `version` and `ETag`; the page caches of both environments are deleted. No Amadeus call. Permission `settings:write`; `staff_actions` records the page before and after.
+         *
+         *     **Key-only calls.** Without a staff token the secret key must carry the `console:automation` scope and this operation's permission in `platform.api_keys.scopes` — otherwise `403 SCOPE_NOT_ALLOWED` (`details.requiredScope`) or `403 FORBIDDEN` (`details.requiredPermission`); such calls are audited as the API key (see ConsoleApiKeyScope). A key scoped `storefront` is refused even with a staff token.
+         */
+        patch: operations["consoleUpdateStorefrontPage"];
+        trace?: never;
+    };
+    "/v1/console/settings/assets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the uploaded storefront images
+         * @description Lists the OTA's uploaded images (`storefront_assets`), newest first (`createdAt` descending, then `id`), with cursor pagination; `kind` keeps the assets of one kind. Each entry has the sniffed type, the size, the dimensions, the original file name and the public `url` (getPublicAsset, absolute on the API host) to show it with.
+         *
+         *     Assets are shared by the test and live environments (one set per OTA), so `X-Velexis-Environment` changes nothing here. No Amadeus call. Permission `settings:read`. Not audited per call.
+         *
+         *     **Key-only calls.** Without a staff token the secret key must carry the `console:automation` scope and this operation's permission in `platform.api_keys.scopes` — otherwise `403 SCOPE_NOT_ALLOWED` (`details.requiredScope`) or `403 FORBIDDEN` (`details.requiredPermission`); such calls are audited as the API key (see ConsoleApiKeyScope). A key scoped `storefront` is refused even with a staff token.
+         */
+        get: operations["consoleListStorefrontAssets"];
+        put?: never;
+        /**
+         * Upload a storefront image
+         * @description Uploads an image as `multipart/form-data` (StorefrontAssetUpload): the parts `file` (the image) and `kind` (what it is for), and optionally `fileName` (the name shown in the console; by default the file part's own file name). A missing, empty or unknown part answers `400 VALIDATION_FAILED`. The server reads the type from the file's first bytes, never from the declared `Content-Type` or the file name, and the dimensions from the file header (OADR-0012 point 2), then refuses with `422 ASSET_INVALID` and `details.reason`:
+         *
+         *     - `type`: anything but PNG, JPEG or WebP, or ICO for the kind `favicon` (no SVG, no CSS), and a file whose header cannot be read;
+         *     - `size`: more than 1 MB (1 048 576 bytes);
+         *     - `dimensions`: a logo (`logo`, `logo_dark`, `logo_square`) larger than 2000 × 2000 pixels.
+         *
+         *     **Effect.** The file is stored unchanged under `tenant_<key>/assets/<sha256>.<ext>` of the StorageAdapter (it is not re-encoded, so metadata such as EXIF stays in it; the OTA admin tells staff) and an immutable `storefront_assets` row is written: a new image is always a new asset, with a new id and URL. The answer is the asset with its public `url`. Reference it from the storefront settings (`branding.logoAssetId` and the other `…AssetId` fields of its kind, console.settings.storefront.update) or, for a `page_image`, from a page body (`![alt text](ast_…)`).
+         *
+         *     **Idempotency.** `Idempotency-Key` required (`idempotency_keys`, 24 h): a retry with the same key, file and parts returns the stored asset; the same key with another upload → `409 IDEMPOTENCY_KEY_REUSED`.
+         *
+         *     No Amadeus call. Permission `settings:write`; `staff_actions` records the new asset's metadata, never the file.
+         *
+         *     **Key-only calls.** Without a staff token the secret key must carry the `console:automation` scope and this operation's permission in `platform.api_keys.scopes` — otherwise `403 SCOPE_NOT_ALLOWED` (`details.requiredScope`) or `403 FORBIDDEN` (`details.requiredPermission`); such calls are audited as the API key (see ConsoleApiKeyScope). A key scoped `storefront` is refused even with a staff token.
+         */
+        post: operations["consoleUploadStorefrontAsset"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/console/settings/assets/{assetId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Delete a storefront image
+         * @description Deletes an uploaded image: its `storefront_assets` row and its stored file. An asset that the storefront settings reference (`branding.logoAssetId`, `logoDarkAssetId`, `logoSquareAssetId`, `faviconAssetId`, `seo.ogImageAssetId`) or that a page body shows answers `409 CONFLICT` with `details.reason = "asset_in_use"`, `details.settingsPaths` (the JSON pointers of the settings fields) and `details.pageIds` (the pages that show it): change those first. Its public URL answers `404` from then on; browsers and caches may keep their copy for the cache lifetime of getPublicAsset.
+         *
+         *     Assets never change, so there is no `If-Match`. No Amadeus call. Permission `settings:write`; `staff_actions` records the deleted asset's metadata.
+         *
+         *     **Key-only calls.** Without a staff token the secret key must carry the `console:automation` scope and this operation's permission in `platform.api_keys.scopes` — otherwise `403 SCOPE_NOT_ALLOWED` (`details.requiredScope`) or `403 FORBIDDEN` (`details.requiredPermission`); such calls are audited as the API key (see ConsoleApiKeyScope). A key scoped `storefront` is refused even with a staff token.
+         */
+        delete: operations["consoleDeleteStorefrontAsset"];
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/v1/console/settings/notification-templates": {
@@ -12678,6 +12900,276 @@ export interface components {
             warnings: components["schemas"]["SettingsWarning"][];
         };
         /**
+         * @description What a content page is for (`storefront_pages.kind`): `content` for any page, the legal kinds for the pages that legal links of the storefront settings point to, `faq` and `about`.
+         * @enum {string}
+         */
+        StorefrontPageKind: "content" | "terms" | "privacy" | "cookies" | "refund_policy" | "imprint" | "faq" | "about";
+        /**
+         * @description URL slug of a content page, lower-case words joined by hyphens: the storefront shows the page at `/p/<slug>`, and a legal link (`StorefrontLegalPageLink.pageSlug`) names it.
+         * @example terms
+         * @example baggage-faq
+         */
+        StorefrontPageSlug: string;
+        /** @description A page body in the Markdown subset of OADR-0012 point 5, at most 50 000 characters. Blocks are separated by blank lines: headings `##`, `###` and `####` (levels 2 to 4; the page title is the level 1), paragraphs (the lines of one paragraph are joined with a space), bullet lists (`- ` or `* `) and numbered lists (`1. `; the first number is the list's start), one level deep, and an image alone on its line, `![alt text](ast_…)` with an alt text of at most 300 characters, which names a `page_image` asset of the OTA. Inside headings, paragraphs and list items: `**bold**` or `__bold__`, `*italic*` or `_italic_`, and links `[text](href)` to an `https:`, `mailto:` or `tel:` URL of at most 2048 characters or a relative `/p/<slug>`; a backslash escapes a Markdown character. Anything else is refused with `422 UNPROCESSABLE` (`details.reason = "markdown_not_allowed"` and the 1-based `details.line`): HTML, tables, code, block quotes, rules, headings of level 1, 5 or 6, nested lists, images inside text, reference links, a longer alt text or URL, and other URLs (`http:`, `javascript:`, `data:`, other relative paths). storefront.getPage serves the body parsed into blocks (StorefrontPageBlock), whose `alt` and `href` keep these limits. */
+        StorefrontPageMarkdown: string;
+        /** @description A content page of the hosted storefront as staff edit it: a row of `storefront_pages`, one per slug and locale, shared by the test and live environments (OADR-0012 point 5). Once published, storefront.listPages lists it and storefront.getPage serves it as blocks. */
+        StorefrontPage: {
+            /** @description Page id (`stp_` + ULID). */
+            id: string;
+            slug: components["schemas"]["StorefrontPageSlug"];
+            locale: components["schemas"]["LocaleCode"];
+            kind: components["schemas"]["StorefrontPageKind"];
+            /** @description Page title (the page's level-1 heading and its document title). */
+            title: string;
+            bodyMarkdown: components["schemas"]["StorefrontPageMarkdown"];
+            /** @description Served to the storefront; a page that is not published is a draft, visible in the console only. */
+            isPublished: boolean;
+            /** @description Listed in the storefront footer (storefront.listPages `showInFooter`). */
+            showInFooter: boolean;
+            /** @description Order in the footer and the page lists, lower first. */
+            sortOrder: number;
+            /**
+             * Format: date-time
+             * @description First publication; null for a page never published. It stays when the page is unpublished.
+             */
+            publishedAt: string | null;
+            /** @description Optimistic-locking counter; the `ETag` is `"<version>"`. */
+            version: number;
+            /**
+             * Format: date-time
+             * @description Creation.
+             */
+            createdAt: string;
+            /**
+             * Format: date-time
+             * @description Last change.
+             */
+            updatedAt: string;
+        };
+        /** @description Body of console.settings.pages.create. Fields not sent take their defaults: `kind` `content`, an empty body, `isPublished` and `showInFooter` false, `sortOrder` 100. */
+        StorefrontPageInput: {
+            slug: components["schemas"]["StorefrontPageSlug"];
+            locale: components["schemas"]["LocaleCode"];
+            kind?: components["schemas"]["StorefrontPageKind"];
+            /** @description Page title. */
+            title: string;
+            bodyMarkdown?: components["schemas"]["StorefrontPageMarkdown"];
+            /** @description Publish the page at once (default false). */
+            isPublished?: boolean;
+            /** @description List the page in the storefront footer (default false). */
+            showInFooter?: boolean;
+            /** @description Order in the footer and the page lists, lower first (default 100). */
+            sortOrder?: number;
+        };
+        /** @description Body of console.settings.pages.update: any subset of the page's writable fields; fields not sent keep their value. `slug` and `locale` are fixed at creation (the page's address `/p/<slug>` and the target of legal links). */
+        StorefrontPageUpdate: {
+            kind?: components["schemas"]["StorefrontPageKind"];
+            /** @description Page title. */
+            title?: string;
+            bodyMarkdown?: components["schemas"]["StorefrontPageMarkdown"];
+            /** @description Publish the page (true) or take it off the storefront as a draft (false). */
+            isPublished?: boolean;
+            /** @description List the page in the storefront footer. */
+            showInFooter?: boolean;
+            /** @description Order in the footer and the page lists, lower first. */
+            sortOrder?: number;
+        };
+        /** @description A page of content pages, by `sortOrder`, then `slug`, then `locale`. */
+        StorefrontPagePage: {
+            /** @description Content pages. */
+            data: components["schemas"]["StorefrontPage"][];
+            /** @description Pagination. */
+            page: components["schemas"]["PageInfo"];
+        };
+        /** @description A published content page in storefront.listPages. */
+        StorefrontPageSummary: {
+            slug: components["schemas"]["StorefrontPageSlug"];
+            /** @description Page title, for the link text. */
+            title: string;
+            kind: components["schemas"]["StorefrontPageKind"];
+            /** @description The storefront lists the page in its footer. */
+            showInFooter: boolean;
+            /** @description Order in the footer and the page lists, lower first. */
+            sortOrder: number;
+        };
+        /** @description The published content pages of a locale, by `sortOrder`, then `slug`; each slug once. */
+        StorefrontPageList: {
+            /** @description Pages. */
+            data: components["schemas"]["StorefrontPageSummary"][];
+        };
+        /** @description A published content page for the storefront (storefront.getPage): its body parsed on the server into blocks, which the storefront renders with `createElement` and `textContent`, never `innerHTML`. */
+        StorefrontPageContent: {
+            slug: components["schemas"]["StorefrontPageSlug"];
+            locale: components["schemas"]["LocaleCode"];
+            /** @description Page title. */
+            title: string;
+            kind: components["schemas"]["StorefrontPageKind"];
+            /** @description The body, block by block, in order; empty for an empty body. */
+            blocks: components["schemas"]["StorefrontPageBlock"][];
+            /**
+             * Format: date-time
+             * @description Last change of the page.
+             */
+            updatedAt: string;
+        };
+        /** @description One block of a page body (`type`): a heading, a paragraph, a list or an image. Text lives only in `text` nodes (StorefrontPageInline); nothing in a block is HTML. */
+        StorefrontPageBlock: components["schemas"]["StorefrontPageHeadingBlock"] | components["schemas"]["StorefrontPageParagraphBlock"] | components["schemas"]["StorefrontPageListBlock"] | components["schemas"]["StorefrontPageImageBlock"];
+        /** @description A heading (`##` to `####`). */
+        StorefrontPageHeadingBlock: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "heading";
+            /** @description Heading level, 2 to 4 (the page title is the level 1). */
+            level: number;
+            /** @description The heading's text. */
+            content: components["schemas"]["StorefrontPageInline"][];
+        };
+        /** @description A paragraph. */
+        StorefrontPageParagraphBlock: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "paragraph";
+            /** @description The paragraph's text. */
+            content: components["schemas"]["StorefrontPageInline"][];
+        };
+        /** @description A bullet or numbered list, one level deep. */
+        StorefrontPageListBlock: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "list";
+            /** @description A numbered list (`1. `) rather than a bullet list (`- `). */
+            ordered: boolean;
+            /** @description The first number of a numbered list; null for a bullet list. */
+            start: number | null;
+            /** @description The list items, in order. */
+            items: components["schemas"]["StorefrontPageListItem"][];
+        };
+        /** @description One list item. */
+        StorefrontPageListItem: {
+            /** @description The item's text. */
+            content: components["schemas"]["StorefrontPageInline"][];
+        };
+        /** @description An image of a `page_image` asset (`![alt text](ast_…)` on a line of its own). */
+        StorefrontPageImageBlock: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "image";
+            /** @description The asset (`storefront_assets`, kind `page_image`). */
+            assetId: string;
+            /**
+             * Format: uri-reference
+             * @description The asset's public URL (getPublicAsset): a same-origin path (`/api/v1/assets/<tenantKey>/<assetId>.<ext>`) for the hosted storefront's edge, an absolute URL on the API host for key callers.
+             */
+            url: string;
+            /** @description Alternative text; empty for a decorative image. */
+            alt: string;
+            /** @description Width in pixels, from the file header. */
+            width: number | null;
+            /** @description Height in pixels, from the file header. */
+            height: number | null;
+        };
+        /** @description An inline node of a block (`type`): plain `text`, `strong` (bold) and `em` (italic) around other inline nodes, or a `link` around text and emphasis (never another link). */
+        StorefrontPageInline: components["schemas"]["StorefrontPageText"] | components["schemas"]["StorefrontPageStrong"] | components["schemas"]["StorefrontPageEmphasis"] | components["schemas"]["StorefrontPageLink"];
+        /** @description Plain text; set it with `textContent`. */
+        StorefrontPageText: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "text";
+            /** @description The text, Markdown escapes removed. */
+            text: string;
+        };
+        /** @description Bold text (`**…**`). */
+        StorefrontPageStrong: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "strong";
+            /** @description What is bold. */
+            content: components["schemas"]["StorefrontPageInline"][];
+        };
+        /** @description Italic text (`*…*`). */
+        StorefrontPageEmphasis: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "em";
+            /** @description What is italic. */
+            content: components["schemas"]["StorefrontPageInline"][];
+        };
+        /** @description A link (`[text](href)`). The storefront opens `https:` links with `rel="noopener noreferrer"` and checks the scheme again before it sets `href`. */
+        StorefrontPageLink: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "link";
+            /** @description An `https:`, `mailto:` or `tel:` URL, or a content page of the storefront (`/p/<slug>`). */
+            href: string;
+            /** @description The link text. */
+            content: components["schemas"]["StorefrontPageInline"][];
+        };
+        /**
+         * @description What an uploaded image is for: the storefront settings reference `logo`, `logo_dark`, `logo_square` and `favicon` assets in `branding` and `og_image` assets in `seo`; content pages show `page_image` assets.
+         * @enum {string}
+         */
+        StorefrontAssetKind: "logo" | "logo_dark" | "logo_square" | "favicon" | "og_image" | "page_image";
+        /** @description An uploaded image (a row of `storefront_assets`; OADR-0012 point 2). Immutable: a new image is a new asset, with a new id and URL. Shared by the test and live environments. */
+        StorefrontAsset: {
+            /** @description Asset id (`ast_` + ULID), part of its public URL. */
+            id: string;
+            kind: components["schemas"]["StorefrontAssetKind"];
+            /**
+             * @description The type read from the file's bytes at upload (`image/x-icon` for favicons only).
+             * @enum {string}
+             */
+            contentType: "image/png" | "image/jpeg" | "image/webp" | "image/x-icon";
+            /** @description File size in bytes (at most 1 MB). */
+            sizeBytes: number;
+            /** @description Width in pixels, from the file header. */
+            width: number | null;
+            /** @description Height in pixels, from the file header. */
+            height: number | null;
+            /** @description The file name shown in the console. */
+            fileName: string;
+            /**
+             * Format: uri
+             * @description The public URL (getPublicAsset): `<API host>/v1/assets/<tenantKey>/<id>.<ext>`, with the extension of `contentType` (`png`, `jpg`, `webp`, `ico`).
+             */
+            url: string;
+            /**
+             * Format: date-time
+             * @description Upload time.
+             */
+            createdAt: string;
+        };
+        /** @description A page of uploaded images, newest first. */
+        StorefrontAssetPage: {
+            /** @description Assets. */
+            data: components["schemas"]["StorefrontAsset"][];
+            /** @description Pagination. */
+            page: components["schemas"]["PageInfo"];
+        };
+        /** @description The `multipart/form-data` body of console.settings.assets.upload: one part per property. The type of `file` is read from its bytes; its declared `Content-Type` and file name extension are ignored. */
+        StorefrontAssetUpload: {
+            /** @description The image file, at most 1 MB (PNG, JPEG or WebP; ICO for a favicon). */
+            file: string;
+            kind: components["schemas"]["StorefrontAssetKind"];
+            /** @description The name shown in the console; by default the file name of the `file` part. */
+            fileName?: string;
+        };
+        /**
          * @description The notification template keys of the MVP (OADR-0013 point 4): customers `auth.*`, travellers `booking.*`, the OTA's staff `staff.*`. Later releases add keys with their code defaults.
          * @enum {string}
          */
@@ -15173,6 +15665,46 @@ export interface components {
                 "application/json": components["schemas"]["ErrorResponse"];
             };
         };
+        /** @description The page change conflicts with the OTA's pages or settings. Possible codes: CONFLICT (`details.reason`: `page_exists`, a page of this slug and locale exists; `page_linked`, a legal link names the page's slug, so no page of that slug can be deleted), IDEMPOTENCY_KEY_REUSED. */
+        StorefrontPageConflict: {
+            headers: {
+                "X-Request-Id": components["headers"]["X-Request-Id"];
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["ErrorResponse"];
+            };
+        };
+        /** @description The page is well-formed but refused by a rule. Possible codes: UNPROCESSABLE (`details.reason`: `markdown_not_allowed`, the body leaves the Markdown subset, with the 1-based `details.line`; `asset_not_found` and `asset_kind`, an image that names no `page_image` asset, with `details.line`; `locale_not_supported`, a locale outside the storefront settings' `locales.supported`). */
+        StorefrontPageUnprocessable: {
+            headers: {
+                "X-Request-Id": components["headers"]["X-Request-Id"];
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["ErrorResponse"];
+            };
+        };
+        /** @description The asset change conflicts with the OTA's settings or pages. Possible codes: CONFLICT (`details.reason = "asset_in_use"`: the storefront settings reference the asset, `details.settingsPaths`, or a page shows it, `details.pageIds`), IDEMPOTENCY_KEY_REUSED. */
+        StorefrontAssetConflict: {
+            headers: {
+                "X-Request-Id": components["headers"]["X-Request-Id"];
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["ErrorResponse"];
+            };
+        };
+        /** @description The uploaded file is not allowed. Possible codes: ASSET_INVALID (`details.reason`: `type`, not PNG, JPEG or WebP, or ICO for a favicon, or unreadable; `size`, more than 1 MB; `dimensions`, a logo larger than 2000 × 2000 pixels). */
+        StorefrontAssetUnprocessable: {
+            headers: {
+                "X-Request-Id": components["headers"]["X-Request-Id"];
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["ErrorResponse"];
+            };
+        };
         /** @description The template was refused. Possible codes: TEMPLATE_INVALID (it does not compile in strict mode or uses a variable the key does not allow; `details.errors[{part, line, message}]`), UNPROCESSABLE (`details.reason`, such as `locale_not_supported`). */
         TemplateUnprocessable: {
             headers: {
@@ -15367,6 +15899,18 @@ export interface components {
         ConsoleMarkupRuleId: string;
         /** @description Fee rule id (`fee_…`). */
         ConsoleFeeRuleId: string;
+        /** @description Content page id (`stp_…`). */
+        ConsoleStorefrontPageId: string;
+        /** @description Only the pages of this locale. */
+        ConsoleStorefrontPageLocaleFilter: components["schemas"]["LocaleCode"];
+        /** @description `true`: only published pages (`isPublished`); `false`: only drafts; absent: every page. */
+        ConsoleStorefrontPagePublishedFilter: boolean;
+        /** @description Storefront asset id (`ast_…`). */
+        ConsoleStorefrontAssetId: string;
+        /** @description Only the assets of this kind. */
+        ConsoleStorefrontAssetKindFilter: components["schemas"]["StorefrontAssetKind"];
+        /** @description Locale of the pages (BCP 47, such as `en` or `fr-CA`). Without it, the first locale of `Accept-Language` that the storefront offers (`locales.supported`), else its default locale; a locale the storefront does not offer counts as absent. */
+        StorefrontPageLocale: components["schemas"]["LocaleCode"];
         /** @description Template key (NotificationTemplateKey). */
         NotificationTemplateKeyPath: components["schemas"]["NotificationTemplateKey"];
         /** @description Delivery channel; `email` only in the MVP. */
@@ -15746,6 +16290,204 @@ export interface operations {
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    listStorefrontPages: {
+        parameters: {
+            query?: {
+                /** @description Locale of the pages (BCP 47, such as `en` or `fr-CA`). Without it, the first locale of `Accept-Language` that the storefront offers (`locales.supported`), else its default locale; a locale the storefront does not offer counts as absent. */
+                locale?: components["parameters"]["StorefrontPageLocale"];
+            };
+            header?: {
+                /** @description BCP 47 locale for messages and display texts. */
+                "Accept-Language"?: components["parameters"]["AcceptLanguage"];
+                /**
+                 * @description Storefront host name the request is made for: the `Host` of the visitor's request, lower case, without port. **Required with a hosting key** (`hk_test_…` / `hk_live_…`, one Next.js deployment serving several OTA domains): the API resolves the OTA from it (a verified storefront domain in `platform.tenant_domains` of an OTA the key is granted for) and then handles the call exactly like a secret key of that OTA in the key's environment. Optional with publishable and secret keys; when sent it must be a verified storefront domain of the key's own OTA. Otherwise `403 HOST_NOT_ALLOWED` (`details.reason`: `missing` | `unknown` | `not_granted`). SDK: client option `host` or `options.host`; look hosts up with storefront.resolve.
+                 *
+                 *     **Edge mode.** On the hosted storefront Caddy sets it to the visitor's host on every `/api/*` request, together with `X-Velexis-Edge`, and replaces any value the browser sent. The API resolves the OTA from it (a verified storefront domain, or the OTA's sub-domain of the storefront base domain) and answers `403 HOST_NOT_ALLOWED` for an unknown or unverified host.
+                 */
+                "X-Velexis-Host"?: components["parameters"]["StorefrontHostHeader"];
+                /**
+                 * @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server), and for the OTA admin's service key on console operations (below); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`.
+                 *
+                 *     **Console operations.** Honoured for secret keys as above and for the OTA admin's first-party service key, which must send it: the staff member's address (the right-most `X-Forwarded-For` entry Caddy gave the admin). With the service key a missing or malformed value answers `400 VALIDATION_FAILED`; the value drives the console sign-in throttle (10 per minute per end-user IP), the lockout and the staff audit log (`staff_actions`). Other callers' values are ignored.
+                 */
+                "X-Velexis-End-User-IP"?: components["parameters"]["CustomerEndUserIp"];
+                /**
+                 * @description User-Agent of the visitor's browser for calls your server makes on their behalf with a secret or hosting key (longer values are truncated to 512 characters). Honoured only for secret and hosting keys, and for the OTA admin's service key on console operations; publishable-key calls use the request's own `User-Agent`. Recorded as session metadata (`AuthSessionDetails.userAgent`, new-sign-in security emails) and used by abuse heuristics. SDK: `options.endUser.userAgent` or the client option `endUser`.
+                 *
+                 *     **Console operations.** The OTA admin's first-party service key must send the staff member's user agent (missing: `400 VALIDATION_FAILED`); it is recorded in the staff audit log (`staff_actions`).
+                 */
+                "X-Velexis-End-User-Agent"?: components["parameters"]["CustomerEndUserAgent"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The published pages of the locale. */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    /** @description `public, max-age=60, stale-while-revalidate=600` for key callers, `private` in edge mode. */
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "data": [
+                     *         {
+                     *           "slug": "about-us",
+                     *           "title": "About Acme Travel",
+                     *           "kind": "about",
+                     *           "showInFooter": true,
+                     *           "sortOrder": 10
+                     *         },
+                     *         {
+                     *           "slug": "terms",
+                     *           "title": "Terms and conditions",
+                     *           "kind": "terms",
+                     *           "showInFooter": true,
+                     *           "sortOrder": 20
+                     *         },
+                     *         {
+                     *           "slug": "privacy",
+                     *           "title": "Privacy policy",
+                     *           "kind": "privacy",
+                     *           "showInFooter": true,
+                     *           "sortOrder": 30
+                     *         },
+                     *         {
+                     *           "slug": "baggage-faq",
+                     *           "title": "Baggage questions",
+                     *           "kind": "faq",
+                     *           "showInFooter": false,
+                     *           "sortOrder": 100
+                     *         }
+                     *       ]
+                     *     }
+                     */
+                    "application/json": components["schemas"]["StorefrontPageList"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getStorefrontPage: {
+        parameters: {
+            query?: {
+                /** @description Locale of the pages (BCP 47, such as `en` or `fr-CA`). Without it, the first locale of `Accept-Language` that the storefront offers (`locales.supported`), else its default locale; a locale the storefront does not offer counts as absent. */
+                locale?: components["parameters"]["StorefrontPageLocale"];
+            };
+            header?: {
+                /** @description BCP 47 locale for messages and display texts. */
+                "Accept-Language"?: components["parameters"]["AcceptLanguage"];
+                /**
+                 * @description Storefront host name the request is made for: the `Host` of the visitor's request, lower case, without port. **Required with a hosting key** (`hk_test_…` / `hk_live_…`, one Next.js deployment serving several OTA domains): the API resolves the OTA from it (a verified storefront domain in `platform.tenant_domains` of an OTA the key is granted for) and then handles the call exactly like a secret key of that OTA in the key's environment. Optional with publishable and secret keys; when sent it must be a verified storefront domain of the key's own OTA. Otherwise `403 HOST_NOT_ALLOWED` (`details.reason`: `missing` | `unknown` | `not_granted`). SDK: client option `host` or `options.host`; look hosts up with storefront.resolve.
+                 *
+                 *     **Edge mode.** On the hosted storefront Caddy sets it to the visitor's host on every `/api/*` request, together with `X-Velexis-Edge`, and replaces any value the browser sent. The API resolves the OTA from it (a verified storefront domain, or the OTA's sub-domain of the storefront base domain) and answers `403 HOST_NOT_ALLOWED` for an unknown or unverified host.
+                 */
+                "X-Velexis-Host"?: components["parameters"]["StorefrontHostHeader"];
+                /**
+                 * @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server), and for the OTA admin's service key on console operations (below); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`.
+                 *
+                 *     **Console operations.** Honoured for secret keys as above and for the OTA admin's first-party service key, which must send it: the staff member's address (the right-most `X-Forwarded-For` entry Caddy gave the admin). With the service key a missing or malformed value answers `400 VALIDATION_FAILED`; the value drives the console sign-in throttle (10 per minute per end-user IP), the lockout and the staff audit log (`staff_actions`). Other callers' values are ignored.
+                 */
+                "X-Velexis-End-User-IP"?: components["parameters"]["CustomerEndUserIp"];
+                /**
+                 * @description User-Agent of the visitor's browser for calls your server makes on their behalf with a secret or hosting key (longer values are truncated to 512 characters). Honoured only for secret and hosting keys, and for the OTA admin's service key on console operations; publishable-key calls use the request's own `User-Agent`. Recorded as session metadata (`AuthSessionDetails.userAgent`, new-sign-in security emails) and used by abuse heuristics. SDK: `options.endUser.userAgent` or the client option `endUser`.
+                 *
+                 *     **Console operations.** The OTA admin's first-party service key must send the staff member's user agent (missing: `400 VALIDATION_FAILED`); it is recorded in the staff audit log (`staff_actions`).
+                 */
+                "X-Velexis-End-User-Agent"?: components["parameters"]["CustomerEndUserAgent"];
+            };
+            path: {
+                /**
+                 * @description Slug of the page, as in its storefront path `/p/<slug>`.
+                 * @example terms
+                 */
+                slug: components["schemas"]["StorefrontPageSlug"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The page with its body as blocks. */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    /** @description `public, max-age=60, stale-while-revalidate=600` for key callers, `private` in edge mode. */
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StorefrontPageContent"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getPublicAsset: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description Tenant key of the OTA (`StorefrontConfig.tenantKey`).
+                 * @example acme
+                 */
+                tenantKey: string;
+                /**
+                 * @description Asset id (`ast_…`).
+                 * @example ast_01JA6B2C3D4E5F6G7H8J9K0M1N
+                 */
+                assetId: string;
+                /**
+                 * @description File extension of the asset's type (`png`, `jpg`, `webp`, `ico`), as its URL carries it; another extension answers `404`.
+                 * @example png
+                 */
+                ext: "png" | "jpg" | "webp" | "ico";
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The image, as uploaded. */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    /** @description `public, max-age=31536000, immutable`. */
+                    "Cache-Control"?: string;
+                    /** @description `nosniff`. */
+                    "X-Content-Type-Options"?: string;
+                    /** @description `default-src 'none'`. */
+                    "Content-Security-Policy"?: string;
+                    /** @description `inline`. */
+                    "Content-Disposition"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "image/png": string;
+                    "image/jpeg": string;
+                    "image/webp": string;
+                    "image/x-icon": string;
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
             404: components["responses"]["NotFound"];
             429: components["responses"]["RateLimited"];
             500: components["responses"]["InternalError"];
@@ -25372,6 +26114,411 @@ export interface operations {
             403: components["responses"]["StorefrontSettingsForbidden"];
             412: components["responses"]["PreconditionFailed"];
             422: components["responses"]["SettingsUnprocessable"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    consoleListStorefrontPages: {
+        parameters: {
+            query?: {
+                /** @description Only the pages of this locale. */
+                locale?: components["parameters"]["ConsoleStorefrontPageLocaleFilter"];
+                /** @description `true`: only published pages (`isPublished`); `false`: only drafts; absent: every page. */
+                published?: components["parameters"]["ConsoleStorefrontPagePublishedFilter"];
+                /** @description Opaque cursor from page.nextCursor. */
+                cursor?: components["parameters"]["Cursor"];
+                /** @description Page size. */
+                limit?: components["parameters"]["Limit"];
+            };
+            header?: {
+                /** @description BCP 47 locale for messages and display texts. */
+                "Accept-Language"?: components["parameters"]["AcceptLanguage"];
+                /** @description Environment of a console call made with the OTA admin's first-party service key, `test` or `live`. Required with the service key (missing: `400 VALIDATION_FAILED`) and refused with any other credential, whose environment is the key's. `live` needs an OTA that is live and a role other than `viewer`, otherwise `403 ENVIRONMENT_NOT_ALLOWED`; ConsoleStaffSession.environments lists the environments the staff member may open. */
+                "X-Velexis-Environment"?: components["parameters"]["VelexisEnvironment"];
+                /**
+                 * @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server), and for the OTA admin's service key on console operations (below); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`.
+                 *
+                 *     **Console operations.** Honoured for secret keys as above and for the OTA admin's first-party service key, which must send it: the staff member's address (the right-most `X-Forwarded-For` entry Caddy gave the admin). With the service key a missing or malformed value answers `400 VALIDATION_FAILED`; the value drives the console sign-in throttle (10 per minute per end-user IP), the lockout and the staff audit log (`staff_actions`). Other callers' values are ignored.
+                 */
+                "X-Velexis-End-User-IP"?: components["parameters"]["CustomerEndUserIp"];
+                /**
+                 * @description User-Agent of the visitor's browser for calls your server makes on their behalf with a secret or hosting key (longer values are truncated to 512 characters). Honoured only for secret and hosting keys, and for the OTA admin's service key on console operations; publishable-key calls use the request's own `User-Agent`. Recorded as session metadata (`AuthSessionDetails.userAgent`, new-sign-in security emails) and used by abuse heuristics. SDK: `options.endUser.userAgent` or the client option `endUser`.
+                 *
+                 *     **Console operations.** The OTA admin's first-party service key must send the staff member's user agent (missing: `400 VALIDATION_FAILED`); it is recorded in the staff audit log (`staff_actions`).
+                 */
+                "X-Velexis-End-User-Agent"?: components["parameters"]["CustomerEndUserAgent"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of content pages. */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StorefrontPagePage"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["ConsoleForbidden"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    consoleCreateStorefrontPage: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Client-generated unique key (UUID v4) that makes the request safe to retry for 24 hours. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+                /** @description BCP 47 locale for messages and display texts. */
+                "Accept-Language"?: components["parameters"]["AcceptLanguage"];
+                /** @description Environment of a console call made with the OTA admin's first-party service key, `test` or `live`. Required with the service key (missing: `400 VALIDATION_FAILED`) and refused with any other credential, whose environment is the key's. `live` needs an OTA that is live and a role other than `viewer`, otherwise `403 ENVIRONMENT_NOT_ALLOWED`; ConsoleStaffSession.environments lists the environments the staff member may open. */
+                "X-Velexis-Environment"?: components["parameters"]["VelexisEnvironment"];
+                /**
+                 * @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server), and for the OTA admin's service key on console operations (below); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`.
+                 *
+                 *     **Console operations.** Honoured for secret keys as above and for the OTA admin's first-party service key, which must send it: the staff member's address (the right-most `X-Forwarded-For` entry Caddy gave the admin). With the service key a missing or malformed value answers `400 VALIDATION_FAILED`; the value drives the console sign-in throttle (10 per minute per end-user IP), the lockout and the staff audit log (`staff_actions`). Other callers' values are ignored.
+                 */
+                "X-Velexis-End-User-IP"?: components["parameters"]["CustomerEndUserIp"];
+                /**
+                 * @description User-Agent of the visitor's browser for calls your server makes on their behalf with a secret or hosting key (longer values are truncated to 512 characters). Honoured only for secret and hosting keys, and for the OTA admin's service key on console operations; publishable-key calls use the request's own `User-Agent`. Recorded as session metadata (`AuthSessionDetails.userAgent`, new-sign-in security emails) and used by abuse heuristics. SDK: `options.endUser.userAgent` or the client option `endUser`.
+                 *
+                 *     **Console operations.** The OTA admin's first-party service key must send the staff member's user agent (missing: `400 VALIDATION_FAILED`); it is recorded in the staff audit log (`staff_actions`).
+                 */
+                "X-Velexis-End-User-Agent"?: components["parameters"]["CustomerEndUserAgent"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StorefrontPageInput"];
+            };
+        };
+        responses: {
+            /** @description The content page was created. */
+            201: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    Location: components["headers"]["Location"];
+                    ETag: components["headers"]["ETag"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StorefrontPage"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["ConsoleForbidden"];
+            409: components["responses"]["StorefrontPageConflict"];
+            422: components["responses"]["StorefrontPageUnprocessable"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    consoleGetStorefrontPage: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description BCP 47 locale for messages and display texts. */
+                "Accept-Language"?: components["parameters"]["AcceptLanguage"];
+                /** @description Environment of a console call made with the OTA admin's first-party service key, `test` or `live`. Required with the service key (missing: `400 VALIDATION_FAILED`) and refused with any other credential, whose environment is the key's. `live` needs an OTA that is live and a role other than `viewer`, otherwise `403 ENVIRONMENT_NOT_ALLOWED`; ConsoleStaffSession.environments lists the environments the staff member may open. */
+                "X-Velexis-Environment"?: components["parameters"]["VelexisEnvironment"];
+                /**
+                 * @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server), and for the OTA admin's service key on console operations (below); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`.
+                 *
+                 *     **Console operations.** Honoured for secret keys as above and for the OTA admin's first-party service key, which must send it: the staff member's address (the right-most `X-Forwarded-For` entry Caddy gave the admin). With the service key a missing or malformed value answers `400 VALIDATION_FAILED`; the value drives the console sign-in throttle (10 per minute per end-user IP), the lockout and the staff audit log (`staff_actions`). Other callers' values are ignored.
+                 */
+                "X-Velexis-End-User-IP"?: components["parameters"]["CustomerEndUserIp"];
+                /**
+                 * @description User-Agent of the visitor's browser for calls your server makes on their behalf with a secret or hosting key (longer values are truncated to 512 characters). Honoured only for secret and hosting keys, and for the OTA admin's service key on console operations; publishable-key calls use the request's own `User-Agent`. Recorded as session metadata (`AuthSessionDetails.userAgent`, new-sign-in security emails) and used by abuse heuristics. SDK: `options.endUser.userAgent` or the client option `endUser`.
+                 *
+                 *     **Console operations.** The OTA admin's first-party service key must send the staff member's user agent (missing: `400 VALIDATION_FAILED`); it is recorded in the staff audit log (`staff_actions`).
+                 */
+                "X-Velexis-End-User-Agent"?: components["parameters"]["CustomerEndUserAgent"];
+            };
+            path: {
+                /** @description Content page id (`stp_…`). */
+                pageId: components["parameters"]["ConsoleStorefrontPageId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The content page. */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    ETag: components["headers"]["ETag"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StorefrontPage"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["ConsoleForbidden"];
+            404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    consoleDeleteStorefrontPage: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description ETag of the version being modified. */
+                "If-Match": components["parameters"]["IfMatch"];
+                /** @description BCP 47 locale for messages and display texts. */
+                "Accept-Language"?: components["parameters"]["AcceptLanguage"];
+                /** @description Environment of a console call made with the OTA admin's first-party service key, `test` or `live`. Required with the service key (missing: `400 VALIDATION_FAILED`) and refused with any other credential, whose environment is the key's. `live` needs an OTA that is live and a role other than `viewer`, otherwise `403 ENVIRONMENT_NOT_ALLOWED`; ConsoleStaffSession.environments lists the environments the staff member may open. */
+                "X-Velexis-Environment"?: components["parameters"]["VelexisEnvironment"];
+                /**
+                 * @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server), and for the OTA admin's service key on console operations (below); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`.
+                 *
+                 *     **Console operations.** Honoured for secret keys as above and for the OTA admin's first-party service key, which must send it: the staff member's address (the right-most `X-Forwarded-For` entry Caddy gave the admin). With the service key a missing or malformed value answers `400 VALIDATION_FAILED`; the value drives the console sign-in throttle (10 per minute per end-user IP), the lockout and the staff audit log (`staff_actions`). Other callers' values are ignored.
+                 */
+                "X-Velexis-End-User-IP"?: components["parameters"]["CustomerEndUserIp"];
+                /**
+                 * @description User-Agent of the visitor's browser for calls your server makes on their behalf with a secret or hosting key (longer values are truncated to 512 characters). Honoured only for secret and hosting keys, and for the OTA admin's service key on console operations; publishable-key calls use the request's own `User-Agent`. Recorded as session metadata (`AuthSessionDetails.userAgent`, new-sign-in security emails) and used by abuse heuristics. SDK: `options.endUser.userAgent` or the client option `endUser`.
+                 *
+                 *     **Console operations.** The OTA admin's first-party service key must send the staff member's user agent (missing: `400 VALIDATION_FAILED`); it is recorded in the staff audit log (`staff_actions`).
+                 */
+                "X-Velexis-End-User-Agent"?: components["parameters"]["CustomerEndUserAgent"];
+            };
+            path: {
+                /** @description Content page id (`stp_…`). */
+                pageId: components["parameters"]["ConsoleStorefrontPageId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The content page was deleted. */
+            204: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["ConsoleForbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["StorefrontPageConflict"];
+            412: components["responses"]["PreconditionFailed"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    consoleUpdateStorefrontPage: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description ETag of the version being modified. */
+                "If-Match": components["parameters"]["IfMatch"];
+                /** @description BCP 47 locale for messages and display texts. */
+                "Accept-Language"?: components["parameters"]["AcceptLanguage"];
+                /** @description Environment of a console call made with the OTA admin's first-party service key, `test` or `live`. Required with the service key (missing: `400 VALIDATION_FAILED`) and refused with any other credential, whose environment is the key's. `live` needs an OTA that is live and a role other than `viewer`, otherwise `403 ENVIRONMENT_NOT_ALLOWED`; ConsoleStaffSession.environments lists the environments the staff member may open. */
+                "X-Velexis-Environment"?: components["parameters"]["VelexisEnvironment"];
+                /**
+                 * @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server), and for the OTA admin's service key on console operations (below); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`.
+                 *
+                 *     **Console operations.** Honoured for secret keys as above and for the OTA admin's first-party service key, which must send it: the staff member's address (the right-most `X-Forwarded-For` entry Caddy gave the admin). With the service key a missing or malformed value answers `400 VALIDATION_FAILED`; the value drives the console sign-in throttle (10 per minute per end-user IP), the lockout and the staff audit log (`staff_actions`). Other callers' values are ignored.
+                 */
+                "X-Velexis-End-User-IP"?: components["parameters"]["CustomerEndUserIp"];
+                /**
+                 * @description User-Agent of the visitor's browser for calls your server makes on their behalf with a secret or hosting key (longer values are truncated to 512 characters). Honoured only for secret and hosting keys, and for the OTA admin's service key on console operations; publishable-key calls use the request's own `User-Agent`. Recorded as session metadata (`AuthSessionDetails.userAgent`, new-sign-in security emails) and used by abuse heuristics. SDK: `options.endUser.userAgent` or the client option `endUser`.
+                 *
+                 *     **Console operations.** The OTA admin's first-party service key must send the staff member's user agent (missing: `400 VALIDATION_FAILED`); it is recorded in the staff audit log (`staff_actions`).
+                 */
+                "X-Velexis-End-User-Agent"?: components["parameters"]["CustomerEndUserAgent"];
+            };
+            path: {
+                /** @description Content page id (`stp_…`). */
+                pageId: components["parameters"]["ConsoleStorefrontPageId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StorefrontPageUpdate"];
+            };
+        };
+        responses: {
+            /** @description The updated content page. */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    ETag: components["headers"]["ETag"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StorefrontPage"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["ConsoleForbidden"];
+            404: components["responses"]["NotFound"];
+            412: components["responses"]["PreconditionFailed"];
+            422: components["responses"]["StorefrontPageUnprocessable"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    consoleListStorefrontAssets: {
+        parameters: {
+            query?: {
+                /** @description Only the assets of this kind. */
+                kind?: components["parameters"]["ConsoleStorefrontAssetKindFilter"];
+                /** @description Opaque cursor from page.nextCursor. */
+                cursor?: components["parameters"]["Cursor"];
+                /** @description Page size. */
+                limit?: components["parameters"]["Limit"];
+            };
+            header?: {
+                /** @description BCP 47 locale for messages and display texts. */
+                "Accept-Language"?: components["parameters"]["AcceptLanguage"];
+                /** @description Environment of a console call made with the OTA admin's first-party service key, `test` or `live`. Required with the service key (missing: `400 VALIDATION_FAILED`) and refused with any other credential, whose environment is the key's. `live` needs an OTA that is live and a role other than `viewer`, otherwise `403 ENVIRONMENT_NOT_ALLOWED`; ConsoleStaffSession.environments lists the environments the staff member may open. */
+                "X-Velexis-Environment"?: components["parameters"]["VelexisEnvironment"];
+                /**
+                 * @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server), and for the OTA admin's service key on console operations (below); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`.
+                 *
+                 *     **Console operations.** Honoured for secret keys as above and for the OTA admin's first-party service key, which must send it: the staff member's address (the right-most `X-Forwarded-For` entry Caddy gave the admin). With the service key a missing or malformed value answers `400 VALIDATION_FAILED`; the value drives the console sign-in throttle (10 per minute per end-user IP), the lockout and the staff audit log (`staff_actions`). Other callers' values are ignored.
+                 */
+                "X-Velexis-End-User-IP"?: components["parameters"]["CustomerEndUserIp"];
+                /**
+                 * @description User-Agent of the visitor's browser for calls your server makes on their behalf with a secret or hosting key (longer values are truncated to 512 characters). Honoured only for secret and hosting keys, and for the OTA admin's service key on console operations; publishable-key calls use the request's own `User-Agent`. Recorded as session metadata (`AuthSessionDetails.userAgent`, new-sign-in security emails) and used by abuse heuristics. SDK: `options.endUser.userAgent` or the client option `endUser`.
+                 *
+                 *     **Console operations.** The OTA admin's first-party service key must send the staff member's user agent (missing: `400 VALIDATION_FAILED`); it is recorded in the staff audit log (`staff_actions`).
+                 */
+                "X-Velexis-End-User-Agent"?: components["parameters"]["CustomerEndUserAgent"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of uploaded images. */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StorefrontAssetPage"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["ConsoleForbidden"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    consoleUploadStorefrontAsset: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Client-generated unique key (UUID v4) that makes the request safe to retry for 24 hours. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+                /** @description BCP 47 locale for messages and display texts. */
+                "Accept-Language"?: components["parameters"]["AcceptLanguage"];
+                /** @description Environment of a console call made with the OTA admin's first-party service key, `test` or `live`. Required with the service key (missing: `400 VALIDATION_FAILED`) and refused with any other credential, whose environment is the key's. `live` needs an OTA that is live and a role other than `viewer`, otherwise `403 ENVIRONMENT_NOT_ALLOWED`; ConsoleStaffSession.environments lists the environments the staff member may open. */
+                "X-Velexis-Environment"?: components["parameters"]["VelexisEnvironment"];
+                /**
+                 * @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server), and for the OTA admin's service key on console operations (below); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`.
+                 *
+                 *     **Console operations.** Honoured for secret keys as above and for the OTA admin's first-party service key, which must send it: the staff member's address (the right-most `X-Forwarded-For` entry Caddy gave the admin). With the service key a missing or malformed value answers `400 VALIDATION_FAILED`; the value drives the console sign-in throttle (10 per minute per end-user IP), the lockout and the staff audit log (`staff_actions`). Other callers' values are ignored.
+                 */
+                "X-Velexis-End-User-IP"?: components["parameters"]["CustomerEndUserIp"];
+                /**
+                 * @description User-Agent of the visitor's browser for calls your server makes on their behalf with a secret or hosting key (longer values are truncated to 512 characters). Honoured only for secret and hosting keys, and for the OTA admin's service key on console operations; publishable-key calls use the request's own `User-Agent`. Recorded as session metadata (`AuthSessionDetails.userAgent`, new-sign-in security emails) and used by abuse heuristics. SDK: `options.endUser.userAgent` or the client option `endUser`.
+                 *
+                 *     **Console operations.** The OTA admin's first-party service key must send the staff member's user agent (missing: `400 VALIDATION_FAILED`); it is recorded in the staff audit log (`staff_actions`).
+                 */
+                "X-Velexis-End-User-Agent"?: components["parameters"]["CustomerEndUserAgent"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": components["schemas"]["StorefrontAssetUpload"];
+            };
+        };
+        responses: {
+            /** @description The image was uploaded. */
+            201: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StorefrontAsset"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["ConsoleForbidden"];
+            409: components["responses"]["StorefrontAssetConflict"];
+            422: components["responses"]["StorefrontAssetUnprocessable"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    consoleDeleteStorefrontAsset: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description BCP 47 locale for messages and display texts. */
+                "Accept-Language"?: components["parameters"]["AcceptLanguage"];
+                /** @description Environment of a console call made with the OTA admin's first-party service key, `test` or `live`. Required with the service key (missing: `400 VALIDATION_FAILED`) and refused with any other credential, whose environment is the key's. `live` needs an OTA that is live and a role other than `viewer`, otherwise `403 ENVIRONMENT_NOT_ALLOWED`; ConsoleStaffSession.environments lists the environments the staff member may open. */
+                "X-Velexis-Environment"?: components["parameters"]["VelexisEnvironment"];
+                /**
+                 * @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server), and for the OTA admin's service key on console operations (below); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`.
+                 *
+                 *     **Console operations.** Honoured for secret keys as above and for the OTA admin's first-party service key, which must send it: the staff member's address (the right-most `X-Forwarded-For` entry Caddy gave the admin). With the service key a missing or malformed value answers `400 VALIDATION_FAILED`; the value drives the console sign-in throttle (10 per minute per end-user IP), the lockout and the staff audit log (`staff_actions`). Other callers' values are ignored.
+                 */
+                "X-Velexis-End-User-IP"?: components["parameters"]["CustomerEndUserIp"];
+                /**
+                 * @description User-Agent of the visitor's browser for calls your server makes on their behalf with a secret or hosting key (longer values are truncated to 512 characters). Honoured only for secret and hosting keys, and for the OTA admin's service key on console operations; publishable-key calls use the request's own `User-Agent`. Recorded as session metadata (`AuthSessionDetails.userAgent`, new-sign-in security emails) and used by abuse heuristics. SDK: `options.endUser.userAgent` or the client option `endUser`.
+                 *
+                 *     **Console operations.** The OTA admin's first-party service key must send the staff member's user agent (missing: `400 VALIDATION_FAILED`); it is recorded in the staff audit log (`staff_actions`).
+                 */
+                "X-Velexis-End-User-Agent"?: components["parameters"]["CustomerEndUserAgent"];
+            };
+            path: {
+                /** @description Storefront asset id (`ast_…`). */
+                assetId: components["parameters"]["ConsoleStorefrontAssetId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The image was deleted. */
+            204: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["ConsoleForbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["StorefrontAssetConflict"];
             429: components["responses"]["RateLimited"];
             500: components["responses"]["InternalError"];
         };

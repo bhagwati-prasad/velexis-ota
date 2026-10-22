@@ -15,6 +15,10 @@ export type PendingTask = `OBE-${number}` | "deferred";
 export const PENDING_OPERATIONS: Readonly<Partial<Record<OtaOperationId, PendingTask>>> = Object.freeze({
   // Storefront
   resolveStorefrontHost: "deferred",
+  // Storefront content (OBE-091): the published pages and the public images
+  listStorefrontPages: "OBE-072",
+  getStorefrontPage: "OBE-072",
+  getPublicAsset: "OBE-071",
   // Customer account and saved travellers
   getAccount: "OBE-035",
   updateAccount: "OBE-035",
@@ -66,6 +70,15 @@ export const PENDING_OPERATIONS: Readonly<Partial<Record<OtaOperationId, Pending
   consoleAmadeusIssueFlightOrder: "deferred",
   consoleAmadeusCancelFlightOrder: "deferred",
   consoleAmadeusPatchFlightOrder: "deferred",
+  // Console settings (OBE-091): content pages and storefront images
+  consoleListStorefrontPages: "OBE-072",
+  consoleCreateStorefrontPage: "OBE-072",
+  consoleGetStorefrontPage: "OBE-072",
+  consoleUpdateStorefrontPage: "OBE-072",
+  consoleDeleteStorefrontPage: "OBE-072",
+  consoleListStorefrontAssets: "OBE-071",
+  consoleUploadStorefrontAsset: "OBE-071",
+  consoleDeleteStorefrontAsset: "OBE-071",
   // Console settings (OBE-058): markup and fee rules, notification templates (the storefront settings: OBE-070)
   consoleListMarkupRules: "OBE-069",
   consoleCreateMarkupRule: "OBE-069",

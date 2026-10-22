@@ -29,6 +29,16 @@
  */
 export const PENDING = Object.freeze(
   /** @type {const} */ ([
+    {
+      entry: "storefront.listPages",
+      task: "SDK-012",
+      note: "OBE-091 added it to the document after SDK-005 wrote the storefront namespace",
+    },
+    {
+      entry: "storefront.getPage",
+      task: "SDK-012",
+      note: "OBE-091 added it to the document after SDK-005 wrote the storefront namespace",
+    },
     { entry: "auth", task: "SDK-008" },
     { entry: "account", task: "SDK-008" },
     {
