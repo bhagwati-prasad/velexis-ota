@@ -1385,7 +1385,8 @@ M5 work is merged behind the `FEATURE_*` switches (PADR-0015). The switches are 
   - No response schema exposes a secret field; secret request fields are `writeOnly`.
 - **Verify:** `pnpm contracts:lint && pnpm contracts:generate && pnpm --filter @velexis/platform-backend test`
 
-### PBE-042 · Add the M5 admin and webhook operations to the OpenAPI document
+### PBE-042 · Add the M5 admin and webhook operations to the OpenAPI document ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-backend
 - **Milestone:** M5
 - **Depends on:** PBE-041

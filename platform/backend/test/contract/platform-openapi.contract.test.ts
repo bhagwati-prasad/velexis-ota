@@ -4,20 +4,22 @@
 // PBE-006 the second (tenants, team, API keys and the M1 reads: 27 operations), PBE-007 the first admin slice
 // (admin auth and dashboard, tenants, provisioning jobs and queues: 21 operations), PBE-066 the second (plans and
 // subscriptions, Amadeus accounts and offices, accounts, platform admins and audit: 26 operations), PBE-037 the M3
-// and M4 slice (the statement descriptor, the console token and the Amadeus settings: 3 operations) and PBE-041 the M5
+// and M4 slice (the statement descriptor, the console token and the Amadeus settings: 3 operations), PBE-041 the M5
 // portal slice (go-live, custom domains, own credentials, Stripe Connect and API keys, the payout account,
-// settlements, Checkout, the Customer Portal and invoices: 20 operations). The tests of a slice name its operations
-// by operationId and never count the document, so the last slice (PBE-042) only adds operations and tests of its own.
-// The convention checks run on every operation of the document: x-scope and the matching security scheme,
-// `platform_admin` on every `/v1/admin/` path but the public sign-in steps, X-Request-Id on every response,
-// x-platform-tables, Idempotency-Key exactly on x-idempotent operations, a 5–500 character `reason` exactly on
-// x-reason-required operations, closed request bodies, `Cache-Control: no-store` on secret-bearing responses, error
-// examples that agree with x-error-codes and the catalogue, and examples that validate with the Ajv checker of
-// @velexis/testing that the integration tests use (a body that is not JSON, such as the CSV exports, only where
-// NON_JSON_RESPONSES lists it, and its slice test checks it). The PBE-041 slice test also checks every operation: no
-// answer reaches a write-only schema, and a request property named like a secret, a password or a bank identifier is
-// write-only. `pnpm contracts:lint` (Redocly, X-007) and the generators' tests (X-008, X-009) cover the lint and the
-// generated files.
+// settlements, Checkout, the Customer Portal and invoices: 20 operations) and PBE-042 the last one, the M5 admin and
+// webhook slice (the Stripe billing admin, the office release, settlements and payout accounts, domains and the two
+// Stripe webhook receivers: 23 operations, and the Stripe ids of adminUpdatePlan). The tests of a slice name its
+// operations by operationId and never count the document. The convention checks run on every operation of the
+// document: x-scope and the matching security scheme, `platform_admin` on every `/v1/admin/` path but the public
+// sign-in steps, X-Request-Id on every response, x-platform-tables, Idempotency-Key exactly on x-idempotent
+// operations, a 5–500 character `reason` exactly on x-reason-required operations, closed request bodies (an open one,
+// the Stripe event of the webhook receivers, only where OPEN_REQUEST_BODIES lists it), `Cache-Control: no-store` on
+// secret-bearing responses, error examples that agree with x-error-codes and the catalogue, and examples that
+// validate with the Ajv checker of @velexis/testing that the integration tests use (a body that is not JSON, such as
+// the CSV exports, only where NON_JSON_RESPONSES lists it, and its slice test checks it). The PBE-041 slice test also
+// checks every operation: no answer reaches a write-only schema, and a request property named like a secret, a
+// password or a bank identifier is write-only. `pnpm contracts:lint` (Redocly, X-007) and the generators' tests (X-008,
+// X-009) cover the lint and the generated files.
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
@@ -31,11 +33,19 @@ import {
 import { platformOperations, type PlatformOperationId } from "@velexis/api-types/operations";
 import { ERROR_CATALOGUE, PLATFORM_ERROR_CODES, type PlatformErrorCode } from "@velexis/errors";
 import { createResponseChecker, type ResponseChecker } from "@velexis/testing";
+import {
+  STRIPE_FIXTURE_EVENT_TYPES,
+  STRIPE_SIGNATURE_HEADER,
+  stripeFixture,
+  type StripeFixtureEventType,
+} from "@velexis/testing/stripe";
 import { beforeAll, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import { OperationPolicies } from "../../src/common/auth/decorators";
 import { FEATURES, type Feature } from "../../src/common/features";
 import { PlatformOpenApi } from "../../src/common/http/openapi-validation.interceptor";
+import { WEBHOOK_BODY_LIMIT, WEBHOOK_PATH_PREFIX } from "../../src/common/http/raw-body";
+import { KEEP_COMPLETED_JOBS, KEEP_FAILED_JOBS } from "../../src/common/queues/queue-names";
 import { APP_DIR } from "../../src/config";
 import { HealthService } from "../../src/health/health.service";
 
@@ -54,7 +64,10 @@ const HTTP_METHODS = ["get", "put", "post", "delete", "options", "head", "patch"
 /** The `x-scope` values of the platform document (PADR-0009 item 1, api-inventory §2). */
 const SCOPES = ["public", "portal_unverified", "portal", "platform_admin", "internal", "webhook"] as const;
 
-/** Response properties that hold a secret: a 2xx response with one must document `Cache-Control: no-store`. */
+/**
+ * Response properties that hold a secret: a 2xx response with one must document `Cache-Control: no-store`. The bank
+ * identifiers of a payout account are answered only when an admin reveals them (PBE-042).
+ */
 const SECRET_PROPERTIES = new Set([
   "accessToken",
   "refreshToken",
@@ -63,6 +76,10 @@ const SECRET_PROPERTIES = new Set([
   "secret",
   "otpauthUrl",
   "recoveryCodes",
+  "iban",
+  "bic",
+  "accountNumber",
+  "routingNumber",
 ]);
 
 /**
@@ -905,6 +922,117 @@ const SETTLEMENT_CSV_COLUMNS = [
   "description",
 ] as const;
 
+const ADMIN_SETTLEMENT_PATH = "/v1/admin/settlements/{settlementId}";
+const ADMIN_PAYOUT_PATH = "/v1/admin/tenants/{tenantId}/payout-account";
+
+/**
+ * The PBE-042 slice: the M5 rows of api-inventory-admin §4 (Stripe billing admin, 5), §5 (the office release), §6
+ * (settlements and payout accounts, 12, with `adminDownloadSettlementLines` of PADR-0016 item 4) and §7 (domains, 3),
+ * and the two webhook receivers of §8.
+ */
+const SLICE_PBE042: readonly SliceOperation[] = [
+  ...(
+    [
+      ["adminCheckPlanPrices", "post", "/v1/admin/plans/{planCode}/check-prices"],
+      ["adminResyncSubscription", "post", "/v1/admin/subscriptions/{subscriptionId}/resync"],
+      ["adminListInvoices", "get", "/v1/admin/invoices"],
+      ["adminListStripeEvents", "get", "/v1/admin/stripe-events"],
+      ["adminReprocessStripeEvent", "post", "/v1/admin/stripe-events/{eventId}/reprocess"],
+      ["adminReleaseAmadeusOffice", "post", "/v1/admin/amadeus-offices/{officeRowId}/release"],
+      ["adminListSettlements", "get", "/v1/admin/settlements"],
+      ["adminGenerateSettlements", "post", "/v1/admin/settlements/generate"],
+      ["adminGetSettlement", "get", ADMIN_SETTLEMENT_PATH],
+      ["adminListSettlementLines", "get", `${ADMIN_SETTLEMENT_PATH}/lines`],
+      ["adminDownloadSettlementLines", "get", `${ADMIN_SETTLEMENT_PATH}/lines.csv`],
+      ["adminAddSettlementAdjustment", "post", `${ADMIN_SETTLEMENT_PATH}/adjustments`],
+      ["adminApproveSettlement", "post", `${ADMIN_SETTLEMENT_PATH}/approve`],
+      ["adminMarkSettlementPaid", "post", `${ADMIN_SETTLEMENT_PATH}/mark-paid`],
+      ["adminVoidSettlement", "post", `${ADMIN_SETTLEMENT_PATH}/void`],
+      ["adminGetPayoutAccount", "get", ADMIN_PAYOUT_PATH],
+      ["adminRevealPayoutAccount", "post", `${ADMIN_PAYOUT_PATH}/reveal`],
+      ["adminReviewPayoutAccount", "post", `${ADMIN_PAYOUT_PATH}/review`],
+      ["adminListDomains", "get", "/v1/admin/domains"],
+      ["adminRecheckDomain", "post", "/v1/admin/domains/{domainId}/recheck"],
+      ["adminRemoveDomain", "post", "/v1/admin/domains/{domainId}/remove"],
+    ] as const
+  ).map(([operationId, method, path]): SliceOperation => ({
+    operationId,
+    method,
+    path,
+    scope: "platform_admin",
+    internal: false,
+  })),
+  {
+    operationId: "receiveStripeBillingEvent",
+    method: "post",
+    path: "/webhooks/stripe/billing",
+    scope: "webhook",
+    internal: true,
+  },
+  {
+    operationId: "receiveStripeConnectAccountEvent",
+    method: "post",
+    path: "/webhooks/stripe/connect-accounts",
+    scope: "webhook",
+    internal: true,
+  },
+];
+
+/**
+ * The PBE-042 operations marked **reason** in api-inventory-admin (PADR-0006 item 5, PADR-0012 item 5, PADR-0003
+ * item 10).
+ */
+const SLICE_PBE042_REASON = [
+  "adminReleaseAmadeusOffice",
+  "adminAddSettlementAdjustment",
+  "adminVoidSettlement",
+  "adminRevealPayoutAccount",
+  "adminRemoveDomain",
+] as const satisfies readonly PlatformOperationId[];
+
+/** The PBE-042 operations marked MFA↑: approving and paying settlements, revealing a payout account (PADR-0006 item 4). */
+const SLICE_PBE042_STEP_UP = [
+  "adminApproveSettlement",
+  "adminMarkSettlementPaid",
+  "adminRevealPayoutAccount",
+] as const satisfies readonly PlatformOperationId[];
+
+/**
+ * The request bodies that are open on purpose: the Stripe event of the webhook receivers, which Stripe extends without
+ * notice, so a closed schema would refuse correctly signed events. Every other request body is closed.
+ */
+const OPEN_REQUEST_BODIES: Readonly<Record<string, string>> = {
+  receiveStripeBillingEvent: "#/components/schemas/StripeEvent",
+  receiveStripeConnectAccountEvent: "#/components/schemas/StripeConnectAccountEvent",
+};
+
+/**
+ * The signed Stripe fixtures of X-028 (@velexis/testing/stripe) that each receiver takes, as the fixtures' README
+ * routes them: the receivers of PBE-043 and PBE-056 must store every one of them.
+ */
+const WEBHOOK_FIXTURES = {
+  receiveStripeBillingEvent: ["checkout.session.completed", "customer.subscription.updated", "invoice.paid"],
+  receiveStripeConnectAccountEvent: ["account.updated", "account.application.deauthorized"],
+} as const satisfies Partial<Record<PlatformOperationId, readonly StripeFixtureEventType[]>>;
+
+/** The columns of the admin's settlement lines CSV, in file order (api-inventory-admin §6). */
+const ADMIN_SETTLEMENT_CSV_COLUMNS = [
+  "id",
+  "type",
+  "occurredAt",
+  "amount",
+  "stripeFee",
+  "originalAmount",
+  "originalCurrency",
+  "balanceTransactionId",
+  "sourceId",
+  "paymentIntentId",
+  "velexisPaymentId",
+  "checkoutId",
+  "description",
+  "createdByAccountId",
+] as const;
+
 /** The columns of the audit CSV export, in file order. */
 const AUDIT_CSV_COLUMNS = [
   "id",
@@ -931,6 +1059,7 @@ const AUDIT_CSV_COLUMNS = [
 const NON_JSON_RESPONSES: Readonly<Record<string, Readonly<Record<string, readonly string[]>>>> = {
   adminExportAudit: { "200": ["text/csv"] },
   downloadSettlementLines: { "200": ["text/csv"] },
+  adminDownloadSettlementLines: { "200": ["text/csv"] },
 };
 
 const isObject = (value: unknown): value is Json =>
@@ -1794,17 +1923,21 @@ interface AdminInventoryRow {
   /** MFA↑ in some calls only ("MFA↑ when the secret changes"). */
   readonly conditionalStepUp: boolean;
   readonly exchange: string;
+  /** The Errors cell. */
+  readonly errors: string;
   readonly milestone: string;
 }
 
 /**
- * The rows of api-inventory-admin §4, §5 and §7 by operationId. One row may name two operations
- * (`adminDisableAccount` / `adminEnableAccount` with `POST …/disable` / `enable`): the second route replaces the last
- * segment of the first path.
+ * The rows of api-inventory-admin §4, §5 and §7 (or of the sections given) by operationId. One row may name two
+ * operations (`adminDisableAccount` / `adminEnableAccount` with `POST …/disable` / `enable`): the second route
+ * replaces the last segment of the first path.
  */
-function adminSectionRows(): Map<string, AdminInventoryRow> {
+function adminSectionRows(
+  headings: readonly string[] = ["## 4. ", "## 5. ", "## 7. "],
+): Map<string, AdminInventoryRow> {
   const text = readFileSync(INVENTORY_ADMIN, "utf8");
-  const sections = ["## 4. ", "## 5. ", "## 7. "].map((heading) => {
+  const sections = headings.map((heading) => {
     const start = text.indexOf(heading);
     expect([heading, start >= 0]).toEqual([heading, true]);
     return text.slice(start, text.indexOf("\n## ", start + 1));
@@ -1813,7 +1946,7 @@ function adminSectionRows(): Map<string, AdminInventoryRow> {
   for (const line of sections.join("\n").split("\n")) {
     // A pipe escaped as `\|` (`"trialing" \| "canceled"`) belongs to its cell.
     const cells = line.split(/(?<!\\)\|/u).map((cell) => cell.trim().replaceAll("\\|", "|"));
-    const [, first = "", route = "", purpose = "", exchange = "", , , milestone = ""] = cells;
+    const [, first = "", route = "", purpose = "", exchange = "", , errors = "", milestone = ""] = cells;
     if (cells.length < 9 || !first.startsWith("`")) {
       continue;
     }
@@ -1831,6 +1964,7 @@ function adminSectionRows(): Map<string, AdminInventoryRow> {
         stepUp: /MFA↑(?! when)/u.test(marks),
         conditionalStepUp: /MFA↑ when/u.test(marks),
         exchange,
+        errors,
         milestone,
       });
     });
@@ -2176,7 +2310,7 @@ describe("the admin plans, Amadeus, accounts, admins and audit slice (PBE-066)",
     );
   });
 
-  it("answers AdminPlan as Plan plus the admin fields, and keeps code, currency and the Stripe ids out of adminUpdatePlan", () => {
+  it("answers AdminPlan as Plan plus the admin fields, and keeps code and currency out of adminUpdatePlan", () => {
     const rows = adminSectionRows();
     const schemas = objectAt(objectAt(platform, "components"), "schemas");
     const plan = objectAt(objectAt(schemas, "Plan"), "properties");
@@ -2207,17 +2341,20 @@ describe("the admin plans, Amadeus, accounts, admins and audit slice (PBE-066)",
     );
     expect(create["required"]).toEqual(fields.filter((field) => !field.endsWith("?")));
 
-    // The update takes any field but code and currency, and retires with isActive; PBE-042 adds the Stripe ids.
+    // The update takes any field but code and currency, and retires with isActive. The M1 request had no Stripe id;
+    // PBE-042 adds exactly the three of AdminPlan for M5 (its slice test checks them).
     const update = Object.keys(objectAt(objectAt(schemas, "UpdatePlanRequest"), "properties"));
+    const stripeIds = ["stripeProductId", "stripePriceIdMonth", "stripePriceIdYear"];
     expect([...update].sort()).toEqual(
       [
         ...fields
           .map((field) => field.replace("?", ""))
           .filter((field) => field !== "code" && field !== "currency"),
         "isActive",
+        ...stripeIds,
       ].sort(),
     );
-    expect(update.filter((name) => name.startsWith("stripe"))).toEqual([]);
+    expect(update.filter((name) => name.startsWith("stripe"))).toEqual(stripeIds);
   });
 
   it("follows the CHECK constraints of migrations 0001 and 0002 for the statuses of the slice", () => {
@@ -3421,13 +3558,15 @@ describe("the M5 portal slice: go-live, domains, own credentials, payments, sett
         expect([cell, /^[=+\-@\t\r]/u.test(cell)]).toEqual([cell, false]);
       }
     }
-    // The response checker reads JSON only, so it refuses the CSV; the list of non-JSON answers is exactly these.
+    // The response checker reads JSON only, so it refuses the CSV; the list of non-JSON answers is exactly these
+    // three, the admin's CSV of the same lines (PBE-042, PADR-0016 item 4) included.
     expect(() => checker.check("downloadSettlementLines", { status: 200, body: media["example"] })).toThrow(
       /no JSON content \(text\/csv\)/,
     );
     expect(NON_JSON_RESPONSES).toEqual({
       adminExportAudit: { "200": ["text/csv"] },
       downloadSettlementLines: { "200": ["text/csv"] },
+      adminDownloadSettlementLines: { "200": ["text/csv"] },
     });
   });
 
@@ -3490,6 +3629,1024 @@ describe("the M5 portal slice: go-live, domains, own credentials, payments, sett
       ),
     ).map((entry) => entry.operationId);
     expect(noStore).toEqual(["startStripeConnect", "createCustomerPortalSession"]);
+  });
+});
+
+/** The backticked catalogue codes of an inventory cell, also after a status (`400 WEBHOOK_SIGNATURE_INVALID`). */
+function statusCodesOf(cell: string): string[] {
+  return [...cell.matchAll(/`(?:[0-9]{3} )?([A-Z][A-Z0-9_]+)`/g)].map(([, code = ""]) => code);
+}
+
+/**
+ * The rows of api-inventory-admin §8 by operationId: Operation, Method and path, Auth, Purpose, Behaviour, Tables,
+ * Errors and M.
+ */
+function webhookRows(): Map<string, string[]> {
+  const text = readFileSync(INVENTORY_ADMIN, "utf8");
+  const start = text.indexOf("## 8. ");
+  expect(start).toBeGreaterThanOrEqual(0);
+  const rows = new Map<string, string[]>();
+  for (const line of text.slice(start, text.indexOf("\n## ", start + 1)).split("\n")) {
+    const cells = line.split("|").map((cell) => cell.trim());
+    const id = /^`([a-z][A-Za-z]+)`$/.exec(cells[1] ?? "")?.[1];
+    if (id !== undefined) {
+      rows.set(id, cells.slice(1, -1));
+    }
+  }
+  return rows;
+}
+
+describe("the M5 admin and webhook slice: Stripe billing, office release, settlements, payout accounts, domains and webhooks (PBE-042)", () => {
+  const schemaOf = (name: string): Json =>
+    objectAt(objectAt(objectAt(platform, "components"), "schemas"), name);
+  const propertiesOf = (name: string): Json => objectAt(schemaOf(name), "properties");
+  const examplesAt = (operationId: string, status: string): unknown[] =>
+    examplesOf(platform, jsonMedia(successOf(operationId, status)) ?? {});
+  const errorExamples = (operationId: string, status: string): Json[] => {
+    const [, response = {}] =
+      responsesOf(platform, operation(operationId)).find(([candidate]) => candidate === status) ?? [];
+    return examplesOf(platform, jsonMedia(response) ?? {}).map((example) => objectAt(example, "error"));
+  };
+  const requestExamples = (operationId: string): unknown[] => {
+    const body = resolve(platform, operation(operationId).spec["requestBody"]);
+    return examplesOf(platform, objectAt(objectAt(body, "content"), "application/json"));
+  };
+  const statusesOf = (operationId: string): string[] =>
+    responsesOf(platform, operation(operationId)).map(([status]) => status);
+  const checkValues = (sql: string, anchor: RegExp): string[] => {
+    const list = anchor.exec(sql)?.[1];
+    expect([String(anchor), list === undefined]).toEqual([String(anchor), false]);
+    return [...(list ?? "").matchAll(/'([^']+)'/g)].map(([, value = ""]) => value);
+  };
+  const deltas = (): string =>
+    readFileSync(join(PLATFORM_MIGRATIONS, "0002_add_mvp_platform_deltas.sql"), "utf8");
+  const filterOf = (operationId: string, name: string): Json =>
+    objectAt(
+      parametersOf(operationId).find((parameter) => parameter["name"] === name),
+      "schema",
+    );
+  const asJson = (value: unknown): Json => (isObject(value) ? value : {});
+
+  let policies: OperationPolicies;
+  let otaPatterns: Set<unknown>;
+
+  /**
+   * The budget of the slice's setup: the guards' policies read the whole platform document again (PlatformOpenApi,
+   * as the API does at start-up), and the OTA document's patterns are collected once; both take a second or two
+   * under a full parallel `pnpm test`. The budget only stops a hook that hangs.
+   */
+  const SLICE_SETUP_TIMEOUT_MS = 30_000;
+
+  beforeAll(() => {
+    policies = new OperationPolicies(PlatformOpenApi.load());
+    otaPatterns = new Set(schemasOf(ota, objectAt(ota, "components")).map((schema) => schema["pattern"]));
+  }, SLICE_SETUP_TIMEOUT_MS);
+
+  it("[PBE-042 AC1] lists the 23 operations of the slice in the operations index, each with x-scope platform_admin or webhook", () => {
+    expect(SLICE_PBE042).toHaveLength(23);
+    const ids = new Set(SLICE_PBE042.map((entry) => entry.operationId));
+    expect(ids.size).toBe(23);
+    // 23 more operations: none of them belongs to an earlier slice.
+    expect(
+      [...SLICE, ...SLICE_PBE006, ...SLICE_PBE007, ...SLICE_PBE066, ...SLICE_PBE037, ...SLICE_PBE041].filter(
+        (entry) => ids.has(entry.operationId),
+      ),
+    ).toEqual([]);
+    for (const entry of SLICE_PBE042) {
+      expect(platformOperations).toContainEqual(expect.objectContaining({ ...entry, sdkMethod: null }));
+      const spec = operation(entry.operationId).spec;
+      expect([entry.operationId, spec["x-scope"], spec["x-internal"], spec["security"]]).toEqual([
+        entry.operationId,
+        entry.scope,
+        entry.internal ? true : undefined,
+        entry.scope === "webhook" ? [] : [{ adminBearer: [] }],
+      ]);
+    }
+    // With PBE-007 and PBE-066, the 68 admin operations, every one under /v1/admin/.
+    const admin = new Set(
+      [
+        ...SLICE_PBE007,
+        ...SLICE_PBE066,
+        ...SLICE_PBE042.filter((entry) => entry.scope === "platform_admin"),
+      ].map((entry) => entry.operationId),
+    );
+    expect(admin.size).toBe(68);
+    for (const operationId of admin) {
+      expect([operationId, operation(operationId).path.startsWith("/v1/admin/")]).toEqual([
+        operationId,
+        true,
+      ]);
+    }
+    // The two receivers are the document's only webhook operations, under the prefix where the API keeps the raw
+    // body for the signature check (raw-body.ts).
+    const webhooks = operations.filter((op) => op.spec["x-scope"] === "webhook");
+    expect(webhooks.map((op) => op.operationId)).toEqual([
+      "receiveStripeBillingEvent",
+      "receiveStripeConnectAccountEvent",
+    ]);
+    for (const op of webhooks) {
+      expect([op.operationId, op.path.startsWith(`${WEBHOOK_PATH_PREFIX}stripe/`)]).toEqual([
+        op.operationId,
+        true,
+      ]);
+    }
+  });
+
+  it("[PBE-042 AC1] documents each slice operation with the method, path, query, marks and errors of the M5 rows of api-inventory-admin §4–§8", () => {
+    const rows = adminSectionRows(["## 4. ", "## 5. ", "## 6. ", "## 7. "]);
+    const webhooks = webhookRows();
+    // The slice is exactly the M5 rows of §4 to §7 and the two receivers of §8.
+    const m5 = [...rows]
+      .filter(([, row]) => row.milestone.startsWith("M5"))
+      .map(([operationId]) => operationId);
+    expect([...m5, ...webhooks.keys()].sort()).toEqual(SLICE_PBE042.map((entry) => entry.operationId).sort());
+
+    for (const entry of SLICE_PBE042) {
+      const { operationId } = entry;
+      const spec = operation(operationId).spec;
+      const row = rows.get(operationId);
+      if (row === undefined) {
+        const [, route = "", auth = "", , , tables = "", errors = ""] = webhooks.get(operationId) ?? [];
+        const [method = "", path = ""] = route.replaceAll("`", "").split(" ");
+        expect([operationId, entry.method, entry.path, auth.startsWith("`webhook`")]).toEqual([
+          operationId,
+          method.toLowerCase(),
+          path,
+          true,
+        ]);
+        expect([operationId, spec["x-error-codes"]]).toEqual([
+          operationId,
+          expect.arrayContaining(statusCodesOf(errors)),
+        ]);
+        expect([operationId, spec["x-platform-tables"]]).toEqual([
+          operationId,
+          [...tables.matchAll(/`([a-z_]+)`/g)].map(([, table = ""]) => table),
+        ]);
+      } else {
+        expect([operationId, entry.method, entry.path]).toEqual([operationId, row.method, row.path]);
+        const query = parametersOf(operationId)
+          .filter((parameter) => parameter["in"] === "query")
+          .map((parameter) => parameter["name"]);
+        expect([operationId, query]).toEqual([operationId, expect.arrayContaining([...row.query])]);
+        expect([
+          operationId,
+          spec["x-reason-required"] === true,
+          spec["x-mfa-step-up"] === true,
+          row.conditionalStepUp,
+        ]).toEqual([operationId, row.reason, row.stepUp, false]);
+        // Every code of the inventory's Errors cell is answered; the operation answers the generic codes too.
+        expect([operationId, spec["x-error-codes"]]).toEqual([
+          operationId,
+          expect.arrayContaining(codesOf(row.errors)),
+        ]);
+      }
+      // No milestone switch (the admin rows have no `F:`, and PADR-0015 item 4 receives webhooks with the switches
+      // off) and no idempotency.
+      expect([operationId, spec["x-feature"], spec["x-idempotent"]]).toEqual([
+        operationId,
+        undefined,
+        undefined,
+      ]);
+    }
+    // adminUpdatePlan, an M1 row with its M5 Stripe ids, answers the codes of its row, the M5 ones included.
+    const updatePlan = rows.get("adminUpdatePlan");
+    expect(updatePlan?.milestone).toBe("M1 (Stripe ids M5)");
+    expect(codesOf(updatePlan?.errors ?? "")).toEqual(expect.arrayContaining(["CONFLICT", "PROVIDER_ERROR"]));
+    expect(operation("adminUpdatePlan").spec["x-error-codes"]).toEqual(
+      expect.arrayContaining(codesOf(updatePlan?.errors ?? "")),
+    );
+  });
+
+  it("[PBE-042 AC1] requires the reasons and step-ups of the inventory, as the guards read them", () => {
+    for (const { operationId, scope } of SLICE_PBE042) {
+      const spec = operation(operationId).spec;
+      const stepUp = (SLICE_PBE042_STEP_UP as readonly string[]).includes(operationId);
+      const reason = (SLICE_PBE042_REASON as readonly string[]).includes(operationId);
+      expect([operationId, spec["x-mfa-step-up"] === true, spec["x-reason-required"] === true]).toEqual([
+        operationId,
+        stepUp,
+        reason,
+      ]);
+      // RecentMfaGuard and FeatureGuard read these flags from the document (PBE-012).
+      expect([operationId, policies.forOperation(operationId)]).toEqual([
+        operationId,
+        { scope, mfaStepUp: stepUp, features: [] },
+      ]);
+    }
+    // A step-up answers 401 REAUTH_REQUIRED; never 403 MFA_REQUIRED, since every platform admin has MFA (PADR-0006).
+    for (const operationId of SLICE_PBE042_STEP_UP) {
+      expect([operationId, errorExamples(operationId, "401").map((error) => error["code"])]).toEqual([
+        operationId,
+        ["UNAUTHENTICATED", "TOKEN_EXPIRED", "REAUTH_REQUIRED"],
+      ]);
+      expect([operationId, operation(operationId).spec["x-error-codes"]]).toEqual([
+        operationId,
+        expect.not.arrayContaining(["MFA_REQUIRED"]),
+      ]);
+    }
+
+    // A reason of 5–500 characters, in a required body.
+    const bodies: Record<(typeof SLICE_PBE042_REASON)[number], Json> = {
+      adminReleaseAmadeusOffice: { confirmNoOpenBookings: true },
+      adminAddSettlementAdjustment: {
+        amount: { amount: "-25.00", currency: "EUR" },
+        description: "Fee correction",
+      },
+      adminVoidSettlement: {},
+      adminRevealPayoutAccount: {},
+      adminRemoveDomain: {},
+    };
+    const requests = requestBodyChecker(SLICE_PBE042_REASON);
+    for (const operationId of SLICE_PBE042_REASON) {
+      const body = bodies[operationId];
+      const check = (reason?: string) =>
+        requests.check(operationId, { status: 200, body: reason === undefined ? body : { ...body, reason } });
+      expect([operationId, operation(operationId).spec["requestBody"]]).toEqual([
+        operationId,
+        expect.objectContaining({ required: true }),
+      ]);
+      expect([operationId, check("Abuse")]).toEqual([operationId, []]);
+      expect([operationId, check("x".repeat(500))]).toEqual([operationId, []]);
+      expect([operationId, check()]).toEqual([
+        operationId,
+        [expect.objectContaining({ path: "/reason", keyword: "required" })],
+      ]);
+      expect([operationId, check("Spam")]).toEqual([
+        operationId,
+        [expect.objectContaining({ path: "/reason", keyword: "minLength" })],
+      ]);
+      expect([operationId, check("x".repeat(501))]).toEqual([
+        operationId,
+        [expect.objectContaining({ path: "/reason", keyword: "maxLength" })],
+      ]);
+    }
+  });
+
+  it("links a plan to its Stripe prices in adminUpdatePlan and compares them in adminCheckPlanPrices", () => {
+    // The three ids of AdminPlan, each nullable to unlink, with the patterns of AdminPlan and the plans CHECKs.
+    const update = propertiesOf("UpdatePlanRequest");
+    const plan = propertiesOf("AdminPlan");
+    const sql = deltas();
+    for (const [name, column] of [
+      ["stripeProductId", "stripe_product_id"],
+      ["stripePriceIdMonth", "stripe_price_id_month"],
+      ["stripePriceIdYear", "stripe_price_id_year"],
+    ] as const) {
+      const property = objectAt(update, name);
+      const constraint = new RegExp(`${column}\\s+text CHECK \\(${column} ~ '([^']+)'\\)`, "u").exec(
+        sql,
+      )?.[1];
+      expect([name, property["type"], property["pattern"], property["pattern"]]).toEqual([
+        name,
+        ["string", "null"],
+        objectAt(plan, name)["pattern"],
+        constraint,
+      ]);
+    }
+    const requests = requestBodyChecker(["adminUpdatePlan"]);
+    const check = (body: unknown) =>
+      requests
+        .check("adminUpdatePlan", { status: 200, body })
+        .map((problem) => `${problem.path} ${problem.keyword}`);
+    const examples = requestExamples("adminUpdatePlan");
+    expect(examples).toContainEqual(expect.objectContaining({ stripePriceIdMonth: expect.any(String) }));
+    for (const example of examples) {
+      expect(check(example)).toEqual([]);
+    }
+    expect(check({ stripePriceIdMonth: null })).toEqual([]);
+    expect(check({ stripePriceIdMonth: "prod_QxGrowth01" })).toEqual(
+      expect.arrayContaining(["/stripePriceIdMonth pattern"]),
+    );
+    expect(check({ stripeProductId: "price_1QxGrowthMonthEur" })).toEqual(
+      expect.arrayContaining(["/stripeProductId pattern"]),
+    );
+    // A price that another plan links conflicts (unique indexes of migration 0002); a Stripe failure saves nothing.
+    expect(sql).toContain("CREATE UNIQUE INDEX plans_stripe_price_month_uq");
+    expect(
+      errorExamples("adminUpdatePlan", "409").map((error) => objectAt(error, "details")["reason"]),
+    ).toEqual(["stripe_price_taken"]);
+    for (const operationId of ["adminUpdatePlan", "adminCheckPlanPrices"]) {
+      expect([operationId, objectAt(operation(operationId).spec, "responses")["502"]]).toEqual([
+        operationId,
+        { $ref: "#/components/responses/ProviderError" },
+      ]);
+    }
+    // The linked plan answers the warnings of its comparison; it can start Checkout for both intervals.
+    expect(examplesAt("adminUpdatePlan", "200")).toContainEqual(
+      expect.objectContaining({
+        stripePriceIdMonth: expect.any(String),
+        checkoutAvailable: { month: true, year: true },
+        priceWarnings: [expect.objectContaining({ field: "stripePriceIdMonth.currency" })],
+      }),
+    );
+
+    // adminCheckPlanPrices takes no body and answers the inventory's {field, expected, actual}, the items of
+    // priceWarnings, each naming a linked price and one of the four attributes the flow compares.
+    expect(operation("adminCheckPlanPrices").spec["requestBody"]).toBeUndefined();
+    const exchange = adminSectionRows().get("adminCheckPlanPrices")?.exchange ?? "";
+    expect(Object.keys(propertiesOf("PlanPriceWarning"))).toEqual(
+      inventoryFieldLists(exchange, "{warnings: [")[0],
+    );
+    expect(objectAt(propertiesOf("PlanPriceCheck"), "warnings")["items"]).toEqual(
+      objectAt(plan, "priceWarnings")["items"],
+    );
+    const checks = examplesAt("adminCheckPlanPrices", "200");
+    expect(checks).toContainEqual({ warnings: [] });
+    const warnings = [...checks, ...examplesAt("adminUpdatePlan", "200")].flatMap((example) => {
+      const list: unknown = asJson(example)["warnings"] ?? asJson(example)["priceWarnings"];
+      return Array.isArray(list) ? (list as unknown[]) : [];
+    });
+    expect(warnings.length).toBeGreaterThan(1);
+    for (const warning of warnings) {
+      expect(String(asJson(warning)["field"])).toMatch(
+        /^stripePriceId(Month|Year)\.(amount|currency|interval|active)$/u,
+      );
+    }
+  });
+
+  it("resyncs a Stripe subscription, lists the invoices and the Stripe inbox, and reprocesses a failed event", () => {
+    // Resync: the subscription with its new version; a manual one has nothing to fetch; Stripe may fail.
+    const resynced = successOf("adminResyncSubscription", "200");
+    expect([jsonMedia(resynced)?.["schema"], objectAt(resynced, "headers")["ETag"]]).toEqual([
+      { $ref: "#/components/schemas/AdminSubscription" },
+      { $ref: "#/components/headers/ETag" },
+    ]);
+    expect(
+      errorExamples("adminResyncSubscription", "409").map((error) => objectAt(error, "details")["reason"]),
+    ).toEqual(["manual"]);
+    expect(statusesOf("adminResyncSubscription")).toContain("502");
+
+    // The two lists answer the items of adminGetSubscription, filtered as the inventory says.
+    const items = (name: string): unknown => objectAt(propertiesOf(name)["data"], "items");
+    expect([items("AdminInvoiceList"), items("AdminStripeEventList")]).toEqual([
+      { $ref: "#/components/schemas/AdminInvoice" },
+      { $ref: "#/components/schemas/AdminStripeEvent" },
+    ]);
+    const invoice = propertiesOf("AdminInvoice");
+    const event = propertiesOf("AdminStripeEvent");
+    expect(filterOf("adminListInvoices", "status")["enum"]).toEqual(objectAt(invoice, "status")["enum"]);
+    expect(filterOf("adminListInvoices", "tenantId")).toEqual({ $ref: "#/components/schemas/TenantId" });
+    expect(filterOf("adminListStripeEvents", "status")["enum"]).toEqual(objectAt(event, "status")["enum"]);
+    expect(filterOf("adminListStripeEvents", "type")["pattern"]).toBe(objectAt(event, "type")["pattern"]);
+    expect(schemaOf("StripeEventType")["pattern"]).toBe(objectAt(event, "type")["pattern"]);
+    const exchange = adminSectionRows().get("adminListStripeEvents")?.exchange ?? "";
+    expect(Object.keys(event)).toEqual(inventoryFieldLists(exchange, "{data: [")[0]);
+
+    // Event ids: Stripe's, and the synthetic ones of the X-028 fixtures, as the CHECK of stripe_events.id allows; the
+    // inbox list, the reprocess path and the receivers share the schema.
+    expect(deltas()).toMatch(
+      /CREATE TABLE platform\.stripe_events \(\s*id\s+text PRIMARY KEY CHECK \(id LIKE 'evt\\_%'\)/u,
+    );
+    const eventId = new RegExp(String(schemaOf("StripeEventId")["pattern"]), "u");
+    for (const type of STRIPE_FIXTURE_EVENT_TYPES) {
+      const { id } = stripeFixture(type);
+      expect([id, eventId.test(id)]).toEqual([id, true]);
+    }
+    for (const [id, valid] of [
+      ["evt_1QyMn3Oq0Su5WxZ7Ab9Cd1Ef", true],
+      ["evt_", false],
+      ["in_1QyMn3Oq0Su5Wx", false],
+      ["evt_1Qy-Mn3", false],
+    ] as const) {
+      expect([id, eventId.test(id)]).toEqual([id, valid]);
+    }
+    const reference = { $ref: "#/components/schemas/StripeEventId" };
+    expect([
+      event["id"],
+      objectAt(resolve(platform, { $ref: "#/components/parameters/StripeEventId" }), "schema"),
+      propertiesOf("StripeEvent")["id"],
+      propertiesOf("StripeConnectAccountEvent")["id"],
+    ]).toEqual([reference, reference, reference, reference]);
+
+    // Reprocess: 202 without a body; an event that is not failed or ignored conflicts with its status as the reason.
+    expect(operation("adminReprocessStripeEvent").spec["requestBody"]).toBeUndefined();
+    expect(objectAt(successOf("adminReprocessStripeEvent", "202"), "content")).toEqual({});
+    expect(
+      errorExamples("adminReprocessStripeEvent", "409").map((error) => objectAt(error, "details")["reason"]),
+    ).toEqual(["processing"]);
+    const description = String(operation("adminReprocessStripeEvent").spec["description"]);
+    for (const status of ["failed", "ignored", "received", "processing", "processed"]) {
+      expect([status, description.includes(`\`${status}\``)]).toEqual([status, true]);
+    }
+    // BullMQ keeps a failed job 30 days and a completed one 1 day (ADR-0009 item 7, queue-names.ts) and ignores a
+    // job id it holds: queuing the event again under its id needs that job removed, or the sweep counting it missing.
+    expect([KEEP_FAILED_JOBS, KEEP_COMPLETED_JOBS]).toEqual([{ age: 30 * 86_400 }, { age: 86_400 }]);
+    expect(description).toContain("ignores a new job with an id it still holds");
+    expect(description).toContain("a job that BullMQ holds as failed or completed counts as missing");
+  });
+
+  it("releases an office to the pool only with the confirmation of no open bookings and a reason", () => {
+    const requests = requestBodyChecker(["adminReleaseAmadeusOffice"]);
+    const check = (body: unknown) =>
+      requests
+        .check("adminReleaseAmadeusOffice", { status: 200, body })
+        .map((problem) => `${problem.path} ${problem.keyword}`);
+    for (const example of requestExamples("adminReleaseAmadeusOffice")) {
+      expect(check(example)).toEqual([]);
+    }
+    const reason = "Acme confirmed that no booking with future travel remains.";
+    expect(check({ confirmNoOpenBookings: true, reason })).toEqual([]);
+    expect(check({ confirmNoOpenBookings: false, reason })).toEqual(["/confirmNoOpenBookings const"]);
+    expect(check({ reason })).toEqual(["/confirmNoOpenBookings required"]);
+    // The inventory's request, and an office that is available again, with no OTA.
+    const exchange = adminSectionRows().get("adminReleaseAmadeusOffice")?.exchange ?? "";
+    expect(Object.keys(propertiesOf("ReleaseAmadeusOfficeRequest"))).toEqual(
+      inventoryFieldLists(exchange)[0],
+    );
+    expect(examplesAt("adminReleaseAmadeusOffice", "200")).toEqual([
+      expect.objectContaining({ status: "available", assignedTenant: null, releasedAt: expect.any(String) }),
+    ]);
+    // An office that backs an active connection stays assigned; one that is not assigned has nothing to release.
+    expect(
+      errorExamples("adminReleaseAmadeusOffice", "409").map((error) => objectAt(error, "details")["reason"]),
+    ).toEqual(["connection_active"]);
+    // The statuses it releases (PADR-0012 items 1 and 8), and both conflict reasons.
+    const description = String(operation("adminReleaseAmadeusOffice").spec["description"]);
+    for (const name of [
+      "`releasing`",
+      "`assigned`",
+      "`details.reason = connection_active`",
+      "`details.reason = not_assigned`",
+    ]) {
+      expect([name, description.includes(name)]).toEqual([name, true]);
+    }
+  });
+
+  it("[PBE-042 AC1] lists adminDownloadSettlementLines in api-inventory-admin §6 and answers the lines of a statement as CSV", () => {
+    // PADR-0016 item 4: one operation per representation, each with its own row of §6.
+    const rows = adminSectionRows(["## 6. "]);
+    expect(rows.get("adminDownloadSettlementLines")).toMatchObject({
+      method: "get",
+      path: `${ADMIN_SETTLEMENT_PATH}/lines.csv`,
+      milestone: "M5",
+    });
+    expect(rows.get("adminListSettlementLines")).toMatchObject({
+      method: "get",
+      path: `${ADMIN_SETTLEMENT_PATH}/lines`,
+      query: ["cursor"],
+    });
+    expect(rows.get("adminListSettlementLines")?.exchange).not.toContain("CSV");
+
+    const ok = successOf("adminDownloadSettlementLines", "200");
+    expect(Object.keys(objectAt(ok, "content"))).toEqual(["text/csv"]);
+    // Never cached, and downloaded as a file named after the OTA, the month and the currency.
+    const headers = objectAt(ok, "headers");
+    expect(objectAt(resolve(platform, headers["Cache-Control"]), "schema")["const"]).toBe("no-store");
+    const disposition = objectAt(objectAt(headers, "Content-Disposition"), "schema");
+    const filenames: unknown = disposition["examples"];
+    expect(Array.isArray(filenames) && filenames.length > 0).toBe(true);
+    for (const filename of Array.isArray(filenames) ? (filenames as unknown[]) : []) {
+      expect(new RegExp(String(disposition["pattern"]), "u").test(String(filename))).toBe(true);
+    }
+    // The header row is the inventory's column list, which the description names too.
+    const columns = (
+      /`text\/csv` \(([^)]+)\)/u.exec(rows.get("adminDownloadSettlementLines")?.exchange ?? "")?.[1] ?? ""
+    ).split(/,\s*/u);
+    expect(columns).toEqual([...ADMIN_SETTLEMENT_CSV_COLUMNS]);
+    const description = String(operation("adminDownloadSettlementLines").spec["description"]);
+    for (const column of ADMIN_SETTLEMENT_CSV_COLUMNS) {
+      expect([column, description.includes(`\`${column}\``)]).toEqual([column, true]);
+    }
+    const media = objectAt(objectAt(ok, "content"), "text/csv");
+    const [header = "", ...lines] = String(media["example"]).trimEnd().split("\n");
+    expect(csvCells(header)).toEqual([...ADMIN_SETTLEMENT_CSV_COLUMNS]);
+
+    // Each row is a line of adminListSettlementLines in the statement's currency: the rows of its example, so the
+    // two representations agree.
+    const [listed] = examplesAt("adminListSettlementLines", "200");
+    const listedLines: unknown = asJson(listed)["data"];
+    const currency = String(
+      asJson(asJson(Array.isArray(listedLines) ? listedLines[0] : {})["amount"])["currency"],
+    );
+    expect(currency).toBe("EUR");
+    expect(lines.length).toBeGreaterThan(0);
+    const data = lines.map((line) => {
+      const cells = csvCells(line);
+      expect([line, cells.length]).toEqual([line, ADMIN_SETTLEMENT_CSV_COLUMNS.length]);
+      const cell = Object.fromEntries(
+        ADMIN_SETTLEMENT_CSV_COLUMNS.map((column, index) => [
+          column,
+          cells[index] === "" ? null : cells[index],
+        ]),
+      );
+      const { amount, stripeFee, originalAmount, originalCurrency, ...rest } = cell;
+      return {
+        ...rest,
+        amount: { amount, currency },
+        stripeFee: { amount: stripeFee, currency },
+        originalAmount:
+          originalAmount === null ? null : { amount: originalAmount, currency: originalCurrency },
+      };
+    });
+    expect(data).toEqual(listedLines);
+    const page = { nextCursor: null, limit: 50 };
+    expect(checker.check("adminListSettlementLines", { status: 200, body: { data, page } })).toEqual([]);
+    // Signed amounts as they are; no text cell that a spreadsheet would run as a formula.
+    expect(description).toContain(
+      "a text cell that starts with `=`, `+`, `-`, `@`, a tab or a carriage return gets a leading `'`",
+    );
+    const amountColumns = new Set(["amount", "stripeFee", "originalAmount"]);
+    for (const line of lines) {
+      csvCells(line).forEach((cell, index) => {
+        const column = ADMIN_SETTLEMENT_CSV_COLUMNS[index] ?? "";
+        expect([
+          column,
+          cell,
+          amountColumns.has(column) ? /^(-?[0-9]+\.[0-9]{2})?$/u.test(cell) : !/^[=+\-@\t\r]/u.test(cell),
+        ]).toEqual([column, cell, true]);
+      });
+    }
+    // The response checker reads JSON only, so it refuses the CSV; NON_JSON_RESPONSES names this answer.
+    expect(() =>
+      checker.check("adminDownloadSettlementLines", { status: 200, body: media["example"] }),
+    ).toThrow(/no JSON content \(text\/csv\)/);
+    expect(NON_JSON_RESPONSES["adminDownloadSettlementLines"]).toEqual({ "200": ["text/csv"] });
+  });
+
+  it("follows PADR-0003 and migration 0002 for the statuses, totals, lines and transitions of a statement", () => {
+    const sql = deltas();
+    const settlements = /CREATE TABLE platform\.settlements \(([\s\S]*?)\n\);/u.exec(sql)?.[1] ?? "";
+    expect(schemaOf("AdminSettlementStatus")["enum"]).toEqual(
+      checkValues(settlements, /CHECK \(status IN \(([^)]*)\)\)/u),
+    );
+    expect(schemaOf("SettlementLineType")["enum"]).toEqual(
+      checkValues(sql, /CHECK \(line_type IN \(([^)]*)\)\)/u),
+    );
+
+    // The admin shapes share the portal's (annotations apart): the summary's properties but `status`, which has
+    // every value here, and the statement's totals. The statement extends the summary with the same schemas.
+    const summary = propertiesOf("AdminSettlementSummary");
+    const statement = propertiesOf("AdminSettlement");
+    for (const [portal, admin] of [
+      ["SettlementSummary", summary],
+      ["Settlement", statement],
+    ] as const) {
+      for (const [name, schema] of Object.entries(propertiesOf(portal))) {
+        if (name !== "status") {
+          expect([portal, name, shape(admin[name])]).toEqual([portal, name, shape(schema)]);
+        }
+      }
+    }
+    expect(Object.keys(statement).slice(0, Object.keys(summary).length)).toEqual(Object.keys(summary));
+    for (const name of Object.keys(summary)) {
+      expect([name, statement[name]]).toEqual([name, summary[name]]);
+    }
+    for (const name of ["AdminSettlementSummary", "AdminSettlement", "AdminSettlementLine"]) {
+      expect([name, schemaOf(name)["required"]]).toEqual([name, Object.keys(propertiesOf(name))]);
+    }
+
+    // Every statement example keeps the formula of PADR-0003 item 5, its Velexis fee and the CHECKs of its status.
+    const examples = [
+      ...examplesAt("adminGetSettlement", "200"),
+      ...examplesAt("adminAddSettlementAdjustment", "200"),
+      ...examplesAt("adminApproveSettlement", "200"),
+      ...examplesAt("adminMarkSettlementPaid", "200"),
+      ...examplesAt("adminVoidSettlement", "200"),
+    ].map(asJson);
+    expect(examples.map((example) => example["status"]).sort()).toEqual([
+      "approved",
+      "carried_forward",
+      "draft",
+      "draft",
+      "paid",
+      "void",
+    ]);
+    for (const example of examples) {
+      const value = (name: string): bigint => cents(example[name]);
+      const net = value("netAmount");
+      expect([example["id"], net]).toEqual([
+        example["id"],
+        value("grossAmount") -
+          value("refundsAmount") -
+          value("disputesAmount") -
+          value("stripeFeesAmount") -
+          value("velexisFeesAmount") +
+          value("adjustmentsAmount"),
+      ]);
+      expect(value("velexisFeesAmount") * 10_000n).toBe(
+        BigInt(Number(example["feeBps"])) * (value("grossAmount") - value("refundsAmount")),
+      );
+      // settlements_paid_ck, settlements_carry_ck and settlements_void_ck, and the transitions of item 9.
+      const states: Readonly<Record<string, Json>> = {
+        draft: { approvedAt: null, paidAt: null, voidedAt: null, voidReason: null },
+        approved: { approvedAt: expect.any(String), paidAt: null },
+        paid: {
+          approvedAt: expect.any(String),
+          paidAt: expect.any(String),
+          payoutReference: expect.any(String),
+        },
+        carried_forward: { approvedAt: expect.any(String), paidAt: null },
+        void: {
+          approvedAt: null,
+          voidedAt: expect.any(String),
+          voidReason: expect.any(String),
+          lineCount: 0,
+        },
+      };
+      const status = String(example["status"]);
+      expect([example["id"], example]).toEqual([example["id"], expect.objectContaining(states[status])]);
+      if (status === "approved" || status === "paid") {
+        expect([example["id"], net > 0n]).toEqual([example["id"], true]);
+      }
+      if (status === "carried_forward") {
+        expect([example["id"], net <= 0n]).toEqual([example["id"], true]);
+      }
+    }
+
+    // Approving and paying need If-Match, a step-up and a verified payout account for a positive net (PADR-0003 item
+    // 9); every action on a statement in the wrong status answers SETTLEMENT_STATE_INVALID.
+    for (const operationId of ["adminApproveSettlement", "adminMarkSettlementPaid"]) {
+      expect([operationId, parametersOf(operationId).map((parameter) => parameter["name"])]).toEqual([
+        operationId,
+        ["If-Match"],
+      ]);
+      expect([operationId, statusesOf(operationId)]).toEqual([
+        operationId,
+        expect.arrayContaining(["200", "401", "409", "412", "422"]),
+      ]);
+      expect([operationId, errorExamples(operationId, "422").map((error) => error["code"])]).toEqual([
+        operationId,
+        ["PAYOUT_ACCOUNT_REQUIRED"],
+      ]);
+    }
+    for (const operationId of [
+      "adminGetSettlement",
+      "adminAddSettlementAdjustment",
+      "adminApproveSettlement",
+      "adminMarkSettlementPaid",
+      "adminVoidSettlement",
+    ]) {
+      const ok = successOf(operationId, "200");
+      expect([operationId, objectAt(ok, "headers")["ETag"], jsonMedia(ok)?.["schema"]]).toEqual([
+        operationId,
+        { $ref: "#/components/headers/ETag" },
+        { $ref: "#/components/schemas/AdminSettlement" },
+      ]);
+      if (operationId !== "adminGetSettlement") {
+        expect([operationId, errorExamples(operationId, "409").map((error) => error["code"])]).toEqual([
+          operationId,
+          ["SETTLEMENT_STATE_INVALID"],
+        ]);
+      }
+    }
+
+    // Adjustments are signed, never zero, with two decimals at most; a period is the first instant of a month.
+    const requests = requestBodyChecker(["adminAddSettlementAdjustment", "adminGenerateSettlements"]);
+    const adjustment = (amount: string) =>
+      requests
+        .check("adminAddSettlementAdjustment", {
+          status: 200,
+          body: {
+            amount: { amount, currency: "EUR" },
+            description: "Correction",
+            reason: "Agreed with the OTA",
+          },
+        })
+        .map((problem) => `${problem.path} ${problem.keyword}`);
+    for (const amount of ["-25.00", "100", "0.01", "-0.5"]) {
+      expect([amount, adjustment(amount)]).toEqual([amount, []]);
+    }
+    for (const amount of ["0", "0.00", "-0.0", "1.001", "12345678901", "1e3"]) {
+      expect([amount, adjustment(amount)]).toEqual([amount, ["/amount/amount pattern"]]);
+    }
+    const generate = (periodStart: string) =>
+      requests.check("adminGenerateSettlements", { status: 200, body: { periodStart } }).length;
+    expect(generate("2027-02-01T00:00:00Z")).toBe(0);
+    for (const periodStart of [
+      "2027-02-02T00:00:00Z",
+      "2027-13-01T00:00:00Z",
+      "2027-02-01T05:00:00Z",
+      "2027-02",
+    ]) {
+      expect([periodStart, generate(periodStart) > 0]).toEqual([periodStart, true]);
+    }
+    expect(filterOf("adminListSettlements", "periodStart")).toEqual({
+      $ref: "#/components/schemas/SettlementPeriodStart",
+    });
+    // A month that has not ended is the service's 400, with its field error; the job is the whole effect.
+    expect(errorExamples("adminGenerateSettlements", "400")[0]?.["fieldErrors"]).toEqual([
+      expect.objectContaining({ path: "/periodStart", code: "period_not_closed" }),
+    ]);
+    expect(objectAt(successOf("adminGenerateSettlements", "202"), "content")).toEqual({});
+    expect(statusesOf("adminGenerateSettlements")).toContain("503");
+
+    // The OTA's payment and checkout ids on a line follow the OTA booking API's patterns.
+    const line = propertiesOf("AdminSettlementLine");
+    for (const name of ["velexisPaymentId", "checkoutId"]) {
+      expect([name, otaPatterns.has(objectAt(line, name)["pattern"])]).toEqual([name, true]);
+    }
+  });
+
+  it("[PBE-042 AC1] reveals bank details only with a reason, a step-up and no-store, and reviews a payout account with a note", () => {
+    // The masked account is the portal's.
+    for (const operationId of ["adminGetPayoutAccount", "adminReviewPayoutAccount"]) {
+      const ok = successOf(operationId, "200");
+      expect([operationId, jsonMedia(ok)?.["schema"], objectAt(ok, "headers")["ETag"]]).toEqual([
+        operationId,
+        jsonMedia(successOf("getPayoutAccount", "200"))?.["schema"],
+        { $ref: "#/components/headers/ETag" },
+      ]);
+    }
+
+    // The reveal: no-store, the IBAN (and BIC) or the local numbers, and never a write-only schema of the request.
+    const reveal = successOf("adminRevealPayoutAccount", "200");
+    expect(objectAt(reveal, "headers")["Cache-Control"]).toEqual({ $ref: "#/components/headers/NoStore" });
+    const revealed = jsonMedia(reveal)?.["schema"];
+    expect(schemasOf(platform, revealed).filter((schema) => schema["writeOnly"] === true)).toEqual([]);
+    expect([...propertyNames(platform, revealed)].sort()).toEqual([...BANK_FIELDS].sort());
+    const [, revealedFields = []] = inventoryFieldLists(
+      adminSectionRows(["## 6. "]).get("adminRevealPayoutAccount")?.exchange ?? "",
+    );
+    expect([...revealedFields].sort()).toEqual([...BANK_FIELDS].sort());
+    for (const example of examplesAt("adminRevealPayoutAccount", "200")) {
+      expect(checker.check("adminRevealPayoutAccount", { status: 200, body: example })).toEqual([]);
+    }
+    for (const body of [
+      { iban: "NO9386011117947", accountNumber: "000123456789", routingNumber: "110000000" },
+      { iban: "NO93 8601 1117 947" },
+      { bic: "DNBANOKK" },
+      {},
+    ]) {
+      expect([body, checker.check("adminRevealPayoutAccount", { status: 200, body }).length > 0]).toEqual([
+        body,
+        true,
+      ]);
+    }
+    // Only the reveal answers bank identifiers, in the whole document; a sensitive read, audited, never replayed.
+    const answering = operations
+      .filter((op) =>
+        responsesOf(platform, op).some(([, response]) =>
+          [...propertyNames(platform, jsonMedia(response)?.["schema"])].some((name) => BANK_FIELDS.has(name)),
+        ),
+      )
+      .map((op) => op.operationId);
+    expect(answering).toEqual(["adminRevealPayoutAccount"]);
+    const spec = operation("adminRevealPayoutAccount").spec;
+    expect([spec["x-idempotent"], spec["x-platform-tables"]]).toEqual([
+      undefined,
+      ["tenant_payout_accounts", "platform_audit_log"],
+    ]);
+
+    // The review: `verified` alone, or `rejected` with the note the owner sees.
+    const requests = requestBodyChecker(["adminReviewPayoutAccount"]);
+    const review = (body: unknown) =>
+      requests.check("adminReviewPayoutAccount", { status: 200, body }).length;
+    for (const example of requestExamples("adminReviewPayoutAccount")) {
+      expect(review(example)).toBe(0);
+    }
+    expect(review({ decision: "verified" })).toBe(0);
+    expect(review({ decision: "rejected", note: "The holder name differs from the legal name." })).toBe(0);
+    for (const body of [
+      { decision: "rejected" },
+      { decision: "verified", note: "Checked by phone" },
+      { decision: "approved" },
+      { decision: "rejected", note: "" },
+    ]) {
+      expect([body, review(body) > 0]).toEqual([body, true]);
+    }
+    expect(parametersOf("adminReviewPayoutAccount").map((parameter) => parameter["name"])).toEqual([
+      "If-Match",
+    ]);
+    expect(statusesOf("adminReviewPayoutAccount")).toContain("412");
+  });
+
+  it("lists every storefront host with the portal's domain schemas, re-checks one and removes only custom domains", () => {
+    const domain = propertiesOf("Domain");
+    const admin = propertiesOf("AdminDomain");
+    // The properties of the portal's Domain but its DNS records, with the same schemas, and the admin's own.
+    const shared = Object.keys(admin).filter((name) => name in domain);
+    expect(shared).toEqual(Object.keys(domain).filter((name) => name !== "dnsRecords"));
+    for (const name of shared) {
+      expect([name, admin[name]]).toEqual([name, domain[name]]);
+    }
+    expect(Object.keys(admin).filter((name) => !(name in domain))).toEqual([
+      "tenantId",
+      "tenantKey",
+      "verifiedAt",
+      "checkFailures",
+      "tlsCheckedAt",
+    ]);
+    // The filters take the values of the portal's Domain, which are the CHECKs of tenant_domains.
+    const baseline = readFileSync(join(PLATFORM_MIGRATIONS, "0001_baseline.sql"), "utf8");
+    const table = /CREATE TABLE platform\.tenant_domains \(([\s\S]*?)\n\);/u.exec(baseline)?.[1] ?? "";
+    for (const [name, column] of [
+      ["kind", "kind"],
+      ["verificationStatus", "verification_status"],
+      ["tlsStatus", "tls_status"],
+    ] as const) {
+      const values = filterOf("adminListDomains", name)["enum"];
+      expect([name, values, values]).toEqual([
+        name,
+        objectAt(domain, name)["enum"],
+        checkValues(table, new RegExp(`CHECK \\(${column} IN \\(([^)]*)\\)\\)`, "u")),
+      ]);
+    }
+    // Re-check: 202 without a body, 503 without Redis. Removal: 204, for any OTA status, never the sub-domain.
+    expect(objectAt(successOf("adminRecheckDomain", "202"), "content")).toEqual({});
+    expect(objectAt(operation("adminRecheckDomain").spec, "responses")["503"]).toEqual({
+      $ref: "#/components/responses/ServiceUnavailable",
+    });
+    expect(objectAt(successOf("adminRemoveDomain", "204"), "content")).toEqual({});
+    expect(
+      errorExamples("adminRemoveDomain", "409").map((error) => objectAt(error, "details")["reason"]),
+    ).toEqual(["subdomain"]);
+    expect(operation("adminRemoveDomain").spec["x-error-codes"]).not.toContain("TENANT_NOT_ACTIVE");
+    expect(operation("adminRemoveDomain").spec["x-platform-tables"]).toEqual(
+      expect.arrayContaining(["tenant_domains", "email_outbox", "platform_audit_log"]),
+    );
+  });
+
+  it("[PBE-042 AC1] receives Stripe events with Stripe-Signature, open to what Stripe adds, and takes every X-028 fixture of its endpoint", () => {
+    const rows = webhookRows();
+    const requests = requestBodyChecker(Object.keys(WEBHOOK_FIXTURES));
+    for (const [operationId, fixtures] of Object.entries(WEBHOOK_FIXTURES)) {
+      const spec = operation(operationId).spec;
+      // The signature header @velexis/testing signs with; no bearer, no rate limit, no switch.
+      expect([operationId, parametersOf(operationId)]).toEqual([
+        operationId,
+        [expect.objectContaining({ name: STRIPE_SIGNATURE_HEADER, in: "header", required: true })],
+      ]);
+      expect([operationId, statusesOf(operationId), spec["x-error-codes"]]).toEqual([
+        operationId,
+        ["200", "400", "500"],
+        ["VALIDATION_FAILED", "WEBHOOK_SIGNATURE_INVALID", "INTERNAL_ERROR"],
+      ]);
+      // The answer Stripe waits for, and the two refusals: a bad signature, and an event of the other mode.
+      expect([
+        operationId,
+        jsonMedia(successOf(operationId, "200"))?.["schema"],
+        examplesAt(operationId, "200"),
+      ]).toEqual([operationId, { $ref: "#/components/schemas/StripeEventReceived" }, [{ received: true }]]);
+      expect(checker.check(operationId, { status: 200, body: { received: false } }).length).toBeGreaterThan(
+        0,
+      );
+      const refused = errorExamples(operationId, "400");
+      expect([operationId, refused.map((error) => error["code"]), refused[0]?.["fieldErrors"]]).toEqual([
+        operationId,
+        ["VALIDATION_FAILED", "WEBHOOK_SIGNATURE_INVALID"],
+        [expect.objectContaining({ path: "/livemode", code: "livemode_mismatch" })],
+      ]);
+      // Every fixture of the endpoint, and every example, is a valid body: the receivers store them (PBE-043,
+      // PBE-056), and the operation and the inventory row name their types.
+      const description = String(spec["description"]);
+      const [, , , , behaviour = ""] = rows.get(operationId) ?? [];
+      for (const type of fixtures) {
+        expect(STRIPE_FIXTURE_EVENT_TYPES).toContain(type);
+        expect([
+          operationId,
+          type,
+          requests.check(operationId, { status: 200, body: stripeFixture(type) }),
+        ]).toEqual([operationId, type, []]);
+        expect([operationId, type, description.includes(`\`${type}\``)]).toEqual([operationId, type, true]);
+      }
+      // The examples are rendered in the API version of the pinned `stripe` package, as the fixtures are.
+      const apiVersion = stripeFixture(fixtures[0]).api_version;
+      for (const example of requestExamples(operationId)) {
+        expect([operationId, requests.check(operationId, { status: 200, body: example })]).toEqual([
+          operationId,
+          [],
+        ]);
+        expect([operationId, asJson(example)["api_version"]]).toEqual([operationId, apiVersion]);
+      }
+      expect([operationId, behaviour]).toEqual([operationId, expect.stringContaining(`\`${fixtures[0]}\``)]);
+    }
+
+    // The inbox endpoints of migration 0002, which the descriptions use.
+    expect(checkValues(deltas(), /CHECK \(endpoint IN \(([^)]*)\)\)/u)).toEqual([
+      "billing",
+      "connect_accounts",
+    ]);
+    expect(String(operation("receiveStripeBillingEvent").spec["description"])).toContain("endpoint: billing");
+    expect(String(operation("receiveStripeConnectAccountEvent").spec["description"])).toContain(
+      "`endpoint: connect_accounts`",
+    );
+    // The raw body is kept on /webhooks/* only, up to the limit the description names.
+    expect(WEBHOOK_BODY_LIMIT).toBe("1mb");
+    expect(String(operation("receiveStripeBillingEvent").spec["description"])).toContain("up to 1 MB");
+
+    // The Connect receiver needs the connected account; both refuse what is not a Stripe event of their shape.
+    const { account, ...withoutAccount } = stripeFixture("account.application.deauthorized");
+    expect(account).toBe("acct_test_alpha");
+    expect(requests.check("receiveStripeConnectAccountEvent", { status: 200, body: withoutAccount })).toEqual(
+      [expect.objectContaining({ path: "/account", keyword: "required" })],
+    );
+    const event = stripeFixture("invoice.paid");
+    const { data, ...withoutData } = event;
+    expect(data).toBeDefined();
+    for (const body of [
+      withoutData,
+      { ...event, object: "charge" },
+      { ...event, type: "Invoice.Paid" },
+      { ...event, id: "in_test_alpha_1" },
+      { ...event, livemode: "false" },
+      { ...event, created: "1791795899" },
+    ]) {
+      expect([body, requests.check("receiveStripeBillingEvent", { status: 200, body }).length > 0]).toEqual([
+        body,
+        true,
+      ]);
+    }
+    // Open on purpose: a property Stripe adds tomorrow does not refuse a signed event (OPEN_REQUEST_BODIES).
+    expect(
+      requests.check("receiveStripeBillingEvent", {
+        status: 200,
+        body: { ...event, context: "acct_test_alpha", data: { ...data, added_by_stripe: { nested: true } } },
+      }),
+    ).toEqual([]);
+    expect(Object.keys(OPEN_REQUEST_BODIES).sort()).toEqual(Object.keys(WEBHOOK_FIXTURES).sort());
+    // The Connect event is the billing event with `account` required, property for property.
+    const billing = schemaOf("StripeEvent");
+    const connect = schemaOf("StripeConnectAccountEvent");
+    expect([...(connect["required"] as string[])].sort()).toEqual(
+      [...(billing["required"] as string[]), "account"].sort(),
+    );
+    expect(Object.keys(propertiesOf("StripeConnectAccountEvent")).sort()).toEqual(
+      Object.keys(propertiesOf("StripeEvent")).sort(),
+    );
+    for (const [name, schema] of Object.entries(propertiesOf("StripeEvent"))) {
+      expect([name, shape(propertiesOf("StripeConnectAccountEvent")[name])]).toEqual([name, shape(schema)]);
+    }
+  });
+
+  it("answers no property ending in Secret, Ciphertext or Hash in any response of the slice", () => {
+    const leaky = (name: string): boolean => /(secret|ciphertext|hash)$/i.test(name);
+    // The walk reaches the statements, the lines and the payout account, so it cannot pass by not looking.
+    expect(propertyNames(platform, { $ref: "#/components/schemas/AdminSettlement" })).toContain(
+      "payoutAccountStatus",
+    );
+    for (const { operationId } of SLICE_PBE042) {
+      for (const [status, response] of responsesOf(platform, operation(operationId))) {
+        const names = [...propertyNames(platform, jsonMedia(response)?.["schema"])];
+        expect([operationId, status, names.filter(leaky)]).toEqual([operationId, status, []]);
+      }
+    }
+    // The checker refuses a statement with a ciphertext, and a masked payout account with an IBAN.
+    const [statement] = examplesAt("adminGetSettlement", "200");
+    expect(
+      checker.check("adminGetSettlement", {
+        status: 200,
+        body: { ...asJson(statement), bankDetailsCiphertext: "AAAA" },
+      }),
+    ).toEqual([expect.objectContaining({ path: "/bankDetailsCiphertext", keyword: "additionalProperties" })]);
+    const [payout] = examplesAt("adminGetPayoutAccount", "200");
+    expect(
+      checker.check("adminGetPayoutAccount", {
+        status: 200,
+        body: { ...asJson(payout), iban: "NO9386011117947" },
+      }),
+    ).toEqual([expect.objectContaining({ path: "/iban", keyword: "additionalProperties" })]);
+  });
+
+  it("paginates the long lists of the slice and gives every request body examples that the request checker accepts", () => {
+    for (const operationId of [
+      "adminListInvoices",
+      "adminListStripeEvents",
+      "adminListSettlements",
+      "adminListSettlementLines",
+      "adminListDomains",
+    ]) {
+      const list: unknown = operation(operationId).spec["parameters"];
+      const refs = (Array.isArray(list) ? (list as unknown[]) : []).map(
+        (parameter) => asJson(parameter)["$ref"],
+      );
+      expect([operationId, refs]).toEqual([
+        operationId,
+        expect.arrayContaining(["#/components/parameters/Cursor", "#/components/parameters/Limit"]),
+      ]);
+      const schema = asJson(resolve(platform, jsonMedia(successOf(operationId, "200"))?.["schema"]));
+      expect([operationId, schema["required"]]).toEqual([operationId, ["data", "page"]]);
+    }
+    // The slice's operations with a body; approval, the reads, the re-checks and reprocessing take none.
+    const withBody = SLICE_PBE042.map(({ operationId }) => operationId).filter(
+      (operationId) => operation(operationId).spec["requestBody"] !== undefined,
+    );
+    expect(withBody).toEqual([
+      "adminReleaseAmadeusOffice",
+      "adminGenerateSettlements",
+      "adminAddSettlementAdjustment",
+      "adminMarkSettlementPaid",
+      "adminVoidSettlement",
+      "adminRevealPayoutAccount",
+      "adminReviewPayoutAccount",
+      "adminRemoveDomain",
+      "receiveStripeBillingEvent",
+      "receiveStripeConnectAccountEvent",
+    ]);
+    const requests = requestBodyChecker(withBody);
+    for (const operationId of withBody) {
+      expect([operationId, operation(operationId).spec["requestBody"]]).toEqual([
+        operationId,
+        expect.objectContaining({ required: true }),
+      ]);
+      const examples = requestExamples(operationId);
+      expect([operationId, examples.length > 0]).toEqual([operationId, true]);
+      for (const example of examples) {
+        expect([operationId, requests.check(operationId, { status: 200, body: example })]).toEqual([
+          operationId,
+          [],
+        ]);
+      }
+    }
   });
 });
 
@@ -3636,14 +4793,28 @@ describe("the conventions of every operation", () => {
     }
   });
 
-  it("closes every request body with additionalProperties: false", () => {
+  it("closes every request body with additionalProperties: false, but the Stripe events of OPEN_REQUEST_BODIES", () => {
+    const open: string[] = [];
     for (const { operationId, spec } of operations) {
       const body = resolve(platform, spec["requestBody"]);
       if (body !== undefined) {
         const media = objectAt(objectAt(body, "content"), "application/json");
+        const openSchema = OPEN_REQUEST_BODIES[operationId];
+        if (openSchema !== undefined) {
+          // Open on purpose, and only there: the PBE-042 slice test checks that these are the webhook receivers.
+          open.push(operationId);
+          const schema = objectAt({ schema: resolve(platform, media["schema"]) }, "schema");
+          expect([operationId, media["schema"], schema["additionalProperties"]]).toEqual([
+            operationId,
+            { $ref: openSchema },
+            true,
+          ]);
+          continue;
+        }
         expect([operationId, isClosed(platform, media["schema"])]).toEqual([operationId, true]);
       }
     }
+    expect(open.sort()).toEqual(Object.keys(OPEN_REQUEST_BODIES).sort());
   });
 
   it("documents Cache-Control: no-store on every 2xx answer that carries a secret", () => {

@@ -29,8 +29,8 @@ export const PENDING_OPERATIONS: readonly PendingOperation[] = Object.freeze([
   // since PBE-028, the dashboard and the tenant search, detail and edit since PBE-029, suspend, resume, migrate and the
   // connection status since PBE-030, the provisioning jobs and queues since PBE-031).
 
-  // PBE-066: admin plans and subscriptions, Amadeus accounts and offices, accounts, platform admins and audit (the
-  // Amadeus accounts and offices are bound since PBE-020, the accounts, platform admins and audit since PBE-032, the
+  // PBE-066: admin plans and subscriptions, Amadeus accounts and offices, accounts, platform admins and audit are all
+  // bound (the Amadeus accounts and offices since PBE-020, the accounts, platform admins and audit since PBE-032, the
   // plans and subscriptions since PBE-033).
 
   // PBE-037: the M4 console token and Amadeus settings, and the M3 statement descriptor.
@@ -60,4 +60,31 @@ export const PENDING_OPERATIONS: readonly PendingOperation[] = Object.freeze([
   { operationId: "listSettlements", task: "PBE-060" },
   { operationId: "getSettlement", task: "PBE-060" },
   { operationId: "downloadSettlementLines", task: "PBE-060" },
+
+  // PBE-042: the M5 admin operations (billing, the office release, settlements and payout accounts, domains) and the
+  // two Stripe webhook receivers. adminUpdatePlan, extended with the Stripe ids, stays bound by PBE-033; PBE-048
+  // implements its M5 part.
+  { operationId: "adminCheckPlanPrices", task: "PBE-048" },
+  { operationId: "adminResyncSubscription", task: "PBE-048" },
+  { operationId: "adminListInvoices", task: "PBE-048" },
+  { operationId: "adminListStripeEvents", task: "PBE-048" },
+  { operationId: "adminReprocessStripeEvent", task: "PBE-048" },
+  { operationId: "adminReleaseAmadeusOffice", task: "PBE-054" },
+  { operationId: "adminListSettlements", task: "PBE-060" },
+  { operationId: "adminGenerateSettlements", task: "PBE-059" },
+  { operationId: "adminGetSettlement", task: "PBE-060" },
+  { operationId: "adminListSettlementLines", task: "PBE-060" },
+  { operationId: "adminDownloadSettlementLines", task: "PBE-060" },
+  { operationId: "adminAddSettlementAdjustment", task: "PBE-060" },
+  { operationId: "adminApproveSettlement", task: "PBE-060" },
+  { operationId: "adminMarkSettlementPaid", task: "PBE-060" },
+  { operationId: "adminVoidSettlement", task: "PBE-060" },
+  { operationId: "adminGetPayoutAccount", task: "PBE-058" },
+  { operationId: "adminRevealPayoutAccount", task: "PBE-058" },
+  { operationId: "adminReviewPayoutAccount", task: "PBE-058" },
+  { operationId: "adminListDomains", task: "PBE-051" },
+  { operationId: "adminRecheckDomain", task: "PBE-051" },
+  { operationId: "adminRemoveDomain", task: "PBE-051" },
+  { operationId: "receiveStripeBillingEvent", task: "PBE-043" },
+  { operationId: "receiveStripeConnectAccountEvent", task: "PBE-056" },
 ] satisfies PendingOperation[]);

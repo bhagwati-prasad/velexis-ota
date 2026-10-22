@@ -2158,7 +2158,7 @@ export interface paths {
         };
         /**
          * List every plan with its Stripe link state
-         * @description Every plan, public or not and active or retired, in `sortOrder` then `code` order, with the fields the pricing page does not show: visibility, the active flag, the settlement fee, the Stripe product and price ids (`null` until PBE-042 links them in M5), the price warnings of the last comparison with Stripe (empty while no price is linked) and the number of OTAs on the plan. The list is short, so it is not paginated. The `version` of each plan is what `adminUpdatePlan` needs in `If-Match`.
+         * @description Every plan, public or not and active or retired, in `sortOrder` then `code` order, with the fields the pricing page does not show: visibility, the active flag, the settlement fee, the Stripe product and price ids (`null` until `adminUpdatePlan` links them, M5), the price warnings of the last comparison with Stripe (empty while no price is linked) and the number of OTAs on the plan. The list is short, so it is not paginated. The `version` of each plan is what `adminUpdatePlan` needs in `If-Match`.
          */
         get: operations["adminListPlans"];
         put?: never;
@@ -2196,9 +2196,35 @@ export interface paths {
          * Edit or retire a plan
          * @description Changes any field of a plan except `code` and `currency`: names, prices (in the plan's currency), limits, features, visibility, trial days, settlement fee and order. `isActive: false` retires the plan: it leaves the pricing page and the wizard, and existing subscriptions keep it. `annualPrice: null` removes the yearly option. `If-Match` carries the plan's `version`; a stale version answers `412 PRECONDITION_FAILED`. Writes an audit row with the before and after values and, after commit, publishes a `plan` invalidation (`{type: "plan", code}`) when `limits` or `features` change, so both backends reload the quotas.
          *
-         *     The Stripe product and price ids are not part of this M1 request: PBE-042 adds `stripeProductId`, `stripePriceIdMonth` and `stripePriceIdYear` with the price comparison (`priceWarnings`) and its `502 PROVIDER_ERROR` in M5.
+         *     **Stripe prices (M5, PADR-0002, subscription-billing flow §A).** `stripeProductId`, `stripePriceIdMonth` and `stripePriceIdYear` link the plan to the Stripe product and recurring prices that Velexis created in Stripe first; `null` unlinks one, and an interval without a price cannot start Checkout (`checkoutAvailable`). When the request links or changes a price, or changes a price of the plan while one is linked, the API retrieves every linked price from Stripe before saving and answers the differences in `priceWarnings`: the amount, the currency or the interval of a price differs from the plan, or the price is inactive. Warnings never block the save. If Stripe fails or cannot be reached, nothing is saved and the answer is `502 PROVIDER_ERROR`; retry later. A price id can link one plan only: a price that another plan links answers `409 CONFLICT` (`details.reason = stripe_price_taken`).
          */
         patch: operations["adminUpdatePlan"];
+        trace?: never;
+    };
+    "/v1/admin/plans/{planCode}/check-prices": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The plan (`code` of `adminListPlans`); an unknown code answers `404 NOT_FOUND`.
+                 * @example growth
+                 */
+                planCode: components["parameters"]["AdminPlanCode"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Compare a plan with its Stripe prices
+         * @description Runs the price comparison of `adminUpdatePlan` again (M5, subscription-billing flow §A), for example after a price was changed or archived in the Stripe dashboard: retrieves every Stripe price linked to the plan and answers one warning per difference, `{field, expected, actual}`, where `field` names the linked price and the attribute (`amount`, `currency`, `interval` or `active`), `expected` the value the plan implies and `actual` the value Stripe answered. A plan without a linked price answers no warning and calls nothing. The warnings become the plan's `priceWarnings`, and an audit row records the check with them, as `adminVerifyAmadeusAccount` does for its request. If Stripe fails or cannot be reached, the answer is `502 PROVIDER_ERROR` and the stored warnings stay as they were.
+         */
+        post: operations["adminCheckPlanPrices"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/v1/admin/subscriptions": {
@@ -2251,6 +2277,98 @@ export interface paths {
          *     `409 CONFLICT` when the subscription is billed by Stripe (`details.reason = stripe_billed`; Stripe subscriptions change in the Customer Portal or with `adminResyncSubscription` in M5), or when `trialing` would give the OTA a second current subscription (`details.reason = current_exists`). A `planCode` that names no active plan answers `422 UNPROCESSABLE` (`details.reason = plan_not_active`); plans that are not public are allowed.
          */
         patch: operations["adminUpdateManualSubscription"];
+        trace?: never;
+    };
+    "/v1/admin/subscriptions/{subscriptionId}/resync": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The subscription (`id` of `adminListSubscriptions`); an unknown id answers `404 NOT_FOUND`.
+                 * @example sub_01JA2Z7R5N0S3V7X1Z4B9D2F6H
+                 */
+                subscriptionId: components["parameters"]["SubscriptionId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Re-fetch a Stripe subscription
+         * @description Retrieves the subscription from Stripe now (M5) and applies it as the processing of a `customer.subscription.updated` event does (subscription-billing flow §D and §E): status, periods, `cancel_at_period_end`, `canceled_at`, price and plan, then the status rules, which may set or clear the billing notice, suspend the OTA for `billing` or resume such a suspension. Use it when a webhook was missed or the row drifted. Writes an audit row with the before and after values; after commit the follow-ups of the status rules run (a `tenant` invalidation, a suspend or resume job, the owners' e-mail). A manual subscription has nothing to fetch (`409 CONFLICT`, `details.reason = manual`). If Stripe fails or cannot be reached, nothing changes and the answer is `502 PROVIDER_ERROR`.
+         */
+        post: operations["adminResyncSubscription"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/invoices": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the invoices of every OTA
+         * @description Every Velexis invoice synchronised from Stripe (M5), newest first (`issuedAt`, then `createdAt`), cursor-paginated, with filters on the OTA and the status. Amounts are `Money` in the invoice currency; the links point to the Stripe-hosted page and PDF.
+         */
+        get: operations["adminListInvoices"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/stripe-events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the Stripe webhook inbox
+         * @description The events of both Stripe receivers (`stripe_events`, M5): `failed` and `ignored` events first, each group newest first (`receivedAt`), then the others, cursor-paginated, with filters on the status, the exact event type and the OTA the event was resolved to. `lastError` says why an event failed or was ignored, a short message without secrets; the payload is never stored or answered (the worker re-fetches the object from Stripe).
+         */
+        get: operations["adminListStripeEvents"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/stripe-events/{eventId}/reprocess": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The Stripe event (`id` of `adminListStripeEvents`); an event the inbox lacks answers `404 NOT_FOUND`.
+                 * @example evt_1QzNo5Pr2Tv7XyA8Bc0De2Fg
+                 */
+                eventId: components["parameters"]["StripeEventId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Re-run a failed or ignored Stripe event
+         * @description Runs a `failed` or `ignored` event of the inbox again (M5), after its cause was fixed (for example a price linked to a plan, subscription-billing flow, failure handling): the event goes back to `received` with its attempts and last error kept, an audit row is written and, after commit, `stripe.event` is queued again on `platform-stripe-events` (BullMQ job id = the event id). BullMQ keeps the event's earlier job once it failed or completed (30 days and 1 day, ADR-0009 item 7) and ignores a new job with an id it still holds, so that job is removed before the event is queued again. If the removal or the enqueue is lost, the `stripe_events.sweep` scheduler queues the event within minutes, as it does for the webhook receivers: for a `received` event, a job that BullMQ holds as failed or completed counts as missing. Any other status answers `409 CONFLICT` with the status in `details.reason`: `processing` (the worker holds it), `received` (it is queued already) or `processed` (it is done).
+         */
+        post: operations["adminReprocessStripeEvent"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/v1/admin/amadeus-accounts": {
@@ -2407,6 +2525,34 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/admin/amadeus-offices/{officeRowId}/release": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The pool entry (`id` of `adminListAmadeusOffices`, `amo_…`), not the 9-character Amadeus office id; an unknown id answers `404 NOT_FOUND`.
+                 * @example amo_01JC8R6T0W4Y8A2C6E0G4J8M2P
+                 */
+                officeRowId: components["parameters"]["AmadeusOfficeRowId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Return an office to the pool
+         * @description Returns an office to `available` (M5, PADR-0012 item 5): it keeps no OTA and gets `releasedAt`. This is the manual step after an OTA moved to its own Amadeus credentials, which left the Velexis office `releasing` so the OTA backend can still service the orders created through it. The admin releases it only once the OTA confirmed, from its bookings console filtered by office, that no booking with future travel remains on it: the body carries `confirmNoOpenBookings: true` and a written `reason` of 5–500 characters that the audit row keeps. There is no automatic timer.
+         *
+         *     A `releasing` office is released. An `assigned` office is released only when it backs no active `velexis` connection of its OTA (for example after the connection was disabled for abuse, PADR-0012 item 8); one that does answers `409 CONFLICT` (`details.reason = connection_active`). An `available` or `retired` office answers `409 CONFLICT` (`details.reason = not_assigned`). Writes an audit row and, after commit, publishes the `amadeus_account` invalidation.
+         */
+        post: operations["adminReleaseAmadeusOffice"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/admin/amadeus-offices/{officeRowId}/retire": {
         parameters: {
             query?: never;
@@ -2427,6 +2573,380 @@ export interface paths {
          * @description Takes an `available` office out of use for good (`retired`, PADR-0012 item 1), with a written `reason` of 5–500 characters that the audit row keeps. An office in any other status answers `409 CONFLICT` (`details.reason = not_available`): an assigned office is released first (`adminReleaseAmadeusOffice`, M5).
          */
         post: operations["adminRetireAmadeusOffice"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/settlements": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the settlement statements of every OTA
+         * @description Every monthly statement (M5, PADR-0003) in any status, newest period first, then by OTA key and currency, cursor-paginated, with filters on the status, the period and the OTA; `status=draft` is the review queue of the settlement sequence (platform-admin-operations flow). One statement exists per OTA, environment, balance currency and calendar month (UTC); production holds `live` statements only, `test` ones exist in development.
+         */
+        get: operations["adminListSettlements"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/settlements/generate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Build or rebuild the drafts of a month
+         * @description Queues the job `settlement.generate {periodStart, tenantId?}` on `platform-settlements` (M5, stripe-payments flow §F), the job that `settlements.monthly` queues on day 3 at 05:00 UTC for the previous month: it lists the month's Stripe balance transactions of the Velexis account once, and rebuilds the **draft** of each OTA and balance currency (or of one OTA with `tenantId`). Existing drafts are rebuilt from scratch; `approved`, `paid` and `carried_forward` statements are never touched, and a balance transaction already on one of them is skipped. Use it after a fix, or to regenerate a voided draft.
+         *
+         *     `periodStart` is the first instant of a calendar month (UTC) that has ended: the current or a future month answers `400 VALIDATION_FAILED` (field error `period_not_closed` on `/periodStart`). An unknown `tenantId` answers `404 NOT_FOUND`. Writes an audit row. The answer comes before the job runs; reload the list to see the drafts. `503 SERVICE_UNAVAILABLE` while Redis is unreachable, because the job is the whole effect.
+         */
+        post: operations["adminGenerateSettlements"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/settlements/{settlementId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The statement (`id` of `adminListSettlements`), in any status; an unknown id answers `404 NOT_FOUND`.
+                 * @example stl_01JD9W3Y7A1C5E9G3J7M1Q5S9V
+                 */
+                settlementId: components["parameters"]["AdminSettlementId"];
+            };
+            cookie?: never;
+        };
+        /**
+         * Get a statement with its totals and the payout account status
+         * @description One statement in any status (M5) with its totals (PADR-0003 item 5): `netAmount = grossAmount − refundsAmount − disputesAmount − stripeFeesAmount − velexisFeesAmount + adjustmentsAmount`, where `velexisFeesAmount` is `feeBps` basis points of the captured amount net of refunds (rounded half to even, never negative) and `adjustmentsAmount` holds the manual lines and the balance carried from earlier statements. It names its OTA and the review status of the OTA's payout account (`payoutAccountStatus`, `null` without one), which approval needs `verified` when the net is positive. The `ETag` is the version that `adminApproveSettlement` and `adminMarkSettlementPaid` need in `If-Match`. The lines are in `adminListSettlementLines`.
+         */
+        get: operations["adminGetSettlement"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/settlements/{settlementId}/lines": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The statement (`id` of `adminListSettlements`), in any status; an unknown id answers `404 NOT_FOUND`.
+                 * @example stl_01JD9W3Y7A1C5E9G3J7M1Q5S9V
+                 */
+                settlementId: components["parameters"]["AdminSettlementId"];
+            };
+            cookie?: never;
+        };
+        /**
+         * List the lines of a statement
+         * @description The lines of one statement (M5), in `occurredAt` order, cursor-paginated: one per Stripe balance transaction (`charge`, `refund`, `dispute`, `dispute_reversal`), plus the `carry_forward` line of earlier negative statements and the manual `adjustment` lines. Amounts are signed `Money` in the statement's currency (refunds and disputes are negative); `stripeFee` is Stripe's fee of the transaction (positive is a cost), and `originalAmount` the charge's own amount when it settled in another currency. The same lines as CSV: `adminDownloadSettlementLines`. A voided draft has no lines any more.
+         */
+        get: operations["adminListSettlementLines"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/settlements/{settlementId}/lines.csv": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The statement (`id` of `adminListSettlements`), in any status; an unknown id answers `404 NOT_FOUND`.
+                 * @example stl_01JD9W3Y7A1C5E9G3J7M1Q5S9V
+                 */
+                settlementId: components["parameters"]["AdminSettlementId"];
+            };
+            cookie?: never;
+        };
+        /**
+         * Download the lines of a statement as CSV
+         * @description Every line of one statement in any status as a CSV file (M5, PADR-0016 item 4: the CSV representation of `adminListSettlementLines` has its own operation): UTF-8, comma-separated, quoted as RFC 4180 says, with one header row and these columns: `id`, `type`, `occurredAt`, `amount` and `stripeFee` (signed decimal strings in the statement's currency), `originalAmount` and `originalCurrency` (the charge's own amount when it settled in another currency), `balanceTransactionId`, `sourceId`, `paymentIntentId`, `velexisPaymentId`, `checkoutId`, `description` and `createdByAccountId` (the admin who added an adjustment); an empty cell is a `null`. The lines are in `occurredAt` order. Amounts are written by the API without a thousands separator and kept as they are; a text cell that starts with `=`, `+`, `-`, `@`, a tab or a carriage return gets a leading `'` (the OWASP rule against CSV injection), so a spreadsheet never runs it as a formula. The file holds an OTA's payment records, so it is never cached.
+         */
+        get: operations["adminDownloadSettlementLines"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/settlements/{settlementId}/adjustments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The statement (`id` of `adminListSettlements`), in any status; an unknown id answers `404 NOT_FOUND`.
+                 * @example stl_01JD9W3Y7A1C5E9G3J7M1Q5S9V
+                 */
+                settlementId: components["parameters"]["AdminSettlementId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Add a manual adjustment line to a draft
+         * @description Adds a manual `adjustment` line to a **draft** (M5, PADR-0003 item 5): a signed amount in the statement's currency (positive is owed to the OTA; another currency answers `400 VALIDATION_FAILED`), a `description` that the OTA sees on the line, and a written `reason` of 5–500 characters that the audit row keeps. The totals are recomputed in the same transaction (`adjustmentsAmount`, `netAmount`, `lineCount`) and the statement's version rises. Any other status answers `409 SETTLEMENT_STATE_INVALID`: approved, paid and carried-forward statements are immutable. A regeneration of the draft keeps no adjustment, as it rebuilds every line.
+         */
+        post: operations["adminAddSettlementAdjustment"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/settlements/{settlementId}/approve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The statement (`id` of `adminListSettlements`), in any status; an unknown id answers `404 NOT_FOUND`.
+                 * @example stl_01JD9W3Y7A1C5E9G3J7M1Q5S9V
+                 */
+                settlementId: components["parameters"]["AdminSettlementId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Approve a draft
+         * @description Approves a **draft** (M5, PADR-0003 items 7 and 9) with a TOTP step-up within the last 15 minutes (`401 REAUTH_REQUIRED`; PADR-0006 item 4) and `If-Match` (a stale version answers `412 PRECONDITION_FAILED`). A positive net makes it `approved`, to be paid by bank transfer, and needs a `verified` payout account (`422 PAYOUT_ACCOUNT_REQUIRED`); a net of zero or less makes it `carried_forward`, and the next month's draft absorbs it as a `carry_forward` line. Approving also sets `carriedToId` on the earlier carried-forward statements this draft absorbed. From then on the statement is immutable and the portal shows it. Any other status answers `409 SETTLEMENT_STATE_INVALID`. Writes an audit row.
+         */
+        post: operations["adminApproveSettlement"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/settlements/{settlementId}/mark-paid": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The statement (`id` of `adminListSettlements`), in any status; an unknown id answers `404 NOT_FOUND`.
+                 * @example stl_01JD9W3Y7A1C5E9G3J7M1Q5S9V
+                 */
+                settlementId: components["parameters"]["AdminSettlementId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Record the bank transfer of an approved statement
+         * @description Records that Velexis paid an **approved** statement by bank transfer (M5, PADR-0003 items 9 and 11): the date of the transfer (`paidAt`, not in the future) and the bank's reference, with a TOTP step-up within the last 15 minutes (`401 REAUTH_REQUIRED`), `If-Match` (`412 PRECONDITION_FAILED`) and a `verified` payout account (`422 PAYOUT_ACCOUNT_REQUIRED`, PADR-0003 item 9). The statement becomes `paid`, an audit row is written, and the owners and finance members of the OTA are e-mailed (`settlements.paid`) through the outbox. Any other status answers `409 SETTLEMENT_STATE_INVALID`.
+         */
+        post: operations["adminMarkSettlementPaid"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/settlements/{settlementId}/void": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The statement (`id` of `adminListSettlements`), in any status; an unknown id answers `404 NOT_FOUND`.
+                 * @example stl_01JD9W3Y7A1C5E9G3J7M1Q5S9V
+                 */
+                settlementId: components["parameters"]["AdminSettlementId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Void a draft
+         * @description Voids a **draft** (M5, PADR-0003 items 8 and 9) with a written `reason` of 5–500 characters that the statement (`voidReason`) and the audit row keep: the statement becomes `void` and keeps its totals for the record, and its lines are deleted in the same transaction (`lineCount` 0), so their balance transactions can be settled again by a new draft (`adminGenerateSettlements`). Any other status answers `409 SETTLEMENT_STATE_INVALID`.
+         */
+        post: operations["adminVoidSettlement"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/tenants/{tenantId}/payout-account": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The OTA (`id` of `adminListTenants`); an unknown id answers `404 NOT_FOUND`.
+                 * @example ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F
+                 */
+                tenantId: components["parameters"]["AdminTenantId"];
+            };
+            cookie?: never;
+        };
+        /**
+         * Get an OTA's payout account, masked
+         * @description The bank account where Velexis pays the OTA's settlements (M5, PADR-0003 item 10), masked exactly as the portal shows it (`PayoutAccount`): holder, bank country, currency, scheme, the last 4 characters of the IBAN or account number, and the review status with the reviewer's note. The bank identifiers are answered only by `adminRevealPayoutAccount`. The `ETag` is the version that `adminReviewPayoutAccount` needs in `If-Match`. An unknown OTA, or an OTA without a payout account, answers `404 NOT_FOUND`.
+         */
+        get: operations["adminGetPayoutAccount"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/tenants/{tenantId}/payout-account/reveal": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The OTA (`id` of `adminListTenants`); an unknown id answers `404 NOT_FOUND`.
+                 * @example ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F
+                 */
+                tenantId: components["parameters"]["AdminTenantId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Reveal an OTA's bank details to pay a settlement
+         * @description Decrypts and answers the full bank identifiers of the OTA's payout account (M5, PADR-0003 item 10), so that Velexis can pay an approved statement by bank transfer: the IBAN and the BIC (when one was given) of an `iban` account, or the account and routing numbers of a `local` one. It needs a TOTP step-up within the last 15 minutes (`401 REAUTH_REQUIRED`, PADR-0006 item 4) and a written `reason` of 5–500 characters. Every reveal is a sensitive read: the audit row `payout_account.revealed` keeps the reason and never a number (PADR-0006, Audit item 2). The answer is `no-store`, never cached nor kept for a replay; the identifiers are never logged. An unknown OTA, or an OTA without a payout account, answers `404 NOT_FOUND`.
+         */
+        post: operations["adminRevealPayoutAccount"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/tenants/{tenantId}/payout-account/review": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The OTA (`id` of `adminListTenants`); an unknown id answers `404 NOT_FOUND`.
+                 * @example ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F
+                 */
+                tenantId: components["parameters"]["AdminTenantId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Verify or reject an OTA's payout account
+         * @description Records the review of a payout account (M5, stripe-payments flow §B): `verified`, which approving and paying a statement with a positive net need, or `rejected` with a `note` that the owner sees as `reviewNote`. A verification clears the note. `If-Match` carries the account's `version` (a stale one answers `412 PRECONDITION_FAILED`, for example when the owner changed the account meanwhile, which returned it to `pending_review`). Writes an audit row and e-mails the owners (`payouts.reviewed`) through the outbox. An unknown OTA, or an OTA without a payout account, answers `404 NOT_FOUND`.
+         */
+        post: operations["adminReviewPayoutAccount"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/domains": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the storefront hosts of every OTA
+         * @description Every storefront host (M5, PADR-0004): the Velexis sub-domains and the custom domains, newest first, cursor-paginated, with filters on the kind, the DNS verification status and the TLS status, each with its OTA, the result of its last DNS check and TLS probe, and the count of consecutive failed daily re-checks (3 fail a verified domain). `kind=custom&verificationStatus=pending` lists the domains waiting for their DNS records.
+         */
+        get: operations["adminListDomains"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/domains/{domainId}/recheck": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The storefront host (`id` of `adminListDomains`) of any OTA; an unknown id answers `404 NOT_FOUND`.
+                 * @example dom_01JB3K5N9Q3S7W1Y5A9C3E7G1J
+                 */
+                domainId: components["parameters"]["AdminDomainId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Check a host's DNS records and certificate now
+         * @description Queues the checks of one host on `platform-domains` now (M5, custom-domains flow steps 2, 4 and 6), instead of waiting for the schedulers: the DNS check of a custom domain (`domain.verify`: the verification of a pending one, the daily re-check of a verified one) and the TLS probe of the host (`domain.tls_probe`); the sub-domain has no DNS records, so it gets the probe only. The answer comes before the jobs run; reload the list to see `lastCheckedAt`, `lastCheckError` and the TLS state. Writes an audit row. `503 SERVICE_UNAVAILABLE` while Redis is unreachable, because the jobs are the whole effect.
+         */
+        post: operations["adminRecheckDomain"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/domains/{domainId}/remove": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The storefront host (`id` of `adminListDomains`) of any OTA; an unknown id answers `404 NOT_FOUND`.
+                 * @example dom_01JB3K5N9Q3S7W1Y5A9C3E7G1J
+                 */
+                domainId: components["parameters"]["AdminDomainId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Remove an abusive custom domain
+         * @description Removes a custom domain of any OTA in any status (M5, PF-92), for example one used for phishing, with a written `reason` of 5–500 characters that the audit row keeps: as `removeDomain` does, the row is deleted and, if it was primary, the sub-domain becomes primary again, in one transaction; after commit the `domain` invalidations are published and the cached `tlsask:<host>` answer is deleted, so neither the storefront nor the TLS gate serves the host any more. The owners are e-mailed through the outbox. The OTA's status does not matter. The sub-domain cannot be removed (`409 CONFLICT`, `details.reason = subdomain`).
+         */
+        post: operations["adminRemoveDomain"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2675,6 +3195,52 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/webhooks/stripe/billing": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Receive a Stripe Billing event
+         * @description The endpoint of the Velexis Stripe account for subscription billing (M5, PADR-0002, subscription-billing flow §C), signed with `STRIPE_BILLING_WEBHOOK_SECRET`. Stripe sends `checkout.session.completed`, `customer.subscription.created`, `customer.subscription.updated`, `customer.subscription.deleted`, `invoice.finalized`, `invoice.paid`, `invoice.payment_failed` and `invoice.voided`; any other type is stored and ends `ignored`.
+         *
+         *     **Order.** First the signature: `Stripe-Signature` is checked on the raw body (kept on `/webhooks/*` only, up to 1 MB) with the endpoint's secret; a missing or wrong signature, or a payload changed after signing, answers `400 WEBHOOK_SIGNATURE_INVALID` and is logged as a security event, never with the body. Then the event: `livemode` must match the deployment (`APP_ENV=production` means live), else `400 VALIDATION_FAILED` with the field error `livemode_mismatch` on `/livemode`. Then one insert into the `stripe_events` inbox `{id, endpoint: billing, type, livemode, object_type, object_id, api_version, stripe_created_at}` with `ON CONFLICT DO NOTHING`, so a redelivered event is stored once, and `stripe.event {eventId}` is queued on `platform-stripe-events` with the event id as BullMQ job id, so it is queued once; an enqueue lost after the commit is queued by the `stripe_events.sweep` scheduler. The answer is `200 {received: true}` within 2 seconds, for a new event and a duplicate alike; Stripe is never called inline, and the worker re-fetches the object before it acts. A database failure answers `500`, so Stripe retries for up to 3 days. The events are received and stored even while `FEATURE_STRIPE_BILLING` is off (PADR-0015 item 4); their processing then ends `ignored`.
+         *
+         *     The body is Stripe's event object, which Stripe extends without notice, so its schema is open (`additionalProperties: true`) and names only what the receiver reads; the payload itself is never stored.
+         */
+        post: operations["receiveStripeBillingEvent"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/webhooks/stripe/connect-accounts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Receive a Stripe Connect account event
+         * @description The Connect endpoint of the Velexis Stripe platform for the state of the OTAs' connected Standard accounts (M5, PADR-0011, stripe-payments flow §C item 5), signed with `STRIPE_CONNECT_WEBHOOK_SECRET`. It is subscribed only to `account.updated` and `account.application.deauthorized`; any other type is stored and ends `ignored`. The payment events of connected accounts go to the OTA backend's own Connect endpoint, not here (architecture flow (d)).
+         *
+         *     The same handling as `receiveStripeBillingEvent`: the signature on the raw body (`400 WEBHOOK_SIGNATURE_INVALID`), `livemode` against the deployment (`400 VALIDATION_FAILED`, `livemode_mismatch`), one insert into `stripe_events` with `endpoint: connect_accounts` and the connected account (`account`, which every Connect event carries, so a body without it answers `400 VALIDATION_FAILED`) with `ON CONFLICT DO NOTHING`, `stripe.event` queued once, and `200 {received: true}` within 2 seconds; a database failure answers `500`. The worker then updates the `payment_provider_connections` rows of that account (`account_reference`): their capabilities and status for `account.updated`, `disabled` for `account.application.deauthorized`. Events of an account no OTA uses end `ignored`. The events are received even while `FEATURE_OWN_STRIPE` is off (PADR-0015 item 4).
+         */
+        post: operations["receiveStripeConnectAccountEvent"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/internal/tls/ask": {
         parameters: {
             query?: never;
@@ -2754,7 +3320,7 @@ export interface components {
             /** @description HTTP status. */
             status: number;
             requestId: string;
-            /** @description Code-specific structured details, for example `reason` for FORBIDDEN, CONFLICT and UNPROCESSABLE, `status` for TENANT_NOT_ACTIVE, `limit` and `used` for PLAN_LIMIT_REACHED, `missing` for LIVE_PRECONDITIONS_UNMET, `feature` for FEATURE_DISABLED and `provider` for PROVIDER_ERROR. */
+            /** @description Code-specific structured details, for example `reason` for FORBIDDEN, CONFLICT and UNPROCESSABLE, `status` for TENANT_NOT_ACTIVE and SETTLEMENT_STATE_INVALID, `limit` and `used` for PLAN_LIMIT_REACHED, `missing` for LIVE_PRECONDITIONS_UNMET, `feature` for FEATURE_DISABLED and `provider` for PROVIDER_ERROR. */
             details?: {
                 [key: string]: unknown;
             };
@@ -4480,7 +5046,11 @@ export interface components {
             /** @description The value Stripe answered. */
             actual: string | null;
         };
-        /** @description A plan as Velexis staff see it: the fields of `Plan`, plus the currency, the visibility, the active flag, the order, the settlement fee, the Stripe link state and the number of OTAs on it. The Stripe ids stay `null` and `priceWarnings` empty until PBE-042 links prices in M5. */
+        /** @description The result of a comparison of a plan with its linked Stripe prices (M5); no warning when they agree. */
+        PlanPriceCheck: {
+            warnings: components["schemas"]["PlanPriceWarning"][];
+        };
+        /** @description A plan as Velexis staff see it: the fields of `Plan`, plus the currency, the visibility, the active flag, the order, the settlement fee, the Stripe link state and the number of OTAs on it. The Stripe ids stay `null` and `priceWarnings` empty until `adminUpdatePlan` links prices (M5); the warnings are those of the last comparison with Stripe (`adminUpdatePlan` or `adminCheckPlanPrices`). */
         AdminPlan: {
             code: components["schemas"]["PlanCode"];
             name: string;
@@ -4544,7 +5114,7 @@ export interface components {
             settlementFeeBps: number;
             sortOrder: number;
         };
-        /** @description The fields to change; at least one. Never `code` or `currency`. `annualPrice: null` removes the yearly option and `isActive: false` retires the plan. PBE-042 adds the Stripe product and price ids in M5. */
+        /** @description The fields to change; at least one. Never `code` or `currency`. `annualPrice: null` removes the yearly option and `isActive: false` retires the plan. From M5 the Stripe product and price ids link the plan to Stripe; `null` unlinks one. */
         UpdatePlanRequest: {
             name?: string;
             description?: string | null;
@@ -4557,6 +5127,12 @@ export interface components {
             trialDays?: number;
             settlementFeeBps?: number;
             sortOrder?: number;
+            /** @description The Stripe Product of the plan (M5); `null` unlinks it. */
+            stripeProductId?: string | null;
+            /** @description The recurring Stripe Price of monthly billing (M5), linked to no other plan; `null` unlinks it, so Checkout cannot start for monthly billing. */
+            stripePriceIdMonth?: string | null;
+            /** @description The recurring Stripe Price of yearly billing (M5), linked to no other plan; `null` unlinks it, so Checkout cannot start for yearly billing. */
+            stripePriceIdYear?: string | null;
         };
         /**
          * @description Stripe's subscription statuses (`subscriptions.status`); manual subscriptions use `trialing`, `past_due` and `canceled` only.
@@ -4634,10 +5210,13 @@ export interface components {
             /** Format: date-time */
             createdAt: string;
         };
+        AdminInvoiceList: {
+            data: components["schemas"]["AdminInvoice"][];
+            page: components["schemas"]["Page"];
+        };
         /** @description One event of the Stripe webhook inbox (`stripe_events`, M5): its type, processing state and last error. The payload is never stored or answered; the worker re-fetches the object from Stripe. */
         AdminStripeEvent: {
-            /** @description The Stripe event id. */
-            id: string;
+            id: components["schemas"]["StripeEventId"];
             /**
              * @description The receiver that got it.
              * @enum {string}
@@ -4656,6 +5235,15 @@ export interface components {
             /** Format: date-time */
             processedAt: string | null;
         };
+        AdminStripeEventList: {
+            data: components["schemas"]["AdminStripeEvent"][];
+            page: components["schemas"]["Page"];
+        };
+        /**
+         * @description A Stripe event id: `evt_` and letters, digits or underscores (Stripe's own ids have no underscore; the synthetic events of the test fixtures, `evt_test_…`, do), as the CHECK of `stripe_events.id` allows.
+         * @example evt_1QyMn3Oq0Su5WxZ7Ab9Cd1Ef
+         */
+        StripeEventId: string;
         /** @description A subscription with its invoices and the Stripe events of its OTA; both lists are empty before M5. */
         AdminSubscriptionDetail: {
             subscription: components["schemas"]["AdminSubscription"];
@@ -4816,6 +5404,275 @@ export interface components {
             office: components["schemas"]["AdminAmadeusOffice"];
             connection: components["schemas"]["AmadeusConnection"];
         };
+        /** @description The confirmation that no booking with future travel remains on the office (PADR-0012 item 5), and the reason. */
+        ReleaseAmadeusOfficeRequest: {
+            /**
+             * @description Always `true`; the OTA confirmed that no booking with future travel remains on the office.
+             * @constant
+             */
+            confirmNoOpenBookings: true;
+            reason: components["schemas"]["AdminReason"];
+        };
+        /**
+         * @description The status of a statement (PADR-0003 item 9): `draft` (built by the generator, open to adjustments), `approved` (to be paid by bank transfer), `paid`, `carried_forward` (a net of zero or less, absorbed by the next draft) or `void` (a voided draft).
+         * @enum {string}
+         */
+        AdminSettlementStatus: "draft" | "approved" | "paid" | "carried_forward" | "void";
+        /**
+         * Format: date-time
+         * @description The first instant of a calendar month in UTC, which names the statement period.
+         * @example 2027-02-01T00:00:00Z
+         */
+        SettlementPeriodStart: string;
+        /** @description One monthly statement as the admin lists it (M5, PADR-0003), in any status, with its OTA. The properties it shares with the portal's `SettlementSummary` have the same schemas, apart from `status`, which has every value here. */
+        AdminSettlementSummary: {
+            id: components["schemas"]["SettlementId"];
+            tenantId: components["schemas"]["TenantId"];
+            tenantKey: components["schemas"]["TenantKey"];
+            tenantName: string;
+            environment: components["schemas"]["Environment"];
+            /**
+             * Format: date-time
+             * @description The first instant of the calendar month (UTC), inclusive.
+             */
+            periodStart: string;
+            /**
+             * Format: date-time
+             * @description The first instant of the next month, exclusive.
+             */
+            periodEnd: string;
+            currency: components["schemas"]["CurrencyCode"];
+            status: components["schemas"]["AdminSettlementStatus"];
+            netAmount: components["schemas"]["Money"];
+            /** @description The lines of `adminListSettlementLines`. */
+            lineCount: number;
+            /**
+             * Format: date-time
+             * @description When the draft was last built.
+             */
+            generatedAt: string;
+            /** Format: date-time */
+            approvedAt: string | null;
+            /**
+             * Format: date-time
+             * @description The date of the bank transfer; `null` unless `paid`.
+             */
+            paidAt: string | null;
+            /** @description Optimistic-locking version; send it in `If-Match` to `adminApproveSettlement` and `adminMarkSettlementPaid`. */
+            version: number;
+        };
+        AdminSettlementList: {
+            data: components["schemas"]["AdminSettlementSummary"][];
+            page: components["schemas"]["Page"];
+        };
+        /** @description One statement with its totals (M5, PADR-0003 item 5): the properties of `AdminSettlementSummary` with the same schemas, plus the parts of `netAmount` and the other properties of the portal's `Settlement` (same schemas), the statement it was carried to, who approved and paid it, the void, and the review status of the OTA's payout account (`null` when the OTA has none). */
+        AdminSettlement: {
+            id: components["schemas"]["SettlementId"];
+            tenantId: components["schemas"]["TenantId"];
+            tenantKey: components["schemas"]["TenantKey"];
+            tenantName: string;
+            environment: components["schemas"]["Environment"];
+            /**
+             * Format: date-time
+             * @description The first instant of the calendar month (UTC), inclusive.
+             */
+            periodStart: string;
+            /**
+             * Format: date-time
+             * @description The first instant of the next month, exclusive.
+             */
+            periodEnd: string;
+            currency: components["schemas"]["CurrencyCode"];
+            status: components["schemas"]["AdminSettlementStatus"];
+            netAmount: components["schemas"]["Money"];
+            /** @description The lines of `adminListSettlementLines`. */
+            lineCount: number;
+            /**
+             * Format: date-time
+             * @description When the draft was last built.
+             */
+            generatedAt: string;
+            /** Format: date-time */
+            approvedAt: string | null;
+            /**
+             * Format: date-time
+             * @description The date of the bank transfer; `null` unless `paid`.
+             */
+            paidAt: string | null;
+            /** @description Optimistic-locking version; send it in `If-Match` to `adminApproveSettlement` and `adminMarkSettlementPaid`. */
+            version: number;
+            grossAmount: components["schemas"]["Money"];
+            refundsAmount: components["schemas"]["Money"];
+            disputesAmount: components["schemas"]["Money"];
+            stripeFeesAmount: components["schemas"]["Money"];
+            velexisFeesAmount: components["schemas"]["Money"];
+            adjustmentsAmount: components["schemas"]["Money"];
+            /** @description The Velexis fee in basis points, copied from the plan when the statement was generated. */
+            feeBps: number;
+            /** @description The bank transfer's reference; `null` unless `paid`. */
+            payoutReference: string | null;
+            /** @description Velexis's remarks on the statement. */
+            notes: string | null;
+            /** @description The statement that absorbed this carried-forward balance, set when that statement is approved; `null` otherwise. */
+            carriedToId: components["schemas"]["SettlementId"] | null;
+            /** @description The platform admin who approved it; `null` before. */
+            approvedByAccountId: components["schemas"]["AccountId"] | null;
+            /** @description The platform admin who recorded the payment; `null` before. */
+            paidByAccountId: components["schemas"]["AccountId"] | null;
+            /** Format: date-time */
+            voidedAt: string | null;
+            /** @description The reason given to `adminVoidSettlement`; `null` unless `void`. */
+            voidReason: string | null;
+            /** @description The review status of the OTA's payout account now (`adminGetPayoutAccount`), which approving and paying a positive net need `verified`; `null` when the OTA has no payout account. */
+            payoutAccountStatus: components["schemas"]["PayoutAccountStatus"] | null;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            updatedAt: string;
+        };
+        /**
+         * @description The kind of a statement line: one per Stripe balance transaction (`charge`, `refund`, `dispute`, `dispute_reversal`), the balance of earlier carried-forward statements (`carry_forward`), or a manual line (`adjustment`).
+         * @enum {string}
+         */
+        SettlementLineType: "charge" | "refund" | "dispute" | "dispute_reversal" | "adjustment" | "carry_forward";
+        /** @description One line of a statement (M5, `settlement_lines`). Amounts are signed `Money` in the statement's currency. The Stripe references are `null` on `adjustment` and `carry_forward` lines; `velexisPaymentId` and `checkoutId` are the OTA's ids from the payment's Stripe metadata, by value, which the OTA admin shows. */
+        AdminSettlementLine: {
+            /** @description The line id (`sln_` + ULID). */
+            id: string;
+            type: components["schemas"]["SettlementLineType"];
+            /**
+             * Format: date-time
+             * @description When the balance transaction was created at Stripe, or when the line was added.
+             */
+            occurredAt: string;
+            amount: components["schemas"]["Money"];
+            stripeFee: components["schemas"]["Money"];
+            /** @description The charge's own amount when it settled in another currency; `null` otherwise. */
+            originalAmount: components["schemas"]["Money"] | null;
+            /** @description The Stripe balance transaction, settled on this line only. */
+            balanceTransactionId: string | null;
+            /** @description The Stripe object of the transaction (the charge, refund or dispute). */
+            sourceId: string | null;
+            paymentIntentId: string | null;
+            /** @description The OTA's payment (`pay_…` of the OTA booking API). */
+            velexisPaymentId: string | null;
+            /** @description The OTA's checkout (`chk_…` of the OTA booking API). */
+            checkoutId: string | null;
+            /** @description The line's text, shown to the OTA; never card data. */
+            description: string | null;
+            /** @description The platform admin who added an `adjustment`; `null` on the other lines. */
+            createdByAccountId: components["schemas"]["AccountId"] | null;
+        };
+        AdminSettlementLineList: {
+            data: components["schemas"]["AdminSettlementLine"][];
+            page: components["schemas"]["Page"];
+        };
+        /** @description The month to (re)build, and optionally one OTA. */
+        GenerateSettlementsRequest: {
+            periodStart: components["schemas"]["SettlementPeriodStart"];
+            tenantId?: components["schemas"]["TenantId"];
+        };
+        /** @description The signed amount of a manual line, not zero, with at most two decimals (`numeric(12,2)`); positive is owed to the OTA. Its currency must be the statement's, which the service checks (`400 VALIDATION_FAILED`). */
+        SettlementAdjustmentAmount: {
+            /** @example -25.00 */
+            amount: string;
+            currency: components["schemas"]["CurrencyCode"];
+        };
+        AddSettlementAdjustmentRequest: {
+            amount: components["schemas"]["SettlementAdjustmentAmount"];
+            /** @description The line's text, which the OTA sees on its statement. */
+            description: string;
+            reason: components["schemas"]["AdminReason"];
+        };
+        MarkSettlementPaidRequest: {
+            /**
+             * Format: date-time
+             * @description The date of the bank transfer; not in the future.
+             */
+            paidAt: string;
+            /** @description The bank transfer's reference, as the bank statement shows it. */
+            payoutReference: string;
+        };
+        /** @description The bank identifiers of a payout account (M5), shown to a platform admin who gave a reason and a step-up: an IBAN account, or a local one. Readable on purpose, unlike the write-only request fields of `setPayoutAccount`; answered with `no-store` only by `adminRevealPayoutAccount`. */
+        RevealedPayoutAccount: components["schemas"]["RevealedIbanPayoutAccount"] | components["schemas"]["RevealedLocalPayoutAccount"];
+        /** @description An IBAN account: the IBAN as stored (spaces removed, upper case, 15–34 characters), and the BIC when the owner gave one. */
+        RevealedIbanPayoutAccount: {
+            iban: string;
+            bic?: string;
+        };
+        /** @description A local account, with the account and routing numbers as the owner entered them. */
+        RevealedLocalPayoutAccount: {
+            accountNumber: string;
+            routingNumber: string;
+        };
+        /** @description The review: `verified`, or `rejected` with a note for the owner. */
+        ReviewPayoutAccountRequest: components["schemas"]["VerifyPayoutAccountRequest"] | components["schemas"]["RejectPayoutAccountRequest"];
+        VerifyPayoutAccountRequest: {
+            /** @constant */
+            decision: "verified";
+        };
+        RejectPayoutAccountRequest: {
+            /** @constant */
+            decision: "rejected";
+            /** @description Why the account is rejected, shown to the owner as `reviewNote`; never a bank number. */
+            note: string;
+        };
+        /** @description A storefront host of any OTA as Velexis staff see it (M5, PADR-0004): the properties it shares with the portal's `Domain` have the same schemas, plus its OTA, the verification time, the count of consecutive failed daily re-checks and the time of the last TLS probe. The DNS records to create are the portal's business. */
+        AdminDomain: {
+            id: string;
+            tenantId: components["schemas"]["TenantId"];
+            tenantKey: components["schemas"]["TenantKey"];
+            /**
+             * Format: hostname
+             * @description The host name, lower case.
+             */
+            hostname: string;
+            /**
+             * @description `subdomain` (`<key>.<STOREFRONT_BASE_DOMAIN>`, Velexis owns the zone) or `custom` (M5).
+             * @enum {string}
+             */
+            kind: "subdomain" | "custom";
+            /**
+             * @description What the host serves; only `storefront` in the MVP.
+             * @enum {string}
+             */
+            purpose: "storefront" | "api" | "console";
+            /** @description The primary host, used in links and e-mails. */
+            isPrimary: boolean;
+            /** @enum {string} */
+            verificationStatus: "pending" | "verified" | "failed";
+            /**
+             * Format: date-time
+             * @description When DNS ownership was last verified.
+             */
+            verifiedAt: string | null;
+            /**
+             * Format: date-time
+             * @description End of the 72-hour verification window of a custom domain; `null` for the sub-domain.
+             */
+            verificationDeadlineAt: string | null;
+            /** Format: date-time */
+            lastCheckedAt: string | null;
+            /** @description What the last DNS check found missing, safe to show. */
+            lastCheckError: string | null;
+            /** @description Consecutive failed daily re-checks of a verified domain; 3 set it `failed`. */
+            checkFailures: number;
+            /** @enum {string} */
+            tlsStatus: "pending" | "issued" | "failed" | "expired";
+            /** Format: date-time */
+            tlsExpiresAt: string | null;
+            /**
+             * Format: date-time
+             * @description The last TLS probe of the host.
+             */
+            tlsCheckedAt: string | null;
+            /** Format: date-time */
+            createdAt: string;
+        };
+        AdminDomainList: {
+            data: components["schemas"]["AdminDomain"][];
+            page: components["schemas"]["Page"];
+        };
         /**
          * @description The lifecycle of an account: `pending_verification` (e-mail address not verified), `active`, `locked`, `disabled` (by Velexis staff), `deleted` (erased).
          * @enum {string}
@@ -4891,6 +5748,63 @@ export interface components {
         GrantAdminRequest: {
             email: components["schemas"]["EmailAddress"];
             reason: components["schemas"]["AdminReason"];
+        };
+        /** @description A Stripe event type, for example `invoice.paid` (lower-case words and underscores, separated by dots); the pattern of `AdminStripeEvent.type`, so every stored type can be answered. */
+        StripeEventType: string;
+        /** @description The event's `data`: `object` is the Stripe object as it was when the event happened (the receiver keeps only its `object` type and its `id`; the worker re-fetches it before it acts), and `previous_attributes` the changed values of an `*.updated` event. Open, as Stripe extends it. */
+        StripeEventData: {
+            object: {
+                id?: string;
+                object?: string;
+            } & {
+                [key: string]: unknown;
+            };
+            previous_attributes?: {
+                [key: string]: unknown;
+            };
+        } & {
+            [key: string]: unknown;
+        };
+        /** @description A Stripe event as Stripe posts it to a webhook endpoint (an `event` object of the endpoint's API version, in Stripe's snake_case). Stripe adds properties without notice, so the schema is open on purpose (`additionalProperties: true`, the only open request body of the document) and names only what the receiver reads; a closed schema would refuse correctly signed events, which Stripe would retry for 3 days. The payload is never stored: the inbox keeps the id, the type, `livemode`, the API version, the creation time and the type and id of `data.object`. */
+        StripeEvent: {
+            id: components["schemas"]["StripeEventId"];
+            /** @constant */
+            object: "event";
+            type: components["schemas"]["StripeEventType"];
+            /** @description Must match the deployment (`APP_ENV=production` means live), else `400 VALIDATION_FAILED`. */
+            livemode: boolean;
+            /** @description When Stripe created the event, in seconds since the epoch. */
+            created: number;
+            /** @description The Stripe API version of the payload. */
+            api_version?: string | null;
+            /** @description The connected account of a Connect event; absent on the events of the Velexis account itself. */
+            account?: string;
+            data: components["schemas"]["StripeEventData"];
+        } & {
+            [key: string]: unknown;
+        };
+        /** @description A Stripe Connect event of a connected account, as `StripeEvent` (open on purpose, for the same reason) with `account` required: the Connect endpoint receives only events of connected accounts. */
+        StripeConnectAccountEvent: {
+            id: components["schemas"]["StripeEventId"];
+            /** @constant */
+            object: "event";
+            /** @description The connected account (`acct_…`; the synthetic test fixtures use underscores, Stripe's own ids do not); the worker matches it with `account_reference` of `payment_provider_connections`. */
+            account: string;
+            type: components["schemas"]["StripeEventType"];
+            /** @description Must match the deployment (`APP_ENV=production` means live), else `400 VALIDATION_FAILED`. */
+            livemode: boolean;
+            /** @description When Stripe created the event, in seconds since the epoch. */
+            created: number;
+            /** @description The Stripe API version of the payload. */
+            api_version?: string | null;
+            data: components["schemas"]["StripeEventData"];
+        } & {
+            [key: string]: unknown;
+        };
+        /** @description The answer Stripe needs to stop retrying. */
+        StripeEventReceived: {
+            /** @constant */
+            received: true;
         };
     };
     responses: {
@@ -5125,6 +6039,36 @@ export interface components {
                 "application/json": components["schemas"]["ErrorResponse"];
             };
         };
+        /** @description The statement's status does not allow the action (`details.status`): adjustments, approval and voiding need a `draft`, marking paid an `approved` statement. Possible codes: SETTLEMENT_STATE_INVALID. */
+        SettlementStateInvalid: {
+            headers: {
+                "X-Request-Id": components["headers"]["X-Request-Id"];
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["ErrorResponse"];
+            };
+        };
+        /** @description A positive net is paid only to a `verified` payout account, and the OTA has none (PADR-0003 item 9). Possible codes: PAYOUT_ACCOUNT_REQUIRED. */
+        PayoutAccountRequired: {
+            headers: {
+                "X-Request-Id": components["headers"]["X-Request-Id"];
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["ErrorResponse"];
+            };
+        };
+        /** @description The signature is missing or wrong, or the event failed validation (for example a `livemode` that does not match the deployment). Stripe retries a refused event. Possible codes: VALIDATION_FAILED, WEBHOOK_SIGNATURE_INVALID. */
+        StripeEventRefused: {
+            headers: {
+                "X-Request-Id": components["headers"]["X-Request-Id"];
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["ErrorResponse"];
+            };
+        };
     };
     parameters: {
         /** @description Client-generated unique key (a UUID v4) that makes the request safe to retry for 24 hours. The same key with another body answers `409 IDEMPOTENCY_KEY_REUSED`. */
@@ -5249,6 +6193,26 @@ export interface components {
          * @example ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F
          */
         AuditTargetId: string;
+        /**
+         * @description The Stripe event (`id` of `adminListStripeEvents`); an event the inbox lacks answers `404 NOT_FOUND`.
+         * @example evt_1QzNo5Pr2Tv7XyA8Bc0De2Fg
+         */
+        StripeEventId: components["schemas"]["StripeEventId"];
+        /**
+         * @description The statement (`id` of `adminListSettlements`), in any status; an unknown id answers `404 NOT_FOUND`.
+         * @example stl_01JD9W3Y7A1C5E9G3J7M1Q5S9V
+         */
+        AdminSettlementId: components["schemas"]["SettlementId"];
+        /**
+         * @description The storefront host (`id` of `adminListDomains`) of any OTA; an unknown id answers `404 NOT_FOUND`.
+         * @example dom_01JB3K5N9Q3S7W1Y5A9C3E7G1J
+         */
+        AdminDomainId: string;
+        /**
+         * @description Stripe's signature of the raw body (`t=<timestamp>,v1=<HMAC-SHA256>`, several `v1` while a secret is rolled), checked with the endpoint's webhook secret and a 5-minute tolerance before anything else; missing or wrong, it answers `400 WEBHOOK_SIGNATURE_INVALID`.
+         * @example t=1803862996,v1=5257a869e7ecebeda32affa62cdca3fa51cad7e77a0e56ff536d0ce8e108d8bd
+         */
+        StripeSignature: string;
     };
     requestBodies: never;
     headers: {
@@ -5258,7 +6222,7 @@ export interface components {
         ETag: string;
         /** @description Seconds to wait before retrying. */
         "Retry-After": number;
-        /** @description Always `no-store`: the body carries a secret (tokens, the TOTP secret, recovery codes or a key shown once). Never cached, and never stored for an idempotent replay. */
+        /** @description Always `no-store`: the body carries a secret (tokens, the TOTP secret, recovery codes, a key shown once or revealed bank details). Never cached, and never stored for an idempotent replay. */
         NoStore: "no-store";
         /** @description Always `no-store`: health answers are never cached. */
         NoStoreHealth: "no-store";
@@ -10713,7 +11677,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description The updated plan, with its new version in `ETag`. */
+            /** @description The updated plan, with its new version in `ETag` and the warnings of the price comparison. */
             200: {
                 headers: {
                     "X-Request-Id": components["headers"]["X-Request-Id"];
@@ -10727,9 +11691,53 @@ export interface operations {
             400: components["responses"]["ValidationFailed"];
             401: components["responses"]["AdminUnauthenticated"];
             404: components["responses"]["NotFound"];
+            /** @description Another plan links this Stripe price (`details.reason = stripe_price_taken`). Possible codes: CONFLICT. */
+            409: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
             412: components["responses"]["PreconditionFailed"];
             429: components["responses"]["RateLimited"];
             500: components["responses"]["InternalError"];
+            502: components["responses"]["ProviderError"];
+        };
+    };
+    adminCheckPlanPrices: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The plan (`code` of `adminListPlans`); an unknown code answers `404 NOT_FOUND`.
+                 * @example growth
+                 */
+                planCode: components["parameters"]["AdminPlanCode"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The differences between the plan and its Stripe prices; empty when they agree. */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlanPriceCheck"];
+                };
+            };
+            400: components["responses"]["ValidationFailed"];
+            401: components["responses"]["AdminUnauthenticated"];
+            404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+            502: components["responses"]["ProviderError"];
         };
     };
     adminListSubscriptions: {
@@ -10911,6 +11919,299 @@ export interface operations {
             412: components["responses"]["PreconditionFailed"];
             /** @description The plan is unknown or retired (`details.reason = plan_not_active`). Possible codes: UNPROCESSABLE. */
             422: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    adminResyncSubscription: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The subscription (`id` of `adminListSubscriptions`); an unknown id answers `404 NOT_FOUND`.
+                 * @example sub_01JA2Z7R5N0S3V7X1Z4B9D2F6H
+                 */
+                subscriptionId: components["parameters"]["SubscriptionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The subscription as Stripe has it now, with its new version in `ETag`. */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    ETag: components["headers"]["ETag"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "id": "sub_01JE4N7P1R5T9W3Y7A1C5E9G3J",
+                     *       "tenantId": "ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F",
+                     *       "tenantKey": "acme",
+                     *       "tenantName": "Acme Travel",
+                     *       "planCode": "growth",
+                     *       "planName": "Growth",
+                     *       "status": "past_due",
+                     *       "billingProvider": "stripe",
+                     *       "billingInterval": "month",
+                     *       "trialEndsAt": null,
+                     *       "currentPeriodStart": "2027-04-01T00:00:00Z",
+                     *       "currentPeriodEnd": "2027-05-01T00:00:00Z",
+                     *       "cancelAtPeriodEnd": false,
+                     *       "canceledAt": null,
+                     *       "providerCustomerId": "cus_Qx7Lm2Np9Rt4Vw",
+                     *       "providerSubscriptionId": "sub_1QxLm2Np9Rt4VwY6Za8Bc0De",
+                     *       "createdAt": "2027-02-01T10:12:40Z",
+                     *       "version": 6
+                     *     }
+                     */
+                    "application/json": components["schemas"]["AdminSubscription"];
+                };
+            };
+            400: components["responses"]["ValidationFailed"];
+            401: components["responses"]["AdminUnauthenticated"];
+            404: components["responses"]["NotFound"];
+            /** @description The subscription is a manual one (`details.reason = manual`). Possible codes: CONFLICT. */
+            409: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+            502: components["responses"]["ProviderError"];
+        };
+    };
+    adminListInvoices: {
+        parameters: {
+            query?: {
+                /** @description Only the invoices of this OTA. */
+                tenantId?: components["schemas"]["TenantId"];
+                /** @description Only invoices in this status. */
+                status?: "draft" | "open" | "paid" | "void" | "uncollectible";
+                /** @description Opaque cursor from `page.nextCursor` of the previous page. */
+                cursor?: components["parameters"]["Cursor"];
+                /** @description Page size. */
+                limit?: components["parameters"]["Limit"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of invoices. */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "data": [
+                     *         {
+                     *           "id": "inv_01JF5P9R3T7W1Y5A9C3E7G1J5M",
+                     *           "tenantId": "ten_01JB3K4M8P2R6T0W4Y8A2C6E0G",
+                     *           "subscriptionId": "sub_01JF5P8Q2S6V0X4Z8B2D6F0H4K",
+                     *           "number": "VX-2027-000377",
+                     *           "status": "open",
+                     *           "subtotal": {
+                     *             "amount": "149.00",
+                     *             "currency": "EUR"
+                     *           },
+                     *           "taxAmount": {
+                     *             "amount": "0.00",
+                     *             "currency": "EUR"
+                     *           },
+                     *           "total": {
+                     *             "amount": "149.00",
+                     *             "currency": "EUR"
+                     *           },
+                     *           "amountPaid": {
+                     *             "amount": "0.00",
+                     *             "currency": "EUR"
+                     *           },
+                     *           "amountDue": {
+                     *             "amount": "149.00",
+                     *             "currency": "EUR"
+                     *           },
+                     *           "periodStart": "2027-04-01T00:00:00Z",
+                     *           "periodEnd": "2027-05-01T00:00:00Z",
+                     *           "issuedAt": "2027-04-01T01:03:55Z",
+                     *           "dueAt": null,
+                     *           "paidAt": null,
+                     *           "hostedInvoiceUrl": "https://invoice.stripe.com/i/acct_1Velexis/test_YWNjdF8xVmVsZXhpczI",
+                     *           "invoicePdfUrl": "https://pay.stripe.com/invoice/acct_1Velexis/test_YWNjdF8xVmVsZXhpczI/pdf",
+                     *           "providerInvoiceId": "in_1QzNo4Pr1Tv6Xy",
+                     *           "createdAt": "2027-04-01T01:03:56Z"
+                     *         },
+                     *         {
+                     *           "id": "inv_01JE4N8Q2S6V0X4Z8B2D6F0H4K",
+                     *           "tenantId": "ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F",
+                     *           "subscriptionId": "sub_01JE4N7P1R5T9W3Y7A1C5E9G3J",
+                     *           "number": "VX-2027-000312",
+                     *           "status": "paid",
+                     *           "subtotal": {
+                     *             "amount": "149.00",
+                     *             "currency": "EUR"
+                     *           },
+                     *           "taxAmount": {
+                     *             "amount": "0.00",
+                     *             "currency": "EUR"
+                     *           },
+                     *           "total": {
+                     *             "amount": "149.00",
+                     *             "currency": "EUR"
+                     *           },
+                     *           "amountPaid": {
+                     *             "amount": "149.00",
+                     *             "currency": "EUR"
+                     *           },
+                     *           "amountDue": {
+                     *             "amount": "0.00",
+                     *             "currency": "EUR"
+                     *           },
+                     *           "periodStart": "2027-03-01T00:00:00Z",
+                     *           "periodEnd": "2027-04-01T00:00:00Z",
+                     *           "issuedAt": "2027-03-01T01:04:12Z",
+                     *           "dueAt": null,
+                     *           "paidAt": "2027-03-01T01:04:15Z",
+                     *           "hostedInvoiceUrl": "https://invoice.stripe.com/i/acct_1Velexis/test_YWNjdF8xVmVsZXhpcw",
+                     *           "invoicePdfUrl": "https://pay.stripe.com/invoice/acct_1Velexis/test_YWNjdF8xVmVsZXhpcw/pdf",
+                     *           "providerInvoiceId": "in_1QyMn3Oq0Su5Wx",
+                     *           "createdAt": "2027-03-01T01:04:13Z"
+                     *         }
+                     *       ],
+                     *       "page": {
+                     *         "nextCursor": null,
+                     *         "limit": 50
+                     *       }
+                     *     }
+                     */
+                    "application/json": components["schemas"]["AdminInvoiceList"];
+                };
+            };
+            400: components["responses"]["ValidationFailed"];
+            401: components["responses"]["AdminUnauthenticated"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    adminListStripeEvents: {
+        parameters: {
+            query?: {
+                /** @description Only events in this processing status. */
+                status?: "received" | "processing" | "processed" | "ignored" | "failed";
+                /**
+                 * @description Only events of this Stripe type, matched exactly.
+                 * @example invoice.payment_failed
+                 */
+                type?: string;
+                /** @description Only the events resolved to this OTA. */
+                tenantId?: components["schemas"]["TenantId"];
+                /** @description Opaque cursor from `page.nextCursor` of the previous page. */
+                cursor?: components["parameters"]["Cursor"];
+                /** @description Page size. */
+                limit?: components["parameters"]["Limit"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of events. */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "data": [
+                     *         {
+                     *           "id": "evt_1QzNo5Pr2Tv7XyA8Bc0De2Fg",
+                     *           "endpoint": "billing",
+                     *           "type": "customer.subscription.updated",
+                     *           "status": "failed",
+                     *           "attempts": 5,
+                     *           "lastError": "UNKNOWN_PRICE: price_1QzNo5Pr2Tv7XyNew is not linked to a plan",
+                     *           "tenantId": "ten_01JB3K4M8P2R6T0W4Y8A2C6E0G",
+                     *           "receivedAt": "2027-04-02T09:14:07Z",
+                     *           "processedAt": "2027-04-02T09:31:40Z"
+                     *         },
+                     *         {
+                     *           "id": "evt_1QyMn3Oq0Su5WxZ7Ab9Cd1Ef",
+                     *           "endpoint": "billing",
+                     *           "type": "invoice.paid",
+                     *           "status": "processed",
+                     *           "attempts": 1,
+                     *           "lastError": null,
+                     *           "tenantId": "ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F",
+                     *           "receivedAt": "2027-03-01T01:04:16Z",
+                     *           "processedAt": "2027-03-01T01:04:18Z"
+                     *         }
+                     *       ],
+                     *       "page": {
+                     *         "nextCursor": null,
+                     *         "limit": 50
+                     *       }
+                     *     }
+                     */
+                    "application/json": components["schemas"]["AdminStripeEventList"];
+                };
+            };
+            400: components["responses"]["ValidationFailed"];
+            401: components["responses"]["AdminUnauthenticated"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    adminReprocessStripeEvent: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The Stripe event (`id` of `adminListStripeEvents`); an event the inbox lacks answers `404 NOT_FOUND`.
+                 * @example evt_1QzNo5Pr2Tv7XyA8Bc0De2Fg
+                 */
+                eventId: components["parameters"]["StripeEventId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Accepted. The event is queued for processing again. */
+            202: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["ValidationFailed"];
+            401: components["responses"]["AdminUnauthenticated"];
+            404: components["responses"]["NotFound"];
+            /** @description The event is not `failed` or `ignored` (`details.reason` is its status: `processing`, `received` or `processed`). Possible codes: CONFLICT. */
+            409: {
                 headers: {
                     "X-Request-Id": components["headers"]["X-Request-Id"];
                     [name: string]: unknown;
@@ -11432,6 +12733,74 @@ export interface operations {
             500: components["responses"]["InternalError"];
         };
     };
+    adminReleaseAmadeusOffice: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The pool entry (`id` of `adminListAmadeusOffices`, `amo_…`), not the 9-character Amadeus office id; an unknown id answers `404 NOT_FOUND`.
+                 * @example amo_01JC8R6T0W4Y8A2C6E0G4J8M2P
+                 */
+                officeRowId: components["parameters"]["AmadeusOfficeRowId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                /**
+                 * @example {
+                 *       "confirmNoOpenBookings": true,
+                 *       "reason": "Acme confirmed on 2027-05-03 that no booking with future travel remains on NCE1A0955."
+                 *     }
+                 */
+                "application/json": components["schemas"]["ReleaseAmadeusOfficeRequest"];
+            };
+        };
+        responses: {
+            /** @description The office, `available` again. */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "id": "amo_01JA2Y9N4Q8S2V6X0Z4B8D2G6J",
+                     *       "amadeusAccountId": "ama_01JA2Y8K3M7P1R5T9W3Z7C1F5H",
+                     *       "officeId": "NCE1A0955",
+                     *       "environment": "test",
+                     *       "status": "available",
+                     *       "assignedTenant": null,
+                     *       "assignedAt": null,
+                     *       "releaseRequestedAt": null,
+                     *       "releasedAt": "2027-05-03T14:20:09Z",
+                     *       "notes": "Live onboarding signed on 2027-03-02; ticketing agreement TA-118.",
+                     *       "createdAt": "2026-10-02T09:20:00Z",
+                     *       "version": 5
+                     *     }
+                     */
+                    "application/json": components["schemas"]["AdminAmadeusOffice"];
+                };
+            };
+            400: components["responses"]["ValidationFailed"];
+            401: components["responses"]["AdminUnauthenticated"];
+            404: components["responses"]["NotFound"];
+            /** @description The office backs an active `velexis` connection, or is not assigned to an OTA (`details.reason`). Possible codes: CONFLICT. */
+            409: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+        };
+    };
     adminRetireAmadeusOffice: {
         parameters: {
             query?: never;
@@ -11486,6 +12855,956 @@ export interface operations {
             401: components["responses"]["AdminUnauthenticated"];
             404: components["responses"]["NotFound"];
             /** @description Only an available office can be retired (`details.reason = not_available`). Possible codes: CONFLICT. */
+            409: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    adminListSettlements: {
+        parameters: {
+            query?: {
+                /** @description Only statements in this status. */
+                status?: components["schemas"]["AdminSettlementStatus"];
+                /** @description Only the statements of this month, given by its first instant (UTC). */
+                periodStart?: components["schemas"]["SettlementPeriodStart"];
+                /** @description Only the statements of this OTA. */
+                tenantId?: components["schemas"]["TenantId"];
+                /** @description Opaque cursor from `page.nextCursor` of the previous page. */
+                cursor?: components["parameters"]["Cursor"];
+                /** @description Page size. */
+                limit?: components["parameters"]["Limit"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of statements. */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "data": [
+                     *         {
+                     *           "id": "stl_01JD9W3Y7A1C5E9G3J7M1Q5S9V",
+                     *           "tenantId": "ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F",
+                     *           "tenantKey": "acme",
+                     *           "tenantName": "Acme Travel",
+                     *           "environment": "live",
+                     *           "periodStart": "2027-02-01T00:00:00Z",
+                     *           "periodEnd": "2027-03-01T00:00:00Z",
+                     *           "currency": "EUR",
+                     *           "status": "draft",
+                     *           "netAmount": {
+                     *             "amount": "11204.87",
+                     *             "currency": "EUR"
+                     *           },
+                     *           "lineCount": 57,
+                     *           "generatedAt": "2027-03-03T05:00:41Z",
+                     *           "approvedAt": null,
+                     *           "paidAt": null,
+                     *           "version": 1
+                     *         },
+                     *         {
+                     *           "id": "stl_01JD9W4Z8B2D6F0H4K8N2Q6T0W",
+                     *           "tenantId": "ten_01JB3K4M8P2R6T0W4Y8A2C6E0G",
+                     *           "tenantKey": "nordic",
+                     *           "tenantName": "Nordic Fly",
+                     *           "environment": "live",
+                     *           "periodStart": "2027-02-01T00:00:00Z",
+                     *           "periodEnd": "2027-03-01T00:00:00Z",
+                     *           "currency": "EUR",
+                     *           "status": "draft",
+                     *           "netAmount": {
+                     *             "amount": "-415.80",
+                     *             "currency": "EUR"
+                     *           },
+                     *           "lineCount": 9,
+                     *           "generatedAt": "2027-03-03T05:00:43Z",
+                     *           "approvedAt": null,
+                     *           "paidAt": null,
+                     *           "version": 1
+                     *         }
+                     *       ],
+                     *       "page": {
+                     *         "nextCursor": null,
+                     *         "limit": 50
+                     *       }
+                     *     }
+                     */
+                    "application/json": components["schemas"]["AdminSettlementList"];
+                };
+            };
+            400: components["responses"]["ValidationFailed"];
+            401: components["responses"]["AdminUnauthenticated"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    adminGenerateSettlements: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GenerateSettlementsRequest"];
+            };
+        };
+        responses: {
+            /** @description Accepted. The generation job is queued. */
+            202: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The body failed validation, for example a month that has not ended. Possible codes: VALIDATION_FAILED. */
+            400: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            401: components["responses"]["AdminUnauthenticated"];
+            404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["ServiceUnavailable"];
+        };
+    };
+    adminGetSettlement: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The statement (`id` of `adminListSettlements`), in any status; an unknown id answers `404 NOT_FOUND`.
+                 * @example stl_01JD9W3Y7A1C5E9G3J7M1Q5S9V
+                 */
+                settlementId: components["parameters"]["AdminSettlementId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The statement. */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    ETag: components["headers"]["ETag"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminSettlement"];
+                };
+            };
+            400: components["responses"]["ValidationFailed"];
+            401: components["responses"]["AdminUnauthenticated"];
+            404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    adminListSettlementLines: {
+        parameters: {
+            query?: {
+                /** @description Opaque cursor from `page.nextCursor` of the previous page. */
+                cursor?: components["parameters"]["Cursor"];
+                /** @description Page size. */
+                limit?: components["parameters"]["Limit"];
+            };
+            header?: never;
+            path: {
+                /**
+                 * @description The statement (`id` of `adminListSettlements`), in any status; an unknown id answers `404 NOT_FOUND`.
+                 * @example stl_01JD9W3Y7A1C5E9G3J7M1Q5S9V
+                 */
+                settlementId: components["parameters"]["AdminSettlementId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of lines. */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "data": [
+                     *         {
+                     *           "id": "sln_01JD9X1B2C3D4E5F6G7H8J9K0M",
+                     *           "type": "charge",
+                     *           "occurredAt": "2027-02-03T10:22:41Z",
+                     *           "amount": {
+                     *             "amount": "1180.00",
+                     *             "currency": "EUR"
+                     *           },
+                     *           "stripeFee": {
+                     *             "amount": "17.40",
+                     *             "currency": "EUR"
+                     *           },
+                     *           "originalAmount": null,
+                     *           "balanceTransactionId": "txn_3QFebCharge01",
+                     *           "sourceId": "ch_3QFebCharge01",
+                     *           "paymentIntentId": "pi_3QFebCharge01",
+                     *           "velexisPaymentId": "pay_01JD2K7M1P5R9T3W7Y1A5C9E3G",
+                     *           "checkoutId": "chk_01JD2K6K0N4Q8S2V6X0Z4B8D2F",
+                     *           "description": "Booking 9K2M4X OSL-LHR",
+                     *           "createdByAccountId": null
+                     *         },
+                     *         {
+                     *           "id": "sln_01JD9X2C3D4E5F6G7H8J9K0M1N",
+                     *           "type": "charge",
+                     *           "occurredAt": "2027-02-09T16:40:03Z",
+                     *           "amount": {
+                     *             "amount": "412.37",
+                     *             "currency": "EUR"
+                     *           },
+                     *           "stripeFee": {
+                     *             "amount": "6.43",
+                     *             "currency": "EUR"
+                     *           },
+                     *           "originalAmount": {
+                     *             "amount": "4790.00",
+                     *             "currency": "NOK"
+                     *           },
+                     *           "balanceTransactionId": "txn_3QFebCharge02",
+                     *           "sourceId": "ch_3QFebCharge02",
+                     *           "paymentIntentId": "pi_3QFebCharge02",
+                     *           "velexisPaymentId": "pay_01JD5N2Q6S0V4X8Z2B6D0F4H8K",
+                     *           "checkoutId": "chk_01JD5N1P5R9T3W7Y1A5C9E3G7J",
+                     *           "description": "Booking 4R8T1Z OSL-CPH",
+                     *           "createdByAccountId": null
+                     *         },
+                     *         {
+                     *           "id": "sln_01JD9X3D4E5F6G7H8J9K0M1N2P",
+                     *           "type": "refund",
+                     *           "occurredAt": "2027-02-11T08:05:59Z",
+                     *           "amount": {
+                     *             "amount": "-150.00",
+                     *             "currency": "EUR"
+                     *           },
+                     *           "stripeFee": {
+                     *             "amount": "0.00",
+                     *             "currency": "EUR"
+                     *           },
+                     *           "originalAmount": null,
+                     *           "balanceTransactionId": "txn_3QFebRefund01",
+                     *           "sourceId": "re_3QFebRefund01",
+                     *           "paymentIntentId": "pi_3QFebCharge01",
+                     *           "velexisPaymentId": "pay_01JD2K7M1P5R9T3W7Y1A5C9E3G",
+                     *           "checkoutId": "chk_01JD2K6K0N4Q8S2V6X0Z4B8D2F",
+                     *           "description": "Partial refund of booking 9K2M4X",
+                     *           "createdByAccountId": null
+                     *         }
+                     *       ],
+                     *       "page": {
+                     *         "nextCursor": "c2xuXzAxSkQ5WDNENEU1RjZHN0g4SjlLME0xTjJQ",
+                     *         "limit": 3
+                     *       }
+                     *     }
+                     */
+                    "application/json": components["schemas"]["AdminSettlementLineList"];
+                };
+            };
+            400: components["responses"]["ValidationFailed"];
+            401: components["responses"]["AdminUnauthenticated"];
+            404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    adminDownloadSettlementLines: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The statement (`id` of `adminListSettlements`), in any status; an unknown id answers `404 NOT_FOUND`.
+                 * @example stl_01JD9W3Y7A1C5E9G3J7M1Q5S9V
+                 */
+                settlementId: components["parameters"]["AdminSettlementId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The CSV file. */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    "Cache-Control": components["headers"]["NoStoreStatement"];
+                    /** @description Always an attachment named after the OTA, the statement's month and its currency, `velexis-settlement-<tenant key>-<yyyy-mm>-<currency>.csv`. */
+                    "Content-Disposition": string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example id,type,occurredAt,amount,stripeFee,originalAmount,originalCurrency,balanceTransactionId,sourceId,paymentIntentId,velexisPaymentId,checkoutId,description,createdByAccountId
+                     *     sln_01JD9X1B2C3D4E5F6G7H8J9K0M,charge,2027-02-03T10:22:41Z,1180.00,17.40,,,txn_3QFebCharge01,ch_3QFebCharge01,pi_3QFebCharge01,pay_01JD2K7M1P5R9T3W7Y1A5C9E3G,chk_01JD2K6K0N4Q8S2V6X0Z4B8D2F,Booking 9K2M4X OSL-LHR,
+                     *     sln_01JD9X2C3D4E5F6G7H8J9K0M1N,charge,2027-02-09T16:40:03Z,412.37,6.43,4790.00,NOK,txn_3QFebCharge02,ch_3QFebCharge02,pi_3QFebCharge02,pay_01JD5N2Q6S0V4X8Z2B6D0F4H8K,chk_01JD5N1P5R9T3W7Y1A5C9E3G7J,Booking 4R8T1Z OSL-CPH,
+                     *     sln_01JD9X3D4E5F6G7H8J9K0M1N2P,refund,2027-02-11T08:05:59Z,-150.00,0.00,,,txn_3QFebRefund01,re_3QFebRefund01,pi_3QFebCharge01,pay_01JD2K7M1P5R9T3W7Y1A5C9E3G,chk_01JD2K6K0N4Q8S2V6X0Z4B8D2F,Partial refund of booking 9K2M4X,
+                     */
+                    "text/csv": string;
+                };
+            };
+            400: components["responses"]["ValidationFailed"];
+            401: components["responses"]["AdminUnauthenticated"];
+            404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    adminAddSettlementAdjustment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The statement (`id` of `adminListSettlements`), in any status; an unknown id answers `404 NOT_FOUND`.
+                 * @example stl_01JD9W3Y7A1C5E9G3J7M1Q5S9V
+                 */
+                settlementId: components["parameters"]["AdminSettlementId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                /**
+                 * @example {
+                 *       "amount": {
+                 *         "amount": "100.00",
+                 *         "currency": "EUR"
+                 *       },
+                 *       "description": "Goodwill credit for the January outage",
+                 *       "reason": "Agreed with Nordic Fly's finance contact on 2027-03-02 after the payment outage of 2027-01-18."
+                 *     }
+                 */
+                "application/json": components["schemas"]["AddSettlementAdjustmentRequest"];
+            };
+        };
+        responses: {
+            /** @description The draft with its new totals and version (`ETag`). */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    ETag: components["headers"]["ETag"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "id": "stl_01JD9W4Z8B2D6F0H4K8N2Q6T0W",
+                     *       "tenantId": "ten_01JB3K4M8P2R6T0W4Y8A2C6E0G",
+                     *       "tenantKey": "nordic",
+                     *       "tenantName": "Nordic Fly",
+                     *       "environment": "live",
+                     *       "periodStart": "2027-02-01T00:00:00Z",
+                     *       "periodEnd": "2027-03-01T00:00:00Z",
+                     *       "currency": "EUR",
+                     *       "status": "draft",
+                     *       "netAmount": {
+                     *         "amount": "-315.80",
+                     *         "currency": "EUR"
+                     *       },
+                     *       "lineCount": 10,
+                     *       "generatedAt": "2027-03-03T05:00:43Z",
+                     *       "approvedAt": null,
+                     *       "paidAt": null,
+                     *       "version": 2,
+                     *       "grossAmount": {
+                     *         "amount": "2400.00",
+                     *         "currency": "EUR"
+                     *       },
+                     *       "refundsAmount": {
+                     *         "amount": "0.00",
+                     *         "currency": "EUR"
+                     *       },
+                     *       "disputesAmount": {
+                     *         "amount": "2715.00",
+                     *         "currency": "EUR"
+                     *       },
+                     *       "stripeFeesAmount": {
+                     *         "amount": "52.80",
+                     *         "currency": "EUR"
+                     *       },
+                     *       "velexisFeesAmount": {
+                     *         "amount": "48.00",
+                     *         "currency": "EUR"
+                     *       },
+                     *       "adjustmentsAmount": {
+                     *         "amount": "100.00",
+                     *         "currency": "EUR"
+                     *       },
+                     *       "feeBps": 200,
+                     *       "payoutReference": null,
+                     *       "notes": null,
+                     *       "carriedToId": null,
+                     *       "approvedByAccountId": null,
+                     *       "paidByAccountId": null,
+                     *       "voidedAt": null,
+                     *       "voidReason": null,
+                     *       "payoutAccountStatus": "pending_review",
+                     *       "createdAt": "2027-03-03T05:00:43Z",
+                     *       "updatedAt": "2027-03-04T08:51:17Z"
+                     *     }
+                     */
+                    "application/json": components["schemas"]["AdminSettlement"];
+                };
+            };
+            400: components["responses"]["ValidationFailed"];
+            401: components["responses"]["AdminUnauthenticated"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["SettlementStateInvalid"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    adminApproveSettlement: {
+        parameters: {
+            query?: never;
+            header: {
+                /**
+                 * @description The `ETag` of the version being changed; a stale version answers `412 PRECONDITION_FAILED`.
+                 * @example "3"
+                 */
+                "If-Match": components["parameters"]["IfMatch"];
+            };
+            path: {
+                /**
+                 * @description The statement (`id` of `adminListSettlements`), in any status; an unknown id answers `404 NOT_FOUND`.
+                 * @example stl_01JD9W3Y7A1C5E9G3J7M1Q5S9V
+                 */
+                settlementId: components["parameters"]["AdminSettlementId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The approved or carried-forward statement, with its new version in `ETag`. */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    ETag: components["headers"]["ETag"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminSettlement"];
+                };
+            };
+            400: components["responses"]["ValidationFailed"];
+            401: components["responses"]["AdminStepUpUnauthorized"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["SettlementStateInvalid"];
+            412: components["responses"]["PreconditionFailed"];
+            422: components["responses"]["PayoutAccountRequired"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    adminMarkSettlementPaid: {
+        parameters: {
+            query?: never;
+            header: {
+                /**
+                 * @description The `ETag` of the version being changed; a stale version answers `412 PRECONDITION_FAILED`.
+                 * @example "3"
+                 */
+                "If-Match": components["parameters"]["IfMatch"];
+            };
+            path: {
+                /**
+                 * @description The statement (`id` of `adminListSettlements`), in any status; an unknown id answers `404 NOT_FOUND`.
+                 * @example stl_01JD9W3Y7A1C5E9G3J7M1Q5S9V
+                 */
+                settlementId: components["parameters"]["AdminSettlementId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                /**
+                 * @example {
+                 *       "paidAt": "2027-02-07T00:00:00Z",
+                 *       "payoutReference": "VX-SETTLE-2027-01-ACME"
+                 *     }
+                 */
+                "application/json": components["schemas"]["MarkSettlementPaidRequest"];
+            };
+        };
+        responses: {
+            /** @description The paid statement, with its new version in `ETag`. */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    ETag: components["headers"]["ETag"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "id": "stl_01JC7T1V5X9Z3B7D1F5H9K3N7Q",
+                     *       "tenantId": "ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F",
+                     *       "tenantKey": "acme",
+                     *       "tenantName": "Acme Travel",
+                     *       "environment": "live",
+                     *       "periodStart": "2027-01-01T00:00:00Z",
+                     *       "periodEnd": "2027-02-01T00:00:00Z",
+                     *       "currency": "EUR",
+                     *       "status": "paid",
+                     *       "netAmount": {
+                     *         "amount": "8935.10",
+                     *         "currency": "EUR"
+                     *       },
+                     *       "lineCount": 41,
+                     *       "generatedAt": "2027-02-03T05:00:38Z",
+                     *       "approvedAt": "2027-02-05T10:02:11Z",
+                     *       "paidAt": "2027-02-07T00:00:00Z",
+                     *       "version": 3,
+                     *       "grossAmount": {
+                     *         "amount": "9600.00",
+                     *         "currency": "EUR"
+                     *       },
+                     *       "refundsAmount": {
+                     *         "amount": "249.00",
+                     *         "currency": "EUR"
+                     *       },
+                     *       "disputesAmount": {
+                     *         "amount": "0.00",
+                     *         "currency": "EUR"
+                     *       },
+                     *       "stripeFeesAmount": {
+                     *         "amount": "139.40",
+                     *         "currency": "EUR"
+                     *       },
+                     *       "velexisFeesAmount": {
+                     *         "amount": "187.02",
+                     *         "currency": "EUR"
+                     *       },
+                     *       "adjustmentsAmount": {
+                     *         "amount": "-89.48",
+                     *         "currency": "EUR"
+                     *       },
+                     *       "feeBps": 200,
+                     *       "payoutReference": "VX-SETTLE-2027-01-ACME",
+                     *       "notes": null,
+                     *       "carriedToId": null,
+                     *       "approvedByAccountId": "acc_01JA2YQ3M7R1T5W9Z3C7F1H5K9",
+                     *       "paidByAccountId": "acc_01JA2YQ3M7R1T5W9Z3C7F1H5K9",
+                     *       "voidedAt": null,
+                     *       "voidReason": null,
+                     *       "payoutAccountStatus": "verified",
+                     *       "createdAt": "2027-02-03T05:00:38Z",
+                     *       "updatedAt": "2027-02-07T08:30:12Z"
+                     *     }
+                     */
+                    "application/json": components["schemas"]["AdminSettlement"];
+                };
+            };
+            400: components["responses"]["ValidationFailed"];
+            401: components["responses"]["AdminStepUpUnauthorized"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["SettlementStateInvalid"];
+            412: components["responses"]["PreconditionFailed"];
+            422: components["responses"]["PayoutAccountRequired"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    adminVoidSettlement: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The statement (`id` of `adminListSettlements`), in any status; an unknown id answers `404 NOT_FOUND`.
+                 * @example stl_01JD9W3Y7A1C5E9G3J7M1Q5S9V
+                 */
+                settlementId: components["parameters"]["AdminSettlementId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                /**
+                 * @example {
+                 *       "reason": "Generated before the USD balance transactions of February were complete; regenerate on 2027-03-05."
+                 *     }
+                 */
+                "application/json": components["schemas"]["AdminReasonRequest"];
+            };
+        };
+        responses: {
+            /** @description The voided statement, with its new version in `ETag`. */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    ETag: components["headers"]["ETag"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "id": "stl_01JD9W5A9C3E7G1J5M9P3S7V1X",
+                     *       "tenantId": "ten_01JB3K4M8P2R6T0W4Y8A2C6E0G",
+                     *       "tenantKey": "nordic",
+                     *       "tenantName": "Nordic Fly",
+                     *       "environment": "live",
+                     *       "periodStart": "2027-02-01T00:00:00Z",
+                     *       "periodEnd": "2027-03-01T00:00:00Z",
+                     *       "currency": "USD",
+                     *       "status": "void",
+                     *       "netAmount": {
+                     *         "amount": "113.82",
+                     *         "currency": "USD"
+                     *       },
+                     *       "lineCount": 0,
+                     *       "generatedAt": "2027-03-03T05:00:44Z",
+                     *       "approvedAt": null,
+                     *       "paidAt": null,
+                     *       "version": 2,
+                     *       "grossAmount": {
+                     *         "amount": "120.00",
+                     *         "currency": "USD"
+                     *       },
+                     *       "refundsAmount": {
+                     *         "amount": "0.00",
+                     *         "currency": "USD"
+                     *       },
+                     *       "disputesAmount": {
+                     *         "amount": "0.00",
+                     *         "currency": "USD"
+                     *       },
+                     *       "stripeFeesAmount": {
+                     *         "amount": "3.78",
+                     *         "currency": "USD"
+                     *       },
+                     *       "velexisFeesAmount": {
+                     *         "amount": "2.40",
+                     *         "currency": "USD"
+                     *       },
+                     *       "adjustmentsAmount": {
+                     *         "amount": "0.00",
+                     *         "currency": "USD"
+                     *       },
+                     *       "feeBps": 200,
+                     *       "payoutReference": null,
+                     *       "notes": null,
+                     *       "carriedToId": null,
+                     *       "approvedByAccountId": null,
+                     *       "paidByAccountId": null,
+                     *       "voidedAt": "2027-03-04T09:20:44Z",
+                     *       "voidReason": "Generated before the USD balance transactions of February were complete; regenerate on 2027-03-05.",
+                     *       "payoutAccountStatus": "pending_review",
+                     *       "createdAt": "2027-03-03T05:00:44Z",
+                     *       "updatedAt": "2027-03-04T09:20:44Z"
+                     *     }
+                     */
+                    "application/json": components["schemas"]["AdminSettlement"];
+                };
+            };
+            400: components["responses"]["ValidationFailed"];
+            401: components["responses"]["AdminUnauthenticated"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["SettlementStateInvalid"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    adminGetPayoutAccount: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The OTA (`id` of `adminListTenants`); an unknown id answers `404 NOT_FOUND`.
+                 * @example ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F
+                 */
+                tenantId: components["parameters"]["AdminTenantId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The payout account, masked. */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    ETag: components["headers"]["ETag"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PayoutAccount"];
+                };
+            };
+            400: components["responses"]["ValidationFailed"];
+            401: components["responses"]["AdminUnauthenticated"];
+            404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    adminRevealPayoutAccount: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The OTA (`id` of `adminListTenants`); an unknown id answers `404 NOT_FOUND`.
+                 * @example ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F
+                 */
+                tenantId: components["parameters"]["AdminTenantId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                /**
+                 * @example {
+                 *       "reason": "Bank transfer of the approved February 2027 statement stl_01JD9W3Y7A1C5E9G3J7M1Q5S9V."
+                 *     }
+                 */
+                "application/json": components["schemas"]["AdminReasonRequest"];
+            };
+        };
+        responses: {
+            /** @description The bank identifiers, shown once. */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    "Cache-Control": components["headers"]["NoStore"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RevealedPayoutAccount"];
+                };
+            };
+            400: components["responses"]["ValidationFailed"];
+            401: components["responses"]["AdminStepUpUnauthorized"];
+            404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    adminReviewPayoutAccount: {
+        parameters: {
+            query?: never;
+            header: {
+                /**
+                 * @description The `ETag` of the version being changed; a stale version answers `412 PRECONDITION_FAILED`.
+                 * @example "3"
+                 */
+                "If-Match": components["parameters"]["IfMatch"];
+            };
+            path: {
+                /**
+                 * @description The OTA (`id` of `adminListTenants`); an unknown id answers `404 NOT_FOUND`.
+                 * @example ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F
+                 */
+                tenantId: components["parameters"]["AdminTenantId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReviewPayoutAccountRequest"];
+            };
+        };
+        responses: {
+            /** @description The reviewed payout account, masked, with its new version in `ETag`. */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    ETag: components["headers"]["ETag"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PayoutAccount"];
+                };
+            };
+            400: components["responses"]["ValidationFailed"];
+            401: components["responses"]["AdminUnauthenticated"];
+            404: components["responses"]["NotFound"];
+            412: components["responses"]["PreconditionFailed"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    adminListDomains: {
+        parameters: {
+            query?: {
+                /** @description Only the sub-domains or only the custom domains. */
+                kind?: "subdomain" | "custom";
+                /** @description Only hosts in this DNS verification status. */
+                verificationStatus?: "pending" | "verified" | "failed";
+                /** @description Only hosts in this TLS status. */
+                tlsStatus?: "pending" | "issued" | "failed" | "expired";
+                /** @description Opaque cursor from `page.nextCursor` of the previous page. */
+                cursor?: components["parameters"]["Cursor"];
+                /** @description Page size. */
+                limit?: components["parameters"]["Limit"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of hosts. */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "data": [
+                     *         {
+                     *           "id": "dom_01JB3K5N9Q3S7W1Y5A9C3E7G1J",
+                     *           "tenantId": "ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F",
+                     *           "tenantKey": "acme",
+                     *           "hostname": "travel.acme-travel.example.com",
+                     *           "kind": "custom",
+                     *           "purpose": "storefront",
+                     *           "isPrimary": true,
+                     *           "verificationStatus": "verified",
+                     *           "verifiedAt": "2026-11-18T10:25:00Z",
+                     *           "verificationDeadlineAt": "2026-11-21T10:00:00Z",
+                     *           "lastCheckedAt": "2027-03-04T04:10:12Z",
+                     *           "lastCheckError": null,
+                     *           "checkFailures": 0,
+                     *           "tlsStatus": "issued",
+                     *           "tlsExpiresAt": "2027-05-17T10:26:41Z",
+                     *           "tlsCheckedAt": "2027-03-04T04:40:08Z",
+                     *           "createdAt": "2026-11-18T10:00:00Z"
+                     *         },
+                     *         {
+                     *           "id": "dom_01JA2Z7S6P1T4W8Y2A5C9E3G7J",
+                     *           "tenantId": "ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F",
+                     *           "tenantKey": "acme",
+                     *           "hostname": "acme.ota.example.com",
+                     *           "kind": "subdomain",
+                     *           "purpose": "storefront",
+                     *           "isPrimary": false,
+                     *           "verificationStatus": "verified",
+                     *           "verifiedAt": "2026-10-14T08:20:14Z",
+                     *           "verificationDeadlineAt": null,
+                     *           "lastCheckedAt": null,
+                     *           "lastCheckError": null,
+                     *           "checkFailures": 0,
+                     *           "tlsStatus": "issued",
+                     *           "tlsExpiresAt": "2027-05-02T11:04:19Z",
+                     *           "tlsCheckedAt": "2027-03-04T04:40:05Z",
+                     *           "createdAt": "2026-10-14T08:20:14Z"
+                     *         }
+                     *       ],
+                     *       "page": {
+                     *         "nextCursor": null,
+                     *         "limit": 50
+                     *       }
+                     *     }
+                     */
+                    "application/json": components["schemas"]["AdminDomainList"];
+                };
+            };
+            400: components["responses"]["ValidationFailed"];
+            401: components["responses"]["AdminUnauthenticated"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    adminRecheckDomain: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The storefront host (`id` of `adminListDomains`) of any OTA; an unknown id answers `404 NOT_FOUND`.
+                 * @example dom_01JB3K5N9Q3S7W1Y5A9C3E7G1J
+                 */
+                domainId: components["parameters"]["AdminDomainId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Accepted. The checks are queued. */
+            202: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["ValidationFailed"];
+            401: components["responses"]["AdminUnauthenticated"];
+            404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["ServiceUnavailable"];
+        };
+    };
+    adminRemoveDomain: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The storefront host (`id` of `adminListDomains`) of any OTA; an unknown id answers `404 NOT_FOUND`.
+                 * @example dom_01JB3K5N9Q3S7W1Y5A9C3E7G1J
+                 */
+                domainId: components["parameters"]["AdminDomainId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                /**
+                 * @example {
+                 *       "reason": "Phishing pages reported by the registrar on 2027-03-02 (case 88231)."
+                 *     }
+                 */
+                "application/json": components["schemas"]["AdminReasonRequest"];
+            };
+        };
+        responses: {
+            /** @description The domain is removed. */
+            204: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["ValidationFailed"];
+            401: components["responses"]["AdminUnauthenticated"];
+            404: components["responses"]["NotFound"];
+            /** @description The domain is an OTA's sub-domain (`details.reason = subdomain`). Possible codes: CONFLICT. */
             409: {
                 headers: {
                     "X-Request-Id": components["headers"]["X-Request-Id"];
@@ -12191,6 +14510,128 @@ export interface operations {
             400: components["responses"]["ValidationFailed"];
             401: components["responses"]["AdminUnauthenticated"];
             429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    receiveStripeBillingEvent: {
+        parameters: {
+            query?: never;
+            header: {
+                /**
+                 * @description Stripe's signature of the raw body (`t=<timestamp>,v1=<HMAC-SHA256>`, several `v1` while a secret is rolled), checked with the endpoint's webhook secret and a 5-minute tolerance before anything else; missing or wrong, it answers `400 WEBHOOK_SIGNATURE_INVALID`.
+                 * @example t=1803862996,v1=5257a869e7ecebeda32affa62cdca3fa51cad7e77a0e56ff536d0ce8e108d8bd
+                 */
+                "Stripe-Signature": components["parameters"]["StripeSignature"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                /**
+                 * @example {
+                 *       "id": "evt_1QyMn3Oq0Su5WxZ7Ab9Cd1Ef",
+                 *       "object": "event",
+                 *       "api_version": "2025-08-27.basil",
+                 *       "created": 1803862996,
+                 *       "livemode": false,
+                 *       "pending_webhooks": 1,
+                 *       "request": {
+                 *         "id": null,
+                 *         "idempotency_key": null
+                 *       },
+                 *       "type": "invoice.paid",
+                 *       "data": {
+                 *         "object": {
+                 *           "id": "in_1QyMn3Oq0Su5Wx",
+                 *           "object": "invoice",
+                 *           "customer": "cus_Qx7Lm2Np9Rt4Vw",
+                 *           "status": "paid"
+                 *         }
+                 *       }
+                 *     }
+                 */
+                "application/json": components["schemas"]["StripeEvent"];
+            };
+        };
+        responses: {
+            /** @description The event is stored (or was stored before) and queued. */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "received": true
+                     *     }
+                     */
+                    "application/json": components["schemas"]["StripeEventReceived"];
+                };
+            };
+            400: components["responses"]["StripeEventRefused"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    receiveStripeConnectAccountEvent: {
+        parameters: {
+            query?: never;
+            header: {
+                /**
+                 * @description Stripe's signature of the raw body (`t=<timestamp>,v1=<HMAC-SHA256>`, several `v1` while a secret is rolled), checked with the endpoint's webhook secret and a 5-minute tolerance before anything else; missing or wrong, it answers `400 WEBHOOK_SIGNATURE_INVALID`.
+                 * @example t=1803862996,v1=5257a869e7ecebeda32affa62cdca3fa51cad7e77a0e56ff536d0ce8e108d8bd
+                 */
+                "Stripe-Signature": components["parameters"]["StripeSignature"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                /**
+                 * @example {
+                 *       "id": "evt_1QzPq6Rs3Uw8YzB9Cd1Ef3Gh",
+                 *       "object": "event",
+                 *       "account": "acct_1QxAcmeTravel01",
+                 *       "api_version": "2025-08-27.basil",
+                 *       "created": 1804383960,
+                 *       "livemode": false,
+                 *       "pending_webhooks": 1,
+                 *       "request": {
+                 *         "id": null,
+                 *         "idempotency_key": null
+                 *       },
+                 *       "type": "account.application.deauthorized",
+                 *       "data": {
+                 *         "object": {
+                 *           "id": "ca_QxVelexisPlatform01",
+                 *           "object": "application",
+                 *           "name": "Velexis"
+                 *         }
+                 *       }
+                 *     }
+                 */
+                "application/json": components["schemas"]["StripeConnectAccountEvent"];
+            };
+        };
+        responses: {
+            /** @description The event is stored (or was stored before) and queued. */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "received": true
+                     *     }
+                     */
+                    "application/json": components["schemas"]["StripeEventReceived"];
+                };
+            };
+            400: components["responses"]["StripeEventRefused"];
             500: components["responses"]["InternalError"];
         };
     };
