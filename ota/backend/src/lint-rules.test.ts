@@ -40,16 +40,16 @@ describe("lint rules of the OTA backend", () => {
   let files: string[];
   let results: ESLint.LintResult[];
 
-  // Loading the root config with its plugins and parser is most of the work (about 1 s here, 10 s under a full
-  // parallel `pnpm test`), then linting every file of the package (about 2 s here, several times that on a loaded
-  // 4-CPU runner, and more with every file the package grows). Both happen once, in this hook with its own timeout,
-  // as in the platform backend's package.test.ts, so the tests below measure only their own work and a loaded
-  // machine cannot time them out.
+  // Loading the root config with its plugins and parser (about 1 s alone), then parsing and linting every file of the
+  // package: 367 files and about 180 000 lines in wave 26, about 14 s on an idle 4-CPU machine and from 45 s to more
+  // than 60 s under the full parallel `pnpm test` there, growing with every file the package gets. Both happen once,
+  // in this hook with its own budget (180 s), as in the platform backend's package.test.ts, so the tests below
+  // measure only their own work and a loaded machine cannot time them out.
   beforeAll(async () => {
     await eslint.calculateConfigForFile(join(APP_DIR, "src/main.ts"));
     files = packageFiles();
     results = await eslint.lintFiles(files);
-  }, 60_000);
+  }, 180_000);
 
   it("reports console.* and process.env in this package's code", async () => {
     const [result] = await eslint.lintText(

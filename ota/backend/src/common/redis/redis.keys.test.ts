@@ -3,6 +3,7 @@
 // `t:<tenantId>:<env>:`, and no file of `src/` other than redis.keys.ts hands the Redis client a key it wrote itself.
 import { readdirSync } from "node:fs";
 import { join, relative } from "node:path";
+import { setImmediate } from "node:timers/promises";
 import ts from "typescript";
 import { beforeAll, describe, expect, it } from "vitest";
 import { APP_DIR } from "../../config";
@@ -705,15 +706,22 @@ describe("source scan for hand-written Redis keys", () => {
   let sourceProblems: string[];
 
   // Building the program parses the package and the declarations it imports (NestJS, BullMQ, ioredis), and the scan of
-  // the sources type-checks every Redis call in them: about three seconds here, several times that under a full
-  // parallel `pnpm test` on a 4-CPU runner, and more with every module the package grows. Both happen once, in this
-  // hook with its own timeout; the tests below only assert on the results.
-  beforeAll(() => {
+  // the sources type-checks every Redis call in them: 210 production files in wave 26, about 4 s and 10 s on an idle
+  // 4-CPU machine (no file above 1.3 s) and from 43 s to more than 60 s in all under the full parallel `pnpm test`
+  // there, and more with every module the package grows. Both happen once, in this hook with its own budget (180 s);
+  // the tests below only assert on the results. The scan takes one file at a time and gives the event loop back in
+  // between: one synchronous run of more than 60 s made vitest's worker miss its RPC deadline ("Timeout calling
+  // onTaskUpdate"), which fails the run although every test passed.
+  beforeAll(async () => {
     const sources = productionSources();
     program = createProgram(sources, { [PROBE]: PROBE_SOURCE });
     scanned = sources.filter((file) => file !== KEYS_FILE);
-    sourceProblems = handWrittenKeys(program, scanned);
-  }, 60_000);
+    sourceProblems = [];
+    for (const file of scanned) {
+      sourceProblems.push(...handWrittenKeys(program, [file]));
+      await setImmediate();
+    }
+  }, 180_000);
 
   it("finds no key written by hand outside redis.keys.ts in src/ [OBE-002 AC1]", () => {
     expect(scanned.map((file) => relative(APP_DIR, file))).toEqual(
