@@ -128,11 +128,18 @@ export function testApiVariables(): Readonly<Record<string, string>> {
 export const TEST_MAIL_FROM = '"Velexis OTA (test)" <no-reply@mail.ota.example.com>';
 
 /**
+ * The storage folder of the worker's tests (STORAGE_DIR, OBE-053): in the package's ignored node_modules/.cache, created
+ * on first use. A test that reads back what it stores passes a folder of its own.
+ */
+const STORAGE_DIR = join(APP_DIR, "node_modules", ".cache", "test-storage");
+
+/**
  * The worker's variables besides the services and the provisioner DSN (OBE-030): the key folder and the storefront
- * base domain it shares with the API, and the e-mail settings with the development values of ota/backend/.env.example
- * (SMTP_URL is Mailpit's development port; a test that sends e-mail passes its own).
+ * base domain it shares with the API, the e-mail settings with the development values of ota/backend/.env.example
+ * (SMTP_URL is Mailpit's development port; a test that sends e-mail passes its own) and the storage folder (OBE-053).
  */
 export function testWorkerVariables(): Readonly<Record<string, string>> {
+  mkdirSync(STORAGE_DIR, { recursive: true, mode: 0o700 });
   return Object.freeze({
     MASTER_KEY_DIR: testApiCredentials().masterKeyDir,
     MASTER_KEY_CURRENT: TEST_MASTER_KEY_CURRENT,
@@ -141,6 +148,7 @@ export function testWorkerVariables(): Readonly<Record<string, string>> {
     MAIL_FROM: TEST_MAIL_FROM,
     OPS_ALERT_EMAIL: "ops@example.com",
     PUBLIC_OTA_ADMIN_URL: "http://localhost:3002",
+    STORAGE_DIR,
   });
 }
 

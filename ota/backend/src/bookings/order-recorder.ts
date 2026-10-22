@@ -24,6 +24,12 @@
 //   - `booking_events` (`booking.created`, and `booking.ticketed` or `booking.ticketing_failed`) and the outbox
 //     `booking.confirmed` to the primary contact (dedupe key `booking.confirmed:<bkg_…>`).
 //
+// `OrderRecorder.event` is the one way the bookings module writes a booking event, so it is where the booking documents
+// are asked for (OBE-053, documents/documents.processor.ts): `booking.created` (the itinerary, and the e-ticket receipts
+// of an order that came back issued), `booking.ticketed` (the receipts and a new itinerary, whichever path stored the
+// tickets: checkout.complete, the ticketing job, a refresh) and `booking.cancelled` (the cancelled itinerary) enqueue
+// `document.render` jobs after the commit of the event's transaction.
+//
 // `toBooking` turns the stored rows into the contract's Booking in customer scope: selling amounts only (no net,
 // markup or office), documents with `numberMasked`, discount numbers masked, customer-visible remarks only. Bookings
 // without an Amadeus order view leave `amadeus` out (bookings.get of OBE-046 adds it).
@@ -47,6 +53,7 @@ import {
 } from "../checkout/traveler-documents";
 import { IdGenerator } from "../common/ids";
 import type { SharedConfig } from "../config";
+import { DocumentRequests } from "../documents/documents.processor";
 import { storefrontUrl } from "../notifications/renderer";
 import { InvalidNotificationError, OutboxService } from "../notifications/outbox.service";
 import { Money } from "../pricing/pricing.types";
@@ -562,6 +569,7 @@ export class OrderRecorder {
     private readonly ids: IdGenerator,
     private readonly logger: PinoLogger,
     config: ConfigService<SharedConfig, true>,
+    private readonly documentRequests: DocumentRequests,
   ) {
     logger.setContext(OrderRecorder.name);
     this.baseDomain = config.get("STOREFRONT_BASE_DOMAIN", { infer: true });
@@ -760,7 +768,10 @@ export class OrderRecorder {
     }));
   }
 
-  /** Appends a booking event; `data` goes through the shared redactor. */
+  /**
+   * Appends a booking event; `data` goes through the shared redactor. The events that change a booking document ask
+   * for it in the same transaction (see the file header).
+   */
   async event(
     trx: TenantTransaction,
     bookingId: string,
@@ -793,6 +804,7 @@ export class OrderRecorder {
       created_at: event.now,
       updated_at: event.now,
     });
+    await this.documentRequests.afterBookingEvent(trx, bookingId, event.type);
   }
 
   /** The segment rows of the order, with their instants read in the airports' time zones (UTC when unknown). */

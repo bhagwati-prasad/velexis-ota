@@ -31,6 +31,7 @@ import { CheckoutModule } from "./checkout/checkout.module";
 import { ConsoleModule } from "./console/console.module";
 import { StaffActionsInterceptor } from "./console/staff-actions.writer";
 import { API_APP, type ApiConfig } from "./config";
+import { DocumentsModule } from "./documents/documents.module";
 import { HealthModule } from "./health/health.module";
 import { IdentityModule } from "./identity/identity.module";
 import { NotificationsModule } from "./notifications/notifications.module";
@@ -95,6 +96,9 @@ export class AppModule implements NestModule {
         // The e-mail outbox (OBE-030), global: a use case queues an e-mail with OutboxService in its transaction; the
         // worker sends it.
         NotificationsModule.forApi(),
+        // The booking documents (OBE-053), global: the booking events of a use case ask for their PDFs, which the
+        // worker renders.
+        DocumentsModule.forApi(),
         // Customer tokens and sessions (OBE-031): the customer guard below verifies the tokens with its key; staff
         // tokens and sessions (OBE-059): the staff guard below.
         IdentityModule,

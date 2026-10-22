@@ -18,6 +18,7 @@ import {
   type EnvVar,
 } from "@velexis/config";
 import { API_KEY_PEPPER_MIN_BYTES } from "@velexis/crypto";
+import { STORAGE_DRIVERS } from "@velexis/db/storage";
 
 /** The package folder (`ota/backend`, or `ota-backend` in a release): `src/` and `dist/` are one level down. */
 export const APP_DIR = resolve(__dirname, "..");
@@ -183,6 +184,9 @@ export const SERVICE_KEY_PATTERN = /^sk_[A-Za-z0-9_]{16,}$/;
  */
 export const JWT_PRIVATE_KEY_MIN_BYTES = 48;
 
+/** The storage folder on the VM (ADR-0017; `velexis-ota`'s, mode 0700, provision-vm.sh): STORAGE_DIR's default. */
+export const DEFAULT_STORAGE_DIR = "/var/lib/velexis/storage";
+
 /** The loopback hosts on which an `http:` Amadeus base URL is accepted: the stub in development and CI. */
 const LOOPBACK_HOSTS: readonly string[] = ["127.0.0.1", "localhost", "[::1]"];
 
@@ -286,6 +290,14 @@ export const workerConfigSchema = {
   OPS_ALERT_EMAIL: env.string({ pattern: EMAIL_ADDRESS }),
   // The OTA admin's public base URL: the links of staff alert e-mails (OADR-0013 item 4).
   PUBLIC_OTA_ADMIN_URL: env.url({ protocols: ["https:", "http:"] }),
+  // The StorageAdapter of @velexis/db/storage (ADR-0017, OADR-0013 item 7; OBE-053): `local` (the MVP) keeps the
+  // objects as files under STORAGE_DIR, an existing folder (checked here; `.local/storage` locally, which `pnpm
+  // dev:keys` creates). The documents module writes the rendered PDFs there (`tenant_<key>/documents/…`) and reads the
+  // storefront's square logo from it (`tenant_<key>/assets/…`). `s3` passes this check, but the adapter refuses it
+  // until an S3 adapter exists, so the worker does not start with it. Both units read ota-backend.env, which holds
+  // them; the API reads them once it serves the files (OBE-054).
+  STORAGE_DRIVER: env.enum(STORAGE_DRIVERS, { default: "local" }),
+  STORAGE_DIR: env.dir({ default: DEFAULT_STORAGE_DIR }),
 } as const;
 
 /** The variables both processes read: what shared modules such as `health` may use. */

@@ -1317,7 +1317,8 @@ Checkout, customer accounts in cookies, Stripe on the Velexis account, the airli
   - Deliberately logging the request body in a scratch branch makes the test fail (documented in the test file's header as a manual check).
 - **Verify:** `pnpm --filter @velexis/ota-backend test:int -- pan-absence`
 
-### OBE-053 · Render itinerary and e-ticket PDFs in the documents queue
+### OBE-053 · Render itinerary and e-ticket PDFs in the documents queue ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-backend
 - **Milestone:** M3
 - **Depends on:** OBE-042, OBE-030

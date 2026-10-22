@@ -3,7 +3,7 @@
 // consumer of ProvisioningModule (OBE-005) is the first, the schedulers and the `ota-maintenance` consumer of
 // JobsModule (OBE-024) the second, the `ota-notifications` consumer of NotificationsModule (OBE-030) the third, the
 // `ota-stripe-events` consumer of PaymentsWorkerModule (OBE-039) the fourth, the `ota-ticketing` consumer of
-// BookingsWorkerModule (OBE-044) the fifth.
+// BookingsWorkerModule (OBE-044) the fifth, the `ota-documents` consumer of DocumentsModule (OBE-053) the sixth.
 import { Module, type DynamicModule, type INestApplicationContext, type Type } from "@nestjs/common";
 import { ConfigModule } from "@nestjs/config";
 import { NestFactory } from "@nestjs/core";
@@ -16,6 +16,7 @@ import { CommonModule } from "./common/common.module";
 import { QueuesModule } from "./common/queues/queues.module";
 import { RedisModule } from "./common/redis/redis.module";
 import { WORKER_APP, type WorkerConfig } from "./config";
+import { DocumentsModule } from "./documents/documents.module";
 import { HealthModule } from "./health/health.module";
 import { JobsModule } from "./jobs/jobs.module";
 import { NotificationsModule } from "./notifications/notifications.module";
@@ -66,6 +67,9 @@ export class WorkerModule {
         // The e-mail outbox (global: OutboxService), the SMTP gateway, the ota-notifications consumer and the
         // notifications.sweep handler that JobsModule's runner finds (OBE-030).
         NotificationsModule.forWorker(),
+        // The booking documents (global: DocumentRequests for the booking events of the jobs), the storage and the
+        // ota-documents consumer that renders the itinerary and e-ticket receipt PDFs (OBE-053).
+        DocumentsModule.forWorker(),
         // The ota-stripe-events consumer: the webhook events read again from Stripe and applied (OBE-039).
         PaymentsWorkerModule,
         // The ota-ticketing consumer and the ticketing.scan handler: the issuance retries (OBE-044).

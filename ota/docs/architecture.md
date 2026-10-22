@@ -172,7 +172,7 @@ BullMQ prefix `vx`, defaults of [ADR-0009](../../docs/mvp/adr/0009-background-jo
 | `ota-bookings` | API, schedulers → worker | `booking.reconcile`, `booking.sync` `{tenantId, bookingId}` | 4 |
 | `ota-ticketing` | API, schedulers → worker | `ticketing.issue {tenantId, bookingId}` | 2 |
 | `ota-notifications` | API (after commit), sweep → worker | `notify {tenantId}` drains that tenant's outbox | 4 |
-| `ota-documents` | bookings → worker | `document.render {tenantId, bookingId, kind, bookingVersion}` | 2 |
+| `ota-documents` | bookings → worker | `document.render {tenantId, bookingId, kind, bookingVersion[, ticketId]}` | 2 |
 | `ota-maintenance` | schedulers → worker | Fan-out and purge jobs below | 2 |
 
 | Scheduler | Every (UTC) | Fans out to | Milestone |
