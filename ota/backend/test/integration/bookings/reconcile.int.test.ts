@@ -79,6 +79,7 @@ import { Clock } from "../../../src/common/clock";
 import { newId } from "../../../src/common/ids";
 import { OTA_QUEUE } from "../../../src/common/queues/queue-names";
 import { loadWorkerConfig } from "../../../src/config";
+import { DocumentsProcessor } from "../../../src/documents/documents.processor";
 import { jobTenant, minuteBucket, tenantJob } from "../../../src/jobs/fan-out";
 import { Money } from "../../../src/pricing/pricing.types";
 import { seedDefaultMarkupRule } from "../../../src/provisioning/seeds/markup-rules.seed";
@@ -799,6 +800,12 @@ beforeAll(async () => {
   for (const scheduler of await maintenance.getJobSchedulers(0, -1)) {
     await maintenance.removeJobScheduler(scheduler.key);
   }
+  // Nor may the booking documents' consumer (`ota-documents`, OBE-053): the booking.created of an order found asks for
+  // its itinerary, and the render's write locks the booking for a moment (documents.processor.ts, T2). Should that
+  // moment meet the reconciliation's inline ticketing claim (`FOR UPDATE SKIP LOCKED`, OADR-0014 point 6), the claim
+  // skips the booking and leaves it to the ticketing scan, so the issuance these scenarios check would depend on how
+  // fast a PDF renders. The render jobs wait in the paused queue; render.int.test.ts covers them.
+  await worker.get(DocumentsProcessor).worker.pause();
 }, OPENAPI_SETUP_TIMEOUT_MS);
 
 afterAll(async () => {
