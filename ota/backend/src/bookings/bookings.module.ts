@@ -16,6 +16,9 @@
 // ConsoleModule imports this module for the console bookings reads (OBE-061): the repositories, the sealed booking
 // documents and the refresh of CustomerBookingsService are exported for them.
 //
+// bookings.update (OBE-048): BookingChangesService (with its BookingChangesRepository) changes the contacts and special
+// requests of a booking through Flight Order Management PATCH, answering through CustomerBookingsService.
+//
 // Guest access (OBE-047): GuestAccessService issues the guest booking tokens of checkout.complete and bookings.lookup
 // (LookupController) and hands them out in `__Host-vx_bt` (CookieWriter, a plain provider without state, provided here
 // again) or the body; LookupAttempts counts the failed lookups in Redis (the global RedisModule's client).
@@ -46,6 +49,7 @@ import { StripeClientFactory } from "../payments/stripe/stripe-client.factory";
 import { StripeGateway } from "../payments/stripe/stripe.gateway";
 import { ShoppingModule } from "../shopping/shopping.module";
 import { TenancyModule } from "../tenancy/tenancy.module";
+import { BookingChangesRepository, BookingChangesService } from "./booking-changes.service";
 import { BookingOrchestrator, CompleteCheckoutIdempotencyHooks } from "./booking-orchestrator.service";
 import { BookingSyncJobs, BookingSyncScan } from "./booking-sync.processor";
 import { BookingSyncRepository, BookingSyncService } from "./booking-sync.service";
@@ -75,6 +79,8 @@ import { TicketingRepository, TicketingService } from "./ticketing.service";
     CompleteCheckoutIdempotencyHooks,
     ReconcileRepository,
     CustomerBookingsService,
+    BookingChangesService,
+    BookingChangesRepository,
     BookingAccessContext,
     BookingAccessGuard,
     GuestAccessService,

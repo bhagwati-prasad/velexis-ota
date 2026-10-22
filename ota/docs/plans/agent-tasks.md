@@ -1228,7 +1228,8 @@ Checkout, customer accounts in cookies, Stripe on the Velexis account, the airli
   - A guest token of booking A cannot open booking B.
 - **Verify:** `pnpm --filter @velexis/ota-backend test -- bookings && pnpm --filter @velexis/ota-backend test:int -- bookings`
 
-### OBE-048 · Implement bookings.update for contacts and remarks
+### OBE-048 · Implement bookings.update for contacts and remarks ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-backend
 - **Milestone:** M3
 - **Depends on:** OBE-047

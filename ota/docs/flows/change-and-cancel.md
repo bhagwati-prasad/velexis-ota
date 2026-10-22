@@ -77,7 +77,7 @@ sequenceDiagram
 ## 3. Steps
 
 1. **Who may act.** The owning customer (cookie session) or the guest holding the booking token; booking of the storefront's environment only. `allowedActions` from the booking decides what the page offers.
-2. **Change contacts.** `bookings.update` accepts `contacts` and `remarks` in the MVP; `travelers[…]` changes answer `403 FEATURE_DISABLED` (`details.feature = "travelerChanges"`). The PATCH sends the full contacts list, as Amadeus replaces it. The new primary e-mail becomes `bookings.contact_email` (used by lookup and notifications); both addresses get a confirmation.
+2. **Change contacts.** `bookings.update` accepts `contacts` and `remarks` in the MVP; `travelers[…]` changes answer `403 FEATURE_DISABLED` (`details.feature = "travelerChanges"`). The PATCH sends the full contacts list, as Amadeus replaces it. The new primary e-mail becomes `bookings.contact_email` (used by lookup and notifications); both addresses get a confirmation (the `booking.confirmed` e-mail of the booking as it is now: the MVP template keys of [OADR-0013](../adr/0013-notifications-and-booking-documents.md) point 4 have none for a change). A special request the order already holds is not added twice.
 3. **Quote.** `bookings.quoteCancellation` reads the order with refund fare rules and computes the mode:
    - `release`: nothing ticketed → the order is cancelled, the payment voided or refunded in full minus non-refundable OTA fees (`fee_rules.refundable = false`);
    - `void`: every ticket was issued today in the OTA's time zone → tickets voided, full refund;
@@ -100,8 +100,11 @@ sequenceDiagram
 | Situation | Answer and effect |
 |---|---|
 | Stale ETag | `412 PRECONDITION_FAILED` |
-| Amadeus 2552 | `409 VERSION_CONFLICT` |
+| Amadeus 2552 | `409 VERSION_CONFLICT`; nothing changes locally |
+| Traveller changes (`travelers[…]`) | `403 FEATURE_DISABLED` (`details.feature = "travelerChanges"`); nothing is read or sent |
 | Contact data invalid | `422 CONTACT_DATA_INVALID` with `fieldErrors` |
+| Timeout on PATCH | `504 SUPPLIER_TIMEOUT`; the order is read back first and what Amadeus applied is recorded (new `ETag`, events, confirmations), so a retry with the old `If-Match` answers `412` |
+| Amadeus `5xx` or a cut connection on PATCH (outcome unknown, [OADR-0003](../adr/0003-booking-orchestration-and-supplier-timeout-recovery.md) point 9) | `502 SUPPLIER_ERROR` or `503 SUPPLIER_UNAVAILABLE`; the order is read back and recorded as after a timeout |
 | Quote changed | `409 REFUND_AMOUNT_CHANGED` with `details.newRefund` |
 | Amadeus refuses DELETE (outside void window) | Converted to `request_only`, `202` |
 | Timeout on DELETE | `504 SUPPLIER_TIMEOUT`; booking flagged; the worker GETs the order within 15 minutes; a same-key retry replays the `504` until decided, then the final `200` (money step runs once) or error |
