@@ -112,6 +112,8 @@ function compileSources(outDir: string): void {
 // `require.main === module` blocks turn the start functions' results into the process's exit code.
 describe("the entry points as processes", () => {
   let outDir: string;
+  /** What each process gave, by entry point and arguments: the processes run in the setup hook, the tests read them. */
+  const runs = new Map<string, SpawnSyncReturns<string>>();
 
   /** Runs `<entry>.js` of the compiled sources with only `env`; packages resolve from this package's node_modules. */
   function run(
@@ -126,12 +128,40 @@ describe("the entry points as processes", () => {
     });
   }
 
+  /** The process run in the setup hook for `key`. */
+  function ran(key: string): SpawnSyncReturns<string> {
+    const result = runs.get(key);
+    if (result === undefined) {
+      throw new Error(`no process ran for ${key}`);
+    }
+    return result;
+  }
+
   beforeAll(() => {
     outDir = mkdtempSync(join(tmpdir(), "velexis-platform-backend-entry-"));
     compileSources(outDir);
-    // Transpiling every source file takes seconds, more on a machine that runs the other packages' tests at the same
-    // time; 60 s bounds it for a slow CI runner.
-  }, 60_000);
+    for (const entry of ["main", "worker"]) {
+      // As on the VM (APP_ENV and NODE_ENV production): no .env.local file is read.
+      runs.set(
+        entry,
+        run(entry, [], {
+          APP_ENV: "production",
+          NODE_ENV: "production",
+          REDIS_URL: "redis://127.0.0.1:6379/0",
+          PLATFORM_BFF_KEY: BFF_KEY,
+          JWT_PRIVATE_KEY_FILE: jwtKey.path,
+          ...testCryptoAndMailEnv(masterKeys),
+          STOREFRONT_BASE_DOMAIN: "ota.example.com",
+        }),
+      );
+    }
+    runs.set("cli help", run("cli", ["help"], {}));
+    runs.set("cli", run("cli", [], {}));
+    // Transpiling every source file takes seconds, and each process about a second to load the application's modules,
+    // several times that on a machine that runs the other packages' tests at the same time (a `next build` among
+    // them), so the processes run here rather than inside the tests' 5 s bound. 180 s bounds the transpiling and the
+    // four processes, each of which spawnSync stops after 30 s, on a slow CI runner.
+  }, 180_000);
 
   afterAll(() => {
     rmSync(outDir, { recursive: true, force: true });
@@ -143,16 +173,7 @@ describe("the entry points as processes", () => {
   ])(
     "[PBE-001 AC3] node dist/%s.js exits 1 without DATABASE_URL, after one fatal line whose ConfigError names it",
     (entry, app) => {
-      // As on the VM (APP_ENV and NODE_ENV production): no .env.local file is read.
-      const result = run(entry, [], {
-        APP_ENV: "production",
-        NODE_ENV: "production",
-        REDIS_URL: "redis://127.0.0.1:6379/0",
-        PLATFORM_BFF_KEY: BFF_KEY,
-        JWT_PRIVATE_KEY_FILE: jwtKey.path,
-        ...testCryptoAndMailEnv(masterKeys),
-        STOREFRONT_BASE_DOMAIN: "ota.example.com",
-      });
+      const result = ran(entry);
 
       expect(result.error).toBeUndefined();
       expect(result.status).toBe(1);
@@ -167,8 +188,8 @@ describe("the entry points as processes", () => {
   );
 
   it("node dist/cli.js exits 0 for help and 2 without a command, with no configuration at all", () => {
-    const help = run("cli", ["help"], {});
-    const none = run("cli", [], {});
+    const help = ran("cli help");
+    const none = ran("cli");
 
     expect([help.status, help.stdout, help.stderr]).toEqual([EXIT_OK, usage(CLI_COMMANDS), ""]);
     expect([none.status, none.stdout, none.stderr]).toEqual([
