@@ -5,10 +5,12 @@
 // `amadeus` (12; `createFlightOrders`, `issueFlightOrder`, `patchFlightOrder` and `cancelFlightOrder` deferred). The
 // table gives the long staff actions their 60 s timeout (`bookings.issue`, `.cancel`, `.import`, `.retrieve`), every
 // state-changing POST its generated `Idempotency-Key`, and every method its `X-Velexis-Environment` flag; `ConsoleApi`
-// in console.js is inferred from this factory. SDK-012 adds `settings` and `payments`. The lists (`bookings.list`,
-// `queues.list`, `queues.listSnapshots`, `customers.list`, `supplierRequests.list`) resolve with a `Page` (`next()`,
-// `for await` across pages) that keeps the response's extra fields (`totalCount`, `snapshot`, `warnings`). Deferred
-// methods surface the API's `501 NOT_IMPLEMENTED` as a `ServerError` that is not retryable.
+// in console.js is inferred from this factory. SDK-012 adds the MVP additions (ota/sdk/docs/extensions.md §3.2 and
+// §3.3): `settings` (25: `markupRules`, `feeRules`, `storefront`, `pages`, `assets`, `templates`) and `payments` (4).
+// The lists (`bookings.list`, `queues.list`, `queues.listSnapshots`, `customers.list`, `supplierRequests.list` and the
+// settings and payments lists) resolve with a `Page` (`next()`, `for await` across pages) that keeps the response's
+// extra fields (`totalCount`, `snapshot`, `warnings`). Deferred methods surface the API's `501 NOT_IMPLEMENTED` as a
+// `ServerError` that is not retryable.
 //
 // - Keys and where it runs: a secret key (or the OTA admin's service key) and, except for `auth.signIn`,
 //   `auth.refresh` and a key-only `auth.signOut`, a staff access token, or a key scoped `console:automation` that
@@ -22,10 +24,17 @@
 // - Staff sessions: a client with `sessionKind: "staff"` and a `refreshToken` refreshes an expired staff token through
 //   `console.auth.refresh` and retries the call once (internal/session.js, README §4.3).
 // - `If-Match`: `bookings.patch`, `.issue` and `.cancel` require `ifMatch`, the booking `version` (a number, sent as its
-//   ETag `"<version>"`) or the ETag itself (a string, sent as it is). A missing or malformed `ifMatch` is a `TypeError`
-//   before any request, like a missing path parameter.
+//   ETag `"<version>"`) or the ETag itself (a string, sent as it is), and so do the updates and deletes of
+//   `settings.markupRules`, `.feeRules`, `.storefront` and `.pages` and `payments.capture`, with the version of their
+//   resource. A missing or malformed `ifMatch` is a `TypeError` before any request, like a missing path parameter.
+//   `settings.templates.put` takes it only when the OTA already has its own template (a malformed one is a
+//   `TypeError` too); `settings.assets.delete` has none (assets never change).
 // - Record locators: `bookings.findByRecordLocator` and `amadeus.getFlightOrderByReference` send `originSystemCode:
 //   "GDS"` when the call leaves it out (the contract's default, the only value Amadeus supports today).
+// - Uploads: `settings.assets.upload` sends `multipart/form-data` with the parts `kind`, `fileName` (when given) and
+//   `file` (a `Blob` or `File`), the text parts first, and its generated `Idempotency-Key`; `fetch` sets the
+//   `Content-Type` with its boundary (internal/http.js). A `file` that is not a `Blob` or a missing `kind` is a
+//   `TypeError` before any request.
 //
 // Console data is personal, priced or live supplier data, so every method sends `cache: "no-store"` to `fetch` unless
 // the call sets `cache` or `next` itself (console.d.ts "Caching", B4 §1).
@@ -90,6 +99,44 @@ import { op } from "../internal/operations.js";
 /** @typedef {import("../console.js").ConsoleAmadeusFlightOrdersByReferenceResult} ConsoleAmadeusFlightOrdersByReferenceResult */
 /** @typedef {import("../console.js").ConsoleAmadeusGetQueueParams} ConsoleAmadeusGetQueueParams */
 /** @typedef {import("../console.js").ConsoleAmadeusQueueResult} ConsoleAmadeusQueueResult */
+/** @typedef {import("../console.js").MarkupRule} MarkupRule */
+/** @typedef {import("../console.js").FeeRule} FeeRule */
+/** @typedef {import("../console.js").StorefrontSettings} StorefrontSettings */
+/** @typedef {import("../console.js").StorefrontSettingsUpdateResult} StorefrontSettingsUpdateResult */
+/** @typedef {import("../console.js").StorefrontPage} StorefrontPage */
+/** @typedef {import("../console.js").StorefrontAsset} StorefrontAsset */
+/** @typedef {import("../console.js").NotificationTemplate} NotificationTemplate */
+/** @typedef {import("../console.js").NotificationTemplateList} NotificationTemplateList */
+/** @typedef {import("../console.js").NotificationTemplatePreview} NotificationTemplatePreview */
+/** @typedef {import("../console.js").ConsolePayment} ConsolePayment */
+/** @typedef {import("../console.js").ConsoleListMarkupRulesParams} ConsoleListMarkupRulesParams */
+/** @typedef {import("../console.js").ConsoleCreateMarkupRuleParams} ConsoleCreateMarkupRuleParams */
+/** @typedef {import("../console.js").ConsoleMarkupRuleRefParams} ConsoleMarkupRuleRefParams */
+/** @typedef {import("../console.js").ConsoleUpdateMarkupRuleParams} ConsoleUpdateMarkupRuleParams */
+/** @typedef {import("../console.js").ConsoleDeleteMarkupRuleParams} ConsoleDeleteMarkupRuleParams */
+/** @typedef {import("../console.js").ConsoleListFeeRulesParams} ConsoleListFeeRulesParams */
+/** @typedef {import("../console.js").ConsoleCreateFeeRuleParams} ConsoleCreateFeeRuleParams */
+/** @typedef {import("../console.js").ConsoleFeeRuleRefParams} ConsoleFeeRuleRefParams */
+/** @typedef {import("../console.js").ConsoleUpdateFeeRuleParams} ConsoleUpdateFeeRuleParams */
+/** @typedef {import("../console.js").ConsoleDeleteFeeRuleParams} ConsoleDeleteFeeRuleParams */
+/** @typedef {import("../console.js").ConsoleGetStorefrontSettingsParams} ConsoleGetStorefrontSettingsParams */
+/** @typedef {import("../console.js").ConsoleUpdateStorefrontSettingsParams} ConsoleUpdateStorefrontSettingsParams */
+/** @typedef {import("../console.js").ConsoleListStorefrontPagesParams} ConsoleListStorefrontPagesParams */
+/** @typedef {import("../console.js").ConsoleCreateStorefrontPageParams} ConsoleCreateStorefrontPageParams */
+/** @typedef {import("../console.js").ConsoleStorefrontPageRefParams} ConsoleStorefrontPageRefParams */
+/** @typedef {import("../console.js").ConsoleUpdateStorefrontPageParams} ConsoleUpdateStorefrontPageParams */
+/** @typedef {import("../console.js").ConsoleDeleteStorefrontPageParams} ConsoleDeleteStorefrontPageParams */
+/** @typedef {import("../console.js").ConsoleListStorefrontAssetsParams} ConsoleListStorefrontAssetsParams */
+/** @typedef {import("../console.js").ConsoleUploadStorefrontAssetParams} ConsoleUploadStorefrontAssetParams */
+/** @typedef {import("../console.js").ConsoleDeleteStorefrontAssetParams} ConsoleDeleteStorefrontAssetParams */
+/** @typedef {import("../console.js").ConsoleListNotificationTemplatesParams} ConsoleListNotificationTemplatesParams */
+/** @typedef {import("../console.js").ConsoleNotificationTemplateRefParams} ConsoleNotificationTemplateRefParams */
+/** @typedef {import("../console.js").ConsolePutNotificationTemplateParams} ConsolePutNotificationTemplateParams */
+/** @typedef {import("../console.js").ConsolePreviewNotificationTemplateParams} ConsolePreviewNotificationTemplateParams */
+/** @typedef {import("../console.js").ConsoleListPaymentsParams} ConsoleListPaymentsParams */
+/** @typedef {import("../console.js").ConsoleGetPaymentParams} ConsoleGetPaymentParams */
+/** @typedef {import("../console.js").ConsoleCapturePaymentParams} ConsoleCapturePaymentParams */
+/** @typedef {import("../console.js").ConsoleRefundPaymentParams} ConsoleRefundPaymentParams */
 /** @typedef {import("../shared.js").ValidationError} ValidationError */
 /** @typedef {import("../shared.js").AuthenticationError} AuthenticationError */
 /** @typedef {import("../shared.js").PaymentError} PaymentError */
@@ -142,32 +189,109 @@ function live(options) {
 const NOT_HEADER_TEXT = /[^\t\x20-\x7e]/;
 
 /**
- * Sends a call whose operation requires `If-Match` (`bookings.patch`, `.issue`, `.cancel`), with `ifMatch` as the
- * header value: a version number becomes its ETag `"<version>"`, a non-blank string of visible ASCII is an ETag and is
- * sent as it is. A missing or malformed `ifMatch` rejects with a `TypeError` before any request (naming the parameter,
- * never its value). Params that are not a plain object are passed on unchanged, so `core.call` refuses them with its
- * usual `TypeError`.
+ * The `If-Match` value of an `ifMatch` param: a version number becomes its ETag `"<version>"`, a non-blank string of
+ * visible ASCII is an ETag and is sent as it is; anything else is `undefined`.
+ * @param {unknown} ifMatch
+ * @returns {string | undefined}
+ */
+function ifMatchValue(ifMatch) {
+  if (typeof ifMatch === "number" && Number.isSafeInteger(ifMatch) && ifMatch >= 0) {
+    return `"${ifMatch}"`;
+  }
+  if (typeof ifMatch !== "string" || ifMatch.trim() === "" || NOT_HEADER_TEXT.test(ifMatch)) {
+    return undefined;
+  }
+  return ifMatch;
+}
+
+/**
+ * Sends a call whose operation requires `If-Match` (`bookings.patch`, `.issue`, `.cancel`, the updates and deletes of
+ * the settings, `payments.capture`), with `ifMatch` as the header value (see `ifMatchValue`). A missing or malformed
+ * `ifMatch` rejects with a `TypeError` before any request, naming the parameter and whose version it is (`resource`),
+ * never its value; params left out have no `ifMatch` either (`settings.storefront.update()` has no path parameter that
+ * would refuse the call otherwise). Other params that are not a plain object are passed on unchanged, so `core.call`
+ * refuses them with its usual `TypeError`.
  * @template T
  * @param {Core} core
  * @param {Operation} operation
- * @param {{ ifMatch: ConsoleIfMatch }} params
+ * @param {string} resource what the version belongs to, as the message names it: `booking`, `markup rule` …
+ * @param {{ ifMatch: ConsoleIfMatch } | undefined} params
  * @param {RequestOptions | undefined} options
  * @returns {Promise<T>}
  */
-async function withIfMatch(core, operation, params, options) {
-  if (!isPlainObject(params)) {
+async function withIfMatch(core, operation, resource, params, options) {
+  if (params !== undefined && !isPlainObject(params)) {
     return core.call(operation, params, live(options));
   }
-  const { ifMatch } = params;
-  if (typeof ifMatch === "number" && Number.isSafeInteger(ifMatch) && ifMatch >= 0) {
-    return core.call(operation, { ...params, ifMatch: `"${ifMatch}"` }, live(options));
-  }
-  if (typeof ifMatch !== "string" || ifMatch.trim() === "" || NOT_HEADER_TEXT.test(ifMatch)) {
+  const ifMatch = ifMatchValue(params?.ifMatch);
+  if (ifMatch === undefined) {
     throw new TypeError(
-      `Velexis SDK: ${operation.method} ${operation.path} needs "ifMatch", the booking version (a whole number) or its ETag (a string)`,
+      `Velexis SDK: ${operation.method} ${operation.path} needs "ifMatch", the ${resource} version (a whole number) or its ETag (a string)`,
     );
   }
-  return core.call(operation, params, live(options));
+  return core.call(operation, { ...params, ifMatch }, live(options));
+}
+
+/**
+ * Sends a call whose operation takes `If-Match` only when its resource already exists (`settings.templates.put`: the
+ * OTA's own template): without `ifMatch` (`undefined` or `null`) no `If-Match` is sent; a given `ifMatch` is sent as
+ * `withIfMatch` sends it, and a malformed one rejects with a `TypeError` before any request. Params that are not a
+ * plain object are passed on unchanged, so `core.call` refuses them with its usual `TypeError`.
+ * @template T
+ * @param {Core} core
+ * @param {Operation} operation
+ * @param {string} resource what the version belongs to, as the message names it
+ * @param {{ ifMatch?: ConsoleIfMatch }} params
+ * @param {RequestOptions | undefined} options
+ * @returns {Promise<T>}
+ */
+async function withOptionalIfMatch(core, operation, resource, params, options) {
+  if (!isPlainObject(params) || params.ifMatch === undefined || params.ifMatch === null) {
+    return core.call(operation, params, live(options));
+  }
+  const ifMatch = ifMatchValue(params.ifMatch);
+  if (ifMatch === undefined) {
+    throw new TypeError(
+      `Velexis SDK: ${operation.method} ${operation.path}: "ifMatch", when given, must be the ${resource} version (a whole number) or its ETag (a string)`,
+    );
+  }
+  return core.call(operation, { ...params, ifMatch }, live(options));
+}
+
+/**
+ * Sends an image upload (`settings.assets.upload`) as `multipart/form-data`: the parts `kind`, then `fileName` when
+ * given, then `file`, so a server that reads the stream part by part meets the text parts before the file;
+ * internal/client.js builds the form and internal/http.js leaves its `Content-Type` (with the boundary) to `fetch`. A
+ * `file` that is not a `Blob` (a `File` is one), a missing or blank `kind`, or a `fileName` that is not a non-blank
+ * string rejects with a `TypeError` before any request, naming the parameter, never its value; params left out have no
+ * `file` either (the operation has no path parameter that would refuse the call otherwise). Other params that are not
+ * a plain object are passed on unchanged, so `core.call` refuses them with its usual `TypeError`.
+ * @template T
+ * @param {Core} core
+ * @param {Operation} operation
+ * @param {ConsoleUploadStorefrontAssetParams | undefined} params
+ * @param {RequestOptions | undefined} options
+ * @returns {Promise<T>}
+ */
+async function uploadAsset(core, operation, params, options) {
+  if (params !== undefined && !isPlainObject(params)) {
+    return core.call(operation, params, live(options));
+  }
+  const { file, kind, fileName, ...rest } = /** @type {Partial<ConsoleUploadStorefrontAssetParams>} */ (
+    params ?? {}
+  );
+  const what = `${operation.method} ${operation.path}`;
+  if (!(file instanceof Blob)) {
+    throw new TypeError(`Velexis SDK: ${what} needs "file", the image as a Blob or File`);
+  }
+  if (typeof kind !== "string" || kind.trim() === "") {
+    throw new TypeError(`Velexis SDK: ${what} needs "kind", what the image is for (such as "logo")`);
+  }
+  const named = fileName !== undefined && fileName !== null;
+  if (named && (typeof fileName !== "string" || fileName.trim() === "")) {
+    throw new TypeError(`Velexis SDK: ${what}: "fileName", when given, must be a non-blank string`);
+  }
+  return core.call(operation, { ...rest, kind, ...(named ? { fileName } : {}), file }, live(options));
 }
 
 /**
@@ -412,7 +536,7 @@ function createConsoleBookingsApi(core) {
      * @throws {SupplierError} `SUPPLIER_NOT_CONFIGURED` (424), `SUPPLIER_ERROR` (502), `SUPPLIER_UNAVAILABLE` (503), `SUPPLIER_TIMEOUT` (504)
      * @throws {ServerError} `INTERNAL_ERROR` (500)
      */
-    patch: (params, options) => withIfMatch(core, op.console_bookings_patch, params, options),
+    patch: (params, options) => withIfMatch(core, op.console_bookings_patch, "booking", params, options),
 
     /**
      * Issues the tickets of a booking with Amadeus Flight Order Issue (optional `formOfPayments`); an authorised
@@ -435,7 +559,7 @@ function createConsoleBookingsApi(core) {
      * @throws {SupplierError} `SUPPLIER_NOT_CONFIGURED` (424), `TICKETING_FAILED`, `SUPPLIER_ERROR` (502, `supplier.code`), `SUPPLIER_UNAVAILABLE` (503), `SUPPLIER_TIMEOUT` (504)
      * @throws {ServerError} `INTERNAL_ERROR` (500)
      */
-    issue: (params, options) => withIfMatch(core, op.console_bookings_issue, params, options),
+    issue: (params, options) => withIfMatch(core, op.console_bookings_issue, "booking", params, options),
 
     /**
      * Cancels a booking: refreshes the order, cancels it with Flight Order Management DELETE, marks the booking
@@ -457,7 +581,7 @@ function createConsoleBookingsApi(core) {
      * @throws {SupplierError} `SUPPLIER_NOT_CONFIGURED` (424), `SUPPLIER_ERROR` (502), `SUPPLIER_UNAVAILABLE` (503), `SUPPLIER_TIMEOUT` (504)
      * @throws {ServerError} `INTERNAL_ERROR` (500)
      */
-    cancel: (params, options) => withIfMatch(core, op.console_bookings_cancel, params, options),
+    cancel: (params, options) => withIfMatch(core, op.console_bookings_cancel, "booking", params, options),
 
     /**
      * Re-synchronises a booking with Amadeus (Flight Order Management GET): status, segments and schedule changes,
@@ -840,7 +964,599 @@ function createConsoleAmadeusApi(core) {
 }
 
 /**
- * The `console` namespace of a client: the contract's six sub-namespaces (SDK-012 adds `settings` and `payments`).
+ * `client.console.settings.markupRules`: the markup rules that turn Amadeus net prices into selling prices
+ * (`markup_rules`, OADR-0005). Settings are shared by the test and live environments, so `X-Velexis-Environment`
+ * changes nothing here. No Amadeus call; `settings:read` to read, `settings:write` (owner, admin) to change.
+ * @param {Core} core
+ */
+function createConsoleMarkupRulesApi(core) {
+  return {
+    /**
+     * Lists the markup rules in the order the pricing engine evaluates them (`priority`, then `id`); `active: true`
+     * keeps the enabled rules, `active: false` the disabled ones. The seeded default rule (`isDefault`) is one of
+     * them. Resolves with a `Page`. `GET /v1/console/settings/markup-rules`; `settings:read`.
+     * @param {ConsoleListMarkupRulesParams} [params]
+     * @param {RequestOptions} [options]
+     * @returns {Promise<Page<MarkupRule>>}
+     * @throws {ValidationError} `VALIDATION_FAILED` (400)
+     * @throws {AuthenticationError} `UNAUTHENTICATED`, `INVALID_API_KEY`, `TOKEN_EXPIRED` (401)
+     * @throws {PermissionError} `FORBIDDEN`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `STAFF_MEMBERSHIP_INACTIVE`, `ENVIRONMENT_NOT_ALLOWED` (403)
+     * @throws {RateLimitError} `RATE_LIMITED` (429)
+     * @throws {ServerError} `INTERNAL_ERROR` (500)
+     */
+    list: (params, options) => core.call(op.console_settings_markupRules_list, params, live(options)),
+
+    /**
+     * Creates a markup rule (`name`, `scope`, `calculation` and the values it uses; `percentage` is a decimal string,
+     * `"5.0000"` = 5 %). It applies to the next search; stored offers keep their prices. The rule may carry `warnings`
+     * (`fixed_currency_not_default`, `sells_below_net`). A same-key retry returns the stored rule.
+     * `POST /v1/console/settings/markup-rules` with a generated `Idempotency-Key`; `settings:write`.
+     * @param {ConsoleCreateMarkupRuleParams} params
+     * @param {RequestOptions} [options]
+     * @returns {Promise<MarkupRule>}
+     * @throws {ValidationError} `VALIDATION_FAILED` (400)
+     * @throws {AuthenticationError} `UNAUTHENTICATED`, `INVALID_API_KEY`, `TOKEN_EXPIRED` (401)
+     * @throws {PermissionError} `FORBIDDEN`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `STAFF_MEMBERSHIP_INACTIVE`, `ENVIRONMENT_NOT_ALLOWED` (403)
+     * @throws {ConflictError} `IDEMPOTENCY_KEY_REUSED` (409)
+     * @throws {RateLimitError} `RATE_LIMITED` (429)
+     * @throws {ServerError} `INTERNAL_ERROR` (500)
+     */
+    create: (params, options) => core.call(op.console_settings_markupRules_create, params, live(options)),
+
+    /**
+     * Gets one markup rule; its `version` is the `ifMatch` of `update` and `delete`.
+     * `GET /v1/console/settings/markup-rules/{markupRuleId}`; `settings:read`.
+     * @param {ConsoleMarkupRuleRefParams} params
+     * @param {RequestOptions} [options]
+     * @returns {Promise<MarkupRule>}
+     * @throws {ValidationError} `VALIDATION_FAILED` (400)
+     * @throws {AuthenticationError} `UNAUTHENTICATED`, `INVALID_API_KEY`, `TOKEN_EXPIRED` (401)
+     * @throws {PermissionError} `FORBIDDEN`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `STAFF_MEMBERSHIP_INACTIVE`, `ENVIRONMENT_NOT_ALLOWED` (403)
+     * @throws {NotFoundError} `NOT_FOUND` (404)
+     * @throws {RateLimitError} `RATE_LIMITED` (429)
+     * @throws {ServerError} `INTERNAL_ERROR` (500)
+     */
+    get: (params, options) => core.call(op.console_settings_markupRules_get, params, live(options)),
+
+    /**
+     * Changes any subset of a markup rule's fields (`null` clears a nullable one, `scope` is replaced as a whole); the
+     * default rule keeps its catch-all scope. Requires `ifMatch` (the rule's `version` or ETag); the answer has the new
+     * `version` and may carry `warnings`. Not retried. `PATCH /v1/console/settings/markup-rules/{markupRuleId}` with
+     * `If-Match`; `settings:write`.
+     * @param {ConsoleUpdateMarkupRuleParams} params
+     * @param {RequestOptions} [options]
+     * @returns {Promise<MarkupRule>}
+     * @throws {TypeError} without a valid `ifMatch`, before any request
+     * @throws {ValidationError} `VALIDATION_FAILED` (400)
+     * @throws {AuthenticationError} `UNAUTHENTICATED`, `INVALID_API_KEY`, `TOKEN_EXPIRED` (401)
+     * @throws {PermissionError} `FORBIDDEN`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `STAFF_MEMBERSHIP_INACTIVE`, `ENVIRONMENT_NOT_ALLOWED` (403)
+     * @throws {NotFoundError} `NOT_FOUND` (404)
+     * @throws {ConflictError} `CONFLICT` (409, `details.reason` `default_rule`)
+     * @throws {VelexisError} `PRECONDITION_FAILED` (412: stale `ifMatch`, reload)
+     * @throws {RateLimitError} `RATE_LIMITED` (429)
+     * @throws {ServerError} `INTERNAL_ERROR` (500)
+     */
+    update: (params, options) =>
+      withIfMatch(core, op.console_settings_markupRules_update, "markup rule", params, options),
+
+    /**
+     * Deletes a markup rule; bookings and priced offers keep their amounts. The seeded default rule cannot be deleted
+     * (switch a rule off with `isActive: false` instead). Requires `ifMatch`; resolves with nothing (`204`).
+     * `DELETE /v1/console/settings/markup-rules/{markupRuleId}` with `If-Match`; `settings:write`.
+     * @param {ConsoleDeleteMarkupRuleParams} params
+     * @param {RequestOptions} [options]
+     * @returns {Promise<void>}
+     * @throws {TypeError} without a valid `ifMatch`, before any request
+     * @throws {ValidationError} `VALIDATION_FAILED` (400)
+     * @throws {AuthenticationError} `UNAUTHENTICATED`, `INVALID_API_KEY`, `TOKEN_EXPIRED` (401)
+     * @throws {PermissionError} `FORBIDDEN`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `STAFF_MEMBERSHIP_INACTIVE`, `ENVIRONMENT_NOT_ALLOWED` (403)
+     * @throws {NotFoundError} `NOT_FOUND` (404)
+     * @throws {ConflictError} `CONFLICT` (409, `details.reason` `default_rule`)
+     * @throws {VelexisError} `PRECONDITION_FAILED` (412)
+     * @throws {RateLimitError} `RATE_LIMITED` (429)
+     * @throws {ServerError} `INTERNAL_ERROR` (500)
+     */
+    delete: (params, options) =>
+      withIfMatch(core, op.console_settings_markupRules_delete, "markup rule", params, options),
+  };
+}
+
+/**
+ * `client.console.settings.feeRules`: the fees the OTA charges on top of the selling price (`fee_rules`: service,
+ * card, ticketing, change, cancellation and extra fees, OADR-0005). Shared by both environments. No Amadeus call;
+ * `settings:read` to read, `settings:write` (owner, admin) to change.
+ * @param {Core} core
+ */
+function createConsoleFeeRulesApi(core) {
+  return {
+    /**
+     * Lists the fee rules by `priority`, then `id`; `active` keeps the enabled (`true`) or disabled (`false`) rules.
+     * Resolves with a `Page`. `GET /v1/console/settings/fee-rules`; `settings:read`.
+     * @param {ConsoleListFeeRulesParams} [params]
+     * @param {RequestOptions} [options]
+     * @returns {Promise<Page<FeeRule>>}
+     * @throws {ValidationError} `VALIDATION_FAILED` (400)
+     * @throws {AuthenticationError} `UNAUTHENTICATED`, `INVALID_API_KEY`, `TOKEN_EXPIRED` (401)
+     * @throws {PermissionError} `FORBIDDEN`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `STAFF_MEMBERSHIP_INACTIVE`, `ENVIRONMENT_NOT_ALLOWED` (403)
+     * @throws {RateLimitError} `RATE_LIMITED` (429)
+     * @throws {ServerError} `INTERNAL_ERROR` (500)
+     */
+    list: (params, options) => core.call(op.console_settings_feeRules_list, params, live(options)),
+
+    /**
+     * Creates a fee rule (`name`, `label` shown to the traveller, `feeType`, `scope`, `calculation` and the values it
+     * uses). It applies from the next pricing; the rule may carry `warnings`. A same-key retry returns the stored
+     * rule. `POST /v1/console/settings/fee-rules` with a generated `Idempotency-Key`; `settings:write`.
+     * @param {ConsoleCreateFeeRuleParams} params
+     * @param {RequestOptions} [options]
+     * @returns {Promise<FeeRule>}
+     * @throws {ValidationError} `VALIDATION_FAILED` (400)
+     * @throws {AuthenticationError} `UNAUTHENTICATED`, `INVALID_API_KEY`, `TOKEN_EXPIRED` (401)
+     * @throws {PermissionError} `FORBIDDEN`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `STAFF_MEMBERSHIP_INACTIVE`, `ENVIRONMENT_NOT_ALLOWED` (403)
+     * @throws {ConflictError} `IDEMPOTENCY_KEY_REUSED` (409)
+     * @throws {RateLimitError} `RATE_LIMITED` (429)
+     * @throws {ServerError} `INTERNAL_ERROR` (500)
+     */
+    create: (params, options) => core.call(op.console_settings_feeRules_create, params, live(options)),
+
+    /**
+     * Gets one fee rule; its `version` is the `ifMatch` of `update` and `delete`.
+     * `GET /v1/console/settings/fee-rules/{feeRuleId}`; `settings:read`.
+     * @param {ConsoleFeeRuleRefParams} params
+     * @param {RequestOptions} [options]
+     * @returns {Promise<FeeRule>}
+     * @throws {ValidationError} `VALIDATION_FAILED` (400)
+     * @throws {AuthenticationError} `UNAUTHENTICATED`, `INVALID_API_KEY`, `TOKEN_EXPIRED` (401)
+     * @throws {PermissionError} `FORBIDDEN`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `STAFF_MEMBERSHIP_INACTIVE`, `ENVIRONMENT_NOT_ALLOWED` (403)
+     * @throws {NotFoundError} `NOT_FOUND` (404)
+     * @throws {RateLimitError} `RATE_LIMITED` (429)
+     * @throws {ServerError} `INTERNAL_ERROR` (500)
+     */
+    get: (params, options) => core.call(op.console_settings_feeRules_get, params, live(options)),
+
+    /**
+     * Changes any subset of a fee rule's fields (`null` clears a nullable one, `scope` is replaced as a whole).
+     * Requires `ifMatch` (the rule's `version` or ETag); the answer has the new `version` and may carry `warnings`. Not
+     * retried. `PATCH /v1/console/settings/fee-rules/{feeRuleId}` with `If-Match`; `settings:write`.
+     * @param {ConsoleUpdateFeeRuleParams} params
+     * @param {RequestOptions} [options]
+     * @returns {Promise<FeeRule>}
+     * @throws {TypeError} without a valid `ifMatch`, before any request
+     * @throws {ValidationError} `VALIDATION_FAILED` (400)
+     * @throws {AuthenticationError} `UNAUTHENTICATED`, `INVALID_API_KEY`, `TOKEN_EXPIRED` (401)
+     * @throws {PermissionError} `FORBIDDEN`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `STAFF_MEMBERSHIP_INACTIVE`, `ENVIRONMENT_NOT_ALLOWED` (403)
+     * @throws {NotFoundError} `NOT_FOUND` (404)
+     * @throws {VelexisError} `PRECONDITION_FAILED` (412: stale `ifMatch`, reload)
+     * @throws {RateLimitError} `RATE_LIMITED` (429)
+     * @throws {ServerError} `INTERNAL_ERROR` (500)
+     */
+    update: (params, options) =>
+      withIfMatch(core, op.console_settings_feeRules_update, "fee rule", params, options),
+
+    /**
+     * Deletes a fee rule; priced offers, checkouts and bookings keep their fee lines. Requires `ifMatch`; resolves
+     * with nothing (`204`). `DELETE /v1/console/settings/fee-rules/{feeRuleId}` with `If-Match`; `settings:write`.
+     * @param {ConsoleDeleteFeeRuleParams} params
+     * @param {RequestOptions} [options]
+     * @returns {Promise<void>}
+     * @throws {TypeError} without a valid `ifMatch`, before any request
+     * @throws {ValidationError} `VALIDATION_FAILED` (400)
+     * @throws {AuthenticationError} `UNAUTHENTICATED`, `INVALID_API_KEY`, `TOKEN_EXPIRED` (401)
+     * @throws {PermissionError} `FORBIDDEN`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `STAFF_MEMBERSHIP_INACTIVE`, `ENVIRONMENT_NOT_ALLOWED` (403)
+     * @throws {NotFoundError} `NOT_FOUND` (404)
+     * @throws {VelexisError} `PRECONDITION_FAILED` (412)
+     * @throws {RateLimitError} `RATE_LIMITED` (429)
+     * @throws {ServerError} `INTERNAL_ERROR` (500)
+     */
+    delete: (params, options) =>
+      withIfMatch(core, op.console_settings_feeRules_delete, "fee rule", params, options),
+  };
+}
+
+/**
+ * `client.console.settings.storefront`: the storefront settings as staff edit them (`storefront_settings`, one row per
+ * OTA shared by both environments); storefront.get derives the public configuration from them. No Amadeus call.
+ * @param {Core} core
+ */
+function createConsoleStorefrontSettingsApi(core) {
+  return {
+    /**
+     * Gets the storefront settings: brand, branding (asset ids, colours, fonts, corner radius), locales, currencies,
+     * markets, features, policies, the airline card per environment, legal, support, SEO, consent and operations. Its
+     * `version` is the `ifMatch` of `update`. `GET /v1/console/settings/storefront`; `settings:read`.
+     * @param {ConsoleGetStorefrontSettingsParams} [params]
+     * @param {RequestOptions} [options]
+     * @returns {Promise<StorefrontSettings>}
+     * @throws {ValidationError} `VALIDATION_FAILED` (400)
+     * @throws {AuthenticationError} `UNAUTHENTICATED`, `INVALID_API_KEY`, `TOKEN_EXPIRED` (401)
+     * @throws {PermissionError} `FORBIDDEN`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `STAFF_MEMBERSHIP_INACTIVE`, `ENVIRONMENT_NOT_ALLOWED` (403)
+     * @throws {RateLimitError} `RATE_LIMITED` (429)
+     * @throws {ServerError} `INTERNAL_ERROR` (500)
+     */
+    get: (params, options) => core.call(op.console_settings_storefront_get, params, live(options)),
+
+    /**
+     * Changes the storefront settings section by section: each top-level section sent (`brand`, `branding`,
+     * `locales`, …) replaces that section as a whole. Requires `ifMatch` (the settings' `version` or ETag). The
+     * answer is the saved settings with `warnings` (`airline_card_net_price` when the airline card is turned on while
+     * markup or fee rules add an amount); the hosted storefront shows the change within 5 minutes. Not retried.
+     * `PATCH /v1/console/settings/storefront` with `If-Match`; `settings:write`.
+     * @param {ConsoleUpdateStorefrontSettingsParams} params
+     * @param {RequestOptions} [options]
+     * @returns {Promise<StorefrontSettingsUpdateResult>}
+     * @throws {TypeError} without a valid `ifMatch`, before any request
+     * @throws {ValidationError} `VALIDATION_FAILED` (400), `UNPROCESSABLE` (422: `details.reason` and `details.path`)
+     * @throws {AuthenticationError} `UNAUTHENTICATED`, `INVALID_API_KEY`, `TOKEN_EXPIRED` (401)
+     * @throws {PermissionError} `FEATURE_DISABLED` (403: `airlineCard.enabledLive` while the airline card is off), `FORBIDDEN`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `STAFF_MEMBERSHIP_INACTIVE`, `ENVIRONMENT_NOT_ALLOWED` (403)
+     * @throws {VelexisError} `PRECONDITION_FAILED` (412: stale `ifMatch`, reload)
+     * @throws {RateLimitError} `RATE_LIMITED` (429)
+     * @throws {ServerError} `INTERNAL_ERROR` (500)
+     */
+    update: (params, options) =>
+      withIfMatch(core, op.console_settings_storefront_update, "storefront settings", params, options),
+  };
+}
+
+/**
+ * `client.console.settings.pages`: the content pages of the hosted storefront (`storefront_pages`, one per slug and
+ * locale, OADR-0012 point 5), drafts included; storefront.listPages and storefront.getPage serve the published ones.
+ * Shared by both environments. No Amadeus call.
+ * @param {Core} core
+ */
+function createConsoleStorefrontPagesApi(core) {
+  return {
+    /**
+     * Lists the content pages, drafts included, by `sortOrder`, then `slug`, then `locale`, each with its Markdown
+     * body; `locale` keeps one locale, `published` the published (`true`) or draft (`false`) pages. Resolves with a
+     * `Page`. `GET /v1/console/settings/pages`; `settings:read`.
+     * @param {ConsoleListStorefrontPagesParams} [params]
+     * @param {RequestOptions} [options]
+     * @returns {Promise<Page<StorefrontPage>>}
+     * @throws {ValidationError} `VALIDATION_FAILED` (400)
+     * @throws {AuthenticationError} `UNAUTHENTICATED`, `INVALID_API_KEY`, `TOKEN_EXPIRED` (401)
+     * @throws {PermissionError} `FORBIDDEN`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `STAFF_MEMBERSHIP_INACTIVE`, `ENVIRONMENT_NOT_ALLOWED` (403)
+     * @throws {RateLimitError} `RATE_LIMITED` (429)
+     * @throws {ServerError} `INTERNAL_ERROR` (500)
+     */
+    list: (params, options) => core.call(op.console_settings_pages_list, params, live(options)),
+
+    /**
+     * Creates a content page (`slug`, `locale` and `title`; `bodyMarkdown` in the Markdown subset of
+     * `StorefrontPageMarkdown`). `slug` and `locale` are fixed from then on; a translation is another page with the
+     * same slug. A page created published is served at once. A same-key retry returns the stored page.
+     * `POST /v1/console/settings/pages` with a generated `Idempotency-Key`; `settings:write`.
+     * @param {ConsoleCreateStorefrontPageParams} params
+     * @param {RequestOptions} [options]
+     * @returns {Promise<StorefrontPage>}
+     * @throws {ValidationError} `VALIDATION_FAILED` (400), `UNPROCESSABLE` (422: `locale_not_supported`, `markdown_not_allowed` with `details.line`, `asset_not_found`, `asset_kind`)
+     * @throws {AuthenticationError} `UNAUTHENTICATED`, `INVALID_API_KEY`, `TOKEN_EXPIRED` (401)
+     * @throws {PermissionError} `FORBIDDEN`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `STAFF_MEMBERSHIP_INACTIVE`, `ENVIRONMENT_NOT_ALLOWED` (403)
+     * @throws {ConflictError} `CONFLICT` (409, `details.reason` `page_exists`), `IDEMPOTENCY_KEY_REUSED` (409)
+     * @throws {RateLimitError} `RATE_LIMITED` (429)
+     * @throws {ServerError} `INTERNAL_ERROR` (500)
+     */
+    create: (params, options) => core.call(op.console_settings_pages_create, params, live(options)),
+
+    /**
+     * Gets one content page, published or not, with its Markdown body; its `version` is the `ifMatch` of `update` and
+     * `delete`. `GET /v1/console/settings/pages/{pageId}`; `settings:read`.
+     * @param {ConsoleStorefrontPageRefParams} params
+     * @param {RequestOptions} [options]
+     * @returns {Promise<StorefrontPage>}
+     * @throws {ValidationError} `VALIDATION_FAILED` (400)
+     * @throws {AuthenticationError} `UNAUTHENTICATED`, `INVALID_API_KEY`, `TOKEN_EXPIRED` (401)
+     * @throws {PermissionError} `FORBIDDEN`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `STAFF_MEMBERSHIP_INACTIVE`, `ENVIRONMENT_NOT_ALLOWED` (403)
+     * @throws {NotFoundError} `NOT_FOUND` (404)
+     * @throws {RateLimitError} `RATE_LIMITED` (429)
+     * @throws {ServerError} `INTERNAL_ERROR` (500)
+     */
+    get: (params, options) => core.call(op.console_settings_pages_get, params, live(options)),
+
+    /**
+     * Changes any subset of `kind`, `title`, `bodyMarkdown`, `isPublished`, `showInFooter` and `sortOrder`
+     * (`isPublished: false` takes the page off the storefront and keeps it as a draft). Requires `ifMatch` (the page's
+     * `version` or ETag); the answer has the new `version`. Not retried.
+     * `PATCH /v1/console/settings/pages/{pageId}` with `If-Match`; `settings:write`.
+     * @param {ConsoleUpdateStorefrontPageParams} params
+     * @param {RequestOptions} [options]
+     * @returns {Promise<StorefrontPage>}
+     * @throws {TypeError} without a valid `ifMatch`, before any request
+     * @throws {ValidationError} `VALIDATION_FAILED` (400), `UNPROCESSABLE` (422: `markdown_not_allowed` with `details.line`, `asset_not_found`, `asset_kind`)
+     * @throws {AuthenticationError} `UNAUTHENTICATED`, `INVALID_API_KEY`, `TOKEN_EXPIRED` (401)
+     * @throws {PermissionError} `FORBIDDEN`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `STAFF_MEMBERSHIP_INACTIVE`, `ENVIRONMENT_NOT_ALLOWED` (403)
+     * @throws {NotFoundError} `NOT_FOUND` (404)
+     * @throws {VelexisError} `PRECONDITION_FAILED` (412: stale `ifMatch`, reload)
+     * @throws {RateLimitError} `RATE_LIMITED` (429)
+     * @throws {ServerError} `INTERNAL_ERROR` (500)
+     */
+    update: (params, options) => withIfMatch(core, op.console_settings_pages_update, "page", params, options),
+
+    /**
+     * Deletes a content page; a page whose slug a legal link of the storefront settings names cannot be deleted, in any
+     * locale (change the link first, or unpublish the page). Requires `ifMatch`; resolves with nothing (`204`).
+     * `DELETE /v1/console/settings/pages/{pageId}` with `If-Match`; `settings:write`.
+     * @param {ConsoleDeleteStorefrontPageParams} params
+     * @param {RequestOptions} [options]
+     * @returns {Promise<void>}
+     * @throws {TypeError} without a valid `ifMatch`, before any request
+     * @throws {ValidationError} `VALIDATION_FAILED` (400)
+     * @throws {AuthenticationError} `UNAUTHENTICATED`, `INVALID_API_KEY`, `TOKEN_EXPIRED` (401)
+     * @throws {PermissionError} `FORBIDDEN`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `STAFF_MEMBERSHIP_INACTIVE`, `ENVIRONMENT_NOT_ALLOWED` (403)
+     * @throws {NotFoundError} `NOT_FOUND` (404)
+     * @throws {ConflictError} `CONFLICT` (409, `details.reason` `page_linked`)
+     * @throws {VelexisError} `PRECONDITION_FAILED` (412)
+     * @throws {RateLimitError} `RATE_LIMITED` (429)
+     * @throws {ServerError} `INTERNAL_ERROR` (500)
+     */
+    delete: (params, options) => withIfMatch(core, op.console_settings_pages_delete, "page", params, options),
+  };
+}
+
+/**
+ * `client.console.settings.assets`: the images staff upload for the storefront (`storefront_assets`: logos, favicon,
+ * Open Graph image, page images; OADR-0012 points 2 and 3). An asset never changes: a new image is a new asset. Shared
+ * by both environments. No Amadeus call.
+ * @param {Core} core
+ */
+function createConsoleStorefrontAssetsApi(core) {
+  return {
+    /**
+     * Lists the uploaded images, newest first, each with its sniffed type, size, dimensions, file name and public
+     * `url`; `kind` keeps one kind. Resolves with a `Page`. `GET /v1/console/settings/assets`; `settings:read`.
+     * @param {ConsoleListStorefrontAssetsParams} [params]
+     * @param {RequestOptions} [options]
+     * @returns {Promise<Page<StorefrontAsset>>}
+     * @throws {ValidationError} `VALIDATION_FAILED` (400)
+     * @throws {AuthenticationError} `UNAUTHENTICATED`, `INVALID_API_KEY`, `TOKEN_EXPIRED` (401)
+     * @throws {PermissionError} `FORBIDDEN`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `STAFF_MEMBERSHIP_INACTIVE`, `ENVIRONMENT_NOT_ALLOWED` (403)
+     * @throws {RateLimitError} `RATE_LIMITED` (429)
+     * @throws {ServerError} `INTERNAL_ERROR` (500)
+     */
+    list: (params, options) => core.call(op.console_settings_assets_list, params, live(options)),
+
+    /**
+     * Uploads an image as `multipart/form-data`: the parts `kind` (what it is for), `fileName` when given (the name
+     * shown in the console; by default the name of the `file` part, which is the `File`'s own name or `blob` for a
+     * plain `Blob`) and `file` (the image, a `Blob` or `File`: PNG, JPEG or WebP, ICO for a `favicon`, at most 1 MB, no
+     * SVG). The server reads the type from the bytes and stores the file unchanged (metadata such as EXIF stays in
+     * it). The SDK leaves the `Content-Type` and its boundary to `fetch`. A same-key retry returns the stored asset;
+     * reference the asset from the storefront settings or a page body by its `id`.
+     * `POST /v1/console/settings/assets` with a generated `Idempotency-Key`; `settings:write`.
+     * @param {ConsoleUploadStorefrontAssetParams} params
+     * @param {RequestOptions} [options]
+     * @returns {Promise<StorefrontAsset>}
+     * @throws {TypeError} without a `Blob` or `File` as `file` or without `kind`, before any request
+     * @throws {ValidationError} `VALIDATION_FAILED` (400: a missing, empty or unknown part), `ASSET_INVALID` (422: `details.reason` `type`, `size` or `dimensions`)
+     * @throws {AuthenticationError} `UNAUTHENTICATED`, `INVALID_API_KEY`, `TOKEN_EXPIRED` (401)
+     * @throws {PermissionError} `FORBIDDEN`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `STAFF_MEMBERSHIP_INACTIVE`, `ENVIRONMENT_NOT_ALLOWED` (403)
+     * @throws {ConflictError} `IDEMPOTENCY_KEY_REUSED` (409)
+     * @throws {RateLimitError} `RATE_LIMITED` (429)
+     * @throws {ServerError} `INTERNAL_ERROR` (500)
+     */
+    upload: (params, options) => uploadAsset(core, op.console_settings_assets_upload, params, options),
+
+    /**
+     * Deletes an uploaded image and its file; an asset that the storefront settings or a page still use cannot be
+     * deleted (`details.settingsPaths`, `details.pageIds`: change those first). Assets never change, so there is no
+     * `ifMatch`. Resolves with nothing (`204`). `DELETE /v1/console/settings/assets/{assetId}`; `settings:write`.
+     * @param {ConsoleDeleteStorefrontAssetParams} params
+     * @param {RequestOptions} [options]
+     * @returns {Promise<void>}
+     * @throws {ValidationError} `VALIDATION_FAILED` (400)
+     * @throws {AuthenticationError} `UNAUTHENTICATED`, `INVALID_API_KEY`, `TOKEN_EXPIRED` (401)
+     * @throws {PermissionError} `FORBIDDEN`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `STAFF_MEMBERSHIP_INACTIVE`, `ENVIRONMENT_NOT_ALLOWED` (403)
+     * @throws {NotFoundError} `NOT_FOUND` (404)
+     * @throws {ConflictError} `CONFLICT` (409, `details.reason` `asset_in_use`)
+     * @throws {RateLimitError} `RATE_LIMITED` (429)
+     * @throws {ServerError} `INTERNAL_ERROR` (500)
+     */
+    delete: (params, options) => core.call(op.console_settings_assets_delete, params, live(options)),
+  };
+}
+
+/**
+ * `client.console.settings.templates`: the OTA's e-mail templates (`notification_templates`, Handlebars in strict mode
+ * with each key's variable allow-list, OADR-0013 point 3); where the OTA has none, the code default applies. No Amadeus
+ * call.
+ * @param {Core} core
+ */
+function createConsoleNotificationTemplatesApi(core) {
+  return {
+    /**
+     * Lists the effective template of every key and supported locale: the OTA's own (`customised: true`) or the code
+     * default (`customised: false`), each with the variables its key allows; by key, then locale, not paginated.
+     * `GET /v1/console/settings/notification-templates`; `settings:read`.
+     * @param {ConsoleListNotificationTemplatesParams} [params]
+     * @param {RequestOptions} [options]
+     * @returns {Promise<NotificationTemplateList>}
+     * @throws {ValidationError} `VALIDATION_FAILED` (400)
+     * @throws {AuthenticationError} `UNAUTHENTICATED`, `INVALID_API_KEY`, `TOKEN_EXPIRED` (401)
+     * @throws {PermissionError} `FORBIDDEN`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `STAFF_MEMBERSHIP_INACTIVE`, `ENVIRONMENT_NOT_ALLOWED` (403)
+     * @throws {RateLimitError} `RATE_LIMITED` (429)
+     * @throws {ServerError} `INTERNAL_ERROR` (500)
+     */
+    list: (params, options) => core.call(op.console_settings_templates_list, params, live(options)),
+
+    /**
+     * Gets the effective template of one key, channel (`email`) and locale; a customised one has a `version`, the
+     * `ifMatch` of `put` (the code default has `version: null`).
+     * `GET /v1/console/settings/notification-templates/{templateKey}/{channel}/{locale}`; `settings:read`.
+     * @param {ConsoleNotificationTemplateRefParams} params
+     * @param {RequestOptions} [options]
+     * @returns {Promise<NotificationTemplate>}
+     * @throws {ValidationError} `VALIDATION_FAILED` (400)
+     * @throws {AuthenticationError} `UNAUTHENTICATED`, `INVALID_API_KEY`, `TOKEN_EXPIRED` (401)
+     * @throws {PermissionError} `FORBIDDEN`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `STAFF_MEMBERSHIP_INACTIVE`, `ENVIRONMENT_NOT_ALLOWED` (403)
+     * @throws {RateLimitError} `RATE_LIMITED` (429)
+     * @throws {ServerError} `INTERNAL_ERROR` (500)
+     */
+    get: (params, options) => core.call(op.console_settings_templates_get, params, live(options)),
+
+    /**
+     * Creates or replaces the OTA's template of one key, channel and locale (`subject`, `bodyHtml`, `bodyText`,
+     * `isActive`). Pass `ifMatch` (its `version` or ETag) when the OTA already has its own template and leave it out
+     * when it has none; a malformed `ifMatch` is a `TypeError`. The server compiles the template in strict mode
+     * against the key's variables. `PUT /v1/console/settings/notification-templates/{templateKey}/{channel}/{locale}`,
+     * with `If-Match` when given (safe to repeat); `settings:write`.
+     * @param {ConsolePutNotificationTemplateParams} params
+     * @param {RequestOptions} [options]
+     * @returns {Promise<NotificationTemplate>}
+     * @throws {TypeError} with a malformed `ifMatch`, before any request
+     * @throws {ValidationError} `VALIDATION_FAILED` (400), `TEMPLATE_INVALID` (422: `details.errors[{part, line, message}]`), `UNPROCESSABLE` (422: `locale_not_supported`)
+     * @throws {AuthenticationError} `UNAUTHENTICATED`, `INVALID_API_KEY`, `TOKEN_EXPIRED` (401)
+     * @throws {PermissionError} `FORBIDDEN`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `STAFF_MEMBERSHIP_INACTIVE`, `ENVIRONMENT_NOT_ALLOWED` (403)
+     * @throws {VelexisError} `PRECONDITION_FAILED` (412: `ifMatch` missing for an existing template, stale, or given for none)
+     * @throws {RateLimitError} `RATE_LIMITED` (429)
+     * @throws {ServerError} `INTERNAL_ERROR` (500)
+     */
+    put: (params, options) =>
+      withOptionalIfMatch(core, op.console_settings_templates_put, "template", params, options),
+
+    /**
+     * Renders a template without saving or sending anything: the effective template, or the draft `subject`,
+     * `bodyHtml` and `bodyText` given, with the key's sample data or `variables`. Show `html` only in a sandboxed
+     * `iframe` without scripts. Safe to repeat.
+     * `POST /v1/console/settings/notification-templates/{templateKey}/{channel}/{locale}/preview`; `settings:read`.
+     * @param {ConsolePreviewNotificationTemplateParams} params
+     * @param {RequestOptions} [options]
+     * @returns {Promise<NotificationTemplatePreview>}
+     * @throws {ValidationError} `VALIDATION_FAILED` (400), `TEMPLATE_INVALID` (422: `details.errors`)
+     * @throws {AuthenticationError} `UNAUTHENTICATED`, `INVALID_API_KEY`, `TOKEN_EXPIRED` (401)
+     * @throws {PermissionError} `FORBIDDEN`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `STAFF_MEMBERSHIP_INACTIVE`, `ENVIRONMENT_NOT_ALLOWED` (403)
+     * @throws {RateLimitError} `RATE_LIMITED` (429)
+     * @throws {ServerError} `INTERNAL_ERROR` (500)
+     */
+    preview: (params, options) => core.call(op.console_settings_templates_preview, params, live(options)),
+
+    /**
+     * Deletes the OTA's template of one key, channel and locale, so the code default applies again, and resolves with
+     * that default (`customised: false`). Safe to repeat.
+     * `POST /v1/console/settings/notification-templates/{templateKey}/{channel}/{locale}/reset`; `settings:write`.
+     * @param {ConsoleNotificationTemplateRefParams} params
+     * @param {RequestOptions} [options]
+     * @returns {Promise<NotificationTemplate>}
+     * @throws {ValidationError} `VALIDATION_FAILED` (400)
+     * @throws {AuthenticationError} `UNAUTHENTICATED`, `INVALID_API_KEY`, `TOKEN_EXPIRED` (401)
+     * @throws {PermissionError} `FORBIDDEN`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `STAFF_MEMBERSHIP_INACTIVE`, `ENVIRONMENT_NOT_ALLOWED` (403)
+     * @throws {RateLimitError} `RATE_LIMITED` (429)
+     * @throws {ServerError} `INTERNAL_ERROR` (500)
+     */
+    reset: (params, options) => core.call(op.console_settings_templates_reset, params, live(options)),
+  };
+}
+
+/**
+ * `client.console.settings`: the OTA's settings (ota/sdk/docs/extensions.md §3.2): markup and fee rules, storefront
+ * settings, content pages, storefront images and e-mail templates. Shared by the test and live environments.
+ * @param {Core} core
+ */
+function createConsoleSettingsApi(core) {
+  return {
+    /** Markup rules: net to selling price (list, create, get, update, delete). */
+    markupRules: createConsoleMarkupRulesApi(core),
+    /** Fee rules on top of the selling price (list, create, get, update, delete). */
+    feeRules: createConsoleFeeRulesApi(core),
+    /** Storefront settings (get, update). */
+    storefront: createConsoleStorefrontSettingsApi(core),
+    /** Content pages of the hosted storefront (list, create, get, update, delete). */
+    pages: createConsoleStorefrontPagesApi(core),
+    /** Storefront images (list, upload, delete). */
+    assets: createConsoleStorefrontAssetsApi(core),
+    /** E-mail templates (list, get, put, preview, reset). */
+    templates: createConsoleNotificationTemplatesApi(core),
+  };
+}
+
+/**
+ * `client.console.payments`: the OTA's payments with their redacted events and refunds (ota/sdk/docs/extensions.md
+ * §3.3, OADR-0010). Only the request's environment is visible; `clientSecret` is always `null` in console scope. No
+ * Amadeus call.
+ * @param {Core} core
+ */
+function createConsolePaymentsApi(core) {
+  return {
+    /**
+     * Lists the payments of the environment, newest first; `status`, `provider` and `method` take one value or several
+     * (sent comma-separated), with `bookingId`, `createdFrom` and `createdTo`. No Stripe call. Resolves with a `Page`.
+     * `GET /v1/console/payments`; `payments:read` (every role).
+     * @param {ConsoleListPaymentsParams} [params]
+     * @param {RequestOptions} [options]
+     * @returns {Promise<Page<ConsolePayment>>}
+     * @throws {ValidationError} `VALIDATION_FAILED` (400)
+     * @throws {AuthenticationError} `UNAUTHENTICATED`, `INVALID_API_KEY`, `TOKEN_EXPIRED` (401)
+     * @throws {PermissionError} `FORBIDDEN`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `STAFF_MEMBERSHIP_INACTIVE`, `ENVIRONMENT_NOT_ALLOWED` (403)
+     * @throws {RateLimitError} `RATE_LIMITED` (429)
+     * @throws {ServerError} `INTERNAL_ERROR` (500)
+     */
+    list: (params, options) => core.call(op.console_payments_list, params, live(options)),
+
+    /**
+     * Gets one payment with its events (oldest first, redacted), refunds, booking (`id`, `reference`, `status`) and
+     * the account mode of its connection. `refresh: true` reads the PaymentIntent from Stripe first and applies its
+     * state, as a webhook would. Its `version` is the `ifMatch` of `capture`.
+     * `GET /v1/console/payments/{paymentId}`; `payments:read`.
+     * @param {ConsoleGetPaymentParams} params
+     * @param {RequestOptions} [options]
+     * @returns {Promise<ConsolePayment>}
+     * @throws {ValidationError} `VALIDATION_FAILED` (400)
+     * @throws {AuthenticationError} `UNAUTHENTICATED`, `INVALID_API_KEY`, `TOKEN_EXPIRED` (401)
+     * @throws {PermissionError} `FORBIDDEN`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `STAFF_MEMBERSHIP_INACTIVE`, `ENVIRONMENT_NOT_ALLOWED` (403)
+     * @throws {NotFoundError} `NOT_FOUND` (404: also a payment of the other environment)
+     * @throws {RateLimitError} `RATE_LIMITED` (429)
+     * @throws {SupplierError} only with `refresh`: `PAYMENT_PROVIDER_ERROR` (502: Stripe failed or is out of reach; nothing changed)
+     * @throws {ServerError} `INTERNAL_ERROR` (500)
+     */
+    get: (params, options) => core.call(op.console_payments_get, params, live(options)),
+
+    /**
+     * Captures an authorised Stripe payment (`authorized` only), the whole authorisation or a smaller `amount` in the
+     * payment's currency (the rest is released), with an audit `reason`. Requires `ifMatch` (the payment's `version`
+     * or ETag); resolves with the captured payment. Stripe captures once per idempotency key: after `502
+     * PAYMENT_PROVIDER_ERROR` retry with the same `options.idempotencyKey`.
+     * `POST /v1/console/payments/{paymentId}/capture` with `If-Match` and `Idempotency-Key`; `payments:capture`
+     * (owner, admin, agent, finance).
+     * @param {ConsoleCapturePaymentParams} params
+     * @param {RequestOptions} [options]
+     * @returns {Promise<ConsolePayment>}
+     * @throws {TypeError} without a valid `ifMatch`, before any request
+     * @throws {ValidationError} `VALIDATION_FAILED` (400), `UNPROCESSABLE` (422: `currency_mismatch`, `amount_exceeds_authorized`)
+     * @throws {AuthenticationError} `UNAUTHENTICATED`, `INVALID_API_KEY`, `TOKEN_EXPIRED` (401)
+     * @throws {PaymentError} `PAYMENT_DECLINED` (402: the authorisation expired or was cancelled; nothing captured)
+     * @throws {PermissionError} `FORBIDDEN`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `STAFF_MEMBERSHIP_INACTIVE`, `ENVIRONMENT_NOT_ALLOWED` (403)
+     * @throws {NotFoundError} `NOT_FOUND` (404)
+     * @throws {ConflictError} `CONFLICT` (409, `details.reason` `payment_not_capturable`), `IDEMPOTENCY_KEY_REUSED` (409)
+     * @throws {VelexisError} `PRECONDITION_FAILED` (412: stale `ifMatch`, reload)
+     * @throws {RateLimitError} `RATE_LIMITED` (429)
+     * @throws {SupplierError} `PAYMENT_PROVIDER_ERROR` (502: retry with the same idempotency key)
+     * @throws {ServerError} `INTERNAL_ERROR` (500)
+     */
+    capture: (params, options) => withIfMatch(core, op.console_payments_capture, "payment", params, options),
+
+    /**
+     * Asks for a refund of a captured Stripe payment (`captured` or `partially_refunded`): `amount` in the payment's
+     * currency, at most what is still refundable, a `reason` category and an optional `reasonNote`. Resolves (`201`)
+     * with the payment and the new refund, `pending`, in `refunds`: the payments queue sends it to Stripe, so this call
+     * makes no Stripe call, and the refund webhooks set its final status. A same-key retry asks for one refund only.
+     * `POST /v1/console/payments/{paymentId}/refunds` with a generated `Idempotency-Key`; `payments:refund` (owner,
+     * admin, finance).
+     * @param {ConsoleRefundPaymentParams} params
+     * @param {RequestOptions} [options]
+     * @returns {Promise<ConsolePayment>}
+     * @throws {ValidationError} `VALIDATION_FAILED` (400), `UNPROCESSABLE` (422: `currency_mismatch`, `amount_exceeds_captured` with `details.refundable`, `refund_via_airline`)
+     * @throws {AuthenticationError} `UNAUTHENTICATED`, `INVALID_API_KEY`, `TOKEN_EXPIRED` (401)
+     * @throws {PermissionError} `FORBIDDEN`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `STAFF_MEMBERSHIP_INACTIVE`, `ENVIRONMENT_NOT_ALLOWED` (403)
+     * @throws {NotFoundError} `NOT_FOUND` (404)
+     * @throws {ConflictError} `CONFLICT` (409, `details.reason` `payment_not_refundable`), `IDEMPOTENCY_KEY_REUSED` (409)
+     * @throws {RateLimitError} `RATE_LIMITED` (429)
+     * @throws {ServerError} `INTERNAL_ERROR` (500)
+     */
+    refund: (params, options) => core.call(op.console_payments_refund, params, live(options)),
+  };
+}
+
+/**
+ * The `console` namespace of a client: the contract's six sub-namespaces and the MVP additions `settings` and
+ * `payments` (SDK-012).
  * @param {Core} core the client's request core
  */
 export function createConsoleApi(core) {
@@ -857,5 +1573,9 @@ export function createConsoleApi(core) {
     supplierRequests: createConsoleSupplierRequestsApi(core),
     /** Raw Amadeus pass-through (verbatim request and response), one method per Amadeus operation. */
     amadeus: createConsoleAmadeusApi(core),
+    /** Markup and fee rules, storefront settings, content pages, storefront images, e-mail templates (MVP addition). */
+    settings: createConsoleSettingsApi(core),
+    /** Payments with their events and refunds: list, get, capture, refund (MVP addition). */
+    payments: createConsolePaymentsApi(core),
   };
 }

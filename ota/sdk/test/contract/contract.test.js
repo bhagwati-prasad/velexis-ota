@@ -4,10 +4,11 @@
 // `tsc -p tsconfig.build.json` emits them, into a scratch folder: the test needs no earlier build and never reads a
 // stale dist/. Then the same project is compiled against declarations emitted from src/ with one parameter narrowed,
 // and again with one result widened, to prove that the assertions catch both at the method that changed; once with
-// the result of a `console` method widened, to prove that the contract methods of the still pending `console`
-// namespace are checked one by one (SDK-011); and once with an empty `console` namespace, to prove that a pending
-// namespace the client has must hold every contract method. The tests also check that methods.generated.ts is what a
-// fresh generator run writes.
+// the result of a `console` method widened, to prove that the contract methods of `console` are checked one by one
+// (SDK-011); and twice with an empty `console` namespace: with the pending list as it is (empty since SDK-012), to
+// prove that every console method, of the contract and added, must be there, and with `console` listed as pending, as
+// it was between SDK-011 and SDK-012, to prove that a pending namespace the client has must hold every contract method.
+// The tests also check that methods.generated.ts is what a fresh generator run writes.
 // `pnpm --filter @velexis/ota-sdk test:contract` runs the same project with the tsc command line over dist/types/.
 import { execFile } from "node:child_process";
 import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -25,6 +26,7 @@ const CONTRACT_DIR = join(SDK_ROOT, "test", "contract");
 const CONTRACT_CONFIG = join(CONTRACT_DIR, "tsconfig.json");
 const BUILD_CONFIG = join(SDK_ROOT, "tsconfig.build.json");
 const METHODS = join(CONTRACT_DIR, "methods.generated.ts");
+const PENDING_LIST = join(CONTRACT_DIR, "pending-namespaces.js");
 const CLIENT_CONTRACT = join(CONTRACT_DIR, "client.contract.ts");
 const FLIGHTS_SOURCE = join(SDK_ROOT, "src", "namespaces", "flights.js");
 const CONSOLE_SOURCE = join(SDK_ROOT, "src", "namespaces", "console.js");
@@ -151,9 +153,10 @@ function emitDeclarations(outDir, sources = {}) {
 
 /**
  * Compiles the contract project of test/contract/tsconfig.json with `@velexis/ota-sdk` mapped to the declarations in
- * `typesDir` instead of dist/types/. Returns the program and every diagnostic tsc would print.
+ * `typesDir` instead of dist/types/, and the text of some of its files replaced (absolute path to text, for a mutated
+ * pending list). Returns the program and every diagnostic tsc would print.
  */
-function compileContract(typesDir) {
+function compileContract(typesDir, sources = {}) {
   const { options, fileNames } = readConfig(CONTRACT_CONFIG);
   const contractOptions = {
     ...options,
@@ -162,7 +165,7 @@ function compileContract(typesDir) {
   const program = ts.createProgram({
     rootNames: fileNames,
     options: contractOptions,
-    host: createHost(contractOptions),
+    host: createHost(contractOptions, sources),
   });
   return { program, diagnostics: ts.getPreEmitDiagnostics(program) };
 }
@@ -229,9 +232,11 @@ describe("the SDK against the frozen contract", () => {
   /** @type {readonly import("typescript").Diagnostic[]} */
   let consoleWidened;
   /** @type {readonly import("typescript").Diagnostic[]} */
+  let consoleEmptied;
+  /** @type {readonly import("typescript").Diagnostic[]} */
   let pendingNamespaceWritten;
 
-  // Four declaration emits and five contract programs, with a turn of the event loop between them: see the budget.
+  // Four declaration emits and six contract programs, with a turn of the event loop between them: see the budget.
   beforeAll(async () => {
     const typesDir = emitDeclarations(join(scratch, "types"));
     await nextTurn();
@@ -258,7 +263,7 @@ describe("the SDK against the frozen contract", () => {
     await nextTurn();
     widened = compileContract(widenedDir).diagnostics;
     await nextTurn();
-    // console.bookings.get (pending namespace, written by SDK-011) resolves with `unknown` instead of a booking.
+    // console.bookings.get (written by SDK-011) resolves with `unknown` instead of a booking.
     const getBooking = [
       "     * @param {ConsoleGetBookingParams} params",
       "     * @param {RequestOptions} [options]",
@@ -275,14 +280,24 @@ describe("the SDK against the frozen contract", () => {
     await nextTurn();
     consoleWidened = compileContract(consoleWidenedDir).diagnostics;
     await nextTurn();
-    // The client has its `console` namespace (still pending for console.settings and console.payments, SDK-012)
-    // without any method in it.
+    // The client has its `console` namespace without any method in it: with the pending list as it is (empty), and
+    // with `console` listed as pending (as between SDK-011 and SDK-012, when console.settings and console.payments
+    // were not written yet).
     const consoleDir = join(scratch, "console-namespace");
     cpSync(typesDir, consoleDir, { recursive: true });
     const index = join(consoleDir, "index.d.ts");
     const consoleMember = '    console: import("./console.js").ConsoleApi;\n';
     writeFileSync(index, replaceOnce(readFileSync(index, "utf8"), consoleMember, "    console: {};\n"));
-    pendingNamespaceWritten = compileContract(consoleDir).diagnostics;
+    consoleEmptied = compileContract(consoleDir).diagnostics;
+    await nextTurn();
+    pendingNamespaceWritten = compileContract(consoleDir, {
+      [PENDING_LIST]: [
+        "export const PENDING = Object.freeze(",
+        '  /** @type {const} */ ([{ entry: "console", task: "SDK-012" }]).map((entry) => Object.freeze(entry)),',
+        ");",
+        "",
+      ].join("\n"),
+    }).diagnostics;
   }, PROGRAM_TIMEOUT_MS);
 
   it("compiles for the M2 namespaces with the declarations emitted from src/ [SDK-006 AC1]", () => {
@@ -317,28 +332,61 @@ describe("the SDK against the frozen contract", () => {
     );
   });
 
-  it("checks the 32 contract methods of the pending console namespace one by one [SDK-011 AC1]", () => {
-    // The baseline holds every console assertion; a console result widened to unknown fails at its assertion only:
-    // the client-wide check leaves the pending namespace out, so only the per-method assertions can catch it.
+  it("checks the 32 contract methods of the console namespace one by one [SDK-011 AC1]", () => {
+    // The baseline holds every console assertion; a console result widened to unknown fails at its assertion and, now
+    // that `console` is no longer pending (SDK-012), at the client-wide check too, as flights.getOffer does.
     expect(format(baseline.diagnostics)).toBe("");
     const methods = readFileSync(METHODS, "utf8");
     expect(methods.match(/= Conforms<\n {2}SdkParams<"console\./g)).toHaveLength(32);
-    expect(locations(consoleWidened), format(consoleWidened)).toEqual([
-      `test/contract/methods.generated.ts:${methodsLine('SdkResult<"console.bookings.get">')}`,
-    ]);
-    expect(consoleWidened[0]?.code).toBe(2344);
+    expect(locations(consoleWidened).sort(), format(consoleWidened)).toEqual(
+      [
+        `test/contract/methods.generated.ts:${methodsLine('SdkResult<"console.bookings.get">')}`,
+        `test/contract/client.contract.ts:${lineOf(CLIENT_CONTRACT, 'Assignable<ContractClientSoFar, Omit<SdkClient, "withOptions">>')}`,
+      ].sort(),
+    );
+    expect(consoleWidened.every((diagnostic) => diagnostic.code === 2344)).toBe(true);
+  });
+
+  /** The `methods.generated.ts` locations of the assertions of every console method, of the contract or added. */
+  const consoleAssertions = () => {
+    const lines = readFileSync(METHODS, "utf8").split("\n");
+    const at = (/** @type {string} */ text) =>
+      lines.flatMap((line, index) =>
+        line.includes(text) ? [`test/contract/methods.generated.ts:${index + 1}`] : [],
+      );
+    return { contract: at('ContractParams<"console.'), additions: at('SdkMember<"console.') };
+  };
+
+  it("checks every console method, of the contract and added, once the pending list is empty [SDK-012]", () => {
+    // SDK-012 removed `console` from pending-namespaces.js: an empty `console` namespace fails at the assertion of
+    // each of its 32 contract methods and 29 additions (console.settings.*, console.payments.*) and at the
+    // client-wide check, each time because the method is missing and not pending.
+    const { contract, additions } = consoleAssertions();
+    expect(contract).toHaveLength(32);
+    expect(additions).toHaveLength(29);
+    expect(locations(consoleEmptied).sort(), format(consoleEmptied)).toEqual(
+      [
+        ...contract,
+        ...additions,
+        `test/contract/client.contract.ts:${lineOf(CLIENT_CONTRACT, 'Assignable<ContractClientSoFar, Omit<SdkClient, "withOptions">>')}`,
+      ].sort(),
+    );
+    const perMethod = consoleEmptied.filter((diagnostic) => diagnostic.file?.fileName === METHODS);
+    expect(perMethod).toHaveLength(61);
+    for (const diagnostic of perMethod) {
+      expect(ts.flattenDiagnosticMessageText(diagnostic.messageText, "\n")).toContain(
+        "missing from the SDK client and not listed in pending-namespaces.js",
+      );
+    }
   });
 
   it("checks every contract method of a pending namespace once the client has the namespace, and no addition", () => {
-    // pending-namespaces.js still lists `console`, but a namespace that an SDK task has written must hold every
-    // method of the contract (SDK-011); only its additions (console.settings.*, console.payments.*) stand in.
-    const lines = readFileSync(METHODS, "utf8").split("\n");
-    const contractConsoleMethods = lines.flatMap((line, index) =>
-      line.includes('ContractParams<"console.') ? [`test/contract/methods.generated.ts:${index + 1}`] : [],
-    );
-    expect(contractConsoleMethods).toHaveLength(32);
+    // With `console` listed as pending, as between SDK-011 and SDK-012, a namespace that an SDK task has written must
+    // still hold every method of the contract; only its additions (console.settings.*, console.payments.*) stand in.
+    const { contract } = consoleAssertions();
+    expect(contract).toHaveLength(32);
     expect(locations(pendingNamespaceWritten).sort(), format(pendingNamespaceWritten)).toEqual(
-      contractConsoleMethods.sort(),
+      contract.sort(),
     );
     expect(ts.flattenDiagnosticMessageText(pendingNamespaceWritten[0].messageText, "\n")).toContain(
       "a method of the contract missing from a namespace that the SDK client already has",

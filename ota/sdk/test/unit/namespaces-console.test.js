@@ -82,6 +82,24 @@ const ALL_METHODS = Object.entries(CONSOLE_METHODS).flatMap(([namespace, methods
   methods.map((method) => `${namespace}.${method}`),
 );
 
+/**
+ * The sub-namespaces of the MVP additions that SDK-012 writes after the contract's six (ota/sdk/docs/extensions.md
+ * §3.2 and §3.3), with their 29 methods; namespaces-console-settings.test.js checks their requests and types.
+ */
+const ADDED_NAMESPACES = ["settings", "payments"];
+const ADDED_METHODS = [
+  ...["markupRules", "feeRules", "pages"].flatMap((namespace) =>
+    ["list", "create", "get", "update", "delete"].map((method) => `settings.${namespace}.${method}`),
+  ),
+  "settings.storefront.get",
+  "settings.storefront.update",
+  "settings.assets.list",
+  "settings.assets.upload",
+  "settings.assets.delete",
+  ...["list", "get", "put", "preview", "reset"].map((method) => `settings.templates.${method}`),
+  ...["list", "get", "capture", "refund"].map((method) => `payments.${method}`),
+];
+
 /** The methods that are deferred until after the MVP (scope.md §3.4, pending-operations.ts of the OTA backend). */
 const DEFERRED = [
   "bookings.create",
@@ -271,7 +289,8 @@ describe("the console namespace", () => {
   it("offers the 32 methods of ConsoleApi in six sub-namespaces, each named by its x-sdk-method [SDK-011]", () => {
     const client = createVelexisClient({ secretKey: SK, fetch: createFakeFetch().fetch });
 
-    expect(Object.keys(client.console)).toEqual(Object.keys(CONSOLE_METHODS));
+    // The contract's six sub-namespaces come first; SDK-012 adds settings and payments after them.
+    expect(Object.keys(client.console)).toEqual([...Object.keys(CONSOLE_METHODS), ...ADDED_NAMESPACES]);
     for (const [namespace, methods] of Object.entries(CONSOLE_METHODS)) {
       const api = /** @type {Record<string, unknown>} */ (
         client.console[/** @type {keyof VelexisClient["console"]} */ (namespace)]
@@ -279,6 +298,7 @@ describe("the console namespace", () => {
       expect(Object.keys(api), namespace).toEqual(methods);
     }
     expect(ALL_METHODS).toHaveLength(32);
+    expect(ADDED_METHODS).toHaveLength(29);
     for (const method of ALL_METHODS) {
       expect(typeof methodAt(client.console, method), method).toBe("function");
       expect(op, method).toHaveProperty(`console_${method.replace(/\./g, "_")}`);
@@ -292,9 +312,10 @@ describe("the console namespace", () => {
     await client.withOptions({ environment: "test" }).console.auth.me();
 
     expect(fake.requests[0]?.headers["x-velexis-environment"]).toBe("test");
-    expect(Object.keys(client.withOptions({ locale: "de-DE" }).console)).toEqual(
-      Object.keys(CONSOLE_METHODS),
-    );
+    expect(Object.keys(client.withOptions({ locale: "de-DE" }).console)).toEqual([
+      ...Object.keys(CONSOLE_METHODS),
+      ...ADDED_NAMESPACES,
+    ]);
   });
 });
 
@@ -890,12 +911,14 @@ describe("each console method sends the request of its route-table entry", () =>
 
 describe("the environment header", () => {
   /**
-   * Sample params for any route-table entry: every path param, `ifMatch` for the operations that require it.
+   * Sample params for any route-table entry: every path param, `ifMatch` for the operations that take it, and the
+   * `file` and `kind` of an upload (SDK-012).
    * @param {Operation} entry
    */
   const paramsFor = (entry) => ({
     ...Object.fromEntries(entry.pathParams.map((name) => [name, `x_${name}`])),
     ...("ifMatch" in entry.headerParams ? { ifMatch: 1 } : {}),
+    ...(entry.body === "multipart" ? { file: new Blob(["image"], { type: "image/png" }), kind: "logo" } : {}),
   });
 
   it("goes on every console request and on no customer request of a live server-mode client [SDK-011 AC2]", async () => {
@@ -910,7 +933,7 @@ describe("the environment header", () => {
     const consoleMethods = methods.filter(({ name }) => name.startsWith("console."));
     const customerMethods = methods.filter(({ entry }) => !entry.environment);
     expect(consoleMethods.map(({ name }) => name.slice("console.".length)).sort()).toEqual(
-      [...ALL_METHODS].sort(),
+      [...ALL_METHODS, ...ADDED_METHODS].sort(),
     );
     // Besides console.*, only the console's availability search (x-scope: console) takes the header.
     expect(
@@ -1521,7 +1544,10 @@ describe("the console types", () => {
   });
 
   it("give every method typed params, options and an awaited result, never any or unknown [SDK-011]", () => {
-    expect(signatures.map((signature) => signature.name).sort()).toEqual([...ALL_METHODS].sort());
+    // The 32 of the contract and, since SDK-012, the 29 additions of settings and payments.
+    expect(signatures.map((signature) => signature.name).sort()).toEqual(
+      [...ALL_METHODS, ...ADDED_METHODS].sort(),
+    );
     expect(signatures.filter((signature) => signature.loose)).toEqual([]);
     const byName = Object.fromEntries(signatures.map((signature) => [signature.name, signature]));
     expect(byName["auth.signOut"]?.types[2]).toBe("void");
@@ -1551,7 +1577,12 @@ describe("the console types", () => {
 
   it("declare the type names of console.d.ts in the contract's order, exported from the root [SDK-011]", () => {
     expect(mirror.contract).toHaveLength(97);
-    expect(mirror.sdk).toEqual(mirror.contract);
+    // Every name of the contract file first, in its order; the types of the MVP additions (SDK-012, listed by
+    // namespaces-console-settings.test.js) close the file and reuse no contract name.
+    expect(mirror.sdk.slice(0, mirror.contract.length)).toEqual(mirror.contract);
+    expect(mirror.sdk.slice(mirror.contract.length).filter((name) => mirror.contract.includes(name))).toEqual(
+      [],
+    );
     expect(rootExports).toEqual(expect.arrayContaining([...mirror.contract, "createConsoleApi"]));
   });
 });

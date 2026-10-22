@@ -3,7 +3,8 @@
 // namespace types (`ConsoleApi` and its six sub-namespaces) are inferred from the factory in ./namespaces/console.js,
 // so each method is documented once, there. SDK-011 writes the 32 methods of the contract (`console.auth`,
 // `.bookings`, `.queues`, `.customers`, `.supplierRequests`, `.amadeus`); SDK-012 adds the MVP additions
-// `console.settings.*` and `console.payments.*` (ota/sdk/docs/extensions.md §3.2 and §3.3) with their types.
+// `console.settings.*` and `console.payments.*` (ota/sdk/docs/extensions.md §3.2 and §3.3) with their types, which
+// close the file after the contract's names (the contract has no counterpart for them).
 //
 // console.d.ts also augments `VelexisClientOptions` of shared.d.ts with `sessionKind` (`"customer"` | `"staff"`) and
 // `onStaffSessionRefreshed`. JavaScript cannot augment a typedef, so both options are members of
@@ -385,3 +386,172 @@ export { createConsoleApi } from "./namespaces/console.js";
  * client option `environment`, every console request carries `X-Velexis-Environment`.
  * @typedef {ReturnType<typeof import("./namespaces/console.js").createConsoleApi>} ConsoleApi
  */
+
+/* ------------------------------------------------------------------------------------------------------------ */
+/* Additions to the contract (ota/sdk/docs/extensions.md §3.2 and §3.3)                                          */
+/* ------------------------------------------------------------------------------------------------------------ */
+
+/** A markup rule (`mkr_…`, `markup_rules`): turns Amadeus net prices into selling prices; may carry `warnings`. @typedef {import("./types.js").Schemas["MarkupRule"]} MarkupRule */
+/** Body of `ConsoleSettingsMarkupRulesApi.create`: `name`, `scope`, `calculation` and the values it uses. @typedef {import("./types.js").Schemas["MarkupRuleInput"]} MarkupRuleInput */
+/** Body of `ConsoleSettingsMarkupRulesApi.update`: any subset of `MarkupRuleInput`. @typedef {import("./types.js").Schemas["MarkupRuleUpdate"]} MarkupRuleUpdate */
+/** A fee rule (`fee_…`, `fee_rules`): a service, card, ticketing, change, cancellation or extra fee; may carry `warnings`. @typedef {import("./types.js").Schemas["FeeRule"]} FeeRule */
+/** Body of `ConsoleSettingsFeeRulesApi.create`: `name`, `label`, `feeType`, `scope`, `calculation` and its values. @typedef {import("./types.js").Schemas["FeeRuleInput"]} FeeRuleInput */
+/** Body of `ConsoleSettingsFeeRulesApi.update`: any subset of `FeeRuleInput`. @typedef {import("./types.js").Schemas["FeeRuleUpdate"]} FeeRuleUpdate */
+/** The storefront settings as staff edit them (`storefront_settings`, one row per OTA). @typedef {import("./types.js").Schemas["StorefrontSettings"]} StorefrontSettings */
+/** Body of `ConsoleSettingsStorefrontApi.update`: whole sections of `StorefrontSettings`. @typedef {import("./types.js").Schemas["StorefrontSettingsUpdate"]} StorefrontSettingsUpdate */
+/** Result of `ConsoleSettingsStorefrontApi.update`: the saved settings and `warnings`. @typedef {import("./types.js").Schemas["StorefrontSettingsUpdateResult"]} StorefrontSettingsUpdateResult */
+/** A content page (`stp_…`, `storefront_pages`) as staff edit it, drafts included, with its Markdown body. @typedef {import("./types.js").Schemas["StorefrontPage"]} StorefrontPage */
+/** Body of `ConsoleSettingsPagesApi.create`: `slug`, `locale`, `title` and the optional fields. @typedef {import("./types.js").Schemas["StorefrontPageInput"]} StorefrontPageInput */
+/** Body of `ConsoleSettingsPagesApi.update`: any subset of `kind`, `title`, `bodyMarkdown`, `isPublished`, `showInFooter`, `sortOrder`. @typedef {import("./types.js").Schemas["StorefrontPageUpdate"]} StorefrontPageUpdate */
+/** An uploaded storefront image (`ast_…`, `storefront_assets`) with its public `url`. @typedef {import("./types.js").Schemas["StorefrontAsset"]} StorefrontAsset */
+/** What an image is for: `logo`, `logo_dark`, `logo_square`, `favicon`, `og_image`, `page_image`. @typedef {import("./types.js").Schemas["StorefrontAssetKind"]} StorefrontAssetKind */
+/** The effective e-mail template of a key, channel and locale (the OTA's own or the code default). @typedef {import("./types.js").Schemas["NotificationTemplate"]} NotificationTemplate */
+/** Result of `ConsoleSettingsTemplatesApi.list`: every effective template (`data`, not paginated). @typedef {import("./types.js").Schemas["NotificationTemplateList"]} NotificationTemplateList */
+/** A notification template key of the MVP (`auth.verify_email`, `booking.confirmed`, `staff.manual_review` …). @typedef {import("./types.js").Schemas["NotificationTemplateKey"]} NotificationTemplateKey */
+/** Delivery channel of a template: `email` in the MVP. @typedef {import("./types.js").Schemas["NotificationChannel"]} NotificationChannel */
+/** Body of `ConsoleSettingsTemplatesApi.put`: `subject`, `bodyHtml`, `bodyText`, `isActive`. @typedef {import("./types.js").Schemas["NotificationTemplateInput"]} NotificationTemplateInput */
+/** Body of `ConsoleSettingsTemplatesApi.preview`: a draft (`subject`, `bodyHtml`, `bodyText`) and `variables`, all optional. @typedef {import("./types.js").Schemas["NotificationTemplatePreviewRequest"]} NotificationTemplatePreviewRequest */
+/** Result of `ConsoleSettingsTemplatesApi.preview`: `{ subject, html, text }`. @typedef {import("./types.js").Schemas["NotificationTemplatePreview"]} NotificationTemplatePreview */
+/** A payment in console scope: `Payment` + environment, version, redacted events, refunds, booking and connection mode. @typedef {import("./types.js").Schemas["ConsolePayment"]} ConsolePayment */
+/** Body of `ConsolePaymentsApi.capture`: optional `amount` (default: the whole authorisation) and `reason`. @typedef {import("./types.js").Schemas["ConsolePaymentCaptureRequest"]} ConsolePaymentCaptureRequest */
+/** Body of `ConsolePaymentsApi.refund`: `amount`, `reason` category and optional `reasonNote`. @typedef {import("./types.js").Schemas["ConsolePaymentRefundRequest"]} ConsolePaymentRefundRequest */
+
+/**
+ * Params of `ConsoleSettingsMarkupRulesApi.list`.
+ * @typedef {object} ConsoleListMarkupRulesParams
+ * @property {string} [cursor] the `page.nextCursor` of the previous page
+ * @property {number} [limit] the page size
+ * @property {boolean} [active] `true`: only enabled rules; `false`: only disabled ones; absent: every rule
+ */
+
+/** Params of `ConsoleSettingsMarkupRulesApi.create`. @typedef {MarkupRuleInput} ConsoleCreateMarkupRuleParams */
+
+/**
+ * Identifies a markup rule (`ConsoleSettingsMarkupRulesApi.get`).
+ * @typedef {object} ConsoleMarkupRuleRefParams
+ * @property {string} markupRuleId markup rule id (`mkr_…`)
+ */
+
+/** Params of `ConsoleSettingsMarkupRulesApi.update`: the rule, `ifMatch` (its version or ETag) and the fields to change. @typedef {ConsoleMarkupRuleRefParams & { ifMatch: ConsoleIfMatch } & MarkupRuleUpdate} ConsoleUpdateMarkupRuleParams */
+/** Params of `ConsoleSettingsMarkupRulesApi.delete`: the rule and `ifMatch`. @typedef {ConsoleMarkupRuleRefParams & { ifMatch: ConsoleIfMatch }} ConsoleDeleteMarkupRuleParams */
+
+/**
+ * Params of `ConsoleSettingsFeeRulesApi.list`.
+ * @typedef {object} ConsoleListFeeRulesParams
+ * @property {string} [cursor] the `page.nextCursor` of the previous page
+ * @property {number} [limit] the page size
+ * @property {boolean} [active] `true`: only enabled rules; `false`: only disabled ones; absent: every rule
+ */
+
+/** Params of `ConsoleSettingsFeeRulesApi.create`. @typedef {FeeRuleInput} ConsoleCreateFeeRuleParams */
+
+/**
+ * Identifies a fee rule (`ConsoleSettingsFeeRulesApi.get`).
+ * @typedef {object} ConsoleFeeRuleRefParams
+ * @property {string} feeRuleId fee rule id (`fee_…`)
+ */
+
+/** Params of `ConsoleSettingsFeeRulesApi.update`: the rule, `ifMatch` (its version or ETag) and the fields to change. @typedef {ConsoleFeeRuleRefParams & { ifMatch: ConsoleIfMatch } & FeeRuleUpdate} ConsoleUpdateFeeRuleParams */
+/** Params of `ConsoleSettingsFeeRulesApi.delete`: the rule and `ifMatch`. @typedef {ConsoleFeeRuleRefParams & { ifMatch: ConsoleIfMatch }} ConsoleDeleteFeeRuleParams */
+/** Params of `ConsoleSettingsStorefrontApi.get` (none). @typedef {Record<string, never>} ConsoleGetStorefrontSettingsParams */
+/** Params of `ConsoleSettingsStorefrontApi.update`: `ifMatch` (the settings' version or ETag) and the sections to replace. @typedef {{ ifMatch: ConsoleIfMatch } & StorefrontSettingsUpdate} ConsoleUpdateStorefrontSettingsParams */
+
+/**
+ * Params of `ConsoleSettingsPagesApi.list`.
+ * @typedef {object} ConsoleListStorefrontPagesParams
+ * @property {string} [cursor] the `page.nextCursor` of the previous page
+ * @property {number} [limit] the page size
+ * @property {string} [locale] only the pages of this locale (BCP 47, such as `en`)
+ * @property {boolean} [published] `true`: only published pages; `false`: only drafts; absent: every page
+ */
+
+/** Params of `ConsoleSettingsPagesApi.create`. @typedef {StorefrontPageInput} ConsoleCreateStorefrontPageParams */
+
+/**
+ * Identifies a content page (`ConsoleSettingsPagesApi.get`).
+ * @typedef {object} ConsoleStorefrontPageRefParams
+ * @property {string} pageId content page id (`stp_…`)
+ */
+
+/** Params of `ConsoleSettingsPagesApi.update`: the page, `ifMatch` (its version or ETag) and the fields to change. @typedef {ConsoleStorefrontPageRefParams & { ifMatch: ConsoleIfMatch } & StorefrontPageUpdate} ConsoleUpdateStorefrontPageParams */
+/** Params of `ConsoleSettingsPagesApi.delete`: the page and `ifMatch`. @typedef {ConsoleStorefrontPageRefParams & { ifMatch: ConsoleIfMatch }} ConsoleDeleteStorefrontPageParams */
+
+/**
+ * Params of `ConsoleSettingsAssetsApi.list`.
+ * @typedef {object} ConsoleListStorefrontAssetsParams
+ * @property {string} [cursor] the `page.nextCursor` of the previous page
+ * @property {number} [limit] the page size
+ * @property {StorefrontAssetKind} [kind] only the assets of this kind
+ */
+
+/**
+ * Params of `ConsoleSettingsAssetsApi.upload` (`StorefrontAssetUpload`, sent as `multipart/form-data`).
+ * @typedef {object} ConsoleUploadStorefrontAssetParams
+ * @property {Blob} file the image, a `Blob` or `File`: PNG, JPEG or WebP (ICO for a `favicon`), at most 1 MB, never SVG
+ * @property {StorefrontAssetKind} kind what the image is for
+ * @property {string} [fileName] the name shown in the console (1 to 200 characters); by default the name of the `file`
+ *   part (a `File`'s own name, `blob` for a plain `Blob`)
+ */
+
+/**
+ * Params of `ConsoleSettingsAssetsApi.delete`.
+ * @typedef {object} ConsoleDeleteStorefrontAssetParams
+ * @property {string} assetId asset id (`ast_…`)
+ */
+
+/** Params of `ConsoleSettingsTemplatesApi.list` (none). @typedef {Record<string, never>} ConsoleListNotificationTemplatesParams */
+
+/**
+ * Identifies a notification template (`ConsoleSettingsTemplatesApi.get`, `.reset`).
+ * @typedef {object} ConsoleNotificationTemplateRefParams
+ * @property {NotificationTemplateKey} templateKey the template key, such as `booking.confirmed`
+ * @property {NotificationChannel} channel the channel (`email`)
+ * @property {string} locale the locale (BCP 47, one of the storefront's supported locales)
+ */
+
+/**
+ * Params of `ConsoleSettingsTemplatesApi.put`: the template, `ifMatch` (its version or ETag) when the OTA already has
+ * its own template (leave it out when it has none), and the template.
+ * @typedef {ConsoleNotificationTemplateRefParams & { ifMatch?: ConsoleIfMatch } & NotificationTemplateInput} ConsolePutNotificationTemplateParams
+ */
+
+/** Params of `ConsoleSettingsTemplatesApi.preview`: the template and an optional draft and render data. @typedef {ConsoleNotificationTemplateRefParams & NotificationTemplatePreviewRequest} ConsolePreviewNotificationTemplateParams */
+
+/**
+ * Params of `ConsolePaymentsApi.list`. `status`, `provider` and `method` take one value or several (sent
+ * comma-separated, OR-ed); the filters are AND-ed.
+ * @typedef {object} ConsoleListPaymentsParams
+ * @property {string} [cursor] the `page.nextCursor` of the previous page
+ * @property {number} [limit] the page size (at most 100)
+ * @property {import("./bookings.js").PaymentStatus | import("./bookings.js").PaymentStatus[]} [status] payment statuses, e.g. `["authorized", "captured"]`
+ * @property {import("./bookings.js").PaymentProvider | import("./bookings.js").PaymentProvider[]} [provider] providers (`stripe`; `airline` for airline-card payments)
+ * @property {import("./bookings.js").Payment["method"] | import("./bookings.js").Payment["method"][]} [method] payment methods
+ * @property {string} [bookingId] payments of this booking (`bkg_…`)
+ * @property {string} [createdFrom] created at or after (ISO-8601)
+ * @property {string} [createdTo] created before (ISO-8601)
+ */
+
+/**
+ * Params of `ConsolePaymentsApi.get`.
+ * @typedef {object} ConsoleGetPaymentParams
+ * @property {string} paymentId payment id (`pay_…`)
+ * @property {boolean} [refresh] read the PaymentIntent from Stripe first and apply its state
+ */
+
+/**
+ * Identifies a payment.
+ * @typedef {object} ConsolePaymentRefParams
+ * @property {string} paymentId payment id (`pay_…`)
+ */
+
+/** Params of `ConsolePaymentsApi.capture`: the payment, `ifMatch` (its version or ETag), `amount?` and `reason`. @typedef {ConsolePaymentRefParams & { ifMatch: ConsoleIfMatch } & ConsolePaymentCaptureRequest} ConsoleCapturePaymentParams */
+/** Params of `ConsolePaymentsApi.refund`: the payment, `amount`, `reason` and `reasonNote?`. @typedef {ConsolePaymentRefParams & ConsolePaymentRefundRequest} ConsoleRefundPaymentParams */
+
+/** `client.console.settings`: markup and fee rules, storefront settings, content pages, storefront images and e-mail templates. @typedef {ConsoleApi["settings"]} ConsoleSettingsApi */
+/** `client.console.settings.markupRules`: list, create, get, update, delete. @typedef {ConsoleSettingsApi["markupRules"]} ConsoleSettingsMarkupRulesApi */
+/** `client.console.settings.feeRules`: list, create, get, update, delete. @typedef {ConsoleSettingsApi["feeRules"]} ConsoleSettingsFeeRulesApi */
+/** `client.console.settings.storefront`: get, update. @typedef {ConsoleSettingsApi["storefront"]} ConsoleSettingsStorefrontApi */
+/** `client.console.settings.pages`: list, create, get, update, delete. @typedef {ConsoleSettingsApi["pages"]} ConsoleSettingsPagesApi */
+/** `client.console.settings.assets`: list, upload, delete. @typedef {ConsoleSettingsApi["assets"]} ConsoleSettingsAssetsApi */
+/** `client.console.settings.templates`: list, get, put, preview, reset. @typedef {ConsoleSettingsApi["templates"]} ConsoleSettingsTemplatesApi */
+/** `client.console.payments`: list, get, capture, refund. @typedef {ConsoleApi["payments"]} ConsolePaymentsApi */

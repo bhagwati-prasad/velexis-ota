@@ -76,8 +76,8 @@ type PendingStandIn<Method extends string, StandIn, OfContract extends boolean> 
  * `StandIn`, so its assertions hold until the SDK task that writes it; a method that is neither there nor pending is
  * a `Problem` that fails every assertion with the reason. A method of the frozen contract (`OfContract`) stands in
  * only while the client has no namespace of that name at all: once an SDK task writes the namespace, every contract
- * method in it is checked, even while the namespace stays pending for its additions (SDK-011 writes the contract's
- * `console` methods and keeps `console` pending until SDK-012 adds `console.settings` and `console.payments`).
+ * method in it is checked, even while the namespace stays pending for its additions (SDK-011 wrote the contract's
+ * `console` methods and kept `console` pending until SDK-012 added `console.settings` and `console.payments`).
  */
 type SdkMethodOr<Method extends string, StandIn, OfContract extends boolean> =
   Member<Sdk.VelexisClient, Method> extends infer Found

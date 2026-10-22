@@ -3,7 +3,8 @@
 // public namespace modules (their typedefs and factories, OADR-0016 point 1). A client offers the namespaces of the
 // milestones built so far, in the contract's order, `withOptions` and `request`: M2 brings `storefront`, `reference`
 // and `flights` (SDK-005), M3 `auth` and `account` (SDK-008), `checkout` (SDK-009) and `bookings` (SDK-010), M4
-// `console` (SDK-011: the contract's methods; SDK-012 adds `console.settings` and `console.payments`).
+// `console` (SDK-011: the contract's methods; SDK-012: `console.settings`, `console.payments` and the storefront's
+// `listPages` and `getPage`).
 import { createBookingsApi, createCheckoutApi } from "./bookings.js";
 import { createConsoleApi } from "./console.js";
 import { createFlightsApi } from "./flights.js";
@@ -26,7 +27,7 @@ export { VERSION } from "./version.js";
  * A configured Velexis client. All namespaces and methods share the client's keys, tokens and defaults.
  * @typedef {object} VelexisClient
  * @property {import("./identity.js").StorefrontApi} storefront storefront bootstrap (branding, locales, currencies,
- *   features, payment provider public config)
+ *   features, payment provider public config) and the published content pages
  * @property {import("./identity.js").AuthApi} auth customer sign-up, sign-in, sessions, e-mail verification, password
  *   reset and change
  * @property {import("./identity.js").AccountApi} account the signed-in customer's profile, preferences, saved
@@ -41,7 +42,7 @@ export { VERSION } from "./version.js";
  *   lookup, changes, extras after booking, cancellation, documents, timeline and ticketing status
  * @property {import("./console.js").ConsoleApi} console the staff console (secret key or the OTA admin's service key,
  *   with a staff token; server-side only): all bookings, PNR lookup and import, order management, issuance, queues,
- *   customers, the Amadeus call log and raw Amadeus access
+ *   customers, the Amadeus call log, raw Amadeus access, the OTA's settings and its payments
  * @property {(overrides: Partial<VelexisClientOptions>) => VelexisClient} withOptions a new client with some options
  *   replaced (for example a per-request access token on the server); it shares nothing mutable with this one
  * @property {<T = unknown>(method: HttpMethod, path: string, init?: { query?: Record<string, string | number | boolean | string[] | undefined>, body?: unknown, options?: RequestOptions }) => Promise<T>} request

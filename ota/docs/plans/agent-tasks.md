@@ -2010,7 +2010,8 @@ The console API (staff sign-in by portal token, bookings, PNR import, queues, cu
   - In server mode with `environment: "live"`, every console request carries `X-Velexis-Environment: live` and customer requests do not.
 - **Verify:** `pnpm --filter @velexis/ota-sdk generate && pnpm --filter @velexis/ota-sdk build && pnpm --filter @velexis/ota-sdk test`
 
-### SDK-012 · Write console settings and payments, multipart upload and storefront pages
+### SDK-012 · Write console settings and payments, multipart upload and storefront pages ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-sdk
 - **Milestone:** M4
 - **Depends on:** SDK-011, OBE-090, OBE-091
