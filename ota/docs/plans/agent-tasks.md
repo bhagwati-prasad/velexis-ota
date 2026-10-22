@@ -1854,7 +1854,8 @@ The console API (staff sign-in by portal token, bookings, PNR import, queues, cu
   - `console.amadeus.createFlightOrders` answers 501 `NOT_IMPLEMENTED`.
 - **Verify:** `pnpm --filter @velexis/ota-backend test:int -- console`
 
-### OBE-068 · Implement console payments list, get, capture and refund
+### OBE-068 · Implement console payments list, get, capture and refund ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-backend
 - **Milestone:** M4
 - **Depends on:** OBE-060, OBE-040, OBE-090

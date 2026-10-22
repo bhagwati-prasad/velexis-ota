@@ -4,8 +4,8 @@
 // - The 4 console payment operations (`ConsolePayment`, tag `Console payments`) with their `x-sdk-method`,
 //   `x-permission` (`payments:read`, `payments:capture`, `payments:refund`) and `x-milestone: M4`, their schemas, their
 //   request validation, their examples (whose payment events are the rows the payments code writes: the webhook
-//   receiver, the payments service and the refunds repository), their pending entries (OBE-068) and their row of
-//   ota/sdk/docs/extensions.md §3.3.
+//   receiver, the payments service and the refunds repository), their handlers (pending until OBE-068 served them)
+//   and their row of ota/sdk/docs/extensions.md §3.3.
 // - The internal endpoints under the `Internal` tag (`x-internal: true`): `healthLive` and `healthReady` (`x-milestone:
 //   M0`, served by HealthController since OBE-001, so no undocumented route is left) and the two M5 webhooks
 //   `receiveStripeConnectWebhook` and `receiveStripeConnectionWebhook` with the tenant rules of OADR-0010 point 4,
@@ -401,11 +401,11 @@ describe("the 8 operations of OBE-090 (api-changes part 2 §3, §5)", () => {
     }
   });
 
-  it("lists the payment operations (OBE-068) and the two webhooks (OBE-078) as pending, and no undocumented route [OBE-090 AC1]", () => {
+  it("lists the two webhooks (OBE-078) as pending, the payment operations no more (OBE-068), and no undocumented route [OBE-090 AC1]", () => {
     // A task that implements its operations removes their entries; route parity (route-parity.contract.test.ts)
-    // then requires their handlers. The health endpoints have theirs (HealthController), so they are neither
-    // pending nor undocumented.
-    const implemented: ReadonlySet<Expected["task"]> = new Set(["served"]);
+    // then requires their handlers. The health endpoints have theirs (HealthController), and since OBE-068 the four
+    // payment operations have theirs (ConsolePaymentsController), so they are neither pending nor undocumented.
+    const implemented: ReadonlySet<Expected["task"]> = new Set(["served", "OBE-068"]);
     for (const { operationId, task } of OBE_090_OPERATIONS) {
       expect([operationId, PENDING_OPERATIONS[operationId as keyof typeof PENDING_OPERATIONS]]).toEqual([
         operationId,

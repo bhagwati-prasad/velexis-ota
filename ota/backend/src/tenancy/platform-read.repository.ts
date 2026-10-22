@@ -7,8 +7,9 @@
 // resolver), the Amadeus connection and the shared Amadeus account in OBE-017 (`amadeusConnection`,
 // `amadeusAccountById`, for the connection resolver of src/amadeus/), the tenants a scheduled job fans out to in
 // OBE-024 (`tenantIdsByStatus`, for src/jobs/fan-out.ts), the default payment connection of an environment in OBE-038
-// (`paymentConnection`, for the Stripe gateway of src/payments/), and a staff member's membership with its account in
-// OBE-059 (`staffMember`, for the staff sessions of src/identity/staff/).
+// (`paymentConnection`, for the Stripe gateway of src/payments/), a staff member's membership with its account in
+// OBE-059 (`staffMember`, for the staff sessions of src/identity/staff/), and the account modes of a tenant's payment
+// connections in OBE-068 (`paymentConnectionModes`, for console.payments of src/console/).
 import { Inject, Injectable } from "@nestjs/common";
 import {
   assertTenantSchema,
@@ -354,6 +355,8 @@ const TENANT_ID_PATTERN = /^ten_[0-9A-Za-z]{1,60}$/;
 const ACCOUNT_ID_PATTERN = /^acc_[0-9A-Za-z]{1,60}$/;
 /** A shared Amadeus account id (`ama_` and a ULID). */
 const AMADEUS_ACCOUNT_ID_PATTERN = /^ama_[0-9A-Za-z]{1,60}$/;
+/** A payment connection id (`ppc_` and a ULID). */
+const PAYMENT_CONNECTION_ID_PATTERN = /^ppc_[0-9A-Za-z]{1,60}$/;
 
 /**
  * A host name as `platform.tenant_domains.hostname` stores it (PADR-0004 item 1, the rule of `redis.keys.ts`): lower
@@ -516,6 +519,42 @@ export class PlatformReadRepository {
         .executeTakeFirst(),
     );
     return row === undefined ? null : toPlatformPaymentConnection(row);
+  }
+
+  /**
+   * The account mode of each of the tenant's payment connections `ids` (`platform.payment_provider_connections`,
+   * whatever their status or default flag), by id (OBE-068: `ConsolePayment.providerConnection` of the connection a
+   * payment was created with). A connection of another tenant, an unknown id or a value that cannot be a connection id
+   * is left out; nothing but the id and the mode is read. A mode outside the CHECK list throws
+   * `UnexpectedPlatformValueError`.
+   */
+  async paymentConnectionModes(
+    tenantId: string,
+    ids: readonly string[],
+  ): Promise<ReadonlyMap<string, PaymentAccountMode>> {
+    const wanted = [...new Set(ids)].filter((id) => PAYMENT_CONNECTION_ID_PATTERN.test(id));
+    if (!TENANT_ID_PATTERN.test(tenantId) || wanted.length === 0) {
+      return new Map();
+    }
+    const rows = await this.read((trx) =>
+      trx
+        .selectFrom("platform.payment_provider_connections")
+        .select(["id", "account_mode"])
+        .where("tenant_id", "=", tenantId)
+        .where("id", "in", wanted)
+        .execute(),
+    );
+    return new Map(
+      rows.map((row) => [
+        row.id,
+        oneOf(
+          row.account_mode,
+          PAYMENT_ACCOUNT_MODES,
+          "platform.payment_provider_connections.account_mode",
+          row.id,
+        ),
+      ]),
+    );
   }
 
   /**

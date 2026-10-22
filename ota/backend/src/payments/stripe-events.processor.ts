@@ -15,7 +15,10 @@
 //        charge.refunded, charge.refund.updated
 //                                   the charge and its refunds: each refund row of the payment (by Stripe id, else by
 //                                   the `refund_id` Velexis wrote in it) takes its state, and the payment its captured
-//                                   and refunded amounts and `captured`, `partially_refunded` or `refunded`;
+//                                   and refunded amounts and `captured`, `partially_refunded` or `refunded`; a refund
+//                                   of a booking that becomes `succeeded` writes the booking's customer-visible
+//                                   `refund.succeeded` event, the only one that says refunded (OBE-068, lead decision
+//                                   6 of 2026-10-22: the request wrote `refund.requested`);
 //        charge.dispute.created     the dispute: a `payment.dispute_created` event and a staff alert (outbox
 //                                   `staff.manual_review` to `ops_alert_email`, else OPS_ALERT_EMAIL; disputes are
 //                                   alerted, not managed, in the MVP);
@@ -24,8 +27,8 @@
 //      (PaymentsRepository.updatePayment, updateRefund), with a `payment_events` row (`source = webhook`) per change.
 //      The Stripe calls happen outside any transaction (architecture §4). A dispute's transaction, whose alert
 //      references the payment's booking, locks the booking first (`FOR KEY SHARE`), then the payment, and a refund
-//      event's transaction the payment, then its refunds: the lock order checkout, booking, payment, refund
-//      (OADR-0003 point 11).
+//      event's transaction the refunds' bookings (`FOR KEY SHARE`, for their booking events), the payment, then its
+//      refunds: the lock order checkout, booking, payment, refund (OADR-0003 point 11).
 //
 // An object whose metadata names another tenant, environment or payment is a security event (logged without the
 // object) and changes nothing. A Stripe failure that can pass (connection, timeout, 5xx, rate limit) fails the job for
@@ -348,7 +351,9 @@ export class StripeEventHandler {
   /**
    * Applies the refunds and the charge's amounts under the rows' locks and with their `version`: the payment first,
    * then its refunds (lead decision of 2026-10-21, OADR-0003 point 11: checkout, booking, payment, refund), as
-   * `refund.submit` takes them (RefundsRepository.lockParents).
+   * `refund.submit` takes them (RefundsRepository.lockParents). A refund of a booking that Stripe reports `succeeded`
+   * also writes the booking's customer-visible `refund.succeeded` event (lead decision 6 of 2026-10-22, OBE-068: only
+   * Stripe's answer makes a refund refunded), so the refunds' bookings are locked `FOR KEY SHARE` before the payment.
    */
   private async applyRefunds(
     stored: StoredEvent,
@@ -357,6 +362,9 @@ export class StripeEventHandler {
   ): Promise<StripeEventOutcome> {
     return await this.tx.run(async (trx) => {
       const now = this.clock.now();
+      // The bookings the refund events reference, before the payment (their foreign keys take FOR KEY SHARE).
+      const refundBookings = await this.repository.refundBookingIds(trx, stored.payment.id);
+      await this.repository.lockBookings(trx, [...refundBookings.values()], "key share");
       const current = await this.repository.payment(trx, stored.payment.id, true);
       if (current === undefined) {
         return "missing";
@@ -390,6 +398,21 @@ export class StripeEventHandler {
             payload: { refundId: row.id, providerRefundId: refund.providerRefundId },
             now,
           });
+          const bookingId = refundBookings.get(row.id);
+          if (update.status === "succeeded" && bookingId !== undefined) {
+            await this.repository.insertRefundBookingEvent(trx, {
+              id: this.ids.newId("evt"),
+              kind: "succeeded",
+              bookingId,
+              refundId: row.id,
+              paymentId: current.id,
+              amount: row.amount,
+              currency: row.currency,
+              actor: { type: "system", id: null },
+              requestId: stored.event.providerEventId,
+              now,
+            });
+          }
         }
       }
       const paymentUpdate = refundedState(current, charge, now);

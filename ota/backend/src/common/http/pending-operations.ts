@@ -94,11 +94,6 @@ export const PENDING_OPERATIONS: Readonly<Partial<Record<OtaOperationId, Pending
   consolePutNotificationTemplate: "OBE-073",
   consolePreviewNotificationTemplate: "OBE-073",
   consoleResetNotificationTemplate: "OBE-073",
-  // Console payments (OBE-090)
-  consoleListPayments: "OBE-068",
-  consoleGetPayment: "OBE-068",
-  consoleCapturePayment: "OBE-068",
-  consoleRefundPayment: "OBE-068",
   // Stripe webhooks of the Connect and API-key modes (OBE-090 documents them in M4; served from M5)
   receiveStripeConnectWebhook: "OBE-078",
   receiveStripeConnectionWebhook: "OBE-078",

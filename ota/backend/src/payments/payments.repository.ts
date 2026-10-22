@@ -16,6 +16,12 @@
 // The lock order (lead decision of 2026-10-21, OADR-0003 point 11): a transaction that locks a booking and its payment
 // locks the booking first, then the payment. `lockBookings` takes the booking's lock for the payment jobs and alerts
 // that change a booking, or write a row that references one, under a payment's lock.
+//
+// OBE-068 adds what console.payments needs (console/console-payments.service.ts): the page of the console's list
+// (`consolePayments`, newest first with a keyset, in the request's environment), the events, refunds and booking
+// summaries of a set of payments in one query each, and the booking writes of a staff capture (`setAmountPaid`) and of
+// the refund events (`insertBookingEvent`, also the webhook's `refund.succeeded`; `refundBookingIds` names the bookings
+// to lock before the payment).
 import { Injectable } from "@nestjs/common";
 import { sql, type Insertable, type TenantDatabase, type Updateable } from "@velexis/db";
 import type { TenantTransaction } from "../tenancy/tenant-tx";
@@ -147,10 +153,140 @@ export interface LockedBookingRow {
  */
 export type BookingLockMode = "update" | "key share";
 
+/** What console.payments.list reads (`consolePayments`, OBE-068). */
+export interface ConsolePaymentQuery {
+  readonly environment: string;
+  /** `payments.status` values, in the stored spelling (`canceled`). */
+  readonly statuses?: readonly string[] | undefined;
+  readonly providers?: readonly string[] | undefined;
+  readonly methods?: readonly string[] | undefined;
+  readonly bookingId?: string | undefined;
+  /** At or after. */
+  readonly createdFrom?: Date | undefined;
+  /** Before. */
+  readonly createdTo?: Date | undefined;
+  /** The keyset position of the page's start: after the row with this `sortKey` and id. */
+  readonly after?: { readonly key: string; readonly id: string } | undefined;
+  readonly limit: number;
+}
+
+/** A `payment_events` row as the console shows it (OBE-068). */
+export interface ConsolePaymentEventRow {
+  readonly id: string;
+  readonly paymentId: string;
+  readonly type: string;
+  readonly source: string;
+  readonly statusFrom: string | null;
+  readonly statusTo: string | null;
+  /** As text, or `null`. */
+  readonly amount: string | null;
+  readonly currency: string | null;
+  readonly providerEventId: string | null;
+  /** The redacted payload stored with the event. */
+  readonly payload: unknown;
+  readonly createdAt: Date;
+}
+
+/** A `refunds` row as the console shows it (OBE-068). */
+export interface ConsoleRefundRow {
+  readonly id: string;
+  readonly paymentId: string;
+  readonly bookingId: string | null;
+  readonly currency: string;
+  readonly amount: string;
+  readonly penaltyAmount: string | null;
+  readonly reason: string;
+  readonly reasonNote: string | null;
+  readonly status: string;
+  readonly providerRefundId: string | null;
+  readonly requestedByType: string;
+  readonly requestedById: string | null;
+  readonly failureReason: string | null;
+  readonly processedAt: Date | null;
+  readonly createdAt: Date;
+  readonly updatedAt: Date;
+}
+
+/** The short reference of a payment's booking (`ConsolePaymentBooking`). */
+export interface PaymentBookingSummaryRow {
+  readonly id: string;
+  readonly reference: string;
+  readonly status: string;
+}
+
+/** The booking events of a refund (`insertRefundBookingEvent`): asked for, and refunded on Stripe's word. */
+export const REFUND_BOOKING_EVENT = Object.freeze({
+  requested: "refund.requested",
+  succeeded: "refund.succeeded",
+} as const);
+
+/** One booking event of a refund (`insertRefundBookingEvent`). */
+export interface RefundBookingEvent {
+  /** `evt_…` */
+  readonly id: string;
+  readonly kind: keyof typeof REFUND_BOOKING_EVENT;
+  readonly bookingId: string;
+  readonly refundId: string;
+  readonly paymentId: string;
+  /** The refund's amount as stored (a decimal string) and its currency. */
+  readonly amount: string;
+  readonly currency: string;
+  /** Who caused it (`booking_events.actor_type`, `actor_id`). */
+  readonly actor: { readonly type: string; readonly id: string | null };
+  readonly requestId: string | null;
+  readonly now: Date;
+}
+
 /** The payment states of a checkout that a new payment replaces (cancelled before they are confirmed). */
 export const REPLACEABLE_STATUSES = ["requires_payment_method", "requires_action"] as const;
 
 type Db = TenantDatabase;
+
+/**
+ * The `payments` rows with their checkout's access columns, as `PaymentRow` (amounts as text): the query `payment` and
+ * `consolePayments` narrow.
+ */
+function paymentRows(trx: TenantTransaction) {
+  return trx
+    .selectFrom("payments as p")
+    .leftJoin("checkouts as c", "c.id", "p.checkout_id")
+    .select([
+      "p.id as id",
+      "p.environment as environment",
+      "p.checkout_id as checkoutId",
+      "p.booking_id as bookingId",
+      "p.customer_id as customerId",
+      "p.provider as provider",
+      "p.provider_connection_id as providerConnectionId",
+      "p.provider_payment_id as providerPaymentId",
+      "p.method as method",
+      "p.capture_method as captureMethod",
+      "p.status as status",
+      "p.card_brand as cardBrand",
+      "p.card_exp_month as cardExpMonth",
+      "p.card_exp_year as cardExpYear",
+      "p.three_ds as threeDs",
+      "p.next_action as nextAction",
+      "p.failure_code as failureCode",
+      "p.failure_message as failureMessage",
+      "p.authorized_at as authorizedAt",
+      "p.captured_at as capturedAt",
+      "p.canceled_at as canceledAt",
+      "p.version as version",
+      "p.created_at as createdAt",
+      "p.updated_at as updatedAt",
+      "c.customer_id as checkoutCustomerId",
+      sql<boolean>`coalesce(c.is_guest, false)`.as("checkoutIsGuest"),
+      sql<string>`p.currency::text`.as("currency"),
+      sql<string | null>`p.card_bin::text`.as("cardBin"),
+      sql<string | null>`p.card_last4::text`.as("cardLast4"),
+      sql<string>`p.amount::text`.as("amount"),
+      sql<string>`p.card_fee_amount::text`.as("cardFeeAmount"),
+      sql<string>`p.amount_authorized::text`.as("amountAuthorized"),
+      sql<string>`p.amount_captured::text`.as("amountCaptured"),
+      sql<string>`p.amount_refunded::text`.as("amountRefunded"),
+    ]);
+}
 
 @Injectable()
 export class PaymentsRepository {
@@ -225,50 +361,190 @@ export class PaymentsRepository {
 
   /** The payment `id` with its checkout's access columns, locked `FOR UPDATE` when `lock`; `undefined` if unknown. */
   async payment(trx: TenantTransaction, id: string, lock = false): Promise<PaymentRow | undefined> {
-    let query = trx
-      .selectFrom("payments as p")
-      .leftJoin("checkouts as c", "c.id", "p.checkout_id")
-      .select([
-        "p.id as id",
-        "p.environment as environment",
-        "p.checkout_id as checkoutId",
-        "p.booking_id as bookingId",
-        "p.customer_id as customerId",
-        "p.provider as provider",
-        "p.provider_connection_id as providerConnectionId",
-        "p.provider_payment_id as providerPaymentId",
-        "p.method as method",
-        "p.capture_method as captureMethod",
-        "p.status as status",
-        "p.card_brand as cardBrand",
-        "p.card_exp_month as cardExpMonth",
-        "p.card_exp_year as cardExpYear",
-        "p.three_ds as threeDs",
-        "p.next_action as nextAction",
-        "p.failure_code as failureCode",
-        "p.failure_message as failureMessage",
-        "p.authorized_at as authorizedAt",
-        "p.captured_at as capturedAt",
-        "p.canceled_at as canceledAt",
-        "p.version as version",
-        "p.created_at as createdAt",
-        "p.updated_at as updatedAt",
-        "c.customer_id as checkoutCustomerId",
-        sql<boolean>`coalesce(c.is_guest, false)`.as("checkoutIsGuest"),
-        sql<string>`p.currency::text`.as("currency"),
-        sql<string | null>`p.card_bin::text`.as("cardBin"),
-        sql<string | null>`p.card_last4::text`.as("cardLast4"),
-        sql<string>`p.amount::text`.as("amount"),
-        sql<string>`p.card_fee_amount::text`.as("cardFeeAmount"),
-        sql<string>`p.amount_authorized::text`.as("amountAuthorized"),
-        sql<string>`p.amount_captured::text`.as("amountCaptured"),
-        sql<string>`p.amount_refunded::text`.as("amountRefunded"),
-      ])
-      .where("p.id", "=", id);
+    let query = paymentRows(trx).where("p.id", "=", id);
     if (lock) {
       query = query.forUpdate(["p"]);
     }
     return await query.executeTakeFirst();
+  }
+
+  // ---- Console reads (OBE-068) ------------------------------------------------------------------------------------
+
+  /**
+   * One page of the payments of `query.environment` for console.payments.list, newest first (`created_at`, then `id`,
+   * both descending), after the keyset position `query.after` when given, at most `query.limit` rows. The filters are
+   * AND-ed, the values of a list OR-ed; statuses in the stored spelling (`canceled`). `sortKey` is the row's
+   * `created_at` in UTC with microseconds, the key of the next page's cursor.
+   */
+  async consolePayments(
+    trx: TenantTransaction,
+    query: ConsolePaymentQuery,
+  ): Promise<(PaymentRow & { readonly sortKey: string })[]> {
+    let select = paymentRows(trx)
+      .select(
+        sql<string>`to_char(p.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US')`.as("sortKey"),
+      )
+      .where("p.environment", "=", query.environment);
+    if (query.statuses !== undefined && query.statuses.length > 0) {
+      select = select.where("p.status", "in", [...query.statuses]);
+    }
+    if (query.providers !== undefined && query.providers.length > 0) {
+      select = select.where("p.provider", "in", [...query.providers]);
+    }
+    if (query.methods !== undefined && query.methods.length > 0) {
+      select = select.where("p.method", "in", [...query.methods]);
+    }
+    if (query.bookingId !== undefined) {
+      select = select.where("p.booking_id", "=", query.bookingId);
+    }
+    if (query.createdFrom !== undefined) {
+      select = select.where("p.created_at", ">=", query.createdFrom);
+    }
+    if (query.createdTo !== undefined) {
+      select = select.where("p.created_at", "<", query.createdTo);
+    }
+    if (query.after !== undefined) {
+      const { key, id } = query.after;
+      select = select.where(
+        sql<boolean>`(p.created_at, p.id) < ((${key}::timestamp AT TIME ZONE 'UTC'), ${id})`,
+      );
+    }
+    return await select.orderBy("p.created_at", "desc").orderBy("p.id", "desc").limit(query.limit).execute();
+  }
+
+  /** The events of the payments `paymentIds` (`payment_events`), oldest first. */
+  async consoleEvents(
+    trx: TenantTransaction,
+    paymentIds: readonly string[],
+  ): Promise<ConsolePaymentEventRow[]> {
+    if (paymentIds.length === 0) {
+      return [];
+    }
+    return await trx
+      .selectFrom("payment_events")
+      .select([
+        "id",
+        "payment_id as paymentId",
+        "type",
+        "source",
+        "status_from as statusFrom",
+        "status_to as statusTo",
+        "provider_event_id as providerEventId",
+        "payload",
+        "created_at as createdAt",
+        sql<string | null>`amount::text`.as("amount"),
+        sql<string | null>`currency::text`.as("currency"),
+      ])
+      .where("payment_id", "in", [...new Set(paymentIds)])
+      .orderBy("created_at")
+      .orderBy("id")
+      .execute();
+  }
+
+  /** The refunds of the payments `paymentIds` (`refunds`), oldest first, with who asked for them. */
+  async consoleRefunds(trx: TenantTransaction, paymentIds: readonly string[]): Promise<ConsoleRefundRow[]> {
+    if (paymentIds.length === 0) {
+      return [];
+    }
+    return await trx
+      .selectFrom("refunds")
+      .select([
+        "id",
+        "payment_id as paymentId",
+        "booking_id as bookingId",
+        "reason",
+        "reason_note as reasonNote",
+        "status",
+        "provider_refund_id as providerRefundId",
+        "requested_by_type as requestedByType",
+        "requested_by_id as requestedById",
+        "failure_reason as failureReason",
+        "processed_at as processedAt",
+        "created_at as createdAt",
+        "updated_at as updatedAt",
+        sql<string>`currency::text`.as("currency"),
+        sql<string>`amount::text`.as("amount"),
+        sql<string | null>`penalty_amount::text`.as("penaltyAmount"),
+      ])
+      .where("payment_id", "in", [...new Set(paymentIds)])
+      .orderBy("created_at")
+      .orderBy("id")
+      .execute();
+  }
+
+  /** The reference and status of each booking of `ids` that exists, by id. */
+  async bookingSummaries(
+    trx: TenantTransaction,
+    ids: readonly string[],
+  ): Promise<ReadonlyMap<string, PaymentBookingSummaryRow>> {
+    const wanted = [...new Set(ids)];
+    if (wanted.length === 0) {
+      return new Map();
+    }
+    const rows = await trx
+      .selectFrom("bookings")
+      .select(["id", "reference", "status"])
+      .where("id", "in", wanted)
+      .execute();
+    return new Map(rows.map((row) => [row.id, row]));
+  }
+
+  /** The bookings the refunds of payment `paymentId` reference, read without a lock (`booking_id` never changes). */
+  async refundBookingIds(trx: TenantTransaction, paymentId: string): Promise<ReadonlyMap<string, string>> {
+    const rows = await trx
+      .selectFrom("refunds")
+      .select(["id", "booking_id as bookingId"])
+      .where("payment_id", "=", paymentId)
+      .where("booking_id", "is not", null)
+      .execute();
+    return new Map(rows.flatMap((row) => (row.bookingId === null ? [] : [[row.id, row.bookingId] as const])));
+  }
+
+  /**
+   * Shows a capture on a booking that the caller's transaction locked `FOR UPDATE` before the payment
+   * (`lockBookings`): `amount_paid` and `version + 1`.
+   */
+  async setAmountPaid(trx: TenantTransaction, bookingId: string, amount: string, now: Date): Promise<void> {
+    await trx
+      .updateTable("bookings")
+      .set({ amount_paid: amount, updated_at: now, version: sql`version + 1` })
+      .where("id", "=", bookingId)
+      .execute();
+  }
+
+  /**
+   * Appends a booking event (`booking_events`, append-only) for a payment step. Its foreign key takes `FOR KEY SHARE` on
+   * the booking: the caller locked the booking before the payment (`lockBookings`, OADR-0003 point 11).
+   */
+  async insertBookingEvent(trx: TenantTransaction, row: Insertable<Db["booking_events"]>): Promise<void> {
+    await trx.insertInto("booking_events").values(row).execute();
+  }
+
+  /**
+   * Appends the customer-visible booking event of a refund (lead decision 6 of 2026-10-22): `refund.requested` when it
+   * is asked for, worded as a request, and `refund.succeeded` only when Stripe reports it succeeded (the webhook). No
+   * other step says that a refund was made. The caller holds the booking's lock (`insertBookingEvent`).
+   */
+  async insertRefundBookingEvent(trx: TenantTransaction, event: RefundBookingEvent): Promise<void> {
+    const what = `Refund of ${event.amount} ${event.currency}`;
+    await this.insertBookingEvent(trx, {
+      id: event.id,
+      booking_id: event.bookingId,
+      type: REFUND_BOOKING_EVENT[event.kind],
+      actor_type: event.actor.type,
+      actor_id: event.actor.id,
+      summary: event.kind === "requested" ? `${what} requested.` : `${what} completed.`,
+      data: JSON.stringify({
+        refundId: event.refundId,
+        paymentId: event.paymentId,
+        amount: event.amount,
+        currency: event.currency,
+      }),
+      visible_to_customer: true,
+      request_id: event.requestId,
+      created_at: event.now,
+      updated_at: event.now,
+    });
   }
 
   /**

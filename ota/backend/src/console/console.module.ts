@@ -11,24 +11,32 @@
 // (console-bookings.controller.ts), which read the bookings module's rows and refresh orders with its
 // CustomerBookingsService (BookingsModule exports them; it never imports this module). PNR import, queues, customers,
 // supplier log, raw Amadeus reads, payments and settings follow. Since OBE-062: console.bookings.retrieve, patch, resync
-// and addNote (console-booking-actions.service.ts), which call Amadeus through AmadeusModule's client.
+// and addNote (console-booking-actions.service.ts), which call Amadeus through AmadeusModule's client. Since OBE-068:
+// console.payments.list, get, capture and refund (console-payments.controller.ts, console-payments.service.ts), which
+// read and change the payments module's rows (PaymentsRepository from BookingsModule, RefundsRepository), call Stripe
+// through PaymentGatewayModule's gateway and queue `refund.submit` on `ota-payments` (QueuesModule).
 import { Global, Module } from "@nestjs/common";
 import { AmadeusModule } from "../amadeus/amadeus.module";
 import { BookingsModule } from "../bookings/bookings.module";
 import { StaffContext, StaffRefusalAudit } from "../common/auth/staff.guard";
 import { loadOpenApiDocument, OpenApiDocument } from "../common/http/openapi-validation.interceptor";
 import { RequestContext } from "../common/http/request-context";
+import { QueuesModule } from "../common/queues/queues.module";
+import { PaymentGatewayModule } from "../payments/payment-gateway.module";
+import { RefundsRepository } from "../payments/refunds.repository";
 import { TenancyModule } from "../tenancy/tenancy.module";
 import { ConsoleBookingActionsService } from "./console-booking-actions.service";
 import { ConsoleBookingsController } from "./console-bookings.controller";
 import { ConsoleBookingsRepository } from "./console-bookings.repository";
 import { ConsoleBookingsService } from "./console-bookings.service";
+import { ConsolePaymentsController } from "./console-payments.controller";
+import { ConsolePaymentsService } from "./console-payments.service";
 import { StaffActionsWriter } from "./staff-actions.writer";
 
 @Global()
 @Module({
-  imports: [TenancyModule.forApi(), AmadeusModule, BookingsModule],
-  controllers: [ConsoleBookingsController],
+  imports: [TenancyModule.forApi(), AmadeusModule, BookingsModule, PaymentGatewayModule, QueuesModule],
+  controllers: [ConsoleBookingsController, ConsolePaymentsController],
   providers: [
     StaffActionsWriter,
     { provide: StaffRefusalAudit, useExisting: StaffActionsWriter },
@@ -41,6 +49,8 @@ import { StaffActionsWriter } from "./staff-actions.writer";
     ConsoleBookingsRepository,
     ConsoleBookingsService,
     ConsoleBookingActionsService,
+    ConsolePaymentsService,
+    RefundsRepository,
   ],
   exports: [StaffActionsWriter, StaffRefusalAudit],
 })

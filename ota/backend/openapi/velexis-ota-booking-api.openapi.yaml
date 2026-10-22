@@ -19431,12 +19431,15 @@ paths:
         **Effect.** In one transaction, which locks the payment's booking, then the payment (OADR-0003 point 11), a
         `refunds` row is written (`pending`, `requested_by_type = staff` and the staff member's `stf_…` id, `reason`,
         `reason_note` = `reasonNote`), with a `payment_events` row (`source = staff`, `refund.requested`), a
-        `booking_events` row `payment.refunded` (the refund asked for, with its `rfd_…` id and amount) when the payment
-        belongs to a booking, and a `staff_actions` row (`payment.refund`). The refund is then sent to Stripe by the
-        payments queue (`refund.submit` on `ota-payments`, idempotency key `refund:<rfd_id>`, OADR-0010 points 3 and
-        6), so this call makes no Stripe call and Stripe being down delays the refund, never refuses it; the refund
-        webhooks (`charge.refunded`, `charge.refund.updated`) set its final status and the payment's `amountRefunded`
-        and status (`partially_refunded` or `refunded`). The answer is the payment with the new refund in `refunds`.
+        `booking_events` row `refund.requested` that the customer sees, worded as a refund asked for (its `rfd_…` id
+        and amount; nothing says refunded yet), when the payment belongs to a booking, and a `staff_actions` row
+        (`payment.refund`). The refund is then sent to Stripe by the payments queue (`refund.submit` on
+        `ota-payments`, idempotency key `refund:<rfd_id>`, OADR-0010 points 3 and 6), so this call makes no Stripe
+        call and Stripe being down delays the refund, never refuses it; the refund webhooks (`charge.refunded`,
+        `charge.refund.updated`) set its final status and the payment's `amountRefunded` and status
+        (`partially_refunded` or `refunded`). Only Stripe's answer makes the refund refunded: when Stripe reports it
+        `succeeded`, the booking gets its `refund.succeeded` event. The answer is the payment with the new refund in
+        `refunds`.
 
 
         **Idempotency.** `Idempotency-Key` required (`idempotency_keys`, 24 h): a retry with the same key and body
@@ -37583,7 +37586,8 @@ components:
           description: >-
             booking.created, payment.authorized, payment.captured, booking.ticketed, booking.contacts_updated,
             booking.documents_updated, booking.schedule_changed, booking.cancellation_requested, booking.cancelled,
-            refund.succeeded, document.generated …
+            refund.requested (a refund asked for, not made yet), refund.succeeded (the payment provider refunded it),
+            document.generated …
         actorType:
           type: string
           enum:
