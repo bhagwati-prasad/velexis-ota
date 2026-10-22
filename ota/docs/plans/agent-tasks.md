@@ -2076,7 +2076,8 @@ The console API (staff sign-in by portal token, bookings, PNR import, queues, cu
   - `can()` matches scope §1.3 for all five roles (table test); client components cannot import `lib/velexis.ts` (`server-only` build error asserted by a test fixture).
 - **Verify:** `pnpm --filter @velexis/ota-admin test && pnpm --filter @velexis/ota-admin build`
 
-### OAD-003 · Build the SSO, refresh and sign-out handlers and the middleware
+### OAD-003 · Build the SSO, refresh and sign-out handlers and the middleware ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-admin
 - **Milestone:** M4
 - **Depends on:** OAD-002, OBE-059

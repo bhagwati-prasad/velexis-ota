@@ -5,10 +5,13 @@ import { join } from "node:path";
 import type { NextConfig } from "next";
 
 /**
- * Static security headers on every response. The nonce-based script policy is per request and comes with the
- * middleware (OAD-003); Caddy adds HSTS and `X-Frame-Options` in production (deploy/caddy/Caddyfile).
+ * Static security headers on every response; Caddy adds HSTS and `X-Frame-Options` in production
+ * (deploy/caddy/Caddyfile). The Content-Security-Policy here is the fallback of the answers the middleware does not
+ * see (static files, the health routes): `src/middleware.ts` sets the full nonce-based policy on every other answer,
+ * per request, in its place (and on the request, where Next.js reads the nonce for the scripts it renders). Both
+ * policies keep `frame-ancestors 'none'`.
  */
-const SECURITY_HEADERS = [
+export const SECURITY_HEADERS = [
   { key: "Content-Security-Policy", value: "frame-ancestors 'none'" },
   { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
   { key: "X-Content-Type-Options", value: "nosniff" },
