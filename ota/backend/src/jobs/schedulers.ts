@@ -5,7 +5,8 @@
 // (fan-out.ts) lists the schedule's target tenants and enqueues one `<schedule id>` job per tenant, with a
 // deterministic id, which the module that owns the work handles (`@TenantJob("<schedule id>")`). Schedules join this
 // list with the task that adds their work (M3: notifications.sweep with OBE-030, payments.authorisation_watch with
-// OBE-040, ticketing.scan with OBE-044, bookings.reconcile_scan with OBE-043, checkouts.expire, …; M4: queues.poll).
+// OBE-040, ticketing.scan with OBE-044, bookings.reconcile_scan with OBE-043, bookings.sync_scan with OBE-045,
+// checkouts.expire, …; M4: queues.poll).
 //
 // Target tenants (OADR-0014 point 4): a schedule names the statuses it runs for, `active` and possibly `suspended`
 // (suspended tenants keep their obligations to paid travellers, but nothing that starts new supplier activity runs for
@@ -128,6 +129,15 @@ export const OTA_SCHEDULES: readonly ScheduleDefinition[] = Object.freeze([
     statuses: ["active", "suspended"],
     description:
       "Adopt pending bookings claimed more than 2 minutes ago without reconcile_until, then enqueue booking.reconcile {tenantId, bookingId} for each pending booking with reconcile_until that is not decided yet (bookings/reconcile.processor.ts)",
+  }),
+  schedule({
+    id: "bookings.sync_scan",
+    pattern: "*/10 * * * *",
+    milestone: "M3",
+    // Booking sync continues for a suspended OTA's paid bookings (OADR-0008 point 8, OADR-0014 point 4).
+    statuses: ["active", "suspended"],
+    description:
+      "Enqueue booking.sync {tenantId, bookingId} for the 20 oldest synced active bookings with an order whose trip is not over, not synced for 6 hours (1 hour in the 24 hours before the ticketing deadline of one that waits for tickets) nor claimed for 30 minutes (bookings/booking-sync.processor.ts)",
   }),
 ]);
 

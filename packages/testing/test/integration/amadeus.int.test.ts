@@ -273,6 +273,19 @@ describe("startAmadeusStub", () => {
     expect(res.status).toBe(504);
     expect(stub.requests().at(-1)).toMatchObject({ scenario: "timeout", status: 504 });
   });
+
+  it("shows the stub's orders and the airline's changes a test plays on them (OBE-045)", async () => {
+    const stub = await start();
+    expect(stub.orders.list()).toEqual([]);
+    // No order yet: the changes find nothing (the stub's own tests play them on stored orders).
+    expect(stub.orders.changeSegment("no-such-order", "1", { bookingStatus: "CANCELLED" })).toBeUndefined();
+    expect(stub.orders.cancelByAirline("no-such-order")).toBeUndefined();
+    expect(() => stub.orders.changeSegment("no-such-order", "1", { departureAt: "tomorrow" })).toThrow(
+      TypeError,
+    );
+    stub.orders.reset();
+    expect(stub.orders.list()).toEqual([]);
+  });
 });
 
 describe("stubScenario", () => {

@@ -1172,7 +1172,8 @@ Checkout, customer accounts in cookies, Stripe on the Velexis account, the airli
   - A timed-out issue followed by a GET that shows tickets makes no second issue call [OF-06 AC2].
 - **Verify:** `pnpm --filter @velexis/ota-backend test -- bookings && pnpm --filter @velexis/ota-backend test:int -- bookings`
 
-### OBE-045 · Sync bookings with Amadeus on a schedule
+### OBE-045 · Sync bookings with Amadeus on a schedule ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-backend
 - **Milestone:** M3
 - **Depends on:** OBE-042

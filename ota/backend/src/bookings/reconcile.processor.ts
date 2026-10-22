@@ -11,8 +11,8 @@
 // database error fails the job, which BullMQ retries with the defaults of ADR-0009; Amadeus and Stripe failures never
 // do (the attempt waits for the next one or records them).
 //
-// `ota-bookings` has one consumer per process: this processor. `booking.sync` (OBE-045) joins it here; any other job
-// name fails at once.
+// `ota-bookings` has one consumer per process: this processor. `booking.sync` (OBE-045) joins it here: those jobs go to
+// BookingSyncJobs (booking-sync.processor.ts); any other job name fails at once.
 //
 // `bookings.reconcile_scan` (every minute, jobs/schedulers.ts) runs per tenant on `ota-maintenance`, for `active` and
 // `suspended` tenants. In one transaction it first adopts the stale claims (ReconcileRepository.adoptStaleClaims, lead
@@ -41,6 +41,7 @@ import { PlatformCache } from "../tenancy/platform-cache";
 import type { PlatformTenant, TenantStatus } from "../tenancy/platform-read.types";
 import { TenantContext } from "../tenancy/tenant-context";
 import { TenantTx, type TenantTransaction } from "../tenancy/tenant-tx";
+import { BOOKING_SYNC_JOB, BookingSyncJobs, type BookingSyncJobResult } from "./booking-sync.processor";
 import { OrderRecorder } from "./order-recorder";
 import {
   parseReconcileJobData,
@@ -76,7 +77,8 @@ export type ReconcileJobResult =
 
 /**
  * The consumer of `ota-bookings` (architecture §6, concurrency 4): `booking.reconcile {tenantId, bookingId}` runs one
- * reconciliation attempt (see the file header); any other job fails at once.
+ * reconciliation attempt (see the file header), `booking.sync {tenantId, bookingId}` one booking sync (OBE-045,
+ * BookingSyncJobs); any other job fails at once.
  */
 @Processor(OTA_QUEUE.bookings, otaWorkerOptions(OTA_QUEUE.bookings))
 export class ReconcileProcessor extends WorkerHost {
@@ -87,12 +89,16 @@ export class ReconcileProcessor extends WorkerHost {
     private readonly reconcile: ReconcileService,
     private readonly cache: PlatformCache,
     private readonly tenants: TenantContext,
+    private readonly sync: BookingSyncJobs,
     @InjectPinoLogger(ReconcileProcessor.name) private readonly logger: PinoLogger,
   ) {
     super();
   }
 
-  async process(job: Job): Promise<ReconcileJobResult> {
+  async process(job: Job): Promise<ReconcileJobResult | BookingSyncJobResult> {
+    if (job.name === BOOKING_SYNC_JOB) {
+      return await this.sync.process(job);
+    }
     const data = job.name === RECONCILE_JOB ? parseReconcileJobData(job.data) : undefined;
     if (data === undefined) {
       this.logger.error(
@@ -119,7 +125,7 @@ export class ReconcileProcessor extends WorkerHost {
   onFailed(job: Job | undefined, error: Error): void {
     this.logger.error(
       { queue: OTA_QUEUE.bookings, jobId: job?.id, attempt: job?.attemptsMade, code: error.name },
-      "bookings.reconcile_job_failed",
+      job?.name === BOOKING_SYNC_JOB ? "bookings.sync_job_failed" : "bookings.reconcile_job_failed",
     );
   }
 

@@ -790,6 +790,89 @@ describe("Flight Order Management", () => {
   });
 });
 
+/** The segments of an order's flight offers, in order. */
+function segmentsOf(order: Json): Json[] {
+  const offers = Array.isArray(order["flightOffers"]) ? (order["flightOffers"] as Json[]) : [];
+  return offers.flatMap((offer) =>
+    (offer["itineraries"] as Json[]).flatMap((itinerary) => itinerary["segments"] as Json[]),
+  );
+}
+
+describe("the airline's changes of an order (OBE-045)", () => {
+  it("plays a schedule change of one segment: new times and status, version + 1, the order readable everywhere [OBE-045 AC1]", async () => {
+    const stub = await startStub();
+    const headers = await authorized(stub);
+    const created = await createOrder(stub, headers);
+    const [segment] = segmentsOf(created);
+    const segmentId = String(segment?.["id"]);
+
+    const changed = stub.orders.changeSegment(created.id, segmentId, {
+      departureAt: "2027-01-15T08:45:00",
+      arrivalAt: "2027-01-15T10:50",
+      bookingStatus: "WAITLISTED",
+    });
+    expect(changed).toMatchObject({ id: created.id, status: "active", version: 2 });
+
+    const res = await getOrder(stub, headers, created.id);
+    expect(res.status).toBe(200);
+    const body = await json<OrderBody>(res);
+    expect(segmentsOf(body.data)).toEqual([
+      {
+        ...segment,
+        departure: { ...(segment?.["departure"] as Json), at: "2027-01-15T08:45:00" },
+        arrival: { ...(segment?.["arrival"] as Json), at: "2027-01-15T10:50" },
+        bookingStatus: "WAITLISTED",
+      },
+    ]);
+    // Everything else of the order is as it was, and the answer still matches the response schema.
+    expect({ ...body.data, flightOffers: undefined }).toEqual({ ...created, flightOffers: undefined });
+    expect(schemaProblems("getFlightOrder", 200, body)).toEqual([]);
+    expect((await byReference(stub, headers, locatorOf(created))).status).toBe(200);
+  });
+
+  it("refuses a malformed change and leaves unknown orders and segments alone [OBE-045 AC1]", async () => {
+    const stub = await startStub();
+    const headers = await authorized(stub);
+    const created = await createOrder(stub, headers);
+    const segmentId = String(segmentsOf(created)[0]?.["id"]);
+
+    expect(() =>
+      stub.orders.changeSegment(created.id, segmentId, { departureAt: "15/01/2027 08:45" }),
+    ).toThrow(TypeError);
+    expect(() =>
+      stub.orders.changeSegment(created.id, segmentId, {
+        bookingStatus: "HX" as unknown as "CANCELLED",
+      }),
+    ).toThrow(TypeError);
+    expect(stub.orders.changeSegment(created.id, "999", { departureAt: "2027-01-15T08:45" })).toBeUndefined();
+    expect(
+      stub.orders.changeSegment("unknown", segmentId, { departureAt: "2027-01-15T08:45" }),
+    ).toBeUndefined();
+    expect(stub.orders.cancelByAirline("unknown")).toBeUndefined();
+    expect(onlyOrder(stub)).toMatchObject({ version: 1 });
+  });
+
+  it("plays a cancellation by the airline: every segment CANCELLED, the order still readable, unlike DELETE [OBE-045 AC2]", async () => {
+    const stub = await startStub();
+    const headers = await authorized(stub);
+    const created = await createOrder(stub, headers, twoTravelerOrder());
+
+    expect(stub.orders.cancelByAirline(created.id)).toMatchObject({ status: "active", version: 2 });
+    const res = await getOrder(stub, headers, created.id);
+    expect(res.status).toBe(200);
+    const body = await json<OrderBody>(res);
+    expect(segmentsOf(body.data).map((segment) => segment["bookingStatus"])).toEqual(
+      segmentsOf(created).map(() => "CANCELLED"),
+    );
+    expect(schemaProblems("getFlightOrder", 200, body)).toEqual([]);
+
+    // A DELETE (the agency's cancellation) still removes it.
+    expect((await send(stub, "DELETE", orderPath(created.id), headers)).status).toBe(204);
+    expect(stub.orders.cancelByAirline(created.id)).toBeUndefined();
+    expect(stub.orders.changeSegment(created.id, "3", { bookingStatus: "CONFIRMED" })).toBeUndefined();
+  });
+});
+
 describe("timeouts at the order writes", () => {
   it("stores the order on timeout before the 504, so reconciliation finds it [OBE-041 AC2]", async () => {
     const { timers, pending } = manualTimers();

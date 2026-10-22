@@ -18,10 +18,13 @@ export {
   maskCardNumbers,
   ORIGIN_SYSTEM_CODE,
   OrderStore,
+  SEGMENT_BOOKING_STATUSES,
   TICKET_NUMBER_PREFIX,
   toFlightOrder,
+  type AirlineSegmentChange,
   type OrderStatus,
   type QueuePlacement,
+  type SegmentBookingStatus,
   type StoredOrder,
   type StubOrders,
 } from "./orders";

@@ -53,6 +53,8 @@ const WATCH = "payments.authorisation_watch";
 const TICKETING = "ticketing.scan";
 /** The reconciliation scan of OBE-043. */
 const RECONCILE = "bookings.reconcile_scan";
+/** The booking sync scan of OBE-045. */
+const SYNC = "bookings.sync_scan";
 const ALPHA = "ten_01JALPHA0000000000000000AA";
 const BETA = "ten_01JBETA00000000000000000BB";
 /** The 15-minute iteration of the tests: 2026-01-15T10:15:00Z (FakeClock's day). */
@@ -145,7 +147,14 @@ const purgeSchedule = () => {
 
 describe("the schedules", () => {
   it("declare offers.purge every 15 minutes for active and suspended tenants, in UTC", () => {
-    expect(OTA_SCHEDULES.map((schedule) => schedule.id)).toEqual([PURGE, SWEEP, WATCH, TICKETING, RECONCILE]);
+    expect(OTA_SCHEDULES.map((schedule) => schedule.id)).toEqual([
+      PURGE,
+      SWEEP,
+      WATCH,
+      TICKETING,
+      RECONCILE,
+      SYNC,
+    ]);
     expect(purgeSchedule()).toMatchObject({
       pattern: "*/15 * * * *",
       milestone: "M2",
@@ -172,6 +181,12 @@ describe("the schedules", () => {
     // OBE-043: the reconciliation scan every minute, for suspended tenants too (OADR-0003 point 5).
     expect(scheduleById(RECONCILE)).toMatchObject({
       pattern: "* * * * *",
+      milestone: "M3",
+      statuses: ["active", "suspended"],
+    });
+    // OBE-045: the booking sync scan every 10 minutes, for suspended tenants too (OADR-0008 point 8).
+    expect(scheduleById(SYNC)).toMatchObject({
+      pattern: "*/10 * * * *",
       milestone: "M3",
       statuses: ["active", "suspended"],
     });
@@ -215,9 +230,14 @@ describe("the schedules", () => {
       { pattern: "* * * * *", tz: SCHEDULE_TIME_ZONE },
       { name: FAN_OUT_JOB, data: { task: RECONCILE } },
     );
+    expect(upsertJobScheduler).toHaveBeenCalledWith(
+      SYNC,
+      { pattern: "*/10 * * * *", tz: SCHEDULE_TIME_ZONE },
+      { name: FAN_OUT_JOB, data: { task: SYNC } },
+    );
     expect(removeJobScheduler).toHaveBeenCalledExactlyOnceWith("offers.legacy_sweep");
     expect(result).toEqual({
-      registered: [PURGE, SWEEP, WATCH, TICKETING, RECONCILE],
+      registered: [PURGE, SWEEP, WATCH, TICKETING, RECONCILE, SYNC],
       removed: ["offers.legacy_sweep"],
     });
   });

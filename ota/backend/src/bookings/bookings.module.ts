@@ -28,6 +28,8 @@
 // handler (reconcile.processor.ts) with the timeout reconciliation of reconcile.service.ts, which reads the checkout
 // (CheckoutRepository, TravelerDocuments) and captures through the PaymentGateway; like PaymentsWorkerModule it
 // provides the gateway itself on the worker's platform caches, never PaymentGatewayModule (the API's tenancy module).
+// Since OBE-045 also the `bookings.sync_scan` handler and the `booking.sync` jobs (booking-sync.processor.ts, which the
+// `ota-bookings` consumer hands them to) with the background sync of booking-sync.service.ts.
 import { Module } from "@nestjs/common";
 import { AmadeusModule, AmadeusWorkerModule } from "../amadeus/amadeus.module";
 import { CheckoutRepository } from "../checkout/checkout.repository";
@@ -45,6 +47,8 @@ import { StripeGateway } from "../payments/stripe/stripe.gateway";
 import { ShoppingModule } from "../shopping/shopping.module";
 import { TenancyModule } from "../tenancy/tenancy.module";
 import { BookingOrchestrator, CompleteCheckoutIdempotencyHooks } from "./booking-orchestrator.service";
+import { BookingSyncJobs, BookingSyncScan } from "./booking-sync.processor";
+import { BookingSyncRepository, BookingSyncService } from "./booking-sync.service";
 import { BookingsRepository } from "./bookings.repository";
 import { CustomerBookingsController } from "./customer-bookings.controller";
 import { CustomerBookingsService } from "./customer-bookings.service";
@@ -115,6 +119,11 @@ export class BookingsModule {}
     ReconcileService,
     ReconcileProcessor,
     ReconcileScan,
+    // The background booking sync (OBE-045).
+    BookingSyncRepository,
+    BookingSyncService,
+    BookingSyncJobs,
+    BookingSyncScan,
     CheckoutRepository,
     checkoutKeyProvider,
     TravelerDocuments,

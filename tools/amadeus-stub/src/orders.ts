@@ -6,7 +6,10 @@
 // `server.orders.reset()` empties it). An order keeps its id, record locator, creation time, offices, flight offers,
 // travellers, remarks, contacts, forms of payment, ticketing agreement, automated processes and the queue placements
 // they make, tickets, status (`active` until DELETE cancels it) and version (1 at creation, +1 per issue, PATCH or
-// cancel). Values are copied in and out, so nothing outside the store changes a stored order.
+// cancel). Values are copied in and out, so nothing outside the store changes a stored order. Tests play what the
+// airline does to an order through `server.orders` too (OBE-045): a schedule change of one segment (`changeSegment`:
+// new local times, a booking status) and a cancellation by the airline (`cancelByAirline`: every segment `CANCELLED`,
+// the order still readable), each +1 on the version.
 //
 // Generated values: the record locator is 6 random letters and digits (unique per store; random so that orders of
 // different stub runs never collide in a test database), the flight-order id is the base64url of `<locator>|<creation
@@ -85,13 +88,49 @@ export interface StoredOrder {
   readonly tickets: readonly JsonObject[];
 }
 
+/** The `bookingStatus` values of an Amadeus FlightSegment (Flight Order Management's specification). */
+export const SEGMENT_BOOKING_STATUSES = [
+  "CONFIRMED",
+  "WAITLISTED",
+  "CANCELLED",
+  "PENDING",
+  "DENIED",
+] as const;
+export type SegmentBookingStatus = (typeof SEGMENT_BOOKING_STATUSES)[number];
+
+/**
+ * A change the airline makes to a segment of an order (OBE-045: the booking sync's schedule changes), as tests play
+ * it: new local times (`YYYY-MM-DDTHH:MM:SS`, or without seconds, as Amadeus writes `departure.at`), a booking status.
+ */
+export interface AirlineSegmentChange {
+  readonly departureAt?: string;
+  readonly arrivalAt?: string;
+  readonly bookingStatus?: SegmentBookingStatus;
+}
+
 /** What tests see of a server's orders (`StubServer.orders`). */
 export interface StubOrders {
   /** Every order, cancelled ones included, oldest first (copies). */
   list(): readonly StoredOrder[];
   /** Forgets every order, as a restarted stub would. */
   reset(): void;
+  /**
+   * Plays a schedule change by the airline (OBE-045): the segment `segmentId` of every flight offer of the active
+   * order `id` takes the change, and the order's version goes up by one; the order stays readable everywhere. Answers
+   * the changed order, or `undefined` when there is no such active order or segment. A malformed change throws.
+   */
+  changeSegment(id: string, segmentId: string, change: AirlineSegmentChange): StoredOrder | undefined;
+  /**
+   * Plays a cancellation by the airline (OBE-045; a time limit that lapsed, say): every segment of the active order
+   * `id` becomes `bookingStatus: CANCELLED` and its version goes up by one. Unlike Management DELETE (a cancellation
+   * by the agency, after which the order is gone), the order stays readable, as Amadeus shows the airline's cancelled
+   * segments. Answers the changed order, or `undefined` when there is no such active order.
+   */
+  cancelByAirline(id: string): StoredOrder | undefined;
 }
+
+/** A local date-time as Amadeus writes `departure.at` and `arrival.at`. */
+const LOCAL_DATE_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2})?$/;
 
 /** Which queue a Queue List reads. */
 export interface QueueQuery {
@@ -420,6 +459,58 @@ export class OrderStore implements StubOrders {
     return snapshot(order);
   }
 
+  changeSegment(id: string, segmentId: string, change: AirlineSegmentChange): StoredOrder | undefined {
+    for (const value of [change.departureAt, change.arrivalAt]) {
+      if (value !== undefined && !LOCAL_DATE_TIME.test(value)) {
+        throw new TypeError("changeSegment: a time is a local date-time YYYY-MM-DDTHH:MM[:SS]");
+      }
+    }
+    if (
+      change.bookingStatus !== undefined &&
+      !(SEGMENT_BOOKING_STATUSES as readonly string[]).includes(change.bookingStatus)
+    ) {
+      throw new TypeError("changeSegment: bookingStatus is not a FlightSegment booking status");
+    }
+    const order = this.#active(id);
+    if (order === undefined) {
+      return undefined;
+    }
+    let found = false;
+    const flightOffers = this.#mapSegments(order.flightOffers, (segment) => {
+      if (segment["id"] !== segmentId) {
+        return segment;
+      }
+      found = true;
+      const departure = isRecord(segment["departure"]) ? segment["departure"] : {};
+      const arrival = isRecord(segment["arrival"]) ? segment["arrival"] : {};
+      return {
+        ...segment,
+        departure: change.departureAt === undefined ? departure : { ...departure, at: change.departureAt },
+        arrival: change.arrivalAt === undefined ? arrival : { ...arrival, at: change.arrivalAt },
+        ...(change.bookingStatus === undefined ? {} : { bookingStatus: change.bookingStatus }),
+      };
+    });
+    if (!found) {
+      return undefined;
+    }
+    order.flightOffers = flightOffers;
+    order.version += 1;
+    return snapshot(order);
+  }
+
+  cancelByAirline(id: string): StoredOrder | undefined {
+    const order = this.#active(id);
+    if (order === undefined) {
+      return undefined;
+    }
+    order.flightOffers = this.#mapSegments(order.flightOffers, (segment) => ({
+      ...segment,
+      bookingStatus: "CANCELLED",
+    }));
+    order.version += 1;
+    return snapshot(order);
+  }
+
   list(): readonly StoredOrder[] {
     return [...this.#orders.values()].map(snapshot);
   }
@@ -432,6 +523,20 @@ export class OrderStore implements StubOrders {
   #active(id: string): MutableOrder | undefined {
     const order = this.#orders.get(id);
     return order?.status === "active" ? order : undefined;
+  }
+
+  /** Copies of `flightOffers` with every segment of every itinerary replaced by `change(segment)`. */
+  #mapSegments(
+    flightOffers: readonly JsonObject[],
+    change: (segment: JsonObject) => JsonObject,
+  ): JsonObject[] {
+    return flightOffers.map((offer) => ({
+      ...structuredClone(offer),
+      itineraries: records(offer["itineraries"]).map((itinerary) => ({
+        ...structuredClone(itinerary),
+        segments: records(itinerary["segments"]).map((segment) => change(structuredClone(segment))),
+      })),
+    }));
   }
 
   #newLocator(): string {

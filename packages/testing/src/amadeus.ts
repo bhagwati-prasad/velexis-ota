@@ -6,6 +6,7 @@
 //   app = await startApi({ env: { AMADEUS_BASE_URL_TEST: stub.url } });
 //   await request(app.server).post("/v1/flight-searches").set(stubScenario("server-error")).send(simpleSearch);
 //   expect(stub.requests().at(-1)).toMatchObject({ operation: "getFlightOffers", status: 500 });
+//   stub.orders.changeSegment(orderId, "3", { departureAt: "2027-01-15T08:45:00" });   // the airline's change
 //   await stub.stop();                                               // in afterAll: frees the port
 //
 // The stub itself (OAuth, routes, scenarios, request validation, fixtures) stays in tools/amadeus-stub
@@ -22,9 +23,12 @@ import {
   TIMEOUT_HOLD_MS,
   TOKEN_EXPIRES_IN,
   TOKEN_OPERATION,
+  type AirlineSegmentChange,
   type RecordedRequest,
+  type StoredOrder,
   type StubClock,
   type StubCredentials,
+  type StubOrders,
   type StubScenario,
   type StubTimers,
 } from "@velexis/amadeus-stub";
@@ -37,8 +41,11 @@ export {
   TIMEOUT_HOLD_MS,
   TOKEN_EXPIRES_IN,
   TOKEN_OPERATION,
+  type AirlineSegmentChange,
+  type StoredOrder,
   type StubClock,
   type StubCredentials,
+  type StubOrders,
   type StubScenario,
   type StubTimers,
 };
@@ -79,6 +86,12 @@ export interface AmadeusStub {
    */
   setDefaultScenario(name: StubScenario): void;
   /**
+   * The flight orders the stub stored (`list()`, `reset()`), and what the airline does to one, which every later read
+   * of the order answers: `changeSegment(id, segmentId, { departureAt?, arrivalAt?, bookingStatus? })` (a schedule
+   * change) and `cancelByAirline(id)` (every segment `CANCELLED`, the order still readable). The stub's README, Orders.
+   */
+  readonly orders: StubOrders;
+  /**
    * Stops listening, drops the responses the `timeout` scenario holds and every open connection, and resolves when
    * the port is free again. Idempotent: a second call returns the same promise.
    */
@@ -105,6 +118,7 @@ export async function startAmadeusStub({
     requests: () => server.requests(),
     clearRequests: () => server.clearRequests(),
     setDefaultScenario: (name: StubScenario) => server.setDefaultScenario(name),
+    orders: server.orders,
     stop: () => server.close(),
   });
 }

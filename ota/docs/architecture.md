@@ -180,7 +180,7 @@ BullMQ prefix `vx`, defaults of [ADR-0009](../../docs/mvp/adr/0009-background-jo
 | `checkouts.expire` | 1 min | Per tenant: expire `open`/`payment_pending` checkouts past `expires_at`, enqueue `payment.void`; a checkout whose booking is `pending` is skipped, its authorisation left to the reconciliation ([OADR-0003](adr/0003-booking-orchestration-and-supplier-timeout-recovery.md) point 10) | M3 |
 | `bookings.reconcile_scan` | 1 min | Adopts `pending` bookings without `reconcile_until` claimed more than 2 minutes ago (`reconcile_until = now + 15 min`), then `booking.reconcile` for `pending` bookings with `reconcile_until` set | M3 |
 | `ticketing.scan` | 5 min | `ticketing.issue` for bookings with `ticketing_next_attempt_at` due; deadline alerts | M3 |
-| `bookings.sync_scan` | 10 min | `booking.sync` for the oldest synced active bookings (20 per tenant per run) | M3 |
+| `bookings.sync_scan` | 10 min | `booking.sync` for the oldest synced active bookings (20 per tenant per run): an order, the trip not over, not synced for 6 h (1 h in the 24 h before the ticketing deadline of one that waits for tickets) nor claimed for 30 min, paid ones only for a suspended tenant; BullMQ priority 10, after the queue's `booking.reconcile` jobs (OBE-045, `bookings/booking-sync.service.ts`) | M3 |
 | `notifications.sweep` | 1 min | `notify` for tenants with due outbox rows | M3 |
 | `offers.purge` | 15 min | Delete expired searches, offers, upsells, priced offers not referenced by a checkout | M2 |
 | `queues.poll` | 15 min | Queue List for each monitored queue of active tenants (paused while suspended) | M4 |

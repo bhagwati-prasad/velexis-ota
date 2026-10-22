@@ -17,7 +17,7 @@ import { createServer, type IncomingHttpHeaders, type IncomingMessage, type Serv
 import type { AddressInfo } from "node:net";
 import { performance } from "node:perf_hooks";
 import { TokenStore, type StubClock, type StubCredentials } from "./oauth";
-import { maskCardNumbers, OrderStore, type StubOrders } from "./orders";
+import { maskCardNumbers, OrderStore, type AirlineSegmentChange, type StubOrders } from "./orders";
 import {
   loadFixture,
   matchRoute,
@@ -110,7 +110,10 @@ export interface StubServer {
   clearRequests(): void;
   /** The scenario of requests without `X-Stub-Scenario` from now on (`success` to go back to normal). */
   setDefaultScenario(scenario: StubScenario): void;
-  /** The flight orders this server stored (Flight Create Orders), and `reset()` to forget them. */
+  /**
+   * The flight orders this server stored (Flight Create Orders), `reset()` to forget them, and the airline's changes
+   * a test plays on them (`changeSegment`, `cancelByAirline`).
+   */
   readonly orders: StubOrders;
   /** Stops listening, drops held responses and open connections, and resolves when the port is free. */
   close(): Promise<void>;
@@ -463,7 +466,13 @@ export async function createStubServer(options: StubServerOptions): Promise<Stub
       recorded.length = 0;
     },
     setDefaultScenario,
-    orders: Object.freeze({ list: () => orders.list(), reset: () => orders.reset() }),
+    orders: Object.freeze({
+      list: () => orders.list(),
+      reset: () => orders.reset(),
+      changeSegment: (id: string, segmentId: string, change: AirlineSegmentChange) =>
+        orders.changeSegment(id, segmentId, change),
+      cancelByAirline: (id: string) => orders.cancelByAirline(id),
+    }),
     close: () => {
       closing ??= new Promise<void>((resolve, reject) => {
         for (const cancel of held) {
