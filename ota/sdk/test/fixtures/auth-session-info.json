@@ -1,0 +1,35 @@
+{
+  "customer": {
+    "id": "cus_2Rk7Vn4Qw9Lx3Tb8",
+    "email": "mia.lund@example.com",
+    "emailVerified": true,
+    "emailVerifiedAt": "2026-10-12T07:58:13Z",
+    "pendingEmail": null,
+    "firstName": "Mia",
+    "lastName": "Lund",
+    "phone": null,
+    "dateOfBirth": null,
+    "status": "active",
+    "marketingConsent": {
+      "granted": false,
+      "updatedAt": "2026-10-12T07:55:00Z",
+      "source": "sign_up"
+    },
+    "termsAcceptedVersion": "2026-09-01",
+    "lastSignInAt": "2026-10-12T08:02:00Z",
+    "createdAt": "2026-10-12T07:55:00Z",
+    "updatedAt": "2026-10-12T08:02:00Z",
+    "version": 2
+  },
+  "session": {
+    "id": "ses_7Tp3Kx9Mv2Qr6Wn4",
+    "createdAt": "2026-10-12T08:02:00Z",
+    "lastUsedAt": "2026-10-12T08:02:00Z",
+    "accessTokenExpiresAt": "2026-10-12T08:17:00Z",
+    "refreshTokenExpiresAt": "2026-11-11T08:02:00Z",
+    "rememberMe": true,
+    "authMethod": "password",
+    "userAgent": "Mozilla/5.0 (X11; Linux x86_64; rv:131.0) Gecko/20100101 Firefox/131.0",
+    "ipCountry": "SE"
+  }
+}

@@ -51,7 +51,7 @@ const HTTP_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE"];
  * The request core handed to the namespace factories.
  * @typedef {object} Core
  * @property {Readonly<VelexisClientOptions>} options the client's validated options (what `withOptions` starts from),
- *   with string tokens that an automatic refresh has rotated replaced by the current ones
+ *   with string tokens that an automatic refresh or an adopted session result has rotated replaced by the current ones
  * @property {"cookie" | "token" | "server"} mode the session mode (README §4)
  * @property {(overrides: unknown) => VelexisClientOptions} derive the options of `withOptions(overrides)`: these
  *   options with the overrides applied (validated when the new client is created); a cookie-mode client cannot be
@@ -60,6 +60,10 @@ const HTTP_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE"];
  *   one SDK method: params split by the route-table entry; list operations resolve with a `Page`
  * @property {<T = unknown>(method: HttpMethod, path: string, init?: RawRequestInit) => Promise<T>} request
  *   the low-level escape hatch for an API path (`/v1/…`)
+ * @property {(result: unknown, presentedRefreshToken?: string, requestOptions?: RequestOptions) => Promise<void>} adoptSession
+ *   token and server mode: makes the tokens of a session result (`auth.signIn`, `auth.refresh`, `auth.changePassword`)
+ *   the client's session and reports them to `onSessionRefreshed` (internal/session.js); nothing for a call sent with
+ *   its own credential (`requestOptions.accessToken`, an `Authorization` header) or in cookie mode; never throws
  */
 
 /** @param {string} message */
@@ -604,5 +608,7 @@ export function createCore(options) {
     derive,
     call,
     request,
+    adoptSession: (result, presentedRefreshToken, requestOptions) =>
+      session.adopt(result, presentedRefreshToken, requestOptions),
   };
 }

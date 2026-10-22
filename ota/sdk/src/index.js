@@ -1,13 +1,13 @@
 // @velexis/ota-sdk public entry (mirrors docs/velexis-sdk/sdk/src/index.d.ts, ADR-0019): `createVelexisClient`,
 // `VERSION`, everything of shared.js (the error classes, `isVelexisError`, `Page` and the shared typedefs) and of the
 // public namespace modules (their typedefs and factories, OADR-0016 point 1). A client offers the namespaces of the
-// milestones built so far, `withOptions` and `request`: M2 brings `storefront`, `reference` and `flights` (SDK-005),
-// M3 `checkout` (SDK-009) and `bookings` (SDK-010), M4 `console` (SDK-011: the contract's methods; SDK-012 adds
-// `console.settings` and `console.payments`); `auth` and `account` (M3) follow.
+// milestones built so far, in the contract's order, `withOptions` and `request`: M2 brings `storefront`, `reference`
+// and `flights` (SDK-005), M3 `auth` and `account` (SDK-008), `checkout` (SDK-009) and `bookings` (SDK-010), M4
+// `console` (SDK-011: the contract's methods; SDK-012 adds `console.settings` and `console.payments`).
 import { createBookingsApi, createCheckoutApi } from "./bookings.js";
 import { createConsoleApi } from "./console.js";
 import { createFlightsApi } from "./flights.js";
-import { createReferenceApi, createStorefrontApi } from "./identity.js";
+import { createAccountApi, createAuthApi, createReferenceApi, createStorefrontApi } from "./identity.js";
 import { createCore } from "./internal/client.js";
 
 export * from "./shared.js";
@@ -27,6 +27,10 @@ export { VERSION } from "./version.js";
  * @typedef {object} VelexisClient
  * @property {import("./identity.js").StorefrontApi} storefront storefront bootstrap (branding, locales, currencies,
  *   features, payment provider public config)
+ * @property {import("./identity.js").AuthApi} auth customer sign-up, sign-in, sessions, e-mail verification, password
+ *   reset and change
+ * @property {import("./identity.js").AccountApi} account the signed-in customer's profile, preferences, saved
+ *   travellers and data exports
  * @property {import("./identity.js").ReferenceApi} reference airports, cities, airlines, countries, currencies
  *   (platform reference data)
  * @property {import("./flights.js").FlightsApi} flights flight search, offer details, branded-fare upsell, pricing,
@@ -54,6 +58,8 @@ export function createVelexisClient(options) {
   const core = createCore(options);
   return {
     storefront: createStorefrontApi(core),
+    auth: createAuthApi(core),
+    account: createAccountApi(core),
     reference: createReferenceApi(core),
     flights: createFlightsApi(core),
     checkout: createCheckoutApi(core),

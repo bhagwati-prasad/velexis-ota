@@ -6,6 +6,7 @@
 // client has no namespace of that name: SDK-011 wrote every contract method of `console` (`auth`, `bookings`,
 // `queues`, `customers`, `supplierRequests`, `amadeus`: 32), and all of them are checked, while the namespace stays
 // pending for its MVP additions until SDK-012 adds `console.settings` and `console.payments` and removes the entry.
+// SDK-008 wrote `auth` and `account` and removed their entries, so their 22 contract methods are checked as well.
 //
 // An entry is either a whole namespace that no SDK task has written yet, or a single method of a namespace that is
 // already implemented, added to the document by a spec task after its namespace (for example `storefront.listPages`,
@@ -39,8 +40,6 @@ export const PENDING = Object.freeze(
       task: "SDK-012",
       note: "OBE-091 added it to the document after SDK-005 wrote the storefront namespace",
     },
-    { entry: "auth", task: "SDK-008" },
-    { entry: "account", task: "SDK-008" },
     {
       entry: "console",
       task: "SDK-012",

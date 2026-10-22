@@ -71,8 +71,8 @@ export type DeviationAssertions = [
   Assignable<CookieModeAuthResult["result"], Awaited<ReturnType<Contract.AuthApi["signIn"]>>>,
   Assignable<CookieModeAuthResult["result"], Awaited<ReturnType<Contract.AuthApi["refresh"]>>>,
   Assignable<CookieModeAuthResult["result"], Awaited<ReturnType<Contract.AuthApi["changePassword"]>>>,
-  // ...and the SDK resolves with all of it, not a part (methods.generated.ts checks the other direction). While
-  // `auth` is pending (SDK-008) the methods stand in with the deviating type, so these hold by themselves.
+  // ...and the SDK resolves with all of it, not a part (methods.generated.ts checks the other direction): the SDK's
+  // own results since SDK-008 wrote `auth`, so together the two pin each method to exactly the approved union.
   Assignable<SdkResult<"auth.signIn">, CookieModeAuthResult["result"]>,
   Assignable<SdkResult<"auth.refresh">, CookieModeAuthResult["result"]>,
   Assignable<SdkResult<"auth.changePassword">, CookieModeAuthResult["result"]>,

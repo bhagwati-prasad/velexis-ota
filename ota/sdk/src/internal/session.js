@@ -29,6 +29,16 @@
 // the call or the client, which wins over the session's) is not the client's session and is not refreshed. Hook
 // failures are ignored, as `onResponse`'s are.
 //
+// Session results (token and server mode, SDK-008): what `auth.signIn`, `auth.refresh` and `auth.changePassword`
+// resolve with (an `AuthSessionResult` with tokens) becomes the client's session through `adopt`, as an automatic
+// refresh's result does: the tokens the client held when the result arrived and the refresh token the call presented
+// count as rotated, so the session sends the new tokens wherever a token source still gives a replaced one, and
+// `onSessionRefreshed` gets the new tokens. A client without `accessToken` and `refreshToken` keeps nothing: it never
+// starts sending a token it was not given, so a server client shared by every visitor holds no visitor's session. A
+// call with its own credential (`options.accessToken`, or an `Authorization` header of the call or the client) is not
+// the client's session, as for the automatic refresh: its result feeds nothing and calls no hook. Cookie mode stores
+// nothing (the session is in httpOnly cookies, and the result carries no token).
+//
 // A call is sent again after `TOKEN_EXPIRED` or `CSRF_TOKEN_INVALID` (the API refused it before doing anything) with
 // the same `Idempotency-Key`. The one exception is an operation the route table marks `retry: "never"` although it
 // takes a key, the reviewed override of `checkout.completeWithAirlineCard`: its card is sent once per submit (OADR-0017
@@ -76,6 +86,11 @@ import { op } from "./operations.js";
  *   handling and the automatic refresh
  * @property {(takesEnvironment: boolean) => Record<string, string>} environmentHeaders `X-Velexis-Environment` for an
  *   operation that takes it (console operations) when the client has `environment`, else no header
+ * @property {(result: unknown, presentedRefreshToken: string | undefined, requestOptions?: RequestOptions) => Promise<void>} adopt
+ *   token and server mode: makes the tokens of a session result (`auth.signIn`, `auth.refresh`, `auth.changePassword`)
+ *   the client's session and reports them to `onSessionRefreshed`; nothing for a result without tokens, for a call
+ *   with its own credential (`requestOptions`) or in cookie mode; never throws (the API has already rotated the
+ *   session, so the caller must get the result)
  */
 
 /** The CSRF cookie of cookie mode (OADR-0006 point 2), not httpOnly: its value goes into `X-CSRF-Token`. */
@@ -312,6 +327,20 @@ async function callHook(hook, ...args) {
 }
 
 /**
+ * The tokens of a session result (`AuthSessionResult` or `ConsoleStaffSession`: `session.accessToken` and
+ * `session.refreshToken`), or `undefined` when it has none (cookie mode's `AuthSessionInfo`).
+ * @param {unknown} result
+ * @returns {Schemas["Session"] | undefined}
+ */
+function sessionTokensOf(result) {
+  const session = /** @type {{ session?: Partial<Schemas["Session"]> | null } | null | undefined} */ (result)
+    ?.session;
+  return typeof session?.accessToken === "string" && typeof session.refreshToken === "string"
+    ? /** @type {Schemas["Session"]} */ (session)
+    : undefined;
+}
+
+/**
  * The tokens of a refresh response (`AuthSessionResult` or `ConsoleStaffSession`: `session.accessToken` and
  * `session.refreshToken`).
  * @param {unknown} result
@@ -319,9 +348,8 @@ async function callHook(hook, ...args) {
  * @throws {ServerError} when the response has no tokens
  */
 function tokensOf(result) {
-  const session = /** @type {{ session?: Partial<Schemas["Session"]> } | null | undefined} */ (result)
-    ?.session;
-  if (typeof session?.accessToken !== "string" || typeof session.refreshToken !== "string") {
+  const session = sessionTokensOf(result);
+  if (session === undefined) {
     throw new ServerError({
       code: "INTERNAL_ERROR",
       message: "The API answered the session refresh without tokens",
@@ -329,7 +357,7 @@ function tokensOf(result) {
       requestId: null,
     });
   }
-  return /** @type {Schemas["Session"]} */ (session);
+  return session;
 }
 
 /**
@@ -373,17 +401,18 @@ export function createSession(options, transport) {
   }
 
   /**
-   * Records the tokens of a refresh: the ones it replaced are rotated from now on.
-   * @param {{ accessToken: string | undefined, refreshToken: string }} replaced
+   * Records the tokens of a refresh or a session result: the ones they replaced are rotated from now on.
+   * @param {{ accessToken: (string | undefined)[], refreshToken: (string | undefined)[] }} replaced
    * @param {Schemas["Session"]} tokens
    */
   function rotate(replaced, tokens) {
     for (const kind of /** @type {const} */ (["accessToken", "refreshToken"])) {
       const set = rotated[kind];
-      const value = replaced[kind];
-      if (value !== undefined) {
-        set.delete(value);
-        set.add(value);
+      for (const value of replaced[kind]) {
+        if (value !== undefined) {
+          set.delete(value);
+          set.add(value);
+        }
       }
       set.delete(tokens[kind]);
       for (const oldest of set) {
@@ -544,7 +573,7 @@ export function createSession(options, transport) {
       }
       const result = await sendOwn(refreshOperation, { refreshToken }, requestOptions);
       const tokens = tokensOf(result);
-      rotate({ accessToken: attempt.accessToken, refreshToken }, tokens);
+      rotate({ accessToken: [attempt.accessToken], refreshToken: [refreshToken] }, tokens);
       generation += 1;
       await callHook(options.onSessionRefreshed, tokens);
       if (refreshOperation === op.console_auth_refresh) {
@@ -587,18 +616,71 @@ export function createSession(options, transport) {
   }
 
   /**
+   * Whether a call presents a credential of its own instead of the session's access token: `options.accessToken`, or
+   * an `Authorization` header of the call or the client (which wins over the session's). Such a call is not the
+   * client's session: it is not refreshed, and its session result does not become the client's session.
+   * @param {Readonly<RequestOptions>} requestOptions
+   */
+  const presentsOwnCredential = (requestOptions) =>
+    requestOptions.accessToken !== undefined ||
+    hasHeader(requestOptions.headers, "authorization") ||
+    hasHeader(transport.headers, "authorization");
+
+  /**
    * Whether a call that failed with `TOKEN_EXPIRED` is refreshed: always in cookie mode; in token and server mode when
-   * the client has a refresh token and the call sent the session's access token, not its own (`options.accessToken`,
-   * or an `Authorization` header of the call or the client, which wins over the session's).
+   * the client has a refresh token and the call sent the session's access token, not its own.
    * @param {HttpRequest} request
    */
   const refreshes = (request) =>
     mode === "cookie" ||
     (options.refreshToken !== undefined &&
       options.refreshToken !== null &&
-      request.options.accessToken === undefined &&
-      !hasHeader(request.options.headers, "authorization") &&
-      !hasHeader(transport.headers, "authorization"));
+      !presentsOwnCredential(request.options));
+
+  /** Whether the client has token sources of its own, which a session result can replace. */
+  const holdsTokens = [options.accessToken, options.refreshToken].some(
+    (source) => source !== undefined && source !== null,
+  );
+
+  /**
+   * The token a source gives now, as the session would send it. A source that throws gives nothing here: the call
+   * whose result is being adopted has already succeeded, and its result must reach the caller.
+   * @param {"accessToken" | "refreshToken"} kind
+   * @returns {Promise<string | undefined>}
+   */
+  async function held(kind) {
+    try {
+      return current(kind, await tokenOf(options[kind], kind));
+    } catch {
+      return undefined;
+    }
+  }
+
+  /**
+   * Makes the tokens of a session result the client's session (token and server mode; see the file header): the
+   * tokens the client holds now and the refresh token the call presented are rotated from now on, and
+   * `onSessionRefreshed` gets the new tokens. A client without token sources keeps nothing, a staff client
+   * (`sessionKind: "staff"`) keeps its staff session (a customer's result is not its session), a call with its own
+   * credential changes nothing and calls no hook (its session is not the client's, as for the automatic refresh), and
+   * cookie mode has nothing to keep.
+   * @param {unknown} result what `auth.signIn`, `auth.refresh` or `auth.changePassword` resolved with
+   * @param {string | undefined} presentedRefreshToken the refresh token the call sent (`auth.refresh`)
+   * @param {RequestOptions} [requestOptions] the request options the call was sent with
+   * @returns {Promise<void>}
+   */
+  async function adopt(result, presentedRefreshToken, requestOptions) {
+    const tokens = mode === "cookie" || options.sessionKind === "staff" ? undefined : sessionTokensOf(result);
+    if (tokens === undefined || presentsOwnCredential(requestOptions ?? {})) {
+      return;
+    }
+    if (holdsTokens) {
+      const accessToken = await held("accessToken");
+      const refreshToken = await held("refreshToken");
+      rotate({ accessToken: [accessToken], refreshToken: [refreshToken, presentedRefreshToken] }, tokens);
+      generation += 1;
+    }
+    await callHook(options.onSessionRefreshed, tokens);
+  }
 
   /**
    * `X-Velexis-Environment` for an operation that takes it (console operations), when the client has `environment`.
@@ -658,5 +740,6 @@ export function createSession(options, transport) {
       return sendWithCsrf(config, call);
     },
     environmentHeaders,
+    adopt,
   };
 }

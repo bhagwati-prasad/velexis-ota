@@ -1404,7 +1404,8 @@ Checkout, customer accounts in cookies, Stripe on the Velexis account, the airli
   - Cross-tenant access answers 401 or 404 in every case.
 - **Verify:** `pnpm --filter @velexis/ota-backend test:int -- m3`
 
-### SDK-008 · Write the auth and account namespaces with cookie-mode results
+### SDK-008 · Write the auth and account namespaces with cookie-mode results ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-sdk
 - **Milestone:** M3
 - **Depends on:** SDK-006, OBE-033
