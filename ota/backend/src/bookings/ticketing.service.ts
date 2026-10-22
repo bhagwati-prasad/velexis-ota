@@ -3,10 +3,13 @@
 // the tenant of the current job context (ticketing.processor.ts opens it), and no database transaction is open while
 // Amadeus is called (architecture §4).
 //
-//   1. Claim (T1). The booking is locked with `FOR UPDATE SKIP LOCKED` (a booking another worker or request holds is
-//      skipped) and checked again, whatever the job said: `confirmed` with an Amadeus order, not paid by airline card
-//      (OBE-051 sends those to manual review; they are never retried), paid when the tenant is suspended (OADR-0008
-//      point 8), and due: `ticketing_status` `pending` or `failed` with `ticketing_next_attempt_at` reached, or an
+//   1. Claim (T1). The booking is locked with `FOR NO KEY UPDATE SKIP LOCKED` (a booking another claim, worker or
+//      request holds is skipped; lead decision of 2026-10-22, OADR-0014 point 6: a transaction that only holds the
+//      booking's `FOR KEY SHARE`, the foreign-key lock of an insert of a booking event, an outbox row or a document
+//      row, never makes the claim skip: such a transaction can only add rows that reference the booking, never change
+//      the booking row the claim reads and writes, and the result step below waits for it) and checked again, whatever
+//      the job said: `confirmed` with an Amadeus order, not paid by airline card (OBE-051 sends those to manual review;
+//      they are never retried), paid when the tenant is suspended (OADR-0008 point 8), and due: `ticketing_status` `pending` or `failed` with `ticketing_next_attempt_at` reached, or an
 //      `in_progress` claim older than TICKETING_CLAIM_TTL_MS (abandoned by a worker or request that stopped). The claim
 //      writes `in_progress`, `ticketing_last_attempt_at = now` (the claim's fencing token), no next attempt and, for an
 //      attempt that may issue, `ticketing_attempts + 1`; it commits before Amadeus is called. An attempt that may not
@@ -161,8 +164,9 @@ export class TicketingRepository {
   }
 
   /**
-   * The booking `id`, locked `FOR UPDATE SKIP LOCKED` (the claim) or `FOR UPDATE` (the result, which waits); `undefined`
-   * when it does not exist or, with `skipLocked`, when another transaction holds it.
+   * The booking `id`, locked `FOR NO KEY UPDATE SKIP LOCKED` (the claim, see the file header) or `FOR UPDATE` (the
+   * result, which waits); `undefined` when it does not exist or, with `skipLocked`, when another claim, worker or
+   * request holds it (`FOR NO KEY UPDATE` or stronger; a `FOR KEY SHARE` holder never makes the claim skip).
    */
   async lock(
     trx: TenantTransaction,
@@ -202,9 +206,10 @@ export class TicketingRepository {
           )
           .as("paidByAirlineCard"),
       ])
-      .where("bookings.id", "=", id)
-      .forUpdate();
-    const row = await (options.skipLocked ? query.skipLocked() : query).executeTakeFirst();
+      .where("bookings.id", "=", id);
+    const row = await (
+      options.skipLocked ? query.forNoKeyUpdate().skipLocked() : query.forUpdate()
+    ).executeTakeFirst();
     return row === undefined ? undefined : { ...row, paidByAirlineCard: Boolean(row.paidByAirlineCard) };
   }
 }

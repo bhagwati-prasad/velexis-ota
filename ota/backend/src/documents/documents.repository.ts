@@ -44,6 +44,13 @@ const E_TICKET = "ETICKET";
 /** The local date-time text of a `timestamp` value. */
 const LOCAL_FORMAT = `YYYY-MM-DD"T"HH24:MI:SS`;
 
+/**
+ * The first key of the advisory lock that serialises the document writes of one booking (`lockDocuments`): its
+ * `hashtext`, with the booking id's as the second key. Advisory locks of two keys never meet the one-key locks of the
+ * migration runner (`pg_advisory_xact_lock(hashtext(schema))`).
+ */
+export const DOCUMENTS_LOCK_SPACE = "velexis.booking_documents";
+
 /** What a trigger needs of a booking: its version (the job key's) and its e-tickets. */
 export interface RenderTargets {
   readonly version: number;
@@ -302,18 +309,29 @@ export class DocumentsRepository {
   }
 
   /**
-   * The booking locked `FOR UPDATE` (the documents' writes of one booking run one at a time): its version and
-   * reference (a document's file name).
+   * Serialises the document writes of booking `bookingId` (the render's T2 and the failed row, documents.processor.ts):
+   * takes the transaction-level advisory lock of the booking's documents (`pg_advisory_xact_lock`, DOCUMENTS_LOCK_SPACE
+   * and the booking id's `hashtext`, released when `trx` ends), then reads the booking's version and reference (a
+   * document's file name) `FOR KEY SHARE`, the lock the document row's foreign key takes on the booking anyway.
+   *
+   * It never takes `FOR UPDATE`, `FOR NO KEY UPDATE` or `FOR SHARE` on the booking (lead decision of 2026-10-22,
+   * OADR-0014 point 6): a claim of the booking (`FOR NO KEY UPDATE SKIP LOCKED`, ticketing and the reconciliation) is
+   * never kept from it by a document being written, and a booking change (`FOR UPDATE`) only waits for the short
+   * write. The caller compares the version with the one it rendered. Two writes of one booking wait for each other on
+   * the advisory lock only; a hash collision of two booking ids makes them wait for each other too, which is harmless.
    */
-  async lockBooking(
+  async lockDocuments(
     trx: TenantTransaction,
     bookingId: string,
   ): Promise<{ readonly version: number; readonly reference: string } | undefined> {
+    await sql`SELECT pg_advisory_xact_lock(hashtext(${DOCUMENTS_LOCK_SPACE}), hashtext(${bookingId}))`.execute(
+      trx,
+    );
     return await trx
       .selectFrom("bookings")
       .select(["version", "reference"])
       .where("id", "=", bookingId)
-      .forUpdate()
+      .forKeyShare()
       .executeTakeFirst();
   }
 

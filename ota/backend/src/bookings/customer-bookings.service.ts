@@ -20,10 +20,14 @@
 // 1). The record (T2) writes nothing when the booking's `version` moved since the claim (another writer recorded it
 // while the order was read; the answer shows the stored booking). Otherwise it writes what the order says:
 // `order_snapshot` after the shared redactor, `order_dictionaries`, the tickets (new ones inserted, changed statuses
-// recorded), the segments' Amadeus status and `isFlown`, the associated records the booking does not have yet, a
-// booking that is now fully or partly ticketed (`ticketed`/`partially_ticketed`, `issued`/`partially_issued`,
-// `issued_at`, event `booking.ticketed`; `version` bumped), `order_included` (bag options with `include=bags`, fare
-// rules with `fareRules`), `last_synced_at`, and clears `sync_error`. Schedule changes and cancellations by the airline
+// recorded; event `booking.ticketed` for new ones), the segments' Amadeus status and `isFlown`, the associated records
+// the booking does not have yet, a booking that is now fully or partly ticketed (`ticketed`/`partially_ticketed`,
+// `issued`/`partially_issued`, `issued_at`, event `booking.ticketed`), `order_included` (bag options with
+// `include=bags`, fare rules with `fareRules`), `last_synced_at`, and clears `sync_error`. The `version` (and so the
+// ETag) moves whenever the record stores new or changed tickets or a new status (lead decision (6a) of 2026-10-22):
+// the documents queue deduplicates its jobs by the version, so the itinerary asked for by the `booking.ticketed` of a
+// new ticket is rendered again with it; a refresh that stores nothing else keeps the version and the ETag (before
+// FIX-W26-BOOKINGS only a new status moved it). Schedule changes and cancellations by the airline
 // are the background sync's (OBE-045, order-diff.ts): a refresh does not compare segment times. Amadeus `404` (an order
 // purged after travel) keeps the stored data with a warning; other Amadeus errors are recorded in `sync_error` and
 // answered `502/503/504` (an error code the operation does not document becomes `502 SUPPLIER_ERROR`).
@@ -653,6 +657,16 @@ export class CustomerBookingsService {
     const upgrade =
       (coverage === "full" && (booking.status === "confirmed" || booking.status === "partially_ticketed")) ||
       (coverage === "partial" && booking.status === "confirmed");
+    const added = tickets.filter((ticket) => !stored.has(ticket.documentNumber));
+    const changed = tickets.filter((ticket) => {
+      const row = stored.get(ticket.documentNumber);
+      return row !== undefined && row.status !== ticket.documentStatus;
+    });
+    // The documents follow the booking's version (their jobs are deduplicated by it, documents.processor.ts): a record
+    // that stores a change they show, new or changed tickets or a new status, moves it, and with it the ETag (lead
+    // decision (6a) of 2026-10-22); one that only brings the snapshot, the segments' state, the associated records or
+    // `order_included` up to date keeps both.
+    const moved = upgrade || added.length > 0 || changed.length > 0;
     const included = isRecord(details.orderIncluded) ? { ...details.orderIncluded } : {};
     if (order.query.include !== undefined && order.query.include.length > 0 && isRecord(order.included)) {
       included["bags"] = order.included["bags"] ?? {};
@@ -689,9 +703,8 @@ export class CustomerBookingsService {
             }
           : {}),
       },
-      upgrade,
+      moved,
     );
-    const added = tickets.filter((ticket) => !stored.has(ticket.documentNumber));
     if (upgrade || added.length > 0) {
       await this.recorder.event(trx, bookingId, {
         type: "booking.ticketed",

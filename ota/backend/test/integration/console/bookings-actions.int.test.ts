@@ -10,6 +10,7 @@
 // its contacts and remarks), with synthetic travellers and flights relative to now. Every answer is checked against
 // the OTA document. The stub's `timeout` scenario holds an answer for 100 ms instead of 30 s.
 import { randomBytes, randomInt, randomUUID } from "node:crypto";
+import { getQueueToken } from "@nestjs/bullmq";
 import type { ConfigService } from "@nestjs/config";
 import { encryptValue, hashApiKey, sha256Hex, type KeyProvider } from "@velexis/crypto";
 import {
@@ -32,6 +33,7 @@ import {
   type TestRedis,
 } from "@velexis/testing";
 import { startAmadeusStub, type AmadeusStub } from "@velexis/testing/amadeus";
+import type { Queue } from "bullmq";
 import request, { type Response } from "supertest";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { AmadeusClient } from "../../../src/amadeus/amadeus.client";
@@ -41,8 +43,10 @@ import { BookingTravelerDocuments } from "../../../src/bookings/order-recorder";
 import type { StoredDocument } from "../../../src/checkout/traveler-documents";
 import { Clock } from "../../../src/common/clock";
 import { newId } from "../../../src/common/ids";
+import { OTA_QUEUE } from "../../../src/common/queues/queue-names";
 import { redisKeys } from "../../../src/common/redis/redis.keys";
 import type { ApiConfig } from "../../../src/config";
+import { documentRenderKey } from "../../../src/documents/documents.processor";
 import { TokenService } from "../../../src/identity/token.service";
 import { seedStorefrontSettings } from "../../../src/provisioning/seeds/storefront-settings.seed";
 import type { OtaPool } from "../../../src/tenancy/tenancy.module";
@@ -1226,6 +1230,60 @@ describe("console.bookings.resync", () => {
         elements: expect.arrayContaining(["contacts"]),
       },
     ]);
+  });
+
+  it("[FIX-W26-BOOKINGS AC3] moves the version when it stores a new ticket of a ticketed booking, so the itinerary is asked for again", async () => {
+    const agent = await staffSession("agent");
+    const order = await newStubOrder();
+    const bookingId = await seedBooking(order);
+    // The booking was ticketed with a ticket the airline has replaced since (an exchange, say): Flight Order
+    // Management now holds a ticket the booking does not have, and the booking's status stays `ticketed`.
+    const earlier = `075-${randomInt(1_000_000_000, 9_999_999_999)}`;
+    await inTenant(async (trx) => {
+      await trx
+        .updateTable("bookings")
+        .set({ status: "ticketed", ticketing_status: "issued", issued_at: new Date() })
+        .where("id", "=", bookingId)
+        .execute();
+      await trx
+        .insertInto("booking_tickets")
+        .values({
+          id: newId("tkt"),
+          booking_id: bookingId,
+          amadeus_traveler_id: "1",
+          document_type: "ETICKET",
+          document_number: earlier,
+          segment_ids: ["3"],
+          issued_at: new Date(),
+        })
+        .execute();
+    });
+    const issued = (await (
+      await stubFetch(`${orderPath(order.id)}/issuance`, { method: "POST", body: buildIssueRequest(["2"]) })
+    ).json()) as { data: { tickets?: JsonObject[] } };
+    const added = issued.data.tickets?.find((ticket) => ticket["documentType"] === "ETICKET")?.[
+      "documentNumber"
+    ];
+    stub.clearRequests();
+    const versionBefore = (await bookingRow(bookingId)).version;
+    const documents = api.app.get<Queue>(getQueueToken(OTA_QUEUE.documents), { strict: false });
+    const itineraryAt = (bookingVersion: number) =>
+      documents.getDeduplicationJobId(documentRenderKey({ bookingId, kind: "itinerary", bookingVersion }));
+
+    const res = await agent.post(`/v1/console/bookings/${bookingId}/resync`, {});
+
+    expect(answer(res)).toEqual([200, undefined]);
+    expectResponseToMatch("consoleResyncBooking", res);
+    expect(res.body).toMatchObject({ statusChanged: false, booking: { status: "ticketed" } });
+    const booking = res.body.booking as { version: number; tickets: Array<{ documentNumber: string }> };
+    expect(booking.tickets.map((ticket) => ticket.documentNumber).sort()).toEqual([earlier, added].sort());
+    // The refresh's record moved the version (the projection may move it once more): the booking.ticketed of the new
+    // ticket asked for the itinerary at the moved version, so it is not deduplicated against the one of before.
+    expect(await itineraryAt(versionBefore + 1)).not.toBe(null);
+    expect(await itineraryAt(versionBefore)).toBe(null);
+    expect(booking.version).toBeGreaterThan(versionBefore);
+    expect(res.headers["etag"]).toBe(`"${booking.version}"`);
+    expect((await eventsOf(bookingId)).map((event) => event.type)).toContain("booking.ticketed");
   });
 
   it("refuses a booking without an order and answers 422 for an order Amadeus no longer has", async () => {

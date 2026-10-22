@@ -20,10 +20,12 @@
 // a booking, a payment and a refund locks them in that order, and a foreign-key lock (the FOR KEY SHARE an insert of a
 // row that references a parent takes) counts as a lock of the parent. One attempt:
 //
-//   1. Claim (T1). The booking is locked `FOR UPDATE SKIP LOCKED` and checked again, whatever the job said: `pending`,
-//      `reconcile_until` set, no `reconcile_outcome`, its order sent at least RECONCILE_FIRST_DELAY_MS ago, and no
-//      other attempt within RECONCILE_CLAIM_GAP_MS (`updated_at` of the last claim), so two jobs of one minute make one
-//      search. The claim writes `reconcile_attempts + 1` (the attempt's fencing token) and commits.
+//   1. Claim (T1). The booking is locked `FOR NO KEY UPDATE SKIP LOCKED` (lead decision of 2026-10-22, OADR-0014 point
+//      6: a transaction that only holds the booking's `FOR KEY SHARE`, an insert of a booking event, an outbox row or a
+//      document row, never makes the claim skip; another attempt's claim or a decision does) and checked again,
+//      whatever the job said: `pending`, `reconcile_until` set, no `reconcile_outcome`, its order sent at least
+//      RECONCILE_FIRST_DELAY_MS ago, and no other attempt within RECONCILE_CLAIM_GAP_MS (`updated_at` of the last
+//      claim), so two jobs of one minute make one search. The claim writes `reconcile_attempts + 1` (the attempt's fencing token) and commits.
 //   2. Search. Without a booking queue (`storefront_settings.booking_queue_number`) the order cannot be looked for.
 //      Otherwise Queue List of the booking queue in the booking's queuing office (at most RECONCILE_QUEUE_LIST_MAX
 //      PNRs), then every PNR created between `create_order_started_at − 1 min` and `+ 5 min` (Queue List gives the
@@ -58,7 +60,13 @@
 //      - undecided at `reconcile_until` (the search of an attempt claimed at or after it was incomplete), only while the
 //        attempt still holds its claim: OADR-0003 point 5's manual review, nothing voided: the booking stays `pending`
 //        with its checkout and authorisation, `reconcile_outcome = manual_review`, `ticketing_status = manual_review`,
-//        the staff event `booking.reconcile_manual_review` and a staff alert; the scan stops, the staff decide;
+//        the staff event `booking.reconcile_manual_review` and a staff alert; the scan stops, the staff decide. Unless
+//        the search is incomplete only because of transient failures (lead decision (3) of 2026-10-22: a rate limit,
+//        a timeout, a `5xx` or a network error of Queue List or of a by-reference read, `transientFailure`) and fewer
+//        than RECONCILE_DEADLINE_RETRIES such attempts were tried again: then the staff event
+//        `booking.reconcile_deadline_retry` (their number is the grace used) and the next scan's attempt searches
+//        again; a search incomplete for any other reason (the read cap, a truncated or unreadable Queue List, entries
+//        or an order that cannot be read) goes to the review at the deadline;
 //      - anything else waits for the next attempt: a search before `reconcile_until` that found nothing, or that was
 //        incomplete.
 //    An airline-card booking is recorded when found but never failed automatically: OBE-051 adds its manual review.
@@ -142,6 +150,20 @@ export const RECONCILE_MANUAL_REVIEW_EVENT = "booking.reconcile_manual_review";
  * scans, make one search. Shorter than the scan's minute, so the cadence stays one attempt per minute.
  */
 export const RECONCILE_CLAIM_GAP_MS = 45_000;
+
+/**
+ * The grace after `reconcile_until` (lead decision (3) of 2026-10-22, OADR-0003 point 5): a search at or after it that
+ * is incomplete only because of transient failures (`transientFailure`: a rate limit, a timeout, a `5xx` or a network
+ * error of Queue List or of a by-reference read) gets up to this many more attempts, one per reconcile run, before the
+ * staff's review. A search incomplete for any other reason goes to the review at once.
+ */
+export const RECONCILE_DEADLINE_RETRIES = 3;
+
+/**
+ * The event of an attempt at or after `reconcile_until` whose search failed transiently and that is tried again
+ * (`booking_events.type`, staff only): their number is the grace used (RECONCILE_DEADLINE_RETRIES).
+ */
+export const RECONCILE_DEADLINE_RETRY_EVENT = "booking.reconcile_deadline_retry";
 
 /** A PNR is a candidate when Queue List says it was created from this long before the order was sent … */
 export const RECONCILE_CREATED_BEFORE_MS = 60_000;
@@ -534,10 +556,12 @@ export class ReconcileRepository {
   /**
    * Adopts the stale claims of `now` (see the file header): the `pending` bookings without `reconcile_until` or an
    * outcome whose create-order attempt started before `staleClaimBefore(now)`, at most `limit`, the oldest first, locked
-   * `FOR UPDATE SKIP LOCKED` (a booking another transaction holds, such as its own request's, is left to a later scan),
-   * get `reconcile_until = now + RECONCILE_WINDOW_MS`. A claim is adopted once: an adopted booking has its
-   * `reconcile_until`, and a concurrent scan skips the rows this one holds. Answers what it adopted; the caller writes
-   * their events in the same transaction. `bookings_status_idx` (environment, status) serves it.
+   * `FOR NO KEY UPDATE SKIP LOCKED` (a booking another transaction holds, such as its own request's or another scan's,
+   * is left to a later scan; one whose `FOR KEY SHARE` alone is held, by the insert of a row that references it, is
+   * adopted: lead decision of 2026-10-22, OADR-0014 point 6), get `reconcile_until = now + RECONCILE_WINDOW_MS`. A
+   * claim is adopted once: an adopted booking has its `reconcile_until`, and a concurrent scan skips the rows this one
+   * holds. Answers what it adopted; the caller writes their events in the same transaction. `bookings_status_idx`
+   * (environment, status) serves it.
    */
   async adoptStaleClaims(
     trx: TenantTransaction,
@@ -554,7 +578,7 @@ export class ReconcileRepository {
       .orderBy("create_order_started_at")
       .orderBy("id")
       .limit(query.limit)
-      .forUpdate()
+      .forNoKeyUpdate()
       .skipLocked()
       .execute();
     const reconcileUntil = adoptedReconcileUntil(query.now);
@@ -610,8 +634,9 @@ export class ReconcileRepository {
   }
 
   /**
-   * The booking `id`, locked `FOR UPDATE SKIP LOCKED` (the claim) or `FOR UPDATE` (the decision, which waits);
-   * `undefined` when it does not exist or, with `skipLocked`, when another transaction holds it.
+   * The booking `id`, locked `FOR NO KEY UPDATE SKIP LOCKED` (the claim, see the file header) or `FOR UPDATE` (the
+   * decision, which waits); `undefined` when it does not exist or, with `skipLocked`, when another claim or a decision
+   * holds it (`FOR NO KEY UPDATE` or stronger; a `FOR KEY SHARE` holder never makes the claim skip).
    */
   async lock(
     trx: TenantTransaction,
@@ -640,9 +665,25 @@ export class ReconcileRepository {
         sql<string>`currency::text`.as("currency"),
         sql<string>`total_amount::text`.as("totalAmount"),
       ])
-      .where("id", "=", id)
-      .forUpdate();
-    return await (options.skipLocked ? query.skipLocked() : query).executeTakeFirst();
+      .where("id", "=", id);
+    return await (
+      options.skipLocked ? query.forNoKeyUpdate().skipLocked() : query.forUpdate()
+    ).executeTakeFirst();
+  }
+
+  /**
+   * How many attempts after `reconcile_until` failed transiently and were tried again (RECONCILE_DEADLINE_RETRY_EVENT,
+   * lead decision (3) of 2026-10-22): the grace used. The booking's own events count it, so no column is needed;
+   * `booking_events_booking_idx` serves it.
+   */
+  async deadlineRetries(trx: TenantTransaction, bookingId: string): Promise<number> {
+    const row = await trx
+      .selectFrom("booking_events")
+      .select(sql<number>`count(*)::int`.as("retries"))
+      .where("booking_id", "=", bookingId)
+      .where("type", "=", RECONCILE_DEADLINE_RETRY_EVENT)
+      .executeTakeFirst();
+    return row?.retries ?? 0;
   }
 
   /** Records a claimed attempt: `reconcile_attempts` (the fencing token) and `updated_at`; the ETag stays as it is. */
@@ -719,6 +760,11 @@ export type ReconcileWait =
    * attempt looks again.
    */
   | "search_incomplete"
+  /**
+   * At or after `reconcile_until`, a search incomplete only because of transient failures, within the grace of
+   * RECONCILE_DEADLINE_RETRIES more attempts (lead decision (3) of 2026-10-22): the next attempt searches again.
+   */
+  | "deadline_retry"
   /** Not found, but the booking is paid by airline card: no automatic failure (OBE-051 adds the manual review). */
   | "airline_card"
   /** The order was found but could not be recorded: the next attempt tries again, staff were alerted. */
@@ -727,7 +773,13 @@ export type ReconcileWait =
 /** What one attempt did (kept with the BullMQ job): ids, counts and codes, never more. */
 export type ReconcileOutcome =
   | { readonly outcome: "skipped"; readonly reason: ReconcileSkip }
-  | { readonly outcome: "pending"; readonly attempts: number; readonly reason: ReconcileWait }
+  | {
+      readonly outcome: "pending";
+      readonly attempts: number;
+      readonly reason: ReconcileWait;
+      /** `deadline_retry`: which of the RECONCILE_DEADLINE_RETRIES more attempts comes next (1 to 3). */
+      readonly retry?: number;
+    }
   | {
       readonly outcome: "found";
       readonly attempts: number;
@@ -749,6 +801,8 @@ interface Claim {
   readonly booking: ReconcileBookingRow;
   /** `reconcile_attempts` after the claim: its fencing token. */
   readonly attempts: number;
+  /** The more attempts after `reconcile_until` already given (RECONCILE_DEADLINE_RETRY_EVENT), at the claim. */
+  readonly deadlineRetries: number;
   /** When the attempt claimed the booking, before its search. */
   readonly claimedAt: Date;
   readonly startedAt: Date;
@@ -763,7 +817,8 @@ type SearchResult =
   | { readonly kind: "absent"; readonly candidates: number }
   /**
    * Not every PNR that may be the order could be read (`gap`, with the API code of a failed call): proves nothing.
-   * `candidates` and `read` count the PNRs worth reading and those read.
+   * `candidates` and `read` count the PNRs worth reading and those read. `transient`: only calls that failed
+   * transiently (`transientFailure`) left it incomplete, so the grace after `reconcile_until` applies.
    */
   | {
       readonly kind: "incomplete";
@@ -771,6 +826,7 @@ type SearchResult =
       readonly code: string;
       readonly candidates: number;
       readonly read: number;
+      readonly transient: boolean;
     }
   | { readonly kind: "no_queue" };
 
@@ -783,6 +839,41 @@ function codeOf(error: unknown): string {
 function isNotFound(error: unknown): boolean {
   return (
     error instanceof AppError && error.cause instanceof AmadeusCallError && error.cause.httpStatus === 404
+  );
+}
+
+/** The API codes of a call that failed transiently (error-mapper.ts, rate-limiter.ts): worth another attempt. */
+const TRANSIENT_CODES: ReadonlySet<string> = new Set([
+  // The buckets of the credential set or of the tenant were empty (rate-limiter.ts): no request was sent.
+  "RATE_LIMITED",
+  // No answer in time, a cut connection, or Amadeus's gateway gave up (504).
+  "SUPPLIER_TIMEOUT",
+  // A connection that could not be made, Amadeus's 502 and 503, and Amadeus's 429 (the shared quota).
+  "SUPPLIER_UNAVAILABLE",
+  // Redis or the platform data did not answer: the call was not made.
+  "SERVICE_UNAVAILABLE",
+]);
+
+/**
+ * Whether a failed Queue List or by-reference read failed transiently (lead decision (3) of 2026-10-22): a rate limit
+ * (ours or Amadeus's `429`), a timeout, a `5xx` (`500` with 141 SYSTEM ERROR and any other one included, which the
+ * mapper answers `502 SUPPLIER_ERROR`) or a network error. Anything else (a refusal, a `401`, an answer that cannot be
+ * read, a bug) is not: trying again a minute later would meet it again.
+ */
+export function transientFailure(error: unknown): boolean {
+  if (!(error instanceof AppError)) {
+    return false;
+  }
+  if (TRANSIENT_CODES.has(error.code)) {
+    return true;
+  }
+  const cause = error.cause;
+  return (
+    cause instanceof AmadeusCallError &&
+    (cause.outcome === "timeout" ||
+      cause.outcome === "network_error" ||
+      cause.httpStatus === 429 ||
+      (cause.httpStatus !== undefined && cause.httpStatus >= 500))
   );
 }
 
@@ -810,19 +901,25 @@ export function reconcileClaimSkip(row: ReconcileBookingRow, now: Date): Reconci
  * The decision an attempt takes after its search (see the file header): a found order is recorded; before
  * `reconcile_until` anything else waits for the next attempt; at or after it, a complete search that found nothing
  * (or the lack of a booking queue, OADR-0003 point 5) fails the booking and voids, and an incomplete one goes to the
- * staff's review (lead decision of 2026-10-21, third batch: an incomplete search never proves the order absent).
+ * staff's review (lead decision of 2026-10-21, third batch: an incomplete search never proves the order absent),
+ * unless only transient failures left it incomplete (`grace.transient`) and fewer than RECONCILE_DEADLINE_RETRIES
+ * more attempts were given (`grace.used`): then it is tried again (lead decision (3) of 2026-10-22).
  */
 export function reconcileDecision(
   search: SearchResult["kind"],
   pastDeadline: boolean,
-): "record" | "fail" | "review" | "wait" {
+  grace: { readonly transient: boolean; readonly used: number } = { transient: false, used: 0 },
+): "record" | "fail" | "review" | "retry" | "wait" {
   if (search === "found") {
     return "record";
   }
   if (!pastDeadline) {
     return "wait";
   }
-  return search === "incomplete" ? "review" : "fail";
+  if (search !== "incomplete") {
+    return "fail";
+  }
+  return grace.transient && grace.used < RECONCILE_DEADLINE_RETRIES ? "retry" : "review";
 }
 
 /** Runs one reconciliation attempt of a booking (see the file header). */
@@ -877,13 +974,23 @@ export class ReconcileService {
         search: search.kind,
         ...(search.kind === "absent" ? { candidates: search.candidates } : {}),
         ...(search.kind === "incomplete"
-          ? { gap: search.gap, code: search.code, candidates: search.candidates, read: search.read }
+          ? {
+              gap: search.gap,
+              code: search.code,
+              candidates: search.candidates,
+              read: search.read,
+              transient: search.transient,
+            }
           : {}),
         pastDeadline,
       },
       "bookings.reconcile_searched",
     );
-    switch (reconcileDecision(search.kind, pastDeadline)) {
+    const grace = {
+      transient: search.kind === "incomplete" && search.transient,
+      used: claim.deadlineRetries,
+    };
+    switch (reconcileDecision(search.kind, pastDeadline, grace)) {
       case "record":
         return search.kind === "found"
           ? await this.recordFound(tenant, claim, search.order, search.supplierRequestId, requestId)
@@ -893,6 +1000,10 @@ export class ReconcileService {
       case "review":
         return search.kind === "incomplete"
           ? await this.manualReview(tenant, claim, settings, search, requestId)
+          : { outcome: "pending", attempts: claim.attempts, reason: "search_incomplete" };
+      case "retry":
+        return search.kind === "incomplete"
+          ? await this.deadlineRetry(claim, search, requestId)
           : { outcome: "pending", attempts: claim.attempts, reason: "search_incomplete" };
       case "wait":
         return {
@@ -930,10 +1041,16 @@ export class ReconcileService {
       }
       const attempts = row.reconcileAttempts + 1;
       await this.repository.markAttempt(trx, row.id, attempts, now);
+      // The grace used so far (lead decision (3) of 2026-10-22); only an attempt past the deadline asks.
+      const deadlineRetries =
+        now.getTime() >= row.reconcileUntil.getTime()
+          ? await this.repository.deadlineRetries(trx, row.id)
+          : 0;
       this.logger.info({ bookingId: row.id, attempt: attempts }, "bookings.reconcile_claimed");
       return {
         booking: row,
         attempts,
+        deadlineRetries,
         claimedAt: now,
         startedAt: row.createOrderStartedAt,
         until: row.reconcileUntil,
@@ -954,17 +1071,24 @@ export class ReconcileService {
     if (queue === null) {
       return { kind: "no_queue" };
     }
-    const incomplete = (gap: SearchGap, code: string, candidates = 0, read = 0): SearchResult => ({
+    const incomplete = (
+      gap: SearchGap,
+      code: string,
+      transient: boolean,
+      candidates = 0,
+      read = 0,
+    ): SearchResult => ({
       kind: "incomplete",
       gap,
       code,
       candidates,
       read,
+      transient,
     });
     if (comparableName(claim.booking.leadLastName) === "") {
       // No name to match a PNR with: nothing can be proven absent.
       this.logger.error({ bookingId: claim.booking.id }, "bookings.reconcile_lead_unknown");
-      return incomplete("lead_unknown", "INTERNAL_ERROR");
+      return incomplete("lead_unknown", "INTERNAL_ERROR", false);
     }
     const context: AmadeusCallContext = {
       tenantId: tenant.id,
@@ -990,11 +1114,11 @@ export class ReconcileService {
     } catch (error) {
       const code = codeOf(error);
       this.logger.warn({ bookingId: claim.booking.id, code }, "bookings.reconcile_queue_failed");
-      return incomplete("queue_failed", code);
+      return incomplete("queue_failed", code, transientFailure(error));
     }
     if (listed === undefined) {
       this.logger.warn({ bookingId: claim.booking.id }, "bookings.reconcile_queue_unreadable");
-      return incomplete("queue_unreadable", "SUPPLIER_ERROR");
+      return incomplete("queue_unreadable", "SUPPLIER_ERROR", false);
     }
     const { candidates } = listed;
     const reads = readSlice(candidates, claim.attempts);
@@ -1002,6 +1126,8 @@ export class ReconcileService {
     const listGap = listedGap(listed, reads.length);
     let gap: { readonly gap: SearchGap; readonly code: string } | undefined =
       listGap === undefined ? undefined : { gap: listGap, code: "SUPPLIER_ERROR" };
+    // Whether only transient failures leave it incomplete: what Queue List and the cap leave out never is.
+    let transient = listGap === undefined;
     let read = 0;
     for (const candidate of reads) {
       read += 1;
@@ -1014,6 +1140,7 @@ export class ReconcileService {
           // The order exists but cannot be recorded: never failed for it.
           this.logger.error({ bookingId: claim.booking.id }, "bookings.reconcile_order_unreadable");
           gap ??= { gap: "order_unreadable", code: "SUPPLIER_ERROR" };
+          transient = false;
         } else if (order !== undefined) {
           return { kind: "found", order, supplierRequestId: reply.call.supplierRequestId };
         }
@@ -1023,6 +1150,7 @@ export class ReconcileService {
           const code = codeOf(error);
           this.logger.warn({ bookingId: claim.booking.id, code }, "bookings.reconcile_read_failed");
           gap ??= { gap: "read_failed", code };
+          transient &&= transientFailure(error);
         }
       }
     }
@@ -1039,7 +1167,7 @@ export class ReconcileService {
           "bookings.reconcile_search_partial",
         );
       }
-      return incomplete(gap.gap, gap.code, candidates.length, read);
+      return incomplete(gap.gap, gap.code, transient, candidates.length, read);
     }
     return { kind: "absent", candidates: candidates.length };
   }
@@ -1534,6 +1662,7 @@ export class ReconcileService {
           code: search.code,
           candidates: search.candidates,
           read: search.read,
+          deadlineRetries: claim.deadlineRetries,
         },
         visibleToCustomer: false,
         requestId,
@@ -1557,6 +1686,67 @@ export class ReconcileService {
         gap: search.gap,
       },
       "bookings.reconcile_manual_review",
+    );
+    return decided;
+  }
+
+  /**
+   * The search of an attempt claimed at or after `reconcile_until` is incomplete only because of transient failures,
+   * and fewer than RECONCILE_DEADLINE_RETRIES more attempts were given (lead decision (3) of 2026-10-22, OADR-0003
+   * point 5): only while the attempt still holds its claim, the staff event RECONCILE_DEADLINE_RETRY_EVENT (the grace
+   * used is their number) and nothing else; the booking stays `pending` without an outcome, so the next scan's attempt
+   * searches again, and decides like any attempt past the deadline (found, absent, or, failing again, another retry or
+   * the review).
+   */
+  private async deadlineRetry(
+    claim: Claim,
+    search: Extract<SearchResult, { kind: "incomplete" }>,
+    requestId: string,
+  ): Promise<ReconcileOutcome> {
+    const id = claim.booking.id;
+    const retry = claim.deadlineRetries + 1;
+    const decided = await this.tx.run(async (trx): Promise<ReconcileOutcome> => {
+      const now = this.clock.now();
+      const current = await this.repository.lock(trx, id, { skipLocked: false });
+      if (current?.status !== "pending" || current.reconcileOutcome !== null) {
+        return { outcome: "decided_elsewhere", attempts: claim.attempts };
+      }
+      if (current.reconcileAttempts !== claim.attempts) {
+        return { outcome: "claim_lost", attempts: claim.attempts };
+      }
+      await this.recorder.event(trx, id, {
+        type: RECONCILE_DEADLINE_RETRY_EVENT,
+        actor: SYSTEM_ACTOR,
+        statusFrom: "pending",
+        statusTo: "pending",
+        summary:
+          `The search for the order of booking ${current.reference} at its deadline failed for a moment ` +
+          `(${search.code}); it is tried again (${retry} of ${RECONCILE_DEADLINE_RETRIES}).`,
+        data: {
+          attempt: claim.attempts,
+          retry,
+          retries: RECONCILE_DEADLINE_RETRIES,
+          gap: search.gap,
+          code: search.code,
+          candidates: search.candidates,
+          read: search.read,
+        },
+        visibleToCustomer: false,
+        requestId,
+        now,
+      });
+      return { outcome: "pending", attempts: claim.attempts, reason: "deadline_retry", retry };
+    });
+    this.logger.warn(
+      {
+        bookingId: id,
+        attempt: claim.attempts,
+        outcome: decided.outcome,
+        retry,
+        gap: search.gap,
+        code: search.code,
+      },
+      "bookings.reconcile_deadline_retry",
     );
     return decided;
   }

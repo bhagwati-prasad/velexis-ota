@@ -68,10 +68,13 @@ import {
 } from "../../../src/bookings/reconcile.processor";
 import {
   RECONCILE_ADOPTED_EVENT,
+  RECONCILE_DEADLINE_RETRIES,
+  RECONCILE_DEADLINE_RETRY_EVENT,
   RECONCILE_JOB,
   RECONCILE_MANUAL_REVIEW_EVENT,
   RECONCILE_QUEUE_LIST_MAX,
   reconcileJobId,
+  ReconcileRepository,
   type AdoptedClaim,
 } from "../../../src/bookings/reconcile.service";
 import { BOOKING_TOKEN_PATTERN } from "../../../src/common/auth/booking-access.guard";
@@ -79,7 +82,6 @@ import { Clock } from "../../../src/common/clock";
 import { newId } from "../../../src/common/ids";
 import { OTA_QUEUE } from "../../../src/common/queues/queue-names";
 import { loadWorkerConfig } from "../../../src/config";
-import { DocumentsProcessor } from "../../../src/documents/documents.processor";
 import { jobTenant, minuteBucket, tenantJob } from "../../../src/jobs/fan-out";
 import { Money } from "../../../src/pricing/pricing.types";
 import { seedDefaultMarkupRule } from "../../../src/provisioning/seeds/markup-rules.seed";
@@ -92,7 +94,12 @@ import { buildOrderRequestInput, buildOrderTraveler, buildStripeConfirmation } f
 import { buildContactInput, buildTravelerInput, dateFromToday } from "../../builders/checkouts";
 import { newApiKey, testApiCredentials, testKeyProvider, testWorkerVariables } from "../../helpers/api-env";
 import { startFakeStripe, stripeEndpointModule, type FakeStripe } from "../../helpers/fake-stripe";
-import { probeRowLockOrder, type RowLockOrderObservation } from "../../helpers/lock-order";
+import {
+  holdKeyShare,
+  probeRowLockOrder,
+  type KeyShareHolder,
+  type RowLockOrderObservation,
+} from "../../helpers/lock-order";
 import { MemorySink } from "../../helpers/log-sink";
 import { useNextApplicationLoggerOutsideRequests } from "../../helpers/nest-pino";
 import { OPENAPI_SETUP_TIMEOUT_MS, preloadOpenApiDocument } from "../../helpers/openapi";
@@ -800,12 +807,10 @@ beforeAll(async () => {
   for (const scheduler of await maintenance.getJobSchedulers(0, -1)) {
     await maintenance.removeJobScheduler(scheduler.key);
   }
-  // Nor may the booking documents' consumer (`ota-documents`, OBE-053): the booking.created of an order found asks for
-  // its itinerary, and the render's write locks the booking for a moment (documents.processor.ts, T2). Should that
-  // moment meet the reconciliation's inline ticketing claim (`FOR UPDATE SKIP LOCKED`, OADR-0014 point 6), the claim
-  // skips the booking and leaves it to the ticketing scan, so the issuance these scenarios check would depend on how
-  // fast a PDF renders. The render jobs wait in the paused queue; render.int.test.ts covers them.
-  await worker.get(DocumentsProcessor).worker.pause();
+  // The booking documents' consumer (`ota-documents`, OBE-053) runs: the booking.created of an order found asks for its
+  // itinerary, whose write takes the booking's FOR KEY SHARE only (documents.processor.ts, T2), so the reconciliation's
+  // inline ticketing claim (FOR NO KEY UPDATE SKIP LOCKED, lead decision (1) of 2026-10-22) never skips the booking for
+  // it (before FIX-W26-BOOKINGS the file paused the consumer, commit 16c3ea9).
 }, OPENAPI_SETUP_TIMEOUT_MS);
 
 afterAll(async () => {
@@ -1398,6 +1403,20 @@ async function reviewOf(bookingId: string) {
   }));
 }
 
+/** The `booking.reconcile_deadline_retry` events of a booking (FIX-W26-BOOKINGS), oldest first. */
+async function deadlineRetriesOf(bookingId: string) {
+  return await alphaTx((trx) =>
+    trx
+      .selectFrom("booking_events")
+      .select(["actor_type as actorType", "visible_to_customer as visible", "data"])
+      .where("booking_id", "=", bookingId)
+      .where("type", "=", RECONCILE_DEADLINE_RETRY_EVENT)
+      .orderBy("created_at")
+      .orderBy("id")
+      .execute(),
+  );
+}
+
 /** The by-reference reads of the stub, in order: their record locators. */
 const readLocators = (): string[] =>
   amadeusCalls("getFlightOrderByReference").map((entry) => String(entry.query["reference"]));
@@ -1601,15 +1620,24 @@ describe("a Queue List answer that may leave PNRs out (FIX-W25-BOOKINGS)", () =>
   it("[FIX-W25-BOOKINGS AC1] never proves the order absent: at reconcile_until the booking goes to staff review, nothing voided", async () => {
     await expectStaffReview(seen, "queue_truncated");
   });
+
+  it("[FIX-W26-BOOKINGS AC2] gets no grace after the deadline: a truncated Queue List is no transient failure, so the review comes at once", async () => {
+    expect(seen.decision).toMatchObject({ outcome: "manual_review", attempts: 2, gap: "queue_truncated" });
+    expect(await deadlineRetriesOf(seen.timedOut.bookingId)).toEqual([]);
+    expect(seen.laterJob).toBeUndefined();
+  });
 });
 
-describe("a read of a possible order that times out (FIX-W25-BOOKINGS)", () => {
+describe("a read of a possible order that Amadeus refuses (FIX-W25-BOOKINGS)", () => {
   let decoy: string;
   let seen: Undecided;
 
   beforeAll(async () => {
     seen = await undecided("UNREADABLE", async () => {
-      // A PNR of the traveller's name that the reconciliation cannot read: it may be the order.
+      // A PNR of the traveller's name that the reconciliation cannot read: it may be the order. Amadeus refuses the
+      // read (a 4xx other than a 404), which another attempt would meet again. (Until FIX-W26-BOOKINGS the read timed
+      // out here; a timeout is a transient failure now, which the grace after the deadline tries again: lead decision
+      // (3) of 2026-10-22, the scenario "a read that keeps timing out after reconcile_until" below.)
       decoy = await createDecoy(() => undefined, "UNREADABLE");
       const client = worker.get(AmadeusClient, { strict: false });
       const real = client.getFlightOrderByReference.bind(client);
@@ -1617,7 +1645,7 @@ describe("a read of a possible order that times out (FIX-W25-BOOKINGS)", () => {
         .spyOn(client, "getFlightOrderByReference")
         .mockImplementation(async (context, input, options) => {
           if (input.query.reference === decoy) {
-            throw new AppError("SUPPLIER_TIMEOUT");
+            throw new AppError("SUPPLIER_REJECTED");
           }
           return await real(context, input, options);
         });
@@ -1743,5 +1771,291 @@ describe("the reconciliation's lock order (FIX-W25-BOOKINGS)", () => {
   it("[FIX-W25-BOOKINGS AC3] the found decision locks the checkout before the booking too", () => {
     expect(found.seen).toEqual({ waiterSeen: true, probedFree: true });
     expect(found.attempt).toMatchObject({ outcome: "found", captured: true });
+  });
+});
+
+// ---- FIX-W26-BOOKINGS (lead decisions (1) and (3) of 2026-10-22) -----------------------------------------------------
+
+describe("a search rate-limited at reconcile_until whose order exists (FIX-W26-BOOKINGS)", () => {
+  let timedOut: TimedOut;
+  let early: ReconcileJobResult;
+  let atDeadline: ReconcileJobResult;
+  let afterDeadline: Awaited<ReturnType<typeof bookingRow>>;
+  let retries: Awaited<ReturnType<typeof deadlineRetriesOf>>;
+  let found: ReconcileJobResult;
+  let decided: Awaited<ReturnType<typeof bookingRow>>;
+
+  beforeAll(async () => {
+    useWorkerClock();
+    timedOut = await timedOutCompletion("timeout", undefined, "GRACEFOUND");
+    // Amadeus answers 429 to the attempts before and at the deadline: the booking queue cannot be read.
+    stub.setDefaultScenario("rate-limited");
+    try {
+      early = await firstAttempt(timedOut.bookingId, after(timedOut.started, 30 * SECOND));
+      atDeadline = await scanAttempt(timedOut.bookingId, after(timedOut.started, 15 * MINUTE));
+    } finally {
+      stub.setDefaultScenario("success");
+    }
+    afterDeadline = await bookingRow(timedOut.bookingId);
+    retries = await deadlineRetriesOf(timedOut.bookingId);
+    // A minute later Amadeus answers again: the more attempt finds the order, records, captures and issues it.
+    found = await scanAttempt(timedOut.bookingId, after(timedOut.started, 16 * MINUTE));
+    decided = await bookingRow(timedOut.bookingId);
+  }, SCENARIO_TIMEOUT_MS);
+
+  it("[FIX-W26-BOOKINGS AC2] tries a 429 at the deadline again instead of the staff's review, and the next complete search finds the order", async () => {
+    expect(early).toMatchObject({ outcome: "pending", attempts: 1, reason: "search_incomplete" });
+    expect(atDeadline).toMatchObject({ outcome: "pending", attempts: 2, reason: "deadline_retry", retry: 1 });
+    expect(afterDeadline).toMatchObject({
+      status: "pending",
+      reconcile_outcome: null,
+      ticketing_status: "pending",
+      checkout_id: timedOut.checkout.id,
+    });
+    expect(retries).toEqual([
+      {
+        actorType: "system",
+        visible: false,
+        data: expect.objectContaining({
+          attempt: 2,
+          retry: 1,
+          retries: RECONCILE_DEADLINE_RETRIES,
+          gap: "queue_failed",
+        }) as unknown,
+      },
+    ]);
+    expect(found).toMatchObject({ outcome: "found", attempts: 3, captured: true, status: "ticketed" });
+    expect(decided).toMatchObject({
+      status: "ticketed",
+      ticketing_status: "issued",
+      reconcile_outcome: "found",
+    });
+    expect((await reviewOf(timedOut.bookingId)).events).toEqual([]);
+    expect(await checkoutStatus(timedOut.checkout.id)).toBe("completed");
+    expect(stripePostsOf(timedOut.payment, "/capture")).toHaveLength(1);
+    expect(stripePostsOf(timedOut.payment, "/cancel")).toHaveLength(0);
+    expect(amadeusCalls("createFlightOrders")).toHaveLength(1);
+  });
+});
+
+describe("a read that keeps timing out after reconcile_until (FIX-W26-BOOKINGS)", () => {
+  const LEAD = "GRACELOST";
+  let timedOut: TimedOut;
+  let decoy: string;
+  let early: ReconcileJobResult;
+  let retried: ReconcileJobResult[];
+  let decision: ReconcileJobResult;
+  let decided: Awaited<ReturnType<typeof bookingRow>>;
+  let laterJob: Job | undefined;
+  let payment: Awaited<ReturnType<typeof paymentRow>>;
+  let checkout: string;
+  let retries: Awaited<ReturnType<typeof deadlineRetriesOf>>;
+
+  beforeAll(async () => {
+    useWorkerClock();
+    timedOut = await timedOutCompletion("timeout-lost", undefined, LEAD);
+    // A PNR of the traveller's name whose by-reference read times out every time: it may be the order.
+    decoy = await createDecoy(() => undefined, LEAD);
+    await resetRateLimits();
+    const client = worker.get(AmadeusClient, { strict: false });
+    const real = client.getFlightOrderByReference.bind(client);
+    const spy = vi
+      .spyOn(client, "getFlightOrderByReference")
+      .mockImplementation(async (context, input, options) => {
+        if (input.query.reference === decoy) {
+          throw new AppError("SUPPLIER_TIMEOUT");
+        }
+        return await real(context, input, options);
+      });
+    try {
+      early = await firstAttempt(timedOut.bookingId, after(timedOut.started, 30 * SECOND));
+      // The attempt at the deadline and the next two are tried again; the third more attempt's failure is the last.
+      retried = [];
+      for (const minutes of [15, 16, 17]) {
+        retried.push(await scanAttempt(timedOut.bookingId, after(timedOut.started, minutes * MINUTE)));
+      }
+      decision = await scanAttempt(timedOut.bookingId, after(timedOut.started, 18 * MINUTE));
+      decided = await bookingRow(timedOut.bookingId);
+      const laterAt = after(timedOut.started, 19 * MINUTE);
+      await scan(laterAt);
+      laterJob =
+        (await bookingsQueue.getJob(reconcileJobId(timedOut.bookingId, minuteBucket(laterAt)))) ?? undefined;
+    } finally {
+      spy.mockRestore();
+    }
+    payment = await paymentRow(timedOut.payment.id);
+    checkout = await checkoutStatus(timedOut.checkout.id);
+    retries = await deadlineRetriesOf(timedOut.bookingId);
+  }, SCENARIO_TIMEOUT_MS);
+
+  it("[FIX-W26-BOOKINGS AC2] gives three more attempts after the deadline, then sends the booking to the staff's review, nothing voided", async () => {
+    expect(early).toMatchObject({ outcome: "pending", attempts: 1, reason: "search_incomplete" });
+    expect(retried).toEqual(
+      [1, 2, 3].map((retry) =>
+        expect.objectContaining({ outcome: "pending", attempts: retry + 1, reason: "deadline_retry", retry }),
+      ),
+    );
+    expect(decision).toMatchObject({ outcome: "manual_review", attempts: 5, gap: "read_failed" });
+    expect(retries.map((row) => row.data)).toEqual(
+      [1, 2, 3].map((retry) =>
+        expect.objectContaining({ retry, gap: "read_failed", code: "SUPPLIER_TIMEOUT" }),
+      ),
+    );
+    // As OADR-0003 point 5's review: pending with its checkout (still locked) and its authorisation, the scan stopped.
+    expect(decided).toMatchObject({
+      status: "pending",
+      ticketing_status: "manual_review",
+      reconcile_outcome: "manual_review",
+      checkout_id: timedOut.checkout.id,
+      failure_code: null,
+    });
+    expect(payment).toMatchObject({ status: "authorized", booking_id: timedOut.bookingId });
+    expect(checkout).toBe("payment_pending");
+    expect(stripePostsOf(timedOut.payment, "/cancel")).toHaveLength(0);
+    expect(laterJob).toBeUndefined();
+    const review = await reviewOf(timedOut.bookingId);
+    expect(review.events).toEqual([
+      {
+        actorType: "system",
+        visible: false,
+        data: expect.objectContaining({
+          reconcileOutcome: "manual_review",
+          attempt: 5,
+          gap: "read_failed",
+          deadlineRetries: RECONCILE_DEADLINE_RETRIES,
+        }) as unknown,
+      },
+    ]);
+    expect(review.alerts).toEqual([
+      expect.objectContaining({ recipient: OPS_EMAIL, recipientType: "staff" }),
+    ]);
+  });
+});
+
+describe("the claims' lock mode (FIX-W26-BOOKINGS, lead decision (1) of 2026-10-22)", () => {
+  const ids: string[] = [];
+
+  /**
+   * A pending booking as an unknown outcome leaves it (`reconcile_until` set), or as a stale claim (none): its
+   * create-order attempt started 10 minutes ago. Removed again after the describe, so no later scan finds it.
+   */
+  async function pendingBooking(reconciling: boolean): Promise<string> {
+    const id = newId("bkg");
+    const now = Date.now();
+    await alphaTx((trx) =>
+      trx
+        .insertInto("bookings")
+        .values({
+          id,
+          environment: "test",
+          reference: newBookingReference(),
+          status: "pending",
+          ticketing_status: "pending",
+          trip_type: "one_way",
+          origin_iata: "MAD",
+          destination_iata: "ORY",
+          first_departure_at: new Date(now + 60 * 24 * 60 * MINUTE),
+          last_arrival_at: new Date(now + 60 * 24 * 60 * MINUTE + 2 * 60 * MINUTE),
+          currency: "EUR",
+          net_amount: "98.47",
+          total_amount: "110.47",
+          contact_email: "contact-1@example.com",
+          lead_last_name: "LOCKMODE",
+          create_order_started_at: new Date(now - 10 * MINUTE),
+          reconcile_until: reconciling ? new Date(now + 5 * MINUTE) : null,
+        })
+        .execute(),
+    );
+    ids.push(id);
+    return id;
+  }
+
+  /** `run` in a transaction of its own that is rolled back: what it answered. */
+  async function rolledBack<T>(run: (trx: TenantTransaction) => Promise<T>): Promise<T> {
+    const rollback = new Error("rolled back by the test");
+    let seen: { readonly value: T } | undefined;
+    await alphaTx(async (trx) => {
+      seen = { value: await run(trx) };
+      throw rollback;
+    }).catch((error: unknown) => {
+      if (error !== rollback) {
+        throw error;
+      }
+    });
+    if (seen === undefined) {
+      throw new Error("the transaction did not run");
+    }
+    return seen.value;
+  }
+
+  afterAll(async () => {
+    await alphaTx((trx) => trx.deleteFrom("bookings").where("id", "in", ids).execute());
+  });
+
+  it.each(["booking_documents", "booking_events"] as const)(
+    "[FIX-W26-BOOKINGS AC1] the reconcile claim and the scan's adoption claim a booking while another transaction holds its FOR KEY SHARE (an uncommitted %s insert)",
+    async (holder: KeyShareHolder) => {
+      const reconciling = await pendingBooking(true);
+      const stale = await pendingBooking(false);
+      const repository = worker.get(ReconcileRepository, { strict: false });
+      const scanner = worker.get(ReconcileScan, { strict: false });
+      const holds = [reconciling, stale].map((bookingId) =>
+        holdKeyShare(tenantDb, "tenant_alpha", { bookingId, by: holder }),
+      );
+      let seen: { claimed: unknown; adopted: string[]; updateSkipped: boolean };
+      try {
+        await Promise.all(holds.map((hold) => hold.held));
+        seen = {
+          claimed: (await rolledBack((trx) => repository.lock(trx, reconciling, { skipLocked: true })))?.id,
+          adopted: (
+            await rolledBack((trx) => scanner.adopt(trx, new Date(), "reconcile-test-key-share"))
+          ).map((claim) => claim.id),
+          // The claims' mode before FIX-W26-BOOKINGS skips it: the key share is held indeed.
+          updateSkipped:
+            (await rolledBack((trx) =>
+              trx
+                .selectFrom("bookings")
+                .select("id")
+                .where("id", "=", reconciling)
+                .forUpdate()
+                .skipLocked()
+                .executeTakeFirst(),
+            )) === undefined,
+        };
+      } finally {
+        for (const hold of holds) {
+          hold.release();
+        }
+        await Promise.all(holds.map((hold) => hold.done));
+      }
+
+      expect(seen.claimed).toBe(reconciling);
+      expect(seen.adopted).toContain(stale);
+      expect(seen.updateSkipped).toBe(true);
+    },
+  );
+
+  it("[FIX-W26-BOOKINGS AC1] still skip a booking that another claim holds: an attempt's claim, a scan's adoption", async () => {
+    const reconciling = await pendingBooking(true);
+    const stale = await pendingBooking(false);
+    const repository = worker.get(ReconcileRepository, { strict: false });
+    const scanner = worker.get(ReconcileScan, { strict: false });
+
+    const seen = await rolledBack(async (trx) => {
+      // Another attempt's claim and another scan's adoption, held while the others try.
+      expect((await repository.lock(trx, reconciling, { skipLocked: true }))?.id).toBe(reconciling);
+      expect(
+        (await scanner.adopt(trx, new Date(), "reconcile-test-first")).map((claim) => claim.id),
+      ).toContain(stale);
+      return {
+        claimed: await rolledBack((other) => repository.lock(other, reconciling, { skipLocked: true })),
+        adopted: (await rolledBack((other) => scanner.adopt(other, new Date(), "reconcile-test-second"))).map(
+          (claim) => claim.id,
+        ),
+      };
+    });
+
+    expect(seen.claimed).toBeUndefined();
+    expect(seen.adopted).not.toContain(stale);
   });
 });

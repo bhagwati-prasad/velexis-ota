@@ -7,8 +7,14 @@
 // key; beta live (its storefront serves the live environment). Customers are inserted with their access tokens signed
 // by the API's own key. Bookings are rows inserted the way the record step writes them (test/builders' synthetic
 // travellers, flights moved relative to now, so no calendar date is fixed); the bookings that are refreshed point at
-// orders created in the stub through its own HTTP API. Every answer is checked against the OTA document.
-import { randomBytes } from "node:crypto";
+// orders created in the stub through its own HTTP API. Every answer is checked against the OTA document. One scenario
+// (FIX-W26-BOOKINGS, a refresh that stores a new ticket) also starts the worker's module graph on the same database and
+// Redis for a moment, so the `ota-documents` consumer renders the itinerary the refresh asks for.
+import { randomBytes, randomInt } from "node:crypto";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { getQueueToken } from "@nestjs/bullmq";
 import type { ConfigService } from "@nestjs/config";
 import { encryptValue, hashApiKey, type KeyProvider } from "@velexis/crypto";
 import {
@@ -31,6 +37,7 @@ import {
   type TestRedis,
 } from "@velexis/testing";
 import { startAmadeusStub, stubScenario, type AmadeusStub } from "@velexis/testing/amadeus";
+import { Job, type Queue } from "bullmq";
 import request from "supertest";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { AmadeusClient } from "../../../src/amadeus/amadeus.client";
@@ -41,17 +48,33 @@ import { buildCreateOrderRequest, buildIssueRequest } from "../../../src/booking
 import { bookingTokenHash } from "../../../src/common/auth/booking-access.guard";
 import { Clock } from "../../../src/common/clock";
 import { newId } from "../../../src/common/ids";
-import type { ApiConfig } from "../../../src/config";
+import { OTA_QUEUE } from "../../../src/common/queues/queue-names";
+import { loadWorkerConfig, type ApiConfig } from "../../../src/config";
+import {
+  documentRenderJob,
+  documentRenderKey,
+  type DocumentRenderJobResult,
+} from "../../../src/documents/documents.processor";
 import { TokenService } from "../../../src/identity/token.service";
 import { seedDefaultMarkupRule } from "../../../src/provisioning/seeds/markup-rules.seed";
 import { seedStorefrontSettings } from "../../../src/provisioning/seeds/storefront-settings.seed";
 import type { OtaPool } from "../../../src/tenancy/tenancy.module";
 import type { TenantTransaction } from "../../../src/tenancy/tenant-tx";
+import { createWorkerApp, createWorkerLogger, WorkerModule } from "../../../src/worker.module";
 import { buildOrderRequestInput } from "../../builders/bookings";
 import { newDocumentNumber } from "../../builders/checkouts";
-import { edgeHeaders, newApiKey, testApiCredentials, testKeyProvider } from "../../helpers/api-env";
+import {
+  edgeHeaders,
+  newApiKey,
+  testApiCredentials,
+  testKeyProvider,
+  testWorkerVariables,
+} from "../../helpers/api-env";
+import { MemorySink } from "../../helpers/log-sink";
+import { useNextApplicationLoggerOutsideRequests } from "../../helpers/nest-pino";
 import { OPENAPI_SETUP_TIMEOUT_MS, preloadOpenApiDocument } from "../../helpers/openapi";
 import { createTestApp, type TestApp } from "../../support/create-test-app";
+import { pdfText } from "../../support/pdf-text";
 
 type JsonObject = Record<string, unknown>;
 type Schema = "tenant_alpha" | "tenant_beta";
@@ -1109,6 +1132,240 @@ describe("bookings.get", () => {
       warnings: [{ title: "ORDER NOT FOUND AT THE AIRLINE" }],
     });
     expect((await bookingColumns(bookingId)).sync_error).toBe("ORDER_NOT_FOUND");
+  });
+});
+
+// ---- FIX-W26-BOOKINGS (lead decision (6a) of 2026-10-22): a refresh that stores tickets moves the version -----------
+
+/** Issues a stub order at the airline (staff, outside Velexis): the number of its first e-ticket. */
+async function issueStubOrder(orderId: string): Promise<string> {
+  const issued = await stubFetch(`/v1/booking/flight-orders/${encodeURIComponent(orderId)}/issuance`, {
+    method: "POST",
+    body: buildIssueRequest(["2"]),
+  });
+  const tickets = ((issued["data"] as JsonObject)["tickets"] ?? []) as JsonObject[];
+  const number = tickets.find((ticket) => ticket["documentType"] === "ETICKET")?.["documentNumber"];
+  if (typeof number !== "string") {
+    throw new Error("the stub issued no e-ticket");
+  }
+  return number;
+}
+
+/** A ticket number of the booking's airline that no stub order holds (an earlier ticket, exchanged since). */
+const earlierTicketNumber = (): string => `075-${randomInt(1_000_000_000, 9_999_999_999)}`;
+
+/** The booking events of `type`. */
+async function eventsOfType(bookingId: string, type: string): Promise<number> {
+  const rows = await inTenant("tenant_alpha", (trx) =>
+    trx
+      .selectFrom("booking_events")
+      .select("id")
+      .where("booking_id", "=", bookingId)
+      .where("type", "=", type)
+      .execute(),
+  );
+  return rows.length;
+}
+
+describe("a refresh that stores a new ticket of a ticketed booking (FIX-W26-BOOKINGS)", () => {
+  /**
+   * The worker's module graph (the `ota-documents` consumer) on this file's database and Redis, a storage folder of its
+   * own: started, used and closed in the hook, which also renders the first PDF of the process (pdfmake and the fonts).
+   */
+  const DOCUMENTS_SETUP_TIMEOUT_MS = 60_000;
+  /** How long the hook waits at most for a render job (a few hundred milliseconds once the renderer is loaded). */
+  const RENDER_WAIT = { timeout: 15_000, interval: 25 } as const;
+
+  let storageDir: string;
+  let earlier: string;
+  let added: string;
+  let firstItinerary: DocumentRenderJobResult;
+  let versionBefore: number;
+  let etagBefore: string | undefined;
+  let refreshed: request.Response;
+  let versionAfter: number;
+  let ticketedEvents: number;
+  let nextItinerary: DocumentRenderJobResult;
+  let itineraries: Array<{ readonly status: string; readonly text: string }>;
+
+  beforeAll(async () => {
+    await redis.client.flushdb();
+    stub.clearRequests();
+    storageDir = mkdtempSync(join(tmpdir(), "velexis-ota-refresh-documents-"));
+    const config = loadWorkerConfig({
+      ...testWorkerVariables(),
+      APP_ENV: "test",
+      DATABASE_URL: db.urlFor("ota"),
+      DATABASE_PROVISIONER_URL: db.urlFor("provisioner"),
+      REDIS_URL: redis.url,
+      STORAGE_DIR: storageDir,
+    });
+    useNextApplicationLoggerOutsideRequests();
+    const worker = await createWorkerApp(
+      WorkerModule.forRoot(config, { logger: createWorkerLogger(config, new MemorySink()) }),
+    );
+    try {
+      await worker.init();
+      const maintenance = worker.get<Queue>(getQueueToken(OTA_QUEUE.maintenance));
+      // No scheduler iteration may fire while the worker runs.
+      for (const scheduler of await maintenance.getJobSchedulers(0, -1)) {
+        await maintenance.removeJobScheduler(scheduler.key);
+      }
+      const documents = worker.get<Queue>(getQueueToken(OTA_QUEUE.documents));
+      const finished = async (key: string): Promise<DocumentRenderJobResult> => {
+        const job = await vi.waitFor(async () => {
+          const id = await documents.getDeduplicationJobId(key);
+          const found = id === null ? undefined : await Job.fromId(documents, id);
+          const state = await found?.getState();
+          if (found === undefined || (state !== "completed" && state !== "failed")) {
+            throw new Error(`job ${key} has not finished`);
+          }
+          return found;
+        }, RENDER_WAIT);
+        expect(await job.getState(), `job ${key}: ${job.failedReason ?? ""}`).toBe("completed");
+        return job.returnvalue as DocumentRenderJobResult;
+      };
+
+      // A ticketed booking with its e-ticket; then the airline issues the order again (an exchange, say), so Flight
+      // Order Management holds a ticket the booking does not have, and the booking's status stays `ticketed`.
+      const customer = await newCustomer();
+      const order = await newStubOrder();
+      earlier = earlierTicketNumber();
+      const bookingId = await seedBooking({
+        customerId: customer.id,
+        status: "ticketed",
+        departInMs: 10 * DAY,
+        amadeusOrderId: order["id"] as string,
+        snapshot: redactPayload(order),
+        tickets: [earlier],
+      });
+      added = await issueStubOrder(order["id"] as string);
+      // Its itinerary of version 1, as the record step asked for it (booking.created).
+      const first = documentRenderJob({ tenantId: alphaId, bookingId, kind: "itinerary", bookingVersion: 1 });
+      await documents.add(first.name, first.data, first.opts);
+      firstItinerary = await finished(documentRenderKey(first.data));
+
+      const shown = await get(`/v1/bookings/${bookingId}`, bearer(customer.token));
+      versionBefore = (await bookingColumns(bookingId)).version;
+      etagBefore = shown.headers["etag"];
+      refreshed = await get(`/v1/bookings/${bookingId}?refresh=true`, bearer(customer.token));
+      versionAfter = (await bookingColumns(bookingId)).version;
+      ticketedEvents = await eventsOfType(bookingId, "booking.ticketed");
+      // The itinerary the refresh's booking.ticketed asked for, at the version it left.
+      nextItinerary = await finished(
+        documentRenderKey({ bookingId, kind: "itinerary", bookingVersion: versionAfter }),
+      );
+      const rows = await inTenant("tenant_alpha", (trx) =>
+        trx
+          .selectFrom("booking_documents")
+          .select(["status", "storage_key as storageKey"])
+          .where("booking_id", "=", bookingId)
+          .where("kind", "=", "itinerary")
+          .orderBy("created_at")
+          .orderBy("id")
+          .execute(),
+      );
+      itineraries = rows.map((row) => ({
+        status: row.status,
+        text: pdfText(readFileSync(join(storageDir, ...row.storageKey.split("/")))),
+      }));
+    } finally {
+      await worker.close();
+    }
+  }, DOCUMENTS_SETUP_TIMEOUT_MS);
+
+  afterAll(() => {
+    if (storageDir !== undefined) {
+      rmSync(storageDir, { recursive: true, force: true });
+    }
+  });
+
+  it("[FIX-W26-BOOKINGS AC3] moves the version and the ETag, and the itinerary rendered next lists the new ticket", () => {
+    expect(firstItinerary).toMatchObject({ outcome: "rendered" });
+    expect(versionBefore).toBe(1);
+    expect(etagBefore).toBe('"1"');
+    expect(refreshed.status).toBe(200);
+    expectResponseToMatch("getBooking", refreshed);
+    expect(refreshed.body).toMatchObject({ status: "ticketed", syncStatus: "refreshed", version: 2 });
+    expect(refreshed.headers["etag"]).toBe('"2"');
+    expect((refreshed.body as BookingBody).tickets.map((ticket) => ticket.documentNumber).sort()).toEqual(
+      [earlier, added].sort(),
+    );
+    expect(versionAfter).toBe(2);
+    expect(ticketedEvents).toBe(1);
+    // A new job of version 2, so the itinerary is rendered again: the first one superseded, the new one with both.
+    expect(nextItinerary).toMatchObject({ outcome: "rendered", superseded: 1 });
+    expect(itineraries.map((row) => row.status)).toEqual(["superseded", "ready"]);
+    expect(itineraries[0]?.text).toContain(earlier);
+    expect(itineraries[0]?.text).not.toContain(added);
+    expect(itineraries[1]?.text).toContain(earlier);
+    expect(itineraries[1]?.text).toContain(added);
+  });
+});
+
+describe("a refresh that stores no new ticket (FIX-W26-BOOKINGS)", () => {
+  it("[FIX-W26-BOOKINGS AC3] keeps the version and the ETag when it changes nothing the documents show, and asks for no document", async () => {
+    const customer = await newCustomer();
+    const order = await newStubOrder();
+    const number = await issueStubOrder(order["id"] as string);
+    // The booking holds the order's ticket as Amadeus holds it: the refresh finds nothing new.
+    const bookingId = await seedBooking({
+      customerId: customer.id,
+      status: "ticketed",
+      departInMs: 10 * DAY,
+      amadeusOrderId: order["id"] as string,
+      snapshot: redactPayload(order),
+      tickets: [number],
+    });
+    const documents = api.app.get<Queue>(getQueueToken(OTA_QUEUE.documents), { strict: false });
+    const before = await get(`/v1/bookings/${bookingId}`, bearer(customer.token));
+
+    const res = await get(`/v1/bookings/${bookingId}?refresh=true`, bearer(customer.token));
+
+    expect(res.status).toBe(200);
+    expectResponseToMatch("getBooking", res);
+    expect((res.body as BookingBody).syncStatus).toBe("refreshed");
+    expect(amadeusCalls("getFlightOrder")).toHaveLength(1);
+    expect(before.headers["etag"]).toBe('"1"');
+    expect(res.headers["etag"]).toBe('"1"');
+    expect((await bookingColumns(bookingId)).version).toBe(1);
+    expect(await eventsOfType(bookingId, "booking.ticketed")).toBe(0);
+    expect(
+      await documents.getDeduplicationJobId(
+        documentRenderKey({ bookingId, kind: "itinerary", bookingVersion: 1 }),
+      ),
+    ).toBe(null);
+  });
+
+  it("[FIX-W26-BOOKINGS AC3] moves the version when it changes the status of a stored ticket (the receipt shows it)", async () => {
+    const customer = await newCustomer();
+    const order = await newStubOrder();
+    const number = await issueStubOrder(order["id"] as string);
+    const bookingId = await seedBooking({
+      customerId: customer.id,
+      status: "ticketed",
+      departInMs: 10 * DAY,
+      amadeusOrderId: order["id"] as string,
+      snapshot: redactPayload(order),
+      tickets: [number],
+    });
+    // The booking still shows the ticket as it was before the airline reissued it.
+    await inTenant("tenant_alpha", (trx) =>
+      trx
+        .updateTable("booking_tickets")
+        .set({ status: "ORIGINAL" })
+        .where("booking_id", "=", bookingId)
+        .execute(),
+    );
+
+    const res = await get(`/v1/bookings/${bookingId}?refresh=true`, bearer(customer.token));
+
+    expect(res.status).toBe(200);
+    expect(res.headers["etag"]).toBe('"2"');
+    expect((await bookingColumns(bookingId)).version).toBe(2);
+    expect((res.body as BookingBody & JsonObject)["tickets"]).toEqual([
+      expect.objectContaining({ documentNumber: number, status: "ISSUED" }),
+    ]);
   });
 });
 

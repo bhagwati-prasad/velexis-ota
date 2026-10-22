@@ -12,8 +12,9 @@
 // booking's environment and customer, and whether a presented guest token hash is a live `booking_access_tokens` row
 // of it, and since OBE-047 the use it records on that row); the list card of one booking (bookings.lookup's answer,
 // OBE-047); the customer-visible events; the services, refunds and current documents of a booking; and what a refresh
-// claims and writes (the `booking.sync_requested` events are the throttle; a refresh bumps `version` only when the
-// booking's status changed). City names come from `reference.airports` and `reference.cities`.
+// claims and writes (the `booking.sync_requested` events are the throttle; a refresh bumps `version` only when it
+// stores new or changed tickets or a new status, the changes the documents follow). City names come from
+// `reference.airports` and `reference.cities`.
 //
 // Like every tenant repository it takes the `tenantTx` transaction first, never opens one and never names a tenant
 // schema. Amounts are read as text (`numeric::text`), dates and local date-times through `to_char`, never as
@@ -1185,8 +1186,9 @@ export class BookingsRepository {
   }
 
   /**
-   * Writes what a refresh read of the order; bumps `version` only when `bumpVersion` (the booking's status or
-   * ticketing state changed). A refresh that only brings the snapshot up to date leaves the ETag as it is.
+   * Writes what a refresh read of the order; bumps `version` only when `bumpVersion` (the refresh stores new or
+   * changed tickets or a new status, which the documents follow: lead decision (6a) of 2026-10-22). A refresh that only
+   * brings the snapshot up to date leaves the ETag as it is.
    */
   async updateSynced(
     trx: TenantTransaction,

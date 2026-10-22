@@ -43,6 +43,7 @@ import {
   ticketingJobId,
   type TicketingJobResult,
 } from "../../../src/bookings/ticketing.processor";
+import { TicketingRepository } from "../../../src/bookings/ticketing.service";
 import { Clock } from "../../../src/common/clock";
 import { newId } from "../../../src/common/ids";
 import { OTA_QUEUE } from "../../../src/common/queues/queue-names";
@@ -56,6 +57,7 @@ import type { TenantTransaction } from "../../../src/tenancy/tenant-tx";
 import { createWorkerApp, createWorkerLogger, WorkerModule } from "../../../src/worker.module";
 import { buildOrderRequestInput } from "../../builders/bookings";
 import { testKeyProvider, testWorkerVariables } from "../../helpers/api-env";
+import { holdKeyShare } from "../../helpers/lock-order";
 import { MemorySink } from "../../helpers/log-sink";
 import { useNextApplicationLoggerOutsideRequests } from "../../helpers/nest-pino";
 
@@ -806,7 +808,7 @@ describe("which bookings are retried", () => {
     expect(await ticketingOf(fresh)).toMatchObject({ ticketingStatus: "in_progress", attempts: 2 });
   });
 
-  it("skips a booking that another transaction holds (FOR UPDATE SKIP LOCKED), without calling Amadeus", async () => {
+  it("skips a booking that another transaction holds FOR UPDATE (the claim's SKIP LOCKED), without calling Amadeus", async () => {
     const booking = await insertBooking({ key: "alpha", failedAt: T0, deadlineAt: null });
     stub.clearRequests();
     const due = plus(T0, 5 * MINUTE);
@@ -825,6 +827,66 @@ describe("which bookings are retried", () => {
       nextAttemptAt: due,
     });
     // Once the row is free, the next scan's job claims it.
+    expect(await attemptAt(booking, plus(due, MINUTE))).toMatchObject({ outcome: "ticketed", attempts: 2 });
+  });
+
+  it.each(["booking_documents", "booking_events"] as const)(
+    "[FIX-W26-BOOKINGS AC1] claims a booking while another transaction holds its FOR KEY SHARE (an uncommitted %s insert)",
+    async (holder) => {
+      const booking = await insertBooking({ key: "alpha", failedAt: T0, deadlineAt: null });
+      stub.clearRequests();
+      const due = plus(T0, 5 * MINUTE);
+      // A document's write or an event's insert of the booking, not committed yet: the foreign key's FOR KEY SHARE.
+      const hold = holdKeyShare(tenantDb, "tenant_alpha", { bookingId: booking.id, by: holder });
+      await hold.held;
+      let ended = false;
+      const end = (): void => {
+        ended = true;
+      };
+      void hold.done.then(end, end);
+      // The resync comes right after the claim's commit, so a resync while the row is held means the claim was made
+      // while it was held. The hold then ends, and the result step (FOR UPDATE, which waits for a key share) goes on.
+      let resyncedWhileHeld = false;
+      const client = app.get(AmadeusClient, { strict: false });
+      const getOrder = client.getFlightOrder.bind(client);
+      vi.spyOn(client, "getFlightOrder").mockImplementationOnce(async (context, request, options) => {
+        resyncedWhileHeld = !ended;
+        hold.release();
+        return await getOrder(context, request, options);
+      });
+
+      let result: TicketingJobResult;
+      try {
+        result = await attemptAt(booking, due);
+      } finally {
+        hold.release();
+        await hold.done;
+      }
+
+      expect(result).toMatchObject({ outcome: "ticketed", via: "issue", attempts: 2 });
+      expect(resyncedWhileHeld).toBe(true);
+      expect(await ticketingOf(booking)).toMatchObject({ status: "ticketed", ticketingStatus: "issued" });
+    },
+  );
+
+  it("[FIX-W26-BOOKINGS AC1] still skips a booking that another claim holds (FOR NO KEY UPDATE SKIP LOCKED)", async () => {
+    const booking = await insertBooking({ key: "alpha", failedAt: T0, deadlineAt: null });
+    stub.clearRequests();
+    const due = plus(T0, 5 * MINUTE);
+
+    // Another worker's claim of the booking: the claim's own lock, held while the scan and the job run.
+    const held = await tx("alpha", async (trx) => {
+      const claimed = await app
+        .get(TicketingRepository, { strict: false })
+        .lock(trx, booking.id, { skipLocked: true });
+      expect(claimed?.id).toBe(booking.id);
+      return await attemptAt(booking, due);
+    });
+
+    expect(held).toMatchObject({ outcome: "skipped", reason: "not_claimable" });
+    expect(stub.requests()).toEqual([]);
+    expect(await ticketingOf(booking)).toMatchObject({ ticketingStatus: "failed", attempts: 1 });
+    // Once the other claim has ended, the next scan's job claims it.
     expect(await attemptAt(booking, plus(due, MINUTE))).toMatchObject({ outcome: "ticketed", attempts: 2 });
   });
 

@@ -7,6 +7,7 @@
 import { AppError, toErrorEnvelope } from "@velexis/errors";
 import { describe, expect, it } from "vitest";
 import { buildCreatedOrderBody } from "../../test/builders/bookings";
+import { mapAmadeusError, type AmadeusCallError } from "../amadeus/error-mapper";
 import type { IdempotencyResponse } from "../common/http/idempotency.service";
 import {
   pendingBookingOf,
@@ -26,6 +27,7 @@ import {
   queueRecordLocatorOf,
   RECONCILE_ADOPT_AFTER_MS,
   RECONCILE_CLAIM_GAP_MS,
+  RECONCILE_DEADLINE_RETRIES,
   RECONCILE_FIRST_DELAY_MS,
   RECONCILE_JOB,
   RECONCILE_MAX_READS,
@@ -37,6 +39,7 @@ import {
   reconcileJobId,
   readSlice,
   staleClaimBefore,
+  transientFailure,
   type ReconcileBookingRow,
   type SearchGap,
 } from "./reconcile.service";
@@ -377,6 +380,61 @@ describe("an attempt", () => {
     expect(ORCHESTRATOR_WINDOW_MS).toBe(RECONCILE_WINDOW_MS);
     expect(RECONCILE_FIRST_DELAY_MS).toBe(30_000);
     expect(RECONCILE_CLAIM_GAP_MS).toBeLessThan(MINUTE);
+  });
+
+  it("[FIX-W26-BOOKINGS AC2] tries a search that failed only transiently at reconcile_until again, up to 3 more attempts, then the staff review it", () => {
+    // Lead decision (3) of 2026-10-22: one more attempt per reconcile run while fewer than 3 were given.
+    expect(RECONCILE_DEADLINE_RETRIES).toBe(3);
+    for (const used of [0, 1, 2]) {
+      expect(reconcileDecision("incomplete", true, { transient: true, used })).toBe("retry");
+    }
+    expect(reconcileDecision("incomplete", true, { transient: true, used: 3 })).toBe("review");
+    // Before the deadline nothing changes; past it, any other incomplete search is reviewed at once.
+    expect(reconcileDecision("incomplete", false, { transient: true, used: 0 })).toBe("wait");
+    expect(reconcileDecision("incomplete", true, { transient: false, used: 0 })).toBe("review");
+    // A complete search, or an order found, decides as before, whatever the grace used.
+    expect(reconcileDecision("absent", true, { transient: true, used: 1 })).toBe("fail");
+    expect(reconcileDecision("no_queue", true, { transient: true, used: 1 })).toBe("fail");
+    expect(reconcileDecision("found", true, { transient: true, used: 2 })).toBe("record");
+  });
+
+  it("[FIX-W26-BOOKINGS AC2] counts a rate limit, a timeout, a 5xx and a network error as transient, a refusal or a bug not", () => {
+    const amadeus = (failure: ConstructorParameters<typeof AmadeusCallError>[1]): AppError =>
+      mapAmadeusError("listQueue", failure);
+    // Our buckets (no request sent), Amadeus's 429 and 502/503, a gateway's 504, no answer in time, a reset or a
+    // connection never made, a 500 with 141 SYSTEM ERROR and any other 5xx.
+    for (const error of [
+      new AppError("RATE_LIMITED"),
+      new AppError("SERVICE_UNAVAILABLE"),
+      amadeus({ kind: "http", status: 429, issues: [] }),
+      amadeus({ kind: "http", status: 502, issues: [] }),
+      amadeus({ kind: "http", status: 503, issues: [] }),
+      amadeus({ kind: "http", status: 504, issues: [] }),
+      amadeus({
+        kind: "http",
+        status: 500,
+        issues: [{ status: 500, code: 141, title: "SYSTEM ERROR HAS OCCURRED" }],
+      }),
+      amadeus({ kind: "http", status: 599, issues: [] }),
+      amadeus({ kind: "timeout" }),
+      amadeus({ kind: "network", code: "ECONNRESET" }),
+      amadeus({ kind: "network", code: "ECONNREFUSED" }),
+    ]) {
+      expect(transientFailure(error), `${error.code}: ${String(error.cause)}`).toBe(true);
+    }
+    // A refusal, an office Amadeus refuses, credentials it refuses, an answer that cannot be read, a bug.
+    for (const error of [
+      amadeus({ kind: "http", status: 400, issues: [{ status: 400, code: 477, title: "INVALID FORMAT" }] }),
+      amadeus({ kind: "http", status: 403, issues: [] }),
+      amadeus({ kind: "http", status: 401, issues: [] }),
+      amadeus({ kind: "http", status: 200, issues: [] }),
+      new AppError("SUPPLIER_ERROR"),
+      new AppError("SUPPLIER_NOT_CONFIGURED"),
+      new Error("a bug"),
+      undefined,
+    ]) {
+      expect(transientFailure(error), String(error)).toBe(false);
+    }
   });
 });
 

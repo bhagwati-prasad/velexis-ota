@@ -814,6 +814,103 @@ describe("a booking that changes while its document is rendered", () => {
   });
 });
 
+/** PostgreSQL's `lock_not_available` (55P03): a NOWAIT lock another transaction holds. */
+function isLockNotAvailable(error: unknown): boolean {
+  return typeof error === "object" && error !== null && (error as { code?: unknown }).code === "55P03";
+}
+
+/** How many sessions of this file's database wait for an advisory lock right now. */
+async function advisoryWaiters(): Promise<number> {
+  const { rows } = await otaPool.query<{ waiting: number }>(
+    "SELECT count(*)::int AS waiting FROM pg_locks WHERE locktype = 'advisory' AND NOT granted " +
+      "AND database = (SELECT oid FROM pg_database WHERE datname = current_database())",
+  );
+  return rows[0]?.waiting ?? -1;
+}
+
+/** Whether the booking can be locked with `mode` NOWAIT in a transaction of its own (rolled back). */
+async function lockable(booking: SeededBooking, mode: "no key update" | "update"): Promise<boolean> {
+  try {
+    await tx(booking.key, async (trx) => {
+      const query = trx.selectFrom("bookings").select("id").where("id", "=", booking.id);
+      await (mode === "update" ? query.forUpdate() : query.forNoKeyUpdate()).noWait().execute();
+    });
+    return true;
+  } catch (error) {
+    if (!isLockNotAvailable(error)) {
+      throw error;
+    }
+    return false;
+  }
+}
+
+describe("two renders of one booking at once (FIX-W26-BOOKINGS, lead decision (1) of 2026-10-22)", () => {
+  it("[FIX-W26-BOOKINGS AC1] are serialised by the booking's documents lock, which never keeps a claim of the booking from it", async () => {
+    const booking = await insertBooking("beta");
+    const tenant = await app.get(PlatformCache, { strict: false }).tenantById(tenants.beta);
+    if (tenant === null) {
+      throw new Error("beta is not readable");
+    }
+    const data: DocumentRenderJobData = {
+      tenantId: tenants.beta,
+      bookingId: booking.id,
+      kind: "itinerary",
+      bookingVersion: await versionOf(booking),
+    };
+    const render = (id: string) =>
+      app
+        .get(TenantContext, { strict: false })
+        .run(jobTenant(tenant, { id, name: DOCUMENT_RENDER_JOB }), () =>
+          app.get(DocumentRenderService).render(tenant, data),
+        );
+    // The first render's write (T2) stops right after it took the booking's documents lock, until the test lets it go.
+    const repository = app.get(DocumentsRepository);
+    const lockDocuments = repository.lockDocuments.bind(repository);
+    let markHeld: () => void = () => undefined;
+    const held = new Promise<void>((resolve) => {
+      markHeld = resolve;
+    });
+    let release: () => void = () => undefined;
+    const released = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const spy = vi.spyOn(repository, "lockDocuments").mockImplementationOnce(async (trx, bookingId) => {
+      const current = await lockDocuments(trx, bookingId);
+      markHeld();
+      await released;
+      return current;
+    });
+    let observed: { readonly claim: boolean; readonly update: boolean; readonly waiting: number };
+    let outcomes: Array<Awaited<ReturnType<typeof render>>>;
+    try {
+      const first = render("first-render");
+      await held;
+      // While the write holds its locks, a claim of the booking (FOR NO KEY UPDATE) gets it at once; the booking's FOR
+      // KEY SHARE is held all the same (FOR UPDATE NOWAIT fails), so the claim was not tried against nothing.
+      const claim = await lockable(booking, "no key update");
+      const update = await lockable(booking, "update");
+      // The second render of the booking waits for the first's documents lock in its write.
+      const second = render("second-render");
+      await vi.waitFor(async () => expect(await advisoryWaiters()).toBe(1), { timeout: 4000, interval: 20 });
+      observed = { claim, update, waiting: await advisoryWaiters() };
+      release();
+      outcomes = await Promise.all([first, second]);
+    } finally {
+      release();
+      spy.mockRestore();
+    }
+
+    expect(observed).toEqual({ claim: true, update: false, waiting: 1 });
+    // One after the other: the first stores the itinerary, the second finds the same bytes stored and adds nothing.
+    expect(outcomes.map((outcome) => outcome.outcome)).toEqual(["rendered", "unchanged"]);
+    const rows = await documentsOf(booking);
+    expect(rows.map((row) => [row.kind, row.status])).toEqual([["itinerary", "ready"]]);
+    expect(readdirSync(join(storageDir, "tenant_beta", "documents", booking.id))).toEqual([
+      `${rows[0]?.id ?? "missing"}.pdf`,
+    ]);
+  });
+});
+
 describe("tenant isolation", () => {
   it("never renders another tenant's booking: a job for alpha with beta's booking finds nothing", async () => {
     const booking = await insertBooking("beta");

@@ -22,11 +22,15 @@
 //      without it) and render the PDF (renderers/); compute its SHA-256;
 //   3. when the newest ready version of the document has this SHA-256, nothing is stored: the render is a no-op
 //      (`unchanged`); otherwise the file is stored at `tenant_<key>/documents/<bookingId>/<documentId>.pdf`;
-//   4. write (T2): lock the booking `FOR UPDATE` (the one lock taken; the row insert's foreign-key lock is the
-//      booking's and the ticket's, OADR-0003 point 11) and check its version against T1's: a booking that changed
-//      meanwhile is read and rendered again (at most RENDER_ROUNDS times), so an older render never replaces a newer
-//      one; then insert the `ready` row and supersede the document's other rows, or, when the newest ready one has the
-//      same SHA-256 by now, insert nothing (the file stored in step 3 is deleted).
+//   4. write (T2): take the booking's documents lock (`DocumentsRepository.lockDocuments`: a transaction-level advisory
+//      lock keyed on the booking id, so the document writes of one booking run one at a time), read the booking's
+//      version `FOR KEY SHARE` (the lock the row insert's foreign key takes on it anyway; the ticket's too, OADR-0003
+//      point 11) and check it against T1's: a booking that changed meanwhile is read and rendered again (at most
+//      RENDER_ROUNDS times), so an older render never replaces a newer one; then insert the `ready` row and supersede
+//      the document's other rows, or, when the newest ready one has the same SHA-256 by now, insert nothing (the file
+//      stored in step 3 is deleted). The documents never lock a booking `FOR UPDATE` (nor `FOR NO KEY UPDATE` or
+//      `FOR SHARE`; lead decision of 2026-10-22, OADR-0014 point 6): a ticketing or reconciliation claim made while a
+//      document is written claims the booking (`FOR NO KEY UPDATE SKIP LOCKED` does not conflict with a key share).
 // The same booking data always gives the same bytes (renderers/itinerary.renderer.ts), so rendering a booking version
 // twice gives one row and one hash. A failure (the renderer, storage, the database) writes or keeps one `failed` row of
 // the document, which supersedes nothing, and fails the job: BullMQ retries it (5 attempts, exponential backoff from
@@ -401,8 +405,9 @@ export class DocumentRenderService {
   }
 
   /**
-   * T2 (see the file header): the booking locked and its version checked; then the new row and the superseded ones,
-   * or, without a stored file (or when the newest ready row has the same hash by now), the failed rows resolved.
+   * T2 (see the file header): the booking's documents locked and its version checked; then the new row and the
+   * superseded ones, or, without a stored file (or when the newest ready row has the same hash by now), the failed
+   * rows resolved.
    */
   private async write(
     slot: DocumentSlot,
@@ -412,7 +417,7 @@ export class DocumentRenderService {
   ): Promise<DocumentRenderOutcome | "changed"> {
     return await this.tx.run(async (trx) => {
       const now = this.clock.now();
-      const current = await this.repository.lockBooking(trx, slot.bookingId);
+      const current = await this.repository.lockDocuments(trx, slot.bookingId);
       if (current === undefined) {
         return { outcome: "skipped", reason: "booking_not_found" } as const;
       }
@@ -568,7 +573,8 @@ export class DocumentRenderService {
     try {
       await this.tx.run(async (trx) => {
         const now = this.clock.now();
-        const booking = await this.repository.lockBooking(trx, slot.bookingId);
+        // The booking's documents lock, as the write's (T2): two failing renders of one document keep one failed row.
+        const booking = await this.repository.lockDocuments(trx, slot.bookingId);
         if (booking === undefined) {
           return;
         }
