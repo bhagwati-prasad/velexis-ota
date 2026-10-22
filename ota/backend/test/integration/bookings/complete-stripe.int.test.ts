@@ -17,6 +17,9 @@
 //
 // FIX-W24-BOOKINGS (lead decision of 2026-10-21, OADR-0003 point 11): the capture's transaction locks the booking
 // before the payment, proven with a second transaction that holds the booking (test/helpers/lock-order.ts).
+// FIX-W25-BOOKINGS (third batch: checkout, booking, payment, refund): the transactions after Flight Create Orders (T2,
+// the failure, the unknown outcome) lock the checkout before the booking, proven the same way with the checkout held;
+// and a claim that a reconciliation decided before the order was sent (an adopted claim) sends no order at all.
 import { randomBytes } from "node:crypto";
 import { getQueueToken } from "@nestjs/bullmq";
 import { encryptValue, hashApiKey, type KeyProvider } from "@velexis/crypto";
@@ -58,7 +61,12 @@ import { newApiKey, testApiCredentials, testKeyProvider } from "../../helpers/ap
 import { AmadeusClient } from "../../../src/amadeus/amadeus.client";
 import { mapAmadeusError } from "../../../src/amadeus/error-mapper";
 import { startFakeStripe, stripeEndpointModule, type FakeStripe } from "../../helpers/fake-stripe";
-import { probeLockOrder, type LockOrderProbe } from "../../helpers/lock-order";
+import {
+  probeLockOrder,
+  probeRowLockOrder,
+  type LockOrderProbe,
+  type RowLockOrderProbe,
+} from "../../helpers/lock-order";
 import { OPENAPI_SETUP_TIMEOUT_MS, preloadOpenApiDocument } from "../../helpers/openapi";
 import { createTestApp, type TestApp } from "../../support/create-test-app";
 
@@ -1419,6 +1427,187 @@ describe("checkout.complete's lock order (FIX-W24-BOOKINGS)", () => {
     const { booking } = res.body as CompletionBody;
     expect(await paymentRow(payment.id)).toMatchObject({ status: "captured", booking_id: booking.id });
     expect((await bookingRow(booking.id)).paid).toBe(checkout.totals.total.amount);
+  });
+});
+
+describe("checkout.complete's lock order of the checkout (FIX-W25-BOOKINGS)", () => {
+  /**
+   * Completes `checkoutId` with a probe (test/helpers/lock-order.ts) that takes the checkout while Flight Create Orders
+   * is sent (no transaction open: OBE-042 AC3), then probes the booking; `respond` answers the request instead of the
+   * stub. The transaction after the call (T2, the failure, the unknown outcome) must wait for the checkout without the
+   * booking's lock: the lead decision of 2026-10-21 (checkout, booking, payment, refund).
+   */
+  async function completeWhileCheckoutHeld(
+    checkoutId: string,
+    options: { readonly extra?: Record<string, string>; readonly respond?: () => Response } = {},
+  ) {
+    let probe: RowLockOrderProbe | undefined;
+    const realFetch = globalThis.fetch;
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const url = input instanceof Request ? input.url : String(input);
+      if (
+        probe === undefined &&
+        url.startsWith(stub.url) &&
+        new URL(url).pathname === "/v1/booking/flight-orders"
+      ) {
+        const [pending] = await bookingsOfCheckout(checkoutId);
+        if (pending === undefined) {
+          throw new Error("Flight Create Orders before the claim");
+        }
+        probe = probeRowLockOrder(tenantDb, "tenant_alpha", {
+          held: { table: "checkouts", id: checkoutId },
+          probed: { table: "bookings", id: pending.id },
+        });
+        await probe.locked;
+        return options.respond?.() ?? (await realFetch(input, init));
+      }
+      return await realFetch(input, init);
+    });
+    const res = await complete(checkoutId, options.extra === undefined ? {} : { extra: options.extra });
+    expectResponseToMatch("completeCheckout", res);
+    return { status: res.status, seen: await probe?.result };
+  }
+
+  it("[FIX-W25-BOOKINGS AC3] records the order (T2) with the checkout locked before the booking", async () => {
+    const { checkout } = await paidCheckout();
+
+    const { status, seen } = await completeWhileCheckoutHeld(checkout.id);
+
+    expect(status).toBe(201);
+    expect(seen).toEqual({ waiterSeen: true, probedFree: true });
+    expect((await checkoutRow(checkout.id)).status).toBe("completed");
+  });
+
+  it("[FIX-W25-BOOKINGS AC3] fails a refused order with the checkout locked before the booking and the payment", async () => {
+    const { checkout, payment } = await paidCheckout();
+
+    const { status, seen } = await completeWhileCheckoutHeld(checkout.id, {
+      extra: stubScenario("sold-out"),
+    });
+
+    expect(status).toBe(409);
+    expect(seen).toEqual({ waiterSeen: true, probedFree: true });
+    expect(await paymentRow(payment.id)).toMatchObject({ status: "canceled" });
+    expect((await checkoutRow(checkout.id)).status).toBe("open");
+  });
+
+  it("[FIX-W25-BOOKINGS AC3] keeps an unknown outcome after a re-price with the checkout locked before the booking", async () => {
+    const { checkout } = await paidCheckout();
+    await ageOffer(checkout.pricedOfferId);
+    const unavailable = (): Response =>
+      new Response(
+        JSON.stringify({ errors: [{ status: 503, code: 141, title: "SYSTEM ERROR HAS OCCURRED" }] }),
+        {
+          status: 503,
+          headers: { "content-type": "application/vnd.amadeus+json" },
+        },
+      );
+
+    const { status, seen } = await completeWhileCheckoutHeld(checkout.id, { respond: unavailable });
+
+    expect(status).toBe(504);
+    expect(seen).toEqual({ waiterSeen: true, probedFree: true });
+    // The unknown outcome moved the checkout to the re-priced offer, as the order sent holds it.
+    expect((await checkoutRow(checkout.id)).priced_offer_id).not.toBe(checkout.pricedOfferId);
+  });
+});
+
+describe("checkout.complete when its claim was decided before the order was sent (FIX-W25-BOOKINGS)", () => {
+  /**
+   * Completes `checkout` with a priced offer older than ten minutes; while it is priced again (after the claim, before
+   * Flight Create Orders), `decide` changes the pending booking as a reconciliation that adopted the claim would
+   * (OADR-0003 point 4). The step that records what is sent (`recordSending`) must then send nothing.
+   */
+  async function completeDecidedWhileRepriced(
+    checkout: CheckoutBody,
+    decide: (bookingId: string) => Promise<void>,
+  ) {
+    await ageOffer(checkout.pricedOfferId);
+    const client = api.app.get(AmadeusClient, { strict: false });
+    const real = client.quoteAirOffers.bind(client);
+    let bookingId: string | undefined;
+    vi.spyOn(client, "quoteAirOffers").mockImplementation(async (context, input, options) => {
+      const reply = await real(context, input, options);
+      const [pending] = await bookingsOfCheckout(checkout.id);
+      if (bookingId === undefined && pending?.status === "pending") {
+        bookingId = pending.id;
+        await decide(pending.id);
+      }
+      return reply;
+    });
+    stub.clearRequests();
+    const res = await complete(checkout.id);
+    expectResponseToMatch("completeCheckout", res);
+    if (bookingId === undefined) {
+      throw new Error("the completion did not price the offers again after its claim");
+    }
+    return { res, bookingId };
+  }
+
+  it("[FIX-W25-BOOKINGS AC2] sends no order for a booking the reconciliation failed meanwhile, and leaves its money to it", async () => {
+    const { checkout, payment } = await paidCheckout();
+
+    const { res, bookingId } = await completeDecidedWhileRepriced(checkout, async (id) => {
+      // As the reconciliation's not-found decision writes it (it voids the authorisation through ota-payments).
+      await alphaTx((trx) =>
+        trx
+          .updateTable("bookings")
+          .set({
+            status: "failed",
+            ticketing_status: "not_applicable",
+            checkout_id: null,
+            failure_code: "SUPPLIER_TIMEOUT",
+            reconcile_until: sql<Date>`now()`,
+            reconcile_outcome: "not_found",
+          })
+          .where("id", "=", id)
+          .execute(),
+      );
+    });
+
+    expect(res.status).toBe(502);
+    expect((res.body as ErrorBody).error).toMatchObject({
+      code: "SUPPLIER_ERROR",
+      details: { bookingId, bookingStatus: "failed" },
+    });
+    expect(amadeusCalls("quoteAirOffers")).toHaveLength(1);
+    expect(amadeusCalls("createFlightOrders")).toHaveLength(0);
+    // Nothing of the request's own: no capture, no void, the decision's booking as it was.
+    expect(stripePosts("/capture")).toHaveLength(0);
+    expect(stripePosts("/cancel")).toHaveLength(0);
+    expect(await paymentRow(payment.id)).toMatchObject({ status: "authorized" });
+    expect(await bookingRow(bookingId)).toMatchObject({
+      status: "failed",
+      failure_code: "SUPPLIER_TIMEOUT",
+      priced_offer_id: checkout.pricedOfferId,
+    });
+  });
+
+  it("[FIX-W25-BOOKINGS AC2] sends no order for a booking the reconciliation put in the staff's review meanwhile", async () => {
+    const { checkout, payment } = await paidCheckout();
+
+    const { res, bookingId } = await completeDecidedWhileRepriced(checkout, async (id) => {
+      await alphaTx((trx) =>
+        trx
+          .updateTable("bookings")
+          .set({
+            ticketing_status: "manual_review",
+            reconcile_until: sql<Date>`now()`,
+            reconcile_outcome: "manual_review",
+          })
+          .where("id", "=", id)
+          .execute(),
+      );
+    });
+
+    expect(res.status).toBe(504);
+    expect((res.body as ErrorBody).error).toMatchObject({ code: "SUPPLIER_TIMEOUT", details: { bookingId } });
+    expect(amadeusCalls("createFlightOrders")).toHaveLength(0);
+    expect(stripePosts("/capture")).toHaveLength(0);
+    expect(stripePosts("/cancel")).toHaveLength(0);
+    expect(await paymentRow(payment.id)).toMatchObject({ status: "authorized" });
+    expect(await bookingRow(bookingId)).toMatchObject({ status: "pending", checkout_id: checkout.id });
+    expect((await checkoutRow(checkout.id)).status).toBe("payment_pending");
   });
 });
 

@@ -23,8 +23,9 @@
 //   3. the state read is applied in one short transaction under the row's lock and with its `version`
 //      (PaymentsRepository.updatePayment, updateRefund), with a `payment_events` row (`source = webhook`) per change.
 //      The Stripe calls happen outside any transaction (architecture §4). A dispute's transaction, whose alert
-//      references the payment's booking, locks the booking first (`FOR KEY SHARE`), then the payment: the lock order of
-//      a transaction that locks both (OADR-0003 point 11).
+//      references the payment's booking, locks the booking first (`FOR KEY SHARE`), then the payment, and a refund
+//      event's transaction the payment, then its refunds: the lock order checkout, booking, payment, refund
+//      (OADR-0003 point 11).
 //
 // An object whose metadata names another tenant, environment or payment is a security event (logged without the
 // object) and changes nothing. A Stripe failure that can pass (connection, timeout, 5xx, rate limit) fails the job for
@@ -344,7 +345,11 @@ export class StripeEventHandler {
     });
   }
 
-  /** Applies the refunds and the charge's amounts under the rows' locks and with their `version`. */
+  /**
+   * Applies the refunds and the charge's amounts under the rows' locks and with their `version`: the payment first,
+   * then its refunds (lead decision of 2026-10-21, OADR-0003 point 11: checkout, booking, payment, refund), as
+   * `refund.submit` takes them (RefundsRepository.lockParents).
+   */
   private async applyRefunds(
     stored: StoredEvent,
     refunds: readonly ProviderRefund[],

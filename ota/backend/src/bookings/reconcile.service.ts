@@ -16,38 +16,51 @@
 // reconciled like any unknown outcome: the order may exist, so it is looked for first, and voided only once it is
 // proven absent. A younger claim is left alone, as its request may still be in flight.
 //
-// A transaction here that locks the booking and its payment locks the booking first, then the payment (OADR-0003
-// point 11). One attempt:
+// The lock order (lead decision of 2026-10-21, OADR-0003 point 11): a transaction here that locks several of a checkout,
+// a booking, a payment and a refund locks them in that order, and a foreign-key lock (the FOR KEY SHARE an insert of a
+// row that references a parent takes) counts as a lock of the parent. One attempt:
 //
 //   1. Claim (T1). The booking is locked `FOR UPDATE SKIP LOCKED` and checked again, whatever the job said: `pending`,
 //      `reconcile_until` set, no `reconcile_outcome`, its order sent at least RECONCILE_FIRST_DELAY_MS ago, and no
 //      other attempt within RECONCILE_CLAIM_GAP_MS (`updated_at` of the last claim), so two jobs of one minute make one
 //      search. The claim writes `reconcile_attempts + 1` (the attempt's fencing token) and commits.
 //   2. Search. Without a booking queue (`storefront_settings.booking_queue_number`) the order cannot be looked for.
-//      Otherwise Queue List of the booking queue in the booking's queuing office, then the PNRs created between
-//      `create_order_started_at − 1 min` and `+ 5 min` (Queue List gives the minute, read in UTC) whose travellers'
-//      names include the lead traveller's last name, the closest in time first, at most RECONCILE_MAX_READS of them read
-//      by record locator (Get Flight Order by Record Locator). An order is accepted only when it carries the general
-//      remark `VELEXIS <reference>` with sub-type BACKOFFICE: a name alone never is. A read Amadeus answers `404`
-//      (cancelled, purged) is a PNR that is not ours; any other failed read makes the search incomplete.
+//      Otherwise Queue List of the booking queue in the booking's queuing office (at most RECONCILE_QUEUE_LIST_MAX
+//      PNRs), then every PNR created between `create_order_started_at − 1 min` and `+ 5 min` (Queue List gives the
+//      minute, read in UTC) whose travellers' names include the lead traveller's last name, the closest in time first,
+//      read by record locator (Get Flight Order by Record Locator), at most RECONCILE_MAX_READS per attempt (`readSlice`:
+//      the next attempt reads the next ones). An order is accepted only when it carries the general remark
+//      `VELEXIS <reference>` with sub-type BACKOFFICE: a name alone never is. A read Amadeus answers `404` (cancelled,
+//      purged) is a PNR that is not ours. A search that could not read every PNR that may be the order is incomplete
+//      (SearchGap, lead decision of 2026-10-21, third batch): Queue List failed, answered something else than a list,
+//      or may have left PNRs out (it holds RECONCILE_QUEUE_LIST_MAX of them, or its `meta.count` says more); an entry
+//      that may be the order has no record locator or no readable names (it is not read: without the lead's name it
+//      may be any other PNR of the queue); the cap was reached; a read failed or timed out; or the order with the
+//      remark cannot be read. An incomplete search never proves the order absent.
 //   3. Decide (T2), with the booking locked again and still `pending` without an outcome:
 //      - found: the order is recorded as checkout.complete records it (order-recorder.ts: `confirmed` or `ticketed`,
 //        children, events, the `booking.confirmed` e-mail), `reconcile_outcome = found`, the checkout `completed`
-//        (which releases its lock); then the money: the Stripe capture `pi:capture:<pay_id>:<amount>` (not for the
-//        `manual_review` policy without tickets, whose staff are alerted), a failed capture handled as checkout.complete
-//        handles it (`manual_review`, `payment.capture_retry` 10 minutes later, staff alert); then, for
-//        `issue_after_payment`, the issuance through the ticketing job's own attempt (ticketing.service.ts: a resync
-//        first, then Flight Order Issue), its next attempt set to now so the ticketing scan takes it over when needed;
+//        (which releases its lock), the checkout locked before the booking; then the money: the Stripe capture
+//        `pi:capture:<pay_id>:<amount>` of the booking's total, which checkout.complete records before Flight Create
+//        Orders (the priced offer the order was sent from, a re-price included) and never more than the authorisation
+//        (not for the `manual_review` policy without tickets, whose staff are alerted), a failed capture handled as
+//        checkout.complete handles it (`manual_review`, `payment.capture_retry` 10 minutes later, staff alert); then,
+//        for `issue_after_payment`, the issuance through the ticketing job's own attempt (ticketing.service.ts: a
+//        resync first, then Flight Order Issue), its next attempt set to now so the ticketing scan takes it over when
+//        needed;
 //      - not found by `reconcile_until` (a complete search of an attempt claimed at or after it found nothing; or,
-//        without a booking queue, simply once it passed), and only when the attempt still holds its claim: the booking
-//        `failed` (`failure_code = SUPPLIER_TIMEOUT`, `reconcile_outcome = not_found`, `checkout_id` cleared), the
-//        checkout reopened (`open`, or `expired` past its expiry), `payment.void` of its Stripe authorisation queued on
-//        `ota-payments` after the commit (payments.processor.ts voids it, `pi:cancel:<pay_id>`), the e-mail
-//        `booking.not_confirmed` to the traveller and a staff alert (`staff.manual_review`; "check the office by hand"
-//        without a booking queue);
-//      - anything else waits for the next attempt: a search that found nothing before `reconcile_until`, or one that
-//        could not be completed (past `reconcile_until` the staff are alerted once, and nothing is voided while the
-//        order may still be in what could not be read).
+//        without a booking queue, simply once it passed), and only when the attempt still holds its claim: the checkout,
+//        the booking and its payments locked in that order, the booking `failed` (`failure_code = SUPPLIER_TIMEOUT`,
+//        `reconcile_outcome = not_found`, `checkout_id` cleared), the checkout reopened (`open`, or `expired` past its
+//        expiry), `payment.void` of its Stripe authorisation queued on `ota-payments` after the commit
+//        (payments.processor.ts voids it, `pi:cancel:<pay_id>`), the e-mail `booking.not_confirmed` to the traveller and
+//        a staff alert (`staff.manual_review`; "check the office by hand" without a booking queue);
+//      - undecided at `reconcile_until` (the search of an attempt claimed at or after it was incomplete), only while the
+//        attempt still holds its claim: OADR-0003 point 5's manual review, nothing voided: the booking stays `pending`
+//        with its checkout and authorisation, `reconcile_outcome = manual_review`, `ticketing_status = manual_review`,
+//        the staff event `booking.reconcile_manual_review` and a staff alert; the scan stops, the staff decide;
+//      - anything else waits for the next attempt: a search before `reconcile_until` that found nothing, or that was
+//        incomplete.
 //    An airline-card booking is recorded when found but never failed automatically: OBE-051 adds its manual review.
 //
 // Log lines carry ids, attempt numbers, counts and codes, never a name, a record locator of another booking or a body.
@@ -81,7 +94,7 @@ import {
   type PaymentGateway,
 } from "../payments/payment-gateway";
 import { providerStateUpdate } from "../payments/payment-state";
-import { PAYMENT_JOB, paymentJob } from "../payments/payments.processor";
+import { captureAmountOf, PAYMENT_JOB, paymentJob } from "../payments/payments.processor";
 import { PaymentsRepository, type PaymentRow } from "../payments/payments.repository";
 import { Money } from "../pricing/pricing.types";
 import { parseOffer, type ParsedOffer } from "../shopping/offers.mapper";
@@ -119,6 +132,12 @@ export const RECONCILE_ADOPT_AFTER_MS = 2 * 60_000;
 export const RECONCILE_ADOPTED_EVENT = "booking.reconcile_adopted";
 
 /**
+ * The event of a booking whose search was still incomplete at `reconcile_until` (`booking_events.type`, staff only):
+ * `reconcile_outcome = manual_review`, the staff decide.
+ */
+export const RECONCILE_MANUAL_REVIEW_EVENT = "booking.reconcile_manual_review";
+
+/**
  * The shortest time between two attempts of one booking: the first job and a scan job of the same minute, or two
  * scans, make one search. Shorter than the scan's minute, so the cadence stays one attempt per minute.
  */
@@ -129,8 +148,20 @@ export const RECONCILE_CREATED_BEFORE_MS = 60_000;
 /** … to this long after. */
 export const RECONCILE_CREATED_AFTER_MS = 5 * 60_000;
 
-/** By-reference reads of one attempt, at most. */
-export const RECONCILE_MAX_READS = 3;
+/**
+ * By-reference reads of one attempt, at most: a safety cap far above the candidates of a booking queue (the PNRs of
+ * one lead last name created within six minutes). An attempt that has more candidates reads this many and is
+ * incomplete; the next attempt reads the next ones (`readSlice`). Before the lead decision of 2026-10-21 (third
+ * batch) an attempt read three, so a fourth PNR of the same minute could stay unread and the order be voided.
+ */
+export const RECONCILE_MAX_READS = 50;
+
+/**
+ * The `max` of the reconciliation's Queue List: an answer that holds this many PNRs, or whose `meta.count` says the
+ * queue holds more than it lists, may have left the order out, so its search is incomplete (an assumption to confirm
+ * with Amadeus with the queue convention, OADR-0003 follow-ups).
+ */
+export const RECONCILE_QUEUE_LIST_MAX = 500;
 
 /** When `payment.capture_retry` runs after a failed capture (OADR-0008 point 7). */
 export const CAPTURE_RETRY_DELAY_MS = 10 * 60_000;
@@ -221,8 +252,61 @@ export function reconcileJob(
 /** A PNR of Queue List worth reading by record locator. */
 export interface QueueCandidate {
   readonly recordLocator: string;
-  /** Its creation, to the minute, as Queue List gives it. */
-  readonly createdAt: Date;
+  /** Its creation, to the minute, as Queue List gives it; `null` when the entry's creation cannot be read. */
+  readonly createdAt: Date | null;
+}
+
+/** What a Queue List answer says about the booking's order (`queueCandidates`). */
+export interface QueueCandidates {
+  /**
+   * Every PNR that may be the order, each record locator once: created within the window, or at a time that cannot be
+   * read, with a traveller of the lead's last name; the closest in time first, those of an unknown time last.
+   */
+  readonly candidates: readonly QueueCandidate[];
+  /**
+   * Entries that may be the order but are not read: within the window (or of an unknown time), with the lead's last
+   * name but no record locator, or whose travellers' names cannot be read (without the lead's name, any other PNR).
+   */
+  readonly unreadable: number;
+  /** The answer may list fewer PNRs than the queue holds (RECONCILE_QUEUE_LIST_MAX, `meta.count`). */
+  readonly truncated: boolean;
+}
+
+/** Why a search could not read every PNR that may be the order: it never proves the order absent. */
+export type SearchGap =
+  /** Queue List failed (no answer, a refusal, a timeout). */
+  | "queue_failed"
+  /** Queue List answered something that is not a list of PNRs. */
+  | "queue_unreadable"
+  /** Queue List may have left PNRs out (RECONCILE_QUEUE_LIST_MAX, `meta.count`). */
+  | "queue_truncated"
+  /** The booking has no lead last name to match the PNRs with. */
+  | "lead_unknown"
+  /** A PNR that may be the order is not read: no record locator or no readable names (`QueueCandidates.unreadable`). */
+  | "candidate_unreadable"
+  /** More candidates than RECONCILE_MAX_READS: the next attempt reads the next ones. */
+  | "read_cap"
+  /** A by-reference read failed or timed out (other than a `404`). */
+  | "read_failed"
+  /** A PNR carries the booking's remark but its order cannot be read: it exists, so the booking is never failed. */
+  | "order_unreadable";
+
+/** `meta.count` of a Queue List answer, a number or a decimal string (the specification's example); else `undefined`. */
+function queueCountOf(meta: unknown): number | undefined {
+  const count = isRecord(meta) ? meta["count"] : undefined;
+  if (typeof count === "number" && Number.isInteger(count) && count >= 0) {
+    return count;
+  }
+  return typeof count === "string" && /^\d{1,9}$/.test(count) ? Number(count) : undefined;
+}
+
+/** The last names of a Queue List entry's travellers, or `undefined` when it names none that can be read. */
+function queueLastNamesOf(entry: JsonObject): string[] | undefined {
+  const names = records(entry["travelers"])
+    .flatMap((traveler) => records(traveler["names"]))
+    .map((name) => comparableName(name["lastName"]))
+    .filter((name) => name !== "");
+  return names.length > 0 ? names : undefined;
 }
 
 /** A name as compared: no accents, upper case, letters only (`Müller-Lüdenscheidt` → `MULLERLUDENSCHEIDT`). */
@@ -264,45 +348,99 @@ export function queueRecordLocatorOf(entry: JsonObject): string | undefined {
 
 /**
  * The PNRs of a Queue List answer that may be the booking's order (see the file header): created within the window
- * around `startedAt` (the entry's minute counts from its start), with a traveller of the lead's last name, the closest
- * in time first, each record locator once, at most RECONCILE_MAX_READS.
+ * around `startedAt` (the entry's minute counts from its start), or at a time that cannot be read, with a traveller of
+ * the lead's last name; every one of them, the closest in time first, each record locator once (lead decision of
+ * 2026-10-21, third batch: an order is never left unread because others of its minute came first). The entries that
+ * may be the order but cannot be read, and whether the answer may be truncated (it holds `max` PNRs, or its
+ * `meta.count` says more), are counted, so the search can tell that it is incomplete. `undefined` when the answer is
+ * not a list of PNRs, or the booking has no lead last name to match.
  */
 export function queueCandidates(
   reply: unknown,
   booking: { readonly startedAt: Date; readonly leadLastName: string },
-): QueueCandidate[] {
+  max: number = RECONCILE_QUEUE_LIST_MAX,
+): QueueCandidates | undefined {
   const lead = comparableName(booking.leadLastName);
-  if (lead === "") {
-    return [];
+  if (lead === "" || !isRecord(reply) || !Array.isArray(reply["data"])) {
+    return undefined;
   }
+  const data: readonly unknown[] = reply["data"];
+  const count = queueCountOf(reply["meta"]);
+  const truncated = data.length >= max || (count !== undefined && count > data.length);
   const started = booking.startedAt.getTime();
   // The minute Queue List gives starts up to 59 s before the PNR was created.
   const earliest = Math.floor((started - RECONCILE_CREATED_BEFORE_MS) / 60_000) * 60_000;
   const latest = started + RECONCILE_CREATED_AFTER_MS;
   const found = new Map<string, QueueCandidate>();
-  for (const entry of records(isRecord(reply) ? reply["data"] : undefined)) {
-    const recordLocator = queueRecordLocatorOf(entry);
-    const createdAt = queueCreationOf(entry);
-    if (recordLocator === undefined || createdAt === undefined || found.has(recordLocator)) {
+  let unreadable = 0;
+  for (const item of data) {
+    if (!isRecord(item)) {
+      // Nothing of it can be read, its time and names included: it may be the order.
+      unreadable += 1;
       continue;
     }
-    if (createdAt.getTime() < earliest || createdAt.getTime() > latest) {
+    const createdAt = queueCreationOf(item) ?? null;
+    if (createdAt !== null && (createdAt.getTime() < earliest || createdAt.getTime() > latest)) {
       continue;
     }
-    const named = records(entry["travelers"]).some((traveler) =>
-      records(traveler["names"]).some((name) => comparableName(name["lastName"]) === lead),
-    );
-    if (named) {
+    const names = queueLastNamesOf(item);
+    if (names !== undefined && !names.includes(lead)) {
+      continue;
+    }
+    const recordLocator = queueRecordLocatorOf(item);
+    if (names === undefined || recordLocator === undefined) {
+      unreadable += 1;
+      continue;
+    }
+    const known = found.get(recordLocator);
+    if (known === undefined || (known.createdAt === null && createdAt !== null)) {
       found.set(recordLocator, { recordLocator, createdAt });
     }
   }
-  return [...found.values()]
-    .sort(
-      (a, b) =>
-        Math.abs(a.createdAt.getTime() - started) - Math.abs(b.createdAt.getTime() - started) ||
-        a.recordLocator.localeCompare(b.recordLocator),
-    )
-    .slice(0, RECONCILE_MAX_READS);
+  const distance = (candidate: QueueCandidate): number =>
+    candidate.createdAt === null
+      ? Number.POSITIVE_INFINITY
+      : Math.abs(candidate.createdAt.getTime() - started);
+  const candidates = [...found.values()].sort((a, b) => {
+    const da = distance(a);
+    const db = distance(b);
+    return da === db ? a.recordLocator.localeCompare(b.recordLocator) : da < db ? -1 : 1;
+  });
+  return { candidates, unreadable, truncated };
+}
+
+/**
+ * The candidates an attempt reads (lead decision of 2026-10-21, third batch): all of them when they are at most
+ * `cap`; otherwise `cap` of them, the reads of attempt `n` starting where attempt `n − 1` stopped in the ordered list
+ * (from `(n − 1) × cap`, wrapping round), so that the attempts read the candidates in turns. Such an attempt has not
+ * read every candidate: it is incomplete and never proves the order absent.
+ */
+export function readSlice<T>(
+  candidates: readonly T[],
+  attempt: number,
+  cap: number = RECONCILE_MAX_READS,
+): readonly T[] {
+  if (candidates.length <= cap) {
+    return candidates;
+  }
+  const start = (Math.max(0, attempt - 1) * cap) % candidates.length;
+  return [...candidates.slice(start), ...candidates.slice(0, start)].slice(0, cap);
+}
+
+/**
+ * Why a Queue List answer leaves an attempt's search incomplete whatever its reads find (lead decision of 2026-10-21,
+ * third batch): the answer may have left PNRs out, an entry that may be the order is not read (no record locator or
+ * no readable names), or the attempt reads (`reads`, its `readSlice`) fewer candidates than there are; `undefined`
+ * when every PNR that may be the order is among the reads.
+ */
+export function listedGap(listed: QueueCandidates, reads: number): SearchGap | undefined {
+  if (listed.truncated) {
+    return "queue_truncated";
+  }
+  if (listed.unreadable > 0) {
+    return "candidate_unreadable";
+  }
+  return reads < listed.candidates.length ? "read_cap" : undefined;
 }
 
 /** A remark text as compared: upper case, single spaces, trimmed. */
@@ -576,7 +714,10 @@ export type ReconcileWait =
   | "not_found_yet"
   /** No booking queue, before `reconcile_until`: nothing to search. */
   | "no_queue"
-  /** Queue List or a read failed, or an order with the remark could not be read: the next attempt looks again. */
+  /**
+   * Before `reconcile_until`, a search that could not read every PNR that may be the order (SearchGap): the next
+   * attempt looks again.
+   */
   | "search_incomplete"
   /** Not found, but the booking is paid by airline card: no automatic failure (OBE-051 adds the manual review). */
   | "airline_card"
@@ -595,6 +736,11 @@ export type ReconcileOutcome =
       readonly ticketing: string | null;
     }
   | { readonly outcome: "not_found"; readonly attempts: number; readonly voids: number }
+  /**
+   * The search at `reconcile_until` was still incomplete: the booking stays `pending` with its authorisation and
+   * `reconcile_outcome = manual_review`, and the staff decide (OADR-0003 point 5).
+   */
+  | { readonly outcome: "manual_review"; readonly attempts: number; readonly gap: SearchGap }
   /** Decided meanwhile by another attempt or by staff, or another attempt claimed it since: nothing written. */
   | { readonly outcome: "decided_elsewhere" | "claim_lost"; readonly attempts: number };
 
@@ -613,8 +759,19 @@ interface Claim {
 /** What a search found. */
 type SearchResult =
   | { readonly kind: "found"; readonly order: CreatedOrder; readonly supplierRequestId: string | null }
+  /** Every PNR that may be the order was read, and none carries the booking's remark: the order is absent. */
   | { readonly kind: "absent"; readonly candidates: number }
-  | { readonly kind: "incomplete"; readonly code: string }
+  /**
+   * Not every PNR that may be the order could be read (`gap`, with the API code of a failed call): proves nothing.
+   * `candidates` and `read` count the PNRs worth reading and those read.
+   */
+  | {
+      readonly kind: "incomplete";
+      readonly gap: SearchGap;
+      readonly code: string;
+      readonly candidates: number;
+      readonly read: number;
+    }
   | { readonly kind: "no_queue" };
 
 /** The API code of a failed call: an AppError's code, `INTERNAL_ERROR` for anything else (a bug). */
@@ -649,18 +806,23 @@ export function reconcileClaimSkip(row: ReconcileBookingRow, now: Date): Reconci
   return undefined;
 }
 
-/** The decision an attempt takes after its search (see the file header). */
+/**
+ * The decision an attempt takes after its search (see the file header): a found order is recorded; before
+ * `reconcile_until` anything else waits for the next attempt; at or after it, a complete search that found nothing
+ * (or the lack of a booking queue, OADR-0003 point 5) fails the booking and voids, and an incomplete one goes to the
+ * staff's review (lead decision of 2026-10-21, third batch: an incomplete search never proves the order absent).
+ */
 export function reconcileDecision(
   search: SearchResult["kind"],
   pastDeadline: boolean,
-): "record" | "fail" | "wait" {
+): "record" | "fail" | "review" | "wait" {
   if (search === "found") {
     return "record";
   }
-  if (search === "incomplete" || !pastDeadline) {
+  if (!pastDeadline) {
     return "wait";
   }
-  return "fail";
+  return search === "incomplete" ? "review" : "fail";
 }
 
 /** Runs one reconciliation attempt of a booking (see the file header). */
@@ -714,7 +876,9 @@ export class ReconcileService {
         attempt: claim.attempts,
         search: search.kind,
         ...(search.kind === "absent" ? { candidates: search.candidates } : {}),
-        ...(search.kind === "incomplete" ? { code: search.code } : {}),
+        ...(search.kind === "incomplete"
+          ? { gap: search.gap, code: search.code, candidates: search.candidates, read: search.read }
+          : {}),
         pastDeadline,
       },
       "bookings.reconcile_searched",
@@ -726,17 +890,11 @@ export class ReconcileService {
           : { outcome: "pending", attempts: claim.attempts, reason: "search_incomplete" };
       case "fail":
         return await this.failNotFound(tenant, claim, settings, search.kind === "no_queue", requestId);
+      case "review":
+        return search.kind === "incomplete"
+          ? await this.manualReview(tenant, claim, settings, search, requestId)
+          : { outcome: "pending", attempts: claim.attempts, reason: "search_incomplete" };
       case "wait":
-        if (search.kind === "incomplete" && pastDeadline) {
-          await this.tx.run((trx) =>
-            this.staffAlert(trx, tenant, claim.booking, settings, "reconcile_search_failed", {
-              reason:
-                `Amadeus did not confirm booking ${claim.booking.reference} and the reconciliation cannot read the ` +
-                `booking queue or its orders (${search.code}); it keeps trying. Look for the order in the office: ` +
-                "the payment is neither captured nor voided until the order is found or proven absent.",
-            }),
-          );
-        }
         return {
           outcome: "pending",
           attempts: claim.attempts,
@@ -796,6 +954,18 @@ export class ReconcileService {
     if (queue === null) {
       return { kind: "no_queue" };
     }
+    const incomplete = (gap: SearchGap, code: string, candidates = 0, read = 0): SearchResult => ({
+      kind: "incomplete",
+      gap,
+      code,
+      candidates,
+      read,
+    });
+    if (comparableName(claim.booking.leadLastName) === "") {
+      // No name to match a PNR with: nothing can be proven absent.
+      this.logger.error({ bookingId: claim.booking.id }, "bookings.reconcile_lead_unknown");
+      return incomplete("lead_unknown", "INTERNAL_ERROR");
+    }
     const context: AmadeusCallContext = {
       tenantId: tenant.id,
       environment: claim.environment,
@@ -803,26 +973,38 @@ export class ReconcileService {
       requestId,
       bookingId: claim.booking.id,
     };
-    let candidates: QueueCandidate[];
+    let listed: QueueCandidates | undefined;
     try {
-      const listed = await this.amadeus.listQueue(context, {
+      const reply = await this.amadeus.listQueue(context, {
         queueId: queue,
         query: {
           category: settings?.bookingQueueCategory ?? 0,
+          max: RECONCILE_QUEUE_LIST_MAX,
           ...(claim.booking.queuingOfficeId === null ? {} : { officeId: claim.booking.queuingOfficeId }),
         },
       });
-      candidates = queueCandidates(listed.body, {
+      listed = queueCandidates(reply.body, {
         startedAt: claim.startedAt,
         leadLastName: claim.booking.leadLastName,
       });
     } catch (error) {
       const code = codeOf(error);
       this.logger.warn({ bookingId: claim.booking.id, code }, "bookings.reconcile_queue_failed");
-      return { kind: "incomplete", code };
+      return incomplete("queue_failed", code);
     }
-    let incomplete: string | undefined;
-    for (const candidate of candidates) {
+    if (listed === undefined) {
+      this.logger.warn({ bookingId: claim.booking.id }, "bookings.reconcile_queue_unreadable");
+      return incomplete("queue_unreadable", "SUPPLIER_ERROR");
+    }
+    const { candidates } = listed;
+    const reads = readSlice(candidates, claim.attempts);
+    // What makes the search incomplete, the first gap seen; every PNR read is still read (it may be the order).
+    const listGap = listedGap(listed, reads.length);
+    let gap: { readonly gap: SearchGap; readonly code: string } | undefined =
+      listGap === undefined ? undefined : { gap: listGap, code: "SUPPLIER_ERROR" };
+    let read = 0;
+    for (const candidate of reads) {
+      read += 1;
       try {
         const reply = await this.amadeus.getFlightOrderByReference(context, {
           query: { reference: candidate.recordLocator, originSystemCode: ORIGIN_SYSTEM_CODE },
@@ -831,21 +1013,35 @@ export class ReconcileService {
         if (order === null) {
           // The order exists but cannot be recorded: never failed for it.
           this.logger.error({ bookingId: claim.booking.id }, "bookings.reconcile_order_unreadable");
-          incomplete ??= "SUPPLIER_ERROR";
+          gap ??= { gap: "order_unreadable", code: "SUPPLIER_ERROR" };
         } else if (order !== undefined) {
           return { kind: "found", order, supplierRequestId: reply.call.supplierRequestId };
         }
       } catch (error) {
         if (!isNotFound(error)) {
+          // A refusal, a timeout or no answer: what was not read may be the order.
           const code = codeOf(error);
           this.logger.warn({ bookingId: claim.booking.id, code }, "bookings.reconcile_read_failed");
-          incomplete ??= code;
+          gap ??= { gap: "read_failed", code };
         }
       }
     }
-    return incomplete === undefined
-      ? { kind: "absent", candidates: candidates.length }
-      : { kind: "incomplete", code: incomplete };
+    if (gap !== undefined) {
+      if (listGap !== undefined) {
+        this.logger.warn(
+          {
+            bookingId: claim.booking.id,
+            gap: gap.gap,
+            candidates: candidates.length,
+            unreadable: listed.unreadable,
+            read,
+          },
+          "bookings.reconcile_search_partial",
+        );
+      }
+      return incomplete(gap.gap, gap.code, candidates.length, read);
+    }
+    return { kind: "absent", candidates: candidates.length };
   }
 
   // ---- Step 3: found -----------------------------------------------------------------------------------------------
@@ -883,8 +1079,14 @@ export class ReconcileService {
     try {
       recorded = await this.tx.run(async (trx) => {
         const now = this.clock.now();
+        // The lock order: the checkout, then the booking (lead decision of 2026-10-21, OADR-0003 point 11).
+        await this.checkouts.checkout(trx, checkoutId, true);
         const current = await this.repository.lock(trx, id, { skipLocked: false });
-        if (current?.status !== "pending" || current.reconcileOutcome !== null) {
+        if (
+          current?.status !== "pending" ||
+          current.reconcileOutcome !== null ||
+          current.checkoutId !== checkoutId
+        ) {
           return undefined;
         }
         const booking = await this.bookings.booking(trx, id);
@@ -1022,7 +1224,16 @@ export class ReconcileService {
     }
     const { booking, payment, minorUnits } = read;
     const ctx: GatewayContext = { tenantId: tenant.id, environment: claim.environment, requestId };
-    const amount = new Money(booking.totalAmount).toFixed(minorUnits);
+    // The total of the priced offer the order was sent from, which checkout.complete records on the booking before it
+    // sends Flight Create Orders (a re-price included, lead decision of 2026-10-21, third batch), and never more than
+    // the authorisation (`captureAmountOf`: a total above it captures the amount authorised).
+    const amount = captureAmountOf(booking.totalAmount, payment, minorUnits);
+    if (!new Money(amount).equals(booking.totalAmount)) {
+      this.logger.error(
+        { bookingId: id, paymentId: payment.id, total: booking.totalAmount, captured: amount },
+        "bookings.reconcile_total_above_authorisation",
+      );
+    }
     let state: GatewayState | undefined;
     if (payment.status !== "captured") {
       try {
@@ -1153,10 +1364,18 @@ export class ReconcileService {
     requestId: string,
   ): Promise<ReconcileOutcome> {
     const id = claim.booking.id;
+    const checkoutId = claim.booking.checkoutId;
     const decided = await this.tx.run(async (trx): Promise<ReconcileOutcome> => {
       const now = this.clock.now();
+      // The lock order of the claim: the checkout, then the booking, then its payments (lead decision of 2026-10-21,
+      // OADR-0003 point 11). Before FIX-W25-BOOKINGS the checkout came last, after the booking and the payments.
+      const checkout = checkoutId === null ? undefined : await this.checkouts.checkout(trx, checkoutId, true);
       const current = await this.repository.lock(trx, id, { skipLocked: false });
-      if (current?.status !== "pending" || current.reconcileOutcome !== null) {
+      if (
+        current?.status !== "pending" ||
+        current.reconcileOutcome !== null ||
+        current.checkoutId !== checkoutId
+      ) {
         return { outcome: "decided_elsewhere", attempts: claim.attempts };
       }
       if (current.reconcileAttempts !== claim.attempts) {
@@ -1212,10 +1431,6 @@ export class ReconcileService {
         requestId,
         now: new Date(now.getTime() + 1),
       });
-      const checkout =
-        current.checkoutId === null
-          ? undefined
-          : await this.checkouts.checkout(trx, current.checkoutId, true);
       if (checkout !== undefined && (checkout.status === "open" || checkout.status === "payment_pending")) {
         // The checkout can be completed again (with a new payment) while it has not expired.
         await this.bookings.updateCheckout(trx, checkout.id, {
@@ -1268,6 +1483,81 @@ export class ReconcileService {
         "bookings.reconcile_not_decided",
       );
     }
+    return decided;
+  }
+
+  // ---- Step 3: undecided ---------------------------------------------------------------------------------------
+
+  /**
+   * The search of an attempt claimed at or after `reconcile_until` could not read every PNR that may be the order
+   * (lead decision of 2026-10-21, third batch): the order may exist, so nothing is voided. As OADR-0003 point 5 settles
+   * an order the reconciliation cannot decide, the booking stays `pending` with its checkout (still locked) and its
+   * authorisation, gets `reconcile_outcome = manual_review` and `ticketing_status = manual_review` (the console's
+   * "needs attention" list; the scan stops), the staff event `booking.reconcile_manual_review` and a staff alert; only
+   * while the attempt still holds its claim. The staff look for the order in the office and decide.
+   */
+  private async manualReview(
+    tenant: PlatformTenant,
+    claim: Claim,
+    settings: BookingSettingsRow | undefined,
+    search: Extract<SearchResult, { kind: "incomplete" }>,
+    requestId: string,
+  ): Promise<ReconcileOutcome> {
+    const id = claim.booking.id;
+    const decided = await this.tx.run(async (trx): Promise<ReconcileOutcome> => {
+      const now = this.clock.now();
+      const current = await this.repository.lock(trx, id, { skipLocked: false });
+      if (current?.status !== "pending" || current.reconcileOutcome !== null) {
+        return { outcome: "decided_elsewhere", attempts: claim.attempts };
+      }
+      if (current.reconcileAttempts !== claim.attempts) {
+        return { outcome: "claim_lost", attempts: claim.attempts };
+      }
+      await this.bookings.updateBooking(trx, id, {
+        reconcile_outcome: "manual_review",
+        ticketing_status: "manual_review",
+        ticketing_next_attempt_at: null,
+        updated_at: now,
+      });
+      await this.recorder.event(trx, id, {
+        type: RECONCILE_MANUAL_REVIEW_EVENT,
+        actor: SYSTEM_ACTOR,
+        statusFrom: "pending",
+        statusTo: "pending",
+        summary:
+          `The order of booking ${current.reference} could be neither found nor proven absent by ` +
+          `${claim.until.toISOString()}; the payment authorisation is kept for the staff to decide.`,
+        data: {
+          reconcileOutcome: "manual_review",
+          attempt: claim.attempts,
+          gap: search.gap,
+          code: search.code,
+          candidates: search.candidates,
+          read: search.read,
+        },
+        visibleToCustomer: false,
+        requestId,
+        now,
+      });
+      await this.staffAlert(trx, tenant, current, settings, "reconcile_manual_review", {
+        reason:
+          `Amadeus did not confirm booking ${current.reference}, and by its deadline the reconciliation could not ` +
+          `read every order of the booking queue that may be it (${search.gap}, ${search.code}). The booking stays ` +
+          "pending and its payment is neither captured nor voided: look for the order with the remark " +
+          `VELEXIS ${current.reference} in the office and settle the booking and its payment from the console.`,
+      });
+      return { outcome: "manual_review", attempts: claim.attempts, gap: search.gap };
+    });
+    this.logger.warn(
+      {
+        tenantId: tenant.id,
+        bookingId: id,
+        attempt: claim.attempts,
+        outcome: decided.outcome,
+        gap: search.gap,
+      },
+      "bookings.reconcile_manual_review",
+    );
     return decided;
   }
 

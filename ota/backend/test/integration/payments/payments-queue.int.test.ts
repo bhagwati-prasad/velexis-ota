@@ -13,7 +13,8 @@
 //
 // FIX-W24-BOOKINGS (lead decision of 2026-10-21, OADR-0003 point 11): the capture retry, the watch and a refund request
 // lock a payment's booking before the payment, proven with a second transaction that holds the booking
-// (test/helpers/lock-order.ts).
+// (test/helpers/lock-order.ts). FIX-W25-BOOKINGS (third batch: checkout, booking, payment, refund): refund.submit's
+// transactions lock the payment before the refund, proven with a second transaction that holds the payment.
 import { randomBytes } from "node:crypto";
 import { getQueueToken } from "@nestjs/bullmq";
 import { Module, type INestApplicationContext } from "@nestjs/common";
@@ -53,7 +54,13 @@ import {
   type FakePaymentIntent,
   type FakeStripe,
 } from "../../helpers/fake-stripe";
-import { probeLockOrder, type LockOrderObservation } from "../../helpers/lock-order";
+import {
+  probeLockOrder,
+  probeRowLockOrder,
+  type LockOrderObservation,
+  type RowLockOrderObservation,
+  type RowLockOrderProbe,
+} from "../../helpers/lock-order";
 import { MemorySink } from "../../helpers/log-sink";
 import { useNextApplicationLoggerOutsideRequests } from "../../helpers/nest-pino";
 
@@ -1077,6 +1084,142 @@ describe("the lock order of a booking and its payment (FIX-W24-BOOKINGS)", () =>
       ok: true,
       refund: { bookingId: refunded.bookingId, amount: "100.00", status: "pending" },
     });
+  });
+});
+
+describe("the lock order of a refund and its payment (FIX-W25-BOOKINGS)", () => {
+  /** What a `refund.submit` job did while the probe held the refund's payment. */
+  interface Seen {
+    readonly refundId: string;
+    readonly job: Job;
+    readonly seen: RowLockOrderObservation;
+  }
+  let recorded: Seen;
+  let refused: Seen;
+  let notRefundable: Seen;
+
+  /** A captured payment of a confirmed booking, with a pending refund of 50.00 asked for through RefundsRepository. */
+  async function askedRefund(): Promise<{ readonly paymentId: string; readonly refundId: string }> {
+    const bookingId = await insertBooking();
+    const payment = await stripePayment(
+      { status: "captured", amountCaptured: "452.10", bookingId },
+      { status: "succeeded", amount_capturable: 0, amount_received: 45210 },
+    );
+    const asked = await alphaTx((trx) =>
+      refunds.create(trx, {
+        id: newId("rfd"),
+        paymentId: payment.id,
+        amount: "50.00",
+        reason: "booking_cancelled",
+        requestedBy: { type: "system", id: null },
+        now: new Date(),
+      }),
+    );
+    if (!asked.ok) {
+      throw new Error(`the refund was refused: ${asked.reason}`);
+    }
+    return { paymentId: payment.id, refundId: asked.refund.id };
+  }
+
+  /** Holds the payment, then probes the refund (test/helpers/lock-order.ts). */
+  const holdPayment = (ids: { readonly paymentId: string; readonly refundId: string }) =>
+    probeRowLockOrder(tenantDb, "tenant_alpha", {
+      held: { table: "payments", id: ids.paymentId },
+      probed: { table: "refunds", id: ids.refundId },
+    });
+
+  /**
+   * Runs `refund.submit` for the refund of `ids`; when Stripe is asked for the refund (the claim committed, no
+   * transaction open), the probe takes the payment, and Stripe answers once it holds it.
+   */
+  async function submitWhileStripeAnswers(ids: {
+    readonly paymentId: string;
+    readonly refundId: string;
+  }): Promise<Seen> {
+    let probe: RowLockOrderProbe | undefined;
+    stripe.onRequest(async (req) => {
+      if (req.method !== "POST" || req.path !== "/v1/refunds" || probe !== undefined) {
+        return;
+      }
+      probe = holdPayment(ids);
+      await probe.locked;
+    });
+    try {
+      const job = await runPaymentJob(PAYMENT_JOB.refundSubmit, ids.refundId);
+      if (probe === undefined) {
+        throw new Error("refund.submit did not call Stripe");
+      }
+      return { refundId: ids.refundId, job, seen: await probe.result };
+    } finally {
+      stripe.onRequest(undefined);
+    }
+  }
+
+  beforeAll(async () => {
+    // The record of the Stripe refund: its payment event references the payment.
+    recorded = await submitWhileStripeAnswers(await askedRefund());
+    // A refund Stripe refuses: the refund `failed`, its payment event and the staff alert.
+    const second = await askedRefund();
+    stripe.fail(1, "refused");
+    refused = await submitWhileStripeAnswers(second);
+    // A refund of a payment without a PaymentIntent (a row create() would refuse), failed by the claim itself while
+    // the probe holds the payment from before the job.
+    const bookingId = await insertBooking();
+    const paymentId = await insertPayment({
+      status: "captured",
+      amountCaptured: "452.10",
+      bookingId,
+      intentId: null,
+    });
+    const refundId = newId("rfd");
+    await alphaTx((trx) =>
+      trx
+        .insertInto("refunds")
+        .values({
+          id: refundId,
+          payment_id: paymentId,
+          booking_id: bookingId,
+          currency: "EUR",
+          amount: "50.00",
+          reason: "booking_cancelled",
+          status: "pending",
+          requested_by_type: "system",
+        })
+        .execute(),
+    );
+    const probe = holdPayment({ paymentId, refundId });
+    await probe.locked;
+    const [job, seen] = await Promise.all([runPaymentJob(PAYMENT_JOB.refundSubmit, refundId), probe.result]);
+    notRefundable = { refundId, job, seen };
+  }, SCENARIO_TIMEOUT_MS);
+
+  /** The status of a refund. */
+  const refundStatus = async (refundId: string): Promise<string> =>
+    (
+      await alphaTx((trx) =>
+        trx.selectFrom("refunds").select("status").where("id", "=", refundId).executeTakeFirstOrThrow(),
+      )
+    ).status;
+
+  it("[FIX-W25-BOOKINGS AC3] records a Stripe refund with the payment locked before the refund: the refund is free while it waits", async () => {
+    expect(recorded.seen).toEqual({ waiterSeen: true, probedFree: true });
+    expect(recorded.job.returnvalue).toMatchObject({ outcome: "applied" });
+    expect(await refundStatus(recorded.refundId)).toBe("processing");
+  });
+
+  it("[FIX-W25-BOOKINGS AC3] fails a refund Stripe refused with the payment locked before the refund", async () => {
+    expect(refused.seen).toEqual({ waiterSeen: true, probedFree: true });
+    expect(refused.job.returnvalue).toMatchObject({ outcome: "failed" });
+    expect(await refundStatus(refused.refundId)).toBe("failed");
+    expect((await alertsLike(`staff.refund:${refused.refundId}:`)).map((alert) => alert.dedupeKey)).toEqual([
+      `staff.refund:${refused.refundId}:failed`,
+    ]);
+  });
+
+  it("[FIX-W25-BOOKINGS AC3] fails a refund its claim cannot send with the payment locked before the refund", async () => {
+    expect(notRefundable.seen).toEqual({ waiterSeen: true, probedFree: true });
+    expect(notRefundable.job.returnvalue).toMatchObject({ outcome: "failed" });
+    expect(await refundStatus(notRefundable.refundId)).toBe("failed");
   });
 });
 

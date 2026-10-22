@@ -28,7 +28,10 @@
 // row without a Stripe id is a submission in flight: another job leaves it alone, unless the claim is older than
 // REFUND_CLAIM_LEASE_MS, which means the job that took it was lost (a stopped worker) and its submission may be sent
 // again, with the same idempotency key `refund:<rfd_id>`. A submission whose answer never came releases its claim (the
-// row is `pending` again) before its job is retried.
+// row is `pending` again) before its job is retried. Every transaction of the job that writes a payment event or a
+// staff alert (the claim, the record of the submission, a refusal) takes `lockParents` before the refund's lock: the
+// payment's booking and the payment first, then the refund (lead decision of 2026-10-21, OADR-0003 point 11), as the
+// webhook's transaction locks the payment, then its refunds.
 import { Injectable } from "@nestjs/common";
 import { sql, type TenantDatabase, type Updateable } from "@velexis/db";
 import { newId } from "../common/ids";
@@ -282,6 +285,36 @@ export class RefundsRepository {
       throw new Error("the refund inserted in this transaction is not readable");
     }
     return { ok: true, refund: created };
+  }
+
+  /**
+   * Takes, in a `refund.submit` transaction and before it locks the refund `id` (`refund(trx, id, true)`), the locks
+   * that transaction's writes take on the refund's parents (lead decision of 2026-10-21, OADR-0003 point 11: the
+   * checkout, the booking, the payment, then the refund, a foreign-key lock counting as a lock of the parent): the
+   * payment's booking `FOR KEY SHARE` (a staff alert's outbox row references it), then the payment `FOR KEY SHARE` (its
+   * payment events reference it). A refundable payment's booking is set before its capture and does not change after
+   * it. Before FIX-W25-BOOKINGS the job locked the refund first and took the payment's lock with its event's insert, the
+   * reverse of the webhook's order (the payment, then its refunds). Nothing for an unknown id.
+   */
+  async lockParents(trx: TenantTransaction, id: string): Promise<void> {
+    const parents = await trx
+      .selectFrom("refunds as r")
+      .innerJoin("payments as p", "p.id", "r.payment_id")
+      .select(["p.id as paymentId", "p.booking_id as bookingId"])
+      .where("r.id", "=", id)
+      .executeTakeFirst();
+    if (parents === undefined) {
+      return;
+    }
+    if (parents.bookingId !== null) {
+      await trx
+        .selectFrom("bookings")
+        .select("id")
+        .where("id", "=", parents.bookingId)
+        .forKeyShare()
+        .execute();
+    }
+    await trx.selectFrom("payments").select("id").where("id", "=", parents.paymentId).forKeyShare().execute();
   }
 
   /** The refund `id`, locked `FOR UPDATE` when `lock`; `undefined` for an unknown id. */

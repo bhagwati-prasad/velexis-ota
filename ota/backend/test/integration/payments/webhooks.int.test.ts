@@ -12,7 +12,9 @@
 // Stripe's own `generateTestHeaderString`). The platform rows are written as the platform does (velexis_migrator), the
 // payments, refunds and storefront settings straight into `tenant_alpha`. Each scenario runs in its `beforeAll` hook,
 // which delivers and waits for the worker with a budget of its own; its tests read what it left. Every answer is checked
-// against the OTA document (`expectResponseToMatch`).
+// against the OTA document (`expectResponseToMatch`). FIX-W25-BOOKINGS (lead decision of 2026-10-21: checkout, booking,
+// payment, refund): a refund event's transaction locks the payment before its refunds, proven with a second
+// transaction that holds the payment (test/helpers/lock-order.ts).
 import { randomBytes } from "node:crypto";
 import { getQueueToken } from "@nestjs/bullmq";
 import { Module, type INestApplicationContext } from "@nestjs/common";
@@ -52,6 +54,11 @@ import {
   type FakePaymentIntent,
   type FakeStripe,
 } from "../../helpers/fake-stripe";
+import {
+  probeRowLockOrder,
+  type RowLockOrderObservation,
+  type RowLockOrderProbe,
+} from "../../helpers/lock-order";
 import { MemorySink } from "../../helpers/log-sink";
 import { useNextApplicationLoggerOutsideRequests } from "../../helpers/nest-pino";
 import { OPENAPI_SETUP_TIMEOUT_MS, preloadOpenApiDocument } from "../../helpers/openapi";
@@ -872,6 +879,101 @@ describe("refunds", () => {
         "payment.captured",
       ]),
     );
+  });
+});
+
+describe("the lock order of a refund event (FIX-W25-BOOKINGS)", () => {
+  let paymentId: string;
+  let refundId: string;
+  let seen: RowLockOrderObservation | undefined;
+  let job: Job;
+
+  beforeAll(async () => {
+    const intentId = stripeId("pi");
+    const chargeId = stripeId("ch");
+    const providerRefundId = stripeId("re");
+    paymentId = await insertPayment({
+      status: "captured",
+      intentId,
+      amountAuthorized: "452.10",
+      amountCaptured: "452.10",
+    });
+    refundId = newId("rfd");
+    await alphaTx(async (trx) => {
+      await trx
+        .insertInto("refunds")
+        .values({
+          id: refundId,
+          payment_id: paymentId,
+          currency: "EUR",
+          amount: "50.00",
+          reason: "customer_request",
+          status: "processing",
+          provider_refund_id: providerRefundId,
+          requested_by_type: "customer",
+        })
+        .execute();
+    });
+    putIntent(intentId, paymentId, { status: "succeeded", amount_received: 45210 });
+    stripe.charges.set(chargeId, {
+      id: chargeId,
+      object: "charge",
+      payment_intent: intentId,
+      amount: 45210,
+      amount_captured: 45210,
+      amount_refunded: 5000,
+      currency: "eur",
+      metadata: metadataOf(paymentId),
+    });
+    stripe.refunds.set(providerRefundId, {
+      id: providerRefundId,
+      object: "refund",
+      charge: chargeId,
+      payment_intent: intentId,
+      amount: 5000,
+      currency: "eur",
+      status: "succeeded",
+      failure_reason: null,
+      metadata: { ...metadataOf(paymentId), refund_id: refundId },
+    });
+    // When the worker lists the charge's refunds (its last read, no transaction open), the probe takes the payment;
+    // the transaction that applies them must wait for it holding nothing of the refund.
+    let probe: RowLockOrderProbe | undefined;
+    stripe.onRequest(async (req) => {
+      if (req.method !== "GET" || req.path !== "/v1/refunds" || probe !== undefined) {
+        return;
+      }
+      probe = probeRowLockOrder(tenantDb, "tenant_alpha", {
+        held: { table: "payments", id: paymentId },
+        probed: { table: "refunds", id: refundId },
+      });
+      await probe.locked;
+    });
+    try {
+      const eventId = stripeId("evt");
+      const refunded = signedStripeEvent(
+        "charge.refunded",
+        {
+          id: eventId,
+          data: { object: { id: chargeId, payment_intent: intentId, metadata: metadataOf(paymentId) } },
+        },
+        SECRET,
+      );
+      expect((await deliver(refunded.payload, refunded.header)).status).toBe(200);
+      job = await finishedJob(eventId);
+      seen = await probe?.result;
+    } finally {
+      stripe.onRequest(undefined);
+    }
+  }, SCENARIO_TIMEOUT_MS);
+
+  it("[FIX-W25-BOOKINGS AC3] applies the refunds with the payment locked before them: the refund is free while it waits", async () => {
+    expect(seen).toEqual({ waiterSeen: true, probedFree: true });
+    expect(job.returnvalue).toMatchObject({ outcome: "applied" });
+    expect(await paymentOf(paymentId)).toMatchObject({
+      status: "partially_refunded",
+      amountRefunded: "50.00",
+    });
   });
 });
 

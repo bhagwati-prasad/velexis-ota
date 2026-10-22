@@ -14,7 +14,8 @@
 // PaymentGateway (StripeGateway, the payment's environment) outside any transaction, with the idempotency keys of
 // OADR-0010 point 3, and its result is applied in a short transaction under the row's lock and with its `version`; a
 // transaction that also changes the payment's booking, or writes a row that references it, locks the booking first,
-// then the payment (lead decision of 2026-10-21, OADR-0003 point 11):
+// then the payment, and a refund's transaction locks the refund last (lead decision of 2026-10-21, OADR-0003 point 11:
+// checkout, booking, payment, refund, a foreign-key lock counting as a lock of the parent):
 //
 //   payment.void            a payment that is not confirmed or `authorized`, with a PaymentIntent: `pi:cancel:<pay_id>`,
 //                           then `canceled` (`payment.voided`). Captured, cancelled, failed or airline-card payments
@@ -769,6 +770,8 @@ export class PaymentJobsHandler {
     }
     return await this.tx.run(async (trx) => {
       const now = this.clock.now();
+      // The payment before the refund (its event below references the payment): `lockParents`.
+      await this.refunds.lockParents(trx, row.id);
       const current = await this.refunds.refund(trx, row.id, true);
       if (current === undefined || current.providerRefundId !== null) {
         // The webhook recorded the refund first.
@@ -795,6 +798,8 @@ export class PaymentJobsHandler {
     attempt: PaymentJobAttempt,
   ): Promise<RefundClaim> {
     const now = this.clock.now();
+    // The payment's booking and the payment before the refund: a refused row's event and alert reference them.
+    await this.refunds.lockParents(trx, refundId);
     const row = await this.refunds.refund(trx, refundId, true);
     if (row === undefined) {
       return { kind: "missing" };
@@ -854,6 +859,9 @@ export class PaymentJobsHandler {
     if (failure === "refused" || failure === "mismatch") {
       await this.tx.run(async (trx) => {
         const now = this.clock.now();
+        // The payment's booking and the payment before the refund (`lockParents`): the failure's event and alert
+        // reference them. Before FIX-W25-BOOKINGS the refund was locked first, the reverse of the webhook's order.
+        await this.refunds.lockParents(trx, row.id);
         if (await this.refunds.markFailed(trx, row.id, version, code, now)) {
           await this.refundFailed(trx, row, payment, attempt, now, { code, from: "processing" });
         }
@@ -888,10 +896,8 @@ export class PaymentJobsHandler {
       return;
     }
     // The alert's outbox row references the payment's booking, and the payment event the payment (their foreign keys
-    // take FOR KEY SHARE on both): the booking's lock comes first (OADR-0003 point 11).
-    if (payment.bookingId !== null) {
-      await this.payments.lockBookings(trx, [payment.bookingId], "key share");
-    }
+    // take FOR KEY SHARE on both): the caller took both locks before the refund's (`RefundsRepository.lockParents`,
+    // OADR-0003 point 11).
     const { code } = failure;
     await this.paymentEvent(trx, payment, attempt, now, {
       type: "refund.failed",

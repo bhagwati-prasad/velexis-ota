@@ -1,7 +1,10 @@
 // checkout.complete for Stripe payments (completeCheckout, `x-scope: both`; OBE-042; ota/docs/architecture-booking.md
 // §1 and §2, OADR-0003 points 1–3, OADR-0008 points 1 and 7, ota/docs/flows/checkout-stripe.md §2 steps 5–7 and §3).
 // Five steps; no database transaction stays open across an Amadeus or Stripe call (OADR-0003 point 1), and a
-// transaction that locks the booking and its payment locks the booking first, then the payment (OADR-0003 point 11).
+// transaction that locks several of the checkout, the booking and the payment locks them in that order, a foreign-key
+// lock (the FOR KEY SHARE an insert of a row that references a parent takes) counting as a lock of the parent (lead
+// decision of 2026-10-21, OADR-0003 point 11): the claim, T2, the unknown outcome and the failure lock the checkout
+// first.
 //
 //   0. Read (T0) and the PaymentIntent. The checkout as its own checkout.get reads it (environment and access, `404`
 //      otherwise); a booking of the checkout answers `409 CHECKOUT_ALREADY_COMPLETED` (`details.bookingId`), or, while
@@ -25,8 +28,12 @@
 //      refuses one, or answers without one): the checkout moves to the new priced offer, extras and totals, the
 //      authorisation is voided, the booking `failed`, `409 PRICE_CHANGED` (`details.oldPrice`, `newPrice`,
 //      `pricedOfferId`, and `reason: extras_unavailable` for an extra): never a booking without the extras the
-//      customer chose and paid for. A lower one is accepted (only it is captured; warning `PRICE_DECREASED`). Then
-//      Flight Create Orders (order-request.builder.ts). Its outcomes (`createFailureKind`):
+//      customer chose and paid for. A lower one is accepted (only it is captured; warning `PRICE_DECREASED`). Then,
+//      under the booking's lock (`recordSending`, lead decision of 2026-10-21, third batch), the booking must still be
+//      `pending` and undecided (else nothing is sent), and it records what is sent: `issue_requested` and, after an
+//      accepted re-price, the priced offer sent with its amounts, so that a process that dies after the send leaves a
+//      booking whose reconciliation captures the re-priced total (the checkout moves only once the order may exist).
+//      Then Flight Create Orders (order-request.builder.ts). Its outcomes (`createFailureKind`):
 //        - rejected (Amadeus answered a `4xx` business refusal: sold out, data, price, ticketing): the authorisation
 //          is voided, the booking `failed` (`checkout_id` cleared, so the checkout stays open and can be completed
 //          again with a new payment), and `409 SOLD_OUT`, `409 PRICE_CHANGED`, `422 TRAVELER_DATA_INVALID`,
@@ -76,6 +83,7 @@ import { InjectQueue } from "@nestjs/bullmq";
 import { Inject, Injectable } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import type { components } from "@velexis/api-types";
+import type { TenantDatabase, Updateable } from "@velexis/db";
 import { AppError, toErrorEnvelope } from "@velexis/errors";
 import { redactPayload } from "@velexis/logger";
 import type { JobsOptions, Queue } from "bullmq";
@@ -883,6 +891,9 @@ export class BookingOrchestrator {
       created_at: now,
       updated_at: now,
     });
+    // The payment's foreign key takes the new booking's FOR KEY SHARE after the payment's lock: a row this transaction
+    // inserted, which no other transaction can see or lock before the commit, so it never waits. The claim's order is
+    // the checkout, an existing booking, the payment (OADR-0003 point 11).
     await this.payments.updatePayment(trx, payment.id, payment.version, {
       booking_id: bookingId,
       updated_at: now,
@@ -938,6 +949,17 @@ export class BookingOrchestrator {
 
     const flightOffers = confirmedPayloadsOf(priced);
     const issue = issueAtCreate(prepared.policy, requiresInstantTicketing(flightOffers));
+    let decided: AppError | undefined;
+    try {
+      decided = await this.recordSending(prepared, claim, { repriced, issue });
+    } catch (error) {
+      // Nothing was sent: the booking fails and the authorisation is kept, as for a request that never left.
+      await this.failBooking(tenant, prepared, claim, { code: "INTERNAL_ERROR", voided: false });
+      throw error;
+    }
+    if (decided !== undefined) {
+      throw decided;
+    }
     let reply: AmadeusResponse<unknown>;
     try {
       const request = buildCreateOrderRequest({
@@ -978,6 +1000,8 @@ export class BookingOrchestrator {
     try {
       recorded = await this.tx.run(async (trx) => {
         const now = this.clock.now();
+        // The lock order: the checkout, then the booking (OADR-0003 point 11), as the claim takes them.
+        await this.checkouts.checkout(trx, prepared.checkout.id, true);
         const locked = await this.repository.booking(trx, booking.id, true);
         if (locked === undefined || locked.status !== "pending") {
           throw new Error("a claimed booking left `pending` during its own request");
@@ -1348,17 +1372,58 @@ export class BookingOrchestrator {
     return notSentAnswer(error);
   }
 
-  /** The booking and the checkout follow an accepted re-price (in T2), the checkout's extras with their new prices. */
-  private async moveToPricedOffer(
-    trx: TenantTransaction,
+  /**
+   * Step 2, before Flight Create Orders is sent (lead decision of 2026-10-21, third batch): under the booking's lock,
+   * the booking must still be `pending` and undecided (the reconciliation may have adopted a claim whose request took
+   * longer than its 2 minutes, OADR-0003 point 4: then nothing is sent), and it records what is about to be sent, so
+   * that a process that dies after the send leaves a booking that holds the order's amounts: `issue_requested` the flag
+   * sent and, after an accepted re-price, the priced offer sent with its amounts (`repricedBookingValues`). The
+   * reconciliation of an adopted claim captures that total, never the first priced offer's. The checkout is moved
+   * only once the order may exist (T2, or the unknown outcome): a request that is not sent leaves it on the total its
+   * authorisation holds. Answers `undefined` to send, else the answer to give instead.
+   */
+  private async recordSending(
     prepared: Prepared,
-    bookingId: string,
+    claim: Claimed,
+    sent: { readonly repriced: Repriced | undefined; readonly issue: boolean },
+  ): Promise<AppError | undefined> {
+    return await this.tx.run(async (trx): Promise<AppError | undefined> => {
+      const now = this.clock.now();
+      const booking = await this.reconcile.lock(trx, claim.booking.id, { skipLocked: false });
+      if (booking === undefined) {
+        throw new Error("a claimed booking is not readable");
+      }
+      if (booking.status !== "pending" || booking.reconcileOutcome !== null) {
+        // Decided by the reconciliation before the order left: it is never sent for this claim.
+        this.logger.error(
+          { bookingId: booking.id, status: booking.status, outcome: booking.reconcileOutcome },
+          "bookings.decided_before_send",
+        );
+        return booking.status === "failed"
+          ? reconciledFailure(booking.id)
+          : booking.status === "pending"
+            ? supplierTimeout(booking.id)
+            : existingBookingError(booking);
+      }
+      if (sent.repriced !== undefined || booking.issueRequested !== sent.issue) {
+        await this.repository.updateBooking(trx, booking.id, {
+          ...(sent.repriced === undefined ? {} : this.repricedBookingValues(prepared, sent.repriced)),
+          issue_requested: sent.issue,
+          updated_at: now,
+        });
+      }
+      return undefined;
+    });
+  }
+
+  /** The booking's columns of an accepted re-price: the priced offer sent and its amounts. */
+  private repricedBookingValues(
+    prepared: Prepared,
     repriced: Repriced,
-    now: Date,
-  ): Promise<void> {
+  ): Omit<Updateable<TenantDatabase["bookings"]>, "version" | "id"> {
     const { priced } = repriced;
     const amounts = netAmountsOf(priced, prepared.minorUnits);
-    await this.repository.updateBooking(trx, bookingId, {
+    return {
       priced_offer_id: priced.row.id,
       net_amount: new Money(priced.row.netTotal).plus(repriced.netServices).toFixed(prepared.minorUnits),
       net_base_amount: amounts.base,
@@ -1371,6 +1436,22 @@ export class BookingOrchestrator {
       ancillaries_amount: repriced.ancillaries,
       total_amount: repriced.total,
       last_ticketing_date: priced.row.lastTicketingDate,
+    };
+  }
+
+  /**
+   * The booking and the checkout follow an accepted re-price (in T2, or at an unknown outcome), the checkout's extras
+   * with their new prices; the caller locked the checkout, then the booking.
+   */
+  private async moveToPricedOffer(
+    trx: TenantTransaction,
+    prepared: Prepared,
+    bookingId: string,
+    repriced: Repriced,
+    now: Date,
+  ): Promise<void> {
+    await this.repository.updateBooking(trx, bookingId, {
+      ...this.repricedBookingValues(prepared, repriced),
       updated_at: now,
     });
     await this.moveCheckout(trx, prepared, repriced, now);
@@ -1463,6 +1544,8 @@ export class BookingOrchestrator {
     try {
       pending = await this.tx.run(async (trx): Promise<BookingRow | undefined> => {
         const now = this.clock.now();
+        // The lock order: the checkout (which an accepted re-price moves), then the booking (OADR-0003 point 11).
+        await this.checkouts.checkout(trx, prepared.checkout.id, true);
         const booking = await this.repository.booking(trx, claim.booking.id, true);
         if (booking === undefined || booking.status !== "pending") {
           return undefined;
@@ -1545,6 +1628,10 @@ export class BookingOrchestrator {
   ): Promise<void> {
     await this.tx.run(async (trx) => {
       const now = this.clock.now();
+      // The lock order: the checkout (reopened below after a void), the booking, then the payment (OADR-0003 point 11).
+      if (failure.voided !== false) {
+        await this.checkouts.checkout(trx, prepared.checkout.id, true);
+      }
       const booking = await this.repository.booking(trx, claim.booking.id, true);
       if (booking === undefined || booking.status !== "pending") {
         return;

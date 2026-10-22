@@ -423,10 +423,12 @@ function handler(
     insertEvent: vi.fn(() => Promise.resolve()),
   };
   const refunds = {
+    lockParents: vi.fn(() => Promise.resolve()),
     refund: vi.fn(() => Promise.resolve(options.refund)),
     claim: vi.fn(() => Promise.resolve((options.refund?.version ?? 0) + 1)),
     markFailed: vi.fn(() => Promise.resolve(true)),
     release: vi.fn(() => Promise.resolve(true)),
+    recordSubmission: vi.fn(() => Promise.resolve(true)),
   };
   const alerts = { send: vi.fn(() => Promise.resolve(true)) };
   const instance = new PaymentJobsHandler(
@@ -711,5 +713,59 @@ describe("PaymentJobsHandler", () => {
     );
     expect(refunds.markFailed).not.toHaveBeenCalled();
     expect(alerts.send).not.toHaveBeenCalled();
+  });
+
+  it("[FIX-W25-BOOKINGS AC3] locks a refund's payment and booking before the refund in the claim and the refusal", async () => {
+    const { instance, gateway, payments, refunds } = handler({
+      payment: paymentRow({ status: "captured", amountCaptured: "452.10" }),
+      refund: refundRow(),
+    });
+    gateway.refund.mockRejectedValue(stripeFailure(400, "charge_already_refunded"));
+
+    expect(await instance.run(PAYMENT_JOB.refundSubmit, REFUND_ID, ATTEMPT)).toBe("failed");
+    // The claim: the parents (the payment's booking, then the payment), then the refund FOR UPDATE.
+    const lockedRefund = refunds.refund.mock.calls.findIndex((call: unknown[]) => call[2] === true);
+    expect(lockedRefund).toBeGreaterThanOrEqual(0);
+    expect(refunds.lockParents).toHaveBeenNthCalledWith(1, expect.anything(), REFUND_ID);
+    expect(refunds.lockParents.mock.invocationCallOrder[0]).toBeLessThan(
+      refunds.refund.mock.invocationCallOrder[lockedRefund] ?? 0,
+    );
+    // The refusal: the parents again before the refund's row is changed, and no booking lock after it.
+    expect(refunds.lockParents).toHaveBeenCalledTimes(2);
+    expect(refunds.lockParents.mock.invocationCallOrder[1]).toBeLessThan(
+      refunds.markFailed.mock.invocationCallOrder[0] ?? 0,
+    );
+    expect(payments.lockBookings).not.toHaveBeenCalled();
+  });
+
+  it("[FIX-W25-BOOKINGS AC3] locks a refund's payment before the refund when it records the Stripe refund", async () => {
+    const { instance, gateway, refunds } = handler({
+      payment: paymentRow({ status: "captured", amountCaptured: "452.10" }),
+      refund: refundRow(),
+    });
+    gateway.refund.mockResolvedValue({
+      providerRefundId: "re_test_unit",
+      status: "pending",
+      amount: "100.00",
+    });
+
+    expect(await instance.run(PAYMENT_JOB.refundSubmit, REFUND_ID, ATTEMPT)).toBe("applied");
+    // Each of the two transactions (the claim, the record) takes the parents' locks, then the refund's.
+    const locks = refunds.refund.mock.calls.flatMap((call: unknown[], index) =>
+      call[2] === true ? [index] : [],
+    );
+    expect(locks).toHaveLength(2);
+    expect(refunds.lockParents).toHaveBeenCalledTimes(2);
+    for (const [order, index] of locks.entries()) {
+      expect(refunds.lockParents.mock.invocationCallOrder[order]).toBeLessThan(
+        refunds.refund.mock.invocationCallOrder[index] ?? 0,
+      );
+    }
+    expect(refunds.recordSubmission).toHaveBeenCalledExactlyOnceWith(
+      expect.anything(),
+      REFUND_ID,
+      "re_test_unit",
+      expect.any(Date),
+    );
   });
 });

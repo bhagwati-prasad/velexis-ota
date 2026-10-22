@@ -16,9 +16,15 @@
 // the per-tenant `bookings.reconcile_scan` job of its minute. The Amadeus token buckets are emptied of their state
 // before each scenario (the worker's clock goes back between scenarios, which would freeze a bucket's refill).
 //
-// FIX-W24-BOOKINGS (lead decision of 2026-10-21): the last two scenarios make a stale claim, a completion whose
-// unknown-outcome write fails (`staleClaim`), and let the scan adopt it after 2 minutes, then reconcile it like any
-// unknown outcome.
+// FIX-W24-BOOKINGS (lead decision of 2026-10-21): two scenarios make a stale claim, a completion whose unknown-outcome
+// write fails (`staleClaim`), and let the scan adopt it after 2 minutes, then reconcile it like any unknown outcome.
+//
+// FIX-W25-BOOKINGS (lead decisions of 2026-10-21, third batch): the search reads every PNR that may be the order (more
+// than three of one minute, the order read last: the stub's clock is moved a minute back while the order is created,
+// so the PNRs of the claim's minute are closer to it and read first), a search that could not read them all (a Queue
+// List that may leave PNRs out, a read that times out) never voids and ends in the staff's review, an adopted claim
+// whose re-price lowered the price is captured for the re-priced total, and the decisions lock the checkout before
+// the booking (test/helpers/lock-order.ts).
 //
 // Each scenario runs in its `beforeAll` hook, with a budget of its own, and keeps what it saw; its tests read it.
 // Every API answer is checked against the OTA document (`expectResponseToMatch`). The Stripe keys and the Amadeus
@@ -47,6 +53,7 @@ import {
   type TestRedis,
 } from "@velexis/testing";
 import { startAmadeusStub, stubScenario, type AmadeusStub } from "@velexis/testing/amadeus";
+import { AppError } from "@velexis/errors";
 import type { Job, Queue } from "bullmq";
 import request from "supertest";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
@@ -62,6 +69,8 @@ import {
 import {
   RECONCILE_ADOPTED_EVENT,
   RECONCILE_JOB,
+  RECONCILE_MANUAL_REVIEW_EVENT,
+  RECONCILE_QUEUE_LIST_MAX,
   reconcileJobId,
   type AdoptedClaim,
 } from "../../../src/bookings/reconcile.service";
@@ -71,16 +80,18 @@ import { newId } from "../../../src/common/ids";
 import { OTA_QUEUE } from "../../../src/common/queues/queue-names";
 import { loadWorkerConfig } from "../../../src/config";
 import { jobTenant, minuteBucket, tenantJob } from "../../../src/jobs/fan-out";
+import { Money } from "../../../src/pricing/pricing.types";
 import { seedDefaultMarkupRule } from "../../../src/provisioning/seeds/markup-rules.seed";
 import { seedStorefrontSettings } from "../../../src/provisioning/seeds/storefront-settings.seed";
 import { PlatformCache } from "../../../src/tenancy/platform-cache";
 import { TenantContext } from "../../../src/tenancy/tenant-context";
 import type { TenantTransaction } from "../../../src/tenancy/tenant-tx";
 import { createWorkerApp, createWorkerLogger, WorkerModule } from "../../../src/worker.module";
-import { buildOrderRequestInput, buildStripeConfirmation } from "../../builders/bookings";
+import { buildOrderRequestInput, buildOrderTraveler, buildStripeConfirmation } from "../../builders/bookings";
 import { buildContactInput, buildTravelerInput, dateFromToday } from "../../builders/checkouts";
 import { newApiKey, testApiCredentials, testKeyProvider, testWorkerVariables } from "../../helpers/api-env";
 import { startFakeStripe, stripeEndpointModule, type FakeStripe } from "../../helpers/fake-stripe";
+import { probeRowLockOrder, type RowLockOrderObservation } from "../../helpers/lock-order";
 import { MemorySink } from "../../helpers/log-sink";
 import { useNextApplicationLoggerOutsideRequests } from "../../helpers/nest-pino";
 import { OPENAPI_SETUP_TIMEOUT_MS, preloadOpenApiDocument } from "../../helpers/openapi";
@@ -124,6 +135,12 @@ let paymentsQueue: Queue;
 let maintenance: Queue;
 /** The worker's time (see the file header). */
 const clock = new FakeClock();
+/**
+ * The stub's time: the real clock, `stubShiftMs` apart. A scenario moves it a minute back while Flight Create Orders
+ * creates the order, so Queue List gives the order an earlier minute than the PNRs created after it.
+ */
+let stubShiftMs = 0;
+const stubClock = { now: (): Date => new Date(Date.now() + stubShiftMs) };
 
 const quietPoolLogger = { error: (): void => undefined };
 
@@ -533,10 +550,11 @@ interface TimedOut {
 
 /**
  * A paid checkout completed with the stub's `scenario` on Flight Create Orders: the `504` and its pending booking.
- * `prepare` changes the paid checkout before its completion; `lastName` is its lead traveller's (SAMPLE otherwise).
+ * `prepare` changes the paid checkout before its completion (with `success`, it is what loses the answer);
+ * `lastName` is its lead traveller's (SAMPLE otherwise).
  */
 async function timedOutCompletion(
-  scenario: "timeout" | "timeout-lost",
+  scenario: "timeout" | "timeout-lost" | "success",
   prepare?: (checkout: CheckoutBody) => Promise<void>,
   lastName?: string,
 ): Promise<TimedOut> {
@@ -562,9 +580,14 @@ async function timedOutCompletion(
  * logs it. The API's OrderRecorder refuses the `booking.supplier_timeout` event, so that transaction rolls back: the
  * booking stays `pending` without `reconcile_until`, without the event and without its first `booking.reconcile`, its
  * checkout locked and its authorisation held, and the answer is still the `504`. The stub's `scenario` decides whether
- * the order exists; `lastName` is the lead traveller's (`timedOutCompletion`).
+ * the order exists; `lastName` is the lead traveller's and `prepare` changes the paid checkout first
+ * (`timedOutCompletion`).
  */
-async function staleClaim(scenario: "timeout" | "timeout-lost", lastName?: string): Promise<TimedOut> {
+async function staleClaim(
+  scenario: "timeout" | "timeout-lost" | "success",
+  lastName?: string,
+  prepare?: (checkout: CheckoutBody) => Promise<void>,
+): Promise<TimedOut> {
   const recorder = api.app.get(OrderRecorder, { strict: false });
   const record = recorder.event.bind(recorder);
   const refused = vi.spyOn(recorder, "event").mockImplementation(async (trx, bookingId, event) => {
@@ -574,10 +597,58 @@ async function staleClaim(scenario: "timeout" | "timeout-lost", lastName?: strin
     await record(trx, bookingId, event);
   });
   try {
-    return await timedOutCompletion(scenario, undefined, lastName);
+    return await timedOutCompletion(scenario, prepare, lastName);
   } finally {
     refused.mockRestore();
   }
+}
+
+/**
+ * Loses the answers of Flight Create Orders the stub gave (the order exists there): the connection is reset on the way
+ * back, an unknown outcome (OADR-0003 point 9). Answers the spy to restore.
+ */
+function loseCreatedOrderAnswers(): { mockRestore(): void } {
+  const realFetch = globalThis.fetch;
+  return vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+    const url = input instanceof Request ? input.url : String(input);
+    const answer = await realFetch(input, init);
+    if (url.startsWith(stub.url) && new URL(url).pathname === "/v1/booking/flight-orders" && answer.ok) {
+      await answer.arrayBuffer();
+      throw new TypeError("fetch failed", {
+        cause: Object.assign(new Error("read ECONNRESET"), { code: "ECONNRESET" }),
+      });
+    }
+    return answer;
+  });
+}
+
+/** `amount` (a decimal string) `units` major units lower, as Amadeus would answer a lower fare. */
+const lowered = (amount: unknown, units: number): unknown =>
+  typeof amount === "string" ? new Money(amount).minus(units).toFixed(2) : amount;
+
+/**
+ * Makes the API's Flight Offers Price answer every offer `units` major units cheaper (its base, total and grand total,
+ * and each traveller pricing's base and total), as a re-price that lowers the price; answers the spy to restore.
+ */
+function lowerRepricing(units: number): { mockRestore(): void } {
+  const client = api.app.get(AmadeusClient, { strict: false });
+  const real = client.quoteAirOffers.bind(client);
+  return vi.spyOn(client, "quoteAirOffers").mockImplementation(async (context, input) => {
+    const reply = await real(context, input);
+    const data = (reply.body as { data?: { flightOffers?: Array<Record<string, unknown>> } }).data;
+    for (const offer of data?.flightOffers ?? []) {
+      const price = offer["price"] as Record<string, unknown>;
+      for (const field of ["base", "total", "grandTotal"]) {
+        price[field] = lowered(price[field], units);
+      }
+      for (const pricing of (offer["travelerPricings"] ?? []) as Array<Record<string, unknown>>) {
+        const own = pricing["price"] as Record<string, unknown>;
+        own["base"] = lowered(own["base"], units);
+        own["total"] = lowered(own["total"], units);
+      }
+    }
+    return reply;
+  });
 }
 
 /** The `booking.reconcile_adopted` events of a booking. */
@@ -592,8 +663,14 @@ async function adoptedEvents(bookingId: string) {
   );
 }
 
-/** A decoy order on alpha's booking queue, created through the worker's Amadeus client: its record locator. */
-async function createDecoy(adjust: (data: Record<string, unknown>) => void): Promise<string> {
+/**
+ * A decoy order on alpha's booking queue, created through the worker's Amadeus client: its record locator. Its
+ * traveller's last name is SAMPLE, or `lastName`.
+ */
+async function createDecoy(
+  adjust: (data: Record<string, unknown>) => void,
+  lastName?: string,
+): Promise<string> {
   const tenant = await worker.get(PlatformCache, { strict: false }).tenantById(alphaId);
   if (tenant === null) {
     throw new Error("alpha is not readable");
@@ -605,6 +682,7 @@ async function createDecoy(adjust: (data: Record<string, unknown>) => void): Pro
       queue: { number: 50, category: 0 },
       offices: { queuing: office, owner: office },
       issue: false,
+      ...(lastName === undefined ? {} : { travelers: [buildOrderTraveler({ travelerId: "1", lastName })] }),
     }),
   );
   adjust((built.body as { data: Record<string, unknown> }).data);
@@ -667,6 +745,7 @@ beforeAll(async () => {
   const secret = randomBytes(24).toString("base64url");
   stub = await startAmadeusStub({
     credentials: { clientId, clientSecret: secret },
+    clock: stubClock,
     // The `timeout` scenarios hold an answer for 100 ms, then give up with their 504, as after 30 s.
     timers: {
       setTimeout: (callback, ms) => setTimeout(callback, Math.min(ms, 100)),
@@ -1289,5 +1368,373 @@ describe("a stale claim whose order was never created (FIX-W24-BOOKINGS, stub ti
       details: { bookingId: timedOut.bookingId, bookingStatus: "failed" },
     });
     expect(amadeusCalls("createFlightOrders")).toHaveLength(1);
+  });
+});
+
+// ---- FIX-W25-BOOKINGS (lead decisions of 2026-10-21, third batch) ----------------------------------------------------
+
+/** The `booking.reconcile_manual_review` events of a booking, and the staff alert of its review. */
+async function reviewOf(bookingId: string) {
+  return await alphaTx(async (trx) => ({
+    events: await trx
+      .selectFrom("booking_events")
+      .select(["actor_type as actorType", "visible_to_customer as visible", "data"])
+      .where("booking_id", "=", bookingId)
+      .where("type", "=", RECONCILE_MANUAL_REVIEW_EVENT)
+      .execute(),
+    alerts: await trx
+      .selectFrom("notifications")
+      .select(["recipient", "recipient_type as recipientType", "payload"])
+      .where("booking_id", "=", bookingId)
+      .where("dedupe_key", "=", `staff.manual_review:${bookingId}:reconcile_manual_review`)
+      .execute(),
+  }));
+}
+
+/** The by-reference reads of the stub, in order: their record locators. */
+const readLocators = (): string[] =>
+  amadeusCalls("getFlightOrderByReference").map((entry) => String(entry.query["reference"]));
+
+describe("more than three PNRs of the lead's name in the order's minute, the order read last (FIX-W25-BOOKINGS)", () => {
+  const LEAD = "MINUTEMATE";
+  let timedOut: TimedOut;
+  let decoys: string[];
+  let found: ReconcileJobResult;
+  let decided: Awaited<ReturnType<typeof bookingRow>>;
+  let reads: string[];
+
+  beforeAll(async () => {
+    useWorkerClock();
+    try {
+      // The order is created a minute back on the stub's clock: Queue List gives it the minute before the claim's.
+      timedOut = await timedOutCompletion(
+        "timeout",
+        () => {
+          stubShiftMs = -MINUTE;
+          return Promise.resolve();
+        },
+        LEAD,
+      );
+    } finally {
+      stubShiftMs = 0;
+    }
+    // Four more PNRs of the same traveller name, created in the claim's minute: closer to it, so read first.
+    decoys = [];
+    for (let index = 0; index < 4; index += 1) {
+      decoys.push(await createDecoy(() => undefined, LEAD));
+    }
+    // The decoys took tokens of the tenant's Amadeus bucket, which the worker's still clock never refills: the
+    // attempt's Queue List, five reads, resync and issue start from a full one.
+    await resetRateLimits();
+    found = await firstAttempt(timedOut.bookingId, after(timedOut.started, 30 * SECOND));
+    decided = await bookingRow(timedOut.bookingId);
+    reads = readLocators();
+  }, SCENARIO_TIMEOUT_MS);
+
+  it("[FIX-W25-BOOKINGS AC1] reads every candidate of the window and finds the order read fifth, after four of one minute", () => {
+    expect(found).toMatchObject({ outcome: "found", attempts: 1, captured: true });
+    expect(decided).toMatchObject({ status: "ticketed", reconcile_outcome: "found" });
+    // Three reads at most before the lead decision: the order would have stayed unread and been voided at the deadline.
+    expect(reads).toHaveLength(5);
+    expect([...reads.slice(0, 4)].sort()).toEqual([...decoys].sort());
+    expect(reads.at(-1)).toBe(decided.record_locator);
+    expect(decoys).not.toContain(decided.record_locator);
+    expect(stripePostsOf(timedOut.payment, "/capture")).toHaveLength(1);
+    expect(stripePostsOf(timedOut.payment, "/cancel")).toHaveLength(0);
+    // The Queue List asked for RECONCILE_QUEUE_LIST_MAX PNRs, so an answer that holds that many is known to be partial.
+    expect(String(amadeusCalls("listQueue")[0]?.query["max"])).toBe(String(RECONCILE_QUEUE_LIST_MAX));
+  });
+});
+
+describe("a complete search of more than three PNRs that finds none of them is the order (FIX-W25-BOOKINGS)", () => {
+  const LEAD = "ALLREAD";
+  let timedOut: TimedOut;
+  let decoys: string[];
+  let early: ReconcileJobResult;
+  let decision: ReconcileJobResult;
+  let decided: Awaited<ReturnType<typeof bookingRow>>;
+  let voidJob: Job;
+
+  beforeAll(async () => {
+    useWorkerClock();
+    timedOut = await timedOutCompletion("timeout-lost", undefined, LEAD);
+    decoys = [];
+    for (let index = 0; index < 4; index += 1) {
+      decoys.push(await createDecoy(() => undefined, LEAD));
+    }
+    await resetRateLimits();
+    early = await firstAttempt(timedOut.bookingId, after(timedOut.started, 30 * SECOND));
+    decision = await scanAttempt(timedOut.bookingId, after(timedOut.started, 15 * MINUTE));
+    decided = await bookingRow(timedOut.bookingId);
+    voidJob = await finished(paymentsQueue, `payment-void-${timedOut.payment.id}`);
+  }, SCENARIO_TIMEOUT_MS);
+
+  it("[FIX-W25-BOOKINGS AC1] reads all of them in each attempt and voids at reconcile_until: only a complete search proves absence", async () => {
+    expect(early).toMatchObject({ outcome: "pending", attempts: 1, reason: "not_found_yet" });
+    expect(decision).toMatchObject({ outcome: "not_found", attempts: 2, voids: 1 });
+    const reads = readLocators();
+    expect(reads).toHaveLength(8);
+    expect([...new Set(reads)].sort()).toEqual([...decoys].sort());
+    expect(decided).toMatchObject({ status: "failed", reconcile_outcome: "not_found", checkout_id: null });
+    expect(voidJob.returnvalue).toMatchObject({ outcome: "applied" });
+    expect(stripePostsOf(timedOut.payment, "/cancel")).toHaveLength(1);
+    expect(await checkoutStatus(timedOut.checkout.id)).toBe("open");
+  });
+});
+
+/**
+ * What an incomplete search left at `reconcile_until`: the attempts before and at the deadline, the booking, its
+ * payment and checkout, a later scan, a replay of the `504` and the Stripe calls about the payment.
+ */
+interface Undecided {
+  readonly timedOut: TimedOut;
+  readonly early: ReconcileJobResult;
+  readonly decision: ReconcileJobResult;
+  readonly decided: Awaited<ReturnType<typeof bookingRow>>;
+  readonly payment: Awaited<ReturnType<typeof paymentRow>>;
+  readonly checkout: string;
+  /** The booking.reconcile a scan a minute after the review would have added for the booking. */
+  readonly laterJob: Job | undefined;
+  readonly replay: Answer;
+}
+
+/**
+ * A timed-out completion whose order was never created (stub `timeout-lost`, lead traveller `lastName`) and whose every
+ * search `spoil` makes incomplete: the first attempt, the one at `reconcile_until`, then a scan a minute later and the
+ * same key's replay. `spoil` gets the booking and answers the spy to restore.
+ */
+async function undecided(
+  lastName: string,
+  spoil: (timedOut: TimedOut) => Promise<{ mockRestore(): void }>,
+): Promise<Undecided> {
+  useWorkerClock();
+  const timedOut = await timedOutCompletion("timeout-lost", undefined, lastName);
+  const spy = await spoil(timedOut);
+  try {
+    const early = await firstAttempt(timedOut.bookingId, after(timedOut.started, 30 * SECOND));
+    const decision = await scanAttempt(timedOut.bookingId, after(timedOut.started, 15 * MINUTE));
+    const decided = await bookingRow(timedOut.bookingId);
+    const laterAt = after(timedOut.started, 16 * MINUTE);
+    await scan(laterAt);
+    return {
+      timedOut,
+      early,
+      decision,
+      decided,
+      payment: await paymentRow(timedOut.payment.id),
+      checkout: await checkoutStatus(timedOut.checkout.id),
+      laterJob:
+        (await bookingsQueue.getJob(reconcileJobId(timedOut.bookingId, minuteBucket(laterAt)))) ?? undefined,
+      replay: await complete(timedOut.checkout.id, { key: timedOut.key }),
+    };
+  } finally {
+    spy.mockRestore();
+  }
+}
+
+/** The common expectations of a booking whose search was still incomplete at `reconcile_until`. */
+async function expectStaffReview(seen: Undecided, gap: string): Promise<void> {
+  const { timedOut } = seen;
+  expect(seen.early).toMatchObject({ outcome: "pending", attempts: 1, reason: "search_incomplete" });
+  expect(seen.decision).toMatchObject({ outcome: "manual_review", attempts: 2, gap });
+  // Never voided: the booking stays pending with its checkout and authorisation, for the staff to decide.
+  expect(seen.decided).toMatchObject({
+    status: "pending",
+    ticketing_status: "manual_review",
+    reconcile_outcome: "manual_review",
+    checkout_id: timedOut.checkout.id,
+    failure_code: null,
+  });
+  expect(seen.payment).toMatchObject({ status: "authorized", booking_id: timedOut.bookingId });
+  expect(seen.checkout).toBe("payment_pending");
+  expect(stripePostsOf(timedOut.payment, "/cancel")).toHaveLength(0);
+  expect(await paymentsQueue.getJob(`payment-void-${timedOut.payment.id}`)).toBeUndefined();
+  expect(stripe.intents.get(timedOut.payment.providerPaymentId ?? "")?.status).toBe("requires_capture");
+  // The scan stops: no attempt after the review.
+  expect(seen.laterJob).toBeUndefined();
+  const review = await reviewOf(timedOut.bookingId);
+  expect(review.events).toEqual([
+    {
+      actorType: "system",
+      visible: false,
+      data: expect.objectContaining({ reconcileOutcome: "manual_review", attempt: 2, gap }) as unknown,
+    },
+  ]);
+  expect(review.alerts).toEqual([expect.objectContaining({ recipient: OPS_EMAIL, recipientType: "staff" })]);
+  expect((await eventTypes(timedOut.bookingId)).filter((type) => type === "booking.failed")).toEqual([]);
+  // The same key still answers that the booking is being confirmed.
+  expect(seen.replay.status).toBe(504);
+  expect((seen.replay.body as ErrorBody).error.details).toMatchObject({
+    bookingId: timedOut.bookingId,
+    replayed: true,
+  });
+}
+
+describe("a Queue List answer that may leave PNRs out (FIX-W25-BOOKINGS)", () => {
+  let seen: Undecided;
+
+  beforeAll(async () => {
+    // Amadeus says the queue holds one PNR more than it listed.
+    seen = await undecided("TRUNCATED", (timedOut) => {
+      const client = worker.get(AmadeusClient, { strict: false });
+      const real = client.listQueue.bind(client);
+      return Promise.resolve(
+        vi.spyOn(client, "listQueue").mockImplementation(async (context, input, options) => {
+          const reply = await real(context, input, options);
+          if (context.bookingId === timedOut.bookingId) {
+            const body = reply.body as { meta?: Record<string, unknown>; data?: unknown[] };
+            body.meta = { ...body.meta, count: (body.data?.length ?? 0) + 1 };
+          }
+          return reply;
+        }),
+      );
+    });
+  }, SCENARIO_TIMEOUT_MS);
+
+  it("[FIX-W25-BOOKINGS AC1] never proves the order absent: at reconcile_until the booking goes to staff review, nothing voided", async () => {
+    await expectStaffReview(seen, "queue_truncated");
+  });
+});
+
+describe("a read of a possible order that times out (FIX-W25-BOOKINGS)", () => {
+  let decoy: string;
+  let seen: Undecided;
+
+  beforeAll(async () => {
+    seen = await undecided("UNREADABLE", async () => {
+      // A PNR of the traveller's name that the reconciliation cannot read: it may be the order.
+      decoy = await createDecoy(() => undefined, "UNREADABLE");
+      const client = worker.get(AmadeusClient, { strict: false });
+      const real = client.getFlightOrderByReference.bind(client);
+      return vi
+        .spyOn(client, "getFlightOrderByReference")
+        .mockImplementation(async (context, input, options) => {
+          if (input.query.reference === decoy) {
+            throw new AppError("SUPPLIER_TIMEOUT");
+          }
+          return await real(context, input, options);
+        });
+    });
+  }, SCENARIO_TIMEOUT_MS);
+
+  it("[FIX-W25-BOOKINGS AC1] never voids on a failed read: at reconcile_until the booking goes to staff review", async () => {
+    await expectStaffReview(seen, "read_failed");
+    expect(seen.decision).toMatchObject({ outcome: "manual_review" });
+    expect(amadeusCalls("getFlightOrderByReference").map((entry) => entry.query["reference"])).not.toContain(
+      decoy,
+    );
+  });
+});
+
+describe("an adopted claim whose re-price lowered the price before the order was sent (FIX-W25-BOOKINGS)", () => {
+  let original: CheckoutBody;
+  let timedOut: TimedOut;
+  let stale: Awaited<ReturnType<typeof bookingRow>>;
+  let found: ReconcileJobResult;
+  let decided: Awaited<ReturnType<typeof bookingRow>>;
+  let captured: Awaited<ReturnType<typeof capturedOf>>;
+
+  /** The captured amount and state of a payment. */
+  async function capturedOf(paymentId: string) {
+    return await alphaTx((trx) =>
+      trx
+        .selectFrom("payments")
+        .select(["status", sql<string>`amount_captured::text`.as("captured")])
+        .where("id", "=", paymentId)
+        .executeTakeFirstOrThrow(),
+    );
+  }
+
+  beforeAll(async () => {
+    useWorkerClock();
+    const spies: Array<{ mockRestore(): void }> = [];
+    try {
+      // The priced offer is priced again 10.00 lower, the order is created from the new priced offer, and its answer
+      // is lost; the unknown-outcome write then fails too, as if the process had died after the send.
+      timedOut = await staleClaim("success", "REPRICED", async (checkout) => {
+        original = checkout;
+        await ageOffer(checkout.pricedOfferId);
+        spies.push(lowerRepricing(10), loseCreatedOrderAnswers());
+      });
+    } finally {
+      for (const spy of spies) {
+        spy.mockRestore();
+      }
+    }
+    stale = await bookingRow(timedOut.bookingId);
+    const adoptedAt = after(timedOut.started, 2 * MINUTE + SECOND);
+    await scan(adoptedAt);
+    found = (await finished(bookingsQueue, reconcileJobId(timedOut.bookingId, minuteBucket(adoptedAt))))
+      .returnvalue as ReconcileJobResult;
+    decided = await bookingRow(timedOut.bookingId);
+    captured = await capturedOf(timedOut.payment.id);
+  }, SCENARIO_TIMEOUT_MS);
+
+  it("[FIX-W25-BOOKINGS AC2] captures the re-priced total of the order sent, never the first priced offer's", () => {
+    // Recorded before the send: the stale claim holds the re-priced offer and total, below the authorisation.
+    expect(stale).toMatchObject({ status: "pending", reconcile_until: null });
+    expect(stale.priced_offer_id).not.toBe(original.pricedOfferId);
+    expect(Number(stale.total)).toBeLessThan(Number(original.totals.total.amount));
+    expect(found).toMatchObject({ outcome: "found", attempts: 1, captured: true });
+    expect(decided).toMatchObject({
+      status: "ticketed",
+      reconcile_outcome: "found",
+      priced_offer_id: stale.priced_offer_id,
+      total: stale.total,
+      paid: stale.total,
+    });
+    const captures = stripePostsOf(timedOut.payment, "/capture");
+    expect(captures).toHaveLength(1);
+    expect(captures[0]?.headers["idempotency-key"]).toBe(`pi:capture:${timedOut.payment.id}:${stale.total}`);
+    expect(captures[0]?.form["amount_to_capture"]).toBe(String(Math.round(Number(stale.total) * 100)));
+    expect(captured).toEqual({ status: "captured", captured: stale.total });
+    expect(amadeusCalls("createFlightOrders")).toHaveLength(1);
+  });
+});
+
+describe("the reconciliation's lock order (FIX-W25-BOOKINGS)", () => {
+  let notFound: { readonly decision: ReconcileJobResult; readonly seen: RowLockOrderObservation };
+  let found: { readonly attempt: ReconcileJobResult; readonly seen: RowLockOrderObservation };
+
+  /** Holds the checkout of `timedOut` until the attempt waits for it, then probes its booking. */
+  async function holdCheckout(timedOut: TimedOut) {
+    const probe = probeRowLockOrder(tenantDb, "tenant_alpha", {
+      held: { table: "checkouts", id: timedOut.checkout.id },
+      probed: { table: "bookings", id: timedOut.bookingId },
+    });
+    await probe.locked;
+    return probe;
+  }
+
+  beforeAll(async () => {
+    useWorkerClock();
+    // The not-found decision, while another transaction holds the checkout: it waits for the checkout before it locks
+    // the booking and the payments (before FIX-W25-BOOKINGS it took them first and the checkout last).
+    const lost = await timedOutCompletion("timeout-lost", undefined, "LOCKLOST");
+    await firstAttempt(lost.bookingId, after(lost.started, 30 * SECOND));
+    const lostProbe = await holdCheckout(lost);
+    const [decision, lostSeen] = await Promise.all([
+      scanAttempt(lost.bookingId, after(lost.started, 15 * MINUTE)),
+      lostProbe.result,
+    ]);
+    notFound = { decision, seen: lostSeen };
+    // The found decision: it records the order and completes the checkout, the checkout locked first too.
+    const kept = await timedOutCompletion("timeout", undefined, "LOCKFOUND");
+    const keptProbe = await holdCheckout(kept);
+    const [attempt, keptSeen] = await Promise.all([
+      firstAttempt(kept.bookingId, after(kept.started, 30 * SECOND)),
+      keptProbe.result,
+    ]);
+    found = { attempt, seen: keptSeen };
+  }, SCENARIO_TIMEOUT_MS);
+
+  it("[FIX-W25-BOOKINGS AC3] the not-found decision locks the checkout before the booking: the booking is free while it waits", () => {
+    expect(notFound.seen).toEqual({ waiterSeen: true, probedFree: true });
+    expect(notFound.decision).toMatchObject({ outcome: "not_found", voids: 1 });
+  });
+
+  it("[FIX-W25-BOOKINGS AC3] the found decision locks the checkout before the booking too", () => {
+    expect(found.seen).toEqual({ waiterSeen: true, probedFree: true });
+    expect(found.attempt).toMatchObject({ outcome: "found", captured: true });
   });
 });

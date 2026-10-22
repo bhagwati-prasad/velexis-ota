@@ -12,9 +12,11 @@
 // Like Stripe it replays the answer of a POST with a known `Idempotency-Key` and the same body, a 500 included, and
 // refuses the same key with another body (400 `idempotency_error`, kept for nothing). `fail(n, "drop")` closes the
 // connections of the next `n` requests before they are handled (Stripe unreachable), `fail(n, "lost")` handles them
-// (and keeps their answers for their keys) but closes the connections instead of answering (the answer is lost), and
-// `fail(n, "server_error")` answers them with a 500 `api_error`, which a POST's key keeps. `onRequest` runs before
-// each answer, for assertions about what the caller had done before it called Stripe.
+// (and keeps their answers for their keys) but closes the connections instead of answering (the answer is lost),
+// `fail(n, "server_error")` answers them with a 500 `api_error`, which a POST's key keeps, and `fail(n, "refused")`
+// with a 400 `invalid_request_error` (`charge_already_refunded`), a refusal that changed nothing. `onRequest` runs
+// before each answer, for assertions about what the caller had done before it called Stripe (a barrier, too: the
+// answer waits for its promise).
 //
 // The webhook processor's reads (OBE-039) are served from what the test puts in `charges`, `refunds` and `disputes`
 // (Stripe's JSON, as the fixtures of @velexis/testing/stripe hold it): `GET /v1/charges/{id}`, `GET /v1/refunds/{id}`,
@@ -52,7 +54,7 @@ export type FakePaymentIntent = Record<string, unknown> & {
 export type FakeStripeObject = Record<string, unknown> & { readonly id: string };
 
 /** How the next requests fail. */
-export type FakeStripeFailure = "drop" | "lost" | "server_error";
+export type FakeStripeFailure = "drop" | "lost" | "server_error" | "refused";
 
 export interface FakeStripe {
   readonly endpoint: StripeApiEndpoint;
@@ -329,7 +331,18 @@ export async function startFakeStripe(): Promise<FakeStripe> {
                   status: 500,
                   body: { error: { type: "api_error", message: "An unexpected error occurred" } },
                 }
-              : handle(request);
+              : failure === "refused"
+                ? {
+                    status: 400,
+                    body: {
+                      error: {
+                        type: "invalid_request_error",
+                        code: "charge_already_refunded",
+                        message: "The charge has already been refunded.",
+                      },
+                    },
+                  }
+                : handle(request);
           if (key !== undefined) {
             replays.set(key, { body, status: answer.status, answer: answer.body });
           }

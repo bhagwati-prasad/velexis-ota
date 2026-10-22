@@ -6,12 +6,12 @@ Related: [`architecture.md`](architecture.md), [OADR-0003](adr/0003-booking-orch
 
 ## 1. The orchestration in five steps
 
-Every booking, whatever the payment method, goes through the same steps in `bookings/booking-orchestrator.service.ts`. No database transaction stays open across an Amadeus or Stripe call, and a transaction that locks both a booking and its payment locks the **booking first, then the payment** ([OADR-0003](adr/0003-booking-orchestration-and-supplier-timeout-recovery.md) point 11, lead decision of 2026-10-21): the claim, the failure, the capture and its failure here, the reconciliation's decisions (§4), and the payment jobs of `ota-payments`. A payment transaction that only writes a row referencing the booking (an outbox alert, a refund) takes the booking's `FOR KEY SHARE` before the payment, as that row's foreign key takes it anyway.
+Every booking, whatever the payment method, goes through the same steps in `bookings/booking-orchestrator.service.ts`. No database transaction stays open across an Amadeus or Stripe call, and a transaction that locks several of a checkout, a booking, a payment and a refund locks them in that order: the **checkout, then the booking, then the payment, then the refund** ([OADR-0003](adr/0003-booking-orchestration-and-supplier-timeout-recovery.md) point 11, lead decisions of 2026-10-21, §1.1). A foreign-key lock counts as a lock of the parent: a transaction that only writes a row referencing a booking or a payment (an outbox alert, a booking or payment event, a refund) takes that parent's `FOR KEY SHARE` in the parent's place in the order, as the row's foreign key takes it anyway.
 
 | Step | Transaction | Does |
 |---|---|---|
 | 1. **Claim** | T1 | Lock the checkout (`SELECT … FOR UPDATE`), check status, expiry, completeness and payment state, then insert the `bookings` row with `status = pending`, a new `reference`, `create_order_started_at = now()` and the amounts copied from the checkout. `bookings.checkout_id` is `UNIQUE`, so a second claim for the same checkout fails: Flight Create Orders runs **at most once per checkout**. Commit. |
-| 2. **Call** | none | Flight Offers Price when a re-price is needed, then Flight Create Orders. The remark `VELEXIS <reference>` goes into `remarks.general`, and the order is queued to the tenant's booking queue (`automatedProcess`) so it can be found again ([OADR-0003](adr/0003-booking-orchestration-and-supplier-timeout-recovery.md)). |
+| 2. **Call** | none + T1b | Flight Offers Price when a re-price is needed; then, under the booking's lock (T1b, `recordSending`), the booking must still be `pending` and undecided, and it records what is sent: `issue_requested` and, after an accepted re-price, the priced offer sent with its amounts (lead decision of 2026-10-21, third batch: a process that dies after the send leaves a booking that is captured for the order's total). Then Flight Create Orders. The remark `VELEXIS <reference>` goes into `remarks.general`, and the order is queued to the tenant's booking queue (`automatedProcess`) so it can be found again ([OADR-0003](adr/0003-booking-orchestration-and-supplier-timeout-recovery.md)). |
 | 3. **Record** | T2 | Store the order: `bookings` (`confirmed`, or `ticketed` if tickets came back), children, redacted `order_snapshot`, `booking_events`, guest token, checkout `completed`, notification outbox rows. Commit. |
 | 4. **Money** | none + T3 | Stripe: capture the authorisation (`issue_at_booking`, `issue_after_payment`). Airline card: nothing to do, the airline charges the card. |
 | 5. **Issue** | none + T4 | `issue_after_payment`: Flight Order Issue, then store tickets. A failure leaves the booking `confirmed` with `ticketing_status = failed` and the ticketing job retries ([OADR-0008](adr/0008-ticketing-policy.md)). |
@@ -31,6 +31,40 @@ stateDiagram-v2
   failed --> [*]
   cancelled --> [*]
 ```
+
+### 1.1 Lock order
+
+The order is the checkout, then the booking, then the payment, then the refund ([OADR-0003](adr/0003-booking-orchestration-and-supplier-timeout-recovery.md) point 11). Two transactions that follow it never wait for each other in a circle, so PostgreSQL never aborts one of them as a deadlock. A foreign-key lock counts as a lock of the parent ("key share": the `FOR KEY SHARE` an insert takes on the row its foreign key references), and a row a transaction inserted itself is its own from the insert (no other transaction can lock it before the commit). The transactions of the money path, each lock in order (FIX-W25-BOOKINGS checked every one; tables not in the order, such as `priced_offers`, `customers` and the child tables, are left out):
+
+| Transaction | Locks, in order |
+|---|---|
+| checkout.complete T1, the claim | checkout `FOR UPDATE` → an existing booking of the checkout `FOR UPDATE` → payment `FOR UPDATE` (its event: key share) → the new booking (inserted; the payment's `booking_id` and the claim's event reference it) |
+| checkout.complete T1b, what is sent (`recordSending`) | booking `FOR UPDATE` |
+| checkout.complete T2, the record step | checkout `FOR UPDATE` → booking `FOR UPDATE` (children, events, the confirmation's outbox row: key share) → the checkout's extras and the checkout updated |
+| checkout.complete, the unknown outcome | checkout `FOR UPDATE` → booking `FOR UPDATE` (event: key share) |
+| checkout.complete, the failure (`failBooking`) | checkout `FOR UPDATE` (after a void) → booking `FOR UPDATE` → payment `FOR UPDATE` (after a void; its event: key share) |
+| checkout.complete, the capture and the failed capture | booking `FOR UPDATE` → payment `FOR UPDATE` (events, the alert: key share) |
+| checkout.complete, the issue (two transactions) | booking `FOR UPDATE` |
+| guest token of a booking | booking key share |
+| `bookings.reconcile_scan`, the adoption | bookings `FOR UPDATE SKIP LOCKED` (events: key share) |
+| `booking.reconcile`, the claim | booking `FOR UPDATE SKIP LOCKED` |
+| `booking.reconcile`, found | checkout `FOR UPDATE` → booking `FOR UPDATE` (children, events, outbox: key share) → checkout updated |
+| `booking.reconcile`, the capture and the failed capture | booking `FOR UPDATE` → payment `FOR UPDATE` (events, the alert: key share) |
+| `booking.reconcile`, not found | checkout `FOR UPDATE` → booking `FOR UPDATE` → payments `FOR UPDATE` (events, outbox: key share) → checkout updated (before FIX-W25-BOOKINGS: booking, payments, then checkout) |
+| `booking.reconcile`, the manual review and the staff alerts | booking `FOR UPDATE` (event, outbox: key share), or booking key share alone |
+| checkout steps (travellers, contacts, special requests, extras) | checkout `FOR UPDATE` |
+| checkout.createPayment, checkout.updatePayment | checkout `FOR UPDATE` → payments `FOR UPDATE` (events: key share) |
+| A new PaymentIntent's id, payment reads and refreshes, a replaced payment's void, a provider error | payment `FOR UPDATE` |
+| `payment.void` | payment `FOR UPDATE` |
+| `payment.capture_retry` | booking `FOR UPDATE` → payment `FOR UPDATE`; its alerts: booking key share |
+| `refund.submit`: the claim, the record, a refusal | booking key share → payment key share (`RefundsRepository.lockParents`) → refund `FOR UPDATE` (before FIX-W25-BOOKINGS: the refund, then the payment's key share with its event) |
+| `refund.submit`: the release, the alert of an unknown outcome | refund (updated), or booking key share alone |
+| A refund's request (`RefundsRepository.create`) | booking key share → payment `FOR UPDATE` → the new refund |
+| `payments.authorisation_watch` | bookings key share → payments `FOR UPDATE SKIP LOCKED` |
+| Stripe webhook receiver | payment key share (the stored event) |
+| `stripe.event`: a PaymentIntent | payment `FOR UPDATE` |
+| `stripe.event`: refunds (`applyRefunds`) | payment `FOR UPDATE` → refunds `FOR UPDATE` |
+| `stripe.event`: a dispute | booking key share → payment `FOR UPDATE` |
 
 ## 2. Stripe booking (`checkout.complete`)
 
@@ -158,17 +192,19 @@ sequenceDiagram
   B->>O: retry with key K
   O-->>B: same 504 (replayed: true) while undecided
   loop every minute until found or reconcile_until
-    W->>A: Queue List (booking queue of the queuing office)
-    W->>A: by-reference GET for PNRs created in the window with the lead name
+    W->>A: Queue List (booking queue of the queuing office, max 500)
+    W->>A: by-reference GET for every PNR created in the window with the lead name (50 per attempt at most)
     W->>W: match remark VELEXIS {reference}
   end
   alt order found
     W->>D: record the order (step 3), reconcile_outcome found
-    W->>S: capture (Stripe) and issue per policy
+    W->>S: capture the booking's total (the priced offer sent) and issue per policy
     W->>D: outbox: confirmation e-mail
-  else not found, Stripe
+  else not found by a complete search, Stripe
     W->>D: booking failed (SUPPLIER_TIMEOUT), checkout open, e-mail "not booked, not charged", staff alert
     W->>S: payment.void on ota-payments: void the authorisation
+  else search still incomplete at reconcile_until
+    W->>D: booking pending, reconcile_outcome manual_review, staff alert (nothing voided)
   else not found, airline card
     W->>D: ticketing_status manual_review, reconcile_outcome manual_review, staff alert
   end
@@ -179,12 +215,13 @@ sequenceDiagram
 Rules:
 
 - **Stale claims** (lead decision of 2026-10-21, OADR-0003 point 4): a booking can be `pending` without `reconcile_until` when the process died between the claim and Flight Create Orders, or when the unknown-outcome write failed (`bookings.reconcile_not_scheduled`). The scan adopts every such booking whose create-order attempt (`create_order_started_at`) started **more than 2 minutes** ago: `reconcile_until = now + 15 min`, event `booking.reconcile_adopted` (staff only), in the scan's transaction with `FOR UPDATE SKIP LOCKED`, so two scans adopt it once. It is then reconciled like any unknown outcome: searched for in the queuing office first, voided and its checkout reopened only once it is proven absent. A younger claim is left alone, as its request may still be in flight.
-- The window and the cadence: first check after 30 s, then every minute, for 15 minutes. Each check costs one Queue List and at most three by-reference calls. An attempt claims the booking (`FOR UPDATE SKIP LOCKED`, `reconcile_attempts + 1`, at most one attempt per 45 s), so the first job and a scan of the same minute make one search; only the attempt that still holds the claim may fail the booking.
-- The candidates: PNRs of the booking queue created from 1 minute before to 5 minutes after `create_order_started_at` (Queue List gives the minute, read in UTC unless it names an offset: an assumption to confirm with Amadeus with the queue convention, OADR-0003 follow-ups) whose travellers include the lead's last name, the closest in time first.
+- The window and the cadence: first check after 30 s, then every minute, for 15 minutes. Each check costs one Queue List (`max` 500) and one by-reference call per candidate, at most 50 per attempt. An attempt claims the booking (`FOR UPDATE SKIP LOCKED`, `reconcile_attempts + 1`, at most one attempt per 45 s), so the first job and a scan of the same minute make one search; only the attempt that still holds the claim may decide.
+- The candidates: every PNR of the booking queue created from 1 minute before to 5 minutes after `create_order_started_at` (Queue List gives the minute, read in UTC unless it names an offset: an assumption to confirm with Amadeus with the queue convention, OADR-0003 follow-ups) whose travellers include the lead's last name, the closest in time first; a PNR whose creation cannot be read is a candidate too, read last. All of them are read (lead decision of 2026-10-21, third batch: before, only three were, so the order could stay unread behind others of its minute); with more than 50, an attempt reads 50 and the next attempt the next ones.
 - A PNR matches only if it carries the general remark `VELEXIS <reference>` with sub-type BACKOFFICE; a name match alone is never enough.
-- A search that could not be completed (Queue List or a read failed, other than a `404`; an order with the remark that cannot be read) decides nothing: the next attempt looks again, and past `reconcile_until` the staff are alerted once. Nothing is voided while the order may be in what could not be read.
-- Found: the order is recorded as step 3 records it (`reconcile_outcome = found`, the checkout `completed`, which releases its lock), then captured and issued per the policy (step 5 through the ticketing job's attempt, a resync first). Not found: the booking `failed` with its `checkout_id` cleared, the checkout `open` again (`expired` past its expiry), `payment.void` queued on `ota-payments`, `booking.not_confirmed` to the traveller, a staff alert; checkout.complete then refuses that payment (`402 PAYMENT_REQUIRED`) while its authorisation is voided.
-- A re-price that was accepted before the lost answer moves the booking and the checkout to the new priced offer at the timeout, so a found order is captured for the total it was booked at.
+- A search that could not read every candidate is incomplete and decides nothing: the cap was reached, Queue List failed, answered something else than a list or may have left PNRs out (it holds 500, or its `meta.count` says more), an entry that may be the order has no record locator or no readable names, a read failed or timed out (other than a `404`), or an order with the remark cannot be read. The next attempt looks again until `reconcile_until`. Nothing is voided while the order may be in what could not be read.
+- Found: the order is recorded as step 3 records it (`reconcile_outcome = found`, the checkout `completed`, which releases its lock), then captured for the booking's total (the priced offer sent, never more than the authorisation) and issued per the policy (step 5 through the ticketing job's attempt, a resync first). Not found (a complete search at or after `reconcile_until`): the booking `failed` with its `checkout_id` cleared, the checkout `open` again (`expired` past its expiry), `payment.void` queued on `ota-payments`, `booking.not_confirmed` to the traveller, a staff alert; checkout.complete then refuses that payment (`402 PAYMENT_REQUIRED`) while its authorisation is voided.
+- Undecided (the search of the attempt at or after `reconcile_until` is still incomplete): OADR-0003 point 5's manual review, never a void. The booking stays `pending` with its checkout (still locked) and its authorisation, `reconcile_outcome = manual_review` and `ticketing_status = manual_review` (the console's "needs attention" list, `reconcileOutcome=manual_review`), the staff event `booking.reconcile_manual_review` and a staff alert; the scan stops and the same key's replay keeps answering the `504`. The staff look for the order in the office and settle the booking and its payment from the console.
+- A re-price that was accepted before the order was sent is recorded on the booking before the send (§1 step 2), and the unknown outcome moves the checkout to the new priced offer too, so a found order is captured for the total it was booked at, also when the process died after the send and the scan adopted the claim.
 - If the tenant has no booking queue configured, the order cannot be searched for: Stripe bookings are voided after 15 minutes and staff are told to check the office by hand (they can still import the PNR from the console).
 - Other operations that may have happened on a timeout: **issue** (resync with Flight Order Management before any retry), **cancel** (GET the order within 15 minutes, then apply the money step once), **patch** (resync, then let the caller retry with `If-Match`).
 
