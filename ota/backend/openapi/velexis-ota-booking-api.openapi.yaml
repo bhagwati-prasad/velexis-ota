@@ -251,6 +251,14 @@ tags:
       from the console. Calls run with the OTA's own Amadeus connection (environment of the API key); responses are net
       supplier data (no markup) and are never shown to customers. Each call writes supplier_requests (redacted) and
       staff_actions.
+  - name: Console payments
+    description: >-
+      The OTA's payments (`payments`, `payment_events`, `refunds`) of the request's environment: the list and the
+      detail with the redacted payment events, the refunds, the booking and the account mode, a fresh read from Stripe
+      on request, the capture of an authorised Stripe payment and the refund of a captured one (OADR-0010). Reads need
+      `payments:read` (every role), captures `payments:capture` (every role but viewer), refunds `payments:refund`
+      (owner, admin, finance); every capture, refund and refused call writes staff_actions, a successful read does
+      not. Airline-card payments are charged and refunded by the airline (OADR-0004).
   - name: Console settings
     description: >-
       The OTA's settings, edited in the OTA admin: markup rules and fee rules (how net prices become selling prices,
@@ -261,9 +269,13 @@ tags:
       read does not.
   - name: Internal
     description: >-
-      Endpoints that are not part of the SDK or of the public reference (`x-internal: true`): the Stripe webhook
-      receivers, which Stripe calls with a signed raw body (OADR-0010). No API key, customer or staff token: each
-      receiver checks the signature with its endpoint's own secret and finds the OTA by the endpoint's own rule.
+      Endpoints that are not part of the SDK or of the public reference (`x-internal: true`): the health endpoints
+      healthLive and healthReady (ADR-0016), which the uptime monitor, the deploy script and the on-VM check call, and
+      the Stripe webhook receivers, which Stripe calls with a signed raw body (OADR-0010): receiveStripeVelexisWebhook
+      (the Velexis account, M3), receiveStripeConnectWebhook (connected accounts) and receiveStripeConnectionWebhook
+      (an OTA's own account), both served from M5. No API key, customer or staff token: each receiver checks the
+      signature with its endpoint's own secret and finds the OTA by the endpoint's own rule, and healthReady answers
+      without a credential on a direct loopback connection only.
 x-tagGroups:
   - name: Storefront & identity
     tags:
@@ -293,6 +305,7 @@ x-tagGroups:
       - Console supplier log
       - Console Amadeus
       - Console settings
+      - Console payments
   - name: Internal
     tags:
       - Internal
@@ -17924,6 +17937,516 @@ paths:
           $ref: '#/components/responses/RateLimited'
         '500':
           $ref: '#/components/responses/InternalError'
+  /v1/console/payments:
+    get:
+      operationId: consoleListPayments
+      summary: List the payments of the OTA
+      description: >-
+        Lists the OTA's payments (`payments`) of the request's environment, newest first (`createdAt` descending, then
+        `id`), with cursor pagination (`cursor`, `limit` ≤ 100; a cursor of another query answers `400
+        VALIDATION_FAILED` at `/query/cursor`). The environment is the one the OTA admin sends in
+        `X-Velexis-Environment`, or the key's: a payment of the other environment is never listed. Each entry is a
+        `ConsolePayment`: the payment with its redacted events (`payment_events`), its refunds, a short reference of
+        its booking and the account mode of its payment connection. `clientSecret` is always `null` in console scope.
+
+
+        **Filters** (combined with AND; list values are comma-separated and OR-ed): `status` (spelled as
+        `Payment.status` spells it, `cancelled` for the stored `canceled`), `provider`, `method`, `bookingId`,
+        `createdFrom` (at or after) and `createdTo` (before). Index used: payments (environment, status, created_at).
+
+
+        No Stripe or Amadeus call: the data is as fresh as the last webhook or console call (console.payments.get with
+        `refresh=true` reads Stripe again). Permission `payments:read` (every role). Read-only; not audited per call.
+        Next.js: `cache: "no-store"`.
+
+
+        **Key-only calls.** Without a staff token the secret key must carry the `console:automation` scope and this
+        operation's permission in `platform.api_keys.scopes` — otherwise `403 SCOPE_NOT_ALLOWED`
+        (`details.requiredScope`) or `403 FORBIDDEN` (`details.requiredPermission`); such calls are audited as the API
+        key (see ConsoleApiKeyScope). A key scoped `storefront` is refused even with a staff token.
+      tags:
+        - Console payments
+      security:
+        - apiKey: []
+          staffAuth: []
+        - apiKey: []
+      x-sdk-method: console.payments.list
+      x-amadeus: []
+      x-tenant-tables:
+        - payments
+        - payment_events
+        - refunds
+        - bookings
+        - staff_actions
+      x-platform-tables:
+        - payment_provider_connections
+      x-error-codes:
+        - VALIDATION_FAILED
+        - UNAUTHENTICATED
+        - INVALID_API_KEY
+        - TOKEN_EXPIRED
+        - FORBIDDEN
+        - SCOPE_NOT_ALLOWED
+        - TENANT_SUSPENDED
+        - STAFF_MEMBERSHIP_INACTIVE
+        - ENVIRONMENT_NOT_ALLOWED
+        - RATE_LIMITED
+        - INTERNAL_ERROR
+      x-scope: console
+      x-permission: payments:read
+      x-milestone: M4
+      parameters:
+        - name: status
+          in: query
+          required: false
+          style: form
+          explode: false
+          description: Payment status(es), comma-separated (e.g. `authorized,captured`).
+          schema:
+            type: array
+            uniqueItems: true
+            items:
+              type: string
+              enum:
+                - requires_payment_method
+                - requires_action
+                - processing
+                - authorized
+                - captured
+                - partially_refunded
+                - refunded
+                - cancelled
+                - failed
+        - name: provider
+          in: query
+          required: false
+          style: form
+          explode: false
+          description: Payment provider(s), comma-separated (`stripe`; `airline` for airline-card payments).
+          schema:
+            type: array
+            uniqueItems: true
+            items:
+              type: string
+              enum:
+                - stripe
+                - adyen
+                - checkout_com
+                - paypal
+                - manual
+                - airline
+        - name: method
+          in: query
+          required: false
+          style: form
+          explode: false
+          description: Payment method(s), comma-separated.
+          schema:
+            type: array
+            uniqueItems: true
+            items:
+              type: string
+              enum:
+                - card
+                - apple_pay
+                - google_pay
+                - paypal
+                - bank_transfer
+                - agency_credit
+                - cash
+                - airline_card
+        - name: bookingId
+          in: query
+          required: false
+          description: Payments of this booking (`bkg_…`).
+          schema:
+            type: string
+            pattern: ^bkg_[0-9A-Za-z]{16,40}$
+        - $ref: '#/components/parameters/ConsoleCreatedFrom'
+        - $ref: '#/components/parameters/ConsoleCreatedTo'
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/AcceptLanguage'
+        - $ref: '#/components/parameters/VelexisEnvironment'
+        - $ref: '#/components/parameters/CustomerEndUserIp'
+        - $ref: '#/components/parameters/CustomerEndUserAgent'
+      responses:
+        '200':
+          description: One page of payments.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+            Cache-Control:
+              description: '`private, no-store`.'
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConsolePaymentPage'
+              examples:
+                payments:
+                  $ref: '#/components/examples/ConsolePaymentPageExample'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/ConsoleForbidden'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /v1/console/payments/{paymentId}:
+    get:
+      operationId: consoleGetPayment
+      summary: Get a payment with its events and refunds
+      description: >-
+        Returns one payment of the request's environment as a `ConsolePayment`: every field of `Payment`, its events
+        (`payment_events`, oldest first, with the redacted payload stored for each: ids, statuses and amounts, never a
+        client secret, card data or a token), its refunds (`refunds`, oldest first, with who asked for them), its
+        booking (`id`, `reference`, `status`; `null` before the booking exists) and the account mode of its payment
+        connection (`null` for an airline-card payment). `clientSecret` is always `null` in console scope. A payment of
+        the other environment answers `404 NOT_FOUND`, like a missing one. `ETag` = `"<version>"`: pass it as
+        `If-Match` to console.payments.capture.
+
+
+        **Refresh.** No Stripe call by default: the data is as fresh as the last webhook or console call.
+        `refresh=true` reads the PaymentIntent again from Stripe with the payment's own connection (OADR-0010 point 1)
+        and applies its state to the payment under the payment's `version`, as the processing of a webhook does
+        (OADR-0010 point 5), before answering; a payment without a PaymentIntent (an airline-card payment, or one that
+        never reached Stripe) is answered as stored. Stripe failing or out of reach answers `502
+        PAYMENT_PROVIDER_ERROR`, and nothing changes.
+
+
+        Permission `payments:read` (every role). Changes nothing of its own: `refresh=true` only applies Stripe's state,
+        as a webhook would; not audited per call. Next.js: `cache: "no-store"`.
+
+
+        **Key-only calls.** Without a staff token the secret key must carry the `console:automation` scope and this
+        operation's permission in `platform.api_keys.scopes` — otherwise `403 SCOPE_NOT_ALLOWED`
+        (`details.requiredScope`) or `403 FORBIDDEN` (`details.requiredPermission`); such calls are audited as the API
+        key (see ConsoleApiKeyScope). A key scoped `storefront` is refused even with a staff token.
+      tags:
+        - Console payments
+      security:
+        - apiKey: []
+          staffAuth: []
+        - apiKey: []
+      x-sdk-method: console.payments.get
+      x-amadeus: []
+      x-tenant-tables:
+        - payments
+        - payment_events
+        - refunds
+        - bookings
+        - staff_actions
+      x-platform-tables:
+        - payment_provider_connections
+      x-error-codes:
+        - VALIDATION_FAILED
+        - UNAUTHENTICATED
+        - INVALID_API_KEY
+        - TOKEN_EXPIRED
+        - FORBIDDEN
+        - SCOPE_NOT_ALLOWED
+        - TENANT_SUSPENDED
+        - STAFF_MEMBERSHIP_INACTIVE
+        - ENVIRONMENT_NOT_ALLOWED
+        - NOT_FOUND
+        - RATE_LIMITED
+        - INTERNAL_ERROR
+        - PAYMENT_PROVIDER_ERROR
+      x-scope: console
+      x-permission: payments:read
+      x-milestone: M4
+      parameters:
+        - $ref: '#/components/parameters/ConsolePaymentId'
+        - name: refresh
+          in: query
+          required: false
+          description: '`true`: read the PaymentIntent again from Stripe and apply its state before answering.'
+          schema:
+            type: boolean
+            default: false
+        - $ref: '#/components/parameters/AcceptLanguage'
+        - $ref: '#/components/parameters/VelexisEnvironment'
+        - $ref: '#/components/parameters/CustomerEndUserIp'
+        - $ref: '#/components/parameters/CustomerEndUserAgent'
+      responses:
+        '200':
+          $ref: '#/components/responses/ConsolePaymentOk'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/ConsoleForbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '502':
+          $ref: '#/components/responses/ConsolePaymentProviderError'
+  /v1/console/payments/{paymentId}/capture:
+    post:
+      operationId: consoleCapturePayment
+      summary: Capture an authorised Stripe payment
+      description: >-
+        Captures an authorised Stripe payment that was not captured automatically: the `manual_review` ticketing
+        policy, or a capture that failed after the booking (ota/docs/flows/console-operations.md §3 step 5). Only a
+        Stripe payment (`provider = stripe`) in `authorized` can be captured; any other answers `409 CONFLICT` with
+        `details.reason = "payment_not_capturable"` and the payment's `details.status` and `details.provider` (an
+        airline-card payment is charged by the airline, never captured here).
+
+
+        **Amount.** `amount` is what to capture, in the payment's currency (`422 UNPROCESSABLE`, `details.reason =
+        "currency_mismatch"` otherwise): a positive amount with at most two decimals and no more than the currency's
+        minor units (`400 VALIDATION_FAILED` at `/amount/amount` otherwise), at most the authorised amount (`422
+        UNPROCESSABLE`, `details.reason = "amount_exceeds_authorized"`, with `details.authorized`). Without `amount`
+        the whole authorised amount is captured. A partial capture releases the rest of the authorisation: Stripe
+        captures once per PaymentIntent.
+
+
+        **Effect.** Stripe captures with the idempotency key `pi:capture:<pay_id>:<amount>` (OADR-0010 point 3), so a
+        retry never captures twice; no transaction is open during the call. The payment becomes `captured` with
+        `amountCaptured` and `capturedAt`, and a `payment_events` row (`source = staff`, `payment.captured`) and a
+        `staff_actions` row (`payment.capture`, with `reason`) record it; when the payment belongs to a booking, the
+        booking's `amount_paid` and a `booking_events` row `payment.captured` show it too (the transaction locks the
+        booking, then the payment: OADR-0003 point 11). The `payment_intent.succeeded` webhook that follows finds the
+        payment already captured. An authorisation that expired or was cancelled at Stripe answers `402
+        PAYMENT_DECLINED` (nothing is captured); Stripe failing or out of reach answers `502 PAYMENT_PROVIDER_ERROR`:
+        retry with the same `Idempotency-Key`.
+
+
+        **Preconditions.** `If-Match` = the payment's `ETag` (`412 PRECONDITION_FAILED` when stale); the answer has the
+        new `version` and `ETag`. `Idempotency-Key` required (`idempotency_keys`, 24 h): a retry with the same key and
+        body returns the stored answer and captures once; the same key with another body → `409
+        IDEMPOTENCY_KEY_REUSED`. No Amadeus call. Permission `payments:capture` (owner, admin, agent, finance).
+
+
+        **Key-only calls.** Without a staff token the secret key must carry the `console:automation` scope and this
+        operation's permission in `platform.api_keys.scopes` — otherwise `403 SCOPE_NOT_ALLOWED`
+        (`details.requiredScope`) or `403 FORBIDDEN` (`details.requiredPermission`); such calls are audited as the API
+        key (see ConsoleApiKeyScope). A key scoped `storefront` is refused even with a staff token.
+      tags:
+        - Console payments
+      security:
+        - apiKey: []
+          staffAuth: []
+        - apiKey: []
+      x-sdk-method: console.payments.capture
+      x-amadeus: []
+      x-tenant-tables:
+        - payments
+        - payment_events
+        - refunds
+        - bookings
+        - booking_events
+        - staff_actions
+        - idempotency_keys
+      x-platform-tables:
+        - payment_provider_connections
+      x-error-codes:
+        - VALIDATION_FAILED
+        - UNAUTHENTICATED
+        - INVALID_API_KEY
+        - TOKEN_EXPIRED
+        - PAYMENT_DECLINED
+        - FORBIDDEN
+        - SCOPE_NOT_ALLOWED
+        - TENANT_SUSPENDED
+        - STAFF_MEMBERSHIP_INACTIVE
+        - ENVIRONMENT_NOT_ALLOWED
+        - NOT_FOUND
+        - CONFLICT
+        - IDEMPOTENCY_KEY_REUSED
+        - PRECONDITION_FAILED
+        - UNPROCESSABLE
+        - RATE_LIMITED
+        - INTERNAL_ERROR
+        - PAYMENT_PROVIDER_ERROR
+      x-scope: console
+      x-permission: payments:capture
+      x-milestone: M4
+      parameters:
+        - $ref: '#/components/parameters/ConsolePaymentId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/IfMatch'
+        - $ref: '#/components/parameters/AcceptLanguage'
+        - $ref: '#/components/parameters/VelexisEnvironment'
+        - $ref: '#/components/parameters/CustomerEndUserIp'
+        - $ref: '#/components/parameters/CustomerEndUserAgent'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ConsolePaymentCaptureRequest'
+            examples:
+              full:
+                summary: Capture the whole authorisation after the manual review
+                value:
+                  reason: Manual review passed; booking VX7K2Q confirmed with the airline
+              partial:
+                summary: Capture less than authorised (the rest is released)
+                value:
+                  amount:
+                    amount: '1200.00'
+                    currency: EUR
+                  reason: One traveller dropped before issuance; the rest is released
+      responses:
+        '200':
+          $ref: '#/components/responses/ConsolePaymentCaptured'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '402':
+          $ref: '#/components/responses/PaymentRequired'
+        '403':
+          $ref: '#/components/responses/ConsoleForbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/ConsolePaymentConflict'
+        '412':
+          $ref: '#/components/responses/PreconditionFailed'
+        '422':
+          $ref: '#/components/responses/ConsolePaymentUnprocessable'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '502':
+          $ref: '#/components/responses/ConsolePaymentProviderError'
+  /v1/console/payments/{paymentId}/refunds:
+    post:
+      operationId: consoleRefundPayment
+      summary: Refund a captured Stripe payment
+      description: >-
+        Asks for a refund of a captured Stripe payment, partial or full, with a reason. Only a Stripe payment
+        (`provider = stripe`) in `captured` or `partially_refunded` can be refunded here: an airline-card payment answers
+        `422 UNPROCESSABLE` with `details.reason = "refund_via_airline"` (the airline refunds its own charge, through
+        the booking's cancellation), any other payment `409 CONFLICT` with `details.reason = "payment_not_refundable"`
+        and the payment's `details.status` and `details.provider`.
+
+
+        **Amount.** `amount` is what to give back, in the payment's currency (`422 UNPROCESSABLE`, `details.reason =
+        "currency_mismatch"` otherwise): a positive amount with at most two decimals and no more than the currency's
+        minor units (`400 VALIDATION_FAILED` at `/amount/amount` otherwise), at most what is still refundable: the
+        captured amount, less the refunded amount, less the refunds still in flight (`pending` or `processing`). More
+        answers `422 UNPROCESSABLE` with `details.reason = "amount_exceeds_captured"` and `details.refundable` (what
+        can still be refunded).
+
+
+        **Effect.** In one transaction, which locks the payment's booking, then the payment (OADR-0003 point 11), a
+        `refunds` row is written (`pending`, `requested_by_type = staff` and the staff member's `stf_…` id, `reason`,
+        `reason_note` = `reasonNote`), with a `payment_events` row (`source = staff`, `refund.requested`), a
+        `booking_events` row `payment.refunded` (the refund asked for, with its `rfd_…` id and amount) when the payment
+        belongs to a booking, and a `staff_actions` row (`payment.refund`). The refund is then sent to Stripe by the
+        payments queue (`refund.submit` on `ota-payments`, idempotency key `refund:<rfd_id>`, OADR-0010 points 3 and
+        6), so this call makes no Stripe call and Stripe being down delays the refund, never refuses it; the refund
+        webhooks (`charge.refunded`, `charge.refund.updated`) set its final status and the payment's `amountRefunded`
+        and status (`partially_refunded` or `refunded`). The answer is the payment with the new refund in `refunds`.
+
+
+        **Idempotency.** `Idempotency-Key` required (`idempotency_keys`, 24 h): a retry with the same key and body
+        returns the stored answer and asks for one refund; the same key with another body → `409
+        IDEMPOTENCY_KEY_REUSED`. No Amadeus call. Permission `payments:refund` (owner, admin, finance).
+
+
+        **Key-only calls.** Without a staff token the secret key must carry the `console:automation` scope and this
+        operation's permission in `platform.api_keys.scopes` — otherwise `403 SCOPE_NOT_ALLOWED`
+        (`details.requiredScope`) or `403 FORBIDDEN` (`details.requiredPermission`); such calls are audited as the API
+        key (see ConsoleApiKeyScope). A key scoped `storefront` is refused even with a staff token.
+      tags:
+        - Console payments
+      security:
+        - apiKey: []
+          staffAuth: []
+        - apiKey: []
+      x-sdk-method: console.payments.refund
+      x-amadeus: []
+      x-tenant-tables:
+        - payments
+        - payment_events
+        - refunds
+        - bookings
+        - booking_events
+        - staff_actions
+        - idempotency_keys
+      x-platform-tables:
+        - payment_provider_connections
+      x-error-codes:
+        - VALIDATION_FAILED
+        - UNAUTHENTICATED
+        - INVALID_API_KEY
+        - TOKEN_EXPIRED
+        - FORBIDDEN
+        - SCOPE_NOT_ALLOWED
+        - TENANT_SUSPENDED
+        - STAFF_MEMBERSHIP_INACTIVE
+        - ENVIRONMENT_NOT_ALLOWED
+        - NOT_FOUND
+        - CONFLICT
+        - IDEMPOTENCY_KEY_REUSED
+        - UNPROCESSABLE
+        - RATE_LIMITED
+        - INTERNAL_ERROR
+      x-scope: console
+      x-permission: payments:refund
+      x-milestone: M4
+      parameters:
+        - $ref: '#/components/parameters/ConsolePaymentId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/AcceptLanguage'
+        - $ref: '#/components/parameters/VelexisEnvironment'
+        - $ref: '#/components/parameters/CustomerEndUserIp'
+        - $ref: '#/components/parameters/CustomerEndUserAgent'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ConsolePaymentRefundRequest'
+            examples:
+              goodwill:
+                summary: A partial goodwill refund
+                value:
+                  amount:
+                    amount: '50.00'
+                    currency: EUR
+                  reason: goodwill
+                  reasonNote: Delayed outbound flight, agreed with the customer by phone
+              duplicate:
+                summary: A full refund of a duplicate payment
+                value:
+                  amount:
+                    amount: '1414.06'
+                    currency: EUR
+                  reason: duplicate
+      responses:
+        '201':
+          $ref: '#/components/responses/ConsolePaymentRefundRequested'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/ConsoleForbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/ConsolePaymentConflict'
+        '422':
+          $ref: '#/components/responses/ConsolePaymentUnprocessable'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
   /webhooks/stripe/velexis/{environment}:
     post:
       operationId: receiveStripeVelexisWebhook
@@ -18047,6 +18570,435 @@ paths:
           $ref: '#/components/responses/InternalError'
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
+  /webhooks/stripe/connect/{environment}:
+    post:
+      operationId: receiveStripeConnectWebhook
+      summary: Receive a Stripe event of an OTA's connected account
+      description: >-
+        The Stripe Connect webhook endpoint of one environment, which serves the `connect_standard` payment mode
+        (ADR-0011, OADR-0010 points 4 and 5): Stripe sends here the events of every OTA account connected to the
+        Velexis platform with Stripe Connect. Stripe calls it; no SDK user does. Caddy forwards the body unchanged and
+        the API keeps it as raw bytes (the raw body parser of `/webhooks/*`). Documented in M4; served from M5
+        (OBE-078), until then the route answers as every pending route.
+
+
+        **Checks, in order.** (1) `Stripe-Signature` is verified on the raw body with the endpoint's Connect secret
+        (`STRIPE_WEBHOOK_SECRET_CONNECT_TEST` or `…_LIVE`, Stripe's signature scheme with a 5-minute tolerance): a body
+        changed after signing, another secret (the Velexis account's or a connection's own included), a stale
+        timestamp or an environment without a secret answer `400 INVALID_REQUEST` (`details.reason:
+        signature_invalid`) before anything in the body is read. (2) `event.livemode` must match `{environment}`
+        (`true` only on `live`). (3) The OTA comes **only** from `event.account`: the `connect_standard` connection of
+        `{environment}` whose `account_reference` is that `acct_…` (`platform.payment_provider_connections`). The OTA
+        controls its connected account and can write any metadata, so `metadata.velexis_tenant_id` never selects the
+        OTA; wherever it or `metadata.velexis_environment` is present, it must equal the OTA and environment found.
+        (4) The payment is looked up by `metadata.payment_id`, then by the PaymentIntent id, inside that OTA only; its
+        `provider_payment_id`, when set, must be the event's object, and a payment of another environment is a
+        mismatch.
+
+
+        **Effect.** As on the Velexis endpoint (receiveStripeVelexisWebhook): in one transaction of the OTA's schema a
+        `payment_events` row (`source = webhook`, `type = webhook.<event type>`, `provider_event_id` = the event id, a
+        payload of ids, statuses and amounts only); an event id that is already stored is a duplicate and writes
+        nothing. Then `stripe.event {tenantId, paymentEventId}` is queued on `ota-stripe-events` with the event id as
+        job id and the answer is `200`. The worker reads the object again from Stripe on the connected account
+        (`Stripe-Account: <acct_…>`) and applies that state, never the event body.
+
+
+        **Acknowledged without effect** (`200`, nothing written, no staff alert, logged without the payload): an event
+        without `account` or for an `acct_…` no connection has, an unknown payment, an OTA that is neither active nor
+        suspended, and every mismatch of step 2 to 4, which is logged as a security event: one OTA's signed events can
+        never write into another OTA's schema. **`503 SERVICE_UNAVAILABLE`** when the connection or the OTA cannot be
+        looked up or the event cannot be queued, and **`500 INTERNAL_ERROR`** when the event cannot be stored: Stripe
+        delivers it again either way.
+      tags:
+        - Internal
+      security: []
+      x-scope: internal
+      x-internal: true
+      x-milestone: M5
+      x-error-codes:
+        - VALIDATION_FAILED
+        - INVALID_REQUEST
+        - INTERNAL_ERROR
+        - SERVICE_UNAVAILABLE
+      x-tenant-tables:
+        - payments
+        - payment_events
+      x-platform-tables:
+        - payment_provider_connections
+        - tenants
+      parameters:
+        - name: environment
+          in: path
+          required: true
+          description: >-
+            The Stripe mode of the endpoint: `test` (Stripe test mode, `livemode: false`) or `live`. Each has its own
+            Connect webhook signing secret.
+          schema:
+            type: string
+            enum:
+              - test
+              - live
+          example: test
+        - name: Stripe-Signature
+          in: header
+          required: true
+          description: >-
+            Stripe's signature of the raw body: `t=<unix seconds>,v1=<HMAC-SHA256 of "<t>.<body>">`, possibly with
+            several `v1` entries during a secret rotation.
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 2048
+      requestBody:
+        required: true
+        description: >-
+          The Stripe event exactly as Stripe sent it, with the connected account in `account`. The signature covers
+          these bytes, so the body is verified before it is parsed and is never re-serialised.
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StripeConnectWebhookEvent'
+            example:
+              id: evt_1QExampleOnlyConnectCapture
+              object: event
+              account: acct_1QExampleOnlyAcmeTravel
+              api_version: 2025-08-27.basil
+              created: 1791799321
+              livemode: false
+              type: payment_intent.amount_capturable_updated
+              data:
+                object:
+                  id: pi_1QExampleOnlyConnectPayment
+                  object: payment_intent
+                  amount: 45210
+                  amount_capturable: 45210
+                  currency: eur
+                  status: requires_capture
+                  metadata:
+                    velexis_tenant_id: ten_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+                    velexis_environment: test
+                    checkout_id: chk_01JA2ZB1C3D5E7F9G1H3J5K7M9
+                    payment_id: pay_01JA2ZB9X1Y3Z5A7B9C1D3E5F7
+      responses:
+        '200':
+          description: >-
+            The event is stored and queued, was already stored, or is acknowledged without effect (see the
+            description).
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebhookAcknowledgement'
+              example:
+                received: true
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+  /webhooks/stripe/c/{connectionId}:
+    post:
+      operationId: receiveStripeConnectionWebhook
+      summary: Receive a Stripe event of an OTA's own Stripe account
+      description: >-
+        The webhook endpoint of one payment connection in `api_keys` mode (ADR-0011, OADR-0010 points 4 and 5): the OTA
+        creates it in its own Stripe dashboard with the URL the portal gave it
+        (`https://api.ota.example.com/webhooks/stripe/c/<ppc_id>`, PADR-0011), so Stripe sends the events of the OTA's
+        own account here. Stripe calls it; no SDK user does. Caddy forwards the body unchanged and the API keeps it as
+        raw bytes (the raw body parser of `/webhooks/*`). Documented in M4; served from M5 (OBE-078), until then the
+        route answers as every pending route.
+
+
+        **Checks, in order.** (1) `Stripe-Signature` is verified on the raw body with that connection's own webhook
+        signing secret (`platform.payment_provider_connections.webhook_secret_ciphertext`, envelope-encrypted and
+        decrypted only inside the receiver, never logged): a body changed after signing, another connection's secret,
+        a stale timestamp, and a `connectionId` that names no connection, a connection that is not in `api_keys` mode
+        or one without a secret all answer the same `400 INVALID_REQUEST` (`details.reason: signature_invalid`) before
+        anything in the body is read, so the endpoint never tells which connection ids exist. (2) `event.livemode`
+        must match the connection's environment. (3) The OTA comes **only** from the path's connection. The OTA owns
+        the account and, in this mode, even knows the signing secret, so `metadata.velexis_tenant_id` never selects
+        the OTA; wherever it or `metadata.velexis_environment` is present, it must equal the connection's OTA and
+        environment. (4) The payment is looked up by `metadata.payment_id`, then by the PaymentIntent id, inside that
+        OTA only; its `provider_payment_id`, when set, must be the event's object, and a payment of another
+        environment is a mismatch.
+
+
+        **Effect.** As on the Velexis endpoint (receiveStripeVelexisWebhook): in one transaction of the OTA's schema a
+        `payment_events` row (`source = webhook`, `type = webhook.<event type>`, `provider_event_id` = the event id, a
+        payload of ids, statuses and amounts only); an event id that is already stored is a duplicate and writes
+        nothing. Then `stripe.event {tenantId, paymentEventId}` is queued on `ota-stripe-events` with the event id as
+        job id and the answer is `200`. The worker reads the object again from Stripe with the connection's own key
+        and applies that state, never the event body.
+
+
+        **Acknowledged without effect** (`200`, nothing written, no staff alert, logged without the payload): an
+        unknown payment, an OTA that is neither active nor suspended, and every mismatch of step 2 to 4, which is
+        logged as a security event: one OTA's signed events can never write into another OTA's schema. **`503
+        SERVICE_UNAVAILABLE`** when the connection or the OTA cannot be looked up or the event cannot be queued, and
+        **`500 INTERNAL_ERROR`** when the event cannot be stored: Stripe delivers it again either way.
+      tags:
+        - Internal
+      security: []
+      x-scope: internal
+      x-internal: true
+      x-milestone: M5
+      x-error-codes:
+        - VALIDATION_FAILED
+        - INVALID_REQUEST
+        - INTERNAL_ERROR
+        - SERVICE_UNAVAILABLE
+      x-tenant-tables:
+        - payments
+        - payment_events
+      x-platform-tables:
+        - payment_provider_connections
+        - tenants
+      parameters:
+        - name: connectionId
+          in: path
+          required: true
+          description: >-
+            The payment connection (`platform.payment_provider_connections.id`, `ppc_` and a ULID) whose webhook
+            endpoint this is, as the portal's `webhookUrl` names it.
+          schema:
+            type: string
+            pattern: ^ppc_[0-9A-HJKMNP-TV-Z]{26}$
+          example: ppc_01JA2ZBA4D8F2H6K0N4Q8S2V6X
+        - name: Stripe-Signature
+          in: header
+          required: true
+          description: >-
+            Stripe's signature of the raw body: `t=<unix seconds>,v1=<HMAC-SHA256 of "<t>.<body>">`, possibly with
+            several `v1` entries during a secret rotation.
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 2048
+      requestBody:
+        required: true
+        description: >-
+          The Stripe event exactly as Stripe sent it. The signature covers these bytes, so the body is verified before
+          it is parsed and is never re-serialised.
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StripeWebhookEvent'
+            example:
+              id: evt_1QExampleOnlyOwnRefund
+              object: event
+              api_version: 2025-08-27.basil
+              created: 1791799321
+              livemode: false
+              type: charge.refunded
+              data:
+                object:
+                  id: ch_1QExampleOnlyOwnCharge
+                  object: charge
+                  amount: 45210
+                  amount_refunded: 5000
+                  currency: eur
+                  payment_intent: pi_1QExampleOnlyOwnPayment
+                  metadata:
+                    velexis_tenant_id: ten_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+                    velexis_environment: test
+                    checkout_id: chk_01JA2ZB1C3D5E7F9G1H3J5K7M9
+                    payment_id: pay_01JA2ZB9X1Y3Z5A7B9C1D3E5F7
+      responses:
+        '200':
+          description: >-
+            The event is stored and queued, was already stored, or is acknowledged without effect (see the
+            description).
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebhookAcknowledgement'
+              example:
+                received: true
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+  /health/live:
+    get:
+      operationId: healthLive
+      summary: Liveness of the API process
+      description: >-
+        `200 {status: "ok"}` while the process runs and its event loop answers; it checks nothing else, so it answers
+        while PostgreSQL or Redis is down (ADR-0016). Called by the uptime monitor and by the deploy script. Public on
+        the API hosts (`api.ota.example.com`), and as `/api/health/live` on the storefront hosts, where Caddy adds the
+        edge credential; Caddy blocks every other `/health/*` path. No credential is needed and no rate limit counts
+        it; a credential sent anyway is checked by the caller guard as on every route: an unknown key or edge secret
+        answers `401 INVALID_API_KEY`, the edge credential beside `X-Api-Key` `400 INVALID_REQUEST`, a publishable key
+        from an origin it does not list `403 ORIGIN_NOT_ALLOWED`, and a key that cannot be looked up (the platform
+        tables out of reach) `503 SERVICE_UNAVAILABLE`. Never cached (`Cache-Control: no-store`) and never logged per
+        request. The worker serves the same answer on its own health port (`127.0.0.1:HEALTH_PORT`), which has no Nest
+        pipeline.
+      tags:
+        - Internal
+      security: []
+      x-scope: internal
+      x-internal: true
+      x-milestone: M0
+      x-tenant-tables: []
+      x-error-codes:
+        - INVALID_REQUEST
+        - INVALID_API_KEY
+        - ORIGIN_NOT_ALLOWED
+        - SERVICE_UNAVAILABLE
+      responses:
+        '200':
+          description: The process is up.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+            Cache-Control:
+              description: '`no-store`.'
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthLiveness'
+              example:
+                status: ok
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+  /health/ready:
+    get:
+      operationId: healthReady
+      summary: Readiness of the API process
+      description: >-
+        Checks the dependencies the process needs before it can serve, in parallel, each within 2 seconds: PostgreSQL
+        (`SELECT 1` on a small pool of its own) and Redis (`PING` on a connection of its own). `200` with `status: ok`
+        when every check answers, otherwise `503` with `status: unavailable`; `checks` names the outcome of each (`ok`,
+        `timeout`, `down`), never a DSN or an error text (ADR-0016). Called by the deploy script after every restart
+        (`curl --max-time 3`) and by the on-VM check.
+
+
+        **Local only.** Caddy blocks `/health/ready` publicly (and `/api/health/ready` on the storefront hosts). The
+        API answers it without a credential only on a direct loopback connection (the socket peer is loopback and
+        neither `X-Forwarded-For` nor `X-Forwarded-Host` is present, OADR-0009 rule 1.2); any other request without a
+        credential answers `401 INVALID_API_KEY`, and a credential sent anyway is checked as on every route, with the
+        answers healthLive lists (`400`, `401`, `403 ORIGIN_NOT_ALLOWED`, and `503 SERVICE_UNAVAILABLE` with the error
+        envelope instead of the readiness body when the key cannot be looked up). Never cached (`Cache-Control:
+        no-store`) and never logged per request.
+
+
+        **Worker.** The worker serves the same paths and answers on `127.0.0.1:HEALTH_PORT` (no Nest pipeline). From
+        OBE-025 (M2) its readiness also reports the BullMQ queues in `queues`: per queue the waiting jobs, the age of
+        the oldest one and the jobs failed in the last hour. Old jobs do not make it unready: the on-VM check decides
+        the alert threshold.
+      tags:
+        - Internal
+      security: []
+      x-scope: internal
+      x-internal: true
+      x-milestone: M0
+      x-tenant-tables: []
+      x-error-codes:
+        - INVALID_REQUEST
+        - INVALID_API_KEY
+        - ORIGIN_NOT_ALLOWED
+        - SERVICE_UNAVAILABLE
+      responses:
+        '200':
+          description: Every dependency answered.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+            Cache-Control:
+              description: '`no-store`.'
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthReadiness'
+              examples:
+                ready:
+                  summary: The API is ready
+                  value:
+                    status: ok
+                    checks:
+                      postgres: ok
+                      redis: ok
+                worker:
+                  summary: The worker is ready and reports its queues
+                  value:
+                    status: ok
+                    checks:
+                      postgres: ok
+                      redis: ok
+                    queues:
+                      ota-payments:
+                        waiting: 2
+                        oldestWaitingSeconds: 140
+                        failedLastHour: 0
+                      ota-stripe-events:
+                        waiting: 0
+                        oldestWaitingSeconds: null
+                        failedLastHour: 0
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '503':
+          description: >-
+            A dependency did not answer in time or refused; `checks` says which. A request that sent a key the caller
+            guard could not look up gets the error envelope (`SERVICE_UNAVAILABLE`) instead.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+            Cache-Control:
+              description: '`no-store` (the readiness body).'
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/HealthReadiness'
+                  - $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                redisDown:
+                  summary: Redis is unreachable
+                  value:
+                    status: unavailable
+                    checks:
+                      postgres: ok
+                      redis: down
+                postgresTimeout:
+                  summary: PostgreSQL does not answer within 2 seconds
+                  value:
+                    status: unavailable
+                    checks:
+                      postgres: timeout
+                      redis: ok
+                SERVICE_UNAVAILABLE:
+                  summary: SERVICE_UNAVAILABLE (a key sent anyway could not be looked up)
+                  value:
+                    error:
+                      code: SERVICE_UNAVAILABLE
+                      message: Velexis is temporarily unavailable.
+                      status: 503
+                      requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
 components:
   securitySchemes:
     apiKey:
@@ -18765,6 +19717,14 @@ components:
       description: Locale of the template (BCP 47, such as `en` or `fr-CA`).
       schema:
         $ref: '#/components/schemas/LocaleCode'
+    ConsolePaymentId:
+      name: paymentId
+      in: path
+      required: true
+      description: Payment id (`pay_…`) of this OTA, in the request's environment.
+      schema:
+        type: string
+        pattern: ^pay_[0-9A-Za-z]{16,40}$
   responses:
     BadRequest:
       description: >-
@@ -21966,6 +22926,188 @@ components:
                   requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
                   details:
                     reason: locale_not_supported
+    ConsolePaymentOk:
+      description: The payment with console detail.
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/X-Request-Id'
+        ETag:
+          $ref: '#/components/headers/ETag'
+        Cache-Control:
+          description: '`private, no-store`.'
+          schema:
+            type: string
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ConsolePayment'
+          examples:
+            authorized:
+              $ref: '#/components/examples/ConsolePaymentExample'
+            captured:
+              $ref: '#/components/examples/ConsolePaymentCapturedExample'
+    ConsolePaymentCaptured:
+      description: The payment after the capture, with its new `version`.
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/X-Request-Id'
+        ETag:
+          $ref: '#/components/headers/ETag'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ConsolePayment'
+          examples:
+            captured:
+              $ref: '#/components/examples/ConsolePaymentCapturedExample'
+    ConsolePaymentRefundRequested:
+      description: >-
+        The refund was asked for: the payment with the new `pending` refund in `refunds`. `Location` points to the
+        payment, where the refund's status can be followed.
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/X-Request-Id'
+        Location:
+          $ref: '#/components/headers/Location'
+        ETag:
+          $ref: '#/components/headers/ETag'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ConsolePayment'
+          examples:
+            refundRequested:
+              $ref: '#/components/examples/ConsolePaymentRefundRequestedExample'
+    ConsolePaymentConflict:
+      description: >-
+        The payment is not in a state that allows the action. Possible codes: CONFLICT (`details.reason`:
+        `payment_not_capturable` (capture: not a Stripe payment in `authorized`) or `payment_not_refundable` (refund: not
+        a Stripe payment in `captured` or `partially_refunded`), with the payment's `details.status` and
+        `details.provider`), IDEMPOTENCY_KEY_REUSED.
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/X-Request-Id'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            NOT_CAPTURABLE:
+              summary: CONFLICT (capture of a payment that is no longer authorised)
+              value:
+                error:
+                  code: CONFLICT
+                  message: Only an authorised Stripe payment can be captured; this one is captured.
+                  status: 409
+                  requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+                  details:
+                    reason: payment_not_capturable
+                    status: captured
+                    provider: stripe
+            NOT_REFUNDABLE:
+              summary: CONFLICT (refund of a payment that was never captured)
+              value:
+                error:
+                  code: CONFLICT
+                  message: Only a captured Stripe payment can be refunded; this one is authorized.
+                  status: 409
+                  requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+                  details:
+                    reason: payment_not_refundable
+                    status: authorized
+                    provider: stripe
+            IDEMPOTENCY_KEY_REUSED:
+              summary: IDEMPOTENCY_KEY_REUSED
+              value:
+                error:
+                  code: IDEMPOTENCY_KEY_REUSED
+                  message: The Idempotency-Key was already used with a different request body.
+                  status: 409
+                  requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+    ConsolePaymentUnprocessable:
+      description: >-
+        The amount or the payment was refused by a rule. Possible codes: UNPROCESSABLE (`details.reason`:
+        `amount_exceeds_authorized` (capture, with `details.authorized`), `amount_exceeds_captured` (refund, with
+        `details.refundable`: the captured amount less the refunded amount and the refunds in flight),
+        `refund_via_airline` (refund of an airline-card payment, which the airline refunds), `currency_mismatch` (an
+        amount in another currency than the payment's, with `details.currency`)).
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/X-Request-Id'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            AMOUNT_EXCEEDS_AUTHORIZED:
+              summary: UNPROCESSABLE (a capture above the authorisation)
+              value:
+                error:
+                  code: UNPROCESSABLE
+                  message: The capture is above the authorised amount.
+                  status: 422
+                  requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+                  details:
+                    reason: amount_exceeds_authorized
+                    authorized:
+                      amount: '1414.06'
+                      currency: EUR
+            AMOUNT_EXCEEDS_CAPTURED:
+              summary: UNPROCESSABLE (a refund above what is still refundable)
+              value:
+                error:
+                  code: UNPROCESSABLE
+                  message: The refund is above what can still be refunded.
+                  status: 422
+                  requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+                  details:
+                    reason: amount_exceeds_captured
+                    refundable:
+                      amount: '1364.06'
+                      currency: EUR
+            REFUND_VIA_AIRLINE:
+              summary: UNPROCESSABLE (an airline-card payment)
+              value:
+                error:
+                  code: UNPROCESSABLE
+                  message: The airline charged this card; it is refunded by the airline when the booking is cancelled.
+                  status: 422
+                  requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+                  details:
+                    reason: refund_via_airline
+            CURRENCY_MISMATCH:
+              summary: UNPROCESSABLE (an amount in another currency)
+              value:
+                error:
+                  code: UNPROCESSABLE
+                  message: The amount must be in the payment's currency (EUR).
+                  status: 422
+                  requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+                  details:
+                    reason: currency_mismatch
+                    currency: EUR
+    ConsolePaymentProviderError:
+      description: >-
+        Stripe returned an error or could not be reached. Possible codes: PAYMENT_PROVIDER_ERROR (nothing changed on
+        this side; retry a capture with the same Idempotency-Key, which Stripe answers once).
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/X-Request-Id'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            PAYMENT_PROVIDER_ERROR:
+              summary: PAYMENT_PROVIDER_ERROR
+              value:
+                error:
+                  code: PAYMENT_PROVIDER_ERROR
+                  message: Stripe is not responding; try again.
+                  status: 502
+                  requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+                  details:
+                    provider: stripe
   schemas:
     ErrorResponse:
       type: object
@@ -41245,6 +42387,288 @@ components:
         text:
           type: string
           description: Rendered plain-text body.
+    ConsolePayment:
+      type: object
+      description: >-
+        A payment in console scope (console.payments.*): every field of `Payment` plus the console-only
+        `ConsolePaymentDetails` (environment, version, events, refunds, booking, account mode). `clientSecret` is always
+        `null` here: only the checkout's owner gets it, while the payment waits for the card.
+      allOf:
+        - $ref: '#/components/schemas/Payment'
+        - $ref: '#/components/schemas/ConsolePaymentDetails'
+    ConsolePaymentDetails:
+      type: object
+      required:
+        - environment
+        - version
+        - events
+        - refunds
+        - booking
+        - providerConnection
+      description: The console-only part of ConsolePayment.
+      properties:
+        environment:
+          type: string
+          enum:
+            - test
+            - live
+          description: The environment of the payment (`payments.environment`), which is the request's.
+        version:
+          type: integer
+          minimum: 1
+          description: >-
+            Optimistic-locking counter (`payments.version`); `ETag` = `"<version>"`, the `If-Match` of
+            console.payments.capture.
+        events:
+          type: array
+          items:
+            $ref: '#/components/schemas/ConsolePaymentEvent'
+          description: Every event of the payment (`payment_events`), oldest first.
+        refunds:
+          type: array
+          items:
+            $ref: '#/components/schemas/ConsolePaymentRefund'
+          description: Every refund of the payment (`refunds`), oldest first.
+        booking:
+          anyOf:
+            - $ref: '#/components/schemas/ConsolePaymentBooking'
+            - type: 'null'
+          description: The booking the payment pays; `null` while the checkout has no booking yet.
+        providerConnection:
+          anyOf:
+            - $ref: '#/components/schemas/ConsolePaymentProviderConnection'
+            - type: 'null'
+          description: >-
+            The payment connection the payment was created with (`payments.provider_connection_id`); `null` for a
+            payment without one (an airline-card payment).
+    ConsolePaymentEvent:
+      type: object
+      description: >-
+        One event of a payment (`payment_events`, append-only): an API or staff call, a Stripe webhook, or a change made
+        by the system. `payload` is what was stored, after redaction: ids, statuses and amounts, never a client secret,
+        card data or a token.
+      required:
+        - id
+        - type
+        - source
+        - statusFrom
+        - statusTo
+        - amount
+        - providerEventId
+        - payload
+        - createdAt
+      properties:
+        id:
+          type: string
+          pattern: ^pev_[0-9A-Za-z]{16,40}$
+          description: Payment event id.
+        type:
+          type: string
+          minLength: 1
+          description: >-
+            Event type, such as `payment.created`, `payment.authorized`, `payment.captured`, `payment.voided`, the
+            refund events `refund.requested`, `refund.submitted`, `refund.succeeded` and `refund.failed`, or
+            `webhook.<Stripe event type>` for a stored webhook.
+        source:
+          type: string
+          enum:
+            - api
+            - webhook
+            - system
+            - staff
+          description: 'Origin of the event (`staff`: a console call).'
+        statusFrom:
+          type:
+            - string
+            - 'null'
+          description: >-
+            Status before the event: the payment's (as `Payment.status` spells it) for a `payment.*` event, the refund's
+            (as `Refund.status` spells it) for a `refund.*` event; `null` when the event changed no status.
+        statusTo:
+          type:
+            - string
+            - 'null'
+          description: >-
+            Status after the event, the payment's or the refund's as for `statusFrom` (`refund.requested`: `pending`);
+            `null` when the event changed no status (a stored webhook).
+        amount:
+          anyOf:
+            - $ref: '#/components/schemas/Money'
+            - type: 'null'
+          description: The amount the event concerns (authorised, captured, refunded), if any.
+        providerEventId:
+          type:
+            - string
+            - 'null'
+          description: The Stripe event id (`evt_…`) of a webhook event; `null` otherwise.
+        payload:
+          type: object
+          additionalProperties: true
+          description: The redacted payload stored with the event (ids, statuses and amounts only).
+        createdAt:
+          type: string
+          format: date-time
+          description: Event time.
+    ConsolePaymentRefund:
+      type: object
+      description: >-
+        A refund of the payment in console scope: every field of `Refund`, with who asked for it, its note and its
+        state at the provider.
+      allOf:
+        - $ref: '#/components/schemas/Refund'
+        - $ref: '#/components/schemas/ConsolePaymentRefundDetails'
+    ConsolePaymentRefundDetails:
+      type: object
+      required:
+        - reasonNote
+        - requestedBy
+        - providerRefundId
+        - failureReason
+        - updatedAt
+      description: The console-only part of ConsolePaymentRefund.
+      properties:
+        reasonNote:
+          type:
+            - string
+            - 'null'
+          description: Free-text explanation (`refunds.reason_note`).
+        requestedBy:
+          $ref: '#/components/schemas/ConsolePaymentRefundRequester'
+          description: Who asked for the refund.
+        providerRefundId:
+          type:
+            - string
+            - 'null'
+          description: The Stripe refund id (`re_…`) once the payments queue has sent it; `null` before.
+        failureReason:
+          type:
+            - string
+            - 'null'
+          description: Why the refund failed (status `failed`), as Stripe or the payments queue reported it.
+        updatedAt:
+          type: string
+          format: date-time
+          description: Last change of the refund.
+    ConsolePaymentRefundRequester:
+      type: object
+      required:
+        - type
+        - id
+      description: Who asked for a refund (`refunds.requested_by_type`, `requested_by_id`).
+      properties:
+        type:
+          type: string
+          enum:
+            - customer
+            - staff
+            - system
+          description: >-
+            `customer`: a self-service cancellation; `staff`: console.payments.refund or a console cancellation;
+            `system`: the backend itself (a failed booking after capture, for instance).
+        id:
+          type:
+            - string
+            - 'null'
+          pattern: ^(cus_[0-9A-Za-z]{12,40}|stf_[0-9A-Za-z]{16,40})$
+          description: The customer (`cus_…`) or staff member (`stf_…`); `null` for the system.
+    ConsolePaymentBooking:
+      type: object
+      required:
+        - id
+        - reference
+        - status
+      description: Short reference of the booking a payment pays (console.bookings.get has the rest).
+      properties:
+        id:
+          type: string
+          pattern: ^bkg_[0-9A-Za-z]{16,40}$
+          description: Booking id.
+        reference:
+          type: string
+          pattern: ^[A-Z0-9]{6,10}$
+          description: Velexis booking reference.
+        status:
+          $ref: '#/components/schemas/BookingStatus'
+          description: Booking status.
+    ConsolePaymentProviderConnection:
+      type: object
+      required:
+        - accountMode
+      description: The payment connection of a payment, as the console shows it (no credential, no account id).
+      properties:
+        accountMode:
+          type: string
+          enum:
+            - velexis
+            - connect_standard
+            - api_keys
+          description: >-
+            Whose Stripe account took the payment (`platform.payment_provider_connections.account_mode` of the
+            connection it was created with): `velexis`, the Velexis account on behalf of the OTA (the MVP default);
+            `connect_standard`, the OTA's own account through Stripe Connect; `api_keys`, the OTA's own account through
+            its own keys (both from M5).
+    ConsolePaymentPage:
+      type: object
+      required:
+        - data
+        - page
+      description: A page of payments, newest first.
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/ConsolePayment'
+          description: Payments.
+        page:
+          $ref: '#/components/schemas/PageInfo'
+          description: Pagination.
+    ConsolePaymentCaptureRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - reason
+      description: Body of console.payments.capture.
+      properties:
+        amount:
+          $ref: '#/components/schemas/Money'
+          description: >-
+            Amount to capture, in the payment's currency: positive, at most two decimals and the currency's minor
+            units, at most the authorised amount. Omitted: the whole authorised amount. Less than authorised releases
+            the rest.
+        reason:
+          type: string
+          minLength: 3
+          maxLength: 500
+          description: Audit justification, stored in `staff_actions`.
+    ConsolePaymentRefundRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - amount
+        - reason
+      description: Body of console.payments.refund.
+      properties:
+        amount:
+          $ref: '#/components/schemas/Money'
+          description: >-
+            Amount to give back, in the payment's currency: positive, at most two decimals and the currency's minor
+            units, at most the captured amount less the refunded amount and the refunds in flight.
+        reason:
+          type: string
+          enum:
+            - customer_request
+            - booking_cancelled
+            - schedule_change
+            - duplicate
+            - fraud
+            - goodwill
+            - other
+          description: Reason category (`refunds.reason`, the values of `Refund.reason`).
+        reasonNote:
+          type: string
+          minLength: 1
+          maxLength: 500
+          description: Free-text explanation (`refunds.reason_note`), also kept in `staff_actions`.
     StripeWebhookEvent:
       type: object
       description: >-
@@ -41307,6 +42731,101 @@ components:
           type: boolean
           enum:
             - true
+    StripeConnectWebhookEvent:
+      type: object
+      description: >-
+        A Stripe event of an OTA's connected account, as Stripe delivers it to the Connect endpoint
+        (receiveStripeConnectWebhook): a `StripeWebhookEvent` with the connected account in `account`. Stripe always
+        sends it there; the receiver acknowledges an event without it without effect.
+      allOf:
+        - $ref: '#/components/schemas/StripeWebhookEvent'
+        - type: object
+          required:
+            - account
+          properties:
+            account:
+              type: string
+              pattern: ^acct_[0-9A-Za-z]+$
+              description: >-
+                The connected account (`acct_…`) the event happened on: the only source of the OTA on this endpoint
+                (OADR-0010 point 4).
+    HealthLiveness:
+      type: object
+      additionalProperties: false
+      required:
+        - status
+      description: The answer of healthLive.
+      properties:
+        status:
+          type: string
+          enum:
+            - ok
+          description: 'Always `ok`: the process answers.'
+    HealthReadiness:
+      type: object
+      additionalProperties: false
+      required:
+        - status
+        - checks
+      description: The answer of healthReady, `200` and `503` alike.
+      properties:
+        status:
+          type: string
+          enum:
+            - ok
+            - unavailable
+          description: '`ok` (`200`) when every check is `ok`, otherwise `unavailable` (`503`).'
+        checks:
+          type: object
+          additionalProperties: false
+          required:
+            - postgres
+            - redis
+          description: The outcome of each dependency check.
+          properties:
+            postgres:
+              $ref: '#/components/schemas/HealthDependencyStatus'
+              description: PostgreSQL (`SELECT 1`).
+            redis:
+              $ref: '#/components/schemas/HealthDependencyStatus'
+              description: Redis (`PING`).
+        queues:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/HealthQueue'
+          description: >-
+            The worker's health port only, from OBE-025 (M2): every OTA queue by name (`ota-payments`,
+            `ota-stripe-events`, …). The API's readiness has no `queues`.
+    HealthDependencyStatus:
+      type: string
+      enum:
+        - ok
+        - timeout
+        - down
+      description: '`ok`: it answered; `timeout`: no answer within 2 seconds; `down`: refused, reset or failed.'
+    HealthQueue:
+      type: object
+      additionalProperties: false
+      required:
+        - waiting
+        - oldestWaitingSeconds
+        - failedLastHour
+      description: One BullMQ queue in the worker's readiness (OBE-025).
+      properties:
+        waiting:
+          type: integer
+          minimum: 0
+          description: Jobs waiting to run.
+        oldestWaitingSeconds:
+          type:
+            - integer
+            - 'null'
+          minimum: 0
+          description: Age of the oldest waiting job, in seconds; `null` when no job waits.
+        failedLastHour:
+          type: integer
+          minimum: 0
+          description: Jobs that failed in the last hour.
   examples:
     PricedOfferExample:
       summary: Priced ECONOMY STANDARD offer, 1 adult + 1 child, with card fees and ancillary options loaded
@@ -45430,6 +46949,664 @@ components:
             isActive: true
             version: 2
             updatedAt: '2026-10-13T15:40:00Z'
+    ConsolePaymentExample:
+      summary: >-
+        Authorised Stripe card payment of a confirmed booking under the manual_review policy, waiting for a capture
+        by staff
+      value:
+        id: pay_01JA4CF2R7V0Y3B6D9G2K5N8Q1
+        checkoutId: chk_01JA4CE5H8K1M4P7R0T3V6Y9B2
+        bookingId: bkg_01JA4CG3S8W1Z4C7F0H3L6P9T2
+        purpose: booking
+        provider: stripe
+        method: card
+        status: authorized
+        captureMethod: manual
+        amount:
+          amount: '1414.06'
+          currency: EUR
+        cardFee:
+          amount: '12.50'
+          currency: EUR
+        cardHint:
+          brand: VISA
+          bin: '424242'
+        amountAuthorized:
+          amount: '1414.06'
+          currency: EUR
+        amountCaptured:
+          amount: '0.00'
+          currency: EUR
+        amountRefunded:
+          amount: '0.00'
+          currency: EUR
+        clientSecret: null
+        providerPublicKey: null
+        providerPaymentId: pi_3Q9xK2LkdIwHu7ix1aBcDeFg
+        redirectUrl: null
+        nextAction: null
+        card:
+          brand: VISA
+          last4: '4242'
+          bin: '424242'
+          expMonth: 8
+          expYear: 2029
+        threeDSecure:
+          required: true
+          status: authenticated
+          version: 2.2.0
+        failure: null
+        createdAt: '2026-10-10T09:17:40Z'
+        updatedAt: '2026-10-10T09:18:22Z'
+        authorizedAt: '2026-10-10T09:18:22Z'
+        capturedAt: null
+        cancelledAt: null
+        environment: test
+        version: 3
+        events:
+          - id: pev_01JA4CF2S1V4Y7B0D3G6K9N2Q5
+            type: payment.created
+            source: api
+            statusFrom: null
+            statusTo: requires_payment_method
+            amount: null
+            providerEventId: null
+            payload:
+              checkoutId: chk_01JA4CE5H8K1M4P7R0T3V6Y9B2
+              cardBrand: VISA
+              cardFee: '12.50'
+              cardFeeSource: priced_offer
+              replaced: []
+            createdAt: '2026-10-10T09:17:40Z'
+          - id: pev_01JA4CF9T2W5Z8C1E4H7K0N3Q6
+            type: webhook.payment_intent.amount_capturable_updated
+            source: webhook
+            statusFrom: null
+            statusTo: null
+            amount: null
+            providerEventId: evt_3Q9xK2LkdIwHu7ix0CaptUpd
+            payload:
+              endpoint: velexis
+              eventId: evt_3Q9xK2LkdIwHu7ix0CaptUpd
+              type: payment_intent.amount_capturable_updated
+              livemode: false
+              createdAt: '2026-10-10T09:18:20.000Z'
+              apiVersion: 2025-08-27.basil
+              object:
+                type: payment_intent
+                id: pi_3Q9xK2LkdIwHu7ix1aBcDeFg
+                status: requires_capture
+                currency: eur
+                amount: 141406
+                amountCapturable: 141406
+                amountReceived: 0
+                amountRefunded: null
+                reason: null
+              paymentIntentId: pi_3Q9xK2LkdIwHu7ix1aBcDeFg
+              chargeId: null
+            createdAt: '2026-10-10T09:18:21Z'
+          - id: pev_01JA4CFA0X3Z6C9E2G5J8M1P4S
+            type: payment.authorized
+            source: webhook
+            statusFrom: requires_payment_method
+            statusTo: authorized
+            amount:
+              amount: '1414.06'
+              currency: EUR
+            providerEventId: null
+            payload:
+              cardBrand: VISA
+              cardLast4: '4242'
+              threeDSecure: authenticated
+              failureCode: null
+              declineCode: null
+              providerEventId: evt_3Q9xK2LkdIwHu7ix0CaptUpd
+              paymentEventId: pev_01JA4CF9T2W5Z8C1E4H7K0N3Q6
+            createdAt: '2026-10-10T09:18:22Z'
+        refunds: []
+        booking:
+          id: bkg_01JA4CG3S8W1Z4C7F0H3L6P9T2
+          reference: VX7K2Q
+          status: confirmed
+        providerConnection:
+          accountMode: velexis
+    ConsolePaymentCapturedExample:
+      summary: The same payment after console.payments.capture of the whole authorisation
+      value:
+        id: pay_01JA4CF2R7V0Y3B6D9G2K5N8Q1
+        checkoutId: chk_01JA4CE5H8K1M4P7R0T3V6Y9B2
+        bookingId: bkg_01JA4CG3S8W1Z4C7F0H3L6P9T2
+        purpose: booking
+        provider: stripe
+        method: card
+        status: captured
+        captureMethod: manual
+        amount:
+          amount: '1414.06'
+          currency: EUR
+        cardFee:
+          amount: '12.50'
+          currency: EUR
+        cardHint:
+          brand: VISA
+          bin: '424242'
+        amountAuthorized:
+          amount: '1414.06'
+          currency: EUR
+        amountCaptured:
+          amount: '1414.06'
+          currency: EUR
+        amountRefunded:
+          amount: '0.00'
+          currency: EUR
+        clientSecret: null
+        providerPublicKey: null
+        providerPaymentId: pi_3Q9xK2LkdIwHu7ix1aBcDeFg
+        redirectUrl: null
+        nextAction: null
+        card:
+          brand: VISA
+          last4: '4242'
+          bin: '424242'
+          expMonth: 8
+          expYear: 2029
+        threeDSecure:
+          required: true
+          status: authenticated
+          version: 2.2.0
+        failure: null
+        createdAt: '2026-10-10T09:17:40Z'
+        updatedAt: '2026-10-12T08:05:10Z'
+        authorizedAt: '2026-10-10T09:18:22Z'
+        capturedAt: '2026-10-12T08:05:10Z'
+        cancelledAt: null
+        environment: test
+        version: 4
+        events:
+          - id: pev_01JA4CF2S1V4Y7B0D3G6K9N2Q5
+            type: payment.created
+            source: api
+            statusFrom: null
+            statusTo: requires_payment_method
+            amount: null
+            providerEventId: null
+            payload:
+              checkoutId: chk_01JA4CE5H8K1M4P7R0T3V6Y9B2
+              cardBrand: VISA
+              cardFee: '12.50'
+              cardFeeSource: priced_offer
+              replaced: []
+            createdAt: '2026-10-10T09:17:40Z'
+          - id: pev_01JA4CF9T2W5Z8C1E4H7K0N3Q6
+            type: webhook.payment_intent.amount_capturable_updated
+            source: webhook
+            statusFrom: null
+            statusTo: null
+            amount: null
+            providerEventId: evt_3Q9xK2LkdIwHu7ix0CaptUpd
+            payload:
+              endpoint: velexis
+              eventId: evt_3Q9xK2LkdIwHu7ix0CaptUpd
+              type: payment_intent.amount_capturable_updated
+              livemode: false
+              createdAt: '2026-10-10T09:18:20.000Z'
+              apiVersion: 2025-08-27.basil
+              object:
+                type: payment_intent
+                id: pi_3Q9xK2LkdIwHu7ix1aBcDeFg
+                status: requires_capture
+                currency: eur
+                amount: 141406
+                amountCapturable: 141406
+                amountReceived: 0
+                amountRefunded: null
+                reason: null
+              paymentIntentId: pi_3Q9xK2LkdIwHu7ix1aBcDeFg
+              chargeId: null
+            createdAt: '2026-10-10T09:18:21Z'
+          - id: pev_01JA4CFA0X3Z6C9E2G5J8M1P4S
+            type: payment.authorized
+            source: webhook
+            statusFrom: requires_payment_method
+            statusTo: authorized
+            amount:
+              amount: '1414.06'
+              currency: EUR
+            providerEventId: null
+            payload:
+              cardBrand: VISA
+              cardLast4: '4242'
+              threeDSecure: authenticated
+              failureCode: null
+              declineCode: null
+              providerEventId: evt_3Q9xK2LkdIwHu7ix0CaptUpd
+              paymentEventId: pev_01JA4CF9T2W5Z8C1E4H7K0N3Q6
+            createdAt: '2026-10-10T09:18:22Z'
+          - id: pev_01JA9K4M7P0R3T6W9Y2B5D8G1J
+            type: payment.captured
+            source: staff
+            statusFrom: authorized
+            statusTo: captured
+            amount:
+              amount: '1414.06'
+              currency: EUR
+            providerEventId: null
+            payload:
+              providerPaymentId: pi_3Q9xK2LkdIwHu7ix1aBcDeFg
+            createdAt: '2026-10-12T08:05:10Z'
+        refunds: []
+        booking:
+          id: bkg_01JA4CG3S8W1Z4C7F0H3L6P9T2
+          reference: VX7K2Q
+          status: confirmed
+        providerConnection:
+          accountMode: velexis
+    ConsolePaymentRefundRequestedExample:
+      summary: The captured payment after console.payments.refund asked for a 50 EUR goodwill refund
+      value:
+        id: pay_01JA4CF2R7V0Y3B6D9G2K5N8Q1
+        checkoutId: chk_01JA4CE5H8K1M4P7R0T3V6Y9B2
+        bookingId: bkg_01JA4CG3S8W1Z4C7F0H3L6P9T2
+        purpose: booking
+        provider: stripe
+        method: card
+        status: captured
+        captureMethod: manual
+        amount:
+          amount: '1414.06'
+          currency: EUR
+        cardFee:
+          amount: '12.50'
+          currency: EUR
+        cardHint:
+          brand: VISA
+          bin: '424242'
+        amountAuthorized:
+          amount: '1414.06'
+          currency: EUR
+        amountCaptured:
+          amount: '1414.06'
+          currency: EUR
+        amountRefunded:
+          amount: '0.00'
+          currency: EUR
+        clientSecret: null
+        providerPublicKey: null
+        providerPaymentId: pi_3Q9xK2LkdIwHu7ix1aBcDeFg
+        redirectUrl: null
+        nextAction: null
+        card:
+          brand: VISA
+          last4: '4242'
+          bin: '424242'
+          expMonth: 8
+          expYear: 2029
+        threeDSecure:
+          required: true
+          status: authenticated
+          version: 2.2.0
+        failure: null
+        createdAt: '2026-10-10T09:17:40Z'
+        updatedAt: '2026-10-12T08:05:10Z'
+        authorizedAt: '2026-10-10T09:18:22Z'
+        capturedAt: '2026-10-12T08:05:10Z'
+        cancelledAt: null
+        environment: test
+        version: 4
+        events:
+          - id: pev_01JA4CF2S1V4Y7B0D3G6K9N2Q5
+            type: payment.created
+            source: api
+            statusFrom: null
+            statusTo: requires_payment_method
+            amount: null
+            providerEventId: null
+            payload:
+              checkoutId: chk_01JA4CE5H8K1M4P7R0T3V6Y9B2
+              cardBrand: VISA
+              cardFee: '12.50'
+              cardFeeSource: priced_offer
+              replaced: []
+            createdAt: '2026-10-10T09:17:40Z'
+          - id: pev_01JA4CF9T2W5Z8C1E4H7K0N3Q6
+            type: webhook.payment_intent.amount_capturable_updated
+            source: webhook
+            statusFrom: null
+            statusTo: null
+            amount: null
+            providerEventId: evt_3Q9xK2LkdIwHu7ix0CaptUpd
+            payload:
+              endpoint: velexis
+              eventId: evt_3Q9xK2LkdIwHu7ix0CaptUpd
+              type: payment_intent.amount_capturable_updated
+              livemode: false
+              createdAt: '2026-10-10T09:18:20.000Z'
+              apiVersion: 2025-08-27.basil
+              object:
+                type: payment_intent
+                id: pi_3Q9xK2LkdIwHu7ix1aBcDeFg
+                status: requires_capture
+                currency: eur
+                amount: 141406
+                amountCapturable: 141406
+                amountReceived: 0
+                amountRefunded: null
+                reason: null
+              paymentIntentId: pi_3Q9xK2LkdIwHu7ix1aBcDeFg
+              chargeId: null
+            createdAt: '2026-10-10T09:18:21Z'
+          - id: pev_01JA4CFA0X3Z6C9E2G5J8M1P4S
+            type: payment.authorized
+            source: webhook
+            statusFrom: requires_payment_method
+            statusTo: authorized
+            amount:
+              amount: '1414.06'
+              currency: EUR
+            providerEventId: null
+            payload:
+              cardBrand: VISA
+              cardLast4: '4242'
+              threeDSecure: authenticated
+              failureCode: null
+              declineCode: null
+              providerEventId: evt_3Q9xK2LkdIwHu7ix0CaptUpd
+              paymentEventId: pev_01JA4CF9T2W5Z8C1E4H7K0N3Q6
+            createdAt: '2026-10-10T09:18:22Z'
+          - id: pev_01JA9K4M7P0R3T6W9Y2B5D8G1J
+            type: payment.captured
+            source: staff
+            statusFrom: authorized
+            statusTo: captured
+            amount:
+              amount: '1414.06'
+              currency: EUR
+            providerEventId: null
+            payload:
+              providerPaymentId: pi_3Q9xK2LkdIwHu7ix1aBcDeFg
+            createdAt: '2026-10-12T08:05:10Z'
+          - id: pev_01JAC2E5H8K1N4Q7S0V3X6Z9B2
+            type: refund.requested
+            source: staff
+            statusFrom: null
+            statusTo: pending
+            amount:
+              amount: '50.00'
+              currency: EUR
+            providerEventId: null
+            payload:
+              refundId: rfd_01JAC2E5G7J0L3N6Q9S2U5W8Y1
+              reason: goodwill
+              requestedByType: staff
+            createdAt: '2026-10-13T10:00:00Z'
+        refunds:
+          - id: rfd_01JAC2E5G7J0L3N6Q9S2U5W8Y1
+            paymentId: pay_01JA4CF2R7V0Y3B6D9G2K5N8Q1
+            bookingId: bkg_01JA4CG3S8W1Z4C7F0H3L6P9T2
+            amount:
+              amount: '50.00'
+              currency: EUR
+            penalty: null
+            reason: goodwill
+            status: pending
+            createdAt: '2026-10-13T10:00:00Z'
+            processedAt: null
+            reasonNote: Delayed outbound flight, agreed with the customer by phone
+            requestedBy:
+              type: staff
+              id: stf_01JA2X7Q9M3K5N8P1R4T6V0W2Y
+            providerRefundId: null
+            failureReason: null
+            updatedAt: '2026-10-13T10:00:00Z'
+        booking:
+          id: bkg_01JA4CG3S8W1Z4C7F0H3L6P9T2
+          reference: VX7K2Q
+          status: confirmed
+        providerConnection:
+          accountMode: velexis
+    ConsolePaymentPageExample:
+      summary: Two payments of the test environment, newest first
+      value:
+        data:
+          - id: pay_01JA5B3D6G9K2M5P8R1T4W7Y0A
+            checkoutId: chk_01JA5B1Q4S7V0X3Z6B9D2F5H8K
+            bookingId: bkg_01JA5B2R5T8W1Y4A7C0E3G6J9L
+            purpose: booking
+            provider: stripe
+            method: card
+            status: authorized
+            captureMethod: manual
+            amount:
+              amount: '386.40'
+              currency: EUR
+            cardFee: null
+            amountAuthorized:
+              amount: '386.40'
+              currency: EUR
+            amountCaptured:
+              amount: '0.00'
+              currency: EUR
+            amountRefunded:
+              amount: '0.00'
+              currency: EUR
+            clientSecret: null
+            providerPublicKey: null
+            providerPaymentId: pi_3QAxL7MkeJxIv8jy2bCdEfGh
+            redirectUrl: null
+            nextAction: null
+            card:
+              brand: MASTERCARD
+              last4: '4444'
+              bin: '555555'
+              expMonth: 3
+              expYear: 2028
+            threeDSecure:
+              required: false
+              status: not_required
+              version: null
+            failure: null
+            createdAt: '2026-10-11T16:42:03Z'
+            updatedAt: '2026-10-11T16:42:31Z'
+            authorizedAt: '2026-10-11T16:42:31Z'
+            capturedAt: null
+            cancelledAt: null
+            environment: test
+            version: 3
+            events:
+              - id: pev_01JA5B3D7H0L3N6Q9S2V5X8Z1C
+                type: payment.created
+                source: api
+                statusFrom: null
+                statusTo: requires_payment_method
+                amount: null
+                providerEventId: null
+                payload:
+                  checkoutId: chk_01JA5B1Q4S7V0X3Z6B9D2F5H8K
+                  cardBrand: null
+                  cardFee: '0.00'
+                  cardFeeSource: null
+                  replaced: []
+                createdAt: '2026-10-11T16:42:03Z'
+              - id: pev_01JA5B4D9H2L5N8Q1S4V7X0Z3C
+                type: webhook.payment_intent.amount_capturable_updated
+                source: webhook
+                statusFrom: null
+                statusTo: null
+                amount: null
+                providerEventId: evt_3QAxL7MkeJxIv8jy0CaptUpd
+                payload:
+                  endpoint: velexis
+                  eventId: evt_3QAxL7MkeJxIv8jy0CaptUpd
+                  type: payment_intent.amount_capturable_updated
+                  livemode: false
+                  createdAt: '2026-10-11T16:42:29.000Z'
+                  apiVersion: 2025-08-27.basil
+                  object:
+                    type: payment_intent
+                    id: pi_3QAxL7MkeJxIv8jy2bCdEfGh
+                    status: requires_capture
+                    currency: eur
+                    amount: 38640
+                    amountCapturable: 38640
+                    amountReceived: 0
+                    amountRefunded: null
+                    reason: null
+                  paymentIntentId: pi_3QAxL7MkeJxIv8jy2bCdEfGh
+                  chargeId: null
+                createdAt: '2026-10-11T16:42:30Z'
+              - id: pev_01JA5B4E8J1M4P7R0T3W6Y9A2D
+                type: payment.authorized
+                source: webhook
+                statusFrom: requires_payment_method
+                statusTo: authorized
+                amount:
+                  amount: '386.40'
+                  currency: EUR
+                providerEventId: null
+                payload:
+                  cardBrand: MASTERCARD
+                  cardLast4: '4444'
+                  threeDSecure: not_required
+                  failureCode: null
+                  declineCode: null
+                  providerEventId: evt_3QAxL7MkeJxIv8jy0CaptUpd
+                  paymentEventId: pev_01JA5B4D9H2L5N8Q1S4V7X0Z3C
+                createdAt: '2026-10-11T16:42:31Z'
+            refunds: []
+            booking:
+              id: bkg_01JA5B2R5T8W1Y4A7C0E3G6J9L
+              reference: VX9M4P
+              status: confirmed
+            providerConnection:
+              accountMode: velexis
+          - id: pay_01JA4CF2R7V0Y3B6D9G2K5N8Q1
+            checkoutId: chk_01JA4CE5H8K1M4P7R0T3V6Y9B2
+            bookingId: bkg_01JA4CG3S8W1Z4C7F0H3L6P9T2
+            purpose: booking
+            provider: stripe
+            method: card
+            status: captured
+            captureMethod: manual
+            amount:
+              amount: '1414.06'
+              currency: EUR
+            cardFee:
+              amount: '12.50'
+              currency: EUR
+            amountAuthorized:
+              amount: '1414.06'
+              currency: EUR
+            amountCaptured:
+              amount: '1414.06'
+              currency: EUR
+            amountRefunded:
+              amount: '0.00'
+              currency: EUR
+            clientSecret: null
+            providerPublicKey: null
+            providerPaymentId: pi_3Q9xK2LkdIwHu7ix1aBcDeFg
+            redirectUrl: null
+            nextAction: null
+            card:
+              brand: VISA
+              last4: '4242'
+              bin: '424242'
+              expMonth: 8
+              expYear: 2029
+            threeDSecure:
+              required: true
+              status: authenticated
+              version: 2.2.0
+            failure: null
+            createdAt: '2026-10-10T09:17:40Z'
+            updatedAt: '2026-10-12T08:05:10Z'
+            authorizedAt: '2026-10-10T09:18:22Z'
+            capturedAt: '2026-10-12T08:05:10Z'
+            cancelledAt: null
+            environment: test
+            version: 4
+            events:
+              - id: pev_01JA4CF2S1V4Y7B0D3G6K9N2Q5
+                type: payment.created
+                source: api
+                statusFrom: null
+                statusTo: requires_payment_method
+                amount: null
+                providerEventId: null
+                payload:
+                  checkoutId: chk_01JA4CE5H8K1M4P7R0T3V6Y9B2
+                  cardBrand: VISA
+                  cardFee: '12.50'
+                  cardFeeSource: priced_offer
+                  replaced: []
+                createdAt: '2026-10-10T09:17:40Z'
+              - id: pev_01JA4CF9T2W5Z8C1E4H7K0N3Q6
+                type: webhook.payment_intent.amount_capturable_updated
+                source: webhook
+                statusFrom: null
+                statusTo: null
+                amount: null
+                providerEventId: evt_3Q9xK2LkdIwHu7ix0CaptUpd
+                payload:
+                  endpoint: velexis
+                  eventId: evt_3Q9xK2LkdIwHu7ix0CaptUpd
+                  type: payment_intent.amount_capturable_updated
+                  livemode: false
+                  createdAt: '2026-10-10T09:18:20.000Z'
+                  apiVersion: 2025-08-27.basil
+                  object:
+                    type: payment_intent
+                    id: pi_3Q9xK2LkdIwHu7ix1aBcDeFg
+                    status: requires_capture
+                    currency: eur
+                    amount: 141406
+                    amountCapturable: 141406
+                    amountReceived: 0
+                    amountRefunded: null
+                    reason: null
+                  paymentIntentId: pi_3Q9xK2LkdIwHu7ix1aBcDeFg
+                  chargeId: null
+                createdAt: '2026-10-10T09:18:21Z'
+              - id: pev_01JA4CFA0X3Z6C9E2G5J8M1P4S
+                type: payment.authorized
+                source: webhook
+                statusFrom: requires_payment_method
+                statusTo: authorized
+                amount:
+                  amount: '1414.06'
+                  currency: EUR
+                providerEventId: null
+                payload:
+                  cardBrand: VISA
+                  cardLast4: '4242'
+                  threeDSecure: authenticated
+                  failureCode: null
+                  declineCode: null
+                  providerEventId: evt_3Q9xK2LkdIwHu7ix0CaptUpd
+                  paymentEventId: pev_01JA4CF9T2W5Z8C1E4H7K0N3Q6
+                createdAt: '2026-10-10T09:18:22Z'
+              - id: pev_01JA9K4M7P0R3T6W9Y2B5D8G1J
+                type: payment.captured
+                source: staff
+                statusFrom: authorized
+                statusTo: captured
+                amount:
+                  amount: '1414.06'
+                  currency: EUR
+                providerEventId: null
+                payload:
+                  providerPaymentId: pi_3Q9xK2LkdIwHu7ix1aBcDeFg
+                createdAt: '2026-10-12T08:05:10Z'
+            refunds: []
+            booking:
+              id: bkg_01JA4CG3S8W1Z4C7F0H3L6P9T2
+              reference: VX7K2Q
+              status: confirmed
+            providerConnection:
+              accountMode: velexis
+        page:
+          nextCursor: null
+          limit: 20
 x-error-catalogue:
   VALIDATION_FAILED:
     status: 400

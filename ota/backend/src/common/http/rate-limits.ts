@@ -4,7 +4,7 @@
 //
 // Which limits a request counts against follows from its operation (`@OpenApiOperation`): OPERATION_RATE_LIMITS
 // names the operations of each row, and every `x-scope: console` operation of the operations index also counts
-// against `console`. Routes outside the document (health) and the 501 routes of pending operations count against
+// against `console`. Handlers that bind no operation (health) and the 501 routes of pending operations count against
 // nothing. A limit counts only the callers its row is about (`callers`): the shopping limit counts the edge and
 // publishable keys, whose calls come from browsers, not the secret keys of storefront servers; the customer
 // operations' limits never meet the anonymous caller, which only public and webhook routes have. Each limit counts

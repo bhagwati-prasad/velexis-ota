@@ -82,14 +82,20 @@ export const PENDING_OPERATIONS: Readonly<Partial<Record<OtaOperationId, Pending
   consolePutNotificationTemplate: "OBE-073",
   consolePreviewNotificationTemplate: "OBE-073",
   consoleResetNotificationTemplate: "OBE-073",
+  // Console payments (OBE-090)
+  consoleListPayments: "OBE-068",
+  consoleGetPayment: "OBE-068",
+  consoleCapturePayment: "OBE-068",
+  consoleRefundPayment: "OBE-068",
+  // Stripe webhooks of the Connect and API-key modes (OBE-090 documents them in M4; served from M5)
+  receiveStripeConnectWebhook: "OBE-078",
+  receiveStripeConnectionWebhook: "OBE-078",
 });
 
 /**
- * Routes the API serves outside the OTA document, so they are no operation's handler: the health endpoints
- * (ADR-0016) until OBE-090 documents them as `healthLive` and `healthReady` and removes them here. The route-parity
- * test fails for a listed route that is not served or that the document has.
+ * Routes the API serves outside the OTA document, so they are no operation's handler. None since OBE-090 documented
+ * the health endpoints (ADR-0016) as `healthLive` and `healthReady`, whose handler is HealthController. A route added
+ * here needs a reason the document cannot have it; the route-parity test fails for a listed route that is not served
+ * or that the document has.
  */
-export const UNDOCUMENTED_ROUTES: readonly string[] = Object.freeze([
-  "GET /health/live",
-  "GET /health/ready",
-]);
+export const UNDOCUMENTED_ROUTES: readonly string[] = Object.freeze([]);

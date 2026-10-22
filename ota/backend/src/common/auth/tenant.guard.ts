@@ -8,8 +8,8 @@
 // It leaves alone:
 //   - the anonymous caller of public, webhook and local routes: those routes find their tenant themselves (the
 //     tenant key in an asset path, a signed file key, the Stripe event) or have none (health);
-//   - routes that are not operations of the document (the health endpoints) and the 501 routes of pending
-//     operations, which answer without touching tenant data, as they skip validation.
+//   - handlers that bind no operation (the health endpoints, documented as the internal healthLive and healthReady)
+//     and the 501 routes of pending operations, which answer without touching tenant data, as they skip validation.
 // The route-parity contract test keeps every other route bound to an operation, so every route that can reach tenant
 // data passes here. Without a tenant in the context, `TenantTx` throws before any SQL.
 //

@@ -1659,7 +1659,8 @@ The console API (staff sign-in by portal token, bookings, PNR import, queues, cu
   - The route parity test passes with the new pending entries; `pnpm --filter @velexis/ota-sdk generate` leaves no diff and the SDK tests pass.
 - **Verify:** `pnpm contracts:lint && pnpm contracts:generate && pnpm --filter @velexis/ota-backend test -- contract && pnpm --filter @velexis/ota-sdk generate && git diff --exit-code ota/sdk/src/internal/operations.js && pnpm --filter @velexis/ota-sdk test`
 
-### OBE-090 · Spec-first: console payments and the internal health and Stripe webhook endpoints
+### OBE-090 · Spec-first: console payments and the internal health and Stripe webhook endpoints ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-backend
 - **Milestone:** M4
 - **Depends on:** OBE-058

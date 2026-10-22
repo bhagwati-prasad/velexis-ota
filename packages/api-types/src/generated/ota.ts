@@ -2692,6 +2692,114 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/console/payments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the payments of the OTA
+         * @description Lists the OTA's payments (`payments`) of the request's environment, newest first (`createdAt` descending, then `id`), with cursor pagination (`cursor`, `limit` ≤ 100; a cursor of another query answers `400 VALIDATION_FAILED` at `/query/cursor`). The environment is the one the OTA admin sends in `X-Velexis-Environment`, or the key's: a payment of the other environment is never listed. Each entry is a `ConsolePayment`: the payment with its redacted events (`payment_events`), its refunds, a short reference of its booking and the account mode of its payment connection. `clientSecret` is always `null` in console scope.
+         *
+         *     **Filters** (combined with AND; list values are comma-separated and OR-ed): `status` (spelled as `Payment.status` spells it, `cancelled` for the stored `canceled`), `provider`, `method`, `bookingId`, `createdFrom` (at or after) and `createdTo` (before). Index used: payments (environment, status, created_at).
+         *
+         *     No Stripe or Amadeus call: the data is as fresh as the last webhook or console call (console.payments.get with `refresh=true` reads Stripe again). Permission `payments:read` (every role). Read-only; not audited per call. Next.js: `cache: "no-store"`.
+         *
+         *     **Key-only calls.** Without a staff token the secret key must carry the `console:automation` scope and this operation's permission in `platform.api_keys.scopes` — otherwise `403 SCOPE_NOT_ALLOWED` (`details.requiredScope`) or `403 FORBIDDEN` (`details.requiredPermission`); such calls are audited as the API key (see ConsoleApiKeyScope). A key scoped `storefront` is refused even with a staff token.
+         */
+        get: operations["consoleListPayments"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/console/payments/{paymentId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get a payment with its events and refunds
+         * @description Returns one payment of the request's environment as a `ConsolePayment`: every field of `Payment`, its events (`payment_events`, oldest first, with the redacted payload stored for each: ids, statuses and amounts, never a client secret, card data or a token), its refunds (`refunds`, oldest first, with who asked for them), its booking (`id`, `reference`, `status`; `null` before the booking exists) and the account mode of its payment connection (`null` for an airline-card payment). `clientSecret` is always `null` in console scope. A payment of the other environment answers `404 NOT_FOUND`, like a missing one. `ETag` = `"<version>"`: pass it as `If-Match` to console.payments.capture.
+         *
+         *     **Refresh.** No Stripe call by default: the data is as fresh as the last webhook or console call. `refresh=true` reads the PaymentIntent again from Stripe with the payment's own connection (OADR-0010 point 1) and applies its state to the payment under the payment's `version`, as the processing of a webhook does (OADR-0010 point 5), before answering; a payment without a PaymentIntent (an airline-card payment, or one that never reached Stripe) is answered as stored. Stripe failing or out of reach answers `502 PAYMENT_PROVIDER_ERROR`, and nothing changes.
+         *
+         *     Permission `payments:read` (every role). Changes nothing of its own: `refresh=true` only applies Stripe's state, as a webhook would; not audited per call. Next.js: `cache: "no-store"`.
+         *
+         *     **Key-only calls.** Without a staff token the secret key must carry the `console:automation` scope and this operation's permission in `platform.api_keys.scopes` — otherwise `403 SCOPE_NOT_ALLOWED` (`details.requiredScope`) or `403 FORBIDDEN` (`details.requiredPermission`); such calls are audited as the API key (see ConsoleApiKeyScope). A key scoped `storefront` is refused even with a staff token.
+         */
+        get: operations["consoleGetPayment"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/console/payments/{paymentId}/capture": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Capture an authorised Stripe payment
+         * @description Captures an authorised Stripe payment that was not captured automatically: the `manual_review` ticketing policy, or a capture that failed after the booking (ota/docs/flows/console-operations.md §3 step 5). Only a Stripe payment (`provider = stripe`) in `authorized` can be captured; any other answers `409 CONFLICT` with `details.reason = "payment_not_capturable"` and the payment's `details.status` and `details.provider` (an airline-card payment is charged by the airline, never captured here).
+         *
+         *     **Amount.** `amount` is what to capture, in the payment's currency (`422 UNPROCESSABLE`, `details.reason = "currency_mismatch"` otherwise): a positive amount with at most two decimals and no more than the currency's minor units (`400 VALIDATION_FAILED` at `/amount/amount` otherwise), at most the authorised amount (`422 UNPROCESSABLE`, `details.reason = "amount_exceeds_authorized"`, with `details.authorized`). Without `amount` the whole authorised amount is captured. A partial capture releases the rest of the authorisation: Stripe captures once per PaymentIntent.
+         *
+         *     **Effect.** Stripe captures with the idempotency key `pi:capture:<pay_id>:<amount>` (OADR-0010 point 3), so a retry never captures twice; no transaction is open during the call. The payment becomes `captured` with `amountCaptured` and `capturedAt`, and a `payment_events` row (`source = staff`, `payment.captured`) and a `staff_actions` row (`payment.capture`, with `reason`) record it; when the payment belongs to a booking, the booking's `amount_paid` and a `booking_events` row `payment.captured` show it too (the transaction locks the booking, then the payment: OADR-0003 point 11). The `payment_intent.succeeded` webhook that follows finds the payment already captured. An authorisation that expired or was cancelled at Stripe answers `402 PAYMENT_DECLINED` (nothing is captured); Stripe failing or out of reach answers `502 PAYMENT_PROVIDER_ERROR`: retry with the same `Idempotency-Key`.
+         *
+         *     **Preconditions.** `If-Match` = the payment's `ETag` (`412 PRECONDITION_FAILED` when stale); the answer has the new `version` and `ETag`. `Idempotency-Key` required (`idempotency_keys`, 24 h): a retry with the same key and body returns the stored answer and captures once; the same key with another body → `409 IDEMPOTENCY_KEY_REUSED`. No Amadeus call. Permission `payments:capture` (owner, admin, agent, finance).
+         *
+         *     **Key-only calls.** Without a staff token the secret key must carry the `console:automation` scope and this operation's permission in `platform.api_keys.scopes` — otherwise `403 SCOPE_NOT_ALLOWED` (`details.requiredScope`) or `403 FORBIDDEN` (`details.requiredPermission`); such calls are audited as the API key (see ConsoleApiKeyScope). A key scoped `storefront` is refused even with a staff token.
+         */
+        post: operations["consoleCapturePayment"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/console/payments/{paymentId}/refunds": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Refund a captured Stripe payment
+         * @description Asks for a refund of a captured Stripe payment, partial or full, with a reason. Only a Stripe payment (`provider = stripe`) in `captured` or `partially_refunded` can be refunded here: an airline-card payment answers `422 UNPROCESSABLE` with `details.reason = "refund_via_airline"` (the airline refunds its own charge, through the booking's cancellation), any other payment `409 CONFLICT` with `details.reason = "payment_not_refundable"` and the payment's `details.status` and `details.provider`.
+         *
+         *     **Amount.** `amount` is what to give back, in the payment's currency (`422 UNPROCESSABLE`, `details.reason = "currency_mismatch"` otherwise): a positive amount with at most two decimals and no more than the currency's minor units (`400 VALIDATION_FAILED` at `/amount/amount` otherwise), at most what is still refundable: the captured amount, less the refunded amount, less the refunds still in flight (`pending` or `processing`). More answers `422 UNPROCESSABLE` with `details.reason = "amount_exceeds_captured"` and `details.refundable` (what can still be refunded).
+         *
+         *     **Effect.** In one transaction, which locks the payment's booking, then the payment (OADR-0003 point 11), a `refunds` row is written (`pending`, `requested_by_type = staff` and the staff member's `stf_…` id, `reason`, `reason_note` = `reasonNote`), with a `payment_events` row (`source = staff`, `refund.requested`), a `booking_events` row `payment.refunded` (the refund asked for, with its `rfd_…` id and amount) when the payment belongs to a booking, and a `staff_actions` row (`payment.refund`). The refund is then sent to Stripe by the payments queue (`refund.submit` on `ota-payments`, idempotency key `refund:<rfd_id>`, OADR-0010 points 3 and 6), so this call makes no Stripe call and Stripe being down delays the refund, never refuses it; the refund webhooks (`charge.refunded`, `charge.refund.updated`) set its final status and the payment's `amountRefunded` and status (`partially_refunded` or `refunded`). The answer is the payment with the new refund in `refunds`.
+         *
+         *     **Idempotency.** `Idempotency-Key` required (`idempotency_keys`, 24 h): a retry with the same key and body returns the stored answer and asks for one refund; the same key with another body → `409 IDEMPOTENCY_KEY_REUSED`. No Amadeus call. Permission `payments:refund` (owner, admin, finance).
+         *
+         *     **Key-only calls.** Without a staff token the secret key must carry the `console:automation` scope and this operation's permission in `platform.api_keys.scopes` — otherwise `403 SCOPE_NOT_ALLOWED` (`details.requiredScope`) or `403 FORBIDDEN` (`details.requiredPermission`); such calls are audited as the API key (see ConsoleApiKeyScope). A key scoped `storefront` is refused even with a staff token.
+         */
+        post: operations["consoleRefundPayment"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/webhooks/stripe/velexis/{environment}": {
         parameters: {
             query?: never;
@@ -2712,6 +2820,102 @@ export interface paths {
          *     **Acknowledged without effect** (`200`, nothing written, logged without the payload): an unknown OTA or payment, an OTA that is neither active nor suspended, and every mismatch of step 2 to 4, which is logged as a security event. **`503 SERVICE_UNAVAILABLE`** when the OTA cannot be looked up, the event cannot be queued, or the PaymentIntent of a dispute cannot be read, and **`500 INTERNAL_ERROR`** when the event cannot be stored: Stripe delivers it again either way, and the delivery that finds it stored queues it again.
          */
         post: operations["receiveStripeVelexisWebhook"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/webhooks/stripe/connect/{environment}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Receive a Stripe event of an OTA's connected account
+         * @description The Stripe Connect webhook endpoint of one environment, which serves the `connect_standard` payment mode (ADR-0011, OADR-0010 points 4 and 5): Stripe sends here the events of every OTA account connected to the Velexis platform with Stripe Connect. Stripe calls it; no SDK user does. Caddy forwards the body unchanged and the API keeps it as raw bytes (the raw body parser of `/webhooks/*`). Documented in M4; served from M5 (OBE-078), until then the route answers as every pending route.
+         *
+         *     **Checks, in order.** (1) `Stripe-Signature` is verified on the raw body with the endpoint's Connect secret (`STRIPE_WEBHOOK_SECRET_CONNECT_TEST` or `…_LIVE`, Stripe's signature scheme with a 5-minute tolerance): a body changed after signing, another secret (the Velexis account's or a connection's own included), a stale timestamp or an environment without a secret answer `400 INVALID_REQUEST` (`details.reason: signature_invalid`) before anything in the body is read. (2) `event.livemode` must match `{environment}` (`true` only on `live`). (3) The OTA comes **only** from `event.account`: the `connect_standard` connection of `{environment}` whose `account_reference` is that `acct_…` (`platform.payment_provider_connections`). The OTA controls its connected account and can write any metadata, so `metadata.velexis_tenant_id` never selects the OTA; wherever it or `metadata.velexis_environment` is present, it must equal the OTA and environment found. (4) The payment is looked up by `metadata.payment_id`, then by the PaymentIntent id, inside that OTA only; its `provider_payment_id`, when set, must be the event's object, and a payment of another environment is a mismatch.
+         *
+         *     **Effect.** As on the Velexis endpoint (receiveStripeVelexisWebhook): in one transaction of the OTA's schema a `payment_events` row (`source = webhook`, `type = webhook.<event type>`, `provider_event_id` = the event id, a payload of ids, statuses and amounts only); an event id that is already stored is a duplicate and writes nothing. Then `stripe.event {tenantId, paymentEventId}` is queued on `ota-stripe-events` with the event id as job id and the answer is `200`. The worker reads the object again from Stripe on the connected account (`Stripe-Account: <acct_…>`) and applies that state, never the event body.
+         *
+         *     **Acknowledged without effect** (`200`, nothing written, no staff alert, logged without the payload): an event without `account` or for an `acct_…` no connection has, an unknown payment, an OTA that is neither active nor suspended, and every mismatch of step 2 to 4, which is logged as a security event: one OTA's signed events can never write into another OTA's schema. **`503 SERVICE_UNAVAILABLE`** when the connection or the OTA cannot be looked up or the event cannot be queued, and **`500 INTERNAL_ERROR`** when the event cannot be stored: Stripe delivers it again either way.
+         */
+        post: operations["receiveStripeConnectWebhook"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/webhooks/stripe/c/{connectionId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Receive a Stripe event of an OTA's own Stripe account
+         * @description The webhook endpoint of one payment connection in `api_keys` mode (ADR-0011, OADR-0010 points 4 and 5): the OTA creates it in its own Stripe dashboard with the URL the portal gave it (`https://api.ota.example.com/webhooks/stripe/c/<ppc_id>`, PADR-0011), so Stripe sends the events of the OTA's own account here. Stripe calls it; no SDK user does. Caddy forwards the body unchanged and the API keeps it as raw bytes (the raw body parser of `/webhooks/*`). Documented in M4; served from M5 (OBE-078), until then the route answers as every pending route.
+         *
+         *     **Checks, in order.** (1) `Stripe-Signature` is verified on the raw body with that connection's own webhook signing secret (`platform.payment_provider_connections.webhook_secret_ciphertext`, envelope-encrypted and decrypted only inside the receiver, never logged): a body changed after signing, another connection's secret, a stale timestamp, and a `connectionId` that names no connection, a connection that is not in `api_keys` mode or one without a secret all answer the same `400 INVALID_REQUEST` (`details.reason: signature_invalid`) before anything in the body is read, so the endpoint never tells which connection ids exist. (2) `event.livemode` must match the connection's environment. (3) The OTA comes **only** from the path's connection. The OTA owns the account and, in this mode, even knows the signing secret, so `metadata.velexis_tenant_id` never selects the OTA; wherever it or `metadata.velexis_environment` is present, it must equal the connection's OTA and environment. (4) The payment is looked up by `metadata.payment_id`, then by the PaymentIntent id, inside that OTA only; its `provider_payment_id`, when set, must be the event's object, and a payment of another environment is a mismatch.
+         *
+         *     **Effect.** As on the Velexis endpoint (receiveStripeVelexisWebhook): in one transaction of the OTA's schema a `payment_events` row (`source = webhook`, `type = webhook.<event type>`, `provider_event_id` = the event id, a payload of ids, statuses and amounts only); an event id that is already stored is a duplicate and writes nothing. Then `stripe.event {tenantId, paymentEventId}` is queued on `ota-stripe-events` with the event id as job id and the answer is `200`. The worker reads the object again from Stripe with the connection's own key and applies that state, never the event body.
+         *
+         *     **Acknowledged without effect** (`200`, nothing written, no staff alert, logged without the payload): an unknown payment, an OTA that is neither active nor suspended, and every mismatch of step 2 to 4, which is logged as a security event: one OTA's signed events can never write into another OTA's schema. **`503 SERVICE_UNAVAILABLE`** when the connection or the OTA cannot be looked up or the event cannot be queued, and **`500 INTERNAL_ERROR`** when the event cannot be stored: Stripe delivers it again either way.
+         */
+        post: operations["receiveStripeConnectionWebhook"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/health/live": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Liveness of the API process
+         * @description `200 {status: "ok"}` while the process runs and its event loop answers; it checks nothing else, so it answers while PostgreSQL or Redis is down (ADR-0016). Called by the uptime monitor and by the deploy script. Public on the API hosts (`api.ota.example.com`), and as `/api/health/live` on the storefront hosts, where Caddy adds the edge credential; Caddy blocks every other `/health/*` path. No credential is needed and no rate limit counts it; a credential sent anyway is checked by the caller guard as on every route: an unknown key or edge secret answers `401 INVALID_API_KEY`, the edge credential beside `X-Api-Key` `400 INVALID_REQUEST`, a publishable key from an origin it does not list `403 ORIGIN_NOT_ALLOWED`, and a key that cannot be looked up (the platform tables out of reach) `503 SERVICE_UNAVAILABLE`. Never cached (`Cache-Control: no-store`) and never logged per request. The worker serves the same answer on its own health port (`127.0.0.1:HEALTH_PORT`), which has no Nest pipeline.
+         */
+        get: operations["healthLive"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/health/ready": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Readiness of the API process
+         * @description Checks the dependencies the process needs before it can serve, in parallel, each within 2 seconds: PostgreSQL (`SELECT 1` on a small pool of its own) and Redis (`PING` on a connection of its own). `200` with `status: ok` when every check answers, otherwise `503` with `status: unavailable`; `checks` names the outcome of each (`ok`, `timeout`, `down`), never a DSN or an error text (ADR-0016). Called by the deploy script after every restart (`curl --max-time 3`) and by the on-VM check.
+         *
+         *     **Local only.** Caddy blocks `/health/ready` publicly (and `/api/health/ready` on the storefront hosts). The API answers it without a credential only on a direct loopback connection (the socket peer is loopback and neither `X-Forwarded-For` nor `X-Forwarded-Host` is present, OADR-0009 rule 1.2); any other request without a credential answers `401 INVALID_API_KEY`, and a credential sent anyway is checked as on every route, with the answers healthLive lists (`400`, `401`, `403 ORIGIN_NOT_ALLOWED`, and `503 SERVICE_UNAVAILABLE` with the error envelope instead of the readiness body when the key cannot be looked up). Never cached (`Cache-Control: no-store`) and never logged per request.
+         *
+         *     **Worker.** The worker serves the same paths and answers on `127.0.0.1:HEALTH_PORT` (no Nest pipeline). From OBE-025 (M2) its readiness also reports the BullMQ queues in `queues`: per queue the waiting jobs, the age of the oldest one and the jobs failed in the last hour. Old jobs do not make it unready: the on-VM check decides the alert threshold.
+         */
+        get: operations["healthReady"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -12553,6 +12757,126 @@ export interface components {
             /** @description Rendered plain-text body. */
             text: string;
         };
+        /** @description A payment in console scope (console.payments.*): every field of `Payment` plus the console-only `ConsolePaymentDetails` (environment, version, events, refunds, booking, account mode). `clientSecret` is always `null` here: only the checkout's owner gets it, while the payment waits for the card. */
+        ConsolePayment: components["schemas"]["Payment"] & components["schemas"]["ConsolePaymentDetails"];
+        /** @description The console-only part of ConsolePayment. */
+        ConsolePaymentDetails: {
+            /**
+             * @description The environment of the payment (`payments.environment`), which is the request's.
+             * @enum {string}
+             */
+            environment: "test" | "live";
+            /** @description Optimistic-locking counter (`payments.version`); `ETag` = `"<version>"`, the `If-Match` of console.payments.capture. */
+            version: number;
+            /** @description Every event of the payment (`payment_events`), oldest first. */
+            events: components["schemas"]["ConsolePaymentEvent"][];
+            /** @description Every refund of the payment (`refunds`), oldest first. */
+            refunds: components["schemas"]["ConsolePaymentRefund"][];
+            /** @description The booking the payment pays; `null` while the checkout has no booking yet. */
+            booking: components["schemas"]["ConsolePaymentBooking"] | null;
+            /** @description The payment connection the payment was created with (`payments.provider_connection_id`); `null` for a payment without one (an airline-card payment). */
+            providerConnection: components["schemas"]["ConsolePaymentProviderConnection"] | null;
+        };
+        /** @description One event of a payment (`payment_events`, append-only): an API or staff call, a Stripe webhook, or a change made by the system. `payload` is what was stored, after redaction: ids, statuses and amounts, never a client secret, card data or a token. */
+        ConsolePaymentEvent: {
+            /** @description Payment event id. */
+            id: string;
+            /** @description Event type, such as `payment.created`, `payment.authorized`, `payment.captured`, `payment.voided`, the refund events `refund.requested`, `refund.submitted`, `refund.succeeded` and `refund.failed`, or `webhook.<Stripe event type>` for a stored webhook. */
+            type: string;
+            /**
+             * @description Origin of the event (`staff`: a console call).
+             * @enum {string}
+             */
+            source: "api" | "webhook" | "system" | "staff";
+            /** @description Status before the event: the payment's (as `Payment.status` spells it) for a `payment.*` event, the refund's (as `Refund.status` spells it) for a `refund.*` event; `null` when the event changed no status. */
+            statusFrom: string | null;
+            /** @description Status after the event, the payment's or the refund's as for `statusFrom` (`refund.requested`: `pending`); `null` when the event changed no status (a stored webhook). */
+            statusTo: string | null;
+            /** @description The amount the event concerns (authorised, captured, refunded), if any. */
+            amount: components["schemas"]["Money"] | null;
+            /** @description The Stripe event id (`evt_…`) of a webhook event; `null` otherwise. */
+            providerEventId: string | null;
+            /** @description The redacted payload stored with the event (ids, statuses and amounts only). */
+            payload: {
+                [key: string]: unknown;
+            };
+            /**
+             * Format: date-time
+             * @description Event time.
+             */
+            createdAt: string;
+        };
+        /** @description A refund of the payment in console scope: every field of `Refund`, with who asked for it, its note and its state at the provider. */
+        ConsolePaymentRefund: components["schemas"]["Refund"] & components["schemas"]["ConsolePaymentRefundDetails"];
+        /** @description The console-only part of ConsolePaymentRefund. */
+        ConsolePaymentRefundDetails: {
+            /** @description Free-text explanation (`refunds.reason_note`). */
+            reasonNote: string | null;
+            /** @description Who asked for the refund. */
+            requestedBy: components["schemas"]["ConsolePaymentRefundRequester"];
+            /** @description The Stripe refund id (`re_…`) once the payments queue has sent it; `null` before. */
+            providerRefundId: string | null;
+            /** @description Why the refund failed (status `failed`), as Stripe or the payments queue reported it. */
+            failureReason: string | null;
+            /**
+             * Format: date-time
+             * @description Last change of the refund.
+             */
+            updatedAt: string;
+        };
+        /** @description Who asked for a refund (`refunds.requested_by_type`, `requested_by_id`). */
+        ConsolePaymentRefundRequester: {
+            /**
+             * @description `customer`: a self-service cancellation; `staff`: console.payments.refund or a console cancellation; `system`: the backend itself (a failed booking after capture, for instance).
+             * @enum {string}
+             */
+            type: "customer" | "staff" | "system";
+            /** @description The customer (`cus_…`) or staff member (`stf_…`); `null` for the system. */
+            id: string | null;
+        };
+        /** @description Short reference of the booking a payment pays (console.bookings.get has the rest). */
+        ConsolePaymentBooking: {
+            /** @description Booking id. */
+            id: string;
+            /** @description Velexis booking reference. */
+            reference: string;
+            /** @description Booking status. */
+            status: components["schemas"]["BookingStatus"];
+        };
+        /** @description The payment connection of a payment, as the console shows it (no credential, no account id). */
+        ConsolePaymentProviderConnection: {
+            /**
+             * @description Whose Stripe account took the payment (`platform.payment_provider_connections.account_mode` of the connection it was created with): `velexis`, the Velexis account on behalf of the OTA (the MVP default); `connect_standard`, the OTA's own account through Stripe Connect; `api_keys`, the OTA's own account through its own keys (both from M5).
+             * @enum {string}
+             */
+            accountMode: "velexis" | "connect_standard" | "api_keys";
+        };
+        /** @description A page of payments, newest first. */
+        ConsolePaymentPage: {
+            /** @description Payments. */
+            data: components["schemas"]["ConsolePayment"][];
+            /** @description Pagination. */
+            page: components["schemas"]["PageInfo"];
+        };
+        /** @description Body of console.payments.capture. */
+        ConsolePaymentCaptureRequest: {
+            /** @description Amount to capture, in the payment's currency: positive, at most two decimals and the currency's minor units, at most the authorised amount. Omitted: the whole authorised amount. Less than authorised releases the rest. */
+            amount?: components["schemas"]["Money"];
+            /** @description Audit justification, stored in `staff_actions`. */
+            reason: string;
+        };
+        /** @description Body of console.payments.refund. */
+        ConsolePaymentRefundRequest: {
+            /** @description Amount to give back, in the payment's currency: positive, at most two decimals and the currency's minor units, at most the captured amount less the refunded amount and the refunds in flight. */
+            amount: components["schemas"]["Money"];
+            /**
+             * @description Reason category (`refunds.reason`, the values of `Refund.reason`).
+             * @enum {string}
+             */
+            reason: "customer_request" | "booking_cancelled" | "schedule_change" | "duplicate" | "fraud" | "goodwill" | "other";
+            /** @description Free-text explanation (`refunds.reason_note`), also kept in `staff_actions`. */
+            reasonNote?: string;
+        };
         /** @description A Stripe event as Stripe delivers it to a webhook endpoint (Stripe's own field names, in snake_case). The receiver reads these fields after the signature check and the `metadata` and ids of `data.object`; the rest is ignored and never stored. */
         StripeWebhookEvent: {
             /** @description The event id (`evt_…`), unique across Stripe; the de-duplication key and the job id. */
@@ -12582,6 +12906,52 @@ export interface components {
         WebhookAcknowledgement: {
             /** @enum {boolean} */
             received: true;
+        };
+        /** @description A Stripe event of an OTA's connected account, as Stripe delivers it to the Connect endpoint (receiveStripeConnectWebhook): a `StripeWebhookEvent` with the connected account in `account`. Stripe always sends it there; the receiver acknowledges an event without it without effect. */
+        StripeConnectWebhookEvent: components["schemas"]["StripeWebhookEvent"] & {
+            /** @description The connected account (`acct_…`) the event happened on: the only source of the OTA on this endpoint (OADR-0010 point 4). */
+            account: string;
+        };
+        /** @description The answer of healthLive. */
+        HealthLiveness: {
+            /**
+             * @description Always `ok`: the process answers.
+             * @enum {string}
+             */
+            status: "ok";
+        };
+        /** @description The answer of healthReady, `200` and `503` alike. */
+        HealthReadiness: {
+            /**
+             * @description `ok` (`200`) when every check is `ok`, otherwise `unavailable` (`503`).
+             * @enum {string}
+             */
+            status: "ok" | "unavailable";
+            /** @description The outcome of each dependency check. */
+            checks: {
+                /** @description PostgreSQL (`SELECT 1`). */
+                postgres: components["schemas"]["HealthDependencyStatus"];
+                /** @description Redis (`PING`). */
+                redis: components["schemas"]["HealthDependencyStatus"];
+            };
+            /** @description The worker's health port only, from OBE-025 (M2): every OTA queue by name (`ota-payments`, `ota-stripe-events`, …). The API's readiness has no `queues`. */
+            queues?: {
+                [key: string]: components["schemas"]["HealthQueue"];
+            };
+        };
+        /**
+         * @description `ok`: it answered; `timeout`: no answer within 2 seconds; `down`: refused, reset or failed.
+         * @enum {string}
+         */
+        HealthDependencyStatus: "ok" | "timeout" | "down";
+        /** @description One BullMQ queue in the worker's readiness (OBE-025). */
+        HealthQueue: {
+            /** @description Jobs waiting to run. */
+            waiting: number;
+            /** @description Age of the oldest waiting job, in seconds; `null` when no job waits. */
+            oldestWaitingSeconds: number | null;
+            /** @description Jobs that failed in the last hour. */
+            failedLastHour: number;
         };
     };
     responses: {
@@ -14813,6 +15183,72 @@ export interface components {
                 "application/json": components["schemas"]["ErrorResponse"];
             };
         };
+        /** @description The payment with console detail. */
+        ConsolePaymentOk: {
+            headers: {
+                "X-Request-Id": components["headers"]["X-Request-Id"];
+                ETag: components["headers"]["ETag"];
+                /** @description `private, no-store`. */
+                "Cache-Control"?: string;
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["ConsolePayment"];
+            };
+        };
+        /** @description The payment after the capture, with its new `version`. */
+        ConsolePaymentCaptured: {
+            headers: {
+                "X-Request-Id": components["headers"]["X-Request-Id"];
+                ETag: components["headers"]["ETag"];
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["ConsolePayment"];
+            };
+        };
+        /** @description The refund was asked for: the payment with the new `pending` refund in `refunds`. `Location` points to the payment, where the refund's status can be followed. */
+        ConsolePaymentRefundRequested: {
+            headers: {
+                "X-Request-Id": components["headers"]["X-Request-Id"];
+                Location: components["headers"]["Location"];
+                ETag: components["headers"]["ETag"];
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["ConsolePayment"];
+            };
+        };
+        /** @description The payment is not in a state that allows the action. Possible codes: CONFLICT (`details.reason`: `payment_not_capturable` (capture: not a Stripe payment in `authorized`) or `payment_not_refundable` (refund: not a Stripe payment in `captured` or `partially_refunded`), with the payment's `details.status` and `details.provider`), IDEMPOTENCY_KEY_REUSED. */
+        ConsolePaymentConflict: {
+            headers: {
+                "X-Request-Id": components["headers"]["X-Request-Id"];
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["ErrorResponse"];
+            };
+        };
+        /** @description The amount or the payment was refused by a rule. Possible codes: UNPROCESSABLE (`details.reason`: `amount_exceeds_authorized` (capture, with `details.authorized`), `amount_exceeds_captured` (refund, with `details.refundable`: the captured amount less the refunded amount and the refunds in flight), `refund_via_airline` (refund of an airline-card payment, which the airline refunds), `currency_mismatch` (an amount in another currency than the payment's, with `details.currency`)). */
+        ConsolePaymentUnprocessable: {
+            headers: {
+                "X-Request-Id": components["headers"]["X-Request-Id"];
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["ErrorResponse"];
+            };
+        };
+        /** @description Stripe returned an error or could not be reached. Possible codes: PAYMENT_PROVIDER_ERROR (nothing changed on this side; retry a capture with the same Idempotency-Key, which Stripe answers once). */
+        ConsolePaymentProviderError: {
+            headers: {
+                "X-Request-Id": components["headers"]["X-Request-Id"];
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["ErrorResponse"];
+            };
+        };
     };
     parameters: {
         /** @description Client-generated unique key (UUID v4) that makes the request safe to retry for 24 hours. */
@@ -14937,6 +15373,8 @@ export interface components {
         NotificationTemplateChannelPath: components["schemas"]["NotificationChannel"];
         /** @description Locale of the template (BCP 47, such as `en` or `fr-CA`). */
         NotificationTemplateLocalePath: components["schemas"]["LocaleCode"];
+        /** @description Payment id (`pay_…`) of this OTA, in the request's environment. */
+        ConsolePaymentId: string;
     };
     requestBodies: never;
     headers: {
@@ -25203,6 +25641,207 @@ export interface operations {
             500: components["responses"]["InternalError"];
         };
     };
+    consoleListPayments: {
+        parameters: {
+            query?: {
+                /** @description Payment status(es), comma-separated (e.g. `authorized,captured`). */
+                status?: ("requires_payment_method" | "requires_action" | "processing" | "authorized" | "captured" | "partially_refunded" | "refunded" | "cancelled" | "failed")[];
+                /** @description Payment provider(s), comma-separated (`stripe`; `airline` for airline-card payments). */
+                provider?: ("stripe" | "adyen" | "checkout_com" | "paypal" | "manual" | "airline")[];
+                /** @description Payment method(s), comma-separated. */
+                method?: ("card" | "apple_pay" | "google_pay" | "paypal" | "bank_transfer" | "agency_credit" | "cash" | "airline_card")[];
+                /** @description Payments of this booking (`bkg_…`). */
+                bookingId?: string;
+                /** @description Only rows created at or after this instant (ISO-8601 UTC). */
+                createdFrom?: components["parameters"]["ConsoleCreatedFrom"];
+                /** @description Only rows created before this instant (ISO-8601 UTC). */
+                createdTo?: components["parameters"]["ConsoleCreatedTo"];
+                /** @description Opaque cursor from page.nextCursor. */
+                cursor?: components["parameters"]["Cursor"];
+                /** @description Page size. */
+                limit?: components["parameters"]["Limit"];
+            };
+            header?: {
+                /** @description BCP 47 locale for messages and display texts. */
+                "Accept-Language"?: components["parameters"]["AcceptLanguage"];
+                /** @description Environment of a console call made with the OTA admin's first-party service key, `test` or `live`. Required with the service key (missing: `400 VALIDATION_FAILED`) and refused with any other credential, whose environment is the key's. `live` needs an OTA that is live and a role other than `viewer`, otherwise `403 ENVIRONMENT_NOT_ALLOWED`; ConsoleStaffSession.environments lists the environments the staff member may open. */
+                "X-Velexis-Environment"?: components["parameters"]["VelexisEnvironment"];
+                /**
+                 * @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server), and for the OTA admin's service key on console operations (below); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`.
+                 *
+                 *     **Console operations.** Honoured for secret keys as above and for the OTA admin's first-party service key, which must send it: the staff member's address (the right-most `X-Forwarded-For` entry Caddy gave the admin). With the service key a missing or malformed value answers `400 VALIDATION_FAILED`; the value drives the console sign-in throttle (10 per minute per end-user IP), the lockout and the staff audit log (`staff_actions`). Other callers' values are ignored.
+                 */
+                "X-Velexis-End-User-IP"?: components["parameters"]["CustomerEndUserIp"];
+                /**
+                 * @description User-Agent of the visitor's browser for calls your server makes on their behalf with a secret or hosting key (longer values are truncated to 512 characters). Honoured only for secret and hosting keys, and for the OTA admin's service key on console operations; publishable-key calls use the request's own `User-Agent`. Recorded as session metadata (`AuthSessionDetails.userAgent`, new-sign-in security emails) and used by abuse heuristics. SDK: `options.endUser.userAgent` or the client option `endUser`.
+                 *
+                 *     **Console operations.** The OTA admin's first-party service key must send the staff member's user agent (missing: `400 VALIDATION_FAILED`); it is recorded in the staff audit log (`staff_actions`).
+                 */
+                "X-Velexis-End-User-Agent"?: components["parameters"]["CustomerEndUserAgent"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of payments. */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    /** @description `private, no-store`. */
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConsolePaymentPage"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["ConsoleForbidden"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    consoleGetPayment: {
+        parameters: {
+            query?: {
+                /** @description `true`: read the PaymentIntent again from Stripe and apply its state before answering. */
+                refresh?: boolean;
+            };
+            header?: {
+                /** @description BCP 47 locale for messages and display texts. */
+                "Accept-Language"?: components["parameters"]["AcceptLanguage"];
+                /** @description Environment of a console call made with the OTA admin's first-party service key, `test` or `live`. Required with the service key (missing: `400 VALIDATION_FAILED`) and refused with any other credential, whose environment is the key's. `live` needs an OTA that is live and a role other than `viewer`, otherwise `403 ENVIRONMENT_NOT_ALLOWED`; ConsoleStaffSession.environments lists the environments the staff member may open. */
+                "X-Velexis-Environment"?: components["parameters"]["VelexisEnvironment"];
+                /**
+                 * @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server), and for the OTA admin's service key on console operations (below); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`.
+                 *
+                 *     **Console operations.** Honoured for secret keys as above and for the OTA admin's first-party service key, which must send it: the staff member's address (the right-most `X-Forwarded-For` entry Caddy gave the admin). With the service key a missing or malformed value answers `400 VALIDATION_FAILED`; the value drives the console sign-in throttle (10 per minute per end-user IP), the lockout and the staff audit log (`staff_actions`). Other callers' values are ignored.
+                 */
+                "X-Velexis-End-User-IP"?: components["parameters"]["CustomerEndUserIp"];
+                /**
+                 * @description User-Agent of the visitor's browser for calls your server makes on their behalf with a secret or hosting key (longer values are truncated to 512 characters). Honoured only for secret and hosting keys, and for the OTA admin's service key on console operations; publishable-key calls use the request's own `User-Agent`. Recorded as session metadata (`AuthSessionDetails.userAgent`, new-sign-in security emails) and used by abuse heuristics. SDK: `options.endUser.userAgent` or the client option `endUser`.
+                 *
+                 *     **Console operations.** The OTA admin's first-party service key must send the staff member's user agent (missing: `400 VALIDATION_FAILED`); it is recorded in the staff audit log (`staff_actions`).
+                 */
+                "X-Velexis-End-User-Agent"?: components["parameters"]["CustomerEndUserAgent"];
+            };
+            path: {
+                /** @description Payment id (`pay_…`) of this OTA, in the request's environment. */
+                paymentId: components["parameters"]["ConsolePaymentId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: components["responses"]["ConsolePaymentOk"];
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["ConsoleForbidden"];
+            404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+            502: components["responses"]["ConsolePaymentProviderError"];
+        };
+    };
+    consoleCapturePayment: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Client-generated unique key (UUID v4) that makes the request safe to retry for 24 hours. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+                /** @description ETag of the version being modified. */
+                "If-Match": components["parameters"]["IfMatch"];
+                /** @description BCP 47 locale for messages and display texts. */
+                "Accept-Language"?: components["parameters"]["AcceptLanguage"];
+                /** @description Environment of a console call made with the OTA admin's first-party service key, `test` or `live`. Required with the service key (missing: `400 VALIDATION_FAILED`) and refused with any other credential, whose environment is the key's. `live` needs an OTA that is live and a role other than `viewer`, otherwise `403 ENVIRONMENT_NOT_ALLOWED`; ConsoleStaffSession.environments lists the environments the staff member may open. */
+                "X-Velexis-Environment"?: components["parameters"]["VelexisEnvironment"];
+                /**
+                 * @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server), and for the OTA admin's service key on console operations (below); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`.
+                 *
+                 *     **Console operations.** Honoured for secret keys as above and for the OTA admin's first-party service key, which must send it: the staff member's address (the right-most `X-Forwarded-For` entry Caddy gave the admin). With the service key a missing or malformed value answers `400 VALIDATION_FAILED`; the value drives the console sign-in throttle (10 per minute per end-user IP), the lockout and the staff audit log (`staff_actions`). Other callers' values are ignored.
+                 */
+                "X-Velexis-End-User-IP"?: components["parameters"]["CustomerEndUserIp"];
+                /**
+                 * @description User-Agent of the visitor's browser for calls your server makes on their behalf with a secret or hosting key (longer values are truncated to 512 characters). Honoured only for secret and hosting keys, and for the OTA admin's service key on console operations; publishable-key calls use the request's own `User-Agent`. Recorded as session metadata (`AuthSessionDetails.userAgent`, new-sign-in security emails) and used by abuse heuristics. SDK: `options.endUser.userAgent` or the client option `endUser`.
+                 *
+                 *     **Console operations.** The OTA admin's first-party service key must send the staff member's user agent (missing: `400 VALIDATION_FAILED`); it is recorded in the staff audit log (`staff_actions`).
+                 */
+                "X-Velexis-End-User-Agent"?: components["parameters"]["CustomerEndUserAgent"];
+            };
+            path: {
+                /** @description Payment id (`pay_…`) of this OTA, in the request's environment. */
+                paymentId: components["parameters"]["ConsolePaymentId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConsolePaymentCaptureRequest"];
+            };
+        };
+        responses: {
+            200: components["responses"]["ConsolePaymentCaptured"];
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            402: components["responses"]["PaymentRequired"];
+            403: components["responses"]["ConsoleForbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["ConsolePaymentConflict"];
+            412: components["responses"]["PreconditionFailed"];
+            422: components["responses"]["ConsolePaymentUnprocessable"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+            502: components["responses"]["ConsolePaymentProviderError"];
+        };
+    };
+    consoleRefundPayment: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Client-generated unique key (UUID v4) that makes the request safe to retry for 24 hours. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+                /** @description BCP 47 locale for messages and display texts. */
+                "Accept-Language"?: components["parameters"]["AcceptLanguage"];
+                /** @description Environment of a console call made with the OTA admin's first-party service key, `test` or `live`. Required with the service key (missing: `400 VALIDATION_FAILED`) and refused with any other credential, whose environment is the key's. `live` needs an OTA that is live and a role other than `viewer`, otherwise `403 ENVIRONMENT_NOT_ALLOWED`; ConsoleStaffSession.environments lists the environments the staff member may open. */
+                "X-Velexis-Environment"?: components["parameters"]["VelexisEnvironment"];
+                /**
+                 * @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server), and for the OTA admin's service key on console operations (below); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`.
+                 *
+                 *     **Console operations.** Honoured for secret keys as above and for the OTA admin's first-party service key, which must send it: the staff member's address (the right-most `X-Forwarded-For` entry Caddy gave the admin). With the service key a missing or malformed value answers `400 VALIDATION_FAILED`; the value drives the console sign-in throttle (10 per minute per end-user IP), the lockout and the staff audit log (`staff_actions`). Other callers' values are ignored.
+                 */
+                "X-Velexis-End-User-IP"?: components["parameters"]["CustomerEndUserIp"];
+                /**
+                 * @description User-Agent of the visitor's browser for calls your server makes on their behalf with a secret or hosting key (longer values are truncated to 512 characters). Honoured only for secret and hosting keys, and for the OTA admin's service key on console operations; publishable-key calls use the request's own `User-Agent`. Recorded as session metadata (`AuthSessionDetails.userAgent`, new-sign-in security emails) and used by abuse heuristics. SDK: `options.endUser.userAgent` or the client option `endUser`.
+                 *
+                 *     **Console operations.** The OTA admin's first-party service key must send the staff member's user agent (missing: `400 VALIDATION_FAILED`); it is recorded in the staff audit log (`staff_actions`).
+                 */
+                "X-Velexis-End-User-Agent"?: components["parameters"]["CustomerEndUserAgent"];
+            };
+            path: {
+                /** @description Payment id (`pay_…`) of this OTA, in the request's environment. */
+                paymentId: components["parameters"]["ConsolePaymentId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConsolePaymentRefundRequest"];
+            };
+        };
+        responses: {
+            201: components["responses"]["ConsolePaymentRefundRequested"];
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["ConsoleForbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["ConsolePaymentConflict"];
+            422: components["responses"]["ConsolePaymentUnprocessable"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+        };
+    };
     receiveStripeVelexisWebhook: {
         parameters: {
             query?: never;
@@ -25270,6 +25909,215 @@ export interface operations {
             400: components["responses"]["BadRequest"];
             500: components["responses"]["InternalError"];
             503: components["responses"]["ServiceUnavailable"];
+        };
+    };
+    receiveStripeConnectWebhook: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Stripe's signature of the raw body: `t=<unix seconds>,v1=<HMAC-SHA256 of "<t>.<body>">`, possibly with several `v1` entries during a secret rotation. */
+                "Stripe-Signature": string;
+            };
+            path: {
+                /**
+                 * @description The Stripe mode of the endpoint: `test` (Stripe test mode, `livemode: false`) or `live`. Each has its own Connect webhook signing secret.
+                 * @example test
+                 */
+                environment: "test" | "live";
+            };
+            cookie?: never;
+        };
+        /** @description The Stripe event exactly as Stripe sent it, with the connected account in `account`. The signature covers these bytes, so the body is verified before it is parsed and is never re-serialised. */
+        requestBody: {
+            content: {
+                /**
+                 * @example {
+                 *       "id": "evt_1QExampleOnlyConnectCapture",
+                 *       "object": "event",
+                 *       "account": "acct_1QExampleOnlyAcmeTravel",
+                 *       "api_version": "2025-08-27.basil",
+                 *       "created": 1791799321,
+                 *       "livemode": false,
+                 *       "type": "payment_intent.amount_capturable_updated",
+                 *       "data": {
+                 *         "object": {
+                 *           "id": "pi_1QExampleOnlyConnectPayment",
+                 *           "object": "payment_intent",
+                 *           "amount": 45210,
+                 *           "amount_capturable": 45210,
+                 *           "currency": "eur",
+                 *           "status": "requires_capture",
+                 *           "metadata": {
+                 *             "velexis_tenant_id": "ten_01JA2Z9W5K7Q3M8N4P6R2T0V1X",
+                 *             "velexis_environment": "test",
+                 *             "checkout_id": "chk_01JA2ZB1C3D5E7F9G1H3J5K7M9",
+                 *             "payment_id": "pay_01JA2ZB9X1Y3Z5A7B9C1D3E5F7"
+                 *           }
+                 *         }
+                 *       }
+                 *     }
+                 */
+                "application/json": components["schemas"]["StripeConnectWebhookEvent"];
+            };
+        };
+        responses: {
+            /** @description The event is stored and queued, was already stored, or is acknowledged without effect (see the description). */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "received": true
+                     *     }
+                     */
+                    "application/json": components["schemas"]["WebhookAcknowledgement"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["ServiceUnavailable"];
+        };
+    };
+    receiveStripeConnectionWebhook: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Stripe's signature of the raw body: `t=<unix seconds>,v1=<HMAC-SHA256 of "<t>.<body>">`, possibly with several `v1` entries during a secret rotation. */
+                "Stripe-Signature": string;
+            };
+            path: {
+                /**
+                 * @description The payment connection (`platform.payment_provider_connections.id`, `ppc_` and a ULID) whose webhook endpoint this is, as the portal's `webhookUrl` names it.
+                 * @example ppc_01JA2ZBA4D8F2H6K0N4Q8S2V6X
+                 */
+                connectionId: string;
+            };
+            cookie?: never;
+        };
+        /** @description The Stripe event exactly as Stripe sent it. The signature covers these bytes, so the body is verified before it is parsed and is never re-serialised. */
+        requestBody: {
+            content: {
+                /**
+                 * @example {
+                 *       "id": "evt_1QExampleOnlyOwnRefund",
+                 *       "object": "event",
+                 *       "api_version": "2025-08-27.basil",
+                 *       "created": 1791799321,
+                 *       "livemode": false,
+                 *       "type": "charge.refunded",
+                 *       "data": {
+                 *         "object": {
+                 *           "id": "ch_1QExampleOnlyOwnCharge",
+                 *           "object": "charge",
+                 *           "amount": 45210,
+                 *           "amount_refunded": 5000,
+                 *           "currency": "eur",
+                 *           "payment_intent": "pi_1QExampleOnlyOwnPayment",
+                 *           "metadata": {
+                 *             "velexis_tenant_id": "ten_01JA2Z9W5K7Q3M8N4P6R2T0V1X",
+                 *             "velexis_environment": "test",
+                 *             "checkout_id": "chk_01JA2ZB1C3D5E7F9G1H3J5K7M9",
+                 *             "payment_id": "pay_01JA2ZB9X1Y3Z5A7B9C1D3E5F7"
+                 *           }
+                 *         }
+                 *       }
+                 *     }
+                 */
+                "application/json": components["schemas"]["StripeWebhookEvent"];
+            };
+        };
+        responses: {
+            /** @description The event is stored and queued, was already stored, or is acknowledged without effect (see the description). */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "received": true
+                     *     }
+                     */
+                    "application/json": components["schemas"]["WebhookAcknowledgement"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["ServiceUnavailable"];
+        };
+    };
+    healthLive: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The process is up. */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    /** @description `no-store`. */
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "status": "ok"
+                     *     }
+                     */
+                    "application/json": components["schemas"]["HealthLiveness"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            503: components["responses"]["ServiceUnavailable"];
+        };
+    };
+    healthReady: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Every dependency answered. */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    /** @description `no-store`. */
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HealthReadiness"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            /** @description A dependency did not answer in time or refused; `checks` says which. A request that sent a key the caller guard could not look up gets the error envelope (`SERVICE_UNAVAILABLE`) instead. */
+            503: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    /** @description `no-store` (the readiness body). */
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HealthReadiness"] | components["schemas"]["ErrorResponse"];
+                };
+            };
         };
     };
 }

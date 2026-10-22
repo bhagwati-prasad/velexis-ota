@@ -75,12 +75,12 @@ Creates send an `Idempotency-Key`; updates and deletes are guarded by `ifMatch` 
 
 | `x-sdk-method` | HTTP | Parameters → result |
 |---|---|---|
-| `console.payments.list` | `GET /v1/console/payments` | `{ status?, provider?, method?, bookingId?, createdFrom?, createdTo?, cursor?, limit? }` → `Page<ConsolePayment>` |
+| `console.payments.list` | `GET /v1/console/payments` | `{ status?, provider?, method?, bookingId?, createdFrom?, createdTo?, cursor?, limit? }` → `Page<ConsolePayment>` (`ConsolePaymentPage`, newest first) |
 | `console.payments.get` | `GET /v1/console/payments/{paymentId}` | `{ paymentId, refresh? }` → `ConsolePayment` |
-| `console.payments.capture` | `POST /v1/console/payments/{paymentId}/capture` | `{ paymentId, ifMatch, amount?, reason }` → `ConsolePayment` |
-| `console.payments.refund` | `POST /v1/console/payments/{paymentId}/refunds` | `{ paymentId, amount, reason, reasonNote? }` → `ConsolePayment` |
+| `console.payments.capture` | `POST /v1/console/payments/{paymentId}/capture` | `{ paymentId, ifMatch, amount?, reason }` (`ConsolePaymentCaptureRequest`) → `ConsolePayment` |
+| `console.payments.refund` | `POST /v1/console/payments/{paymentId}/refunds` | `{ paymentId, amount, reason, reasonNote? }` (`ConsolePaymentRefundRequest`) → `ConsolePayment` |
 
-The exact schema names and fields are fixed in the OpenAPI document by the API tasks; the generated types flow into the SDK automatically.
+OBE-090 fixed the schemas in the OpenAPI document (tag `Console payments`), and the generated types flow into the SDK. `ConsolePayment` is `Payment` with `environment`, `version`, `events` (`ConsolePaymentEvent`, redacted), `refunds` (`ConsolePaymentRefund`), `booking` (`{ id, reference, status }`) and `providerConnection` (`{ accountMode }`); its `clientSecret` is always `null`. `status`, `provider` and `method` of the list take one value or several (sent comma-separated). `capture` and `refund` send an `Idempotency-Key`; `capture` also takes `ifMatch` (the payment's `version`) and answers the captured payment, `refund` answers `201` with the new `pending` refund in `refunds` (the payments queue sends it to Stripe, so the call makes no Stripe call). `get` with `refresh: true` reads the PaymentIntent from Stripe first. Permissions: `payments:read`, `payments:capture` and `payments:refund`.
 
 ## 4. Enum values and fields added to existing schemas
 
