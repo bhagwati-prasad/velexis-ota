@@ -51,6 +51,13 @@ const USER_AGENT = "Mozilla/5.0 (PAD-002 test)";
 
 const IDLE_SIGN_IN: SignInState = { status: "idle", fieldErrors: {}, values: { email: "" } };
 const IDLE_MFA: MfaState = { status: "idle", method: "totp" };
+/** Return paths whose dot segments the URL parser turns into the protocol-relative `//evil.example` (FIX-W26-SECURITY). */
+const DOT_SEGMENT_REDIRECTS = [
+  "/.//evil.example",
+  "/a/..//evil.example",
+  "/%2e//evil.example",
+  "/%2E%2E//evil.example",
+] as const;
 
 const fetchMock = vi.fn<(input: Request) => Promise<Response>>();
 
@@ -505,6 +512,14 @@ describe("/sign-in page", () => {
     }
   });
 
+  it("[FIX-W26-SECURITY AC2] carries no next into the form when its dot segments normalise to //evil.example", async () => {
+    for (const next of DOT_SEGMENT_REDIRECTS) {
+      await renderSignInPage({ next });
+      expect(document.querySelector('input[name="next"]'), next).toBeNull();
+      cleanup();
+    }
+  });
+
   it("shows the notice of where the admin came from, and nothing for unknown values", async () => {
     await renderSignInPage({ signedOut: "1" });
     expect(screen.getByRole("status").textContent).toBe(SIGN_IN_STRINGS.signedOut);
@@ -627,6 +642,30 @@ describe("/sign-in/mfa: MfaForm and the verifyMfa action", () => {
       cookieStore({ [MFA_CHALLENGE_COOKIE]: MFA_CHALLENGE });
       answer({ "/v1/admin/auth/mfa/verify": () => json(adminSession(), 200) });
 
+      await expect(verifyMfa(IDLE_MFA, formData({ method: "totp", code: "492039", next }))).rejects.toThrow(
+        /^NEXT_REDIRECT \/$/,
+      );
+    }
+  });
+
+  it("[FIX-W26-SECURITY AC2] stays on the admin through both steps for a next whose dot segments normalise to //evil.example", async () => {
+    for (const next of DOT_SEGMENT_REDIRECTS) {
+      // The password step carries no return path to the code step ...
+      const store = cookieStore();
+      answer({ "/v1/admin/auth/sign-in": () => challenge() });
+      await expect(
+        signIn(IDLE_SIGN_IN, formData({ email: EMAIL, password: PASSWORD, next })),
+      ).rejects.toThrow(/^NEXT_REDIRECT \/sign-in\/mfa$/);
+      expect(writes(store), next).toEqual([[MFA_CHALLENGE_COOKIE, MFA_CHALLENGE, 300]]);
+
+      // ... the code step's page puts none into its form ...
+      cookieStore({ [MFA_CHALLENGE_COOKIE]: MFA_CHALLENGE });
+      render(await mfaPage({ next }));
+      expect(document.querySelector('input[name="next"]'), next).toBeNull();
+      cleanup();
+
+      // ... and the code step itself ends on the dashboard, also for a value posted in the hidden field.
+      answer({ "/v1/admin/auth/mfa/verify": () => json(adminSession(), 200) });
       await expect(verifyMfa(IDLE_MFA, formData({ method: "totp", code: "492039", next }))).rejects.toThrow(
         /^NEXT_REDIRECT \/$/,
       );

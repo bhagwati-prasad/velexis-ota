@@ -169,6 +169,14 @@ export function takeParam(name, env = {}) {
 }
 
 /**
+ * Whether `text` is a path on this storefront: exactly one leading `/` (`//host` is protocol-relative), and no control
+ * character, white space or backslash.
+ * @param {string} text
+ */
+const isStorefrontPath = (text) =>
+  text.startsWith("/") && !text.startsWith("//") && !hasUnsafeUrlCharacter(text) && !/\s/.test(text);
+
+/**
  * A redirect target that stays on this storefront: a path with exactly one leading `/`, before and after its dot
  * segments are resolved (its query and fragment kept). Anything else (`//evil.example`, `/.//evil.example`,
  * `/\evil.example`, `https://…`, `javascript:…`, a path without the leading `/`, control characters or white space, a
@@ -177,22 +185,15 @@ export function takeParam(name, env = {}) {
  * @returns {string}
  */
 export function safeNext(value) {
-  if (
-    typeof value !== "string" ||
-    value.length > MAX_NEXT_LENGTH ||
-    !value.startsWith("/") ||
-    value.startsWith("//") ||
-    hasUnsafeUrlCharacter(value) ||
-    /\s/.test(value)
-  ) {
+  if (typeof value !== "string" || value.length > MAX_NEXT_LENGTH || !isStorefrontPath(value)) {
     return DEFAULT_NEXT;
   }
   try {
     const url = new URL(value, PROBE_ORIGIN);
     const target = `${url.pathname}${url.search}${url.hash}`;
     // Dot segments are resolved here, so "/.//evil.example" and "/a/..//evil.example" come out as "//evil.example":
-    // the normalised path is checked again for a second leading slash.
-    return url.origin === PROBE_ORIGIN && !target.startsWith("//") ? target : DEFAULT_NEXT;
+    // the normalised path is checked again, with the same rule (FIX-W26-SECURITY).
+    return url.origin === PROBE_ORIGIN && isStorefrontPath(target) ? target : DEFAULT_NEXT;
   } catch {
     return DEFAULT_NEXT;
   }

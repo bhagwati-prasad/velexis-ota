@@ -74,9 +74,9 @@
 //
 // Every copy of an order these actions keep (the snapshot, the PATCH request in `supplier_requests`, the staff
 // action's before and after, `form_of_identifications`) passes the shared redactor and has the numbers of its forms of
-// identification (passport, identity card, driving licence numbers, which that redactor does not know) cut to their
-// last 4, as console.bookings.get shows them (`keptOrderDataOf`, `maskedIdentifications`). Only Amadeus and the
-// retrieve's answer see them in full.
+// identification (passport, identity card, driving licence numbers) cut to their last 4, as console.bookings.get shows
+// them (`keptOrderDataOf`, `maskedIdentifications`; the shared redactor cuts them the same way since FIX-W26-SECURITY,
+// and cutting a cut number again changes nothing). Only Amadeus and the retrieve's answer see them in full.
 import { Injectable } from "@nestjs/common";
 import type { components, operations } from "@velexis/api-types";
 import type { Insertable, TenantDatabase, Updateable } from "@velexis/db";
@@ -655,7 +655,8 @@ export function flightOfferRefsOf(
 /**
  * An order's `data` as Velexis keeps a copy of it (the snapshot, the PATCH request of the supplier log, the staff
  * action): the shared redactor, then the numbers of its forms of identification (passport, identity card or driving
- * licence numbers, which the shared redactor does not know) cut to their last 4, as console.bookings.get shows them.
+ * licence numbers) cut to their last 4, as console.bookings.get shows them. The shared redactor already cuts them
+ * (FIX-W26-SECURITY); the second cut keeps the same last 4.
  */
 export function keptOrderDataOf(data: JsonObject): JsonObject {
   const redacted = redactPayload(data);

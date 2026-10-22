@@ -295,9 +295,10 @@ const normaliseKey = (key: string): string => key.toLowerCase().replace(/[-_]/g,
 
 /**
  * The keys whose value is card or identity document data, as the shared redactor treats them: the parents whose
- * `number` it masks (`card`, Amadeus `creditCard` and `virtualCreditCardDetails`, `documents`), the numbers it masks
- * wherever they are (`pan`, `cardNumber`, `certificateNumber`), and the fields it drops (security codes, birth place,
- * issuance location). Their values are hashed as the redactor keeps them.
+ * `number` it masks (`card`, Amadeus `creditCard` and `virtualCreditCardDetails`, `documents`, and an Amadeus order's
+ * `formOfIdentifications`, FIX-W26-SECURITY), the numbers it masks wherever they are (`pan`, `cardNumber`,
+ * `certificateNumber`), and the fields it drops (security codes, birth place, issuance location). Their values are
+ * hashed as the redactor keeps them.
  */
 const MASKED_FOR_HASH = new Set([
   "card",
@@ -306,6 +307,7 @@ const MASKED_FOR_HASH = new Set([
   "virtualcreditcarddetails",
   "documents",
   "document",
+  "formofidentifications",
   "pan",
   "primaryaccountnumber",
   "cardnumber",

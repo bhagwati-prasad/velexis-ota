@@ -251,20 +251,27 @@ export const REFRESH_PATH = "/auth/refresh";
 
 const NEXT_PATH_MAX_LENGTH = 2048;
 const NEXT_PATH_BASE = "https://admin.invalid";
+// eslint-disable-next-line no-control-regex -- control characters are exactly what is refused here
+const NEXT_PATH_UNSAFE_CHARACTERS = /[\u0000-\u001f\u007f\\]/;
+
+/** A path on this origin: one leading `/` but not two (`//host` is protocol-relative), no control character or `\`. */
+function isOwnOriginPath(path: string): boolean {
+  return path.startsWith("/") && !path.startsWith("//") && !NEXT_PATH_UNSAFE_CHARACTERS.test(path);
+}
 
 /**
  * `next` when it is a relative path on the admin, otherwise `undefined`: absolute URLs, protocol-relative ones
  * (`//evil.example`, `/\evil.example`), anything with a control character or a backslash, and values longer than
  * 2 048 characters are dropped. The result is the path, query and fragment as the URL parser normalises them, and
- * it is checked again after that: dot segments (`/.//evil.example`, `/a/..//evil.example`, `/%2e%2e//evil.example`)
- * normalise to the protocol-relative `//evil.example`, which a browser would follow to another host.
+ * it is checked again after that, with the same rule (FIX-W26-SECURITY): dot segments (`/.//evil.example`,
+ * `/a/..//evil.example`, `/%2e%2e//evil.example`) normalise to the protocol-relative `//evil.example`, which a browser
+ * would follow to another host.
  */
 export function safeNextPath(next: string | null | undefined): string | undefined {
   if (typeof next !== "string" || next.length === 0 || next.length > NEXT_PATH_MAX_LENGTH) {
     return undefined;
   }
-  // eslint-disable-next-line no-control-regex -- control characters are exactly what is refused here
-  if (!next.startsWith("/") || next.startsWith("//") || /[\u0000-\u001f\u007f\\]/.test(next)) {
+  if (!isOwnOriginPath(next)) {
     return undefined;
   }
   let url: URL;
@@ -274,7 +281,7 @@ export function safeNextPath(next: string | null | undefined): string | undefine
     return undefined;
   }
   const path = `${url.pathname}${url.search}${url.hash}`;
-  return url.origin === NEXT_PATH_BASE && path.startsWith("/") && !path.startsWith("//") ? path : undefined;
+  return url.origin === NEXT_PATH_BASE && isOwnOriginPath(path) ? path : undefined;
 }
 
 /** `/auth/refresh`, with `?next=` when `next` is a safe relative path. */

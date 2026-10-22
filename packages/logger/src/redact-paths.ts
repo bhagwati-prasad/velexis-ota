@@ -16,11 +16,16 @@
  * a shared branch would write the censor into the caller's own object.
  *
  * Known upstream limit (pino 9.14 with @pinojs/redact 0.4.0): below a key that also starts a literal path
- * (`documents`, `mfa` and `oauth` at depth 1 or 2, and `req.headers` / `res.headers` when the `req` and `res`
- * serializers are replaced), the redactor copies only along that literal path. A `card`, `creditCard` or
- * `formOfPayments` object nested inside such a branch is still kept out of the line, but the censor is also written
- * into the caller's object. Realistic shapes (identity documents, MFA and OAuth bodies, header strings) never nest
- * card objects there, and the tests check that every realistic logged object stays unchanged.
+ * (`documents`, `formOfIdentifications`, `mfa` and `oauth` at depth 1 or 2, and `req.headers` / `res.headers` when the
+ * `req` and `res` serializers are replaced), the redactor copies only along that literal path. A `card`, `creditCard`
+ * or `formOfPayments` object nested inside such a branch is still kept out of the line, but the censor is also written
+ * into the caller's object. Realistic shapes (identity documents, forms of identification, MFA and OAuth bodies,
+ * header strings) never nest card objects there, and the tests check that every realistic logged object stays
+ * unchanged.
+ *
+ * Identity document numbers (`documents[*].number`) and the numbers of an Amadeus flight order's forms of
+ * identification (`formOfIdentifications[*].number`: passport, identity card or driving licence numbers;
+ * FIX-W26-SECURITY) are censored at the same depths: as the list itself (depth 1 of the line) and one level down.
  *
  * The platform's paths (platform/docs/architecture.md §8): Stripe secret keys and webhook secrets, bank numbers,
  * recovery codes, TOTP secrets and `otpauth://` URLs, MFA challenge and invitation tokens, the secret variables of an
@@ -140,6 +145,7 @@ export const REDACT_PATHS: readonly string[] = Object.freeze([
   "*.card.number",
   "*.creditCard.number",
   "documents[*].number",
+  "formOfIdentifications[*].number",
   "*.mfa.code",
   "*.mfa.state",
   "*.oauth.code",
@@ -148,8 +154,9 @@ export const REDACT_PATHS: readonly string[] = Object.freeze([
   "*.*.creditCard",
   "*.*.formOfPayments",
 
-  // Depth 4: identity document numbers, card objects.
+  // Depth 4: identity document and form-of-identification numbers, card objects.
   "*.documents[*].number",
+  "*.formOfIdentifications[*].number",
   "*.*.*.card",
   "*.*.*.creditCard",
   "*.*.*.formOfPayments",

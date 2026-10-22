@@ -118,6 +118,58 @@ describe("redactPayload", () => {
     ]);
   });
 
+  it("masks formOfIdentifications[].number to its last 4 characters, like documents[].number, at any depth [FIX-W26-SECURITY AC4]", () => {
+    // Test values only: made-up passport, identity card and driving licence numbers of an Amadeus flight order.
+    const identifications = (): Json[] => [
+      {
+        identificationType: "PASSPORT",
+        carrierCode: "IB",
+        number: "PX48213579",
+        travelerIds: ["1"],
+        flightOfferIds: ["1"],
+      },
+      { identificationType: "NATIONAL_IDENTITY_CARD", number: " ID20746135 ", travelerIds: ["2"] },
+      { identificationType: "DRIVERS_LICENSE", number: 90817263, travelerIds: ["3"] },
+      { identificationType: "OTHER_ID", number: "X12" },
+      { identificationType: "TICKET", travelerIds: ["1"] },
+    ];
+    const masked: Json[] = [
+      {
+        identificationType: "PASSPORT",
+        carrierCode: "IB",
+        number: "3579",
+        travelerIds: ["1"],
+        flightOfferIds: ["1"],
+      },
+      { identificationType: "NATIONAL_IDENTITY_CARD", number: "6135", travelerIds: ["2"] },
+      { identificationType: "DRIVERS_LICENSE", number: "7263", travelerIds: ["3"] },
+      { identificationType: "OTHER_ID", number: "X12" },
+      { identificationType: "TICKET", travelerIds: ["1"] },
+    ];
+    const input = deepFreeze({
+      // A Flight Order Management answer's data, as order_snapshot and supplier_requests keep it ...
+      data: { type: "flight-order", id: "eJzTd9f3NjIJdgMADeQCtg", formOfIdentifications: identifications() },
+      // ... nested deeper (a reply inside another object), under the column's name, and as a single object.
+      reply: { body: { data: { formOfIdentifications: identifications() } } },
+      form_of_identifications: identifications(),
+      FormOfIdentifications: { identificationType: "PASSPORT", number: "PX48213579" },
+    });
+
+    const output = redactPayload(input);
+
+    expect(output).toEqual({
+      data: { type: "flight-order", id: "eJzTd9f3NjIJdgMADeQCtg", formOfIdentifications: masked },
+      reply: { body: { data: { formOfIdentifications: masked } } },
+      form_of_identifications: masked,
+      FormOfIdentifications: { identificationType: "PASSPORT", number: "3579" },
+    });
+    for (const full of ["PX48213579", "ID20746135", "90817263"]) {
+      expect(JSON.stringify(output)).not.toContain(full);
+    }
+    // Masking a masked copy again changes nothing (OBE-062's keptOrderDataOf cuts the numbers once more).
+    expect(redactPayload(output)).toEqual(output);
+  });
+
   it("drops securityCode, cvc and cvv wherever they appear", () => {
     const output = redactPayload({
       card: { number: "4111 1111 1111 1111", cvc: TEST_CVV },

@@ -411,6 +411,38 @@ describe("safeNextPath", () => {
   ])("keeps the relative path %j", (value, expected) => {
     expect(safeNextPath(value)).toBe(expected);
   });
+
+  it.each([
+    "/.//evil.example",
+    "/a/..//evil.example",
+    "/%2e//evil.example",
+    "/%2E%2E//evil.example",
+    "/%2e%2e//evil.example",
+    "/otas/..//evil.example/x?y=1#z",
+    "/otas/%2e%2e//evil.example",
+    "/x/%2E%2E/%2E%2E//evil.example",
+  ])(
+    "[PFE-002 AC2] [FIX-W26-SECURITY AC1] ignores %j, whose dot segments the URL parser turns into a protocol-relative //evil.example",
+    (value) => {
+      expect(safeNextPath(value)).toBeUndefined();
+    },
+  );
+
+  it.each([
+    ["/./dashboard", "/dashboard"],
+    ["/%2e/account", "/account"],
+    ["/otas/ten_1/./team?tab=invitations", "/otas/ten_1/team?tab=invitations"],
+    ["/otas/ten_1/%2E%2E/billing", "/otas/billing"],
+    ["/otas/ten_1/..//team", "/otas//team"],
+    ["/otas/%2e%2e/%2Fevil.example", "/%2Fevil.example"],
+    ["/.%2F%2Fevil.example", "/.%2F%2Fevil.example"],
+    ["/%2e%2F/evil.example", "/%2e%2F/evil.example"],
+  ])(
+    "[FIX-W26-SECURITY AC1] keeps %j, whose dot segments and encoded slashes stay on the portal, as %j",
+    (value, expected) => {
+      expect(safeNextPath(value)).toBe(expected);
+    },
+  );
 });
 
 // ---- Client components never import lib/api or lib/session ----------------------------------------------------

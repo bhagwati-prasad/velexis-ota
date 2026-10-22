@@ -399,6 +399,33 @@ describe("the request hash", () => {
     );
   });
 
+  it("[FIX-W26-SECURITY AC4] never covers a form-of-identification number either: it counts by its last 4, as a document number does", () => {
+    const { service } = harness();
+    // Test values only: made-up passport and driving licence numbers of an Amadeus order request.
+    const order = (passport: string, licence: string) => ({
+      path: {},
+      query: {},
+      body: {
+        data: {
+          type: "flight-order",
+          formOfIdentifications: [
+            { identificationType: "PASSPORT", carrierCode: "IB", number: passport, travelerIds: ["1"] },
+            { identificationType: "DRIVERS_LICENSE", number: licence, travelerIds: ["2"] },
+          ],
+        },
+      },
+    });
+
+    const hash = service.hashOf("consoleAmadeusCreateFlightOrders", order("PX48213579", "DL90817263"));
+
+    expect(hash).toBe(requestHash("consoleAmadeusCreateFlightOrders", order("3579", "7263")));
+    expect(hash).not.toBe(requestHash("consoleAmadeusCreateFlightOrders", order("PX48213579", "DL90817263")));
+    expect(service.hashOf("consoleAmadeusCreateFlightOrders", order("XY11113579", "AB00007263"))).toBe(hash);
+    expect(service.hashOf("consoleAmadeusCreateFlightOrders", order("PX48213570", "DL90817263"))).not.toBe(
+      hash,
+    );
+  });
+
   it("refuses a password before anything is hashed or stored, also in what a hook returns; a hook can leave it out", async () => {
     const { service, records } = harness();
     const signIn = (body: unknown): IdempotentRequest => ({

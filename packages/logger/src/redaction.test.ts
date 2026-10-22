@@ -487,6 +487,49 @@ describe("redaction through createLogger", () => {
     expect(REDACT_PATHS).toEqual(expect.arrayContaining(["*.card.number", "*.creditCard.number"]));
   });
 
+  it("censors form-of-identification numbers below their parent at the depths of identity document numbers [FIX-W26-SECURITY AC4]", () => {
+    const { logger, sink } = testLogger();
+    // Test values only: a made-up passport and driving licence number of an Amadeus flight order.
+    const passport = "PX48213579";
+    const licence = "DL90817263";
+    const logged = {
+      formOfIdentifications: [
+        { identificationType: "PASSPORT", carrierCode: "IB", number: passport, travelerIds: ["1"] },
+      ],
+      order: {
+        id: "eJzTd9f3NjIJdgMADeQCtg",
+        formOfIdentifications: [
+          { identificationType: "DRIVERS_LICENSE", number: licence, travelerIds: ["2"] },
+        ],
+      },
+    };
+    const snapshot = structuredClone(logged);
+
+    logger.warn(logged, "order.debug");
+
+    expect(sink.lines[0]).not.toContain(passport);
+    expect(sink.lines[0]).not.toContain(licence);
+    const [record] = sink.records();
+    expect(record).toMatchObject({
+      formOfIdentifications: [
+        { identificationType: "PASSPORT", carrierCode: "IB", number: REDACT_CENSOR, travelerIds: ["1"] },
+      ],
+      order: {
+        id: "eJzTd9f3NjIJdgMADeQCtg",
+        formOfIdentifications: [{ identificationType: "DRIVERS_LICENSE", number: REDACT_CENSOR }],
+      },
+    });
+    expect(logged).toEqual(snapshot);
+    expect(REDACT_PATHS).toEqual(
+      expect.arrayContaining(["formOfIdentifications[*].number", "*.formOfIdentifications[*].number"]),
+    );
+    // Same depth rules as the documents: wherever `documents[*].number` is a path, so is the form of identification's.
+    const depthOf = (path: string): number => path.split(/\.|\[/).length;
+    expect(REDACT_PATHS.filter((path) => path.includes("formOfIdentifications")).map(depthOf)).toEqual(
+      REDACT_PATHS.filter((path) => path.includes("documents")).map(depthOf),
+    );
+  });
+
   it("censors credential headers of a request and a response, and the serializers drop headers", () => {
     const { logger, sink } = testLogger();
     const headers = {

@@ -404,6 +404,38 @@ describe("safeNextPath", () => {
   ])("keeps the relative path %j", (value, expected) => {
     expect(safeNextPath(value)).toBe(expected);
   });
+
+  it.each([
+    "/.//evil.example",
+    "/a/..//evil.example",
+    "/%2e//evil.example",
+    "/%2E%2E//evil.example",
+    "/%2e%2e//evil.example",
+    "/tenants/..//evil.example/x?y=1#z",
+    "/tenants/%2e%2e//evil.example",
+    "/x/%2E%2E/%2E%2E//evil.example",
+  ])(
+    "[FIX-W26-SECURITY AC1] ignores %j, whose dot segments the URL parser turns into a protocol-relative //evil.example",
+    (value) => {
+      expect(safeNextPath(value)).toBeUndefined();
+    },
+  );
+
+  it.each([
+    ["/./tenants", "/tenants"],
+    ["/%2e/audit", "/audit"],
+    ["/tenants/./ten_1?tab=audit", "/tenants/ten_1?tab=audit"],
+    ["/tenants/ten_1/%2E%2E/../audit", "/audit"],
+    ["/tenants/ten_1/..//audit", "/tenants//audit"],
+    ["/tenants/%2e%2e/%2Fevil.example", "/%2Fevil.example"],
+    ["/.%2F%2Fevil.example", "/.%2F%2Fevil.example"],
+    ["/%2e%2F/evil.example", "/%2e%2F/evil.example"],
+  ])(
+    "[FIX-W26-SECURITY AC1] keeps %j, whose dot segments and encoded slashes stay on the admin, as %j",
+    (value, expected) => {
+      expect(safeNextPath(value)).toBe(expected);
+    },
+  );
 });
 
 // ---- Client components never import the server-only modules ------------------------------------------------

@@ -63,6 +63,13 @@ const RECOVERY_CODE = "7KQ4-M2XP-9TRW-H5ZD";
 const RESET_TOKEN = "pr_Pr2xL9qW5mT8vK3cN7bZ4hY1dF6sJ0aG2eU8iO5rQ1k";
 const FORWARDED_FOR = "198.51.100.23, 203.0.113.7";
 const USER_AGENT = "Mozilla/5.0 (PFE-006 test)";
+/** Return paths whose dot segments the URL parser turns into the protocol-relative `//evil.example` (FIX-W26-SECURITY). */
+const DOT_SEGMENT_REDIRECTS = [
+  "/.//evil.example",
+  "/a/..//evil.example",
+  "/%2e//evil.example",
+  "/%2E%2E//evil.example",
+] as const;
 
 const fetchMock = vi.fn<(input: Request) => Promise<Response>>();
 
@@ -393,6 +400,41 @@ describe("/sign-in: SignInForm and the signIn action", () => {
     ).rejects.toThrow("NEXT_REDIRECT /verify-pending");
   });
 
+  it("[PFE-002 AC2] [FIX-W26-SECURITY AC2] stays on the portal for a next whose dot segments normalise to //evil.example, with or without MFA", async () => {
+    for (const next of DOT_SEGMENT_REDIRECTS) {
+      // Signed in at once: the default page, never the other host.
+      cookieStore();
+      answer({ "/v1/auth/sign-in": () => json(portalSession(), 200) });
+      await expect(
+        signIn(
+          { status: "idle", fieldErrors: {}, values: { email: "" } },
+          formData({ email: EMAIL, password: PASSWORD, next }),
+        ),
+      ).rejects.toThrow(/^NEXT_REDIRECT \/dashboard$/);
+
+      // With MFA: no return path is kept for the code step ...
+      const store = cookieStore();
+      answer({
+        "/v1/auth/sign-in": () =>
+          json({ mfaRequired: true, mfaChallengeToken: MFA_CHALLENGE, expiresIn: 300 }, 200),
+      });
+      await expect(
+        signIn(
+          { status: "idle", fieldErrors: {}, values: { email: "" } },
+          formData({ email: EMAIL, password: PASSWORD, next }),
+        ),
+      ).rejects.toThrow(/^NEXT_REDIRECT \/sign-in\/mfa$/);
+      expect(writes(store), next).toEqual([[MFA_CHALLENGE_COOKIE, MFA_CHALLENGE, 300]]);
+
+      // ... and one the cookie still holds (written by an earlier release) is checked again after the code.
+      cookieStore({ [MFA_CHALLENGE_COOKIE]: MFA_CHALLENGE, [NEXT_PATH_COOKIE]: next });
+      answer({ "/v1/auth/mfa/verify": () => json(portalSession(), 200) });
+      await expect(
+        verifyMfa({ status: "idle", method: "totp" }, formData({ method: "totp", code: "492039" })),
+      ).rejects.toThrow(/^NEXT_REDIRECT \/dashboard$/);
+    }
+  });
+
   it("keeps an MFA challenge in a SameSite=Strict cookie with the return path, and continues to /sign-in/mfa [PF-04 AC2]", async () => {
     const store = cookieStore();
     answer({
@@ -443,6 +485,17 @@ describe("/sign-in page", () => {
     for (const next of ["https://evil.example/x", "//evil.example", ["/a", "/b"]]) {
       await renderSignInPage({ next });
       expect(document.querySelector('input[name="next"]')).toBeNull();
+      cleanup();
+    }
+  });
+
+  it("[PFE-002 AC2] [FIX-W26-SECURITY AC2] carries no next into the form or the sign-up link when its dot segments normalise to //evil.example", async () => {
+    for (const next of DOT_SEGMENT_REDIRECTS) {
+      await renderSignInPage({ next });
+      expect(document.querySelector('input[name="next"]'), next).toBeNull();
+      expect(screen.getByRole("link", { name: SIGN_IN_STRINGS.signUp }).getAttribute("href"), next).toBe(
+        "/sign-up",
+      );
       cleanup();
     }
   });

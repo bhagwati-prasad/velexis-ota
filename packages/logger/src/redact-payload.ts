@@ -7,7 +7,9 @@ export const CIRCULAR_REFERENCE = "[Circular]";
 /**
  * How the value of a key is treated:
  * - `card`: a payment card (`card`, `creditCard`, …), whose `number` keeps its last 4 digits;
- * - `documents` / `document`: identity documents, whose `number` keeps its last 4 characters;
+ * - `documents` / `document`: identity documents (`documents`, `document`) and the forms of identification of an
+ *   Amadeus flight order (`formOfIdentifications`: passport, identity card or driving licence numbers), whose
+ *   `number` keeps its last 4 characters;
  * - `credentialBody`: an MFA or OAuth body (`mfa`, `oauth`), whose `code` and `state` are secrets at any depth;
  * - `plain`: anything else.
  */
@@ -20,7 +22,8 @@ function normalise(key: string): string {
 
 /** Parents whose `number` is a card number (Amadeus `creditCard`, `virtualCreditCardDetails`). */
 const CARD_PARENTS = new Set(["card", "creditcard", "paymentcard", "virtualcreditcarddetails"]);
-const DOCUMENT_LIST_PARENTS = new Set(["documents"]);
+/** Lists of identity documents: Amadeus `documents` and `formOfIdentifications` (FIX-W26-SECURITY). */
+const DOCUMENT_LIST_PARENTS = new Set(["documents", "formofidentifications"]);
 const DOCUMENT_PARENTS = new Set(["document"]);
 /** Parents of an MFA or OAuth body (platform/docs/architecture.md §8), and the keys that are secret below them. */
 const CREDENTIAL_BODY_PARENTS = new Set(["mfa", "oauth"]);
@@ -162,7 +165,8 @@ function redactValue(value: unknown, kind: Kind, ancestors: Set<object>): unknow
  * `payment_events.payload`, `notifications.payload`, `priced_offers.amadeus_request` and the platform
  * audit log (`platform_audit_log.details`). It returns a deep copy and never mutates its input:
  * - card `number` fields (under `card`, `creditCard`, …) keep their last 4 digits;
- * - `documents[].number`, `cardNumber` and `certificateNumber` keep their last 4 characters;
+ * - `documents[].number`, `formOfIdentifications[].number`, `cardNumber` and `certificateNumber` keep their last 4
+ *   characters;
  * - `securityCode`, `cvc`, `cvv`, `birthPlace` and `issuanceLocation` are dropped;
  * - password, token, secret and API key fields (and credential headers), bank numbers (`iban`, `accountNumber`),
  *   recovery codes, `otpauthUrl`, the e-mail links with tokens (`verifyUrl`, `resetUrl`, `acceptUrl`), and the `code`
