@@ -17,7 +17,8 @@
 //   child tables (that is resync) and without a new `version`; a booking another writer changed while the order was
 //   read keeps its snapshot (`snapshotUpdated: false`). It is an audited read
 //   (OADR-0011 point 8 as decided on 2026-10-21: a supplier record): the use case writes its `order.retrieve` row (the
-//   document's action name) itself, with the booking, so it is there whatever the interceptor records for reads. A
+//   document's action name) itself, with the booking; its handler also opts in with `@AuditedRead`, and the
+//   interceptor writes no second row for a call whose use case wrote one. A
 //   booking without an Amadeus order answers `409 BOOKING_NOT_MODIFIABLE`; an order Amadeus no longer has
 //   `404 NOT_FOUND` with `error.supplier`.
 //
