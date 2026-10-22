@@ -30,6 +30,7 @@ import { OTA_POOL, TenancyModule, type OtaPool } from "../../../src/tenancy/tena
 import { createWorkerApp, createWorkerLogger, WorkerModule } from "../../../src/worker.module";
 import { testApiVariables, testWorkerVariables } from "../../helpers/api-env";
 import { MemorySink } from "../../helpers/log-sink";
+import { OPENAPI_SETUP_TIMEOUT_MS, preloadOpenApiDocument } from "../../helpers/openapi";
 import { unreachableRedisUrl } from "../../helpers/ports";
 
 /**
@@ -134,6 +135,9 @@ async function insertTenant(values: Omit<TenantInsert, "id" | "plan_code">): Pro
     .execute();
   return id;
 }
+
+// The API graph that the TenancyModule test starts parses the OTA document first: paid here, not in its 5 s bound.
+beforeAll(preloadOpenApiDocument, OPENAPI_SETUP_TIMEOUT_MS);
 
 beforeAll(async () => {
   db = await createTestDatabase();
