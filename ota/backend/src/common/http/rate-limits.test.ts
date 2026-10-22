@@ -1,12 +1,15 @@
 // The rate-limit table and its trackers (OBE-013; architecture §8): the limits as the architecture lists them, which
-// operations and callers each one counts, the end user's IP, and the trackers' digests. The guard against Redis, with
-// 429 and 503: test/integration/common/guards.int.test.ts.
+// operations and callers each one counts, the end user's IP, and the trackers' digests; the guard's
+// `rate_limit.exceeded` line of a 429 over a storage that refuses (FIX-W25-AUDIT, OADR-0011 point 8 as decided on
+// 2026-10-21). The guard against Redis, with 429 and 503: test/integration/common/guards.int.test.ts.
 import type { ExecutionContext } from "@nestjs/common";
 import { Reflector } from "@nestjs/core";
 import type { ThrottlerOptions, ThrottlerStorage } from "@nestjs/throttler";
 import { otaOperations, type OtaOperationId } from "@velexis/api-types/operations";
+import type { PinoLogger } from "nestjs-pino";
 import { describe, expect, it } from "vitest";
-import type { Caller } from "../../tenancy/caller-resolver";
+import type { StaffContext, StaffPrincipal } from "../auth/staff.guard";
+import type { Caller, CallerContext } from "../../tenancy/caller-resolver";
 import { newId } from "../ids";
 import { redisKeys } from "../redis/redis.keys";
 import { OPENAPI_OPERATION } from "./openapi-operation.decorator";
@@ -14,7 +17,9 @@ import {
   endUserIp,
   OPERATION_RATE_LIMITS,
   RATE_LIMITS,
+  RateLimitGuard,
   rateLimitOptions,
+  rateLimitRefusal,
   rateLimitsOf,
   trackerDigest,
   trackerValue,
@@ -251,5 +256,123 @@ describe("rateLimitOptions", () => {
     expect(secret?.skipIf?.(execution(Handlers.prototype.search))).toBe(true);
     const signIn = throttlers(EDGE).find((throttler) => throttler.name === "ota_sign_in");
     expect(signIn?.skipIf?.(execution(Handlers.prototype.search))).toBe(true);
+  });
+});
+
+describe("the rate_limit.exceeded line", () => {
+  class Handlers {
+    list(): void {}
+    signIn(): void {}
+  }
+  Reflect.defineMetadata(OPENAPI_OPERATION, "consoleListBookings", Handlers.prototype.list);
+  Reflect.defineMetadata(OPENAPI_OPERATION, "consoleSignIn", Handlers.prototype.signIn);
+
+  const STAFF_ID = "stf_01JA2Z9W5K7Q3M8N4P6R2T0V1D";
+  const SESSION_ID = "asn_01JA2Z9W5K7Q3M8N4P6R2T0V1F";
+  const END_USER_IP = "203.0.113.77";
+
+  /** The guard over a storage that refuses every request, with the request's caller and staff member. */
+  async function refusingGuard(caller: Caller, staff: boolean) {
+    const lines: Array<{ fields: Record<string, unknown>; msg: string }> = [];
+    const record = (fields: Record<string, unknown>, msg: string) => lines.push({ fields, msg });
+    const principal = { family: { id: SESSION_ID, staffId: STAFF_ID } } as unknown as StaffPrincipal;
+    const storage = {
+      increment: () =>
+        Promise.resolve({ totalHits: 601, timeToExpire: 30, isBlocked: true, timeToBlockExpire: 30 }),
+    } as unknown as ThrottlerStorage;
+    const callers = { get: () => caller } as unknown as CallerContext;
+    const staffContext = { get: () => (staff ? principal : undefined) } as unknown as StaffContext;
+    const reflector = new Reflector();
+    const guard = new RateLimitGuard(
+      rateLimitOptions(
+        { reflector, callers, tenants: { get: () => undefined }, staff: staffContext },
+        storage,
+      ),
+      storage,
+      reflector,
+      callers,
+      staffContext,
+      { info: record, warn: record } as unknown as PinoLogger,
+    );
+    await guard.onModuleInit();
+    return { guard, lines };
+  }
+
+  function execution(handler: () => void): ExecutionContext {
+    const req = {
+      ip: END_USER_IP,
+      socket: {},
+      headers: { "x-velexis-end-user-ip": END_USER_IP, authorization: "Bearer not-logged" },
+      body: { email: "anna.berg@example.com" },
+    };
+    const res = { setHeader: () => undefined };
+    return {
+      getType: () => "http",
+      getHandler: () => handler,
+      getClass: () => Handlers,
+      switchToHttp: () => ({ getRequest: () => req, getResponse: () => res }),
+    } as unknown as ExecutionContext;
+  }
+
+  it("names the staff member, the key, the operation and the limit, and nothing else [FIX-W25-AUDIT AC2]", async () => {
+    const withStaff = await refusingGuard(SECRET, true);
+    const keyOnly = await refusingGuard(SECRET, false);
+    const service = await refusingGuard({ type: "service", id: "service" }, false);
+
+    for (const { guard } of [withStaff, keyOnly]) {
+      await expect(guard.canActivate(execution(Handlers.prototype.list))).rejects.toMatchObject({
+        code: "RATE_LIMITED",
+        status: 429,
+      });
+    }
+    await expect(service.guard.canActivate(execution(Handlers.prototype.signIn))).rejects.toMatchObject({
+      code: "RATE_LIMITED",
+    });
+
+    expect(withStaff.lines).toEqual([
+      {
+        msg: "rate_limit.exceeded",
+        fields: {
+          operationId: "consoleListBookings",
+          limit: "ota_console",
+          maxRequests: 600,
+          windowSeconds: 60,
+          callerType: "key",
+          staffId: STAFF_ID,
+          keyId: SECRET.keyId,
+        },
+      },
+    ]);
+    expect(keyOnly.lines.map((line) => line.fields)).toEqual([
+      expect.not.objectContaining({ staffId: expect.anything() }),
+    ]);
+    expect(keyOnly.lines[0]?.fields).toMatchObject({ keyId: SECRET.keyId, limit: "ota_console" });
+    // The OTA admin's sign-in: counted per end-user IP, which the line never holds.
+    expect(service.lines).toEqual([
+      {
+        msg: "rate_limit.exceeded",
+        fields: {
+          operationId: "consoleSignIn",
+          limit: "ota_sign_in",
+          maxRequests: 10,
+          windowSeconds: 60,
+          callerType: "service",
+        },
+      },
+    ]);
+    const text = JSON.stringify([...withStaff.lines, ...keyOnly.lines, ...service.lines]);
+    for (const value of [END_USER_IP, "anna.berg@example.com", "not-logged", SESSION_ID]) {
+      expect(text).not.toContain(value);
+    }
+  });
+
+  it("describes a limit it does not know by its name alone", () => {
+    expect(rateLimitRefusal(undefined, "other", undefined, undefined)).toEqual({
+      operationId: null,
+      limit: "other",
+      maxRequests: null,
+      windowSeconds: null,
+      callerType: null,
+    });
   });
 });

@@ -23,6 +23,13 @@
 // whose session no longer passes the checks as none (`ENDED_STAFF_SESSION_AS_NONE`, `StaffContext.endedSession`): the
 // document makes a sign-out of an already-ended session a `204`.
 //
+// A `403 STAFF_MEMBERSHIP_INACTIVE` refuses a staff member the request knows: the token is verified and its family
+// passed the checks, only the membership did not. It writes one denied `staff_actions` row (OADR-0011 point 8 as
+// decided on 2026-10-21) through `StaffRefusalAudit` (the console audit's writer), with the token's staff member and
+// role as the actor and the operation's action, before the refusal is answered; a row that cannot be written is logged
+// and the refusal stands. The other refusals here name nobody the audit could trust (an unknown, expired, revoked or
+// foreign token: `401`), and have the log line only.
+//
 // An accepted token makes the staff member the request's actor (`TenantContext.setActor`, `staff`/`stf_…`), and puts
 // the family and the membership into the request context (`StaffContext`), where services read them.
 //
@@ -38,6 +45,7 @@ import { AppError, isAppError } from "@velexis/errors";
 import type { Request } from "express";
 import { ClsService } from "nestjs-cls";
 import { InjectPinoLogger, PinoLogger } from "nestjs-pino";
+import type { StaffActionActor } from "../../console/staff-actions.writer";
 import {
   StaffSessions,
   StaffTokens,
@@ -55,6 +63,24 @@ import { STAFF_SESSION_PERMISSION } from "./scope.guard";
 
 /** Whether an operation takes a staff token from a key caller. */
 export type StaffRequirement = "required" | "optional" | "none";
+
+/**
+ * Where the staff guard records its refusal of a known staff member (see the file header): the console audit's
+ * `StaffActionsWriter` (console/staff-actions.writer.ts), which ConsoleModule binds to this token. An abstract class, so
+ * that this file never imports the writer, which imports this file.
+ */
+export abstract class StaffRefusalAudit {
+  /**
+   * The denied row of console call `operationId` refused with `error`: `params` are the request's path parameters as
+   * the router gave them (only values that pass their schema become the target), `actor` who was refused.
+   */
+  abstract recordDenial(
+    operationId: string,
+    params: Readonly<Record<string, unknown>> | undefined,
+    error: AppError,
+    actor?: StaffActionActor,
+  ): Promise<void>;
+}
 
 /** The security schemes of the document: the key caller and its staff token. */
 export const STAFF_SECURITY_SCHEMES = Object.freeze({ caller: "apiKey", staff: "staffAuth" });
@@ -231,6 +257,7 @@ export class StaffGuard implements CanActivate {
     private readonly sessions: StaffSessions,
     private readonly staff: StaffContext,
     openApi: OpenApiDocument,
+    private readonly audit: StaffRefusalAudit,
     @InjectPinoLogger(StaffGuard.name) private readonly logger: PinoLogger,
   ) {
     this.requirements = staffRequirements(openApi.document);
@@ -262,7 +289,8 @@ export class StaffGuard implements CanActivate {
     if (requirement === "none") {
       return true;
     }
-    const token = bearerTokenOf(execution.switchToHttp().getRequest<Request>().headers);
+    const req = execution.switchToHttp().getRequest<Request>();
+    const token = bearerTokenOf(req.headers);
     if (token === undefined) {
       if (requirement === "optional") {
         return true;
@@ -305,6 +333,16 @@ export class StaffGuard implements CanActivate {
         // sign out of again (the handler answers 204).
         this.staff.markEndedSession({ familyId: verdict.claims.sid, staffId: verdict.claims.sub });
         return true;
+      }
+      if (isAppError(error) && error.code === "STAFF_MEMBERSHIP_INACTIVE") {
+        // The verified token names the staff member: one denied row (see the file header).
+        await this.audit.recordDenial(operationId, req.params, error, {
+          type: "staff",
+          staffId: verdict.claims.sub,
+          accountId: null,
+          email: null,
+          role: verdict.claims.role,
+        });
       }
       throw error;
     }

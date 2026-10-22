@@ -1,17 +1,22 @@
-// The console audit (OBE-060; OADR-0011 point 8, db README §8): the staff_actions row builder and its redaction, the
-// action and target of a console call, and StaffActionsWriter and StaffActionsInterceptor over a recording
-// transaction, without a database. The rows in PostgreSQL, through the API's pipeline:
-// test/integration/console/console-access.int.test.ts. Every id, token and number here is made up on the spot.
+// The console audit (OBE-060; OADR-0011 point 8 as decided on 2026-10-21, db README §8): the staff_actions row builder
+// and its redaction, the action and target of a console call, which calls are reads, and StaffActionsWriter and
+// StaffActionsInterceptor over a recording transaction, without a database. The rows in PostgreSQL, through the API's
+// pipeline: test/integration/console/console-access.int.test.ts. FIX-W25-AUDIT (the lead's decision of 2026-10-21,
+// third batch) stops the interceptor's row for a successful read that has not opted in with `@AuditedRead`, and takes
+// a denied call's path value as its target only when it passes the parameter's schema. Every id, token and number here
+// is made up on the spot.
 import { randomBytes } from "node:crypto";
 import type { CallHandler, ExecutionContext } from "@nestjs/common";
 import { Reflector } from "@nestjs/core";
 import { AppError } from "@velexis/errors";
 import type { ClsService } from "nestjs-cls";
 import type { PinoLogger } from "nestjs-pino";
-import { lastValueFrom, of, throwError } from "rxjs";
-import { describe, expect, it } from "vitest";
+import { defer, lastValueFrom, of, throwError } from "rxjs";
+import { beforeAll, describe, expect, it } from "vitest";
+import { OPENAPI_SETUP_TIMEOUT_MS } from "../../test/helpers/openapi";
 import type { StaffContext, StaffPrincipal } from "../common/auth/staff.guard";
 import { OPENAPI_OPERATION } from "../common/http/openapi-operation.decorator";
+import { loadOpenApiDocument, type OpenApiDocument } from "../common/http/openapi-validation.interceptor";
 import type { RequestContext } from "../common/http/request-context";
 import { newId, type IdGenerator } from "../common/ids";
 import type { Caller, CallerContext } from "../tenancy/caller-resolver";
@@ -19,9 +24,11 @@ import type { RequestTenant, TenantContext } from "../tenancy/tenant-context";
 import type { TenantTransaction, TenantTx } from "../tenancy/tenant-tx";
 import {
   auditedParams,
+  AuditedRead,
   consoleAction,
   consoleTarget,
   failureOutcome,
+  isConsoleRead,
   StaffActionsInterceptor,
   StaffActionsWriter,
   staffActionRow,
@@ -44,6 +51,15 @@ const REQUEST: StaffActionRequest = {
   ip: "203.0.113.24",
   userAgent: "Mozilla/5.0 (console test)",
 };
+
+let document: OpenApiDocument;
+
+// The OTA document is parsed and its validators compiled once per test process (about 1.5 s alone, much more while
+// every package's tests run at once): here, with the budget of test/helpers/openapi.ts. The writer checks a denied
+// call's path values against it.
+beforeAll(() => {
+  document = loadOpenApiDocument();
+}, OPENAPI_SETUP_TIMEOUT_MS);
 
 describe("staffActionRow", () => {
   it("writes the actor columns staff_actions_actor_ck expects for each kind of actor", () => {
@@ -184,6 +200,37 @@ describe("the action, target and outcome of a console call", () => {
     expect(consoleTarget("consoleGetBooking", undefined)).toEqual({ targetType: null, targetId: null });
   });
 
+  it("counts reads by their read permission, and the operations without one by GET or HEAD [FIX-W25-AUDIT AC1]", () => {
+    for (const operationId of [
+      "consoleListBookings",
+      "consoleGetBooking",
+      "consoleListQueue",
+      "consoleGetCustomer",
+      "consoleListSupplierRequests",
+      "consoleGetStorefrontSettings",
+      // POSTs that change nothing: the permission decides.
+      "consolePreviewNotificationTemplate",
+      "consoleAmadeusSearchFlightOffers",
+      // A shared operation in console scope (no x-permission), a GET.
+      "getStorefront",
+    ]) {
+      expect([operationId, isConsoleRead(operationId)]).toEqual([operationId, true]);
+    }
+    for (const operationId of [
+      "consoleCreateMarkupRule",
+      "consoleUpdateStorefrontSettings",
+      "consoleIssueBooking",
+      "consoleAmadeusCancelFlightOrder",
+      // A shared operation in console scope (no x-permission), a POST.
+      "createFlightSearch",
+      // The staff-session operations (x-permission none) and an id the document does not have.
+      "consoleGetMe",
+      "noSuchOperation",
+    ]) {
+      expect([operationId, isConsoleRead(operationId)]).toEqual([operationId, false]);
+    }
+  });
+
   it("counts permission refusals of a use case as denials and everything else as failures", () => {
     expect(failureOutcome(new AppError("FORBIDDEN"))).toBe("denied");
     expect(failureOutcome(new AppError("OFFICE_NOT_ALLOWED"))).toBe("denied");
@@ -270,6 +317,7 @@ function writerHarness(
       requestId: () => "req-console-2",
     } as unknown as RequestContext,
     cls,
+    document,
     logger,
   );
   return { writer, rows, lines, cls };
@@ -381,6 +429,68 @@ describe("StaffActionsWriter", () => {
     ).resolves.toBe(undefined);
     expect(failing.lines).toEqual(["staff_actions.write_failed"]);
   });
+
+  it("takes a denied call's path value as its target only when it passes the parameter's schema [FIX-W25-AUDIT AC3]", async () => {
+    // The guards run before request validation: these are the router's strings, whatever the caller typed.
+    const bookingId = newId("bkg");
+    const pasted = `4111 1111 ${randomBytes(4).toString("hex")}`;
+    const { writer, rows } = writerHarness();
+    const denial = new AppError("FORBIDDEN");
+
+    await writer.recordDenial("consoleGetBooking", { bookingId }, denial);
+    await writer.recordDenial("consoleGetBooking", { bookingId: pasted }, denial);
+    await writer.recordDenial("consoleGetBooking", { bookingId: `${bookingId}x`.repeat(3) }, denial);
+    // An integer parameter is checked as the validation interceptor coerces it: 0 to 99.
+    await writer.recordDenial("consoleListQueue", { queueId: "12" }, denial);
+    await writer.recordDenial("consoleListQueue", { queueId: "120" }, denial);
+    await writer.recordDenial("consoleListQueue", { queueId: "twelve" }, denial);
+    await writer.recordDenial("consoleUpdateMarkupRule", { markupRuleId: "mkr_1" }, denial);
+    // A parameter the operation does not have is never a target, nor is anything of an unknown operation.
+    await writer.recordDenial("consoleGetBooking", { bookingId: 7, other: bookingId }, denial);
+    await writer.recordDenial("noSuchOperation", { bookingId }, denial);
+
+    expect(rows.map((row) => [row["action"], row["target_type"], row["target_id"]])).toEqual([
+      ["bookings.get", "booking", bookingId],
+      ["bookings.get", null, null],
+      ["bookings.get", null, null],
+      ["queues.list", "queue", "12"],
+      ["queues.list", null, null],
+      ["queues.list", null, null],
+      ["settings.markupRules.update", null, null],
+      ["bookings.get", null, null],
+      ["noSuchOperation", null, null],
+    ]);
+    expect(rows.every((row) => row["outcome"] === "denied")).toBe(true);
+    expect(JSON.stringify(rows)).not.toContain(pasted);
+  });
+
+  it("writes the denial of an actor the guard names, a staff member known by the token only [FIX-W25-AUDIT AC2]", async () => {
+    const staffId = newId("stf");
+    const { writer, rows } = writerHarness({ principal: false });
+
+    await writer.recordDenial("consoleGetMe", {}, new AppError("STAFF_MEMBERSHIP_INACTIVE"), {
+      type: "staff",
+      staffId,
+      accountId: null,
+      email: null,
+      role: "finance",
+    });
+
+    expect(rows).toEqual([
+      expect.objectContaining({
+        actor_type: "staff",
+        actor_id: staffId,
+        staff_id: staffId,
+        account_id: null,
+        staff_email: null,
+        staff_role: "finance",
+        action: "auth.me",
+        outcome: "denied",
+        target_type: null,
+        ip_address: "198.51.100.77",
+      }),
+    ]);
+  });
 });
 
 describe("StaffActionsInterceptor", () => {
@@ -388,10 +498,22 @@ describe("StaffActionsInterceptor", () => {
     list(): void {}
     me(): void {}
     get(): void {}
+    create(): void {}
+    @AuditedRead({ action: "customer.view" })
+    customer(): void {}
+    @AuditedRead()
+    rawSearch(): void {}
+    // On a change the opt-in changes nothing.
+    @AuditedRead({ action: "never.used" })
+    update(): void {}
   }
   Reflect.defineMetadata(OPENAPI_OPERATION, "consoleListBookings", Handlers.prototype.list);
   Reflect.defineMetadata(OPENAPI_OPERATION, "consoleGetMe", Handlers.prototype.me);
   Reflect.defineMetadata(OPENAPI_OPERATION, "consoleGetBooking", Handlers.prototype.get);
+  Reflect.defineMetadata(OPENAPI_OPERATION, "consoleCreateMarkupRule", Handlers.prototype.create);
+  Reflect.defineMetadata(OPENAPI_OPERATION, "consoleGetCustomer", Handlers.prototype.customer);
+  Reflect.defineMetadata(OPENAPI_OPERATION, "consoleAmadeusSearchFlightOffers", Handlers.prototype.rawSearch);
+  Reflect.defineMetadata(OPENAPI_OPERATION, "consoleUpdateMarkupRule", Handlers.prototype.update);
 
   function interceptor(consoleScope = true) {
     const harness = writerHarness();
@@ -413,15 +535,113 @@ describe("StaffActionsInterceptor", () => {
   const answering = (value: unknown): CallHandler => ({ handle: () => of(value) });
   const failing = (error: unknown): CallHandler => ({ handle: () => throwError(() => error) });
 
-  it("writes one succeeded row after a console call, and passes the answer on", async () => {
+  // OBE-060 asserted a succeeded row after every console call here; the lead's decision of 2026-10-21 (third batch,
+  // OADR-0011 point 8) keeps it for changes only, and for the reads that opt in.
+  it("writes one succeeded row after a state-changing console call, and passes the answer on [FIX-W25-AUDIT AC1]", async () => {
     const { interceptor: audit, rows } = interceptor();
 
     const body = await lastValueFrom(
-      audit.intercept(execution(Handlers.prototype.list), answering({ data: [] })),
+      audit.intercept(execution(Handlers.prototype.create), answering({ id: "mkr_1" })),
+    );
+
+    expect(body).toEqual({ id: "mkr_1" });
+    expect(rows).toEqual([
+      expect.objectContaining({ action: "settings.markupRules.create", outcome: "succeeded" }),
+    ]);
+  });
+
+  it("writes no row after a successful read, and passes the answer on [FIX-W25-AUDIT AC1]", async () => {
+    const list = interceptor();
+    const get = interceptor();
+
+    const body = await lastValueFrom(
+      list.interceptor.intercept(execution(Handlers.prototype.list), answering({ data: [] })),
+    );
+    await lastValueFrom(
+      get.interceptor.intercept(
+        execution(Handlers.prototype.get, { bookingId: "bkg_01JA2Z9W5K7Q3M8N4P6R2T0V1E" }),
+        answering({}),
+      ),
     );
 
     expect(body).toEqual({ data: [] });
-    expect(rows).toEqual([expect.objectContaining({ action: "bookings.list", outcome: "succeeded" })]);
+    expect([...list.rows, ...get.rows]).toEqual([]);
+  });
+
+  it("writes the succeeded row of a read that opts in with @AuditedRead, with its action and target [FIX-W25-AUDIT AC1]", async () => {
+    const customerId = newId("cus");
+    const customer = interceptor();
+    const raw = interceptor();
+    const update = interceptor();
+
+    await lastValueFrom(
+      customer.interceptor.intercept(execution(Handlers.prototype.customer, { customerId }), answering({})),
+    );
+    await lastValueFrom(raw.interceptor.intercept(execution(Handlers.prototype.rawSearch), answering({})));
+    await lastValueFrom(
+      update.interceptor.intercept(
+        execution(Handlers.prototype.update, { markupRuleId: "mkr_01JA2Z9W5K7Q3M8N4P6R2T0V1E" }),
+        answering({}),
+      ),
+    );
+
+    expect(customer.rows).toEqual([
+      expect.objectContaining({
+        action: "customer.view",
+        outcome: "succeeded",
+        target_type: "customer",
+        target_id: customerId,
+        actor_type: "staff",
+        staff_id: STAFF_ID,
+      }),
+    ]);
+    expect(raw.rows).toEqual([
+      expect.objectContaining({ action: "amadeus.searchFlightOffers", outcome: "succeeded" }),
+    ]);
+    // A change keeps the action every change of the pipeline has.
+    expect(update.rows).toEqual([
+      expect.objectContaining({ action: "settings.markupRules.update", outcome: "succeeded" }),
+    ]);
+  });
+
+  it("adds no row to an opted-in read whose use case wrote its own [FIX-W25-AUDIT AC1]", async () => {
+    const customerId = newId("cus");
+    const { interceptor: audit, rows, writer } = interceptor();
+    const handled: CallHandler = {
+      handle: () =>
+        defer(async () => {
+          await writer.recordAlone({ action: "customer.view", targetType: "customer", targetId: customerId });
+          return {};
+        }),
+    };
+
+    await lastValueFrom(audit.intercept(execution(Handlers.prototype.customer, { customerId }), handled));
+
+    expect(rows).toEqual([expect.objectContaining({ action: "customer.view", target_id: customerId })]);
+  });
+
+  it("still writes the failed row of a read, opted in or not, with the operation's action [FIX-W25-AUDIT AC1]", async () => {
+    const customer = interceptor();
+    const list = interceptor();
+
+    await expect(
+      lastValueFrom(
+        customer.interceptor.intercept(
+          execution(Handlers.prototype.customer, { customerId: newId("cus") }),
+          failing(new AppError("NOT_FOUND")),
+        ),
+      ),
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+    await expect(
+      lastValueFrom(
+        list.interceptor.intercept(execution(Handlers.prototype.list), failing(new AppError("FORBIDDEN"))),
+      ),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+
+    expect([...customer.rows, ...list.rows].map((row) => [row["action"], row["outcome"]])).toEqual([
+      ["customers.get", "failed"],
+      ["bookings.list", "denied"],
+    ]);
   });
 
   it("writes a failed or denied row for a call whose handler threw, and rethrows its error", async () => {

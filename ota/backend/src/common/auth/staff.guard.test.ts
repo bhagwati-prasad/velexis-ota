@@ -1,8 +1,8 @@
 // The staff guard (OBE-059; architecture §3 step 8, OADR-0011 point 3): which operations take a staff token, read from
 // the OTA document's `security` alternatives, and what the guard does with the bearer token of a key caller in
 // console scope, with a minimal execution context, the tokens of the test process's key file, a FakeClock and the
-// session checks stubbed (staff-auth.service.test.ts tests them; the whole pipeline against PostgreSQL and Redis is
-// test/integration/console/staff-auth.int.test.ts).
+// session checks and the audit's writer stubbed (staff-auth.service.test.ts tests the checks; the whole pipeline against
+// PostgreSQL and Redis is test/integration/console/staff-auth.int.test.ts and console-access.int.test.ts).
 import type { ExecutionContext } from "@nestjs/common";
 import type { ConfigService } from "@nestjs/config";
 import { Reflector } from "@nestjs/core";
@@ -14,6 +14,7 @@ import { testApiCredentials } from "../../../test/helpers/api-env";
 import { OPENAPI_SETUP_TIMEOUT_MS } from "../../../test/helpers/openapi";
 import type { Clock } from "../clock";
 import type { ApiConfig } from "../../config";
+import type { StaffActionActor } from "../../console/staff-actions.writer";
 import {
   STAFF_FAMILY_LIFETIME_MS,
   StaffTokens,
@@ -35,6 +36,7 @@ import {
   type EndedStaffSession,
   type StaffContext,
   type StaffPrincipal,
+  type StaffRefusalAudit,
 } from "./staff.guard";
 
 const TENANT_A = "ten_01JA2Z9W5K7Q3M8N4P6R2T0V1A";
@@ -113,6 +115,8 @@ interface Harness {
   readonly ended: EndedStaffSession[];
   readonly tokens: StaffTokens;
   readonly clock: FakeClock;
+  /** The denials the guard handed the audit's writer. */
+  readonly denials: Array<{ operationId: string; params: unknown; code: string; actor: unknown }>;
 }
 
 interface HarnessOptions {
@@ -129,6 +133,7 @@ function harness(options: HarnessOptions = {}): Harness {
   const refusals: unknown[] = [];
   const expired = { count: 0 };
   const ended: EndedStaffSession[] = [];
+  const denials: Harness["denials"] = [];
   const clock = new FakeClock(START);
   const tokens = new StaffTokens(configWith(testApiCredentials().jwtKeyFile), clock as unknown as Clock);
   const sessions = {
@@ -170,14 +175,24 @@ function harness(options: HarnessOptions = {}): Harness {
       markEndedSession: (session: EndedStaffSession) => ended.push(session),
     } as unknown as StaffContext,
     document,
+    {
+      recordDenial: (operationId: string, params: unknown, error: AppError, actor?: StaffActionActor) => {
+        denials.push({ operationId, params, code: error.code, actor });
+        return Promise.resolve();
+      },
+    } as unknown as StaffRefusalAudit,
     { info: (fields: { reason: unknown }) => refusals.push(fields.reason) } as unknown as PinoLogger,
   );
-  return { guard, actors, principals, authenticated, refusals, expired, ended, tokens, clock };
+  return { guard, actors, principals, authenticated, refusals, expired, ended, tokens, clock, denials };
 }
 
 /** An execution context of `handler` with the request's headers. */
-function execution(handler: HandlerName, headers: Record<string, string> = {}): ExecutionContext {
-  const req = { headers };
+function execution(
+  handler: HandlerName,
+  headers: Record<string, string> = {},
+  params: Record<string, string> = {},
+): ExecutionContext {
+  const req = { headers, params };
   return {
     getType: () => "http",
     getHandler: () => Handlers.prototype[handler],
@@ -322,6 +337,34 @@ describe("StaffGuard", () => {
     ).toBe("403 STAFF_MEMBERSHIP_INACTIVE");
     expect(revoked.actors).toEqual([]);
     expect(removed.principals).toEqual([]);
+  });
+
+  it("hands the audit a denial of the token's staff member for an inactive membership, and nothing for a 401 [FIX-W25-AUDIT AC2]", async () => {
+    const revoked = harness({ authenticate: () => Promise.reject(new AppError("UNAUTHENTICATED")) });
+    const removed = harness({
+      authenticate: () => Promise.reject(new AppError("STAFF_MEMBERSHIP_INACTIVE")),
+    });
+    const down = harness({ authenticate: () => Promise.reject(new AppError("SERVICE_UNAVAILABLE")) });
+    const params = { bookingId: "bkg_01JA2Z9W5K7Q3M8N4P6R2T0V1E" };
+
+    for (const h of [revoked, removed, down]) {
+      const token = await staffToken(h.tokens);
+      await refusal(h.guard.canActivate(execution("consoleListBookings", bearer(token), params)));
+      // An expired, foreign or malformed token names nobody.
+      h.clock.advance(16 * 60_000);
+      await refusal(h.guard.canActivate(execution("consoleListBookings", bearer(token), params)));
+    }
+
+    expect([...revoked.denials, ...down.denials]).toEqual([]);
+    expect(removed.denials).toEqual([
+      {
+        operationId: "consoleListBookings",
+        // The router's values: the writer keeps only those that pass their schema.
+        params,
+        code: "STAFF_MEMBERSHIP_INACTIVE",
+        actor: { type: "staff", staffId: STAFF_ID, accountId: null, email: null, role: "agent" },
+      },
+    ]);
   });
 
   it("takes a valid token whose session has ended as none on signOut only, never a failure to check", async () => {

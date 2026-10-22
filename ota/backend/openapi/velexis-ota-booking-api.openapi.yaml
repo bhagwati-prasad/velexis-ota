@@ -230,13 +230,16 @@ tags:
       sync state, PNR lookup by record locator and import of existing Amadeus orders, verbatim Amadeus order retrieve,
       creation of orders on behalf of customers with the full Flight Create Orders body, Flight Order Management PATCH
       of every patchable element, issuance, cancellation, re-synchronisation and internal notes. Every write is audited
-      in staff_actions and booking_events.
+      in staff_actions and booking_events; of the reads, the PNR lookup and the verbatim order retrieve are audited in
+      staff_actions, the list and the detail are not.
   - name: Console queues
     description: >-
       Amadeus office queues (Queue List): PNRs placed on a queue/category of an office, linked to the OTA's bookings,
       with stored queue snapshots.
   - name: Console customers
-    description: Customer accounts of this OTA with booking statistics and their bookings (read-only; PII access is audited).
+    description: >-
+      Customer accounts of this OTA with booking statistics and their bookings (read-only; viewing a customer is
+      audited in staff_actions, the customer list is not).
   - name: Console supplier log
     description: >-
       Redacted log of every Amadeus call made for this OTA (supplier_requests, 90-day retention) for troubleshooting:
@@ -254,7 +257,8 @@ tags:
       OADR-0005), the storefront settings (brand, branding, locales, currencies, markets, features, policies, the
       airline card, legal, support, SEO, consent, operations; OADR-0012) and the e-mail templates (OADR-0013). Settings
       are shared by the test and live environments (one set per OTA). Reads need `settings:read`, changes
-      `settings:write` (owner and admin only); every call writes staff_actions.
+      `settings:write` (owner and admin only); every change and every refused call writes staff_actions, a successful
+      read does not.
   - name: Internal
     description: >-
       Endpoints that are not part of the SDK or of the public reference (`x-internal: true`): the Stripe webhook
@@ -13073,9 +13077,9 @@ paths:
         retained, 30 days). Each new call without cursor is a fresh read. Amadeus warnings are returned in `warnings`.
 
 
-        Queue placement itself is done through `automatedProcess` / `queuingOfficeId` at create-order or patch. Audited
-        (`staff_actions` `queue.list`), logged (`supplier_requests`). Permission `queues:read` (owner, admin, agent).
-        Next.js: `cache: "no-store"`.
+        Queue placement itself is done through `automatedProcess` / `queuingOfficeId` at create-order or patch. Logged
+        (`supplier_requests`); not audited per call. Permission `queues:read` (owner, admin, agent). Next.js: `cache:
+        "no-store"`.
 
 
         **Key-only calls.** Without a staff token the secret key must carry the `console:automation` scope and this
@@ -16353,7 +16357,7 @@ paths:
 
 
         Settings are shared by the test and live environments (one set of rules per OTA), so `X-Velexis-Environment`
-        changes nothing here. No Amadeus call. Permission `settings:read`; the call is recorded in `staff_actions`.
+        changes nothing here. No Amadeus call. Permission `settings:read`. Not audited per call.
 
 
         **Key-only calls.** Without a staff token the secret key must carry the `console:automation` scope and this
@@ -16558,7 +16562,7 @@ paths:
       summary: Get a markup rule
       description: >-
         Returns one markup rule. `ETag` = `"<version>"`: pass it as `If-Match` to update or delete the rule. No Amadeus
-        call. Permission `settings:read`; the call is recorded in `staff_actions`.
+        call. Permission `settings:read`. Not audited per call.
 
 
         **Key-only calls.** Without a staff token the secret key must carry the `console:automation` scope and this
@@ -16826,7 +16830,7 @@ paths:
         pricing, `ancillary_service` per extra, `payment_card` once the card brand is known, `cancellation` in the
         cancellation quote; `change` fees are stored but unused in the MVP (no exchanges). Settings are shared by the
         test and live environments, so `X-Velexis-Environment` changes nothing here. No Amadeus call. Permission
-        `settings:read`; the call is recorded in `staff_actions`.
+        `settings:read`. Not audited per call.
 
 
         **Key-only calls.** Without a staff token the secret key must carry the `console:automation` scope and this
@@ -17023,7 +17027,7 @@ paths:
       summary: Get a fee rule
       description: >-
         Returns one fee rule. `ETag` = `"<version>"`: pass it as `If-Match` to update or delete the rule. No Amadeus
-        call. Permission `settings:read`; the call is recorded in `staff_actions`.
+        call. Permission `settings:read`. Not audited per call.
 
 
         **Key-only calls.** Without a staff token the secret key must carry the `console:automation` scope and this
@@ -17269,7 +17273,7 @@ paths:
 
 
         `ETag` = `"<version>"`: pass it as `If-Match` to console.settings.storefront.update. No Amadeus call.
-        Permission `settings:read`; the call is recorded in `staff_actions`.
+        Permission `settings:read`. Not audited per call.
 
 
         **Key-only calls.** Without a staff token the secret key must carry the `console:automation` scope and this
@@ -17491,7 +17495,7 @@ paths:
         OADR-0013 point 3.
 
 
-        No Amadeus call. Permission `settings:read`; the call is recorded in `staff_actions`.
+        No Amadeus call. Permission `settings:read`. Not audited per call.
 
 
         **Key-only calls.** Without a staff token the secret key must carry the `console:automation` scope and this
@@ -17561,8 +17565,8 @@ paths:
         Returns the effective template of one key, channel and locale: the OTA's row when it exists (`customised:
         true`, with `ETag` = `"<version>"` to pass as `If-Match` to console.settings.templates.put), otherwise the code
         default (`customised: false`, `version` null, no `ETag`; the English default where the code has none for the
-        locale). `variables` lists what the key's templates may use. No Amadeus call. Permission `settings:read`; the
-        call is recorded in `staff_actions`.
+        locale). `variables` lists what the key's templates may use. No Amadeus call. Permission `settings:read`. Not
+        audited per call.
 
 
         **Key-only calls.** Without a staff token the secret key must carry the `console:automation` scope and this
@@ -17758,7 +17762,7 @@ paths:
 
         The answer is `{subject, html, text}`. Show `html` only in a sandboxed `iframe` without scripts (the OTA admin
         does). Safe to repeat (`x-idempotent-by-design`): nothing is stored. No Amadeus call. Permission
-        `settings:read`; the call is recorded in `staff_actions`.
+        `settings:read`. Not audited per call.
 
 
         **Key-only calls.** Without a staff token the secret key must carry the `console:automation` scope and this
@@ -36159,12 +36163,13 @@ components:
         calls **without** a staff token (cron jobs, back-office integrations). Such key-only calls act with exactly the
         `StaffPermission` values also listed in the key's scopes, e.g. `["console:automation", "bookings:read",
         "queues:read"]`; nothing is implied (`bookings:issue`, `bookings:cancel` and `amadeus:write` must be listed
-        explicitly). They are audited as `actor.type = api_key` (`key_…`). Rules: a key-only call with a key that lacks
-        `console:automation` → `403 SCOPE_NOT_ALLOWED` (`details.requiredScope = "console:automation"`); a key-only call
-        without the operation's permission → `403 FORBIDDEN` (`details.requiredPermission`); a secret key with an empty
-        scope list may call console operations with a staff token but never key-only; publishable keys are refused on
-        every console operation. Recommended keys per deployment: storefront `sk_…` scoped `storefront`; console backend
-        `sk_…` scoped `console`; one key per automation job scoped `console:automation` + the minimum permissions.
+        explicitly). Their `staff_actions` rows name `actor.type = api_key` (`key_…`). Rules: a key-only call with a key
+        that lacks `console:automation` → `403 SCOPE_NOT_ALLOWED` (`details.requiredScope = "console:automation"`); a
+        key-only call without the operation's permission → `403 FORBIDDEN` (`details.requiredPermission`); a secret key
+        with an empty scope list may call console operations with a staff token but never key-only; publishable keys are
+        refused on every console operation. Recommended keys per deployment: storefront `sk_…` scoped `storefront`;
+        console backend `sk_…` scoped `console`; one key per automation job scoped `console:automation` + the minimum
+        permissions.
     ConsolePasswordSignIn:
       type: object
       additionalProperties: false
@@ -37268,7 +37273,7 @@ components:
           type: string
           description: >-
             booking.create, booking.patch, booking.issue, booking.cancel, booking.resync, booking.import, booking.note,
-            pnr.lookup, order.retrieve, queue.list, amadeus.<operationId> …
+            pnr.lookup, order.retrieve, customer.view, amadeus.<operationId> …
         targetType:
           type:
             - string

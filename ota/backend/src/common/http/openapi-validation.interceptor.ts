@@ -479,6 +479,39 @@ export class RequestValidator {
     }
     return { path: parts.path, query: parts.query, headers: parts.header, cookies: parts.cookie, body };
   }
+
+  /**
+   * The path parameters of `params` (as the router gave them, before this validator ran) whose values pass their own
+   * schema in the document, unchanged; a parameter the operation does not have, one that is not a string, and one its
+   * schema refuses are left out. What a refusal before validation may record of the path: the console audit takes a
+   * target only from these (OADR-0011 point 8, console/staff-actions.writer.ts). Never throws.
+   */
+  validPathParameters(params: Readonly<Record<string, unknown>> | undefined): Record<string, string> {
+    const path = this.locations.find((entry) => entry.location === "path");
+    if (params === undefined || path === undefined) {
+      return {};
+    }
+    const raw: Record<string, string> = {};
+    const values: JsonObject = {};
+    for (const { spec, types, itemTypes } of path.parameters) {
+      const value = params[spec.name];
+      if (typeof value === "string") {
+        raw[spec.name] = value;
+        values[spec.name] = coerce(value, spec, types, itemTypes);
+      }
+    }
+    if (path.validate(values)) {
+      return raw;
+    }
+    // An error under `/<name>` refuses that parameter; a `required` error at the root is about one that is absent.
+    const refused = new Set(
+      (path.validate.errors ?? []).flatMap((error) => {
+        const segment = /^\/([^/]+)/.exec(error.instancePath)?.[1];
+        return segment === undefined ? [] : [unescapePointer(segment)];
+      }),
+    );
+    return Object.fromEntries(Object.entries(raw).filter(([name]) => !refused.has(name)));
+  }
 }
 
 function rawValue(request: RawRequest, location: ParameterLocation, name: string): unknown {

@@ -1,9 +1,21 @@
-// The console audit (OBE-060; OADR-0011 point 8 as revised on 2026-10-21, flows/console-operations.md §3 step 7,
+// The console audit (OBE-060; OADR-0011 point 8 as decided on 2026-10-21, flows/console-operations.md §3 step 7,
 // db README §8): `staff_actions` rows with the actor, the role, the action, the target, the reason, the redacted before
 // and after, the request id, and the end user's IP and user agent (for the OTA admin's service caller the staff
 // member's forwarded ones, never the admin server's 127.0.0.1). Point 8 asks for one row per state-changing console
-// call and one per refused console call (`outcome = denied` for a permission refusal, `failed` for any other); a
-// successful read and the staff-session calls console.auth.refresh, signOut and me need none.
+// call, one per refused console call (`outcome = denied` for a permission refusal, `failed` for any other), and one per
+// successful read that returns personal data of one person or a supplier record: viewing a customer (`customer.view`),
+// the PNR lookup (`pnr.lookup`), the order retrieve (`order.retrieve`) and the raw Amadeus reads
+// (`amadeus.<operationId>`). Every other successful read (lists such as bookings, queues and the customer search) and
+// the staff-session calls console.auth.refresh, signOut and me need none.
+//
+// Reads (`isConsoleRead`): an operation whose `x-permission` is a read permission (`bookings:read`, `customers:read`,
+// `queues:read`, `supplier_requests:read`, `amadeus:read`, `payments:read`, `settings:read`), so a POST that changes
+// nothing (the raw Amadeus searches, a template preview) is a read too; an operation without one (a shared `both`
+// operation that a `console:automation` key calls in console scope) is a read when it is a GET or a HEAD. A read that
+// is audited opts in with `@AuditedRead()` on its handler, which its implementation attaches (OBE-062, OBE-064, OBE-066
+// and OBE-067): the interceptor then writes its `succeeded` row, with the decorator's action when it names one, unless
+// the use case wrote its own (with a target, reason or before and after the decorator cannot know). The opt-in is the
+// handler's, not the document's, so that the code that returns the personal data is the code that says so.
 //
 // Who writes the row:
 //
@@ -11,17 +23,18 @@
 //   the row and the change commit together (the console booking, payment and settings operations of OBE-061 to
 //   OBE-074; console.auth.signIn writes its `staff.sign_in` rows, succeeded or denied, with the same row builder);
 // - a denial of the permission guard (`403 FORBIDDEN`, `403 ENVIRONMENT_NOT_ALLOWED`, `403 SCOPE_NOT_ALLOWED` for a
-//   key-only call without `console:automation`) is written in a short transaction of its own (`recordDenial`): the
-//   request ends there;
+//   key-only call without `console:automation`) and the staff guard's `403 STAFF_MEMBERSHIP_INACTIVE` for a verified
+//   staff token are written in a short transaction of their own (`recordDenial`): the request ends there. Both guards
+//   run before request validation, so a path value becomes the target only when it passes that parameter's schema in
+//   the document (`RequestValidator.validPathParameters`); otherwise the row has no target;
 // - every other console call is written by `StaffActionsInterceptor` around the handler, in a short transaction of its
 //   own after it: `failed` (`denied` for a `403 FORBIDDEN`, `ENVIRONMENT_NOT_ALLOWED` or `OFFICE_NOT_ALLOWED` of the use
-//   case) when it was refused or its handler threw, else `succeeded`, unless the use case wrote its row already. A
-//   succeeded call counts any row the use case wrote (`recorded()`); a failed one only a row that committed on its own
-//   (`recordAlone`), because a row written in the use case's transaction is gone when that transaction rolled back with
-//   the failure (and when it had committed before a later step failed, the call has both rows: what was done, and that
-//   the call failed). A call that cannot be audited fails (the database error's answer). The `succeeded` rows of calls
-//   whose use case writes none are reads today: OBE-060 audited every console call, and the interceptor still writes
-//   them although the revised point 8 no longer asks for them (left for the lead to decide, FIX-W24-ADR).
+//   case) when it was refused or its handler threw, else `succeeded` for a call that is not a read and for an opted-in
+//   read, unless the use case wrote its row already. A succeeded call counts any row the use case wrote
+//   (`recorded()`); a failed one only a row that committed on its own (`recordAlone`), because a row written in the use
+//   case's transaction is gone when that transaction rolled back with the failure (and when it had committed before a
+//   later step failed, the call has both rows: what was done, and that the call failed). A call that cannot be audited
+//   fails (the database error's answer).
 //
 // The interceptor wraps the validation and idempotency interceptors: Nest applies the global enhancers of a module
 // before those of the modules it imports, so the interceptors of app.module.ts (key usage, then this one) run outside
@@ -30,33 +43,43 @@
 // interceptor refuses (a missing, reused or in-progress `Idempotency-Key`) reaches it as a failure, its use case never
 // having run, and is recorded as `failed` with its action and target only: the row never holds the request's body,
 // query or headers, and a path parameter that validation refused is not taken as the target (`auditedParams`). An
-// idempotent replay reaches it as a success of a call whose use case did not run in this request.
+// idempotent replay of a state-changing call reaches it as a success of a call whose use case did not run in this
+// request, and keeps its `succeeded` row.
 //
 // Console calls are the requests in console scope (scope.guard.ts) on operations of the document. The four staff
 // session operations (`x-permission: none`: console.auth.signIn, refresh, signOut, me) are session plumbing, not
-// console work: the sign-in writes its own `staff.sign_in` row (and a denied one for a viewer asking for live), the
-// other three none (the OTA admin calls console.auth.me once per page); the permission guard's denials of them are
-// written as for any console call. A request whose actor is unknown (no staff member and no API key: a service request
-// whose credential named nobody) has no row: `staff_actions_actor_ck` needs an actor, and the log line has the rest.
-// Requests refused before the staff member or key is known (an unknown, missing, expired or revoked credential, a
-// missing header, a key scoped `storefront`, a body the body parsers refuse: malformed JSON or too large, answered
+// console work: the sign-in writes its own `staff.sign_in` row, and a denied one for each of its 403 refusals of a
+// staff member it knows (a viewer asking for live, `STAFF_MEMBERSHIP_INACTIVE`, `TENANT_SUSPENDED`, `MFA_REQUIRED`); the
+// other three write none (the OTA admin calls console.auth.me once per page); the guards' denials of them are written as
+// for any console call. A request whose actor is unknown (no staff member and no API key: a service request whose
+// credential named nobody) has no row: `staff_actions_actor_ck` needs an actor, and the log line has the rest. Requests
+// refused before the staff member or key is known (an unknown, missing, expired or revoked credential, a missing
+// header, a key scoped `storefront`, a body the body parsers refuse: malformed JSON or too large, answered
 // `400 INVALID_REQUEST` by middleware before any guard) have no row either, nor does a call the rate limits refuse
-// (`429 RATE_LIMITED`): the guards run before the interceptors, and the rate-limit guard before the permission guard.
+// (`429 RATE_LIMITED`): the rate-limit guard logs it instead (`rate_limit.exceeded` with the staff member or key, the
+// operation and the limit; rate-limits.ts), so that a client asking again and again never fills the table.
 //
 // The actor (`ConsoleStaffAction.actor`, `staff_actions_actor_ck`): the signed-in staff member (`staff`, `stf_…`, with
 // the account, e-mail and role of the membership as the staff guard read it), else the API key of a key-only call
-// (`api_key`, `key_…`), else an actor the use case names (a staff member known by e-mail only, for a failed sign-in).
-// The action is the operation's SDK method without `console.` (`bookings.get`, `settings.markupRules.create`) unless the
-// use case names one (`staff.sign_in`, `booking.issue`); the target is the operation's last `…Id` path parameter
-// (`bookingId` → `booking`). `booking_id` is set only by use cases, which know the booking exists (it references
-// `bookings`).
+// (`api_key`, `key_…`), else an actor the guard or the use case names (the staff member of a verified staff token whose
+// membership the staff guard refused, known by its id and role only; a staff member known by e-mail only, for a failed
+// sign-in). The action is the operation's SDK method without `console.` (`bookings.get`,
+// `settings.markupRules.create`) unless the use case or `@AuditedRead` names one (`staff.sign_in`, `booking.issue`,
+// `customer.view`); the target is the operation's last `…Id` path parameter (`bookingId` → `booking`). `booking_id` is
+// set only by use cases, which know the booking exists (it references `bookings`).
 //
 // Redaction (db README §8): `before` and `after` pass the shared redactor of @velexis/logger (`redactPayload`):
 // document, card, discount card and certificate numbers keep their last 4 characters, security codes and the birth and
 // issuance places are dropped, and every token, secret, password and API key value becomes `[REDACTED]`. No row ever
 // holds a token, a key or a full document number; the reason is the staff member's own text.
 import { isIP } from "node:net";
-import { Injectable, type CallHandler, type ExecutionContext, type NestInterceptor } from "@nestjs/common";
+import {
+  Injectable,
+  SetMetadata,
+  type CallHandler,
+  type ExecutionContext,
+  type NestInterceptor,
+} from "@nestjs/common";
 import { Reflector } from "@nestjs/core";
 import { otaOperations, type OtaOperationId } from "@velexis/api-types/operations";
 import type { Insertable, TenantDatabase } from "@velexis/db";
@@ -67,8 +90,9 @@ import { ClsService } from "nestjs-cls";
 import { InjectPinoLogger, PinoLogger } from "nestjs-pino";
 import { defer, lastValueFrom, type Observable } from "rxjs";
 import { MAX_END_USER_AGENT_LENGTH } from "../common/auth/caller.guard";
-import { isStaffSessionOperation, StaffContext } from "../common/auth/staff.guard";
+import { isStaffSessionOperation, StaffContext, StaffRefusalAudit } from "../common/auth/staff.guard";
 import { OPENAPI_OPERATION } from "../common/http/openapi-operation.decorator";
+import { OpenApiDocument } from "../common/http/openapi-validation.interceptor";
 import { RequestContext } from "../common/http/request-context";
 import { IdGenerator } from "../common/ids";
 import { CallerContext } from "../tenancy/caller-resolver";
@@ -82,11 +106,14 @@ export type StaffActionOutcome = "succeeded" | "failed" | "denied";
 /** Who acted (`staff_actions.actor_type` and the columns `staff_actions_actor_ck` ties to it). */
 export type StaffActionActor =
   | {
-      /** A staff member with a membership: `actor_id = staff_id = stf_…`. */
+      /**
+       * A staff member with a membership: `actor_id = staff_id = stf_…`. The account and e-mail are `null` when the
+       * request knows the membership by its verified staff token only (the staff guard's refusal of its membership).
+       */
       readonly type: "staff";
       readonly staffId: string;
-      readonly accountId: string;
-      readonly email: string;
+      readonly accountId: string | null;
+      readonly email: string | null;
       readonly role: StaffRole;
     }
   | {
@@ -226,6 +253,52 @@ export function consoleAction(operationId: string): string {
   return method === null ? operationId : method.replace(/^console\./, "");
 }
 
+/** A read permission of the role matrix (roles.ts): `bookings:read`, `customers:read`, `amadeus:read` … */
+const READ_PERMISSION = /^[a-z_]+:read$/;
+
+/**
+ * Whether a console call of `operationId` is a read (see the file header): its `x-permission` is a read permission,
+ * or, for an operation without one, it is a GET or a HEAD. The staff-session operations (`x-permission: none`) and ids
+ * the document does not have are not reads.
+ */
+export function isConsoleRead(operationId: string): boolean {
+  const operation = OPERATIONS.get(operationId as OtaOperationId);
+  if (operation === undefined || operation.permission === "none") {
+    return false;
+  }
+  if (operation.permission !== null) {
+    return READ_PERMISSION.test(operation.permission);
+  }
+  return operation.method === "get" || operation.method === "head";
+}
+
+/** Metadata key of `@AuditedRead` on a handler. */
+export const AUDITED_READ = "velexis:console:audited-read";
+
+/** What `@AuditedRead` records on a handler. */
+export interface AuditedReadOptions {
+  /**
+   * The action of the read's `succeeded` row (`customer.view`, `pnr.lookup`, `order.retrieve`); the operation's SDK
+   * method without `console.` when absent (`amadeus.searchFlightOffers`). Refusals and failures of the call keep the
+   * action every refused console call has (`consoleAction`).
+   */
+  readonly action?: string | undefined;
+}
+
+/**
+ * Opts the successful calls of a console read in to the audit (OADR-0011 point 8 as decided on 2026-10-21; see the
+ * file header): put it on the handler of a read that returns personal data of one person or a supplier record, next to
+ * `@OpenApiOperation`. On a handler that is not a read it changes nothing: every successful change is audited anyway.
+ *
+ *   @Get("v1/console/customers/:customerId")
+ *   @OpenApiOperation("consoleGetCustomer")
+ *   @AuditedRead({ action: "customer.view" })
+ *   get(…) { … }
+ */
+export function AuditedRead(options: AuditedReadOptions = {}): MethodDecorator {
+  return SetMetadata(AUDITED_READ, Object.freeze({ action: options.action ?? null }));
+}
+
 /** `markupRuleId` → `markup_rule`. */
 const snakeCase = (name: string): string => name.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`);
 
@@ -291,7 +364,7 @@ const RECORDED_KEY = "console.staff_action_recorded";
 const COMMITTED_KEY = "console.staff_action_committed";
 
 @Injectable()
-export class StaffActionsWriter {
+export class StaffActionsWriter implements StaffRefusalAudit {
   constructor(
     private readonly tx: TenantTx,
     private readonly ids: IdGenerator,
@@ -300,6 +373,7 @@ export class StaffActionsWriter {
     private readonly staff: StaffContext,
     private readonly context: RequestContext,
     private readonly cls: ClsService,
+    private readonly document: OpenApiDocument,
     @InjectPinoLogger(StaffActionsWriter.name) private readonly logger: PinoLogger,
   ) {}
 
@@ -345,7 +419,7 @@ export class StaffActionsWriter {
     }
   }
 
-  /** Writes the row of `entry` in a short transaction of its own (reads, denials). */
+  /** Writes the row of `entry` in a short transaction of its own (audited reads, denials). */
   async recordAlone(entry: StaffActionEntry): Promise<void> {
     await this.tx.run((trx) => this.record(trx, entry));
     if (this.cls.isActive()) {
@@ -364,16 +438,19 @@ export class StaffActionsWriter {
   }
 
   /**
-   * The row of a console call `operationId` the permission guard refused with `error` (`outcome = denied`), in a
-   * transaction of its own. Without an actor or a tenant there is no row; a row that cannot be written is logged, and
-   * the refusal stands.
+   * The row of a console call `operationId` that a guard refused with `error` (`outcome = denied`), in a transaction
+   * of its own: the permission guard's denials, and the staff guard's refusal of a verified staff token's membership,
+   * which names `actor` (the request has no staff member then). `params` are the request's path parameters as the
+   * router gave them: the guards run before request validation, so a value becomes the target only when it passes its
+   * parameter's schema in the document, and the row has no target otherwise. Without an actor or a tenant there is no
+   * row; a row that cannot be written is logged, and the refusal stands.
    */
   async recordDenial(
     operationId: string,
-    params: Request["params"] | undefined,
+    params: Readonly<Record<string, unknown>> | undefined,
     error: AppError,
+    actor: StaffActionActor | undefined = this.requestActor(),
   ): Promise<void> {
-    const actor = this.requestActor();
     if (actor === undefined || this.tenants.get() === undefined) {
       this.logger.info({ operationId, code: error.code }, "staff_actions.denial_without_actor");
       return;
@@ -381,7 +458,7 @@ export class StaffActionsWriter {
     try {
       await this.recordAlone({
         action: consoleAction(operationId),
-        ...consoleTarget(operationId, params),
+        ...consoleTarget(operationId, this.validPathParameters(operationId, params)),
         outcome: "denied",
         actor,
       });
@@ -393,12 +470,14 @@ export class StaffActionsWriter {
   /**
    * The row of a console call that the pipeline audits (`StaffActionsInterceptor`), unless its use case wrote one:
    * for a succeeded call any row, for a failed or denied one a row that committed on its own (a row of the use case's
-   * transaction rolled back with the failure; see the file header). Nothing without an actor.
+   * transaction rolled back with the failure; see the file header). `action` replaces the operation's (an opted-in
+   * read's). Nothing without an actor.
    */
   async recordCall(
     operationId: string,
     params: Readonly<Record<string, unknown>> | undefined,
     outcome: StaffActionOutcome,
+    action: string | null = null,
   ): Promise<void> {
     const actor = this.requestActor();
     const audited = outcome === "succeeded" ? this.recorded() : this.recordedAlone();
@@ -406,18 +485,31 @@ export class StaffActionsWriter {
       return;
     }
     await this.recordAlone({
-      action: consoleAction(operationId),
+      action: action ?? consoleAction(operationId),
       ...consoleTarget(operationId, params),
       outcome,
       actor,
     });
   }
+
+  /** The path parameters of `params` that pass their schema of `operationId` in the document (none for an unknown id). */
+  private validPathParameters(
+    operationId: string,
+    params: Readonly<Record<string, unknown>> | undefined,
+  ): Readonly<Record<string, string>> {
+    try {
+      return this.document.validator(operationId).validPathParameters(params);
+    } catch {
+      return {};
+    }
+  }
 }
 
 /**
- * Audits every console call the use case did not audit itself (see the file header): global (`APP_INTERCEPTOR` in
- * app.module.ts, outside HttpModule's validation and idempotency interceptors, so their refusals are recorded as
- * failures), on handlers bound to an operation, in console scope, except the staff-session operations.
+ * Audits every console call the use case did not audit itself and the rule asks for (see the file header): global
+ * (`APP_INTERCEPTOR` in app.module.ts, outside HttpModule's validation and idempotency interceptors, so their refusals
+ * are recorded as failures), on handlers bound to an operation, in console scope, except the staff-session operations.
+ * A successful read is recorded only when its handler carries `@AuditedRead`.
  */
 @Injectable()
 export class StaffActionsInterceptor implements NestInterceptor {
@@ -437,6 +529,11 @@ export class StaffActionsInterceptor implements NestInterceptor {
       return next.handle();
     }
     const params = execution.switchToHttp().getRequest<Request>().params;
+    const read = isConsoleRead(operationId);
+    const optIn = this.reflector.get<{ readonly action: string | null } | undefined>(
+      AUDITED_READ,
+      execution.getHandler(),
+    );
     return defer(async () => {
       let body: unknown;
       try {
@@ -450,7 +547,9 @@ export class StaffActionsInterceptor implements NestInterceptor {
           });
         throw error;
       }
-      await this.writer.recordCall(operationId, params, "succeeded");
+      if (!read || optIn !== undefined) {
+        await this.writer.recordCall(operationId, params, "succeeded", read ? (optIn?.action ?? null) : null);
+      }
       return body;
     });
   }

@@ -17,8 +17,9 @@
 //   The schedule-change diff and `booking.synced` of a full resync are the background sync's and console.bookings.resync's
 //   (OBE-045, OBE-062).
 //
-// Neither read is audited (the document: "Read-only; not audited per call", "Viewing is not audited"); the console
-// audit interceptor of OBE-060 records what it records for every console call.
+// Neither read is audited (the document: "Read-only; not audited per call", "Viewing is not audited"): their handlers
+// do not opt in with `@AuditedRead`, so the console audit interceptor writes a row only for a refused or failed call
+// (OADR-0011 point 8 as decided on 2026-10-21; console/staff-actions.writer.ts).
 import { Injectable } from "@nestjs/common";
 import type { operations } from "@velexis/api-types";
 import { AppError } from "@velexis/errors";

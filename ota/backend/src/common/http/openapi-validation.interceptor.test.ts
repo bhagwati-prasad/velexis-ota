@@ -503,4 +503,31 @@ describe("the compiled document", () => {
   it("refuses an operation id the document does not have", () => {
     expect(() => loadOpenApiDocument().operation("notAnOperation")).toThrow(/no operation "notAnOperation"/);
   });
+
+  it("keeps the path parameters whose router values pass their own schema, as they came [FIX-W25-AUDIT AC3]", () => {
+    const document = loadOpenApiDocument();
+    const bookingId = "bkg_01JA2Z9W5K7Q3M8N4P6R2T0V1E";
+
+    expect(document.validator("consoleGetBooking").validPathParameters({ bookingId })).toEqual({ bookingId });
+    expect(
+      document.validator("consoleGetBooking").validPathParameters({ bookingId: `${SECRET} 4111` }),
+    ).toEqual({});
+    // Coerced as validation coerces it (an integer from 0 to 99), returned as the router's string.
+    expect(document.validator("consoleListQueue").validPathParameters({ queueId: "7" })).toEqual({
+      queueId: "7",
+    });
+    expect(document.validator("consoleListQueue").validPathParameters({ queueId: "100" })).toEqual({});
+    // One refused parameter leaves the others; absent, unknown and non-string values are never kept.
+    expect(
+      document.validator("consoleGetNotificationTemplate").validPathParameters({
+        templateKey: "booking.confirmed",
+        channel: "sms",
+        locale: "fr-CA",
+        extra: "x",
+      }),
+    ).toEqual({ templateKey: "booking.confirmed", locale: "fr-CA" });
+    expect(document.validator("consoleGetBooking").validPathParameters({ bookingId: 7 })).toEqual({});
+    expect(document.validator("consoleGetBooking").validPathParameters(undefined)).toEqual({});
+    expect(document.validator("consoleListBookings").validPathParameters({ bookingId })).toEqual({});
+  });
 });

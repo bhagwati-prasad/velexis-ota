@@ -15,12 +15,17 @@
 //   the token; this is the backstop behind that check (a platform fault, or an OTA that went live within the token's
 //   60 s). A viewer asking for `live` is refused (`403 ENVIRONMENT_NOT_ALLOWED`, OBE-060) with a denied
 //   `staff.sign_in` row; that the tenant is live, when the OTA admin asks for it, is the permission guard's check,
-//   before the token is taken. Every refusal of this service leaves the token used (`GETDEL`) and opens nothing.
-//   Success opens a family with the membership's current role, writes one `staff_actions` row `staff.sign_in` (the
-//   console audit's row of console/staff-actions.writer.ts: actor, role, the session as target, request id, the end
-//   user's IP and user agent) and answers `ConsoleStaffSession`. The rate limit (10 per minute per end-user IP) is the
-//   operation's throttler (rate-limits.ts). For the OTA admin's service caller the request's tenant is the portal
-//   token's, which the tenant guard read (OBE-060).
+//   before the token is taken. Every refusal of this service leaves the token used (`GETDEL`) and opens nothing. Its
+//   403 refusals of a staff member it knows each write one denied `staff.sign_in` row without a target (OADR-0011
+//   point 8 as decided on 2026-10-21): `STAFF_MEMBERSHIP_INACTIVE` as the membership the portal token names (its
+//   account, the account's e-mail when the account still has a membership here, and the membership's role, or the
+//   token's when the membership is another), `TENANT_SUSPENDED` (unless the tenant row is gone) and `MFA_REQUIRED` as
+//   the membership just read; the `401 PORTAL_TOKEN_INVALID` refusals name nobody the audit could trust, and have the
+//   log line only. Success opens a family with the membership's current role, writes one `staff_actions` row
+//   `staff.sign_in` (the console audit's row of console/staff-actions.writer.ts: actor, role, the session as target,
+//   request id, the end user's IP and user agent) and answers `ConsoleStaffSession`. The rate limit (10 per minute per
+//   end-user IP) is the operation's throttler (rate-limits.ts). For the OTA admin's service caller the request's tenant
+//   is the portal token's, which the tenant guard read (OBE-060).
 // - console.auth.refresh. The family of the refresh token must pass the revocation checks of staff-sessions.ts and
 //   its membership must be active with the family's role; then it rotates. A rotated token presented again revokes the
 //   family (`401 REFRESH_TOKEN_REUSED`); an unknown, ended or revoked one is `401 REFRESH_TOKEN_INVALID`; a removed or
@@ -56,7 +61,7 @@ import {
   type IdempotentInput,
 } from "../../common/http/idempotency.service";
 import { IdGenerator } from "../../common/ids";
-import { staffActionRow } from "../../console/staff-actions.writer";
+import { staffActionRow, type StaffActionActor } from "../../console/staff-actions.writer";
 import { PlatformCache } from "../../tenancy/platform-cache";
 import {
   PlatformReadRepository,
@@ -102,6 +107,17 @@ export function mfaRequiredFor(
   grant: Pick<PortalTokenGrant, "mfa">,
 ): boolean {
   return tenant.storefrontEnvironment === "live" && grant.mfa !== true;
+}
+
+/** The console audit's actor of a membership the sign-in read (console/staff-actions.writer.ts). */
+export function staffActorOf(member: PlatformStaffMember): StaffActionActor {
+  return {
+    type: "staff",
+    staffId: member.id,
+    accountId: member.accountId,
+    email: member.account.email,
+    role: member.role,
+  };
 }
 
 /** The contract's `StaffMember` of a membership. */
@@ -253,17 +269,33 @@ export class StaffAuthService {
         { reason: "membership_inactive", accountId: grant.accountId, staffId: grant.membershipId },
         "staff.sign_in_refused",
       );
+      // The portal token the platform issued names the membership: the refusal is its denied row.
+      await this.recordRefusedSignIn(
+        {
+          type: "staff",
+          staffId: grant.membershipId,
+          accountId: grant.accountId,
+          email: member?.account.email ?? null,
+          role: member !== null && member.id === grant.membershipId ? member.role : grant.role,
+        },
+        input,
+      );
       throw new AppError("STAFF_MEMBERSHIP_INACTIVE");
     }
     const tenant = await this.freshTenant(tenantId);
     if (tenant === null || tenant.status !== "active") {
       this.logger.info({ reason: "tenant_not_active", staffId: member.id }, "staff.sign_in_refused");
+      if (tenant !== null) {
+        // A suspended tenant keeps its schema; a tenant row that is gone may not have one, and has the log line only.
+        await this.recordRefusedSignIn(staffActorOf(member), input);
+      }
       throw new AppError("TENANT_SUSPENDED");
     }
     if (mfaRequiredFor(tenant, grant)) {
       // The platform issues no such token for a live OTA (PADR-0008), so this one is a warning: the OTA went live within
       // the token's 60 s, or the platform's check failed. The token is used up; no session is opened.
       this.logger.warn({ reason: "mfa_required", staffId: member.id }, "staff.sign_in_refused");
+      await this.recordRefusedSignIn(staffActorOf(member), input);
       throw new AppError("MFA_REQUIRED");
     }
     // OADR-0011 point 5 (OBE-060): a viewer is limited to test, whatever environment the request asked for; the refusal
@@ -271,7 +303,7 @@ export class StaffAuthService {
     await this.assertSignInEnvironment(member, input);
     const issued = await this.sessions.open(member, input.userAgent);
     try {
-      await this.recordSignIn(member, issued.family, input);
+      await this.recordSignIn(staffActorOf(member), issued.family, input);
     } catch (error) {
       // No audit row, no session: the family that was just opened is ended again.
       await this.sessions.revoke(issued.family.id).catch(() => undefined);
@@ -442,7 +474,7 @@ export class StaffAuthService {
    * admin the forwarded ones); no token, no portal token.
    */
   private async recordSignIn(
-    member: PlatformStaffMember,
+    actor: StaffActionActor,
     family: StaffFamily | undefined,
     input: StaffSignInInput,
     outcome: "succeeded" | "denied" = "succeeded",
@@ -457,19 +489,27 @@ export class StaffAuthService {
         targetId: family?.id ?? null,
       },
       {
-        actor: {
-          type: "staff",
-          staffId: member.id,
-          accountId: member.accountId,
-          email: member.account.email,
-          role: member.role,
-        },
+        actor,
         requestId: requestId === "" ? null : requestId,
         ip: input.ip,
         userAgent: input.userAgent,
       },
     );
     await this.tx.run((trx) => trx.insertInto("staff_actions").values(row).execute());
+  }
+
+  /**
+   * The denied `staff.sign_in` row of a sign-in refused for a staff member the request knows (OADR-0011 point 8 as
+   * decided on 2026-10-21): one insert in a transaction of its own; a row that cannot be written is logged, and the
+   * refusal stands.
+   */
+  private async recordRefusedSignIn(actor: StaffActionActor, input: StaffSignInInput): Promise<void> {
+    await this.recordSignIn(actor, undefined, input, "denied").catch((writeError: unknown) => {
+      this.logger.error(
+        { err: writeError, staffId: actor.type === "staff" ? actor.staffId : null },
+        "staff_actions.write_failed",
+      );
+    });
   }
 
   /**
@@ -494,9 +534,7 @@ export class StaffAuthService {
     try {
       this.assertEnvironment(member.role, member.id, "staff.sign_in_refused");
     } catch (error) {
-      await this.recordSignIn(member, undefined, input, "denied").catch((writeError: unknown) => {
-        this.logger.error({ err: writeError, staffId: member.id }, "staff_actions.write_failed");
-      });
+      await this.recordRefusedSignIn(staffActorOf(member), input);
       throw error;
     }
   }

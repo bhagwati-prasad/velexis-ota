@@ -8,7 +8,11 @@
 // does, and starts the API in-process with probe routes bound to console operations that have no handler yet (their
 // guards are the pipeline's; their 501 routes skip the guards). Supertest connects from 127.0.0.1 without
 // X-Forwarded-For: the OTA admin's direct connection. Each admin client forwards an end-user IP address of its own, so
-// the sign-in limit of 10 per minute per IP never mixes the tests. Tokens and names are made up per run.
+// the sign-in limit of 10 per minute per IP never mixes the tests. Tokens and names are made up per run. FIX-W25-AUDIT
+// (the lead's decision of 2026-10-21, third batch, OADR-0011 point 8): a successful read writes no row unless its
+// handler opts in with `@AuditedRead` (the probe of consoleGetCustomer does), a change and its idempotent replay keep
+// theirs, a 429 is a log line only, the staff guard's 403 of a known staff member is a denied row, and a denied call's
+// path value is its target only when it passes the parameter's schema.
 import { randomBytes, randomInt, randomUUID } from "node:crypto";
 import { Controller, Get, Param, Post } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
@@ -39,7 +43,7 @@ import { trackerDigest } from "../../../src/common/http/rate-limits";
 import { newId } from "../../../src/common/ids";
 import { redisKeys } from "../../../src/common/redis/redis.keys";
 import type { ApiConfig } from "../../../src/config";
-import { StaffActionsWriter } from "../../../src/console/staff-actions.writer";
+import { AuditedRead, StaffActionsWriter } from "../../../src/console/staff-actions.writer";
 import { StaffTokens } from "../../../src/identity/staff/staff-sessions";
 import { CallerResolver } from "../../../src/tenancy/caller-resolver";
 import type { OtaPool } from "../../../src/tenancy/tenancy.module";
@@ -56,9 +60,10 @@ const PASSPORT = `X${randomInt(10_000_000, 99_999_999)}`;
 const PROBE_TOKEN = `eyJ${randomBytes(24).toString("base64url")}`;
 
 /**
- * Routes bound to console operations that have no handler yet (OBE-061 onwards), so the whole guard pipeline runs on
- * them: list bookings (`bookings:read`), create a markup rule (`settings:write`), and get a booking, whose handler
- * audits the read itself with a before and after that carry a document number and a token.
+ * Routes bound to console operations on paths of their own, so the whole guard pipeline runs on them: list bookings
+ * (`bookings:read`), create a markup rule (`settings:write`), get a booking, whose handler audits the read itself with
+ * a before and after that carry a document number and a token, and get a customer (`customers:read`), a read that
+ * opts in to the audit as OBE-066's handler will.
  */
 @Controller("__console")
 class ConsoleProbe {
@@ -92,7 +97,25 @@ class ConsoleProbe {
     });
     return { id: bookingId };
   }
+
+  @Get("customers/:customerId")
+  @OpenApiOperation("consoleGetCustomer")
+  @AuditedRead({ action: "customer.view" })
+  getCustomer(@Param("customerId") customerId: string): { id: string } {
+    return { id: customerId };
+  }
 }
+
+/** A valid body of consoleCreateMarkupRule (the document's `longHaul` example). */
+const MARKUP_RULE = {
+  name: "Long-haul economy",
+  scope: { originCountries: ["FR"], cabins: ["ECONOMY"], minNet: "400.00" },
+  calculation: "percentage",
+  percentage: "4.0000",
+  appliesPer: "traveler",
+  min: { amount: "15.00", currency: "EUR" },
+  priority: 100,
+};
 
 let db: TestDatabase;
 let redis: TestRedis;
@@ -544,6 +567,13 @@ describe("console.auth.signIn through the OTA admin", () => {
     ).toHaveLength(10);
     expect(rows.filter((row) => row["ip_address"] === otherIp.ip)).toHaveLength(1);
     expect(rows.some((row) => String(row["ip_address"]).includes("127.0.0.1"))).toBe(false);
+    // The refused sign-in is a log line (no staff member is known yet), without the IP it was counted for.
+    const limited = api.sink
+      .records()
+      .filter((line) => line["msg"] === "rate_limit.exceeded" && line["operationId"] === "consoleSignIn");
+    expect(limited.length).toBeGreaterThanOrEqual(1);
+    expect(limited[0]).toMatchObject({ limit: "ota_sign_in", maxRequests: 10, callerType: "service" });
+    expect(JSON.stringify(limited)).not.toContain(admin.ip);
   });
 
   it("opens a session of the portal token's tenant in the environment asked for, and lists the environments", async () => {
@@ -699,30 +729,91 @@ describe("environments and permissions", () => {
     expect(automationWrite.body.error.details).toEqual({ requiredPermission: "settings:write" });
 
     const keyRows = await staffActions("tenant_alpha", { actorId: alphaAutomationKeyId });
+    // The successful read writes no row (OADR-0011 point 8 as decided on 2026-10-21); the refused write does.
     expect(keyRows.map((row) => [row["actor_type"], row["staff_id"], row["action"], row["outcome"]])).toEqual(
-      [
-        ["api_key", null, "bookings.list", "succeeded"],
-        ["api_key", null, "settings.markupRules.create", "denied"],
-      ],
+      [["api_key", null, "settings.markupRules.create", "denied"]],
     );
-    expect(keyRows[1]?.["ip_address"]).toBe("192.0.2.77");
+    expect(keyRows[0]?.["ip_address"]).toBe("192.0.2.77");
     const consoleKeyRows = await staffActions("tenant_alpha", { actorId: alphaConsoleKeyId });
     expect(
       consoleKeyRows.map((row) => [row["actor_type"], row["action"], row["outcome"], row["ip_address"]]),
     ).toEqual([["api_key", "bookings.list", "denied", "192.0.2.78"]]);
   });
 
-  it("writes one succeeded row per console call of the staff member", async () => {
-    const finance = await signIn(await insertMember(alphaId, "finance"));
+  // OBE-060 wrote a succeeded row for every console call ("writes one succeeded row per console call of the staff
+  // member"); the lead's decision of 2026-10-21 (third batch, OADR-0011 point 8) keeps it for changes and for the reads
+  // that return one person's personal data or a supplier record, which opt in.
+  it("writes no row for a successful read, one for a change and its replay, and one for an opted-in read [FIX-W25-AUDIT AC1]", async () => {
+    const owner = await signIn(await insertMember(alphaId, "owner"));
+    const customerId = newId("cus");
+    const key = randomUUID();
 
-    expect((await finance.admin.get("/__console/bookings", finance.accessToken)).status).toBe(200);
-    expect((await finance.admin.me(finance.accessToken)).status).toBe(200);
+    const list = await owner.admin.get("/__console/bookings", owner.accessToken);
+    const me = await owner.admin.me(owner.accessToken);
+    const created = await owner.admin.post(
+      "/__console/settings/markup-rules",
+      MARKUP_RULE,
+      owner.accessToken,
+      {
+        "Idempotency-Key": key,
+      },
+    );
+    const replayed = await owner.admin.post(
+      "/__console/settings/markup-rules",
+      MARKUP_RULE,
+      owner.accessToken,
+      {
+        "Idempotency-Key": key,
+      },
+    );
+    const customer = await owner.admin.get(`/__console/customers/${customerId}`, owner.accessToken);
 
-    const rows = await staffActions("tenant_alpha", { staffId: finance.member.staffId });
-    expect(rows.map((row) => [row["action"], row["outcome"], row["ip_address"]])).toEqual([
-      ["staff.sign_in", "succeeded", finance.admin.ip],
-      ["bookings.list", "succeeded", finance.admin.ip],
+    for (const res of [list, me, created, replayed, customer]) {
+      expect(res.status).toBeLessThan(300);
+    }
+    expect(replayed.body).toEqual(created.body);
+    const rows = await staffActions("tenant_alpha", { staffId: owner.member.staffId });
+    expect(rows.map((row) => [row["action"], row["outcome"], row["target_type"], row["target_id"]])).toEqual([
+      ["staff.sign_in", "succeeded", "staff_session", owner.familyId],
+      ["settings.markupRules.create", "succeeded", null, null],
+      ["settings.markupRules.create", "succeeded", null, null],
+      ["customer.view", "succeeded", "customer", customerId],
     ]);
+    expect(rows[3]).toMatchObject({
+      actor_type: "staff",
+      staff_role: "owner",
+      ip_address: owner.admin.ip,
+      user_agent: owner.admin.userAgent,
+    });
+  });
+
+  it("records a denied call's path value as its target only when it passes the parameter's schema [FIX-W25-AUDIT AC3]", async () => {
+    const owner = await signIn(await insertMember(alphaId, "owner"));
+    const bookingId = newId("bkg");
+    const pasted = `${PASSPORT}-${randomBytes(3).toString("hex")}`;
+    // alpha is not live: the permission guard refuses live before request validation has looked at the path.
+    const live = { "X-Velexis-Environment": "live" };
+
+    const valid = await owner.admin.get(`/__console/bookings/${bookingId}`, owner.accessToken, live);
+    const refused = await owner.admin.get(`/__console/bookings/${pasted}`, owner.accessToken, live);
+    const customer = await owner.admin.get(
+      `/__console/customers/${encodeURIComponent(pasted)}`,
+      owner.accessToken,
+      live,
+    );
+
+    for (const res of [valid, refused, customer]) {
+      expect(answer(res)).toEqual([403, "ENVIRONMENT_NOT_ALLOWED"]);
+    }
+    const rows = await staffActions("tenant_alpha", { staffId: owner.member.staffId });
+    expect(
+      rows.slice(1).map((row) => [row["action"], row["outcome"], row["target_type"], row["target_id"]]),
+    ).toEqual([
+      ["bookings.get", "denied", "booking", bookingId],
+      ["bookings.get", "denied", null, null],
+      ["customers.get", "denied", null, null],
+    ]);
+    expect(JSON.stringify(rows)).not.toContain(pasted);
   });
 });
 
@@ -802,5 +893,99 @@ describe("staff_actions rows", () => {
     for (const pasted of [pastedQuery, pastedBody, pastedPath, PASSPORT]) {
       expect(stored).not.toContain(pasted);
     }
+  });
+});
+
+describe("refusals of a known staff member or key", () => {
+  it("answers 429 over the console limit with a log line naming the staff member or key, and no row [FIX-W25-AUDIT AC2]", async () => {
+    const agent = await signIn(await insertMember(alphaId, "agent"));
+    const automation = await issueKey(alphaId, ["console:automation", "bookings:read"]);
+    // Both are 600 calls into their minute: the next one is over the limit.
+    for (const tracker of [`staff:${agent.familyId}`, automation.id]) {
+      await redis.client.set(`rl:ota_console:${trackerDigest("principal", tracker)}`, "600", "EX", 60);
+    }
+
+    const staffCall = await agent.admin.get("/__console/bookings", agent.accessToken);
+    const keyCall = await request(api.server)
+      .post("/__console/settings/markup-rules")
+      .set({ "X-Api-Key": automation.key, "Idempotency-Key": randomUUID() })
+      .send(MARKUP_RULE);
+
+    for (const res of [staffCall, keyCall]) {
+      expect(answer(res)).toEqual([429, "RATE_LIMITED"]);
+      expect(res.headers["retry-after"]).toMatch(/^\d+$/);
+    }
+    const lines = api.sink.records().filter((line) => line["msg"] === "rate_limit.exceeded");
+    expect(lines.filter((line) => line["staffId"] === agent.member.staffId)).toEqual([
+      expect.objectContaining({
+        operationId: "consoleListBookings",
+        limit: "ota_console",
+        maxRequests: 600,
+        windowSeconds: 60,
+        callerType: "service",
+      }),
+    ]);
+    expect(lines.filter((line) => line["keyId"] === automation.id)).toEqual([
+      expect.objectContaining({
+        operationId: "consoleCreateMarkupRule",
+        limit: "ota_console",
+        callerType: "key",
+      }),
+    ]);
+    const text = JSON.stringify(lines);
+    for (const secret of [agent.accessToken, automation.key, agent.admin.ip, agent.familyId]) {
+      expect(text).not.toContain(secret);
+    }
+    // The refusals wrote no row: the agent has its sign-in only, the key nothing.
+    expect(
+      (await staffActions("tenant_alpha", { staffId: agent.member.staffId })).map((row) => row["action"]),
+    ).toEqual(["staff.sign_in"]);
+    expect(await staffActions("tenant_alpha", { actorId: automation.id })).toEqual([]);
+  });
+
+  it("writes a denied row of the token's staff member when the staff guard refuses an inactive membership [FIX-W25-AUDIT AC2]", async () => {
+    const member = await insertMember(alphaId, "agent");
+    const agent = await signIn(member);
+    const bookingId = newId("bkg");
+    const pasted = `${PASSPORT}-${randomBytes(3).toString("hex")}`;
+    await migrator
+      .updateTable("platform.tenant_memberships")
+      .set({ status: "suspended" })
+      .where("id", "=", member.staffId)
+      .execute();
+    // As the platform's `membership` invalidation does: the next request reads the platform row.
+    await redis.client.del(redisKeys.member(member.accountId, alphaId).key);
+
+    const answers = [
+      await agent.admin.get(`/__console/bookings/${bookingId}`, agent.accessToken),
+      await agent.admin.get(`/__console/bookings/${pasted}`, agent.accessToken),
+      await agent.admin.me(agent.accessToken),
+    ];
+
+    for (const res of answers) {
+      expect(answer(res)).toEqual([403, "STAFF_MEMBERSHIP_INACTIVE"]);
+    }
+    const rows = await staffActions("tenant_alpha", { staffId: member.staffId });
+    expect(rows.map((row) => [row["action"], row["outcome"], row["target_type"], row["target_id"]])).toEqual([
+      ["staff.sign_in", "succeeded", "staff_session", agent.familyId],
+      ["bookings.get", "denied", "booking", bookingId],
+      ["bookings.get", "denied", null, null],
+      ["auth.me", "denied", null, null],
+    ]);
+    for (const row of rows.slice(1)) {
+      // The verified token names the membership and its role; the account is not read for a refusal.
+      expect(row).toMatchObject({
+        actor_type: "staff",
+        actor_id: member.staffId,
+        account_id: null,
+        staff_email: null,
+        staff_role: "agent",
+        ip_address: agent.admin.ip,
+        user_agent: agent.admin.userAgent,
+        request_id: expect.any(String),
+      });
+    }
+    expect(JSON.stringify(rows)).not.toContain(pasted);
+    expect(JSON.stringify(rows)).not.toContain(agent.accessToken);
   });
 });

@@ -197,7 +197,7 @@ const staffTokensAt = (clock: FakeClock): StaffTokens =>
 function recordingLogger(): { logger: PinoLogger; lines: Array<{ msg: string; fields: unknown }> } {
   const lines: Array<{ msg: string; fields: unknown }> = [];
   const record = (fields: unknown, msg: string) => lines.push({ msg, fields });
-  return { logger: { info: record, warn: record } as unknown as PinoLogger, lines };
+  return { logger: { info: record, warn: record, error: record } as unknown as PinoLogger, lines };
 }
 
 describe("portal tokens, refresh tokens and cut-offs", () => {
@@ -888,6 +888,77 @@ describe("StaffAuthService", () => {
     expect(JSON.stringify(lines)).not.toContain(token);
   });
 
+  it("writes a denied staff.sign_in row for each 403 refusal of a staff member it knows, none for a 401 [FIX-W25-AUDIT AC2]", async () => {
+    const { service, sessions, tenant, rows } = serviceHarness();
+    const token = portalToken();
+    const refuse = async (expected: string): Promise<void> => {
+      expect((await refusal(service.signIn(signInInput(token)))).answer).toBe(expected);
+    };
+
+    // 401s: no staff member the audit could trust.
+    await refuse("401 PORTAL_TOKEN_INVALID");
+    sessions.grant = grantFor({ tenantId: OTHER_TENANT_ID });
+    await refuse("401 PORTAL_TOKEN_INVALID");
+    expect(rows).toEqual([]);
+    // The portal token names a membership the account no longer has here; then one without any membership left.
+    sessions.grant = grantFor({ membershipId: OTHER_STAFF_ID, role: "viewer" });
+    await refuse("403 STAFF_MEMBERSHIP_INACTIVE");
+    sessions.grant = grantFor({ role: "admin" });
+    sessions.freshMemberValue = null;
+    await refuse("403 STAFF_MEMBERSHIP_INACTIVE");
+    sessions.grant = grantFor();
+    sessions.freshMemberValue = member({ status: "suspended", role: "finance" });
+    await refuse("403 STAFF_MEMBERSHIP_INACTIVE");
+    sessions.grant = grantFor();
+    sessions.freshMemberValue = member();
+    tenant.value = tenantRow({ status: "suspended" });
+    await refuse("403 TENANT_SUSPENDED");
+    // A tenant row that is gone may have no schema left: the log line only.
+    sessions.grant = grantFor();
+    tenant.value = null;
+    await refuse("403 TENANT_SUSPENDED");
+    sessions.grant = grantFor({ mfa: false });
+    tenant.value = tenantRow({ storefrontEnvironment: "live" });
+    await refuse("403 MFA_REQUIRED");
+
+    const written = rows.map((entry) => (entry as { row: Record<string, unknown> }).row);
+    expect(
+      written.map((row) => [row["staff_id"], row["account_id"], row["staff_email"], row["staff_role"]]),
+    ).toEqual([
+      [OTHER_STAFF_ID, ACCOUNT_ID, "maria.lopez@example.com", "viewer"],
+      [STAFF_ID, ACCOUNT_ID, null, "admin"],
+      [STAFF_ID, ACCOUNT_ID, "maria.lopez@example.com", "finance"],
+      [STAFF_ID, ACCOUNT_ID, "maria.lopez@example.com", "agent"],
+      [STAFF_ID, ACCOUNT_ID, "maria.lopez@example.com", "agent"],
+    ]);
+    for (const row of written) {
+      expect(row).toMatchObject({
+        actor_type: "staff",
+        action: "staff.sign_in",
+        outcome: "denied",
+        target_type: null,
+        target_id: null,
+        before: null,
+        after: null,
+        request_id: "req-staff-1",
+        ip_address: "203.0.113.7",
+        user_agent: "Mozilla/5.0 (test)",
+      });
+    }
+    expect(JSON.stringify(rows)).not.toContain(token);
+    expect(sessions.opened).toEqual([]);
+  });
+
+  it("keeps a 403 refusal of the sign-in when its denied row cannot be written [FIX-W25-AUDIT AC2]", async () => {
+    const { service, sessions, audit, lines } = serviceHarness();
+    sessions.grant = grantFor();
+    sessions.freshMemberValue = member({ status: "removed" });
+    audit.failing = true;
+
+    expect((await refusal(service.signIn(signInInput()))).answer).toBe("403 STAFF_MEMBERSHIP_INACTIVE");
+    expect(lines.map((line) => line.msg)).toContain("staff_actions.write_failed");
+  });
+
   it("refuses a portal token issued at or before the account's staffdeny:acct cut-off", async () => {
     const { service, sessions, lines } = serviceHarness();
     const issuedAt = Date.parse(START);
@@ -915,7 +986,7 @@ describe("StaffAuthService", () => {
     expect(JSON.stringify(lines)).not.toContain(token);
   });
 
-  it("refuses a portal token without MFA for a live tenant with 403 MFA_REQUIRED and opens nothing [FIX-W23-STAFF AC2]", async () => {
+  it("refuses a portal token without MFA for a live tenant with 403 MFA_REQUIRED, opens nothing and writes its denied row [FIX-W23-STAFF AC2] [FIX-W25-AUDIT AC2]", async () => {
     const { service, sessions, rows, tenant, lines } = serviceHarness();
     tenant.value = tenantRow({ storefrontEnvironment: "live" });
     sessions.grant = grantFor({ mfa: false });
@@ -929,7 +1000,14 @@ describe("StaffAuthService", () => {
     expect((await refusal(service.signIn(signInInput(token)))).answer).toBe("401 PORTAL_TOKEN_INVALID");
     expect(sessions.opened).toEqual([]);
     expect(sessions.revoked).toEqual([]);
-    expect(rows).toEqual([]);
+    // FIX-W23-STAFF asserted no row here; the lead's decision of 2026-10-21 (third batch, OADR-0011 point 8) makes the
+    // refusal of a staff member the sign-in knows one denied row.
+    expect(rows).toEqual([
+      {
+        table: "staff_actions",
+        row: expect.objectContaining({ action: "staff.sign_in", outcome: "denied", staff_id: STAFF_ID }),
+      },
+    ]);
     expect(lines[0]).toEqual({
       msg: "staff.sign_in_refused",
       fields: { reason: "mfa_required", staffId: STAFF_ID },

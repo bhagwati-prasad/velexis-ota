@@ -640,7 +640,8 @@ describe("the 17 console settings operations (api-changes part 2 §2.1–§2.3, 
         op.operationId,
         [{ apiKey: [], staffAuth: [] }, { apiKey: [] }],
       ]);
-      // Every console call writes staff_actions (api-changes part 2 §1, OADR-0011 point 8).
+      // Every settings operation writes staff_actions: a change its row, any call its refused row (api-changes
+      // part 2 §1, OADR-0011 point 8 as decided on 2026-10-21; a successful read writes none).
       expect([op.operationId, op.spec["x-tenant-tables"]]).toEqual([
         op.operationId,
         expect.arrayContaining(["staff_actions"]),

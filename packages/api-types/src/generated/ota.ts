@@ -2071,7 +2071,7 @@ export interface paths {
          *
          *     **Snapshot + paging.** A call **without** `cursor` calls Amadeus (with `max`, `category` default 0, `officeId` default = the supplier connection's queuing office; the office must belong to the connection, else `403 OFFICE_NOT_ALLOWED`; Amadeus 403 also maps to `OFFICE_NOT_ALLOWED`) and stores the complete response as a `queue_snapshots` row (`qsn_…`: office, queue, category, max, item count, verbatim response, staff, supplier request). The first `limit` items are returned with `page.nextCursor`; calls **with** `cursor` page through that stored snapshot without calling Amadeus again (cursor = snapshot id + offset, valid as long as the snapshot is retained, 30 days). Each new call without cursor is a fresh read. Amadeus warnings are returned in `warnings`.
          *
-         *     Queue placement itself is done through `automatedProcess` / `queuingOfficeId` at create-order or patch. Audited (`staff_actions` `queue.list`), logged (`supplier_requests`). Permission `queues:read` (owner, admin, agent). Next.js: `cache: "no-store"`.
+         *     Queue placement itself is done through `automatedProcess` / `queuingOfficeId` at create-order or patch. Logged (`supplier_requests`); not audited per call. Permission `queues:read` (owner, admin, agent). Next.js: `cache: "no-store"`.
          *
          *     **Key-only calls.** Without a staff token the secret key must carry the `console:automation` scope and this operation's permission in `platform.api_keys.scopes` — otherwise `403 SCOPE_NOT_ALLOWED` (`details.requiredScope`) or `403 FORBIDDEN` (`details.requiredPermission`); such calls are audited as the API key (see ConsoleApiKeyScope). A key scoped `storefront` is refused even with a staff token.
          */
@@ -2415,7 +2415,7 @@ export interface paths {
          * List the markup rules
          * @description Lists the markup rules of the OTA (`markup_rules`), which turn Amadeus net prices into selling prices, in the order the pricing engine evaluates them: `priority` ascending, then `id`. Cursor pagination. `active=true` lists only enabled rules (`isActive`), `active=false` only disabled ones, no `active` every rule. The seeded default rule (`isDefault`, scope `{}`, priority 1000) is one of them; it cannot be deleted.
          *
-         *     Settings are shared by the test and live environments (one set of rules per OTA), so `X-Velexis-Environment` changes nothing here. No Amadeus call. Permission `settings:read`; the call is recorded in `staff_actions`.
+         *     Settings are shared by the test and live environments (one set of rules per OTA), so `X-Velexis-Environment` changes nothing here. No Amadeus call. Permission `settings:read`. Not audited per call.
          *
          *     **Key-only calls.** Without a staff token the secret key must carry the `console:automation` scope and this operation's permission in `platform.api_keys.scopes` — otherwise `403 SCOPE_NOT_ALLOWED` (`details.requiredScope`) or `403 FORBIDDEN` (`details.requiredPermission`); such calls are audited as the API key (see ConsoleApiKeyScope). A key scoped `storefront` is refused even with a staff token.
          */
@@ -2449,7 +2449,7 @@ export interface paths {
         };
         /**
          * Get a markup rule
-         * @description Returns one markup rule. `ETag` = `"<version>"`: pass it as `If-Match` to update or delete the rule. No Amadeus call. Permission `settings:read`; the call is recorded in `staff_actions`.
+         * @description Returns one markup rule. `ETag` = `"<version>"`: pass it as `If-Match` to update or delete the rule. No Amadeus call. Permission `settings:read`. Not audited per call.
          *
          *     **Key-only calls.** Without a staff token the secret key must carry the `console:automation` scope and this operation's permission in `platform.api_keys.scopes` — otherwise `403 SCOPE_NOT_ALLOWED` (`details.requiredScope`) or `403 FORBIDDEN` (`details.requiredPermission`); such calls are audited as the API key (see ConsoleApiKeyScope). A key scoped `storefront` is refused even with a staff token.
          */
@@ -2491,7 +2491,7 @@ export interface paths {
          * List the fee rules
          * @description Lists the fee rules of the OTA (`fee_rules`): the service, card, ticketing, change, cancellation and extra fees the OTA charges on top of the selling price, ordered by `priority`, then `id`. Cursor pagination. `active=true` lists only enabled rules (`isActive`), `active=false` only disabled ones, no `active` every rule.
          *
-         *     Which pricing step applies which `feeType` is fixed by OADR-0005 point 7: `booking_service` and `ticketing` at pricing, `ancillary_service` per extra, `payment_card` once the card brand is known, `cancellation` in the cancellation quote; `change` fees are stored but unused in the MVP (no exchanges). Settings are shared by the test and live environments, so `X-Velexis-Environment` changes nothing here. No Amadeus call. Permission `settings:read`; the call is recorded in `staff_actions`.
+         *     Which pricing step applies which `feeType` is fixed by OADR-0005 point 7: `booking_service` and `ticketing` at pricing, `ancillary_service` per extra, `payment_card` once the card brand is known, `cancellation` in the cancellation quote; `change` fees are stored but unused in the MVP (no exchanges). Settings are shared by the test and live environments, so `X-Velexis-Environment` changes nothing here. No Amadeus call. Permission `settings:read`. Not audited per call.
          *
          *     **Key-only calls.** Without a staff token the secret key must carry the `console:automation` scope and this operation's permission in `platform.api_keys.scopes` — otherwise `403 SCOPE_NOT_ALLOWED` (`details.requiredScope`) or `403 FORBIDDEN` (`details.requiredPermission`); such calls are audited as the API key (see ConsoleApiKeyScope). A key scoped `storefront` is refused even with a staff token.
          */
@@ -2525,7 +2525,7 @@ export interface paths {
         };
         /**
          * Get a fee rule
-         * @description Returns one fee rule. `ETag` = `"<version>"`: pass it as `If-Match` to update or delete the rule. No Amadeus call. Permission `settings:read`; the call is recorded in `staff_actions`.
+         * @description Returns one fee rule. `ETag` = `"<version>"`: pass it as `If-Match` to update or delete the rule. No Amadeus call. Permission `settings:read`. Not audited per call.
          *
          *     **Key-only calls.** Without a staff token the secret key must carry the `console:automation` scope and this operation's permission in `platform.api_keys.scopes` — otherwise `403 SCOPE_NOT_ALLOWED` (`details.requiredScope`) or `403 FORBIDDEN` (`details.requiredPermission`); such calls are audited as the API key (see ConsoleApiKeyScope). A key scoped `storefront` is refused even with a staff token.
          */
@@ -2565,7 +2565,7 @@ export interface paths {
          * Get the storefront settings
          * @description Returns the OTA's storefront settings as staff edit them (`storefront_settings`, one row per OTA shared by the test and live environments): brand, branding (asset ids of `storefront_assets`, colours, fonts from the bundled list, corner radius), locales, currencies, markets, features, policies, the airline card per environment, legal versions and links, support, SEO, consent and operations. storefront.get derives the public configuration from them.
          *
-         *     `ETag` = `"<version>"`: pass it as `If-Match` to console.settings.storefront.update. No Amadeus call. Permission `settings:read`; the call is recorded in `staff_actions`.
+         *     `ETag` = `"<version>"`: pass it as `If-Match` to console.settings.storefront.update. No Amadeus call. Permission `settings:read`. Not audited per call.
          *
          *     **Key-only calls.** Without a staff token the secret key must carry the `console:automation` scope and this operation's permission in `platform.api_keys.scopes` — otherwise `403 SCOPE_NOT_ALLOWED` (`details.requiredScope`) or `403 FORBIDDEN` (`details.requiredPermission`); such calls are audited as the API key (see ConsoleApiKeyScope). A key scoped `storefront` is refused even with a staff token.
          */
@@ -2601,7 +2601,7 @@ export interface paths {
          * List the notification templates
          * @description Lists the **effective** e-mail template of every template key the code knows, for every locale of the storefront settings' `locales.supported`: the OTA's own row of `notification_templates` when it exists (`customised: true`), otherwise the code default (`customised: false`; the English default where the code has none for the locale), each with the variables its key allows. Ordered by key, then locale; not paginated. OADR-0013 point 3.
          *
-         *     No Amadeus call. Permission `settings:read`; the call is recorded in `staff_actions`.
+         *     No Amadeus call. Permission `settings:read`. Not audited per call.
          *
          *     **Key-only calls.** Without a staff token the secret key must carry the `console:automation` scope and this operation's permission in `platform.api_keys.scopes` — otherwise `403 SCOPE_NOT_ALLOWED` (`details.requiredScope`) or `403 FORBIDDEN` (`details.requiredPermission`); such calls are audited as the API key (see ConsoleApiKeyScope). A key scoped `storefront` is refused even with a staff token.
          */
@@ -2623,7 +2623,7 @@ export interface paths {
         };
         /**
          * Get a notification template
-         * @description Returns the effective template of one key, channel and locale: the OTA's row when it exists (`customised: true`, with `ETag` = `"<version>"` to pass as `If-Match` to console.settings.templates.put), otherwise the code default (`customised: false`, `version` null, no `ETag`; the English default where the code has none for the locale). `variables` lists what the key's templates may use. No Amadeus call. Permission `settings:read`; the call is recorded in `staff_actions`.
+         * @description Returns the effective template of one key, channel and locale: the OTA's row when it exists (`customised: true`, with `ETag` = `"<version>"` to pass as `If-Match` to console.settings.templates.put), otherwise the code default (`customised: false`, `version` null, no `ETag`; the English default where the code has none for the locale). `variables` lists what the key's templates may use. No Amadeus call. Permission `settings:read`. Not audited per call.
          *
          *     **Key-only calls.** Without a staff token the secret key must carry the `console:automation` scope and this operation's permission in `platform.api_keys.scopes` — otherwise `403 SCOPE_NOT_ALLOWED` (`details.requiredScope`) or `403 FORBIDDEN` (`details.requiredPermission`); such calls are audited as the API key (see ConsoleApiKeyScope). A key scoped `storefront` is refused even with a staff token.
          */
@@ -2659,7 +2659,7 @@ export interface paths {
          * Preview a notification template
          * @description Renders a template without saving or sending anything: the effective template of the key, channel and locale, or the `subject`, `bodyHtml` and `bodyText` given in the body (a draft), with the template's sample data, or with `variables` when given. Compiled exactly like console.settings.templates.put (strict mode, the key's allow-list): a draft that does not compile answers `422 TEMPLATE_INVALID` with `details.errors`.
          *
-         *     The answer is `{subject, html, text}`. Show `html` only in a sandboxed `iframe` without scripts (the OTA admin does). Safe to repeat (`x-idempotent-by-design`): nothing is stored. No Amadeus call. Permission `settings:read`; the call is recorded in `staff_actions`.
+         *     The answer is `{subject, html, text}`. Show `html` only in a sandboxed `iframe` without scripts (the OTA admin does). Safe to repeat (`x-idempotent-by-design`): nothing is stored. No Amadeus call. Permission `settings:read`. Not audited per call.
          *
          *     **Key-only calls.** Without a staff token the secret key must carry the `console:automation` scope and this operation's permission in `platform.api_keys.scopes` — otherwise `403 SCOPE_NOT_ALLOWED` (`details.requiredScope`) or `403 FORBIDDEN` (`details.requiredPermission`); such calls are audited as the API key (see ConsoleApiKeyScope). A key scoped `storefront` is refused even with a staff token.
          */
@@ -10256,7 +10256,7 @@ export interface components {
          */
         StaffPermission: "bookings:read" | "bookings:write" | "bookings:issue" | "bookings:cancel" | "customers:read" | "queues:read" | "supplier_requests:read" | "amadeus:read" | "amadeus:write" | "settings:read" | "settings:write" | "payments:read" | "payments:capture" | "payments:refund";
         /**
-         * @description Scope values of a secret key (`platform.api_keys.scopes`, managed in the Velexis portal) that decide how the key may be used on `/v1/console/**`. `storefront` — customer-scope operations only: every console operation answers `403 SCOPE_NOT_ALLOWED`, also with a staff token, so a storefront deployment (or an SSRF / unguarded server action in it) can never reach the back office. `console` — console operations **with a staff token**; the staff member's role decides the permissions. `console:automation` (implies `console`) — additionally allows console calls **without** a staff token (cron jobs, back-office integrations). Such key-only calls act with exactly the `StaffPermission` values also listed in the key's scopes, e.g. `["console:automation", "bookings:read", "queues:read"]`; nothing is implied (`bookings:issue`, `bookings:cancel` and `amadeus:write` must be listed explicitly). They are audited as `actor.type = api_key` (`key_…`). Rules: a key-only call with a key that lacks `console:automation` → `403 SCOPE_NOT_ALLOWED` (`details.requiredScope = "console:automation"`); a key-only call without the operation's permission → `403 FORBIDDEN` (`details.requiredPermission`); a secret key with an empty scope list may call console operations with a staff token but never key-only; publishable keys are refused on every console operation. Recommended keys per deployment: storefront `sk_…` scoped `storefront`; console backend `sk_…` scoped `console`; one key per automation job scoped `console:automation` + the minimum permissions.
+         * @description Scope values of a secret key (`platform.api_keys.scopes`, managed in the Velexis portal) that decide how the key may be used on `/v1/console/**`. `storefront` — customer-scope operations only: every console operation answers `403 SCOPE_NOT_ALLOWED`, also with a staff token, so a storefront deployment (or an SSRF / unguarded server action in it) can never reach the back office. `console` — console operations **with a staff token**; the staff member's role decides the permissions. `console:automation` (implies `console`) — additionally allows console calls **without** a staff token (cron jobs, back-office integrations). Such key-only calls act with exactly the `StaffPermission` values also listed in the key's scopes, e.g. `["console:automation", "bookings:read", "queues:read"]`; nothing is implied (`bookings:issue`, `bookings:cancel` and `amadeus:write` must be listed explicitly). Their `staff_actions` rows name `actor.type = api_key` (`key_…`). Rules: a key-only call with a key that lacks `console:automation` → `403 SCOPE_NOT_ALLOWED` (`details.requiredScope = "console:automation"`); a key-only call without the operation's permission → `403 FORBIDDEN` (`details.requiredPermission`); a secret key with an empty scope list may call console operations with a staff token but never key-only; publishable keys are refused on every console operation. Recommended keys per deployment: storefront `sk_…` scoped `storefront`; console backend `sk_…` scoped `console`; one key per automation job scoped `console:automation` + the minimum permissions.
          * @enum {string}
          */
         ConsoleApiKeyScope: "storefront" | "console" | "console:automation";
@@ -10758,7 +10758,7 @@ export interface components {
         ConsoleStaffAction: {
             /** @description Staff action id. */
             id: string;
-            /** @description booking.create, booking.patch, booking.issue, booking.cancel, booking.resync, booking.import, booking.note, pnr.lookup, order.retrieve, queue.list, amadeus.<operationId> … */
+            /** @description booking.create, booking.patch, booking.issue, booking.cancel, booking.resync, booking.import, booking.note, pnr.lookup, order.retrieve, customer.view, amadeus.<operationId> … */
             action: string;
             /** @description Object type. */
             targetType: string | null;

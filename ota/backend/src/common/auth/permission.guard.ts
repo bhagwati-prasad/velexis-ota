@@ -29,8 +29,11 @@
 // Every refusal (`FORBIDDEN`, `SCOPE_NOT_ALLOWED`, `ENVIRONMENT_NOT_ALLOWED`) writes a `staff_actions` row with
 // `outcome = denied` in a transaction of its own (StaffActionsWriter.recordDenial; console/staff-actions.writer.ts),
 // with the staff member or the key as the actor and the end user's IP and user agent; a request without either (the
-// OTA admin's sign-in, refresh, or a credential that named nobody) has only the log line. The rate limits run first, so
-// a client that keeps asking for what it may not do is limited (600 per minute per staff session or key) before it can
+// OTA admin's sign-in, refresh, or a credential that named nobody) has only the log line. The guard runs before request
+// validation, so it hands the writer the path parameters as the router gave them, and the writer takes a value as the
+// row's target only when it passes that parameter's schema in the document (OADR-0011 point 8 as decided on
+// 2026-10-21): a refused request never puts the caller's own text into `target_id`. The rate limits run first, so a
+// client that keeps asking for what it may not do is limited (600 per minute per staff session or key) before it can
 // fill the audit table.
 import { Injectable, type CanActivate, type ExecutionContext } from "@nestjs/common";
 import { Reflector } from "@nestjs/core";

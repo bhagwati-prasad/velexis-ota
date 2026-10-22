@@ -6,8 +6,9 @@
 // and starts the API in-process. Every answer is checked against the OTA document (`expectResponseToMatch`). Each
 // client calls from an IP address of its own (`X-Velexis-End-User-IP`), so the sign-in limit of 10 per minute per IP
 // never mixes the tests. FIX-W23-STAFF adds the MFA rule of live tenants (PADR-0008; flows §6): a portal token whose
-// `mfa` flag is false signs in to the test tenant alpha but not to the live tenant beta. Tokens and names are made up
-// per run; no value is a secret.
+// `mfa` flag is false signs in to the test tenant alpha but not to the live tenant beta. FIX-W25-AUDIT (OADR-0011
+// point 8 as decided on 2026-10-21): the sign-in's and the staff guard's 403 refusals of a staff member they know write
+// a denied staff_actions row. Tokens and names are made up per run; no value is a secret.
 import { randomBytes, randomInt, randomUUID } from "node:crypto";
 import type { ConfigService } from "@nestjs/config";
 import { INVALIDATION_CHANNEL, type InvalidationEvent } from "@velexis/api-types/jobs";
@@ -315,6 +316,22 @@ async function signIn(member: Member, apiKey = alphaKey): Promise<SignedIn> {
 /** The `[status, error code]` of an answer. */
 const answer = (res: Response): [number, unknown] => [res.status, res.body?.error?.code];
 
+/** The staff_actions rows of `staffId` in `schema`, oldest first. */
+async function staffActionsOf(
+  schema: "tenant_alpha" | "tenant_beta",
+  staffId: string,
+): Promise<Array<Record<string, unknown>>> {
+  return tenantTx(tenantDb, schema as TenantSchema, (trx) =>
+    trx
+      .selectFrom("staff_actions")
+      .selectAll()
+      .where("staff_id", "=", staffId)
+      .orderBy("created_at")
+      .orderBy("id")
+      .execute(),
+  ) as Promise<Array<Record<string, unknown>>>;
+}
+
 // Cloning the template and building the API's module graph (Nest, pools, Redis, the OTA document's validators) take
 // several seconds alone and much longer on a busy 4-CPU runner: all of it happens once here, with its own budget, and
 // the tests only make calls.
@@ -482,10 +499,59 @@ describe("console.auth.signIn", () => {
       .execute();
 
     for (const member of [removed, suspended, disabled]) {
-      const res = await new ConsoleClient().signIn(await portalTokenFor(member));
+      const client = new ConsoleClient();
+      const res = await client.signIn(await portalTokenFor(member));
       expect([member.staffId, ...answer(res)]).toEqual([member.staffId, 403, "STAFF_MEMBERSHIP_INACTIVE"]);
       expectResponseToMatch("consoleSignIn", res);
+      // The portal token names the membership: one denied row without a target [FIX-W25-AUDIT AC2].
+      expect(await staffActionsOf("tenant_alpha", member.staffId)).toEqual([
+        expect.objectContaining({
+          actor_type: "staff",
+          actor_id: member.staffId,
+          account_id: member.accountId,
+          staff_email: member.email,
+          staff_role: "agent",
+          action: "staff.sign_in",
+          outcome: "denied",
+          target_type: null,
+          target_id: null,
+          ip_address: client.ip,
+          user_agent: client.userAgent,
+        }),
+      ]);
     }
+  });
+
+  it("refuses a sign-in to a tenant suspended since its cached row with 403 TENANT_SUSPENDED and a denied row [FIX-W25-AUDIT AC2]", async () => {
+    const member = await insertMember(alphaId, "agent");
+    // A sign-in that the cache serves (the tenant guard reads alpha's row through the 60 s cache).
+    await signIn(member);
+    await migrator
+      .updateTable("platform.tenants")
+      .set({ status: "suspended" })
+      .where("id", "=", alphaId)
+      .execute();
+    const client = new ConsoleClient();
+    let res: Response;
+    try {
+      // The sign-in reads the tenant past the cache.
+      res = await client.signIn(await portalTokenFor(member));
+    } finally {
+      await migrator
+        .updateTable("platform.tenants")
+        .set({ status: "active" })
+        .where("id", "=", alphaId)
+        .execute();
+    }
+
+    expect(answer(res)).toEqual([403, "TENANT_SUSPENDED"]);
+    expectResponseToMatch("consoleSignIn", res);
+    const rows = await staffActionsOf("tenant_alpha", member.staffId);
+    expect(rows.map((row) => [row["action"], row["outcome"], row["target_type"]])).toEqual([
+      ["staff.sign_in", "succeeded", "staff_session"],
+      ["staff.sign_in", "denied", null],
+    ]);
+    expect(rows[1]).toMatchObject({ staff_email: member.email, staff_role: "agent", ip_address: client.ip });
   });
 
   it("replays the stored session to a retry with the same Idempotency-Key", async () => {
@@ -515,7 +581,7 @@ describe("console.auth.signIn", () => {
     expect(me.body.environments).toEqual(["test", "live"]);
   });
 
-  it("refuses a portal token without MFA for a live OTA with 403 MFA_REQUIRED: the token stays used, nothing opens [FIX-W23-STAFF AC2]", async () => {
+  it("refuses a portal token without MFA for a live OTA with 403 MFA_REQUIRED: the token stays used, nothing opens, one denied row [FIX-W23-STAFF AC2] [FIX-W25-AUDIT AC2]", async () => {
     const member = await insertMember(betaId, "agent");
     const client = new ConsoleClient(betaKey);
     const token = await portalTokenFor(member, "agent", new Date(), false);
@@ -530,15 +596,16 @@ describe("console.auth.signIn", () => {
     // GETDEL: the refused token is gone, so presenting it again is an unknown token.
     expect(await redis.client.exists(redisKeys.portalToken(sha256Hex(token)).key)).toBe(0);
     expect(answer(again)).toEqual([401, "PORTAL_TOKEN_INVALID"]);
-    // No session and no staff_actions row for the refused sign-in.
+    // No session for the refused sign-in. FIX-W23-STAFF asserted no staff_actions row either; the lead's decision of
+    // 2026-10-21 (third batch, OADR-0011 point 8) makes the refusal of the staff member the token names one denied row.
     // This file's Redis database is its own (useRedis), so the families listed are this file's.
     const families = await redis.client.keys("staffsess:*");
     const stored = families.length === 0 ? [] : await redis.client.mget(...families);
     expect(stored.filter((value) => value?.includes(member.staffId))).toEqual([]);
-    const rows = await tenantTx(tenantDb, "tenant_beta" as TenantSchema, (trx) =>
-      trx.selectFrom("staff_actions").select("id").where("staff_id", "=", member.staffId).execute(),
-    );
-    expect(rows).toEqual([]);
+    const rows = await staffActionsOf("tenant_beta", member.staffId);
+    expect(rows.map((row) => [row["action"], row["outcome"], row["target_id"], row["ip_address"]])).toEqual([
+      ["staff.sign_in", "denied", null, client.ip],
+    ]);
     // With MFA (a token the platform issues once MFA is on) the same member signs in, live offered.
     const withMfa = await client.signIn(await portalTokenFor(member, "agent", new Date(), true));
     expect(answer(withMfa)).toEqual([200, undefined]);
@@ -691,6 +758,13 @@ describe("revocation", () => {
     const me = await client.me(accessToken);
     expect(answer(me)).toEqual([403, "STAFF_MEMBERSHIP_INACTIVE"]);
     expectResponseToMatch("consoleGetMe", me);
+    // The staff guard knows the staff member from the verified token: one denied row [FIX-W25-AUDIT AC2].
+    expect(
+      (await staffActionsOf("tenant_alpha", member.staffId)).map((row) => [row["action"], row["outcome"]]),
+    ).toEqual([
+      ["staff.sign_in", "succeeded"],
+      ["auth.me", "denied"],
+    ]);
     const refresh = await client.refresh(refreshToken);
     expect(answer(refresh)).toEqual([403, "STAFF_MEMBERSHIP_INACTIVE"]);
     expectResponseToMatch("consoleRefreshSession", refresh);

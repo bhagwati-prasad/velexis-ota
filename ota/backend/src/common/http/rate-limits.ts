@@ -37,9 +37,12 @@
 // `getPublicAsset` (OBE-071) are in the document.
 //
 // The guard runs after the caller, tenant, scope and CSRF guards (architecture §3 steps 4–9, app.module.ts), and, as a
-// guard, before validation: invalid requests count too. While Redis is down every rate-limited route refuses with
-// `503 SERVICE_UNAVAILABLE` (architecture §10; logged as `throttler.store_unavailable`); a limit that cannot be counted
-// is never skipped.
+// guard, before validation: invalid requests count too. Each `429 RATE_LIMITED` is one `rate_limit.exceeded` line with
+// the operation, the limit, the caller's type and the staff member or key when the request has them (`stf_…`,
+// `key_…`), never an address, a tracker or a request value; a refused console call writes no `staff_actions` row
+// (OADR-0011 point 8 as decided on 2026-10-21), so a client asking again and again cannot fill the audit table. While
+// Redis is down every rate-limited route refuses with `503 SERVICE_UNAVAILABLE` (architecture §10; logged as
+// `throttler.store_unavailable`); a limit that cannot be counted is never skipped.
 import { createHash } from "node:crypto";
 import { isIP } from "node:net";
 import { Injectable, type ExecutionContext } from "@nestjs/common";
@@ -58,7 +61,7 @@ import {
   type ThrottlerStorage,
 } from "@nestjs/throttler";
 import { otaOperations, type OtaOperationId } from "@velexis/api-types/operations";
-import { AppError } from "@velexis/errors";
+import { AppError, isAppError } from "@velexis/errors";
 import type { Request } from "express";
 import type { Redis } from "ioredis";
 import { InjectPinoLogger, PinoLogger } from "nestjs-pino";
@@ -422,9 +425,49 @@ interface HeaderTarget {
   setHeader(name: string, value: string): unknown;
 }
 
+const LIMITS_BY_NAME: ReadonlyMap<string, RateLimit> = new Map(
+  Object.values(RATE_LIMITS).map((limit: RateLimit) => [limit.name, limit]),
+);
+
+/**
+ * The fields of the `rate_limit.exceeded` line of a `429 RATE_LIMITED` (OADR-0011 point 8 as decided on 2026-10-21:
+ * a refused console call of a known staff member or key writes no `staff_actions` row, only this line): the operation,
+ * the limit (its throttler name, requests and window), the caller's type, and the staff member (`stf_…`) and the key
+ * (`key_…`) when the request has them. Never an IP address, an e-mail address, a tracker, a token or a request value.
+ */
+export interface RateLimitRefusal {
+  readonly operationId: string | null;
+  readonly limit: string;
+  readonly maxRequests: number | null;
+  readonly windowSeconds: number | null;
+  readonly callerType: Caller["type"] | null;
+  readonly staffId?: string;
+  readonly keyId?: string;
+}
+
+/** The `rate_limit.exceeded` fields of a request refused by throttler `throttler` (see `RateLimitRefusal`). */
+export function rateLimitRefusal(
+  operationId: string | undefined,
+  throttler: string,
+  caller: Caller | undefined,
+  staffId: string | undefined,
+): RateLimitRefusal {
+  const limit = LIMITS_BY_NAME.get(throttler);
+  return {
+    operationId: operationId ?? null,
+    limit: throttler,
+    maxRequests: limit?.limit ?? null,
+    windowSeconds: limit?.windowSeconds ?? null,
+    callerType: caller?.type ?? null,
+    ...(staffId === undefined ? {} : { staffId }),
+    ...(caller?.type === "key" ? { keyId: caller.keyId } : {}),
+  };
+}
+
 /**
  * The global guard of the request limits (architecture §3 step 10). A request over a limit answers
- * `429 RATE_LIMITED` with `Retry-After`; a limit that Redis cannot count answers `503 SERVICE_UNAVAILABLE`.
+ * `429 RATE_LIMITED` with `Retry-After` and logs `rate_limit.exceeded` (`rateLimitRefusal`); a limit that Redis cannot
+ * count answers `503 SERVICE_UNAVAILABLE`.
  */
 @Injectable()
 export class RateLimitGuard extends ThrottlerGuard {
@@ -432,16 +475,34 @@ export class RateLimitGuard extends ThrottlerGuard {
     @InjectThrottlerOptions() options: ThrottlerModuleOptions,
     @InjectThrottlerStorage() storageService: ThrottlerStorage,
     reflector: Reflector,
+    private readonly callers: CallerContext,
+    private readonly staff: StaffContext,
     @InjectPinoLogger(RateLimitGuard.name) private readonly pino: PinoLogger,
   ) {
     super(options, storageService, reflector);
   }
 
-  /** Counts one limit; a Redis failure refuses the request (architecture §10). */
+  /** Counts one limit; a refusal is logged, and a Redis failure refuses the request (architecture §10). */
   protected override async handleRequest(requestProps: ThrottlerRequest): Promise<boolean> {
     try {
       return await super.handleRequest(requestProps);
     } catch (error) {
+      if (isAppError(error) && error.code === "RATE_LIMITED") {
+        const operationId =
+          requestProps.context.getType() === "http"
+            ? this.reflector.get<string | undefined>(OPENAPI_OPERATION, requestProps.context.getHandler())
+            : undefined;
+        this.pino.info(
+          rateLimitRefusal(
+            operationId,
+            requestProps.throttler.name ?? "default",
+            this.callers.get(),
+            this.staff.get()?.family.staffId,
+          ),
+          "rate_limit.exceeded",
+        );
+        throw error;
+      }
       if (!(error instanceof RateLimitStoreUnavailableError)) {
         throw error;
       }
