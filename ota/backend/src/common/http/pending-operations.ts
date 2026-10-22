@@ -78,17 +78,7 @@ export const PENDING_OPERATIONS: Readonly<Partial<Record<OtaOperationId, Pending
   consoleListStorefrontAssets: "OBE-071",
   consoleUploadStorefrontAsset: "OBE-071",
   consoleDeleteStorefrontAsset: "OBE-071",
-  // Console settings (OBE-058): markup and fee rules, notification templates (the storefront settings: OBE-070)
-  consoleListMarkupRules: "OBE-069",
-  consoleCreateMarkupRule: "OBE-069",
-  consoleGetMarkupRule: "OBE-069",
-  consoleUpdateMarkupRule: "OBE-069",
-  consoleDeleteMarkupRule: "OBE-069",
-  consoleListFeeRules: "OBE-069",
-  consoleCreateFeeRule: "OBE-069",
-  consoleGetFeeRule: "OBE-069",
-  consoleUpdateFeeRule: "OBE-069",
-  consoleDeleteFeeRule: "OBE-069",
+  // Console settings (OBE-058): notification templates (the storefront settings: OBE-070; markup and fee rules: OBE-069)
   consoleListNotificationTemplates: "OBE-073",
   consoleGetNotificationTemplate: "OBE-073",
   consolePutNotificationTemplate: "OBE-073",
