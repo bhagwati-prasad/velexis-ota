@@ -58,6 +58,7 @@
     "pino-http": "10.5.0",
     "reflect-metadata": "0.2.2",
     "rxjs": "7.8.2",
+    "stripe": "18.5.0",
     "yaml": "2.9.1"
   },
   "devDependencies": {

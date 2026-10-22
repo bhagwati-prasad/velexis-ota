@@ -8,6 +8,7 @@ Helpers for the integration tests of `test/integration/**` (`pnpm --filter @vele
 | [`jwt-key.ts`](jwt-key.ts) | A fresh Ed25519 key file (mode 0600) for `JWT_PRIVATE_KEY_FILE`. | PBE-012 |
 | [`master-key.ts`](master-key.ts) | A fresh key folder for `MASTER_KEY_DIR` (KEK and API key pepper) and the development e-mail settings. | PBE-011 |
 | [`fake-ota-worker.ts`](fake-ota-worker.ts) | `FakeOtaWorker`: the OTA worker's side of provisioning, as a BullMQ worker on `ota-tenant-ops` that answers on `platform-tenant-events` ([PADR-0017](../../../docs/adr/0017-platform-test-doubles-and-end-to-end-harness.md) item 1). Below. | PBE-019 |
+| [`fake-stripe.ts`](fake-stripe.ts) | `FakeStripe`: an injectable fake of the platform's Stripe calls (`StripeApi` of `src/common/stripe/stripe.client.ts`), in place of `StripeClient`. Below. | PBE-043 |
 
 ## The fake OTA worker
 
@@ -50,3 +51,30 @@ How it behaves, so tests can rely on it:
 - **One queue, one consumer.** It consumes every message on the Redis database it is given, so a test file starts at most one, after `createTestApp()` (which empties that database). Messages that earlier tests of the file left on `ota-tenant-ops` are taken too; drain the queue first (`tenantOps.drain(true)`) when that matters.
 
 [`../integration/provisioning/dispatch.int.test.ts`](../integration/provisioning/dispatch.int.test.ts) runs it for every outcome and message. [`../integration/provisioning/post-steps.int.test.ts`](../integration/provisioning/post-steps.int.test.ts) (PBE-022) runs it with the worker's module graph, whose `platform-tenant-events` processor takes its `tenant.provisioned` answers and runs the platform's post-steps. [`../integration/provisioning/failures.int.test.ts`](../integration/provisioning/failures.int.test.ts) (PBE-023) runs it with `failed` and `silent` outcomes against the failure handler and the reconciler (the tests run `ReconcilerScheduler.run` themselves after moving the FakeClock, and cancel the jobs they leave active), [`../integration/provisioning/reveal.int.test.ts`](../integration/provisioning/reveal.int.test.ts) (PBE-023) provisions OTAs through `createTenant` to read the setup progress and reveal the initial keys, and [`../integration/provisioning/suspension.int.test.ts`](../integration/provisioning/suspension.int.test.ts) and [`../integration/provisioning/migrate.int.test.ts`](../integration/provisioning/migrate.int.test.ts) (PBE-030) run it for `tenant.suspend`, `tenant.resume` and `tenant.migrate` (answered, failed or silent through the reconciler's attempts), and add the deploy fan-out's `jobId: null` reports to `platform-tenant-events` themselves.
+
+## The fake Stripe client
+
+Nothing in a test reaches Stripe, and no test needs a Stripe key: the modules that call Stripe inject `StripeClient`, and a test provides `FakeStripe` in its place. Webhook deliveries are the signed fixtures of `@velexis/testing/stripe` (X-028), signed with a secret the test makes (`whsec_` and random bytes) and posted as they are.
+
+```ts
+import { StripeClient } from "../../../src/common/stripe/stripe.client";
+import { FakeStripe } from "../../support/fake-stripe";
+
+const stripe = new FakeStripe();
+worker = await Test.createTestingModule({ imports: [WorkerModule.forRoot(t.config, logger)] })
+  .overrideProvider(StripeClient)
+  .useValue(stripe)
+  .compile();
+
+stripe.put({ id: "sub_test_alpha_1", object: "subscription" /* , … the fields the handler reads */ });
+stripe.failNext("subscriptions.retrieve", FakeStripe.apiError(503)); // Stripe down for one call
+// …
+expect(stripe.callsOf("subscriptions.retrieve").map((call) => call.id)).toEqual(["sub_test_alpha_1"]);
+```
+
+- **Retrieve** answers a copy of the object `put` stored under that id and `object` type, with the references named in `params.expand` replaced by the stored objects; an unknown id throws the SDK's `StripeInvalidRequestError` (404, `resource_missing`).
+- **Create** needs `{ idempotencyKey }` (architecture §7: every POST has one) and throws without it. The same key and parameters answer the first object again; the same key with other parameters throws `StripeIdempotencyError`. New objects get `<prefix>_fake_<n>` ids and Stripe's URL shapes (`https://checkout.stripe.com/c/pay/…`, `https://billing.stripe.com/p/session/…`), and later retrieves find them.
+- **Failures**: `failNext(method, error)` queues errors for the next calls of a method; `FakeStripe.apiError(status, code?)` and `FakeStripe.connectionError()` build what the SDK throws (a 429 rate limit, a 5xx `api_error`, a 4xx `invalid_request_error`, a network failure).
+- **Calls** are recorded in order (`calls`, `callsOf(method)`) with the id, a copy of the parameters and the idempotency key; `reset()` forgets everything, and `notConfigured()` makes `api()` throw `StripeNotConfiguredError` as the application does without `STRIPE_SECRET_KEY`.
+
+[`../integration/billing/billing-webhook.int.test.ts`](../integration/billing/billing-webhook.int.test.ts) (PBE-043) runs it with the worker's module graph and a test handler of `customer.subscription.updated`; the methods are those of `FAKE_STRIPE_METHODS`, and a task that adds a Stripe call adds it to `StripeApi` and to the fake.

@@ -94,6 +94,33 @@ export const STOREFRONT_BASE_DOMAIN_PATTERN =
   /^(?=.{1,222}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
 
 /**
+ * A secret or restricted API key of the Velexis Stripe account (`sk_test_…`, `sk_live_…`, `rk_test_…`, `rk_live_…`).
+ * Its mode must be the deployment's (`stripeProblems`): live keys in production only, test keys everywhere else.
+ */
+export const STRIPE_SECRET_KEY_PATTERN = /^[sr]k_(?:test|live)_[A-Za-z0-9_]{1,250}$/;
+
+/** A webhook endpoint's signing secret (`whsec_…`, as the Stripe dashboard and `stripe listen` print it). */
+export const STRIPE_WEBHOOK_SECRET_PATTERN = /^whsec_[A-Za-z0-9+/=_-]{1,250}$/;
+
+/** The Connect Standard OAuth client id of the Velexis platform (`ca_…`). */
+export const STRIPE_CONNECT_CLIENT_ID_PATTERN = /^ca_[A-Za-z0-9_]{1,250}$/;
+
+/**
+ * The Stripe variables each milestone switch needs (PADR-0015, README §3): they are optional while their switches are
+ * off, so a deployment before M5 needs none, and required while one is on. Stripe Billing needs the account's key
+ * and the billing endpoint's secret, the OTA's own Stripe (Connect Standard) the key, the OAuth client id and the
+ * Connect endpoint's secret.
+ */
+export const STRIPE_SWITCH_VARIABLES = Object.freeze({
+  FEATURE_STRIPE_BILLING: Object.freeze(["STRIPE_SECRET_KEY", "STRIPE_BILLING_WEBHOOK_SECRET"] as const),
+  FEATURE_OWN_STRIPE: Object.freeze([
+    "STRIPE_SECRET_KEY",
+    "STRIPE_CONNECT_CLIENT_ID",
+    "STRIPE_CONNECT_WEBHOOK_SECRET",
+  ] as const),
+});
+
+/**
  * The schema of every variable the platform backend reads (README §3, configuration matrix in
  * docs/mvp/architecture.md §6). Defaults exist only where they are safe in production (conventions §8).
  */
@@ -181,6 +208,24 @@ export const PLATFORM_BACKEND_CONFIG_SCHEMA = {
   FEATURE_OWN_AMADEUS: env.bool({ default: false }),
   FEATURE_CUSTOM_DOMAINS: env.bool({ default: false }),
   FEATURE_LIVE_SWITCH: env.bool({ default: false }),
+  /**
+   * The secret key of the Velexis Stripe account (ADR-0013, PADR-0002): Billing, Connect and balance transactions,
+   * through `common/stripe/stripe.client.ts` only. Required while FEATURE_STRIPE_BILLING or FEATURE_OWN_STRIPE is on
+   * (STRIPE_SWITCH_VARIABLES); a live key in production only, a test key everywhere else. A secret: never logged.
+   */
+  STRIPE_SECRET_KEY: env.string({ optional: true, pattern: STRIPE_SECRET_KEY_PATTERN }),
+  /**
+   * The signing secret of `/webhooks/stripe/billing` (StripeSignatureGuard). Required while FEATURE_STRIPE_BILLING is
+   * on; without it the endpoint refuses every delivery with `400 WEBHOOK_SIGNATURE_INVALID`. A secret: never logged.
+   */
+  STRIPE_BILLING_WEBHOOK_SECRET: env.string({ optional: true, pattern: STRIPE_WEBHOOK_SECRET_PATTERN }),
+  /** The Connect Standard OAuth client id (`ca_…`, PADR-0011). Required while FEATURE_OWN_STRIPE is on. */
+  STRIPE_CONNECT_CLIENT_ID: env.string({ optional: true, pattern: STRIPE_CONNECT_CLIENT_ID_PATTERN }),
+  /**
+   * The signing secret of `/webhooks/stripe/connect-accounts` (PADR-0011). Required while FEATURE_OWN_STRIPE is on;
+   * without it the endpoint refuses every delivery. A secret: never logged.
+   */
+  STRIPE_CONNECT_WEBHOOK_SECRET: env.string({ optional: true, pattern: STRIPE_WEBHOOK_SECRET_PATTERN }),
 } as const satisfies ConfigSchema;
 
 export type PlatformBackendConfig = ConfigOf<typeof PLATFORM_BACKEND_CONFIG_SCHEMA>;
@@ -225,12 +270,65 @@ function trustProxyProblems(source: EnvSource | undefined): ConfigProblem[] {
       ];
 }
 
+type StripeVariable = (typeof STRIPE_SWITCH_VARIABLES)[keyof typeof STRIPE_SWITCH_VARIABLES][number];
+
+const STRIPE_VARIABLES: readonly StripeVariable[] = [
+  "STRIPE_SECRET_KEY",
+  "STRIPE_BILLING_WEBHOOK_SECRET",
+  "STRIPE_CONNECT_CLIENT_ID",
+  "STRIPE_CONNECT_WEBHOOK_SECRET",
+];
+
+/**
+ * The Stripe rules that a schema entry cannot express (STRIPE_SWITCH_VARIABLES): a variable that a switch which is on
+ * needs must be set, and STRIPE_SECRET_KEY's mode must be the deployment's (`APP_ENV=production` means live, as for
+ * the `livemode` of webhook events). A variable that is invalid on its own is reported by the schema, not here.
+ */
+function stripeProblems(source: EnvSource | undefined): ConfigProblem[] {
+  const problems: ConfigProblem[] = [];
+  const switches = validValues(
+    {
+      FEATURE_STRIPE_BILLING: PLATFORM_BACKEND_CONFIG_SCHEMA.FEATURE_STRIPE_BILLING,
+      FEATURE_OWN_STRIPE: PLATFORM_BACKEND_CONFIG_SCHEMA.FEATURE_OWN_STRIPE,
+    },
+    source,
+  );
+  for (const variable of STRIPE_VARIABLES) {
+    const value = validValues({ [variable]: PLATFORM_BACKEND_CONFIG_SCHEMA[variable] }, source);
+    if (value === undefined || value[variable] !== undefined || switches === undefined) {
+      continue;
+    }
+    const needing = (
+      Object.keys(STRIPE_SWITCH_VARIABLES) as Array<keyof typeof STRIPE_SWITCH_VARIABLES>
+    ).filter(
+      (feature) =>
+        switches[feature] &&
+        (STRIPE_SWITCH_VARIABLES[feature] as readonly StripeVariable[]).includes(variable),
+    );
+    if (needing.length > 0) {
+      problems.push({ variable, reason: `is required while ${needing.join(" or ")} is on` });
+    }
+  }
+  const appEnv = validValues({ APP_ENV: PLATFORM_BACKEND_CONFIG_SCHEMA.APP_ENV }, source)?.APP_ENV;
+  const key = validValues(
+    { STRIPE_SECRET_KEY: PLATFORM_BACKEND_CONFIG_SCHEMA.STRIPE_SECRET_KEY },
+    source,
+  )?.STRIPE_SECRET_KEY;
+  if (appEnv !== undefined && key !== undefined && /^[sr]k_live_/.test(key) !== (appEnv === "production")) {
+    problems.push({
+      variable: "STRIPE_SECRET_KEY",
+      reason: "must be a live-mode key with APP_ENV=production and a test-mode key otherwise",
+    });
+  }
+  return problems;
+}
+
 /**
  * Validates the configuration in `source` (default: the process environment) and returns it deep-frozen. Throws one
  * `ConfigError` that names every invalid variable and the reason, never a value.
  */
 export function parseConfig(source?: EnvSource): PlatformBackendConfig {
-  const problems = trustProxyProblems(source);
+  const problems = [...trustProxyProblems(source), ...stripeProblems(source)];
   try {
     const config = defineConfig(PLATFORM_BACKEND_CONFIG_SCHEMA, source);
     if (problems.length === 0) {

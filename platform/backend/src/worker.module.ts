@@ -8,13 +8,15 @@
 // `platform-maintenance` processor (MaintenanceProcessor, PBE-021), which hands each to the `@MaintenanceJob` handler
 // of the module that owns it: `api_keys.flush_usage` of ApiKeysModule first, `invitations.expire` of MembershipsModule
 // (PBE-026), `amadeus.pool_level` of SupplierConnectionsModule (PBE-020). SupplierConnectionsModule also brings the one
-// processor of `platform-connections` (the verification jobs, PBE-020), and ProvisioningModule the one processor of
-// `platform-tenant-events` with the provisioning post-steps (PBE-022).
+// processor of `platform-connections` (the verification jobs, PBE-020), ProvisioningModule the one processor of
+// `platform-tenant-events` with the provisioning post-steps (PBE-022), and BillingSyncModule the one processor of
+// `platform-stripe-events` with the `stripe_events.sweep` handler (PBE-043).
 import { Module, type DynamicModule } from "@nestjs/common";
 import { DiscoveryModule } from "@nestjs/core";
 import type { Logger } from "@velexis/logger";
 import { LoggerModule } from "nestjs-pino";
 import { ApiKeysModule } from "./api-keys/api-keys.module";
+import { BillingSyncModule } from "./billing/sync/billing-sync.module";
 import { CommonModule } from "./common/common.module";
 import { MaintenanceProcessor } from "./common/queues/maintenance.processor";
 import { QueuesModule } from "./common/queues/queues.module";
@@ -46,6 +48,7 @@ export class WorkerModule {
         MembershipsModule.forWorker(),
         SupplierConnectionsModule.forWorker(),
         ProvisioningModule.forWorker(),
+        BillingSyncModule.forWorker(),
       ],
       // The schedules of a milestone switch that is off are not registered (PADR-0015 item 2).
       providers: [schedulerSwitchesProvider, JobSchedulerRegistry, MaintenanceProcessor],

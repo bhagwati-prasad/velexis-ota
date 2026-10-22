@@ -64,7 +64,7 @@ sequenceDiagram
 ### C. Webhook intake
 
 1. `/webhooks/stripe/billing` verifies the signature on the raw body with `STRIPE_BILLING_WEBHOOK_SECRET`, refuses events whose `livemode` differs from the deployment, inserts `stripe_events {id, endpoint: 'billing', type, livemode, object_type, object_id, api_version, stripe_created_at}` with `ON CONFLICT DO NOTHING`, enqueues `stripe.event` with BullMQ id = event id, and answers `200`.
-2. The `stripe_events.sweep` scheduler re-enqueues `received` rows older than 2 minutes, so an enqueue lost after the commit is not lost.
+2. The `stripe_events.sweep` scheduler re-enqueues `received` rows older than 2 minutes, so an enqueue lost after the commit is not lost. It also re-enqueues retryable `failed` rows older than 2 minutes and `processing` rows unchanged for 10 minutes whose BullMQ job is missing or finished, so an attempt that stopped half-way does not strand its event (PBE-043).
 
 ### D. Processing (worker, `platform-stripe-events`, concurrency 2)
 

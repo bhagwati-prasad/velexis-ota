@@ -148,7 +148,7 @@ BullMQ gives any job of a queue to any of its workers, so `platform-maintenance`
 | `domains.verify_pending` | every 5 min | `domain.verify` for each pending custom domain; `failed` past the 72 h deadline | M5 |
 | `domains.recheck_verified` | 04:10 | `domain.recheck` for each verified custom domain | M5 |
 | `domains.tls_probe` | 04:40 | `domain.tls_probe` for every storefront host | M5 |
-| `stripe_events.sweep` | every 5 min | Enqueue `received` or retryable `failed` inbox rows older than 2 minutes whose BullMQ job is missing | M5 |
+| `stripe_events.sweep` | every 5 min | Enqueue `received` or retryable `failed` inbox rows older than 2 minutes, and `processing` rows unchanged for 10 minutes, whose BullMQ job is missing | M5 |
 | `billing.abandoned_checkouts` | 03:20 | Tenants `provisioning` with an `incomplete` subscription older than 48 h → `failed` | M5 |
 | `billing.manual_trials` | 08:10 | Trial-ending notices and suspension of manual trials | M5 |
 | `settlements.monthly` | 05:00 on day 3 | `settlement.generate` for the previous month | M5 |

@@ -15,6 +15,7 @@ import { AdminModule } from "./admin/admin.module";
 import { ApiKeysModule } from "./api-keys/api-keys.module";
 import { AuthModule } from "./auth/auth.module";
 import { BillingModule } from "./billing/billing.module";
+import { BillingSyncModule } from "./billing/sync/billing-sync.module";
 import { API_REQUEST_MIDDLEWARE, CommonModule } from "./common/common.module";
 import { configModule, PLATFORM_PROCESSES, type PlatformBackendConfig } from "./config";
 import { DomainsModule } from "./domains/domains.module";
@@ -56,6 +57,8 @@ export class AppModule implements NestModule {
         DomainsModule.forApi(),
         PaymentConnectionsModule.forApi(),
         ProvisioningModule.forApi(),
+        // The Stripe Billing webhook receiver: stores and queues events, never calls Stripe (layer 3, PBE-043).
+        BillingSyncModule,
         // The platform admin's controllers over the services of the modules above (layer 4).
         AdminModule,
       ],

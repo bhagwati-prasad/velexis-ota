@@ -1403,7 +1403,8 @@ M5 work is merged behind the `FEATURE_*` switches (PADR-0015). The switches are 
   - `pnpm contracts:lint` is clean; the operations index has 23 more platform operations; the inventory lists `adminDownloadSettlementLines`.
 - **Verify:** `pnpm contracts:lint && pnpm contracts:generate && pnpm --filter @velexis/platform-backend test`
 
-### PBE-043 · Add the Stripe client, the webhook inbox and the billing webhook receiver
+### PBE-043 · Add the Stripe client, the webhook inbox and the billing webhook receiver ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-backend
 - **Milestone:** M5
 - **Depends on:** PBE-042, PBE-009, X-028

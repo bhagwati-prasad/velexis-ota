@@ -63,7 +63,7 @@ export const PENDING_OPERATIONS: readonly PendingOperation[] = Object.freeze([
 
   // PBE-042: the M5 admin operations (billing, the office release, settlements and payout accounts, domains) and the
   // two Stripe webhook receivers. adminUpdatePlan, extended with the Stripe ids, stays bound by PBE-033; PBE-048
-  // implements its M5 part.
+  // implements its M5 part. receiveStripeBillingEvent is bound since PBE-043.
   { operationId: "adminCheckPlanPrices", task: "PBE-048" },
   { operationId: "adminResyncSubscription", task: "PBE-048" },
   { operationId: "adminListInvoices", task: "PBE-048" },
@@ -85,6 +85,5 @@ export const PENDING_OPERATIONS: readonly PendingOperation[] = Object.freeze([
   { operationId: "adminListDomains", task: "PBE-051" },
   { operationId: "adminRecheckDomain", task: "PBE-051" },
   { operationId: "adminRemoveDomain", task: "PBE-051" },
-  { operationId: "receiveStripeBillingEvent", task: "PBE-043" },
   { operationId: "receiveStripeConnectAccountEvent", task: "PBE-056" },
 ] satisfies PendingOperation[]);

@@ -82,6 +82,22 @@ const MAIL_AND_KEY_VARIABLES = [
   "PUBLIC_PLATFORM_ADMIN_URL",
 ] as const;
 
+/** The Stripe variables PBE-043 adds, in the order of the schema. */
+const STRIPE_VARIABLES = [
+  "STRIPE_SECRET_KEY",
+  "STRIPE_BILLING_WEBHOOK_SECRET",
+  "STRIPE_CONNECT_CLIENT_ID",
+  "STRIPE_CONNECT_WEBHOOK_SECRET",
+] as const;
+
+/** Dummy test-mode values of the four Stripe variables (the shapes of the app's .env.example). */
+const STRIPE_TEST_VALUES = {
+  STRIPE_SECRET_KEY: "sk_test_dummy",
+  STRIPE_BILLING_WEBHOOK_SECRET: "whsec_dummy_billing",
+  STRIPE_CONNECT_CLIENT_ID: "ca_dummy",
+  STRIPE_CONNECT_WEBHOOK_SECRET: "whsec_dummy_connect",
+} as const satisfies Record<(typeof STRIPE_VARIABLES)[number], string>;
+
 /** Where `pnpm dev:keys` puts the development key, and where provision-vm.sh puts the key on the VM. */
 const DEV_JWT_KEY_FILE = "./.local/keys/platform-jwt-ed25519.pem";
 const VM_JWT_KEY_FILE = "/etc/velexis/keys/platform/platform-jwt-ed25519.pem";
@@ -429,6 +445,7 @@ describe("parseConfig", () => {
       "STOREFRONT_BASE_DOMAIN",
       "MAX_TENANTS_PER_ACCOUNT",
       ...Object.values(FEATURE_VARIABLES),
+      ...STRIPE_VARIABLES,
     ]);
   });
 
@@ -488,6 +505,8 @@ describe("parseConfig", () => {
   it("reads the six FEATURE_* switches (default false) and MAX_TENANTS_PER_ACCOUNT (default 3)", () => {
     const on = parseConfig({
       ...REQUIRED,
+      // The Stripe switches need their Stripe variables since PBE-043.
+      ...STRIPE_TEST_VALUES,
       FEATURE_STRIPE_BILLING: "true",
       FEATURE_OWN_STRIPE: "1",
       FEATURE_SETTLEMENTS: "false",
@@ -634,6 +653,114 @@ describe("parseConfig: the key folder and the e-mail settings (PBE-011)", () => 
       "PUBLIC_PORTAL_URL",
       "PUBLIC_PLATFORM_ADMIN_URL",
     ]);
+  });
+});
+
+describe("parseConfig: Stripe (PBE-043)", () => {
+  it("[PBE-043] leaves the four Stripe variables optional while Stripe Billing and the OTA's own Stripe are off", () => {
+    const config = parseConfig(REQUIRED);
+
+    for (const variable of STRIPE_VARIABLES) {
+      expect(config[variable], variable).toBeUndefined();
+    }
+    expect(parseConfig({ ...REQUIRED, ...STRIPE_TEST_VALUES })).toMatchObject(STRIPE_TEST_VALUES);
+    // The settlements switch reads balance transactions in M5 (PBE-059 adds what it needs).
+    expect(parseConfig({ ...REQUIRED, FEATURE_SETTLEMENTS: "true" }).STRIPE_SECRET_KEY).toBeUndefined();
+  });
+
+  it("[PBE-043] requires the key and the billing secret with FEATURE_STRIPE_BILLING on, naming the switch", () => {
+    expect(configError({ ...REQUIRED, FEATURE_STRIPE_BILLING: "true" }).problems).toEqual([
+      { variable: "STRIPE_SECRET_KEY", reason: "is required while FEATURE_STRIPE_BILLING is on" },
+      { variable: "STRIPE_BILLING_WEBHOOK_SECRET", reason: "is required while FEATURE_STRIPE_BILLING is on" },
+    ]);
+    expect(
+      parseConfig({
+        ...REQUIRED,
+        FEATURE_STRIPE_BILLING: "true",
+        STRIPE_SECRET_KEY: STRIPE_TEST_VALUES.STRIPE_SECRET_KEY,
+        STRIPE_BILLING_WEBHOOK_SECRET: STRIPE_TEST_VALUES.STRIPE_BILLING_WEBHOOK_SECRET,
+      }).FEATURE_STRIPE_BILLING,
+    ).toBe(true);
+  });
+
+  it("[PBE-043] requires the key, the Connect client id and the Connect secret with FEATURE_OWN_STRIPE on", () => {
+    expect(configError({ ...REQUIRED, FEATURE_OWN_STRIPE: "true" }).problems).toEqual([
+      { variable: "STRIPE_SECRET_KEY", reason: "is required while FEATURE_OWN_STRIPE is on" },
+      { variable: "STRIPE_CONNECT_CLIENT_ID", reason: "is required while FEATURE_OWN_STRIPE is on" },
+      { variable: "STRIPE_CONNECT_WEBHOOK_SECRET", reason: "is required while FEATURE_OWN_STRIPE is on" },
+    ]);
+    expect(
+      configError({ ...REQUIRED, FEATURE_STRIPE_BILLING: "true", FEATURE_OWN_STRIPE: "true" }).problems[0],
+    ).toEqual({
+      variable: "STRIPE_SECRET_KEY",
+      reason: "is required while FEATURE_STRIPE_BILLING or FEATURE_OWN_STRIPE is on",
+    });
+  });
+
+  it("[PBE-043] refuses Stripe values of another shape without echoing them, and reports them once", () => {
+    const error = configError({
+      ...REQUIRED,
+      FEATURE_STRIPE_BILLING: "true",
+      FEATURE_OWN_STRIPE: "true",
+      STRIPE_SECRET_KEY: "pk_test_secret-value-1",
+      STRIPE_BILLING_WEBHOOK_SECRET: "secret-value-2",
+      STRIPE_CONNECT_CLIENT_ID: "acct_secret-value-3",
+      STRIPE_CONNECT_WEBHOOK_SECRET: "whsec_secret value-4",
+    });
+
+    expect(error.problems.map((problem) => problem.variable)).toEqual([...STRIPE_VARIABLES]);
+    for (const value of ["secret-value-1", "secret-value-2", "secret-value-3", "secret value-4"]) {
+      expect(error.message).not.toContain(value);
+    }
+  });
+
+  it("[PBE-043] accepts only test-mode keys outside production and only live-mode keys in production", () => {
+    for (const key of ["sk_test_dummy", "rk_test_dummy"]) {
+      expect(parseConfig({ ...REQUIRED, STRIPE_SECRET_KEY: key }).STRIPE_SECRET_KEY).toBe(key);
+      expect(configError({ ...REQUIRED, APP_ENV: "production", STRIPE_SECRET_KEY: key }).problems).toEqual([
+        {
+          variable: "STRIPE_SECRET_KEY",
+          reason: "must be a live-mode key with APP_ENV=production and a test-mode key otherwise",
+        },
+      ]);
+    }
+    for (const key of ["sk_live_dummy", "rk_live_dummy"]) {
+      expect(
+        parseConfig({ ...REQUIRED, APP_ENV: "production", STRIPE_SECRET_KEY: key }).STRIPE_SECRET_KEY,
+      ).toBe(key);
+      for (const appEnv of ["development", "test"]) {
+        expect(
+          configError({ ...REQUIRED, APP_ENV: appEnv, STRIPE_SECRET_KEY: key }).problems.map(
+            (p) => p.variable,
+          ),
+        ).toEqual(["STRIPE_SECRET_KEY"]);
+      }
+    }
+  });
+
+  it("[PBE-043] declares the four Stripe variables in every env template: dummies locally, empty on the VM", () => {
+    for (const file of [
+      ".env.example",
+      "platform/backend/.env.example",
+      "deploy/env/platform-backend.env.example",
+    ]) {
+      const values = readEnvFile(join(REPO_ROOT, file));
+      expect(
+        STRIPE_VARIABLES.filter((variable) => values[variable] === undefined),
+        file,
+      ).toEqual([]);
+      // The values parse with both Stripe switches on (the VM template's are empty until M5: switches off).
+      const stripe = pick(values, STRIPE_VARIABLES);
+      if (file.startsWith("deploy/")) {
+        expect(Object.values(stripe), file).toEqual(["", "", "", ""]);
+      } else {
+        expect(
+          parseConfig({ ...REQUIRED, ...stripe, FEATURE_STRIPE_BILLING: "true", FEATURE_OWN_STRIPE: "true" })
+            .STRIPE_SECRET_KEY,
+          file,
+        ).toMatch(/^sk_test_/);
+      }
+    }
   });
 });
 

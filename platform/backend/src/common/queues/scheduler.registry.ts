@@ -125,7 +125,7 @@ export const PLATFORM_SCHEDULES: readonly ScheduleDefinition[] = Object.freeze([
     // The inbox holds the billing events and the Connect account events (PADR-0015 item 4).
     features: ["stripe_billing", "own_stripe"],
     description:
-      "Enqueue received or retryable failed inbox rows older than 2 minutes whose BullMQ job is missing",
+      "Enqueue received or retryable failed inbox rows older than 2 minutes, and processing rows unchanged for 10 minutes, whose BullMQ job is missing",
   }),
   schedule({
     id: "billing.abandoned_checkouts",
