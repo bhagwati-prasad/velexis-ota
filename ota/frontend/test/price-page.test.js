@@ -1,8 +1,8 @@
 // The price page (ota/frontend/docs/pages.md §6): price.html with its partials expanded by the build's include plugin,
 // run by src/pages/price.js against a fake SDK. It covers the breakdown with every fee line label and the API's total
 // (OADR-0005 point 7), the extras shown as "Available in checkout" only when `features.ancillaries` is on, the fare
-// rules in "Changes and refunds", a changed price, the countdown to "Price expired" with fake timers, the disabled
-// Continue of M2, and the states of §6 for their error codes.
+// rules in "Changes and refunds", a changed price, the countdown to "Price expired" with fake timers (which disables
+// Continue), and the states of §6 for their error codes. Continue's `checkout.create` is in test/checkout-page.test.js.
 import {
   ConnectionError,
   ExpiredError,
@@ -547,7 +547,7 @@ describe("price page: the confirmed price", () => {
     expect(texts("[data-price-conditions] > li")).toEqual(["Refundable", "Changes allowed"]);
   });
 
-  it("[OFE-007] shows the trip, the flights, the booking requirements and a disabled Continue", async () => {
+  it("[OFE-007] shows the trip, the flights, the booking requirements and Continue", async () => {
     const { view } = open();
     await view.done;
     await settle();
@@ -568,12 +568,14 @@ describe("price page: the confirmed price", () => {
       "The date of birth of each traveller",
       "Passport or ID card details",
     ]);
-    // Continue is there, but disabled until checkout opens (OFE-011, M3).
+    // Continue opens the checkout once the price is shown (OFE-011; test/checkout-page.test.js follows it).
     const button = /** @type {HTMLButtonElement} */ ($("button[data-continue]"));
     expect(text(button)).toBe("Continue to checkout");
-    expect(button.disabled).toBe(true);
+    expect(button.disabled).toBe(false);
     expect(button.getAttribute("aria-describedby")).toBe("checkout-note");
-    expect(text(document.getElementById("checkout-note"))).toBe("Checkout opens soon.");
+    expect(text(document.getElementById("checkout-note"))).toBe(
+      "Next you enter the travellers and the contact details.",
+    );
     // Back to the offer page the flight was priced on.
     expect($("a[data-back-link]").hidden).toBe(false);
     expect($("a[data-back-link]").getAttribute("href")).toBe(`/offer.html?offer=${BASE_ID}&fare=${OFFER_ID}`);

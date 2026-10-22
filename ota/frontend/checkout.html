@@ -1,0 +1,551 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="robots" content="noindex" />
+    <title>Checkout</title>
+    <meta
+      name="description"
+      content="Enter the travellers, the contact details and the extras of your booking."
+    />
+    <link rel="stylesheet" href="/src/styles/main.css" />
+    <script type="module" src="/src/pages/checkout.js"></script>
+  </head>
+  <body class="flex min-h-screen flex-col bg-surface font-body text-ink antialiased">
+    <!-- @include partials/noscript.html -->
+    <!-- @include partials/test-banner.html -->
+    <!-- @include partials/header.html -->
+    <main
+      id="main"
+      tabindex="-1"
+      class="mx-auto w-full max-w-6xl flex-1 px-4 py-8 focus:outline-none"
+      data-checkout-page
+    >
+      <p class="mb-3">
+        <a
+          href="/"
+          hidden
+          class="min-h-6 font-medium text-primary underline underline-offset-4"
+          data-back-link
+          >Back to your price</a
+        >
+      </p>
+      <h1 class="font-heading text-2xl font-semibold sm:text-3xl" data-checkout-title>Checkout</h1>
+
+      <nav aria-label="Checkout steps" class="mt-4" data-stepper hidden>
+        <ol class="flex flex-wrap gap-x-6 gap-y-2 text-sm" data-stepper-list></ol>
+      </nav>
+
+      <div data-checkout-state></div>
+
+      <div class="mt-6 space-y-4" aria-hidden="true" data-checkout-loading hidden>
+        <div class="h-24 rounded-ui bg-panel motion-safe:animate-pulse"></div>
+        <div class="h-48 rounded-ui bg-panel motion-safe:animate-pulse"></div>
+        <div class="h-24 rounded-ui bg-panel motion-safe:animate-pulse"></div>
+      </div>
+
+      <div class="mt-6 grid items-start gap-6 lg:grid-cols-[1fr_20rem]" data-checkout-content hidden>
+        <div class="min-w-0">
+          <div data-step-notice></div>
+
+          <section aria-labelledby="step-travellers-title" data-step="travellers" hidden>
+            <h2
+              id="step-travellers-title"
+              tabindex="-1"
+              class="font-heading text-xl font-semibold focus:outline-none"
+            >
+              Travellers
+            </h2>
+            <p class="mt-1 text-muted">
+              Enter each name exactly as it is written in the passport or ID card used for the trip.
+            </p>
+            <form id="checkout-travellers" method="post" class="mt-4 space-y-4" data-step-form="travellers">
+              <div data-error-summary hidden class="mb-6 rounded-ui border-2 border-error bg-panel p-4"></div>
+              <div class="space-y-4" data-travellers></div>
+              <p>
+                <button
+                  type="submit"
+                  data-busy-label="Saving the travellers…"
+                  class="min-h-6 rounded-ui bg-primary px-5 py-2 font-medium text-on-primary hover:opacity-90"
+                >
+                  Continue
+                </button>
+              </p>
+            </form>
+          </section>
+
+          <section aria-labelledby="step-contacts-title" data-step="contacts" hidden>
+            <h2
+              id="step-contacts-title"
+              tabindex="-1"
+              class="font-heading text-xl font-semibold focus:outline-none"
+            >
+              Contact details
+            </h2>
+            <p class="mt-1 text-muted">We send the confirmation and the e-tickets to this contact.</p>
+            <form id="checkout-contacts" method="post" class="mt-4 space-y-4" data-step-form="contacts">
+              <div data-error-summary hidden class="mb-6 rounded-ui border-2 border-error bg-panel p-4"></div>
+              <fieldset class="rounded-ui border border-muted/30 bg-surface p-4 sm:p-5">
+                <legend class="px-1 font-heading text-lg font-semibold">Contact for this booking</legend>
+                <div class="mt-3 grid gap-4 sm:grid-cols-2">
+                  <label class="block">
+                    <span class="block text-sm font-medium">First name</span>
+                    <input
+                      type="text"
+                      name="contacts.0.addresseeName.firstName"
+                      required
+                      maxlength="56"
+                      autocomplete="section-contact given-name"
+                      data-error-path="/contacts/0/addresseeName"
+                      class="mt-1 block w-full rounded-ui border border-muted/60 bg-surface px-3 py-2 aria-invalid:border-error"
+                    />
+                  </label>
+                  <label class="block">
+                    <span class="block text-sm font-medium">Last name</span>
+                    <input
+                      type="text"
+                      name="contacts.0.addresseeName.lastName"
+                      required
+                      maxlength="56"
+                      autocomplete="section-contact family-name"
+                      class="mt-1 block w-full rounded-ui border border-muted/60 bg-surface px-3 py-2 aria-invalid:border-error"
+                    />
+                  </label>
+                  <label class="block sm:col-span-2">
+                    <span class="block text-sm font-medium">E-mail address</span>
+                    <input
+                      type="email"
+                      name="contacts.0.emailAddress"
+                      required
+                      maxlength="254"
+                      autocomplete="section-contact email"
+                      spellcheck="false"
+                      data-error-path="/contacts /contacts/0"
+                      class="mt-1 block w-full rounded-ui border border-muted/60 bg-surface px-3 py-2 aria-invalid:border-error"
+                    />
+                  </label>
+                  <label class="block">
+                    <span class="block text-sm font-medium">Country calling code</span>
+                    <input
+                      type="text"
+                      name="contacts.0.phones.0.countryCallingCode"
+                      inputmode="tel"
+                      maxlength="5"
+                      pattern="\+?[0-9]{1,4}"
+                      title="The country calling code, for example +44"
+                      autocomplete="section-contact tel-country-code"
+                      class="mt-1 block w-full rounded-ui border border-muted/60 bg-surface px-3 py-2 aria-invalid:border-error"
+                    />
+                  </label>
+                  <label class="block">
+                    <span class="block text-sm font-medium">Mobile phone number</span>
+                    <input
+                      type="tel"
+                      name="contacts.0.phones.0.number"
+                      maxlength="20"
+                      autocomplete="section-contact tel-national"
+                      data-error-path="/contacts/0/phones /contacts/0/phones/0"
+                      class="mt-1 block w-full rounded-ui border border-muted/60 bg-surface px-3 py-2 aria-invalid:border-error"
+                    />
+                  </label>
+                </div>
+                <div class="mt-4 grid gap-4 sm:grid-cols-2" data-mailing-address hidden>
+                  <label class="block sm:col-span-2">
+                    <span class="block text-sm font-medium">Street and number</span>
+                    <input
+                      type="text"
+                      name="contacts.0.address.lines.0"
+                      required
+                      maxlength="70"
+                      autocomplete="section-contact street-address"
+                      data-error-path="/contacts/0/address"
+                      class="mt-1 block w-full rounded-ui border border-muted/60 bg-surface px-3 py-2 aria-invalid:border-error"
+                    />
+                  </label>
+                  <label class="block">
+                    <span class="block text-sm font-medium">Postal code</span>
+                    <input
+                      type="text"
+                      name="contacts.0.address.postalCode"
+                      maxlength="12"
+                      autocomplete="section-contact postal-code"
+                      class="mt-1 block w-full rounded-ui border border-muted/60 bg-surface px-3 py-2 aria-invalid:border-error"
+                    />
+                  </label>
+                  <label class="block">
+                    <span class="block text-sm font-medium">Town or city</span>
+                    <input
+                      type="text"
+                      name="contacts.0.address.cityName"
+                      required
+                      maxlength="35"
+                      autocomplete="section-contact address-level2"
+                      class="mt-1 block w-full rounded-ui border border-muted/60 bg-surface px-3 py-2 aria-invalid:border-error"
+                    />
+                  </label>
+                  <label class="block">
+                    <span class="block text-sm font-medium">Country</span>
+                    <select
+                      name="contacts.0.address.countryCode"
+                      required
+                      autocomplete="section-contact country"
+                      data-countries
+                      class="mt-1 block w-full rounded-ui border border-muted/60 bg-surface px-3 py-2 aria-invalid:border-error"
+                    ></select>
+                  </label>
+                </div>
+              </fieldset>
+
+              <p>
+                <label class="inline-flex min-h-6 items-center gap-2">
+                  <input type="checkbox" class="size-4 accent-primary" data-invoice-toggle />
+                  I need an invoice
+                </label>
+                <span class="block text-sm text-muted" data-invoice-required hidden
+                  >The airline needs an invoice address for this booking.</span
+                >
+              </p>
+              <fieldset class="rounded-ui border border-muted/30 bg-surface p-4 sm:p-5" data-invoice hidden>
+                <legend class="px-1 font-heading text-lg font-semibold">Invoice</legend>
+                <div class="mt-3 grid gap-4 sm:grid-cols-2">
+                  <label class="block">
+                    <span class="block text-sm font-medium">Company (optional)</span>
+                    <input
+                      type="text"
+                      name="contacts.1.companyName"
+                      maxlength="60"
+                      autocomplete="section-invoice organization"
+                      class="mt-1 block w-full rounded-ui border border-muted/60 bg-surface px-3 py-2 aria-invalid:border-error"
+                    />
+                  </label>
+                  <label class="block">
+                    <span class="block text-sm font-medium">Invoice e-mail (optional)</span>
+                    <input
+                      type="email"
+                      name="contacts.1.emailAddress"
+                      maxlength="254"
+                      autocomplete="section-invoice email"
+                      spellcheck="false"
+                      class="mt-1 block w-full rounded-ui border border-muted/60 bg-surface px-3 py-2 aria-invalid:border-error"
+                    />
+                  </label>
+                  <label class="block sm:col-span-2">
+                    <span class="block text-sm font-medium">Street and number</span>
+                    <input
+                      type="text"
+                      name="contacts.1.address.lines.0"
+                      required
+                      maxlength="70"
+                      autocomplete="section-invoice street-address"
+                      data-error-path="/contacts/1 /contacts/1/address"
+                      class="mt-1 block w-full rounded-ui border border-muted/60 bg-surface px-3 py-2 aria-invalid:border-error"
+                    />
+                  </label>
+                  <label class="block">
+                    <span class="block text-sm font-medium">Postal code</span>
+                    <input
+                      type="text"
+                      name="contacts.1.address.postalCode"
+                      maxlength="12"
+                      autocomplete="section-invoice postal-code"
+                      class="mt-1 block w-full rounded-ui border border-muted/60 bg-surface px-3 py-2 aria-invalid:border-error"
+                    />
+                  </label>
+                  <label class="block">
+                    <span class="block text-sm font-medium">Town or city</span>
+                    <input
+                      type="text"
+                      name="contacts.1.address.cityName"
+                      required
+                      maxlength="35"
+                      autocomplete="section-invoice address-level2"
+                      class="mt-1 block w-full rounded-ui border border-muted/60 bg-surface px-3 py-2 aria-invalid:border-error"
+                    />
+                  </label>
+                  <label class="block">
+                    <span class="block text-sm font-medium">Country</span>
+                    <select
+                      name="contacts.1.address.countryCode"
+                      required
+                      autocomplete="section-invoice country"
+                      data-countries
+                      class="mt-1 block w-full rounded-ui border border-muted/60 bg-surface px-3 py-2 aria-invalid:border-error"
+                    ></select>
+                  </label>
+                </div>
+              </fieldset>
+              <p>
+                <button
+                  type="submit"
+                  data-busy-label="Saving the contact details…"
+                  class="min-h-6 rounded-ui bg-primary px-5 py-2 font-medium text-on-primary hover:opacity-90"
+                >
+                  Continue
+                </button>
+              </p>
+            </form>
+          </section>
+
+          <section aria-labelledby="step-extras-title" data-step="extras" hidden>
+            <h2
+              id="step-extras-title"
+              tabindex="-1"
+              class="font-heading text-xl font-semibold focus:outline-none"
+            >
+              Extras and special requests
+            </h2>
+            <p class="mt-1 text-muted">
+              Add bags or services now, or continue without them. The airline confirms the price of each
+              extra.
+            </p>
+            <form id="checkout-extras" method="post" class="mt-4 space-y-4" data-step-form="extras">
+              <div data-error-summary hidden class="mb-6 rounded-ui border-2 border-error bg-panel p-4"></div>
+              <p class="text-sm text-muted" data-extras-loading hidden>Loading the extras…</p>
+              <div data-extras-state></div>
+              <p class="text-muted" data-extras-empty hidden>
+                The airline offers no extras for these flights.
+              </p>
+              <div class="space-y-4" data-ancillaries></div>
+              <p class="font-medium text-warning" role="status" data-extras-message hidden></p>
+              <section
+                class="rounded-ui border-2 border-warning bg-panel p-4"
+                aria-labelledby="extras-change-title"
+                data-extras-change
+                hidden
+              >
+                <h3 id="extras-change-title" tabindex="-1" class="font-heading text-lg font-semibold">
+                  Your new total
+                </h3>
+                <p class="mt-2" data-extras-change-text></p>
+                <p class="mt-2 text-sm text-muted">
+                  Confirm to continue at this total, or change the extras.
+                </p>
+              </section>
+              <fieldset class="rounded-ui border border-muted/30 bg-surface p-4 sm:p-5">
+                <legend class="px-1 font-heading text-lg font-semibold">Special requests</legend>
+                <p id="remarks-hint" class="text-sm text-muted">
+                  For example a meal or help at the airport. Our team reads them and asks the airline; we
+                  cannot promise them. Use letters without accents, digits, spaces and . , ' ( ) / : ? + -
+                  only.
+                </p>
+                <div class="mt-3 space-y-3" data-remarks></div>
+              </fieldset>
+              <p>
+                <button
+                  type="submit"
+                  data-busy-label="Checking with the airline…"
+                  data-extras-submit
+                  class="min-h-6 rounded-ui bg-primary px-5 py-2 font-medium text-on-primary hover:opacity-90"
+                >
+                  Continue
+                </button>
+              </p>
+            </form>
+          </section>
+
+          <section aria-labelledby="step-payment-title" data-step="payment" hidden>
+            <h2
+              id="step-payment-title"
+              tabindex="-1"
+              class="font-heading text-xl font-semibold focus:outline-none"
+            >
+              Payment
+            </h2>
+            <p class="mt-1 text-muted">Choose how you want to pay. You enter the card on the next page.</p>
+            <form id="checkout-payment" method="post" class="mt-4 space-y-4" data-step-form="payment">
+              <div data-error-summary hidden class="mb-6 rounded-ui border-2 border-error bg-panel p-4"></div>
+              <section
+                class="rounded-ui border-2 border-warning bg-panel p-4"
+                aria-labelledby="payment-change-title"
+                data-payment-change
+                hidden
+              >
+                <h3 id="payment-change-title" tabindex="-1" class="font-heading text-lg font-semibold">
+                  The airline changed the price
+                </h3>
+                <p class="mt-2" data-payment-change-text></p>
+              </section>
+              <fieldset data-payment-methods>
+                <legend class="font-heading text-lg font-semibold">How do you want to pay?</legend>
+                <ul class="mt-3 space-y-3" data-payment-method-list></ul>
+              </fieldset>
+              <div data-payment-unavailable></div>
+              <dl class="rounded-ui border border-muted/30 bg-surface p-4">
+                <div class="flex items-baseline justify-between gap-4 text-lg font-semibold">
+                  <dt>Total to pay</dt>
+                  <dd class="tabular-nums" data-payment-total></dd>
+                </div>
+                <dd class="mt-1 text-sm text-muted" data-payment-total-note></dd>
+              </dl>
+              <p class="text-sm" data-payment-conditions hidden></p>
+              <p class="text-sm" data-payment-links></p>
+              <p>
+                <label class="inline-flex min-h-6 items-start gap-2">
+                  <input
+                    type="checkbox"
+                    name="termsAccepted"
+                    required
+                    class="mt-1 size-4 accent-primary"
+                    data-terms
+                  />
+                  <span data-terms-label
+                    >I accept the terms and conditions, the privacy policy and the fare rules.</span
+                  >
+                </label>
+              </p>
+              <div data-payment-state></div>
+              <p>
+                <button
+                  type="submit"
+                  data-busy-label="Preparing the payment…"
+                  class="min-h-6 rounded-ui bg-primary px-5 py-2 font-medium text-on-primary hover:opacity-90"
+                >
+                  Continue to payment
+                </button>
+              </p>
+            </form>
+          </section>
+        </div>
+
+        <aside
+          aria-labelledby="summary-title"
+          class="rounded-ui border border-muted/30 bg-panel p-4 lg:sticky lg:top-4"
+        >
+          <h2 id="summary-title" class="font-heading text-lg font-semibold">Your trip</h2>
+          <ol class="mt-3 space-y-4" data-checkout-itineraries></ol>
+          <dl class="mt-4 divide-y divide-muted/20 text-sm">
+            <div class="flex items-baseline justify-between gap-4 py-2">
+              <dt>Flights, taxes and fees</dt>
+              <dd class="tabular-nums" data-total-offer></dd>
+            </div>
+            <div class="flex items-baseline justify-between gap-4 py-2" data-total-extras-row hidden>
+              <dt>Extras</dt>
+              <dd class="tabular-nums" data-total-extras></dd>
+            </div>
+            <div class="flex items-baseline justify-between gap-4 py-2" data-total-card-fee-row hidden>
+              <dt>Card fee</dt>
+              <dd class="tabular-nums" data-total-card-fee></dd>
+            </div>
+            <div class="flex items-baseline justify-between gap-4 py-2 text-lg font-semibold">
+              <dt>Total</dt>
+              <dd class="tabular-nums" data-total></dd>
+            </div>
+          </dl>
+          <p class="mt-3 text-sm text-muted" data-checkout-expiry></p>
+        </aside>
+      </div>
+    </main>
+    <!-- @include partials/footer.html -->
+
+    <!-- @include partials/templates/offer-card.html -->
+    <!-- @include partials/templates/traveller-form.html -->
+    <template id="tpl-step">
+      <li class="flex items-baseline gap-2" data-step-item data-field-data-status="status">
+        <a
+          class="min-h-6 font-medium text-primary underline underline-offset-4 aria-[current=step]:font-semibold aria-[current=step]:text-ink aria-[current=step]:no-underline"
+          data-step-link
+          ><span data-field="label"></span>
+          <span class="text-xs font-normal text-muted" data-field="statusText"></span
+        ></a>
+        <span class="text-muted" data-step-text
+          ><span data-field="label"></span> <span class="text-xs" data-field="statusText"></span
+        ></span>
+      </li>
+    </template>
+    <template id="tpl-ancillary-traveller">
+      <fieldset
+        class="rounded-ui border border-muted/30 bg-surface p-4 sm:p-5"
+        data-ancillary-traveller
+        data-field-data-traveler-id="travelerId"
+      >
+        <legend class="px-1 font-heading text-lg font-semibold" data-field="title"></legend>
+        <div class="mt-2 space-y-4" data-ancillary-groups></div>
+      </fieldset>
+    </template>
+    <template id="tpl-ancillary-group">
+      <fieldset data-ancillary-group>
+        <legend class="font-medium" data-field="title"></legend>
+        <ul class="mt-2 space-y-2" data-ancillary-choices></ul>
+      </fieldset>
+    </template>
+    <template id="tpl-ancillary-choice">
+      <li data-ancillary-choice data-field-data-option-id="optionId">
+        <label class="flex min-h-6 items-start gap-3">
+          <input class="mt-1 size-4 shrink-0 accent-primary" data-ancillary-input />
+          <span class="flex-1">
+            <span data-field="label"></span>
+            <span class="block text-sm text-muted" data-field="detail" data-field-hidden="noDetail"></span>
+          </span>
+          <span class="font-medium tabular-nums" data-field="price"></span>
+        </label>
+        <label class="mt-2 ml-7 block" data-seat hidden>
+          <span class="block text-sm font-medium">Seat number, for example 14C</span>
+          <input
+            type="text"
+            maxlength="4"
+            pattern="[1-9][0-9]{0,2}[A-Za-z]?"
+            autocomplete="off"
+            data-seat-number
+            class="mt-1 block w-28 rounded-ui border border-muted/60 bg-surface px-3 py-2 aria-invalid:border-error"
+          />
+        </label>
+      </li>
+    </template>
+    <template id="tpl-remark">
+      <label class="block" data-remark>
+        <span class="block text-sm font-medium" data-field="label"></span>
+        <input
+          type="text"
+          maxlength="110"
+          pattern="[A-Za-z0-9 .,'\(\)\/:?+\-]+"
+          aria-describedby="remarks-hint"
+          data-remark-input
+          class="mt-1 block w-full rounded-ui border border-muted/60 bg-surface px-3 py-2 aria-invalid:border-error"
+        />
+      </label>
+    </template>
+    <template id="tpl-payment-method">
+      <li>
+        <label
+          class="flex min-h-6 cursor-pointer items-start gap-3 rounded-ui border-2 border-muted/30 bg-surface p-3 has-checked:border-primary"
+        >
+          <input
+            type="radio"
+            name="method"
+            required
+            class="mt-1 size-5 shrink-0 accent-primary"
+            data-payment-method
+            data-field-value="method"
+            data-field-checked="checked"
+          />
+          <span>
+            <span class="block font-medium" data-field="label"></span>
+            <span class="block text-sm text-muted" data-field="detail" data-field-hidden="noDetail"></span>
+          </span>
+        </label>
+      </li>
+    </template>
+    <template id="tpl-payment-link">
+      <a
+        class="font-medium text-primary underline underline-offset-4"
+        target="_blank"
+        rel="noopener noreferrer"
+        data-payment-link
+        data-field="label"
+        data-field-href="href"
+      ></a>
+    </template>
+    <template id="tpl-state-link">
+      <p class="mt-4">
+        <a
+          class="font-medium text-primary underline underline-offset-4"
+          data-state-link
+          data-field="label"
+          data-field-href="href"
+        ></a>
+      </p>
+    </template>
+    <!-- @include partials/states.html -->
+  </body>
+</html>

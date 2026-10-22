@@ -1491,7 +1491,8 @@ Checkout, customer accounts in cookies, Stripe on the Velexis account, the airli
   - After deletion the account menu shows "Sign in".
 - **Verify:** `pnpm --filter @velexis/ota-frontend test && pnpm --filter @velexis/ota-frontend build`
 
-### OFE-011 · Build the checkout data page
+### OFE-011 · Build the checkout data page ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-frontend
 - **Milestone:** M3
 - **Depends on:** OFE-007, SDK-009, OBE-037, OBE-038

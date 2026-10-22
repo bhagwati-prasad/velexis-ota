@@ -100,7 +100,7 @@
           </section>
 
           <section aria-labelledby="rules-title">
-            <details class="rounded-ui border border-muted/30 bg-surface p-4" data-fare-rules>
+            <details id="fare-rules" class="rounded-ui border border-muted/30 bg-surface p-4" data-fare-rules>
               <summary class="min-h-6 cursor-pointer font-heading text-xl font-semibold">
                 <span id="rules-title">Changes and refunds</span>
               </summary>
@@ -136,18 +136,22 @@
             hidden
           ></p>
           <div data-price-expired></div>
-          <p class="mt-4">
+          <form class="mt-4" data-continue-form>
             <button
-              type="button"
+              type="submit"
               disabled
               aria-describedby="checkout-note"
-              class="min-h-6 w-full rounded-ui bg-primary px-5 py-2 font-medium text-on-primary disabled:opacity-60"
+              data-busy-label="Opening the checkout…"
+              class="min-h-6 w-full rounded-ui bg-primary px-5 py-2 font-medium text-on-primary hover:opacity-90 disabled:opacity-60"
               data-continue
             >
               Continue to checkout
             </button>
+          </form>
+          <p id="checkout-note" class="mt-2 text-sm text-muted" data-continue-note>
+            Next you enter the travellers and the contact details.
           </p>
-          <p id="checkout-note" class="mt-2 text-sm text-muted" data-continue-note>Checkout opens soon.</p>
+          <div data-continue-state></div>
         </aside>
       </div>
     </main>

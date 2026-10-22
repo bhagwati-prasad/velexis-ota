@@ -187,6 +187,11 @@ export const STRINGS = Object.freeze({
   "pricePage.less": "{amount} less than expected",
   "pricePage.continue": "Continue to checkout",
   "pricePage.continueNewPrice": "Continue at the new price, {price}",
+  "pricePage.opening": "Opening the checkout…",
+  "pricePage.verifyEmail": "Verify your e-mail address to book",
+  "pricePage.resend": "Send the link again",
+  "pricePage.resent": "If your e-mail address still needs verifying, we have sent you a new link.",
+  "pricePage.resendFailed": "We could not send the link right now. Please try again in a moment.",
   "breakdown.travellersTitle": "Price per traveller",
   "breakdown.detailsTitle": "What the total includes",
   "breakdown.travellers.ADULT": { one: "{count} adult", other: "{count} adults" },
@@ -265,6 +270,77 @@ export const STRINGS = Object.freeze({
   "rules.category.REBOOK": "Rebooking",
   "rules.category.CANCELLATION": "Cancellation",
   "rules.noteTitle": "{name} ({fareBasis})",
+
+  // Checkout page (src/pages/checkout.js, docs/pages.md §7) and its components (stepper, traveller-form,
+  // contact-form, ancillary-picker, error-summary).
+  "checkout.title": "{step} – Checkout",
+  "checkout.loading": "Loading your checkout…",
+  "checkout.loaded": "Checkout: {step}",
+  "checkout.missing": "We could not find this checkout",
+  "checkout.step.travellers": "Travellers",
+  "checkout.step.contacts": "Contact details",
+  "checkout.step.extras": "Extras",
+  "checkout.step.payment": "Payment",
+  "checkout.stepLabel": "{number}. {name}",
+  "checkout.stepStatus.done": "(done)",
+  "checkout.stepStatus.current": "(current step)",
+  "checkout.stepStatus.locked": "(not yet)",
+  "checkout.heldUntil": "We hold this price until {time}.",
+  "checkout.travellerTitle": "Traveller {number}: {type}",
+  "checkout.travellerTitleNamed": "Traveller {number}: {name}, {type}",
+  "checkout.travellerNumber": "Traveller {number}",
+  "checkout.infantWith": "Travels on the lap of traveller {number}.",
+  "checkout.chooseCountry": "Choose a country",
+  "checkout.countryCodeHint": "The two-letter country code, for example GB",
+  "checkout.documentStored":
+    "We have the number {number}. Leave the field empty to keep it, or enter the number again to change it.",
+  "checkout.travellersSaved": "Travellers saved",
+  "checkout.contactsSaved": "Contact details saved",
+  "checkout.extrasFailed": "Extras cannot be added right now",
+  "checkout.extrasGroup": "{kind}: {flights}",
+  "checkout.extrasServices": "Services",
+  "checkout.extrasSeats": "Seats",
+  "checkout.extrasNone": "No extra bag",
+  "checkout.extrasPriceLater": "Price confirmed by the airline",
+  "checkout.extrasNewTotal": "With these extras the airline's total is {new} (before: {old}).",
+  "checkout.extrasNewTotalOnly": "With these extras the airline's total is {new}.",
+  "checkout.extrasConfirm": "Confirm the new total, {price}",
+  "checkout.extrasSaved": "Extras saved. Your total is {price}",
+  "checkout.extraRemoved": "{label} is no longer available and was removed. Check your extras and continue.",
+  "checkout.extraUnavailable": "One of the extras is no longer available. Check your extras and continue.",
+  "checkout.remarkLabel": "Request {number} (optional)",
+  "checkout.method.card": "Card",
+  "checkout.method.airline_card": "Card, charged by the airline",
+  "checkout.cardBrands": "Accepted: {brands}",
+  "checkout.cardFeeNote": "A card fee may be added on the next page, depending on your card.",
+  "checkout.airlineCardTotal": "The airline charges your card at its own price, shown on the next page.",
+  "checkout.terms": "terms and conditions",
+  "checkout.privacy": "privacy policy",
+  "checkout.fareRules": "fare rules",
+  "checkout.readBefore": "Please read the ",
+  "checkout.listSeparator": ", the ",
+  "checkout.listLast": " and the ",
+  "checkout.newTab": " (each opens in a new tab).",
+  "checkout.conditions": "This fare: {conditions}.",
+  "checkout.paymentPreparing": "Preparing the payment…",
+  "checkout.paymentsUnavailable": "Payments are not available yet",
+  "checkout.airlineCardUnavailable": "Paying the airline by card is not available. You can pay by card.",
+  "checkout.paymentNewTotal":
+    "The new total is {new} (before: {old}). Check it, then continue to the payment.",
+  "checkout.paymentProviderError":
+    "The payment service is not answering. Nothing was charged. Please try again.",
+  "checkout.incomplete": "Some details are still missing",
+  "checkout.notSaved": "This could not be saved. Check the details and try again.",
+  "checkout.reapplied":
+    "This checkout was changed in another tab. We saved your changes on top of the latest version.",
+  "checkout.stale": "This checkout was changed in another tab again. Reload to see the latest version.",
+  "checkout.reload": "Reload",
+  // AmadeusDocumentType: the documents a traveller can show.
+  "document.PASSPORT": "Passport",
+  "document.IDENTITY_CARD": "ID card",
+  "document.VISA": "Visa",
+  "document.KNOWN_TRAVELER": "Known traveller number",
+  "document.REDRESS": "Redress number",
 
   // Filters (src/components/filters.js): labels of the facet values.
   "stops.0": "Direct",
@@ -347,6 +423,9 @@ export const STRINGS = Object.freeze({
   "field.INFANTS_RANGE": "Choose between 0 and 9 infants",
   "field.TOO_MANY_SEATS": "At most 9 passengers can have a seat (adults and children together)",
   "field.INFANTS_EXCEED_ADULTS": "Each infant travels on an adult's lap: add an adult or remove an infant",
+  // The payment step's own check (src/pages/checkout.js, docs/pages.md §7).
+  "field.TERMS_REQUIRED":
+    "Accept the terms and conditions, the privacy policy and the fare rules to continue",
 
   // Page states (lib/errors.js, ota/frontend/docs/pages.md §2 and the pages' state tables).
   "state.suspended": "This travel site is temporarily unavailable",
@@ -384,6 +463,9 @@ export const STRINGS = Object.freeze({
   "stateHint.price-expired":
     "The airline holds a confirmed price for a short time only. Re-price to see the current price.",
   "stateHint.sold-out": "Choose another flight from the results.",
+  "stateHint.checkout-expired":
+    "Prices are held for a short time only. Price the flight again to see the current price.",
+  "stateHint.email-not-verified": "Open the link in the e-mail we sent you, then try again.",
 });
 
 const plurals = new Intl.PluralRules(LANGUAGE);

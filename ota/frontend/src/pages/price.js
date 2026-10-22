@@ -13,12 +13,17 @@
 //    a fee never reads as a change) and the confirmed price side by side ("The airline changed the price"), and
 //    Continue names the new price. A countdown from `expiresAt` (`role="timer"`, announced once five
 //    minutes before and at the end) ends in "Price expired" with Re-price, back to the offer page that prices again.
-// 5. Continue is present but disabled ("Checkout opens soon") until OFE-011 wires `checkout.create` (M3).
+// 5. Continue (enabled once the price is shown, disabled again when it expires): `checkout.create({ pricedOfferId })`
+//    and `/checkout.html?id=chk_…&step=travellers` (OFE-011). Without guest checkout (`features.guestCheckout`
+//    off) a visitor goes to `/account/sign-in.html?next=…` first, as after a `401` of `checkout.create`.
 //
 // States (pages.md §6): `410 OFFER_EXPIRED` (also a `404` priced offer, which the purge removes after it expired) as
 // on the offer page, "This fare is no longer available", with a link back to the flight to price it again (else the
-// home page); `503`, connection failures and `429` the shared states with Retry, which loads the price again. Every
-// amount is the API's own: the page never adds, subtracts or multiplies prices.
+// home page); `503`, connection failures and `429` the shared states with Retry, which loads the price again. At
+// Continue: `403 EMAIL_NOT_VERIFIED` asks to verify the e-mail address, with "Send the link again"
+// (`auth.resendVerification`), and other failures show their state next to the button, with Retry where it may help.
+// The address `#fare-rules` (the checkout's payment step links to it) opens the "Changes and refunds" disclosure.
+// Every amount is the API's own: the page never adds, subtracts or multiplies prices.
 
 import { boot, renderState } from "../boot.js";
 import { fareName } from "../components/fare-families.js";
@@ -29,8 +34,10 @@ import { isZero, lowestPrice, mount as mountBreakdown } from "../components/pric
 import { clone, fill } from "../lib/dom.js";
 import { isAborted, pageStateFor } from "../lib/errors.js";
 import { formatLocalDate, formatMoney } from "../lib/format.js";
+import { withSubmitState } from "../lib/forms.js";
 import { hasString, t } from "../lib/i18n.js";
-import { withQuery } from "../lib/url.js";
+import { signInHref } from "../lib/session.js";
+import { currentPath, withQuery } from "../lib/url.js";
 
 /** @typedef {import("@velexis/ota-sdk").VelexisClient} VelexisClient */
 /** @typedef {import("@velexis/ota-sdk").Schemas["PricedOffer"]} PricedOffer */
@@ -45,13 +52,21 @@ import { withQuery } from "../lib/url.js";
 /** @typedef {import("@velexis/ota-sdk").Schemas["Money"]} Money */
 /** @typedef {import("../lib/errors.js").PageState} PageState */
 /** @typedef {import("../lib/config.js").StorefrontConfig} StorefrontConfig */
-/** @typedef {Pick<VelexisClient, "flights">} PageClient */
+/** @typedef {import("../lib/session.js").SessionInfo} SessionInfo */
+/**
+ * The SDK client as far as the page needs it: `checkout.create` for Continue, and `auth.resendVerification` when the
+ * customer's e-mail address still needs verifying.
+ * @typedef {Pick<VelexisClient, "flights" | "checkout"> & { auth?: Partial<Pick<VelexisClient["auth"], "resendVerification">> }} PageClient
+ */
 /** @typedef {{ label: string, detail: string | null }} ItemLine */
 /** @typedef {{ category: string, label: string, status: string, detail: string | null }} RuleLine */
 
 /** A priced offer id as the API writes it. */
 export const PRICED_OFFER_ID = /^prc_[0-9A-Za-z]{16,40}$/;
 const OFFER_ID = /^off_[0-9A-Za-z]{16,40}$/;
+const CHECKOUT_ID = /^chk_[0-9A-Za-z]{16,40}$/;
+/** The address of the "Changes and refunds" disclosure. */
+export const FARE_RULES_HASH = "#fare-rules";
 /** From how many seconds before `expiresAt` the countdown warns (announced once). */
 export const EXPIRY_WARNING_SECONDS = 300;
 /** States after which the same call cannot do better: no Retry. */
@@ -311,8 +326,8 @@ export function categoryLines(categories, locale) {
  * Runs the price page (see the top of this file) in `doc`, with what boot() returned. Returns `null` when the page has
  * no price area, else `{ done, destroy }`: `done` settles once the price (or a state), its extras and its fare rules
  * are shown.
- * @param {{ config: StorefrontConfig, client: PageClient }} context
- * @param {{ doc?: Document, location?: Location, referrer?: string }} [env] for tests
+ * @param {{ config: StorefrontConfig, client: PageClient, session?: SessionInfo | null }} context
+ * @param {{ doc?: Document, location?: Location, referrer?: string, navigate?: (url: string) => void }} [env] for tests
  */
 export function start(context, env = {}) {
   const doc = env.doc ?? document;
@@ -322,7 +337,9 @@ export function start(context, env = {}) {
   }
   const location = env.location ?? doc.defaultView?.location ?? globalThis.location;
   const referrer = env.referrer ?? doc.referrer;
+  const navigate = env.navigate ?? ((/** @type {string} */ url) => location.assign(url));
   const { config, client } = context;
+  const session = context.session ?? null;
   const locale = config?.defaultLocale;
   const support = config?.support ?? null;
   const features = config?.features;
@@ -360,6 +377,9 @@ export function start(context, env = {}) {
     countdown: find("[data-price-countdown]"),
     expired: find("[data-price-expired]"),
     continue: /** @type {HTMLButtonElement} */ (main.querySelector("button[data-continue]")),
+    continueForm: /** @type {HTMLFormElement} */ (main.querySelector("form[data-continue-form]")),
+    continueState: find("[data-continue-state]"),
+    fareRules: /** @type {HTMLDetailsElement | null} */ (main.querySelector("details[data-fare-rules]")),
   };
   const pageTitle = doc.title;
 
@@ -375,6 +395,8 @@ export function start(context, env = {}) {
   const controllers = new Set();
   /** The countdown's next tick. @type {ReturnType<typeof setTimeout> | null} */
   let timer = null;
+  /** The priced offer on the screen, once loaded. @type {PricedOffer | null} */
+  let shown = null;
   let destroyed = false;
   const breakdown = mountBreakdown(el.breakdown, locale ? { locale } : {});
 
@@ -600,6 +622,8 @@ export function start(context, env = {}) {
     }
     el.countdown.hidden = true;
     el.countdown.textContent = "";
+    el.continue.disabled = true;
+    el.continueState.replaceChildren();
     const element = renderState(el.expired, {
       // A state of this page only: no error code maps to it (lib/errors.js names the states of SDK errors), and its
       // name gives it its own hint (`stateHint.price-expired`) and `data-state`.
@@ -789,10 +813,126 @@ export function start(context, env = {}) {
     renderTotal(priced);
     renderRequirements(priced);
     renderRules(priced.fareRules ?? null, priced.conditions);
+    shown = priced;
+    el.continue.disabled = false;
+    el.continueState.replaceChildren();
     el.state.replaceChildren();
     el.loading.hidden = true;
     el.content.hidden = false;
+    if (location.hash === FARE_RULES_HASH && el.fareRules) {
+      el.fareRules.open = true;
+      el.fareRules.scrollIntoView?.();
+    }
   };
+
+  /**
+   * `403 EMAIL_NOT_VERIFIED` at Continue: "Verify your e-mail address to book", with "Send the link again" when the
+   * SDK has `auth.resendVerification`.
+   */
+  const showVerifyEmail = () => {
+    const element = renderState(
+      el.continueState,
+      { name: "email-not-verified", scope: "inline", message: t("pricePage.verifyEmail") },
+      { focus: true },
+    );
+    live.announce(t("pricePage.verifyEmail"));
+    const resend = client.auth?.resendVerification;
+    if (typeof resend !== "function") {
+      return;
+    }
+    const button = doc.createElement("button");
+    button.type = "button";
+    button.className =
+      "mt-4 rounded-ui bg-primary px-4 py-2 font-medium text-on-primary hover:opacity-90 disabled:opacity-60";
+    button.textContent = t("pricePage.resend");
+    button.dataset.action = "resend";
+    const message = doc.createElement("p");
+    message.className = "mt-2 text-sm";
+    message.setAttribute("role", "status");
+    message.dataset.resendStatus = "";
+    button.addEventListener("click", async () => {
+      button.disabled = true;
+      try {
+        await resend.call(client.auth, { returnPath: currentPath(location) });
+        message.textContent = t("pricePage.resent");
+        button.remove();
+      } catch {
+        message.textContent = t("pricePage.resendFailed");
+        button.disabled = false;
+      }
+    });
+    element.append(button, message);
+  };
+
+  /**
+   * Continue: opens the checkout of the priced offer (`checkout.create`) and goes to its travellers step. Without guest
+   * checkout, a visitor signs in first and comes back to this page.
+   */
+  const startCheckout = () =>
+    withSubmitState(el.continueForm, async () => {
+      const priced = shown;
+      if (!priced || destroyed || el.continue.disabled) {
+        return;
+      }
+      el.continueState.replaceChildren();
+      if (features?.guestCheckout === false && session === null) {
+        navigate(signInHref(location));
+        return;
+      }
+      live.announce(t("pricePage.opening"));
+      /** @type {{ id: string }} */
+      let checkout;
+      try {
+        checkout = await client.checkout.create({ pricedOfferId: priced.id });
+      } catch (error) {
+        if (destroyed || isAborted(error)) {
+          return;
+        }
+        const state = stateOf(error);
+        if (state.name === "signed-out") {
+          navigate(signInHref(location));
+          return;
+        }
+        if (state.name === "offer-expired" || state.name === "not-found") {
+          showPageState(
+            { name: "offer-expired", scope: "inline", message: t("state.offer-expired") },
+            { link: t("pricePage.priceAgain"), focus: true },
+          );
+          return;
+        }
+        if (state.name === "email-not-verified") {
+          showVerifyEmail();
+          return;
+        }
+        renderState(el.continueState, state, {
+          support,
+          focus: true,
+          requestId: state.name === "unexpected" ? requestIdOf(error) : null,
+          ...(FINAL_STATES.has(state.name) ? {} : { onRetry: () => startCheckout().catch(report) }),
+        });
+        live.announce(state.message);
+        return;
+      }
+      if (destroyed) {
+        return;
+      }
+      if (typeof checkout?.id !== "string" || !CHECKOUT_ID.test(checkout.id)) {
+        renderState(
+          el.continueState,
+          { name: "unexpected", scope: "inline", message: t("state.unexpected") },
+          { support, focus: true, onRetry: () => startCheckout().catch(report) },
+        );
+        return;
+      }
+      navigate(withQuery("/checkout.html", { id: checkout.id, step: "travellers" }));
+    });
+
+  /** @param {Event} event */
+  const onContinue = (event) => {
+    event.preventDefault();
+    startCheckout().catch(report);
+  };
+  el.continueForm.addEventListener("submit", onContinue);
 
   /**
    * Loads the priced offer, then its extras and fare rules.
@@ -878,6 +1018,7 @@ export function start(context, env = {}) {
         clearTimeout(timer);
         timer = null;
       }
+      el.continueForm.removeEventListener("submit", onContinue);
       breakdown.destroy();
       live.clear();
     },
@@ -888,7 +1029,11 @@ document.documentElement.dataset.js = "on";
 
 boot().then((context) => {
   try {
-    start(/** @type {{ config: StorefrontConfig, client: PageClient }} */ (/** @type {unknown} */ (context)));
+    start(
+      /** @type {{ config: StorefrontConfig, client: PageClient, session: SessionInfo | null }} */ (
+        /** @type {unknown} */ (context)
+      ),
+    );
   } catch (error) {
     report(error);
   }
