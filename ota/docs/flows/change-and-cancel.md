@@ -113,6 +113,7 @@ sequenceDiagram
 | The record step fails after DELETE `204` | As a timeout on DELETE (`504`, booking flagged, the worker finds the order gone and runs the money step once) |
 | Not decided 15 minutes after a timeout (the order cannot be read) | Staff event `booking.cancellation_manual_review` and a staff alert; the same key keeps replaying the `504` |
 | Stripe refund fails | Cancellation stands; refund `failed`, staff alerted (`manual_review`), never undone |
+| The `refund.submit` job is lost after the money step's commit (Redis down, or the after-commit task failed) | Cancellation stands; the refund stays `pending` until `refunds.sweep` queues `refund.submit` again, 5 minutes or more after the request, with the same job id (FIX-W27-FOLLOWUPS, [OADR-0010](../adr/0010-stripe-gateway-and-payment-webhooks.md) point 6); `refund:<rfd_id>` keeps Stripe from refunding twice |
 | Booking already cancelled | `409 BOOKING_ALREADY_CANCELLED` |
 
 ## 5. Tables
