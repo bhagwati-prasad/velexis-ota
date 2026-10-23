@@ -305,6 +305,14 @@ export interface Bookings {
   reference: string;
   status: Generated<string>;
   supplier_connection_id: string | null;
+  /**
+   * What the last recorded synchronisation changed ([{path, label, before, after}], JSON pointers into the booking): ConsoleSupplierSync.differences.
+   */
+  sync_changes: Generated<Json>;
+  /**
+   * When a synchronisation with Flight Order Management was last claimed (background sync, refresh, console resync): the sync skips the booking for 30 minutes after it, a refresh is throttled by it; replaces the booking.sync_requested events.
+   */
+  sync_claimed_at: Timestamp | null;
   sync_error: string | null;
   tags: Generated<string[]>;
   taxes_amount: Generated<Numeric>;

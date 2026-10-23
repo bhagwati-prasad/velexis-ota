@@ -46,6 +46,8 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { AmadeusClient } from "../../../src/amadeus/amadeus.client";
 import { BookingChangesRepository } from "../../../src/bookings/booking-changes.service";
 import { newBookingReference } from "../../../src/bookings/booking-reference";
+import { orderSegmentsOf } from "../../../src/bookings/order-diff";
+import { readCreatedOrder } from "../../../src/bookings/order-recorder";
 import { buildCreateOrderRequest } from "../../../src/bookings/order-request.builder";
 import { newBookingToken } from "../../../src/bookings/guest-access.service";
 import { bookingTokenHash } from "../../../src/common/auth/booking-access.guard";
@@ -58,7 +60,7 @@ import { seedStorefrontSettings } from "../../../src/provisioning/seeds/storefro
 import type { OtaPool } from "../../../src/tenancy/tenancy.module";
 import type { TenantTransaction } from "../../../src/tenancy/tenant-tx";
 import { createWorkerApp, createWorkerLogger, WorkerModule } from "../../../src/worker.module";
-import { buildOrderContact, buildOrderRequestInput } from "../../builders/bookings";
+import { buildOrderContact, buildOrderRequestInput, pricedFlightOffer } from "../../builders/bookings";
 import {
   edgeWriteHeaders,
   newApiKey,
@@ -236,9 +238,25 @@ const orderPath = (orderId: string): string => `/v1/booking/flight-orders/${enco
 /** The order as the stub holds it now. */
 const stubOrder = (orderId: string): Promise<JsonObject> => stubFetch(orderPath(orderId), { method: "GET" });
 
-/** An order of the stub (Flight Create Orders, not issued) of one adult with a special request, for `email`. */
+/** The fixture's offer 2 with its flight (2 h 05 min) departing at `departure` (a local time, UTC reading). */
+function offerDepartingAt(departure: Date): JsonObject {
+  const offer = pricedFlightOffer();
+  for (const itinerary of offer["itineraries"] as JsonObject[]) {
+    for (const segment of itinerary["segments"] as JsonObject[]) {
+      (segment["departure"] as JsonObject)["at"] = local(departure);
+      (segment["arrival"] as JsonObject)["at"] = local(new Date(departure.getTime() + 125 * MINUTE));
+    }
+  }
+  return offer;
+}
+
+/**
+ * An order of the stub (Flight Create Orders, not issued) of one adult with a special request, for `email`, its flight
+ * 10 days after now (to the minute), so no calendar date matters.
+ */
 async function newStubOrder(email: string): Promise<JsonObject> {
-  const input = buildOrderRequestInput();
+  const departure = new Date(Math.floor((Date.now() + 10 * DAY) / MINUTE) * MINUTE);
+  const input = buildOrderRequestInput({ flightOffers: [offerDepartingAt(departure)] });
   const built = buildCreateOrderRequest({
     ...input,
     contacts: [buildOrderContact({ email })],
@@ -257,19 +275,36 @@ const records = (value: unknown): JsonObject[] =>
 interface BookingSeed {
   readonly customerId?: string | null;
   readonly status?: string;
-  /** The departure, relative to now (10 days by default); the flight lasts 2 hours. */
+  /**
+   * The departure, relative to now, of a booking whose flight differs from its order's (a trip that is over); without
+   * it the booking holds the order's flight, as the record step stores it.
+   */
   readonly departInMs?: number;
 }
 
 /**
- * A booking of `order` as the record step writes it: the bookings row (110.47 EUR), its MAD–ORY flight (segment "3" of
- * offer "2", the stub's offer), the adult, the order's contact (primary) and remarks (the special request visible to
- * the customer, the Velexis one not) and its record.
+ * A booking of `order` as the record step writes it: the bookings row (110.47 EUR), the order's MAD–ORY flight
+ * (segment "3" of offer "2", the stub's offer; local times read as UTC, the fixture's airports having no time zone in
+ * the template's reference data; since FIX-W27-SYNC a refresh records the order through the background sync's diff, so
+ * another flight would be a schedule change), the adult, the order's contact (primary) and remarks (the special request
+ * visible to the customer, the Velexis one not) and its record.
  */
 async function seedBooking(order: JsonObject, seed: BookingSeed = {}): Promise<string> {
   const id = newId("bkg");
   const now = Date.now();
-  const outbound = new Date(now + (seed.departInMs ?? 10 * DAY));
+  const [segment] = orderSegmentsOf(
+    readCreatedOrder({ data: order }) ??
+      ((): never => {
+        throw new Error("the stub's order cannot be read");
+      })(),
+  );
+  const ordered = seed.departInMs === undefined ? segment : undefined;
+  const outbound =
+    ordered === undefined
+      ? new Date(now + (seed.departInMs ?? 10 * DAY))
+      : new Date(`${ordered.departureLocal}Z`);
+  const arrival =
+    ordered === undefined ? new Date(outbound.getTime() + 2 * HOUR) : new Date(`${ordered.arrivalLocal}Z`);
   const recordLocator = (records(order["associatedRecords"])[0]?.["reference"] as string | undefined) ?? "";
   const contact = records(order["contacts"])[0] ?? {};
   const contactName = (contact["addresseeName"] ?? {}) as JsonObject;
@@ -295,7 +330,7 @@ async function seedBooking(order: JsonObject, seed: BookingSeed = {}): Promise<s
         origin_iata: "MAD",
         destination_iata: "ORY",
         first_departure_at: outbound,
-        last_arrival_at: new Date(outbound.getTime() + 2 * HOUR),
+        last_arrival_at: arrival,
         validating_carrier: "IB",
         travelers_count: 1,
         currency: "EUR",
@@ -327,15 +362,17 @@ async function seedBooking(order: JsonObject, seed: BookingSeed = {}): Promise<s
         carrier_code: "IB",
         flight_number: "3436",
         departure_iata: "MAD",
+        departure_terminal: ordered?.departureTerminal ?? null,
         departure_local: local(outbound),
         departure_at: outbound,
         arrival_iata: "ORY",
-        arrival_local: local(new Date(outbound.getTime() + 2 * HOUR)),
-        arrival_at: new Date(outbound.getTime() + 2 * HOUR),
-        duration_minutes: 120,
+        arrival_terminal: ordered?.arrivalTerminal ?? null,
+        arrival_local: local(arrival),
+        arrival_at: arrival,
+        duration_minutes: ordered?.durationMinutes ?? 120,
         cabin: "ECONOMY",
         booking_class: "Q",
-        is_flown: outbound.getTime() + 2 * HOUR < now,
+        is_flown: arrival.getTime() < now,
       })
       .execute();
     await trx

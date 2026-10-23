@@ -103,7 +103,13 @@ describe("the baseline migrations", () => {
       expect(files.numbered.map((file) => [file.id, file.kind, file.phase, file.noTransaction])).toEqual([
         ["0001_baseline", "numbered", "expand", false],
         ...(set === "platform" ? [["0002_add_mvp_platform_deltas", "numbered", "expand", false]] : []),
-        ...(set === "tenant" ? [["0002_add_mvp_tenant_deltas", "numbered", "expand", false]] : []),
+        ...(set === "tenant"
+          ? [
+              ["0002_add_mvp_tenant_deltas", "numbered", "expand", false],
+              // The booking sync's claim column and last changes (FIX-W27-SYNC).
+              ["0003_add_booking_sync_claim", "numbered", "expand", false],
+            ]
+          : []),
       ]);
       expect(files.numbered[0]?.checksum).toBe(sha256(await readFile(resolve(REFERENCE_DDL, source))));
       expect(files.repeatable.map((file) => [file.id, file.phase])).toEqual(

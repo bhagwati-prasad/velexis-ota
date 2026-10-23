@@ -67,12 +67,16 @@ import {
   type ReconcileJobResult,
 } from "../../../src/bookings/reconcile.processor";
 import {
+  BOOKING_QUEUE_ALERT,
+  BOOKING_QUEUE_ALERT_ENTRIES,
+  bookingQueueAlertKey,
   RECONCILE_ADOPTED_EVENT,
   RECONCILE_DEADLINE_RETRIES,
   RECONCILE_DEADLINE_RETRY_EVENT,
   RECONCILE_JOB,
   RECONCILE_MANUAL_REVIEW_EVENT,
   RECONCILE_QUEUE_LIST_MAX,
+  reconcileJob,
   reconcileJobId,
   ReconcileRepository,
   type AdoptedClaim,
@@ -2057,5 +2061,135 @@ describe("the claims' lock mode (FIX-W26-BOOKINGS, lead decision (1) of 2026-10-
 
     expect(seen.claimed).toBeUndefined();
     expect(seen.adopted).not.toContain(stale);
+  });
+});
+
+// ---- FIX-W27-SYNC (lead decision (5) of 2026-10-23): a booking queue that is nearly full ----------------------------
+
+/** The staff alerts about alpha's booking queue (no booking: the OTA's), oldest first. */
+async function queueAlerts() {
+  return await alphaTx((trx) =>
+    trx
+      .selectFrom("notifications")
+      .select([
+        "template_key as templateKey",
+        "recipient",
+        "recipient_type as recipientType",
+        "booking_id as bookingId",
+        "dedupe_key as dedupeKey",
+        "payload",
+      ])
+      .where("dedupe_key", "like", `staff.manual_review:${BOOKING_QUEUE_ALERT}:%`)
+      .orderBy("created_at")
+      .orderBy("id")
+      .execute(),
+  );
+}
+
+describe("a booking queue that is nearly full (FIX-W27-SYNC, lead decision (5) of 2026-10-23)", () => {
+  /** The Queue List answers of these bookings hold this many entries (the stub's own, then old PNRs of others). */
+  let entries = 0;
+  let below: TimedOut;
+  let full: TimedOut;
+  let again: TimedOut;
+  let at: Date;
+  let nextDay: Date;
+  let results: ReconcileJobResult[];
+  let sameDay: Awaited<ReturnType<typeof queueAlerts>>;
+  let later: Awaited<ReturnType<typeof queueAlerts>>;
+
+  beforeAll(async () => {
+    useWorkerClock();
+    below = await timedOutCompletion("timeout-lost", undefined, "QUEUEBELOW");
+    full = await timedOutCompletion("timeout-lost", undefined, "QUEUEFULL");
+    again = await timedOutCompletion("timeout-lost", undefined, "QUEUEAGAIN");
+    const ours = new Set([below.bookingId, full.bookingId, again.bookingId]);
+    // Queue List of these bookings: the stub's entries, padded with PNRs of other travellers created long ago (outside
+    // every search window), up to `entries`, as a queue nobody cleaned would hold them.
+    const client = worker.get(AmadeusClient, { strict: false });
+    const real = client.listQueue.bind(client);
+    vi.spyOn(client, "listQueue").mockImplementation(async (context, input, options) => {
+      const reply = await real(context, input, options);
+      if (context.bookingId !== undefined && ours.has(context.bookingId)) {
+        const body = reply.body as { meta?: Record<string, unknown>; data?: unknown[] };
+        const data = [...(body.data ?? [])];
+        for (let index = data.length; index < entries; index += 1) {
+          data.push({
+            type: "pnrList",
+            id: `Q${index.toString(36).toUpperCase().padStart(5, "0")}-2000-01-01`,
+            creation: { dateTime: "2000-01-01T00:00" },
+            travelers: [{ names: [{ firstName: "OTHER", lastName: "PADDING" }] }],
+          });
+        }
+        body.data = data;
+        body.meta = { ...body.meta, count: data.length };
+      }
+      return reply;
+    });
+    // Every first attempt at the same instant (the same UTC day), 30 s after the last of the three claims.
+    at = new Date(
+      Math.max(below.started.getTime(), full.started.getTime(), again.started.getTime()) + 30 * SECOND,
+    );
+    entries = BOOKING_QUEUE_ALERT_ENTRIES - 1;
+    results = [await firstAttempt(below.bookingId, at)];
+    entries = BOOKING_QUEUE_ALERT_ENTRIES;
+    results.push(await firstAttempt(full.bookingId, at));
+    results.push(await firstAttempt(again.bookingId, at));
+    sameDay = await queueAlerts();
+    // A day later (past its reconcile_until): one attempt of the first booking, its queue fuller still.
+    nextDay = new Date(at.getTime() + 24 * 60 * MINUTE);
+    entries = BOOKING_QUEUE_ALERT_ENTRIES + 50;
+    clock.set(nextDay);
+    const job = reconcileJob(alphaId, below.bookingId, minuteBucket(nextDay));
+    await bookingsQueue.add(job.name, job.data, { jobId: job.opts.jobId });
+    results.push((await finished(bookingsQueue, job.opts.jobId)).returnvalue as ReconcileJobResult);
+    later = await queueAlerts();
+  }, SCENARIO_TIMEOUT_MS);
+
+  it("[FIX-W27-SYNC AC6] alerts staff when a Queue List answer holds 400 entries, at most once a day per OTA, never for 399", () => {
+    // 399 entries: no alert; 400: one; another booking's search of the same day: still one.
+    expect(sameDay).toEqual([
+      {
+        templateKey: "staff.manual_review",
+        recipient: OPS_EMAIL,
+        recipientType: "staff",
+        bookingId: null,
+        dedupeKey: bookingQueueAlertKey(at),
+        payload: {
+          booking: {
+            reference: "",
+            recordLocator: "",
+            consoleUrl: expect.stringMatching(/\/bookings$/) as unknown,
+          },
+          review: {
+            reason: expect.stringMatching(
+              new RegExp(`holds ${BOOKING_QUEUE_ALERT_ENTRIES} PNRs.*at most ${RECONCILE_QUEUE_LIST_MAX}`),
+            ) as unknown,
+          },
+        },
+      },
+    ]);
+    // The next day's search of a queue as full alerts again, with its count.
+    expect(later).toHaveLength(2);
+    expect(later[1]).toMatchObject({
+      dedupeKey: bookingQueueAlertKey(nextDay),
+      payload: {
+        review: {
+          reason: expect.stringContaining(`holds ${BOOKING_QUEUE_ALERT_ENTRIES + 50} PNRs`) as unknown,
+        },
+      },
+    });
+    expect(bookingQueueAlertKey(nextDay)).not.toBe(bookingQueueAlertKey(at));
+  });
+
+  it("[FIX-W27-SYNC AC6] leaves the search's result as it is: the padding is no candidate and nothing is truncated", () => {
+    // Before reconcile_until a complete search that finds nothing keeps the booking pending, with or without an alert.
+    const [withoutAlert, ...withAlert] = results
+      .slice(0, 3)
+      .map(({ bookingId: _bookingId, ...result }) => result);
+    expect(withoutAlert).toMatchObject({ outcome: "pending", attempts: 1 });
+    expect(withAlert).toEqual([withoutAlert, withoutAlert]);
+    // After it, the complete search of 450 entries proves the order absent, as without the alert.
+    expect(results[3]).toMatchObject({ outcome: "not_found" });
   });
 });

@@ -16,8 +16,10 @@
 //   - the booking: `confirmed`, `ticketed` (every traveller has an e-ticket) or `partially_ticketed`, the Amadeus order
 //     id, record locator, offices, `last_ticketing_date` (the earliest of the offers) and `ticketing_deadline_at` (its
 //     start in the OTA's time zone, or the ticketing agreement's date when earlier, OADR-0008 point 3), the ticketing
-//     agreement, automated processes and forms of payment, `order_snapshot` (the order after the shared redactor:
-//     document, discount card and certificate numbers masked, card data removed), `last_synced_at`;
+//     agreement, automated processes and forms of payment, the forms of identification with their numbers cut to the
+//     last 4 characters (`form_of_identifications`, OBE-062's maskedIdentifications, since FIX-W27-SYNC), `order_snapshot`
+//     (the order after the shared redactor: document, discount card and certificate numbers masked, card data
+//     removed), `last_synced_at`;
 //   - `ticketing_status`: `issued` / `partially_issued` with tickets; without them `failed` when the order was asked
 //     to issue (the ticketing job retries from 5 minutes later, OBE-044), `manual_review` for that policy, else
 //     `pending` (capture, then Flight Order Issue);
@@ -27,8 +29,9 @@
 // `OrderRecorder.event` is the one way the bookings module writes a booking event, so it is where the booking documents
 // are asked for (OBE-053, documents/documents.processor.ts): `booking.created` (the itinerary, and the e-ticket receipts
 // of an order that came back issued), `booking.ticketed` (the receipts and a new itinerary, whichever path stored the
-// tickets: checkout.complete, the ticketing job, a refresh) and `booking.cancelled` (the cancelled itinerary) enqueue
-// `document.render` jobs after the commit of the event's transaction.
+// tickets: checkout.complete, the ticketing job, a refresh), `booking.schedule_changed` (a new itinerary, whichever
+// synchronisation found the change; lead decision (3) of 2026-10-23) and `booking.cancelled` (the cancelled itinerary)
+// enqueue `document.render` jobs after the commit of the event's transaction.
 //
 // `toBooking` turns the stored rows into the contract's Booking in customer scope: selling amounts only (no net,
 // markup or office), documents with `numberMasked`, discount numbers masked, customer-visible remarks only. Bookings
@@ -62,6 +65,7 @@ import { warningsOf } from "../shopping/priced-offers.mapper";
 import type { ContextActor } from "../tenancy/tenant-context";
 import type { TenantTransaction } from "../tenancy/tenant-tx";
 import { velexisRemarkText } from "./booking-reference";
+import { maskedIdentifications } from "./identifications";
 import {
   BookingsRepository,
   type BookingChildren,
@@ -677,6 +681,8 @@ export class OrderRecorder {
         : {}),
       validating_carrier: order.offers[0]?.validatingAirlineCodes[0] ?? booking.validatingCarrier,
       form_of_payments: JSON.stringify(redactPayload(order.formOfPayments)),
+      // The forms of identification, numbers cut to their last 4 (FIX-W27-SYNC: console.bookings.get shows them).
+      form_of_identifications: JSON.stringify(maskedIdentifications(order.data["formOfIdentifications"])),
       order_snapshot: JSON.stringify(redactPayload(order.data)),
       order_dictionaries: order.dictionaries === undefined ? null : JSON.stringify(order.dictionaries),
       ...(first === undefined || last === undefined

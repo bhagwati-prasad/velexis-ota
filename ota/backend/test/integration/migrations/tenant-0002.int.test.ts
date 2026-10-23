@@ -12,6 +12,9 @@
 //   - a tenant provisioned by the worker's ProvisioningService (OBE-005) after this task: 0002 in its ledger, and
 //     velexis_ota_app writes the two new tables through the default privileges of provisioning (the file has no
 //     GRANT; test/contract/migration-0002.contract.test.ts checks the file).
+// Since FIX-W27-SYNC the release holds tenant migration 0003 (`bookings.sync_claimed_at`, `bookings.sync_changes`)
+// after 0002: provisioning and the deploy fan-out apply both, so the tests above expect the release's files (0002 and
+// 0003), and one test checks the columns of 0003 itself.
 // The file runs on its own clone of the @velexis/testing template. Tenant rows are written and read as
 // velexis_ota_app through tenantTx, the application's path; the catalogue is read as velexis_migrator, a member of
 // the schemas' owner (test code may name a schema, application code never). Every test uses schemas of its own.
@@ -48,6 +51,9 @@ import { PlatformReadRepository } from "../../../src/tenancy/platform-read.repos
 
 const MIGRATION_ID = "0002_add_mvp_tenant_deltas";
 const MIGRATION_FILE = `${MIGRATION_ID}.sql`;
+/** The release's last file (FIX-W27-SYNC): a schema at version N has it too. */
+const LATEST_ID = "0003_add_booking_sync_claim";
+const LATEST_FILE = `${LATEST_ID}.sql`;
 const GENERATED_TYPES = join(APP_DIR, "..", "..", "packages", "db", "src", "generated", "tenant.ts");
 /** The privileges of velexis_ota_app on every tenant table: exactly DML (OADR-0007 item 3). */
 const DML = ["SELECT", "INSERT", "UPDATE", "DELETE"];
@@ -144,8 +150,8 @@ async function insertTenant(key: string, status: string): Promise<string> {
 
 const sha256 = (bytes: Uint8Array): string => createHash("sha256").update(bytes).digest("hex");
 
-async function migrationChecksum(): Promise<string> {
-  return sha256(await readFile(join(TENANT_MIGRATIONS_DIR, MIGRATION_FILE)));
+async function migrationChecksum(file = MIGRATION_FILE): Promise<string> {
+  return sha256(await readFile(join(TENANT_MIGRATIONS_DIR, file)));
 }
 
 async function tablesOf(schema: string): Promise<string[]> {
@@ -479,8 +485,9 @@ describe("tenant migration 0002 on PostgreSQL", () => {
     expect(result.applied.map((file) => [file.id, file.phase, file.transaction, file.status])).toEqual([
       ["0001_baseline", "expand", true, "applied"],
       [MIGRATION_ID, "expand", true, "applied"],
+      [LATEST_ID, "expand", true, "applied"],
     ]);
-    // Both ledger rows come from the one provisioning transaction.
+    // Every ledger row comes from the one provisioning transaction.
     expect(new Set((await ledgerOf(schema)).map((row) => row.xid)).size).toBe(1);
     const tables = await tablesOf(schema);
     expect(tables).toHaveLength(44);
@@ -496,6 +503,9 @@ describe("tenant migration 0002 on PostgreSQL", () => {
     expect(actual["checkouts.pricing_mode"]).toEqual({ nullable: false, hasDefault: true });
     expect(actual["bookings.reconcile_until"]).toEqual({ nullable: true, hasDefault: false });
     expect(actual["storefront_settings.booking_queue_number"]).toEqual({ nullable: true, hasDefault: false });
+    // 0003 (FIX-W27-SYNC).
+    expect(actual["bookings.sync_claimed_at"]).toEqual({ nullable: true, hasDefault: false });
+    expect(actual["bookings.sync_changes"]).toEqual({ nullable: false, hasDefault: true });
   });
 
   it("upgrades a schema at N-1 with baseline rows in payments, checkouts, bookings and storefront_settings: the rows survive and still validate [OBE-008 AC1]", async () => {
@@ -512,10 +522,13 @@ describe("tenant migration 0002 on PostgreSQL", () => {
     const fanOut = await migrateTenants({ dir: TENANT_MIGRATIONS_DIR, url: db.urlFor("migrator") });
 
     expect(fanOut.exitCode).toBe(0);
-    expect(fanOut.report?.target).toBe(MIGRATION_ID);
+    expect(fanOut.report?.target).toBe(LATEST_ID);
     expect(fanOut.report?.failed).toEqual([]);
     const upgraded = fanOut.report?.applied.find((entry) => entry.schema === schema);
-    expect(upgraded?.files.map((file) => [file.id, file.status])).toEqual([[MIGRATION_ID, "applied"]]);
+    expect(upgraded?.files.map((file) => [file.id, file.status])).toEqual([
+      [MIGRATION_ID, "applied"],
+      [LATEST_ID, "applied"],
+    ]);
 
     // The rows are all there, unchanged, with the defaults of the new columns.
     const after = await upgradedRows(schema);
@@ -530,6 +543,9 @@ describe("tenant migration 0002 on PostgreSQL", () => {
         reconcile_until: null,
         reconcile_attempts: 0,
         reconcile_outcome: null,
+        // 0003 (FIX-W27-SYNC): no claim yet, no change recorded.
+        sync_claimed_at: null,
+        sync_changes: [],
       })),
     );
     expect(after.storefrontSettings).toEqual(
@@ -582,7 +598,7 @@ describe("tenant migration 0002 on PostgreSQL", () => {
     });
     expect(rewritten).toEqual([2, 1, 1, 1]);
 
-    // The upgraded schema has exactly the catalogue of a schema provisioned with both files.
+    // The upgraded schema has exactly the catalogue of a schema provisioned with the release's files.
     await provision("tenant_m2_reference");
     const reference = await catalogue("tenant_m2_reference");
     expect(reference.length).toBeGreaterThan(500);
@@ -829,6 +845,7 @@ describe("tenant migration 0002 on PostgreSQL", () => {
     expect(result).toMatchObject({ created: false, upToDate: 1, ledgerOnly: [] });
     expect(result.applied.map((file) => [file.id, file.checksum])).toEqual([
       [MIGRATION_ID, await migrationChecksum()],
+      [LATEST_ID, await migrationChecksum(LATEST_FILE)],
     ]);
     const ledger = await ledgerOf(schema);
     expect(ledger.map(({ id, checksum, phase, status }) => ({ id, checksum, phase, status }))).toEqual([
@@ -839,6 +856,7 @@ describe("tenant migration 0002 on PostgreSQL", () => {
         status: "applied",
       },
       { id: MIGRATION_ID, checksum: await migrationChecksum(), phase: "expand", status: "applied" },
+      { id: LATEST_ID, checksum: await migrationChecksum(LATEST_FILE), phase: "expand", status: "applied" },
     ]);
     expect(ledger[1]?.execution_ms).toEqual(expect.any(Number));
     // The ledger row and the two tables of 0002 were written by one transaction, a later one than the baseline's.
@@ -855,7 +873,7 @@ describe("tenant migration 0002 on PostgreSQL", () => {
       dir: TENANT_MIGRATIONS_DIR,
       url: db.urlFor("migrator"),
     });
-    expect(again).toMatchObject({ applied: [], upToDate: 2 });
+    expect(again).toMatchObject({ applied: [], upToDate: 3 });
   });
 
   it("provisions a new tenant with 0002 in its ledger; velexis_ota_app writes storefront_assets and storefront_pages through the default privileges [OBE-008 AC2]", async () => {
@@ -868,13 +886,14 @@ describe("tenant migration 0002 on PostgreSQL", () => {
     expect(result.status).toBe("provisioned");
     const payload = result.status === "provisioned" ? result.payload : undefined;
     expect(payload?.schemaName).toBe(schema);
-    expect(payload?.schemaVersion).toBe(MIGRATION_ID);
+    expect(payload?.schemaVersion).toBe(LATEST_ID);
     expect(payload?.migrations.map((migration) => [migration.version, migration.phase])).toEqual([
       ["0001_baseline", "expand"],
       [MIGRATION_ID, "expand"],
+      [LATEST_ID, "expand"],
     ]);
     const ledger = await ledgerOf(schema);
-    expect(ledger.map(({ id, checksum }) => [id, checksum]).at(-1)).toEqual([
+    expect(ledger.map(({ id, checksum }) => [id, checksum]).find(([id]) => id === MIGRATION_ID)).toEqual([
       MIGRATION_ID,
       await migrationChecksum(),
     ]);
@@ -978,5 +997,59 @@ describe("tenant migration 0002 on PostgreSQL", () => {
         pages: await trx.selectFrom("storefront_pages").select("id").execute(),
       })),
     ).toEqual({ assets: [], pages: [] });
+  });
+});
+
+describe("tenant migration 0003 on PostgreSQL (FIX-W27-SYNC)", () => {
+  it("[FIX-W27-SYNC AC1] adds the claim column, empty, and the last changes, an empty list that holds arrays only", async () => {
+    const schema = "tenant_m3_claim";
+    await provision(schema);
+    await insertBaselineRows(schema);
+
+    const booking = await tenantTx(app, schema, (trx) =>
+      trx.selectFrom("bookings").select(["id", "sync_claimed_at", "sync_changes"]).executeTakeFirstOrThrow(),
+    );
+    expect(booking).toMatchObject({ sync_claimed_at: null, sync_changes: [] });
+    const claimedAt = new Date("2026-10-23T09:00:00.000Z");
+    await tenantTx(app, schema, (trx) =>
+      trx
+        .updateTable("bookings")
+        .set({
+          sync_claimed_at: claimedAt,
+          sync_changes: JSON.stringify([
+            { path: "/status", label: "Booking status", before: "a", after: "b" },
+          ]),
+        })
+        .where("id", "=", booking.id)
+        .execute(),
+    );
+    expect(
+      await tenantTx(app, schema, (trx) =>
+        trx.selectFrom("bookings").select(["sync_claimed_at", "sync_changes"]).executeTakeFirstOrThrow(),
+      ),
+    ).toEqual({
+      sync_claimed_at: claimedAt,
+      sync_changes: [{ path: "/status", label: "Booking status", before: "a", after: "b" }],
+    });
+    expect(
+      await failure(
+        tenantTx(app, schema, (trx) =>
+          trx
+            .updateTable("bookings")
+            .set({ sync_changes: JSON.stringify({ path: "/status" }) })
+            .where("id", "=", booking.id)
+            .execute(),
+        ),
+      ),
+    ).toEqual({ code: CHECK_VIOLATION, constraint: "bookings_sync_changes_ck" });
+    // Documented like every column (conventions §9).
+    const { rows } = await sql<{ column: string; comment: string | null }>`
+      SELECT a.attname AS column, col_description(a.attrelid, a.attnum) AS comment FROM pg_catalog.pg_attribute a
+      WHERE a.attrelid = ${`${schema}.bookings`}::regclass AND a.attname IN ('sync_claimed_at', 'sync_changes')
+      ORDER BY a.attname`.execute(migrator);
+    expect(rows.map((row) => [row.column, (row.comment ?? "").length > 20])).toEqual([
+      ["sync_changes", true],
+      ["sync_claimed_at", true],
+    ]);
   });
 });

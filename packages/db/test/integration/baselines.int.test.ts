@@ -82,6 +82,11 @@ const TENANT_MIGRATION_0002 = {
   file: "0002_add_mvp_tenant_deltas.sql",
   tables: ["storefront_assets", "storefront_pages"],
 };
+/** Tenant migration 0003 (FIX-W27-SYNC): two columns of `bookings`, no table. */
+const TENANT_MIGRATION_0003 = {
+  id: "0003_add_booking_sync_claim",
+  file: "0003_add_booking_sync_claim.sql",
+};
 /** ADR-0004: the only platform.accounts columns velexis_ota_app may read, in table order. */
 const OTA_READABLE_ACCOUNT_COLUMNS = [
   "id",
@@ -459,6 +464,12 @@ describe("the baselines and the OTA read grants on PostgreSQL", () => {
       {
         id: TENANT_MIGRATION_0002.id,
         checksum: await sha256(join(TENANT_DIR, TENANT_MIGRATION_0002.file)),
+        phase: "expand",
+        status: "applied",
+      },
+      {
+        id: TENANT_MIGRATION_0003.id,
+        checksum: await sha256(join(TENANT_DIR, TENANT_MIGRATION_0003.file)),
         phase: "expand",
         status: "applied",
       },

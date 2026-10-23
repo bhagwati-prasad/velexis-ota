@@ -5,6 +5,8 @@
 // module's one way to write a booking event) calls `afterBookingEvent` in the transaction that writes the event,
 //   booking.created    the order was recorded: the itinerary, and a receipt per e-ticket when the order came back issued;
 //   booking.ticketed   tickets were stored: a receipt per e-ticket and a new itinerary (the previous one superseded);
+//   booking.schedule_changed  the airline changed the flights (any synchronisation that found it, FIX-W27-SYNC, lead
+//                      decision (3) of 2026-10-23): a new itinerary with the new times;
 //   booking.cancelled  a new itinerary, marked cancelled;
 // and after that transaction's commit (`afterCommit` of TenantTx; a rollback drops them) the jobs go to `ota-documents`:
 // `document.render {tenantId, bookingId, kind, bookingVersion[, ticketId]}`, the booking's version as the transaction
@@ -177,6 +179,7 @@ export function parseDocumentRenderJobData(data: unknown): DocumentRenderJobData
 export const DOCUMENT_TRIGGERS: Readonly<Record<string, { readonly receipts: boolean }>> = Object.freeze({
   "booking.created": { receipts: true },
   "booking.ticketed": { receipts: true },
+  "booking.schedule_changed": { receipts: false },
   "booking.cancelled": { receipts: false },
 });
 

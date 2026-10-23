@@ -11,6 +11,7 @@ import {
   diffTickets,
   orderSegmentsOf,
   scheduleChangeOf,
+  syncChangesOf,
   ticketUpgradeOf,
   type OrderSegment,
 } from "./order-diff";
@@ -347,5 +348,107 @@ describe("diffTickets and ticketUpgradeOf", () => {
     expect(
       ticketUpgradeOf("confirmed", ["1"], [], [orderTicket("000-0000000001", { documentStatus: "VOID" })]),
     ).toBeUndefined();
+  });
+});
+
+describe("syncChangesOf", () => {
+  it("lists what a record changes as JSON pointers into the booking, with labels, before and after [FIX-W27-SYNC AC5]", () => {
+    const stored = recorded();
+    const later = order((data) => {
+      const [segment] = rawSegments(data);
+      (segment?.["departure"] as JsonObject)["at"] = "2027-01-15T08:45:00";
+      if (segment !== undefined) {
+        segment["isFlown"] = true;
+      }
+    });
+    const storedTickets = [ticketRow("000-0000000002")];
+    const tickets = diffTickets(storedTickets, [
+      orderTicket("000-0000000001"),
+      orderTicket("000-0000000002", { documentStatus: "VOID" }),
+    ]);
+
+    expect(
+      syncChangesOf({
+        statusBefore: "confirmed",
+        statusAfter: "ticketed",
+        ticketingStatusBefore: "pending",
+        ticketingStatusAfter: "issued",
+        segments: stored,
+        segmentDiff: diffSegments(stored, orderSegmentsOf(later)),
+        tickets: storedTickets,
+        ticketDiff: tickets,
+      }),
+    ).toEqual([
+      { path: "/status", label: "Booking status", before: "confirmed", after: "ticketed" },
+      { path: "/ticketing/status", label: "Ticketing status", before: "pending", after: "issued" },
+      // Tickets by their place in the booking's list (ordered by document number).
+      {
+        path: "/tickets/0",
+        label: "Ticket 000-0000000001",
+        before: null,
+        after: {
+          documentType: "ETICKET",
+          documentNumber: "000-0000000001",
+          status: "ISSUED",
+          travelerId: "1",
+        },
+      },
+      { path: "/tickets/1/status", label: "Ticket 000-0000000002 status", before: "ISSUED", after: "VOID" },
+      {
+        path: "/itineraries/0/segments/0/departure/at",
+        label: "IB3436 departure time",
+        before: "2027-01-15T07:15:00",
+        after: "2027-01-15T08:45:00",
+      },
+      { path: "/itineraries/0/segments/0/isFlown", label: "IB3436 flown", before: false, after: true },
+    ]);
+  });
+
+  it("names a removed segment's cancellation and an added segment, and nothing when nothing changed [FIX-W27-SYNC AC5]", () => {
+    const [segment] = recorded();
+    if (segment === undefined) {
+      throw new Error("no segment");
+    }
+    const reaccommodated = order((data) => {
+      const [raw] = rawSegments(data);
+      if (raw !== undefined) {
+        raw["id"] = "4";
+        raw["number"] = "3438";
+      }
+    });
+    const diff = diffSegments([segment], orderSegmentsOf(reaccommodated));
+    const unchanged = {
+      statusBefore: "confirmed",
+      statusAfter: "confirmed",
+      ticketingStatusBefore: "pending",
+      ticketingStatusAfter: "pending",
+      segments: [segment],
+      tickets: [],
+      ticketDiff: { added: [], statusChanged: [] },
+    };
+
+    expect(syncChangesOf({ ...unchanged, segmentDiff: diff })).toEqual([
+      {
+        path: "/itineraries/0/segments/0/status",
+        label: "IB3436 status",
+        before: "CONFIRMED",
+        after: "CANCELLED",
+      },
+      {
+        path: "/itineraries/0/segments/0",
+        label: "IB3438 added",
+        before: null,
+        after: {
+          flight: "IB3438",
+          origin: "MAD",
+          destination: "ORY",
+          departureAt: "2027-01-15T07:15:00",
+          arrivalAt: "2027-01-15T09:20:00",
+        },
+      },
+    ]);
+    expect(
+      syncChangesOf({ ...unchanged, segmentDiff: diffSegments([segment], orderSegmentsOf(order())) }),
+    ).toEqual([]);
   });
 });

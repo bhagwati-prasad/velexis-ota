@@ -31,8 +31,10 @@ import { PlatformReadRepository } from "../../../src/tenancy/platform-read.repos
 import { TEST_STOREFRONT_BASE_DOMAIN, testApiCredentials } from "../../helpers/api-env";
 import { unreachableRedisUrl } from "../../helpers/ports";
 
-/** The last file of migrations/tenant: the version tenant_demo reaches (OBE-008). */
-const SCHEMA_VERSION = "0002_add_mvp_tenant_deltas";
+/** The last file of migrations/tenant: the version tenant_demo reaches (OBE-008, FIX-W27-SYNC). */
+const SCHEMA_VERSION = "0003_add_booking_sync_claim";
+/** Every file of migrations/tenant, as a schema's ledger lists them. */
+const LEDGER = ["0001_baseline", "0002_add_mvp_tenant_deltas", SCHEMA_VERSION];
 /** The platform dev:seed's test offices (PBE-034). */
 const OFFICES = ["DEV1A0001", "DEV1A0002", "DEV1A0003"];
 const KEY_TEXT = /\b[ps]k_test_[A-Za-z0-9]{40}\b/g;
@@ -246,7 +248,7 @@ describe("dev:seed", () => {
       ).rows,
     }));
     expect(settings).toEqual([{ brand_name: "Demo Travel" }]);
-    expect(ledger.map((row) => row.id)).toEqual(["0001_baseline", SCHEMA_VERSION]);
+    expect(ledger.map((row) => row.id)).toEqual(LEDGER);
 
     // The platform's mirror of the ledger, as the record_migrations post-step writes it.
     const mirror = await migrator
@@ -255,10 +257,9 @@ describe("dev:seed", () => {
       .where("tenant_id", "=", tenant.id)
       .orderBy("version")
       .execute();
-    expect(mirror).toEqual([
-      { version: "0001_baseline", status: "applied", schema_name: "tenant_demo" },
-      { version: SCHEMA_VERSION, status: "applied", schema_name: "tenant_demo" },
-    ]);
+    expect(mirror).toEqual(
+      LEDGER.map((version) => ({ version, status: "applied", schema_name: "tenant_demo" })),
+    );
     expect(first.stdout).toContain(`Schema tenant_demo at ${SCHEMA_VERSION}: provisioned; tenant activated.`);
     expect(second.stdout).toContain(
       `Schema tenant_demo at ${SCHEMA_VERSION}: complete already; tenant active.`,
@@ -365,7 +366,7 @@ describe("dev:seed", () => {
           failed: [
             {
               schema: "tenant_alpha",
-              file: "0002_add_mvp_tenant_deltas.sql",
+              file: `${SCHEMA_VERSION}.sql`,
               error: { message: "lock timeout", code: "55P03" },
               exitCode: 1,
             },
@@ -419,7 +420,7 @@ describe("dev:seed", () => {
         expect(event.tenantId).toBe(tenant.id);
         expect(event.payload).toMatchObject({
           schemaVersion: SCHEMA_VERSION,
-          migrations: [{ version: "0001_baseline" }, { version: SCHEMA_VERSION }],
+          migrations: LEDGER.map((version) => ({ version })),
         });
       }
       for (const event of failed) {

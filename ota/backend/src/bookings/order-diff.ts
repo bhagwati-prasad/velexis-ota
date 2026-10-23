@@ -1,14 +1,14 @@
 // The diff of the booking sync (OBE-045; ota/docs/flows/ticketing-and-documents.md §3 step 5, db README §6 "Booking
 // sync", the document's consoleResyncBooking): what a Flight Order Management GET of a booking's order says changed
 // since the booking was last recorded, without any I/O. booking-sync.service.ts reads the order and the stored rows and
-// writes what this file decides.
+// writes what this file decides, for the background sync and for every refresh (see "One diff for every path").
 //
 // Segments are matched by their Amadeus flight offer id and segment id (`booking_segments_amadeus_uq`, the keys the
 // record step stored, order-recorder.ts `segmentPlansOf`):
 //   - a matched segment whose times, airports, terminals, marketing flight or `bookingStatus` differ is **changed**
 //     (SCHEDULE_FIELDS, local times compared as `YYYY-MM-DDTHH:MM:SS`, as the order and the table both keep them); a
 //     `bookingStatus` the order leaves out keeps the stored one; `isFlown` alone is a **state** change, recorded
-//     without a schedule change, as the customer refresh records it (customer-bookings.service.ts);
+//     without a schedule change;
 //   - a segment of the order the booking does not have is **added** (an airline's re-accommodation);
 //   - a stored segment the order no longer has, and that is not `CANCELLED` already, is **removed**: it is recorded as
 //     `CANCELLED`, never deleted (tickets and services name segment ids).
@@ -23,10 +23,17 @@
 //
 // Tickets are matched by document number: new ones are **added**, known ones whose `documentStatus` changed (VOID,
 // REFUNDED, EXCHANGED …) are **status changes**; a booking whose travellers are now all or partly ticketed is upgraded
-// as the customer refresh upgrades it (`ticketed`/`partially_ticketed`, `issued`/`partially_issued`).
+// (`ticketed`/`partially_ticketed`, `issued`/`partially_issued`).
 //
 // The event data (`scheduleChangeOf`) is customer-safe: segment ids, flights, airports, local times and statuses, never
 // a price, an office or a person's data.
+//
+// **One diff for every path** (lead decision (3) of 2026-10-23, FIX-W27-SYNC): the background sync, the customer
+// refresh, console.bookings.get with `refresh=true` and console.bookings.resync all record a fetched order through this
+// diff (BookingSyncService's record step), so a schedule change is reported whichever path reads it first. What a
+// record changed is also kept as `syncChangesOf`'s list (`bookings.sync_changes`, the console's
+// ConsoleSupplierSync.differences): JSON pointers into the booking as the API answers it, with a label, the value before
+// and the value after (the booking's and ticketing status, tickets, segments).
 import type { BookingSegmentRow, BookingTicketRow } from "./bookings.repository";
 import {
   segmentPlansOf,
@@ -234,7 +241,7 @@ export interface TicketUpgrade {
 /**
  * The upgrade of a `confirmed` or `partially_ticketed` booking whose stored and new tickets now cover every traveller
  * (`ticketed`), or some of a `confirmed` one (`partially_ticketed`); `undefined` when nothing changes. Stored tickets
- * the order no longer lists count as they are stored, as the customer refresh counts them.
+ * the order no longer lists count as they are stored.
  */
 export function ticketUpgradeOf(
   bookingStatus: string,
@@ -290,6 +297,150 @@ const FIELD_NAMES: Readonly<Record<ScheduleField, string>> = Object.freeze({
   flightNumber: "flightNumber",
   status: "status",
 });
+
+/** One difference a recorded synchronisation found (the document's ConsoleSyncChange). */
+export interface SyncChange {
+  /** JSON pointer into the booking as the API answers it (`/itineraries/0/segments/0/departure/at`). */
+  readonly path: string;
+  /** For people: `IB3436 departure time`. */
+  readonly label: string;
+  readonly before: unknown;
+  readonly after: unknown;
+}
+
+/** What `syncChangesOf` compares. */
+export interface SyncChangesInput {
+  readonly statusBefore: string;
+  readonly statusAfter: string;
+  readonly ticketingStatusBefore: string;
+  readonly ticketingStatusAfter: string;
+  /** The stored segments before the record, in their order (itinerary, then segment). */
+  readonly segments: readonly BookingSegmentRow[];
+  readonly segmentDiff: SegmentDiff;
+  /** The stored tickets before the record. */
+  readonly tickets: readonly BookingTicketRow[];
+  readonly ticketDiff: TicketDiff;
+}
+
+/** The pointer and label suffix of each schedule field (BookingSegment of the document). */
+const FIELD_POINTERS: Readonly<Record<ScheduleField, { readonly path: string; readonly label: string }>> =
+  Object.freeze({
+    departureIata: { path: "/departure/iataCode", label: "departure airport" },
+    departureTerminal: { path: "/departure/terminal", label: "departure terminal" },
+    departureLocal: { path: "/departure/at", label: "departure time" },
+    arrivalIata: { path: "/arrival/iataCode", label: "arrival airport" },
+    arrivalTerminal: { path: "/arrival/terminal", label: "arrival terminal" },
+    arrivalLocal: { path: "/arrival/at", label: "arrival time" },
+    carrierCode: { path: "/carrierCode", label: "carrier" },
+    flightNumber: { path: "/number", label: "flight number" },
+    status: { path: "/status", label: "status" },
+  });
+
+/**
+ * The differences a record makes (see the file header), in the order the console's resync lists them: the booking's
+ * status, its ticketing status, the tickets (by their place in the booking's list, ordered by document number), then the
+ * segments (by their itinerary and place in it); an empty list when the record changes none of them.
+ */
+export function syncChangesOf(input: SyncChangesInput): SyncChange[] {
+  const changes: SyncChange[] = [];
+  if (input.statusBefore !== input.statusAfter) {
+    changes.push({
+      path: "/status",
+      label: "Booking status",
+      before: input.statusBefore,
+      after: input.statusAfter,
+    });
+  }
+  if (input.ticketingStatusBefore !== input.ticketingStatusAfter) {
+    changes.push({
+      path: "/ticketing/status",
+      label: "Ticketing status",
+      before: input.ticketingStatusBefore,
+      after: input.ticketingStatusAfter,
+    });
+  }
+  const numbers = [
+    ...new Set([
+      ...input.tickets.map((ticket) => ticket.documentNumber),
+      ...input.ticketDiff.added.map((ticket) => ticket.documentNumber),
+    ]),
+  ].sort();
+  for (const ticket of input.ticketDiff.added) {
+    changes.push({
+      path: `/tickets/${numbers.indexOf(ticket.documentNumber)}`,
+      label: `Ticket ${ticket.documentNumber}`,
+      before: null,
+      after: {
+        documentType: ticket.documentType,
+        documentNumber: ticket.documentNumber,
+        status: ticket.documentStatus,
+        travelerId: ticket.travelerId,
+      },
+    });
+  }
+  for (const changed of input.ticketDiff.statusChanged) {
+    changes.push({
+      path: `/tickets/${numbers.indexOf(changed.stored.documentNumber)}/status`,
+      label: `Ticket ${changed.stored.documentNumber} status`,
+      before: changed.from,
+      after: changed.to,
+    });
+  }
+  // The place of each stored segment in the booking's itineraries (BookingItinerary.segments).
+  const itineraries = [...new Set(input.segments.map((segment) => segment.itineraryIndex))].sort(
+    (a, b) => a - b,
+  );
+  const pointerOf = (segment: BookingSegmentRow): string => {
+    const bound = input.segments.filter((candidate) => candidate.itineraryIndex === segment.itineraryIndex);
+    return `/itineraries/${itineraries.indexOf(segment.itineraryIndex)}/segments/${bound.indexOf(segment)}`;
+  };
+  const flown = new Map(input.segmentDiff.flown.map((entry) => [entry.stored.id, entry.isFlown]));
+  for (const segment of input.segments) {
+    const flight = flightOf(segment);
+    const changed = input.segmentDiff.changed.find((entry) => entry.stored.id === segment.id);
+    for (const change of changed?.changes ?? []) {
+      const field = FIELD_POINTERS[change.field];
+      changes.push({
+        path: `${pointerOf(segment)}${field.path}`,
+        label: `${flight} ${field.label}`,
+        before: change.from,
+        after: change.to,
+      });
+    }
+    const isFlown = flown.get(segment.id);
+    if (isFlown !== undefined) {
+      changes.push({
+        path: `${pointerOf(segment)}/isFlown`,
+        label: `${flight} flown`,
+        before: segment.isFlown,
+        after: isFlown,
+      });
+    }
+    if (input.segmentDiff.removed.includes(segment)) {
+      changes.push({
+        path: `${pointerOf(segment)}/status`,
+        label: `${flight} status`,
+        before: segment.status,
+        after: "CANCELLED",
+      });
+    }
+  }
+  for (const segment of input.segmentDiff.added) {
+    changes.push({
+      path: `/itineraries/${segment.itineraryIndex}/segments/${segment.segmentIndex}`,
+      label: `${flightOf(segment)} added`,
+      before: null,
+      after: {
+        flight: flightOf(segment),
+        origin: segment.departureIata,
+        destination: segment.arrivalIata,
+        departureAt: segment.departureLocal,
+        arrivalAt: segment.arrivalLocal,
+      },
+    });
+  }
+  return changes;
+}
 
 /** The schedule change of `diff`, or `undefined` when no segment changed, was added or was removed. */
 export function scheduleChangeOf(diff: SegmentDiff): ScheduleChange | undefined {

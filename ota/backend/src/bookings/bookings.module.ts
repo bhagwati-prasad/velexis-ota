@@ -33,6 +33,12 @@
 // provides the gateway itself on the worker's platform caches, never PaymentGatewayModule (the API's tenancy module).
 // Since OBE-045 also the `bookings.sync_scan` handler and the `booking.sync` jobs (booking-sync.processor.ts, which the
 // `ota-bookings` consumer hands them to) with the background sync of booking-sync.service.ts.
+//
+// Since FIX-W27-SYNC (lead decision (3) of 2026-10-23) BookingSyncService runs in both processes: the API's
+// CustomerBookingsService refreshes through it, and ConsoleModule's console.bookings.resync calls it (it is exported),
+// so every path records a fetched order through the same diff. Its staff alerts (StaffAlerts, also the reconciler's)
+// take the process's options: STAFF_ALERT_OPTIONS from `apiStaffAlertOptions` here, `workerStaffAlertOptions` in the
+// worker.
 import { Module } from "@nestjs/common";
 import { AmadeusModule, AmadeusWorkerModule } from "../amadeus/amadeus.module";
 import { CheckoutRepository } from "../checkout/checkout.repository";
@@ -62,6 +68,7 @@ import { BookingTravelerDocuments, bookingsKeyProvider, OrderRecorder } from "./
 import { ReconcileProcessor, ReconcileScan } from "./reconcile.processor";
 import { ReconcileRepository, ReconcileService } from "./reconcile.service";
 import { TicketingProcessor, TicketingScan } from "./ticketing.processor";
+import { apiStaffAlertOptions, StaffAlerts, workerStaffAlertOptions } from "./staff-alerts";
 import { TicketingRepository, TicketingService } from "./ticketing.service";
 
 @Module({
@@ -79,6 +86,11 @@ import { TicketingRepository, TicketingService } from "./ticketing.service";
     CompleteCheckoutIdempotencyHooks,
     ReconcileRepository,
     CustomerBookingsService,
+    // Every refresh records the order through the background sync's diff (FIX-W27-SYNC).
+    BookingSyncService,
+    BookingSyncRepository,
+    StaffAlerts,
+    apiStaffAlertOptions,
     BookingChangesService,
     BookingChangesRepository,
     BookingAccessContext,
@@ -102,6 +114,7 @@ import { TicketingRepository, TicketingService } from "./ticketing.service";
   exports: [
     BookingOrchestrator,
     BookingsRepository,
+    BookingSyncService,
     BookingTravelerDocuments,
     CustomerBookingsService,
     PaymentsRepository,
@@ -130,6 +143,9 @@ export class BookingsModule {}
     BookingSyncService,
     BookingSyncJobs,
     BookingSyncScan,
+    // The staff alerts of the reconciliation and the sync (FIX-W27-SYNC).
+    StaffAlerts,
+    workerStaffAlertOptions,
     CheckoutRepository,
     checkoutKeyProvider,
     TravelerDocuments,

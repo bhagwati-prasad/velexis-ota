@@ -38,8 +38,9 @@ import request, { type Response } from "supertest";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { AmadeusClient } from "../../../src/amadeus/amadeus.client";
 import { newBookingReference } from "../../../src/bookings/booking-reference";
+import { orderSegmentsOf } from "../../../src/bookings/order-diff";
 import { buildCreateOrderRequest, buildIssueRequest } from "../../../src/bookings/order-request.builder";
-import { BookingTravelerDocuments } from "../../../src/bookings/order-recorder";
+import { BookingTravelerDocuments, readCreatedOrder } from "../../../src/bookings/order-recorder";
 import type { StoredDocument } from "../../../src/checkout/traveler-documents";
 import { Clock } from "../../../src/common/clock";
 import { newId } from "../../../src/common/ids";
@@ -51,7 +52,7 @@ import { TokenService } from "../../../src/identity/token.service";
 import { seedStorefrontSettings } from "../../../src/provisioning/seeds/storefront-settings.seed";
 import type { OtaPool } from "../../../src/tenancy/tenancy.module";
 import type { TenantTransaction } from "../../../src/tenancy/tenant-tx";
-import { buildOrderRequestInput, buildStoredPassport } from "../../builders/bookings";
+import { buildOrderRequestInput, buildStoredPassport, pricedFlightOffer } from "../../builders/bookings";
 import { newApiKey, testApiCredentials, testKeyProvider } from "../../helpers/api-env";
 import { OPENAPI_SETUP_TIMEOUT_MS, preloadOpenApiDocument } from "../../helpers/openapi";
 import { createTestApp, type TestApp } from "../../support/create-test-app";
@@ -323,9 +324,25 @@ async function stubFetch(
 
 const orderPath = (orderId: string): string => `/v1/booking/flight-orders/${encodeURIComponent(orderId)}`;
 
-/** An order of the stub (Flight Create Orders, not issued) of one adult with a fresh passport and a special request. */
+/** The fixture's offer 2 with its flight (2 h 05 min) departing at `departure` (a local time, UTC reading). */
+function offerDepartingAt(departure: Date): JsonObject {
+  const offer = pricedFlightOffer();
+  for (const itinerary of offer["itineraries"] as JsonObject[]) {
+    for (const segment of itinerary["segments"] as JsonObject[]) {
+      (segment["departure"] as JsonObject)["at"] = local(departure);
+      (segment["arrival"] as JsonObject)["at"] = local(new Date(departure.getTime() + 125 * MINUTE));
+    }
+  }
+  return offer;
+}
+
+/**
+ * An order of the stub (Flight Create Orders, not issued) of one adult with a fresh passport and a special request,
+ * its flight 10 days after now (to the minute), so no calendar date matters.
+ */
 async function newStubOrder(): Promise<StubOrder> {
-  const input = buildOrderRequestInput();
+  const departure = new Date(Math.floor((Date.now() + 10 * DAY) / MINUTE) * MINUTE);
+  const input = buildOrderRequestInput({ flightOffers: [offerDepartingAt(departure)] });
   const traveler = input.travelers[0];
   if (traveler === undefined) {
     throw new Error("the order request builder has no traveller");
@@ -354,15 +371,32 @@ interface BookingSeed {
   readonly environment?: "test" | "live";
 }
 
+/** The segments of a stub order as the record step stores them. */
+function orderSegmentsOfStub(order: StubOrder) {
+  const created = readCreatedOrder({ data: order.data });
+  if (created === undefined) {
+    throw new Error("the stub's order cannot be read");
+  }
+  return orderSegmentsOf(created);
+}
+
 /**
- * A booking of `order` as the record step writes it: the bookings row (net 98.47 + markup 12.00 = 110.47 EUR), its
- * MAD–ORY flight (segment "3" of offer "2", the stub's offer), the adult with the order's passport sealed, the
+ * A booking of `order` as the record step writes it: the bookings row (net 98.47 + markup 12.00 = 110.47 EUR), the
+ * order's MAD–ORY flight (segment "3" of offer "2", the stub's offer; its local times read as UTC, the fixture's
+ * airports having no time zone in the template's reference data), the adult with the order's passport sealed, the
  * order's contacts and remarks (the special request visible to the customer, the Velexis one not) and its record.
  */
 async function seedBooking(order: StubOrder, seed: BookingSeed = {}): Promise<string> {
   const id = newId("bkg");
   const now = Date.now();
-  const outbound = new Date(now + 10 * DAY);
+  const segments = orderSegmentsOfStub(order);
+  const outbound = new Date(`${segments[0]?.departureLocal ?? local(new Date(now + 10 * DAY))}Z`);
+  const lastArrival = new Date(
+    Math.max(
+      outbound.getTime(),
+      ...segments.map((segment) => new Date(`${segment.arrivalLocal}Z`).getTime()),
+    ),
+  );
   const recordLocator =
     (records(order.data["associatedRecords"])[0]?.["reference"] as string | undefined) ?? "";
   const contact = records(order.data["contacts"])[0] ?? {};
@@ -392,7 +426,7 @@ async function seedBooking(order: StubOrder, seed: BookingSeed = {}): Promise<st
         origin_iata: "MAD",
         destination_iata: "ORY",
         first_departure_at: outbound,
-        last_arrival_at: new Date(outbound.getTime() + 2 * HOUR),
+        last_arrival_at: lastArrival,
         validating_carrier: "IB",
         travelers_count: 1,
         currency: "EUR",
@@ -417,25 +451,33 @@ async function seedBooking(order: StubOrder, seed: BookingSeed = {}): Promise<st
       .execute();
     await trx
       .insertInto("booking_segments")
-      .values({
-        id: newId("seg"),
-        booking_id: id,
-        amadeus_flight_offer_id: "2",
-        amadeus_segment_id: "3",
-        itinerary_index: 0,
-        segment_index: 0,
-        carrier_code: "IB",
-        flight_number: "3436",
-        departure_iata: "MAD",
-        departure_local: local(outbound),
-        departure_at: outbound,
-        arrival_iata: "ORY",
-        arrival_local: local(new Date(outbound.getTime() + 2 * HOUR)),
-        arrival_at: new Date(outbound.getTime() + 2 * HOUR),
-        duration_minutes: 120,
-        cabin: "ECONOMY",
-        booking_class: "Q",
-      })
+      .values(
+        segments.map((segment) => ({
+          id: newId("seg"),
+          booking_id: id,
+          amadeus_flight_offer_id: segment.amadeusFlightOfferId,
+          amadeus_segment_id: segment.amadeusSegmentId,
+          itinerary_index: segment.itineraryIndex,
+          segment_index: segment.segmentIndex,
+          carrier_code: segment.carrierCode,
+          flight_number: segment.flightNumber,
+          operating_carrier_code: segment.operatingCarrierCode,
+          aircraft_code: segment.aircraftCode,
+          departure_iata: segment.departureIata,
+          departure_terminal: segment.departureTerminal,
+          departure_local: segment.departureLocal,
+          departure_at: new Date(`${segment.departureLocal}Z`),
+          arrival_iata: segment.arrivalIata,
+          arrival_terminal: segment.arrivalTerminal,
+          arrival_local: segment.arrivalLocal,
+          arrival_at: new Date(`${segment.arrivalLocal}Z`),
+          duration_minutes: segment.durationMinutes,
+          cabin: segment.cabin,
+          booking_class: segment.bookingClass,
+          fare_basis: segment.fareBasis,
+          ...(segment.status === null ? {} : { status: segment.status }),
+        })),
+      )
       .execute();
     await trx
       .insertInto("booking_travelers")
@@ -1213,9 +1255,9 @@ describe("console.bookings.resync", () => {
     expectResponseToMatch("consoleResyncBooking", again);
     expect(Number(again.headers["retry-after"])).toBeGreaterThan(0);
     const events = (await eventsOf(bookingId)).map((event) => event.type);
-    expect(events).toEqual(
-      expect.arrayContaining(["booking.sync_requested", "booking.ticketed", "booking.synced"]),
-    );
+    expect(events).toEqual(expect.arrayContaining(["booking.ticketed", "booking.synced"]));
+    // The claim is the booking's column since FIX-W27-SYNC, never an event.
+    expect(events).not.toContain("booking.sync_requested");
     const actions = await staffActionsOf(bookingId);
     expect(actions.map((action) => [action.action, action.outcome])).toEqual([
       ["booking.resync", "succeeded"],
@@ -1229,6 +1271,83 @@ describe("console.bookings.resync", () => {
         version: (res.body.booking as { version: number }).version,
         elements: expect.arrayContaining(["contacts"]),
       },
+    ]);
+  });
+
+  it("[FIX-W27-SYNC AC2] reports a schedule change through the background sync's diff: its changes, booking.schedule_changed and a new itinerary", async () => {
+    const agent = await staffSession("agent");
+    const order = await newStubOrder();
+    const bookingId = await seedBooking(order);
+    const [segment] = orderSegmentsOfStub(order);
+    if (segment === undefined) {
+      throw new Error("the stub order has no segment");
+    }
+    // The airline moves the flight by 2 hours (outside Velexis).
+    const departure = local(new Date(new Date(`${segment.departureLocal}Z`).getTime() + 2 * HOUR));
+    const arrival = local(new Date(new Date(`${segment.arrivalLocal}Z`).getTime() + 2 * HOUR));
+    stub.orders.changeSegment(order.id, segment.amadeusSegmentId, {
+      departureAt: departure,
+      arrivalAt: arrival,
+    });
+    stub.clearRequests();
+    const versionBefore = (await bookingRow(bookingId)).version;
+    const documents = api.app.get<Queue>(getQueueToken(OTA_QUEUE.documents), { strict: false });
+
+    const res = await agent.post(`/v1/console/bookings/${bookingId}/resync`, {});
+
+    // The contract is the same: the booking, the changes, whether the status changed, the audit row.
+    expect(answer(res)).toEqual([200, undefined]);
+    expectResponseToMatch("consoleResyncBooking", res);
+    expect(res.body).toMatchObject({ statusChanged: false, previousStatus: "confirmed" });
+    expect(res.body.changes).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          path: "/itineraries/0/segments/0/departure/at",
+          before: segment.departureLocal,
+          after: departure,
+        }),
+        expect.objectContaining({
+          path: "/itineraries/0/segments/0/arrival/at",
+          before: segment.arrivalLocal,
+          after: arrival,
+        }),
+      ]),
+    );
+    const booking = res.body.booking as {
+      version: number;
+      itineraries: Array<{ segments: Array<{ departure: { at: string } }> }>;
+      supplierSync: { differences: JsonObject[] };
+    };
+    expect(booking.itineraries[0]?.segments[0]?.departure.at).toBe(departure);
+    // The console's differences are the sync's diff (FIX-W27-SYNC AC5).
+    expect(booking.supplierSync.differences.map((change) => change["path"])).toEqual([
+      "/itineraries/0/segments/0/departure/at",
+      "/itineraries/0/segments/0/arrival/at",
+    ]);
+    // The background sync's events: booking.schedule_changed (visible: times changed), then booking.synced.
+    const events = await eventsOf(bookingId);
+    expect(events.map((event) => event.type)).toEqual(
+      expect.arrayContaining(["booking.schedule_changed", "booking.synced"]),
+    );
+    // A new itinerary at the version the record left (DOCUMENT_TRIGGERS).
+    expect(booking.version).toBeGreaterThan(versionBefore);
+    expect(
+      await documents.getDeduplicationJobId(
+        documentRenderKey({ bookingId, kind: "itinerary", bookingVersion: versionBefore + 1 }),
+      ),
+    ).not.toBe(null);
+    // One Flight Order Management GET, logged as the console's resync with the staff member; the staff action.
+    expect(amadeusCalls("getFlightOrder")).toHaveLength(1);
+    const logged = await inTenant((trx) =>
+      trx
+        .selectFrom("supplier_requests")
+        .select(["operation", "staff_id"])
+        .where("booking_id", "=", bookingId)
+        .execute(),
+    );
+    expect(logged).toEqual([{ operation: "console.bookings.resync", staff_id: agent.member.staffId }]);
+    expect((await staffActionsOf(bookingId)).map((action) => [action.action, action.outcome])).toEqual([
+      ["booking.resync", "succeeded"],
     ]);
   });
 

@@ -10,6 +10,7 @@ Design: [ADR-0004](../../../docs/mvp/adr/0004-postgresql-schema-per-tenant.md) (
 |---|---|
 | `tenant/0001_baseline.sql` | Byte-for-byte copy of [`docs/velexis-sdk/db/tenant.sql`](../../../docs/velexis-sdk/db/tenant.sql): the 42 tenant tables, including the schema's own ledger `schema_migrations` |
 | `tenant/0002_add_mvp_tenant_deltas.sql` | All MVP tenant deltas, phase `expand` (OBE-008): the SQL block of [`data-model-migration-0002.md`](../../docs/data-model-migration-0002.md) §2, byte for byte (airline-card payments, checkout pricing mode, booking reconciliation, storefront settings columns, the tables `storefront_assets` and `storefront_pages`); the reasons are in [`data-model.md`](../../docs/data-model.md) §3 |
+| `tenant/0003_add_booking_sync_claim.sql` | `bookings.sync_claimed_at` (the claim of the booking sync and the refreshes, instead of `booking.sync_requested` events) and `bookings.sync_changes` (what the last synchronisation changed), phase `expand` (FIX-W27-SYNC, lead decision (3) of 2026-10-23); the reasons are in [`data-model.md`](../../docs/data-model.md) §3.7 |
 
 The file and its document never drift apart: change both in the same commit, before the file is merged (never after). Changes found later take the next free number (`0003_…`).
 

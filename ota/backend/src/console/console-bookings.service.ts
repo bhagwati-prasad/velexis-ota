@@ -14,8 +14,10 @@
 //   throttle of one per 10 s per booking (`supplierSync.status` `refreshed`, `throttled`, `order_not_found`); a booking
 //   without an Amadeus order (pending, failed) or a cancelled one ignores it. Amadeus errors of a refresh are recorded
 //   in `sync_error` and answered as the refresh answers them (`424`, `502`, `503`, `504`): staff retry without it.
-//   The schedule-change diff and `booking.synced` of a full resync are the background sync's and console.bookings.resync's
-//   (OBE-045, OBE-062).
+//   Since FIX-W27-SYNC the refresh records the order through the background sync's diff (a schedule change or a
+//   cancellation by the airline is recorded here too); `booking.synced` and the projection are console.bookings.resync's
+//   (OBE-062). `supplierSync.nextScheduledSyncAt` is when the background sync is due next (bookings/sync-schedule.ts)
+//   and `supplierSync.differences` what the last recorded synchronisation changed (`bookings.sync_changes`).
 //
 // Neither read is audited (the document: "Read-only; not audited per call", "Viewing is not audited"): their handlers
 // do not opt in with `@AuditedRead`, so the console audit interceptor writes a row only for a refused or failed call
@@ -36,6 +38,7 @@ import { BookingsRepository } from "../bookings/bookings.repository";
 import { CustomerBookingsService, ORDER_NOT_FOUND_WARNING } from "../bookings/customer-bookings.service";
 import { BookingTravelerDocuments, type Warning } from "../bookings/order-recorder";
 import type { TicketingPolicy } from "../bookings/order-request.builder";
+import { nextScheduledSyncOf } from "../bookings/sync-schedule";
 import { roleHasPermission, type StaffPermission } from "../common/auth/roles";
 import { StaffContext } from "../common/auth/staff.guard";
 import { Clock } from "../common/clock";
@@ -313,6 +316,18 @@ export class ConsoleBookingsService {
           lastAttemptAt: stored.lastRefreshAt,
           syncError: stored.syncError,
           lastSupplierRequestId: await this.repository.lastOrderRead(trx, bookingId),
+          nextScheduledSyncAt: nextScheduledSyncOf(
+            {
+              status: booking.status,
+              amadeusOrderId: booking.amadeusOrderId,
+              lastArrivalAt: booking.lastArrivalAt,
+              ticketingDeadlineAt: booking.ticketingDeadlineAt,
+              lastSyncedAt: booking.lastSyncedAt,
+              syncClaimedAt: stored.syncClaimedAt,
+            },
+            now,
+          ),
+          differences: stored.syncChanges,
         }),
         events: await this.repository.events(trx, bookingId, { limit: DETAIL_LIMITS.events }),
         notes: await this.repository.events(trx, bookingId, {

@@ -47,8 +47,11 @@ const PLATFORM_JOB_OPTIONS: JobsOptions = { attempts: 3, backoff: { type: "expon
 const DML = ["SELECT", "INSERT", "UPDATE", "DELETE"];
 /** SQLSTATE admin_shutdown: the provisioning connection was terminated. */
 const ADMIN_SHUTDOWN = "57P01";
-/** The last file of migrations/tenant: the version a new schema reaches (0002_add_mvp_tenant_deltas, OBE-008). */
-const SCHEMA_VERSION = "0002_add_mvp_tenant_deltas";
+/**
+ * The last file of migrations/tenant: the version a new schema reaches (0003_add_booking_sync_claim, FIX-W27-SYNC,
+ * after 0002_add_mvp_tenant_deltas of OBE-008).
+ */
+const SCHEMA_VERSION = "0003_add_booking_sync_claim";
 /** The tables of a complete tenant schema: the 42 of the baseline and the 2 that migration 0002 adds (OBE-008). */
 const TENANT_TABLE_COUNT = 44;
 

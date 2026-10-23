@@ -12,9 +12,9 @@
 // booking's environment and customer, and whether a presented guest token hash is a live `booking_access_tokens` row
 // of it, and since OBE-047 the use it records on that row); the list card of one booking (bookings.lookup's answer,
 // OBE-047); the customer-visible events; the services, refunds and current documents of a booking; and what a refresh
-// claims and writes (the `booking.sync_requested` events are the throttle; a refresh bumps `version` only when it
-// stores new or changed tickets or a new status, the changes the documents follow). City names come from
-// `reference.airports` and `reference.cities`.
+// claims and writes (`bookings.sync_claimed_at` is the claim and, with `last_synced_at`, the throttle since FIX-W27-SYNC;
+// before, `booking.sync_requested` events were; the record step of every synchronisation is booking-sync.service.ts's).
+// City names come from `reference.airports` and `reference.cities`.
 //
 // Like every tenant repository it takes the `tenantTx` transaction first, never opens one and never names a tenant
 // schema. Amounts are read as text (`numeric::text`), dates and local date-times through `to_char`, never as
@@ -328,8 +328,12 @@ export interface BookingDetailsRow {
   readonly orderDictionaries: unknown;
   readonly syncError: string | null;
   readonly cancelledBy: string | null;
-  /** The last refresh claim or sync of the booking (`booking.sync_requested` events, `last_synced_at`). */
+  /** The last refresh claim or sync of the booking (`sync_claimed_at` or `last_synced_at`, whichever is later). */
   readonly lastRefreshAt: Date | null;
+  /** `sync_claimed_at`: the last claim of a synchronisation (the sync's or a refresh's). */
+  readonly syncClaimedAt: Date | null;
+  /** `sync_changes`: what the last recorded synchronisation changed (order-diff.ts `syncChangesOf`). */
+  readonly syncChanges: unknown;
 }
 
 /** A customer-visible `booking_events` row. */
@@ -402,18 +406,19 @@ export interface RefreshClaimRow {
   readonly version: number;
 }
 
-/** The event type of a refresh claim (staff-only): the throttle of bookings.get, getTicketingStatus, getFareRules. */
+/**
+ * The staff-only event that recorded the claim of a synchronisation (the sync's and the refreshes') until FIX-W27-SYNC:
+ * no longer written (lead decision (3) of 2026-10-23, `bookings.sync_claimed_at` is the claim); the events written
+ * before stay on the bookings' timelines.
+ */
 export const REFRESH_CLAIM_EVENT = "booking.sync_requested";
 
 /** A timestamptz column as UTC text with microseconds: the keyset positions of the lists. */
 const utcKeyOf = (column: string) =>
   sql<string>`to_char(${sql.ref(column)} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US')`;
 
-/** The last refresh of booking `b`: the newest claim event or `last_synced_at`, whichever is later. */
-const lastRefreshOf = sql<Date | null>`greatest(b.last_synced_at, (
-  SELECT max(e.created_at) FROM booking_events e
-  WHERE e.booking_id = b.id AND e.type = ${REFRESH_CLAIM_EVENT}
-))`;
+/** The last refresh of booking `b`: its last claim of a synchronisation or `last_synced_at`, whichever is later. */
+const lastRefreshOf = sql<Date | null>`greatest(b.last_synced_at, b.sync_claimed_at)`;
 
 /**
  * The local first departure of booking `b`: its first segment's local time, else (a pending booking has no segment
@@ -1040,6 +1045,8 @@ export class BookingsRepository {
         "b.order_dictionaries as orderDictionaries",
         "b.sync_error as syncError",
         "b.cancelled_by as cancelledBy",
+        "b.sync_claimed_at as syncClaimedAt",
+        "b.sync_changes as syncChanges",
         lastRefreshOf.as("lastRefreshAt"),
       ])
       .where("b.id", "=", id)
@@ -1158,9 +1165,8 @@ export class BookingsRepository {
   /**
    * The booking `id` locked `FOR UPDATE` for a refresh claim, with its last refresh; `undefined` when unknown.
    *
-   * Two statements: the lock first, then the read. Under READ COMMITTED a statement sees what was committed when it
-   * started, so a read in the locking statement itself, which may have waited for a concurrent claim, would miss that
-   * claim's `booking.sync_requested` event and call Amadeus a second time.
+   * Two statements: the lock first, then the read, which sees what a concurrent claim the lock waited for committed
+   * (its `sync_claimed_at`), so the second of two refreshes is throttled instead of calling Amadeus a second time.
    */
   async lockForRefresh(trx: TenantTransaction, id: string): Promise<RefreshClaimRow | undefined> {
     const locked = await trx
@@ -1220,17 +1226,13 @@ export class BookingsRepository {
       .execute();
   }
 
-  /** Records the Amadeus state of a segment (`bookingStatus`, `isFlown`) found by a refresh. */
-  async updateSegmentState(
-    trx: TenantTransaction,
-    segmentRowId: string,
-    state: { readonly status: string; readonly isFlown: boolean; readonly now: Date },
-  ): Promise<void> {
-    await trx
-      .updateTable("booking_segments")
-      .set({ status: state.status, is_flown: state.isFlown, updated_at: state.now })
-      .where("id", "=", segmentRowId)
-      .execute();
+  /**
+   * Records the claim of a synchronisation of the booking `id` (the sync's or a refresh's) at `at`, under the lock the
+   * claim holds: `sync_claimed_at` only, never `version`, `updated_at` or a key column (so the update takes no
+   * `FOR UPDATE`, OADR-0014 point 6) and no booking event (lead decision (3) of 2026-10-23).
+   */
+  async markSyncClaimed(trx: TenantTransaction, id: string, at: Date): Promise<void> {
+    await trx.updateTable("bookings").set({ sync_claimed_at: at }).where("id", "=", id).execute();
   }
 
   /** Records the Amadeus `documentStatus` of a ticket found by a refresh (VOID, REFUNDED, EXCHANGED …). */

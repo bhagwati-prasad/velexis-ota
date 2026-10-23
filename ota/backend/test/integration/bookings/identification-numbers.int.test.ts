@@ -294,6 +294,15 @@ function sendIdentificationsWithOrders(numbers: IdentificationNumbers): void {
   });
 }
 
+/** The forms of identification `sendIdentificationsWithOrders` adds, as the booking keeps them: last 4 only. */
+function maskedIdentifications(numbers: IdentificationNumbers): JsonObject[] {
+  return [
+    { identificationType: "PASSPORT", number: numbers.passport.slice(-4), travelerIds: ["1"] },
+    { identificationType: "NATIONAL_IDENTITY_CARD", number: numbers.idCard.slice(-4), travelerIds: ["1"] },
+    { identificationType: "DRIVERS_LICENSE", number: numbers.licence.slice(-4), travelerIds: ["1"] },
+  ];
+}
+
 /** The `number`s of the forms of identification of an order's `data` (or of a list of them). */
 function identificationNumbersOf(value: unknown): unknown[] {
   const list = Array.isArray(value)
@@ -500,7 +509,8 @@ describe("the numbers of an order's forms of identification", () => {
       identificationNumbersOf((copies.supplierRequests[2]?.response_body as { data: unknown }).data),
     ).toEqual(masked);
     expect(identificationNumbersOf(copies.booking.order_snapshot)).toEqual(masked);
-    expect(copies.booking.form_of_identifications).toEqual([]);
+    // Projected on the booking with their last 4 only, by the record step and again by the refresh (FIX-W27-SYNC).
+    expect(copies.booking.form_of_identifications).toEqual(maskedIdentifications(numbers));
 
     // No stored copy and no log line holds a full number.
     expectNoFullNumber(copies, [completed.text, refreshed.text], all);
@@ -520,7 +530,7 @@ describe("the numbers of an order's forms of identification, recorded without an
     await payCheckout(checkout);
   }, CHECKOUT_SETUP_TIMEOUT_MS);
 
-  it("[FIX-W26-SECURITY AC5] keep their last 4 only in the order snapshot of the record step (OrderRecorder), the supplier log and the booking", async () => {
+  it("[FIX-W26-SECURITY AC5] [FIX-W27-SYNC AC4] keep their last 4 only in the order snapshot of the record step (OrderRecorder), the supplier log and the booking", async () => {
     const numbers = newIdentificationNumbers();
     const all = [numbers.passport, numbers.idCard, numbers.licence];
     const masked = all.map((number) => number.slice(-4));
@@ -543,7 +553,8 @@ describe("the numbers of an order's forms of identification, recorded without an
     const [createOrders] = copies.supplierRequests;
     expect(identificationNumbersOf((createOrders?.request_body as { data: unknown }).data)).toEqual(masked);
     expect(identificationNumbersOf((createOrders?.response_body as { data: unknown }).data)).toEqual(masked);
-    expect(copies.booking.form_of_identifications).toEqual([]);
+    // The record step projects them on the booking, last 4 only (FIX-W27-SYNC AC4).
+    expect(copies.booking.form_of_identifications).toEqual(maskedIdentifications(numbers));
 
     expectNoFullNumber(copies, [completed.text], all);
   });

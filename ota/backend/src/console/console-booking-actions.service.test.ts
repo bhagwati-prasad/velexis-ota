@@ -14,6 +14,7 @@ import type {
   BookingRow,
   BookingsRepository,
 } from "../bookings/bookings.repository";
+import type { BookingSyncService } from "../bookings/booking-sync.service";
 import type { CustomerBookingsService } from "../bookings/customer-bookings.service";
 import type { BookingTravelerDocuments } from "../bookings/order-recorder";
 import type { StaffContext } from "../common/auth/staff.guard";
@@ -487,6 +488,7 @@ function setup(patch: () => Promise<unknown> = () => Promise.resolve({ body: {},
     new IdGenerator(new Clock()),
     new Clock(),
     { info: vi.fn(), warn: vi.fn() } as unknown as PinoLogger,
+    {} as BookingSyncService,
   );
   return { service, amadeus, refresh, transactions };
 }

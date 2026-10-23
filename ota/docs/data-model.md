@@ -19,7 +19,8 @@ Related: [db README](../../docs/velexis-sdk/db/README.md) (tenancy design), [ADR
 |---|---|---|
 | `0001_baseline.sql` | Byte-for-byte copy of `tenant.sql` (a unit test compares checksums) | M0 (X-012) |
 | `0002_add_mvp_tenant_deltas.sql` | All MVP deltas below, phase `expand` | M2, one task, before the first shopping endpoint |
-| `0003_…` and later | Changes found during M3–M6 | When needed |
+| `0003_add_booking_sync_claim.sql` | `bookings.sync_claimed_at` and `bookings.sync_changes` (§3.7), phase `expand` | M3 (FIX-W27-SYNC, lead decision (3) of 2026-10-23) |
+| `0004_…` and later | Changes found during M3–M6 | When needed |
 
 One file for all MVP deltas avoids number clashes between agents working in parallel; the columns used only in M3 or M4 are nullable or have safe defaults, so they cost nothing earlier. The cross-cutting [schema delta table](../../docs/mvp/architecture.md#schema-deltas-named-by-the-cross-cutting-adrs) lists `payments.provider` adding `airline` under M3; shipping it in `0002` during M2 meets that milestone early, as the platform plan does with its own `0002`. Rules for every tenant migration ([`conventions.md` §9](../../docs/mvp/conventions.md#9-database-migrations)): unqualified names, no `search_path`, no other schema except `reference` by value, `text` + `CHECK` statuses, `COMMENT ON` for every new table and column, CHECK lists extended with `NOT VALID` then `VALIDATE`, and the code works with schema versions N-1 and N. New tables need no `GRANT`: provisioning sets default privileges for `velexis_ota_app` in each schema ([OADR-0007](adr/0007-tenant-migration-runner-and-provisioning-worker.md)).
 
@@ -134,6 +135,15 @@ erDiagram
 | A table for staff sessions | Staff sessions live in Redis ([ADR-0008](../../docs/mvp/adr/0008-identity-accounts-customers-sessions.md)). |
 | Default template rows for keys added later | The notification service falls back to code defaults when a tenant has no row, so new keys need no data backfill ([OADR-0013](adr/0013-notifications-and-booking-documents.md)). |
 | Per-tenant roles or data keys | Not in the MVP ([ADR-0004](../../docs/mvp/adr/0004-postgresql-schema-per-tenant.md), [ADR-0010](../../docs/mvp/adr/0010-secrets-envelope-encryption.md)). |
+
+### 3.7 The deltas of `0003`: the booking sync's claim and last changes
+
+`ota/backend/migrations/tenant/0003_add_booking_sync_claim.sql` (FIX-W27-SYNC, lead decision (3) of 2026-10-23; [OADR-0003](adr/0003-booking-orchestration-and-supplier-timeout-recovery.md) follow-ups, [OADR-0014](adr/0014-per-tenant-workers-and-schedulers.md) point 6):
+
+| Change | Why |
+|---|---|
+| `bookings.sync_claimed_at timestamptz` (nullable) | The claim of a synchronisation with Flight Order Management (the background sync's and the refreshes'): the sync skips a booking claimed in the last 30 minutes, a refresh is throttled by it. It replaces the staff-only `booking.sync_requested` events, about four a day per upcoming booking and one an hour near the ticketing deadline, which filled the console's timeline of 100 events. The events written before stay; no backfill (conventions §9: backfills are jobs), so a claim recorded as an event in the half hour before the upgrade is not seen and the booking may be synchronised once more. |
+| `bookings.sync_changes jsonb NOT NULL DEFAULT '[]'` with `bookings_sync_changes_ck` (an array) | What the last recorded synchronisation changed, whichever path read the order (`[{path, label, before, after}]`, JSON pointers into the booking): the console's `ConsoleSupplierSync.differences`. Empty when it changed nothing. |
 
 ## 4. Encrypted columns
 

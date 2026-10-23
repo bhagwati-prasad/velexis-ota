@@ -3,6 +3,7 @@
 **Status:** Accepted
 **Date:** 2026-10-12
 **Deciders:** OTA backend tech lead. Decided during planning; revisit when an OTA needs invoices issued by Velexis, SMS, or sending from its own domain.
+**Revisions:** 2026-10-23 (lead decision (3), recording FIX-W27-SYNC): point 6's itinerary is also rendered again on a schedule change (`booking.schedule_changed`), whichever synchronisation found it (dated note under point 6).
 
 ## Context
 
@@ -16,6 +17,8 @@
 4. **MVP template keys:** customers `auth.verify_email`, `auth.password_reset`; travellers `booking.confirmed`, `booking.ticketed`, `booking.ticketing_delayed`, `booking.cancelled`, `booking.cancellation_requested`, `booking.not_confirmed`; staff `staff.ticketing_failed`, `staff.manual_review`, `staff.airline_card_alert`. E-mail only.
 5. **Sender.** `From: "<OTA brand name>" <no-reply@mail.ota.example.com>` (the domain of `MAIL_FROM`), `Reply-To: storefront_settings.support_email`. Staff alerts go to `ops_alert_email`, else to the owners' e-mails read from the platform.
 6. **Documents in the MVP:** `itinerary` (on confirmation, on ticketing, on cancellation; the previous one becomes `superseded`) and `e_ticket_receipt` (one per ticket). **No `invoice`, `credit_note` or `emd_receipt`** in the MVP: legal invoicing (numbering, VAT, company data) stays with the OTA's accounting until a later decision. The confirmation e-mail says so.
+
+   **2026-10-23 (lead decision (3), FIX-W27-SYNC).** A schedule change by the airline (`booking.schedule_changed`, which the background sync, a refresh or console.bookings.resync writes, whichever reads the changed order first) also asks for a new itinerary with the new times (`DOCUMENT_TRIGGERS` of [`documents.processor.ts`](../../backend/src/documents/documents.processor.ts)); no e-mail of its own in the MVP.
 7. **Rendering.** pdfmake with fonts bundled in the repository and the OTA's square logo read from `storefront_assets` (no network fetch). Job key `document.render:<bookingId>:<kind>:<bookingVersion>[:<ticketId>]`; a second job for the same key is a no-op. Files are stored at `tenant_<key>/documents/<bookingId>/<documentId>.pdf` with SHA-256 in `content_hash`.
 8. **Attachments.** `booking.confirmed` attaches the itinerary and `booking.ticketed` the e-ticket receipts when they are `ready`; if not ready within 2 minutes the e-mail is sent with a link to the booking page instead.
 9. **Downloads.** `bookings.getDocumentDownloadUrl` returns a 5-minute HMAC-signed URL under `/v1/files/` (same-origin `/api/v1/files/` for the edge); the handler re-checks the tenant and streams the file with `Content-Disposition: attachment`.

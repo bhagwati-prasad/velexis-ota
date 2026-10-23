@@ -17,6 +17,8 @@ import {
 } from "./booking-orchestrator.service";
 import {
   adoptedReconcileUntil,
+  BOOKING_QUEUE_ALERT_ENTRIES,
+  bookingQueueAlertKey,
   carriesVelexisRemark,
   comparableName,
   listedGap,
@@ -198,6 +200,24 @@ describe("the PNRs of the booking queue worth reading", () => {
     expect(queueCandidates({ meta: { count: "7" }, data: entries }, booking)?.truncated).toBe(true);
     expect(queueCandidates({ meta: { count: 2 }, data: entries }, booking, 2)?.truncated).toBe(true);
     expect(RECONCILE_QUEUE_LIST_MAX).toBeGreaterThan(RECONCILE_MAX_READS);
+  });
+
+  it("[FIX-W27-SYNC AC6] count the queue's entries for the nearly-full alert: the answer's, or meta.count when it says more", () => {
+    const booking = { startedAt: STARTED, leadLastName: "SAMPLE" };
+    const entries = [pnr("AAA111", minuteText(0), ["SAMPLE"]), pnr("BBB222", minuteText(0), ["OTHER"])];
+
+    expect(queueCandidates({ meta: { count: 2 }, data: entries }, booking)?.entries).toBe(2);
+    expect(queueCandidates({ data: entries }, booking)?.entries).toBe(2);
+    expect(queueCandidates({ meta: { count: "450" }, data: entries }, booking)?.entries).toBe(450);
+    // The alert at 80 % of what one answer carries (lead decision (5) of 2026-10-23).
+    expect(BOOKING_QUEUE_ALERT_ENTRIES).toBe(RECONCILE_QUEUE_LIST_MAX * 0.8);
+    // Once a UTC day: the same key all day, another the next day.
+    expect(bookingQueueAlertKey(new Date("2027-01-15T00:00:00.000Z"))).toBe(
+      bookingQueueAlertKey(new Date("2027-01-15T23:59:59.999Z")),
+    );
+    expect(bookingQueueAlertKey(new Date("2027-01-16T00:00:00.000Z"))).toBe(
+      "staff.manual_review:booking_queue_nearly_full:2027-01-16",
+    );
   });
 
   it("[FIX-W25-BOOKINGS AC1] are read at most RECONCILE_MAX_READS per attempt, the next attempt going on from there", () => {

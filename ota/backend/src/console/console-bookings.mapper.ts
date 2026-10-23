@@ -17,7 +17,9 @@
 // The sync state (ConsoleBookingSyncStatus): `not_applicable` without an Amadeus order (pending, failed), else
 // `order_not_found` when the last refresh found no order, `failed` after another sync error, `fresh` within 6 h of the
 // last sync, else `stale`; a refresh of this request makes it `refreshed` or `throttled`. The inherited
-// `Booking.syncStatus` maps `order_not_found` to `failed` and `not_applicable` to `fresh` (the document's rule).
+// `Booking.syncStatus` maps `order_not_found` to `failed` and `not_applicable` to `fresh` (the document's rule). The
+// supplier sync block fills `nextScheduledSyncAt` from the background sync's schedule and `differences` from the last
+// recorded synchronisation's diff (FIX-W27-SYNC; `toSupplierSync`).
 //
 // `consoleActions` weighs the caller's permissions (the role's, or a key's own) and the booking's state; a refused
 // action names its reason (`no_permission` first). The list cursor is opaque base64url JSON: the sort key (an instant
@@ -34,6 +36,7 @@ import {
 } from "../bookings/bookings.mapper";
 import type { BookingRemarkRow, BookingRow } from "../bookings/bookings.repository";
 import { ORDER_NOT_FOUND } from "../bookings/customer-bookings.service";
+import { maskedIdentifications } from "../bookings/identifications";
 import type { Booking } from "../bookings/order-recorder";
 import type { StaffPermission } from "../common/auth/roles";
 import { Money, type MoneyValue } from "../pricing/pricing.types";
@@ -57,6 +60,7 @@ export type ConsoleBookingSyncStatus = Schemas["ConsoleBookingSyncStatus"];
 export type ConsoleBookingActions = Schemas["ConsoleBookingActions"];
 type ConsoleBookingPricing = Schemas["ConsoleBookingPricing"];
 type ConsoleSupplierSync = Schemas["ConsoleSupplierSync"];
+type ConsoleSyncChange = Schemas["ConsoleSyncChange"];
 type ConsoleFormOfPayment = Schemas["ConsoleFormOfPayment"];
 type ConsoleActor = Schemas["ConsoleActor"];
 type ConsoleBookingEvent = Schemas["ConsoleBookingEvent"];
@@ -292,13 +296,32 @@ export function toConsolePricing(
   };
 }
 
-/** The supplier sync block of the detail. */
+/** The stored `sync_changes` (order-diff.ts `syncChangesOf`) as ConsoleSyncChange entries; anything else is left out. */
+export function syncDifferencesOf(value: unknown): ConsoleSyncChange[] {
+  return records(value).flatMap((entry) => {
+    const path = text(entry["path"]);
+    const label = text(entry["label"]);
+    return path === undefined || label === undefined || !path.startsWith("/")
+      ? []
+      : [{ path, label, before: entry["before"] ?? null, after: entry["after"] ?? null }];
+  });
+}
+
+/**
+ * The supplier sync block of the detail: `nextScheduledSyncAt` is when the background sync is due next
+ * (bookings/sync-schedule.ts: every 6 h for upcoming trips, hourly in the 24 h before the ticketing deadline, never
+ * within 30 minutes of a claim; `null` when it no longer reads the booking), `differences` what the last recorded
+ * synchronisation changed, whichever path read the order (`bookings.sync_changes`, FIX-W27-SYNC).
+ */
 export function toSupplierSync(input: {
   readonly status: ConsoleBookingSyncStatus;
   readonly lastSyncedAt: Date | null;
   readonly lastAttemptAt: Date | null;
   readonly syncError: string | null;
   readonly lastSupplierRequestId: string | null;
+  readonly nextScheduledSyncAt: Date | null;
+  /** `bookings.sync_changes`. */
+  readonly differences: unknown;
 }): ConsoleSupplierSync {
   return {
     status: input.status,
@@ -306,9 +329,8 @@ export function toSupplierSync(input: {
     lastAttemptAt: input.lastAttemptAt?.toISOString() ?? null,
     lastError: input.syncError,
     lastSupplierRequestId: input.lastSupplierRequestId,
-    // The background sync and its diff of orders come with OBE-045: until then nothing is scheduled or compared.
-    nextScheduledSyncAt: null,
-    differences: [],
+    nextScheduledSyncAt: input.nextScheduledSyncAt?.toISOString() ?? null,
+    differences: syncDifferencesOf(input.differences),
   };
 }
 
@@ -368,13 +390,11 @@ export function toConsoleFormOfPayment(entry: unknown): ConsoleFormOfPayment | u
   return undefined;
 }
 
-/** Forms of identification with their numbers cut to the last 4 characters (customer scope does the same). */
-export function maskedIdentifications(value: unknown): JsonObject[] {
-  return records(redactPayload(value)).map((entry) => {
-    const number = entry["number"];
-    return typeof number === "string" ? { ...entry, number: number.slice(-4) } : entry;
-  });
-}
+/**
+ * Forms of identification with their numbers cut to the last 4 characters (customer scope does the same): OBE-062's
+ * projection, which the record step and the synchronisations also write since FIX-W27-SYNC (bookings/identifications.ts).
+ */
+export { maskedIdentifications };
 
 /**
  * The stored order as staff see it (see the file header): the snapshot through the shared redactor, net prices and

@@ -51,15 +51,17 @@
 //   after. `notifyCustomer` has no e-mail template yet (the default templates are OBE-055's): the answer carries a
 //   warning instead.
 //
-// - `resync` (`bookings:write`): the refresh of console.bookings.get (CustomerBookingsService.refresh, OBE-046: the
-//   claim, one Flight Order Management GET, the tickets, the segments' state, the associated records, a status that is
-//   now ticketed, the snapshot; the console's throttle of 10 s answers `429 RATE_LIMITED`), then the projection of the
-//   stored order on the booking (T3, below), the event `booking.synced` and the `booking.resync` staff action. It
-//   answers the booking, the differences between the console views before and after (ConsoleSyncChange, JSON
-//   pointers into the booking), whether the status changed and the previous status. A booking without an order, or a
-//   cancelled one, answers `409 BOOKING_NOT_MODIFIABLE`; an order Amadeus no longer has `422 SUPPLIER_REJECTED`
-//   (`supplierSync.status = order_not_found`). The background sync's diff (schedule changes, cancellation by the
-//   airline) is OBE-045's, whose sync service this will call once it exists.
+// - `resync` (`bookings:write`): a refresh through the background sync's service (BookingSyncService.refresh, OBE-045,
+//   as OBE-062's question asked; lead decision (3) of 2026-10-23, FIX-W27-SYNC: the claim in
+//   `bookings.sync_claimed_at`, one Flight Order Management GET, and the record through the sync's diff of
+//   order-diff.ts with its events: tickets, segments and their schedule changes (`booking.schedule_changed`, a new
+//   itinerary), a cancellation by the airline, a status that is now ticketed, the associated records, the forms of
+//   identification, the snapshot; the console's throttle of 10 s answers `429 RATE_LIMITED`), then the projection of
+//   the stored order on the booking (T3, below), the event `booking.synced` and the `booking.resync` staff action. It
+//   answers the booking, the differences between the console views before and after (ConsoleSyncChange, JSON pointers
+//   into the booking: a schedule change shows as its segments' new times), whether the status changed and the
+//   previous status. A booking without an order, or a cancelled one, answers `409 BOOKING_NOT_MODIFIABLE`; an order
+//   Amadeus no longer has `422 SUPPLIER_REJECTED` (`supplierSync.status = order_not_found`).
 //
 // - `addNote` (`bookings:write`, `Idempotency-Key`): a `staff.note` booking event, staff-only unless the staff member
 //   asks for `visibleToCustomer` (the document's option; the default keeps it out of bookings.listEvents), and the
@@ -102,6 +104,7 @@ import {
   type BookingRow,
   type BookingTravelerRow,
 } from "../bookings/bookings.repository";
+import { BookingSyncService } from "../bookings/booking-sync.service";
 import { CustomerBookingsService } from "../bookings/customer-bookings.service";
 import { BookingTravelerDocuments, deadlineLocalOf, eventActorOf } from "../bookings/order-recorder";
 import {
@@ -851,6 +854,7 @@ export class ConsoleBookingActionsService {
     private readonly ids: IdGenerator,
     private readonly clock: Clock,
     @InjectPinoLogger(ConsoleBookingActionsService.name) private readonly logger: PinoLogger,
+    private readonly sync: BookingSyncService,
   ) {}
 
   // ---- console.bookings.retrieve -----------------------------------------------------------------------------------
@@ -1445,13 +1449,14 @@ export class ConsoleBookingActionsService {
       }
     });
     const before = await this.consoleBookings.get(bookingId, { refresh: false });
-    const outcome = await this.customerBookings.refresh(
-      tenant,
-      bookingId,
-      OPERATIONS.resync,
-      { include: body.include, fareRules: body.fareRules },
-      { throttleMs: CONSOLE_REFRESH_THROTTLE_MS },
-    );
+    const outcome = await this.sync.refresh({ id: tenant.tenantId, key: tenant.key }, bookingId, {
+      operation: OPERATIONS.resync,
+      requestId: this.requestId(tenant),
+      environment: tenant.environment,
+      query: { include: body.include, fareRules: body.fareRules },
+      throttleMs: CONSOLE_REFRESH_THROTTLE_MS,
+      staffId: tenant.actor.type === "staff" ? tenant.actor.id : null,
+    });
     switch (outcome.kind) {
       case "skipped":
         throw new AppError("BOOKING_NOT_MODIFIABLE", { details: { status: before.status } });

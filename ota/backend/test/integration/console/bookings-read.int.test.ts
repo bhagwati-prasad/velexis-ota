@@ -37,8 +37,9 @@ import { startAmadeusStub, type AmadeusStub } from "@velexis/testing/amadeus";
 import request, { type Response } from "supertest";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { newBookingReference } from "../../../src/bookings/booking-reference";
+import { orderSegmentsOf } from "../../../src/bookings/order-diff";
 import { buildCreateOrderRequest } from "../../../src/bookings/order-request.builder";
-import { BookingTravelerDocuments } from "../../../src/bookings/order-recorder";
+import { BookingTravelerDocuments, readCreatedOrder } from "../../../src/bookings/order-recorder";
 import { Clock } from "../../../src/common/clock";
 import { newId } from "../../../src/common/ids";
 import { redisKeys } from "../../../src/common/redis/redis.keys";
@@ -48,7 +49,12 @@ import { seedDefaultMarkupRule } from "../../../src/provisioning/seeds/markup-ru
 import { seedStorefrontSettings } from "../../../src/provisioning/seeds/storefront-settings.seed";
 import type { OtaPool } from "../../../src/tenancy/tenancy.module";
 import type { TenantTransaction } from "../../../src/tenancy/tenant-tx";
-import { buildOrderRequestInput, buildStoredPassport, newRecordLocator } from "../../builders/bookings";
+import {
+  buildOrderRequestInput,
+  buildStoredPassport,
+  newRecordLocator,
+  pricedFlightOffer,
+} from "../../builders/bookings";
 import { newDocumentNumber } from "../../builders/checkouts";
 import { newApiKey, testApiCredentials, testKeyProvider } from "../../helpers/api-env";
 import { OPENAPI_SETUP_TIMEOUT_MS, preloadOpenApiDocument } from "../../helpers/openapi";
@@ -316,19 +322,36 @@ interface BookingSeed {
   readonly failure?: { readonly code: string; readonly message: string };
 }
 
+/** The segments of a stored order snapshot (a stub order's `data`), or `undefined` when it holds no readable order. */
+function snapshotSegmentsOf(snapshot: JsonObject | undefined) {
+  const order = snapshot === undefined ? undefined : readCreatedOrder({ data: snapshot });
+  return order === undefined || order.offers.length === 0 ? undefined : orderSegmentsOf(order);
+}
+
 /**
  * A booking as the record step writes it: the bookings row (net 98.47 + markup 12.00 = 110.47 EUR unless told
  * otherwise), its MAD–ORY flight (segment "3" of offer "2", the stub's offer) and, with a return, ORY–MAD; one adult
- * traveller, and its associated records. Pending and failed bookings have no flight or traveller rows.
+ * traveller, and its associated records. Pending and failed bookings have no flight or traveller rows. A booking of a
+ * stub order (`snapshot`) holds that order's segments, their local times read as UTC (the fixture's airports have no
+ * time zone in the template's reference data), as the record step stores them: since FIX-W27-SYNC a refresh records
+ * the order through the background sync's diff, so other segments would be a schedule change.
  */
 async function seedBooking(seed: BookingSeed = {}): Promise<string> {
   const id = newId("bkg");
   const schema = seed.schema ?? "tenant_alpha";
   const now = Date.now();
-  const outbound = new Date(now + (seed.departInMs ?? 10 * DAY));
+  const ordered = snapshotSegmentsOf(seed.snapshot);
+  const orderedFirst = ordered?.[0];
+  const outbound =
+    orderedFirst === undefined
+      ? new Date(now + (seed.departInMs ?? 10 * DAY))
+      : new Date(`${orderedFirst.departureLocal}Z`);
   const inbound =
     seed.returnAfterMs === undefined ? undefined : new Date(outbound.getTime() + seed.returnAfterMs);
-  const lastArrival = new Date((inbound ?? outbound).getTime() + 2 * HOUR);
+  const lastArrival =
+    ordered !== undefined && ordered.length > 0
+      ? new Date(Math.max(...ordered.map((segment) => new Date(`${segment.arrivalLocal}Z`).getTime())))
+      : new Date((inbound ?? outbound).getTime() + 2 * HOUR);
   const status = seed.status ?? "confirmed";
   const withOrder = status !== "pending" && status !== "failed";
   const recordLocator = withOrder ? (seed.recordLocator ?? newRecordLocator()) : null;
@@ -390,16 +413,52 @@ async function seedBooking(seed: BookingSeed = {}): Promise<string> {
     if (!withOrder) {
       return;
     }
-    const flights = [
-      { from: "MAD", to: "ORY", at: outbound, segmentId: "3", itinerary: 0 },
-      ...(inbound === undefined
+    if (ordered !== undefined && ordered.length > 0) {
+      await trx
+        .insertInto("booking_segments")
+        .values(
+          ordered.map((segment) => ({
+            id: newId("seg"),
+            booking_id: id,
+            amadeus_flight_offer_id: segment.amadeusFlightOfferId,
+            amadeus_segment_id: segment.amadeusSegmentId,
+            itinerary_index: segment.itineraryIndex,
+            segment_index: segment.segmentIndex,
+            carrier_code: segment.carrierCode,
+            flight_number: segment.flightNumber,
+            operating_carrier_code: segment.operatingCarrierCode,
+            aircraft_code: segment.aircraftCode,
+            departure_iata: segment.departureIata,
+            departure_terminal: segment.departureTerminal,
+            departure_local: segment.departureLocal,
+            departure_at: new Date(`${segment.departureLocal}Z`),
+            arrival_iata: segment.arrivalIata,
+            arrival_terminal: segment.arrivalTerminal,
+            arrival_local: segment.arrivalLocal,
+            arrival_at: new Date(`${segment.arrivalLocal}Z`),
+            duration_minutes: segment.durationMinutes,
+            cabin: segment.cabin,
+            booking_class: segment.bookingClass,
+            fare_basis: segment.fareBasis,
+            ...(segment.status === null ? {} : { status: segment.status }),
+            ...(segment.isFlown === null ? {} : { is_flown: segment.isFlown }),
+          })),
+        )
+        .execute();
+    }
+    const flights =
+      ordered !== undefined && ordered.length > 0
         ? []
-        : [{ from: "ORY", to: "MAD", at: inbound, segmentId: "4", itinerary: 1 }]),
-    ];
-    await trx
-      .insertInto("booking_segments")
-      .values(
-        flights.map((flight) => ({
+        : [
+            { from: "MAD", to: "ORY", at: outbound, segmentId: "3", itinerary: 0 },
+            ...(inbound === undefined
+              ? []
+              : [{ from: "ORY", to: "MAD", at: inbound, segmentId: "4", itinerary: 1 }]),
+          ];
+    for (const flight of flights) {
+      await trx
+        .insertInto("booking_segments")
+        .values({
           id: newId("seg"),
           booking_id: id,
           amadeus_flight_offer_id: "2",
@@ -418,9 +477,9 @@ async function seedBooking(seed: BookingSeed = {}): Promise<string> {
           cabin: "ECONOMY",
           booking_class: "Q",
           is_flown: flight.at.getTime() + 2 * HOUR < now,
-        })),
-      )
-      .execute();
+        })
+        .execute();
+    }
     await trx
       .insertInto("booking_travelers")
       .values({
@@ -543,9 +602,22 @@ async function stubFetch(path: string, init: { method: string; body?: unknown })
   return (await res.json()) as JsonObject;
 }
 
-/** An order of the stub (Flight Create Orders, not issued) with a fresh passport number; its `data`. */
+/** The fixture's offer 2 with its flight (2 h 05 min) departing at `departure` (a local time, UTC reading). */
+function offerDepartingAt(departure: Date): JsonObject {
+  const offer = pricedFlightOffer();
+  for (const itinerary of offer["itineraries"] as JsonObject[]) {
+    for (const segment of itinerary["segments"] as JsonObject[]) {
+      (segment["departure"] as JsonObject)["at"] = local(departure);
+      (segment["arrival"] as JsonObject)["at"] = local(new Date(departure.getTime() + 125 * MINUTE));
+    }
+  }
+  return offer;
+}
+
+/** An order of the stub with a fresh passport number, its flight 10 days after now (to the minute); its `data`. */
 async function newStubOrder(documentNumber = newDocumentNumber()): Promise<JsonObject> {
-  const input = buildOrderRequestInput();
+  const departure = new Date(Math.floor((Date.now() + 10 * DAY) / MINUTE) * MINUTE);
+  const input = buildOrderRequestInput({ flightOffers: [offerDepartingAt(departure)] });
   const traveler = input.travelers[0];
   const document = traveler?.documents[0];
   if (traveler === undefined || document === undefined) {
@@ -562,6 +634,9 @@ async function newStubOrder(documentNumber = newDocumentNumber()): Promise<JsonO
 }
 
 const amadeusCalls = (operation: string) => stub.requests().filter((entry) => entry.operation === operation);
+
+/** The `supplierSync` block of a console.bookings.get answer. */
+const supplierSyncOf = (res: Response): JsonObject => (res.body as { supplierSync: JsonObject }).supplierSync;
 
 // ---- Answers -------------------------------------------------------------------------------------------------------
 
@@ -1183,7 +1258,16 @@ describe("console.bookings.get", () => {
         markupRuleId: alphaMarkupRule.id,
         markupRuleName: alphaMarkupRule.name,
       },
-      supplierSync: { status: "fresh", lastError: null, nextScheduledSyncAt: null, differences: [] },
+      // Synchronised an hour ago, its ticketing deadline 2 days away: the background sync is due 6 hours after the last
+      // one (FIX-W27-SYNC AC5); no synchronisation recorded a difference yet.
+      supplierSync: {
+        status: "fresh",
+        lastError: null,
+        nextScheduledSyncAt: new Date(
+          new Date(String(supplierSyncOf(res).lastSyncedAt)).getTime() + 6 * HOUR,
+        ).toISOString(),
+        differences: [],
+      },
       formOfPayments: [
         {
           kind: "creditCard",
@@ -1485,8 +1569,69 @@ describe("console.bookings.get", () => {
     expect(first.body.recentSupplierRequests).toEqual([
       expect.objectContaining({ id: logged[0]?.id, operation: "console.bookings.get" }),
     ]);
-    expect((first.body.events as JsonObject[]).map((event) => event["type"])).toContain(
+    // The claim is the booking's column since FIX-W27-SYNC: nothing of it on the timeline.
+    expect((first.body.events as JsonObject[]).map((event) => event["type"])).not.toContain(
       "booking.sync_requested",
     );
+  });
+
+  it("[FIX-W27-SYNC AC5] fills nextScheduledSyncAt from the sync's schedule and differences from the last diff", async () => {
+    const agent = await staffSession(alphaId, "agent");
+    const order = await newStubOrder();
+    // Waits for its tickets, its ticketing deadline 20 hours away: hourly in the 24 h before it.
+    const nearDeadline = await seedBooking({
+      amadeusOrderId: order["id"] as string,
+      snapshot: redactPayload(order),
+      ticketingDeadlineInMs: 20 * HOUR,
+    });
+    const [segment] = snapshotSegmentsOf(redactPayload(order)) ?? [];
+    if (segment === undefined) {
+      throw new Error("the stub order has no segment");
+    }
+    const departure = local(new Date(new Date(`${segment.departureLocal}Z`).getTime() + HOUR));
+    stub.orders.changeSegment(order["id"] as string, segment.amadeusSegmentId, { departureAt: departure });
+    const ticketed = await seedBooking({ status: "ticketed", lastSyncedAgoMs: 2 * HOUR });
+    const pending = await seedBooking({ status: "pending" });
+
+    // The staff refresh sees the airline's change first: the diff of the background sync records it.
+    const refreshed = await agent.get(`/v1/console/bookings/${nearDeadline}?refresh=true`);
+    const read = await Promise.all([ticketed, pending].map((id) => agent.get(`/v1/console/bookings/${id}`)));
+
+    expect(answer(refreshed)).toEqual([200, undefined]);
+    expectResponseToMatch("consoleGetBooking", refreshed);
+    const sync = supplierSyncOf(refreshed);
+    expect(sync).toMatchObject({
+      status: "refreshed",
+      differences: [
+        {
+          path: "/itineraries/0/segments/0/departure/at",
+          label: `${segment.carrierCode}${segment.flightNumber} departure time`,
+          before: segment.departureLocal,
+          after: departure,
+        },
+      ],
+    });
+    // Refreshed now (and claimed now): next due an hour later, the deadline's hourly rhythm.
+    expect(sync.nextScheduledSyncAt).toBe(
+      new Date(new Date(String(sync.lastSyncedAt)).getTime() + HOUR).toISOString(),
+    );
+    expect((refreshed.body.events as JsonObject[]).map((event) => event["type"])).toContain(
+      "booking.schedule_changed",
+    );
+    // A ticketed booking synchronised 2 hours ago: every 6 hours. A pending one has no order to synchronise.
+    for (const res of read) {
+      expect(answer(res)).toEqual([200, undefined]);
+      expectResponseToMatch("consoleGetBooking", res);
+    }
+    const [ticketedSync, pendingSync] = read.map(supplierSyncOf);
+    expect(ticketedSync).toMatchObject({ status: "fresh", differences: [] });
+    expect(ticketedSync?.nextScheduledSyncAt).toBe(
+      new Date(new Date(String(ticketedSync?.lastSyncedAt)).getTime() + 6 * HOUR).toISOString(),
+    );
+    expect(pendingSync).toMatchObject({
+      status: "not_applicable",
+      nextScheduledSyncAt: null,
+      differences: [],
+    });
   });
 });

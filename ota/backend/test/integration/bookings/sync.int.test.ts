@@ -19,6 +19,11 @@
 // render (whose write locks the booking for a moment before FIX-W26-BOOKINGS) or an e-mail never runs alongside a
 // sync; the jobs they would run wait in their queues, where the file reads them. `Clock` is pointed at a FakeClock
 // that only moves forward: each test starts on a day of its own after the previous one.
+//
+// FIX-W27-SYNC (lead decision (3) of 2026-10-23): the claim is `bookings.sync_claimed_at`, never a
+// `booking.sync_requested` event; the refreshes of the API claim through the same BookingSyncService, which the worker
+// graph holds too, so the file plays "a refresh at the same moment" with that service's `refresh` (its claim, its
+// throttle and its record are the API's, AmadeusClient aside: a throttled refresh calls no Amadeus).
 import { randomBytes } from "node:crypto";
 import { getQueueToken } from "@nestjs/bullmq";
 import { Global, Module, type DynamicModule, type INestApplicationContext } from "@nestjs/common";
@@ -39,6 +44,7 @@ import type { Job, Queue } from "bullmq";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { AmadeusClient } from "../../../src/amadeus/amadeus.client";
 import { AMADEUS_LIMITS, DEFAULT_AMADEUS_LIMITS, type AmadeusLimits } from "../../../src/amadeus/limits";
+import { REFRESH_THROTTLE_MS } from "../../../src/bookings/allowed-actions";
 import { newBookingReference } from "../../../src/bookings/booking-reference";
 import {
   BOOKING_SYNC_JOB,
@@ -51,12 +57,15 @@ import {
 } from "../../../src/bookings/booking-sync.processor";
 import {
   AIRLINE_CANCEL_REASON,
+  AIRLINE_CANCELLED_ALERT,
   BOOKING_SYNC_DEADLINE_INTERVAL_MS,
   BOOKING_SYNC_INTERVAL_MS,
   BOOKING_SYNC_OPERATION,
   BOOKING_SYNC_RETRY_MS,
   BOOKING_SYNC_ROUNDS,
+  BookingSyncService,
   SCHEDULE_CHANGED_EVENT,
+  type RefreshOutcome,
 } from "../../../src/bookings/booking-sync.service";
 import { orderSegmentsOf } from "../../../src/bookings/order-diff";
 import { readCreatedOrder } from "../../../src/bookings/order-recorder";
@@ -235,7 +244,11 @@ async function asTenant<T>(
 /** An order of `offerOn(departure)` for one traveller, created as `key` through the worker's Amadeus client. */
 async function createOrder(
   key: TenantKey,
-  options: { readonly departure: Date; readonly issue: boolean },
+  options: {
+    readonly departure: Date;
+    readonly issue: boolean;
+    readonly identifications?: readonly JsonObject[] | undefined;
+  },
 ): Promise<{ readonly id: string; readonly recordLocator: string; readonly body: unknown }> {
   const office = tenants[key].office;
   const request = buildCreateOrderRequest(
@@ -247,11 +260,21 @@ async function createOrder(
       issue: options.issue,
     }),
   );
+  const body =
+    options.identifications === undefined
+      ? request.body
+      : {
+          ...request.body,
+          data: {
+            ...(request.body as { data: JsonObject }).data,
+            formOfIdentifications: options.identifications,
+          },
+        };
   const reply = await asTenant(key, (client, context) =>
     client.createFlightOrders(
       { ...context, environment: "test", operation: "test.setup" },
       {
-        body: request.body as unknown as Parameters<AmadeusClient["createFlightOrders"]>[1]["body"],
+        body: body as unknown as Parameters<AmadeusClient["createFlightOrders"]>[1]["body"],
         query: request.query,
       },
     ),
@@ -301,6 +324,8 @@ interface BookingSeed {
   readonly trip?: { readonly departure: Date; readonly arrival: Date };
   /** `ticketing_deadline_at`; none by default. */
   readonly ticketingDeadlineAt?: Date;
+  /** Forms of identification of the order at the stub (an airline that asks for them), in full. */
+  readonly identifications?: readonly JsonObject[];
 }
 
 interface SeededBooking {
@@ -315,7 +340,11 @@ async function insertBooking(seed: BookingSeed): Promise<SeededBooking> {
   const departure = plus(seed.at, 60 * DAY);
   const order = seed.unknownOrder
     ? { id: `SYNCTEST${randomBytes(8).toString("hex").toUpperCase()}`, recordLocator: null, body: null }
-    : await createOrder(seed.key, { departure, issue: seed.issuedAtAirline === true });
+    : await createOrder(seed.key, {
+        departure,
+        issue: seed.issuedAtAirline === true,
+        identifications: seed.identifications,
+      });
   const id = newId("bkg");
   const reference = newBookingReference();
   const status = seed.status ?? "confirmed";
@@ -426,6 +455,7 @@ async function bookingOf(booking: SeededBooking) {
         "ticketing_next_attempt_at as nextAttemptAt",
         "issued_at as issuedAt",
         "last_synced_at as lastSyncedAt",
+        "sync_claimed_at as syncClaimedAt",
         "sync_error as syncError",
         "cancelled_at as cancelledAt",
         "cancelled_by as cancelledBy",
@@ -433,6 +463,8 @@ async function bookingOf(booking: SeededBooking) {
         "first_departure_at as firstDepartureAt",
         "last_arrival_at as lastArrivalAt",
         "order_snapshot as orderSnapshot",
+        "form_of_identifications as formOfIdentifications",
+        "sync_changes as syncChanges",
       ])
       .where("id", "=", booking.id)
       .executeTakeFirstOrThrow(),
@@ -481,7 +513,13 @@ async function notificationsOf(booking: SeededBooking) {
   return await tx(booking.key, (trx) =>
     trx
       .selectFrom("notifications")
-      .select(["template_key as templateKey", "recipient", "dedupe_key as dedupeKey", "payload"])
+      .select([
+        "template_key as templateKey",
+        "recipient",
+        "recipient_type as recipientType",
+        "dedupe_key as dedupeKey",
+        "payload",
+      ])
       .where("booking_id", "=", booking.id)
       .orderBy("template_key")
       .execute(),
@@ -585,6 +623,47 @@ async function concurrentChange(booking: SeededBooking, tag: string): Promise<vo
       .where("id", "=", booking.id)
       .execute(),
   );
+}
+
+/**
+ * A refresh of the booking as the API runs one (bookings.get with `refresh=true`: BookingSyncService.refresh with the
+ * customer's 60 s throttle), in a request context of its tenant, at the clock's time.
+ */
+async function refreshAs(booking: SeededBooking): Promise<RefreshOutcome> {
+  return await asTenant(booking.key, (_client, context) =>
+    app
+      .get(BookingSyncService, { strict: false })
+      .refresh({ id: context.tenantId, key: booking.key }, booking.id, {
+        operation: "bookings.get",
+        requestId: context.requestId,
+        environment: "test",
+        query: {},
+        throttleMs: REFRESH_THROTTLE_MS,
+      }),
+  );
+}
+
+/** A Stripe payment of the booking that holds the traveller's money (`captured` or `authorized`) for its total. */
+async function insertPayment(booking: SeededBooking, status: "captured" | "authorized"): Promise<string> {
+  const id = newId("pay");
+  await tx(booking.key, (trx) =>
+    trx
+      .insertInto("payments")
+      .values({
+        id,
+        environment: "test",
+        booking_id: booking.id,
+        provider: "stripe",
+        provider_payment_id: `pi_${randomBytes(12).toString("hex")}`,
+        currency: "EUR",
+        amount: "115.00",
+        amount_authorized: "115.00",
+        amount_captured: status === "captured" ? "115.00" : "0",
+        status,
+      })
+      .execute(),
+  );
+  return id;
 }
 
 /** A transaction of the test that holds a lock on the booking until `release()` (then rolls back). */
@@ -776,13 +855,13 @@ describe("a schedule change by the airline", () => {
     // The redacted snapshot is the order as read.
     expect(JSON.stringify(row.orderSnapshot)).toContain(localOf(departure));
 
+    // The claim is the booking's column (lead decision (3) of 2026-10-23): no booking.sync_requested event.
+    expect(row.syncClaimedAt).toEqual(T0);
     const events = await eventsOf(booking);
     expect(events.map((event) => [event.type, event.actorType, event.visible])).toEqual([
-      ["booking.sync_requested", "system", false],
       [SCHEDULE_CHANGED_EVENT, "supplier", true],
     ]);
-    expect(events[0]?.data).toEqual({ operation: BOOKING_SYNC_OPERATION });
-    expect(events[1]).toMatchObject({
+    expect(events[0]).toMatchObject({
       statusFrom: "confirmed",
       statusTo: "confirmed",
       data: {
@@ -798,10 +877,12 @@ describe("a schedule change by the airline", () => {
         ],
         added: [],
         removed: [],
+        via: BOOKING_SYNC_OPERATION,
       },
     });
-    // No customer e-mail for a schedule change in the MVP.
+    // No customer e-mail for a schedule change in the MVP; a new itinerary of the new version (FIX-W27-SYNC).
     expect(await notificationsOf(booking)).toEqual([]);
+    expect(await renderJobsOf(booking)).toEqual([{ kind: "itinerary", bookingVersion: version + 1 }]);
 
     // Not due again before 6 hours have passed. The next due sync reads the same order: nothing changed, so no second
     // event and the same version; only the synchronisation time moves.
@@ -818,6 +899,32 @@ describe("a schedule change by the airline", () => {
       1,
     );
     expect(await bookingOf(booking)).toMatchObject({ version: version + 1, lastSyncedAt: next });
+  });
+
+  it("[FIX-W27-SYNC AC5] keeps what the sync changed as the booking's last differences, and an empty list once nothing changes", async () => {
+    const departure = plus(booking.departure, 45 * MINUTE);
+    stub.orders.changeSegment(booking.orderId, "3", { departureAt: localOf(departure) });
+
+    expect(await syncJob(booking, T0)).toMatchObject({
+      outcome: "synced",
+      changes: { scheduleChanged: true },
+    });
+
+    expect((await bookingOf(booking)).syncChanges).toEqual([
+      {
+        path: "/itineraries/0/segments/0/departure/at",
+        label: "IB3436 departure time",
+        before: localOf(booking.departure),
+        after: localOf(departure),
+      },
+    ]);
+    // The next due sync reads the same order: nothing changed since, so the differences are empty.
+    const next = plus(T0, BOOKING_SYNC_INTERVAL_MS);
+    expect(await syncAt(booking, next)).toMatchObject({
+      outcome: "synced",
+      changes: { versionMoved: false },
+    });
+    expect((await bookingOf(booking)).syncChanges).toEqual([]);
   });
 
   it("[OBE-045 AC1] records a status change of a segment as a schedule change for staff only", async () => {
@@ -887,10 +994,9 @@ describe("a cancellation by the airline", () => {
     // booking.cancelled through OrderRecorder.event, visible to the customer; the schedule change is part of it.
     const events = await eventsOf(booking);
     expect(events.map((event) => [event.type, event.actorType, event.visible])).toEqual([
-      ["booking.sync_requested", "system", false],
       ["booking.cancelled", "supplier", true],
     ]);
-    expect(events[1]).toMatchObject({
+    expect(events[0]).toMatchObject({
       statusFrom: "confirmed",
       statusTo: "cancelled",
       data: { cancelledBy: "airline" },
@@ -902,6 +1008,7 @@ describe("a cancellation by the airline", () => {
       {
         templateKey: "booking.cancelled",
         recipient: tenants.alpha.email,
+        recipientType: "guest",
         dedupeKey: `booking.cancelled:${booking.id}`,
         payload: expect.objectContaining({
           booking: expect.objectContaining({
@@ -924,6 +1031,71 @@ describe("a cancellation by the airline", () => {
     expect(readsOf(booking)).toHaveLength(1);
   });
 
+  it("[FIX-W27-SYNC AC3] alerts staff once when the airline cancels a booking whose payment holds the money", async () => {
+    const paymentId = await insertPayment(booking, "captured");
+    stub.orders.cancelByAirline(booking.orderId);
+
+    expect(await syncJob(booking, T0)).toMatchObject({
+      outcome: "synced",
+      changes: { cancelledByAirline: true },
+    });
+
+    const alerts = (await notificationsOf(booking)).filter(
+      (row) => row.templateKey === "staff.manual_review",
+    );
+    expect(alerts).toEqual([
+      {
+        templateKey: "staff.manual_review",
+        // No ops_alert_email or support address of the OTA: Velexis ops (OPS_ALERT_EMAIL).
+        recipient: "ops@example.com",
+        recipientType: "staff",
+        dedupeKey: `staff.manual_review:${booking.id}:${AIRLINE_CANCELLED_ALERT}`,
+        payload: {
+          booking: {
+            reference: booking.reference,
+            recordLocator: expect.stringMatching(/^[A-Z0-9]{6}$/) as unknown,
+            consoleUrl: `http://localhost:3002/bookings/${booking.id}`,
+          },
+          review: { reason: expect.stringContaining(`${paymentId} captured 115.00 EUR`) as unknown },
+        },
+      },
+    ]);
+    // booking.cancelled through OrderRecorder.event, and the traveller's e-mail, as for any cancellation.
+    expect((await eventsOf(booking)).map((event) => event.type)).toEqual(["booking.cancelled"]);
+    expect((await notificationsOf(booking)).map((row) => row.templateKey)).toEqual([
+      "booking.cancelled",
+      "staff.manual_review",
+    ]);
+    // Once: neither a stray sync job nor a refresh of the cancelled booking alerts again.
+    expect(await syncJob(booking, plus(T0, 7 * HOUR))).toMatchObject({
+      outcome: "skipped",
+      reason: "not_active",
+    });
+    expect(await refreshAs(booking)).toEqual({ kind: "skipped" });
+    expect(
+      (await notificationsOf(booking)).filter((row) => row.templateKey === "staff.manual_review"),
+    ).toHaveLength(1);
+  });
+
+  it("[FIX-W27-SYNC AC3] alerts staff about an authorised payment too, and not about a booking without one", async () => {
+    await insertPayment(booking, "authorized");
+    const unpaid = await insertBooking({ key: "alpha", at: T0 });
+    stub.orders.cancelByAirline(booking.orderId);
+    stub.orders.cancelByAirline(unpaid.orderId);
+
+    await syncJob(booking, T0);
+    await syncJob(unpaid, T0);
+
+    expect((await notificationsOf(booking)).map((row) => row.templateKey)).toEqual([
+      "booking.cancelled",
+      "staff.manual_review",
+    ]);
+    expect((await notificationsOf(booking))[1]?.payload).toMatchObject({
+      review: { reason: expect.stringContaining("authorised 115.00 EUR") as unknown },
+    });
+    expect((await notificationsOf(unpaid)).map((row) => row.templateKey)).toEqual(["booking.cancelled"]);
+  });
+
   it("[OBE-045 AC2] never cancels a booking whose order Amadeus no longer returns: ORDER_NOT_FOUND for staff", async () => {
     // Cancelled outside Velexis (Management DELETE): the stub answers 404 for it from now on.
     await deleteOrder(booking);
@@ -938,8 +1110,9 @@ describe("a cancellation by the airline", () => {
       syncError: "ORDER_NOT_FOUND",
       version,
       lastSyncedAt: plus(T0, -7 * HOUR),
+      syncClaimedAt: T0,
     });
-    expect((await eventsOf(booking)).map((event) => event.type)).toEqual(["booking.sync_requested"]);
+    expect((await eventsOf(booking)).map((event) => event.type)).toEqual([]);
     // Its claim keeps it out of the scans for 30 minutes, then the read is tried again.
     const soon = plus(T0, 10 * MINUTE);
     await scan("alpha", soon);
@@ -1017,8 +1190,9 @@ describe("a concurrent change of the booking", () => {
     expect(await bookingOf(booking)).toMatchObject({
       version: version + BOOKING_SYNC_ROUNDS,
       lastSyncedAt: plus(T0, -7 * HOUR),
+      syncClaimedAt: T0,
     });
-    expect((await eventsOf(booking)).map((event) => event.type)).toEqual(["booking.sync_requested"]);
+    expect((await eventsOf(booking)).map((event) => event.type)).toEqual([]);
 
     // Once its claim is 30 minutes old, with the other writers gone, it records the change.
     vi.mocked(client.getFlightOrder).mockRestore();
@@ -1067,9 +1241,9 @@ describe("the claim", () => {
       writer.release();
       await writer.done;
     }
-    expect((await eventsOf(booking)).filter((event) => event.type === "booking.sync_requested")).toHaveLength(
-      1,
-    );
+    // Only the first sync claimed it (`sync_claimed_at`, no event); the skipped one wrote nothing.
+    expect((await bookingOf(booking)).syncClaimedAt).toEqual(T0);
+    expect((await eventsOf(booking)).filter((event) => event.type === "booking.sync_requested")).toEqual([]);
     expect(readsOf(booking)).toHaveLength(1);
   });
 
@@ -1093,10 +1267,7 @@ describe("the claim", () => {
       version: before + 1,
     });
     const events = await eventsOf(issued);
-    expect(events.map((event) => [event.type, event.visible])).toEqual([
-      ["booking.sync_requested", false],
-      ["booking.ticketed", true],
-    ]);
+    expect(events.map((event) => [event.type, event.visible])).toEqual([["booking.ticketed", true]]);
     expect((await renderJobsOf(issued)).map((job) => job["kind"]).sort()).toEqual([
       "e_ticket_receipt",
       "itinerary",
@@ -1118,6 +1289,98 @@ describe("the claim", () => {
     expect(await job?.getState()).toBe("failed");
     expect(job?.attemptsMade).toBe(1);
     expect(readsOf(booking)).toEqual([]);
+  });
+});
+
+describe("the claim as a column (FIX-W27-SYNC)", () => {
+  let T0: Date;
+  let booking: SeededBooking;
+
+  beforeEach(async () => {
+    T0 = clock.set(nextDay());
+    await syncedEverything(T0);
+    booking = await insertBooking({ key: "alpha", at: T0 });
+    stub.clearRequests();
+  }, BOOKING_SETUP_TIMEOUT_MS);
+
+  it("[FIX-W27-SYNC AC1] a sync claim writes no event and makes a refresh of the same moment stand back", async () => {
+    stub.orders.changeSegment(booking.orderId, "3", { departureAt: localOf(plus(booking.departure, HOUR)) });
+    // While the sync reads the order (its claim committed), a customer opens the booking with refresh=true.
+    const client = app.get(AmadeusClient, { strict: false });
+    const read = client.getFlightOrder.bind(client);
+    let concurrent: RefreshOutcome | undefined;
+    let eventsDuringRead: string[] = [];
+    vi.spyOn(client, "getFlightOrder").mockImplementationOnce(async (context, request, options) => {
+      eventsDuringRead = (await eventsOf(booking)).map((event) => event.type);
+      concurrent = await refreshAs(booking);
+      return await read(context, request, options);
+    });
+
+    const result = await syncJob(booking, T0);
+
+    expect(result).toMatchObject({ outcome: "synced", changes: { scheduleChanged: true } });
+    // The claim: the column, no event (none was written by the time Amadeus was called).
+    expect(eventsDuringRead).toEqual([]);
+    expect((await bookingOf(booking)).syncClaimedAt).toEqual(T0);
+    // The refresh found the sync's claim within its 60 s throttle: throttled, no second Flight Order Management GET.
+    expect(concurrent).toEqual({ kind: "throttled", retryAfterSeconds: REFRESH_THROTTLE_MS / 1000 });
+    expect(readsOf(booking)).toHaveLength(1);
+    expect((await eventsOf(booking)).map((event) => event.type)).toEqual([SCHEDULE_CHANGED_EVENT]);
+  });
+
+  it("[FIX-W27-SYNC AC1] a refresh's claim keeps the background sync away for 30 minutes, as the sync's own does", async () => {
+    // A refresh whose read fails (Amadeus 500): its claim stays, the booking is not synchronised.
+    stub.setDefaultScenario("server-error");
+    await expect(refreshAs(booking)).rejects.toMatchObject({ code: "SUPPLIER_ERROR" });
+    stub.setDefaultScenario("success");
+    expect(await bookingOf(booking)).toMatchObject({
+      syncClaimedAt: T0,
+      syncError: "SUPPLIER_ERROR",
+      lastSyncedAt: plus(T0, -7 * HOUR),
+    });
+    expect(await eventsOf(booking)).toEqual([]);
+
+    // Due by its last synchronisation, but claimed: not before 30 minutes have passed.
+    const soon = plus(T0, BOOKING_SYNC_RETRY_MS - MINUTE);
+    await scan("alpha", soon);
+    expect(await syncJobOf(booking, soon)).toBeUndefined();
+    expect(await syncJob(booking, plus(soon, 30_000))).toMatchObject({
+      outcome: "skipped",
+      reason: "not_due",
+    });
+    const later = plus(T0, BOOKING_SYNC_RETRY_MS);
+    expect(await syncAt(booking, later)).toMatchObject({ outcome: "synced" });
+    expect(await bookingOf(booking)).toMatchObject({
+      syncClaimedAt: later,
+      lastSyncedAt: later,
+      syncError: null,
+    });
+  });
+
+  it("[FIX-W27-SYNC AC4] projects the order's forms of identification with their last 4 characters only", async () => {
+    const numbers = [
+      `P${randomBytes(5).toString("hex").toUpperCase()}`,
+      `ID${randomBytes(5).toString("hex").toUpperCase()}`,
+    ];
+    const identified = await insertBooking({
+      key: "alpha",
+      at: T0,
+      identifications: [
+        { identificationType: "PASSPORT", number: numbers[0], travelerIds: ["1"] },
+        { identificationType: "NATIONAL_IDENTITY_CARD", number: numbers[1], travelerIds: ["1"] },
+      ],
+    });
+
+    expect(await syncJob(identified, T0)).toMatchObject({ outcome: "synced" });
+
+    const row = await bookingOf(identified);
+    expect(row.formOfIdentifications).toEqual([
+      { identificationType: "PASSPORT", number: numbers[0]?.slice(-4), travelerIds: ["1"] },
+      { identificationType: "NATIONAL_IDENTITY_CARD", number: numbers[1]?.slice(-4), travelerIds: ["1"] },
+    ]);
+    for (const number of numbers) {
+      expect(JSON.stringify(row)).not.toContain(number);
+    }
   });
 });
 
@@ -1144,20 +1407,13 @@ describe("the scan", () => {
         }),
       );
     }
+    // Claimed by a refresh 10 minutes ago (`sync_claimed_at`, lead decision (3) of 2026-10-23).
     const claimed = await insertBooking({ key: "alpha", at: T0, unknownOrder: true });
     await tx("alpha", (trx) =>
       trx
-        .insertInto("booking_events")
-        .values({
-          id: newId("evt"),
-          booking_id: claimed.id,
-          type: "booking.sync_requested",
-          actor_type: "customer",
-          summary: "Synchronisation with the airline requested.",
-          visible_to_customer: false,
-          created_at: plus(T0, -10 * MINUTE),
-          updated_at: plus(T0, -10 * MINUTE),
-        })
+        .updateTable("bookings")
+        .set({ sync_claimed_at: plus(T0, -10 * MINUTE) })
+        .where("id", "=", claimed.id)
         .execute(),
     );
     notDue = {

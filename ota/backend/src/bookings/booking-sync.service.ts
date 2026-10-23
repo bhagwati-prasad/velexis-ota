@@ -1,38 +1,49 @@
-// The background booking sync (OBE-045; ota/docs/flows/ticketing-and-documents.md §3 step 5 and §4, OADR-0014 points
-// 2, 4 and 6, db README §6 "Booking sync", the document's consoleResyncBooking and listBookings "Freshness"): one
-// Flight Order Management GET of an active booking's order, and what it says changed written onto the booking. It runs
-// in the worker only, for one booking of the tenant of the current job context (booking-sync.processor.ts opens it),
-// and no database transaction is open while Amadeus is called (architecture §4).
+// The booking sync (OBE-045; ota/docs/flows/ticketing-and-documents.md §3 step 5 and §4, OADR-0014 points 2, 4 and 6,
+// db README §6 "Booking sync", the document's consoleResyncBooking and listBookings "Freshness"): one Flight Order
+// Management GET of an active booking's order, and what it says changed written onto the booking. No database
+// transaction is open while Amadeus is called (architecture §4).
 //
-// **Due** (BookingSyncRepository.dueBookingIds, the scan's query, and the claim's check): a `confirmed`, `ticketed` or
-// `partially_ticketed` booking with an Amadeus order whose trip is not over (`last_arrival_at` after now: the document
-// keeps "upcoming trips" current), last synchronised BOOKING_SYNC_INTERVAL_MS (6 hours, the document's "every 6 h",
-// Booking.syncStatus `fresh`) ago or more (or never), or BOOKING_SYNC_DEADLINE_INTERVAL_MS (1 hour) ago or more for a
-// booking that still waits for tickets (`confirmed`, `partially_ticketed`) in the 24 hours before its
-// `ticketing_deadline_at` (the document's ConsoleSupplierSync.nextScheduledSyncAt: "every 6 h for upcoming trips, hourly
-// in the 24 h before the ticketing deadline"; syncIntervalOf), and without a claim of a synchronisation in the last
-// BOOKING_SYNC_RETRY_MS (30 minutes: `booking.sync_requested`, the events the customer refresh also writes and is
-// throttled by), so an attempt in progress is never doubled and one whose read failed (a rate limit, a timeout, an
-// order not found) is tried again half an hour later instead of at every scan; for a suspended tenant only paid ones
-// (`amount_paid > 0`, OADR-0008 point 8). The scan takes the oldest synced first (`bookings_sync_idx`).
+// Two ways in, one record step (lead decision (3) of 2026-10-23, FIX-W27-SYNC):
+//   - `attempt`: the background sync, in the worker, for one booking of the tenant of the current job context
+//     (booking-sync.processor.ts opens it), when the booking is due (sync-schedule.ts);
+//   - `refresh`: the refreshes, in the API (bookings.get, getTicketingStatus and getFareRules with a refresh through
+//     CustomerBookingsService, console.bookings.get with `refresh=true`, console.bookings.resync and the resync after a
+//     timed-out patch), throttled instead of scheduled.
+// Both claim the booking in a column (`bookings.sync_claimed_at`; until FIX-W27-SYNC a staff-only
+// `booking.sync_requested` event, about four a day per upcoming booking, which filled the console's timeline), read the
+// order without a transaction, and record it through the same diff (order-diff.ts) and the same events, so a schedule
+// change, a cancellation by the airline or a new ticket is reported whichever path reads it first.
 //
-//   1. Claim (T1). The booking is locked with `FOR NO KEY UPDATE SKIP LOCKED` (lead decision (1) of 2026-10-22,
-//      OADR-0014 point 6: a booking another claim, worker or request holds is skipped, a transaction that only holds its
-//      `FOR KEY SHARE`, the foreign-key lock of an event, outbox or document insert, never makes the claim skip), read
-//      in a statement after the lock and checked again, whatever the job said (due, above). The claim writes the
-//      staff-only event `booking.sync_requested` (`data.operation = "booking.sync"`), its in-progress marker: a second
-//      claim (another job, a customer refresh within 60 s) sees it and stands back. It does not move `version`, and
-//      commits before Amadeus is called.
-//   2. Read. Flight Order Management GET with `include=bags`. A failure is recorded in `sync_error` (Booking.syncStatus
-//      `failed`; `version` unchanged): Amadeus 404 as `ORDER_NOT_FOUND` (an order purged, or cancelled outside
-//      Velexis: staff check it; never a cancellation, see order-diff.ts), an answer that cannot be read as
-//      `SUPPLIER_ERROR`, any other as its error code. The next attempt comes with the next due scan.
+// **Due** (BookingSyncRepository.dueBookingIds, the scan's query, and the claim's check; sync-schedule.ts): a
+// `confirmed`, `ticketed` or `partially_ticketed` booking with an Amadeus order whose trip is not over, last
+// synchronised 6 hours ago or more (or never), or 1 hour ago or more when it still waits for tickets in the 24 hours
+// before its ticketing deadline, and not claimed (by the sync or a refresh: `sync_claimed_at`) in the last 30 minutes,
+// so an attempt in progress is never doubled and one whose read failed (a rate limit, a timeout, an order not found) is
+// tried again half an hour later instead of at every scan; for a suspended tenant only paid ones (`amount_paid > 0`,
+// OADR-0008 point 8). The scan takes the oldest synced first (`bookings_sync_idx`).
+//
+//   1. Claim (T1). The sync locks the booking with `FOR NO KEY UPDATE SKIP LOCKED` (lead decision (1) of 2026-10-22,
+//      OADR-0014 point 6: a booking another claim, worker or request holds is skipped, a transaction that only holds
+//      its `FOR KEY SHARE`, the foreign-key lock of an event, outbox or document insert, never makes the claim skip),
+//      reads it in a statement after the lock and checks it again, whatever the job said (due, above). A refresh locks
+//      it `FOR UPDATE` and waits (BookingsRepository.lockForRefresh), skips a booking without an order, pending, failed
+//      or cancelled (and, when asked, one whose ticketing is final), and is throttled within its `throttleMs` (60 s for
+//      the customer's, 10 s for the console's, none after a timed-out patch) of the last claim or synchronisation. The
+//      claim writes `sync_claimed_at` (BookingsRepository.markSyncClaimed; never `version`, `updated_at` or a key
+//      column, and no event), and commits before Amadeus is called: a second claim (another job, a refresh) sees it and
+//      stands back (a refresh within its throttle, the sync for 30 minutes).
+//   2. Read. Flight Order Management GET (the sync with `include=bags`, a refresh with the `include` and `fareRules` it
+//      was asked for). A failure is recorded in `sync_error` (Booking.syncStatus `failed`; `version` unchanged): Amadeus
+//      404 as `ORDER_NOT_FOUND` (an order purged, or cancelled outside Velexis: staff check it; never a cancellation,
+//      see order-diff.ts), an answer that cannot be read as `SUPPLIER_ERROR`, any other as its error code. The sync
+//      answers `failed` and tries again when due; a refresh answers `not_found` for a 404 and throws the error for the
+//      others (a code the booking reads do not document becomes `502 SUPPLIER_ERROR`).
 //   3. Record (T2), with the booking `version` of the claim: the booking is locked again (`FOR NO KEY UPDATE`, which
 //      waits) and must still be active with the same order; a booking whose `version` moved since the claim (another
-//      writer recorded something while the order was read: a ticketing job, a console patch or resync, a refresh that
-//      stored tickets) is not overwritten: the sync reads the order again and records it against the new version, at
-//      most BOOKING_SYNC_ROUNDS reads in all (`superseded` after that, nothing written; the next due scan tries again).
-//      Otherwise it applies the diff of order-diff.ts:
+//      writer recorded something while the order was read: a ticketing job, a console patch or resync, another
+//      refresh) is not overwritten: the sync reads the order again and records it against the new version, at most
+//      BOOKING_SYNC_ROUNDS reads in all (`superseded` after that, nothing written; the next due scan tries again); a
+//      refresh answers `superseded` (the stored booking is answered). Otherwise it applies the diff of order-diff.ts:
 //        - tickets: new ones inserted, changed statuses recorded; a booking now fully or partly ticketed becomes
 //          `ticketed`/`partially_ticketed` (`issued`/`partially_issued`, `issued_at`), event `booking.ticketed`, which
 //          asks for the e-ticket receipts and a new itinerary (documents.processor.ts);
@@ -40,23 +51,30 @@
 //          terminals, flight, status, duration), added ones inserted, removed ones `CANCELLED`, `isFlown` recorded; the
 //          booking's `first_departure_at`/`last_arrival_at` follow the segments that are not cancelled; event
 //          `booking.schedule_changed` (flagged in the console as `hasScheduleChange`; visible to the customer when
-//          times changed). No customer e-mail for a schedule change in the MVP (plan step 3);
+//          times changed), which asks for a new itinerary (lead decision (3) of 2026-10-23). No customer e-mail for a
+//          schedule change in the MVP (plan step 3);
 //        - cancellation by the airline (every segment of the order `CANCELLED`): the booking becomes `cancelled` with
 //          `cancelled_at`, `cancelled_by = airline`, no further ticketing attempt, event `booking.cancelled` through
-//          OrderRecorder.event (the cancelled itinerary follows it), and the traveller's `booking.cancelled` e-mail
-//          (once per booking, dedupe key). The money is staff's (flow §3 step 4: the authorisation is voided or the
-//          capture refunded from the console); the log line says whether the booking was paid. A schedule change of
-//          the same read is part of the cancellation, not an event of its own;
-//        - always: the redacted `order_snapshot`, `order_dictionaries`, `order_included.bags`, the order's associated
-//          records the booking does not have yet, `last_synced_at`, `sync_error = null`.
+//          OrderRecorder.event (the cancelled itinerary follows it), the traveller's `booking.cancelled` e-mail (once
+//          per booking, dedupe key) and, when the booking has an authorised or captured payment, a staff alert
+//          (StaffAlerts, `staff.manual_review:<bkg_…>:airline_cancelled`, once per booking; lead decision (3) of
+//          2026-10-23). The money is staff's (flow §3 step 4: the authorisation is voided or the capture refunded from
+//          the console). A schedule change of the same read is part of the cancellation, not an event of its own;
+//        - always: the redacted `order_snapshot`, `order_dictionaries`, `order_included` (the bag options read with
+//          `include=bags`, the fare rules read with `fareRules`), the order's forms of identification cut to their
+//          last 4 characters (`form_of_identifications`, OBE-062's maskedIdentifications), the order's associated
+//          records the booking does not have yet, what the diff changed (`sync_changes`, the console's
+//          ConsoleSupplierSync.differences: `[]` when nothing changed), `last_synced_at`, `sync_error = null`.
 //      `version` moves (and with it the ETag) when tickets, a status or the segments changed, the changes documents and
 //      answers follow (lead decision (6a) of 2026-10-22); an `isFlown`, a record or the snapshot alone keep it.
 //
 // The sync does not clean the booking queue (lead decision (5) of 2026-10-22: Queue List has no removal among the 12
-// operations). Log lines carry ids, codes and counts, never an Amadeus body, a ticket number or a person's data.
+// operations; since lead decision (5) of 2026-10-23 the reconciler alerts staff when it nears the 500 one Queue List
+// answer carries, reconcile.service.ts). Log lines carry ids, codes and counts, never an Amadeus body, a ticket number or
+// a person's data.
 import { Injectable } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
-import { AppError, isAppError } from "@velexis/errors";
+import { AppError, isAppError, type OtaErrorCode } from "@velexis/errors";
 import { sql, type Insertable, type TenantDatabase, type Updateable } from "@velexis/db";
 import { redactPayload } from "@velexis/logger";
 import { InjectPinoLogger, PinoLogger } from "nestjs-pino";
@@ -65,58 +83,68 @@ import type { AmadeusCallContext } from "../amadeus/call-context";
 import { AmadeusCallError } from "../amadeus/error-mapper";
 import { Clock } from "../common/clock";
 import { IdGenerator } from "../common/ids";
-import type { WorkerConfig } from "../config";
+import type { SharedConfig } from "../config";
 import { InvalidNotificationError, OutboxService } from "../notifications/outbox.service";
 import { storefrontUrl } from "../notifications/renderer";
 import { Money } from "../pricing/pricing.types";
+import { warningsOf } from "../shopping/priced-offers.mapper";
 import type { PlatformTenant } from "../tenancy/platform-read.types";
 import { TenantTx, type TenantTransaction } from "../tenancy/tenant-tx";
-import { orderRecordsOf } from "./bookings.mapper";
+import {
+  offerFareRulesOf,
+  orderRecordsOf,
+  ticketingFinal,
+  type FareRuleType,
+  type StoredFareRules,
+} from "./bookings.mapper";
 import {
   BookingsRepository,
-  REFRESH_CLAIM_EVENT,
   type BookingChildren,
   type BookingRow,
   type BookingSegmentRow,
+  type BookingSettingsRow,
 } from "./bookings.repository";
-import { ORDER_NOT_FOUND } from "./customer-bookings.service";
+import { maskedIdentifications } from "./identifications";
 import {
   cancelledByAirline,
   diffSegments,
   diffTickets,
   orderSegmentsOf,
   scheduleChangeOf,
+  syncChangesOf,
   ticketUpgradeOf,
   type OrderSegment,
   type SegmentDiff,
 } from "./order-diff";
-import { OrderRecorder, readCreatedOrder, type CreatedOrder } from "./order-recorder";
+import { OrderRecorder, readCreatedOrder, type CreatedOrder, type Warning } from "./order-recorder";
+import { StaffAlerts } from "./staff-alerts";
+import {
+  AWAITING_TICKETS_STATUSES,
+  BOOKING_SYNC_DEADLINE_INTERVAL_MS,
+  BOOKING_SYNC_DEADLINE_WINDOW_MS,
+  BOOKING_SYNC_INTERVAL_MS,
+  BOOKING_SYNC_RETRY_MS,
+  BOOKING_SYNC_STATUSES,
+  isSyncStatus,
+  syncIntervalOf,
+} from "./sync-schedule";
+
+export {
+  BOOKING_SYNC_DEADLINE_INTERVAL_MS,
+  BOOKING_SYNC_DEADLINE_WINDOW_MS,
+  BOOKING_SYNC_INTERVAL_MS,
+  BOOKING_SYNC_RETRY_MS,
+  BOOKING_SYNC_STATUSES,
+  syncIntervalOf,
+} from "./sync-schedule";
 
 type Db = TenantDatabase;
 
-/** The Velexis operation of the sync's Amadeus calls (`supplier_requests.operation`) and its claim events. */
+/** The Velexis operation of the sync's Amadeus calls (`supplier_requests.operation`) and its events (`data.via`). */
 export const BOOKING_SYNC_OPERATION = "booking.sync";
-
-/** How long a synchronisation keeps a booking from being synchronised again (see the file header). */
-export const BOOKING_SYNC_INTERVAL_MS = 6 * 60 * 60_000;
-
-/** The same in the 24 h before the ticketing deadline of a booking that waits for tickets (see the file header). */
-export const BOOKING_SYNC_DEADLINE_INTERVAL_MS = 60 * 60_000;
-
-/** How long before its ticketing deadline a booking that waits for tickets is synchronised hourly. */
-export const BOOKING_SYNC_DEADLINE_WINDOW_MS = 24 * 60 * 60_000;
-
-/** How long a claim of a synchronisation (an attempt, in progress or failed) keeps the booking out (see the header). */
-export const BOOKING_SYNC_RETRY_MS = 30 * 60_000;
 
 /** The reads of the order one sync makes at most when other writers keep moving the booking's version. */
 export const BOOKING_SYNC_ROUNDS = 3;
-
-/** The booking statuses the sync keeps current: those with an order that is not cancelled (`pending` is reconciled). */
-export const BOOKING_SYNC_STATUSES = ["confirmed", "ticketed", "partially_ticketed"] as const;
-
-/** The statuses among BOOKING_SYNC_STATUSES of a booking that still waits for (some of) its tickets. */
-const AWAITING_TICKETS_STATUSES = ["confirmed", "partially_ticketed"] as const;
 
 /** The event of a schedule change (the console's `hasScheduleChange`, console-bookings.repository.ts). */
 export const SCHEDULE_CHANGED_EVENT = "booking.schedule_changed";
@@ -127,18 +155,39 @@ export const BOOKING_CANCELLED_EVENT = "booking.cancelled";
 /** `bookings.cancel_reason` of a cancellation the sync found. */
 export const AIRLINE_CANCEL_REASON = "Every segment of the order was cancelled by the airline.";
 
+/** The kind of the staff alert of an airline cancellation of a paid booking (its dedupe key's last part). */
+export const AIRLINE_CANCELLED_ALERT = "airline_cancelled";
+
+/** `sync_error` of a read whose order Amadeus no longer has (also the console's `order_not_found`). */
+export const ORDER_NOT_FOUND = "ORDER_NOT_FOUND";
+
+/** The warning of a refresh that found no order at Amadeus (purged after travel): the stored data is shown. */
+export const ORDER_NOT_FOUND_WARNING: Warning = Object.freeze({
+  title: "ORDER NOT FOUND AT THE AIRLINE",
+  detail: "The airline no longer returns this order; the booking as last synchronised is shown.",
+});
+
+/** The Amadeus error codes the booking reads document; a refresh answers any other as `502 SUPPLIER_ERROR`. */
+const DOCUMENTED_SUPPLIER_CODES: ReadonlySet<string> = new Set<OtaErrorCode>([
+  "SUPPLIER_NOT_CONFIGURED",
+  "RATE_LIMITED",
+  "SUPPLIER_ERROR",
+  "SERVICE_UNAVAILABLE",
+  "SUPPLIER_UNAVAILABLE",
+  "SUPPLIER_TIMEOUT",
+]);
+
+/** The payment states that hold the traveller's money: an authorisation or a capture (the staff alert's test). */
+const HELD_PAYMENT_STATUSES = ["authorized", "captured", "partially_refunded"] as const;
+
 /** Who the sync's booking events name: Amadeus, which reported the change. */
 const SUPPLIER_ACTOR = Object.freeze({ type: "supplier", id: null });
-const SYSTEM_ACTOR = Object.freeze({ type: "system", id: null });
 
 /** A BCP 47 locale as the outbox accepts it. */
 const LOCALE = /^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8}){0,3}$/;
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
-
-const isSyncStatus = (status: string): boolean =>
-  (BOOKING_SYNC_STATUSES as readonly string[]).includes(status);
 
 /** What the claim reads of a booking. */
 export interface SyncClaimRow {
@@ -152,8 +201,8 @@ export interface SyncClaimRow {
   readonly amountPaid: string;
   readonly version: number;
   readonly lastSyncedAt: Date | null;
-  /** The newest claim of a synchronisation (`booking.sync_requested` events: the sync's and the refreshes'). */
-  readonly lastClaimAt: Date | null;
+  /** `sync_claimed_at`: the newest claim of a synchronisation (the sync's and the refreshes'). */
+  readonly syncClaimedAt: Date | null;
 }
 
 /** The query options of the scan. */
@@ -164,18 +213,22 @@ export interface DueSyncQuery {
   readonly limit: number;
 }
 
-/** The newest claim of a synchronisation of booking `b`. */
-const lastClaimOf = sql<Date | null>`(
-  SELECT max(e.created_at) FROM booking_events e
-  WHERE e.booking_id = b.id AND e.type = ${REFRESH_CLAIM_EVENT}
-)`;
+/** A payment of a booking that holds the traveller's money (HELD_PAYMENT_STATUSES). */
+export interface HeldPaymentRow {
+  readonly id: string;
+  readonly status: string;
+  readonly currency: string;
+  readonly amountAuthorized: string;
+  readonly amountCaptured: string;
+  readonly amountRefunded: string;
+}
 
-/** The sync's queries on `bookings` and `booking_segments` (tenant repository: the `tenantTx` transaction first). */
+/** The sync's queries on `bookings`, `booking_segments` and `payments` (tenant repository: `tenantTx` first). */
 @Injectable()
 export class BookingSyncRepository {
   /**
    * The ids of the bookings due at `now` (see the file header), the oldest synced first (never synced first), at most
-   * `limit`. The partial index `bookings_sync_idx` serves the order; `booking_events_booking_idx` the claim check.
+   * `limit`. The partial index `bookings_sync_idx` serves the order.
    */
   async dueBookingIds(trx: TenantTransaction, query: DueSyncQuery): Promise<string[]> {
     const at = query.now.getTime();
@@ -202,17 +255,9 @@ export class BookingSyncRepository {
           ]),
         ]),
       )
+      // Not claimed in the last 30 minutes (BOOKING_SYNC_RETRY_MS).
       .where((eb) =>
-        eb.not(
-          eb.exists(
-            eb
-              .selectFrom("booking_events as e")
-              .select(sql<number>`1`.as("one"))
-              .whereRef("e.booking_id", "=", "b.id")
-              .where("e.type", "=", REFRESH_CLAIM_EVENT)
-              .where("e.created_at", ">", claimedBefore),
-          ),
-        ),
+        eb.or([eb("b.sync_claimed_at", "is", null), eb("b.sync_claimed_at", "<=", claimedBefore)]),
       );
     if (query.paidOnly) {
       select = select.where("b.amount_paid", ">", "0");
@@ -277,6 +322,25 @@ export class BookingSyncRepository {
     }
   }
 
+  /** The booking's payments that hold the traveller's money (an authorisation or a capture), oldest first; no lock. */
+  async heldPayments(trx: TenantTransaction, bookingId: string): Promise<HeldPaymentRow[]> {
+    return await trx
+      .selectFrom("payments")
+      .select([
+        "id",
+        "status",
+        sql<string>`currency::text`.as("currency"),
+        sql<string>`amount_authorized::text`.as("amountAuthorized"),
+        sql<string>`amount_captured::text`.as("amountCaptured"),
+        sql<string>`amount_refunded::text`.as("amountRefunded"),
+      ])
+      .where("booking_id", "=", bookingId)
+      .where("status", "in", [...HELD_PAYMENT_STATUSES])
+      .orderBy("created_at")
+      .orderBy("id")
+      .execute();
+  }
+
   private async read(trx: TenantTransaction, id: string): Promise<SyncClaimRow | undefined> {
     return await trx
       .selectFrom("bookings as b")
@@ -290,8 +354,8 @@ export class BookingSyncRepository {
         "b.ticketing_deadline_at as ticketingDeadlineAt",
         "b.version as version",
         "b.last_synced_at as lastSyncedAt",
+        "b.sync_claimed_at as syncClaimedAt",
         sql<string>`b.amount_paid::text`.as("amountPaid"),
-        lastClaimOf.as("lastClaimAt"),
       ])
       .where("b.id", "=", id)
       .executeTakeFirst();
@@ -312,7 +376,7 @@ export type BookingSyncSkip =
   /** Synchronised less than syncIntervalOf ago, or claimed less than BOOKING_SYNC_RETRY_MS ago. */
   | "not_due";
 
-/** What a sync recorded (counts and flags for the job's result and the log line). */
+/** What a record step changed (counts and flags for the job's result and the log line). */
 export interface BookingSyncChanges {
   readonly segmentsChanged: number;
   readonly segmentsAdded: number;
@@ -334,6 +398,45 @@ export type BookingSyncOutcome =
   /** Other writers moved the booking's version during every read: nothing was written. */
   | { readonly outcome: "superseded"; readonly rounds: number };
 
+/** The Amadeus query of a refresh (the sync's is `include=bags`). */
+export interface RefreshQuery {
+  readonly include?: "bags"[] | undefined;
+  readonly fareRules?: FareRuleType[] | undefined;
+}
+
+/** What a refresh did. */
+export type RefreshOutcome =
+  | { readonly kind: "refreshed"; readonly warnings: readonly Warning[] }
+  | { readonly kind: "throttled"; readonly retryAfterSeconds: number }
+  | { readonly kind: "skipped" }
+  | { readonly kind: "not_found" }
+  /** Another writer changed the booking (`version`) while its order was read: nothing was written over it. */
+  | { readonly kind: "superseded" };
+
+/** The tenant a synchronisation writes for: its id, its key (the storefront's links) and its default locale. */
+export interface SyncTenant {
+  readonly id: string;
+  readonly key: string;
+  /** The e-mails' locale without a settings row; `en` when unknown (the API's tenant context has none). */
+  readonly defaultLocale?: string | undefined;
+}
+
+/** One refresh (see the file header). */
+export interface RefreshRequest {
+  /** The Velexis operation (`supplier_requests.operation`, the events' `data.via`). */
+  readonly operation: string;
+  readonly requestId: string;
+  /** The request's environment (the booking's: the callers checked it). */
+  readonly environment: "test" | "live";
+  readonly query: RefreshQuery;
+  /** No refresh within this long of the last claim or synchronisation (`throttled`). */
+  readonly throttleMs: number;
+  /** Skip a booking whose ticketing is final (getTicketingStatus). */
+  readonly unlessFinal?: boolean | undefined;
+  /** The staff member a console call names in its `supplier_requests` row. */
+  readonly staffId?: string | null | undefined;
+}
+
 /** A claimed booking. */
 interface SyncClaim {
   readonly id: string;
@@ -342,8 +445,6 @@ interface SyncClaim {
   readonly office: string | null;
   /** The booking's `version` at the claim. */
   readonly version: number;
-  /** When the claim was written: the record's events come after it on the timeline. */
-  readonly claimedAt: Date;
 }
 
 /** A read of the order. */
@@ -354,7 +455,14 @@ type OrderRead =
       readonly body: Record<string, unknown>;
       readonly supplierRequestId: string | null;
     }
-  | { readonly ok: false; readonly code: string };
+  | { readonly ok: false; readonly code: string; readonly error?: Error };
+
+/** What the record step writes for (the path's operation, the job's or request's id, what was read). */
+interface RecordRequest {
+  readonly operation: string;
+  readonly requestId: string;
+  readonly query: RefreshQuery;
+}
 
 /** What the record step did. */
 type RecordResult =
@@ -362,23 +470,7 @@ type RecordResult =
   | { readonly kind: "superseded"; readonly version: number }
   | { readonly kind: "gone"; readonly reason: BookingSyncSkip };
 
-/**
- * How long after its last synchronisation a booking is due again at `now` (see the file header): an hour for one that
- * waits for tickets (`confirmed`, `partially_ticketed`) whose ticketing deadline is in the next 24 hours, else 6 hours.
- * dueBookingIds runs the same rule in SQL.
- */
-export function syncIntervalOf(row: Pick<SyncClaimRow, "status" | "ticketingDeadlineAt">, now: Date): number {
-  const left =
-    row.ticketingDeadlineAt === null ? undefined : row.ticketingDeadlineAt.getTime() - now.getTime();
-  return left !== undefined &&
-    left > 0 &&
-    left <= BOOKING_SYNC_DEADLINE_WINDOW_MS &&
-    (AWAITING_TICKETS_STATUSES as readonly string[]).includes(row.status)
-    ? BOOKING_SYNC_DEADLINE_INTERVAL_MS
-    : BOOKING_SYNC_INTERVAL_MS;
-}
-
-/** Why a booking may not be claimed at `now`, or `undefined` when it may. */
+/** Why a booking may not be claimed by the sync at `now`, or `undefined` when it may. */
 export function syncClaimSkip(
   row: SyncClaimRow,
   now: Date,
@@ -398,18 +490,35 @@ export function syncClaimSkip(
   }
   const since = (instant: Date | null): number =>
     instant === null ? Number.POSITIVE_INFINITY : now.getTime() - instant.getTime();
-  if (since(row.lastSyncedAt) < syncIntervalOf(row, now) || since(row.lastClaimAt) < BOOKING_SYNC_RETRY_MS) {
+  if (
+    since(row.lastSyncedAt) < syncIntervalOf(row, now) ||
+    since(row.syncClaimedAt) < BOOKING_SYNC_RETRY_MS
+  ) {
     return "not_due";
   }
   return undefined;
 }
 
+/** True for an Amadeus `404` (an order Amadeus no longer has). */
+const isOrderNotFound = (error: unknown): boolean =>
+  isAppError(error) && error.cause instanceof AmadeusCallError && error.cause.httpStatus === 404;
+
 /** The API code of a failed read: an AppError's code (404 as ORDER_NOT_FOUND), `INTERNAL_ERROR` for anything else. */
 function readFailureCode(error: unknown): string {
-  if (isAppError(error) && error.cause instanceof AmadeusCallError && error.cause.httpStatus === 404) {
+  if (isOrderNotFound(error)) {
     return ORDER_NOT_FOUND;
   }
   return error instanceof AppError ? error.code : "INTERNAL_ERROR";
+}
+
+/** The Amadeus query of `query` (empty lists left out). */
+function amadeusQueryOf(query: RefreshQuery): { include?: "bags"[]; fareRules?: FareRuleType[] } {
+  return {
+    ...(query.include !== undefined && query.include.length > 0 ? { include: [...query.include] } : {}),
+    ...(query.fareRules !== undefined && query.fareRules.length > 0
+      ? { fareRules: [...query.fareRules] }
+      : {}),
+  };
 }
 
 /** A segment row to write, with its instants. */
@@ -419,7 +528,7 @@ interface PlacedSegment {
   readonly arrivalAt: Date;
 }
 
-/** Runs one synchronisation of a booking (see the file header). */
+/** Runs the synchronisations of a booking (see the file header). Both processes. */
 @Injectable()
 export class BookingSyncService {
   private readonly baseDomain: string;
@@ -431,13 +540,16 @@ export class BookingSyncService {
     private readonly recorder: OrderRecorder,
     private readonly amadeus: AmadeusClient,
     private readonly outbox: OutboxService,
+    private readonly alerts: StaffAlerts,
     private readonly ids: IdGenerator,
     private readonly clock: Clock,
-    config: ConfigService<WorkerConfig, true>,
+    config: ConfigService<SharedConfig, true>,
     @InjectPinoLogger(BookingSyncService.name) private readonly logger: PinoLogger,
   ) {
     this.baseDomain = config.get("STOREFRONT_BASE_DOMAIN", { infer: true });
   }
+
+  // ---- The background sync -----------------------------------------------------------------------------------------
 
   /**
    * One synchronisation of the booking `bookingId` of `tenant`, in the tenant's job context; `requestId` names the job
@@ -445,7 +557,7 @@ export class BookingSyncService {
    * job fails and BullMQ retries it; its claim keeps the booking from being claimed again until it is due).
    */
   async attempt(tenant: PlatformTenant, bookingId: string, requestId: string): Promise<BookingSyncOutcome> {
-    const claim = await this.claim(tenant, bookingId, requestId);
+    const claim = await this.claim(tenant, bookingId);
     if (typeof claim === "string") {
       this.logger.debug({ bookingId, reason: claim }, "bookings.sync_skipped");
       return { outcome: "skipped", reason: claim };
@@ -458,15 +570,20 @@ export class BookingSyncService {
       bookingId,
       ...(claim.office === null ? {} : { orderOffice: claim.office }),
     };
+    const request: RecordRequest = {
+      operation: BOOKING_SYNC_OPERATION,
+      requestId,
+      query: { include: ["bags"] },
+    };
     let version = claim.version;
     for (let round = 1; round <= BOOKING_SYNC_ROUNDS; round += 1) {
-      const read = await this.read(context, claim);
+      const read = await this.read(context, claim, request.query);
       if (!read.ok) {
         await this.recordFailure(bookingId, read.code);
         this.logger.warn({ tenantId: tenant.id, bookingId, code: read.code, round }, "bookings.sync_failed");
         return { outcome: "failed", rounds: round, code: read.code };
       }
-      const result = await this.tx.run((trx) => this.record(trx, tenant, claim, version, read, requestId));
+      const result = await this.tx.run((trx) => this.record(trx, tenant, claim, version, read, request));
       if (result.kind === "applied") {
         this.logger.info({ tenantId: tenant.id, bookingId, round, ...result.changes }, "bookings.synced");
         return { outcome: "synced", rounds: round, changes: result.changes };
@@ -485,13 +602,8 @@ export class BookingSyncService {
     return { outcome: "superseded", rounds: BOOKING_SYNC_ROUNDS };
   }
 
-  // ---- Step 1: the claim -------------------------------------------------------------------------------------------
-
-  private async claim(
-    tenant: PlatformTenant,
-    bookingId: string,
-    requestId: string,
-  ): Promise<SyncClaim | BookingSyncSkip> {
+  /** Step 1 of the sync: the claim, `FOR NO KEY UPDATE SKIP LOCKED`, the due rule, `sync_claimed_at`. */
+  private async claim(tenant: PlatformTenant, bookingId: string): Promise<SyncClaim | BookingSyncSkip> {
     return await this.tx.run(async (trx) => {
       const now = this.clock.now();
       const row = await this.repository.claim(trx, bookingId);
@@ -505,33 +617,111 @@ export class BookingSyncService {
       if ((row.environment !== "test" && row.environment !== "live") || row.amadeusOrderId === null) {
         return "not_claimable";
       }
-      await this.recorder.event(trx, row.id, {
-        type: REFRESH_CLAIM_EVENT,
-        actor: SYSTEM_ACTOR,
-        summary: "Synchronisation with the airline started.",
-        data: { operation: BOOKING_SYNC_OPERATION },
-        visibleToCustomer: false,
-        requestId,
-        now,
-      });
+      await this.bookings.markSyncClaimed(trx, row.id, now);
       return {
         id: row.id,
         environment: row.environment,
         orderId: row.amadeusOrderId,
         office: row.ownerOfficeId,
         version: row.version,
-        claimedAt: now,
       };
     });
   }
 
+  // ---- The refreshes -----------------------------------------------------------------------------------------------
+
+  /**
+   * One refresh of the booking `bookingId` (see the file header): claimed and throttled, one read, the record step.
+   * Answers what it did; Amadeus errors other than a 404 are recorded in `sync_error` and thrown (`NOT_FOUND` for an
+   * unknown booking).
+   */
+  async refresh(tenant: SyncTenant, bookingId: string, request: RefreshRequest): Promise<RefreshOutcome> {
+    const claim = await this.tx.run(async (trx) => {
+      const row = await this.bookings.lockForRefresh(trx, bookingId);
+      if (row === undefined) {
+        throw new AppError("NOT_FOUND");
+      }
+      const now = this.clock.now();
+      if (
+        row.amadeusOrderId === null ||
+        row.status === "pending" ||
+        row.status === "failed" ||
+        row.status === "cancelled"
+      ) {
+        return { kind: "skipped" } as const;
+      }
+      if (request.unlessFinal === true) {
+        const booking = await this.bookings.booking(trx, bookingId);
+        if (booking !== undefined && ticketingFinal(booking.status, booking.ticketingStatus)) {
+          return { kind: "skipped" } as const;
+        }
+      }
+      if (row.lastRefreshAt !== null && now.getTime() - row.lastRefreshAt.getTime() < request.throttleMs) {
+        const left = request.throttleMs - (now.getTime() - row.lastRefreshAt.getTime());
+        return { kind: "throttled", retryAfterSeconds: Math.max(1, Math.ceil(left / 1000)) } as const;
+      }
+      await this.bookings.markSyncClaimed(trx, bookingId, now);
+      return {
+        kind: "claimed",
+        claim: {
+          id: bookingId,
+          environment: request.environment,
+          orderId: row.amadeusOrderId,
+          office: row.ownerOfficeId,
+          version: row.version,
+        } satisfies SyncClaim,
+      } as const;
+    });
+    if (claim.kind !== "claimed") {
+      return claim;
+    }
+    const context: AmadeusCallContext = {
+      tenantId: tenant.id,
+      environment: request.environment,
+      operation: request.operation,
+      requestId: request.requestId,
+      bookingId,
+      ...(request.staffId === null || request.staffId === undefined ? {} : { staffId: request.staffId }),
+      ...(claim.claim.office === null ? {} : { orderOffice: claim.claim.office }),
+    };
+    const read = await this.read(context, claim.claim, request.query);
+    if (!read.ok) {
+      if (read.error !== undefined && !isAppError(read.error)) {
+        // A bug, not an Amadeus answer: nothing to record on the booking.
+        throw read.error;
+      }
+      await this.recordFailure(bookingId, read.code);
+      if (read.code === ORDER_NOT_FOUND) {
+        this.logger.warn({ bookingId }, "bookings.refresh_order_not_found");
+        return { kind: "not_found" };
+      }
+      const error = read.error;
+      if (isAppError(error) && !DOCUMENTED_SUPPLIER_CODES.has(error.code)) {
+        throw new AppError("SUPPLIER_ERROR", {
+          ...(error.supplier === undefined ? {} : { supplier: error.supplier }),
+          cause: error,
+        });
+      }
+      throw error ?? new AppError("SUPPLIER_ERROR");
+    }
+    const result = await this.tx.run((trx) =>
+      this.record(trx, tenant, claim.claim, claim.claim.version, read, request),
+    );
+    if (result.kind !== "applied") {
+      this.logger.info({ bookingId }, "bookings.refresh_superseded");
+      return { kind: "superseded" };
+    }
+    this.logger.info({ bookingId, operation: request.operation, ...result.changes }, "bookings.refreshed");
+    return { kind: "refreshed", warnings: warningsOf(read.body["warnings"]) };
+  }
+
   // ---- Step 2: the read --------------------------------------------------------------------------------------------
 
-  private async read(context: AmadeusCallContext, claim: SyncClaim): Promise<OrderRead> {
+  private async read(context: AmadeusCallContext, claim: SyncClaim, query: RefreshQuery): Promise<OrderRead> {
     try {
       const reply = await this.amadeus.getFlightOrder(context, {
         flightOrderId: claim.orderId,
-        query: { include: ["bags"] },
+        query: amadeusQueryOf(query),
       });
       const body: unknown = reply.body;
       const order = readCreatedOrder(body);
@@ -549,7 +739,7 @@ export class BookingSyncService {
           "bookings.sync_read_error",
         );
       }
-      return { ok: false, code };
+      return { ok: false, code, ...(error instanceof Error ? { error } : {}) };
     }
   }
 
@@ -564,11 +754,11 @@ export class BookingSyncService {
 
   private async record(
     trx: TenantTransaction,
-    tenant: PlatformTenant,
+    tenant: SyncTenant,
     claim: SyncClaim,
     claimedVersion: number,
     read: Extract<OrderRead, { ok: true }>,
-    requestId: string,
+    request: RecordRequest,
   ): Promise<RecordResult> {
     const now = this.clock.now();
     const current = await this.repository.lock(trx, claim.id);
@@ -628,6 +818,7 @@ export class BookingSyncService {
     // The booking.
     const scheduleChange = scheduleChangeOf(segments);
     const statusAfter = cancelled ? "cancelled" : (upgrade?.status ?? booking.status);
+    const ticketingAfter = upgrade?.ticketingStatus ?? booking.ticketingStatus;
     const moved =
       cancelled ||
       upgrade !== undefined ||
@@ -635,10 +826,28 @@ export class BookingSyncService {
       tickets.statusChanged.length > 0 ||
       scheduleChange !== undefined;
     const included = isRecord(details.orderIncluded) ? { ...details.orderIncluded } : {};
-    if (isRecord(read.body["included"])) {
-      included["bags"] = read.body["included"]["bags"] ?? {};
+    if (request.query.include !== undefined && request.query.include.length > 0) {
+      included["bags"] = isRecord(read.body["included"]) ? (read.body["included"]["bags"] ?? {}) : {};
       included["bagsLoadedAt"] = now.toISOString();
     }
+    if (request.query.fareRules !== undefined && request.query.fareRules.length > 0) {
+      const fareRules: StoredFareRules = {
+        loadedAt: now.toISOString(),
+        types: [...request.query.fareRules],
+        offers: offerFareRulesOf(order.data),
+      };
+      included["fareRules"] = fareRules;
+    }
+    const changes = syncChangesOf({
+      statusBefore: booking.status,
+      statusAfter,
+      ticketingStatusBefore: booking.ticketingStatus,
+      ticketingStatusAfter: ticketingAfter,
+      segments: children.segments,
+      segmentDiff: segments,
+      tickets: children.tickets,
+      ticketDiff: tickets,
+    });
     await this.bookings.updateSynced(
       trx,
       booking.id,
@@ -648,6 +857,8 @@ export class BookingSyncService {
           ? {}
           : { order_dictionaries: JSON.stringify(order.dictionaries) }),
         order_included: JSON.stringify(redactPayload(included)),
+        form_of_identifications: JSON.stringify(maskedIdentifications(order.data["formOfIdentifications"])),
+        sync_changes: JSON.stringify(changes),
         last_synced_at: now,
         sync_error: null,
         updated_at: now,
@@ -675,13 +886,17 @@ export class BookingSyncService {
       moved,
     );
 
-    // The events, after the booking's write: the documents they ask for read its new version. One millisecond apart,
-    // and after the claim's, as the timeline orders by time, then by the random id.
-    let at = Math.max(now.getTime(), claim.claimedAt.getTime() + 1);
+    // The events, after the booking's write: the documents they ask for read its new version. One millisecond apart, as
+    // the timeline orders by time, then by the random id.
+    let at = now.getTime();
     const event = async (
       input: Omit<Parameters<OrderRecorder["event"]>[2], "now" | "requestId">,
     ): Promise<void> => {
-      await this.recorder.event(trx, booking.id, { ...input, requestId, now: new Date(at) });
+      await this.recorder.event(trx, booking.id, {
+        ...input,
+        requestId: request.requestId,
+        now: new Date(at),
+      });
       at += 1;
     };
     if (upgrade !== undefined || tickets.added.length > 0) {
@@ -691,7 +906,7 @@ export class BookingSyncService {
         statusFrom: booking.status,
         statusTo: upgrade?.status ?? booking.status,
         summary: "E-tickets issued.",
-        data: { tickets: tickets.added.map((ticket) => ticket.documentNumber), via: BOOKING_SYNC_OPERATION },
+        data: { tickets: tickets.added.map((ticket) => ticket.documentNumber), via: request.operation },
         visibleToCustomer: true,
         supplierRequestId: read.supplierRequestId,
       });
@@ -703,13 +918,21 @@ export class BookingSyncService {
         statusFrom: upgrade?.status ?? booking.status,
         statusTo: "cancelled",
         summary: `The airline cancelled booking ${booking.reference}.`,
-        data: { cancelledBy: "airline" },
+        data: { cancelledBy: "airline", via: request.operation },
         visibleToCustomer: true,
         supplierRequestId: read.supplierRequestId,
       });
-      await this.cancellationEmail(trx, tenant, booking, children);
+      const settings = await this.bookings.settings(trx);
+      await this.cancellationEmail(trx, tenant, booking, children, settings);
+      const held = await this.cancellationAlert(trx, tenant, booking, settings);
       this.logger.warn(
-        { tenantId: tenant.id, bookingId: booking.id, paid: new Money(booking.amountPaid).greaterThan(0) },
+        {
+          tenantId: tenant.id,
+          bookingId: booking.id,
+          paid: new Money(booking.amountPaid).greaterThan(0),
+          heldPayments: held,
+          via: request.operation,
+        },
         "bookings.sync_cancelled_by_airline",
       );
     } else if (scheduleChange !== undefined) {
@@ -719,7 +942,7 @@ export class BookingSyncService {
         statusFrom: statusAfter,
         statusTo: statusAfter,
         summary: scheduleChange.summary,
-        data: scheduleChange.data,
+        data: { ...scheduleChange.data, via: request.operation },
         visibleToCustomer: scheduleChange.visibleToCustomer,
         supplierRequestId: read.supplierRequestId,
       });
@@ -910,7 +1133,7 @@ export class BookingSyncService {
     );
   }
 
-  // ---- The traveller's e-mail of a cancellation --------------------------------------------------------------------
+  // ---- What a cancellation by the airline sends ---------------------------------------------------------------------
 
   /**
    * The outbox `booking.cancelled` e-mail to the primary contact (or the booking's contact e-mail), once per booking
@@ -919,11 +1142,11 @@ export class BookingSyncService {
    */
   private async cancellationEmail(
     trx: TenantTransaction,
-    tenant: PlatformTenant,
+    tenant: SyncTenant,
     booking: BookingRow,
     children: BookingChildren,
+    settings: BookingSettingsRow | undefined,
   ): Promise<void> {
-    const settings = await this.bookings.settings(trx);
     const primary = children.contacts.find((contact) => contact.isPrimary) ?? children.contacts[0];
     const language = primary?.language ?? null;
     try {
@@ -933,7 +1156,7 @@ export class BookingSyncService {
         locale:
           language !== null && LOCALE.test(language)
             ? language
-            : (settings?.defaultLocale ?? tenant.defaultLocale),
+            : (settings?.defaultLocale ?? tenant.defaultLocale ?? "en"),
         customerId: booking.customerId,
         bookingId: booking.id,
         dedupeKey: `booking.cancelled:${booking.id}`,
@@ -969,5 +1192,38 @@ export class BookingSyncService {
         "bookings.sync_email_invalid",
       );
     }
+  }
+
+  /**
+   * The staff alert of an airline cancellation of a booking whose payment holds the traveller's money (an authorisation
+   * or a capture): `staff.manual_review`, once per booking (lead decision (3) of 2026-10-23). Answers how many payments
+   * hold money (0: no alert).
+   */
+  private async cancellationAlert(
+    trx: TenantTransaction,
+    tenant: SyncTenant,
+    booking: BookingRow,
+    settings: BookingSettingsRow | undefined,
+  ): Promise<number> {
+    const held = await this.repository.heldPayments(trx, booking.id);
+    if (held.length === 0) {
+      return 0;
+    }
+    const money = held.map((payment) => {
+      const captured = new Money(payment.amountCaptured).minus(payment.amountRefunded);
+      return captured.greaterThan(0)
+        ? `${payment.id} captured ${captured.toFixed(2)} ${payment.currency}`
+        : `${payment.id} authorised ${new Money(payment.amountAuthorized).toFixed(2)} ${payment.currency}`;
+    });
+    await this.alerts.send(trx, {
+      settings,
+      fallbackLocale: tenant.defaultLocale ?? "en",
+      booking: { id: booking.id, reference: booking.reference, recordLocator: booking.recordLocator },
+      dedupeKey: `staff.manual_review:${booking.id}:${AIRLINE_CANCELLED_ALERT}`,
+      reason:
+        `The airline cancelled every flight of booking ${booking.reference}, and its payment still holds the ` +
+        `traveller's money (${money.join("; ")}). Release the authorisation or refund the payment from the console.`,
+    });
+    return held.length;
   }
 }

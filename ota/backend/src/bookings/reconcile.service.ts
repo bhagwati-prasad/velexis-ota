@@ -91,7 +91,7 @@ import { TravelerDocuments } from "../checkout/traveler-documents";
 import { Clock } from "../common/clock";
 import { IdGenerator } from "../common/ids";
 import { OTA_QUEUE } from "../common/queues/queue-names";
-import { EMAIL_ADDRESS, type WorkerConfig } from "../config";
+import type { WorkerConfig } from "../config";
 import { InvalidNotificationError, OutboxService } from "../notifications/outbox.service";
 import { storefrontUrl } from "../notifications/renderer";
 import type { TemplateKey } from "../notifications/templates/registry";
@@ -120,6 +120,7 @@ import {
   type RecordedOrder,
 } from "./order-recorder";
 import { VELEXIS_REMARK_SUBTYPE, type TicketingPolicy } from "./order-request.builder";
+import { StaffAlerts } from "./staff-alerts";
 import { TicketingService } from "./ticketing.service";
 
 // ---- Timing (OADR-0003 point 4) -------------------------------------------------------------------------------------
@@ -184,6 +185,21 @@ export const RECONCILE_MAX_READS = 50;
  * with Amadeus with the queue convention, OADR-0003 follow-ups).
  */
 export const RECONCILE_QUEUE_LIST_MAX = 500;
+
+/**
+ * A Queue List answer of the booking queue that holds this many entries or more (or whose `meta.count` says the queue
+ * does) raises the staff alert `booking_queue_nearly_full` (lead decision (5) of 2026-10-23: 80 % of the
+ * RECONCILE_QUEUE_LIST_MAX one answer can carry; cleaning the queue stays manual in Amadeus: the runbook "Cleaning the
+ * booking queue" of ota/backend/README.md §4), at most once a day per OTA (`bookingQueueAlertKey`, the UTC day).
+ */
+export const BOOKING_QUEUE_ALERT_ENTRIES = 400;
+
+/** The kind of the staff alert of a booking queue that is nearly full (its dedupe key's middle part). */
+export const BOOKING_QUEUE_ALERT = "booking_queue_nearly_full";
+
+/** The dedupe key of the queue alert of the UTC day of `now`: one alert per OTA (tenant schema) and day. */
+export const bookingQueueAlertKey = (now: Date): string =>
+  `staff.manual_review:${BOOKING_QUEUE_ALERT}:${now.toISOString().slice(0, 10)}`;
 
 /** When `payment.capture_retry` runs after a failed capture (OADR-0008 point 7). */
 export const CAPTURE_RETRY_DELAY_MS = 10 * 60_000;
@@ -292,6 +308,11 @@ export interface QueueCandidates {
   readonly unreadable: number;
   /** The answer may list fewer PNRs than the queue holds (RECONCILE_QUEUE_LIST_MAX, `meta.count`). */
   readonly truncated: boolean;
+  /**
+   * How many entries the queue holds as far as the answer tells: its entries, or its `meta.count` when that says
+   * more (BOOKING_QUEUE_ALERT_ENTRIES).
+   */
+  readonly entries: number;
 }
 
 /** Why a search could not read every PNR that may be the order: it never proves the order absent. */
@@ -428,7 +449,7 @@ export function queueCandidates(
     const db = distance(b);
     return da === db ? a.recordLocator.localeCompare(b.recordLocator) : da < db ? -1 : 1;
   });
-  return { candidates, unreadable, truncated };
+  return { candidates, unreadable, truncated, entries: Math.max(data.length, count ?? 0) };
 }
 
 /**
@@ -926,8 +947,6 @@ export function reconcileDecision(
 @Injectable()
 export class ReconcileService {
   private readonly baseDomain: string;
-  private readonly adminUrl: string;
-  private readonly opsAlertEmail: string;
 
   constructor(
     private readonly tx: TenantTx,
@@ -941,6 +960,7 @@ export class ReconcileService {
     private readonly amadeus: AmadeusClient,
     @Inject(PAYMENT_GATEWAY) private readonly gateway: PaymentGateway,
     private readonly outbox: OutboxService,
+    private readonly alerts: StaffAlerts,
     @InjectQueue(OTA_QUEUE.payments) private readonly paymentsQueue: Queue,
     private readonly clock: Clock,
     private readonly ids: IdGenerator,
@@ -948,8 +968,6 @@ export class ReconcileService {
     @InjectPinoLogger(ReconcileService.name) private readonly logger: PinoLogger,
   ) {
     this.baseDomain = config.get("STOREFRONT_BASE_DOMAIN", { infer: true });
-    this.adminUrl = config.get("PUBLIC_OTA_ADMIN_URL", { infer: true });
-    this.opsAlertEmail = config.get("OPS_ALERT_EMAIL", { infer: true });
   }
 
   /**
@@ -1119,6 +1137,10 @@ export class ReconcileService {
     if (listed === undefined) {
       this.logger.warn({ bookingId: claim.booking.id }, "bookings.reconcile_queue_unreadable");
       return incomplete("queue_unreadable", "SUPPLIER_ERROR", false);
+    }
+    if (listed.entries >= BOOKING_QUEUE_ALERT_ENTRIES) {
+      // Staff clean the queue by hand before it outgrows one answer; the search goes on as it would without it.
+      await this.queueNearlyFull(tenant, claim, settings, queue, listed.entries);
     }
     const { candidates } = listed;
     const reads = readSlice(candidates, claim.attempts);
@@ -1814,7 +1836,7 @@ export class ReconcileService {
 
   /**
    * A staff alert (`staff.manual_review`) to `ops_alert_email`, else the OTA's support e-mail, else OPS_ALERT_EMAIL, once
-   * per booking and kind (dedupe key `staff.manual_review:<bkg_…>:<kind>`).
+   * per booking and kind (dedupe key `staff.manual_review:<bkg_…>:<kind>`), written by StaffAlerts (staff-alerts.ts).
    */
   private async staffAlert(
     trx: TenantTransaction,
@@ -1824,27 +1846,74 @@ export class ReconcileService {
     kind: string,
     alert: { readonly reason: string },
   ): Promise<void> {
-    const to =
-      [settings?.opsAlertEmail, settings?.supportEmail].find(
-        (address): address is string =>
-          address !== null && address !== undefined && EMAIL_ADDRESS.test(address),
-      ) ?? this.opsAlertEmail;
-    const consoleUrl = new URL(
-      `bookings/${booking.id}`,
-      this.adminUrl.endsWith("/") ? this.adminUrl : `${this.adminUrl}/`,
-    ).toString();
-    await this.enqueue(trx, booking.id, "staff.manual_review", {
-      templateKey: "staff.manual_review",
-      to,
-      locale: settings?.defaultLocale ?? tenant.defaultLocale,
-      recipientType: "staff",
-      bookingId: booking.id,
-      dedupeKey: `staff.manual_review:${booking.id}:${kind}`,
-      data: {
-        booking: { reference: booking.reference, recordLocator: "", consoleUrl },
-        review: { reason: alert.reason },
-      },
-    });
+    const to = this.alerts.recipientOf(settings);
+    if (to === undefined) {
+      return;
+    }
+    await this.enqueue(
+      trx,
+      booking.id,
+      "staff.manual_review",
+      this.alerts.notification(
+        {
+          settings,
+          fallbackLocale: tenant.defaultLocale,
+          booking: { id: booking.id, reference: booking.reference },
+          dedupeKey: `staff.manual_review:${booking.id}:${kind}`,
+          reason: alert.reason,
+        },
+        to,
+      ),
+    );
+  }
+
+  /**
+   * The staff alert of a booking queue that is nearly full (lead decision (5) of 2026-10-23): `staff.manual_review`
+   * about the OTA, not a booking, at most once a UTC day per OTA (`bookingQueueAlertKey`), in a short transaction of
+   * its own between two Amadeus calls. Its failure is logged and never changes the search.
+   */
+  private async queueNearlyFull(
+    tenant: PlatformTenant,
+    claim: Claim,
+    settings: BookingSettingsRow | undefined,
+    queue: number,
+    entries: number,
+  ): Promise<void> {
+    const now = this.clock.now();
+    const category = settings?.bookingQueueCategory ?? 0;
+    const office = claim.booking.queuingOfficeId ?? "the queuing office";
+    try {
+      const queued = await this.tx.run((trx) =>
+        this.alerts.send(trx, {
+          settings,
+          fallbackLocale: tenant.defaultLocale,
+          booking: null,
+          path: "bookings",
+          dedupeKey: bookingQueueAlertKey(now),
+          reason:
+            `The booking queue ${queue} (category ${category}) of ${office} (${claim.environment}) holds ${entries} ` +
+            `PNRs; one Queue List answer carries at most ${RECONCILE_QUEUE_LIST_MAX}, and a fuller queue leaves the ` +
+            "search for bookings whose answer was lost incomplete (they go to the staff's review instead of being " +
+            "decided). Remove the PNRs of finished bookings from the queue by hand in Amadeus (runbook: Cleaning " +
+            "the booking queue, ota/backend/README.md).",
+        }),
+      );
+      this.logger.warn(
+        {
+          tenantId: tenant.id,
+          bookingId: claim.booking.id,
+          entries,
+          limit: RECONCILE_QUEUE_LIST_MAX,
+          queued,
+        },
+        "bookings.booking_queue_nearly_full",
+      );
+    } catch (error) {
+      this.logger.error(
+        { tenantId: tenant.id, bookingId: claim.booking.id, err: error },
+        "bookings.booking_queue_alert_failed",
+      );
+    }
   }
 
   /**
