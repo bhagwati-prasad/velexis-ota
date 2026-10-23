@@ -15,9 +15,14 @@
 // - JWT_PRIVATE_KEY_FILE (OBE-031): an Ed25519 private key in PKCS#8 PEM as `pnpm dev:keys` writes
 //   .local/keys/ota-jwt-ed25519.pem (mode 0600), in the same folder and created the same way, so tokens one test process
 //   signs verify in the applications it starts.
+// - DOCUMENT_URL_KEY_FILE (OBE-054): the HMAC key of the signed document URLs as `pnpm dev:keys` writes
+//   .local/keys/document-url.key (32 random bytes, base64, mode 0600), in the same folder and created the same way, so a
+//   test signs or checks a URL with the key the applications it starts use.
+// - STORAGE_DRIVER's default and STORAGE_DIR (OBE-053, shared since OBE-054): the storage folder below, which a test
+//   that stores or serves files replaces with a folder of its own.
 // - STOREFRONT_BASE_DOMAIN and PUBLIC_OTA_API_URL: the development values of ota/backend/.env.example.
-// - The worker's variables (`testWorkerVariables`, OBE-030): the same key folder and base domain, and the e-mail
-//   settings of ota/backend/.env.example.
+// - The worker's variables (`testWorkerVariables`, OBE-030): the same key folder, base domain and storage folder, and
+//   the e-mail settings of ota/backend/.env.example.
 //
 // Nothing here is a real secret, and nothing is committed.
 import { generateKeyPairSync, randomBytes, randomInt } from "node:crypto";
@@ -40,6 +45,10 @@ export interface TestApiCredentials {
   readonly masterKeyDir: string;
   /** The absolute path of the Ed25519 signing key (JWT_PRIVATE_KEY_FILE). */
   readonly jwtKeyFile: string;
+  /** The absolute path of the document URL key (DOCUMENT_URL_KEY_FILE, OBE-054). */
+  readonly documentUrlKeyFile: string;
+  /** The decoded document URL key: what `signUrl` of @velexis/crypto signs a test's own URLs with. */
+  readonly documentUrlKey: Buffer;
 }
 
 /** The storefront base domain of the tests: `<key>.ota.example.com` are the tenants' sub-domains. */
@@ -54,6 +63,21 @@ export const TEST_MASTER_KEY_CURRENT = "local:v1";
 const MASTER_KEY_BYTES = 32;
 /** The token signing key of the tests: `ota-jwt-ed25519.pem` in KEY_DIR. */
 const JWT_KEY_FILE = join(KEY_DIR, "ota-jwt-ed25519.pem");
+/** The document URL key of the tests: `document-url.key` in KEY_DIR (OBE-054). */
+const DOCUMENT_URL_KEY_FILE = join(KEY_DIR, "document-url.key");
+const DOCUMENT_URL_KEY_BYTES = 32;
+
+/**
+ * The storage folder of the tests (STORAGE_DIR, OBE-053; the API's too since OBE-054): in the package's ignored
+ * node_modules/.cache, created on first use. A test that reads back what it stores passes a folder of its own.
+ */
+const STORAGE_DIR = join(APP_DIR, "node_modules", ".cache", "test-storage");
+
+/** STORAGE_DIR of the tests, created on first use. */
+function testStorageDir(): string {
+  mkdirSync(STORAGE_DIR, { recursive: true, mode: 0o700 });
+  return STORAGE_DIR;
+}
 
 /** `bytes` random bytes in base64, as `pnpm dev:keys` writes a key file. */
 const base64Key = (bytes: number) => (): string => `${randomBytes(bytes).toString("base64")}\n`;
@@ -93,9 +117,14 @@ export function testApiCredentials(): TestApiCredentials {
     ensureKeyFile(PEPPER_FILE, base64Key(PEPPER_BYTES));
     ensureKeyFile(MASTER_KEY_FILE, base64Key(MASTER_KEY_BYTES));
     ensureKeyFile(JWT_KEY_FILE, ed25519Pem);
+    ensureKeyFile(DOCUMENT_URL_KEY_FILE, base64Key(DOCUMENT_URL_KEY_BYTES));
     const pepper = readKeyFile(PEPPER_FILE, { minBytes: PEPPER_BYTES });
     if (!Buffer.isBuffer(pepper)) {
       throw new Error("the test pepper file is not a base64 key file");
+    }
+    const documentUrlKey = readKeyFile(DOCUMENT_URL_KEY_FILE, { minBytes: DOCUMENT_URL_KEY_BYTES });
+    if (!Buffer.isBuffer(documentUrlKey)) {
+      throw new Error("the test document URL key file is not a base64 key file");
     }
     credentials = Object.freeze({
       edgeSecret: randomBytes(32).toString("hex"),
@@ -104,19 +133,27 @@ export function testApiCredentials(): TestApiCredentials {
       pepper,
       masterKeyDir: KEY_DIR,
       jwtKeyFile: JWT_KEY_FILE,
+      documentUrlKeyFile: DOCUMENT_URL_KEY_FILE,
+      documentUrlKey,
     });
   }
   return credentials;
 }
 
-/** The API-only variables of src/config.ts with test values, to merge into an API environment. */
+/**
+ * The API's variables of src/config.ts that tests cannot fill with a constant, and the folders and base domain it shares
+ * with the worker, with test values, to merge into an API environment.
+ */
 export function testApiVariables(): Readonly<Record<string, string>> {
-  const { edgeSecret, serviceKey, pepperFile, masterKeyDir, jwtKeyFile } = testApiCredentials();
+  const { edgeSecret, serviceKey, pepperFile, masterKeyDir, jwtKeyFile, documentUrlKeyFile } =
+    testApiCredentials();
   return Object.freeze({
     VELEXIS_EDGE_SECRET: edgeSecret,
     OTA_ADMIN_SERVICE_KEY: serviceKey,
     API_KEY_PEPPER_FILE: pepperFile,
     JWT_PRIVATE_KEY_FILE: jwtKeyFile,
+    DOCUMENT_URL_KEY_FILE: documentUrlKeyFile,
+    STORAGE_DIR: testStorageDir(),
     STOREFRONT_BASE_DOMAIN: TEST_STOREFRONT_BASE_DOMAIN,
     PUBLIC_OTA_API_URL: "http://localhost:4000",
     MASTER_KEY_DIR: masterKeyDir,
@@ -128,18 +165,11 @@ export function testApiVariables(): Readonly<Record<string, string>> {
 export const TEST_MAIL_FROM = '"Velexis OTA (test)" <no-reply@mail.ota.example.com>';
 
 /**
- * The storage folder of the worker's tests (STORAGE_DIR, OBE-053): in the package's ignored node_modules/.cache, created
- * on first use. A test that reads back what it stores passes a folder of its own.
- */
-const STORAGE_DIR = join(APP_DIR, "node_modules", ".cache", "test-storage");
-
-/**
  * The worker's variables besides the services and the provisioner DSN (OBE-030): the key folder and the storefront
  * base domain it shares with the API, the e-mail settings with the development values of ota/backend/.env.example
  * (SMTP_URL is Mailpit's development port; a test that sends e-mail passes its own) and the storage folder (OBE-053).
  */
 export function testWorkerVariables(): Readonly<Record<string, string>> {
-  mkdirSync(STORAGE_DIR, { recursive: true, mode: 0o700 });
   return Object.freeze({
     MASTER_KEY_DIR: testApiCredentials().masterKeyDir,
     MASTER_KEY_CURRENT: TEST_MASTER_KEY_CURRENT,
@@ -148,7 +178,7 @@ export function testWorkerVariables(): Readonly<Record<string, string>> {
     MAIL_FROM: TEST_MAIL_FROM,
     OPS_ALERT_EMAIL: "ops@example.com",
     PUBLIC_OTA_ADMIN_URL: "http://localhost:3002",
-    STORAGE_DIR,
+    STORAGE_DIR: testStorageDir(),
   });
 }
 

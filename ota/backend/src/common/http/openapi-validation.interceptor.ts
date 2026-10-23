@@ -529,8 +529,12 @@ export class RequestValidator {
 
 function rawValue(request: RawRequest, location: ParameterLocation, name: string): unknown {
   switch (location) {
-    case "path":
-      return request.params[name];
+    case "path": {
+      // A parameter of several path segments (`{storageKey}` of downloadFile, the route's `*storageKey` wildcard)
+      // comes from Express 5 as its segments: it is validated as the path text they make.
+      const value: unknown = request.params[name];
+      return Array.isArray(value) ? value.join("/") : value;
+    }
     case "query":
       return Object.prototype.hasOwnProperty.call(request.query, name) ? request.query[name] : undefined;
     case "header":

@@ -33,8 +33,8 @@
 // Two rows are not request counters and are counted where the outcome is known: the `bookings.lookup` failures
 // (`counts: "failures"`, OBE-047, with RedisThrottlerStorage and `trackerDigest`), and the customer sign-in lockout and
 // the airline card's three attempts per checkout, which have keys of their own (`authfail`, `acChk` of redis.keys.ts;
-// OBE-033, OBE-051). The public downloads limit gets its operations when `downloadFile` (OBE-054) and
-// `getPublicAsset` (OBE-071) are in the document.
+// OBE-033, OBE-051). The public downloads limit counts the signed document downloads (`downloadFile`, OBE-054), and
+// gets the public images when `getPublicAsset` is served (OBE-071).
 //
 // The guard runs after the caller, tenant, scope and CSRF guards (architecture §3 steps 4–9, app.module.ts), and, as a
 // guard, before validation: invalid requests count too. Each `429 RATE_LIMITED` is one `rate_limit.exceeded` line with
@@ -223,6 +223,7 @@ export const OPERATION_RATE_LIMITS: Readonly<Partial<Record<OtaOperationId, read
     createCheckoutPayment: ["checkoutPayment"],
     completeCheckout: ["checkoutPayment"],
     completeCheckoutWithAirlineCard: ["airlineCardPerIp", "airlineCardPerTenant"],
+    downloadFile: ["publicDownloads"],
   });
 
 const CONSOLE_OPERATIONS: ReadonlySet<string> = new Set(

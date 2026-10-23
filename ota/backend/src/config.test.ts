@@ -39,14 +39,18 @@ const MIGRATOR_URL = "postgres://velexis_migrator:dummy-migrator-password@127.0.
 /** The worker's variables besides the services (OBE-030): the key folder, the base domain and the e-mail settings. */
 const WORKER_VARIABLES = testWorkerVariables();
 const WORKER_ENV = { ...SHARED, DATABASE_PROVISIONER_URL: PROVISIONER_URL, ...WORKER_VARIABLES } as const;
-/** The API-only variables (OBE-011): a random edge secret and a pepper file of this test process. */
+/**
+ * The API's variables of the test process (OBE-011): a random edge secret, the key files of this test process and the
+ * storage folder it shares with the worker (OBE-054).
+ */
 const API_ONLY = testApiVariables();
-/** The API's variables that the worker does not read: the caller credentials and the API's public URL. */
+/** The API's variables that the worker does not read: the caller credentials, the URL key and the API's public URL. */
 const API_ONLY_NAMES = [
   "VELEXIS_EDGE_SECRET",
   "OTA_ADMIN_SERVICE_KEY",
   "API_KEY_PEPPER_FILE",
   "JWT_PRIVATE_KEY_FILE",
+  "DOCUMENT_URL_KEY_FILE",
   "PUBLIC_OTA_API_URL",
 ];
 const API_ENV = { ...SHARED, ...API_ONLY } as const;
@@ -131,6 +135,7 @@ describe("the privileged DSNs", () => {
       "API_KEY_PEPPER_FILE",
       "APP_ENV",
       "DATABASE_URL",
+      "DOCUMENT_URL_KEY_FILE",
       "JWT_PRIVATE_KEY_FILE",
       "LOG_LEVEL",
       "MASTER_KEY_CURRENT",
@@ -139,6 +144,8 @@ describe("the privileged DSNs", () => {
       "PORT",
       "PUBLIC_OTA_API_URL",
       "REDIS_URL",
+      "STORAGE_DIR",
+      "STORAGE_DRIVER",
       "STOREFRONT_BASE_DOMAIN",
       "STRIPE_PUBLISHABLE_KEY_LIVE",
       "STRIPE_PUBLISHABLE_KEY_TEST",
@@ -233,6 +240,7 @@ describe("values", () => {
       PORT: 4000,
       TRUST_PROXY: ["loopback"],
       AIRLINE_CARD_ENABLED: false,
+      STORAGE_DRIVER: "local",
       ...API_ONLY,
     });
     expect(worker.HEALTH_PORT).toBe(4001);
@@ -298,11 +306,15 @@ describe("values", () => {
 
 describe("the caller credentials of the API (OBE-011)", () => {
   it("are required: the API names every missing one, the worker reads none of them", () => {
-    const error = configErrorOf(() => loadApiConfig(SHARED));
+    // The storage folder of the test process stands in for the VM's, STORAGE_DIR's default (checked below).
+    const error = configErrorOf(() =>
+      loadApiConfig({ ...SHARED, STORAGE_DIR: API_ONLY["STORAGE_DIR"] ?? "missing" }),
+    );
     const worker = loadWorkerConfig({ ...WORKER_ENV, ...API_ONLY });
 
     expect(error.problems.map((problem) => problem.variable).sort()).toEqual([
       "API_KEY_PEPPER_FILE",
+      "DOCUMENT_URL_KEY_FILE",
       "JWT_PRIVATE_KEY_FILE",
       "MASTER_KEY_CURRENT",
       "MASTER_KEY_DIR",
@@ -622,41 +634,80 @@ describe("the e-mail settings of the worker (OBE-030)", () => {
   });
 });
 
-describe("the storage settings of the worker (OBE-053)", () => {
-  it("default to the local driver, read STORAGE_DIR as an existing folder and are never read by the API", () => {
+describe("the storage settings of both processes (OBE-053, OBE-054)", () => {
+  it("default to the local driver and read STORAGE_DIR as an existing folder, in the worker and the API [OBE-054]", () => {
     const folder = mkdtempSync(join(tmpdir(), "velexis-ota-storage-"));
     try {
       const worker = loadWorkerConfig({ ...WORKER_ENV, STORAGE_DIR: folder });
-      const api = loadApiConfig({ ...API_ENV, STORAGE_DRIVER: "local", STORAGE_DIR: folder });
+      const api = loadApiConfig({ ...API_ENV, STORAGE_DIR: folder });
+      const apiS3 = loadApiConfig({ ...API_ENV, STORAGE_DRIVER: "s3", STORAGE_DIR: folder });
 
       expect([worker.STORAGE_DRIVER, worker.STORAGE_DIR]).toEqual(["local", folder]);
-      expect(api).not.toHaveProperty("STORAGE_DRIVER");
-      expect(api).not.toHaveProperty("STORAGE_DIR");
+      expect([api.STORAGE_DRIVER, api.STORAGE_DIR]).toEqual(["local", folder]);
+      expect(apiS3.STORAGE_DRIVER).toBe("s3");
     } finally {
       rmSync(folder, { recursive: true, force: true });
     }
   });
 
   it("refuse a folder that does not exist (the VM's by default) and a driver that is not local or s3", () => {
-    const withoutDir = Object.fromEntries(
-      Object.entries(WORKER_ENV).filter(([name]) => name !== "STORAGE_DIR"),
-    );
     const missing = join(tmpdir(), `velexis-ota-missing-${process.pid}`, "storage");
+    const loaders = [
+      ["worker", WORKER_ENV, loadWorkerConfig],
+      ["api", API_ENV, loadApiConfig],
+    ] as const;
 
-    for (const [source, variable] of [
-      [{ ...WORKER_ENV, STORAGE_DIR: missing }, "STORAGE_DIR"],
-      [{ ...WORKER_ENV, STORAGE_DRIVER: "gcs" }, "STORAGE_DRIVER"],
-    ] as const) {
-      const error = configErrorOf(() => loadWorkerConfig(source));
-      expect(error.problems.map((problem) => problem.variable)).toEqual([variable]);
+    for (const [name, env, load] of loaders) {
+      const withoutDir = Object.fromEntries(
+        Object.entries(env).filter(([variable]) => variable !== "STORAGE_DIR"),
+      );
+      for (const [source, variable] of [
+        [{ ...env, STORAGE_DIR: missing }, "STORAGE_DIR"],
+        [{ ...env, STORAGE_DRIVER: "gcs" }, "STORAGE_DRIVER"],
+      ] as const) {
+        const error = configErrorOf(() => load(source));
+        expect([name, error.problems.map((problem) => problem.variable)]).toEqual([name, [variable]]);
+      }
+      // Without the variable the VM's folder is the value, checked like one: here it exists only where it was
+      // created.
+      if (existsSync(DEFAULT_STORAGE_DIR)) {
+        expect([name, load(withoutDir).STORAGE_DIR]).toEqual([name, DEFAULT_STORAGE_DIR]);
+      } else {
+        expect([
+          name,
+          configErrorOf(() => load(withoutDir)).problems.map((problem) => problem.variable),
+        ]).toEqual([name, ["STORAGE_DIR"]]);
+      }
     }
-    // Without the variable the VM's folder is the value, checked like one: here it exists only where it was created.
-    if (existsSync(DEFAULT_STORAGE_DIR)) {
-      expect(loadWorkerConfig(withoutDir).STORAGE_DIR).toBe(DEFAULT_STORAGE_DIR);
-    } else {
-      expect(
-        configErrorOf(() => loadWorkerConfig(withoutDir)).problems.map((problem) => problem.variable),
-      ).toEqual(["STORAGE_DIR"]);
+  });
+});
+
+describe("the document URL key of the API (OBE-054)", () => {
+  it("is a required key file of at least 32 bytes that only the API reads", () => {
+    const folder = mkdtempSync(join(tmpdir(), "velexis-ota-url-key-"));
+    try {
+      const short = join(folder, "short.key");
+      writeFileSync(short, `${Buffer.alloc(16, 1).toString("base64")}\n`, { mode: 0o600 });
+      const readable = join(folder, "readable.key");
+      writeFileSync(readable, `${Buffer.alloc(32, 1).toString("base64")}\n`, { mode: 0o644 });
+      chmodSync(readable, 0o644);
+      const withoutKey = Object.fromEntries(
+        Object.entries(API_ENV).filter(([variable]) => variable !== "DOCUMENT_URL_KEY_FILE"),
+      );
+
+      for (const source of [
+        withoutKey,
+        { ...API_ENV, DOCUMENT_URL_KEY_FILE: short },
+        { ...API_ENV, DOCUMENT_URL_KEY_FILE: readable },
+        { ...API_ENV, DOCUMENT_URL_KEY_FILE: join(folder, "missing.key") },
+      ]) {
+        const error = configErrorOf(() => loadApiConfig(source));
+        expect(error.problems.map((problem) => problem.variable)).toEqual(["DOCUMENT_URL_KEY_FILE"]);
+      }
+      expect(loadApiConfig(API_ENV).DOCUMENT_URL_KEY_FILE).toBe(testApiCredentials().documentUrlKeyFile);
+      expect(loadWorkerConfig({ ...WORKER_ENV, ...API_ONLY })).not.toHaveProperty("DOCUMENT_URL_KEY_FILE");
+    } finally {
+      rmSync(folder, { recursive: true, force: true });
     }
   });
 });
@@ -708,17 +759,23 @@ describe("example and template files", () => {
       const jwtKeyFile = join(root, local["JWT_PRIVATE_KEY_FILE"] ?? "missing");
       copyFileSync(testApiCredentials().jwtKeyFile, jwtKeyFile);
       chmodSync(jwtKeyFile, 0o600);
+      // And its document URL key (OBE-054).
+      const documentUrlKeyFile = join(root, local["DOCUMENT_URL_KEY_FILE"] ?? "missing");
+      copyFileSync(testApiCredentials().documentUrlKeyFile, documentUrlKeyFile);
+      chmodSync(documentUrlKeyFile, 0o600);
+      // The storage folder that `pnpm dev:keys` creates (OBE-053), relative to the same root.
+      const storageDir = join(root, local["STORAGE_DIR"] ?? "missing");
+      mkdirSync(storageDir, { recursive: true });
 
       // The key folder of `pnpm dev:keys` (MASTER_KEY_DIR, the pepper's folder) is the scratch root's too.
       const api = loadApiConfig({
         ...local,
         API_KEY_PEPPER_FILE: pepperFile,
         JWT_PRIVATE_KEY_FILE: jwtKeyFile,
+        DOCUMENT_URL_KEY_FILE: documentUrlKeyFile,
         MASTER_KEY_DIR: join(root, local["MASTER_KEY_DIR"] ?? "missing"),
+        STORAGE_DIR: storageDir,
       });
-      // The storage folder that `pnpm dev:keys` creates (OBE-053), relative to the same root.
-      const storageDir = join(root, local["STORAGE_DIR"] ?? "missing");
-      mkdirSync(storageDir, { recursive: true });
       const worker = loadWorkerConfig({
         ...local,
         MASTER_KEY_DIR: join(root, local["MASTER_KEY_DIR"] ?? "missing"),
@@ -727,6 +784,8 @@ describe("example and template files", () => {
 
       expect(local["API_KEY_PEPPER_FILE"]).toBe(".local/keys/api-key-pepper");
       expect(local["JWT_PRIVATE_KEY_FILE"]).toBe(".local/keys/ota-jwt-ed25519.pem");
+      expect(local["DOCUMENT_URL_KEY_FILE"]).toBe(".local/keys/document-url.key");
+      expect(api.DOCUMENT_URL_KEY_FILE).toBe(documentUrlKeyFile);
       expect(local["MASTER_KEY_DIR"]).toBe(".local/keys");
       expect(api.MASTER_KEY_DIR).toBe(dirname(pepperFile));
       expect(api.AMADEUS_BASE_URL_TEST).toBe("http://127.0.0.1:4900");
@@ -742,6 +801,7 @@ describe("example and template files", () => {
       expect(worker.STOREFRONT_BASE_DOMAIN).toBe("ota.example.com");
       expect(local["STORAGE_DIR"]).toBe(".local/storage");
       expect([worker.STORAGE_DRIVER, worker.STORAGE_DIR]).toEqual(["local", storageDir]);
+      expect([api.STORAGE_DRIVER, api.STORAGE_DIR]).toEqual(["local", storageDir]);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -757,12 +817,15 @@ describe("example and template files", () => {
     expect(shared["JWT_PRIVATE_KEY_FILE"]).toBe(
       `${shared["MASTER_KEY_DIR"] ?? "missing"}/ota-jwt-ed25519.pem`,
     );
-    // The OTA zone's key folder does not exist here either: the test process's own folder stands in for it.
+    expect(shared["DOCUMENT_URL_KEY_FILE"]).toBe(`${shared["MASTER_KEY_DIR"] ?? "missing"}/document-url.key`);
+    // The OTA zone's key folder and the VM's storage folder do not exist here either: the test process's own stand in.
     const api = loadApiConfig({
       ...shared,
       API_KEY_PEPPER_FILE: testApiCredentials().pepperFile,
       JWT_PRIVATE_KEY_FILE: testApiCredentials().jwtKeyFile,
+      DOCUMENT_URL_KEY_FILE: testApiCredentials().documentUrlKeyFile,
       MASTER_KEY_DIR: testApiCredentials().masterKeyDir,
+      STORAGE_DIR: API_ONLY["STORAGE_DIR"] ?? "missing",
     });
     expect(api.APP_ENV).toBe("production");
     // Empty in the template: the connection's or the shared account's base_url is used on the VM.

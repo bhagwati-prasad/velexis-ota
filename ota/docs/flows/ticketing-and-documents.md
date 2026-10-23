@@ -72,7 +72,7 @@ sequenceDiagram
    | Ticketing given up | — | `booking.ticketing_delayed` (traveller), `staff.ticketing_failed` (staff) |
    | Timeout not found (Stripe) | — | `booking.not_confirmed` |
 
-8. **Downloads.** `bookings.listDocuments` lists ready documents; `bookings.getDocumentDownloadUrl` returns a same-origin signed URL (`/api/v1/files/<key>?exp=…&sig=…`, 5 minutes) on the hosted storefront, or an `api.ota.example.com` URL for key callers. The file handler re-checks the tenant and streams the PDF.
+8. **Downloads.** `bookings.listDocuments` lists ready documents; `bookings.getDocumentDownloadUrl` returns a same-origin signed URL (`/api/v1/files/<key>?exp=…&sig=…`, 5 minutes) on the hosted storefront, or an `api.ota.example.com` URL for key callers. The file handler re-checks the tenant and streams the PDF. Since OBE-054 (`src/documents/`, the operation `downloadFile`): the list holds the `ready` rows only (a superseded version and a failed rendering are not listed), newest first; a URL is issued for a `ready` or `superseded` document (a link to an older version stays valid for its 5 minutes), `failed` answers `409 DOCUMENT_NOT_READY`, a failed rendering that a newer version superseded has no file and answers `404`, and every URL issued appends the staff-only booking event `document.downloaded`. Only the path and `exp` are signed (HMAC-SHA-256 with `document-url.key`), so one link works through Caddy's `/api` and on the API host. The file endpoint answers `403` to an expired, tampered or malformed link before it looks anything up; then, with the storefront edge or an API key, the storage key must be the resolved OTA's and the booking of the request's environment, and without a credential (a browser following a key caller's URL) the key's OTA must be active; anything else is `404`. The file is checked against `content_hash` before it is sent with `Content-Disposition: attachment`, 120 downloads per minute per IP.
 
 ## 4. Failure handling
 
@@ -98,4 +98,4 @@ Traveller: `bookings.getTicketingStatus`, `bookings.get`, `bookings.listDocument
 - Stub scenario `ticketing-failed`: retries follow the schedule (fake `Clock`), stop at deadline − 2 h, alerts are written once.
 - Timeout on issue followed by a GET that shows tickets: no second issue call.
 - Document rendering is deterministic for a fixed booking version (hash stable), and a second render of the same version is a no-op.
-- Signed URL: expired or tampered signatures answer `403`; another tenant's key answers `404`.
+- Signed URL: expired or tampered signatures answer `403`; another tenant's key answers `404` (`src/documents/signed-url.test.ts`, `test/integration/documents/download.int.test.ts`, OBE-054).

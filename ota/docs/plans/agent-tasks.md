@@ -1338,7 +1338,8 @@ Checkout, customer accounts in cookies, Stripe on the Velexis account, the airli
   - No document number appears in full in the PDF text (only the masked form).
 - **Verify:** `pnpm --filter @velexis/ota-backend test -- documents && pnpm --filter @velexis/ota-backend test:int -- documents`
 
-### OBE-054 · Implement document listing, signed download URLs and the file endpoint
+### OBE-054 · Implement document listing, signed download URLs and the file endpoint ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-backend
 - **Milestone:** M3
 - **Depends on:** OBE-053, OBE-047

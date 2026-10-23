@@ -67,6 +67,12 @@ function pathsOf(value: unknown): string[] {
   return list.map((item) => `/${String(item)}`.replace(/\/+/g, "/").replace(/(.)\/$/, "$1"));
 }
 
+/**
+ * A route path written as in the document: `:bookingId` and the named wildcard of a parameter of several segments
+ * (`*storageKey`, OBE-054's downloadFile) become `{bookingId}` and `{storageKey}`.
+ */
+const toTemplatePath = (path: string): string => path.replace(/[:*]([A-Za-z0-9_]+)/g, "{$1}");
+
 function joinPaths(prefix: string, path: string): string {
   const joined = `${prefix}/${path}`.replace(/\/+/g, "/");
   return joined.length > 1 ? joined.replace(/\/$/, "") : joined;
@@ -95,7 +101,7 @@ function collectRoutes(app: INestApplication): HandlerRoute[] {
             routes.push({
               handler: `${metatype.name}.${name}`,
               method,
-              path: joinPaths(prefix, path).replace(/:([A-Za-z0-9_]+)/g, "{$1}"),
+              path: toTemplatePath(joinPaths(prefix, path)),
               operationId: Reflect.getMetadata(OPENAPI_OPERATION, handler) as string | undefined,
               pending: Reflect.getMetadata(PENDING_OPERATION, handler) as string | undefined,
             });
@@ -200,14 +206,15 @@ function registeredRoutes(app: INestApplication): RegisteredRoute[] {
   const routes: RegisteredRoute[] = [];
   for (const layer of stack as Array<{ route?: { path?: unknown; methods?: Record<string, unknown> } }>) {
     const path = layer.route?.path;
-    // Nest mounts the middleware of `forRoutes(...)` as wildcard routes (`/{*path}`) that pass every request on.
-    if (typeof path !== "string" || path.includes("*")) {
+    // Nest mounts the middleware of `forRoutes(...)` as optional wildcard routes (`/{*path}`) that pass every request
+    // on; a handler's named wildcard (`/v1/files/*storageKey`) is a route like any other.
+    if (typeof path !== "string" || path.includes("{*")) {
       continue;
     }
     for (const method of Object.keys(layer.route?.methods ?? {})) {
       routes.push({
         method: method === "_all" ? "ALL" : method.toUpperCase(),
-        path: path.replace(/:([A-Za-z0-9_]+)/g, "{$1}"),
+        path: toTemplatePath(path),
       });
     }
   }

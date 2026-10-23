@@ -3,7 +3,9 @@
 // OBE-029 adds the airline-card method (§3.1), the edge-only operation completeCheckoutWithAirlineCard (§3.2), the
 // payment account modes of StorefrontPaymentConfig (§4) and PAYMENT_ATTEMPTS_EXCEEDED (§6). OBE-039 adds the webhook
 // receiver of the Velexis Stripe account, receiveStripeVelexisWebhook (api-changes-console-and-internal.md §5). OBE-061
-// adds the needs-attention filters of consoleListBookings (api-changes-console-and-internal.md §7).
+// adds the needs-attention filters of consoleListBookings (api-changes-console-and-internal.md §7). OBE-054 adds the
+// file endpoint of the signed document URLs, downloadFile (api-changes-console-and-internal.md §5; OADR-0013 point 9),
+// and the same-origin URLs that bookings.getDocumentDownloadUrl gives the storefront edge.
 //
 // The 96 operations of the original design are read from the frozen copy under docs/velexis-sdk/openapi/, so the
 // counts asserted here (77 MVP, 19 deferred, 63 customer-scope) never change when later spec tasks add operations.
@@ -21,6 +23,8 @@ import { ERROR_CATALOGUE, OTA_ERROR_CODES, type ErrorCode } from "@velexis/error
 import { createResponseChecker, responseChecker, type ResponseChecker } from "@velexis/testing";
 import { beforeAll, describe, expect, it } from "vitest";
 import { parse } from "yaml";
+import { PENDING_OPERATIONS } from "../../src/common/http/pending-operations";
+import { RATE_LIMITS, rateLimitsOf } from "../../src/common/http/rate-limits";
 import { APP_DIR } from "../../src/config";
 
 const REPO_ROOT = join(APP_DIR, "..", "..");
@@ -1404,6 +1408,163 @@ describe("console.bookings.list: the needs-attention filters (api-changes-consol
       "reconcileOutcome" | "cancellationRequested" | "hasScheduleChange"
     > = { reconcileOutcome: ["manual_review"], cancellationRequested: true, hasScheduleChange: false };
     expect(Object.keys(query)).toEqual(NEEDS_ATTENTION_FILTERS);
+  });
+});
+
+// ---- OBE-054: the file endpoint of the signed document URLs (api-changes-console-and-internal §5, OADR-0013 point 9) -
+
+const DOWNLOAD_FILE = "downloadFile";
+
+describe("downloadFile and the document download URLs (api-changes-console-and-internal §5)", () => {
+  it("documents GET /v1/files/{storageKey}: x-sdk-exclude, no credential, x-milestone M3, no SDK method [OBE-054]", () => {
+    const op = operation(DOWNLOAD_FILE);
+    expect([op.method, op.path]).toEqual(["get", "/v1/files/{storageKey}"]);
+    expect(op.spec["tags"]).toEqual(["Booking documents"]);
+    expect(op.spec["x-sdk-exclude"]).toBe(true);
+    expect(op.spec["security"]).toEqual([]);
+    expect(op.spec["x-milestone"]).toBe("M3");
+    expect(op.spec["x-scope"]).toBe("both");
+    expect(op.spec).not.toHaveProperty("x-sdk-method");
+    expect(op.spec).not.toHaveProperty("x-internal");
+    expect(op.spec).not.toHaveProperty("x-edge-only");
+    expect(op.spec).not.toHaveProperty("x-permission");
+    expect(op.spec["x-amadeus"]).toEqual([]);
+    expect(op.spec["x-tenant-tables"]).toEqual(["booking_documents", "bookings"]);
+    expect(op.spec["x-platform-tables"]).toEqual(["tenants"]);
+    // The operations index carries it for route parity, without an SDK method; the SDK parity check skips it.
+    expect(otaOperations.find((entry) => entry.operationId === DOWNLOAD_FILE)).toEqual({
+      operationId: DOWNLOAD_FILE,
+      method: "get",
+      path: "/v1/files/{storageKey}",
+      sdkMethod: null,
+      scope: "both",
+      tags: ["Booking documents"],
+      internal: false,
+      milestone: "M3",
+      edgeOnly: false,
+      permission: null,
+    } satisfies ApiOperation<string>);
+    // The tag says so; the operation is not internal, so it stays in the public reference.
+    const tag = (working["tags"] as Json[]).find((entry) => entry["name"] === "Booking documents");
+    expect(String(tag?.["description"])).toContain("downloadFile");
+  });
+
+  it("takes the storage key with its slashes, and exp and sig as required query parameters [OBE-054]", () => {
+    const op = operation(DOWNLOAD_FILE);
+    const parameters = (op.spec["parameters"] as Json[]).map((parameter) => ({
+      name: parameter["name"],
+      in: parameter["in"],
+      required: parameter["required"],
+      schema: parameter["schema"],
+    }));
+    expect(parameters).toEqual([
+      {
+        name: "storageKey",
+        in: "path",
+        required: true,
+        schema: { type: "string", minLength: 1, maxLength: 512 },
+      },
+      { name: "exp", in: "query", required: true, schema: { type: "integer", minimum: 1 } },
+      { name: "sig", in: "query", required: true, schema: { type: "string", minLength: 1, maxLength: 128 } },
+    ]);
+    // The key is several path segments, sent as signed: the description says so.
+    expect(String((op.spec["parameters"] as Json[])[0]?.["description"])).toContain("not percent-encoded");
+    // Compiles only while the generated types say so.
+    type Parameters = operations["downloadFile"]["parameters"];
+    const query: Parameters["query"] = { exp: 1, sig: "x" };
+    const path: Parameters["path"] = {
+      storageKey: "tenant_acme/documents/bkg_01JA4CG3S8W1Z4C7F0H3L6P9T2/doc_01JA4CG8B6E9H2L5P8S1W4Z7C0.pdf",
+    };
+    expect([Object.keys(query), Object.keys(path)]).toEqual([["exp", "sig"], ["storageKey"]]);
+  });
+
+  it("answers the PDF with its headers, and documents each error code with its status [OBE-054]", () => {
+    const op = operation(DOWNLOAD_FILE);
+    const responses = objectAt(op.spec, "responses");
+    expect(Object.keys(responses).sort()).toEqual(["200", "400", "401", "403", "404", "429", "500", "503"]);
+    const ok = objectAt(responses, "200");
+    expect(Object.keys(objectAt(ok, "content"))).toEqual(["application/pdf"]);
+    expect(Object.keys(objectAt(ok, "headers")).sort()).toEqual([
+      "Cache-Control",
+      "Content-Disposition",
+      "X-Content-Type-Options",
+      "X-Request-Id",
+    ]);
+    expect(responses["403"]).toEqual({ $ref: "#/components/responses/DocumentLinkForbidden" });
+    const codes = op.spec["x-error-codes"] as ErrorCode[];
+    expect(codes).toEqual(
+      expect.arrayContaining([
+        "VALIDATION_FAILED",
+        "FORBIDDEN",
+        "NOT_FOUND",
+        "RATE_LIMITED",
+        "INTERNAL_ERROR",
+        // What the guards answer to a credential sent along (an edge header, a pk_ or sk_ key), as on every route.
+        "INVALID_API_KEY",
+        "ORIGIN_NOT_ALLOWED",
+        "HOST_NOT_ALLOWED",
+        "TENANT_SUSPENDED",
+        "SCOPE_NOT_ALLOWED",
+      ]),
+    );
+    for (const code of codes) {
+      expect([code, String(ERROR_CATALOGUE[code].status) in responses]).toEqual([code, true]);
+    }
+    // The link refusal's example is the answer of the handler, and it validates.
+    const refused = {
+      error: {
+        code: "FORBIDDEN",
+        message: "The download link is not valid or has expired; ask for a new one.",
+        status: 403,
+        requestId: "req_01JA2Z9W5K7Q3M8N4P6R2T0V1X",
+      },
+    };
+    expect(checker.check(DOWNLOAD_FILE, { status: 403, body: refused })).toEqual([]);
+    const examples = objectAt(working, "components", "responses", "DocumentLinkForbidden", "content");
+    expect(objectAt(examples, "application/json", "examples", "FORBIDDEN")["value"]).toEqual(refused);
+  });
+
+  it("gives DocumentDownloadUrl.url uri-reference: a same-origin path for the edge, an absolute URL for keys [OBE-054 AC2]", () => {
+    expect(
+      objectAt(working, "components", "schemas", "DocumentDownloadUrl", "properties", "url"),
+    ).toMatchObject({
+      type: "string",
+      format: "uri-reference",
+    });
+    const download = objectAt(
+      operation("getBookingDocumentDownloadUrl").spec,
+      "responses",
+      "200",
+      "content",
+      "application/json",
+      "examples",
+    );
+    const urls = Object.values(download).map((example) =>
+      String((example as Json & { value: Json }).value["url"]),
+    );
+    expect(urls).toHaveLength(2);
+    expect(urls[0]?.startsWith("/api/v1/files/tenant_acme/documents/")).toBe(true);
+    expect(urls[1]?.startsWith("https://api.ota.example.com/v1/files/tenant_acme/documents/")).toBe(true);
+    for (const example of Object.values(download)) {
+      const body = (example as Json)["value"];
+      expect(checker.check("getBookingDocumentDownloadUrl", { status: 200, body })).toEqual([]);
+    }
+    // The frozen design had an object-storage URL (`format: uri`): the edge's relative path is OADR-0013 point 9's.
+    expect(
+      objectAt(frozen, "components", "schemas", "DocumentDownloadUrl", "properties", "url")["format"],
+    ).toBe("uri");
+  });
+
+  it("counts the downloads against the public downloads limit, 120 per minute per IP [OBE-054]", () => {
+    expect(rateLimitsOf(DOWNLOAD_FILE)).toEqual(["publicDownloads"]);
+    expect(RATE_LIMITS.publicDownloads).toMatchObject({ limit: 120, windowSeconds: 60, by: "ip" });
+    expect(RATE_LIMITS.publicDownloads.callers).toContain("anonymous");
+  });
+
+  it("serves the three operations: none of them is pending any more [OBE-054]", () => {
+    for (const operationId of [DOWNLOAD_FILE, "listBookingDocuments", "getBookingDocumentDownloadUrl"]) {
+      expect([operationId, operationId in PENDING_OPERATIONS]).toEqual([operationId, false]);
+    }
   });
 });
 

@@ -101,11 +101,16 @@ describe("the operations of each limit", () => {
     expect(rateLimitsOf("getFlightSearch")).toEqual([]);
   });
 
-  it("leave only the failure counters and the public downloads (OBE-054, OBE-071) without an operation", () => {
+  it("leave only the failure counters without an operation", () => {
     const used = new Set(otaOperations.flatMap((operation) => rateLimitsOf(operation.operationId)));
     const unused = (Object.keys(RATE_LIMITS) as RateLimitId[]).filter((id) => !used.has(id));
 
-    expect(unused.sort()).toEqual(["lookupFailuresPerIp", "lookupFailuresPerReference", "publicDownloads"]);
+    expect(unused.sort()).toEqual(["lookupFailuresPerIp", "lookupFailuresPerReference"]);
+  });
+
+  it("count the signed document downloads against the public downloads limit, the public images not yet (OBE-071) [OBE-054]", () => {
+    expect(rateLimitsOf("downloadFile")).toEqual(["publicDownloads"]);
+    expect(rateLimitsOf("getPublicAsset")).toEqual([]);
   });
 });
 

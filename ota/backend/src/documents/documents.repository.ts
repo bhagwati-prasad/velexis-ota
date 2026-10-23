@@ -15,6 +15,13 @@
 //           the last ready version stays downloadable, and the next ready version of the document supersedes it.
 // `pending` is not used: the job writes a row when it has a result, and a document without a row is not ready yet.
 //
+// The downloads (OBE-054, OADR-0013 item 9) read the rows in the API: a booking's ready documents, newest first with a
+// keyset position as UTC text with microseconds (a JavaScript Date would lose them and skip or repeat rows); one
+// document of a booking for its signed URL; and the document stored at a storage key, with its booking's environment,
+// for the file endpoint. The one row they write outside `booking_documents` is the staff-only booking event of a
+// download URL (`document.downloaded`, which asks for no document), appended to `booking_events` as the bookings
+// module appends its events (BookingsRepository.insertEvent), so this module needs nothing of that one.
+//
 // Like every tenant repository it takes the `tenantTx` transaction first, never opens one and never names a tenant
 // schema. Amounts are read as text, local date-times through `to_char`, never as JavaScript numbers or local dates.
 import { createHash } from "node:crypto";
@@ -87,6 +94,51 @@ export interface CurrentDocumentRow {
   readonly contentHash: string;
   readonly createdAt: Date;
 }
+
+/** A document as bookings.listDocuments lists it, with its keyset position. */
+export interface ListedDocumentRow {
+  readonly id: string;
+  readonly bookingId: string;
+  readonly ticketId: string | null;
+  readonly kind: string;
+  readonly status: string;
+  readonly locale: string;
+  readonly fileName: string;
+  readonly contentType: string;
+  readonly sizeBytes: number | null;
+  readonly invoiceNumber: string | null;
+  readonly createdAt: Date;
+  /** `created_at` in UTC with microseconds: the cursor's key. */
+  readonly sortKey: string;
+}
+
+/** One document of a booking, as its download URL needs it. */
+export interface DownloadDocumentRow {
+  readonly id: string;
+  readonly kind: string;
+  readonly status: string;
+  readonly fileName: string;
+  readonly contentType: string;
+  readonly storageKey: string;
+  /** The file's SHA-256: FAILED_CONTENT_HASH for a failed rendering (nothing stored), also once superseded. */
+  readonly contentHash: string;
+}
+
+/** The document stored at a storage key, as the file endpoint serves it. */
+export interface StoredFileRow {
+  readonly id: string;
+  readonly bookingId: string;
+  readonly status: string;
+  readonly fileName: string;
+  readonly contentType: string;
+  readonly contentHash: string;
+  /** The booking's environment (`test`, `live`). */
+  readonly environment: string;
+}
+
+/** `created_at` of `column` as UTC text with microseconds (a keyset position). */
+const utcKeyOf = (column: string) =>
+  sql<string>`to_char(${sql.ref(column)} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US')`;
 
 /** Which document: a booking's itinerary, or the receipt of one of its tickets. */
 export interface DocumentSlot {
@@ -386,5 +438,92 @@ export class DocumentsRepository {
   /** Records another failed render on a `failed` row. */
   async touch(trx: TenantTransaction, id: string, now: Date): Promise<void> {
     await trx.updateTable("booking_documents").set({ updated_at: now }).where("id", "=", id).execute();
+  }
+
+  /**
+   * The booking's `ready` documents (OBE-054: bookings.listDocuments), of `kinds` when given, newest first
+   * (`created_at`, then `id`), after the keyset position `after`, at most `limit` rows.
+   */
+  async readyDocuments(
+    trx: TenantTransaction,
+    bookingId: string,
+    page: {
+      readonly kinds?: readonly string[] | undefined;
+      readonly after?: { readonly key: string; readonly id: string } | undefined;
+      readonly limit: number;
+    },
+  ): Promise<ListedDocumentRow[]> {
+    let select = trx
+      .selectFrom("booking_documents as d")
+      .select([
+        "d.id as id",
+        "d.booking_id as bookingId",
+        "d.booking_ticket_id as ticketId",
+        "d.kind as kind",
+        "d.status as status",
+        "d.locale as locale",
+        "d.file_name as fileName",
+        "d.content_type as contentType",
+        "d.size_bytes as sizeBytes",
+        "d.invoice_number as invoiceNumber",
+        "d.created_at as createdAt",
+        utcKeyOf("d.created_at").as("sortKey"),
+      ])
+      .where("d.booking_id", "=", bookingId)
+      .where("d.status", "=", "ready");
+    if (page.kinds !== undefined && page.kinds.length > 0) {
+      select = select.where("d.kind", "in", [...page.kinds]);
+    }
+    if (page.after !== undefined) {
+      select = select.where(
+        sql<boolean>`(d.created_at, d.id) < (${page.after.key}::timestamp AT TIME ZONE 'UTC', ${page.after.id})`,
+      );
+    }
+    return await select.orderBy("d.created_at", "desc").orderBy("d.id", "desc").limit(page.limit).execute();
+  }
+
+  /** Appends a booking event: the `document.downloaded` event of a download URL (OBE-054; see the file header). */
+  async insertBookingEvent(trx: TenantTransaction, row: Insertable<Db["booking_events"]>): Promise<void> {
+    await trx.insertInto("booking_events").values(row).execute();
+  }
+
+  /** Document `documentId` of booking `bookingId` (OBE-054: its download URL); `undefined` for another booking's. */
+  async documentOf(
+    trx: TenantTransaction,
+    bookingId: string,
+    documentId: string,
+  ): Promise<DownloadDocumentRow | undefined> {
+    return await trx
+      .selectFrom("booking_documents")
+      .select([
+        "id",
+        "kind",
+        "status",
+        "file_name as fileName",
+        "content_type as contentType",
+        "storage_key as storageKey",
+        "content_hash as contentHash",
+      ])
+      .where("id", "=", documentId)
+      .where("booking_id", "=", bookingId)
+      .executeTakeFirst();
+  }
+
+  /** The document stored at `storageKey`, with its booking's environment (OBE-054: the file endpoint). */
+  async fileByStorageKey(trx: TenantTransaction, storageKey: string): Promise<StoredFileRow | undefined> {
+    return await trx
+      .selectFrom("booking_documents as d")
+      .innerJoin("bookings as b", "b.id", "d.booking_id")
+      .select([
+        "d.id as id",
+        "d.booking_id as bookingId",
+        "d.status as status",
+        "d.file_name as fileName",
+        "d.content_type as contentType",
+        "d.content_hash as contentHash",
+        "b.environment as environment",
+      ])
+      .where("d.storage_key", "=", storageKey)
+      .executeTakeFirst();
   }
 }

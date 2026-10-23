@@ -530,4 +530,34 @@ describe("the compiled document", () => {
     expect(document.validator("consoleGetBooking").validPathParameters(undefined)).toEqual({});
     expect(document.validator("consoleListBookings").validPathParameters({ bookingId })).toEqual({});
   });
+
+  it("validates a parameter of several path segments as the path its segments make [OBE-054]", () => {
+    const validator = loadOpenApiDocument().validator("downloadFile");
+    const segments = [
+      "tenant_acme",
+      "documents",
+      "bkg_01JA2Z9W5K7Q3M8N4P6R2T0V1E",
+      "doc_01JA2Z9W5K7Q3M8N4P6R2T0V1F.pdf",
+    ];
+    const sig = "MNeWTf3Ru0xhwadrgL6GtU5UqX222M5ExG_O2_x4_yA";
+    const request = {
+      // Express 5 gives the `*storageKey` wildcard of the route as its decoded segments.
+      params: { storageKey: segments },
+      query: { exp: "1791625500", sig },
+      headers: {},
+      body: undefined,
+      bodySent: false,
+    };
+
+    expect(validator.validate(request)).toMatchObject({
+      path: { storageKey: segments.join("/") },
+      query: { exp: 1791625500, sig },
+    });
+    expect(() => validator.validate({ ...request, query: { exp: "1791625500" } })).toThrow(
+      expect.objectContaining({
+        code: "VALIDATION_FAILED",
+        fieldErrors: [expect.objectContaining({ path: "/query/sig", code: "required" })],
+      }),
+    );
+  });
 });

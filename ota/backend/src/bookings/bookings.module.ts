@@ -25,6 +25,10 @@
 // gateway), CancelBookingIdempotencyHooks answer the replays of a `504`; the markup and fee engine's rules come from
 // PricingModule.
 //
+// The booking documents' routes (OBE-054): DocumentsController of src/documents/ (bookings.listDocuments,
+// bookings.getDocumentDownloadUrl) is registered here, behind the same booking access guard, over the
+// DocumentDownloadsService of the global DocumentsModule (bookings → documents, architecture §2.2).
+//
 // Guest access (OBE-047): GuestAccessService issues the guest booking tokens of checkout.complete and bookings.lookup
 // (LookupController) and hands them out in `__Host-vx_bt` (CookieWriter, a plain provider without state, provided here
 // again) or the body; LookupAttempts counts the failed lookups in Redis (the global RedisModule's client).
@@ -55,6 +59,7 @@ import { BookingAccessContext, BookingAccessGuard } from "../common/auth/booking
 import { CookieWriter } from "../common/http/cookie-writer";
 import { RequestContext } from "../common/http/request-context";
 import { QueuesModule } from "../common/queues/queues.module";
+import { DocumentsController } from "../documents/documents.controller";
 import { IdentityModule } from "../identity/identity.module";
 import { PAYMENT_GATEWAY } from "../payments/payment-gateway";
 import { PaymentGatewayModule } from "../payments/payment-gateway.module";
@@ -100,7 +105,7 @@ import { TicketingRepository, TicketingService } from "./ticketing.service";
     QueuesModule,
     PricingModule,
   ],
-  controllers: [CustomerBookingsController, LookupController],
+  controllers: [CustomerBookingsController, LookupController, DocumentsController],
   providers: [
     BookingOrchestrator,
     CompleteCheckoutIdempotencyHooks,

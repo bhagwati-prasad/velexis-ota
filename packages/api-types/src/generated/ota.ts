@@ -1629,7 +1629,7 @@ export interface paths {
         };
         /**
          * List documents of a booking
-         * @description Lists the booking's generated documents (`booking_documents`): e-ticket receipts and EMD receipts (one per ticket, after issuance), the itinerary (after booking, regenerated after changes — older versions `superseded`), invoices (after capture) and credit notes (after refunds). Newest first; filter by `kind`. Documents are rendered by Velexis as PDFs (storefront branding, `notification_templates`, Accept-Language at generation time) and stored encrypted in object storage; download them with bookings.getDocumentDownloadUrl. No Amadeus call. Booking of the key's environment only (`404` otherwise).
+         * @description Lists the booking's generated documents that are ready to download (`booking_documents` with status `ready`): e-ticket receipts and EMD receipts (one per ticket, after issuance), the itinerary (after booking, regenerated after changes — older versions `superseded`), invoices (after capture) and credit notes (after refunds). In the MVP Velexis renders the itinerary and one e-ticket receipt per e-ticket only (OADR-0013 point 6). A superseded version, a document whose rendering failed and one not rendered yet are not listed, so each document appears in its newest ready version. Newest first (`createdAt`, then `id`); filter by `kind`. Documents are rendered by Velexis as PDFs (storefront branding) and kept by its storage (ADR-0017); download them with bookings.getDocumentDownloadUrl. No Amadeus call. Booking of the key's environment only (`404` otherwise).
          *
          *     **Caching.** `private, no-store`.
          */
@@ -1651,11 +1651,39 @@ export interface paths {
         };
         /**
          * Get a download URL for a booking document
-         * @description Returns a short-lived (5 minutes) signed object-storage URL for one document, served with `Content-Disposition: attachment; filename=…`. Redirect the browser to it or use it as an `<a href>`; do not store it. Every call writes a `booking_events` entry (`document.downloaded`, not customer-visible). A document still `pending` (or `failed`) answers `409 DOCUMENT_NOT_READY` (`details.retryAfterSeconds`). No Amadeus call. Booking of the key's environment only (`404` otherwise). Guests need the booking token: call it from a route handler with `createServerClient({ bookingId })` (cookie `vx_bt_<bookingId>`), never by passing the token to client code.
+         * @description Returns a short-lived (5 minutes) signed URL for one document, served with `Content-Disposition: attachment; filename=…`. Redirect the browser to it or use it as an `<a href>`; do not store it. Every call writes a `booking_events` entry (`document.downloaded`, not customer-visible). A document still `pending` (or `failed`) answers `409 DOCUMENT_NOT_READY` (`details.retryAfterSeconds`); a `superseded` one can still be downloaded, except a failed rendering that a newer version superseded (it has no file: `404`, and no event). No Amadeus call. Booking of the key's environment only (`404` otherwise), and a document of another booking is `404` too. Guests need the booking token: call it from a route handler with `createServerClient({ bookingId })` (cookie `vx_bt_<bookingId>`), never by passing the token to client code.
+         *
+         *     **The URL** (OADR-0013 point 9, ADR-0017) is the file endpoint downloadFile, `/v1/files/<storageKey>?exp=<unix seconds>&sig=<HMAC-SHA-256>`: the hosted storefront's edge gets it as the same-origin path `/api/v1/files/…` (its `/api/*` requests reach this API through Caddy), key callers as an absolute URL on the API host (`https://api.ota.example.com/v1/files/…`). Only the path and `exp` are signed, and `expiresAt` is `exp`.
          *
          *     **Caching.** `no-store` (the URL expires).
          */
         get: operations["getBookingDocumentDownloadUrl"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/files/{storageKey}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Download a booking document at its signed URL
+         * @description Serves the PDF of a booking document at the short-lived signed URL of bookings.getDocumentDownloadUrl (OADR-0013 point 9, ADR-0017): `/api/v1/files/<storageKey>?exp=…&sig=…` on the hosted storefront (same-origin: Caddy proxies its `/api/*` to this API without the prefix) and `https://api.ota.example.com/v1/files/…` for key callers. Not an SDK method (`x-sdk-exclude`): redirect the browser to the URL or use it as an `<a href>`; do not store it.
+         *
+         *     **No credential.** The URL is the credential: `sig` is the HMAC-SHA-256 of the path and `exp` with Velexis' document URL key, and `exp` the Unix time (seconds) up to which the link works, 5 minutes after it was issued. A credential that comes with the request is checked as on every route: with the hosted storefront's edge header (Caddy adds it to every `/api/*` request of a storefront host) or an API key the request is the OTA's of that host or key, and the storage key must name that OTA's files and a booking of the request's environment. Without a credential the OTA is the one whose files the signed key names, served while it is active.
+         *
+         *     **Answers.** A signature that does not match the path and `exp` (a path, `exp` or `sig` changed after signing), an `exp` in the past and a query other than `exp` followed by `sig` answer `403 FORBIDDEN`, all with the same body and before anything is looked up. A key of another OTA than the request's, of an OTA that is not active, of a booking of the other environment, or of no stored document (a failed rendering has none, also once superseded) answers `404 NOT_FOUND`. A superseded version of a document is served until its link expires.
+         *
+         *     **Headers.** `Content-Type` of the document (`application/pdf`), `Content-Disposition: attachment; filename="<fileName>"`, `Cache-Control: private, no-store` (the link expires) and `X-Content-Type-Options: nosniff`. Rate limit 120 per minute per IP. No Amadeus call.
+         */
+        get: operations["downloadFile"];
         put?: never;
         post?: never;
         delete?: never;
@@ -10192,8 +10220,8 @@ export interface components {
             /** @description Document. */
             documentId: string;
             /**
-             * Format: uri
-             * @description Signed object-storage URL (Content-Disposition: attachment).
+             * Format: uri-reference
+             * @description Signed URL of the file endpoint downloadFile (`Content-Disposition: attachment`): the same-origin path `/api/v1/files/…?exp=…&sig=…` for the hosted storefront's edge, an absolute URL on the API host (`https://api.ota.example.com/v1/files/…`) for key callers (OADR-0013 point 9).
              */
             url: string;
             /**
@@ -15556,6 +15584,16 @@ export interface components {
         };
         /** @description The document cannot be downloaded yet. Possible codes: DOCUMENT_NOT_READY (`details.retryAfterSeconds`, `details.status` pending | failed). */
         DocumentConflict: {
+            headers: {
+                "X-Request-Id": components["headers"]["X-Request-Id"];
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["ErrorResponse"];
+            };
+        };
+        /** @description downloadFile refused the request. Possible codes: FORBIDDEN (the link's signature does not match its path and `exp`, or `exp` has passed: ask bookings.getDocumentDownloadUrl for a new link; every reason gets this same answer), HOST_NOT_ALLOWED (the storefront host of an edge request) and TENANT_SUSPENDED (the OTA of that host or of the API key), as on every route, ORIGIN_NOT_ALLOWED (a publishable key sent from an origin it does not list), SCOPE_NOT_ALLOWED (a credential that may not call it). */
+        DocumentLinkForbidden: {
             headers: {
                 "X-Request-Id": components["headers"]["X-Request-Id"];
                 [name: string]: unknown;
@@ -21475,12 +21513,64 @@ export interface operations {
                     "application/json": components["schemas"]["DocumentDownloadUrl"];
                 };
             };
+            400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
             409: components["responses"]["DocumentConflict"];
             429: components["responses"]["RateLimited"];
             500: components["responses"]["InternalError"];
+        };
+    };
+    downloadFile: {
+        parameters: {
+            query: {
+                /**
+                 * @description End of the link's validity, Unix time in seconds (signed).
+                 * @example 1791625500
+                 */
+                exp: number;
+                /**
+                 * @description The signature, base64url of the HMAC-SHA-256 of `<path>?exp=<exp>` (43 characters); any other value answers `403`.
+                 * @example MNeWTf3Ru0xhwadrgL6GtU5UqX222M5ExG_O2_x4_yA
+                 */
+                sig: string;
+            };
+            header?: never;
+            path: {
+                /**
+                 * @description The document's storage key, `tenant_<key>/documents/<bookingId>/<documentId>.pdf`: several path segments, sent with their `/` as the signed URL has them (not percent-encoded). A key that is not one Velexis signed answers `403`.
+                 * @example tenant_acme/documents/bkg_01JA4CG3S8W1Z4C7F0H3L6P9T2/doc_01JA4CG8B6E9H2L5P8S1W4Z7C0.pdf
+                 */
+                storageKey: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The document's file, as rendered. */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    /** @description `private, no-store`. */
+                    "Cache-Control"?: string;
+                    /** @description `attachment; filename="<fileName>"` (the `fileName` of the Document). */
+                    "Content-Disposition"?: string;
+                    /** @description `nosniff`. */
+                    "X-Content-Type-Options"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/pdf": string;
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["DocumentLinkForbidden"];
+            404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["ServiceUnavailable"];
         };
     };
     listBookingEvents: {
