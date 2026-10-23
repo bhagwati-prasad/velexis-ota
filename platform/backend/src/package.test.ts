@@ -13,6 +13,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
+import { setImmediate } from "node:timers/promises";
 import { ESLint } from "eslint";
 import ts from "typescript";
 import { beforeAll, describe, expect, it } from "vitest";
@@ -80,10 +81,16 @@ describe("the build", () => {
     ).toEqual([]);
   });
 
-  it("[PBE-001 AC1] the build script's entry-point check fails while one of the three files is missing", () => {
-    const check = /&& node -e "([^"]+)"$/.exec(manifest.scripts["build"] ?? "")?.[1];
+  /** The build script's `node -e` entry-point check, and its exit status without dist/cli.js and with it. */
+  const check = /&& node -e "([^"]+)"$/.exec(manifest.scripts["build"] ?? "")?.[1];
+  let withoutCli: number | null;
+  let withCli: number | null;
+
+  // Two Node processes: a fraction of a second each idle, more on a loaded runner, so they run here and not in the
+  // test's 5 s.
+  beforeAll(() => {
     if (check === undefined) {
-      throw new Error("the build script has no `node -e` entry-point check");
+      return;
     }
     const dir = mkdtempSync(join(tmpdir(), "velexis-platform-backend-build-"));
     try {
@@ -92,13 +99,21 @@ describe("the build", () => {
       for (const entry of ["main", "worker"]) {
         writeFileSync(join(dir, "dist", `${entry}.js`), "");
       }
-
-      expect(runCheck()).not.toBe(0);
+      withoutCli = runCheck();
       writeFileSync(join(dir, "dist", "cli.js"), "");
-      expect(runCheck()).toBe(0);
+      withCli = runCheck();
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  }, 30_000);
+
+  it("[PBE-001 AC1] the build script's entry-point check fails while one of the three files is missing", () => {
+    if (check === undefined) {
+      throw new Error("the build script has no `node -e` entry-point check");
+    }
+
+    expect(withoutCli).not.toBe(0);
+    expect(withCli).toBe(0);
   });
 
   it("emits CommonJS with decorator metadata, which NestJS's dependency injection needs", () => {
@@ -109,13 +124,47 @@ describe("the build", () => {
 });
 
 /**
- * ESLint computes the configuration of, and parses, every source and test file of the package: 84 files in PBE-011,
- * about 3 s on one idle core, and more with every task. While the other test files of the package (and, under
- * `pnpm test`, the other packages) run in parallel it takes several times that, so Vitest's default bounds fail the
- * check on a busy machine, not on a finding. Both passes run once, in the setup hook with this budget, which only
- * stops a run that hangs; the tests below compare their results.
+ * ESLint computes the configuration of every source and test file of the package and lints the files in which the
+ * two rules can report something (see `needsLinting`). Until wave 27 it parsed every file (281 files then): 6 s for
+ * this test file on an idle 4-CPU machine and from 13 s to 23 s under the full parallel `pnpm test` there, growing
+ * with every task, almost all of it typescript-estree's parse. Now TypeScript's parser (syntax only, well under 1 s
+ * idle) finds the files in which the two rules can report something, and ESLint lints those (17 in wave 27): 2.0 s
+ * to 2.5 s idle and from 9 s to 21 s under the full parallel `pnpm test`. Both passes run once, in the setup hook with
+ * this budget, which only stops a run that hangs; the tests below compare their results. The hook gives the event
+ * loop back between files, so vitest's worker keeps answering its RPC calls.
  */
 const LINT_SETUP_TIMEOUT_MS = 60_000;
+
+/** The identifiers the two rules report: `console` of `console.*` and `process` of `process.env`. */
+const RULE_IDENTIFIERS: ReadonlySet<string> = new Set(["console", "process"]);
+
+/**
+ * True when ESLint must parse the file to know what the two rules report in it. Both report an identifier only:
+ * `no-console` a reference to `console`, `n/no-process-env` a member expression on `process`. TypeScript's parser
+ * (syntax only, no program) finds every identifier with that name, written with `\u` escapes too, and the file goes
+ * to ESLint when it has one. So does a file with a comment that names ESLint (a directive, which ESLint can report
+ * as unused) and a file TypeScript cannot parse, which ESLint's TypeScript parser reports as a fatal problem. In
+ * every other file neither rule can report anything, as TypeScript's syntax tree of it is complete. (ESLint's parser
+ * also refuses a few constructs that TypeScript parses and leaves to its type checker, such as a modifier where none
+ * is allowed: this scan reports such a file only when it has one of the two identifiers, and `pnpm typecheck` and
+ * `pnpm lint` refuse it either way.)
+ */
+function needsLinting(file: string): boolean {
+  const text = readFileSync(file, "utf8");
+  if (text.includes("eslint")) {
+    return true;
+  }
+  const source = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, false, ts.ScriptKind.TS);
+  // The syntax errors typescript-estree turns into ESLint's fatal "Parsing error" (it reads the same field).
+  if (
+    (source as ts.SourceFile & { parseDiagnostics: readonly ts.Diagnostic[] }).parseDiagnostics.length > 0
+  ) {
+    return true;
+  }
+  const visit = (node: ts.Node): boolean =>
+    (ts.isIdentifier(node) && RULE_IDENTIFIERS.has(node.text)) || ts.forEachChild(node, visit) === true;
+  return ts.forEachChild(source, visit) === true;
+}
 
 describe("lint rules", () => {
   const RULES = ["no-console", "n/no-process-env"] as const;
@@ -134,6 +183,7 @@ describe("lint rules", () => {
 
   beforeAll(async () => {
     severities = [];
+    const candidates: string[] = [];
     for (const file of files) {
       const config = (await eslint.calculateConfigForFile(join(APP_DIR, file))) as {
         rules: Record<string, unknown>;
@@ -142,8 +192,13 @@ describe("lint rules", () => {
         const setting = config.rules[rule];
         severities.push({ file, rule, severity: Array.isArray(setting) ? setting[0] : setting });
       }
+      if (needsLinting(join(APP_DIR, file))) {
+        candidates.push(join(APP_DIR, file));
+      }
+      await setImmediate();
     }
-    const results = await eslint.lintFiles(files.map((file) => join(APP_DIR, file)));
+    // (ESLint would lint its cwd, the whole repository, for an empty list.)
+    const results = candidates.length === 0 ? [] : await eslint.lintFiles(candidates);
     findings = results.flatMap((result) =>
       result.messages.map(
         (message) => `${relative(APP_DIR, result.filePath)}:${message.line} ${message.ruleId}`,

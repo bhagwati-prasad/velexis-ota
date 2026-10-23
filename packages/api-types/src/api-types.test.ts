@@ -8,8 +8,9 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
+import { availableParallelism, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { setImmediate } from "node:timers/promises";
 import { runInThisContext } from "node:vm";
 import Ajv2020 from "ajv/dist/2020";
 import addFormats from "ajv-formats";
@@ -68,7 +69,9 @@ const HTTP_METHODS: readonly HttpMethod[] = [
 
 // openapi-typescript needs a few seconds on the 40,000-line OTA document (more on a busy runner).
 const OTA_DOCUMENT_TIMEOUT_MS = 120_000;
-const SMALL_DOCUMENT_TIMEOUT_MS = 30_000;
+// The generator's runs for every test of it: 17 child processes, four at a time, about 10 s idle (two of them on
+// the OTA document of the repository), and several times that while CI runs every package at once.
+const GENERATOR_RUNS_TIMEOUT_MS = 180_000;
 
 // ---- Helpers -----------------------------------------------------------------------------------------------
 
@@ -336,307 +339,358 @@ function propertyNames(program: ts.Program, type: ts.Type, property?: string): s
 
 // ---- The generator -----------------------------------------------------------------------------------------
 
+/** Runs `tasks`, at most `limit` at a time; resolves to their results in order. */
+async function inPool<T>(
+  tasks: ReadonlyArray<() => Promise<T>>,
+  limit = availableParallelism(),
+): Promise<T[]> {
+  const results: T[] = [];
+  let next = 0;
+  const worker = async (): Promise<void> => {
+    while (next < tasks.length) {
+      const index = next++;
+      results[index] = await (tasks[index] as () => Promise<T>)();
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, tasks.length) }, worker));
+  return results;
+}
+
+/** The scratch platform document of the test that generates the platform types. */
+const SCRATCH_PLATFORM = smallDocument("Scratch platform", [
+  { path: "/v1/plans", lines: ["operationId: listPlans", "tags: [Plans]", "x-scope: public"] },
+  {
+    path: "/internal/tls-ask",
+    lines: ["operationId: tlsAsk", "tags: [Internal, Domains]", "x-scope: internal", "x-internal: true"],
+  },
+  {
+    path: "/v1/tenants",
+    method: "post",
+    lines: ["operationId: createTenant", "tags: [Tenants]", "x-scope: portal"],
+  },
+]);
+
+/** The scratch OTA document with the MVP extensions (x-milestone, x-edge-only, x-permission). */
+const MVP_EXTENSIONS_OTA = smallDocument("Scratch OTA with the MVP extensions", [
+  { path: "/v1/things", lines: ["operationId: listThings", "x-milestone: M2"] },
+  {
+    path: "/v1/thing-completions",
+    method: "post",
+    lines: ["operationId: completeThing", "x-milestone: M3", "x-edge-only: true"],
+  },
+  {
+    path: "/v1/console/things",
+    lines: [
+      "operationId: consoleListThings",
+      "x-milestone: deferred",
+      "x-edge-only: false",
+      "x-permission: bookings:read",
+    ],
+  },
+  { path: "/v1/plain", lines: ["operationId: plainThing"] },
+]);
+
+/** The broken operations the generator refuses, each next to a valid one. */
+const BROKEN_OPERATIONS = [
+  {
+    problem: "an operation without operationId",
+    lines: ["tags: [Things]"],
+    error: 'ota GET /v1/broken: every operation needs an "operationId"',
+  },
+  {
+    problem: "an operationId used twice",
+    lines: ["operationId: listThings"],
+    error: 'ota GET /v1/broken: "operationId" listThings is also used by ota GET /v1/things',
+  },
+  {
+    problem: "an x-internal that is not a boolean",
+    lines: ["operationId: brokenThing", 'x-internal: "yes"'],
+    error: 'ota GET /v1/broken: "x-internal" must be true or false',
+  },
+  {
+    problem: "an x-internal without a value",
+    lines: ["operationId: brokenThing", "x-internal:"],
+    error: 'ota GET /v1/broken: "x-internal" must be true or false',
+  },
+  {
+    problem: "tags that are not a list of strings",
+    lines: ["operationId: brokenThing", "tags: Things"],
+    error: 'ota GET /v1/broken: "tags" must be a list of strings',
+  },
+  {
+    problem: "tags without a value",
+    lines: ["operationId: brokenThing", "tags:"],
+    error: 'ota GET /v1/broken: "tags" must be a list of strings',
+  },
+  {
+    problem: "an empty x-sdk-method",
+    lines: ["operationId: brokenThing", 'x-sdk-method: ""'],
+    error: 'ota GET /v1/broken: "x-sdk-method" must be a non-empty string',
+  },
+  {
+    problem: "an x-milestone outside M0 … M6 and deferred",
+    lines: ["operationId: brokenThing", "x-milestone: M7"],
+    error: 'ota GET /v1/broken: "x-milestone" must be one of M0, M1, M2, M3, M4, M5, M6, deferred',
+  },
+  {
+    problem: "an x-milestone that is not a string",
+    lines: ["operationId: brokenThing", "x-milestone: 2"],
+    error: 'ota GET /v1/broken: "x-milestone" must be a non-empty string',
+  },
+  {
+    problem: "an x-edge-only that is not a boolean",
+    lines: ["operationId: brokenThing", 'x-edge-only: "true"'],
+    error: 'ota GET /v1/broken: "x-edge-only" must be true or false',
+  },
+  {
+    problem: "an x-edge-only without a value",
+    lines: ["operationId: brokenThing", "x-edge-only:"],
+    error: 'ota GET /v1/broken: "x-edge-only" must be true or false',
+  },
+  {
+    problem: "an x-permission without a value",
+    lines: ["operationId: brokenThing", "x-permission:"],
+    error: 'ota GET /v1/broken: "x-permission" must be a non-empty string',
+  },
+] as const;
+
 describe("contracts:generate (scripts/generate.mjs)", () => {
-  it(
-    "gives the same files on a second run, equal to the committed ones, without timestamps or local paths [X-008 AC1]",
-    { timeout: 2 * OTA_DOCUMENT_TIMEOUT_MS },
-    async () => {
-      const out = join(scratch, "repository-output");
+  /** A run of the generator into `out`. */
+  interface Generated {
+    readonly run: Run;
+    readonly out: string;
+  }
+  /** The two runs over the repository's documents into one folder, with the files after each. */
+  let repository: {
+    readonly first: Run;
+    readonly firstFiles: GeneratedFiles | undefined;
+    readonly second: Run;
+    readonly secondFiles: GeneratedFiles | undefined;
+  };
+  /** The other runs, by the name of their scratch tree (`broken-<problem>` for BROKEN_OPERATIONS). */
+  const generated = new Map<string, Generated>();
+  /** The TypeScript errors of the files that the runs which pass wrote, by the name of their scratch tree. */
+  const compiled = new Map<string, string[]>();
 
-      const first = await runGenerate(["--out", out]);
-      expect(first.stderr).toBe("");
-      expect(first.code).toBe(0);
-      const firstFiles = readFiles(out);
-      const second = await runGenerate(["--out", out]);
-      expect(second.code).toBe(0);
-      const secondFiles = readFiles(out);
+  const ran = (name: string): Generated => {
+    const found = generated.get(name);
+    if (found === undefined) {
+      throw new Error(`no run of the generator for ${name}`);
+    }
+    return found;
+  };
+  /** The files of a run that passed; fails the test when it wrote none. */
+  const written = (files: GeneratedFiles | undefined): GeneratedFiles => {
+    if (files === undefined) {
+      throw new Error("the generator wrote no files");
+    }
+    return files;
+  };
 
-      expect(secondFiles).toEqual(firstFiles);
-      for (const name of GENERATED_FILES) {
-        expect(second.stdout).toContain(`contracts:generate: unchanged ${name}`);
-      }
-      // The committed files are the generator's output: CI's `git diff --exit-code` after a run stays empty.
-      expect(readFiles(GENERATED_DIR)).toEqual(firstFiles);
-      for (const content of Object.values(firstFiles)) {
-        expect(content.split("\n")[0]).toBe(HEADER);
-        expect(content).not.toContain(REPO_ROOT);
-        expect(content).not.toContain(scratch);
-        // The generator's own header (the comment lines before the first blank line) carries no date or time.
-        const header = content.slice(0, content.indexOf("\n\n"));
-        expect(header.split("\n").every((line) => line.startsWith("//"))).toBe(true);
-        expect(header).not.toMatch(/\d{4}-\d\d-\d\d|\d\d:\d\d/);
-        expect(content.endsWith("\n")).toBe(true);
-      }
-      expect(firstFiles["ota.ts"]).toContain(`// Source: ${OTA_PATH} (openapi-typescript)`);
-    },
-  );
+  // openapi-typescript needs a few seconds on the 40,000-line OTA document, and every run loads it and TypeScript in
+  // a child process (about a second idle); compiling the generated files of a scratch run takes another second.
+  // All of it is several times slower while CI runs every package at once, so the runs of every test below happen
+  // here, a few at a time, in the setup hook with its own budget; the tests assert on what they gave.
+  beforeAll(async () => {
+    const generate = async (name: string, documents: { ota?: string; platform?: string }): Promise<void> => {
+      const { config, out } = makeTree(name, documents);
+      generated.set(name, { run: await runGenerate(["--config", config, "--out", out]), out });
+    };
+    const readIfWritten = (out: string): GeneratedFiles | undefined =>
+      existsSync(join(out, "operations.ts")) ? readFiles(out) : undefined;
+    await inPool([
+      async () => {
+        const out = join(scratch, "repository-output");
+        const first = await runGenerate(["--out", out]);
+        const firstFiles = readIfWritten(out);
+        const second = await runGenerate(["--out", out]);
+        repository = { first, firstFiles, second, secondFiles: readIfWritten(out) };
+      },
+      () => generate("platform-missing", { ota: SMALL_OTA }),
+      () => generate("platform-present", { ota: SMALL_OTA, platform: SCRATCH_PLATFORM }),
+      () => generate("mvp-extensions", { ota: MVP_EXTENSIONS_OTA }),
+      ...BROKEN_OPERATIONS.map(({ lines }) => async () => {
+        const ota = smallDocument("Broken OTA", [
+          { path: "/v1/things", lines: ["operationId: listThings", "x-sdk-method: things.list"] },
+          { path: "/v1/broken", lines },
+        ]);
+        await generate(`broken-${lines.join("-").replace(/\W+/g, "-")}`, { ota });
+      }),
+      async () => {
+        const { config, out } = makeTree("ota-missing", {});
+        generated.set("ota-missing", { run: await runGenerate(["--config", config, "--out", out]), out });
+        generated.set("unknown-option", { run: await runGenerate(["--outdir", out]), out });
+      },
+    ]);
+    for (const name of ["platform-missing", "platform-present", "mvp-extensions"]) {
+      const { run, out } = ran(name);
+      compiled.set(name, run.code === 0 ? compileGenerated(out) : ["the generator failed"]);
+      await setImmediate();
+    }
+  }, GENERATOR_RUNS_TIMEOUT_MS);
 
-  it(
-    "writes the empty platform placeholder and says so while the platform document does not exist",
-    { timeout: SMALL_DOCUMENT_TIMEOUT_MS },
-    async () => {
-      const { config, out } = makeTree("platform-missing", { ota: SMALL_OTA });
+  it("gives the same files on a second run, equal to the committed ones, without timestamps or local paths [X-008 AC1]", () => {
+    const { first, second } = repository;
+    expect(first.stderr).toBe("");
+    expect(first.code).toBe(0);
+    const firstFiles = written(repository.firstFiles);
+    expect(second.code).toBe(0);
+    const secondFiles = written(repository.secondFiles);
 
-      const run = await runGenerate(["--config", config, "--out", out]);
+    expect(secondFiles).toEqual(firstFiles);
+    for (const name of GENERATED_FILES) {
+      expect(second.stdout).toContain(`contracts:generate: unchanged ${name}`);
+    }
+    // The committed files are the generator's output: CI's `git diff --exit-code` after a run stays empty.
+    expect(readFiles(GENERATED_DIR)).toEqual(firstFiles);
+    for (const content of Object.values(firstFiles)) {
+      expect(content.split("\n")[0]).toBe(HEADER);
+      expect(content).not.toContain(REPO_ROOT);
+      expect(content).not.toContain(scratch);
+      // The generator's own header (the comment lines before the first blank line) carries no date or time.
+      const header = content.slice(0, content.indexOf("\n\n"));
+      expect(header.split("\n").every((line) => line.startsWith("//"))).toBe(true);
+      expect(header).not.toMatch(/\d{4}-\d\d-\d\d|\d\d:\d\d/);
+      expect(content.endsWith("\n")).toBe(true);
+    }
+    expect(firstFiles["ota.ts"]).toContain(`// Source: ${OTA_PATH} (openapi-typescript)`);
+  });
 
-      expect(run.code).toBe(0);
-      expect(run.stdout).toMatch(
-        new RegExp(
-          `^contracts:generate: "platform": ${PLATFORM_PATH} does not exist yet; ` +
-            "the platform plan creates it in M1 \\(ADR-0006\\)\\. Writing the empty placeholder\\.$",
-          "m",
-        ),
-      );
-      const files = readFiles(out);
-      expect(files["platform.ts"]).toContain(`// Source: ${PLATFORM_PATH}, which does not exist yet`);
-      for (const declaration of [
-        "export interface paths {}",
-        "export type webhooks = Record<string, never>;",
-        "export interface components {}",
-        "export type $defs = Record<string, never>;",
-        "export interface operations {}",
-      ]) {
-        expect(files["platform.ts"]).toContain(declaration);
-      }
-      const index = loadIndex(files["operations.ts"]);
-      expect(index.platformOperations).toEqual([]);
-      expect(index.otaOperations).toMatchObject([
-        {
-          operationId: "listThings",
-          method: "get",
-          path: "/v1/things",
-          sdkMethod: "things.list",
-          scope: "customer",
-          tags: ["Things"],
-          internal: false,
-        },
-      ]);
-      expect(compileGenerated(out)).toEqual([]);
-      if (!existsSync(join(REPO_ROOT, PLATFORM_PATH))) {
-        // The repository has no platform document yet, so the committed file is that placeholder too.
-        expect(readFileSync(join(GENERATED_DIR, "platform.ts"), "utf8")).toBe(files["platform.ts"]);
-      }
-    },
-  );
+  it("writes the empty platform placeholder and says so while the platform document does not exist", () => {
+    const { run, out } = ran("platform-missing");
 
-  it(
-    "generates the platform types and indexes its operations once the platform document exists",
-    { timeout: SMALL_DOCUMENT_TIMEOUT_MS },
-    async () => {
-      const platform = smallDocument("Scratch platform", [
-        { path: "/v1/plans", lines: ["operationId: listPlans", "tags: [Plans]", "x-scope: public"] },
-        {
-          path: "/internal/tls-ask",
-          lines: [
-            "operationId: tlsAsk",
-            "tags: [Internal, Domains]",
-            "x-scope: internal",
-            "x-internal: true",
-          ],
-        },
-        {
-          path: "/v1/tenants",
-          method: "post",
-          lines: ["operationId: createTenant", "tags: [Tenants]", "x-scope: portal"],
-        },
-      ]);
-      const { config, out } = makeTree("platform-present", { ota: SMALL_OTA, platform });
+    expect(run.code).toBe(0);
+    expect(run.stdout).toMatch(
+      new RegExp(
+        `^contracts:generate: "platform": ${PLATFORM_PATH} does not exist yet; ` +
+          "the platform plan creates it in M1 \\(ADR-0006\\)\\. Writing the empty placeholder\\.$",
+        "m",
+      ),
+    );
+    const files = readFiles(out);
+    expect(files["platform.ts"]).toContain(`// Source: ${PLATFORM_PATH}, which does not exist yet`);
+    for (const declaration of [
+      "export interface paths {}",
+      "export type webhooks = Record<string, never>;",
+      "export interface components {}",
+      "export type $defs = Record<string, never>;",
+      "export interface operations {}",
+    ]) {
+      expect(files["platform.ts"]).toContain(declaration);
+    }
+    const index = loadIndex(files["operations.ts"]);
+    expect(index.platformOperations).toEqual([]);
+    expect(index.otaOperations).toMatchObject([
+      {
+        operationId: "listThings",
+        method: "get",
+        path: "/v1/things",
+        sdkMethod: "things.list",
+        scope: "customer",
+        tags: ["Things"],
+        internal: false,
+      },
+    ]);
+    expect(compiled.get("platform-missing")).toEqual([]);
+    if (!existsSync(join(REPO_ROOT, PLATFORM_PATH))) {
+      // The repository has no platform document yet, so the committed file is that placeholder too.
+      expect(readFileSync(join(GENERATED_DIR, "platform.ts"), "utf8")).toBe(files["platform.ts"]);
+    }
+  });
 
-      const run = await runGenerate(["--config", config, "--out", out]);
+  it("generates the platform types and indexes its operations once the platform document exists", () => {
+    const { run, out } = ran("platform-present");
 
-      expect(run.stderr).toBe("");
-      expect(run.code).toBe(0);
-      expect(run.stdout).toContain("contracts:generate: 1 OTA and 3 platform operations indexed.");
-      const files = readFiles(out);
-      expect(files["platform.ts"].split("\n").slice(0, 2)).toEqual([
-        HEADER,
-        `// Source: ${PLATFORM_PATH} (openapi-typescript)`,
-      ]);
-      expect(files["platform.ts"]).toContain('"/v1/plans": {');
-      expect(files["platform.ts"]).toContain("listPlans: {");
-      expect(files["platform.ts"]).toContain("Thing: {");
-      expect(files["operations.ts"]).toContain(`//          ${PLATFORM_PATH} (3 operations)`);
-      expect(loadIndex(files["operations.ts"]).platformOperations).toMatchObject([
-        {
-          operationId: "listPlans",
-          method: "get",
-          path: "/v1/plans",
-          sdkMethod: null,
-          scope: "public",
-          tags: ["Plans"],
-          internal: false,
-        },
-        {
-          operationId: "tlsAsk",
-          method: "get",
-          path: "/internal/tls-ask",
-          sdkMethod: null,
-          scope: "internal",
-          tags: ["Internal", "Domains"],
-          internal: true,
-        },
-        {
-          operationId: "createTenant",
-          method: "post",
-          path: "/v1/tenants",
-          sdkMethod: null,
-          scope: "portal",
-          tags: ["Tenants"],
-          internal: false,
-        },
-      ]);
-      // The real platform types and the index typed by them compile: `PlatformOperationId` is now
-      // "listPlans" | "tlsAsk" | "createTenant".
-      expect(compileGenerated(out)).toEqual([]);
-    },
-  );
+    expect(run.stderr).toBe("");
+    expect(run.code).toBe(0);
+    expect(run.stdout).toContain("contracts:generate: 1 OTA and 3 platform operations indexed.");
+    const files = readFiles(out);
+    expect(files["platform.ts"].split("\n").slice(0, 2)).toEqual([
+      HEADER,
+      `// Source: ${PLATFORM_PATH} (openapi-typescript)`,
+    ]);
+    expect(files["platform.ts"]).toContain('"/v1/plans": {');
+    expect(files["platform.ts"]).toContain("listPlans: {");
+    expect(files["platform.ts"]).toContain("Thing: {");
+    expect(files["operations.ts"]).toContain(`//          ${PLATFORM_PATH} (3 operations)`);
+    expect(loadIndex(files["operations.ts"]).platformOperations).toMatchObject([
+      {
+        operationId: "listPlans",
+        method: "get",
+        path: "/v1/plans",
+        sdkMethod: null,
+        scope: "public",
+        tags: ["Plans"],
+        internal: false,
+      },
+      {
+        operationId: "tlsAsk",
+        method: "get",
+        path: "/internal/tls-ask",
+        sdkMethod: null,
+        scope: "internal",
+        tags: ["Internal", "Domains"],
+        internal: true,
+      },
+      {
+        operationId: "createTenant",
+        method: "post",
+        path: "/v1/tenants",
+        sdkMethod: null,
+        scope: "portal",
+        tags: ["Tenants"],
+        internal: false,
+      },
+    ]);
+    // The real platform types and the index typed by them compile: `PlatformOperationId` is now
+    // "listPlans" | "tlsAsk" | "createTenant".
+    expect(compiled.get("platform-present")).toEqual([]);
+  });
 
-  it(
-    "indexes x-milestone, x-edge-only and x-permission, with null, false and null when they are absent",
-    { timeout: SMALL_DOCUMENT_TIMEOUT_MS },
-    async () => {
-      const ota = smallDocument("Scratch OTA with the MVP extensions", [
-        { path: "/v1/things", lines: ["operationId: listThings", "x-milestone: M2"] },
-        {
-          path: "/v1/thing-completions",
-          method: "post",
-          lines: ["operationId: completeThing", "x-milestone: M3", "x-edge-only: true"],
-        },
-        {
-          path: "/v1/console/things",
-          lines: [
-            "operationId: consoleListThings",
-            "x-milestone: deferred",
-            "x-edge-only: false",
-            "x-permission: bookings:read",
-          ],
-        },
-        { path: "/v1/plain", lines: ["operationId: plainThing"] },
-      ]);
-      const { config, out } = makeTree("mvp-extensions", { ota });
+  it("indexes x-milestone, x-edge-only and x-permission, with null, false and null when they are absent", () => {
+    const { run, out } = ran("mvp-extensions");
 
-      const run = await runGenerate(["--config", config, "--out", out]);
+    expect(run.stderr).toBe("");
+    expect(run.code).toBe(0);
+    const files = readFiles(out);
+    expect(loadIndex(files["operations.ts"]).otaOperations).toMatchObject([
+      { operationId: "listThings", milestone: "M2", edgeOnly: false, permission: null },
+      { operationId: "completeThing", milestone: "M3", edgeOnly: true, permission: null },
+      {
+        operationId: "consoleListThings",
+        milestone: "deferred",
+        edgeOnly: false,
+        permission: "bookings:read",
+      },
+      { operationId: "plainThing", milestone: null, edgeOnly: false, permission: null },
+    ]);
+    // The interface types the milestone as the closed list, so a misspelt value does not compile.
+    expect(files["operations.ts"]).toContain(
+      '  readonly milestone: "M0" | "M1" | "M2" | "M3" | "M4" | "M5" | "M6" | "deferred" | null;',
+    );
+    expect(files["operations.ts"]).toContain("  readonly edgeOnly: boolean;");
+    expect(files["operations.ts"]).toContain("  readonly permission: string | null;");
+    expect(compiled.get("mvp-extensions")).toEqual([]);
+  });
 
-      expect(run.stderr).toBe("");
-      expect(run.code).toBe(0);
-      const files = readFiles(out);
-      expect(loadIndex(files["operations.ts"]).otaOperations).toMatchObject([
-        { operationId: "listThings", milestone: "M2", edgeOnly: false, permission: null },
-        { operationId: "completeThing", milestone: "M3", edgeOnly: true, permission: null },
-        {
-          operationId: "consoleListThings",
-          milestone: "deferred",
-          edgeOnly: false,
-          permission: "bookings:read",
-        },
-        { operationId: "plainThing", milestone: null, edgeOnly: false, permission: null },
-      ]);
-      // The interface types the milestone as the closed list, so a misspelt value does not compile.
-      expect(files["operations.ts"]).toContain(
-        '  readonly milestone: "M0" | "M1" | "M2" | "M3" | "M4" | "M5" | "M6" | "deferred" | null;',
-      );
-      expect(files["operations.ts"]).toContain("  readonly edgeOnly: boolean;");
-      expect(files["operations.ts"]).toContain("  readonly permission: string | null;");
-      expect(compileGenerated(out)).toEqual([]);
-    },
-  );
+  it.each(BROKEN_OPERATIONS)("fails on $problem and writes nothing", ({ lines, error }) => {
+    const { run, out } = ran(`broken-${lines.join("-").replace(/\W+/g, "-")}`);
 
-  it.each([
-    {
-      problem: "an operation without operationId",
-      lines: ["tags: [Things]"],
-      error: 'ota GET /v1/broken: every operation needs an "operationId"',
-    },
-    {
-      problem: "an operationId used twice",
-      lines: ["operationId: listThings"],
-      error: 'ota GET /v1/broken: "operationId" listThings is also used by ota GET /v1/things',
-    },
-    {
-      problem: "an x-internal that is not a boolean",
-      lines: ["operationId: brokenThing", 'x-internal: "yes"'],
-      error: 'ota GET /v1/broken: "x-internal" must be true or false',
-    },
-    {
-      problem: "an x-internal without a value",
-      lines: ["operationId: brokenThing", "x-internal:"],
-      error: 'ota GET /v1/broken: "x-internal" must be true or false',
-    },
-    {
-      problem: "tags that are not a list of strings",
-      lines: ["operationId: brokenThing", "tags: Things"],
-      error: 'ota GET /v1/broken: "tags" must be a list of strings',
-    },
-    {
-      problem: "tags without a value",
-      lines: ["operationId: brokenThing", "tags:"],
-      error: 'ota GET /v1/broken: "tags" must be a list of strings',
-    },
-    {
-      problem: "an empty x-sdk-method",
-      lines: ["operationId: brokenThing", 'x-sdk-method: ""'],
-      error: 'ota GET /v1/broken: "x-sdk-method" must be a non-empty string',
-    },
-    {
-      problem: "an x-milestone outside M0 … M6 and deferred",
-      lines: ["operationId: brokenThing", "x-milestone: M7"],
-      error: 'ota GET /v1/broken: "x-milestone" must be one of M0, M1, M2, M3, M4, M5, M6, deferred',
-    },
-    {
-      problem: "an x-milestone that is not a string",
-      lines: ["operationId: brokenThing", "x-milestone: 2"],
-      error: 'ota GET /v1/broken: "x-milestone" must be a non-empty string',
-    },
-    {
-      problem: "an x-edge-only that is not a boolean",
-      lines: ["operationId: brokenThing", 'x-edge-only: "true"'],
-      error: 'ota GET /v1/broken: "x-edge-only" must be true or false',
-    },
-    {
-      problem: "an x-edge-only without a value",
-      lines: ["operationId: brokenThing", "x-edge-only:"],
-      error: 'ota GET /v1/broken: "x-edge-only" must be true or false',
-    },
-    {
-      problem: "an x-permission without a value",
-      lines: ["operationId: brokenThing", "x-permission:"],
-      error: 'ota GET /v1/broken: "x-permission" must be a non-empty string',
-    },
-  ])(
-    "fails on $problem and writes nothing",
-    { timeout: SMALL_DOCUMENT_TIMEOUT_MS },
-    async ({ lines, error }) => {
-      const ota = smallDocument("Broken OTA", [
-        { path: "/v1/things", lines: ["operationId: listThings", "x-sdk-method: things.list"] },
-        { path: "/v1/broken", lines },
-      ]);
-      const { config, out } = makeTree(`broken-${lines.join("-").replace(/\W+/g, "-")}`, { ota });
+    expect(run.code).toBe(1);
+    expect(run.stderr).toContain(`contracts:generate: ${error}`);
+    expect(existsSync(out)).toBe(false);
+  });
 
-      const run = await runGenerate(["--config", config, "--out", out]);
+  it("fails when the OTA document is missing, and on an unknown option", () => {
+    const { run: missing, out } = ran("ota-missing");
+    const { run: unknown } = ran("unknown-option");
 
-      expect(run.code).toBe(1);
-      expect(run.stderr).toContain(`contracts:generate: ${error}`);
-      expect(existsSync(out)).toBe(false);
-    },
-  );
-
-  // Two generator processes, each loading openapi-typescript and TypeScript: the same budget as the other runs.
-  it(
-    "fails when the OTA document is missing, and on an unknown option",
-    { timeout: SMALL_DOCUMENT_TIMEOUT_MS },
-    async () => {
-      const { config, out } = makeTree("ota-missing", {});
-
-      const missing = await runGenerate(["--config", config, "--out", out]);
-      const unknown = await runGenerate(["--outdir", out]);
-
-      expect(missing.code).toBe(1);
-      expect(missing.stderr).toContain(`contracts:generate: the OTA document ${OTA_PATH} does not exist`);
-      expect(unknown.code).toBe(1);
-      expect(unknown.stderr).toContain("usage: node scripts/generate.mjs");
-      expect(existsSync(out)).toBe(false);
-    },
-  );
+    expect(missing.code).toBe(1);
+    expect(missing.stderr).toContain(`contracts:generate: the OTA document ${OTA_PATH} does not exist`);
+    expect(unknown.code).toBe(1);
+    expect(unknown.stderr).toContain("usage: node scripts/generate.mjs");
+    expect(existsSync(out)).toBe(false);
+  });
 });
 
 // ---- The operations index -----------------------------------------------------------------------------------

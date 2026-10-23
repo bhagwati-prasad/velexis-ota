@@ -3,9 +3,9 @@
 // entry per `x-sdk-method`. These tests check the committed table against the document and the reviewed
 // overrides, check a sample of every namespace, prove that the generator is deterministic, and run it on small
 // scratch documents to prove that it refuses what core.call could only guess at.
-import { spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { availableParallelism, tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -40,14 +40,66 @@ afterAll(() => rmSync(scratch, { recursive: true, force: true }));
 
 /**
  * Each run parses the whole document in a child process, which takes about half a second alone and much longer
- * while Turborepo runs every package's tests at once; the tests that run the generator get this budget instead of
- * Vitest's 5 s default, and a run that hangs is killed.
+ * while Turborepo runs every package's tests at once. So the runs happen in setup hooks (with budgets made of this
+ * one) and never inside a test's 5 s, and a run that hangs is killed after it.
  */
 const GENERATOR_TIMEOUT_MS = 60_000;
 
-/** Runs the generator with the given arguments. */
+/**
+ * Runs the generator with the given arguments; resolves to its exit status (null when it was killed) and output,
+ * as spawnSync gives them.
+ * @param {...string} args
+ * @returns {Promise<{ status: number | null; stdout: string; stderr: string }>}
+ */
 const generate = (...args) =>
-  spawnSync(process.execPath, [GENERATOR, ...args], { encoding: "utf8", timeout: GENERATOR_TIMEOUT_MS });
+  new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [GENERATOR, ...args], { timeout: GENERATOR_TIMEOUT_MS });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.setEncoding("utf8").on("data", (chunk) => (stdout += chunk));
+    child.stderr.setEncoding("utf8").on("data", (chunk) => (stderr += chunk));
+    child.on("error", reject);
+    child.on("close", (status) => resolve({ status, stdout, stderr }));
+  });
+
+/**
+ * Runs declared in a describe block and made in its setup hook: `plan` declares one (an async function, next to the
+ * test that reads it) and returns the function that gives its result; `makeAll` makes every declared run, at most
+ * as many at a time as there are CPUs.
+ */
+function plannedRuns() {
+  /** @type {Array<{ run: () => Promise<unknown>; made: boolean; result: unknown }>} */
+  const planned = [];
+  return {
+    /**
+     * @template T
+     * @param {() => Promise<T>} run
+     * @returns {() => T}
+     */
+    plan(run) {
+      const entry = { run, made: false, result: /** @type {unknown} */ (undefined) };
+      planned.push(entry);
+      return () => {
+        if (!entry.made) {
+          throw new Error("the planned run of the generator was not made");
+        }
+        return /** @type {T} */ (entry.result);
+      };
+    },
+    async makeAll() {
+      let next = 0;
+      const worker = async () => {
+        while (next < planned.length) {
+          const entry = planned[next];
+          next += 1;
+          entry.result = await entry.run();
+          entry.made = true;
+        }
+      };
+      await Promise.all(Array.from({ length: Math.min(availableParallelism(), planned.length) }, worker));
+    },
+  };
+}
 
 /** Every operation of a parsed document, with its resolved parameters (path-level ones merged). */
 function operationsOf(document) {
@@ -126,23 +178,27 @@ describe("the committed route table", () => {
     }
   });
 
-  it(
-    "is what a fresh run of the generator writes, and a second run changes nothing [SDK-002 AC1]",
-    { timeout: 2 * GENERATOR_TIMEOUT_MS },
-    () => {
-      const out = join(scratch, "operations.js");
-      const first = generate("--out", out);
-      expect(first.status, first.stderr).toBe(0);
-      expect(first.stdout).toContain("wrote");
-      const written = readFileSync(out, "utf8");
-      expect(written).toBe(readFileSync(TABLE, "utf8"));
+  /** Two runs of the generator on the working document into one file, with the file after each run. */
+  let fresh;
+  beforeAll(async () => {
+    const out = join(scratch, "operations.js");
+    const read = () => (existsSync(out) ? readFileSync(out, "utf8") : "");
+    const first = await generate("--out", out);
+    const written = read();
+    const second = await generate("--out", out);
+    fresh = { first, written, second, rewritten: read() };
+  }, 2 * GENERATOR_TIMEOUT_MS);
 
-      const second = generate("--out", out);
-      expect(second.status, second.stderr).toBe(0);
-      expect(second.stdout).toContain("unchanged");
-      expect(readFileSync(out, "utf8")).toBe(written);
-    },
-  );
+  it("is what a fresh run of the generator writes, and a second run changes nothing [SDK-002 AC1]", () => {
+    const { first, written, second, rewritten } = fresh;
+    expect(first.status, first.stderr).toBe(0);
+    expect(first.stdout).toContain("wrote");
+    expect(written).toBe(readFileSync(TABLE, "utf8"));
+
+    expect(second.status, second.stderr).toBe(0);
+    expect(second.stdout).toContain("unchanged");
+    expect(rewritten).toBe(written);
+  });
 
   it("starts with the generated, do-not-edit header and names its sources", () => {
     const text = readFileSync(TABLE, "utf8");
@@ -619,12 +675,12 @@ const ok = { description: "OK" };
 const documentWith = (paths, components = {}) =>
   stringify({ openapi: "3.1.0", info: { title: "scratch", version: "1.0.0" }, paths, components });
 
-/** Runs the generator on a scratch document and overrides; returns the result and the output path. */
-function generateFrom(paths, { components, overrides: overridesJson = NO_OVERRIDES } = {}) {
+/** Runs the generator on a scratch document and overrides; resolves to the result and the output path. */
+async function generateFrom(paths, { components, overrides: overridesJson = NO_OVERRIDES } = {}) {
   const document = scratchFile("document.yaml", documentWith(paths, components));
   const overridesFile = scratchFile("overrides.json", overridesJson);
   const out = join(scratch, `${counter}-operations.js`);
-  return { ...generate("--document", document, "--overrides", overridesFile, "--out", out), out };
+  return { ...(await generate("--document", document, "--overrides", overridesFile, "--out", out)), out };
 }
 
 /** Expects a refusal: exit 1, a message naming `pattern`, and no output file. */
@@ -639,26 +695,39 @@ const jsonBody = (properties) => ({
   content: { "application/json": { schema: { type: "object", properties } } },
 });
 
-describe("the generator", { timeout: 2 * GENERATOR_TIMEOUT_MS }, () => {
-  it("exits 1 on a document with a duplicated x-sdk-method [SDK-002 AC3]", () => {
+describe("the generator", () => {
+  // Each test declares its runs of the generator next to it; this hook makes them all, a few at a time: about 20
+  // child processes, one of them on the working document, a few seconds idle and several times that while Turborepo
+  // runs every package's tests at once.
+  const runs = plannedRuns();
+  beforeAll(() => runs.makeAll(), 3 * GENERATOR_TIMEOUT_MS);
+
+  const duplicatedInDocument = runs.plan(async () => {
     const text = readFileSync(DOCUMENT, "utf8");
     const duplicated = text.replace("x-sdk-method: storefront.resolve", "x-sdk-method: storefront.get");
-    expect(duplicated).not.toBe(text);
     const out = join(scratch, "duplicated-operations.js");
-    const result = generate("--document", scratchFile("duplicated.yaml", duplicated), "--out", out);
-    expectRefusal({ ...result, out }, /"x-sdk-method" storefront\.get is also used by GET \/v1\/storefront/);
+    const result = await generate("--document", scratchFile("duplicated.yaml", duplicated), "--out", out);
+    return { text, duplicated, result: { ...result, out } };
+  });
+  it("exits 1 on a document with a duplicated x-sdk-method [SDK-002 AC3]", () => {
+    const { text, duplicated, result } = duplicatedInDocument();
+    expect(duplicated).not.toBe(text);
+    expectRefusal(result, /"x-sdk-method" storefront\.get is also used by GET \/v1\/storefront/);
   });
 
-  it("exits 1 on a duplicated x-sdk-method in a scratch document [SDK-002 AC3]", () => {
-    const result = generateFrom({
+  const duplicatedInScratch = runs.plan(() =>
+    generateFrom({
       "/v1/a": { get: { operationId: "a", "x-sdk-method": "storefront.get", responses: { 200: ok } } },
       "/v1/b": { get: { operationId: "b", "x-sdk-method": "storefront.get", responses: { 200: ok } } },
-    });
+    }),
+  );
+  it("exits 1 on a duplicated x-sdk-method in a scratch document [SDK-002 AC3]", () => {
+    const result = duplicatedInScratch();
     expectRefusal(result, /storefront\.get is also used by GET \/v1\/a/);
   });
 
-  it("exits 1 when a path and a query parameter share a name", () => {
-    const result = generateFrom({
+  const pathAndQuery = runs.plan(() =>
+    generateFrom({
       "/v1/things/{thingId}": {
         get: {
           operationId: "getThing",
@@ -670,12 +739,15 @@ describe("the generator", { timeout: 2 * GENERATOR_TIMEOUT_MS }, () => {
           responses: { 200: ok },
         },
       },
-    });
+    }),
+  );
+  it("exits 1 when a path and a query parameter share a name", () => {
+    const result = pathAndQuery();
     expectRefusal(result, /the param name "thingId" is both a path parameter and a query parameter/);
   });
 
-  it("exits 1 when a query parameter and a top-level body property share a name", () => {
-    const result = generateFrom({
+  const queryAndBody = runs.plan(() =>
+    generateFrom({
       "/v1/things": {
         post: {
           operationId: "createThing",
@@ -685,12 +757,15 @@ describe("the generator", { timeout: 2 * GENERATOR_TIMEOUT_MS }, () => {
           responses: { 201: ok },
         },
       },
-    });
+    }),
+  );
+  it("exits 1 when a query parameter and a top-level body property share a name", () => {
+    const result = queryAndBody();
     expectRefusal(result, /"include" is both a query parameter and a top-level property of the request body/);
   });
 
-  it("exits 1 when ifMatch is also a body property, found through $ref and allOf", () => {
-    const result = generateFrom(
+  const ifMatchInBody = runs.plan(() =>
+    generateFrom(
       {
         "/v1/things/{thingId}": {
           patch: {
@@ -718,22 +793,28 @@ describe("the generator", { timeout: 2 * GENERATOR_TIMEOUT_MS }, () => {
           },
         },
       },
-    );
+    ),
+  );
+  it("exits 1 when ifMatch is also a body property, found through $ref and allOf", () => {
+    const result = ifMatchInBody();
     expectRefusal(
       result,
       /"ifMatch" is both the header If-Match and a top-level property of the request body/,
     );
   });
 
-  it("exits 1 on an operation without x-sdk-method that is neither x-internal nor x-sdk-exclude", () => {
-    const result = generateFrom({
+  const withoutSdkMethod = runs.plan(() =>
+    generateFrom({
       "/v1/things": { get: { operationId: "listThings", responses: { 200: ok } } },
-    });
+    }),
+  );
+  it("exits 1 on an operation without x-sdk-method that is neither x-internal nor x-sdk-exclude", () => {
+    const result = withoutSdkMethod();
     expectRefusal(result, /GET \/v1\/things: every operation needs an "x-sdk-method"/);
   });
 
-  it("skips x-internal and x-sdk-exclude operations, with or without an x-sdk-method", () => {
-    const result = generateFrom({
+  const internalAndExcluded = runs.plan(() =>
+    generateFrom({
       "/v1/things": {
         get: { operationId: "listThings", "x-sdk-method": "bookings.list", responses: { 200: ok } },
       },
@@ -756,15 +837,18 @@ describe("the generator", { timeout: 2 * GENERATOR_TIMEOUT_MS }, () => {
           responses: { 200: ok },
         },
       },
-    });
+    }),
+  );
+  it("skips x-internal and x-sdk-exclude operations, with or without an x-sdk-method", () => {
+    const result = internalAndExcluded();
     expect(result.status, result.stderr).toBe(0);
     const text = readFileSync(result.out, "utf8");
     expect(text).toContain("  bookings_list: {");
     expect(text).not.toMatch(/stripe|getAsset|assets|ping/i);
   });
 
-  it("exits 1 on a header parameter the SDK does not know", () => {
-    const result = generateFrom({
+  const unknownHeader = runs.plan(() =>
+    generateFrom({
       "/v1/things": {
         get: {
           operationId: "listThings",
@@ -773,12 +857,15 @@ describe("the generator", { timeout: 2 * GENERATOR_TIMEOUT_MS }, () => {
           responses: { 200: ok },
         },
       },
-    });
+    }),
+  );
+  it("exits 1 on a header parameter the SDK does not know", () => {
+    const result = unknownHeader();
     expectRefusal(result, /the header parameter "X-Something-New" is unknown to the SDK/);
   });
 
-  it("exits 1 on an array query parameter that is not comma-separated", () => {
-    const result = generateFrom({
+  const explodedArray = runs.plan(() =>
+    generateFrom({
       "/v1/things": {
         get: {
           operationId: "listThings",
@@ -787,20 +874,26 @@ describe("the generator", { timeout: 2 * GENERATOR_TIMEOUT_MS }, () => {
           responses: { 200: ok },
         },
       },
-    });
+    }),
+  );
+  it("exits 1 on an array query parameter that is not comma-separated", () => {
+    const result = explodedArray();
     expectRefusal(result, /query parameter "status" is an array without "explode: false"/);
   });
 
-  it("exits 1 when the path template and the path parameters differ", () => {
-    const result = generateFrom({
+  const templateMismatch = runs.plan(() =>
+    generateFrom({
       "/v1/things/{thingId}": {
         get: { operationId: "getThing", "x-sdk-method": "bookings.get", responses: { 200: ok } },
       },
-    });
+    }),
+  );
+  it("exits 1 when the path template and the path parameters differ", () => {
+    const result = templateMismatch();
     expectRefusal(result, /the path template names \{thingId\} but the path parameters are none/);
   });
 
-  it("marks a multipart/form-data body as multipart, and exits 1 on a body with two media types", () => {
+  const multipartBodies = runs.plan(async () => {
     const upload = (content) => ({
       "/v1/console/settings/assets": {
         post: {
@@ -814,18 +907,22 @@ describe("the generator", { timeout: 2 * GENERATOR_TIMEOUT_MS }, () => {
     const multipart = {
       schema: { type: "object", properties: { file: { type: "string" }, kind: { type: "string" } } },
     };
-    const result = generateFrom(upload({ "multipart/form-data": multipart }));
+    const result = await generateFrom(upload({ "multipart/form-data": multipart }));
+    const twoTypes = await generateFrom(
+      upload({ "multipart/form-data": multipart, "application/json": multipart }),
+    );
+    return { result, twoTypes };
+  });
+  it("marks a multipart/form-data body as multipart, and exits 1 on a body with two media types", () => {
+    const { result, twoTypes } = multipartBodies();
     expect(result.status, result.stderr).toBe(0);
     expect(readFileSync(result.out, "utf8")).toContain('    environment: false,\n    body: "multipart",\n');
 
-    const twoTypes = generateFrom(
-      upload({ "multipart/form-data": multipart, "application/json": multipart }),
-    );
     expectRefusal(twoTypes, /the request body must have exactly one media type/);
   });
 
-  it("exits 1 when the path template repeats a placeholder and leaves a path parameter out", () => {
-    const result = generateFrom({
+  const repeatedPlaceholder = runs.plan(() =>
+    generateFrom({
       "/v1/things/{thingId}/parts/{thingId}": {
         get: {
           operationId: "getPart",
@@ -837,35 +934,42 @@ describe("the generator", { timeout: 2 * GENERATOR_TIMEOUT_MS }, () => {
           responses: { 200: ok },
         },
       },
-    });
+    }),
+  );
+  it("exits 1 when the path template repeats a placeholder and leaves a path parameter out", () => {
+    const result = repeatedPlaceholder();
     expectRefusal(
       result,
       /the path template names \{thingId\}, \{thingId\} but the path parameters are thingId, partId/,
     );
   });
 
-  it("exits 1 on an override for a method the document does not have, unless it names its specTask", () => {
+  const overridesOfMissingMethods = runs.plan(async () => {
     const paths = {
       "/v1/things": {
         get: { operationId: "listThings", "x-sdk-method": "bookings.list", responses: { 200: ok } },
       },
     };
-    const typo = generateFrom(paths, {
+    const typo = await generateFrom(paths, {
       overrides: JSON.stringify({ operations: { "bookings.lsit": { timeoutMs: 60_000, reason: "typo" } } }),
     });
-    expectRefusal(typo, /"bookings\.lsit" is not an x-sdk-method of the document/);
-
-    const waiting = generateFrom(paths, {
+    const waiting = await generateFrom(paths, {
       overrides: JSON.stringify({
         operations: { "bookings.later": { timeoutMs: 60_000, reason: "later", specTask: "OBE-999" } },
       }),
     });
+    return { typo, waiting };
+  });
+  it("exits 1 on an override for a method the document does not have, unless it names its specTask", () => {
+    const { typo, waiting } = overridesOfMissingMethods();
+    expectRefusal(typo, /"bookings\.lsit" is not an x-sdk-method of the document/);
+
     expect(waiting.status, waiting.stderr).toBe(0);
     expect(waiting.stdout).toContain("overrides waiting for their operation: bookings.later (OBE-999)");
   });
 
-  it("applies an override once its operation exists", () => {
-    const result = generateFrom(
+  const appliedOverride = runs.plan(() =>
+    generateFrom(
       {
         "/v1/things": {
           post: {
@@ -886,28 +990,35 @@ describe("the generator", { timeout: 2 * GENERATOR_TIMEOUT_MS }, () => {
           },
         }),
       },
-    );
+    ),
+  );
+  it("applies an override once its operation exists", () => {
+    const result = appliedOverride();
     expect(result.status, result.stderr).toBe(0);
     const text = readFileSync(result.out, "utf8");
     expect(text).toContain('    idempotency: "required",\n    retry: "never",\n    timeoutMs: 90000,');
   });
 
-  it("refuses an override that would make a call retried, or that gives no reason", () => {
+  const looserAndSilentOverrides = runs.plan(async () => {
     const paths = {
       "/v1/things": {
         get: { operationId: "listThings", "x-sdk-method": "bookings.list", responses: { 200: ok } },
       },
     };
-    const looser = generateFrom(paths, {
+    const looser = await generateFrom(paths, {
       overrides: JSON.stringify({
         operations: { "bookings.list": { retry: "idempotent", reason: "faster" } },
       }),
     });
-    expectRefusal(looser, /"retry" can only be overridden to "never"/);
-
-    const silent = generateFrom(paths, {
+    const silent = await generateFrom(paths, {
       overrides: JSON.stringify({ operations: { "bookings.list": { timeoutMs: 60_000 } } }),
     });
+    return { looser, silent };
+  });
+  it("refuses an override that would make a call retried, or that gives no reason", () => {
+    const { looser, silent } = looserAndSilentOverrides();
+    expectRefusal(looser, /"retry" can only be overridden to "never"/);
+
     expectRefusal(silent, /every override needs a "reason"/);
   });
 });

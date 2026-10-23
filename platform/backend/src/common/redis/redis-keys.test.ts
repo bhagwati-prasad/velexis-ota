@@ -3,6 +3,7 @@
 // set it, and no file of `src/` other than redis-keys.ts writes a key by hand or writes to Redis past the helpers.
 import { readdirSync } from "node:fs";
 import { join, relative } from "node:path";
+import { setImmediate } from "node:timers/promises";
 import ts from "typescript";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { APP_DIR } from "../../config";
@@ -297,15 +298,16 @@ function redisWritesOutsideHelpers(program: ts.Program, files: readonly string[]
       if (prefix !== undefined) {
         report(node, prefix, "a key written by hand (use redisKeys)");
       }
+      // Only a write command can be reported, so the type checker is asked only about calls of one: resolving the
+      // receiver of every call first was most of the scan's time.
       if (
         ts.isCallExpression(node) &&
         ts.isPropertyAccessExpression(node.expression) &&
+        WRITE_COMMANDS.has(node.expression.name.text.replace(/Buffer$/, "")) &&
         isRedisCommand(checker, node.expression)
       ) {
         const command = node.expression.name.text.replace(/Buffer$/, "");
-        if (WRITE_COMMANDS.has(command)) {
-          report(node.expression.name, command, "a Redis write outside the helpers of redis-keys.ts");
-        }
+        report(node.expression.name, command, "a Redis write outside the helpers of redis-keys.ts");
       }
       ts.forEachChild(node, visit);
     };
@@ -328,10 +330,15 @@ function compilerOptions(): ts.CompilerOptions {
   };
 }
 
-/** A program over `files`, plus in-memory files (absolute path → text) that resolve modules from their folder. */
+/**
+ * A program over `files`, plus in-memory files (absolute path → text) that resolve modules from their folder. As
+ * tsc's own host, it leaves setting parent nodes to the binder; and it skips the JSDoc comments of TypeScript files,
+ * which give no type there (about a third of building the program goes to parsing those of the declaration files).
+ */
 function createProgram(files: readonly string[], virtual: Readonly<Record<string, string>> = {}): ts.Program {
   const options = compilerOptions();
-  const host = ts.createCompilerHost(options, true);
+  const host = ts.createCompilerHost(options);
+  host.jsDocParsingMode = ts.JSDocParsingMode.ParseForTypeInfo;
   const { getSourceFile, fileExists, readFile } = host;
   host.fileExists = (path) => Object.hasOwn(virtual, path) || fileExists.call(host, path);
   host.readFile = (path) => virtual[path] ?? readFile.call(host, path);
@@ -372,14 +379,23 @@ describe("source scan for Redis writes past redis-keys.ts", () => {
   let findings: string[];
 
   // Building the program parses the package and the declarations it imports (NestJS, BullMQ, ioredis), and the scan
-  // resolves the type of every call in src/ with the type checker: a few seconds that grow with the package, several
-  // times that under a full parallel `pnpm test`. Both happen once, in this hook with its own timeout, so the tests
-  // below only compare results.
-  beforeAll(() => {
+  // asks the type checker about every call of a write command in src/. Until wave 27 the program parsed the JSDoc of
+  // every declaration file and the scan resolved the receiver of every call: with 169 production files about 2.8 s
+  // for the program and 4.7 s for the scan on an idle 4-CPU machine (6.2 s for this test file) and from 25 s to
+  // 29.5 s under the full parallel `pnpm test` there. Now the program takes about 2 s and the scan 0.3 s: 2.8 s idle
+  // for this test file and from 11 s to 19 s under the full parallel `pnpm test`, growing with the package. Both
+  // happen once, in this hook with its own budget (60 s), so the tests below only compare results. The scan takes one
+  // file at a time and gives the event loop back in between, so vitest's worker keeps answering its RPC calls on a
+  // loaded machine.
+  beforeAll(async () => {
     sources = productionSources();
     program = createProgram(sources, { [PROBE]: PROBE_SOURCE });
     scanned = sources.filter((file) => file !== KEYS_FILE);
-    findings = redisWritesOutsideHelpers(program, scanned);
+    findings = [];
+    for (const file of scanned) {
+      findings.push(...redisWritesOutsideHelpers(program, [file]));
+      await setImmediate();
+    }
   }, 60_000);
 
   it("finds no hand-written key and no Redis write outside redis-keys.ts in src/", () => {

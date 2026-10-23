@@ -142,7 +142,13 @@ beforeAll(() => {
       "guestTicketed",
     ),
   });
-  responseChecker("ota").check("createCheckout", { status: 201, body: EXAMPLES.checkout });
+  // Compiles the validator of every response the tests check (each is cached for the rest of the file).
+  const checker = responseChecker("ota");
+  checker.check("createCheckout", { status: 201, body: EXAMPLES.checkout });
+  checker.check("getCheckout", { status: 200, body: EXAMPLES.checkout });
+  checker.check("createCheckoutPayment", { status: 201, body: EXAMPLES.payment });
+  checker.check("completeCheckout", { status: 201, body: EXAMPLES.completion });
+  checker.check("completeCheckoutWithAirlineCard", { status: 201, body: EXAMPLES.airlineCompletion });
 }, 60_000);
 
 afterEach(() => {

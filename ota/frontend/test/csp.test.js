@@ -21,6 +21,18 @@ import {
 
 const CADDYFILE = join(REPO_ROOT, "deploy", "caddy", "Caddyfile");
 
+/**
+ * vite.config.js as `vite build` loads it (command build, mode production), loaded once below.
+ * @type {import("vite").UserConfig | undefined}
+ */
+let buildConfig;
+
+// Vite bundles vite.config.js with esbuild to load it: a fraction of a second idle, seconds next to the other
+// packages' tests on a CI runner, so it happens once, in this hook with its own budget, and not in the tests' 5 s.
+beforeAll(async () => {
+  buildConfig = (await loadConfigFromFile({ command: "build", mode: "production" }, VITE_CONFIG))?.config;
+}, 30_000);
+
 /** The text of the `{ … }` block that starts at the first `{` at or after `from`. */
 function blockAt(/** @type {string} */ text, /** @type {number} */ from, /** @type {string} */ what) {
   const open = text.indexOf("{", from);
@@ -101,9 +113,8 @@ function headerDifferences(caddyfile, previewHeaders) {
 describe("preview CSP and the Caddyfile", () => {
   const caddyfile = readFileSync(CADDYFILE, "utf8");
 
-  it("[OFE-001 AC2] the preview CSP equals the storefront CSP of deploy/caddy/Caddyfile", async () => {
-    const loaded = await loadConfigFromFile({ command: "build", mode: "production" }, VITE_CONFIG);
-    const previewHeaders = /** @type {Record<string, string>} */ (loaded?.config.preview?.headers ?? {});
+  it("[OFE-001 AC2] the preview CSP equals the storefront CSP of deploy/caddy/Caddyfile", () => {
+    const previewHeaders = /** @type {Record<string, string>} */ (buildConfig?.preview?.headers ?? {});
 
     expect(previewHeaders["Content-Security-Policy"]).toBe(
       caddyStorefrontHeaders(caddyfile)["Content-Security-Policy"],
@@ -155,6 +166,8 @@ describe("the production build and its preview", () => {
   let server;
   const EDGE_SECRET = "edge-secret-marker-for-ofe-001-tests";
 
+  // A production build of every page, then the preview server: about 2 s idle, several times that next to the other
+  // packages' tests on a CI runner, so both happen in this hook with its own budget.
   beforeAll(async () => {
     // The dev values exist when the build runs; none of them may reach the bundle (no VITE_ variables).
     vi.stubEnv("OTA_API_URL", "http://127.0.0.1:9");
@@ -168,7 +181,7 @@ describe("the production build and its preview", () => {
       build: { outDir: dist },
       preview: { host: "127.0.0.1", port: 0, open: false },
     });
-  });
+  }, 60_000);
 
   afterAll(async () => {
     await server?.close();
@@ -208,9 +221,8 @@ describe("the production build and its preview", () => {
     );
   });
 
-  it("[OFE-001 AC1] builds every page as an MPA input without the preload polyfill or inlined assets", async () => {
-    const loaded = await loadConfigFromFile({ command: "build", mode: "production" }, VITE_CONFIG);
-    const config = loaded?.config;
+  it("[OFE-001 AC1] builds every page as an MPA input without the preload polyfill or inlined assets", () => {
+    const config = buildConfig;
 
     expect(config?.appType).toBe("mpa");
     expect(config?.build?.modulePreload).toEqual({ polyfill: false });

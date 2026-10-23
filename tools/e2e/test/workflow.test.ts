@@ -4,7 +4,7 @@ import { execFileSync } from "node:child_process";
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import { REPO_ROOT } from "../support/stack";
 
@@ -123,18 +123,35 @@ describe("the test:e2e script of @velexis/e2e", () => {
       .split("\n")
       .filter(Boolean);
 
+  /** The arguments the tests below append, as the workflow and a developer pass them. */
+  const CASES = [
+    "",
+    "-- --project\\=portal --project\\=platform-admin",
+    "--project=portal specs/smoke.e2e.ts",
+  ];
+  /** What `playwright` received for each of CASES, collected in the setup hook. */
+  const received = new Map<string, string[]>();
+
+  // Each case runs the script's shell commands in child processes: milliseconds idle, more on a loaded runner. They
+  // run here, once, with this budget, and not inside the tests' 5 s; the tests assert on what they printed.
+  beforeAll(() => {
+    for (const args of CASES) {
+      received.set(args, playwrightArgs(args));
+    }
+  }, 30_000);
+
   it("builds the tooling, then runs playwright test", () => {
     expect(build).toBe("pnpm run build:tools");
-    expect(playwrightArgs("")).toEqual(["test"]);
+    expect(received.get("")).toEqual(["test"]);
   });
 
   it("hands the workflow's --project arguments to playwright test without the -- that pnpm forwards [PFE-014 AC2]", () => {
-    expect(playwrightArgs("-- --project\\=portal --project\\=platform-admin")).toEqual([
+    expect(received.get("-- --project\\=portal --project\\=platform-admin")).toEqual([
       "test",
       "--project=portal",
       "--project=platform-admin",
     ]);
-    expect(playwrightArgs("--project=portal specs/smoke.e2e.ts")).toEqual([
+    expect(received.get("--project=portal specs/smoke.e2e.ts")).toEqual([
       "test",
       "--project=portal",
       "specs/smoke.e2e.ts",

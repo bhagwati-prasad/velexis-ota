@@ -366,33 +366,42 @@ describe("env builders", () => {
 });
 
 describe("process.env boundary", () => {
-  it("keeps n/no-process-env active in every other package and app, and off only in @velexis/config [X-002 AC5]", async () => {
+  const CHECKED = [
+    "packages/logger/src/create-logger.ts",
+    "packages/crypto/src/envelope.ts",
+    "packages/db/src/index.ts",
+    "packages/errors/src/index.ts",
+    "packages/api-types/src/index.ts",
+    "packages/testing/src/index.ts",
+    "platform/backend/src/main.ts",
+    "platform/frontend/src/lib/config.ts",
+    "platform/admin/src/lib/config.ts",
+    "ota/backend/src/main.ts",
+    "ota/admin/src/lib/config.ts",
+  ];
+  const EXEMPT = ["packages/config/src/define-config.ts", "packages/config/src/dev-env-files.ts"];
+  /** The severity of n/no-process-env for each file above, as ESLint computes its configuration. */
+  const severities = new Map<string, unknown>();
+
+  // Loading the root ESLint config with its plugins and parsers takes about a second idle, several times that while
+  // CI runs every package at once: once, in this hook with its own budget, and not inside the test's 5 s.
+  beforeAll(async () => {
     const root = findWorkspaceRoot(__dirname) as string;
     const eslint = new ESLint({ cwd: root });
-    const severity = async (file: string): Promise<unknown> => {
+    for (const file of [...CHECKED, ...EXEMPT]) {
       const config = (await eslint.calculateConfigForFile(file)) as { rules?: Record<string, unknown[]> };
-      return config.rules?.["n/no-process-env"]?.[0];
-    };
-
-    for (const file of [
-      "packages/logger/src/create-logger.ts",
-      "packages/crypto/src/envelope.ts",
-      "packages/db/src/index.ts",
-      "packages/errors/src/index.ts",
-      "packages/api-types/src/index.ts",
-      "packages/testing/src/index.ts",
-      "platform/backend/src/main.ts",
-      "platform/frontend/src/lib/config.ts",
-      "platform/admin/src/lib/config.ts",
-      "ota/backend/src/main.ts",
-      "ota/admin/src/lib/config.ts",
-    ]) {
-      expect({ file, severity: await severity(file) }).toEqual({ file, severity: 2 });
-    }
-    for (const file of ["packages/config/src/define-config.ts", "packages/config/src/dev-env-files.ts"]) {
-      expect({ file, severity: await severity(file) }).toEqual({ file, severity: 0 });
+      severities.set(file, config.rules?.["n/no-process-env"]?.[0]);
     }
   }, 30_000);
+
+  it("keeps n/no-process-env active in every other package and app, and off only in @velexis/config [X-002 AC5]", () => {
+    for (const file of CHECKED) {
+      expect({ file, severity: severities.get(file) }).toEqual({ file, severity: 2 });
+    }
+    for (const file of EXEMPT) {
+      expect({ file, severity: severities.get(file) }).toEqual({ file, severity: 0 });
+    }
+  });
 
   it("reads process.env in no source file of the package except define-config.ts", () => {
     const sources = readdirSync(__dirname).filter(

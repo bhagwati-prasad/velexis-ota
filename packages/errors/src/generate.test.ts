@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { availableParallelism, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { runInThisContext } from "node:vm";
 import ts from "typescript";
@@ -22,6 +22,9 @@ const PLATFORM_PATH = "platform/backend/openapi/velexis-platform-api.openapi.yam
 
 // The generator parses the 40,000-line OTA document in a few seconds at most (more on a busy runner).
 const OTA_DOCUMENT_TIMEOUT_MS = 120_000;
+// Each run on a small scratch document starts Node and the generator: a few tenths of a second idle, seconds while
+// CI runs every package at once, so the runs happen in setup hooks with this budget and the tests assert on them.
+const SMALL_RUNS_TIMEOUT_MS = 60_000;
 
 interface Run {
   code: number | null;
@@ -147,42 +150,70 @@ function compile(file: string): string[] {
 }
 
 describe("scripts/generate.mjs", () => {
-  it(
-    "regenerates the committed catalogue byte for byte, with no timestamp or local path [X-009 AC4]",
-    async () => {
-      const first = join(scratch, "deterministic-1");
-      const second = join(scratch, "deterministic-2");
-      const runs = [
-        await runGenerate(["--root", REPO_ROOT, "--out", first]),
-        await runGenerate(["--root", REPO_ROOT, "--out", second]),
-      ];
-      for (const run of runs) {
-        expect(run.stderr).toBe("");
-        expect(run.code).toBe(0);
-        expect(run.stdout).toContain("wrote catalogue.ts");
-      }
-      const content = readFileSync(join(first, "catalogue.ts"), "utf8");
-      expect(readFileSync(join(second, "catalogue.ts"), "utf8")).toBe(content);
-      expect(readFileSync(COMMITTED, "utf8")).toBe(content);
+  /** Three runs over the repository's documents and what they wrote, made once in the setup hook below. */
+  interface Deterministic {
+    readonly runs: readonly Run[];
+    readonly first: string;
+    readonly second: string;
+    readonly again: Run;
+    readonly afterAgain: string;
+  }
+  let deterministic: Deterministic;
+  /** The text of `<dir>/catalogue.ts`, or "" when the generator did not write it (the run's assertions then fail). */
+  const catalogueIn = (dir: string): string => {
+    const file = join(dir, "catalogue.ts");
+    return existsSync(file) ? readFileSync(file, "utf8") : "";
+  };
+  // Each run parses the 40,000-line OTA document in a child process: about a second idle, several times that while
+  // CI runs every package at once. The three runs happen here, in the setup hook with OTA_DOCUMENT_TIMEOUT_MS, and
+  // the test below asserts on what they gave.
+  beforeAll(async () => {
+    const first = join(scratch, "deterministic-1");
+    const second = join(scratch, "deterministic-2");
+    const runs = [
+      await runGenerate(["--root", REPO_ROOT, "--out", first]),
+      await runGenerate(["--root", REPO_ROOT, "--out", second]),
+    ];
+    const firstContent = catalogueIn(first);
+    const secondContent = catalogueIn(second);
+    // A run over an unchanged output.
+    const again = await runGenerate(["--root", REPO_ROOT, "--out", first]);
+    deterministic = {
+      runs,
+      first: firstContent,
+      second: secondContent,
+      again,
+      afterAgain: catalogueIn(first),
+    };
+  }, OTA_DOCUMENT_TIMEOUT_MS);
 
-      expect(content.split("\n")[0]).toBe(HEADER);
-      expect(content).toContain(`// Sources: ${OTA_PATH} (`);
-      expect(content.endsWith("\n")).toBe(true);
-      for (const local of [REPO_ROOT, scratch, tmpdir(), PACKAGE_DIR]) {
-        expect(content).not.toContain(local);
-      }
-      expect(content).not.toMatch(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/);
+  it("regenerates the committed catalogue byte for byte, with no timestamp or local path [X-009 AC4]", () => {
+    const { runs, first: content, second, again, afterAgain } = deterministic;
+    for (const run of runs) {
+      expect(run.stderr).toBe("");
+      expect(run.code).toBe(0);
+      expect(run.stdout).toContain("wrote catalogue.ts");
+    }
+    expect(second).toBe(content);
+    expect(readFileSync(COMMITTED, "utf8")).toBe(content);
 
-      // A run over an unchanged output leaves the file alone.
-      const again = await runGenerate(["--root", REPO_ROOT, "--out", first]);
-      expect(again.code).toBe(0);
-      expect(again.stdout).toContain("unchanged catalogue.ts");
-      expect(readFileSync(join(first, "catalogue.ts"), "utf8")).toBe(content);
-    },
-    OTA_DOCUMENT_TIMEOUT_MS,
-  );
+    expect(content.split("\n")[0]).toBe(HEADER);
+    expect(content).toContain(`// Sources: ${OTA_PATH} (`);
+    expect(content.endsWith("\n")).toBe(true);
+    for (const local of [REPO_ROOT, scratch, tmpdir(), PACKAGE_DIR]) {
+      expect(content).not.toContain(local);
+    }
+    expect(content).not.toMatch(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/);
 
-  it("fails, names every conflict and writes nothing when a code has different statuses in the two documents", async () => {
+    // A run over an unchanged output leaves the file alone.
+    expect(again.code).toBe(0);
+    expect(again.stdout).toContain("unchanged catalogue.ts");
+    expect(afterAgain).toBe(content);
+  });
+
+  /** The run on a tree whose documents give codes different statuses, made in the setup hook below. */
+  let conflict: { readonly run: Run; readonly out: string };
+  beforeAll(async () => {
     const { root, out } = makeTree("conflict", {
       ota: document(OTA_CATALOGUE),
       platform: document({
@@ -192,7 +223,11 @@ describe("scripts/generate.mjs", () => {
         REAUTH_REQUIRED: { status: 401, description: "Platform only." },
       }),
     });
-    const run = await runGenerate(["--root", root, "--out", out]);
+    conflict = { run: await runGenerate(["--root", root, "--out", out]), out };
+  }, SMALL_RUNS_TIMEOUT_MS);
+
+  it("fails, names every conflict and writes nothing when a code has different statuses in the two documents", () => {
+    const { run, out } = conflict;
     expect(run.code).toBe(1);
     expect(run.stderr).toContain("a code must have the same HTTP status in both documents");
     expect(run.stderr).toContain(`NOT_FOUND is 404 in ${OTA_PATH} but 410 in ${PLATFORM_PATH}`);
@@ -364,12 +399,30 @@ describe("scripts/generate.mjs", () => {
     },
   ];
 
-  it.each(failures)("fails on $name and writes nothing", async ({ name, ota, platform, args, error }) => {
-    const { root, out } = makeTree(`fail-${name.replaceAll(/\W+/g, "-")}`, {
-      ...(ota === undefined ? {} : { ota }),
-      ...(platform === undefined ? {} : { platform }),
-    });
-    const run = await runGenerate(args ?? ["--root", root, "--out", out]);
+  /** The run on each failing tree, by its name, made in the setup hook below, a few at a time. */
+  const failed = new Map<string, { readonly run: Run; readonly out: string }>();
+  beforeAll(async () => {
+    let next = 0;
+    const worker = async (): Promise<void> => {
+      while (next < failures.length) {
+        const { name, ota, platform, args } = failures[next] as (typeof failures)[number];
+        next += 1;
+        const { root, out } = makeTree(`fail-${name.replaceAll(/\W+/g, "-")}`, {
+          ...(ota === undefined ? {} : { ota }),
+          ...(platform === undefined ? {} : { platform }),
+        });
+        failed.set(name, { run: await runGenerate(args ?? ["--root", root, "--out", out]), out });
+      }
+    };
+    await Promise.all(Array.from({ length: availableParallelism() }, worker));
+  }, SMALL_RUNS_TIMEOUT_MS);
+
+  it.each(failures)("fails on $name and writes nothing", ({ name, error }) => {
+    const found = failed.get(name);
+    if (found === undefined) {
+      throw new Error(`no run of the generator for ${name}`);
+    }
+    const { run, out } = found;
     expect(run.code).toBe(1);
     expect(run.stderr).toMatch(/^contracts:generate \(@velexis\/errors\): /);
     expect(run.stderr).toMatch(error);

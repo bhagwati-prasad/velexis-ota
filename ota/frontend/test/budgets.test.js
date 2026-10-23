@@ -5,7 +5,7 @@ import { spawnSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { gzipSync } from "node:zlib";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, describe, expect, it } from "vitest";
 
 import { BUDGETS, KB, checkBudgets, formatReport, passes } from "../scripts/check-budgets.mjs";
 import { STOREFRONT_ROOT, removeScratch, scratchDir } from "./helpers/storefront.js";
@@ -64,14 +64,32 @@ const withinBudget = () => ({
 });
 
 describe("check-budgets", () => {
-  it("[OFE-001 AC3] a JS budget breach on the fixture folder exits 1 and names the file", () => {
-    const dir = fixture({
-      ...withinBudget(),
-      "search.html": page(script("/assets/search-abcdefgh.js")),
-      "assets/search-abcdefgh.js": `export const blob = "${incompressible(BUDGETS.js)}";`,
-    });
+  /**
+   * The runs of the script on the fixtures of the tests below, made once in the setup hook.
+   * @type {Record<"breach" | "within" | "empty", ReturnType<typeof runScript>>}
+   */
+  let runs;
 
-    const run = runScript(dir);
+  // Each run starts Node and the script in a child process: a few tenths of a second idle, seconds while every
+  // package's tests run at once on a CI runner. The three runs happen here, with this budget, and not inside the
+  // tests' 5 s; the tests assert on what they gave.
+  beforeAll(() => {
+    runs = {
+      breach: runScript(
+        fixture({
+          ...withinBudget(),
+          "search.html": page(script("/assets/search-abcdefgh.js")),
+          "assets/search-abcdefgh.js": `export const blob = "${incompressible(BUDGETS.js)}";`,
+        }),
+      ),
+      within: runScript(fixture(withinBudget())),
+      empty: runScript(fixture({ "assets/a-abcdefgh.js": "" })),
+    };
+    scratch.splice(0).forEach(removeScratch);
+  }, 30_000);
+
+  it("[OFE-001 AC3] a JS budget breach on the fixture folder exits 1 and names the file", () => {
+    const run = runs.breach;
 
     expect(run.status).toBe(1);
     expect(run.stdout).toMatch(/OVER BUDGET: search\.html JS .* > 60\.0 KB: assets\/search-abcdefgh\.js/);
@@ -80,7 +98,7 @@ describe("check-budgets", () => {
   });
 
   it("[OFE-001 AC3] exits 0 with the table when every page is within budget", () => {
-    const run = runScript(fixture(withinBudget()));
+    const run = runs.within;
 
     expect(run.stderr).toBe("");
     expect(run.status).toBe(0);
@@ -146,7 +164,7 @@ describe("check-budgets", () => {
     expect(external.missing).toEqual([{ page: "pay.html", file: "assets/x.js" }]);
     expect(passes(external)).toBe(false);
 
-    const empty = runScript(fixture({ "assets/a-abcdefgh.js": "" }));
+    const { empty } = runs;
     expect(empty.status).toBe(1);
     expect(empty.stdout).toContain("NO PAGES");
   });

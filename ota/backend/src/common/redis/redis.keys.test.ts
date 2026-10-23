@@ -469,7 +469,8 @@ function keyArguments(command: string, args: readonly ts.Expression[]): KeyArgum
   if (command === "mset" || command === "msetnx") {
     return keysAt((index) => index % 2 === 0);
   }
-  const counted = COUNTED_KEYS[command];
+  // Own keys only: `toString` or `constructor` would find Object.prototype's.
+  const counted = Object.hasOwn(COUNTED_KEYS, command) ? COUNTED_KEYS[command] : undefined;
   if (counted !== undefined) {
     const [countAt, firstAt, destination] = counted;
     const count = args[countAt];
@@ -539,12 +540,115 @@ function isBuiltKeyType(checker: ts.TypeChecker, type: ts.Type): boolean {
   return brandType.isStringLiteral() && brandType.value === "RedisKeyName";
 }
 
+/** True when the file is one of ioredis's own (its declaration files). */
+function isIoredisFile(fileName: string): boolean {
+  return fileName.replaceAll("\\", "/").includes("/node_modules/ioredis/");
+}
+
 /** True when the symbol (or the symbol it aliases) is declared by ioredis. */
 function isDeclaredByIoredis(checker: ts.TypeChecker, symbol: ts.Symbol | undefined): boolean {
   const target =
     symbol !== undefined && symbol.flags & ts.SymbolFlags.Alias ? checker.getAliasedSymbol(symbol) : symbol;
   return (target?.declarations ?? []).some((declaration) =>
-    declaration.getSourceFile().fileName.replaceAll("\\", "/").includes("/node_modules/ioredis/"),
+    isIoredisFile(declaration.getSourceFile().fileName),
+  );
+}
+
+/** The global types whose members property access finds on every object type (Object) and function type. */
+const OBJECT_AND_FUNCTION = new Set(["Object", "Function", "CallableFunction", "NewableFunction"]);
+const memberNamesOfPrograms = new WeakMap<ts.Program, ReadonlySet<string>>();
+
+/**
+ * Every method name a call can have when `isRedisCommand` holds for it, as a superset: the names of the members
+ * that ioredis's declaration files declare (the commands and the methods of its clients, pipelines, streams, errors
+ * and options), the properties of every type declared there, with those it inherits from Node.js (EventEmitter,
+ * Readable, Error) and the commands this package adds with defineCommand (they merge into RedisCommander), the names
+ * ioredis exports, and the members of Object and Function, which property access finds on every object and function.
+ * A call by any other name has no method declared by ioredis and no receiver of an ioredis type, so the scan need
+ * not ask the type checker about it. (Two internal option types of ioredis, in cluster/util.d.ts and
+ * utils/index.d.ts, also take any name through `[key: string]: any`; no Redis command is sent through them.)
+ */
+function ioredisMemberNames(program: ts.Program): ReadonlySet<string> {
+  const known = memberNamesOfPrograms.get(program);
+  if (known !== undefined) {
+    return known;
+  }
+  const checker = program.getTypeChecker();
+  const names = new Set<string>();
+  const addPropertiesOf = (type: ts.Type): void => {
+    for (const property of checker.getPropertiesOfType(checker.getApparentType(type))) {
+      names.add(property.name);
+    }
+  };
+  const visit = (node: ts.Node): void => {
+    const name =
+      ts.isClassElement(node) || ts.isTypeElement(node) || ts.isEnumMember(node) ? node.name : undefined;
+    if (
+      name !== undefined &&
+      (ts.isIdentifier(name) ||
+        ts.isPrivateIdentifier(name) ||
+        ts.isStringLiteral(name) ||
+        ts.isNumericLiteral(name))
+    ) {
+      names.add(name.text);
+    }
+    if (
+      (ts.isClassDeclaration(node) ||
+        ts.isInterfaceDeclaration(node) ||
+        ts.isTypeAliasDeclaration(node) ||
+        ts.isEnumDeclaration(node)) &&
+      node.name !== undefined
+    ) {
+      const symbol = checker.getSymbolAtLocation(node.name);
+      if (symbol !== undefined) {
+        // The members of a union are receivers of their own; isRedisCommand asks each for its symbol.
+        const declared = checker.getDeclaredTypeOfSymbol(symbol);
+        for (const member of declared.isUnion() ? declared.types : [declared]) {
+          if (isDeclaredByIoredis(checker, member.getSymbol() ?? member.aliasSymbol)) {
+            addPropertiesOf(member);
+          }
+        }
+        if (ts.isClassDeclaration(node) || ts.isEnumDeclaration(node)) {
+          addPropertiesOf(checker.getTypeOfSymbol(symbol)); // the static side: `Redis.Cluster`, …
+        }
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  let anyFile: ts.SourceFile | undefined;
+  for (const source of program.getSourceFiles().filter((file) => isIoredisFile(file.fileName))) {
+    anyFile = source;
+    const moduleSymbol = checker.getSymbolAtLocation(source);
+    for (const exported of moduleSymbol === undefined ? [] : checker.getExportsOfModule(moduleSymbol)) {
+      names.add(exported.name);
+    }
+    visit(source);
+  }
+  if (anyFile === undefined) {
+    throw new Error("ioredis is not part of the program");
+  }
+  for (const global of checker.getSymbolsInScope(anyFile, ts.SymbolFlags.Interface)) {
+    if (OBJECT_AND_FUNCTION.has(global.name)) {
+      addPropertiesOf(checker.getDeclaredTypeOfSymbol(global));
+    }
+  }
+  memberNamesOfPrograms.set(program, names);
+  return names;
+}
+
+/**
+ * False when the scan cannot report a call `x.<method>(…)`, whatever `x` is, so the type checker need not resolve
+ * `x` (resolving the receivers of all calls, Kysely's query builder chains among them, was most of the scan's
+ * time): when the arguments `keyArguments` takes as keys are none or only function expressions (`rows.map((row) =>
+ * …)`), which `handWrittenKeys` passes over as callbacks, and when no ioredis type has the method (see
+ * `ioredisMemberNames`), as then it is no Redis command.
+ */
+function mayBeReported(program: ts.Program, call: ts.CallExpression, method: string): boolean {
+  return (
+    keyArguments(method, call.arguments).some(
+      (found) =>
+        "unreadable" in found || !(ts.isArrowFunction(found.key) || ts.isFunctionExpression(found.key)),
+    ) && ioredisMemberNames(program).has(method)
   );
 }
 
@@ -605,6 +709,7 @@ function handWrittenKeys(program: ts.Program, files: readonly string[]): string[
       if (
         ts.isCallExpression(node) &&
         ts.isPropertyAccessExpression(node.expression) &&
+        mayBeReported(program, node, node.expression.name.text) &&
         isRedisCommand(checker, node.expression)
       ) {
         const command = node.expression.name.text;
@@ -638,10 +743,15 @@ function handWrittenKeys(program: ts.Program, files: readonly string[]): string[
   return problems;
 }
 
-/** A program over `files`, plus in-memory files (absolute path → text) that resolve modules from their folder. */
+/**
+ * A program over `files`, plus in-memory files (absolute path → text) that resolve modules from their folder. As
+ * tsc's own host, it leaves setting parent nodes to the binder; and it skips the JSDoc comments of TypeScript files,
+ * which give no type there (about a third of building the program goes to parsing those of the declaration files).
+ */
 function createProgram(files: readonly string[], virtual: Readonly<Record<string, string>> = {}): ts.Program {
   const options = compilerOptions();
-  const host = ts.createCompilerHost(options, true);
+  const host = ts.createCompilerHost(options);
+  host.jsDocParsingMode = ts.JSDocParsingMode.ParseForTypeInfo;
   const { getSourceFile, fileExists, readFile } = host;
   host.fileExists = (path) => Object.hasOwn(virtual, path) || fileExists.call(host, path);
   host.readFile = (path) => virtual[path] ?? readFile.call(host, path);
@@ -705,13 +815,19 @@ describe("source scan for hand-written Redis keys", () => {
   let scanned: string[];
   let sourceProblems: string[];
 
-  // Building the program parses the package and the declarations it imports (NestJS, BullMQ, ioredis), and the scan of
-  // the sources type-checks every Redis call in them: 210 production files in wave 26, about 4 s and 10 s on an idle
-  // 4-CPU machine (no file above 1.3 s) and from 43 s to more than 60 s in all under the full parallel `pnpm test`
-  // there, and more with every module the package grows. Both happen once, in this hook with its own budget (180 s);
-  // the tests below only assert on the results. The scan takes one file at a time and gives the event loop back in
-  // between: one synchronous run of more than 60 s made vitest's worker miss its RPC deadline ("Timeout calling
-  // onTaskUpdate"), which fails the run although every test passed.
+  // Building the program parses the package and the declarations it imports (NestJS, Kysely, Stripe, BullMQ,
+  // ioredis), and the scan of the sources asks the type checker about every call that may be a Redis command. Until
+  // wave 27 the program parsed the JSDoc of every declaration file and the scan asked about every call with a
+  // property access, resolving the receivers of Kysely's query chains among them: with 210 production files about
+  // 2.5 s for the program and 6 s for the scan on an idle 4-CPU machine (8.5 s for this test file) and from 41 s to
+  // 46 s under the full parallel `pnpm test` there (from 43 s to more than 60 s in wave 26's integration runs). Now
+  // the program skips that JSDoc (about 1.9 s) and the scan asks about the 1 000 of 9 900 calls that can be reported
+  // (see `mayBeReported`; about 2.4 s, half of it for the five `exists(…)` of Kysely's expression builders): 5.3 s
+  // idle for this test file and from 12 s to 30 s under the full parallel `pnpm test`. Both happen once, in this hook
+  // with its own budget (180 s, as the worst case stays near 30 s); the tests below only assert on the results. The
+  // scan takes one file at a time and gives the event loop back in between: one synchronous run of more than 60 s
+  // made vitest's worker miss its RPC deadline ("Timeout calling onTaskUpdate"), which fails the run although every
+  // test passed.
   beforeAll(async () => {
     const sources = productionSources();
     program = createProgram(sources, { [PROBE]: PROBE_SOURCE });

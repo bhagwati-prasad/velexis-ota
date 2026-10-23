@@ -34,7 +34,8 @@ import {
 
 /** The acceptance limit of one clone (X-015 AC2), measured locally at 0.1 to 0.4 s. */
 const CLONE_LIMIT_MS = 1_000;
-// Building a whole template (the global-setup test) migrates three sets: a few seconds, more on a busy runner.
+// Building a whole template (in the setup hook of the global setup's test) migrates three sets: a few seconds, more on
+// a busy runner.
 const TEMPLATE_TIMEOUT_MS = 120_000;
 
 const adminUrl = testDatabaseAdminUrl();
@@ -271,44 +272,79 @@ describe("createTestDatabase", () => {
 });
 
 describe("the global setup", () => {
-  it(
-    "builds a template, provides its name to the test files, and drops it at teardown with leftover clones",
-    async () => {
-      // A clone of this run's template, which the other run's teardown must leave alone.
-      const ours = await createTestDatabase();
-      const provided = new Map<string, string>();
-      const teardown = await setup({ provide: (key, value) => provided.set(key, value) });
-      const name = provided.get("velexisTestTemplateDatabase");
-      const leftovers: string[] = [];
-      try {
-        expect(name).toMatch(/^velexis_test_tpl_[a-z0-9]+_[0-9a-f]{6}$/);
-        expect(name).not.toBe(templateName());
-        expect(await databaseExists(name as string)).toBe(true);
-        // A template accepts no session of its own after the build, so it can be cloned at once.
-        const sessions = await adminQuery("SELECT 1 FROM pg_stat_activity WHERE datname = $1", [name]);
-        expect(sessions).toEqual([]);
-        const clone = await createTestDatabase({ template: name });
-        expect(await customerIds(clone)).toEqual({ tenant_alpha: [], tenant_beta: [] });
-        await clone.drop();
-        // A clone whose test file never called drop() (it crashed before afterAll): the teardown removes it.
-        const leftover = await createTestDatabase({ template: name });
-        leftovers.push(leftover.name);
-        expect(await databaseExists(leftover.name)).toBe(true);
-      } finally {
-        await teardown();
-      }
-      // (Should anything above fail, this run's own teardown drops `ours`.)
-      const oursSurvived = await databaseExists(ours.name);
-      await ours.drop();
-      expect(oursSurvived).toBe(true);
-      expect(await databaseExists(name as string)).toBe(false);
-      expect(leftovers).toHaveLength(1);
-      for (const leftover of leftovers) {
-        expect(await databaseExists(leftover)).toBe(false);
-      }
-    },
-    TEMPLATE_TIMEOUT_MS,
-  );
+  /** What a run of the global setup gave, observed in the setup hook; the test below asserts on it. */
+  interface SetupRun {
+    readonly name: string | undefined;
+    readonly existed: boolean;
+    readonly sessions: unknown[];
+    readonly cloneCustomers: Awaited<ReturnType<typeof customerIds>>;
+    readonly leftoverExisted: boolean;
+    readonly leftovers: readonly string[];
+    readonly oursSurvived: boolean;
+    readonly existsAfterTeardown: boolean;
+    readonly leftoversAfterTeardown: readonly boolean[];
+  }
+  let observed: SetupRun;
+
+  // The global setup builds a whole template (it migrates three sets), then the teardown drops it: a few seconds, more
+  // on a busy runner. It runs here, in the setup hook with TEMPLATE_TIMEOUT_MS, and not inside the test's 5 s.
+  beforeAll(async () => {
+    // A clone of this run's template, which the other run's teardown must leave alone.
+    const ours = await createTestDatabase();
+    const provided = new Map<string, string>();
+    const teardown = await setup({ provide: (key, value) => provided.set(key, value) });
+    const name = provided.get("velexisTestTemplateDatabase");
+    const leftovers: string[] = [];
+    let existed: boolean;
+    let sessions: unknown[];
+    let cloneCustomers: SetupRun["cloneCustomers"];
+    let leftoverExisted: boolean;
+    try {
+      existed = await databaseExists(name as string);
+      // A template accepts no session of its own after the build, so it can be cloned at once.
+      sessions = await adminQuery("SELECT 1 FROM pg_stat_activity WHERE datname = $1", [name]);
+      const clone = await createTestDatabase({ template: name });
+      cloneCustomers = await customerIds(clone);
+      await clone.drop();
+      // A clone whose test file never called drop() (it crashed before afterAll): the teardown removes it.
+      const leftover = await createTestDatabase({ template: name });
+      leftovers.push(leftover.name);
+      leftoverExisted = await databaseExists(leftover.name);
+    } finally {
+      await teardown();
+    }
+    // (Should anything above fail, this run's own teardown drops `ours`.)
+    const oursSurvived = await databaseExists(ours.name);
+    await ours.drop();
+    observed = {
+      name,
+      existed,
+      sessions,
+      cloneCustomers,
+      leftoverExisted,
+      leftovers,
+      oursSurvived,
+      existsAfterTeardown: await databaseExists(name as string),
+      leftoversAfterTeardown: await Promise.all(leftovers.map(async (leftover) => databaseExists(leftover))),
+    };
+  }, TEMPLATE_TIMEOUT_MS);
+
+  it("builds a template, provides its name to the test files, and drops it at teardown with leftover clones", () => {
+    const { name } = observed;
+    expect(name).toMatch(/^velexis_test_tpl_[a-z0-9]+_[0-9a-f]{6}$/);
+    expect(name).not.toBe(templateName());
+    expect(observed.existed).toBe(true);
+    expect(observed.sessions).toEqual([]);
+    expect(observed.cloneCustomers).toEqual({ tenant_alpha: [], tenant_beta: [] });
+    expect(observed.leftoverExisted).toBe(true);
+
+    expect(observed.oursSurvived).toBe(true);
+    expect(observed.existsAfterTeardown).toBe(false);
+    expect(observed.leftovers).toHaveLength(1);
+    for (const existsAfter of observed.leftoversAfterTeardown) {
+      expect(existsAfter).toBe(false);
+    }
+  });
 });
 
 describe("two test files running in parallel", () => {

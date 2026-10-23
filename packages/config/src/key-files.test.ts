@@ -7,9 +7,14 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { ConfigError, KeyFileError, defineConfig, env, readKeyFile } from "./index";
 
 let tmp: string;
+/** A named pipe (FIFO) with mode 0600, which readKeyFile must refuse without blocking on it. */
+let fifo: string;
+// mkfifo is a child process: milliseconds idle, more on a loaded runner, so it runs here and not inside a test's 5 s.
 beforeAll(() => {
   tmp = mkdtempSync(join(tmpdir(), "velexis-config-keys-"));
-});
+  fifo = join(tmp, "a-fifo");
+  execFileSync("mkfifo", ["-m", "0600", fifo]);
+}, 30_000);
 afterAll(() => {
   rmSync(tmp, { recursive: true, force: true });
 });
@@ -143,8 +148,6 @@ describe("readKeyFile", () => {
     mkdirSync(directory, { mode: 0o700 });
     expect(keyFileErrorOf(() => readKeyFile(directory, { minBytes: 32 })).problem).toBe("not-a-file");
 
-    const fifo = join(tmp, "a-fifo");
-    execFileSync("mkfifo", ["-m", "0600", fifo]);
     expect(keyFileErrorOf(() => readKeyFile(fifo, { minBytes: 32 })).problem).toBe("not-a-file");
   });
 

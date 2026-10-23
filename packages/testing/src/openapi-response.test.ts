@@ -120,9 +120,20 @@ const FIXTURE = {
 
 const ITEM = { id: "itm_1", price: "12.30", status: "live", createdAt: "2026-10-12T09:00:00Z" };
 
+/** What checking one response of every documented operation gave (see the test that compiles them all). */
+interface EveryResponse {
+  /** The responses with JSON content that were checked, so their schemas were compiled and run. */
+  compiled: number;
+  /** The error message of each response documented with other media types only (`undefined` when none was thrown). */
+  withoutJson: Array<{ response: string; message: string | undefined }>;
+  /** The errors that checking a response with JSON content threw (a schema that does not compile). */
+  errors: string[];
+}
+
 describe("expectResponseToMatch on the OTA document", () => {
   let document: { components: { schemas: Record<string, JsonObject>; examples: Record<string, JsonObject> } };
   let paths: Record<string, Record<string, { operationId?: string; responses?: JsonObject }>>;
+  let everyResponse: EveryResponse;
 
   beforeAll(() => {
     const parsed = parse(readFileSync(join(REPO_ROOT, API_DOCUMENTS.ota), "utf8")) as JsonObject;
@@ -135,6 +146,41 @@ describe("expectResponseToMatch on the OTA document", () => {
     // The same for the platform document, which the last test of this block reads once it exists.
     if (existsSync(join(REPO_ROOT, API_DOCUMENTS.platform))) {
       responseChecker("platform");
+    }
+    // Compiling the schema of every documented JSON response (more than 800) takes about a second idle and several
+    // on a busy runner: here too, and the test that compiles them all asserts on what it gave.
+    everyResponse = { compiled: 0, withoutJson: [], errors: [] };
+    const checker = responseChecker("ota");
+    for (const item of Object.values(paths)) {
+      for (const operation of Object.values(item)) {
+        if (typeof operation.operationId !== "string") {
+          continue;
+        }
+        for (const [status, response] of Object.entries(operation.responses ?? {})) {
+          const content = (response as JsonObject)["content"];
+          const types = content !== null && typeof content === "object" ? Object.keys(content) : [];
+          const checked = `${operation.operationId} ${status}`;
+          if (types.length > 0 && !types.some((type) => /^application\/([\w.+-]+\+)?json\b/i.test(type))) {
+            // Documented with other media types only (getPublicAsset's images): the checker refuses to judge it,
+            // as for the fixture's PDF, so its test checks that body another way.
+            let message: string | undefined;
+            try {
+              checker.check(String(operation.operationId), { status: Number(status), body: "" });
+            } catch (error) {
+              message = (error as Error).message;
+            }
+            everyResponse.withoutJson.push({ response: checked, message });
+            continue;
+          }
+          // A body that matches nothing: every schema is compiled and run; compile errors would throw.
+          try {
+            checker.check(operation.operationId, { status: Number(status), body: Symbol.for("nothing") });
+          } catch (error) {
+            everyResponse.errors.push(`${checked}: ${(error as Error).message}`);
+          }
+          everyResponse.compiled += 1;
+        }
+      }
     }
   }, PARSE_TIMEOUT_MS);
 
@@ -214,38 +260,17 @@ describe("expectResponseToMatch on the OTA document", () => {
     expect(error.message).toBe('expectResponseToMatch: the OTA document has no operation "getBookng"');
   });
 
-  it(
-    "compiles the schema of every documented JSON response of the OTA document in strict mode",
-    () => {
-      const checker = responseChecker("ota");
-      let compiled = 0;
-      for (const item of Object.values(paths)) {
-        for (const operation of Object.values(item)) {
-          if (typeof operation.operationId !== "string") {
-            continue;
-          }
-          for (const [status, response] of Object.entries(operation.responses ?? {})) {
-            const content = (response as JsonObject)["content"];
-            const types = content !== null && typeof content === "object" ? Object.keys(content) : [];
-            if (types.length > 0 && !types.some((type) => /^application\/([\w.+-]+\+)?json\b/i.test(type))) {
-              // Documented with other media types only (getPublicAsset's images): the checker refuses to judge it,
-              // as for the fixture's PDF, so its test checks that body another way.
-              expect(() =>
-                checker.check(String(operation.operationId), { status: Number(status), body: "" }),
-              ).toThrow("has no JSON content");
-              continue;
-            }
-            // A body that matches nothing: every schema is compiled and run; compile errors would throw.
-            checker.check(operation.operationId, { status: Number(status), body: Symbol.for("nothing") });
-            compiled += 1;
-          }
-        }
-      }
-      expect(compiled).toBeGreaterThan(800);
-      expect(checker.operationIds()).toContain("getBooking");
-    },
-    PARSE_TIMEOUT_MS,
-  );
+  it("compiles the schema of every documented JSON response of the OTA document in strict mode", () => {
+    for (const { response, message } of everyResponse.withoutJson) {
+      expect({ response, message }).toEqual({
+        response,
+        message: expect.stringContaining("has no JSON content"),
+      });
+    }
+    expect(everyResponse.errors).toEqual([]);
+    expect(everyResponse.compiled).toBeGreaterThan(800);
+    expect(responseChecker("ota").operationIds()).toContain("getBooking");
+  });
 
   it("reads the documents that packages/api-types/redocly.yaml lists", () => {
     const redocly = parse(readFileSync(join(REPO_ROOT, "packages/api-types/redocly.yaml"), "utf8")) as {

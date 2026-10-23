@@ -4,7 +4,9 @@
 // clients are refused outside src/amadeus/ (OADR-0001 point 1, OBE-018).
 import { readdirSync, readFileSync } from "node:fs";
 import { join, relative } from "node:path";
+import { setImmediate } from "node:timers/promises";
 import { ESLint } from "eslint";
+import ts from "typescript";
 import { beforeAll, describe, expect, it } from "vitest";
 import { APP_DIR } from "./config";
 
@@ -12,6 +14,8 @@ const REPO_ROOT = join(APP_DIR, "..", "..");
 const RULES = ["no-console", "n/no-process-env"] as const;
 /** A disable comment naming either rule. Built from parts, so this file does not match itself. */
 const DISABLE_COMMENT = new RegExp(`${["eslint", "disable"].join("-")}[^\\n]*(no-console|no-process-env)`);
+/** The identifiers the two rules report: `console` of `console.*` and `process` of `process.env`. */
+const RULE_IDENTIFIERS: ReadonlySet<string> = new Set(["console", "process"]);
 
 /** The TypeScript files of src/ and test/. */
 function packageFiles(): string[] {
@@ -26,6 +30,34 @@ function packageFiles(): string[] {
   return [...walk(join(APP_DIR, "src")), ...walk(join(APP_DIR, "test"))];
 }
 
+/**
+ * True when ESLint must parse the file to know what the two rules report in it. Both report an identifier only:
+ * `no-console` a reference to `console`, `n/no-process-env` a member expression on `process`. TypeScript's parser
+ * (syntax only, no program) finds every identifier with that name, written with `\u` escapes too, and the file goes
+ * to ESLint when it has one. So does a file with a comment that names ESLint (a directive, which ESLint can report
+ * as unused) and a file TypeScript cannot parse, which ESLint's TypeScript parser reports as a fatal problem. In
+ * every other file neither rule can report anything, as TypeScript's syntax tree of it is complete. (ESLint's parser
+ * also refuses a few constructs that TypeScript parses and leaves to its type checker, such as a modifier where none
+ * is allowed: this scan reports such a file only when it has one of the two identifiers, and `pnpm typecheck` and
+ * `pnpm lint` refuse it either way.)
+ */
+function needsLinting(file: string): boolean {
+  const text = readFileSync(file, "utf8");
+  if (text.includes("eslint")) {
+    return true;
+  }
+  const source = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, false, ts.ScriptKind.TS);
+  // The syntax errors typescript-estree turns into ESLint's fatal "Parsing error" (it reads the same field).
+  if (
+    (source as ts.SourceFile & { parseDiagnostics: readonly ts.Diagnostic[] }).parseDiagnostics.length > 0
+  ) {
+    return true;
+  }
+  const visit = (node: ts.Node): boolean =>
+    (ts.isIdentifier(node) && RULE_IDENTIFIERS.has(node.text)) || ts.forEachChild(node, visit) === true;
+  return ts.forEachChild(source, visit) === true;
+}
+
 describe("lint rules of the OTA backend", () => {
   // Only the two rules run, and neither needs type information: parsing without the TypeScript project keeps it fast.
   // Files the root config ignores (the generated Amadeus types, OBE-017) give no result instead of an "ignored"
@@ -38,18 +70,36 @@ describe("lint rules of the OTA backend", () => {
   });
 
   let files: string[];
+  /** The files ESLint lints, by its configuration: every file it does not ignore. */
+  let linted: Set<string>;
   let results: ESLint.LintResult[];
 
-  // Loading the root config with its plugins and parser (about 1 s alone), then parsing and linting every file of the
-  // package: 367 files and about 180 000 lines in wave 26, about 14 s on an idle 4-CPU machine and from 45 s to more
-  // than 60 s under the full parallel `pnpm test` there, growing with every file the package gets. Both happen once,
-  // in this hook with its own budget (180 s), as in the platform backend's package.test.ts, so the tests below
-  // measure only their own work and a loaded machine cannot time them out.
+  // Loading the root config with its plugins and parser takes about 1 s alone. Until wave 27 ESLint then parsed every
+  // file of the package (367 files, about 180 000 lines): 9.4 s for this test file on an idle 4-CPU machine and from
+  // 11 s to 32 s under the full parallel `pnpm test` there (from 45 s to more than 60 s in wave 26's integration
+  // runs), almost all of it typescript-estree's parse. Now TypeScript's parser (syntax only, about 1 s for all the
+  // files) finds the files in which the two rules can report something, and ESLint lints those (28 of the 357 files
+  // it lints in wave 27; see `needsLinting`): 3.5 s idle and from 7 s to 17 s under the full parallel `pnpm test`. It
+  // happens once, in this hook with its own budget (60 s), as in the platform backend's package.test.ts, so the tests
+  // below measure only their own work and a loaded machine cannot time them out. The hook gives the event loop back
+  // between files, so vitest's worker keeps answering its RPC calls.
   beforeAll(async () => {
     await eslint.calculateConfigForFile(join(APP_DIR, "src/main.ts"));
     files = packageFiles();
-    results = await eslint.lintFiles(files);
-  }, 180_000);
+    linted = new Set();
+    const candidates: string[] = [];
+    for (const file of files) {
+      if (!(await eslint.isPathIgnored(file))) {
+        linted.add(file);
+        if (needsLinting(file)) {
+          candidates.push(file);
+        }
+      }
+      await setImmediate();
+    }
+    // (ESLint would lint its cwd, the whole repository, for an empty list.)
+    results = candidates.length === 0 ? [] : await eslint.lintFiles(candidates);
+  }, 60_000);
 
   it("reports console.* and process.env in this package's code", async () => {
     const [result] = await eslint.lintText(
@@ -85,8 +135,8 @@ describe("lint rules of the OTA backend", () => {
     expect(files.map((file) => relative(APP_DIR, file))).toEqual(
       expect.arrayContaining(["src/main.ts", "src/worker.ts", "src/cli.ts", "src/config.ts"]),
     );
-    // Only generated code is skipped: every hand-written file of src/ and test/ was linted.
-    const linted = new Set(results.map((result) => result.filePath));
+    // Only generated code is skipped: ESLint lints every hand-written file of src/ and test/ (`linted`: the files
+    // its configuration does not ignore, the same that lintFiles gives a result for).
     expect(
       files
         .filter((file) => !linted.has(file))

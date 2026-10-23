@@ -12,12 +12,13 @@ import {
   type ArgumentsHost,
 } from "@nestjs/common";
 import { AppError } from "@velexis/errors";
-import { expectResponseToMatch } from "@velexis/testing";
+import { expectResponseToMatch, responseChecker } from "@velexis/testing";
 import type { PinoLogger } from "nestjs-pino";
 import request from "supertest";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createTestApp, type TestApp } from "../../../test/support/create-test-app";
 import type { LogLine } from "../../../test/helpers/log-sink";
+import { OPENAPI_SETUP_TIMEOUT_MS, preloadOpenApiDocument } from "../../../test/helpers/openapi";
 import { PublicRoute } from "../auth/caller.guard";
 import { ErrorFilter, fromHttpException } from "./error.filter";
 import { OpenApiOperation } from "./openapi-operation.decorator";
@@ -91,9 +92,14 @@ class FailingController {
 
 let api: TestApp;
 
+// Starting the application parses and compiles the OTA document, and the first expectResponseToMatch parses it again
+// for the response checker: one-time work that takes several seconds while every package's tests run at once, so it
+// happens here, with the budget of test/helpers/openapi.ts, and not in the first test.
 beforeAll(async () => {
+  preloadOpenApiDocument();
+  responseChecker("ota");
   api = await createTestApp({ controllers: [FailingController] });
-});
+}, OPENAPI_SETUP_TIMEOUT_MS);
 
 afterAll(async () => {
   await api.close();

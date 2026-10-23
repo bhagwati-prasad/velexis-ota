@@ -107,11 +107,47 @@ afterAll(() => {
   rmSync(PACKAGE_DIR, { recursive: true, force: true });
 });
 
-describe("main.js", () => {
-  it("exits 1 with a ConfigError naming DATABASE_URL when it is missing [OBE-001 AC3]", async () => {
-    const { DATABASE_URL: _omitted, ...withoutUrl } = services.api;
+/**
+ * Each process loads the application's modules in about a second, several times that on a loaded runner, and the
+ * health checks below give a starting process 10 s to answer (`waitForHealth`). The processes of a describe block
+ * run in its setup hook with this budget, never inside a test's 5 s, and the tests assert on what they gave.
+ */
+const PROCESSES_TIMEOUT_MS = 60_000;
 
-    const exit = await run("main.js", withoutUrl).exited;
+/** What a process serving health checks gave: the first status, the body of /health/ready, how it ended. */
+interface Served {
+  readonly status: number;
+  readonly body: unknown;
+  readonly exit: Exit;
+}
+
+/** Starts `entry`, waits for its first answer on `port`, reads /health/ready once more, then stops it with SIGTERM. */
+async function serveHealth(entry: string, env: Record<string, string>, port: number): Promise<Served> {
+  const started = run(entry, env);
+  let status: number;
+  let body: unknown;
+  try {
+    status = await waitForHealth(port, "/health/ready", started);
+    body = (await exchange(port, "/health/ready")).json();
+  } finally {
+    started.stop();
+  }
+  return { status, body, exit: await started.exited };
+}
+
+describe("main.js", () => {
+  let missingUrl: Exit;
+  let served: Served;
+
+  beforeAll(async () => {
+    const { DATABASE_URL: _omitted, ...withoutUrl } = services.api;
+    missingUrl = await run("main.js", withoutUrl).exited;
+    // 127.0.0.1:4000 is the API's default port (OBE-001 AC2): integration files never run at the same time.
+    served = await serveHealth("main.js", services.api, 4000);
+  }, PROCESSES_TIMEOUT_MS);
+
+  it("exits 1 with a ConfigError naming DATABASE_URL when it is missing [OBE-001 AC3]", () => {
+    const exit = missingUrl;
 
     expect(exit.code).toBe(1);
     expect(jsonLines(exit.stdout)).toEqual([
@@ -126,19 +162,14 @@ describe("main.js", () => {
     ]);
   });
 
-  it("serves /health/ready on 127.0.0.1:4000 and stops on SIGTERM [OBE-001 AC2]", async () => {
-    const api = run("main.js", services.api);
-    try {
-      expect(await waitForHealth(4000, "/health/ready", api)).toBe(200);
-      expect((await exchange(4000, "/health/ready")).json()).toEqual({
-        status: "ok",
-        checks: { postgres: "ok", redis: "ok" },
-      });
-    } finally {
-      api.stop();
-    }
+  it("serves /health/ready on 127.0.0.1:4000 and stops on SIGTERM [OBE-001 AC2]", () => {
+    expect(served.status).toBe(200);
+    expect(served.body).toEqual({
+      status: "ok",
+      checks: { postgres: "ok", redis: "ok" },
+    });
 
-    const exit = await api.exited;
+    const { exit } = served;
     // Nest closes the application, then lets SIGTERM end the process (a clean stop for systemd).
     expect(exit.signal ?? exit.code).toBe("SIGTERM");
     expect(jsonLines(exit.stdout).map((line) => line["msg"])).toContain("api.listening");
@@ -146,10 +177,20 @@ describe("main.js", () => {
 });
 
 describe("worker.js", () => {
-  it("exits 1 with a ConfigError naming DATABASE_URL when it is missing [OBE-001 AC3]", async () => {
-    const { DATABASE_URL: _omitted, ...withoutUrl } = services.worker;
+  let missingUrl: Exit;
+  let missingProvisioner: Exit;
+  let served: Served;
 
-    const exit = await run("worker.js", withoutUrl).exited;
+  beforeAll(async () => {
+    const { DATABASE_URL: _omitted, ...withoutUrl } = services.worker;
+    missingUrl = await run("worker.js", withoutUrl).exited;
+    missingProvisioner = await run("worker.js", services.api).exited;
+    // 127.0.0.1:4001 is the worker's default health port (OBE-001 AC2).
+    served = await serveHealth("worker.js", services.worker, 4001);
+  }, PROCESSES_TIMEOUT_MS);
+
+  it("exits 1 with a ConfigError naming DATABASE_URL when it is missing [OBE-001 AC3]", () => {
+    const exit = missingUrl;
 
     expect(exit.code).toBe(1);
     expect(jsonLines(exit.stdout)).toEqual([
@@ -163,31 +204,31 @@ describe("worker.js", () => {
     ]);
   });
 
-  it("exits 1 without the provisioner DSN, which the API never needs [OBE-001 AC3]", async () => {
-    const exit = await run("worker.js", services.api).exited;
+  it("exits 1 without the provisioner DSN, which the API never needs [OBE-001 AC3]", () => {
+    const exit = missingProvisioner;
 
     expect(exit.code).toBe(1);
     expect(exit.stdout).toContain("DATABASE_PROVISIONER_URL is required but missing");
   });
 
-  it("serves /health/ready on 127.0.0.1:4001 and stops on SIGTERM [OBE-001 AC2]", async () => {
-    const worker = run("worker.js", services.worker);
-    try {
-      expect(await waitForHealth(4001, "/health/ready", worker)).toBe(200);
-    } finally {
-      worker.stop();
-    }
+  it("serves /health/ready on 127.0.0.1:4001 and stops on SIGTERM [OBE-001 AC2]", () => {
+    expect(served.status).toBe(200);
 
-    const exit = await worker.exited;
+    const { exit } = served;
     expect(exit.signal ?? exit.code).toBe("SIGTERM");
   });
 });
 
 describe("cli.js", () => {
-  it("lists its commands on help and exits 1 on an unknown command", async () => {
-    const help = await run("cli.js", {}, ["help"]).exited;
-    const unknown = await run("cli.js", {}, ["nope"]).exited;
+  let help: Exit;
+  let unknown: Exit;
 
+  beforeAll(async () => {
+    help = await run("cli.js", {}, ["help"]).exited;
+    unknown = await run("cli.js", {}, ["nope"]).exited;
+  }, PROCESSES_TIMEOUT_MS);
+
+  it("lists its commands on help and exits 1 on an unknown command", () => {
     expect(help.code).toBe(0);
     expect(help.stdout).toContain("Usage: node dist/cli.js <command> [arguments]");
     expect(unknown.code).toBe(1);

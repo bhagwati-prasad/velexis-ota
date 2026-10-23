@@ -4,7 +4,7 @@
 // `tenants_key_dns_ck`.
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import { APP_DIR } from "../config";
 import {
@@ -69,6 +69,18 @@ describe("tenantKeyProblem", () => {
 });
 
 describe("the documents that define the rules", () => {
+  /** The pattern of the OpenAPI document's TenantKey schema. */
+  let documentPattern: string;
+
+  // Parsing the whole OpenAPI document takes a fraction of a second idle and seconds next to the other packages'
+  // tests on a CI runner: once, in this hook with its own budget, and not inside the test's 5 s.
+  beforeAll(() => {
+    const document = parse(readFileSync(OPENAPI, "utf8")) as {
+      components: { schemas: { TenantKey: { pattern: string } } };
+    };
+    documentPattern = document.components.schemas.TenantKey.pattern;
+  }, 30_000);
+
   it("reserves exactly the names of the sign-up flow (step 6), once each", () => {
     const documented = reservedKeysOfTheFlow();
 
@@ -79,14 +91,11 @@ describe("the documents that define the rules", () => {
   });
 
   it("uses the pattern of the OpenAPI document's TenantKey and of migration 0002's tenants_key_dns_ck", () => {
-    const document = parse(readFileSync(OPENAPI, "utf8")) as {
-      components: { schemas: { TenantKey: { pattern: string } } };
-    };
     const constraint = /tenants_key_dns_ck CHECK \(key ~ '([^']+)'\)/.exec(
       readFileSync(MIGRATION_0002, "utf8"),
     );
 
-    expect(TENANT_KEY_PATTERN.source).toBe(document.components.schemas.TenantKey.pattern);
+    expect(TENANT_KEY_PATTERN.source).toBe(documentPattern);
     expect(constraint?.[1]).toBe(TENANT_KEY_PATTERN.source);
     expect(TENANT_KEY_PATTERN.flags).toBe("");
   });
