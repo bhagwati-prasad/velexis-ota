@@ -306,11 +306,31 @@ async function stubOrderStatus(orderId: string): Promise<number> {
   return res.status;
 }
 
-/** An order of the stub (Flight Create Orders, not issued) of one adult, for `email`. */
-async function newStubOrder(email: string): Promise<JsonObject> {
+/**
+ * An order of the stub (Flight Create Orders, not issued) of one adult, for `email`, its flight leaving at `outbound`
+ * and landing 2 hours later (local times read as UTC, as the record step stores them for the template's airports): the
+ * seeded booking holds the same flight, so a refresh, which records the order through the sync's diff since
+ * FIX-W27-SYNC, finds no schedule change.
+ */
+async function newStubOrder(email: string, outbound: Date): Promise<JsonObject> {
   const input = buildOrderRequestInput();
+  const flightOffers = records(input.flightOffers).map((offer) => ({
+    ...offer,
+    itineraries: records(offer["itineraries"]).map((itinerary) => ({
+      ...itinerary,
+      segments: records(itinerary["segments"]).map((segment) => ({
+        ...segment,
+        departure: { ...(segment["departure"] as JsonObject), at: local(outbound) },
+        arrival: {
+          ...(segment["arrival"] as JsonObject),
+          at: local(new Date(outbound.getTime() + 2 * HOUR)),
+        },
+      })),
+    })),
+  }));
   const built = buildCreateOrderRequest({
     ...input,
+    flightOffers,
     contacts: [buildOrderContact({ email })],
     remarks: [],
     offices: { queuing: office, owner: office },
@@ -355,10 +375,13 @@ interface SeededBooking {
  */
 async function seedBooking(prefix: string, seed: BookingSeed = {}): Promise<SeededBooking> {
   const email = uniqueEmail(prefix);
-  const order = await newStubOrder(email);
   const id = newId("bkg");
   const now = Date.now();
   const outbound = new Date(now + (seed.departInMs ?? 10 * DAY));
+  const order = await newStubOrder(email, outbound);
+  // The order's segment, whose terminals the booking keeps as the record step does.
+  const flight =
+    records(records(records(order["flightOffers"])[0]?.["itineraries"])[0]?.["segments"])[0] ?? {};
   const recordLocator = (records(order["associatedRecords"])[0]?.["reference"] as string | undefined) ?? "";
   const contact = records(order["contacts"])[0] ?? {};
   const contactName = (contact["addresseeName"] ?? {}) as JsonObject;
@@ -420,9 +443,11 @@ async function seedBooking(prefix: string, seed: BookingSeed = {}): Promise<Seed
         carrier_code: "IB",
         flight_number: "3436",
         departure_iata: "MAD",
+        departure_terminal: ((flight["departure"] ?? {}) as JsonObject)["terminal"] as string | undefined,
         departure_local: local(outbound),
         departure_at: outbound,
         arrival_iata: "ORY",
+        arrival_terminal: ((flight["arrival"] ?? {}) as JsonObject)["terminal"] as string | undefined,
         arrival_local: local(new Date(outbound.getTime() + 2 * HOUR)),
         arrival_at: new Date(outbound.getTime() + 2 * HOUR),
         duration_minutes: 120,
