@@ -27,7 +27,8 @@ import { headers } from "next/headers";
 import { cache } from "react";
 
 import { getConfig } from "@/config";
-import type { StaffEnvironment } from "@/lib/permissions";
+import { isVelexisErrorLike } from "@/lib/errors";
+import { canOpenEnvironment, type StaffEnvironment } from "@/lib/permissions";
 import { dedupRefresh, type DedupRefresh, type StaffRefreshOutcome } from "@/lib/refresh-dedup";
 import { readSession, redirectOnSessionError, redirectToRefresh } from "@/lib/session";
 
@@ -176,33 +177,78 @@ export function refreshStaffSession(
   );
 }
 
+/** What the server components of one request work with (README §4 "Environment switch", routes.md §1). */
+export interface ConsoleRequest {
+  /** The console client of the request, in `environment`. */
+  readonly console: ConsoleApi;
+  /** `console.auth.me` in `environment`: the staff member, the OTA, the permissions and the environments. */
+  readonly staff: ConsoleStaffProfile;
+  /** The environment every call of the request is sent in. */
+  readonly environment: StaffEnvironment;
+  /**
+   * The environment cookie asked for `live`, which the OTA or the role does not allow (any more): the API refused it
+   * (`403 ENVIRONMENT_NOT_ALLOWED`) or the session no longer lists it. The request then works in `test`, and the shell
+   * shows "Live is not available for this OTA or role" and resets the cookie (OAD-004).
+   */
+  readonly liveRefused: boolean;
+}
+
 /**
- * The console client of this request (React `cache`: one per server request), for server components. Without a
- * session it redirects to the portal; with a refresh token only (the middleware could not refresh) it redirects to
- * `/auth/refresh`, because a server component cannot write the rotated tokens.
+ * The console of this request (React `cache`: once per server request), for server components: the client, the staff
+ * profile and the environment the request works in. Without a session it redirects to the portal; with a refresh
+ * token only (the middleware could not refresh) it redirects to `/auth/refresh`, because a server component cannot
+ * write the rotated tokens.
+ *
+ * `console.auth.me` runs first, in the environment of the cookie. When that is `live` and the API refuses it
+ * (`403 ENVIRONMENT_NOT_ALLOWED`: the OTA is no longer live, or the role became one that never opens live), or the
+ * profile no longer allows it, the request asks again in `test` and every call of the request goes there: a server
+ * component cannot reset the cookie, and Next.js would hide the refusal from the error boundary in production. The
+ * layout shows the banner of routes.md §1 and resets the cookie with a server action. Other refusals keep the rules of
+ * `redirectOnSessionError`: an expired token goes to `/auth/refresh`, an ended session to the portal, anything else is
+ * thrown for the page to handle.
  */
-export const getConsole = cache(async (): Promise<ConsoleApi> => {
+export const getConsoleRequest = cache(async (): Promise<ConsoleRequest> => {
   const session = await readSession();
-  if (session.accessToken === undefined) {
+  const { accessToken } = session;
+  if (accessToken === undefined) {
     redirectToRefresh();
   }
-  return createConsoleClient({
-    accessToken: session.accessToken,
-    environment: session.environment,
-    incoming: await headers(),
-  });
+  const incoming = await headers();
+  const clientIn = (environment: StaffEnvironment): ConsoleApi =>
+    createConsoleClient({ accessToken, environment, incoming });
+
+  const wanted = session.environment;
+  const client = clientIn(wanted);
+  let staff: ConsoleStaffProfile | undefined;
+  try {
+    staff = await client.auth.me();
+  } catch (error) {
+    if (wanted !== "live" || !isVelexisErrorLike(error) || error.code !== "ENVIRONMENT_NOT_ALLOWED") {
+      return redirectOnSessionError(error);
+    }
+  }
+  if (staff !== undefined && canOpenEnvironment(staff, wanted)) {
+    return { console: client, staff, environment: wanted, liveRefused: false };
+  }
+
+  const testClient = clientIn("test");
+  try {
+    staff = await testClient.auth.me();
+  } catch (error) {
+    return redirectOnSessionError(error);
+  }
+  return { console: testClient, staff, environment: "test", liveRefused: true };
 });
+
+/**
+ * The console client of this request (React `cache`), for server components, in the environment the request works
+ * in (`getConsoleRequest`).
+ */
+export const getConsole = cache(async (): Promise<ConsoleApi> => (await getConsoleRequest()).console);
 
 /**
  * `console.auth.me` once per request (React `cache`): the staff member, the OTA, the permissions that drive the
  * navigation and the buttons (`can()`), and the environments of the switch. An expired session redirects to
  * `/auth/refresh`, an ended one to the portal.
  */
-export const getStaff = cache(async (): Promise<ConsoleStaffProfile> => {
-  const client = await getConsole();
-  try {
-    return await client.auth.me();
-  } catch (error) {
-    return redirectOnSessionError(error);
-  }
-});
+export const getStaff = cache(async (): Promise<ConsoleStaffProfile> => (await getConsoleRequest()).staff);

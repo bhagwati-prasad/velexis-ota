@@ -2099,7 +2099,8 @@ The console API (staff sign-in by portal token, bookings, PNR import, queues, cu
   - The middleware never refreshes the same token twice for parallel requests (test with two simultaneous requests).
 - **Verify:** `pnpm --filter @velexis/ota-admin test && pnpm --filter @velexis/ota-admin build`
 
-### OAD-004 · Build the console shell with the environment switch and shared components
+### OAD-004 · Build the console shell with the environment switch and shared components ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-admin
 - **Milestone:** M4
 - **Depends on:** OAD-003

@@ -23,6 +23,18 @@ export interface ActionState {
   readonly fieldErrors?: FieldErrors;
 }
 
+/**
+ * The hidden field of a confirmation dialog's idempotency key (README §7: rendered once with the page, sent as the
+ * SDK's `idempotencyKey`). Here rather than in the dialog's client module, so the server actions' schemas can read it.
+ */
+export const ACTION_KEY_FIELD = "actionKey";
+/** The field of a staff action's reason (`reason` of the console operations, stored in `staff_actions.reason`). */
+export const REASON_FIELD = "reason";
+/** The shortest reason the confirmation dialog accepts (some operations' `reason` has `minLength: 3`). */
+export const REASON_MIN_LENGTH = 3;
+/** The longest reason of the console operations (`maxLength: 500`). */
+export const REASON_MAX_LENGTH = 500;
+
 /** The state before the first submission: `useActionState(action, INITIAL_ACTION_STATE)`. */
 export const INITIAL_ACTION_STATE: ActionState = Object.freeze({});
 

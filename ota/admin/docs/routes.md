@@ -18,6 +18,12 @@ Related: [scope §1.3 and §2.3](../../docs/scope.md#13-staff-roles-and-permissi
 | `504 SUPPLIER_TIMEOUT` on an Amadeus action | "Amadeus did not answer. Resync before retrying." with a Resync button ([`architecture-booking.md`](../../docs/architecture-booking.md) §4) |
 | Other `VelexisError` | Message from `lib/errors.ts` and the `requestId` |
 
+How (OAD-004):
+
+- **On the server.** In production Next.js replaces an error thrown in a server component with a generic one before it reaches `error.tsx`, so pages handle these codes where they call the SDK: a redirect (`redirectOnSessionError` of `lib/session.ts`) or a state of their own (`ErrorState` of `components/error-state.tsx`). `(console)/error.tsx` is the fallback and shows the error's digest as the reference of the server log.
+- **The shell** (`(console)/layout.tsx`) does this for `console.auth.me`: `TENANT_SUSPENDED` renders the full page with the link to the portal, any other API error the message and the request id with "Try again".
+- **`ENVIRONMENT_NOT_ALLOWED`.** `getConsoleRequest` (`lib/velexis.ts`) asks `console.auth.me` in the cookie's environment; when the API refuses `live` (or the profile no longer allows it) it asks again in `test`, and the whole request works in `test`. The shell then shows the banner and resets `__Host-vx_env` to `test` with the `resetEnvironment` server action, because a server component cannot write cookies. In server actions `requireStaff` / `requireStaffSession` (`lib/session.ts`) reset the cookie to `test` themselves and throw the refusal, so the action answers the same message without running in another environment; the switch's action (`switchEnvironment`) answers it for a refused `live` and leaves the cookie at `test`.
+
 ## 2. Dashboard: `/`
 
 Tiles link to pre-filtered lists. Each tile renders only with its permission.

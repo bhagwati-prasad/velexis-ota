@@ -46,6 +46,7 @@ import {
   endUserHeaders,
   endUserIp,
   getConsole,
+  getConsoleRequest,
   getStaff,
   refreshStaffSession,
 } from "./velexis";
@@ -154,6 +155,9 @@ describe("SDK clients", () => {
     });
 
     expect(api.requests.map((request) => `${request.method} ${request.url.pathname}`)).toEqual([
+      // getConsole() and getStaff() each start with console.auth.me (`getConsoleRequest` decides the environment
+      // of the request, OAD-004); React's `cache` makes it one call per server request, which a test has not.
+      "GET /v1/console/auth/me",
       "GET /v1/console/auth/me",
       "GET /v1/console/bookings",
       `POST /v1/console/bookings/${BOOKING_ID}/notes`,
@@ -266,6 +270,76 @@ describe("SDK clients", () => {
 
     api.on("GET /v1/console/auth/me", () => apiError("TENANT_SUSPENDED", 403));
     await expect(getStaff()).rejects.toMatchObject({ code: "TENANT_SUSPENDED" });
+  });
+
+  it("[OAD-004] works in the environment of the cookie when the session allows it", async () => {
+    signedIn(900);
+
+    const request = await getConsoleRequest();
+    await request.console.bookings.list({ limit: 5 });
+
+    expect(request).toMatchObject({ environment: "live", liveRefused: false, staff: staffProfile() });
+    expect(api.requests.map((sent) => sent.headers.get("X-Velexis-Environment"))).toEqual(["live", "live"]);
+  });
+
+  it("[OAD-004] falls back to test when the API refuses the live cookie (ENVIRONMENT_NOT_ALLOWED)", async () => {
+    signedIn(900);
+    const viewer = staffProfile({ role: "viewer", environments: ["test"] });
+    api.on("GET /v1/console/auth/me", (request) =>
+      request.headers.get("X-Velexis-Environment") === "live"
+        ? apiError("ENVIRONMENT_NOT_ALLOWED", 403, {
+            details: { environment: "live", environments: ["test"] },
+          })
+        : Response.json(viewer),
+    );
+
+    const request = await getConsoleRequest();
+    await request.console.bookings.list({ limit: 5 });
+
+    expect(request).toMatchObject({ environment: "test", liveRefused: true, staff: viewer });
+    expect(
+      api.requests.map((sent) => [sent.url.pathname, sent.headers.get("X-Velexis-Environment")]),
+    ).toEqual([
+      ["/v1/console/auth/me", "live"],
+      ["/v1/console/auth/me", "test"],
+      ["/v1/console/bookings", "test"],
+    ]);
+    // getConsole() and getStaff() are the same request's.
+    expect(await getStaff()).toEqual(viewer);
+    await (await getConsole()).bookings.list({ limit: 5 });
+    expect(api.requests.at(-1)?.headers.get("X-Velexis-Environment")).toBe("test");
+  });
+
+  it("[OAD-004] falls back to test when the profile no longer allows live", async () => {
+    signedIn(900);
+    api.on("GET /v1/console/auth/me", () => Response.json(staffProfile({ environments: ["test"] })));
+
+    const request = await getConsoleRequest();
+
+    expect(request).toMatchObject({ environment: "test", liveRefused: true });
+    expect(api.requests.map((sent) => sent.headers.get("X-Velexis-Environment"))).toEqual(["live", "test"]);
+  });
+
+  it("[OAD-004] asks once in a test session, and keeps the session rules for the other refusals", async () => {
+    const jar = signedIn(900);
+    jar.set(ENVIRONMENT_COOKIE, "test");
+    expect(await getConsoleRequest()).toMatchObject({ environment: "test", liveRefused: false });
+    expect(api.requests).toHaveLength(1);
+
+    // A test session is never refused for its environment: the refusal is thrown like any other.
+    api.on("GET /v1/console/auth/me", () => apiError("ENVIRONMENT_NOT_ALLOWED", 403));
+    await expect(getConsoleRequest()).rejects.toMatchObject({ code: "ENVIRONMENT_NOT_ALLOWED" });
+
+    // After the fallback, an expired token still goes to /auth/refresh, a suspended OTA still throws.
+    jar.set(ENVIRONMENT_COOKIE, "live");
+    let call = 0;
+    api.on("GET /v1/console/auth/me", () => {
+      call += 1;
+      return call === 1 ? apiError("ENVIRONMENT_NOT_ALLOWED", 403) : apiError("TOKEN_EXPIRED", 401);
+    });
+    expect(await redirectOf(() => getConsoleRequest())).toBe("/auth/refresh");
+    api.on("GET /v1/console/auth/me", () => apiError("TENANT_SUSPENDED", 403));
+    await expect(getConsoleRequest()).rejects.toMatchObject({ code: "TENANT_SUSPENDED" });
   });
 
   it("refreshes with the dedicated session result, never with an access token", async () => {

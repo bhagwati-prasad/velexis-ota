@@ -45,6 +45,7 @@ import {
   redirectOnSessionError,
   refreshPath,
   requireStaff,
+  requireStaffSession,
   safeNextPath,
   setStaffSession,
   staffSessionCookies,
@@ -346,6 +347,56 @@ describe("requireStaff", () => {
     expect(api.requests.map((request) => request.url.pathname)).toEqual(["/v1/console/auth/me"]);
   });
 
+  it("[OAD-004] requireStaffSession is requireStaff without the permission check", async () => {
+    const { refreshToken } = signedIn(30);
+    const rotated = staffSession(Date.now(), {
+      role: "viewer",
+      environments: ["test"],
+      accessToken: staffAccessToken("viewer", Date.now(), 900),
+    });
+    api.on("POST /v1/console/auth/refresh", () => Response.json(rotated));
+    api.on("GET /v1/console/auth/me", () =>
+      Response.json(staffProfile({ role: "viewer", environments: ["test"] })),
+    );
+
+    const context = await requireStaffSession();
+
+    expect(context.staff.staff.role).toBe("viewer");
+    // The same refresh as requireStaff's: the new tokens, the environment the new session allows.
+    expect(api.requests[0]?.body).toEqual({ refreshToken });
+    expect(context.environment).toBe("test");
+    expect(jar.get(ENVIRONMENT_COOKIE)?.value).toBe("test");
+    expect(api.sent("GET /v1/console/auth/me")[0]?.headers.get("Authorization")).toBe(
+      `Bearer ${rotated.session.accessToken}`,
+    );
+    // requireStaff with the same session refuses what the viewer may not do.
+    await expect(requireStaff("settings:write")).rejects.toMatchObject({ code: "FORBIDDEN" });
+  });
+
+  it("[OAD-004] resets a live environment the API refuses to test, and still refuses the action", async () => {
+    signedIn(900);
+    api.on("GET /v1/console/auth/me", () => apiError("ENVIRONMENT_NOT_ALLOWED", 403));
+
+    await expect(requireStaff("bookings:read")).rejects.toMatchObject({ code: "ENVIRONMENT_NOT_ALLOWED" });
+
+    // routes.md §1: the cookie goes back to test; the action is not re-run in test, and nothing else is cleared.
+    expect(jar.writes.map((write) => [write.name, write.value])).toEqual([[ENVIRONMENT_COOKIE, "test"]]);
+    expect(jar.writes[0]?.options).toEqual(environmentCookie("test").options);
+    expect(
+      api.sent("GET /v1/console/auth/me").map((sent) => sent.headers.get("X-Velexis-Environment")),
+    ).toEqual(["live"]);
+    expect(api.requests).toHaveLength(1);
+  });
+
+  it("[OAD-004] leaves the cookies alone for other refusals of console.auth.me", async () => {
+    signedIn(900);
+    api.on("GET /v1/console/auth/me", () => apiError("TENANT_SUSPENDED", 403));
+
+    await expect(requireStaffSession()).rejects.toMatchObject({ code: "TENANT_SUSPENDED" });
+
+    expect(jar.writes).toEqual([]);
+  });
+
   it("refreshes an access token that expires within 60 s, writes the new cookies and uses the new token", async () => {
     const { refreshToken } = signedIn(30);
     const rotated = staffSession(Date.now(), { accessToken: staffAccessToken("new", Date.now(), 900) });
@@ -457,7 +508,8 @@ describe("requireStaff", () => {
     signedIn(900);
     api.on("GET /v1/console/auth/me", () => apiError("ENVIRONMENT_NOT_ALLOWED", 403));
     await expect(requireStaff("bookings:read")).rejects.toMatchObject({ code: "ENVIRONMENT_NOT_ALLOWED" });
-    expect(jar.writes).toEqual([]);
+    // The session stays; since OAD-004 a refused live environment goes back to test (routes.md §1), and nothing else.
+    expect(jar.writes.map((write) => [write.name, write.value])).toEqual([[ENVIRONMENT_COOKIE, "test"]]);
   });
 });
 

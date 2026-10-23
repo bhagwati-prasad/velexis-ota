@@ -74,7 +74,9 @@ sequenceDiagram
 3. Server components never refresh: their SDK client gets the access token only. If a call still fails with `TOKEN_EXPIRED`, the page redirects to `/auth/refresh?next=<path>`, a route handler that refreshes (de-duplicated) and redirects (`303`) back (`getStaff()` does this for `console.auth.me`). `next` is kept only when `safeNextPath` of `lib/session.ts` accepts it (a relative path on the admin), else the handler goes to the dashboard `/`. It refreshes whenever there is a refresh token, even when the access token looks fresh, because the API refused that token and going back without a new one would loop; a failure that may pass answers a short page (`429` or `503`) with "Try again" and "Back to the portal" instead of a redirect. Server actions start with `requireStaff(permission)`, which refreshes through the same de-duplication when the access token is missing or expires within 60 s and writes the new cookies before any call.
 4. A refused refresh (`REFRESH_TOKEN_INVALID`, `REFRESH_TOKEN_REUSED`, `STAFF_MEMBERSHIP_INACTIVE`, `TENANT_SUSPENDED`, `UNAUTHENTICATED`, `VALIDATION_FAILED`) clears the access, refresh and environment cookies and sends the user to the portal; the tenant cookie stays for that redirect.
 
-**Environment switch.** The header shows a TEST / LIVE switch when `session.environments` contains `live` (a live tenant and a role other than `viewer`). A server action validates the choice against the session and sets `__Host-vx_env`; every SDK client is built with that `environment`. The whole shell turns a warning colour in live mode, and destructive dialogs repeat "LIVE".
+**Environment switch.** The header shows a TEST / LIVE switch when `session.environments` contains `live` (a live tenant and a role other than `viewer`; `canOpenEnvironment` of `lib/permissions.ts` checks both), else the environment badge. A server action (`switchEnvironment` of `(console)/env-actions.ts`) validates the choice against the session and sets `__Host-vx_env`: `test` always, `live` only after `console.auth.me` (`requireStaffSession`) lists it for a role that may open it; a refused `live` answers "Live is not available for this OTA or role" and leaves the cookie at `test`. After a switch the staff member lands on the dashboard of the new environment. Every SDK client is built with the environment of the request. The whole shell turns a warning colour in live mode with a "LIVE environment" strip, and confirmation dialogs repeat "LIVE".
+
+**A refused live environment** (routes.md §1, OAD-004). The cookie can still say `live` after the OTA went back to test or the role became `viewer`. `getConsoleRequest` (`lib/velexis.ts`, React `cache`: once per request) calls `console.auth.me` in the cookie's environment first; when the API refuses `live` (`403 ENVIRONMENT_NOT_ALLOWED`) or the profile no longer allows it, it asks again in `test`, and every call of that request (`getConsole()`, `getStaff()`) goes to `test`. A server component cannot write cookies, and Next.js would hide the refusal from `error.tsx` in production, so the shell shows the banner "Live is not available for this OTA or role" and resets the cookie through the `resetEnvironment` server action. Server actions can write cookies: `requireStaffSession` (and so `requireStaff`) resets the cookie to `test` itself when `console.auth.me` is refused for `live`, and throws the refusal, so the action answers the same message and is never re-run in another environment than the page's; the re-render after the action shows the shell in test. The middleware's next refresh would reset it as well (`staffSessionCookies` keeps an environment only when the new session allows it). A client-side navigation renders only the new page, not the layout (Next.js keeps layouts), so after a refusal seen there the page already works in `test` while the shell keeps its last environment until the next full render: a reload, the switch, or any server action.
 
 ## 5. Route map
 
@@ -125,14 +127,18 @@ ota/admin/
       auth/refresh/route.ts      GET refresh fallback
       auth/sign-out/route.ts     POST sign-out
       signed-out/page.tsx
-      (console)/layout.tsx       shell: tenant, environment switch, navigation by permission
+      (console)/layout.tsx       shell: tenant, environment switch, navigation by permission, live colour, the
+                                 states of TENANT_SUSPENDED and of an API that failed (rendered, not thrown)
+      (console)/env-actions.ts   server actions: switchEnvironment (only to an allowed value), resetEnvironment
       (console)/page.tsx         dashboard
       (console)/bookings/…       page.tsx, [bookingId]/page.tsx, [bookingId]/actions.ts, *-form.tsx, *-dialog.tsx
       (console)/pnr/…  queues/…  shopping/…  payments/…  customers/…  supplier-log/…  portal/…
       (console)/settings/        markups/ fees/ storefront/ assets/ pages/ templates/
-      (console)/error.tsx        per-area error boundaries using lib/errors.ts
-    components/ui/               shadcn/ui copies
-    components/                  data-table, status-badge, money, json-view, confirm-dialog, env-banner, permission-gate
+      (console)/error.tsx        per-area error boundaries using lib/errors.ts (the fallback: see §10)
+    components/ui/               shadcn/ui copies: button, input, textarea, label, select, checkbox, switch, tabs,
+                                 table, dialog, alert-dialog, badge, card, tooltip, dropdown-menu
+    components/                  data-table, status-badge, money, json-view, confirm-dialog, env-banner, permission-gate,
+                                 console-nav (the shell's navigation), error-state (an API error in the admin's words)
     lib/velexis.ts               server-only: console client per request (service key, token, environment, end-user
                                  headers, response log), getConsole(), getStaff(), refreshStaffSession()
     lib/session.ts               server-only: the four cookies, readSession(), redirects, requireStaff()
@@ -142,6 +148,7 @@ ota/admin/
     lib/permissions.ts           permission constants, the role matrix, can(profile, permission)
     lib/errors.ts                VelexisError code → message, fieldErrors → form state
     lib/action-state.ts          ActionState type and helpers for useActionState
+    lib/utils.ts                 the shadcn/ui cn() helper (components.json "utils")
     lib/portal-links.ts          portal URLs for the tenant
     test/fake-ota-api.ts         tests only: fake fetch for the real SDK, staff session builders, cookie jar
 ```
@@ -155,21 +162,25 @@ import { createVelexisClient } from "@velexis/ota-sdk";
 import { headers } from "next/headers";
 import { cache } from "react";
 
-export const getConsole = cache(async () => {
+export const getConsoleRequest = cache(async () => {
   const s = await readSession();                          // cookies; throws a redirect to the portal when absent
   if (s.accessToken === undefined) redirectToRefresh();   // a server component cannot write rotated tokens (§4)
-  return createConsoleClient({                            // createVelexisClient({ ... }).console:
+  const client = createConsoleClient({                    // createVelexisClient({ ... }).console:
     accessToken: s.accessToken,                           //   secretKey OTA_ADMIN_SERVICE_KEY, baseUrl OTA_API_URL,
     environment: s.environment,                           //   sessionKind "staff", no refreshToken (§4), onResponse
     incoming: await headers(),                            //   log line, X-Velexis-End-User-IP / -Agent (§2)
   });
-});
+  const staff = await client.auth.me();                   // TOKEN_EXPIRED → /auth/refresh, ended → the portal;
+  return { console: client, staff, environment: s.environment, liveRefused: false };
+});                                                       // a refused live → the same in test, liveRefused (§4)
 
-// console.auth.me once per request; TOKEN_EXPIRED → /auth/refresh, an ended session → the portal
-export const getStaff = cache(async () => (await getConsole()).auth.me());
+export const getConsole = cache(async () => (await getConsoleRequest()).console);
+// console.auth.me once per request
+export const getStaff = cache(async () => (await getConsoleRequest()).staff);
 ```
 
 - **Reads** happen in server components with `await getConsole()`. Every console call is personal and priced, so nothing is cached across requests (`cache: "no-store"` is the SDK default for console calls). List pages keep filters, sort and the cursor in `searchParams`, so views are shareable links.
+- **Errors in server components.** In production Next.js replaces an error thrown in a server component with a generic one before it reaches `error.tsx` (only its `digest` is left), so a page handles the API codes it knows on the server: `redirectOnSessionError` (`lib/session.ts`) for `TOKEN_EXPIRED` and an ended session, `notFound()` for `NOT_FOUND`, and a state of its own for the rest (`ErrorState` of `components/error-state.tsx` with the message of `lib/errors.ts` and the request id, routes.md §1). `error.tsx` is the fallback for what nobody expected; it shows the digest as the reference that matches the server log. The shell does the same for `console.auth.me`: `403 TENANT_SUSPENDED` renders the full page "This OTA is suspended" with a link to the portal, any other API error the console's message with the request id and "Try again".
 - **Mutations** are server actions:
 
 ```ts
@@ -193,7 +204,7 @@ export async function issueTickets(_: ActionState, form: FormData): Promise<Acti
 ```
 
 - Updates send `ifMatch` = the `version` the page displayed; `412 PRECONDITION_FAILED` asks the user to reload.
-- State-changing calls carry an idempotency key generated when the dialog or form is rendered (a hidden input), so a double submit or a retry replays the same action.
+- State-changing calls carry an idempotency key generated when the dialog or form is rendered (a hidden input), so a double submit or a retry replays the same action. The page's server component renders it once (`crypto.randomUUID()`) and hands it to `ConfirmDialog` as `idempotencyKey`; the dialog posts it as `actionKey`, the same for every submission of that render; the action's `revalidatePath` after a success renders a new one.
 - Long operations (issue, cancel, import, retrieve) use the SDK's 60 s timeout; the button shows progress with `useFormStatus`.
 - Server actions run where cookies can be written, so `requireStaff()` refreshes before the action's first call when the access token is missing or expires within 60 s (through the same de-duplication, writing the new cookies) and hands back a client with the fresh token. That client never gets the refresh token: the SDK's own automatic refresh (`onStaffSessionRefreshed`) would go around the de-duplication. A `TOKEN_EXPIRED` in the middle of an action therefore becomes the action's error ("Your session expired. Reload the page to continue."), and the reload refreshes in the middleware.
 
@@ -214,11 +225,15 @@ The roles and permission matrix are those of [scope §1.3](../docs/scope.md#13-s
 
 ## 9. Components and UI
 
-- **shadcn/ui** copies in `src/components/ui/`: button, input, textarea, select, checkbox, switch, tabs, table, dialog, alert-dialog, sheet, badge, card, tooltip, dropdown-menu, form helpers. No toast library: results are shown inline from the action state.
-- **Data tables** on TanStack Table with server-side filtering and cursor paging ("Next" uses `page.nextCursor`; `totalCount` shown when the API gives it).
-- **Status badges** for booking, ticketing, payment and sync states, always with text.
-- **Confirmation dialogs** for issue, cancel, capture, refund, import and settings deletes: a summary of the effect (amount, refund mode, environment), a required reason, and the live-mode warning.
-- **JSON view** for the Amadeus order and supplier requests: collapsible `<details>` with a `<pre>` of the already-redacted payload; no third-party viewer.
+- **shadcn/ui** copies in `src/components/ui/` (OAD-004, copied from the portal where it has them, the new-york style otherwise): button, input, textarea, label, select, checkbox, switch, tabs, table, dialog, alert-dialog, badge, card, tooltip, dropdown-menu; sheet and form helpers come with the first page that needs them. Their Radix packages, `class-variance-authority`, `clsx`, `tailwind-merge` and `@tanstack/react-table` 8 are pinned to exact versions. No toast library: results are shown inline from the action state.
+- **Shell** (`(console)/layout.tsx`): the OTA's name, the navigation of `components/console-nav.tsx` (each area with the permission of its main read, filtered by `can()`), the environment switch or badge, the staff member and role, "Back to the portal", "Sign out", the live strip and the refused-live banner of `components/env-banner.tsx`.
+- **Data tables** (`components/data-table.tsx`) on TanStack Table with server-side filtering and cursor paging: "Next page" uses `page.nextCursor`, "First page" drops the cursor, the other `searchParams` stay (`listHref`, which filter components use too); `totalCount` is shown when the API gives it, `10,000+` when it answers `null`.
+- **Status badges** (`components/status-badge.tsx`) for booking, ticketing, derived payment, payment record and sync states, always with text; an unknown status shows its raw value.
+- **Money** (`components/money.tsx`): the decimal string formatted with `Intl` exactly, never through a JS number.
+- **Confirmation dialogs** (`components/confirm-dialog.tsx`) for issue, cancel, capture, refund, import and settings deletes: a summary of the effect (amount, refund mode), the environment badge, a required reason (3 to 500 characters after trimming; the action validates it again), the live-mode warning with "… in LIVE" on the button, the hidden idempotency key of §7 and the action's message, request id and field errors.
+- **Permission gate** (`components/permission-gate.tsx`): the content when `can(profile, permission)`, else nothing (`mode="hide"`) or a disabled button with a tooltip "Needs the permission <permission>".
+- **JSON view** (`components/json-view.tsx`) for the Amadeus order and supplier requests: collapsible `<details>` (closed by default) with a `<pre>` of the already-redacted payload; no third-party viewer.
+- **Error state** (`components/error-state.tsx`): a heading, the message of `lib/errors.ts` for the code, the request id (or the digest of a hidden server error), and the ways on.
 - **Template preview** in an `<iframe sandbox srcdoc>` without `allow-scripts` ([api-changes part 2 §2.6](../docs/api-changes-console-and-internal.md#26-notification-templates-notification_templates)).
 - **Theme editor** shows a live swatch preview and warns when a colour pair fails WCAG contrast (the storefront then falls back, see [storefront theming](../frontend/README.md#6-theming)).
 - Forms follow [conventions §3](../../docs/mvp/conventions.md#3-nextjs-apps-portal-platform-admin-ota-admin): visible labels, errors linked with `aria-describedby`, Zod on the server and the same schema on the client for instant feedback.
@@ -229,7 +244,7 @@ The roles and permission matrix are those of [scope §1.3](../docs/scope.md#13-s
 - **No card numbers in the admin.** The admin never offers a credit-card form of payment: an airline-card booking left without tickets is issued with an `other` form of payment (the OTA's own arrangement) or cancelled ([OADR-0018](../docs/adr/0018-ota-admin-consumes-the-sdk-server-side.md), [OADR-0004](../docs/adr/0004-airline-card-data-handling.md)). Airline-card payments cannot be refunded here (`refund_via_airline`).
 - **Headers** from `next.config` and middleware: CSP with per-request nonces, `frame-ancestors 'none'`, `Referrer-Policy: strict-origin-when-cross-origin` ([ADR-0014](../../docs/mvp/adr/0014-frontend-stack-nextjs-tailwind.md)); Caddy adds HSTS and `X-Frame-Options`. The middleware sets, on every answer it sees, `default-src 'self'; script-src 'self' 'nonce-<128 random bits>'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'self'; object-src 'none'` (`'unsafe-eval'` is added for `next dev` only), and passes the policy and `x-nonce` on in the request headers, where Next.js reads the nonce for the scripts it renders. Every page therefore renders per request (`dynamic = "force-dynamic"` in the root layout): a prerendered page would keep scripts without the nonce. The static `frame-ancestors 'none'` policy of `next.config.ts` stays for the answers the middleware does not see (static files, health routes). A later page that shows images from another host (storefront assets) adds that host to `img-src` here.
 - **Uploads**: asset uploads go through a server action (2 MB body limit; the API refuses files over 1 MB, SVG and CSS); the admin warns that image metadata is kept ([OADR-0012](../docs/adr/0012-storefront-settings-assets-and-pages.md)).
-- **Errors** show messages from `lib/errors.ts` keyed by code, plus the `requestId`; never stack traces. Supplier details (console scope) are shown to staff as the API returns them, already redacted.
+- **Errors** show messages from `lib/errors.ts` keyed by code, plus the `requestId`; never stack traces or the API's own message. Server components render the codes they know on the server (§7), because Next.js hides a server component's error from `error.tsx` in production. Supplier details (console scope) are shown to staff as the API returns them, already redacted.
 - **Logging**: the server logs one line per SDK response through `onResponse` (method, path without query, status, request id, duration) with `@velexis/logger`; never bodies, cookies or tokens.
 
 ## 11. Configuration
@@ -264,7 +279,8 @@ pnpm --filter @velexis/ota-admin dev          # http://localhost:3002
 | Unit | `src/config.test.ts`, `src/lib/*.test.ts` (Vitest) | Configuration (missing or invalid variables, loopback `OTA_API_URL`, the env templates, `next.config.ts`, no `NEXT_PUBLIC_` variable), session cookies and `requireStaff()`, refresh de-duplication (two parallel refreshes → one SDK call), the end-user headers on every SDK request (with the real SDK and the fake `fetch` of `src/test/fake-ota-api.ts`), `can()` against the table of scope §1.3 (read from `ota/docs/scope.md`), error mapping, portal links. `src/lib/velexis.test.ts` also runs `next build` on a fixture whose client component imports `lib/velexis.ts` and expects the `server-only` build error |
 | Route | `src/app/**/*.test.ts` | Route handlers called directly with a fake global `fetch` and fake timers: `/health/live`, `/health/ready` (OTA API up, refused, slower than 2 s, error status); `POST /sso` (foreign, `null` or missing `Origin` → 403, a reused token → the error page, the four `__Host-` cookies and no token in the URL or body, body type, token pattern and size, refusals by code); `/auth/refresh` (safe `next`, one call for parallel redirects, refused → portal, may pass → "Try again"); `POST /auth/sign-out` (Origin, the call, cookies cleared whatever the API answers); the `/signed-out` page |
 | Middleware | `src/middleware.test.ts` | The real middleware with `NextRequest` and the fake `fetch`: matcher and runtime (`unstable_doesMiddlewareMatch`), the nonce policy on every answer, refresh before 60 s with the new tokens forwarded to the request, two simultaneous requests with one token → one refresh call, refused → cookies cleared and the portal, may pass → the session kept, deny by default, the session routes left alone |
-| Component | `src/**/*.test.tsx` (Vitest + Testing Library) | Filters to `searchParams`, confirmation dialogs (reason required, live warning), forms rendering `fieldErrors`, permission gating |
+| Component | `src/**/*.test.tsx` (Vitest + Testing Library) | Filters to `searchParams`, confirmation dialogs (reason required, the same idempotency key on a double submit and a retry, live warning), forms rendering `fieldErrors`, permission gating, the shared components (badges, money, JSON view, data table paging, navigation by role, error state, environment switch and banner) and the error boundary |
+| Shell | `src/app/(console)/layout.test.tsx`, `env-actions.test.ts` | The real layout rendered on the server against the fake `fetch` (a viewer sees no LIVE switch, the navigation by role, live mode, a refused live environment falls back to test with the banner, `TENANT_SUSPENDED` and other API errors rendered, redirects of an expired or ended session); the switch's server action (`env=live` refused for a viewer and for an OTA that is not live, the cookie never set to a refused value, `test` without a call) |
 | Server actions | `src/app/**/actions.test.ts` | With the SDK's `fetch` option pointing at a fake: right method and parameters, `ifMatch`, idempotency key reuse, error → action state |
 | End to end | `tools/e2e/specs/ota-admin/*.e2e.ts` (Playwright + axe) | Portal → Open console → dashboard; bookings list → detail → issue and cancel with refund on stub bookings; PNR import; capture and refund in Stripe test mode; markup change visible in the next storefront search; viewer role sees no actions and no LIVE switch; SSO token reuse refused |
 
@@ -272,4 +288,4 @@ Build: `pnpm --filter @velexis/ota-admin build` produces `.next/standalone/ota/a
 
 Tests: `pnpm --filter @velexis/ota-admin test`. Vitest resolves `@/…` to `src/` and replaces `server-only` with its empty module (what Next.js server code gets); component tests start with `// @vitest-environment happy-dom` and use Testing Library.
 
-shadcn/ui is initialised (`components.json`, the CSS variables and `@theme inline` tokens in `src/app/globals.css`, shared by copy with the portal and the platform admin) without components. The first task that adds one (shadcn CLI 2.x, run in `ota/admin`) also adds the `cn()` helper in `src/lib/utils.ts` that `components.json` points to, and pins the components' dependencies to exact versions.
+shadcn/ui is initialised (`components.json`, the CSS variables and `@theme inline` tokens in `src/app/globals.css`, shared by copy with the portal and the platform admin). OAD-004 added the components of §9 to `src/components/ui/` with the `cn()` helper in `src/lib/utils.ts` that `components.json` points to, and pinned their dependencies to exact versions (one Radix release line for all of them); a later component comes from the shadcn CLI 2.x, run in `ota/admin`, or by copy from the portal, with its dependency pinned the same way. A server-mode SDK client refuses to run where a `document` exists, so tests of a server component render it in Node (`react-dom/server`) and query the HTML in a detached happy-dom document (`layout.test.tsx`); client components are tested in happy-dom with their server actions mocked.

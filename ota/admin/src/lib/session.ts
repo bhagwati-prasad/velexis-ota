@@ -406,10 +406,25 @@ function forbidden(permission: StaffPermission): PermissionError {
  *   left to try; with a usable one the action goes on with it.
  * - A missing permission throws a `PermissionError` `FORBIDDEN` with `details.requiredPermission`, before any call
  *   that changes something.
+ * - A live environment the API refuses (`403 ENVIRONMENT_NOT_ALLOWED`) resets `__Host-vx_env` to `test` and is
+ *   thrown, so the action answers "Live is not available for this OTA or role" (routes.md §1).
  *
  * Use the returned `console` (built with the fresh token), not `getConsole()`, inside the action.
  */
 export async function requireStaff(permission: StaffPermission): Promise<StaffContext> {
+  const context = await requireStaffSession();
+  if (!can(context.staff, permission)) {
+    throw forbidden(permission);
+  }
+  return context;
+}
+
+/**
+ * `requireStaff` without the permission check, for the server actions that every signed-in staff member may run
+ * (the environment switch of OAD-004, which weighs `session.environments` instead): the refreshed session and
+ * `console.auth.me`, with the same redirects and errors.
+ */
+export async function requireStaffSession(): Promise<StaffContext> {
   const jar = await cookies();
   const incoming = await headers();
   const session = readSessionCookies(jar);
@@ -449,10 +464,13 @@ export async function requireStaff(permission: StaffPermission): Promise<StaffCo
       writeCookies(jar, clearedSessionCookies());
       redirectToPortal(session.tenantId);
     }
+    if (code === "ENVIRONMENT_NOT_ALLOWED" && environment === "live") {
+      // routes.md §1: the OTA or the role no longer opens live. A server action can write cookies, so the environment
+      // goes back to test here; the action is still refused (never re-run in another environment than the page's),
+      // and the re-render of the page after the action shows the shell in test.
+      writeCookies(jar, [environmentCookie("test")]);
+    }
     throw error;
-  }
-  if (!can(staff, permission)) {
-    throw forbidden(permission);
   }
   return { console: client, staff, environment };
 }
