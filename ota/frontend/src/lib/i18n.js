@@ -403,6 +403,31 @@ export const STRINGS = Object.freeze({
   "field.PASSWORD_BREACHED":
     "This password is too common or has appeared in a data breach. Choose another one.",
   "field.PASSWORD_SAME_AS_CURRENT": "Choose a password different from your current one",
+  // Card payment page (src/pages/checkout-pay-card.js, docs/pages.md §8).
+  "payCard.title": "Pay by card – Checkout",
+  "payCard.loading": "Loading your payment…",
+  "payCard.ready": "Enter your card, then review the total",
+  "payCard.missing": "We could not find this payment",
+  "payCard.backToPayment": "Back to the payment step",
+  "payCard.unavailable": "Card payment is unavailable",
+  "payCard.airlineCard": "Pay with the airline card instead",
+  "payCard.reviewing": "Checking the card fee…",
+  "payCard.reviewed": "Your final total is {price}",
+  "payCard.checkCard": "Check your card details",
+  "payCard.noCardFee": "No card fee",
+  "payCard.brandNotAccepted": "We cannot take this card. Pay with one of these cards: {brands}.",
+  "payCard.brandNotAcceptedNone": "We cannot take this card. Please pay with another card.",
+  "payCard.pay": "Pay {price}",
+  "payCard.paying": "Confirming your payment. Do not close this page.",
+  "payCard.paid": "Payment confirmed. Completing your booking…",
+  "payCard.cardFailed": "The payment did not go through. Check your card or use another card.",
+  "payCard.restarting": "Starting the payment again…",
+  "payCard.restarted": "We started the payment again. Review the total once more, then pay.",
+  "payCard.restartFailed": "We could not start the payment again",
+  "payCard.newTotal": "The new total is {new} (before: {old}). Review it, then pay.",
+  "payCard.newTotalOnly": "The new total is {new}. Review it, then pay.",
+  "payCard.providerError": "The payment service is not answering. Nothing was charged. Please try again.",
+  "payCard.updateFailed": "The card form could not show the new total. Please try again.",
   // AmadeusDocumentType: the documents a traveller can show.
   "document.PASSPORT": "Passport",
   "document.IDENTITY_CARD": "ID card",
@@ -534,6 +559,7 @@ export const STRINGS = Object.freeze({
   "stateHint.checkout-expired":
     "Prices are held for a short time only. Price the flight again to see the current price.",
   "stateHint.email-not-verified": "Open the link in the e-mail we sent you, then try again.",
+  "stateHint.card-unavailable": "Nothing was charged. Please try again in a moment.",
 });
 
 const plurals = new Intl.PluralRules(LANGUAGE);

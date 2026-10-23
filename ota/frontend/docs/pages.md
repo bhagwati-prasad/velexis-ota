@@ -179,18 +179,26 @@ Seats: there is no seat map in the MVP ([scope §2.2](../../docs/scope.md#22-hos
 
 **SDK and Stripe calls**
 
-1. `checkout.getPayment({ paymentId })` and `checkout.get({ checkoutId })`: `clientSecret`, `providerPublicKey`, `accountId` (Connect mode), amount, totals.
-2. `Stripe(providerPublicKey, { stripeAccount: accountId ?? undefined })`, `elements({ clientSecret, appearance })` with the OTA colours, mount the Payment Element.
-3. **Review**: "Review total" calls `stripe.createConfirmationToken({ elements })`, then `checkout.updatePayment({ paymentId, card: { brand } })` with the brand from `payment_method_preview.card`, then `elements.fetchUpdates()`. The page shows the final total including `cardFee` and the merchant name (`payment.merchantName`, statement descriptor).
-4. **Pay**: `stripe.confirmPayment({ clientSecret, confirmParams: { confirmation_token, return_url: "/checkout/complete.html?id=…&payment=…" }, redirect: "if_required" })`. Without a redirect, go to the complete page directly; with 3-D Secure Stripe shows its challenge and returns to the same URL.
+1. `checkout.getPayment({ paymentId })` and `checkout.get({ checkoutId })`: `clientSecret`, `providerPublicKey`, amount, the trip and its totals. The Stripe account (`accountId`, Connect mode), the merchant name, the statement descriptor and the accepted brands (`pspCardBrands`) come from `config.payment` (`storefront.get`); `Payment` has no account of its own.
+2. `Stripe(providerPublicKey, { stripeAccount: accountId })` (the option only when `accountId` is set), `elements({ clientSecret, appearance })` with the OTA colours (the palette `lib/theme.js` applies, so the neutral one when the OTA's colours fail contrast) and its corner radius, mount the Payment Element.
+3. **Review**: "Review total" calls `elements.submit()` (Stripe checks the form, which it requires before a confirmation token), `stripe.createConfirmationToken({ elements })`, then `checkout.updatePayment({ paymentId, card: { brand } })` with the Amadeus brand that `config.payment.pspCardBrands` gives for `payment_method_preview.card.brand`, then `elements.fetchUpdates()`. The page shows the final total including `cardFee`, the merchant name (`config.payment.merchantName`) and the statement descriptor (`config.payment.statementDescriptor`, when there is one). A change in the card form drops the review, so Pay always confirms the card that was reviewed.
+4. **Pay**: `stripe.confirmPayment({ clientSecret, confirmParams: { confirmation_token, return_url: "/checkout/complete.html?id=…&payment=…" }, redirect: "if_required" })` (the return URL absolute, on the page's origin). Without a redirect, go to the complete page directly; with 3-D Secure Stripe shows its challenge and returns to the same URL. A confirmed payment is never confirmed again from this page.
+
+- **No card data on the page.** The card is typed into Stripe's iframes: the page has no form control of its own (no `<input>`, `<select>` or `<form>`; the header's currency selector is left out here, as the payment's currency is fixed), and its code never reads a value. The buttons are plain `type="button"` buttons.
+- **Where a payment belongs.** At load, a payment that is `processing`, `authorized` or `captured` opens the complete page, an `airline_card` payment the airline-card page, a payment that `failed` or was `cancelled` is replaced by a new one (`checkout.createPayment`, the terms were accepted on the payment step), a completed checkout opens its confirmation, and an expired one says "Your session expired" with a link to price the flight again. An address without valid `chk_…` and `pay_…` ids, or a payment of another checkout, shows "We could not find this payment".
 
 | State | Shows |
 |---|---|
-| Card declined or 3-D Secure failed (Stripe error) | Stripe's message in the element; the payment stays `requires_payment_method`; try another card |
-| `409 PAYMENT_NOT_UPDATABLE` | Create a new payment (`checkout.createPayment`) and remount |
-| `409 PRICE_CHANGED` on `updatePayment` | New total, "Pay" asks for confirmation again with a new payment |
-| `502 PAYMENT_PROVIDER_ERROR` | Retry |
-| Stripe.js failed to load | "Card payment is unavailable", airline card offered if enabled |
+| Card declined or 3-D Secure failed (Stripe error) | Stripe's message under the element; the payment stays `requires_payment_method`; try another card and review again |
+| A brand outside `pspCardBrands`, or `422 UNPROCESSABLE` on `updatePayment` | "We cannot take this card", with the accepted brands; no fee is quoted |
+| `409 PAYMENT_NOT_UPDATABLE` | Create a new payment (`checkout.createPayment`) and remount; the address takes the new `payment=` |
+| `409 PRICE_CHANGED` on `updatePayment` | New total next to the old one; a new payment is created, so "Pay" needs a new review |
+| `502 PAYMENT_PROVIDER_ERROR` | "The payment service is not answering. Nothing was charged." with Retry (the review again) |
+| A new payment cannot be created | "We could not start the payment again", Retry when the call may succeed later, and the way back to the payment step |
+| `409 CHECKOUT_ALREADY_COMPLETED` / `CHECKOUT_BEING_COMPLETED` | The confirmation of `details.bookingId` (`pending=1` while it is being completed; without it the checkout is loaded again, which opens it) |
+| `410 CHECKOUT_EXPIRED` | "Your session expired", with a link to price the flight again |
+| `400 VALIDATION_FAILED` / `INVALID_REQUEST` on `updatePayment` | "Something went wrong" with the request id (the page has no field to mark) |
+| Stripe.js failed to load, or its element cannot (`loaderror`) | "Card payment is unavailable" ("Nothing was charged"), Retry loads the page again, and "Pay with the airline card instead" (the payment step) when the OTA offers the airline card; without Stripe.js the page makes no checkout or payment call |
 
 ## 9. Pay by airline card: `/checkout/pay-airline.html?id=chk_…&payment=pay_…` (M3 test, live after M6)
 

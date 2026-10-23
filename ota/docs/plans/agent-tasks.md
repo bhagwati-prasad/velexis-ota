@@ -1514,7 +1514,8 @@ Checkout, customer accounts in cookies, Stripe on the Velexis account, the airli
   - The airline-card option is shown only when `supportedMethods` includes it.
 - **Verify:** `pnpm --filter @velexis/ota-frontend test && pnpm --filter @velexis/ota-frontend build`
 
-### OFE-012 · Build the card payment page with Stripe's Payment Element
+### OFE-012 · Build the card payment page with Stripe's Payment Element ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-frontend
 - **Milestone:** M3
 - **Depends on:** OFE-011
