@@ -32,7 +32,7 @@ sequenceDiagram
   PA->>R: SET ptk:sha256 {accountId, tenantId, membershipId, role, mfa} EX 60 NX
   PA->>P: audit console.token_issued
   PA-->>FE: ptk_…
-  FE-->>M: HTML form POST to https://admin.ota.example.com/sso (auto-submit, no-store, no-referrer)
+  FE-->>M: HTML form POST to https://admin.ota.example.com/sso (auto-submit, no-store, strict-origin)
   M->>OAD: POST /sso portalToken=ptk_…
   OAD->>OA: console.auth.signIn {grantType: portal_token} with the service key
   OA->>R: GETDEL ptk:sha256
@@ -68,7 +68,7 @@ sequenceDiagram
    - requires the tenant `active` (`TENANT_NOT_ACTIVE` with `details.status`, so the portal can explain "suspended for billing" and link to the billing page);
    - applies the MFA policy: when the tenant is live, the account must have MFA enabled (`MFA_REQUIRED`) ([PADR-0008](../adr/0008-email-verification-and-mfa-policy.md));
    - generates `ptk_` + 43 base62 characters (256 bits), stores `SET ptk:<sha256> <json> EX 60 NX` with `{v: 1, accountId, tenantId, membershipId, role, mfa: <account MFA enabled>, issuedAt, requestId}`, audits `console.token_issued` (never the token), and returns it with `Cache-Control: no-store`.
-3. The route handler answers with a minimal HTML page: a form `POST https://admin.ota.example.com/sso` with a hidden `portalToken`, a nonce-allowed script that submits it at once, and a visible "Continue" button for browsers without JavaScript. Headers: `Cache-Control: no-store`, `Referrer-Policy: no-referrer`, CSP `form-action https://admin.ota.example.com`. The token is never in a URL.
+3. The route handler answers with a minimal HTML page: a form `POST https://admin.ota.example.com/sso` with a hidden `portalToken`, a nonce-allowed script that submits it at once, and a visible "Continue" button for browsers without JavaScript. Headers: `Cache-Control: no-store`, `Referrer-Policy: strict-origin`, CSP `form-action https://admin.ota.example.com`. The token is never in a URL. `strict-origin`, not `no-referrer` (lead decision of 2026-10-23, [PADR-0007](../adr/0007-portal-to-ota-admin-sso-token.md) point 4): under `no-referrer` browsers send `Origin: null` on this cross-origin POST, and the OTA admin's `/sso` accepts only `Origin` = `https://platform.example.com` ([OADR-0018](../../../ota/docs/adr/0018-ota-admin-consumes-the-sdk-server-side.md) point 2); `strict-origin` sends that origin and nothing of the launch URL's path or query.
 4. The OTA admin and OTA backend complete the sign-in as in [ADR-0008](../../../docs/mvp/adr/0008-identity-accounts-customers-sessions.md) (OTA plan). The staff session is bound to that one tenant.
 5. **Coming from the OTA admin.** Without a session, the OTA admin redirects to `https://platform.example.com/console?tenant=<tenantId>`. That portal page requires sign-in, then shows the user's OTAs with an **Open console** button each (pre-selecting `tenant`); with exactly one OTA it shows a single button. The OTA admin's tenant switcher links to the same page.
 

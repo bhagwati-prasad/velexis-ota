@@ -1285,7 +1285,8 @@ The OTA group builds checkout, Stripe payments on the Velexis account and the ai
 
 The OTA group builds the OTA admin and the console in M4. The platform issues the one-time console token and lets owners edit the Amadeus office settings that the console uses.
 
-### PBE-039 · Implement the one-time console token for OTA admin SSO
+### PBE-039 · Implement the one-time console token for OTA admin SSO ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-backend
 - **Milestone:** M4
 - **Depends on:** PBE-037, PBE-025
@@ -1324,11 +1325,11 @@ The OTA group builds the OTA admin and the console in M4. The platform issues th
 - **Files:** `platform/frontend/src/app/(app)/otas/[tenantId]/console/launch/route.ts`, `platform/frontend/src/app/(app)/otas/[tenantId]/console/launch/route.test.ts`, `platform/frontend/src/app/(app)/console/page.tsx`, `platform/frontend/src/components/open-console-button.tsx`, `platform/frontend/src/app/(app)/otas/[tenantId]/page.tsx`, `platform/frontend/src/app/(app)/dashboard/page.tsx`
 - **Steps:**
   1. `OpenConsoleButton`: a small `<form method="post">` to `/otas/{tenantId}/console/launch`, so prefetching never mints tokens; shown on the OTA dashboard and on each dashboard row.
-  2. The route handler checks `Origin` against `PUBLIC_PORTAL_URL` (403 otherwise), calls `createConsoleToken`, and answers a minimal HTML page with a form `POST {consoleSsoUrl}` holding a hidden `portalToken`, a nonce-allowed script that submits it, and a visible "Continue" button. Headers: `Cache-Control: no-store`, `Referrer-Policy: no-referrer`, CSP `form-action` limited to the origin of `PUBLIC_OTA_ADMIN_URL`.
+  2. The route handler checks `Origin` against `PUBLIC_PORTAL_URL` (403 otherwise), calls `createConsoleToken`, and answers a minimal HTML page with a form `POST {consoleSsoUrl}` holding a hidden `portalToken`, a nonce-allowed script that submits it, and a visible "Continue" button. Headers: `Cache-Control: no-store`, `Referrer-Policy: strict-origin` (not `no-referrer`, which makes browsers send `Origin: null` on the form POST and the OTA admin's `/sso` refuse it; PADR-0007 point 4, lead decision of 2026-10-23), CSP `form-action` limited to the origin of `PUBLIC_OTA_ADMIN_URL`.
   3. Errors: `TENANT_NOT_ACTIVE` redirects to the OTA dashboard with an explanation (and a billing link for `billing` suspensions); `MFA_REQUIRED` redirects to `/account/security` with a message.
   4. `/console?tenant=`: after sign-in, the user's OTAs with an "Open console" button each, the `tenant` one pre-selected; with one OTA, a single button.
 - **Acceptance:**
-  - The launch response contains the token only in the form body, never in a URL, and carries `no-store` and `no-referrer` [PF-22 AC2].
+  - The launch response contains the token only in the form body, never in a URL, and carries `no-store` and `Referrer-Policy: strict-origin` [PF-22 AC2].
   - A foreign `Origin` gets 403; `MFA_REQUIRED` leads to the security page [PF-22 AC3].
   - `/console?tenant=<id>` pre-selects that OTA.
 - **Verify:** `pnpm --filter @velexis/platform-frontend test`

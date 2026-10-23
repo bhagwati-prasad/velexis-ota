@@ -1,8 +1,10 @@
 // MembershipsModule (platform/docs/architecture.md §2.1, layer 1): owns `tenant_memberships` and
 // `tenant_invitations`, the role matrix (tenant-roles.ts), the team routes (members.controller.ts: list, role changes,
 // removals, PBE-025), the invitations (invitations.controller.ts: invite, list, resend, revoke, look up and accept,
-// PBE-026), and later the console token (PBE-036). It imports AuditModule for the audit rows of its changes and
-// NotificationsModule for the invitation e-mails (layer 0). The worker imports `MembershipsModule.forWorker()` (below).
+// PBE-026), and the console token of the OTA admin's single sign-on (ConsoleTokenController of members.controller.ts and
+// console-token.service.ts, PBE-039; the token lives in Redis only). It imports AuditModule for the audit rows of its
+// changes and NotificationsModule for the invitation e-mails (layer 0). The worker imports
+// `MembershipsModule.forWorker()` (below).
 //
 // It is global for one reason: TenantRoleGuard, a global guard of CommonModule (layer 0) that must run between the
 // auth guards and RecentMfaGuard (API_GUARDS), reads the caller's membership on every tenant request through the
@@ -18,7 +20,8 @@ import { InvitationsExpireScheduler } from "./invitations-expire.scheduler";
 import { InvitationAcceptanceController, InvitationsController } from "./invitations.controller";
 import { InvitationsRepository } from "./invitations.repository";
 import { InvitationsService } from "./invitations.service";
-import { MembersController } from "./members.controller";
+import { ConsoleTokenService } from "./console-token.service";
+import { ConsoleTokenController, MembersController } from "./members.controller";
 import { MembersService } from "./members.service";
 import { MembershipsRepository } from "./memberships.repository";
 
@@ -36,10 +39,16 @@ export class MembershipsWorkerModule {}
 @Global()
 @Module({
   imports: [AuditModule, NotificationsModule],
-  controllers: [MembersController, InvitationsController, InvitationAcceptanceController],
+  controllers: [
+    MembersController,
+    ConsoleTokenController,
+    InvitationsController,
+    InvitationAcceptanceController,
+  ],
   providers: [
     MembershipsRepository,
     MembersService,
+    ConsoleTokenService,
     InvitationsRepository,
     InvitationsService,
     { provide: TenantMembershipLookup, useExisting: MembershipsRepository },

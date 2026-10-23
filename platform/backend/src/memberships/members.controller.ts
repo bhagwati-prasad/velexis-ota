@@ -4,12 +4,19 @@
 // runs, and MembersService applies the rules finer than a role (who may touch owners and admins, leaving, the step-up
 // of granting owner, the last owner). `If-Match` and `ETag` carry the member's version, with the helpers the tenant
 // profile uses (common/http/if-match.ts), so this module imports nothing of TenantsModule (architecture §2.2).
-import { Controller, Delete, Get, HttpCode, Patch, Res } from "@nestjs/common";
+//
+// The console token of the same section (PBE-039, PADR-0007) has its own path, `/v1/tenants/{tenantId}/console-token`,
+// so its own controller below: every member may ask for one, and ConsoleTokenService checks the account, the tenant
+// and the MFA policy of live OTAs. Its answer carries the one-time token, so it is sent with `Cache-Control:
+// no-store` (set before the service runs, so a refusal carries it too), which also keeps it out of the idempotency
+// store; nothing here logs a body.
+import { Controller, Delete, Get, HttpCode, Patch, Post, Res } from "@nestjs/common";
 import type { AccessTokenClaims } from "../auth/token.service";
 import { AccessToken } from "../common/auth/decorators";
 import { CurrentMembership, TenantRoles, type TenantMembership } from "../common/auth/tenant-role.guard";
 import { etagOf, versionOfIfMatch } from "../common/http/if-match";
 import { OpenApiOperation, Validated } from "../common/http/openapi-operation.decorator";
+import { ConsoleTokenService, type ConsoleToken } from "./console-token.service";
 import { MembersService, type Member, type MemberList, type UpdateMemberRequest } from "./members.service";
 import { tenantRolesOf } from "./tenant-roles";
 
@@ -60,5 +67,21 @@ export class MembersController {
     @Validated("path") path: Readonly<Record<string, unknown>>,
   ): Promise<void> {
     return this.members.remove(membership, path["memberId"] as string);
+  }
+}
+
+@Controller("v1/tenants/:tenantId/console-token")
+export class ConsoleTokenController {
+  constructor(private readonly consoleTokens: ConsoleTokenService) {}
+
+  @Post()
+  @OpenApiOperation("createConsoleToken")
+  @TenantRoles(...tenantRolesOf("createConsoleToken"))
+  createConsoleToken(
+    @CurrentMembership() membership: TenantMembership,
+    @Res({ passthrough: true }) res: HeaderTarget,
+  ): Promise<ConsoleToken> {
+    res.setHeader("Cache-Control", "no-store");
+    return this.consoleTokens.create(membership);
   }
 }

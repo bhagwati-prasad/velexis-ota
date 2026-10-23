@@ -68,6 +68,7 @@ const REQUIRED = {
   OPS_ALERT_EMAIL: DEVELOPMENT.OPS_ALERT_EMAIL,
   PUBLIC_PORTAL_URL: DEVELOPMENT.PUBLIC_PORTAL_URL,
   PUBLIC_PLATFORM_ADMIN_URL: DEVELOPMENT.PUBLIC_PLATFORM_ADMIN_URL,
+  PUBLIC_OTA_ADMIN_URL: DEVELOPMENT.PUBLIC_OTA_ADMIN_URL,
   STOREFRONT_BASE_DOMAIN: DEVELOPMENT.STOREFRONT_BASE_DOMAIN,
 } as const;
 
@@ -81,6 +82,9 @@ const MAIL_AND_KEY_VARIABLES = [
   "PUBLIC_PORTAL_URL",
   "PUBLIC_PLATFORM_ADMIN_URL",
 ] as const;
+
+/** The SSO hand-off target PBE-039 adds, right after MAIL_AND_KEY_VARIABLES in the schema. */
+const OTA_ADMIN_URL = "PUBLIC_OTA_ADMIN_URL";
 
 /** The Stripe variables PBE-043 adds, in the order of the schema. */
 const STRIPE_VARIABLES = [
@@ -182,6 +186,7 @@ describe("parseConfig", () => {
       OPS_ALERT_EMAIL: "ops@example.com",
       PUBLIC_PORTAL_URL: "http://localhost:3000",
       PUBLIC_PLATFORM_ADMIN_URL: "http://localhost:3001",
+      PUBLIC_OTA_ADMIN_URL: "http://localhost:3002",
       STOREFRONT_BASE_DOMAIN: "ota.example.com",
       MAX_TENANTS_PER_ACCOUNT: 3,
       FEATURE_STRIPE_BILLING: false,
@@ -213,6 +218,7 @@ describe("parseConfig", () => {
       OPS_ALERT_EMAIL: "secret-value-14",
       PUBLIC_PORTAL_URL: "ftp://secret-value-15.example.com",
       PUBLIC_PLATFORM_ADMIN_URL: "secret-value-16",
+      PUBLIC_OTA_ADMIN_URL: "mailto:secret-value-18@example.com",
       STOREFRONT_BASE_DOMAIN: "https://ota.example.com/domain-value-10",
       MAX_TENANTS_PER_ACCOUNT: "many-value-8",
       FEATURE_CUSTOM_DOMAINS: "maybe-value-9",
@@ -229,6 +235,7 @@ describe("parseConfig", () => {
       "JWT_PRIVATE_KEY_FILE",
       "API_KEY_PEPPER_FILE",
       ...MAIL_AND_KEY_VARIABLES,
+      OTA_ADMIN_URL,
       "STOREFRONT_BASE_DOMAIN",
       "MAX_TENANTS_PER_ACCOUNT",
       "FEATURE_CUSTOM_DOMAINS",
@@ -252,6 +259,7 @@ describe("parseConfig", () => {
       "secret-value-15",
       "secret-value-16",
       "secret-value-17",
+      "secret-value-18",
       "domain-value-10",
     ]) {
       expect(error.message).not.toContain(value);
@@ -318,6 +326,7 @@ describe("parseConfig", () => {
       "JWT_PRIVATE_KEY_FILE",
       "API_KEY_PEPPER_FILE",
       ...MAIL_AND_KEY_VARIABLES,
+      OTA_ADMIN_URL,
       "STOREFRONT_BASE_DOMAIN",
       "TRUST_PROXY",
     ]);
@@ -442,6 +451,7 @@ describe("parseConfig", () => {
       "JWT_PRIVATE_KEY_FILE",
       "API_KEY_PEPPER_FILE",
       ...MAIL_AND_KEY_VARIABLES,
+      OTA_ADMIN_URL,
       "STOREFRONT_BASE_DOMAIN",
       "MAX_TENANTS_PER_ACCOUNT",
       ...Object.values(FEATURE_VARIABLES),
@@ -653,6 +663,52 @@ describe("parseConfig: the key folder and the e-mail settings (PBE-011)", () => 
       "PUBLIC_PORTAL_URL",
       "PUBLIC_PLATFORM_ADMIN_URL",
     ]);
+  });
+});
+
+describe("parseConfig: the OTA admin's URL (PBE-039)", () => {
+  it("[PBE-039] requires PUBLIC_OTA_ADMIN_URL, an http(s) URL, without echoing a refused value", () => {
+    expect(configError({ ...REQUIRED, [OTA_ADMIN_URL]: undefined }).problems).toEqual([
+      { variable: OTA_ADMIN_URL, reason: "is required but missing" },
+    ]);
+    for (const url of ["https://admin.ota.example.com", "http://localhost:3002"]) {
+      expect(parseConfig({ ...REQUIRED, [OTA_ADMIN_URL]: url }).PUBLIC_OTA_ADMIN_URL).toBe(url);
+    }
+    for (const url of [
+      "admin.ota.example.com",
+      "javascript:alert(1)",
+      "ftp://admin-value-1.example.com",
+      "",
+    ]) {
+      const error = configError({ ...REQUIRED, [OTA_ADMIN_URL]: url });
+
+      expect(
+        error.problems.map((p) => p.variable),
+        url,
+      ).toEqual([OTA_ADMIN_URL]);
+      if (url !== "") {
+        expect(error.message).not.toContain(url);
+      }
+    }
+  });
+
+  it("[PBE-039] declares PUBLIC_OTA_ADMIN_URL in every env template: the local OTA admin, the VM's on https", () => {
+    for (const [file, expected] of [
+      [".env.example", "http://localhost:3002"],
+      ["platform/backend/.env.example", "http://localhost:3002"],
+      ["deploy/env/platform-backend.env.example", "https://admin.ota.example.com"],
+    ] as const) {
+      const values = readEnvFile(join(REPO_ROOT, file));
+
+      expect(values[OTA_ADMIN_URL], file).toBe(expected);
+      expect(parseConfig({ ...REQUIRED, [OTA_ADMIN_URL]: values[OTA_ADMIN_URL] }).PUBLIC_OTA_ADMIN_URL).toBe(
+        expected,
+      );
+    }
+    // The portal posts the token to the OTA admin the API names: the same development value on both sides.
+    expect(readEnvFile(join(REPO_ROOT, "platform/frontend/.env.example"))[OTA_ADMIN_URL]).toBe(
+      readEnvFile(join(APP_DIR, ".env.example"))[OTA_ADMIN_URL],
+    );
   });
 });
 

@@ -2,7 +2,8 @@
 // the read of TenantRoleGuard (PBE-017): the caller's **active** membership of an OTA that members may see; the team
 // routes (PBE-025): the member list, the rows a role change or a removal locks, and its two writes; and the create-OTA
 // transaction (PBE-018): the owner membership of a new OTA and the count of the OTAs an account owns (the tenant limit
-// of scope PF-10 AC4). The membership of an accepted invitation is written by invitations.repository.ts (PBE-026).
+// of scope PF-10 AC4). The membership of an accepted invitation is written by invitations.repository.ts (PBE-026); the
+// console token (PBE-039) reads the caller's membership with its account and tenant (`findConsoleTokenState`).
 // Kysely on the API's `PLATFORM_DB`, schema-qualified tables (ADR-0005). The member reads join `platform.accounts` for
 // what the `Member` schema shows next to the membership (name, e-mail address, MFA flag), read only, as the operations'
 // `x-platform-tables` say.
@@ -43,6 +44,24 @@ export interface LockedMembership {
   readonly mfa_enabled: boolean;
 }
 
+/**
+ * What `createConsoleToken` checks before it issues a portal token (PBE-039, PADR-0007 item 2): the caller's active
+ * membership, its account and its tenant, read together.
+ */
+export interface ConsoleTokenState {
+  /** `stf_…`. */
+  readonly membership_id: string;
+  readonly role: string;
+  readonly account_status: string;
+  readonly account_deleted_at: Date | null;
+  readonly email_verified_at: Date | null;
+  readonly mfa_enabled: boolean;
+  readonly tenant_status: string;
+  readonly suspension_reason: string | null;
+  /** `test` or `live` (migration 0002): a live OTA needs MFA for console access (PADR-0008). */
+  readonly storefront_environment: string;
+}
+
 /** The membership states of migration 0001; only `active` members are on the team. */
 export type MembershipStatus = "active" | "suspended" | "removed";
 
@@ -79,6 +98,37 @@ export class MembershipsRepository implements TenantMembershipLookup {
       return undefined;
     }
     return { membershipId: row.id, tenantId: row.tenant_id, accountId: row.account_id, role: row.role };
+  }
+
+  /**
+   * The console-token state of `accountId` in `tenantId` (PBE-039): its **active** membership of a tenant members may
+   * see, with the account's status, verification and MFA flag and the tenant's status, suspension reason and storefront
+   * environment, in one indexed read (the unique `(tenant_id, account_id)` and two primary keys) on the pool;
+   * `undefined` when there is no such membership any more. The account and tenant columns are read only, as the
+   * operation's `x-platform-tables` say.
+   */
+  async findConsoleTokenState(tenantId: string, accountId: string): Promise<ConsoleTokenState | undefined> {
+    return this.db
+      .selectFrom("platform.tenant_memberships as m")
+      .innerJoin("platform.accounts as a", "a.id", "m.account_id")
+      .innerJoin("platform.tenants as t", "t.id", "m.tenant_id")
+      .select([
+        "m.id as membership_id",
+        "m.role",
+        "a.status as account_status",
+        "a.deleted_at as account_deleted_at",
+        "a.email_verified_at",
+        "a.mfa_enabled",
+        "t.status as tenant_status",
+        "t.suspension_reason",
+        "t.storefront_environment",
+      ])
+      .where("m.tenant_id", "=", tenantId)
+      .where("m.account_id", "=", accountId)
+      .where("m.status", "=", "active" satisfies MembershipStatus)
+      .where("t.status", "in", MEMBER_VISIBLE_TENANT_STATUSES)
+      .where("t.deleted_at", "is", null)
+      .executeTakeFirst();
   }
 
   /**

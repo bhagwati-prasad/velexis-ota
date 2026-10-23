@@ -1,9 +1,10 @@
 // Key folders and e-mail settings for tests that build the platform backend's configuration (MASTER_KEY_DIR and
-// MASTER_KEY_CURRENT, SMTP_URL, MAIL_FROM, OPS_ALERT_EMAIL, PUBLIC_PORTAL_URL, PUBLIC_PLATFORM_ADMIN_URL; PBE-011; and
-// API_KEY_PEPPER_FILE, PBE-021). Each call of `createTestMasterKeyDir` writes a fresh KEK `master-v1.key` and a fresh
-// API key pepper `api-key-pepper` (32 random bytes in base64 each, mode 0600) into its own temporary folder (mode 0700),
-// as `pnpm dev:keys` writes the development keys and provision-vm.sh the platform zone's folder, so tests never depend
-// on `.local/keys/` or share a key. The keys are generated on the spot and are no secret.
+// MASTER_KEY_CURRENT, SMTP_URL, MAIL_FROM, OPS_ALERT_EMAIL, PUBLIC_PORTAL_URL, PUBLIC_PLATFORM_ADMIN_URL; PBE-011;
+// API_KEY_PEPPER_FILE, PBE-021; and PUBLIC_OTA_ADMIN_URL, PBE-039). Each call of `createTestMasterKeyDir` writes a
+// fresh KEK `master-v1.key` and a fresh API key pepper `api-key-pepper` (32 random bytes in base64 each, mode 0600) into
+// its own temporary folder (mode 0700), as `pnpm dev:keys` writes the development keys and provision-vm.sh the platform
+// zone's folder, so tests never depend on `.local/keys/` or share a key. The keys are generated on the spot and are no
+// secret.
 import { randomBytes } from "node:crypto";
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -48,7 +49,7 @@ export function createTestMasterKeyDir(): TestMasterKeyDir {
 
 /**
  * The e-mail settings and public URLs of `platform/backend/.env.example` (development values, dummies): Mailpit's SMTP
- * port, a sender and an ops address on the example domains, and the local portal and admin.
+ * port, a sender and an ops address on the example domains, and the local portal, platform admin and OTA admin.
  */
 export const TEST_MAIL_ENV = Object.freeze({
   SMTP_URL: "smtp://127.0.0.1:1025",
@@ -56,6 +57,7 @@ export const TEST_MAIL_ENV = Object.freeze({
   OPS_ALERT_EMAIL: "ops@example.com",
   PUBLIC_PORTAL_URL: "http://localhost:3000",
   PUBLIC_PLATFORM_ADMIN_URL: "http://localhost:3001",
+  PUBLIC_OTA_ADMIN_URL: "http://localhost:3002",
 });
 
 /** TEST_MAIL_ENV and the key folder's MASTER_KEY_DIR, MASTER_KEY_CURRENT and API_KEY_PEPPER_FILE. */

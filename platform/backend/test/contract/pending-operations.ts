@@ -33,8 +33,7 @@ export const PENDING_OPERATIONS: readonly PendingOperation[] = Object.freeze([
   // bound (the Amadeus accounts and offices since PBE-020, the accounts, platform admins and audit since PBE-032, the
   // plans and subscriptions since PBE-033).
 
-  // PBE-037: the M4 console token and Amadeus settings, and the M3 statement descriptor.
-  { operationId: "createConsoleToken", task: "PBE-039" },
+  // PBE-037: the M4 Amadeus settings and the M3 statement descriptor (createConsoleToken is bound since PBE-039).
   { operationId: "updateAmadeusConnection", task: "PBE-040" },
   { operationId: "updatePaymentConnection", task: "PBE-038" },
 

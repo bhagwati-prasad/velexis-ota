@@ -187,6 +187,12 @@ export const PLATFORM_BACKEND_CONFIG_SCHEMA = {
   /** The platform admin's public base URL, for the links of ops e-mails (PADR-0013 item 7). */
   PUBLIC_PLATFORM_ADMIN_URL: env.url({ protocols: ["http:", "https:"] }),
   /**
+   * The OTA admin's public base URL (`https://admin.ota.example.com`): `createConsoleToken` answers it with `/sso` as
+   * the `consoleSsoUrl` the portal posts the one-time token to (PADR-0007 item 4, PBE-039), never a host taken from a
+   * request. The API reads it; the worker and the CLI validate it too, because the three read `platform-backend.env`.
+   */
+  PUBLIC_OTA_ADMIN_URL: env.url({ protocols: ["http:", "https:"] }),
+  /**
    * The parent domain of every OTA's storefront sub-domain, `<key>.<STOREFRONT_BASE_DOMAIN>` (`ota.example.com`):
    * the host the key check shows (`checkTenantKey`), the sub-domain row of a new OTA and the TLS `ask` rule. No
    * default: a wrong domain in production would hand out hosts Velexis does not serve.

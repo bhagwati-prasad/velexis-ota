@@ -214,7 +214,7 @@ Internal checkpoints keep this long milestone reviewable:
 
 | Risk | Mitigation |
 |---|---|
-| Token leakage through prefetch, history or `Referer` | POST-only launch form, `no-store`, `no-referrer`, 60 s single-use token in Redis with `NX` and `GETDEL` |
+| Token leakage through prefetch, history or `Referer` | POST-only launch form, `no-store`, `Referrer-Policy: strict-origin` (the portal's origin only; `no-referrer` would send `Origin: null`, which the OTA admin's `/sso` refuses, PADR-0007 point 4), 60 s single-use token in Redis with `NX` and `GETDEL` |
 | Cross-origin hand-off breaks on cookies or CSP | The end-to-end journey runs across the real portal and OTA admin origins; the portal CSP allows exactly the OTA admin origin in `form-action` |
 
 ### M5 — Monetisation & self-service
