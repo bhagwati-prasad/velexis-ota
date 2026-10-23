@@ -69,6 +69,7 @@ The order is the checkout, then the booking, then the payment, then the refund (
 | `refund.submit`: the release, the alert of an unknown outcome | refund (updated), or booking key share alone |
 | A refund's request (`RefundsRepository.create`) | booking key share → payment `FOR UPDATE` → the new refund |
 | `payments.authorisation_watch` | bookings key share → payments `FOR UPDATE SKIP LOCKED` |
+| `refunds.sweep` (FIX-W27-FOLLOWUPS) | none (the unclaimed refunds read without a lock; the `refund.submit` job it queues claims each one) |
 | Stripe webhook receiver | payment key share (the stored event) |
 | `stripe.event`: a PaymentIntent | payment `FOR UPDATE` |
 | `stripe.event`: refunds (`applyRefunds`) | payment `FOR UPDATE` → refunds `FOR UPDATE` |

@@ -3,7 +3,7 @@
 **Status:** Accepted
 **Date:** 2026-10-12
 **Deciders:** OTA backend tech lead. Decided during planning; revisit when a second payment provider is added, when Stripe disputes need handling in the OTA admin, or when the legal review of Velexis-collected payments changes the default mode (ADR-0011 follow-up).
-**Revisions:** 2026-10-12 (planning review): point 4 binds the tenant to the endpoint, cross-checks metadata and `livemode`, and acknowledges mismatches without effect.
+**Revisions:** 2026-10-12 (planning review): point 4 binds the tenant to the endpoint, cross-checks metadata and `livemode`, and acknowledges mismatches without effect. 2026-10-23 (lead decision (4), FIX-W27-FOLLOWUPS): point 6 gains the `refunds.sweep` schedule, which queues `refund.submit` again for a refund whose enqueue was lost (dated note under point 6).
 
 ## Context
 
@@ -38,6 +38,8 @@
    - an unknown tenant or payment is logged and acknowledged with `200`.
 5. **Processing re-fetches.** The `ota-stripe-events` processor never trusts the event body: it retrieves the PaymentIntent, charge or refund from Stripe and applies the state with the payment's `version` lock. Handled types: `payment_intent.amount_capturable_updated` (authorized), `payment_intent.succeeded` (captured), `payment_intent.payment_failed`, `payment_intent.canceled`, `charge.refunded` and `charge.refund.updated` (refund rows), `charge.dispute.created` (staff alert only in the MVP). Other types are stored and ignored.
 6. **Voids and retries** run in `ota-payments`: `payment.void` (checkout expiry, Amadeus rejection after authorisation, reconciliation not found), `payment.capture_retry`, `refund.submit`. Each job re-reads the row and does nothing if the state already moved.
+
+   **2026-10-23 (lead decision (4), FIX-W27-FOLLOWUPS): the refund sweep.** A refund's producer queues `refund.submit` after the commit and never fails its request when Redis does not answer, so a lost enqueue (Redis down at the commit, or the after-commit task failed) left the row `pending` for good. The `refunds.sweep` schedule (every 5 minutes, per `active` and `suspended` tenant, [OADR-0014](0014-per-tenant-workers-and-schedulers.md) points 1 and 4) queues `refund.submit` again for the refunds still `pending` and never claimed 5 minutes or more after their request (100 per job, the oldest first; a full batch continues with the next, OADR-0014 point 2, so refunds whose jobs are still waiting never hide a lost one behind them). Never claimed means still at the version of a new row: a claim and the release of a claim bump it, so such a refund was never sent to Stripe. The sweep adds the producers' own job, with its id `refund-submit-<rfd_id>`, which BullMQ ignores while it holds that job, and the job claims the row before it calls Stripe with the refund's key `refund:<rfd_id>` (point 3), so a refund is never submitted twice. A refund being sent, one already sent and one whose claim was released after an answer that never came (its own job retries it, then the staff are alerted to check before refunding again) are left alone.
 7. **3-D Secure:** `payment_method_options.card.request_three_d_secure = automatic`, or `any` when `storefront_settings.require_3ds`. The 3-D Secure outcome is copied to `payments.three_ds` for display; it is not forwarded to Amadeus (the OTA-merchant model uses `other` forms of payment).
 8. **What never happens:** card data reaching the backend on this path (Stripe.js collects it), refunds from the storefront (only cancellations trigger them), or a PaymentIntent without the tenant metadata.
 
@@ -48,6 +50,7 @@
 - The same code serves all three modes; switching an OTA to its own Stripe is a platform data change plus an invalidation.
 - Webhooks are cheap and safe to retry; state comes from Stripe, not from event order.
 - Every Stripe write is idempotent, so the SDK's single network retry and our job retries cannot double-charge or double-refund.
+- A refund whose enqueue was lost goes out within about 10 minutes (the refund sweep of point 6), without a second submission of a refund that was ever claimed.
 
 ### Negative
 

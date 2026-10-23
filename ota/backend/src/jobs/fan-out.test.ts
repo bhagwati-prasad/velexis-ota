@@ -55,6 +55,8 @@ const TICKETING = "ticketing.scan";
 const RECONCILE = "bookings.reconcile_scan";
 /** The booking sync scan of OBE-045. */
 const SYNC = "bookings.sync_scan";
+/** The sweep of the refunds whose enqueue was lost (FIX-W27-FOLLOWUPS). */
+const REFUNDS = "refunds.sweep";
 const ALPHA = "ten_01JALPHA0000000000000000AA";
 const BETA = "ten_01JBETA00000000000000000BB";
 /** The 15-minute iteration of the tests: 2026-01-15T10:15:00Z (FakeClock's day). */
@@ -154,6 +156,7 @@ describe("the schedules", () => {
       TICKETING,
       RECONCILE,
       SYNC,
+      REFUNDS,
     ]);
     expect(purgeSchedule()).toMatchObject({
       pattern: "*/15 * * * *",
@@ -187,6 +190,12 @@ describe("the schedules", () => {
     // OBE-045: the booking sync scan every 10 minutes, for suspended tenants too (OADR-0008 point 8).
     expect(scheduleById(SYNC)).toMatchObject({
       pattern: "*/10 * * * *",
+      milestone: "M3",
+      statuses: ["active", "suspended"],
+    });
+    // FIX-W27-FOLLOWUPS: the refund sweep every 5 minutes, for suspended tenants too (OADR-0014 point 4).
+    expect(scheduleById(REFUNDS)).toMatchObject({
+      pattern: "*/5 * * * *",
       milestone: "M3",
       statuses: ["active", "suspended"],
     });
@@ -235,9 +244,14 @@ describe("the schedules", () => {
       { pattern: "*/10 * * * *", tz: SCHEDULE_TIME_ZONE },
       { name: FAN_OUT_JOB, data: { task: SYNC } },
     );
+    expect(upsertJobScheduler).toHaveBeenCalledWith(
+      REFUNDS,
+      { pattern: "*/5 * * * *", tz: SCHEDULE_TIME_ZONE },
+      { name: FAN_OUT_JOB, data: { task: REFUNDS } },
+    );
     expect(removeJobScheduler).toHaveBeenCalledExactlyOnceWith("offers.legacy_sweep");
     expect(result).toEqual({
-      registered: [PURGE, SWEEP, WATCH, TICKETING, RECONCILE, SYNC],
+      registered: [PURGE, SWEEP, WATCH, TICKETING, RECONCILE, SYNC, REFUNDS],
       removed: ["offers.legacy_sweep"],
     });
   });

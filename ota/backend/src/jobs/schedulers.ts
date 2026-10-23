@@ -6,7 +6,7 @@
 // deterministic id, which the module that owns the work handles (`@TenantJob("<schedule id>")`). Schedules join this
 // list with the task that adds their work (M3: notifications.sweep with OBE-030, payments.authorisation_watch with
 // OBE-040, ticketing.scan with OBE-044, bookings.reconcile_scan with OBE-043, bookings.sync_scan with OBE-045,
-// checkouts.expire, …; M4: queues.poll).
+// refunds.sweep with FIX-W27-FOLLOWUPS, checkouts.expire, …; M4: queues.poll).
 //
 // Target tenants (OADR-0014 point 4): a schedule names the statuses it runs for, `active` and possibly `suspended`
 // (suspended tenants keep their obligations to paid travellers, but nothing that starts new supplier activity runs for
@@ -138,6 +138,15 @@ export const OTA_SCHEDULES: readonly ScheduleDefinition[] = Object.freeze([
     statuses: ["active", "suspended"],
     description:
       "Enqueue booking.sync {tenantId, bookingId} for the 20 oldest synced active bookings with an order whose trip is not over, not synced for 6 hours (1 hour in the 24 hours before the ticketing deadline of one that waits for tickets) nor claimed for 30 minutes (bookings/booking-sync.processor.ts)",
+  }),
+  schedule({
+    id: "refunds.sweep",
+    pattern: "*/5 * * * *",
+    milestone: "M3",
+    // A suspended OTA's refunds are sent all the same (OADR-0014 point 4).
+    statuses: ["active", "suspended"],
+    description:
+      "Enqueue refund.submit {tenantId, id} again, with its own job id refund-submit-<rfd_id>, for the refunds still pending and unclaimed 5 minutes after their request (a lost enqueue), 100 per job, oldest first, a full batch continuing with the next (payments/refunds-sweep.processor.ts)",
   }),
 ]);
 

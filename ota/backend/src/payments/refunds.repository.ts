@@ -32,6 +32,11 @@
 // staff alert (the claim, the record of the submission, a refusal) takes `lockParents` before the refund's lock: the
 // payment's booking and the payment first, then the refund (lead decision of 2026-10-21, OADR-0003 point 11), as the
 // webhook's transaction locks the payment, then its refunds.
+//
+// The sweep (FIX-W27-FOLLOWUPS, lead decision (4) of 2026-10-23). A row whose `refund.submit` enqueue was lost (Redis
+// down at the commit, or the after-commit task failed) is still `pending` at NEW_REFUND_VERSION: a claim, and the release
+// of a claim, bump the version, so such a row was never sent to Stripe. `unclaimedRefundIds` lists those rows for the
+// `refunds.sweep` schedule (refunds-sweep.processor.ts), which queues the producers' own job for each again.
 import { Injectable } from "@nestjs/common";
 import { sql, type TenantDatabase, type Updateable } from "@velexis/db";
 import { newId } from "../common/ids";
@@ -66,6 +71,12 @@ export const REFUNDABLE_PAYMENT_STATUSES: readonly string[] = Object.freeze([
 
 /** How long a claim of `refund.submit` holds a row before another job may send it again (OADR-0014 point 6). */
 export const REFUND_CLAIM_LEASE_MS = 5 * 60_000;
+
+/**
+ * The `version` of a row `create` inserts. Every change bumps it (a claim, the release of a claim, a record), so a row
+ * still `pending` at this version was never claimed by a `refund.submit` job, and never sent to Stripe.
+ */
+export const NEW_REFUND_VERSION = 1;
 
 /** The `payment_events.source` of a refund request, by requester. */
 const EVENT_SOURCE: Readonly<Record<RefundRequester, "api" | "staff" | "system">> = Object.freeze({
@@ -256,7 +267,7 @@ export class RefundsRepository {
         status: "pending",
         requested_by_type: input.requestedBy.type,
         requested_by_id: input.requestedBy.id,
-        version: 1,
+        version: NEW_REFUND_VERSION,
         created_at: input.now,
         updated_at: input.now,
       })
@@ -340,6 +351,33 @@ export class RefundsRepository {
       query = query.forUpdate();
     }
     return await query.executeTakeFirst();
+  }
+
+  /**
+   * The refunds no `refund.submit` job has claimed that were asked for at `requestedBefore` or earlier: `pending` at
+   * NEW_REFUND_VERSION without a Stripe id, the oldest first, at most `limit` ids after the first `offset` (the sweep's
+   * continuations). Read without a lock: the job that is queued for each claims the row itself (`refunds.sweep`,
+   * refunds-sweep.processor.ts).
+   */
+  async unclaimedRefundIds(
+    trx: TenantTransaction,
+    requestedBefore: Date,
+    limit: number,
+    offset = 0,
+  ): Promise<string[]> {
+    const rows = await trx
+      .selectFrom("refunds")
+      .select("id")
+      .where("status", "=", "pending")
+      .where("version", "=", NEW_REFUND_VERSION)
+      .where("provider_refund_id", "is", null)
+      .where("created_at", "<=", requestedBefore)
+      .orderBy("created_at")
+      .orderBy("id")
+      .limit(limit)
+      .offset(offset)
+      .execute();
+    return rows.map((row) => row.id);
   }
 
   /** The sum of the payment's refunds in flight (`pending`, `processing`), a decimal string. */

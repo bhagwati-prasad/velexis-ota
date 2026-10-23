@@ -26,7 +26,8 @@
 // - `If-Match`: `bookings.patch`, `.issue` and `.cancel` require `ifMatch`, the booking `version` (a number, sent as its
 //   ETag `"<version>"`) or the ETag itself (a string, sent as it is), and so do the updates and deletes of
 //   `settings.markupRules`, `.feeRules`, `.storefront` and `.pages` and `payments.capture`, with the version of their
-//   resource. A missing or malformed `ifMatch` is a `TypeError` before any request, like a missing path parameter.
+//   resource. A missing or malformed `ifMatch` is a `TypeError` before any request, like a missing path parameter,
+//   also in a call without params (the check of internal/if-match.js, shared with `account` and `bookings`).
 //   `settings.templates.put` takes it only when the OTA already has its own template (a malformed one is a
 //   `TypeError` too); `settings.assets.delete` has none (assets never change).
 // - Record locators: `bookings.findByRecordLocator` and `amadeus.getFlightOrderByReference` send `originSystemCode:
@@ -39,6 +40,7 @@
 // Console data is personal, priced or live supplier data, so every method sends `cache: "no-store"` to `fetch` unless
 // the call sets `cache` or `next` itself (console.d.ts "Caching", B4 §1).
 
+import { optionalIfMatch, requireIfMatch } from "../internal/if-match.js";
 import { op } from "../internal/operations.js";
 
 /** @typedef {import("../internal/client.js").Core} Core */
@@ -183,34 +185,12 @@ function live(options) {
 }
 
 /**
- * A character that cannot be part of a header value as `ifMatch` sends it: anything but tab and visible ASCII with
- * spaces (CR, LF and NUL would make `Headers` throw, other characters are not an ETag).
- */
-const NOT_HEADER_TEXT = /[^\t\x20-\x7e]/;
-
-/**
- * The `If-Match` value of an `ifMatch` param: a version number becomes its ETag `"<version>"`, a non-blank string of
- * visible ASCII is an ETag and is sent as it is; anything else is `undefined`.
- * @param {unknown} ifMatch
- * @returns {string | undefined}
- */
-function ifMatchValue(ifMatch) {
-  if (typeof ifMatch === "number" && Number.isSafeInteger(ifMatch) && ifMatch >= 0) {
-    return `"${ifMatch}"`;
-  }
-  if (typeof ifMatch !== "string" || ifMatch.trim() === "" || NOT_HEADER_TEXT.test(ifMatch)) {
-    return undefined;
-  }
-  return ifMatch;
-}
-
-/**
  * Sends a call whose operation requires `If-Match` (`bookings.patch`, `.issue`, `.cancel`, the updates and deletes of
- * the settings, `payments.capture`), with `ifMatch` as the header value (see `ifMatchValue`). A missing or malformed
- * `ifMatch` rejects with a `TypeError` before any request, naming the parameter and whose version it is (`resource`),
- * never its value; params left out have no `ifMatch` either (`settings.storefront.update()` has no path parameter that
- * would refuse the call otherwise). Other params that are not a plain object are passed on unchanged, so `core.call`
- * refuses them with its usual `TypeError`.
+ * the settings, `payments.capture`), with `ifMatch` as the header value (`requireIfMatch`, internal/if-match.js). A
+ * missing or malformed `ifMatch` rejects with a `TypeError` before any request, naming the parameter and whose version
+ * it is (`resource`), never its value; params left out have no `ifMatch` either (`settings.storefront.update()` has no
+ * path parameter that would refuse the call otherwise). Other params that are not a plain object are passed on
+ * unchanged, so `core.call` refuses them with its usual `TypeError`.
  * @template T
  * @param {Core} core
  * @param {Operation} operation
@@ -220,23 +200,15 @@ function ifMatchValue(ifMatch) {
  * @returns {Promise<T>}
  */
 async function withIfMatch(core, operation, resource, params, options) {
-  if (params !== undefined && !isPlainObject(params)) {
-    return core.call(operation, params, live(options));
-  }
-  const ifMatch = ifMatchValue(params?.ifMatch);
-  if (ifMatch === undefined) {
-    throw new TypeError(
-      `Velexis SDK: ${operation.method} ${operation.path} needs "ifMatch", the ${resource} version (a whole number) or its ETag (a string)`,
-    );
-  }
-  return core.call(operation, { ...params, ifMatch }, live(options));
+  return core.call(operation, requireIfMatch(operation, resource, params), live(options));
 }
 
 /**
  * Sends a call whose operation takes `If-Match` only when its resource already exists (`settings.templates.put`: the
  * OTA's own template): without `ifMatch` (`undefined` or `null`) no `If-Match` is sent; a given `ifMatch` is sent as
- * `withIfMatch` sends it, and a malformed one rejects with a `TypeError` before any request. Params that are not a
- * plain object are passed on unchanged, so `core.call` refuses them with its usual `TypeError`.
+ * `withIfMatch` sends it, and a malformed one rejects with a `TypeError` before any request (`optionalIfMatch`,
+ * internal/if-match.js). Params that are not a plain object are passed on unchanged, so `core.call` refuses them with
+ * its usual `TypeError`.
  * @template T
  * @param {Core} core
  * @param {Operation} operation
@@ -246,16 +218,7 @@ async function withIfMatch(core, operation, resource, params, options) {
  * @returns {Promise<T>}
  */
 async function withOptionalIfMatch(core, operation, resource, params, options) {
-  if (!isPlainObject(params) || params.ifMatch === undefined || params.ifMatch === null) {
-    return core.call(operation, params, live(options));
-  }
-  const ifMatch = ifMatchValue(params.ifMatch);
-  if (ifMatch === undefined) {
-    throw new TypeError(
-      `Velexis SDK: ${operation.method} ${operation.path}: "ifMatch", when given, must be the ${resource} version (a whole number) or its ETag (a string)`,
-    );
-  }
-  return core.call(operation, { ...params, ifMatch }, live(options));
+  return core.call(operation, optionalIfMatch(operation, resource, params), live(options));
 }
 
 /**

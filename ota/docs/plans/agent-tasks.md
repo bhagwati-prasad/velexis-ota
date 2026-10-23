@@ -1034,7 +1034,7 @@ Checkout, customer accounts in cookies, Stripe on the Velexis account, the airli
 - **Files:** `ota/backend/src/checkout/ancillaries.service.ts`, `ota/backend/src/checkout/ancillaries.service.test.ts`, `ota/backend/src/checkout/checkout.controller.ts`, `ota/backend/src/common/http/pending-operations.ts`, `ota/backend/test/integration/checkout/ancillaries.int.test.ts`
 - **Steps:**
   1. Validate selections against the priced offer's ancillary catalogue; call Flight Offers Price with `additionalServices` (no transaction open during the call) and store a child priced offer (`parent_priced_offer_id`); `checkouts.priced_offer_id` points at it.
-  2. Apply `ancillary_service` fee rules per extra; check `expectedTotal` (`409 PRICE_CHANGED` with the new total, selection kept); `409 ANCILLARY_NOT_AVAILABLE` for an unknown option.
+  2. Apply `ancillary_service` fee rules per extra; check `expectedTotal` (`409 PRICE_CHANGED` with the new total, selection kept); `422 ANCILLARY_NOT_AVAILABLE` for an unknown option.
   3. Remove the operation from `pending-operations.ts`.
 - **Acceptance:**
   - Adding a bag re-prices into a child priced offer and the checkout totals satisfy `total = offer + ancillaries + fees`.
@@ -1503,7 +1503,7 @@ Checkout, customer accounts in cookies, Stripe on the Velexis account, the airli
   1. Wire the price page's Continue to `checkout.create({ pricedOfferId })` (guest checkout off and no session → sign-in with `next`).
   2. One page, steps `travellers`, `contacts`, `extras`, `payment` (each a history entry; stepper from `checkout.progress`). Travellers follow `requirements` (`reference.countries.list` for nationality and issuing country); contacts pre-filled from the first adult or the account; extras with `flights.getAncillaries` and `checkout.setAncillaries` plus `checkout.setRemarks` (skipped when `features.ancillaries` is off).
   3. Payment step: methods from `config.payment.supportedMethods` (`card`; `airline_card` with `payment.airlineCard.notice`), total, terms, privacy and fare-rules links, "I accept"; `checkout.createPayment` then go to `/checkout/pay-card.html` or `/checkout/pay-airline.html` with `payment=pay_…`.
-  4. States of `pages.md` §7 (`422` field errors, `412` reload and re-apply, `409 PRICE_CHANGED` on extras, `409 ANCILLARY_NOT_AVAILABLE`, `410 CHECKOUT_EXPIRED`, `422 CHECKOUT_INCOMPLETE`, `424 PAYMENT_PROVIDER_NOT_CONFIGURED`, `403 FEATURE_DISABLED`). No third-party script on this page.
+  4. States of `pages.md` §7 (`422` field errors, `412` reload and re-apply, `409 PRICE_CHANGED` on extras, `422 ANCILLARY_NOT_AVAILABLE`, `410 CHECKOUT_EXPIRED`, `422 CHECKOUT_INCOMPLETE`, `424 PAYMENT_PROVIDER_NOT_CONFIGURED`, `403 FEATURE_DISABLED`). No third-party script on this page.
 - **Acceptance:**
   - Every `set*` call sends `ifMatch` with the displayed version (fake SDK assertions).
   - `fieldErrors` mark the right fields with `aria-invalid` and focus the error summary.

@@ -46,6 +46,7 @@ import { RECONCILE_SCAN_JOB } from "../../../src/bookings/reconcile.processor";
 import { TICKETING_SCAN_JOB } from "../../../src/bookings/ticketing.processor";
 import { NOTIFICATIONS_SWEEP_JOB } from "../../../src/notifications/notifications.processor";
 import { AUTHORISATION_WATCH_JOB } from "../../../src/payments/authorisation-watch.processor";
+import { REFUNDS_SWEEP_JOB } from "../../../src/payments/refunds-sweep.processor";
 import { OFFERS_PURGE_JOB } from "../../../src/shopping/offers-purge.processor";
 import { createWorkerApp, createWorkerLogger, WorkerModule } from "../../../src/worker.module";
 import { testWorkerVariables } from "../../helpers/api-env";
@@ -342,8 +343,8 @@ const NONE = { searches: 0, offers: 0, upsells: 0, pricedOffers: 0 };
 
 /**
  * The scheduler of offers.purge among those registered at start-up (the outbox sweep of OBE-030, the authorisation
- * watch of OBE-040, the ticketing scan of OBE-044, the reconciliation scan of OBE-043 and the booking sync scan of
- * OBE-045 are the others).
+ * watch of OBE-040, the ticketing scan of OBE-044, the reconciliation scan of OBE-043, the booking sync scan of
+ * OBE-045 and the refund sweep of FIX-W27-FOLLOWUPS are the others).
  */
 const purgeScheduler = (): JobSchedulerJson | undefined =>
   registered.find((scheduler) => scheduler.key === OFFERS_PURGE_JOB);
@@ -356,6 +357,7 @@ describe("the schedulers", () => {
       NOTIFICATIONS_SWEEP_JOB,
       OFFERS_PURGE_JOB,
       AUTHORISATION_WATCH_JOB,
+      REFUNDS_SWEEP_JOB,
       TICKETING_SCAN_JOB,
     ]);
     expect(purgeScheduler()).toEqual(
@@ -377,6 +379,7 @@ describe("the schedulers", () => {
           TICKETING_SCAN_JOB,
           RECONCILE_SCAN_JOB,
           BOOKINGS_SYNC_SCAN_JOB,
+          REFUNDS_SWEEP_JOB,
         ],
         removed: [],
       }),

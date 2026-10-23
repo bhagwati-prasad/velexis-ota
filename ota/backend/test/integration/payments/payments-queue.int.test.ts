@@ -15,6 +15,11 @@
 // lock a payment's booking before the payment, proven with a second transaction that holds the booking
 // (test/helpers/lock-order.ts). FIX-W25-BOOKINGS (third batch: checkout, booking, payment, refund): refund.submit's
 // transactions lock the payment before the refund, proven with a second transaction that holds the payment.
+//
+// FIX-W27-FOLLOWUPS (lead decision (4) of 2026-10-23): the `refunds.sweep` schedule, run through the fan-out as the
+// scheduler adds it, queues `refund.submit` for the refunds whose enqueue was lost (the file asks for them through
+// RefundsRepository and adds no job), and leaves the others alone; a full batch continues with the next one, so a lost
+// enqueue behind a batch of refunds whose jobs wait is reached in the same run (OADR-0014 point 2).
 import { randomBytes } from "node:crypto";
 import { getQueueToken } from "@nestjs/bullmq";
 import { Module, type INestApplicationContext } from "@nestjs/common";
@@ -42,6 +47,11 @@ import {
   AUTHORISATION_WATCH_JOB,
 } from "../../../src/payments/authorisation-watch.processor";
 import { PAYMENT_JOB, paymentJob, type PaymentJobResult } from "../../../src/payments/payments.processor";
+import {
+  REFUND_SWEEP_AFTER_MS,
+  REFUND_SWEEP_BATCH,
+  REFUNDS_SWEEP_JOB,
+} from "../../../src/payments/refunds-sweep.processor";
 import { RefundsRepository, type CreateRefundResult } from "../../../src/payments/refunds.repository";
 import { STRIPE_MAX_NETWORK_RETRIES } from "../../../src/payments/stripe/stripe-client.factory";
 import { seedStorefrontSettings } from "../../../src/provisioning/seeds/storefront-settings.seed";
@@ -874,6 +884,280 @@ describe("refunds", () => {
     expect((await alertsLike(`staff.refund:${unknown.refundId}:`)).map((alert) => alert.dedupeKey)).toEqual([
       `staff.refund:${unknown.refundId}:not_submitted`,
     ]);
+  });
+});
+
+describe("refunds.sweep (FIX-W27-FOLLOWUPS)", () => {
+  /** A request the sweep counts as lost: asked for more than REFUND_SWEEP_AFTER_MS ago. */
+  const longAgo = (): Date => new Date(Date.now() - REFUND_SWEEP_AFTER_MS - 5 * 60_000);
+  let lost: string;
+  let lostBeta: string;
+  let fresh: string;
+  let claimed: string;
+  let submitted: string;
+  let released: string;
+  let waiting: string;
+  /** The rows the sweep leaves alone, as they were before it ran. */
+  let untouched: Map<string, RefundState>;
+  const sweeps: Job[] = [];
+  let submissions: Record<TenantKey, Job>;
+
+  interface RefundState {
+    readonly status: string;
+    readonly version: number;
+    readonly providerRefundId: string | null;
+    readonly updatedAt: Date;
+  }
+
+  async function refundOf(id: string, tenant: TenantKey = "alpha"): Promise<RefundState> {
+    return await txOf(tenant)(
+      async (trx) =>
+        await trx
+          .selectFrom("refunds")
+          .select(["status", "version", "provider_refund_id as providerRefundId", "updated_at as updatedAt"])
+          .where("id", "=", id)
+          .executeTakeFirstOrThrow(),
+    );
+  }
+
+  /** A customer's refund of `amount` asked for at `now`, whose `refund.submit` enqueue was lost: no job is added. */
+  async function askRefund(
+    paymentId: string,
+    amount: string,
+    now: Date,
+    tenant: TenantKey = "alpha",
+  ): Promise<string> {
+    const result = await txOf(tenant)((trx) =>
+      refunds.create(trx, {
+        id: newId("rfd"),
+        paymentId,
+        amount,
+        reason: "booking_cancelled",
+        requestedBy: { type: "customer", id: newId("cus") },
+        now,
+      }),
+    );
+    if (!result.ok) {
+      throw new Error(`the refund of ${amount} was refused (${result.reason})`);
+    }
+    return result.refund.id;
+  }
+
+  /** Runs the sweep of `tenantId` for the iteration of minute `bucket`, as the fan-out adds it, and waits for it. */
+  async function sweep(tenantId: string, bucket: number): Promise<Job> {
+    const spec = tenantJob(REFUNDS_SWEEP_JOB, tenantId, bucket);
+    await maintenance.add(spec.name, spec.data, spec.opts);
+    return await finished(maintenance, spec.opts.jobId);
+  }
+
+  /** The Stripe refund requests of the refund `id` (its idempotency key). */
+  const submissionsOf = (id: string) =>
+    requestsTo("POST", "/v1/refunds").filter((call) => call.headers["idempotency-key"] === `refund:${id}`);
+
+  beforeAll(async () => {
+    const payment = await stripePayment(
+      { status: "captured", amountCaptured: "452.10" },
+      { status: "succeeded", amount_capturable: 0, amount_received: 45210 },
+    );
+    const betaPayment = await insertPayment({ status: "captured", amountCaptured: "452.10" }, "beta");
+    lost = await askRefund(payment.id, "40.00", longAgo());
+    // A suspended OTA's refunds are swept too (OADR-0014 point 4).
+    lostBeta = await askRefund(betaPayment, "40.00", longAgo(), "beta");
+    // Asked for a moment ago: its producer's enqueue may still come.
+    fresh = await askRefund(payment.id, "10.00", new Date());
+    // Claimed by a refund.submit job that is sending it now.
+    claimed = await askRefund(payment.id, "10.00", longAgo());
+    // Sent: Stripe's refund id is recorded, the final state is left to the webhook.
+    submitted = await askRefund(payment.id, "10.00", longAgo());
+    // A claim released after an answer that never came: its own job retries it, then the staff are alerted.
+    released = await askRefund(payment.id, "10.00", longAgo());
+    await alphaTx(async (trx) => {
+      const now = new Date();
+      for (const id of [claimed, submitted, released]) {
+        if ((await refunds.claim(trx, id, 1, now)) === undefined) {
+          throw new Error(`the refund ${id} could not be claimed`);
+        }
+      }
+      await refunds.recordSubmission(trx, submitted, stripeId("re"), now);
+      await refunds.release(trx, released, 2, now);
+    });
+    // Its enqueue came through and its job waits (a backlog): the sweep's job for it is that same job.
+    waiting = await askRefund(payment.id, "10.00", longAgo());
+    const queued = paymentJob(PAYMENT_JOB.refundSubmit, alphaId, waiting);
+    await payments.add(queued.name, queued.data, { ...queued.opts, delay: 60 * 60_000 });
+    untouched = new Map(
+      await Promise.all(
+        [fresh, claimed, submitted, released, waiting].map(async (id) => [id, await refundOf(id)] as const),
+      ),
+    );
+
+    // The scheduler's iteration: the fan-out adds one sweep per active or suspended tenant.
+    const due = new Date();
+    const fanOut = await maintenance.add(
+      FAN_OUT_JOB,
+      { task: REFUNDS_SWEEP_JOB },
+      { prevMillis: due.getTime() },
+    );
+    await finished(maintenance, fanOut.id ?? "");
+    for (const tenantId of [alphaId, betaId]) {
+      sweeps.push(await finished(maintenance, tenantJobId(REFUNDS_SWEEP_JOB, tenantId, minuteBucket(due))));
+    }
+    submissions = {
+      alpha: await finished(payments, paymentJob(PAYMENT_JOB.refundSubmit, alphaId, lost).opts.jobId),
+      beta: await finished(payments, paymentJob(PAYMENT_JOB.refundSubmit, betaId, lostBeta).opts.jobId),
+    };
+    // A later iteration, after the submissions.
+    sweeps.push(await sweep(alphaId, minuteBucket(due) + 5));
+    sweeps.push(await sweep(betaId, minuteBucket(due) + 5));
+  }, SCENARIO_TIMEOUT_MS);
+
+  afterAll(async () => {
+    // The waiting job would only run in an hour: the file's worker never takes it.
+    await (
+      await payments.getJob(paymentJob(PAYMENT_JOB.refundSubmit, alphaId, waiting).opts.jobId)
+    )?.remove();
+  });
+
+  it("[FIX-W27-FOLLOWUPS AC1] submits a refund whose enqueue was lost exactly once, through its own job id, whatever the runs", async () => {
+    expect(sweeps.map((job) => job.returnvalue as unknown)).toEqual([
+      expect.objectContaining({
+        task: REFUNDS_SWEEP_JOB,
+        tenantId: alphaId,
+        outcome: "done",
+        counts: { refunds: 2 },
+      }),
+      expect.objectContaining({
+        task: REFUNDS_SWEEP_JOB,
+        tenantId: betaId,
+        outcome: "done",
+        counts: { refunds: 1 },
+      }),
+      // The later run: the lost refunds are claimed and sent now; the waiting one is found again, its job kept.
+      expect.objectContaining({ tenantId: alphaId, outcome: "done", counts: { refunds: 1 } }),
+      expect.objectContaining({ tenantId: betaId, outcome: "done", counts: { refunds: 0 } }),
+    ]);
+    const cases = [
+      { tenant: "alpha", tenantId: alphaId, id: lost, job: submissions.alpha },
+      { tenant: "beta", tenantId: betaId, id: lostBeta, job: submissions.beta },
+    ] as const;
+    for (const { tenant, tenantId, id, job } of cases) {
+      expect(job.id).toBe(`refund-submit-${id}`);
+      expect(job.returnvalue).toEqual({
+        tenantId,
+        job: "refund.submit",
+        id,
+        outcome: "applied",
+      } satisfies PaymentJobResult);
+      const calls = submissionsOf(id);
+      expect(calls).toHaveLength(1);
+      expect(calls[0]?.form).toMatchObject({
+        amount: "4000",
+        metadata: { refund_id: id, velexis_tenant_id: tenantId, velexis_environment: "test" },
+      });
+      expect(await refundOf(id, tenant)).toMatchObject({
+        status: "processing",
+        providerRefundId: expect.stringMatching(/^re_test_/),
+      });
+    }
+  });
+
+  it("[FIX-W27-FOLLOWUPS AC2] leaves alone a refund being sent, one already sent, a released claim, a fresh request and a queued job", async () => {
+    for (const [id, before] of untouched) {
+      expect(await refundOf(id), id).toEqual(before);
+      expect(submissionsOf(id), id).toEqual([]);
+    }
+    for (const id of [fresh, claimed, submitted, released]) {
+      expect(await payments.getJob(`refund-submit-${id}`), id).toBeUndefined();
+    }
+    // The waiting refund keeps the one job its producer added, still delayed.
+    const kept = await payments.getJob(`refund-submit-${waiting}`);
+    expect(await kept?.getState()).toBe("delayed");
+    expect(kept?.opts.delay).toBe(60 * 60_000);
+  });
+
+  describe("after a full batch (OADR-0014 point 2)", () => {
+    /** A full batch of older refunds whose jobs BullMQ holds without having claimed them: a backlog. */
+    let held: string[];
+    /** The refund behind them, whose enqueue was lost. */
+    let behind: string;
+    let runs: Job[];
+    let submission: Job;
+
+    const submitJobId = (id: string): string => paymentJob(PAYMENT_JOB.refundSubmit, betaId, id).opts.jobId;
+
+    beforeAll(async () => {
+      const payment = await insertPayment({ status: "captured", amountCaptured: "452.10" }, "beta");
+      const older = new Date(Date.now() - REFUND_SWEEP_AFTER_MS - 10 * 60_000);
+      held = [];
+      for (let n = 0; n < REFUND_SWEEP_BATCH; n += 1) {
+        held.push(await askRefund(payment, "0.01", older, "beta"));
+      }
+      behind = await askRefund(payment, "0.01", longAgo(), "beta");
+      // Their jobs wait behind others (delayed an hour): every run finds these refunds first.
+      await payments.addBulk(
+        held.map((id) => {
+          const job = paymentJob(PAYMENT_JOB.refundSubmit, betaId, id);
+          return { name: job.name, data: job.data, opts: { ...job.opts, delay: 60 * 60_000 } };
+        }),
+      );
+
+      // One run of a later iteration: its first job and the continuation the runner adds for the full batch.
+      const bucket = minuteBucket(new Date()) + 30;
+      runs = [
+        await sweep(betaId, bucket),
+        await finished(maintenance, tenantJobId(REFUNDS_SWEEP_JOB, betaId, bucket, 1)),
+      ];
+      submission = await finished(payments, submitJobId(behind));
+    }, SCENARIO_TIMEOUT_MS);
+
+    afterAll(async () => {
+      // The held jobs would only run in an hour: the file's worker never takes them.
+      for (const id of held) {
+        await (await payments.getJob(submitJobId(id)))?.remove();
+      }
+    });
+
+    it("[FIX-W27-FOLLOWUPS AC1] continues with the next batch and submits the lost refund behind it once", async () => {
+      expect(runs.map((job) => job.returnvalue as unknown)).toEqual([
+        expect.objectContaining({
+          tenantId: betaId,
+          outcome: "done",
+          counts: { refunds: REFUND_SWEEP_BATCH },
+          continued: true,
+        }),
+        expect.objectContaining({
+          tenantId: betaId,
+          outcome: "done",
+          counts: { refunds: 1 },
+          continued: false,
+        }),
+      ]);
+      expect(submission.returnvalue).toEqual({
+        tenantId: betaId,
+        job: "refund.submit",
+        id: behind,
+        outcome: "applied",
+      } satisfies PaymentJobResult);
+      expect(submissionsOf(behind)).toHaveLength(1);
+      expect(await refundOf(behind, "beta")).toMatchObject({ status: "processing" });
+    });
+
+    it("[FIX-W27-FOLLOWUPS AC2] leaves the held refunds to the jobs BullMQ holds for them", async () => {
+      const unchanged = await txOf("beta")(
+        async (trx) =>
+          await trx
+            .selectFrom("refunds")
+            .select(sql<string>`count(*)::text`.as("count"))
+            .where("id", "in", held)
+            .where("status", "=", "pending")
+            .where("version", "=", 1)
+            .executeTakeFirstOrThrow(),
+      );
+      expect(unchanged.count).toBe(String(REFUND_SWEEP_BATCH));
+      expect(held.flatMap((id) => submissionsOf(id))).toEqual([]);
+      const states = await Promise.all(held.map((id) => payments.getJobState(submitJobId(id))));
+      expect(new Set(states)).toEqual(new Set(["delayed"]));
+    });
   });
 });
 

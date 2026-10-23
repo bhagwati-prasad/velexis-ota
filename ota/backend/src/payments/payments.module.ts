@@ -19,9 +19,11 @@
 //     it to the tenant's payments and refunds; its staff alerts go through the worker's global OutboxService. Since
 //     OBE-040 also the `ota-payments` consumer (payments.processor.ts: voids, capture retries, refund submissions through
 //     the PaymentGateway, with the refunds' claims of refunds.repository.ts) and the `payments.authorisation_watch`
-//     handler (authorisation-watch.processor.ts, `@TenantJob`, found by the jobs module's runner). It builds on the
-//     worker's tenancy module, so it never imports `PaymentGatewayModule` (the API's tenancy module): it provides the
-//     gateway itself, on the worker's platform caches.
+//     handler (authorisation-watch.processor.ts, `@TenantJob`, found by the jobs module's runner), and since
+//     FIX-W27-FOLLOWUPS the `refunds.sweep` handler (refunds-sweep.processor.ts), which queues `refund.submit` again
+//     for the refunds whose enqueue was lost. It builds on the worker's tenancy module, so it never imports
+//     `PaymentGatewayModule` (the API's tenancy module): it provides the gateway itself, on the worker's platform
+//     caches.
 //
 // The API imports `PaymentsModule`, the worker `PaymentsWorkerModule`.
 import { Module } from "@nestjs/common";
@@ -42,6 +44,7 @@ import { PaymentsController } from "./payments.controller";
 import { PaymentAlerts, PaymentJobsHandler, PaymentsProcessor } from "./payments.processor";
 import { PaymentsRepository } from "./payments.repository";
 import { PaymentsService } from "./payments.service";
+import { RefundsSweep } from "./refunds-sweep.processor";
 import { RefundsRepository } from "./refunds.repository";
 import { StripeEventHandler, StripeEventsProcessor } from "./stripe-events.processor";
 import { StripeClientFactory } from "./stripe/stripe-client.factory";
@@ -92,6 +95,8 @@ export class PaymentsModule {}
     PaymentJobsHandler,
     PaymentsProcessor,
     AuthorisationWatchProcessor,
+    // The sweep of the refunds whose refund.submit enqueue was lost (FIX-W27-FOLLOWUPS).
+    RefundsSweep,
   ],
 })
 export class PaymentsWorkerModule {}

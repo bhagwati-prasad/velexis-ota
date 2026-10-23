@@ -9,12 +9,15 @@
 // - Every method needs the customer's access token (cookie mode: the session cookie) and acts on that customer.
 // - `If-Match`: `update`, `preferences.update` and `savedTravelers.update` require `ifMatch`, the resource `version`
 //   of the last read (a number, sent as its ETag `"<version>"`) or the ETag itself (a string, sent as it is). A missing
-//   or malformed `ifMatch` is a `TypeError` before any request, like a missing path parameter; a stale one is the
-//   API's `412 PRECONDITION_FAILED`.
+//   or malformed `ifMatch` is a `TypeError` before any request, like a missing path parameter, and so is a call
+//   without params (FIX-W27-FOLLOWUPS: `update()` and `preferences.update()` have no path parameter, and went out
+//   without `If-Match` before); the check is the one of `console` and `bookings` (internal/if-match.js). A stale one
+//   is the API's `412 PRECONDITION_FAILED`.
 //
 // The responses are personal, so every method sends `cache: "no-store"` to `fetch` unless the call sets `cache` or
 // `next` itself (identity.d.ts `AccountApi`: never cache them).
 
+import { requireIfMatch } from "../internal/if-match.js";
 import { op } from "../internal/operations.js";
 
 /** @typedef {import("../internal/client.js").Core} Core */
@@ -69,38 +72,22 @@ function live(options) {
 }
 
 /**
- * A character that cannot be part of a header value as `ifMatch` sends it: anything but tab and visible ASCII with
- * spaces (CR, LF and NUL would make `Headers` throw, other characters are not an ETag).
- */
-const NOT_HEADER_TEXT = /[^\t\x20-\x7e]/;
-
-/**
  * Sends a call whose operation requires `If-Match` (`update`, `preferences.update`, `savedTravelers.update`), with
  * `ifMatch` as the header value: a version number becomes its ETag `"<version>"`, a non-blank string of visible ASCII
- * is an ETag and is sent as it is. A missing or malformed `ifMatch` rejects with a `TypeError` before any request, also
- * before the CSRF request of cookie mode (naming the parameter, never its value). Params that are not a plain object
+ * is an ETag and is sent as it is (`requireIfMatch`, internal/if-match.js). A missing or malformed `ifMatch`, also in
+ * a call without params, rejects with a `TypeError` before any request, also before the CSRF request of cookie mode,
+ * naming the parameter and whose version it is (`resource`), never its value. Other params that are not a plain object
  * are passed on unchanged, so `core.call` refuses them with its usual `TypeError`.
  * @template T
  * @param {Core} core
  * @param {Operation} operation
- * @param {AccountIfMatch} params
+ * @param {string} resource what the version belongs to, as the message names it: `account`, `preferences` …
+ * @param {AccountIfMatch | undefined} params
  * @param {RequestOptions | undefined} options
  * @returns {Promise<T>}
  */
-async function withIfMatch(core, operation, params, options) {
-  if (!isPlainObject(params)) {
-    return core.call(operation, params, live(options));
-  }
-  const { ifMatch } = params;
-  if (typeof ifMatch === "number" && Number.isSafeInteger(ifMatch) && ifMatch >= 0) {
-    return core.call(operation, { ...params, ifMatch: `"${ifMatch}"` }, live(options));
-  }
-  if (typeof ifMatch !== "string" || ifMatch.trim() === "" || NOT_HEADER_TEXT.test(ifMatch)) {
-    throw new TypeError(
-      `Velexis SDK: ${operation.method} ${operation.path} needs "ifMatch", the version of the last read (a whole number) or its ETag (a string)`,
-    );
-  }
-  return core.call(operation, params, live(options));
+async function withIfMatch(core, operation, resource, params, options) {
+  return core.call(operation, requireIfMatch(operation, resource, params), live(options));
 }
 
 /**
@@ -139,7 +126,8 @@ function createAccountPreferencesApi(core) {
      * @throws {RateLimitError} `RATE_LIMITED` (429)
      * @throws {ServerError} `NOT_IMPLEMENTED` (501, deferred), `INTERNAL_ERROR` (500)
      */
-    update: (params, options) => withIfMatch(core, op.account_preferences_update, params, options),
+    update: (params, options) =>
+      withIfMatch(core, op.account_preferences_update, "preferences", params, options),
   };
 }
 
@@ -214,7 +202,8 @@ function createAccountSavedTravelersApi(core) {
      * @throws {RateLimitError} `RATE_LIMITED` (429)
      * @throws {ServerError} `NOT_IMPLEMENTED` (501, deferred), `INTERNAL_ERROR` (500)
      */
-    update: (params, options) => withIfMatch(core, op.account_savedTravelers_update, params, options),
+    update: (params, options) =>
+      withIfMatch(core, op.account_savedTravelers_update, "saved traveler", params, options),
 
     /**
      * Deletes a saved traveller and its documents (existing bookings keep their own copies). Resolves with nothing
@@ -308,7 +297,7 @@ export function createAccountApi(core) {
      * @throws {RateLimitError} `RATE_LIMITED` (429)
      * @throws {ServerError} `INTERNAL_ERROR` (500)
      */
-    update: (params, options) => withIfMatch(core, op.account_update, params, options),
+    update: (params, options) => withIfMatch(core, op.account_update, "account", params, options),
 
     /**
      * Deletes the account, re-authenticated with `currentPassword`: signs the customer out everywhere at once and

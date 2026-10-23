@@ -9,7 +9,8 @@
 //
 // - `If-Match`: `update`, `addAncillaries` and `cancel` require `ifMatch`, the booking `version` (a number, sent as
 //   its ETag `"<version>"`) or the ETag itself (a string, sent as it is). A missing or malformed `ifMatch` is a
-//   `TypeError` before any request, like a missing path parameter.
+//   `TypeError` before any request, like a missing path parameter, also in a call without params (the check of
+//   internal/if-match.js, shared with `account` and `console`).
 // - Guest booking token: per call in token and server mode with `options.bookingToken` (`X-Booking-Token`; it wins
 //   over the client's `bookingToken`). In cookie mode the token is the httpOnly `__Host-vx_bt` cookie, so a booking
 //   token in the options is refused with a `TypeError` before any request (internal/session.js), and `lookup`
@@ -19,6 +20,7 @@
 // Everything here is personal, priced or time-limited, so every method sends `cache: "no-store"` to `fetch` unless the
 // call sets `cache` or `next` itself (bookings.d.ts "Caching", B3 §1).
 
+import { requireIfMatch } from "../internal/if-match.js";
 import { op } from "../internal/operations.js";
 
 /** @typedef {import("../internal/client.js").Core} Core */
@@ -92,38 +94,21 @@ function live(options) {
 }
 
 /**
- * A character that cannot be part of a header value as `ifMatch` sends it: anything but tab and visible ASCII with
- * spaces (CR, LF and NUL would make `Headers` throw, other characters are not an ETag).
- */
-const NOT_HEADER_TEXT = /[^\t\x20-\x7e]/;
-
-/**
  * Sends a call whose operation requires `If-Match` (`update`, `addAncillaries`, `cancel`), with `ifMatch` as the
  * header value: a version number becomes its ETag `"<version>"`, a non-blank string of visible ASCII is an ETag and is
- * sent as it is. A missing or malformed `ifMatch` rejects with a `TypeError` before any request, also before the CSRF
- * request of cookie mode (naming the parameter, never its value). Params that are not a plain object are passed on
- * unchanged, so `core.call` refuses them with its usual `TypeError`.
+ * sent as it is (`requireIfMatch`, internal/if-match.js). A missing or malformed `ifMatch`, also in a call without
+ * params, rejects with a `TypeError` before any request, also before the CSRF request of cookie mode (naming the
+ * parameter, never its value). Other params that are not a plain object are passed on unchanged, so `core.call`
+ * refuses them with its usual `TypeError`.
  * @template T
  * @param {Core} core
  * @param {Operation} operation
- * @param {{ ifMatch: IfMatchValue }} params
+ * @param {{ ifMatch: IfMatchValue } | undefined} params
  * @param {RequestOptions | undefined} options
  * @returns {Promise<T>}
  */
 async function withIfMatch(core, operation, params, options) {
-  if (!isPlainObject(params)) {
-    return core.call(operation, params, live(options));
-  }
-  const { ifMatch } = params;
-  if (typeof ifMatch === "number" && Number.isSafeInteger(ifMatch) && ifMatch >= 0) {
-    return core.call(operation, { ...params, ifMatch: `"${ifMatch}"` }, live(options));
-  }
-  if (typeof ifMatch !== "string" || ifMatch.trim() === "" || NOT_HEADER_TEXT.test(ifMatch)) {
-    throw new TypeError(
-      `Velexis SDK: ${operation.method} ${operation.path} needs "ifMatch", the booking version (a whole number) or its ETag (a string)`,
-    );
-  }
-  return core.call(operation, params, live(options));
+  return core.call(operation, requireIfMatch(operation, "booking", params), live(options));
 }
 
 /**

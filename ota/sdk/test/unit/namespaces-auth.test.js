@@ -1124,6 +1124,27 @@ describe("cookie mode", () => {
 describe("If-Match on the account updates", () => {
   const UPDATES = ["account.update", "account.preferences.update", "account.savedTravelers.update"];
 
+  /**
+   * What each update's version belongs to, as its `TypeError` names it: since FIX-W27-FOLLOWUPS the message of
+   * SDK-012's methods (internal/if-match.js), "the <resource> version", where SDK-008 said "the version of the last
+   * read".
+   * @type {Record<string, string>}
+   */
+  const RESOURCES = {
+    "account.update": "account",
+    "account.preferences.update": "preferences",
+    "account.savedTravelers.update": "saved traveler",
+  };
+
+  /**
+   * The `TypeError` message of an update called without a valid `ifMatch`.
+   * @param {string} method
+   */
+  const ifMatchMessage = (method) => {
+    const entry = op[/** @type {keyof typeof op} */ (method.replace(/\./g, "_"))];
+    return `Velexis SDK: ${entry.method} ${entry.path} needs "ifMatch", the ${RESOURCES[method]} version (a whole number) or its ETag (a string)`;
+  };
+
   it.each(UPDATES)("%s sends a version as its ETag and an ETag as it is [SDK-008]", async (method) => {
     const fake = createFakeFetch([answerOf(method), answerOf(method)]);
     const client = createVelexisClient({ publishableKey: PK, accessToken: AT, fetch: fake.fetch });
@@ -1157,11 +1178,47 @@ describe("If-Match on the account updates", () => {
     }).catch((/** @type {unknown} */ caught) => caught);
 
     expect(error).toBeInstanceOf(TypeError);
-    expect(/** @type {TypeError} */ (error).message).toMatch(
-      /^Velexis SDK: PATCH \/v1\/account\S* needs "ifMatch", the version of the last read \(a whole number\) or its ETag \(a string\)$/,
-    );
+    expect(/** @type {TypeError} */ (error).message).toBe(ifMatchMessage(/** @type {string} */ (method)));
     expect(fake.requests).toHaveLength(0);
   });
+
+  it.each(UPDATES.flatMap((method) => [/** @type {const} */ (["token", method]), ["cookie", method]]))(
+    "[FIX-W27-FOLLOWUPS AC3] in %s mode, %s() without params is the same TypeError, before any request",
+    async (mode, method) => {
+      // account.update and account.preferences.update have no path parameter: before FIX-W27-FOLLOWUPS a call without
+      // params went out as a PATCH without If-Match.
+      stubBrowserPage({ csrf: false });
+      const fake = createFakeFetch([answerOf(method)]);
+      const client =
+        mode === "cookie"
+          ? createVelexisClient({ session: "cookie", fetch: fake.fetch })
+          : createVelexisClient({ publishableKey: PK, accessToken: AT, fetch: fake.fetch });
+
+      const error = await methodOf(client, method)().catch((/** @type {unknown} */ caught) => caught);
+
+      expect(error).toBeInstanceOf(TypeError);
+      expect(/** @type {TypeError} */ (error).message).toBe(ifMatchMessage(method));
+      // Not even the CSRF request of cookie mode.
+      expect(fake.requests).toHaveLength(0);
+    },
+  );
+
+  it.each(["account.update", "account.preferences.update"])(
+    "[FIX-W27-FOLLOWUPS AC3] %s with fields but no ifMatch is the same TypeError, before any request",
+    async (method) => {
+      const fake = createFakeFetch([answerOf(method)]);
+      const client = createVelexisClient({ publishableKey: PK, accessToken: AT, fetch: fake.fetch });
+
+      const error = await methodOf(
+        client,
+        method,
+      )({ marketingConsent: true, currency: "SEK" }).catch((/** @type {unknown} */ caught) => caught);
+
+      expect(error).toBeInstanceOf(TypeError);
+      expect(/** @type {TypeError} */ (error).message).toBe(ifMatchMessage(method));
+      expect(fake.requests).toHaveLength(0);
+    },
+  );
 });
 
 describe("account.savedTravelers.list", () => {
