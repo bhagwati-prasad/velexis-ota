@@ -60,6 +60,11 @@ The order is the checkout, then the booking, then the payment, then the refund (
 | `booking.sync` and the refreshes, the record (`BookingSyncService`, one diff for every path) | booking `FOR NO KEY UPDATE` (tickets, segments, records, events, outbox, the staff alert of an airline cancellation: key share; the payments only read) |
 | `booking.reconcile`, the alert of a booking queue that is nearly full (FIX-W27-SYNC) | none (an outbox row without a booking) |
 | `document.render`, the write (T2) and the failed row | the booking's documents advisory lock (`pg_advisory_xact_lock(hashtext('velexis.booking_documents'), hashtext(<bkg_…>))`) → booking key share (the version read `FOR KEY SHARE`; the row's foreign keys: the booking's and the ticket's key share) → the document's `booking_documents` rows (inserted, superseded); never `FOR UPDATE` on the booking |
+| bookings.cancel, the claim (and the request of `request_only`) (OBE-049) | booking `FOR NO KEY UPDATE SKIP LOCKED` (a booking another claim or writer holds: `503`, nothing written; event, outbox: key share) |
+| bookings.cancel and `booking.cancellation_check`, the record step and the money step | booking `FOR NO KEY UPDATE` (children, events, outbox: key share) → payment `FOR UPDATE` (`RefundsRepository.create`, its event: key share) → the new refund; an airline card's payment event: payment key share |
+| bookings.cancel, a refusal, an order not found, the flag of an unknown outcome; the check's decisions without money | booking `FOR NO KEY UPDATE` (event, outbox: key share) |
+| bookings.cancel and the check, the void of an authorisation | payment `FOR UPDATE` (its event: key share) |
+| `booking.cancellation_check`, the claim | booking `FOR NO KEY UPDATE SKIP LOCKED` |
 | checkout steps (travellers, contacts, special requests, extras) | checkout `FOR UPDATE` |
 | checkout.createPayment, checkout.updatePayment | checkout `FOR UPDATE` → payments `FOR UPDATE` (events: key share) |
 | A new PaymentIntent's id, payment reads and refreshes, a replaced payment's void, a provider error | payment `FOR UPDATE` |

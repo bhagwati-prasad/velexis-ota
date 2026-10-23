@@ -1246,7 +1246,8 @@ Checkout, customer accounts in cookies, Stripe on the Velexis account, the airli
   - Stub `version-conflict` answers 409 and changes nothing locally.
 - **Verify:** `pnpm --filter @velexis/ota-backend test:int -- bookings`
 
-### OBE-049 · Implement cancellation quotes and cancellation with the money step
+### OBE-049 · Implement cancellation quotes and cancellation with the money step ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-backend
 - **Milestone:** M3
 - **Depends on:** OBE-048, OBE-040

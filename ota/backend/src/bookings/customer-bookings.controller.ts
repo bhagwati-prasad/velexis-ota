@@ -8,9 +8,14 @@
 //
 // bookings.update (updateBooking, OBE-048): the contacts and special requests of the booking through
 // BookingChangesService (the `If-Match` header goes to it), behind the same guard; it answers the updated booking with
-// its new `ETag` and `Cache-Control: private, no-store`. bookings.quoteCancellation and bookings.cancel (OBE-049) join
-// this controller.
-import { Controller, Get, Patch, Res, UseGuards } from "@nestjs/common";
+// its new `ETag` and `Cache-Control: private, no-store`.
+//
+// bookings.quoteCancellation and bookings.cancel (quoteBookingCancellation, cancelBooking, OBE-049) through
+// CancellationService, behind the same guard: the quote with `Cache-Control: no-store`; the cancellation with the
+// booking's new `ETag`, `200` when the booking is cancelled and `202` when the cancellation waits for the staff
+// (`Cache-Control: no-store`). Its `Idempotency-Key` is the global idempotency interceptor's, with the replays of a `504`
+// of CancelBookingIdempotencyHooks.
+import { Controller, Get, HttpCode, Patch, Post, Res, UseGuards } from "@nestjs/common";
 import type { Response } from "express";
 import { BookingAccessGuard } from "../common/auth/booking-access.guard";
 import {
@@ -28,6 +33,12 @@ import {
   type BookingTicketingStatus,
 } from "./bookings.mapper";
 import { BookingChangesService } from "./booking-changes.service";
+import {
+  CANCELLATION_CACHE_CONTROL,
+  CancellationService,
+  type CancellationQuote,
+  type CancellationResult,
+} from "./cancellation.service";
 import { CustomerBookingsService, type Page } from "./customer-bookings.service";
 import type { Booking } from "./order-recorder";
 
@@ -36,6 +47,7 @@ export class CustomerBookingsController {
   constructor(
     private readonly bookings: CustomerBookingsService,
     private readonly changes: BookingChangesService,
+    private readonly cancellations: CancellationService,
   ) {}
 
   @Get()
@@ -80,6 +92,40 @@ export class CustomerBookingsController {
     res.setHeader("ETag", bookingEtagOf(booking.version));
     res.setHeader("Cache-Control", BOOKING_CACHE_CONTROL);
     return booking;
+  }
+
+  @Get(":bookingId/cancellation-quote")
+  @OpenApiOperation("quoteBookingCancellation")
+  @UseGuards(BookingAccessGuard)
+  async quoteCancellation(
+    @OpenApiInput() input: ValidatedInput<"quoteBookingCancellation">,
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<CancellationQuote> {
+    res.setHeader("Cache-Control", CANCELLATION_CACHE_CONTROL);
+    return await this.cancellations.quote(input.path.bookingId);
+  }
+
+  @Post(":bookingId/cancellation")
+  @HttpCode(200)
+  @OpenApiOperation("cancelBooking")
+  @UseGuards(BookingAccessGuard)
+  async cancel(
+    @OpenApiInput() input: ValidatedInput<"cancelBooking">,
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<CancellationResult> {
+    if (input.body === undefined) {
+      // The validation interceptor refuses a request without a body: never reached.
+      throw new Error("cancelBooking without a validated body");
+    }
+    const answer = await this.cancellations.cancel(
+      input.path.bookingId,
+      input.headers["If-Match"],
+      input.body,
+    );
+    res.status(answer.status);
+    res.setHeader("ETag", bookingEtagOf(answer.version));
+    res.setHeader("Cache-Control", CANCELLATION_CACHE_CONTROL);
+    return answer.result;
   }
 
   @Get(":bookingId/ticketing")

@@ -19,6 +19,11 @@
 //     everywhere else: the order exists although the client never heard so, and reconciliation can find it;
 //   - `timeout-lost` holds the answer of an order write without applying it (no order stored); every other route
 //     answers as for `success`.
+// OBE-049 adds the refusals of a cancellation (bookings.cancel; ota/docs/flows/change-and-cancel.md §7):
+//   - `version-conflict` also refuses Flight Order Management DELETE (409 with 2552), the order unchanged;
+//   - `cancel-refused`: Flight Order Management DELETE answers 400 with 4926 (INVALID DATA RECEIVED), as Amadeus
+//     refuses the cancellation of an order the airline does not let go (tickets outside the void window), the order
+//     unchanged; every other route answers as for `success`.
 
 /** The request header that selects a scenario (case-insensitive, as every HTTP header). */
 export const SCENARIO_HEADER = "X-Stub-Scenario";
@@ -37,6 +42,7 @@ export const STUB_SCENARIOS = [
   "ticketing-failed",
   "version-conflict",
   "timeout-lost",
+  "cancel-refused",
 ] as const;
 export type StubScenario = (typeof STUB_SCENARIOS)[number];
 
@@ -88,7 +94,7 @@ export const AMADEUS_ERROR_CODES = Object.freeze({
   creditCardNotAccepted: 1304,
   /** Ticketing failed (`ticketing-failed`; an error at issuance, a warning at a create order with `issue=true`). */
   ticketing: 9112,
-  /** Simultaneous update: the order changed meanwhile (`version-conflict` at Flight Order Management PATCH). */
+  /** Simultaneous update: the order changed meanwhile (`version-conflict` at Flight Order Management PATCH, DELETE). */
   simultaneousUpdate: 2552,
   /** No flight order with this id or record locator (the specifications' `Error_404` example). */
   notFound: 1797,
@@ -194,6 +200,7 @@ export function applyScenario(scenario: StubScenario, writesOrder = false): Scen
     case "ticketing-failed":
     case "version-conflict":
     case "timeout-lost":
+    case "cancel-refused":
       return { kind: "continue" };
     case "server-error":
       return { kind: "respond", response: SERVER_ERROR };
@@ -278,12 +285,25 @@ export const TICKETING_FAILED_WARNING: AmadeusIssue = Object.freeze({
   detail: "Stub scenario ticketing-failed: the flight order was created but not issued",
 });
 
-/** `version-conflict` at Flight Order Management PATCH: a 409 with error 2552, the order unchanged. */
+/** `version-conflict` at Flight Order Management PATCH and DELETE: a 409 with error 2552, the order unchanged. */
 export const VERSION_CONFLICT: StubResponse = amadeusErrorResponse([
   {
     status: 409,
     code: AMADEUS_ERROR_CODES.simultaneousUpdate,
     title: "SIMULTANEOUS UPDATE",
     detail: "Stub scenario version-conflict: the flight order was updated meanwhile",
+  },
+]);
+
+/**
+ * `cancel-refused` at Flight Order Management DELETE (OBE-049): a 400 with error 4926, as Amadeus answers a cancellation
+ * the airline does not accept (tickets outside the void window); the order unchanged.
+ */
+export const CANCEL_REFUSED: StubResponse = amadeusErrorResponse([
+  {
+    status: 400,
+    code: AMADEUS_ERROR_CODES.invalidDataReceived,
+    title: "INVALID DATA RECEIVED",
+    detail: "Stub scenario cancel-refused: the airline does not accept the cancellation of this flight order",
   },
 ]);

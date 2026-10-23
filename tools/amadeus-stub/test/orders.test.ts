@@ -772,6 +772,51 @@ describe("Flight Order Management", () => {
     );
   });
 
+  it("refuses DELETE without a change for version-conflict (2552) and cancel-refused (4926) [OBE-049]", async () => {
+    const stub = await startStub();
+    const headers = await authorized(stub);
+    const created = await createOrder(stub, headers);
+
+    const conflict = await send(stub, "DELETE", orderPath(created.id), {
+      ...headers,
+      ...scenario("version-conflict"),
+    });
+    expect(conflict.status).toBe(409);
+    expect((await json<ErrorBody>(conflict)).errors).toEqual([
+      expect.objectContaining({ status: 409, code: 2552, title: "SIMULTANEOUS UPDATE" }),
+    ]);
+    const refused = await send(stub, "DELETE", orderPath(created.id), {
+      ...headers,
+      ...scenario("cancel-refused"),
+    });
+    expect(refused.status).toBe(400);
+    expect(await json<ErrorBody>(refused)).toEqual({
+      errors: [
+        {
+          status: 400,
+          code: 4926,
+          title: "INVALID DATA RECEIVED",
+          detail:
+            "Stub scenario cancel-refused: the airline does not accept the cancellation of this flight order",
+        },
+      ],
+    });
+    expect(onlyOrder(stub)).toMatchObject({ status: "active", version: 1 });
+    expect((await getOrder(stub, headers, created.id)).status).toBe(200);
+
+    // The other operations answer as for success under cancel-refused.
+    const patch = { data: { type: "flight-order", flightOffers: created["flightOffers"] } };
+    const patched = await send(
+      stub,
+      "PATCH",
+      orderPath(created.id),
+      { ...headers, ...scenario("cancel-refused") },
+      patch,
+    );
+    expect(patched.status).toBe(200);
+    expect((await send(stub, "DELETE", orderPath(created.id), headers)).status).toBe(204);
+  });
+
   it("answers 400 for another origin system at the by-reference GET [OBE-041]", async () => {
     const stub = await startStub();
     const headers = await authorized(stub);

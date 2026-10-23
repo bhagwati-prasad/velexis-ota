@@ -169,7 +169,7 @@ BullMQ prefix `vx`, defaults of [ADR-0009](../../docs/mvp/adr/0009-background-jo
 | `platform-tenant-events` | OTA worker → platform | `tenant.provisioned`, `tenant.provision_failed`, `tenant.migrated`, `tenant.migration_failed`, `tenant.suspended`, `tenant.resumed` | (platform) |
 | `ota-stripe-events` | webhook receiver → worker | `stripe.event {tenantId, paymentEventId}` | 4 |
 | `ota-payments` | API, schedulers → worker | `payment.void`, `payment.capture_retry`, `refund.submit` `{tenantId, id}` | 4 |
-| `ota-bookings` | API, schedulers → worker | `booking.reconcile`, `booking.sync` `{tenantId, bookingId}` | 4 |
+| `ota-bookings` | API, schedulers → worker | `booking.reconcile`, `booking.sync`, `booking.cancellation_check` (OBE-049) `{tenantId, bookingId}` | 4 |
 | `ota-ticketing` | API, schedulers → worker | `ticketing.issue {tenantId, bookingId}` | 2 |
 | `ota-notifications` | API (after commit), sweep → worker | `notify {tenantId}` drains that tenant's outbox | 4 |
 | `ota-documents` | bookings → worker | `document.render {tenantId, bookingId, kind, bookingVersion[, ticketId]}` | 2 |

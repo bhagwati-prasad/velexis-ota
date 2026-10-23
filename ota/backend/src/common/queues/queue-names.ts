@@ -20,7 +20,7 @@ export const OTA_QUEUE = Object.freeze({
   stripeEvents: "ota-stripe-events",
   /** API, schedulers → worker: `payment.void`, `payment.capture_retry`, `refund.submit`. */
   payments: "ota-payments",
-  /** API, schedulers → worker: `booking.reconcile`, `booking.sync`. */
+  /** API, schedulers → worker: `booking.reconcile`, `booking.sync`, `booking.cancellation_check`. */
   bookings: "ota-bookings",
   /** API, schedulers → worker: `ticketing.issue`. */
   ticketing: "ota-ticketing",

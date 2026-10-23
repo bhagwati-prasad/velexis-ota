@@ -3,7 +3,7 @@
 A small Node `http` server (no framework) that stands in for Amadeus Enterprise in development, integration tests and end-to-end runs ([ADR-0015](../../docs/mvp/adr/0015-testing-strategy.md), [ADR-0012](../../docs/mvp/adr/0012-amadeus-account-model.md)). It implements the OAuth token endpoint and routes the 12 Amadeus operations of the 9 specifications in [`docs/amadeus-api/`](../../docs/amadeus-api/), validates every request against its specification, serves synthetic or recorded-and-scrubbed fixtures, and fails on demand through scenarios.
 
 - **Dev only.** It is a `devDependency` of whatever uses it ([ADR-0022](../../docs/mvp/adr/0022-shared-test-support-package.md) item 2; `tools/ci/check-package-json.mjs` enforces it). The VM never runs it ([ADR-0025](../../docs/mvp/adr/0025-roadmap-scheduling-and-tracking.md) item 7): the CLI refuses to start when `APP_ENV` or `NODE_ENV` is `production`.
-- **Tasks.** X-026 built the server, the token endpoint, the route table, validation, the generic scenarios and Flight Offers Search. OBE-019 added the shopping operations (price, upsell, availability), their scenarios `sold-out` and `price-changed`, and the refusal of unknown body fields. OBE-041 added the order operations (create, issue, management GET/PATCH/DELETE, by reference, queue list) on [in-memory orders](#orders), their scenarios `ticketing-failed`, `version-conflict` and `timeout-lost`, and the masking of card numbers in the request log; every operation now has a handler. X-027 added the in-process helper `@velexis/testing/amadeus`, X-034 [fixture recording](#record-a-fixture-from-the-amadeus-test-environment) with the [scrubber and the personal-data scan](#scrubbing-and-the-personal-data-scan). OBE-045 added the airline's changes a test plays on an order (`orders.changeSegment`, `orders.cancelByAirline`, [Orders](#orders)).
+- **Tasks.** X-026 built the server, the token endpoint, the route table, validation, the generic scenarios and Flight Offers Search. OBE-019 added the shopping operations (price, upsell, availability), their scenarios `sold-out` and `price-changed`, and the refusal of unknown body fields. OBE-041 added the order operations (create, issue, management GET/PATCH/DELETE, by reference, queue list) on [in-memory orders](#orders), their scenarios `ticketing-failed`, `version-conflict` and `timeout-lost`, and the masking of card numbers in the request log; every operation now has a handler. X-027 added the in-process helper `@velexis/testing/amadeus`, X-034 [fixture recording](#record-a-fixture-from-the-amadeus-test-environment) with the [scrubber and the personal-data scan](#scrubbing-and-the-personal-data-scan). OBE-045 added the airline's changes a test plays on an order (`orders.changeSegment`, `orders.cancelByAirline`, [Orders](#orders)). OBE-049 added the refusals of Management DELETE: `version-conflict` there too, and the scenario `cancel-refused`.
 
 ## Run it
 
@@ -231,7 +231,7 @@ An unknown or cancelled order (id or record locator) answers `404` code 1797 `NO
 2. **Scenario**: the `X-Stub-Scenario` header, or the default scenario. An unknown name is a `400` (stub code 90001) that names the header and lists the known scenarios.
 3. **Token endpoint**: grant and credentials are checked (below). **Operations**: the bearer token is checked (`401`), an operation without a handler answers `501` (stub code 90002, naming the task that adds it), then the request is validated against the specification (`400`), unknown body fields included for the operations that refuse them.
 4. **Generic scenario**: `server-error`, `rate-limited` or `timeout` (below). An order write (create, issue, PATCH, DELETE) applies `timeout` in its handler instead, after the write.
-5. **Answer**: the token, or the operation's handler, which applies the operation-specific scenarios it knows (`sold-out`, `price-changed`, `ticketing-failed`, `version-conflict`, `timeout-lost`) and answers now or holds its answer.
+5. **Answer**: the token, or the operation's handler, which applies the operation-specific scenarios it knows (`sold-out`, `price-changed`, `ticketing-failed`, `version-conflict`, `timeout-lost`, `cancel-refused`) and answers now or holds its answer.
 
 Authentication and validation come before the scenario, so a request without a token or with a malformed body fails whatever the scenario says.
 
@@ -270,10 +270,11 @@ Tokens live in memory, per server, and expire after 1799 s on the injected clock
 | `timeout-lost` | the order writes | Holds the response like `timeout`, then `504`, **without** the write: no order is stored (no ticket issued, nothing changed or cancelled). Every other route answers as for `success` |
 | `sold-out` | Flight Offers Price, Branded Fares Upsell, Flight Create Orders | `400` code 34651 `SEGMENT SELL FAILURE`, `detail` `Could not sell segment <id>` naming the first posted segment; no order is stored |
 | `ticketing-failed` | Flight Order Issue, Flight Create Orders with `issue=true` | Issue: `400` code 9112 `TICKETING - TKT`, no ticket. Create with `issue=true`: the order is stored without tickets and answered `201` with `warnings: [{ "status": 201, "code": 9112, "title": "TICKETING - TKT", … }]` |
-| `version-conflict` | Flight Order Management PATCH | `409` code 2552 `SIMULTANEOUS UPDATE`; the order is unchanged |
+| `version-conflict` | Flight Order Management PATCH and DELETE | `409` code 2552 `SIMULTANEOUS UPDATE`; the order is unchanged |
+| `cancel-refused` | Flight Order Management DELETE | `400` code 4926 `INVALID DATA RECEIVED`, as Amadeus refuses a cancellation the airline does not accept (tickets outside the void window); the order is unchanged |
 | `price-changed` | Flight Offers Price | `200` with a higher price: the `base` and `total` of each traveller pricing raised by 10.00, the offer's `base`, `total` and `grandTotal` by 10.00 per traveller pricing (98.47 becomes 108.47 for one adult), and `warnings: [{ "status": 200, "code": 37200, "title": "PRICE DISCREPANCY", … }]` |
 
-The operation-specific scenarios (`sold-out`, `price-changed`, `ticketing-failed`, `version-conflict`, `timeout-lost`) change only the operations listed; every other route, the token endpoint included, answers as for `success`, so a default scenario can be set for a whole flow (search and token succeed, pricing fails; or the reconciler's Queue List and by-reference reads succeed while the order was lost). Amounts stay decimal strings: `price-changed` adds to their digits with `BigInt`, never through a JavaScript number.
+The operation-specific scenarios (`sold-out`, `price-changed`, `ticketing-failed`, `version-conflict`, `timeout-lost`, `cancel-refused`) change only the operations listed; every other route, the token endpoint included, answers as for `success`, so a default scenario can be set for a whole flow (search and token succeed, pricing fails; or the reconciler's Queue List and by-reference reads succeed while the order was lost). Amounts stay decimal strings: `price-changed` adds to their digits with `BigInt`, never through a JavaScript number.
 
 | Magic value | Answer |
 |---|---|
@@ -315,12 +316,12 @@ The specifications are loaded as they are, with four normalisations on a copy: d
 | 400 | 34651 | `sold-out` at Flight Offers Price, Branded Fares Upsell and Flight Create Orders |
 | 400 | 1304 | The declined test card at Flight Create Orders or Flight Order Issue |
 | 400 | 9112 | `ticketing-failed` at Flight Order Issue, or issuing an order that is already issued |
-| 400 | 4926 | By-reference GET with an `originSystemCode` other than `GDS` |
+| 400 | 4926 | By-reference GET with an `originSystemCode` other than `GDS`; `cancel-refused` at Management DELETE |
 | 400 | 90001 | Unknown `X-Stub-Scenario` |
 | 401 | 38187 (OAuth format), 38190, 38191, 38192 | OAuth and bearer token (above) |
 | 404 | 38196 | No route |
 | 404 | 1797 | No active flight order with this id or record locator |
-| 409 | 2552 | `version-conflict` at Management PATCH |
+| 409 | 2552 | `version-conflict` at Management PATCH and DELETE |
 | 413 | 90003 | Request body over 5 MiB |
 | 429 | 38194 | `rate-limited` |
 | 500 | 141 | `server-error` |

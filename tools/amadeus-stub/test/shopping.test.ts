@@ -636,7 +636,7 @@ describe("Flight Availabilities Search", () => {
 
 describe("scenarios of the shopping operations", () => {
   it("knows sold-out and price-changed besides the generic scenarios [OBE-019 AC2]", () => {
-    // OBE-041 adds the order scenarios after them.
+    // OBE-041 adds the order scenarios after them, OBE-049 the refused cancellation.
     expect(STUB_SCENARIOS).toEqual([
       "success",
       "server-error",
@@ -647,6 +647,7 @@ describe("scenarios of the shopping operations", () => {
       "ticketing-failed",
       "version-conflict",
       "timeout-lost",
+      "cancel-refused",
     ]);
   });
 

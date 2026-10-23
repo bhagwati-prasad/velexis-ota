@@ -8,13 +8,20 @@
 //     answers 200 with the order. The specification makes `data.type` and `data.flightOffers` mandatory; the stub
 //     accepts them and changes no flight offer. Scenario `version-conflict` answers 409 with 2552 (SIMULTANEOUS
 //     UPDATE) and changes nothing.
-//   - DELETE cancels the order and answers 204 without a body; from then on it is gone for every operation.
+//   - DELETE cancels the order and answers 204 without a body; from then on it is gone for every operation. Scenario
+//     `version-conflict` answers 409 with 2552 and `cancel-refused` 400 with 4926 (OBE-049); both change nothing.
 //
 // `timeout` on PATCH and DELETE applies the change, then holds the answer and gives up with a 504; `timeout-lost` holds
 // the answer without changing anything. GET knows no operation-specific scenario.
 import { dictionariesOf, orderNotFound, toFlightOrder } from "../orders";
 import type { FixtureLoader, HandlerContext, OperationHandler } from "../routes";
-import { timedOut, VERSION_CONFLICT, type HeldResponse, type StubResponse } from "../scenarios";
+import {
+  CANCEL_REFUSED,
+  timedOut,
+  VERSION_CONFLICT,
+  type HeldResponse,
+  type StubResponse,
+} from "../scenarios";
 import { FLIGHT_CREATE_ORDERS_FIXTURES, orderData } from "./create-orders";
 
 const orderIdOf = (context: HandlerContext): string => context.pathParams["flight-orderId"] ?? "";
@@ -63,8 +70,16 @@ export function patchFlightOrderHandler(loadFixture: FixtureLoader): OperationHa
 
 /** The handler of `cancelFlightOrder`. */
 export const cancelFlightOrderHandler: OperationHandler = (context) =>
-  write(context, () =>
-    context.orders.cancel(orderIdOf(context)) === undefined
-      ? orderNotFound("id")
-      : { status: 204, body: undefined },
-  );
+  write(context, () => {
+    const id = orderIdOf(context);
+    if (context.orders.get(id) === undefined) {
+      return orderNotFound("id");
+    }
+    if (context.scenario === "version-conflict") {
+      return VERSION_CONFLICT;
+    }
+    if (context.scenario === "cancel-refused") {
+      return CANCEL_REFUSED;
+    }
+    return context.orders.cancel(id) === undefined ? orderNotFound("id") : { status: 204, body: undefined };
+  });

@@ -19,6 +19,12 @@
 // bookings.update (OBE-048): BookingChangesService (with its BookingChangesRepository) changes the contacts and special
 // requests of a booking through Flight Order Management PATCH, answering through CustomerBookingsService.
 //
+// bookings.quoteCancellation and bookings.cancel (OBE-049): CancellationService (with CancellationRepository) quotes
+// and cancels through Flight Order Management, CancellationRecorder writes the cancellation and its money step (the
+// refunds of OBE-040 through RefundsRepository, a plain provider provided here again; the void through the payment
+// gateway), CancelBookingIdempotencyHooks answer the replays of a `504`; the markup and fee engine's rules come from
+// PricingModule.
+//
 // Guest access (OBE-047): GuestAccessService issues the guest booking tokens of checkout.complete and bookings.lookup
 // (LookupController) and hands them out in `__Host-vx_bt` (CookieWriter, a plain provider without state, provided here
 // again) or the body; LookupAttempts counts the failed lookups in Redis (the global RedisModule's client).
@@ -32,7 +38,9 @@
 // (CheckoutRepository, TravelerDocuments) and captures through the PaymentGateway; like PaymentsWorkerModule it
 // provides the gateway itself on the worker's platform caches, never PaymentGatewayModule (the API's tenancy module).
 // Since OBE-045 also the `bookings.sync_scan` handler and the `booking.sync` jobs (booking-sync.processor.ts, which the
-// `ota-bookings` consumer hands them to) with the background sync of booking-sync.service.ts.
+// `ota-bookings` consumer hands them to) with the background sync of booking-sync.service.ts. Since OBE-049 also the
+// `booking.cancellation_check` jobs (CancellationChecks of cancellation.service.ts, which the same consumer hands them
+// to) with the worker's CancellationRecorder.
 //
 // Since FIX-W27-SYNC (lead decision (3) of 2026-10-23) BookingSyncService runs in both processes: the API's
 // CustomerBookingsService refreshes through it, and ConsoleModule's console.bookings.resync calls it (it is exported),
@@ -51,8 +59,10 @@ import { IdentityModule } from "../identity/identity.module";
 import { PAYMENT_GATEWAY } from "../payments/payment-gateway";
 import { PaymentGatewayModule } from "../payments/payment-gateway.module";
 import { PaymentsRepository } from "../payments/payments.repository";
+import { RefundsRepository } from "../payments/refunds.repository";
 import { StripeClientFactory } from "../payments/stripe/stripe-client.factory";
 import { StripeGateway } from "../payments/stripe/stripe.gateway";
+import { PricingModule } from "../pricing/pricing.module";
 import { ShoppingModule } from "../shopping/shopping.module";
 import { TenancyModule } from "../tenancy/tenancy.module";
 import { BookingChangesRepository, BookingChangesService } from "./booking-changes.service";
@@ -60,6 +70,15 @@ import { BookingOrchestrator, CompleteCheckoutIdempotencyHooks } from "./booking
 import { BookingSyncJobs, BookingSyncScan } from "./booking-sync.processor";
 import { BookingSyncRepository, BookingSyncService } from "./booking-sync.service";
 import { BookingsRepository } from "./bookings.repository";
+import {
+  apiCancellationAlertOptions,
+  CancelBookingIdempotencyHooks,
+  CancellationChecks,
+  CancellationRecorder,
+  CancellationRepository,
+  CancellationService,
+  workerCancellationAlertOptions,
+} from "./cancellation.service";
 import { CustomerBookingsController } from "./customer-bookings.controller";
 import { CustomerBookingsService } from "./customer-bookings.service";
 import { GuestAccessRepository, GuestAccessService, LookupAttempts } from "./guest-access.service";
@@ -79,6 +98,7 @@ import { TicketingRepository, TicketingService } from "./ticketing.service";
     ShoppingModule,
     IdentityModule,
     QueuesModule,
+    PricingModule,
   ],
   controllers: [CustomerBookingsController, LookupController],
   providers: [
@@ -93,6 +113,13 @@ import { TicketingRepository, TicketingService } from "./ticketing.service";
     apiStaffAlertOptions,
     BookingChangesService,
     BookingChangesRepository,
+    // bookings.quoteCancellation and bookings.cancel (OBE-049).
+    CancellationService,
+    CancellationRepository,
+    CancellationRecorder,
+    CancelBookingIdempotencyHooks,
+    RefundsRepository,
+    apiCancellationAlertOptions,
     BookingAccessContext,
     BookingAccessGuard,
     GuestAccessService,
@@ -146,6 +173,12 @@ export class BookingsModule {}
     // The staff alerts of the reconciliation and the sync (FIX-W27-SYNC).
     StaffAlerts,
     workerStaffAlertOptions,
+    // The check of a cancellation whose DELETE got no answer (OBE-049).
+    CancellationRepository,
+    CancellationRecorder,
+    CancellationChecks,
+    RefundsRepository,
+    workerCancellationAlertOptions,
     CheckoutRepository,
     checkoutKeyProvider,
     TravelerDocuments,
