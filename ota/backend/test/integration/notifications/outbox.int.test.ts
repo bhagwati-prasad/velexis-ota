@@ -778,6 +778,15 @@ describe("a final status", () => {
     }
 
     // With SMTP up: a ciphertext sealed for another row does not decrypt, and a key without a template cannot render.
+    // Since OBE-055 every key has a code default: the worker's TemplateService plays a release that ships none for
+    // booking.confirmed (and the tenant has no row of it) until the row has failed.
+    const templates = worker.get(TemplateService, { strict: false });
+    const codeDefault = templates.codeDefault.bind(templates);
+    const withoutDefault = vi
+      .spyOn(templates, "codeDefault")
+      .mockImplementation((key) =>
+        key === "booking.confirmed" ? Promise.resolve(undefined) : codeDefault(key),
+      );
     const booking = TEMPLATE_REGISTRY["booking.confirmed"].sampleData["booking"] ?? {};
     const [donorId = "", unreadableId = "", missingId = ""] = await queueSilently([
       verifyEmail(donorTo),
@@ -802,11 +811,15 @@ describe("a final status", () => {
       "the unreadable row to fail",
       (current) => current.status === "failed",
     );
-    missing = await waitForRow(
-      missingId,
-      "the row without a template to fail",
-      (current) => current.status === "failed",
-    );
+    try {
+      missing = await waitForRow(
+        missingId,
+        "the row without a template to fail",
+        (current) => current.status === "failed",
+      );
+    } finally {
+      withoutDefault.mockRestore();
+    }
     donor = await waitForRow(donorId, "the donor row to be sent", (current) => current.status === "sent");
   }, SCENARIO_TIMEOUT_MS);
 

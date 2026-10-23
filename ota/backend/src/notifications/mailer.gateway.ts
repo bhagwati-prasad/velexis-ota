@@ -11,6 +11,8 @@
 // the notification's id (`<ntf_…@sender domain>`), so every attempt of one e-mail is the same message for the
 // receiving servers. Nodemailer may not read files or URLs for a message (`disableFileAccess`, `disableUrlAccess`),
 // writes no logs of its own, and waits at most 10 seconds for a connection or a greeting and 30 seconds for a reply.
+// Attachments (the booking documents of OBE-055, attachments.ts) are given as bytes the worker read and checked, never
+// as a path or a URL; their file names are cut to one line of MAX_ATTACHMENT_NAME_LENGTH characters.
 //
 // A failure is a `MailerError` with the SMTP error code, response code and command only: the server's reply text may
 // quote the recipient, so it is never kept, logged or stored. `transport` tells a failure of the connection to the
@@ -64,6 +66,17 @@ export function displayName(value: string): string {
   return [...line].slice(0, MAX_DISPLAY_NAME_LENGTH).join("").trim();
 }
 
+/** The longest file name of an attachment, in characters. */
+export const MAX_ATTACHMENT_NAME_LENGTH = 120;
+
+/** A file attached to an e-mail: its bytes, never a path or a URL. */
+export interface EmailAttachment {
+  /** The file name the recipient sees, such as `VX7K2M9Q-itinerary.pdf`. */
+  readonly fileName: string;
+  readonly contentType: string;
+  readonly content: Buffer;
+}
+
 /** One e-mail to send. */
 export interface OutgoingEmail {
   /** The outbox id (`ntf_…`): it makes the Message-ID. */
@@ -78,6 +91,22 @@ export interface OutgoingEmail {
   /** `null`: a text-only e-mail. */
   readonly html: string | null;
   readonly text: string;
+  /** Files to attach; none when left out. */
+  readonly attachments?: readonly EmailAttachment[] | undefined;
+}
+
+/**
+ * A file name as one line without path separators (control characters and line breaks become spaces, `/` and `\\`
+ * become `_`), at most MAX_ATTACHMENT_NAME_LENGTH characters; `attachment` when nothing is left.
+ */
+export function attachmentName(value: string): string {
+  const line = value
+    .replace(CONTROL_CHARACTERS, " ")
+    .replace(/[\\/]+/g, "_")
+    .replace(/\s+/g, " ")
+    .trim();
+  const name = [...line].slice(0, MAX_ATTACHMENT_NAME_LENGTH).join("").trim();
+  return name === "" ? "attachment" : name;
 }
 
 /** What the SMTP server accepted. */
@@ -218,6 +247,16 @@ export class MailerGateway implements OnApplicationShutdown {
       subject: email.subject,
       ...(email.html === null ? {} : { html: email.html }),
       text: email.text,
+      ...(email.attachments === undefined || email.attachments.length === 0
+        ? {}
+        : {
+            attachments: email.attachments.map((attachment) => ({
+              filename: attachmentName(attachment.fileName),
+              content: attachment.content,
+              contentType: attachment.contentType,
+              contentDisposition: "attachment" as const,
+            })),
+          }),
     };
     try {
       await this.transport.sendMail(message);

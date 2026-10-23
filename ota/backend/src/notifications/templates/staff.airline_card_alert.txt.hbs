@@ -1,0 +1,21 @@
+Something unusual happened with airline-card payments.
+
+Alert: {{alert.kind}}
+Detected at: {{alert.occurredAt}} (UTC)
+
+{{alert.message}}
+
+{{#if booking.reference}}
+Booking reference: {{booking.reference}}
+{{/if}}
+{{#if booking.recordLocator}}
+Record locator: {{booking.recordLocator}}
+{{/if}}
+
+Check the checkout and its payments in the OTA admin. Card data is never stored by Velexis or shown in this alert.
+
+Open in the OTA admin:
+{{booking.consoleUrl}}
+
+You receive this alert as the operations address or an owner of {{brand.name}}. The address for alerts is set in
+the OTA admin, under the storefront settings.

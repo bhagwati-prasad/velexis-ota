@@ -781,10 +781,15 @@ describe("checkout.complete with a Stripe payment, for each ticketing policy", (
       "issueFlightOrder",
     ]);
     expect(JSON.stringify(supplierRows)).not.toContain(checkout.documentNumber);
-    // The confirmation e-mail is queued for the primary contact.
+    // The confirmation e-mail is queued for the primary contact, and so is the e-ticket e-mail of the tickets the
+    // issuance stored (OBE-055: `booking.ticketed` queues it).
     const queued = await notifications(booking.id);
-    expect(queued.map((entry) => entry.template_key)).toEqual(["booking.confirmed"]);
+    expect(queued.map((entry) => entry.template_key)).toEqual(["booking.confirmed", "booking.ticketed"]);
     expect(queued[0]?.recipient).toMatch(/^contact-\d+@example\.com$/);
+    expect(queued[1]?.recipient).toBe(queued[0]?.recipient);
+    expect(queued[1]?.payload).toMatchObject({
+      tickets: [{ number: booking.tickets[0]?.documentNumber, travellerName: expect.any(String) as unknown }],
+    });
     expect(await eventTypes(booking.id)).toEqual(
       expect.arrayContaining(["booking.created", "booking.ticketed", "payment.captured"]),
     );

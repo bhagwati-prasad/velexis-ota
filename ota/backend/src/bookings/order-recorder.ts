@@ -23,15 +23,18 @@
 //   - `ticketing_status`: `issued` / `partially_issued` with tickets; without them `failed` when the order was asked
 //     to issue (the ticketing job retries from 5 minutes later, OBE-044), `manual_review` for that policy, else
 //     `pending` (capture, then Flight Order Issue);
-//   - `booking_events` (`booking.created`, and `booking.ticketed` or `booking.ticketing_failed`) and the outbox
-//     `booking.confirmed` to the primary contact (dedupe key `booking.confirmed:<bkg_…>`).
+//   - the outbox `booking.confirmed` to the primary contact (dedupe key `booking.confirmed:<bkg_…>`), and
+//     `booking_events` (`booking.created`, and `booking.ticketed` or `booking.ticketing_failed`).
 //
 // `OrderRecorder.event` is the one way the bookings module writes a booking event, so it is where the booking documents
 // are asked for (OBE-053, documents/documents.processor.ts): `booking.created` (the itinerary, and the e-ticket receipts
 // of an order that came back issued), `booking.ticketed` (the receipts and a new itinerary, whichever path stored the
-// tickets: checkout.complete, the ticketing job, a refresh), `booking.schedule_changed` (a new itinerary, whichever
-// synchronisation found the change; lead decision (3) of 2026-10-23) and `booking.cancelled` (the cancelled itinerary)
-// enqueue `document.render` jobs after the commit of the event's transaction.
+// tickets: checkout.complete, the ticketing job, the sync, a refresh), `booking.schedule_changed` (a new itinerary,
+// whichever synchronisation found the change; lead decision (3) of 2026-10-23) and `booking.cancelled` (the cancelled
+// itinerary) enqueue `document.render` jobs after the commit of the event's transaction. For the same reason
+// `booking.ticketed` also queues the traveller's `booking.ticketed` e-mail with the e-tickets (OBE-055, flow §3 step 7:
+// dedupe key `booking.ticketed:<bkg_…>:v<version>`), which the worker sends with the receipts attached once they are
+// ready (notifications/attachments.ts), as it sends `booking.confirmed` with the itinerary.
 //
 // `toBooking` turns the stored rows into the contract's Booking in customer scope: selling amounts only (no net,
 // markup or office), documents with `numberMasked`, discount numbers masked, customer-visible remarks only. Bookings
@@ -62,7 +65,7 @@ import { InvalidNotificationError, OutboxService } from "../notifications/outbox
 import { Money } from "../pricing/pricing.types";
 import { parseOffer, type ParsedOffer } from "../shopping/offers.mapper";
 import { warningsOf } from "../shopping/priced-offers.mapper";
-import type { ContextActor } from "../tenancy/tenant-context";
+import { TenantContext, type ContextActor } from "../tenancy/tenant-context";
 import type { TenantTransaction } from "../tenancy/tenant-tx";
 import { velexisRemarkText } from "./booking-reference";
 import { maskedIdentifications } from "./identifications";
@@ -108,6 +111,15 @@ export const FIRST_TICKETING_RETRY_MS = 5 * 60_000;
 
 /** How long a synchronisation counts as fresh in an answer (Booking.syncStatus). */
 const FRESH_SYNC_MS = 6 * 60 * 60_000;
+
+/** The booking event of stored tickets, which queues the traveller's e-ticket e-mail of the same name. */
+export const TICKETED_EVENT = "booking.ticketed";
+
+/** The ticket type of an e-ticket (`booking_tickets.document_type`), the tickets the e-ticket e-mail lists. */
+const E_TICKET_TYPE = "ETICKET";
+
+/** A BCP 47 locale as the outbox accepts it. */
+const LOCALE = /^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8}){0,3}$/;
 
 // ---- The created order ---------------------------------------------------------------------------------------------
 
@@ -574,6 +586,7 @@ export class OrderRecorder {
     private readonly logger: PinoLogger,
     config: ConfigService<SharedConfig, true>,
     private readonly documentRequests: DocumentRequests,
+    private readonly tenants: TenantContext,
   ) {
     logger.setContext(OrderRecorder.name);
     this.baseDomain = config.get("STOREFRONT_BASE_DOMAIN", { infer: true });
@@ -700,6 +713,9 @@ export class OrderRecorder {
       last_synced_at: now,
       updated_at: now,
     });
+    // The confirmation first, so it is queued (and, its itinerary ready, sent) before an e-ticket e-mail of the same
+    // transaction.
+    await this.confirmationEmail(trx, input, segments, travelers);
     const actor = eventActorOf(input.actor);
     await this.event(trx, booking.id, {
       type: "booking.created",
@@ -715,7 +731,7 @@ export class OrderRecorder {
     });
     if (coverage !== "none") {
       await this.event(trx, booking.id, {
-        type: "booking.ticketed",
+        type: TICKETED_EVENT,
         actor,
         statusFrom: state.status,
         statusTo: state.status,
@@ -740,7 +756,6 @@ export class OrderRecorder {
         now,
       });
     }
-    await this.confirmationEmail(trx, input, segments, travelers);
     return {
       status: state.status,
       ticketingStatus: state.ticketingStatus,
@@ -776,7 +791,7 @@ export class OrderRecorder {
 
   /**
    * Appends a booking event; `data` goes through the shared redactor. The events that change a booking document ask
-   * for it in the same transaction (see the file header).
+   * for it in the same transaction, and `booking.ticketed` queues the e-ticket e-mail (see the file header).
    */
   async event(
     trx: TenantTransaction,
@@ -811,6 +826,76 @@ export class OrderRecorder {
       updated_at: event.now,
     });
     await this.documentRequests.afterBookingEvent(trx, bookingId, event.type);
+    if (event.type === TICKETED_EVENT) {
+      await this.ticketedEmail(trx, bookingId);
+    }
+  }
+
+  /**
+   * The outbox `booking.ticketed` e-mail of a `booking.ticketed` event (see the file header): the booking's e-tickets
+   * to the primary contact (or the booking's contact e-mail), in the contact's language or the storefront's, once per
+   * booking version. A booking without e-tickets queues nothing; a call the outbox refuses (InvalidNotificationError,
+   * raised before any SQL) is logged and skipped: the tickets are recorded all the same.
+   */
+  private async ticketedEmail(trx: TenantTransaction, bookingId: string): Promise<void> {
+    const booking = await this.repository.booking(trx, bookingId);
+    if (booking === undefined) {
+      return;
+    }
+    const children = await this.repository.children(trx, bookingId);
+    const tickets = children.tickets.filter((ticket) => ticket.documentType === E_TICKET_TYPE);
+    if (tickets.length === 0) {
+      return;
+    }
+    const settings = await this.repository.settings(trx);
+    const primary = children.contacts.find((contact) => contact.isPrimary) ?? children.contacts[0];
+    const language = primary?.language ?? null;
+    const names = new Map(
+      children.travelers.map((traveler) => [
+        traveler.amadeusTravelerId,
+        `${traveler.firstName} ${traveler.lastName}`.trim(),
+      ]),
+    );
+    try {
+      await this.outbox.enqueue(trx, {
+        templateKey: TICKETED_EVENT,
+        to: primary?.email ?? booking.contactEmail,
+        locale: language !== null && LOCALE.test(language) ? language : (settings?.defaultLocale ?? "en"),
+        customerId: booking.customerId,
+        bookingId: booking.id,
+        dedupeKey: `${TICKETED_EVENT}:${booking.id}:v${booking.version}`,
+        data: {
+          booking: {
+            reference: booking.reference,
+            recordLocator: booking.recordLocator ?? "",
+            url: `${storefrontUrl(this.tenants.require().key, this.baseDomain)}/booking.html?id=${booking.id}`,
+            total: { amount: booking.totalAmount, currency: booking.currency },
+            contact: { firstName: primary?.firstName ?? "", lastName: primary?.lastName ?? "" },
+            travellers: children.travelers.map((traveler) => ({
+              firstName: traveler.firstName,
+              lastName: traveler.lastName,
+            })),
+            segments: children.segments.map((segment) => ({
+              origin: segment.departureIata,
+              destination: segment.arrivalIata,
+              departureAt: segment.departureLocal,
+              arrivalAt: segment.arrivalLocal,
+              carrierCode: segment.carrierCode,
+              flightNumber: segment.flightNumber,
+            })),
+          },
+          tickets: tickets.map((ticket) => ({
+            number: ticket.documentNumber,
+            travellerName: names.get(ticket.amadeusTravelerId ?? "") ?? "",
+          })),
+        },
+      });
+    } catch (error) {
+      if (!(error instanceof InvalidNotificationError)) {
+        throw error;
+      }
+      this.logger.error({ bookingId, err: error }, "bookings.ticketed_email_invalid");
+    }
   }
 
   /** The segment rows of the order, with their instants read in the airports' time zones (UTC when unknown). */

@@ -8,8 +8,9 @@
 // `amadeusAccountById`, for the connection resolver of src/amadeus/), the tenants a scheduled job fans out to in
 // OBE-024 (`tenantIdsByStatus`, for src/jobs/fan-out.ts), the default payment connection of an environment in OBE-038
 // (`paymentConnection`, for the Stripe gateway of src/payments/), a staff member's membership with its account in
-// OBE-059 (`staffMember`, for the staff sessions of src/identity/staff/), and the account modes of a tenant's payment
-// connections in OBE-068 (`paymentConnectionModes`, for console.payments of src/console/).
+// OBE-059 (`staffMember`, for the staff sessions of src/identity/staff/), the account modes of a tenant's payment
+// connections in OBE-068 (`paymentConnectionModes`, for console.payments of src/console/), and the e-mail addresses
+// of a tenant's owners in OBE-055 (`ownerEmails`, for the staff alerts of src/notifications/staff-recipients.ts).
 import { Inject, Injectable } from "@nestjs/common";
 import {
   assertTenantSchema,
@@ -349,6 +350,17 @@ interface StaffMemberRow {
   readonly tenant_time_zone: string;
 }
 
+/** An owner of a tenant who gets its staff alerts (`ownerEmails`). */
+export interface PlatformOwnerEmail {
+  /** `acc_` + ULID. */
+  readonly accountId: string;
+  /** `platform.accounts.email`, as the platform stores it. */
+  readonly email: string;
+}
+
+/** The account statuses whose owners get staff alerts: signed-in accounts and accounts locked for a while. */
+const ALERTED_ACCOUNT_STATUSES: readonly AccountStatus[] = Object.freeze(["active", "locked"]);
+
 /** A tenant id as the platform writes it (`ten_` and a ULID); anything else is unknown without a query. */
 const TENANT_ID_PATTERN = /^ten_[0-9A-Za-z]{1,60}$/;
 /** An account id (`acc_` and a ULID). */
@@ -594,6 +606,36 @@ export class PlatformReadRepository {
         .executeTakeFirst(),
     );
     return row === undefined ? null : toPlatformStaffMember(row);
+  }
+
+  /**
+   * The e-mail addresses of the owners of tenant `tenantId` who get its staff alerts when the OTA has no
+   * `ops_alert_email` (OADR-0013 item 5, OBE-055): `active` memberships with the role `owner` whose account is
+   * `active` or `locked`, has a verified e-mail address and is not erased; the oldest membership (the founder) first,
+   * at most `limit`. Only the membership's and the account's readable columns are named. A value that cannot be a
+   * tenant id is unknown without a query.
+   */
+  async ownerEmails(tenantId: string, limit = 10): Promise<PlatformOwnerEmail[]> {
+    if (!TENANT_ID_PATTERN.test(tenantId) || !Number.isSafeInteger(limit) || limit < 1) {
+      return [];
+    }
+    const rows = await this.read((trx) =>
+      trx
+        .selectFrom("platform.tenant_memberships as m")
+        .innerJoin("platform.accounts as a", "a.id", "m.account_id")
+        .select(["a.id as account_id", "a.email"])
+        .where("m.tenant_id", "=", tenantId)
+        .where("m.role", "=", "owner")
+        .where("m.status", "=", "active")
+        .where("a.status", "in", [...ALERTED_ACCOUNT_STATUSES])
+        .where("a.email_verified_at", "is not", null)
+        .where("a.deleted_at", "is", null)
+        .orderBy("m.created_at")
+        .orderBy("m.id")
+        .limit(limit)
+        .execute(),
+    );
+    return rows.map((row) => Object.freeze({ accountId: row.account_id, email: row.email }));
   }
 
   /**

@@ -1,0 +1,32 @@
+{{#if booking.contact.firstName}}Hello {{booking.contact.firstName}},{{else}}Hello,{{/if}}
+
+We have received your request to cancel booking {{booking.reference}}.
+
+Your booking is not cancelled yet. The {{brand.name}} team handles the cancellation with the airline and writes to you
+when it is done, with the amount refunded, if any. Until then your booking stays as it is.
+
+Booking reference: {{booking.reference}}
+{{#if booking.recordLocator}}
+Airline reference: {{booking.recordLocator}}
+{{/if}}
+Booking total: {{booking.total.amount}} {{booking.total.currency}}
+
+Flights (local times):
+{{#each booking.segments}}
+- {{carrierCode}} {{flightNumber}}, {{origin}} to {{destination}}: departs {{departureAt}}, arrives {{arrivalAt}}
+{{/each}}
+
+View your booking:
+{{booking.url}}
+{{#if brand.supportEmail}}
+
+Questions? Write to {{brand.supportEmail}}{{#if brand.supportPhone}} or call {{brand.supportPhone}}{{/if}}.
+{{else}}
+{{#if brand.supportPhone}}
+
+Questions? Call {{brand.supportPhone}}.
+{{/if}}
+{{/if}}
+
+{{brand.name}}
+{{brand.storefrontUrl}}

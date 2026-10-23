@@ -126,8 +126,9 @@ import {
 import { RequestContext } from "../common/http/request-context";
 import { IdGenerator } from "../common/ids";
 import { OTA_QUEUE } from "../common/queues/queue-names";
-import { EMAIL_ADDRESS, type SharedConfig } from "../config";
-import { InvalidNotificationError, OutboxService } from "../notifications/outbox.service";
+import type { SharedConfig } from "../config";
+import { InvalidNotificationError } from "../notifications/outbox.service";
+import { StaffRecipients } from "../notifications/staff-recipients";
 import {
   PAYMENT_GATEWAY,
   type GatewayContext,
@@ -538,7 +539,7 @@ export class BookingOrchestrator {
     private readonly amadeus: AmadeusClient,
     private readonly connections: ConnectionResolver,
     @Inject(PAYMENT_GATEWAY) private readonly gateway: PaymentGateway,
-    private readonly outbox: OutboxService,
+    private readonly staffRecipients: StaffRecipients,
     @InjectQueue(OTA_QUEUE.payments) private readonly paymentsQueue: Queue,
     @InjectQueue(OTA_QUEUE.bookings) private readonly bookingsQueue: Queue,
     private readonly reconcile: ReconcileRepository,
@@ -1051,7 +1052,7 @@ export class BookingOrchestrator {
       captured = await this.capture(tenant, ctx, prepared, claim, total, recorded.status, warnings);
     } else if (!captured) {
       await this.tx.run(async (trx) => {
-        await this.staffAlert(trx, prepared.settings, booking, "manual_review_policy", {
+        await this.staffAlert(trx, booking, "manual_review_policy", {
           reason:
             "The ticketing policy of the OTA is manual review: issue the tickets from the console, which captures the payment first.",
           locale: prepared.settings.defaultLocale,
@@ -1746,7 +1747,7 @@ export class BookingOrchestrator {
           requestId: this.requestId(tenant),
           now,
         });
-        await this.staffAlert(trx, prepared.settings, booking, "capture_failed", {
+        await this.staffAlert(trx, booking, "capture_failed", {
           reason:
             "The payment could not be captured after the order was created. The capture is retried once in 10 minutes; check the payment before issuing.",
           locale: prepared.settings.defaultLocale,
@@ -2078,31 +2079,21 @@ export class BookingOrchestrator {
   }
 
   /**
-   * A staff alert (`staff.manual_review`) to `ops_alert_email`, else the support address; skipped (and logged) when the
-   * OTA has neither. Its console link is `https://admin.<STOREFRONT_BASE_DOMAIN>/bookings/<bkg_…>`: the API has no
-   * PUBLIC_OTA_ADMIN_URL (a worker variable).
+   * A staff alert (`staff.manual_review`) to `ops_alert_email`, else the owners (notifications/staff-recipients.ts);
+   * skipped (and logged) when the OTA has neither: the API has no OPS_ALERT_EMAIL (a worker variable). Its console link
+   * is `https://admin.<STOREFRONT_BASE_DOMAIN>/bookings/<bkg_…>`: the API has no PUBLIC_OTA_ADMIN_URL either.
    */
   private async staffAlert(
     trx: TenantTransaction,
-    settings: BookingSettingsRow,
     booking: BookingRow,
     kind: string,
     alert: { readonly reason: string; readonly locale: string },
   ): Promise<void> {
-    const to = [settings.opsAlertEmail, settings.supportEmail].find(
-      (address): address is string => address !== null && EMAIL_ADDRESS.test(address),
-    );
-    if (to === undefined) {
-      this.logger.warn({ bookingId: booking.id, kind }, "bookings.staff_alert_without_recipient");
-      return;
-    }
     try {
-      await this.outbox.enqueue(trx, {
+      await this.staffRecipients.enqueue(trx, {
         templateKey: "staff.manual_review",
-        to,
         locale: alert.locale,
         bookingId: booking.id,
-        recipientType: "staff",
         dedupeKey: `staff.manual_review:${booking.id}:${kind}`,
         data: {
           booking: {

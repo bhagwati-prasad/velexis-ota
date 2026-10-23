@@ -1,0 +1,44 @@
+{{#if booking.contact.firstName}}Hello {{booking.contact.firstName}},{{else}}Hello,{{/if}}
+
+Thank you for booking with {{brand.name}}. The airline has confirmed your booking.
+
+Booking reference: {{booking.reference}}
+{{#if booking.recordLocator}}
+Airline reference: {{booking.recordLocator}}
+{{/if}}
+Total: {{booking.total.amount}} {{booking.total.currency}}
+
+Flights (local times):
+{{#each booking.segments}}
+- {{carrierCode}} {{flightNumber}}, {{origin}} to {{destination}}: departs {{departureAt}}, arrives {{arrivalAt}}
+{{/each}}
+
+Travellers:
+{{#each booking.travellers}}
+- {{firstName}} {{lastName}}
+{{/each}}
+
+{{#if documents.attached}}
+Your itinerary is attached to this e-mail as a PDF.
+{{else}}
+Your itinerary will be ready to download on your booking page shortly.
+{{/if}}
+Your e-tickets follow in a separate e-mail as soon as the airline has issued them.
+
+View your booking:
+{{booking.url}}
+
+This e-mail is not an invoice. Invoices for this booking are issued by {{brand.name}}: if you need one, please ask
+{{brand.name}}{{#if brand.supportEmail}} at {{brand.supportEmail}}{{/if}}.
+{{#if brand.supportEmail}}
+
+Questions? Write to {{brand.supportEmail}}{{#if brand.supportPhone}} or call {{brand.supportPhone}}{{/if}}.
+{{else}}
+{{#if brand.supportPhone}}
+
+Questions? Call {{brand.supportPhone}}.
+{{/if}}
+{{/if}}
+
+{{brand.name}}
+{{brand.storefrontUrl}}

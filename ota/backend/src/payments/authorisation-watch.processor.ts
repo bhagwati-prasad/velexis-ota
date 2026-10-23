@@ -5,11 +5,12 @@
 // a `manual_review` booking (OADR-0008 point 1) must be issued, which captures it, or the payment voided before then.
 //
 // Each payment is alerted once: the job writes a `payment.authorisation_expiring` payment event with the outbox alert
-// (`staff.manual_review` to `ops_alert_email`, else OPS_ALERT_EMAIL; dedupe key `staff.authorisation_watch:<pay_id>`),
-// in one transaction, and the next runs leave out payments that have the event. The batch (at most
-// AUTHORISATION_WATCH_BATCH payments, oldest authorisation first) is locked with `FOR UPDATE SKIP LOCKED`, so two jobs of
-// one tenant at once (a continuation and a new run) alert different payments; a full batch of candidates that alerted at
-// least one payment asks the runner for more (a candidate another job holds is skipped, and the next run finds it).
+// (`staff.manual_review` to `ops_alert_email`, else the owners, else OPS_ALERT_EMAIL; dedupe key
+// `staff.authorisation_watch:<pay_id>`), in one transaction, and the next runs leave out payments that have the event.
+// The batch (at most AUTHORISATION_WATCH_BATCH payments, oldest authorisation first) is locked with `FOR UPDATE SKIP
+// LOCKED`, so two jobs of one tenant at once (a continuation and a new run) alert different payments; a full batch of
+// candidates that alerted at least one payment asks the runner for more (a candidate another job holds is skipped, and
+// the next run finds it).
 // The alert's outbox row references the payment's booking, so the bookings are locked (`FOR KEY SHARE`) before the
 // payments: the lock order of a transaction that locks a booking and its payment (OADR-0003 point 11).
 // The time comes from `Clock`. The job logs counts only.

@@ -2,35 +2,60 @@
 // every tenant, its templates (tenant rows or code defaults, templates/registry.ts), the renderer and, in the worker,
 // the SMTP gateway, the `ota-notifications` consumer and the `notifications.sweep` handler.
 //
-//   API     NotificationsModule.forApi()     OutboxService (queue an e-mail in a use case's transaction), and the
-//                                            template service and renderer the console's template settings use (OBE-073)
-//   worker  NotificationsModule.forWorker()  the same, and MailerGateway, OutboxDrainer, NotificationsProcessor and
-//                                            NotificationsSweep (`@TenantJob`, found by the jobs module's runner)
+//   API     NotificationsModule.forApi()     OutboxService (queue an e-mail in a use case's transaction),
+//                                            StaffRecipients (queue a staff alert to the OTA's alert address or its
+//                                            owners, OBE-055), and the template service and renderer the console's
+//                                            template settings use (OBE-073)
+//   worker  NotificationsModule.forWorker()  the same, and MailerGateway, NotificationAttachments (the booking
+//                                            documents of the booking e-mails, read from the StorageAdapter of
+//                                            STORAGE_DRIVER and STORAGE_DIR, OBE-055), OutboxDrainer,
+//                                            NotificationsProcessor and NotificationsSweep (`@TenantJob`, found by the
+//                                            jobs module's runner)
 //
 // Both are global, so a use case anywhere injects `OutboxService` without importing this module (as AppModule and
 // WorkerModule import it once). Sending happens in the worker only (ADR-0017): the API never opens an SMTP connection.
 // The tenant context, `TenantTx` and the platform cache come from `TenancyModule`, the queues from QueuesModule, Clock
 // and IdGenerator from the global CommonModule; the KEKs of MASTER_KEY_DIR are loaded once, at start-up.
-import { Module, type DynamicModule, type Provider } from "@nestjs/common";
+import { Module, type DynamicModule, type FactoryProvider, type Provider } from "@nestjs/common";
+import { ConfigService } from "@nestjs/config";
+import { createStorage, type StorageAdapter } from "@velexis/db/storage";
 import { QueuesModule } from "../common/queues/queues.module";
+import type { WorkerConfig } from "../config";
 import { TenancyModule } from "../tenancy/tenancy.module";
+import { ATTACHMENT_STORAGE, NotificationAttachments } from "./attachments";
 import { MailerGateway, mailTransportProvider } from "./mailer.gateway";
 import { NotificationsProcessor, NotificationsSweep, OutboxDrainer } from "./notifications.processor";
 import { OutboxRepository } from "./outbox.repository";
 import { notificationsKeyProvider, OutboxService } from "./outbox.service";
 import { NotificationRenderer } from "./renderer";
+import { StaffRecipients } from "./staff-recipients";
 import { TemplateService } from "./template.service";
+
+/**
+ * The worker's StorageAdapter for the attachments (ADR-0017): the one the documents module stores the PDFs with
+ * (`local` under STORAGE_DIR), read only here. Nothing is read at start-up.
+ */
+const attachmentStorageProvider: FactoryProvider<StorageAdapter> = {
+  provide: ATTACHMENT_STORAGE,
+  inject: [ConfigService],
+  useFactory: (config: ConfigService<WorkerConfig, true>) =>
+    createStorage({
+      driver: config.get("STORAGE_DRIVER", { infer: true }),
+      dir: config.get("STORAGE_DIR", { infer: true }),
+    }),
+};
 
 /** What both processes have. */
 const SHARED_PROVIDERS: readonly Provider[] = [
   notificationsKeyProvider,
   OutboxRepository,
   OutboxService,
+  StaffRecipients,
   TemplateService,
   NotificationRenderer,
 ];
 
-const SHARED_EXPORTS = [OutboxService, TemplateService, NotificationRenderer];
+const SHARED_EXPORTS = [OutboxService, StaffRecipients, TemplateService, NotificationRenderer];
 
 @Module({})
 export class NotificationsModule {
@@ -59,6 +84,8 @@ export class NotificationsModule {
         ...SHARED_PROVIDERS,
         mailTransportProvider,
         MailerGateway,
+        attachmentStorageProvider,
+        NotificationAttachments,
         OutboxDrainer,
         NotificationsProcessor,
         NotificationsSweep,

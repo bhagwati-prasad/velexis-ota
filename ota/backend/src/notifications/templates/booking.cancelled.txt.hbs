@@ -1,0 +1,36 @@
+{{#if booking.contact.firstName}}Hello {{booking.contact.firstName}},{{else}}Hello,{{/if}}
+
+Your booking {{booking.reference}} is cancelled: the flights below are no longer booked for you.
+
+{{#if refund.amount}}
+A refund of {{refund.amount}} {{refund.currency}} goes back to the card you paid with. It can take up to 10 days to
+appear on your statement.
+{{else}}
+If an amount is due back to you, {{brand.name}} will tell you how and when it is refunded.
+{{/if}}
+
+Booking reference: {{booking.reference}}
+{{#if booking.recordLocator}}
+Airline reference: {{booking.recordLocator}}
+{{/if}}
+Booking total: {{booking.total.amount}} {{booking.total.currency}}
+
+Flights (local times):
+{{#each booking.segments}}
+- {{carrierCode}} {{flightNumber}}, {{origin}} to {{destination}}: departs {{departureAt}}, arrives {{arrivalAt}}
+{{/each}}
+
+View your booking:
+{{booking.url}}
+{{#if brand.supportEmail}}
+
+Questions? Write to {{brand.supportEmail}}{{#if brand.supportPhone}} or call {{brand.supportPhone}}{{/if}}.
+{{else}}
+{{#if brand.supportPhone}}
+
+Questions? Call {{brand.supportPhone}}.
+{{/if}}
+{{/if}}
+
+{{brand.name}}
+{{brand.storefrontUrl}}

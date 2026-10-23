@@ -1,17 +1,19 @@
 // The SMTP gateway of the OTA worker without SMTP (OBE-030; OADR-0013 item 5, ADR-0017): the message it hands to
 // Nodemailer (the OTA's brand as the sender's display name on MAIL_FROM's address, the support address as Reply-To,
-// the envelope, the Message-ID) and the failures it reports. Sending through Mailpit runs in
-// test/integration/notifications/outbox.int.test.ts.
+// the envelope, the Message-ID, the attachments of OBE-055) and the failures it reports. Sending through Mailpit runs
+// in test/integration/notifications/outbox.int.test.ts and booking-emails.int.test.ts.
 import type { ConfigService } from "@nestjs/config";
 import type { SendMailOptions } from "nodemailer";
 import { describe, expect, it, vi } from "vitest";
 import type { WorkerConfig } from "../config";
 import {
+  attachmentName,
   describeFailure,
   displayName,
   failureOf,
   MailerError,
   MailerGateway,
+  MAX_ATTACHMENT_NAME_LENGTH,
   MAX_DISPLAY_NAME_LENGTH,
   parseMailbox,
   type MailTransport,
@@ -134,6 +136,36 @@ describe("MailerGateway.send", () => {
     expect((unknownUser as MailerError).permanent).toBe(false);
     expect(JSON.stringify([down, unknownUser, (unknownUser as MailerError).failure])).not.toContain("alex@");
   });
+
+  it("[OBE-055] attaches files as bytes, never as a path, with their names on one line", async () => {
+    const { gateway, sent } = gatewayWith(() => Promise.resolve({}));
+    const pdf = Buffer.from("%PDF-1.7 test");
+
+    await gateway.send({
+      ...EMAIL,
+      attachments: [
+        { fileName: "VX7K2M9Q-itinerary.pdf", contentType: "application/pdf", content: pdf },
+        { fileName: "../../etc/passwd\r\nX-Evil: 1", contentType: "application/pdf", content: pdf },
+      ],
+    });
+    await gateway.send({ ...EMAIL, attachments: [] });
+
+    expect(sent[0]?.attachments).toEqual([
+      {
+        filename: "VX7K2M9Q-itinerary.pdf",
+        content: pdf,
+        contentType: "application/pdf",
+        contentDisposition: "attachment",
+      },
+      {
+        filename: ".._.._etc_passwd X-Evil: 1",
+        content: pdf,
+        contentType: "application/pdf",
+        contentDisposition: "attachment",
+      },
+    ]);
+    expect(sent[1]).not.toHaveProperty("attachments");
+  });
 });
 
 describe("the helpers", () => {
@@ -156,5 +188,12 @@ describe("the helpers", () => {
       code: "Error",
     });
     expect(describeFailure({ code: "ETIMEDOUT" })).toBe("ETIMEDOUT");
+  });
+
+  it("[OBE-055] cuts an attachment's name to one line without path separators", () => {
+    expect(attachmentName("e-ticket-VX7K2M9Q-0571234567890.pdf")).toBe("e-ticket-VX7K2M9Q-0571234567890.pdf");
+    expect(attachmentName(" a/b\\c\u0000d\u2028e ")).toBe("a_b_c d e");
+    expect(attachmentName("\n\t")).toBe("attachment");
+    expect([...attachmentName(`${"x".repeat(200)}.pdf`)]).toHaveLength(MAX_ATTACHMENT_NAME_LENGTH);
   });
 });

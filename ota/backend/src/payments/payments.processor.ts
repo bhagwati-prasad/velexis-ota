@@ -38,10 +38,11 @@
 // After a refusal (a 4xx) or a 5xx (which Stripe keeps as the answer of the key for 24 hours, so the same key cannot
 // succeed), and after the last attempt, the job reads the PaymentIntent again and applies what Stripe holds now (an
 // authorisation that expired, a capture made elsewhere); when that is not what the job wanted, the staff are alerted
-// (outbox `staff.manual_review` to `ops_alert_email`, else OPS_ALERT_EMAIL, once per payment or refund and kind) and the
-// job ends. A refund Stripe refused is `failed` (the cancellation stands, flows/change-and-cancel.md §4); one whose
-// outcome is unknown is released (`pending`; the webhook still finds it by its `refund_id`) and alerted. A PaymentIntent
-// whose metadata names another tenant or payment is a security event (logged by the gateway) and changes nothing.
+// (outbox `staff.manual_review` to `ops_alert_email`, else the owners, else OPS_ALERT_EMAIL, once per payment or refund
+// and kind; notifications/staff-recipients.ts) and the job ends. A refund Stripe refused is `failed` (the cancellation
+// stands, flows/change-and-cancel.md §4); one whose outcome is unknown is released (`pending`; the webhook still finds
+// it by its `refund_id`) and alerted. A PaymentIntent whose metadata names another tenant or payment is a security
+// event (logged by the gateway) and changes nothing.
 //
 // Log lines carry ids, job names, outcomes, statuses and Stripe's error codes, never a Stripe object, an e-mail address
 // or a payload.
@@ -56,9 +57,10 @@ import { InjectPinoLogger, PinoLogger } from "nestjs-pino";
 import { Clock } from "../common/clock";
 import { IdGenerator } from "../common/ids";
 import { OTA_QUEUE, otaWorkerOptions } from "../common/queues/queue-names";
-import { EMAIL_ADDRESS, type WorkerConfig } from "../config";
+import type { WorkerConfig } from "../config";
 import { jobTenant } from "../jobs/fan-out";
-import { InvalidNotificationError, OutboxService } from "../notifications/outbox.service";
+import { InvalidNotificationError } from "../notifications/outbox.service";
+import { StaffRecipients } from "../notifications/staff-recipients";
 import { Money } from "../pricing/pricing.types";
 import { PlatformCache } from "../tenancy/platform-cache";
 import type { TenantStatus } from "../tenancy/platform-read.types";
@@ -341,14 +343,15 @@ export interface PaymentAlert {
 }
 
 /**
- * The staff alerts about payments (outbox `staff.manual_review`): to the OTA's `ops_alert_email`, else OPS_ALERT_EMAIL,
- * in the storefront's default locale, with the booking's reference and a console link to the booking (or the payment).
+ * The staff alerts about payments (outbox `staff.manual_review`): to the OTA's `ops_alert_email`, else its owners, else
+ * OPS_ALERT_EMAIL (notifications/staff-recipients.ts, OBE-055), in the storefront's default locale, with the booking's
+ * reference and a console link to the booking (or the payment).
  */
 @Injectable()
 export class PaymentAlerts {
   constructor(
     private readonly payments: PaymentsRepository,
-    private readonly outbox: OutboxService,
+    private readonly staffRecipients: StaffRecipients,
     private readonly config: ConfigService<WorkerConfig, true>,
     @InjectPinoLogger(PaymentAlerts.name) private readonly logger: PinoLogger,
   ) {}
@@ -360,18 +363,12 @@ export class PaymentAlerts {
     alert: PaymentAlert,
   ): Promise<boolean> {
     const facts = await this.payments.alertFacts(trx, payment.bookingId);
-    const own = facts.opsAlertEmail !== null && EMAIL_ADDRESS.test(facts.opsAlertEmail);
-    if (facts.opsAlertEmail !== null && !own) {
-      this.logger.warn({ paymentId: payment.id }, "payments.ops_alert_email_invalid");
-    }
-    const to = own && facts.opsAlertEmail !== null ? facts.opsAlertEmail : this.config.get("OPS_ALERT_EMAIL");
     const adminUrl = this.config.get("PUBLIC_OTA_ADMIN_URL");
     const consolePath =
       payment.bookingId === null ? `payments/${payment.id}` : `bookings/${payment.bookingId}`;
     try {
-      const queued = await this.outbox.enqueue(trx, {
+      const queued = await this.staffRecipients.enqueue(trx, {
         templateKey: ALERT_TEMPLATE,
-        to,
         locale: facts.defaultLocale ?? "en",
         data: {
           booking: {
@@ -382,7 +379,6 @@ export class PaymentAlerts {
           review: { reason: alert.reason },
         },
         dedupeKey: alert.dedupeKey,
-        recipientType: "staff",
         bookingId: payment.bookingId,
       });
       return queued.queued;

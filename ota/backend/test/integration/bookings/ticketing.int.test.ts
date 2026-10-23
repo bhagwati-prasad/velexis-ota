@@ -697,8 +697,11 @@ describe("a timed-out issuance", () => {
     const events = await eventsOf(booking);
     expect(events.map((event) => event.type)).toEqual(["booking.ticketing_failed", "booking.ticketed"]);
     expect(events[1]).toMatchObject({ visible: true, data: { via: "resync", attempt: 3 } });
-    // No alert: the booking is ticketed.
-    expect(await notificationsOf(booking)).toEqual([]);
+    // No alert: the booking is ticketed. The traveller gets the e-ticket e-mail, which the stored tickets queue since
+    // OBE-055 (OrderRecorder.event).
+    expect((await notificationsOf(booking)).map((row) => [row.templateKey, row.recipientType])).toEqual([
+      ["booking.ticketed", "guest"],
+    ]);
   });
 });
 

@@ -6,10 +6,14 @@
 //   1. resolve the tenant through the platform cache and re-check its status: `active` or `suspended` (a suspended
 //      OTA's travellers still get their e-mails, OADR-0014 point 4); any other tenant is skipped;
 //   2. claim at most 100 due rows (`FOR UPDATE SKIP LOCKED`, outbox.repository.ts: a 5-minute lease, committed before
-//      anything is sent) and read, in the same transaction, the tenant's sender settings and templates;
-//   3. per row, outside any transaction: decrypt the secret values, render (renderer.ts), send with
-//      `From: "<brand name>" <MAIL_FROM address>` and `Reply-To: <support e-mail>` (mailer.gateway.ts);
+//      anything is sent) and read, in the same transaction, the tenant's sender settings and templates, and the
+//      attachment plan of the booking e-mails that attach documents (attachments.ts, OBE-055);
+//   3. per row, outside any transaction: decrypt the secret values, read the attachments of an `attach` plan, render
+//      (renderer.ts, `documents.attached` as the plan decided), send with `From: "<brand name>" <MAIL_FROM address>`
+//      and `Reply-To: <support e-mail>` (mailer.gateway.ts);
 //   4. per row, in a short transaction fenced by the lease:
+//        waiting        → its documents are not ready and the 2 minutes since they were asked for are not over:
+//                         `pending` again for ATTACHMENT_RECHECK_MS without an attempt (released, `deferred`);
 //        sent           → `sent`, secrets erased in the same update;
 //        SMTP failed    → one more attempt; `pending` again after 1, 2, 4 and 8 minutes, `failed` (secrets erased)
 //                         after the 5th failed attempt (RETRY_BACKOFF_MS, MAX_ATTEMPTS);
@@ -19,7 +23,10 @@
 //      tried go back to `pending` for a minute without an attempt, so an outage costs one attempt per row and never
 //      ties a worker to 100 timeouts; a batch that runs longer than BATCH_TIME_BUDGET_MS releases the rest the same
 //      way, well inside the lease;
-//   5. a full batch, or one cut short by the time budget, enqueues the next `notify` at the back of the queue.
+//   5. a full batch, or one cut short by the time budget, enqueues the next `notify` at the back of the queue; a batch
+//      that deferred e-mails for their documents enqueues a delayed `notify` for the earliest of them (job id
+//      `notify:<tenantId>:w<due in ATTACHMENT_RECHECK_MS steps>`, one per tenant and step), so a waiting confirmation
+//      goes out seconds after its itinerary is ready instead of at the next sweep.
 //
 // `notifications.sweep` (every minute, jobs/schedulers.ts) runs per tenant on `ota-maintenance` and enqueues
 // `notify {tenantId}` (id `notify:<tenantId>:<minute bucket>`) when the tenant has a due row: e-mails whose enqueue was
@@ -47,7 +54,19 @@ import { PlatformCache } from "../tenancy/platform-cache";
 import type { PlatformTenant, TenantStatus } from "../tenancy/platform-read.types";
 import { TenantContext } from "../tenancy/tenant-context";
 import { TenantTx, type TenantTransaction } from "../tenancy/tenant-tx";
-import { MailerError, MailerGateway, SMTP_PROVIDER, type SentEmail } from "./mailer.gateway";
+import {
+  ATTACHMENT_RECHECK_MS,
+  NotificationAttachments,
+  waitUntil,
+  type AttachmentPlan,
+} from "./attachments";
+import {
+  MailerError,
+  MailerGateway,
+  SMTP_PROVIDER,
+  type EmailAttachment,
+  type SentEmail,
+} from "./mailer.gateway";
 import { OutboxRepository, type Lease, type NotificationRow } from "./outbox.repository";
 import {
   NOTIFICATIONS_KEY_PROVIDER,
@@ -112,6 +131,8 @@ export interface DrainCounts extends Readonly<Record<string, number>> {
   readonly retried: number;
   readonly failed: number;
   readonly released: number;
+  /** Released without an attempt because their documents were not ready yet (attachments.ts). */
+  readonly deferred: number;
 }
 
 /** What `drain` did, and whether more is due. */
@@ -119,6 +140,17 @@ export interface DrainOutcome {
   readonly counts: DrainCounts;
   /** True when the batch was full or cut short (not by an SMTP failure): the next `notify` follows at once. */
   readonly more: boolean;
+  /** When the earliest e-mail deferred for its documents is due again; `undefined` when none was deferred. */
+  readonly wakeAt?: Date | undefined;
+}
+
+/**
+ * The delayed `notify` of a tenant's e-mails deferred until `at` (see the file header): its job id, one per tenant and
+ * ATTACHMENT_RECHECK_MS step, and when it runs, the end of the step, so it finds every e-mail due within the step.
+ */
+export function wakeJob(tenantId: string, at: Date): { readonly jobId: string; readonly runAt: Date } {
+  const step = Math.ceil(at.getTime() / ATTACHMENT_RECHECK_MS);
+  return { jobId: `${NOTIFY_JOB}:${tenantId}:w${step}`, runAt: new Date(step * ATTACHMENT_RECHECK_MS) };
 }
 
 /** What a finished `notify` job returns (BullMQ keeps it with the job). */
@@ -132,7 +164,7 @@ export type NotifyResult =
   | { readonly tenantId: string; readonly outcome: "skipped"; readonly reason: string };
 
 /** How one row ended. */
-type RowOutcome = "sent" | "retried" | "failed" | "released" | "lost";
+type RowOutcome = "sent" | "retried" | "failed" | "released" | "deferred" | "lost";
 
 /** A row that cannot be rendered: its error code for `last_error`, or `undefined` for an unexpected error. */
 function renderFailureCode(error: unknown): string | undefined {
@@ -170,6 +202,7 @@ export class OutboxDrainer {
     private readonly repository: OutboxRepository,
     private readonly renderer: NotificationRenderer,
     private readonly mailer: MailerGateway,
+    private readonly attachments: NotificationAttachments,
     private readonly clock: Clock,
     @Inject(NOTIFICATIONS_KEY_PROVIDER) private readonly keys: KeyProvider,
     @InjectPinoLogger(OutboxDrainer.name) private readonly logger: PinoLogger,
@@ -180,16 +213,21 @@ export class OutboxDrainer {
     const started = this.clock.now();
     const leaseUntil = new Date(started.getTime() + CLAIM_LEASE_MS);
     const limit = JOB_BATCH_LIMITS.notificationOutbox;
-    const { rows, batch } = await this.tx.run(async (trx) => {
+    const { rows, batch, plans } = await this.tx.run(async (trx) => {
       const claimed = await this.repository.claimDue(trx, started, leaseUntil, limit);
+      if (claimed.length === 0) {
+        return { rows: claimed, batch: undefined, plans: new Map<string, AttachmentPlan>() };
+      }
       return {
         rows: claimed,
-        batch: claimed.length === 0 ? undefined : await this.renderer.prepare(trx, tenant, claimed),
+        batch: await this.renderer.prepare(trx, tenant, claimed),
+        plans: await this.attachments.plan(trx, claimed, started),
       };
     });
-    const counts = { claimed: rows.length, sent: 0, retried: 0, failed: 0, released: 0 };
+    const counts = { claimed: rows.length, sent: 0, retried: 0, failed: 0, released: 0, deferred: 0 };
     let smtpDown = false;
     let outOfTime = false;
+    let wakeAt: Date | undefined;
     for (const row of rows) {
       const lease: Lease = { id: row.id, until: leaseUntil };
       const now = this.clock.now();
@@ -204,9 +242,12 @@ export class OutboxDrainer {
           ? "released"
           : "lost";
       } else {
-        const result = await this.sendOne(row, lease, batch);
+        const result = await this.sendOne(row, lease, batch, plans.get(row.id));
         outcome = result.outcome;
         smtpDown = result.smtpDown;
+        if (result.deferredUntil !== undefined && (wakeAt === undefined || result.deferredUntil < wakeAt)) {
+          wakeAt = result.deferredUntil;
+        }
       }
       if (outcome === "lost") {
         this.logger.debug({ notificationId: row.id }, "notifications.lease_lost");
@@ -217,7 +258,30 @@ export class OutboxDrainer {
     if (counts.claimed > 0) {
       this.logger.info({ tenantId: tenant.id, ...counts }, "notifications.drained");
     }
-    return { counts, more: !smtpDown && (rows.length >= limit || outOfTime) };
+    return { counts, more: !smtpDown && (rows.length >= limit || outOfTime), wakeAt };
+  }
+
+  /**
+   * The attachments of a row with an attachment plan (see the file header): the files of an `attach` plan, none for
+   * `link`, or when they are not ready, the time the row waits until (`wait`, or files of an `attach` plan that
+   * could not be read inside the wait).
+   */
+  private async attachmentsOf(
+    row: NotificationRow,
+    plan: AttachmentPlan | undefined,
+  ): Promise<{ readonly files: readonly EmailAttachment[] } | { readonly waitUntil: Date }> {
+    if (plan === undefined || plan.kind === "link") {
+      return { files: [] };
+    }
+    if (plan.kind === "wait") {
+      return { waitUntil: plan.until };
+    }
+    const files = await this.attachments.load(row.id, plan.documents);
+    if (files !== undefined) {
+      return { files };
+    }
+    const until = waitUntil(plan.askedAt, this.clock.now());
+    return until === undefined ? { files: [] } : { waitUntil: until };
   }
 
   /** Renders and sends one claimed row and records the outcome. */
@@ -225,15 +289,33 @@ export class OutboxDrainer {
     row: NotificationRow,
     lease: Lease,
     batch: RenderBatch,
-  ): Promise<{ readonly outcome: RowOutcome; readonly smtpDown: boolean }> {
+    plan: AttachmentPlan | undefined,
+  ): Promise<{ readonly outcome: RowOutcome; readonly smtpDown: boolean; readonly deferredUntil?: Date }> {
     const attempt = row.attempts + 1;
     const record = (fn: (trx: TenantTransaction) => Promise<boolean>, outcome: RowOutcome) =>
       this.tx.run(fn).then((changed): RowOutcome => (changed ? outcome : "lost"));
 
+    const attachments = await this.attachmentsOf(row, plan);
+    if ("waitUntil" in attachments) {
+      // The documents are not ready yet: claimed again later, without an attempt (OADR-0013 item 8).
+      const now = this.clock.now();
+      const outcome = await record(
+        (trx) => this.repository.release(trx, lease, attachments.waitUntil, now),
+        "deferred",
+      );
+      this.logger.debug(
+        { notificationId: row.id, template: row.template_key, until: attachments.waitUntil.toISOString() },
+        "notifications.waiting_for_documents",
+      );
+      return { outcome, smtpDown: false, deferredUntil: attachments.waitUntil };
+    }
+    const files = attachments.files;
+    const documentsAttached = files.length > 0;
+
     let rendered: RenderedNotification;
     try {
       const secrets = await this.secretsOf(row);
-      rendered = await batch.render(row, secrets);
+      rendered = await batch.render(row, secrets, { documentsAttached });
     } catch (error) {
       const code = renderFailureCode(error);
       const now = this.clock.now();
@@ -281,6 +363,7 @@ export class OutboxDrainer {
         subject: rendered.subject,
         html: rendered.html,
         text: rendered.text,
+        attachments: files,
       });
     } catch (error) {
       const failure = error instanceof MailerError ? error : new MailerError({ code: "ESEND" });
@@ -333,7 +416,15 @@ export class OutboxDrainer {
         }),
       "sent",
     );
-    this.logger.info({ notificationId: row.id, template: row.template_key, attempt }, "notifications.sent");
+    this.logger.info(
+      {
+        notificationId: row.id,
+        template: row.template_key,
+        attempt,
+        ...(plan === undefined ? {} : { attachments: files.length }),
+      },
+      "notifications.sent",
+    );
     return { outcome, smtpDown: false };
   }
 
@@ -377,6 +468,7 @@ export class NotificationsProcessor extends WorkerHost {
     private readonly drainer: OutboxDrainer,
     private readonly cache: PlatformCache,
     private readonly tenants: TenantContext,
+    private readonly clock: Clock,
     @InjectQueue(OTA_QUEUE.notifications) private readonly queue: Queue,
     @InjectPinoLogger(NotificationsProcessor.name) private readonly logger: PinoLogger,
   ) {
@@ -402,6 +494,15 @@ export class NotificationsProcessor extends WorkerHost {
     if (outcome.more) {
       const next = notifyJob(tenant.id);
       await this.queue.add(next.name, next.data, next.opts);
+    }
+    if (outcome.wakeAt !== undefined) {
+      // The e-mails waiting for their documents: claimed again when the earliest is due (see the file header).
+      const wake = wakeJob(tenant.id, outcome.wakeAt);
+      const next = notifyJob(tenant.id, wake.jobId);
+      await this.queue.add(next.name, next.data, {
+        ...next.opts,
+        delay: Math.max(0, wake.runAt.getTime() - this.clock.now().getTime()),
+      });
     }
     return { tenantId: tenant.id, outcome: "done", counts: outcome.counts, continued: outcome.more };
   }

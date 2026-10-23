@@ -1,0 +1,16 @@
+{{#if booking.reference}}A booking needs a member of staff.{{else}}A payment needs a member of staff.{{/if}}
+
+{{#if booking.reference}}
+Booking reference: {{booking.reference}}
+{{/if}}
+{{#if booking.recordLocator}}
+Record locator: {{booking.recordLocator}}
+{{/if}}
+
+{{review.reason}}
+
+Open in the OTA admin:
+{{booking.consoleUrl}}
+
+You receive this alert as the operations address or an owner of {{brand.name}}. The address for alerts is set in
+the OTA admin, under the storefront settings.

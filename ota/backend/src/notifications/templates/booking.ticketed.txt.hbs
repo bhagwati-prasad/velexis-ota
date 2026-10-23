@@ -1,0 +1,42 @@
+{{#if booking.contact.firstName}}Hello {{booking.contact.firstName}},{{else}}Hello,{{/if}}
+
+The airline has issued the e-tickets of your booking {{booking.reference}}. You are ready to travel.
+
+E-tickets:
+{{#each tickets}}
+- {{travellerName}}: {{number}}
+{{/each}}
+
+Booking reference: {{booking.reference}}
+{{#if booking.recordLocator}}
+Airline reference: {{booking.recordLocator}}
+{{/if}}
+Total: {{booking.total.amount}} {{booking.total.currency}}
+
+Flights (local times):
+{{#each booking.segments}}
+- {{carrierCode}} {{flightNumber}}, {{origin}} to {{destination}}: departs {{departureAt}}, arrives {{arrivalAt}}
+{{/each}}
+
+{{#if documents.attached}}
+The e-ticket receipts are attached to this e-mail as PDFs. Keep them with your passport or identity document.
+{{else}}
+The e-ticket receipts will be ready to download on your booking page shortly.
+{{/if}}
+
+View your booking:
+{{booking.url}}
+
+Check in with the airline before your flight. Present the identity document named in the booking at the airport.
+{{#if brand.supportEmail}}
+
+Questions? Write to {{brand.supportEmail}}{{#if brand.supportPhone}} or call {{brand.supportPhone}}{{/if}}.
+{{else}}
+{{#if brand.supportPhone}}
+
+Questions? Call {{brand.supportPhone}}.
+{{/if}}
+{{/if}}
+
+{{brand.name}}
+{{brand.storefrontUrl}}

@@ -7,6 +7,10 @@
 //   links       built here from the e-mail's secret values, on that storefront URL: `verifyUrl` is
 //               `<storefront>/account/verify.html?token=<token>`, `resetUrl` `<storefront>/account/reset-password.html?…`;
 //               they exist only in memory while the worker renders the e-mail;
+//   documents.attached
+//               for the keys that attach booking documents (`attachesDocuments`: booking.confirmed, booking.ticketed),
+//               what the sender decided when it sends the e-mail (OBE-055, attachments.ts): true when the documents
+//               are attached, else false (the e-mail points to the booking page);
 //   the rest    from `notifications.payload`, the variables the code that queued the e-mail passed
 //               (`checkTemplateData` checked them then; only allow-listed paths are copied here).
 //
@@ -31,7 +35,9 @@ import {
   type RenderedTemplate,
 } from "./template.service";
 import {
+  attachesDocuments,
   callerVariables,
+  DOCUMENTS_ATTACHED_VARIABLE,
   isTemplateKey,
   TEMPLATE_REGISTRY,
   TemplateFilesError,
@@ -280,8 +286,9 @@ export function storefrontUrl(tenantKey: string, baseDomain: string): string {
 }
 
 /**
- * The render data of an e-mail of `key` (see the file header): the allow-listed paths of `payload`, the brand and the
- * links built from `secrets`. Throws `NotificationDataError` when a secret a link needs is missing.
+ * The render data of an e-mail of `key` (see the file header): the allow-listed paths of `payload`, the brand, the
+ * links built from `secrets` and, for a key that attaches documents, `documents.attached` (false unless
+ * `documentsAttached`). Throws `NotificationDataError` when a secret a link needs is missing.
  */
 export function renderData(
   key: TemplateKey,
@@ -289,6 +296,7 @@ export function renderData(
     readonly brand: BrandValues;
     readonly payload: unknown;
     readonly secrets: Readonly<Record<string, string>>;
+    readonly documentsAttached?: boolean | undefined;
   },
 ): Record<string, unknown> {
   const definition = TEMPLATE_REGISTRY[key];
@@ -307,7 +315,16 @@ export function renderData(
     const query = new URLSearchParams({ [link.param]: secret }).toString();
     setPath(data, link.variable, `${input.brand.storefrontUrl}${link.path}?${query}`);
   }
+  if (attachesDocuments(key)) {
+    setPath(data, DOCUMENTS_ATTACHED_VARIABLE, input.documentsAttached === true);
+  }
   return data;
+}
+
+/** How the sender sends a row (notifications.processor.ts, attachments.ts). */
+export interface RenderOptions {
+  /** The booking documents of the e-mail are attached (`documents.attached`); false when left out. */
+  readonly documentsAttached?: boolean | undefined;
 }
 
 /** A rendered e-mail and how it was made. */
@@ -331,7 +348,11 @@ export interface RenderBatch {
   readonly sender: SenderSettings | undefined;
   readonly brand: BrandValues;
   /** Renders one row with its secret values (in memory). */
-  render(row: RenderableRow, secrets: Readonly<Record<string, string>>): Promise<RenderedNotification>;
+  render(
+    row: RenderableRow,
+    secrets: Readonly<Record<string, string>>,
+    options?: RenderOptions,
+  ): Promise<RenderedNotification>;
 }
 
 /** Builds the render data of e-mails and renders them (see the file header). */
@@ -397,7 +418,7 @@ export class NotificationRenderer {
     return {
       sender,
       brand,
-      render: (row, secrets) => this.renderRow(row, secrets, brand, effective),
+      render: (row, secrets, options) => this.renderRow(row, secrets, brand, effective, options),
     };
   }
 
@@ -406,6 +427,7 @@ export class NotificationRenderer {
     secrets: Readonly<Record<string, string>>,
     brand: BrandValues,
     effective: ReadonlyMap<string, EffectiveTemplate | Error>,
+    options: RenderOptions | undefined,
   ): Promise<RenderedNotification> {
     const key = row.template_key;
     if (!isTemplateKey(key)) {
@@ -415,7 +437,12 @@ export class NotificationRenderer {
     if (template === undefined || template instanceof Error) {
       throw template ?? new NotificationDataError(`No template was read for ${key}`);
     }
-    const data = renderData(key, { brand, payload: row.payload, secrets });
+    const data = renderData(key, {
+      brand,
+      payload: row.payload,
+      secrets,
+      documentsAttached: options?.documentsAttached,
+    });
     try {
       return {
         ...(await this.templates.render(template, data)),

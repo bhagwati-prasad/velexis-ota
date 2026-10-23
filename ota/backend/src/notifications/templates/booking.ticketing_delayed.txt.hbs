@@ -1,0 +1,32 @@
+{{#if booking.contact.firstName}}Hello {{booking.contact.firstName}},{{else}}Hello,{{/if}}
+
+Your booking {{booking.reference}} is confirmed, but the airline has not issued your e-tickets yet.
+
+The {{brand.name}} team has been told and is taking care of it. You do not need to do anything now: we will write to
+you again when the e-tickets are issued, or contact you if anything changes.
+
+Booking reference: {{booking.reference}}
+{{#if booking.recordLocator}}
+Airline reference: {{booking.recordLocator}}
+{{/if}}
+Total: {{booking.total.amount}} {{booking.total.currency}}
+
+Flights (local times):
+{{#each booking.segments}}
+- {{carrierCode}} {{flightNumber}}, {{origin}} to {{destination}}: departs {{departureAt}}, arrives {{arrivalAt}}
+{{/each}}
+
+View your booking:
+{{booking.url}}
+{{#if brand.supportEmail}}
+
+Questions? Write to {{brand.supportEmail}}{{#if brand.supportPhone}} or call {{brand.supportPhone}}{{/if}}.
+{{else}}
+{{#if brand.supportPhone}}
+
+Questions? Call {{brand.supportPhone}}.
+{{/if}}
+{{/if}}
+
+{{brand.name}}
+{{brand.storefrontUrl}}

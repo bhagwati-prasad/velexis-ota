@@ -20,8 +20,9 @@
 //                                   `refund.succeeded` event, the only one that says refunded (OBE-068, lead decision
 //                                   6 of 2026-10-22: the request wrote `refund.requested`);
 //        charge.dispute.created     the dispute: a `payment.dispute_created` event and a staff alert (outbox
-//                                   `staff.manual_review` to `ops_alert_email`, else OPS_ALERT_EMAIL; disputes are
-//                                   alerted, not managed, in the MVP);
+//                                   `staff.manual_review` to `ops_alert_email`, else the owners, else
+//                                   OPS_ALERT_EMAIL: notifications/staff-recipients.ts; disputes are alerted, not
+//                                   managed, in the MVP);
 //      other types are stored by the receiver and ignored here;
 //   3. the state read is applied in one short transaction under the row's lock and with its `version`
 //      (PaymentsRepository.updatePayment, updateRefund), with a `payment_events` row (`source = webhook`) per change.
@@ -45,9 +46,9 @@ import Stripe from "stripe";
 import { Clock } from "../common/clock";
 import { IdGenerator } from "../common/ids";
 import { OTA_QUEUE, otaWorkerOptions } from "../common/queues/queue-names";
-import { EMAIL_ADDRESS, type WorkerConfig } from "../config";
+import type { WorkerConfig } from "../config";
 import { jobTenant } from "../jobs/fan-out";
-import { OutboxService } from "../notifications/outbox.service";
+import { StaffRecipients } from "../notifications/staff-recipients";
 import { PlatformCache } from "../tenancy/platform-cache";
 import { TenantContext } from "../tenancy/tenant-context";
 import { TenantTx, type TenantTransaction } from "../tenancy/tenant-tx";
@@ -179,7 +180,7 @@ export class StripeEventHandler {
     private readonly tenants: TenantContext,
     private readonly repository: PaymentsRepository,
     private readonly clients: StripeClientFactory,
-    private readonly outbox: OutboxService,
+    private readonly staffRecipients: StaffRecipients,
     private readonly config: ConfigService<WorkerConfig, true>,
     private readonly clock: Clock,
     private readonly ids: IdGenerator,
@@ -514,12 +515,6 @@ export class StripeEventHandler {
     },
   ): Promise<void> {
     const facts = await this.repository.alertFacts(trx, payment.bookingId);
-    const ownAddress = facts.opsAlertEmail !== null && EMAIL_ADDRESS.test(facts.opsAlertEmail);
-    if (facts.opsAlertEmail !== null && !ownAddress) {
-      this.logger.warn({ paymentId: payment.id }, "payments.ops_alert_email_invalid");
-    }
-    const to =
-      ownAddress && facts.opsAlertEmail !== null ? facts.opsAlertEmail : this.config.get("OPS_ALERT_EMAIL");
     const adminUrl = this.config.get("PUBLIC_OTA_ADMIN_URL");
     const consolePath =
       payment.bookingId === null ? `payments/${payment.id}` : `bookings/${payment.bookingId}`;
@@ -528,9 +523,8 @@ export class StripeEventHandler {
     // staff cannot open, so the alert does not send them there.
     const due =
       dispute.evidenceDueBy === null ? "" : ` Stripe needs the evidence by ${dispute.evidenceDueBy}.`;
-    await this.outbox.enqueue(trx, {
+    await this.staffRecipients.enqueue(trx, {
       templateKey: DISPUTE_ALERT_TEMPLATE,
-      to,
       locale: facts.defaultLocale ?? "en",
       data: {
         booking: {
@@ -545,7 +539,6 @@ export class StripeEventHandler {
         },
       },
       dedupeKey: disputeDedupeKey(dispute.disputeId),
-      recipientType: "staff",
       bookingId: payment.bookingId,
     });
   }

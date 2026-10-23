@@ -1835,8 +1835,10 @@ export class ReconcileService {
   // ---- Shared ------------------------------------------------------------------------------------------------------
 
   /**
-   * A staff alert (`staff.manual_review`) to `ops_alert_email`, else the OTA's support e-mail, else OPS_ALERT_EMAIL, once
-   * per booking and kind (dedupe key `staff.manual_review:<bkg_…>:<kind>`), written by StaffAlerts (staff-alerts.ts).
+   * A staff alert (`staff.manual_review`) to `ops_alert_email`, else the owners, else OPS_ALERT_EMAIL
+   * (notifications/staff-recipients.ts), once per booking and kind (dedupe key `staff.manual_review:<bkg_…>:<kind>`),
+   * written by StaffAlerts (staff-alerts.ts). A call the outbox refuses is logged and skipped, as the e-mails of
+   * `enqueue` are.
    */
   private async staffAlert(
     trx: TenantTransaction,
@@ -1846,25 +1848,13 @@ export class ReconcileService {
     kind: string,
     alert: { readonly reason: string },
   ): Promise<void> {
-    const to = this.alerts.recipientOf(settings);
-    if (to === undefined) {
-      return;
-    }
-    await this.enqueue(
-      trx,
-      booking.id,
-      "staff.manual_review",
-      this.alerts.notification(
-        {
-          settings,
-          fallbackLocale: tenant.defaultLocale,
-          booking: { id: booking.id, reference: booking.reference },
-          dedupeKey: `staff.manual_review:${booking.id}:${kind}`,
-          reason: alert.reason,
-        },
-        to,
-      ),
-    );
+    await this.alerts.send(trx, {
+      settings,
+      fallbackLocale: tenant.defaultLocale,
+      booking: { id: booking.id, reference: booking.reference },
+      dedupeKey: `staff.manual_review:${booking.id}:${kind}`,
+      reason: alert.reason,
+    });
   }
 
   /**

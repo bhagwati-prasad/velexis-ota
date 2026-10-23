@@ -1,15 +1,22 @@
 // The notification templates the code knows (OADR-0013 items 3 and 4): the MVP keys, the variables each key may use
 // (its allow-list) with sample data for the console preview, and the loader of the English code defaults
-// `<key>.{subject,html,txt}.hbs` in this folder. OBE-030 and OBE-055 add the default files and refine the allow-lists
-// of the keys they write; the provisioning seed (provisioning/seeds/templates.seed.ts) copies the defaults that exist
-// into a new tenant's `notification_templates`, and every key without a row uses the code default at send time.
+// `<key>.{subject,html,txt}.hbs` in this folder. OBE-030 wrote the defaults of the account e-mails, OBE-055 those of the
+// nine booking and staff keys, so every MVP key has one; the provisioning seed (provisioning/seeds/templates.seed.ts)
+// copies the defaults into a new tenant's `notification_templates`, and every key without a row uses the code default
+// at send time. templates.test.ts compiles each default in strict mode against its allow-list and renders it with its
+// sample data.
 //
-// Where the values of a key's variables come from (OBE-030):
+// Where the values of a key's variables come from (OBE-030, OBE-055):
 //   - `brand.*`: the renderer, from the tenant's `storefront_settings` and storefront host (BRAND_VARIABLE_PREFIX);
 //   - the key's `links`: the renderer, which builds each on the tenant's storefront host from a secret value of the
 //     e-mail (`/account/verify.html?token=…`, OADR-0015 point 5); the secret travels only encrypted
 //     (`notifications.secret_payload_ciphertext`) and the link exists only while the e-mail is rendered;
-//   - everything else: the code that queues the e-mail (`callerVariables`), stored in `notifications.payload`.
+//   - `documents.attached` (DOCUMENTS_ATTACHED_VARIABLE, `booking.confirmed` and `booking.ticketed` only): the sender,
+//     when it sends the e-mail: true when the booking's documents are attached, false when they were not ready within
+//     the wait of OADR-0013 item 8 and the e-mail points to the booking page instead (attachments.ts);
+//   - everything else: the code that queues the e-mail (`callerVariables`), stored in `notifications.payload`. The
+//     booking e-mails' `booking.url` is `/booking.html?id=bkg_…` on the tenant's storefront host (OADR-0015 point 5),
+//     the staff alerts' `booking.consoleUrl` the booking's page in the OTA admin.
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 
@@ -93,6 +100,12 @@ export interface TemplateDefinition {
 
 /** The variables whose names start with this are filled by the renderer from the tenant's settings. */
 export const BRAND_VARIABLE_PREFIX = "brand.";
+
+/**
+ * The variable the sender fills for the keys that attach booking documents (OADR-0013 item 8, attachments.ts): true
+ * when the documents are attached to the e-mail, false when it is sent with the link to the booking page instead.
+ */
+export const DOCUMENTS_ATTACHED_VARIABLE = "documents.attached";
 
 const variable = (name: string, description: string): TemplateVariable =>
   Object.freeze({ name, description });
@@ -229,9 +242,15 @@ export const TEMPLATE_REGISTRY: Readonly<Record<TemplateKey, TemplateDefinition>
     },
     [tokenLink("resetUrl", "/account/reset-password.html")],
   ),
-  "booking.confirmed": define("booking.confirmed", "traveller", BOOKING_VARIABLES, {
-    booking: SAMPLE_BOOKING,
-  }),
+  "booking.confirmed": define(
+    "booking.confirmed",
+    "traveller",
+    [
+      ...BOOKING_VARIABLES,
+      variable(DOCUMENTS_ATTACHED_VARIABLE, "True when the itinerary PDF is attached to the e-mail."),
+    ],
+    { booking: SAMPLE_BOOKING, documents: { attached: true } },
+  ),
   "booking.ticketed": define(
     "booking.ticketed",
     "traveller",
@@ -239,10 +258,15 @@ export const TEMPLATE_REGISTRY: Readonly<Record<TemplateKey, TemplateDefinition>
       ...BOOKING_VARIABLES,
       variable("tickets[].number", "Number of each e-ticket (13 digits)."),
       variable("tickets[].travellerName", "Name of the traveller of each e-ticket."),
+      variable(
+        DOCUMENTS_ATTACHED_VARIABLE,
+        "True when the e-ticket receipt PDFs are attached to the e-mail.",
+      ),
     ],
     {
       booking: SAMPLE_BOOKING,
       tickets: [{ number: "0571234567890", travellerName: "Alex Martin" }],
+      documents: { attached: true },
     },
   ),
   "booking.ticketing_delayed": define("booking.ticketing_delayed", "traveller", BOOKING_VARIABLES, {
@@ -312,14 +336,22 @@ export const TEMPLATE_REGISTRY: Readonly<Record<TemplateKey, TemplateDefinition>
 
 /**
  * The variables the code that queues an e-mail of `key` passes (stored in `notifications.payload`): the allow-list
- * without the brand and the links, which the renderer fills.
+ * without the brand and the links, which the renderer fills, and `documents.attached`, which the sender fills.
  */
 export function callerVariables(key: TemplateKey): readonly TemplateVariable[] {
   const definition = TEMPLATE_REGISTRY[key];
   const links = new Set(definition.links.map((link) => link.variable));
   return definition.variables.filter(
-    (entry) => !entry.name.startsWith(BRAND_VARIABLE_PREFIX) && !links.has(entry.name),
+    (entry) =>
+      !entry.name.startsWith(BRAND_VARIABLE_PREFIX) &&
+      !links.has(entry.name) &&
+      entry.name !== DOCUMENTS_ATTACHED_VARIABLE,
   );
+}
+
+/** True when the sender fills `documents.attached` for `key`: the keys that attach booking documents. */
+export function attachesDocuments(key: TemplateKey): boolean {
+  return TEMPLATE_REGISTRY[key].variables.some((entry) => entry.name === DOCUMENTS_ATTACHED_VARIABLE);
 }
 
 /**

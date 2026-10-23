@@ -2,7 +2,9 @@
 // which template applies (a repository double answers the tenant's active rows as the SQL does), the safe Handlebars
 // subset and the allow-list check, strict-mode rendering and escaping, the render data of the renderer (brand, links,
 // payload) and the two shipped defaults, auth.verify_email and auth.password_reset. The same paths run against
-// PostgreSQL, Redis and Mailpit in test/integration/notifications/outbox.int.test.ts.
+// PostgreSQL, Redis and Mailpit in test/integration/notifications/outbox.int.test.ts. Since OBE-055 every key has a
+// shipped default (templates/templates.test.ts checks the booking and staff ones), so the tests of a key without one
+// read the defaults from a folder that holds the account e-mails' only (`accountDefaultsDir`).
 import { cpSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -124,6 +126,19 @@ function silentLogger(): PinoLogger {
 
 const config = { get: () => "ota.example.com" } as unknown as ConfigService<SharedConfig, true>;
 
+/**
+ * A new folder with the shipped defaults of the account e-mails only (auth.verify_email, auth.password_reset): the
+ * booking and staff keys have no default files there. The caller removes it.
+ */
+function accountDefaultsDir(): string {
+  const dir = mkdtempSync(join(tmpdir(), "obe030-defaults-"));
+  cpSync(DEFAULT_TEMPLATES_DIR, dir, {
+    recursive: true,
+    filter: (path) => path === DEFAULT_TEMPLATES_DIR || /[\\/]auth\.[a-z_]+\.[a-z]+\.hbs$/.test(path),
+  });
+  return dir;
+}
+
 describe("the effective template", () => {
   it("[OBE-030 AC3] is the tenant's active row for the e-mail's locale", async () => {
     const row = templateRow({ key: "auth.verify_email", locale: "en-GB" });
@@ -172,13 +187,19 @@ describe("the effective template", () => {
     });
   });
 
-  it("does not exist for a key with neither a tenant row nor default files (they come with OBE-055)", async () => {
-    const service = new TemplateService(repositoryWith([]));
+  it("does not exist for a key with neither a tenant row nor default files", async () => {
+    const dir = accountDefaultsDir();
+    try {
+      const service = new TemplateService(repositoryWith([]), dir);
 
-    await expect(service.effective(TRX, "booking.confirmed", "en")).rejects.toBeInstanceOf(
-      TemplateMissingError,
-    );
-    expect(await service.codeDefault("booking.confirmed")).toBeUndefined();
+      await expect(service.effective(TRX, "booking.confirmed", "en")).rejects.toBeInstanceOf(
+        TemplateMissingError,
+      );
+      expect(await service.codeDefault("booking.confirmed")).toBeUndefined();
+      expect(await service.codeDefault("auth.verify_email")).toBeDefined();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("reads and compiles a code default once", async () => {
@@ -536,11 +557,10 @@ describe("the renderer", () => {
   });
 
   it("fails only the rows of a key whose code default is broken (a bug of a release), and renders the others of the batch", async () => {
-    // The shipped defaults, and two broken ones: booking.confirmed uses a variable outside its allow-list,
-    // booking.cancelled has its subject file only.
-    const dir = mkdtempSync(join(tmpdir(), "obe030-defaults-"));
+    // The shipped defaults of the account e-mails, and two broken ones: booking.confirmed uses a variable outside its
+    // allow-list, booking.cancelled has its subject file only.
+    const dir = accountDefaultsDir();
     try {
-      cpSync(DEFAULT_TEMPLATES_DIR, dir, { recursive: true, filter: (path) => !path.endsWith(".ts") });
       writeFileSync(join(dir, "booking.confirmed.subject.hbs"), "Booking {{booking.reference}}");
       writeFileSync(join(dir, "booking.confirmed.html.hbs"), "<p>{{booking.nope}}</p>");
       writeFileSync(join(dir, "booking.confirmed.txt.hbs"), "{{booking.reference}}");
@@ -573,21 +593,26 @@ describe("the renderer", () => {
   });
 
   it("fails a row whose key has no template, or that lacks its secret, without failing the batch", async () => {
-    const repository = repositoryWith([]);
-    const renderer = new NotificationRenderer(
-      new TemplateService(repository),
-      repository,
-      silentLogger(),
-      config,
-    );
+    const dir = accountDefaultsDir();
+    try {
+      const repository = repositoryWith([]);
+      const renderer = new NotificationRenderer(
+        new TemplateService(repository, dir),
+        repository,
+        silentLogger(),
+        config,
+      );
 
-    const batch = await renderer.prepare(TRX, tenant, [row("booking.confirmed"), row("auth.verify_email")]);
+      const batch = await renderer.prepare(TRX, tenant, [row("booking.confirmed"), row("auth.verify_email")]);
 
-    await expect(batch.render(row("booking.confirmed"), {})).rejects.toBeInstanceOf(TemplateMissingError);
-    await expect(batch.render(row("auth.verify_email"), {})).rejects.toBeInstanceOf(NotificationDataError);
-    await expect(batch.render(row("auth.unknown"), {})).rejects.toBeInstanceOf(NotificationDataError);
-    await expect(batch.render(row("auth.verify_email"), { token: TOKEN })).resolves.toMatchObject({
-      origin: "default",
-    });
+      await expect(batch.render(row("booking.confirmed"), {})).rejects.toBeInstanceOf(TemplateMissingError);
+      await expect(batch.render(row("auth.verify_email"), {})).rejects.toBeInstanceOf(NotificationDataError);
+      await expect(batch.render(row("auth.unknown"), {})).rejects.toBeInstanceOf(NotificationDataError);
+      await expect(batch.render(row("auth.verify_email"), { token: TOKEN })).resolves.toMatchObject({
+        origin: "default",
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

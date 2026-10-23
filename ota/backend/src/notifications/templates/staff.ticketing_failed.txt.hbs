@@ -1,0 +1,19 @@
+The airline did not issue the e-tickets of a booking, and no automatic attempt is left.
+
+{{#if booking.reference}}
+Booking reference: {{booking.reference}}
+{{/if}}
+{{#if booking.recordLocator}}
+Record locator: {{booking.recordLocator}}
+{{/if}}
+Attempts made: {{failure.attempts}}
+Last error: {{failure.code}} - {{failure.message}}
+
+Issue the tickets from the OTA admin, or cancel the booking, before the airline's ticketing time limit: after it the
+airline cancels the booking itself. The traveller has been told that the e-tickets are delayed.
+
+Open the booking:
+{{booking.consoleUrl}}
+
+You receive this alert as the operations address or an owner of {{brand.name}}. The address for alerts is set in
+the OTA admin, under the storefront settings.

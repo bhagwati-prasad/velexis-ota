@@ -32,9 +32,9 @@
 //      `staff.ticketing_failed` and `booking.ticketing_delayed`, each once per booking (dedupe keys). The worker never
 //      cancels: staff issue or cancel from the console.
 //
-// Staff alerts go to `storefront_settings.ops_alert_email`, else the OTA's support e-mail, else OPS_ALERT_EMAIL (Velexis
-// ops), until OBE-055 adds the owners of the platform (staff-recipients.ts). Log lines carry ids, attempt numbers and
-// error codes, never an Amadeus body, a ticket or a person's data.
+// Staff alerts go to `storefront_settings.ops_alert_email`, else to the owners' e-mails read from the platform, else to
+// OPS_ALERT_EMAIL (Velexis ops): notifications/staff-recipients.ts (OBE-055, OADR-0013 item 5). Log lines carry ids,
+// attempt numbers and error codes, never an Amadeus body, a ticket or a person's data.
 import { Injectable } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { AppError } from "@velexis/errors";
@@ -44,14 +44,15 @@ import { InjectPinoLogger, PinoLogger } from "nestjs-pino";
 import { AmadeusClient } from "../amadeus/amadeus.client";
 import type { AmadeusCallContext } from "../amadeus/call-context";
 import { Clock } from "../common/clock";
-import { EMAIL_ADDRESS, type WorkerConfig } from "../config";
+import type { WorkerConfig } from "../config";
 import { InvalidNotificationError, OutboxService } from "../notifications/outbox.service";
 import { storefrontUrl } from "../notifications/renderer";
+import { StaffRecipients, type StaffAlertInput } from "../notifications/staff-recipients";
 import type { TemplateKey } from "../notifications/templates/registry";
 import { Money } from "../pricing/pricing.types";
 import type { PlatformTenant } from "../tenancy/platform-read.types";
 import { TenantTx, type TenantTransaction } from "../tenancy/tenant-tx";
-import { BookingsRepository, type BookingChildren, type BookingSettingsRow } from "./bookings.repository";
+import { BookingsRepository, type BookingChildren } from "./bookings.repository";
 import {
   OrderRecorder,
   readCreatedOrder,
@@ -323,7 +324,6 @@ const STOP_TEXT: Readonly<Record<TicketingStop, string>> = Object.freeze({
 export class TicketingService {
   private readonly baseDomain: string;
   private readonly adminUrl: string;
-  private readonly opsAlertEmail: string;
 
   constructor(
     private readonly tx: TenantTx,
@@ -332,13 +332,13 @@ export class TicketingService {
     private readonly recorder: OrderRecorder,
     private readonly amadeus: AmadeusClient,
     private readonly outbox: OutboxService,
+    private readonly staffRecipients: StaffRecipients,
     private readonly clock: Clock,
     config: ConfigService<WorkerConfig, true>,
     @InjectPinoLogger(TicketingService.name) private readonly logger: PinoLogger,
   ) {
     this.baseDomain = config.get("STOREFRONT_BASE_DOMAIN", { infer: true });
     this.adminUrl = config.get("PUBLIC_OTA_ADMIN_URL", { infer: true });
-    this.opsAlertEmail = config.get("OPS_ALERT_EMAIL", { infer: true });
   }
 
   /**
@@ -725,11 +725,9 @@ export class TicketingService {
       `bookings/${booking.id}`,
       this.adminUrl.endsWith("/") ? this.adminUrl : `${this.adminUrl}/`,
     ).toString();
-    await this.enqueue(trx, booking.id, "staff.ticketing_failed", {
+    await this.alert(trx, booking.id, {
       templateKey: "staff.ticketing_failed",
-      to: this.staffRecipient(settings),
       locale: settings?.defaultLocale ?? tenant.defaultLocale,
-      recipientType: "staff",
       bookingId: booking.id,
       dedupeKey: `staff.ticketing_failed:${booking.id}`,
       data: {
@@ -751,16 +749,6 @@ export class TicketingService {
       dedupeKey: `booking.ticketing_delayed:${booking.id}`,
       data: { booking: this.travellerBooking(tenant, booking, children, primary) },
     });
-  }
-
-  /** `ops_alert_email`, else the OTA's support e-mail, else OPS_ALERT_EMAIL (see the file header). */
-  private staffRecipient(settings: BookingSettingsRow | undefined): string {
-    return (
-      [settings?.opsAlertEmail, settings?.supportEmail].find(
-        (address): address is string =>
-          address !== null && address !== undefined && EMAIL_ADDRESS.test(address),
-      ) ?? this.opsAlertEmail
-    );
   }
 
   /** The `booking.*` variables of a traveller e-mail, from the stored booking. */
@@ -789,6 +777,18 @@ export class TicketingService {
         flightNumber: segment.flightNumber,
       })),
     };
+  }
+
+  /** Queues a staff alert to the OTA's staff (see the file header); a refused call is logged and skipped, as below. */
+  private async alert(trx: TenantTransaction, bookingId: string, input: StaffAlertInput): Promise<void> {
+    try {
+      await this.staffRecipients.enqueue(trx, input);
+    } catch (error) {
+      if (!(error instanceof InvalidNotificationError)) {
+        throw error;
+      }
+      this.logger.error({ bookingId, template: input.templateKey }, "bookings.ticketing_alert_invalid");
+    }
   }
 
   /**
