@@ -76,13 +76,11 @@ import { BookingSyncJobs, BookingSyncScan } from "./booking-sync.processor";
 import { BookingSyncRepository, BookingSyncService } from "./booking-sync.service";
 import { BookingsRepository } from "./bookings.repository";
 import {
-  apiCancellationAlertOptions,
   CancelBookingIdempotencyHooks,
   CancellationChecks,
   CancellationRecorder,
   CancellationRepository,
   CancellationService,
-  workerCancellationAlertOptions,
 } from "./cancellation.service";
 import { CustomerBookingsController } from "./customer-bookings.controller";
 import { CustomerBookingsService } from "./customer-bookings.service";
@@ -124,7 +122,6 @@ import { TicketingRepository, TicketingService } from "./ticketing.service";
     CancellationRecorder,
     CancelBookingIdempotencyHooks,
     RefundsRepository,
-    apiCancellationAlertOptions,
     BookingAccessContext,
     BookingAccessGuard,
     GuestAccessService,
@@ -183,7 +180,6 @@ export class BookingsModule {}
     CancellationRecorder,
     CancellationChecks,
     RefundsRepository,
-    workerCancellationAlertOptions,
     CheckoutRepository,
     checkoutKeyProvider,
     TravelerDocuments,

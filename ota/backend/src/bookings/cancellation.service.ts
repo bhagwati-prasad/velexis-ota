@@ -94,8 +94,9 @@
 //
 // **Request** (`recordRequest`: `request_only`, a refusal, an order not found): the booking stays as it is
 // (`version + 1`); the customer-visible event `booking.cancellation_requested`, the traveller's
-// `booking.cancellation_requested` e-mail and a staff alert (`staff.manual_review` to `ops_alert_email`, else the
-// support address; flow §3 step 6). The staff finish it from the console. `refundStatus: manual_review` (paid) or
+// `booking.cancellation_requested` e-mail and a staff alert (`staff.manual_review` through StaffAlerts to
+// `ops_alert_email`, else the owners, else, in the worker, Velexis ops: notifications/staff-recipients.ts; flow §3 step
+// 6). The staff finish it from the console. `refundStatus: manual_review` (paid) or
 // `not_applicable`.
 //
 // **The worker's check** (`booking.cancellation_check {tenantId, bookingId}` on `ota-bookings`, CancellationChecks,
@@ -110,7 +111,7 @@
 //
 // Log lines carry ids, modes and codes, never an amount with a person's data, an address or an Amadeus body.
 import { InjectQueue } from "@nestjs/bullmq";
-import { Inject, Injectable, type FactoryProvider } from "@nestjs/common";
+import { Inject, Injectable } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import type { components } from "@velexis/api-types";
 import { sql } from "@velexis/db";
@@ -136,7 +137,7 @@ import { IdGenerator } from "../common/ids";
 import { OTA_QUEUE } from "../common/queues/queue-names";
 import { CANCELLATION_QUOTE_TTL_SECONDS, redisKeys, type RedisKey } from "../common/redis/redis.keys";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
-import { EMAIL_ADDRESS, type SharedConfig, type WorkerConfig } from "../config";
+import type { SharedConfig } from "../config";
 import { jobTenant } from "../jobs/fan-out";
 import { InvalidNotificationError, OutboxService } from "../notifications/outbox.service";
 import { storefrontUrl } from "../notifications/renderer";
@@ -200,6 +201,7 @@ import {
 } from "./cancellation-mode";
 import { CustomerBookingsService, ORDER_NOT_FOUND_WARNING } from "./customer-bookings.service";
 import { eventActorOf, OrderRecorder, type Booking, type Warning } from "./order-recorder";
+import { StaffAlerts } from "./staff-alerts";
 import { jobRequestId } from "./ticketing.processor";
 
 type Schemas = components["schemas"];
@@ -565,38 +567,6 @@ export function quoteValid(cached: CachedQuote, version: number, now: Date): boo
   );
 }
 
-// ---- The staff alerts -----------------------------------------------------------------------------------------------
-
-/** Injection token of the process's alert options (the API and the worker differ, see below). */
-export const CANCELLATION_ALERT_OPTIONS = "CANCELLATION_ALERT_OPTIONS";
-
-/** Where a staff alert links to, and who gets it when the OTA has no address. */
-export interface CancellationAlertOptions {
-  readonly adminUrl: string;
-  /** Velexis ops (the worker's OPS_ALERT_EMAIL); `null` in the API, which then skips (and logs) the alert. */
-  readonly fallbackTo: string | null;
-}
-
-/** The API has no PUBLIC_OTA_ADMIN_URL or OPS_ALERT_EMAIL (worker variables): `https://admin.<base domain>`. */
-export const apiCancellationAlertOptions: FactoryProvider<CancellationAlertOptions> = {
-  provide: CANCELLATION_ALERT_OPTIONS,
-  inject: [ConfigService],
-  useFactory: (config: ConfigService<SharedConfig, true>) => ({
-    adminUrl: `https://admin.${config.get("STOREFRONT_BASE_DOMAIN", { infer: true })}`,
-    fallbackTo: null,
-  }),
-};
-
-/** The worker's options: PUBLIC_OTA_ADMIN_URL and OPS_ALERT_EMAIL. */
-export const workerCancellationAlertOptions: FactoryProvider<CancellationAlertOptions> = {
-  provide: CANCELLATION_ALERT_OPTIONS,
-  inject: [ConfigService],
-  useFactory: (config: ConfigService<WorkerConfig, true>) => ({
-    adminUrl: config.get("PUBLIC_OTA_ADMIN_URL", { infer: true }),
-    fallbackTo: config.get("OPS_ALERT_EMAIL", { infer: true }),
-  }),
-};
-
 // ---- The repository -------------------------------------------------------------------------------------------------
 
 /** The storefront settings a cancellation reads. */
@@ -882,7 +852,7 @@ export class CancellationRecorder {
     private readonly outbox: OutboxService,
     @Inject(PAYMENT_GATEWAY) private readonly gateway: PaymentGateway,
     @InjectQueue(OTA_QUEUE.payments) private readonly paymentsQueue: Queue,
-    @Inject(CANCELLATION_ALERT_OPTIONS) private readonly alerts: CancellationAlertOptions,
+    private readonly alerts: StaffAlerts,
     private readonly ids: IdGenerator,
     private readonly clock: Clock,
     config: ConfigService<SharedConfig, true>,
@@ -1316,8 +1286,9 @@ export class CancellationRecorder {
   }
 
   /**
-   * A staff alert (`staff.manual_review`) to `ops_alert_email`, else the support address, else the process's fallback
-   * (the worker's OPS_ALERT_EMAIL); skipped and logged without one. Once per booking and kind.
+   * A staff alert (`staff.manual_review`) through StaffAlerts (staff-alerts.ts): to `ops_alert_email`, else the owners,
+   * else, in the worker only, OPS_ALERT_EMAIL (notifications/staff-recipients.ts); skipped and logged without one, as
+   * is a call the outbox refuses. Once per booking and kind.
    */
   private async staffAlert(
     trx: TenantTransaction,
@@ -1326,39 +1297,13 @@ export class CancellationRecorder {
     alert: { readonly reason: string },
   ): Promise<void> {
     const settings = await this.repository.settings(trx);
-    const to =
-      [settings?.opsAlertEmail, settings?.supportEmail].find(
-        (address): address is string =>
-          address !== null && address !== undefined && EMAIL_ADDRESS.test(address),
-      ) ?? this.alerts.fallbackTo;
-    if (to === null) {
-      this.logger.warn({ bookingId: booking.id, kind }, "bookings.staff_alert_without_recipient");
-      return;
-    }
-    const base = this.alerts.adminUrl.endsWith("/") ? this.alerts.adminUrl : `${this.alerts.adminUrl}/`;
-    try {
-      await this.outbox.enqueue(trx, {
-        templateKey: "staff.manual_review",
-        to,
-        locale: settings?.defaultLocale ?? "en",
-        recipientType: "staff",
-        bookingId: booking.id,
-        dedupeKey: `staff.manual_review:${booking.id}:${kind}`,
-        data: {
-          booking: {
-            reference: booking.reference,
-            recordLocator: booking.recordLocator ?? "",
-            consoleUrl: new URL(`bookings/${booking.id}`, base).toString(),
-          },
-          review: { reason: alert.reason },
-        },
-      });
-    } catch (error) {
-      if (!(error instanceof InvalidNotificationError)) {
-        throw error;
-      }
-      this.logger.warn({ bookingId: booking.id, kind }, "bookings.staff_alert_invalid");
-    }
+    await this.alerts.send(trx, {
+      settings,
+      fallbackLocale: "en",
+      booking: { id: booking.id, reference: booking.reference, recordLocator: booking.recordLocator },
+      dedupeKey: `staff.manual_review:${booking.id}:${kind}`,
+      reason: alert.reason,
+    });
   }
 
   /** Adds a job; never throws (a failure is logged: the payments queue's sweeps find the row). */

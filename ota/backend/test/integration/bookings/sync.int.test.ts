@@ -1046,7 +1046,7 @@ describe("a cancellation by the airline", () => {
     expect(alerts).toEqual([
       {
         templateKey: "staff.manual_review",
-        // No ops_alert_email or support address of the OTA: Velexis ops (OPS_ALERT_EMAIL).
+        // No ops_alert_email and no owner of the OTA: Velexis ops (OPS_ALERT_EMAIL, StaffRecipients).
         recipient: "ops@example.com",
         recipientType: "staff",
         dedupeKey: `staff.manual_review:${booking.id}:${AIRLINE_CANCELLED_ALERT}`,
