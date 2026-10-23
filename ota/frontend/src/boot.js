@@ -384,6 +384,7 @@ export async function boot({
           config,
           session: null,
           currency,
+          client,
           ...(location ? { location } : {}),
           onCurrencyChange(code) {
             rememberCurrency(code, preferences);

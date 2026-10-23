@@ -1461,7 +1461,8 @@ Checkout, customer accounts in cookies, Stripe on the Velexis account, the airli
   - Passing `bookingToken` in cookie mode throws `TypeError` before any request.
 - **Verify:** `pnpm --filter @velexis/ota-sdk build && pnpm --filter @velexis/ota-sdk test`
 
-### OFE-009 · Build the authentication pages and the account menu
+### OFE-009 · Build the authentication pages and the account menu ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-frontend
 - **Milestone:** M3
 - **Depends on:** OFE-003, SDK-008, OBE-032, OBE-034

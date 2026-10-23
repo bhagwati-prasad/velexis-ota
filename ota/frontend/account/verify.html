@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="referrer" content="strict-origin" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="robots" content="noindex" />
+    <title>Confirm your e-mail address</title>
+    <meta name="description" content="Confirm the e-mail address of your account." />
+    <link rel="stylesheet" href="/src/styles/main.css" />
+    <script type="module" src="/src/pages/account-verify.js"></script>
+  </head>
+  <body class="flex min-h-screen flex-col bg-surface font-body text-ink antialiased">
+    <!-- @include partials/noscript.html -->
+    <!-- @include partials/test-banner.html -->
+    <!-- @include partials/header.html -->
+    <main
+      id="main"
+      tabindex="-1"
+      class="mx-auto w-full max-w-6xl flex-1 px-4 py-10 focus:outline-none"
+      data-verify-page
+    >
+      <div class="max-w-md">
+        <h1 class="font-heading text-3xl font-semibold">Confirm your e-mail address</h1>
+
+        <p class="mt-6 text-muted" data-verify-loading hidden>Confirming your e-mail address…</p>
+
+        <div data-auth-state></div>
+
+        <section aria-labelledby="verify-done-title" class="mt-6" data-verified hidden>
+          <h2
+            id="verify-done-title"
+            tabindex="-1"
+            class="font-heading text-xl font-semibold focus:outline-none"
+            data-field="title"
+          >
+            Your e-mail address is confirmed
+          </h2>
+          <p class="mt-2" data-field="emailChanged" data-field-hidden="sameEmail"></p>
+          <p class="mt-2" data-field-hidden="noClaimed">
+            <span data-field="claimed"></span>
+            <a href="/bookings.html" class="min-h-6 font-medium text-primary underline underline-offset-4"
+              >Open My bookings</a
+            >
+          </p>
+          <p class="mt-4">
+            <a
+              href="/account/sign-in.html"
+              class="min-h-6 font-medium text-primary underline underline-offset-4"
+              data-field="continueLabel"
+              data-field-href="continueHref"
+              data-continue
+              >Sign in</a
+            >
+          </p>
+        </section>
+
+        <section aria-labelledby="verify-resend-title" class="mt-6" data-resend hidden>
+          <h2 id="verify-resend-title" class="font-heading text-xl font-semibold">Get a new link</h2>
+          <form method="post" class="mt-4 space-y-4" data-resend-form>
+            <div data-error-summary hidden class="mb-6 rounded-ui border-2 border-error bg-panel p-4"></div>
+            <label class="block" data-resend-email>
+              <span class="block text-sm font-medium">E-mail address of your account</span>
+              <input
+                type="email"
+                name="email"
+                required
+                maxlength="254"
+                autocomplete="email"
+                autocapitalize="none"
+                spellcheck="false"
+                class="mt-1 block w-full rounded-ui border border-muted/60 bg-surface px-3 py-2 aria-invalid:border-error"
+              />
+            </label>
+            <p>
+              <button
+                type="submit"
+                data-busy-label="Sending the link…"
+                class="min-h-6 rounded-ui bg-primary px-5 py-2 font-medium text-on-primary hover:opacity-90"
+              >
+                Send a new link
+              </button>
+            </p>
+          </form>
+          <p class="mt-4 font-medium" role="status" data-resend-status hidden></p>
+          <div data-resend-state></div>
+        </section>
+      </div>
+    </main>
+    <!-- @include partials/footer.html -->
+    <!-- @include partials/states.html -->
+  </body>
+</html>

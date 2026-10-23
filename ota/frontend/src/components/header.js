@@ -6,7 +6,8 @@
 //   is shown next to the name, which stays the link's text. The API's `data:` placeholder badge is not shown here.
 // - Currency: a labelled `<select>` of `config.currencies` (only with two or more), preselected with the remembered
 //   choice or the default currency. A change calls `onCurrencyChange(code)` and changes nothing else on the page.
-// - Account menu: a sign-in or account link (lib/session.js); hidden, with "My bookings", when the OTA has no customer
+// - Account menu (lib/session.js): a sign-in link when signed out; the customer's first name, the account link and
+//   "Sign out" (with the `client` given) when signed in. Hidden, with "My bookings", when the OTA has no customer
 //   accounts (`features.customerAccounts = false`).
 
 import { t } from "../lib/i18n.js";
@@ -22,6 +23,7 @@ import { NEUTRAL_PALETTE, isHexColor, safeImageUrl, textColorOn } from "../lib/t
  * @property {string | null} [currency] the remembered currency choice; without one the default currency is selected
  * @property {(currency: string) => void} [onCurrencyChange] called with the code the traveller chose
  * @property {Location} [location] for the `next` of the sign-in link
+ * @property {import("../lib/session.js").SessionClient | null} [client] the SDK client of the menu's sign-out
  */
 
 const CURRENCY_SELECT_ID = "vx-currency";
@@ -150,11 +152,10 @@ export function mount(root, props) {
     if (menu) {
       menu.hidden = !accounts;
       if (accounts) {
-        renderAccountMenu(
-          menu,
-          current.session ?? null,
-          current.location ? { location: current.location } : {},
-        );
+        renderAccountMenu(menu, current.session ?? null, {
+          ...(current.location ? { location: current.location } : {}),
+          client: current.client ?? null,
+        });
       }
     }
   };
