@@ -19,10 +19,7 @@ export const PENDING_OPERATIONS: Readonly<Partial<Record<OtaOperationId, Pending
   listStorefrontPages: "OBE-072",
   getStorefrontPage: "OBE-072",
   getPublicAsset: "OBE-071",
-  // Customer account and saved travellers
-  getAccount: "OBE-035",
-  updateAccount: "OBE-035",
-  deleteAccount: "OBE-035",
+  // Customer account and saved travellers (account.get, account.update and account.delete: OBE-035)
   getAccountPreferences: "deferred",
   updateAccountPreferences: "deferred",
   createAccountDataExport: "deferred",

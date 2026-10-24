@@ -15,6 +15,7 @@ import { createLogger, pinoHttpOptions, type Logger } from "@velexis/logger";
 import { ClsMiddleware, ClsModule } from "nestjs-cls";
 import { LoggerModule, Logger as NestPinoLogger } from "nestjs-pino";
 import type { DestinationStream } from "pino";
+import { AccountModule } from "./account/account.module";
 import { CallerGuard } from "./common/auth/caller.guard";
 import { CsrfGuard } from "./common/auth/csrf.guard";
 import { CustomerGuard } from "./common/auth/customer.guard";
@@ -108,6 +109,7 @@ export class AppModule implements NestModule {
         // The operations of the OTA document, one module per context (conventions §2).
         ReferenceModule,
         StorefrontModule,
+        AccountModule,
         ShoppingModule,
         CheckoutModule,
         PaymentsModule,
