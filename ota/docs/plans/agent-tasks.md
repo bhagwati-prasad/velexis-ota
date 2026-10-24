@@ -1481,7 +1481,8 @@ Checkout, customer accounts in cookies, Stripe on the Velexis account, the airli
   - Password fields allow paste and password managers (`autocomplete` tokens present).
 - **Verify:** `pnpm --filter @velexis/ota-frontend test && pnpm --filter @velexis/ota-frontend build`
 
-### OFE-010 · Build the account page
+### OFE-010 · Build the account page ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-frontend
 - **Milestone:** M3
 - **Depends on:** OFE-009, OBE-035

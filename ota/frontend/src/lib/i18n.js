@@ -392,6 +392,44 @@ export const STRINGS = Object.freeze({
   "auth.resetNoToken": "Open the link in the e-mail we sent you",
   "auth.resetNoTokenHint": "If you have not received one, request a new link.",
   "auth.requestNewLink": "Request a new link",
+  // Account page (src/pages/account-index.js, docs/pages-account.md §6).
+  "accountPage.loading": "Loading your account…",
+  "accountPage.verified": "(confirmed)",
+  "accountPage.notVerified": "(not confirmed yet)",
+  "accountPage.verifyTitle": "Confirm your e-mail address",
+  "accountPage.verifyText": "We sent a link to {email}. Open it to confirm your address.",
+  "accountPage.pendingTitle": "Confirm your new e-mail address",
+  "accountPage.pendingText": "We sent a link to {pending}. Until you open it, you sign in with {email}.",
+  "accountPage.saved": "Your profile is saved",
+  "accountPage.noChanges": "There is nothing new to save",
+  "accountPage.stale": "Your profile was updated elsewhere",
+  "accountPage.staleHint": "Reload to see the latest version. What you typed stays in the form.",
+  "accountPage.reload": "Reload",
+  "accountPage.reloaded":
+    "We loaded the latest version of your profile and kept what you typed. Check it, then save again.",
+  "accountPage.emailRequested": "We sent a link to {email}. Open it to finish the change.",
+  "accountPage.emailKept": "You keep signing in with {email}.",
+  "accountPage.passwordChanged": "Your password is changed",
+  "accountPage.passwordChangedOthers": "You are signed out on your other devices.",
+  "accountPage.tooManyPasswords": "Too many wrong passwords",
+  "accountPage.tryAgainIn": {
+    one: "Try again in {count} minute, or reset your password.",
+    other: "Try again in {count} minutes, or reset your password.",
+  },
+  "accountPage.tryAgainLater": "Try again later, or reset your password.",
+  "accountPage.linkJustSent": "We sent a link a moment ago",
+  "accountPage.linkJustSentHint": "Wait a minute before asking for another one.",
+  "accountPage.sessionEnded": "Your session has ended",
+  "accountPage.sessionEndedHint": "Sign in again to continue. What you typed stays on this page.",
+  "accountPage.signOutAll": "Sign out everywhere",
+  "accountPage.signedOutEverywhere": "You are signed out on every device",
+  "accountPage.deleteBlocked": "Your account cannot be deleted yet",
+  "accountPage.deleteBlockedHint":
+    "Some of your bookings are still waiting for payment, tickets or a refund. Try again once they are settled, or contact us.",
+  "accountPage.blockedBooking": "View booking {number}",
+  "accountPage.deleted": "Your account is deleted",
+  "accountPage.exportNote":
+    "If you would like a copy of your data, write to {email} before you delete your account.",
   // The checks and API rules of the authentication forms.
   "field.taken": "An account with this e-mail address already exists",
   "field.outdated": "The terms have just changed: reload the page to read them, then accept them",
@@ -403,6 +441,12 @@ export const STRINGS = Object.freeze({
   "field.PASSWORD_BREACHED":
     "This password is too common or has appeared in a data breach. Choose another one.",
   "field.PASSWORD_SAME_AS_CURRENT": "Choose a password different from your current one",
+  // The checks and API rules of the account page (account.update, auth.changePassword, account.delete).
+  "field.incorrect": "This is not your current password",
+  "field.CURRENT_PASSWORD_INCORRECT": "This is not your current password",
+  "field.blank": "Fill in this field",
+  "field.in_future": "The date of birth cannot be in the future",
+  "field.SAME_EMAIL": "This is already the address you sign in with",
   // Card payment page (src/pages/checkout-pay-card.js, docs/pages.md §8).
   "payCard.title": "Pay by card – Checkout",
   "payCard.loading": "Loading your payment…",

@@ -121,16 +121,32 @@ How the pages decide (OFE-009, `src/pages/account-*.js`, `src/lib/session.js`):
 
 1. `account.get()`: name, e-mail, phone, verification state, `version`.
 2. **Profile**: `account.update({ ifMatch: version, firstName, lastName, phone, … })`.
-3. **Password**: `auth.changePassword({ currentPassword, newPassword })`; the API rotates the session cookies.
-4. **Sign out**: `auth.signOut()`; **sign out everywhere**: `auth.signOut({ scope: "all" })`. Both clear the cookies and return to `/`.
-5. **Delete account**: a confirmation dialog that asks for the password, then `account.delete({ currentPassword, reason })` (immediate soft delete); bookings stay retrievable through lookup.
+3. **E-mail address**: `account.update({ ifMatch: version, email, currentPassword })`; the new address is `pendingEmail` until the link sent to it is opened.
+4. **Password**: `auth.changePassword({ currentPassword, newPassword, signOutOtherSessions })`; the API rotates the session cookies.
+5. **Sign out**: `auth.signOut()`; **sign out everywhere**: `auth.signOut({ scope: "all" })`. Both clear the cookies and return to `/`.
+6. **Delete account**: a confirmation dialog that asks for the password, then `account.delete({ currentPassword, reason })` (immediate soft delete); bookings stay retrievable through lookup.
 
 | State | Shows |
 |---|---|
-| `412 PRECONDITION_FAILED` | "Your profile changed elsewhere", reload |
-| `400 CURRENT_PASSWORD_INCORRECT` | Field error on the current password |
-| `409 ACCOUNT_DELETION_BLOCKED` | The reason from `details` (for example an upcoming trip in progress) and the support contact |
-| Unverified e-mail | Banner with "Resend verification" |
+| `412 PRECONDITION_FAILED` | "Your profile was updated elsewhere", Reload; the typed values stay |
+| `422 CURRENT_PASSWORD_INCORRECT` | Field error on the current password (e-mail change, password change, deletion) |
+| `409 EMAIL_ALREADY_REGISTERED` | Field error on the new address |
+| `429 RATE_LIMITED`, `details.reason: password_attempts` | "Too many wrong passwords", how long to wait (`Retry-After`) and a password-reset link (e-mail change, deletion) |
+| `429 RATE_LIMITED`, `details.reason: verification_email` | "We sent a link a moment ago", wait a minute |
+| `423 ACCOUNT_LOCKED` | "Too many wrong passwords" with `details.lockedUntil` and a password-reset link (password change) |
+| `422 PASSWORD_TOO_WEAK` | The broken rule on the new password (`sameAsCurrent` included) |
+| `409 ACCOUNT_DELETION_BLOCKED` | The bookings of `details.bookingIds` (links to their pages) and the support contact |
+| `401` while the page is open | "Your session has ended" with a sign-in link back to `/account/`; the typed values stay |
+| Unverified or pending e-mail | Banner with "Send the link again" |
+
+How the page decides (OFE-010, `src/pages/account-index.js`, `src/components/dialog.js`):
+
+- **Who gets in.** A visitor (no session from `boot()`), and a `401` of `account.get`, goes to `/account/sign-in.html?next=/account/` with `location.replace`; without customer accounts the page shows the shared "not available" state.
+- **Profile.** Save sends only the fields that differ from the profile as read (names trimmed, the phone compared without spaces, dots, hyphens and brackets, the calling code without its `+`); nothing changed sends nothing. Clearing both phone fields sends `phone: null`, clearing the date of birth `dateOfBirth: null`. The calling code goes out as `+<digits>` (the contract's `[0-9+]{2,5}` refuses a one-digit code such as `1` without it; the API drops the `+`), the device type as `MOBILE`. A blank name or half a phone number is marked before any request.
+- **Stale version.** `412` keeps everything typed; Reload calls `account.get`, takes the new `version` and the new values of the fields the customer did not touch, and keeps the typed ones, so a second Save sends them on the new version. The e-mail change shares the version and the same Reload.
+- **E-mail.** The current address again, with no change pending, is refused on the page; with a change pending it withdraws it. The banner names the pending address ("until you open it, you sign in with …"), or the unconfirmed one; "Send the link again" calls `auth.resendVerification({ returnPath: "/account/" })` without an address (the API sends to the pending address, else the unconfirmed one).
+- **Deletion.** The native `<dialog>` takes the focus to the password field, closes on Escape and "Keep my account" (not while the request runs; a browser that closes it anyway on a repeated Escape sees it open again when the deletion fails, with the reason), forgets the password when it closes, and gives the focus back to the button that opened it. `reason` is sent only when chosen; `exportData` is never sent (the API answers `403 FEATURE_DISABLED` while exports are deferred), so the page asks the customer to write to the support address for a copy first. On success the header's account menu shows "Sign in" at once and the page goes to `/` with `location.replace`.
+- **Passwords** are read from their form for the one call, cleared after a success and when the deletion dialog closes, and never stored or logged; every password field keeps paste and password managers (`current-password`, `new-password`).
 
 **Saved travellers** (`/account/travellers.html`) and **preferences** are **later**: their operations are deferred (`features.savedTravelers = false`) and the account page shows no link to them in the MVP.
 
