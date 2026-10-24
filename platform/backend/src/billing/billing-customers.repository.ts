@@ -140,4 +140,85 @@ export class BillingCustomersRepository {
     }
     return stored;
   }
+
+  /** The tenant whose stored Customer is `customerId` (`cus_…` is unique), read in `trx`; `undefined` for none. */
+  async tenantOfCustomer(trx: PlatformTransaction, customerId: string): Promise<string | undefined> {
+    const row = await trx
+      .selectFrom("platform.billing_customers")
+      .select("tenant_id")
+      .where("provider_customer_id", "=", customerId)
+      .executeTakeFirst();
+    return row?.tenant_id;
+  }
+
+  /**
+   * Stores the Customer that paid a completed Checkout as the OTA's Customer in `trx` (PBE-045, billing sync): a new
+   * row, or the stored one (locked) with this Customer, its `livemode` and the e-mail address Checkout collected (the
+   * stored one when Checkout gave none). Nothing is written when nothing differs. The caller checks first that no other
+   * OTA holds the Customer (`tenantOfCustomer`), so the unique `cus_…` never fails here.
+   */
+  async upsertFromSync(
+    trx: PlatformTransaction,
+    customer: SyncedBillingCustomer,
+  ): Promise<BillingCustomerSync> {
+    const stored = await trx
+      .selectFrom("platform.billing_customers")
+      .select(["provider_customer_id", "livemode", "billing_email"])
+      .where("tenant_id", "=", customer.tenantId)
+      .forUpdate()
+      .executeTakeFirst();
+    if (stored === undefined) {
+      await trx
+        .insertInto("platform.billing_customers")
+        .values({
+          tenant_id: customer.tenantId,
+          provider: "stripe",
+          provider_customer_id: customer.customerId,
+          livemode: customer.livemode,
+          billing_email: customer.billingEmail,
+          created_at: customer.now,
+          updated_at: customer.now,
+        })
+        .execute();
+      return { previousCustomerId: null, changed: true };
+    }
+    const billingEmail = customer.billingEmail ?? stored.billing_email;
+    if (
+      stored.provider_customer_id === customer.customerId &&
+      stored.livemode === customer.livemode &&
+      stored.billing_email === billingEmail
+    ) {
+      return { previousCustomerId: stored.provider_customer_id, changed: false };
+    }
+    await trx
+      .updateTable("platform.billing_customers")
+      .set({
+        provider_customer_id: customer.customerId,
+        livemode: customer.livemode,
+        billing_email: billingEmail,
+        updated_at: customer.now,
+      })
+      .where("tenant_id", "=", customer.tenantId)
+      .execute();
+    return { previousCustomerId: stored.provider_customer_id, changed: true };
+  }
+}
+
+/** The Stripe Customer of a completed Checkout, as billing sync stores it (PBE-045, `upsertFromSync`). */
+export interface SyncedBillingCustomer {
+  readonly tenantId: string;
+  /** `cus_…`: the session's Customer. */
+  readonly customerId: string;
+  readonly livemode: boolean;
+  /** The e-mail address Checkout collected (`customer_details.email`); `null` keeps the stored one. */
+  readonly billingEmail: string | null;
+  readonly now: Date;
+}
+
+/** What `upsertFromSync` did. */
+export interface BillingCustomerSync {
+  /** The Customer stored before; `null` when the OTA had none. */
+  readonly previousCustomerId: string | null;
+  /** False when the stored row was the same already. */
+  readonly changed: boolean;
 }

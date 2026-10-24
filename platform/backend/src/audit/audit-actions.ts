@@ -50,7 +50,7 @@ export const AUDIT_ACTIONS = Object.freeze([
   "tenant.went_live", // goLive
 
   // Jobs and queues (admin §3).
-  "provisioning_job.retried", // retryProvisioning, adminRetryProvisioningJob
+  "provisioning_job.retried", // retryProvisioning, adminRetryProvisioningJob, billing sync (system, a paid failed OTA)
   "provisioning_job.canceled", // adminCancelProvisioningJob
   "queue_job.retried", // adminRetryQueueJob
   "stripe_event.reprocessed", // adminReprocessStripeEvent

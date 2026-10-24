@@ -21,7 +21,9 @@
 //   `platform-maintenance` processor runs, and SuspensionService and MigrateService, which take the migrate, suspend
 //   and resume answers. They write through the repositories of the layer-1 modules they import (ApiKeysModule,
 //   SupplierConnectionsModule, PaymentConnectionsModule) and through TenantsRepository, MembershipsRepository and
-//   SubscriptionsRepository, provided here on their own because their modules carry the portal's routes.
+//   SubscriptionsRepository, provided here on their own because their modules carry the portal's routes. It exports the
+//   jobs repository, the dispatcher and SuspensionService to billing sync's handlers (BillingSyncModule.forWorker(),
+//   PBE-045), which import the same module object.
 //   NotificationsModule queues the e-mails (ops alerts, `tenant.welcome`, `tenant.provisioning_failed`) and AuditModule
 //   writes the audit rows.
 //
@@ -96,6 +98,9 @@ import { TenantEventsProcessor } from "./tenant-events.processor";
     ReconcilerScheduler,
     PurgeRevealsScheduler,
   ],
+  // For billing sync's handlers (BillingSyncModule.forWorker(), PBE-045): the dispatch of a provision job, and the
+  // suspension and resume of an OTA for `billing` in the transaction of a billing event.
+  exports: [ProvisioningJobsRepository, ProvisioningDispatcher, SuspensionService],
 })
 export class ProvisioningWorkerModule {}
 
@@ -133,8 +138,16 @@ export class ProvisioningModule {
     return ProvisioningModule.apiModule;
   }
 
-  /** The module with the tenant-event processor and the post-steps, for WorkerModule. */
+  /** The one `forWorker()` module object of the process. */
+  private static workerModule: DynamicModule | undefined;
+
+  /**
+   * The module with the tenant-event processor and the post-steps, for WorkerModule; BillingSyncModule.forWorker()
+   * imports it too, for the dispatcher and SuspensionService (PBE-045). One object for every caller, as `forApi()`, so
+   * the worker has one instance of each processor.
+   */
   static forWorker(): DynamicModule {
-    return { module: ProvisioningWorkerModule };
+    ProvisioningModule.workerModule ??= { module: ProvisioningWorkerModule };
+    return ProvisioningModule.workerModule;
   }
 }

@@ -1,8 +1,9 @@
 // The `subscriptions` repository (platform/docs/architecture.md §2.1: BillingModule owns the table). PBE-017 brings
 // the read of `getSubscription`, PBE-018 the manual trial of a new OTA (ADR-0013 point 4, the path before M5), PBE-033
 // the admin's list, detail and manual edit, with the subscription's invoices and its OTA's Stripe events (both empty
-// before M5), PBE-044 the `incomplete` Stripe row of an OTA created in M5 and the reads and write of Checkout; the
-// Stripe Billing sync (M5) adds its writes. Kysely on the API's `PLATFORM_DB` (ADR-0005).
+// before M5), PBE-044 the `incomplete` Stripe row of an OTA created in M5 and the reads and write of Checkout, PBE-045
+// the reads and writes of the Stripe Billing sync (a Stripe subscription copied into its row, by its provider id or the
+// pre-inserted row it names, and the current row it replaces). Kysely on the API's `PLATFORM_DB` (ADR-0005).
 import { Inject, Injectable } from "@nestjs/common";
 import { sql, type PlatformDatabase, type Selectable } from "@velexis/db";
 import type { PlatformTransaction } from "../audit/audit.repository";
@@ -173,6 +174,121 @@ export type CheckoutSubscriptionRow = Pick<
   "id" | "status" | "billing_provider" | "plan_code" | "billing_interval" | "provider_subscription_id"
 >;
 
+/** A Stripe subscription row as billing sync reads and writes it (PBE-045). */
+export type StripeSubscriptionRecord = Pick<
+  SubscriptionTable,
+  | "id"
+  | "tenant_id"
+  | "plan_code"
+  | "status"
+  | "billing_provider"
+  | "billing_interval"
+  | "provider_customer_id"
+  | "provider_subscription_id"
+  | "provider_price_id"
+  | "trial_ends_at"
+  | "current_period_start"
+  | "current_period_end"
+  | "cancel_at_period_end"
+  | "canceled_at"
+  | "checkout_session_id"
+  | "version"
+>;
+
+/** The state of a Stripe subscription that billing sync copies into its row (PBE-045). */
+export interface StripeSubscriptionState {
+  /** Stripe's status, one of the statuses the table allows. */
+  readonly status: string;
+  /** The plan the subscription's price is linked to. */
+  readonly planCode: string;
+  /** `month` or `year`: the interval the price is linked as. */
+  readonly billingInterval: string;
+  /** `cus_…`. */
+  readonly providerCustomerId: string;
+  /** Stripe's `sub_…`. */
+  readonly providerSubscriptionId: string;
+  /** `price_…`. */
+  readonly providerPriceId: string;
+  readonly trialEndsAt: Date | null;
+  readonly currentPeriodStart: Date | null;
+  readonly currentPeriodEnd: Date | null;
+  readonly cancelAtPeriodEnd: boolean;
+  readonly canceledAt: Date | null;
+}
+
+/** A new Stripe subscription row, written by billing sync for a completed Checkout. */
+export interface NewStripeSubscription {
+  /** `sub_…` (the platform's id). */
+  readonly id: string;
+  readonly tenantId: string;
+  readonly state: StripeSubscriptionState;
+  /** `cs_…` of the Checkout Session that created it. */
+  readonly checkoutSessionId: string | null;
+  readonly now: Date;
+}
+
+/** A write of a Stripe subscription's state into its row by billing sync. */
+export interface StripeSubscriptionWrite {
+  readonly state: StripeSubscriptionState;
+  /** `cs_…` of the Checkout Session; `null` keeps the stored one. */
+  readonly checkoutSessionId: string | null;
+  readonly now: Date;
+  /**
+   * True when the row's state changes: `version + 1` and `updated_at`. False records the re-fetch only
+   * (`provider_synced_at`), so a duplicate event leaves the row's version as it was.
+   */
+  readonly changed: boolean;
+}
+
+/** The row of a Stripe subscription and its tenant, read without a lock to find the tenant to lock first. */
+export interface SubscriptionRef {
+  readonly id: string;
+  readonly tenant_id: string;
+}
+
+/** Another current subscription of a tenant, as billing sync finds it before a Stripe row takes the slot. */
+export type CurrentSubscriptionSlot = Pick<
+  SubscriptionTable,
+  "id" | "status" | "billing_provider" | "provider_subscription_id"
+>;
+
+/** The columns of StripeSubscriptionRecord. */
+const STRIPE_RECORD_COLUMNS = [
+  "id",
+  "tenant_id",
+  "plan_code",
+  "status",
+  "billing_provider",
+  "billing_interval",
+  "provider_customer_id",
+  "provider_subscription_id",
+  "provider_price_id",
+  "trial_ends_at",
+  "current_period_start",
+  "current_period_end",
+  "cancel_at_period_end",
+  "canceled_at",
+  "checkout_session_id",
+  "version",
+] as const;
+
+/** The columns of a Stripe subscription's state. */
+function stateColumns(state: StripeSubscriptionState) {
+  return {
+    plan_code: state.planCode,
+    status: state.status,
+    billing_interval: state.billingInterval,
+    provider_customer_id: state.providerCustomerId,
+    provider_subscription_id: state.providerSubscriptionId,
+    provider_price_id: state.providerPriceId,
+    trial_ends_at: state.trialEndsAt,
+    current_period_start: state.currentPeriodStart,
+    current_period_end: state.currentPeriodEnd,
+    cancel_at_period_end: state.cancelAtPeriodEnd,
+    canceled_at: state.canceledAt,
+  };
+}
+
 /** What a Checkout Session records on the pre-inserted `incomplete` row. */
 export interface CheckoutSessionRecord {
   /** `sub_…` of the `incomplete` row. */
@@ -326,6 +442,159 @@ export class SubscriptionsRepository {
       .returning("id")
       .executeTakeFirst();
     return row !== undefined;
+  }
+
+  /**
+   * The row of the Stripe subscription `providerSubscriptionId` and its tenant, read without a lock on the pool
+   * (billing sync locks the tenant first, then reads the row again with `lockStripeByProvider`); `undefined` for none.
+   */
+  async findStripeRef(providerSubscriptionId: string): Promise<SubscriptionRef | undefined> {
+    return this.db
+      .selectFrom("platform.subscriptions")
+      .select(["id", "tenant_id"])
+      .where("billing_provider", "=", "stripe")
+      .where("provider_subscription_id", "=", providerSubscriptionId)
+      .executeTakeFirst();
+  }
+
+  /**
+   * The pre-inserted Stripe row `id` (`velexis_subscription_id` of a Checkout: no Stripe subscription yet) and its
+   * tenant, read without a lock on the pool; `undefined` when `id` is no such row.
+   */
+  async findPendingStripeRef(id: string): Promise<SubscriptionRef | undefined> {
+    return this.db
+      .selectFrom("platform.subscriptions")
+      .select(["id", "tenant_id"])
+      .where("id", "=", id)
+      .where("billing_provider", "=", "stripe")
+      .where("provider_subscription_id", "is", null)
+      .executeTakeFirst();
+  }
+
+  /** The row of the Stripe subscription `providerSubscriptionId`, locked in `trx` (`FOR UPDATE`); `undefined` for none. */
+  async lockStripeByProvider(
+    trx: PlatformTransaction,
+    providerSubscriptionId: string,
+  ): Promise<StripeSubscriptionRecord | undefined> {
+    return trx
+      .selectFrom("platform.subscriptions")
+      .select(STRIPE_RECORD_COLUMNS)
+      .where("billing_provider", "=", "stripe")
+      .where("provider_subscription_id", "=", providerSubscriptionId)
+      .forUpdate()
+      .executeTakeFirst();
+  }
+
+  /**
+   * The pre-inserted Stripe row `id` of `tenantId` that no Stripe subscription has filled yet, locked in `trx`;
+   * `undefined` when `id` is no such row of that tenant.
+   */
+  async lockPendingStripe(
+    trx: PlatformTransaction,
+    id: string,
+    tenantId: string,
+  ): Promise<StripeSubscriptionRecord | undefined> {
+    return trx
+      .selectFrom("platform.subscriptions")
+      .select(STRIPE_RECORD_COLUMNS)
+      .where("id", "=", id)
+      .where("tenant_id", "=", tenantId)
+      .where("billing_provider", "=", "stripe")
+      .where("provider_subscription_id", "is", null)
+      .forUpdate()
+      .executeTakeFirst();
+  }
+
+  /**
+   * The current subscriptions (CURRENT_SUBSCRIPTION_STATUSES) of `tenantId` other than `exceptId`, locked in `trx`:
+   * what a Stripe row that takes the "one current subscription" slot replaces (`subscriptions_current_uq` allows one).
+   */
+  async lockOtherCurrent(
+    trx: PlatformTransaction,
+    tenantId: string,
+    exceptId: string | null,
+  ): Promise<CurrentSubscriptionSlot[]> {
+    let query = trx
+      .selectFrom("platform.subscriptions")
+      .select(["id", "status", "billing_provider", "provider_subscription_id"])
+      .where("tenant_id", "=", tenantId)
+      .where("status", "in", CURRENT_SUBSCRIPTION_STATUSES);
+    if (exceptId !== null) {
+      query = query.where("id", "<>", exceptId);
+    }
+    return query.orderBy("id").forUpdate().execute();
+  }
+
+  /**
+   * Cancels the subscriptions `ids` that a Stripe row replaces (a manual trial, an unpaid Checkout's row) in `trx`:
+   * `canceled`, `canceled_at` (kept when set), `version + 1`.
+   */
+  async supersede(trx: PlatformTransaction, ids: readonly string[], now: Date): Promise<void> {
+    if (ids.length === 0) {
+      return;
+    }
+    await trx
+      .updateTable("platform.subscriptions")
+      .set({
+        status: "canceled",
+        canceled_at: sql<Date>`coalesce(canceled_at, ${now}::timestamptz)`,
+        version: sql<number>`version + 1`,
+        updated_at: now,
+      })
+      .where("id", "in", [...ids])
+      .execute();
+  }
+
+  /**
+   * Inserts the Stripe row of a completed Checkout in `trx` (`billing_provider = 'stripe'`, the subscription's state,
+   * the Session, `provider_synced_at = now`). A second current subscription of the tenant fails on
+   * `subscriptions_current_uq`: the caller supersedes the other one first.
+   */
+  async insertStripe(
+    trx: PlatformTransaction,
+    row: NewStripeSubscription,
+  ): Promise<StripeSubscriptionRecord> {
+    return trx
+      .insertInto("platform.subscriptions")
+      .values({
+        id: row.id,
+        tenant_id: row.tenantId,
+        billing_provider: "stripe",
+        ...stateColumns(row.state),
+        checkout_session_id: row.checkoutSessionId,
+        provider_synced_at: row.now,
+        created_at: row.now,
+        updated_at: row.now,
+      })
+      .returning(STRIPE_RECORD_COLUMNS)
+      .executeTakeFirstOrThrow();
+  }
+
+  /**
+   * Writes a Stripe subscription's state into the Stripe row `id` (locked by the caller) in `trx`: always
+   * `provider_synced_at`, and the state with `version + 1` and `updated_at` when `write.changed` (see
+   * StripeSubscriptionWrite). Returns the row as written.
+   */
+  async writeStripe(
+    trx: PlatformTransaction,
+    id: string,
+    write: StripeSubscriptionWrite,
+  ): Promise<StripeSubscriptionRecord> {
+    const changes = write.changed
+      ? {
+          ...stateColumns(write.state),
+          ...(write.checkoutSessionId === null ? {} : { checkout_session_id: write.checkoutSessionId }),
+          version: sql<number>`version + 1`,
+          updated_at: write.now,
+        }
+      : {};
+    return trx
+      .updateTable("platform.subscriptions")
+      .set({ ...changes, provider_synced_at: write.now })
+      .where("id", "=", id)
+      .where("billing_provider", "=", "stripe")
+      .returning(STRIPE_RECORD_COLUMNS)
+      .executeTakeFirstOrThrow();
   }
 
   /**

@@ -7,9 +7,12 @@
 //    attempt) or retryable `failed` becomes `processing` with one more attempt. A row that is missing or done
 //    (`processed`, `ignored`, `failed` for good) is skipped, so a job that runs twice processes the event once.
 // 2. Route it: an event whose endpoint's milestone switch is off (`billing` → FEATURE_STRIPE_BILLING, `connect_accounts`
-//    → FEATURE_OWN_STRIPE) ends `ignored`, as does a type no handler declares (`@HandlesStripeEvents`, registered by
-//    later tasks: PBE-045, PBE-046, PBE-056). Otherwise the type's handler runs; it re-fetches the object from Stripe
-//    and resolves to `processed` or `ignored`.
+//    → FEATURE_OWN_STRIPE) ends `ignored`, as does a type no handler declares (`@HandlesStripeEvents`). Otherwise the
+//    type's handler runs; it re-fetches the object from Stripe and resolves to `processed` or `ignored`. The billing
+//    handlers are those of handlers/ (PBE-045: `checkout.session.completed`, `customer.subscription.created`, `…updated`
+//    and `…deleted`, with the price-to-plan map and the status rules); the invoice events (PBE-046) and the Connect
+//    account events (PBE-056) follow. A handler applies its change in one transaction of its own and dispatches the
+//    jobs it queued after that commit, so this processor holds no transaction while a handler calls Stripe.
 // 3. Finish: `processed` or `ignored` with `processed_at`, the reason of an ignored event in `last_error`, and the
 //    tenant the handler resolved it to.
 //

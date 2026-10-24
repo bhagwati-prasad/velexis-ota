@@ -25,6 +25,11 @@
 // `resume` job (payload `{}`), `tenant.resumed` audited, the e-mail `tenant.resumed`, the invalidation, and
 // `tenant.resume` after the commit.
 //
+// Billing sync (PBE-045) suspends and resumes in the transaction that copies a Stripe subscription, under the same
+// tenant lock, so the status rules act on the subscription as that transaction wrote it: `suspendInTransaction` and
+// `resumeInTransaction` are step 1 of each in the caller's `runInTransaction` transaction, and the caller dispatches the
+// job they return after its commit (`dispatchQuietly`, step 2).
+//
 // The answers of the OTA worker: `markAnswered` takes `tenant.suspended` and `tenant.resumed` of the job's current
 // attempt from the tenant-event consumer and marks the job `succeeded`, whatever the tenant's status is now (PADR-0014
 // item 7: the OTA worker acts on the current state, so a late answer still ends its job). Until the OTA consumer exists
@@ -169,6 +174,13 @@ export function connectionStatusDecision(
   return { action: "update" };
 }
 
+/** Throws for a platform admin who suspends for `billing`, billing sync's reason only (PADR-0014 item 1). */
+function assertReasonAllowed(reason: TenantSuspensionReason, actor: LifecycleActor): void {
+  if (actor.type === "platform_admin" && reason === "billing") {
+    throw new Error("SuspensionService.suspend: `billing` is set by billing sync only (PADR-0014 item 1)");
+  }
+}
+
 /** The audit row's actor fields of `actor`. */
 function actorOf(actor: LifecycleActor): Pick<AuditEntry, "actorType" | "actorAccountId" | "actorLabel"> {
   return actor.type === "platform_admin"
@@ -212,93 +224,117 @@ export class SuspensionService {
     reason: TenantSuspensionReason,
     actor: LifecycleActor,
   ): Promise<TenantLifecycleResult> {
-    if (actor.type === "platform_admin" && reason === "billing") {
-      throw new Error("SuspensionService.suspend: `billing` is set by billing sync only (PADR-0014 item 1)");
-    }
-    const jobId = await runInTransaction(this.db, async (trx) => {
-      const tenant = await this.lockShownTenant(trx, tenantId);
-      const now = this.clock.now();
-      if (tenant.status !== "active" || !(await this.tenants.suspend(trx, tenantId, reason, now))) {
-        throw new AppError("CONFLICT", { details: { reason: "not_active", status: tenant.status } });
-      }
-      const job = await this.queueJob(trx, tenant, "suspend", { reason }, actor, now);
-      await this.audit.record(trx, {
-        ...actorOf(actor),
-        action: "tenant.suspended",
-        targetType: "tenant",
-        targetId: tenantId,
-        tenantId,
-        tenantKey: tenant.key,
-        before: { status: "active" },
-        after: { status: "suspended", suspensionReason: reason },
-        details: {
-          jobId: job.id,
-          suspensionReason: reason,
-          ...reasonOf(actor),
-          ...(job.superseded.length === 0 ? {} : { supersededJobIds: [...job.superseded] }),
-        },
-        ...(actor.type === "system" && actor.requestId !== undefined ? { requestId: actor.requestId } : {}),
-      });
-      await this.notifyOwners(trx, tenant, "tenant.suspended", job.id);
-      this.invalidations.publishAfterCommit(trx, { v: 1, type: "tenant", id: tenantId });
-      return job.id;
-    });
+    assertReasonAllowed(reason, actor);
+    const jobId = await runInTransaction(this.db, (trx) =>
+      this.suspendInTransaction(trx, tenantId, reason, actor),
+    );
     return this.afterCommit(tenantId, jobId, actor);
+  }
+
+  /**
+   * Step 1 of `suspend` in the caller's `trx`, which `runInTransaction` opened (the invalidation is published after its
+   * commit): the same checks, writes, audit row and e-mails. Returns the `suspend` job's id, for `dispatchQuietly` after
+   * the commit.
+   */
+  async suspendInTransaction(
+    trx: PlatformTransaction,
+    tenantId: string,
+    reason: TenantSuspensionReason,
+    actor: LifecycleActor,
+  ): Promise<string> {
+    assertReasonAllowed(reason, actor);
+    const tenant = await this.lockShownTenant(trx, tenantId);
+    const now = this.clock.now();
+    if (tenant.status !== "active" || !(await this.tenants.suspend(trx, tenantId, reason, now))) {
+      throw new AppError("CONFLICT", { details: { reason: "not_active", status: tenant.status } });
+    }
+    const job = await this.queueJob(trx, tenant, "suspend", { reason }, actor, now);
+    await this.audit.record(trx, {
+      ...actorOf(actor),
+      action: "tenant.suspended",
+      targetType: "tenant",
+      targetId: tenantId,
+      tenantId,
+      tenantKey: tenant.key,
+      before: { status: "active" },
+      after: { status: "suspended", suspensionReason: reason },
+      details: {
+        jobId: job.id,
+        suspensionReason: reason,
+        ...reasonOf(actor),
+        ...(job.superseded.length === 0 ? {} : { supersededJobIds: [...job.superseded] }),
+      },
+      ...(actor.type === "system" && actor.requestId !== undefined ? { requestId: actor.requestId } : {}),
+    });
+    await this.notifyOwners(trx, tenant, "tenant.suspended", job.id);
+    this.invalidations.publishAfterCommit(trx, { v: 1, type: "tenant", id: tenantId });
+    return job.id;
   }
 
   /** Resumes the suspended OTA `tenantId` (see the file header). */
   async resume(tenantId: string, actor: LifecycleActor): Promise<TenantLifecycleResult> {
-    const jobId = await runInTransaction(this.db, async (trx) => {
-      const tenant = await this.lockShownTenant(trx, tenantId);
-      if (tenant.status !== "suspended") {
-        throw new AppError("CONFLICT", { details: { reason: "not_suspended", status: tenant.status } });
-      }
-      if (tenant.suspension_reason === "billing") {
-        const subscription = await this.subscriptions.findShownForTenant(tenantId, trx);
-        if (subscription === undefined || !RESUMABLE_SUBSCRIPTION_STATUSES.has(subscription.status)) {
-          throw new AppError("CONFLICT", {
-            details: {
-              reason: "subscription_not_active",
-              subscriptionStatus: subscription?.status ?? null,
-            },
-          });
-        }
-      } else if (actor.type === "system") {
-        // Only a platform admin lifts a suspension for abuse, a request or an admin decision (PADR-0014 item 4).
+    const jobId = await runInTransaction(this.db, (trx) => this.resumeInTransaction(trx, tenantId, actor));
+    return this.afterCommit(tenantId, jobId, actor);
+  }
+
+  /**
+   * Step 1 of `resume` in the caller's `trx`, which `runInTransaction` opened: the same checks (a `billing` suspension
+   * reads the subscription as `trx` sees it), writes, audit row and e-mails. Returns the `resume` job's id, for
+   * `dispatchQuietly` after the commit.
+   */
+  async resumeInTransaction(
+    trx: PlatformTransaction,
+    tenantId: string,
+    actor: LifecycleActor,
+  ): Promise<string> {
+    const tenant = await this.lockShownTenant(trx, tenantId);
+    if (tenant.status !== "suspended") {
+      throw new AppError("CONFLICT", { details: { reason: "not_suspended", status: tenant.status } });
+    }
+    if (tenant.suspension_reason === "billing") {
+      const subscription = await this.subscriptions.findShownForTenant(tenantId, trx);
+      if (subscription === undefined || !RESUMABLE_SUBSCRIPTION_STATUSES.has(subscription.status)) {
         throw new AppError("CONFLICT", {
-          details: { reason: "not_billing_suspension", suspensionReason: tenant.suspension_reason },
+          details: {
+            reason: "subscription_not_active",
+            subscriptionStatus: subscription?.status ?? null,
+          },
         });
       }
-      const now = this.clock.now();
-      if (!(await this.tenants.resume(trx, tenantId, now))) {
-        throw new AppError("CONFLICT", { details: { reason: "not_suspended", status: tenant.status } });
-      }
-      const job = await this.queueJob(trx, tenant, "resume", {}, actor, now);
-      await this.audit.record(trx, {
-        ...actorOf(actor),
-        action: "tenant.resumed",
-        targetType: "tenant",
-        targetId: tenantId,
-        tenantId,
-        tenantKey: tenant.key,
-        before: {
-          status: "suspended",
-          suspensionReason: tenant.suspension_reason,
-          suspendedAt: tenant.suspended_at?.toISOString() ?? null,
-        },
-        after: { status: "active" },
-        details: {
-          jobId: job.id,
-          ...reasonOf(actor),
-          ...(job.superseded.length === 0 ? {} : { supersededJobIds: [...job.superseded] }),
-        },
-        ...(actor.type === "system" && actor.requestId !== undefined ? { requestId: actor.requestId } : {}),
+    } else if (actor.type === "system") {
+      // Only a platform admin lifts a suspension for abuse, a request or an admin decision (PADR-0014 item 4).
+      throw new AppError("CONFLICT", {
+        details: { reason: "not_billing_suspension", suspensionReason: tenant.suspension_reason },
       });
-      await this.notifyOwners(trx, tenant, "tenant.resumed", job.id);
-      this.invalidations.publishAfterCommit(trx, { v: 1, type: "tenant", id: tenantId });
-      return job.id;
+    }
+    const now = this.clock.now();
+    if (!(await this.tenants.resume(trx, tenantId, now))) {
+      throw new AppError("CONFLICT", { details: { reason: "not_suspended", status: tenant.status } });
+    }
+    const job = await this.queueJob(trx, tenant, "resume", {}, actor, now);
+    await this.audit.record(trx, {
+      ...actorOf(actor),
+      action: "tenant.resumed",
+      targetType: "tenant",
+      targetId: tenantId,
+      tenantId,
+      tenantKey: tenant.key,
+      before: {
+        status: "suspended",
+        suspensionReason: tenant.suspension_reason,
+        suspendedAt: tenant.suspended_at?.toISOString() ?? null,
+      },
+      after: { status: "active" },
+      details: {
+        jobId: job.id,
+        ...reasonOf(actor),
+        ...(job.superseded.length === 0 ? {} : { supersededJobIds: [...job.superseded] }),
+      },
+      ...(actor.type === "system" && actor.requestId !== undefined ? { requestId: actor.requestId } : {}),
     });
-    return this.afterCommit(tenantId, jobId, actor);
+    await this.notifyOwners(trx, tenant, "tenant.resumed", job.id);
+    this.invalidations.publishAfterCommit(trx, { v: 1, type: "tenant", id: tenantId });
+    return job.id;
   }
 
   /** Sets the status of one connection of `tenantId` for the platform admin `accountId` (see the file header). */
@@ -471,14 +507,10 @@ export class SuspensionService {
   }
 
   /**
-   * After the commit: dispatches the job (never failing the call; the reconciler takes a job left `queued`) and reads
-   * the tenant and the job back.
+   * Step 2 of a suspend or resume, after the commit of the transaction that queued the job `jobId`: dispatches it, and
+   * never rejects (a failure is logged as `provisioning.dispatch_failed`; the reconciler takes a job left `queued`).
    */
-  private async afterCommit(
-    tenantId: string,
-    jobId: string,
-    actor: LifecycleActor,
-  ): Promise<TenantLifecycleResult> {
+  async dispatchQuietly(jobId: string, tenantId: string, actor: LifecycleActor): Promise<void> {
     try {
       await this.dispatcher.dispatch(
         jobId,
@@ -487,6 +519,18 @@ export class SuspensionService {
     } catch (error) {
       this.logger.warn({ jobId, tenantId, err: error }, "provisioning.dispatch_failed");
     }
+  }
+
+  /**
+   * After the commit: dispatches the job (never failing the call; the reconciler takes a job left `queued`) and reads
+   * the tenant and the job back.
+   */
+  private async afterCommit(
+    tenantId: string,
+    jobId: string,
+    actor: LifecycleActor,
+  ): Promise<TenantLifecycleResult> {
+    await this.dispatchQuietly(jobId, tenantId, actor);
     const tenant = await this.tenants.findWithHost(tenantId);
     const job = await this.jobs.findForAdmin(jobId);
     if (tenant === undefined || job === undefined) {

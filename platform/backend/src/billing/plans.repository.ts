@@ -1,7 +1,7 @@
 // The `plans` repository (platform/docs/architecture.md §2.1: BillingModule owns the table). PBE-017 brought the read
 // of the pricing page and the create-OTA wizard; PBE-033 the admin's plan management (list with tenant counts, create,
-// update, the active-plan check of a manual subscription). The Stripe price links come with PBE-042 (M5). Kysely on
-// the API's `PLATFORM_DB` (ADR-0005).
+// update, the active-plan check of a manual subscription). The Stripe price links come with PBE-042 (M5); billing sync
+// (PBE-045) reads the plans a Stripe Price is linked to. Kysely on the API's `PLATFORM_DB` (ADR-0005).
 //
 // **The version of a plan.** Unlike the other versioned tables, `platform.plans` has no `version` column (migrations
 // 0001 and 0002). The version that `adminUpdatePlan` takes in `If-Match` is derived from `updated_at` instead:
@@ -45,6 +45,9 @@ export type PlanRecord = PublicPlanRow &
     | "created_at"
     | "updated_at"
   >;
+
+/** A plan's links to Stripe Prices, as billing sync maps a price back to its plan (PBE-045). */
+export type PlanPriceLinkRow = Pick<PlanTable, "code" | "stripe_price_id_month" | "stripe_price_id_year">;
 
 /** A plan with the number of OTAs on it (`tenants.plan_code`, in any status). */
 export type AdminPlanRow = PlanRecord & { readonly tenant_count: number };
@@ -222,6 +225,25 @@ export class PlansRepository {
       .where("is_active", "=", true)
       .executeTakeFirst();
     return row !== undefined;
+  }
+
+  /**
+   * The plans linked to the Stripe Price `priceId` (`stripe_price_id_month` or `stripe_price_id_year`), public or not,
+   * active or retired, read on `db`: billing sync maps a subscription's price back to its plan (PBE-045,
+   * `billing/sync/price-to-plan.ts`). Each column is unique, so at most two plans come back.
+   */
+  async findByStripePrice(
+    priceId: string,
+    db: PlatformDb | PlatformTransaction = this.db,
+  ): Promise<PlanPriceLinkRow[]> {
+    return db
+      .selectFrom("platform.plans")
+      .select(["code", "stripe_price_id_month", "stripe_price_id_year"])
+      .where((eb) =>
+        eb.or([eb("stripe_price_id_month", "=", priceId), eb("stripe_price_id_year", "=", priceId)]),
+      )
+      .orderBy("code")
+      .execute();
   }
 
   /** True when `code` is a currency of `reference.currencies` (billing reads the reference data directly). */

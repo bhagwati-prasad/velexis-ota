@@ -1,0 +1,1061 @@
+// Billing events with re-fetch and the status rules (PBE-045; subscription-billing flow §D and §E, PADR-0002 items 1,
+// 5, 6 and 7, PADR-0014, scope PF-73 AC1 and PF-74, lead decision (5) of 2026-10-24): the X-028 fixtures of
+// `checkout.session.completed` and `customer.subscription.updated`, signed with a secret made for this file, are
+// posted to `POST /webhooks/stripe/billing` of the API (createTestApp, FEATURE_STRIPE_BILLING on), and the worker's
+// module graph (WorkerModule, as dist/worker.js builds it, with the API's FakeClock) processes them on this file's
+// database clone and Redis database. Stripe is the FakeStripe of test/support/fake-stripe.ts: the handlers re-fetch
+// the Checkout Session and the subscription from it, so each test puts there what Stripe would answer, and the event
+// payloads carry only the fixture (the handlers never read them).
+//
+// Each test arranges OTAs of its own with the builders (ids of this file's range, so the invalidations of other test
+// files on the same Redis server never match), delivers one event at a time and waits until its inbox row is done.
+// Nothing answers `ota-tenant-ops` here: a dispatched job stays `running`, and its message waits in the queue, where
+// the tests count it. The job schedulers are not registered (JobSchedulerRegistry replaced), so the reconciler never
+// dispatches anything behind the tests' backs. The Stripe keys are the development values of `.env.example`.
+import { randomBytes } from "node:crypto";
+import { getQueueToken } from "@nestjs/bullmq";
+import { DiscoveryService } from "@nestjs/core";
+import { Test, type TestingModule } from "@nestjs/testing";
+import provisionFixture from "@velexis/api-types/fixtures/jobs/tenant-provision.json";
+import {
+  bullmqJobId,
+  INVALIDATION_CHANNEL,
+  OTA_TENANT_OPS,
+  validateJob,
+  type InvalidationEvent,
+} from "@velexis/api-types/jobs";
+import { expectResponseToMatch, responseChecker } from "@velexis/testing";
+import { uniqueEmail } from "@velexis/testing/mailpit";
+import { signedStripeEvent, stripeFixture } from "@velexis/testing/stripe";
+import type { Queue } from "bullmq";
+import { Redis } from "ioredis";
+import type Stripe from "stripe";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { TokenService } from "../../../src/auth/token.service";
+import { Clock } from "../../../src/common/clock";
+import { PLATFORM_POOL, type PlatformPool } from "../../../src/common/database";
+import { JobSchedulerRegistry } from "../../../src/common/queues/scheduler.registry";
+import { StripeClient } from "../../../src/common/stripe/stripe.client";
+import { createProcessLogger, PLATFORM_PROCESSES } from "../../../src/config";
+import { ProvisioningDispatcher } from "../../../src/provisioning/dispatcher";
+import { ReconcilerScheduler } from "../../../src/provisioning/reconciler.scheduler";
+import { SuspensionService } from "../../../src/provisioning/suspension.service";
+import { TenantEventsProcessor } from "../../../src/provisioning/tenant-events.processor";
+import { WorkerModule } from "../../../src/worker.module";
+import {
+  insertAccount,
+  insertPlan,
+  insertRow,
+  insertSubscription,
+  testId,
+  type PlatformRow,
+  type SubscriptionRow,
+  type TenantRow,
+} from "../../builders/platform-rows";
+import { insertOta } from "../../builders/tenants";
+import { createTestApp, LogSink, type TestApp } from "../../support/app";
+import { FakeStripe } from "../../support/fake-stripe";
+
+/**
+ * The database clone, the API's and the worker's Nest module graphs, the platform document and the job validators;
+ * the bound allows for the parallel load of a 4-CPU CI runner.
+ */
+const SETUP_TIMEOUT_MS = 60_000;
+/** How long a test waits for the worker to finish an event (it takes milliseconds; under Vitest's 5 s). */
+const WAIT = { timeout: 4_000, interval: 20 } as const;
+/** How long a test waits for an invalidation published after a commit. */
+const EVENT_WAIT = { timeout: 3_000, interval: 20 } as const;
+
+/** The signing secret of `/webhooks/stripe/billing` in this file only. */
+const SECRET = `whsec_${randomBytes(24).toString("base64url")}`;
+const PATH = "/webhooks/stripe/billing";
+/** The switched-on application: the development Stripe key of `.env.example` (nothing reaches Stripe). */
+const STRIPE_ENV = Object.freeze({
+  FEATURE_STRIPE_BILLING: "true",
+  STRIPE_SECRET_KEY: "sk_test_replace_me",
+  STRIPE_BILLING_WEBHOOK_SECRET: SECRET,
+});
+/** The plans of this file and their Stripe Prices (Stripe's id shape, as the `plans` columns allow it). */
+const GROWTH = { code: "growth", month: "price_TestPbe045GrowthMonth", year: "price_TestPbe045GrowthYear" };
+const STARTER = { code: "starter", month: "price_TestPbe045StarterMonth" };
+/** A price no plan links. */
+const UNLINKED_PRICE = "price_TestPbe045Unlinked";
+/** The first number of this file's ids (`testId`), away from the other test files'. */
+const FIRST_ID = 45_000;
+const DAY_S = 24 * 60 * 60;
+const DAY_MS = DAY_S * 1000;
+const FAMILY = testId("asn", FIRST_ID);
+
+type Row = Record<string, unknown>;
+
+const stripe = new FakeStripe();
+let t: TestApp;
+let pool: PlatformPool;
+let worker: TestingModule;
+let tenantOps: Queue;
+let subscriber: Redis;
+let tokens: TokenService;
+const invalidations: InvalidationEvent[] = [];
+const workerLogs = new LogSink();
+let next = FIRST_ID;
+
+beforeAll(async () => {
+  // Expensive set-up, once per file: the clone, both module graphs, the invalidation subscriber, the platform
+  // document of expectResponseToMatch, the job validators a dispatch compiles on its first call and the fixtures.
+  t = await createTestApp({ env: STRIPE_ENV, overrides: [{ provide: StripeClient, useValue: stripe }] });
+  pool = t.app.get<PlatformPool>(PLATFORM_POOL);
+  tenantOps = t.app.get<Queue>(getQueueToken(OTA_TENANT_OPS), { strict: false });
+  tokens = t.app.get(TokenService);
+  responseChecker("platform");
+  validateJob("tenant.provision", provisionFixture);
+  stripeFixture("checkout.session.completed");
+  stripeFixture("customer.subscription.updated");
+
+  const logger = createProcessLogger(PLATFORM_PROCESSES.worker, t.config, workerLogs);
+  worker = await Test.createTestingModule({ imports: [WorkerModule.forRoot(t.config, logger)] })
+    .overrideProvider(Clock)
+    .useValue(t.clock)
+    .overrideProvider(JobSchedulerRegistry)
+    .useValue({})
+    .overrideProvider(StripeClient)
+    .useValue(stripe)
+    .compile();
+  await worker.init();
+
+  subscriber = new Redis(t.redis.url, { lazyConnect: true });
+  subscriber.on("message", (_channel: string, message: string) => {
+    invalidations.push(JSON.parse(message) as InvalidationEvent);
+  });
+  await subscriber.connect();
+  await subscriber.subscribe(INVALIDATION_CHANNEL);
+
+  await insertPlan(pool, {
+    code: GROWTH.code,
+    stripe_price_id_month: GROWTH.month,
+    stripe_price_id_year: GROWTH.year,
+  });
+  await insertPlan(pool, { code: STARTER.code, stripe_price_id_month: STARTER.month });
+}, SETUP_TIMEOUT_MS);
+
+afterAll(async () => {
+  await subscriber?.quit();
+  await worker?.close();
+  await t?.close();
+}, SETUP_TIMEOUT_MS);
+
+// ---- Stripe objects and events -----------------------------------------------------------------------------------
+
+/** The Stripe ids of one Checkout of this file. */
+interface StripeIds {
+  readonly sessionId: string;
+  readonly subscriptionId: string;
+  /** As `billing_customers` allows it: `cus_`, letters and digits. */
+  readonly customerId: string;
+}
+
+function stripeIds(): StripeIds {
+  const n = next++;
+  return {
+    sessionId: `cs_test_pbe045_${n}`,
+    subscriptionId: `sub_test_pbe045_${n}`,
+    customerId: `cus_TestPbe045N${n}`,
+  };
+}
+
+/** What a subscription of a test is, besides its ids. */
+interface SubscriptionShape {
+  readonly status: Stripe.Subscription.Status;
+  readonly priceId?: string;
+  /** `metadata.velexis_subscription_id`: the pre-inserted row of an OTA created in M5. */
+  readonly pendingRowId?: string;
+  readonly trialEnd?: number | null;
+}
+
+/** The fixture's subscription as Stripe answers a retrieve: `ids`, the OTA's metadata and `shape`. */
+function stripeSubscription(ids: StripeIds, tenantId: string, shape: SubscriptionShape): Stripe.Subscription {
+  const base = stripeFixture("customer.subscription.updated").data.object;
+  const [item] = base.items.data;
+  if (item === undefined) {
+    throw new Error("the subscription fixture has no item");
+  }
+  const priceId = shape.priceId ?? GROWTH.month;
+  const canceled = shape.status === "canceled";
+  return {
+    ...base,
+    id: ids.subscriptionId,
+    customer: ids.customerId,
+    status: shape.status,
+    trial_end: shape.trialEnd ?? null,
+    cancel_at: null,
+    cancel_at_period_end: false,
+    canceled_at: canceled ? base.created + 30 * DAY_S : null,
+    latest_invoice: null,
+    metadata: {
+      velexis_tenant_id: tenantId,
+      velexis_plan_code: GROWTH.code,
+      ...(shape.pendingRowId === undefined ? {} : { velexis_subscription_id: shape.pendingRowId }),
+    },
+    items: {
+      ...base.items,
+      data: [
+        {
+          ...item,
+          subscription: ids.subscriptionId,
+          price: { ...item.price, id: priceId },
+          plan: { ...item.plan, id: priceId },
+        },
+      ],
+      url: `/v1/subscription_items?subscription=${ids.subscriptionId}`,
+    },
+  };
+}
+
+/** The fixture's completed Checkout Session of `ids` for `tenantId`, as Stripe answers a retrieve. */
+function checkoutSession(
+  ids: StripeIds,
+  tenantId: string,
+  options: {
+    readonly pendingRowId?: string;
+    readonly email: string;
+    readonly mode?: "subscription" | "payment";
+  },
+): Stripe.Checkout.Session {
+  const base = stripeFixture("checkout.session.completed").data.object;
+  return {
+    ...base,
+    id: ids.sessionId,
+    mode: options.mode ?? "subscription",
+    client_reference_id: tenantId,
+    customer: ids.customerId,
+    customer_details:
+      base.customer_details === null ? null : { ...base.customer_details, email: options.email },
+    invoice: null,
+    subscription: options.mode === "payment" ? null : ids.subscriptionId,
+    metadata: {
+      velexis_tenant_id: tenantId,
+      velexis_plan_code: GROWTH.code,
+      ...(options.pendingRowId === undefined ? {} : { velexis_subscription_id: options.pendingRowId }),
+    },
+    cancel_url: `https://platform.example.com/otas/${tenantId}/billing?checkout=canceled`,
+    success_url: `https://platform.example.com/otas/${tenantId}/setup?checkout=success`,
+  };
+}
+
+/** A new event id of the fixtures' shape. */
+const newEventId = (label: string): string => `evt_test_pbe045_${label}_${next++}`;
+
+/** A signed delivery: the fixture of `type` whose object is `objectId`, with the event id `eventId`. */
+interface Delivery {
+  readonly eventId: string;
+  readonly payload: string;
+  readonly header: string;
+}
+
+function checkoutEvent(sessionId: string, eventId = newEventId("checkout")): Delivery {
+  const { payload, header } = signedStripeEvent(
+    "checkout.session.completed",
+    { id: eventId, data: { object: { id: sessionId } } },
+    SECRET,
+    { timestamp: t.clock.now() },
+  );
+  return { eventId, payload, header };
+}
+
+function subscriptionEvent(
+  subscriptionId: string,
+  eventId = newEventId("subscription"),
+  type: "customer.subscription.updated" | "customer.subscription.deleted" = "customer.subscription.updated",
+): Delivery {
+  const { payload, header } = signedStripeEvent(
+    "customer.subscription.updated",
+    // The `…deleted` event is the fixture of `…updated` under the other type: its payload is never read.
+    { id: eventId, type: type as "customer.subscription.updated", data: { object: { id: subscriptionId } } },
+    SECRET,
+    { timestamp: t.clock.now() },
+  );
+  return { eventId, payload, header };
+}
+
+/** Posts `delivery` as Stripe does and waits until the worker is done with it; answers its inbox row. */
+async function deliver(delivery: Delivery): Promise<Row> {
+  const res = await t.http
+    .post(PATH)
+    .set("Content-Type", "application/json")
+    .set("Stripe-Signature", delivery.header)
+    .send(delivery.payload);
+  expect(res.status).toBe(200);
+  return vi.waitFor(async () => {
+    const row = (await rowsOf("SELECT * FROM platform.stripe_events WHERE id = $1", [delivery.eventId]))[0];
+    expect(["processed", "ignored", "failed"]).toContain(row?.["status"]);
+    return row as Row;
+  }, WAIT);
+}
+
+// ---- Rows ----------------------------------------------------------------------------------------------------------
+
+async function rowsOf(text: string, values: unknown[]): Promise<Row[]> {
+  return (await pool.query(text, values)).rows as Row[];
+}
+
+const tenantOf = async (tenantId: string): Promise<Row> =>
+  (await rowsOf("SELECT * FROM platform.tenants WHERE id = $1", [tenantId]))[0] as Row;
+
+const subscriptionsOf = (tenantId: string): Promise<Row[]> =>
+  rowsOf("SELECT * FROM platform.subscriptions WHERE tenant_id = $1 ORDER BY created_at, id", [tenantId]);
+
+const jobsOf = (tenantId: string): Promise<Row[]> =>
+  rowsOf(
+    "SELECT id, kind, status, attempt, requested_by_account_id, payload FROM platform.provisioning_jobs " +
+      "WHERE tenant_id = $1 ORDER BY created_at, id",
+    [tenantId],
+  );
+
+const auditOf = (tenantId: string, action: string): Promise<Row[]> =>
+  rowsOf("SELECT * FROM platform.platform_audit_log WHERE tenant_id = $1 AND action = $2 ORDER BY id", [
+    tenantId,
+    action,
+  ]);
+
+const emailsOf = (tenantId: string, template: string): Promise<Row[]> =>
+  rowsOf("SELECT template, to_email FROM platform.email_outbox WHERE tenant_id = $1 AND template = $2", [
+    tenantId,
+    template,
+  ]);
+
+/** The `ota-tenant-ops` messages of the job `jobId` (one per dispatched attempt), by attempt. */
+async function messagesOf(jobId: string): Promise<Array<{ name: string; attempt: number }>> {
+  const found: Array<{ name: string; attempt: number }> = [];
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    const job = await tenantOps.getJob(bullmqJobId(jobId, attempt));
+    if (job !== undefined) {
+      found.push({ name: job.name, attempt });
+    }
+  }
+  return found;
+}
+
+/** Waits for the `tenant` invalidation of `tenantId`. */
+async function expectTenantInvalidation(tenantId: string): Promise<void> {
+  await vi.waitFor(() => {
+    expect(invalidations).toContainEqual({ v: 1, type: "tenant", id: tenantId });
+  }, EVENT_WAIT);
+}
+
+/** An owner of this file (an address of this test only). */
+const newOwner = (): Promise<PlatformRow<"accounts">> =>
+  insertAccount(pool, { id: testId("acc", next++), email: uniqueEmail("owner-pbe045") });
+
+/** An OTA of this file with `owner` and `subscription`. */
+async function arrangeOta(
+  owner: PlatformRow<"accounts">,
+  tenant: Partial<TenantRow>,
+  subscription: Partial<SubscriptionRow>,
+): Promise<{ readonly tenant: PlatformRow<"tenants">; readonly subscription: PlatformRow<"subscriptions"> }> {
+  const n = next++;
+  const ota = await insertOta(pool, {
+    tenant: { id: testId("ten", n), key: `pbe${n}`, ...tenant },
+    // A day before the FakeClock's now, so it sorts before the rows billing sync writes at that time.
+    subscription: {
+      id: testId("sub", n),
+      created_at: new Date(t.clock.now().getTime() - DAY_MS),
+      ...subscription,
+    },
+    members: [[owner, "owner"]],
+  });
+  if (ota.subscription === undefined) {
+    throw new Error("arrangeOta: the subscription was not written");
+  }
+  return { tenant: ota.tenant, subscription: ota.subscription };
+}
+
+/** A `provision` job of `tenantId`: `queued` and due at the FakeClock's time, unless `job` says otherwise. */
+async function insertProvisionJob(
+  tenantId: string,
+  job: Readonly<Record<string, unknown>> = {},
+): Promise<PlatformRow<"provisioning_jobs">> {
+  const now = t.clock.now();
+  return insertRow(pool, "provisioning_jobs", {
+    id: testId("job", next++),
+    tenant_id: tenantId,
+    kind: "provision",
+    status: "queued",
+    attempt: 0,
+    scheduled_at: now,
+    created_at: now,
+    updated_at: now,
+    ...job,
+  });
+}
+
+/** The trial end of this file's Checkouts: 14 days after the FakeClock's now, in Stripe's Unix seconds. */
+const trialEndOf = (): number => Math.floor(t.clock.now().getTime() / 1000) + 14 * DAY_S;
+
+/**
+ * An OTA created in M5 that waits for its Checkout (PBE-044): `provisioning` on `growth`, the pre-inserted `incomplete`
+ * Stripe row with the Session's id, a `queued` provision job, an owner; and the Session and the subscription Stripe
+ * answers once the owner has paid (`status`, the Customer of `ids`).
+ */
+async function arrangeNewOta(ids: StripeIds, status: Stripe.Subscription.Status = "trialing") {
+  const owner = await newOwner();
+  const { tenant, subscription } = await arrangeOta(
+    owner,
+    { status: "provisioning", plan_code: GROWTH.code, activated_at: null },
+    {
+      plan_code: GROWTH.code,
+      status: "incomplete",
+      billing_provider: "stripe",
+      trial_ends_at: null,
+      checkout_session_id: ids.sessionId,
+    },
+  );
+  const job = await insertProvisionJob(tenant.id);
+  const trialEnd = trialEndOf();
+  stripe.put(
+    checkoutSession(ids, tenant.id, { pendingRowId: subscription.id, email: owner.email }),
+    stripeSubscription(ids, tenant.id, { status, pendingRowId: subscription.id, trialEnd }),
+  );
+  return { owner, tenant, row: subscription, job };
+}
+
+/** An active OTA that pays the Stripe subscription of `ids` (`active`), with the row billing sync wrote for it. */
+async function arrangePayingOta(ids: StripeIds, tenant: Partial<TenantRow> = {}) {
+  const owner = await newOwner();
+  const ota = await arrangeOta(
+    owner,
+    { plan_code: GROWTH.code, ...tenant },
+    {
+      plan_code: GROWTH.code,
+      status: "active",
+      billing_provider: "stripe",
+      trial_ends_at: null,
+      provider_customer_id: ids.customerId,
+      provider_subscription_id: ids.subscriptionId,
+      provider_price_id: GROWTH.month,
+      checkout_session_id: ids.sessionId,
+    },
+  );
+  return { owner, ...ota };
+}
+
+/** Puts the subscription of `ids` with `status` into the FakeStripe, as Stripe would answer a re-fetch now. */
+function stripeNow(ids: StripeIds, tenantId: string, shape: SubscriptionShape): void {
+  stripe.put(stripeSubscription(ids, tenantId, shape));
+}
+
+/** The headers of a portal call by `accountId`. */
+async function portalHeaders(accountId: string): Promise<Record<string, string>> {
+  const { token } = await tokens.sign({ aud: "portal", sub: accountId, sid: FAMILY, ev: true, amr: ["pwd"] });
+  return { Authorization: `Bearer ${token}`, ...t.bffHeaders("203.0.113.45") };
+}
+
+// ---- Tests ---------------------------------------------------------------------------------------------------------
+
+describe("checkout.session.completed and customer.subscription.* (worker)", () => {
+  it("[PBE-045 AC1] gives the same final rows when the fixture events come twice and in reverse order [PF-73 AC1]", async () => {
+    const forwardIds = stripeIds();
+    const reverseIds = stripeIds();
+    const forward = await arrangeNewOta(forwardIds);
+    const reverse = await arrangeNewOta(reverseIds);
+    const checkoutCalls = stripe.callsOf("checkout.sessions.retrieve").length;
+
+    // Forward: the Checkout, then the subscription; each delivered twice (Stripe's retry of one event id) and once more
+    // under a new event id (another event about the same object), which is processed again.
+    const forwardEvents = [checkoutEvent(forwardIds.sessionId), subscriptionEvent(forwardIds.subscriptionId)];
+    for (const delivery of [
+      ...forwardEvents,
+      ...forwardEvents,
+      checkoutEvent(forwardIds.sessionId),
+      subscriptionEvent(forwardIds.subscriptionId),
+    ]) {
+      expect(await deliver(delivery)).toMatchObject({ status: "processed", tenant_id: forward.tenant.id });
+    }
+    // Reverse: the subscription first, then the Checkout, the same way.
+    const reverseEvents = [subscriptionEvent(reverseIds.subscriptionId), checkoutEvent(reverseIds.sessionId)];
+    for (const delivery of [
+      ...reverseEvents,
+      ...reverseEvents,
+      subscriptionEvent(reverseIds.subscriptionId),
+      checkoutEvent(reverseIds.sessionId),
+    ]) {
+      expect(await deliver(delivery)).toMatchObject({ status: "processed", tenant_id: reverse.tenant.id });
+    }
+
+    // The handlers re-fetched: the Checkout Session with its subscription expanded.
+    expect(stripe.callsOf("checkout.sessions.retrieve").slice(checkoutCalls)).toEqual(
+      [forwardIds.sessionId, forwardIds.sessionId, reverseIds.sessionId, reverseIds.sessionId].map((id) =>
+        expect.objectContaining({ id, params: { expand: ["subscription"] } }),
+      ),
+    );
+    const finalRows = async (ota: typeof forward, ids: StripeIds) => {
+      const values = new Map<string, string>([
+        [ota.tenant.id, "<tenant>"],
+        [ota.row.id, "<row>"],
+        [ota.job.id, "<job>"],
+        [ids.sessionId, "<session>"],
+        [ids.subscriptionId, "<subscription>"],
+        [ids.customerId, "<customer>"],
+        [ota.owner.email, "<email>"],
+      ]);
+      const normalise = (rows: Row[]): Row[] =>
+        rows.map((row) =>
+          Object.fromEntries(
+            Object.entries(row)
+              // `created_at` of the rows the builders wrote is the database's time, not the FakeClock's.
+              .filter(([column]) => column !== "created_at")
+              .map(([column, value]) => [
+                column,
+                typeof value === "string" ? (values.get(value) ?? value) : value,
+              ]),
+          ),
+        );
+      const tenant = await tenantOf(ota.tenant.id);
+      return {
+        tenant: {
+          status: tenant["status"],
+          plan_code: tenant["plan_code"],
+          billing_notice: tenant["billing_notice"],
+          suspension_reason: tenant["suspension_reason"],
+          version: tenant["version"],
+        },
+        subscriptions: normalise(await subscriptionsOf(ota.tenant.id)),
+        customers: normalise(
+          await rowsOf("SELECT * FROM platform.billing_customers WHERE tenant_id = $1", [ota.tenant.id]),
+        ),
+        jobs: normalise(await jobsOf(ota.tenant.id)),
+        messages: await messagesOf(ota.job.id),
+      };
+    };
+    const forwardRows = await finalRows(forward, forwardIds);
+    const reverseRows = await finalRows(reverse, reverseIds);
+
+    expect(reverseRows).toEqual(forwardRows);
+    // And they are the paid Checkout's: the row filled once (version 2), the Customer stored, provisioning started once.
+    const trialEnd = new Date(trialEndOf() * 1000);
+    expect(forwardRows.subscriptions).toEqual([
+      expect.objectContaining({
+        id: "<row>",
+        status: "trialing",
+        plan_code: GROWTH.code,
+        billing_interval: "month",
+        billing_provider: "stripe",
+        provider_customer_id: "<customer>",
+        provider_subscription_id: "<subscription>",
+        provider_price_id: GROWTH.month,
+        checkout_session_id: "<session>",
+        trial_ends_at: trialEnd,
+        current_period_start: new Date(1791795895 * 1000),
+        current_period_end: new Date(1794474295 * 1000),
+        cancel_at_period_end: false,
+        canceled_at: null,
+        provider_synced_at: t.clock.now(),
+        version: 2,
+      }),
+    ]);
+    expect(forwardRows.customers).toEqual([
+      expect.objectContaining({
+        tenant_id: "<tenant>",
+        provider_customer_id: "<customer>",
+        livemode: false,
+        billing_email: "<email>",
+      }),
+    ]);
+    expect(forwardRows.tenant).toEqual({
+      status: "provisioning",
+      plan_code: GROWTH.code,
+      billing_notice: null,
+      suspension_reason: null,
+      version: 1,
+    });
+    expect(forwardRows.jobs).toEqual([
+      expect.objectContaining({ id: "<job>", kind: "provision", status: "running", attempt: 1 }),
+    ]);
+    expect(forwardRows.messages).toEqual([{ name: "tenant.provision", attempt: 1 }]);
+  });
+
+  it("[PBE-045 AC2] dispatches provisioning exactly once for a completed Checkout delivered again and again", async () => {
+    const ids = stripeIds();
+    const { tenant, row, job } = await arrangeNewOta(ids, "active");
+    const first = checkoutEvent(ids.sessionId);
+
+    expect(await deliver(first)).toMatchObject({ status: "processed", tenant_id: tenant.id, attempts: 1 });
+    expect(await deliver(first)).toMatchObject({ status: "processed", attempts: 1 });
+    expect(await deliver(checkoutEvent(ids.sessionId))).toMatchObject({ status: "processed" });
+
+    expect(await jobsOf(tenant.id)).toEqual([
+      expect.objectContaining({ id: job.id, status: "running", attempt: 1 }),
+    ]);
+    expect(await messagesOf(job.id)).toEqual([{ name: "tenant.provision", attempt: 1 }]);
+    const message = await tenantOps.getJob(bullmqJobId(job.id, 1));
+    expect(message?.data).toMatchObject({ name: "tenant.provision", jobId: job.id, tenantId: tenant.id });
+    // The message carries the Stripe event that caused it as its request id.
+    expect((message?.data as { requestId?: string } | undefined)?.requestId).toBe(first.eventId);
+    expect(await subscriptionsOf(tenant.id)).toEqual([
+      expect.objectContaining({ id: row.id, status: "active", provider_subscription_id: ids.subscriptionId }),
+    ]);
+    // One audit row for the one change, by billing sync, with the event as request id.
+    expect(await auditOf(tenant.id, "subscription.updated")).toEqual([
+      expect.objectContaining({
+        actor_type: "system",
+        actor_label: "billing.sync",
+        target_type: "subscription",
+        target_id: row.id,
+        request_id: first.eventId,
+        details: expect.objectContaining({
+          eventId: first.eventId,
+          eventType: "checkout.session.completed",
+          checkoutSessionId: ids.sessionId,
+          customerId: ids.customerId,
+          before: expect.objectContaining({ status: "incomplete", providerSubscriptionId: null }),
+          after: expect.objectContaining({ status: "active", providerSubscriptionId: ids.subscriptionId }),
+        }),
+      }),
+    ]);
+  });
+
+  it("[PBE-045 AC2] replaces the manual trial of an existing OTA with the Checkout's Stripe row in one transaction", async () => {
+    const ids = stripeIds();
+    const owner = await newOwner();
+    const { tenant, subscription: manual } = await arrangeOta(
+      owner,
+      { billing_notice: "trial_ending" },
+      { status: "trialing", billing_provider: "manual" },
+    );
+    // createCheckoutSession of an existing OTA writes no row and no `velexis_subscription_id` (flow §B item 2).
+    stripe.put(
+      checkoutSession(ids, tenant.id, { email: owner.email }),
+      stripeSubscription(ids, tenant.id, { status: "active", priceId: STARTER.month }),
+    );
+
+    // Stripe sends the subscription's creation first: no row is its yet, so the event waits for the Checkout's.
+    expect(await deliver(subscriptionEvent(ids.subscriptionId))).toMatchObject({
+      status: "ignored",
+      last_error: `UNKNOWN_SUBSCRIPTION: no row of ${ids.subscriptionId} yet; the completed Checkout writes it`,
+      tenant_id: tenant.id,
+    });
+    const delivery = checkoutEvent(ids.sessionId);
+    expect(await deliver(delivery)).toMatchObject({ status: "processed", tenant_id: tenant.id });
+
+    const [manualAfter, stripeRow] = await subscriptionsOf(tenant.id);
+    expect(manualAfter).toMatchObject({
+      id: manual.id,
+      billing_provider: "manual",
+      status: "canceled",
+      canceled_at: t.clock.now(),
+      version: manual.version + 1,
+    });
+    expect(stripeRow).toMatchObject({
+      billing_provider: "stripe",
+      status: "active",
+      plan_code: STARTER.code,
+      provider_subscription_id: ids.subscriptionId,
+      provider_price_id: STARTER.month,
+      checkout_session_id: ids.sessionId,
+      version: 1,
+    });
+    // The plan follows the price, the banner of the manual trial goes, and the active OTA is not provisioned again.
+    expect(await tenantOf(tenant.id)).toMatchObject({
+      status: "active",
+      plan_code: STARTER.code,
+      billing_notice: null,
+      version: tenant.version + 2,
+    });
+    expect(await jobsOf(tenant.id)).toEqual([]);
+    expect(await auditOf(tenant.id, "subscription.updated")).toEqual([
+      expect.objectContaining({
+        target_id: stripeRow?.["id"],
+        details: expect.objectContaining({
+          created: true,
+          supersededSubscriptionIds: [manual.id],
+          before: { tenantPlanCode: "early_access", billingNotice: "trial_ending" },
+          after: expect.objectContaining({
+            status: "active",
+            planCode: STARTER.code,
+            tenantPlanCode: STARTER.code,
+            billingNotice: null,
+          }),
+        }),
+      }),
+    ]);
+    await expectTenantInvalidation(tenant.id);
+    // The subscription's later event finds the row now and changes nothing.
+    expect(await deliver(subscriptionEvent(ids.subscriptionId))).toMatchObject({ status: "processed" });
+    expect((await subscriptionsOf(tenant.id))[1]).toMatchObject({ version: 1 });
+  });
+
+  it("[PBE-045 AC3] past_due sets the banner, which the portal shows [PF-74 AC1]", async () => {
+    const ids = stripeIds();
+    const { owner, tenant, subscription } = await arrangePayingOta(ids);
+    stripeNow(ids, tenant.id, { status: "past_due" });
+
+    const delivery = subscriptionEvent(ids.subscriptionId);
+    expect(await deliver(delivery)).toMatchObject({ status: "processed", tenant_id: tenant.id });
+
+    expect(await tenantOf(tenant.id)).toMatchObject({
+      status: "active",
+      billing_notice: "past_due",
+      version: tenant.version + 1,
+    });
+    expect(await subscriptionsOf(tenant.id)).toEqual([
+      expect.objectContaining({ id: subscription.id, status: "past_due", version: subscription.version + 1 }),
+    ]);
+    await expectTenantInvalidation(tenant.id);
+    expect(await auditOf(tenant.id, "subscription.updated")).toEqual([
+      expect.objectContaining({
+        request_id: delivery.eventId,
+        details: expect.objectContaining({
+          before: expect.objectContaining({ status: "active", billingNotice: null }),
+          after: expect.objectContaining({ status: "past_due", billingNotice: "past_due" }),
+        }),
+      }),
+    ]);
+    // The portal's banner: the tenant's billing notice and the subscription's banner.
+    const headers = await portalHeaders(owner.id);
+    const ota = await t.http.get(`/v1/tenants/${tenant.id}`).set(headers);
+    expect(ota.status).toBe(200);
+    expectResponseToMatch("getTenant", ota, { document: "platform" });
+    expect(ota.body).toMatchObject({ status: "active", billingNotice: "past_due" });
+    const res = await t.http.get(`/v1/tenants/${tenant.id}/subscription`).set(headers);
+    expect(res.status).toBe(200);
+    expectResponseToMatch("getSubscription", res, { document: "platform" });
+    expect(res.body).toMatchObject({ status: "past_due", banner: "past_due", canManageInStripe: true });
+  });
+
+  it("[PBE-045 AC3] unpaid suspends with reason billing and e-mails the owners, and active resumes it [PF-74 AC2]", async () => {
+    const ids = stripeIds();
+    const { owner, tenant } = await arrangePayingOta(ids, { billing_notice: "past_due" });
+
+    stripeNow(ids, tenant.id, { status: "unpaid" });
+    const unpaid = subscriptionEvent(ids.subscriptionId);
+    expect(await deliver(unpaid)).toMatchObject({ status: "processed", tenant_id: tenant.id });
+
+    expect(await tenantOf(tenant.id)).toMatchObject({
+      status: "suspended",
+      suspension_reason: "billing",
+      suspended_at: t.clock.now(),
+      billing_notice: "past_due",
+    });
+    const [suspendJob] = await jobsOf(tenant.id);
+    expect(suspendJob).toMatchObject({
+      kind: "suspend",
+      status: "running",
+      attempt: 1,
+      requested_by_account_id: null,
+      payload: { reason: "billing" },
+    });
+    expect(await messagesOf(String(suspendJob?.["id"]))).toEqual([{ name: "tenant.suspend", attempt: 1 }]);
+    expect(await auditOf(tenant.id, "tenant.suspended")).toEqual([
+      expect.objectContaining({
+        actor_type: "system",
+        actor_label: "billing.sync",
+        request_id: unpaid.eventId,
+        details: expect.objectContaining({ suspensionReason: "billing", jobId: suspendJob?.["id"] }),
+      }),
+    ]);
+    expect(await emailsOf(tenant.id, "tenant.suspended")).toEqual([
+      { template: "tenant.suspended", to_email: owner.email },
+    ]);
+    await expectTenantInvalidation(tenant.id);
+
+    // The owner pays: Stripe's retry succeeds and the subscription is active again.
+    stripeNow(ids, tenant.id, { status: "active" });
+    expect(await deliver(subscriptionEvent(ids.subscriptionId))).toMatchObject({ status: "processed" });
+
+    expect(await tenantOf(tenant.id)).toMatchObject({
+      status: "active",
+      suspension_reason: null,
+      suspended_at: null,
+      billing_notice: null,
+    });
+    const resumeJob = (await jobsOf(tenant.id)).find((job) => job["kind"] === "resume");
+    expect(resumeJob).toMatchObject({ status: "running", attempt: 1, payload: {} });
+    expect(await messagesOf(String(resumeJob?.["id"]))).toEqual([{ name: "tenant.resume", attempt: 1 }]);
+    expect(await auditOf(tenant.id, "tenant.resumed")).toEqual([
+      expect.objectContaining({ actor_type: "system", actor_label: "billing.sync" }),
+    ]);
+    expect(await emailsOf(tenant.id, "tenant.resumed")).toEqual([
+      { template: "tenant.resumed", to_email: owner.email },
+    ]);
+  });
+
+  it("[PBE-045 AC3] a canceled subscription (customer.subscription.deleted) suspends, and a later active never resumes an abuse suspension [PF-74 AC2]", async () => {
+    const ids = stripeIds();
+    const { tenant } = await arrangePayingOta(ids);
+    stripeNow(ids, tenant.id, { status: "canceled" });
+
+    const deleted = subscriptionEvent(
+      ids.subscriptionId,
+      newEventId("deleted"),
+      "customer.subscription.deleted",
+    );
+    expect(await deliver(deleted)).toMatchObject({ status: "processed" });
+    expect(await tenantOf(tenant.id)).toMatchObject({ status: "suspended", suspension_reason: "billing" });
+
+    const abuseIds = stripeIds();
+    const abused = await arrangePayingOta(abuseIds, {
+      status: "suspended",
+      suspension_reason: "abuse",
+      suspended_at: t.clock.now(),
+    });
+    stripeNow(abuseIds, abused.tenant.id, { status: "active" });
+    await pool.query("UPDATE platform.subscriptions SET status = 'unpaid' WHERE id = $1", [
+      abused.subscription.id,
+    ]);
+
+    expect(await deliver(subscriptionEvent(abuseIds.subscriptionId))).toMatchObject({ status: "processed" });
+
+    expect(await tenantOf(abused.tenant.id)).toMatchObject({
+      status: "suspended",
+      suspension_reason: "abuse",
+    });
+    expect(await subscriptionsOf(abused.tenant.id)).toEqual([expect.objectContaining({ status: "active" })]);
+    expect(await jobsOf(abused.tenant.id)).toEqual([]);
+    expect(await auditOf(abused.tenant.id, "tenant.resumed")).toEqual([]);
+  });
+
+  it("[PBE-045] re-dispatches a failed OTA whose owner paid through createCheckoutSession, once (lead decision 5)", async () => {
+    const ids = stripeIds();
+    const owner = await newOwner();
+    // An abandoned Checkout (billing flow §H): the tenant failed, its row expired, its job canceled.
+    const { tenant, subscription: expired } = await arrangeOta(
+      owner,
+      { status: "failed", plan_code: GROWTH.code, activated_at: null },
+      {
+        plan_code: GROWTH.code,
+        status: "incomplete_expired",
+        billing_provider: "stripe",
+        trial_ends_at: null,
+      },
+    );
+    const abandoned = await insertProvisionJob(tenant.id, {
+      status: "canceled",
+      error: "CHECKOUT_ABANDONED",
+    });
+    // createCheckoutSession: no current row, so no `velexis_subscription_id`.
+    stripe.put(
+      checkoutSession(ids, tenant.id, { email: owner.email }),
+      stripeSubscription(ids, tenant.id, { status: "active" }),
+    );
+
+    const delivery = checkoutEvent(ids.sessionId);
+    expect(await deliver(delivery)).toMatchObject({ status: "processed", tenant_id: tenant.id });
+    expect(await deliver(checkoutEvent(ids.sessionId))).toMatchObject({ status: "processed" });
+
+    expect(await tenantOf(tenant.id)).toMatchObject({ status: "provisioning", version: tenant.version + 1 });
+    const [first, second] = await subscriptionsOf(tenant.id);
+    expect(first).toMatchObject({ id: expired.id, status: "incomplete_expired", version: expired.version });
+    expect(second).toMatchObject({ status: "active", provider_subscription_id: ids.subscriptionId });
+    const jobs = await jobsOf(tenant.id);
+    expect(jobs).toEqual([
+      expect.objectContaining({ id: abandoned.id, status: "canceled" }),
+      expect.objectContaining({
+        kind: "provision",
+        status: "running",
+        attempt: 1,
+        requested_by_account_id: null,
+      }),
+    ]);
+    const retried = String(jobs[1]?.["id"]);
+    expect(await messagesOf(retried)).toEqual([{ name: "tenant.provision", attempt: 1 }]);
+    expect(await auditOf(tenant.id, "provisioning_job.retried")).toEqual([
+      expect.objectContaining({
+        actor_type: "system",
+        actor_label: "billing.sync",
+        target_id: retried,
+        request_id: delivery.eventId,
+        details: expect.objectContaining({
+          kind: "provision",
+          reason: "checkout_completed",
+          checkoutSessionId: ids.sessionId,
+          subscriptionId: second?.["id"],
+          previousJobId: abandoned.id,
+          previousError: "CHECKOUT_ABANDONED",
+          before: { tenantStatus: "failed" },
+          after: { tenantStatus: "provisioning" },
+        }),
+      }),
+    ]);
+    await expectTenantInvalidation(tenant.id);
+  });
+
+  it("[PBE-045] fails an event whose price is linked to no plan with UNKNOWN_PRICE, for good, and writes nothing", async () => {
+    const ids = stripeIds();
+    const { tenant, subscription } = await arrangePayingOta(ids);
+    stripeNow(ids, tenant.id, { status: "past_due", priceId: UNLINKED_PRICE });
+
+    expect(await deliver(subscriptionEvent(ids.subscriptionId))).toMatchObject({
+      status: "failed",
+      attempts: 1,
+      last_error: `UNKNOWN_PRICE: ${UNLINKED_PRICE} is linked to no plan`,
+      tenant_id: tenant.id,
+      processed_at: t.clock.now(),
+    });
+    expect(await subscriptionsOf(tenant.id)).toEqual([
+      expect.objectContaining({ status: "active", version: subscription.version }),
+    ]);
+    expect(await tenantOf(tenant.id)).toMatchObject({ billing_notice: null, version: tenant.version });
+  });
+
+  it("[PBE-045 AC3] leaves an OTA that pays a newer subscription alone when a late event about its earlier, canceled one arrives", async () => {
+    const earlierIds = stripeIds();
+    const ids = stripeIds();
+    const { tenant } = await arrangePayingOta(ids);
+    // The OTA's earlier Stripe subscription, canceled before the current one began (its row a month older).
+    const earlier = await insertSubscription(pool, tenant, {
+      id: testId("sub", next++),
+      plan_code: GROWTH.code,
+      status: "canceled",
+      billing_provider: "stripe",
+      trial_ends_at: null,
+      provider_customer_id: ids.customerId,
+      provider_subscription_id: earlierIds.subscriptionId,
+      provider_price_id: GROWTH.month,
+      cancel_at_period_end: true,
+      canceled_at: new Date(t.clock.now().getTime() - 31 * DAY_MS),
+      created_at: new Date(t.clock.now().getTime() - 60 * DAY_MS),
+    });
+    stripeNow({ ...earlierIds, customerId: ids.customerId }, tenant.id, { status: "canceled" });
+
+    const late = subscriptionEvent(
+      earlierIds.subscriptionId,
+      newEventId("late"),
+      "customer.subscription.deleted",
+    );
+    expect(await deliver(late)).toMatchObject({ status: "processed", tenant_id: tenant.id });
+
+    // The earlier row takes Stripe's state; the rules read the shown (current, active) subscription, not the event's.
+    const rows = await subscriptionsOf(tenant.id);
+    expect(rows.find((row) => row["id"] === earlier.id)).toMatchObject({
+      status: "canceled",
+      cancel_at_period_end: false,
+      version: earlier.version + 1,
+    });
+    expect(rows.find((row) => row["provider_subscription_id"] === ids.subscriptionId)).toMatchObject({
+      status: "active",
+    });
+    expect(await tenantOf(tenant.id)).toMatchObject({
+      status: "active",
+      suspension_reason: null,
+      billing_notice: null,
+      version: tenant.version,
+    });
+    expect(await jobsOf(tenant.id)).toEqual([]);
+    expect(await auditOf(tenant.id, "tenant.suspended")).toEqual([]);
+  });
+
+  it("[PBE-045] fails for good and writes nothing on a second current Stripe subscription or a Customer, row or metadata of another OTA", async () => {
+    const holderIds = stripeIds();
+    const holder = await arrangePayingOta(holderIds);
+    await insertRow(pool, "billing_customers", {
+      tenant_id: holder.tenant.id,
+      provider_customer_id: holderIds.customerId,
+      livemode: false,
+    });
+    const failedFor = (code: string) =>
+      expect.objectContaining({
+        status: "failed",
+        attempts: 1,
+        last_error: expect.stringMatching(new RegExp(`^${code}: `)),
+        processed_at: t.clock.now(),
+      });
+
+    // A Checkout of a second Stripe subscription while the OTA pays one already: an admin resolves it in Stripe.
+    const secondIds = stripeIds();
+    stripe.put(
+      checkoutSession(secondIds, holder.tenant.id, { email: holder.owner.email }),
+      stripeSubscription(secondIds, holder.tenant.id, { status: "active" }),
+    );
+    expect(await deliver(checkoutEvent(secondIds.sessionId))).toEqual(failedFor("SUBSCRIPTION_CONFLICT"));
+    expect(await subscriptionsOf(holder.tenant.id)).toEqual([
+      expect.objectContaining({
+        id: holder.subscription.id,
+        status: "active",
+        version: holder.subscription.version,
+      }),
+    ]);
+    // The Customer stored before stays the OTA's: the failed transaction wrote nothing.
+    expect(
+      await rowsOf("SELECT provider_customer_id FROM platform.billing_customers WHERE tenant_id = $1", [
+        holder.tenant.id,
+      ]),
+    ).toEqual([{ provider_customer_id: holderIds.customerId }]);
+
+    // Another OTA's Checkout paid with the holder's Customer, or naming the holder in its metadata.
+    const owner = await newOwner();
+    const { tenant } = await arrangeOta(owner, {}, {});
+    const borrowedIds = { ...stripeIds(), customerId: holderIds.customerId };
+    stripe.put(
+      checkoutSession(borrowedIds, tenant.id, { email: owner.email }),
+      stripeSubscription(borrowedIds, tenant.id, { status: "active" }),
+    );
+    expect(await deliver(checkoutEvent(borrowedIds.sessionId))).toEqual(failedFor("CUSTOMER_CONFLICT"));
+    const namingIds = stripeIds();
+    const naming: Stripe.Checkout.Session = {
+      ...checkoutSession(namingIds, tenant.id, { email: owner.email }),
+      metadata: { velexis_tenant_id: holder.tenant.id },
+    };
+    stripe.put(naming, stripeSubscription(namingIds, tenant.id, { status: "active" }));
+    expect(await deliver(checkoutEvent(namingIds.sessionId))).toEqual(failedFor("TENANT_MISMATCH"));
+    expect(await subscriptionsOf(tenant.id)).toEqual([
+      expect.objectContaining({ billing_provider: "manual", status: "trialing" }),
+    ]);
+    expect(
+      await rowsOf("SELECT 1 FROM platform.billing_customers WHERE tenant_id = $1", [tenant.id]),
+    ).toEqual([]);
+
+    // A subscription whose row is another OTA's than its metadata or its Customer names.
+    const payingIds = stripeIds();
+    const paying = await arrangePayingOta(payingIds);
+    stripeNow(payingIds, holder.tenant.id, { status: "past_due" });
+    expect(await deliver(subscriptionEvent(payingIds.subscriptionId))).toEqual(failedFor("TENANT_MISMATCH"));
+    stripeNow({ ...payingIds, customerId: holderIds.customerId }, paying.tenant.id, { status: "past_due" });
+    expect(await deliver(subscriptionEvent(payingIds.subscriptionId))).toEqual(
+      failedFor("CUSTOMER_CONFLICT"),
+    );
+    expect(await subscriptionsOf(paying.tenant.id)).toEqual([
+      expect.objectContaining({ status: "active", version: paying.subscription.version }),
+    ]);
+    expect(await tenantOf(paying.tenant.id)).toMatchObject({
+      billing_notice: null,
+      version: paying.tenant.version,
+    });
+  });
+
+  it("[PBE-045] keeps one instance of the provisioning worker's processor and services, which billing sync imports too", () => {
+    // ProvisioningModule.forWorker() is one module object: a second one would start a second platform-tenant-events
+    // worker and reconciler in the process.
+    const providers = worker.get(DiscoveryService, { strict: false }).getProviders();
+    for (const type of [
+      TenantEventsProcessor,
+      ReconcilerScheduler,
+      ProvisioningDispatcher,
+      SuspensionService,
+    ]) {
+      expect(providers.filter((wrapper) => wrapper.metatype === type).length, type.name).toBe(1);
+    }
+  });
+
+  it("ignores a Checkout that is not a subscription's and a subscription of no OTA", async () => {
+    const ids = stripeIds();
+    const owner = await newOwner();
+    const { tenant } = await arrangeOta(owner, {}, {});
+    stripe.put(checkoutSession(ids, tenant.id, { email: owner.email, mode: "payment" }));
+
+    expect(await deliver(checkoutEvent(ids.sessionId))).toMatchObject({
+      status: "ignored",
+      last_error: "NOT_SUBSCRIPTION_MODE: the session is in payment mode",
+    });
+    const stranger = stripeIds();
+    const strangers: Stripe.Subscription = {
+      ...stripeSubscription(stranger, tenant.id, { status: "active" }),
+      metadata: {},
+    };
+    stripe.put(strangers);
+    expect(await deliver(subscriptionEvent(stranger.subscriptionId))).toMatchObject({
+      status: "ignored",
+      tenant_id: null,
+    });
+    expect(await subscriptionsOf(tenant.id)).toEqual([
+      expect.objectContaining({ billing_provider: "manual" }),
+    ]);
+  });
+});

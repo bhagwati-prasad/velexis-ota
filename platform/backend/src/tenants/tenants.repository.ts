@@ -3,8 +3,9 @@
 // writes in the create-OTA transaction (PBE-018), the two writes of its post-steps (PBE-022): the mirrored schema
 // version and the activation, and the failure of a provisioning and the owner's retry (PBE-023), the platform
 // admin's OTA search and its edit of the legal name and the internal notes (PBE-029), the plan that follows the
-// admin's change of a manual subscription (PBE-033), and the status switch of a suspension and a resume (PBE-030,
-// PADR-0014). Kysely on the process's `PLATFORM_DB`, schema-qualified tables
+// admin's change of a manual subscription (PBE-033), the status switch of a suspension and a resume (PBE-030,
+// PADR-0014), and the billing banner that billing sync keeps (PBE-045). Kysely on the process's `PLATFORM_DB`,
+// schema-qualified tables
 // (ADR-0005). The reads join what an answer shows next to the tenant row: the caller's role from the active
 // membership (listTenants), the oldest active owner's e-mail address (the admin search) and the primary storefront
 // host from `tenant_domains`, read only. `reference.countries`,
@@ -478,6 +479,27 @@ export class TenantsRepository {
       .where("id", "=", tenantId)
       .execute();
     return current.plan_code;
+  }
+
+  /**
+   * Sets the billing banner of the tenant (`billing_notice`: `past_due`, `trial_ending`, or `null` for none) in `trx`,
+   * with `version + 1`, only when it differs (PBE-045: billing sync's status rules; the admin's tenant shows it). True
+   * when this call changed the tenant.
+   */
+  async setBillingNotice(
+    trx: PlatformTransaction,
+    tenantId: string,
+    notice: string | null,
+    now: Date,
+  ): Promise<boolean> {
+    const row = await trx
+      .updateTable("platform.tenants")
+      .set({ billing_notice: notice, version: sql<number>`version + 1`, updated_at: now })
+      .where("id", "=", tenantId)
+      .where(sql<boolean>`billing_notice IS DISTINCT FROM ${notice}::text`)
+      .returning("id")
+      .executeTakeFirst();
+    return row !== undefined;
   }
 
   /** True when `code` is a country of `reference.countries`. */
