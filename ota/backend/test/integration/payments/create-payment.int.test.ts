@@ -333,6 +333,7 @@ async function paymentRows(checkoutId: string) {
         "card_bin",
         sql<string>`amount::text`.as("amount"),
         sql<string>`card_fee_amount::text`.as("cardFee"),
+        "card_fee_lines",
       ])
       .where("checkout_id", "=", checkoutId)
       .orderBy("created_at")
@@ -815,6 +816,49 @@ describe("the card fee and the payment's state", () => {
     const diners = await updatePayment(edgeWrite(), payment.id, { card: { brand: "DINERS" } });
     expect(diners.status).toBe(422);
     expectResponseToMatch("updatePayment", diners);
+  });
+
+  it("[FIX-W28-CANCEL AC2] stores each line of the card fee with whether a cancellation refunds it, at creation and at each new hint", async () => {
+    const surcharge = await alphaTx((trx) =>
+      trx.selectFrom("fee_rules").select("id").where("name", "=", "Visa surcharge").executeTakeFirstOrThrow(),
+    );
+    const refundable = (on: boolean) =>
+      alphaTx((trx) =>
+        trx.updateTable("fee_rules").set({ refundable: on }).where("id", "=", surcharge.id).execute(),
+      );
+    // The OTA makes its VISA surcharge refundable for this test.
+    await refundable(true);
+    try {
+      const checkout = await newCheckout(() => edgeWrite());
+      const created = await createPayment(edgeWrite(), checkout.id, { ...CARD, card: { brand: "VISA" } });
+      expect(created.status).toBe(201);
+      const payment = created.body as PaymentBody;
+      // The Amadeus fee is never refundable; the OTA's surcharge carries its rule's flag.
+      expect((await paymentRows(checkout.id)).map((row) => [row.cardFee, row.card_fee_lines])).toEqual([
+        [
+          "1.70",
+          [
+            { source: "amadeus", ruleId: null, amount: "1.20", refundable: false },
+            { source: "fee_rule", ruleId: surcharge.id, amount: "0.50", refundable: true },
+          ],
+        ],
+      ]);
+      // A new hint quotes the fee again and stores its lines: MASTERCARD has no surcharge.
+      expect((await updatePayment(edgeWrite(), payment.id, { card: { brand: "MASTERCARD" } })).status).toBe(
+        200,
+      );
+      expect((await paymentRows(checkout.id)).map((row) => [row.cardFee, row.card_fee_lines])).toEqual([
+        ["1.50", [{ source: "amadeus", ruleId: null, amount: "1.50", refundable: false }]],
+      ]);
+      // A payment without a card hint has no card fee and no line.
+      const plain = await newCheckout(() => edgeWrite());
+      expect((await createPayment(edgeWrite(), plain.id, CARD)).status).toBe(201);
+      expect((await paymentRows(plain.id)).map((row) => [row.cardFee, row.card_fee_lines])).toEqual([
+        ["0.00", []],
+      ]);
+    } finally {
+      await refundable(false);
+    }
   });
 
   it("gives the next card hint a Stripe key of its own after a PaymentIntent update whose answer was lost", async () => {

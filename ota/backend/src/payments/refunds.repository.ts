@@ -33,6 +33,14 @@
 // payment's booking and the payment first, then the refund (lead decision of 2026-10-21, OADR-0003 point 11), as the
 // webhook's transaction locks the payment, then its refunds.
 //
+// The release (FIX-W28-CANCEL, lead decision (1) of 2026-10-23, second batch). A cancellation of a booking whose payment
+// is only authorised captures the amount the OTA keeps and Stripe releases the rest of the authorisation; once Stripe
+// reports the capture, `recordRelease` records that rest as the customer's refund: a `refunds` row `succeeded` at once
+// (no Stripe refund: `provider_refund_id` stays empty, `reason_note` RELEASE_NOTE, the kept amount as
+// `penalty_amount`), with a `payment.released` payment event, once per payment. Neither `refund.submit` nor the sweep
+// ever sends such a row (it is final), and the webhooks never match it (no Stripe id, no `refund_id` in a Stripe
+// refund's metadata); it is what bookings.cancel's `refund` and `refundStatus: succeeded` show.
+//
 // The sweep (FIX-W27-FOLLOWUPS, lead decision (4) of 2026-10-23). A row whose `refund.submit` enqueue was lost (Redis
 // down at the commit, or the after-commit task failed) is still `pending` at NEW_REFUND_VERSION: a claim, and the release
 // of a claim, bump the version, so such a row was never sent to Stripe. `unclaimedRefundIds` lists those rows for the
@@ -135,6 +143,26 @@ export type RefundRefusal =
 export type CreateRefundResult =
   | { readonly ok: true; readonly refund: RefundJobRow }
   | { readonly ok: false; readonly reason: RefundRefusal; readonly refundable: string | null };
+
+/** The `refunds.reason_note` of the release of an authorisation (`recordRelease`, see the file header). */
+export const RELEASE_NOTE = "authorisation released: the cancellation captured the amount kept";
+
+/** The rest of an authorisation that a cancellation's capture released (`recordRelease`). */
+export interface NewRelease {
+  /** `rfd_…`, from `IdGenerator`. */
+  readonly id: string;
+  readonly paymentId: string;
+  readonly bookingId: string;
+  /** What the customer gets back: the authorisation less the amount captured, a positive decimal string. */
+  readonly amount: string;
+  /** What the cancellation kept (captured), stored as `penalty_amount` (Refund.penalty: "Airline penalty and OTA fee retained"). */
+  readonly kept: string;
+  readonly reason: RefundReason;
+  readonly requestedBy: { readonly type: RefundRequester; readonly id: string | null };
+  /** Who recorded it: the cancellation's request (`api`) or the payments queue's capture retry (`system`). */
+  readonly source: "api" | "system";
+  readonly now: Date;
+}
 
 /** What a `refund.submit` job does with a row it read (see the file header). */
 export type RefundSubmission = "submit" | "in_flight" | "done";
@@ -378,6 +406,70 @@ export class RefundsRepository {
       .offset(offset)
       .execute();
     return rows.map((row) => row.id);
+  }
+
+  /**
+   * Records the release of an authorisation (see the file header) in `trx`, whose caller locked the booking and then the
+   * payment (OADR-0003 point 11: the refund comes last): the `succeeded` row and its `payment.released` payment event,
+   * unless the payment has its release already. Answers the new row, or `undefined` when there was one (or nothing to
+   * release).
+   */
+  async recordRelease(trx: TenantTransaction, input: NewRelease): Promise<RefundJobRow | undefined> {
+    const amount = new Money(input.amount);
+    if (!amount.greaterThan(0)) {
+      return undefined;
+    }
+    const existing = await trx
+      .selectFrom("refunds")
+      .select("id")
+      .where("payment_id", "=", input.paymentId)
+      .where("reason_note", "=", RELEASE_NOTE)
+      .executeTakeFirst();
+    if (existing !== undefined) {
+      return undefined;
+    }
+    const payment = await trx
+      .selectFrom("payments")
+      .select(sql<string>`currency::text`.as("currency"))
+      .where("id", "=", input.paymentId)
+      .executeTakeFirstOrThrow();
+    const released = amount.toFixed(2);
+    await trx
+      .insertInto("refunds")
+      .values({
+        id: input.id,
+        payment_id: input.paymentId,
+        booking_id: input.bookingId,
+        currency: payment.currency,
+        amount: released,
+        penalty_amount: new Money(input.kept).toFixed(2),
+        reason: input.reason,
+        reason_note: RELEASE_NOTE,
+        status: "succeeded",
+        requested_by_type: input.requestedBy.type,
+        requested_by_id: input.requestedBy.id,
+        processed_at: input.now,
+        version: NEW_REFUND_VERSION,
+        created_at: input.now,
+        updated_at: input.now,
+      })
+      .execute();
+    await trx
+      .insertInto("payment_events")
+      .values({
+        id: newId("pev", input.now),
+        payment_id: input.paymentId,
+        type: "payment.released",
+        source: input.source,
+        status_to: "succeeded",
+        amount: released,
+        currency: payment.currency,
+        payload: JSON.stringify({ refundId: input.id, bookingId: input.bookingId, kept: input.kept }),
+        created_at: input.now,
+        updated_at: input.now,
+      })
+      .execute();
+    return await this.refund(trx, input.id);
   }
 
   /** The sum of the payment's refunds in flight (`pending`, `processing`), a decimal string. */

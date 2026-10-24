@@ -19,6 +19,7 @@ import { AUTHORISATION_WATCH_JOB, authorisationAlertReason } from "./authorisati
 import type { GatewayState, PaymentGateway } from "./payment-gateway";
 import {
   attemptOf,
+  cancellationCaptureRetryJob,
   captureAmountOf,
   failureCodeOf,
   isPaymentJobName,
@@ -167,6 +168,12 @@ describe("the jobs of ota-payments", () => {
     expect(paymentJob(PAYMENT_JOB.refundSubmit, TENANT.id, REFUND_ID).opts.jobId).toBe(
       `refund-submit-${REFUND_ID}`,
     );
+    // A cancellation's kept amount has its own id, so a finished retry of the order's capture never hides it.
+    expect(cancellationCaptureRetryJob(TENANT.id, PAYMENT_ID)).toEqual({
+      name: "payment.capture_retry",
+      data: { tenantId: TENANT.id, id: PAYMENT_ID },
+      opts: { jobId: `capture-retry-cancellation-${PAYMENT_ID}` },
+    });
   });
 
   it("accept exactly a tenant id and the id of the job's row", () => {
@@ -421,6 +428,7 @@ function handler(
     currencyMinorUnits: vi.fn(() => Promise.resolve(2)),
     updatePayment: vi.fn(() => Promise.resolve(true)),
     insertEvent: vi.fn(() => Promise.resolve()),
+    insertRefundBookingEvent: vi.fn(() => Promise.resolve()),
   };
   const refunds = {
     lockParents: vi.fn(() => Promise.resolve()),
@@ -429,6 +437,9 @@ function handler(
     markFailed: vi.fn(() => Promise.resolve(true)),
     release: vi.fn(() => Promise.resolve(true)),
     recordSubmission: vi.fn(() => Promise.resolve(true)),
+    recordRelease: vi.fn((_trx: unknown, release: { id: string; amount: string }) =>
+      Promise.resolve(refundRow({ id: release.id, amount: release.amount, status: "succeeded" })),
+    ),
   };
   const alerts = { send: vi.fn(() => Promise.resolve(true)) };
   const instance = new PaymentJobsHandler(
@@ -483,6 +494,94 @@ describe("PaymentJobsHandler", () => {
       PAYMENT_ID,
       3,
       expect.objectContaining({ status: "captured" }),
+    );
+  });
+
+  it("[FIX-W28-CANCEL AC1] captures a cancelled booking's kept amount with the cancellation's key, then records the release", async () => {
+    const bookingId = "bkg_01JBPAYMENTS0000000000000";
+    const { instance, gateway, payments, refunds, alerts } = handler({
+      payment: paymentRow({ bookingId }),
+      // The job's reads: the booking is cancelled, and its booking.cancelled event names the payment's capture.
+      trx: readsOnly({
+        status: "cancelled",
+        actorType: "customer",
+        actorId: "cus_01JBPAYMENTS0000000000000",
+        data: { capturePaymentId: PAYMENT_ID, captureAmount: "25.00", refundReason: "duplicate" },
+      }),
+      lockedBookings: [{ id: bookingId, amountPaid: "0.00" }],
+    });
+    gateway.capture.mockResolvedValue(intentState("captured", { amountReceived: "25.00" }));
+
+    expect(await instance.run(PAYMENT_JOB.captureRetry, PAYMENT_ID, ATTEMPT)).toBe("applied");
+    expect(gateway.capture).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ tenantId: TENANT.id }),
+      expect.objectContaining({ id: PAYMENT_ID }),
+      "25.00",
+      "cancellation",
+    );
+    // The authorisation less what was captured is the release, recorded once as the customer's refund.
+    expect(refunds.recordRelease).toHaveBeenCalledExactlyOnceWith(
+      expect.anything(),
+      expect.objectContaining({
+        paymentId: PAYMENT_ID,
+        bookingId,
+        amount: "427.10",
+        kept: "25.00",
+        reason: "duplicate",
+        requestedBy: { type: "customer", id: "cus_01JBPAYMENTS0000000000000" },
+        source: "system",
+      }),
+    );
+    expect(payments.insertRefundBookingEvent).toHaveBeenCalledExactlyOnceWith(
+      expect.anything(),
+      expect.objectContaining({ kind: "succeeded", bookingId, amount: "427.10" }),
+    );
+    // The booking first, then the payment, then the release's refund row (OADR-0003 point 11).
+    expect(payments.lockBookings.mock.invocationCallOrder[0]).toBeLessThan(
+      refunds.recordRelease.mock.invocationCallOrder[0] ?? 0,
+    );
+    expect(alerts.send).not.toHaveBeenCalled();
+  });
+
+  it("[FIX-W28-CANCEL AC1] hands a kept amount it cannot capture to the staff, and never touches the cancellation", async () => {
+    const bookingId = "bkg_01JBPAYMENTS0000000000000";
+    const { instance, gateway, payments, refunds, alerts } = handler({
+      payment: paymentRow({ bookingId }),
+      trx: readsOnly({
+        status: "cancelled",
+        actorType: "customer",
+        actorId: null,
+        data: { capturePaymentId: PAYMENT_ID, captureAmount: "25.00" },
+      }),
+      lockedBookings: [{ id: bookingId, amountPaid: "0.00" }],
+    });
+    // A 5xx Stripe keeps for the key; the PaymentIntent read again still holds the authorisation.
+    gateway.capture.mockRejectedValue(stripeFailure(500));
+    gateway.refresh.mockResolvedValue(intentState("authorized"));
+
+    expect(await instance.run(PAYMENT_JOB.captureRetry, PAYMENT_ID, ATTEMPT)).toBe("failed");
+    expect(refunds.recordRelease).not.toHaveBeenCalled();
+    // The `final` capture failure (refundStatus manual_review) after the booking's key share, then the alert.
+    expect(payments.lockBookings).toHaveBeenCalledWith(expect.anything(), [bookingId], "key share");
+    expect(payments.insertEvent).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ type: "payment.capture_failed" }),
+    );
+    const final = JSON.parse(
+      String(
+        (payments.insertEvent.mock.calls as unknown as [unknown, { type: string; payload: string }][]).find(
+          ([, row]) => row.type === "payment.capture_failed",
+        )?.[1].payload,
+      ),
+    ) as Record<string, unknown>;
+    expect(final).toMatchObject({ purpose: "cancellation", amount: "25.00", final: true, bookingId });
+    expect(alerts.send).toHaveBeenCalledExactlyOnceWith(
+      expect.anything(),
+      expect.objectContaining({ id: PAYMENT_ID }),
+      {
+        dedupeKey: `staff.payment:${PAYMENT_ID}:capture_retry_failed`,
+        reason: expect.stringContaining("The cancellation stands") as unknown,
+      },
     );
   });
 

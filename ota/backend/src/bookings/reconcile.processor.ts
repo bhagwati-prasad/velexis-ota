@@ -24,6 +24,22 @@
 // seconds ago, the adopted ones included), at most RECONCILE_SCAN_BATCH of each, the earliest deadline first, and
 // after the commit enqueues `booking.reconcile` for each with the deterministic id
 // `booking.reconcile:<bkg_…>:<minute bucket>`, so two runs of one scheduler iteration add each booking once.
+//
+// The same scan sweeps the lost checks of a cancellation (FIX-W28-CANCEL, OBE-049): bookings.cancel queues the first
+// `booking.cancellation_check` of a DELETE without an answer after its commit and never fails its request when Redis
+// does not answer, so a lost enqueue left the booking flagged, its cancellation undecided and the same key replaying
+// the `504`, until the staff acted. The scan lists the live bookings whose newest cancellation event is a flag written
+// a minute ago or more (CancellationRepository.undecidedFlags: of the bookings changed in the last day, at most
+// RECONCILE_SCAN_BATCH, the oldest flag first; a flag handed to the staff or decided is not one of them) and adds the
+// first check of each flag again, at once, with its own job id `booking.cancellation_check:<bkg_…>:<deadline>-1`:
+// BullMQ ignores it while it holds that job (waiting, delayed, running, or finished within the day it keeps finished
+// jobs), so a flag whose check was queued is never checked twice, and a lost one is checked once, within about a
+// minute. A flag still undecided CANCELLATION_SWEEP_FINAL_AFTER_MS after its deadline lost a later check of its chain
+// (a reschedule whose enqueue failed, a job that failed for good, a chain that gave up): every check after the deadline
+// that claims the booking decides it (the order cancelled, still active, or the staff's review), so none is waiting any
+// more. For such a flag the scan adds the chain's last check instead, `…:<deadline>-<CANCELLATION_CHECK_MAX_RUNS>`,
+// which decides it once (it never reschedules: a booking another transaction holds then makes it give up) and is just
+// as single by its id.
 import { InjectQueue, OnWorkerEvent, Processor, WorkerHost } from "@nestjs/bullmq";
 import { Injectable } from "@nestjs/common";
 import { UnrecoverableError, type Job, type Queue } from "bullmq";
@@ -45,7 +61,10 @@ import { TenantTx, type TenantTransaction } from "../tenancy/tenant-tx";
 import { BOOKING_SYNC_JOB, BookingSyncJobs, type BookingSyncJobResult } from "./booking-sync.processor";
 import {
   CANCELLATION_CHECK_JOB,
+  CANCELLATION_CHECK_MAX_RUNS,
+  cancellationCheckJob,
   CancellationChecks,
+  CancellationRepository,
   type CancellationCheckResult,
 } from "./cancellation.service";
 import { OrderRecorder } from "./order-recorder";
@@ -70,6 +89,26 @@ export const RECONCILE_TENANT_STATUSES: readonly TenantStatus[] = Object.freeze(
 
 /** Bookings one scan job enqueues per tenant at most; the next run (a minute later) takes the rest. */
 export const RECONCILE_SCAN_BATCH = 100;
+
+/** A cancellation flag is swept once it is this old: its own first check was queued 30 s after it. */
+export const CANCELLATION_SWEEP_AFTER_MS = 60_000;
+/** How far back the sweep looks for flagged bookings (their `updated_at`): a minute's scan sees each flag many times. */
+export const CANCELLATION_SWEEP_WINDOW_MS = 24 * 60 * 60_000;
+/**
+ * A flag still undecided this long after its deadline lost a later check of its chain (see the file header): the
+ * checks come a minute apart and the first one after the deadline decides, so a healthy chain is done well before.
+ */
+export const CANCELLATION_SWEEP_FINAL_AFTER_MS = 5 * 60_000;
+
+/**
+ * The run of the check the sweep adds for an undecided flag at `now`: the first one, or once the deadline is
+ * CANCELLATION_SWEEP_FINAL_AFTER_MS behind, the chain's last one (see the file header).
+ */
+export function sweptCheckRunOf(until: Date, now: Date): number {
+  return now.getTime() >= until.getTime() + CANCELLATION_SWEEP_FINAL_AFTER_MS
+    ? CANCELLATION_CHECK_MAX_RUNS
+    : 1;
+}
 
 /** What a finished `booking.reconcile` job returns (BullMQ keeps it with the job). */
 export type ReconcileJobResult =
@@ -170,6 +209,7 @@ export class ReconcileScan implements TenantJobHandler {
     private readonly tx: TenantTx,
     private readonly repository: ReconcileRepository,
     private readonly recorder: OrderRecorder,
+    private readonly cancellations: CancellationRepository,
     private readonly clock: Clock,
     @InjectQueue(OTA_QUEUE.bookings) private readonly queue: Queue,
     @InjectPinoLogger(ReconcileScan.name) private readonly logger: PinoLogger,
@@ -178,11 +218,16 @@ export class ReconcileScan implements TenantJobHandler {
   async run(tenant: PlatformTenant, job: Job): Promise<TenantJobOutcome> {
     const now = this.clock.now();
     const requestId = jobRequestId(job);
-    const { adopted, due } = await this.tx.run(async (trx) => {
+    const { adopted, due, flags } = await this.tx.run(async (trx) => {
       const claims = await this.adopt(trx, now, requestId);
       return {
         adopted: claims,
         due: await this.repository.dueBookingIds(trx, { now, limit: RECONCILE_SCAN_BATCH }),
+        flags: await this.cancellations.undecidedFlags(trx, {
+          changedSince: new Date(now.getTime() - CANCELLATION_SWEEP_WINDOW_MS),
+          flaggedBefore: new Date(now.getTime() - CANCELLATION_SWEEP_AFTER_MS),
+          limit: RECONCILE_SCAN_BATCH,
+        }),
       };
     });
     for (const claim of adopted) {
@@ -196,7 +241,25 @@ export class ReconcileScan implements TenantJobHandler {
       const bucket = parseTenantJobData(job.data)?.bucket ?? minuteBucket(now);
       await this.queue.addBulk(due.map((bookingId) => reconcileJob(tenant.id, bookingId, bucket)));
     }
-    return { more: false, counts: { adopted: adopted.length, due: due.length } };
+    if (flags.length > 0) {
+      // The first check of each flag (the chain's last one once its deadline is well past) under its own job id, at
+      // once (see the file header).
+      await this.queue.addBulk(
+        flags.map((flag) => {
+          const check = cancellationCheckJob(
+            tenant.id,
+            flag.bookingId,
+            flag.until.getTime(),
+            sweptCheckRunOf(flag.until, now),
+          );
+          return { name: check.name, data: check.data, opts: { jobId: check.opts.jobId } };
+        }),
+      );
+    }
+    return {
+      more: false,
+      counts: { adopted: adopted.length, due: due.length, cancellationChecks: flags.length },
+    };
   }
 
   /**

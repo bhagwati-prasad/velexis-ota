@@ -79,6 +79,12 @@ export interface PaymentRow {
   readonly currency: string;
   readonly amount: string;
   readonly cardFeeAmount: string;
+  /**
+   * `payments.card_fee_lines` (tenant migration 0004, FIX-W28-CANCEL): the lines of the card fee with their refundable
+   * flag, as stored (checkout/pricing-mode.ts `CardFeeLine`); `undefined` only on a row built by hand, which counts,
+   * like an empty list, as nothing refundable (card-fees.ts `keptCardFeeOf`).
+   */
+  readonly cardFeeLines?: unknown;
   readonly amountAuthorized: string;
   readonly amountCaptured: string;
   readonly amountRefunded: string;
@@ -275,6 +281,7 @@ function paymentRows(trx: TenantTransaction) {
       "p.version as version",
       "p.created_at as createdAt",
       "p.updated_at as updatedAt",
+      "p.card_fee_lines as cardFeeLines",
       "c.customer_id as checkoutCustomerId",
       sql<boolean>`coalesce(c.is_guest, false)`.as("checkoutIsGuest"),
       sql<string>`p.currency::text`.as("currency"),

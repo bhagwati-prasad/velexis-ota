@@ -18,6 +18,7 @@ import {
   createPlatformDb,
   createPool,
   createTenantDb,
+  sql,
   tenantTx,
   type Kysely,
   type PlatformDatabase,
@@ -320,6 +321,9 @@ interface BookingSeed {
   readonly lastSyncedAgoMs?: number;
   readonly formOfPayments?: readonly JsonObject[];
   readonly failure?: { readonly code: string; readonly message: string };
+  /** Who cancelled a cancelled booking (`staff` by default) and the typed reason (`cancel_reason`). */
+  readonly cancelledBy?: string;
+  readonly cancelReason?: string;
 }
 
 /** The segments of a stored order snapshot (a stub order's `data`), or `undefined` when it holds no readable order. */
@@ -401,7 +405,8 @@ async function seedBooking(seed: BookingSeed = {}): Promise<string> {
         order_snapshot: JSON.stringify(seed.snapshot ?? {}),
         last_synced_at: seed.lastSyncedAgoMs === undefined ? null : new Date(now - seed.lastSyncedAgoMs),
         cancelled_at: status === "cancelled" ? new Date(now - HOUR) : null,
-        cancelled_by: status === "cancelled" ? "staff" : null,
+        cancelled_by: status === "cancelled" ? (seed.cancelledBy ?? "staff") : null,
+        cancel_reason: seed.cancelReason ?? null,
         failure_code: seed.failure?.code ?? null,
         failure_message: seed.failure?.message ?? null,
         tags: [...(seed.tags ?? [])],
@@ -1384,6 +1389,113 @@ describe("console.bookings.get", () => {
     }
     // No Amadeus call without refresh.
     expect(amadeusCalls("getFlightOrder")).toHaveLength(0);
+  });
+
+  it("[FIX-W28-CANCEL AC3] shows the cancellation as its rows tell it: the customer's reason and comment, a staff member's reason, a request waiting for the staff", async () => {
+    const agent = await staffSession(alphaId, "agent");
+    const requestedAt = new Date(Date.now() - 2 * HOUR).toISOString();
+    const byCustomer = await seedBooking({
+      status: "cancelled",
+      ticketingStatus: "not_applicable",
+      cancelledBy: "customer",
+      cancelReason: "illness",
+    });
+    await seedEvent(byCustomer, {
+      type: "booking.cancelled",
+      actorType: "customer",
+      visible: true,
+      data: {
+        cancelledBy: "customer",
+        reasonCode: "illness",
+        comment: "Sick",
+        requestedAt,
+        ticketsVoided: false,
+        estimatedRefund: { amount: "0.00", currency: "EUR" },
+        refundStatus: "not_applicable",
+      },
+    });
+    const byStaff = await seedBooking({
+      status: "cancelled",
+      ticketingStatus: "not_applicable",
+      cancelReason: "duplicate",
+    });
+    await seedEvent(byStaff, {
+      type: "booking.cancelled",
+      actorType: "staff",
+      data: { cancelledBy: "staff", reason: "Booked twice by the agency" },
+    });
+    const requested = await seedBooking({ ticketingStatus: "pending" });
+    await seedEvent(requested, {
+      type: "booking.cancellation_requested",
+      actorType: "customer",
+      visible: true,
+      data: {
+        mode: "request_only",
+        cause: "request_only",
+        reasonCode: "found_cheaper",
+        comment: "Cheaper elsewhere",
+        requestedAt,
+        amountPaid: "0.00",
+        estimatedRefund: { amount: "0.00", currency: "EUR" },
+      },
+    });
+    // Self-service cancellation on for this test, so canCancel names the pending request (the OTA's switch comes
+    // first otherwise).
+    const features = async (on: boolean) =>
+      await inTenant("tenant_alpha", (trx) =>
+        trx
+          .updateTable("storefront_settings")
+          .set({
+            features: sql`jsonb_set(features, '{selfServiceCancellation}', ${JSON.stringify(on)}::jsonb)`,
+          })
+          .execute(),
+      );
+    await features(true);
+    let customerRes: Response;
+    let staffRes: Response;
+    let requestRes: Response;
+    try {
+      customerRes = await agent.get(`/v1/console/bookings/${byCustomer}`);
+      staffRes = await agent.get(`/v1/console/bookings/${byStaff}`);
+      requestRes = await agent.get(`/v1/console/bookings/${requested}`);
+    } finally {
+      await features(false);
+    }
+    for (const res of [customerRes, staffRes, requestRes]) {
+      expect(answer(res)).toEqual([200, undefined]);
+      expectResponseToMatch("consoleGetBooking", res);
+    }
+    expect(customerRes.body.cancellation).toMatchObject({
+      status: "cancelled",
+      cancelledBy: "customer",
+      reasonCode: "illness",
+      comment: "Sick",
+      requestedAt,
+      estimatedRefund: { amount: "0.00", currency: "EUR" },
+      refund: null,
+      refundStatus: "not_applicable",
+    });
+    // Console scope shows the staff member's reason; customer scope never would.
+    expect(staffRes.body.cancellation).toMatchObject({
+      status: "cancelled",
+      cancelledBy: "staff",
+      reasonCode: "duplicate",
+      comment: "Booked twice by the agency",
+    });
+    expect(requestRes.body.cancellation).toMatchObject({
+      status: "pending",
+      cancelledAt: null,
+      cancelledBy: "customer",
+      reasonCode: "found_cheaper",
+      comment: "Cheaper elsewhere",
+      requestedAt,
+      refund: null,
+      refundStatus: "not_applicable",
+    });
+    expect(requestRes.body.allowedActions).toMatchObject({
+      canCancel: false,
+      reasons: { canCancel: "pending" },
+    });
   });
 
   it("answers what each role and key may do now, and why not", async () => {

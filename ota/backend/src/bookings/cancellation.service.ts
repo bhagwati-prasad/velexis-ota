@@ -10,8 +10,10 @@
 // tickets. Then, read in one transaction: the mode (cancellation-mode.ts), the payment the money step would act on
 // (`moneyOf`: a Stripe payment `captured`/`partially_refunded`, else one `authorized`, else an airline-card payment),
 // the booking's non-refundable fees (its priced offer's pricing snapshot, `keptFeesOf`; every OTA fee of the booking
-// when the snapshot cannot be read) and the `cancellation` fees of the markup and fee engine on the booking total
-// (OADR-0005 point 7; the facts come from the booking's own rows, `pricingInputOfBooking`), the estimate split over the
+// when the snapshot cannot be read), the `cancellation` fees of the markup and fee engine on the booking total
+// (OADR-0005 point 7; the facts come from the booking's own rows, `pricingInputOfBooking`) and the payment's card fee
+// unless its stored line is refundable (card-fees.ts `keptCardFeeOf`; lead decision (2) of 2026-10-23, second batch,
+// FIX-W28-CANCEL), the estimate split over the
 // travellers, and the REFUND and CANCELLATION fare rules behind it (customer scope: the airline's `refundingPreview`
 // is net and never shown). The quote is cached for 10 minutes in `t:<tenantId>:<env>:cxq:<bookingId>` (the contract's
 // `cxq:{bookingId}` under the tenant prefix every tenant key has, redis.keys.ts) with the booking's `version`; a Redis
@@ -32,8 +34,9 @@
 //      or different `expectedRefund` answers `409 REFUND_AMOUNT_CHANGED` with `details.expectedRefund` and
 //      `details.newRefund`, and nothing is cancelled.
 //   3. The claim (T1): the booking locked `FOR NO KEY UPDATE SKIP LOCKED` (OADR-0014 point 6, lead addition to OBE-049:
-//      a booking another claim or writer holds is skipped and answered `503 SERVICE_UNAVAILABLE`, which the idempotency
-//      layer does not keep, so the same key can be sent again; a transaction that only holds the booking's `FOR KEY
+//      a booking another claim or writer holds is skipped and answered `503 SERVICE_UNAVAILABLE` with `Retry-After`
+//      (`retryAfterOf`, lead decision (8) of 2026-10-23, second batch), which the idempotency layer does not keep, so
+//      the same key can be sent again; a transaction that only holds the booking's `FOR KEY
 //      SHARE`, the foreign-key lock of an event, outbox or document insert, never makes it skip), every check of step 1
 //      again against the locked row (and the quote's `version`), then `version + 1`, its marker. A second request with
 //      the same ETag (another key, another tab) answers `503` while T1 holds the booking and `412` once it committed, so
@@ -59,7 +62,8 @@
 //        request) or the final error (`502 SUPPLIER_ERROR`: the airline did not cancel; `409
 //        BOOKING_ALREADY_CANCELLED`: someone else did).
 //   5. The answer: CancellationResult (`cancellation`, and the booking in customer scope with that cancellation) with
-//      the booking's new `ETag`; `200` when cancelled, `202` when pending.
+//      the booking's new `ETag`; `200` when cancelled, `202` when pending. The cancellation is the block bookings.get
+//      shows (bookings.mapper.ts `cancellationOf`, FIX-W28-CANCEL), so both always say the same.
 //
 // **Record** (`CancellationRecorder.recordCancelled`, T2 of the request and of the worker's check; the booking locked
 // `FOR NO KEY UPDATE` by the caller and still live): `cancelled`, `cancelled_at`, `cancelled_by = customer`,
@@ -76,10 +80,19 @@
 //                        `refund.submit` queued after the commit (its claim and the key `refund:<rfd_id>` make one
 //                        Stripe refund of any number of jobs). `refundStatus: pending`. A refund the repository refuses
 //                        (refunded meanwhile) alerts the staff: `manual_review`, the cancellation stands
-//   Stripe, authorised   voided after the commit through the PaymentGateway (`pi:cancel:<pay_id>`) and recorded
-//                        (`payment.voided`); a void that fails is queued as `payment.void` (OBE-040).
-//                        `refundStatus: authorization_voided`, `pending` while it is queued (the event's
-//                        `voidPaymentId` lets a later answer, a replay after a `504`, read which of the two it is)
+//   Stripe, authorised   lead decision (1) of 2026-10-23, second batch (FIX-W28-CANCEL): the amount the OTA keeps (the
+//                        authorisation less the estimate: `authorisationSettlementOf`) is captured after the commit
+//                        (`captureKept`, `pi:capture:<pay_id>:cancellation:<amount>`) and Stripe releases the rest;
+//                        what Stripe reports is recorded with the capture paths' events and the release (a `refunds`
+//                        row `succeeded`, RefundsRepository.recordRelease, and `refund.succeeded`). A capture that
+//                        fails is recorded, alerted and retried by `payment.capture_retry` 10 minutes later; it never
+//                        undoes the cancellation. `refundStatus: pending`, then `succeeded` with the release as
+//                        `refund` (`manual_review` when the retry gives up). Only an authorisation of which nothing is
+//                        kept is voided after the commit (`pi:cancel:<pay_id>`, `payment.voided`; a void that fails is
+//                        queued as `payment.void`, OBE-040): `refundStatus: authorization_voided`, `pending` while it is
+//                        queued. The event's `voidPaymentId`, or `capturePaymentId`, `captureAmount` and
+//                        `releaseAmount`, let a later answer (a replay after a `504`, bookings.get) and the capture
+//                        retry read which it is
 //   airline card         `payment_events` `airline.void_expected` only (the airline reverses its charge; no Stripe
 //                        call, no `refunds` row). `refundStatus: not_applicable`
 //
@@ -89,8 +102,10 @@
 // outbox or document insert never conflicts with either);
 // T2's refund request locks the payment after it (RefundsRepository.create), then inserts the refund; the payment
 // event of an airline card references the payment after the booking. The void's record locks the payment only. The
-// worker's check claims the booking `FOR NO KEY UPDATE SKIP LOCKED` (a booking another transaction holds is checked at
-// its next run) before its money step.
+// capture of a kept amount locks the booking `FOR UPDATE` (its `amount_paid`), then the payment, then inserts the
+// release's refund row; its failure locks the booking `FOR KEY SHARE` (events, the alert's outbox row), then the
+// payment. The worker's check claims the booking `FOR NO KEY UPDATE SKIP LOCKED` (a booking another transaction holds
+// is checked at its next run) before its money step.
 //
 // **Request** (`recordRequest`: `request_only`, a refusal, an order not found): the booking stays as it is
 // (`version + 1`); the customer-visible event `booking.cancellation_requested`, the traveller's
@@ -107,7 +122,10 @@
 // `booking.cancellation_not_applied` (the customer may try again); a read that fails leaves it undecided and the job
 // comes back a minute later, until the deadline (15 minutes after the DELETE), when the staff event
 // `booking.cancellation_manual_review` and a staff alert hand it to the staff. A booking someone else cancelled
-// meanwhile ends the check (the staff alert of that path covers the money).
+// meanwhile ends the check (the staff alert of that path covers the money). A lost enqueue of the first check is swept
+// by `bookings.reconcile_scan` (reconcile.processor.ts, FIX-W28-CANCEL), under the flag's own job id, and a chain that
+// lost a later check (a flag still undecided 5 minutes after its deadline) gets its last check (run
+// CANCELLATION_CHECK_MAX_RUNS) from the same scan.
 //
 // Log lines carry ids, modes and codes, never an amount with a person's data, an address or an Amadeus body.
 import { InjectQueue } from "@nestjs/bullmq";
@@ -146,10 +164,12 @@ import {
   PAYMENT_GATEWAY,
   type GatewayContext,
   type GatewayPayment,
+  type GatewayState,
   type PaymentGateway,
 } from "../payments/payment-gateway";
 import { providerStateUpdate } from "../payments/payment-state";
-import { PAYMENT_JOB, paymentJob } from "../payments/payments.processor";
+import { keptCardFeeOf } from "../payments/card-fees";
+import { cancellationCaptureRetryJob, PAYMENT_JOB, paymentJob } from "../payments/payments.processor";
 import { PaymentsRepository, type PaymentRow } from "../payments/payments.repository";
 import {
   REFUNDABLE_PAYMENT_STATUSES,
@@ -171,21 +191,20 @@ import { PlatformCache } from "../tenancy/platform-cache";
 import type { PlatformTenant, TenantStatus } from "../tenancy/platform-read.types";
 import { TenantContext, type ContextActor, type RequestTenant } from "../tenancy/tenant-context";
 import { afterCommit, TenantTx, type TenantTransaction } from "../tenancy/tenant-tx";
-import { createFailureKind, pendingBookingOf, replayedTimeout } from "./booking-orchestrator.service";
+import {
+  CAPTURE_RETRY_DELAY_MS,
+  createFailureKind,
+  pendingBookingOf,
+  replayedTimeout,
+} from "./booking-orchestrator.service";
 import {
   bookingEtagOf,
   snapshotOffersOf,
   storedFareRulesOf,
   toBookingFareRules,
-  toRefund,
   type BookingFareRule,
 } from "./bookings.mapper";
-import {
-  BookingsRepository,
-  type BookingChildren,
-  type BookingRefundRow,
-  type BookingRow,
-} from "./bookings.repository";
+import { BookingsRepository, type BookingChildren, type BookingRow } from "./bookings.repository";
 import {
   cancellationModeOf,
   expectedRefundMatches,
@@ -199,10 +218,33 @@ import {
   type NotAllowedReason,
   type RefundEstimate,
 } from "./cancellation-mode";
+import {
+  CANCELLATION_EVENTS,
+  cancellationEventsOf,
+  cancellationStateOf,
+  cancelledEventOf,
+  flagOf,
+  undecidedFlags,
+  type CancellationEventRow,
+  type CancellationFlag,
+  type CancellationState,
+  type UndecidedFlagRow,
+} from "./cancellation-state";
 import { CustomerBookingsService, ORDER_NOT_FOUND_WARNING } from "./customer-bookings.service";
 import { eventActorOf, OrderRecorder, type Booking, type Warning } from "./order-recorder";
 import { StaffAlerts } from "./staff-alerts";
 import { jobRequestId } from "./ticketing.processor";
+
+// The cancellation's events and state moved to cancellation-state.ts (FIX-W28-CANCEL: bookings.get reads them too); they
+// are still read from here.
+export {
+  CANCELLATION_EVENTS,
+  cancellationStateOf,
+  flagOf,
+  type CancellationEventRow,
+  type CancellationFlag,
+  type CancellationState,
+};
 
 type Schemas = components["schemas"];
 export type CancellationQuote = Schemas["CancellationQuote"];
@@ -235,20 +277,6 @@ export const CANCELLATION_CACHE_CONTROL = "no-store";
 
 /** `details.feature` of `403 FEATURE_DISABLED` when the storefront has self-service cancellation off. */
 export const SELF_SERVICE_CANCELLATION_FEATURE = "selfServiceCancellation";
-
-/** The booking events of a cancellation. */
-export const CANCELLATION_EVENTS = Object.freeze({
-  /** Customer-visible: the booking was cancelled (OrderRecorder.event asks for the cancelled itinerary). */
-  cancelled: "booking.cancelled",
-  /** Customer-visible: the cancellation was handed to the staff (`request_only`, a refusal). */
-  requested: "booking.cancellation_requested",
-  /** Staff-only: Flight Order Management DELETE got no answer that decides it; the flag the worker checks. */
-  timeout: "booking.cancellation_timeout",
-  /** Staff-only: the worker found the order still active after a DELETE without an answer. */
-  notApplied: "booking.cancellation_not_applied",
-  /** Staff-only: still undecided at the deadline; the staff decide. */
-  manualReview: "booking.cancellation_manual_review",
-} as const);
 
 /** The `payment_events.type` of an airline-card booking's cancellation (flow §3 step 5). */
 export const AIRLINE_VOID_EXPECTED_EVENT = "airline.void_expected";
@@ -443,14 +471,31 @@ function notCancellable(reason: NotAllowedReason): AppError {
   });
 }
 
+/** The cause of the `503` of a booking another claim or writer holds (`bookingBusy`). */
+export class BookingBusyError extends Error {
+  override readonly name = "BookingBusyError";
+}
+
+/** The `Retry-After` of that `503`: the claims' and writers' transactions hold a booking for a moment only. */
+export const BOOKING_BUSY_RETRY_AFTER_SECONDS = 1;
+
 /**
  * The claim found the booking held by another claim or writer (`FOR NO KEY UPDATE SKIP LOCKED`, OADR-0014 point 6): a
- * transient `503`, which the idempotency layer does not keep, so the same key can be sent again a moment later.
+ * transient `503` with `Retry-After` (lead decision (8) of 2026-10-23, second batch), which the idempotency layer does
+ * not keep, so the same key can be sent again a moment later.
  */
 const bookingBusy = (): AppError =>
   new AppError("SERVICE_UNAVAILABLE", {
     message: "The booking is being updated. Please try again in a moment.",
+    cause: new BookingBusyError("another claim or writer holds the booking"),
   });
+
+/** The seconds of `Retry-After` of a bookings.cancel error, or `undefined` when it has none (the controller's). */
+export function retryAfterOf(error: unknown): number | undefined {
+  return isAppError(error) && error.cause instanceof BookingBusyError
+    ? BOOKING_BUSY_RETRY_AFTER_SECONDS
+    : undefined;
+}
 
 /** The cancellation of a booking is undecided, or waits for the staff: no second one until it is settled. */
 const cancellationPending = (): AppError =>
@@ -569,101 +614,14 @@ export function quoteValid(cached: CachedQuote, version: number, now: Date): boo
 
 // ---- The repository -------------------------------------------------------------------------------------------------
 
-/** The storefront settings a cancellation reads. */
+/**
+ * The storefront settings a cancellation reads. No alert address: StaffRecipients chooses the recipients of a staff
+ * alert (notifications/staff-recipients.ts, OADR-0013).
+ */
 export interface CancellationSettingsRow {
   readonly features: unknown;
   readonly timeZone: string;
-  readonly opsAlertEmail: string | null;
-  readonly supportEmail: string | null;
   readonly defaultLocale: string;
-}
-
-/** A booking event of a cancellation, newest first. */
-export interface CancellationEventRow {
-  readonly type: string;
-  readonly actorType: string;
-  readonly actorId: string | null;
-  readonly data: unknown;
-  readonly createdAt: Date;
-}
-
-/** What a cancellation flag (the `booking.cancellation_timeout` event) holds: the request, to decide it later. */
-export interface CancellationFlag {
-  readonly mode: CancellationMode;
-  readonly reasonCode: string;
-  readonly comment: string | null;
-  readonly estimate: RefundEstimate;
-  readonly currency: string;
-  readonly requestedAt: string;
-  readonly until: string;
-  readonly actor: ContextActor;
-  readonly requestId: string;
-}
-
-/** The flag of `row`, or `undefined` when its data cannot be read. */
-export function flagOf(row: CancellationEventRow): CancellationFlag | undefined {
-  const data = isRecord(row.data) ? row.data : {};
-  const estimate = isRecord(data["estimate"]) ? data["estimate"] : {};
-  const amounts = ["amountPaid", "estimatedRefund", "penalty", "otaFee"].map((key) => text(estimate[key]));
-  const actor = isRecord(data["actor"]) ? data["actor"] : {};
-  const mode = data["mode"];
-  if (
-    (mode !== "release" && mode !== "void") ||
-    typeof data["reasonCode"] !== "string" ||
-    typeof data["until"] !== "string" ||
-    typeof data["currency"] !== "string" ||
-    amounts.some((amount) => amount === undefined || !/^\d+(?:\.\d+)?$/.test(amount))
-  ) {
-    return undefined;
-  }
-  const [amountPaid, estimatedRefund, penalty, otaFee] = amounts as [string, string, string, string];
-  const actorType = actor["type"];
-  return {
-    mode,
-    reasonCode: data["reasonCode"],
-    comment: text(data["comment"]) ?? null,
-    estimate: { amountPaid, estimatedRefund, penalty, otaFee },
-    currency: data["currency"],
-    requestedAt: text(data["requestedAt"]) ?? data["until"],
-    until: data["until"],
-    actor: {
-      type: actorType === "customer" || actorType === "guest" ? actorType : "system",
-      id: text(actor["id"]) ?? null,
-    },
-    requestId: text(data["requestId"]) ?? "unknown",
-  };
-}
-
-/** Where a booking's cancellation stands, from its events (newest first). */
-export type CancellationState =
-  | { readonly kind: "none" }
-  /** A DELETE without an answer, not decided yet. */
-  | { readonly kind: "undecided"; readonly flag: CancellationFlag; readonly flaggedAt: Date }
-  /** The worker found the order still active after the DELETE without an answer. */
-  | { readonly kind: "not_applied" }
-  /** A cancellation request waits for the staff. */
-  | { readonly kind: "requested" };
-
-/** The state of a live booking's cancellation (see CancellationState); the events newest first. */
-export function cancellationStateOf(events: readonly CancellationEventRow[]): CancellationState {
-  const latest = events[0];
-  if (latest === undefined) {
-    return { kind: "none" };
-  }
-  if (latest.type === CANCELLATION_EVENTS.requested) {
-    return { kind: "requested" };
-  }
-  if (latest.type === CANCELLATION_EVENTS.notApplied) {
-    return { kind: "not_applied" };
-  }
-  if (latest.type === CANCELLATION_EVENTS.timeout || latest.type === CANCELLATION_EVENTS.manualReview) {
-    const flagRow = events.find((event) => event.type === CANCELLATION_EVENTS.timeout);
-    const flag = flagRow === undefined ? undefined : flagOf(flagRow);
-    return flag === undefined || flagRow === undefined
-      ? { kind: "none" }
-      : { kind: "undecided", flag, flaggedAt: flagRow.createdAt };
-  }
-  return { kind: "none" };
 }
 
 /**
@@ -685,13 +643,7 @@ export class CancellationRepository {
   async settings(trx: TenantTransaction): Promise<CancellationSettingsRow | undefined> {
     return await trx
       .selectFrom("storefront_settings")
-      .select([
-        "features",
-        "time_zone as timeZone",
-        "ops_alert_email as opsAlertEmail",
-        "support_email as supportEmail",
-        "default_locale as defaultLocale",
-      ])
+      .select(["features", "time_zone as timeZone", "default_locale as defaultLocale"])
       .executeTakeFirst();
   }
 
@@ -707,32 +659,20 @@ export class CancellationRepository {
 
   /** The events of a cancellation's state (CANCELLATION_EVENTS but `cancelled`), newest first, at most 50. */
   async cancellationEvents(trx: TenantTransaction, bookingId: string): Promise<CancellationEventRow[]> {
-    return await trx
-      .selectFrom("booking_events")
-      .select(["type", "actor_type as actorType", "actor_id as actorId", "data", "created_at as createdAt"])
-      .where("booking_id", "=", bookingId)
-      .where("type", "in", [
-        CANCELLATION_EVENTS.requested,
-        CANCELLATION_EVENTS.timeout,
-        CANCELLATION_EVENTS.notApplied,
-        CANCELLATION_EVENTS.manualReview,
-      ])
-      .orderBy("created_at", "desc")
-      .orderBy("id", "desc")
-      .limit(50)
-      .execute();
+    return await cancellationEventsOf(trx, bookingId);
   }
 
   /** The newest `booking.cancelled` event of the booking, or `undefined`. */
   async cancelledEvent(trx: TenantTransaction, bookingId: string): Promise<CancellationEventRow | undefined> {
-    return await trx
-      .selectFrom("booking_events")
-      .select(["type", "actor_type as actorType", "actor_id as actorId", "data", "created_at as createdAt"])
-      .where("booking_id", "=", bookingId)
-      .where("type", "=", CANCELLATION_EVENTS.cancelled)
-      .orderBy("created_at", "desc")
-      .orderBy("id", "desc")
-      .executeTakeFirst();
+    return await cancelledEventOf(trx, bookingId);
+  }
+
+  /** The live bookings whose cancellation flag is undecided (cancellation-state.ts `undecidedFlags`). */
+  async undecidedFlags(
+    trx: TenantTransaction,
+    window: Parameters<typeof undecidedFlags>[1],
+  ): Promise<UndecidedFlagRow[]> {
+    return await undecidedFlags(trx, window);
   }
 
   /** The cancellation recorded on the booking, `version + 1` (see the file header). */
@@ -815,8 +755,44 @@ export interface RecordedMoney {
     readonly amount: string;
     readonly currency: string;
   } | null;
-  /** The Stripe payment to void after the commit. */
+  /** The Stripe payment to void after the commit (an authorisation of which nothing is kept). */
   readonly voidPayment: PaymentRow | null;
+  /** The Stripe authorisation of which the kept amount is captured after the commit, the rest released. */
+  readonly capture: KeptCapture | null;
+}
+
+/**
+ * The capture of the amount a cancellation keeps of an authorisation (lead decision (1) of 2026-10-23, second batch):
+ * `amount` is captured with `pi:capture:<pay_id>:cancellation:<amount>`, Stripe releases `release`.
+ */
+export interface KeptCapture {
+  readonly payment: PaymentRow;
+  /** What the OTA keeps: the cancellation fee, the fees that are not refunded, any airline penalty. */
+  readonly amount: string;
+  /** What goes back to the customer: the authorisation less `amount`. */
+  readonly release: string;
+  readonly reason: RefundReason;
+  /** The customer who cancelled (`cus_…`), or `null` for a guest. */
+  readonly customerId: string | null;
+}
+
+/**
+ * How a cancellation settles a Stripe authorisation of `authorized` when the customer gets `estimatedRefund` back:
+ * the amount kept (`authorized − refund`, never below zero) is captured and the rest released; nothing kept voids it.
+ */
+export function authorisationSettlementOf(
+  authorized: string,
+  estimatedRefund: string,
+  minorUnits: number,
+):
+  | { readonly kind: "void" }
+  | { readonly kind: "capture"; readonly amount: string; readonly release: string } {
+  const whole = new Money(authorized);
+  const release = Money.max(Money.min(new Money(estimatedRefund), whole), 0);
+  const kept = whole.minus(release);
+  return kept.greaterThan(0)
+    ? { kind: "capture", amount: kept.toFixed(minorUnits), release: release.toFixed(minorUnits) }
+    : { kind: "void" };
 }
 
 /** What `recordCancelled` did. */
@@ -902,6 +878,8 @@ export class CancellationRecorder {
         cancelledBy: "customer",
         mode: ask.mode,
         reasonCode: ask.reasonCode,
+        // The reason of a refund or release this cancellation records (refunds.reason).
+        refundReason: refundReasonOf(ask.reasonCode),
         ...(ask.comment === null ? {} : { comment: ask.comment }),
         requestedAt: ask.requestedAt.toISOString(),
         ticketsVoided: voided > 0,
@@ -910,6 +888,15 @@ export class CancellationRecorder {
         ...(money.refund === null ? {} : { refundId: money.refund.id }),
         // The authorisation voided after the commit: a later answer reads the payment for the outcome.
         ...(money.voidPayment === null ? {} : { voidPaymentId: money.voidPayment.id }),
+        // The authorisation whose kept amount is captured after the commit, the rest released (FIX-W28-CANCEL): the
+        // payments queue's capture retry reads the amount here, a later answer the payment and its release.
+        ...(money.capture === null
+          ? {}
+          : {
+              capturePaymentId: money.capture.payment.id,
+              captureAmount: money.capture.amount,
+              releaseAmount: money.capture.release,
+            }),
         ...(via.cause === "checked" ? { cause: "checked_after_timeout" } : {}),
       },
       visibleToCustomer: true,
@@ -966,7 +953,12 @@ export class CancellationRecorder {
       }
     }
     const target = moneyOf(rows, inFlight);
-    const none: RecordedMoney = { refundStatus: "not_applicable", refund: null, voidPayment: null };
+    const none: RecordedMoney = {
+      refundStatus: "not_applicable",
+      refund: null,
+      voidPayment: null,
+      capture: null,
+    };
     if (target === undefined) {
       return none;
     }
@@ -988,8 +980,31 @@ export class CancellationRecorder {
           updated_at: now,
         });
         return none;
-      case "stripe_authorized":
-        return { refundStatus: "pending", refund: null, voidPayment: row };
+      case "stripe_authorized": {
+        // Lead decision (1) of 2026-10-23, second batch: the amount kept is captured and the rest released after the
+        // commit; only an authorisation of which nothing is kept is voided.
+        const settlement = authorisationSettlementOf(
+          estimate.authorized,
+          ask.estimate.estimatedRefund,
+          (await this.payments.currencyMinorUnits(trx, row.currency)) ?? 2,
+        );
+        if (settlement.kind === "void") {
+          return { refundStatus: "pending", refund: null, voidPayment: row, capture: null };
+        }
+        return {
+          // Nothing goes back when the whole authorisation is kept.
+          refundStatus: new Money(settlement.release).isZero() ? "not_applicable" : "pending",
+          refund: null,
+          voidPayment: null,
+          capture: {
+            payment: row,
+            amount: settlement.amount,
+            release: settlement.release,
+            reason: refundReasonOf(ask.reasonCode),
+            customerId: ask.actor.type === "customer" ? ask.actor.id : null,
+          },
+        };
+      }
       case "none":
         return none;
       case "stripe_captured":
@@ -1017,7 +1032,7 @@ export class CancellationRecorder {
           `The customer cancelled this booking, but its refund could not be asked for (${created.reason}): ` +
           "refund the customer from the console.",
       });
-      return { refundStatus: "manual_review", refund: null, voidPayment: null };
+      return { refundStatus: "manual_review", refund: null, voidPayment: null, capture: null };
     }
     const job = paymentJob(PAYMENT_JOB.refundSubmit, tenant.tenantId, created.refund.id);
     afterCommit(trx, () => this.enqueue(this.paymentsQueue, job.name, job.data, job.opts));
@@ -1030,6 +1045,7 @@ export class CancellationRecorder {
         currency: created.refund.currency,
       },
       voidPayment: null,
+      capture: null,
     };
   }
 
@@ -1060,6 +1076,8 @@ export class CancellationRecorder {
         reasonCode: ask.reasonCode,
         ...(ask.comment === null ? {} : { comment: ask.comment }),
         requestedAt: ask.requestedAt.toISOString(),
+        // What the customer paid (captured, else authorised): the pending cancellation's `refundStatus` reads it.
+        amountPaid: ask.estimate.amountPaid,
         estimatedRefund: { amount: ask.estimate.estimatedRefund, currency: ask.currency },
         ...(supplierCode === null ? {} : { supplierCode }),
       },
@@ -1169,6 +1187,24 @@ export class CancellationRecorder {
   }
 
   /**
+   * The money step's part after the commit (see the file header): an authorisation of which nothing is kept is voided
+   * (`voidAuthorisation`), one of which the cancellation keeps an amount is captured for that amount and the rest
+   * released (`captureKept`); nothing else. No transaction is open.
+   */
+  async settleAuthorisation(
+    tenant: CancellationTenant,
+    bookingId: string,
+    money: RecordedMoney,
+    source: "api" | "system",
+  ): Promise<void> {
+    if (money.voidPayment !== null) {
+      await this.voidAuthorisation(tenant, money.voidPayment);
+    } else if (money.capture !== null) {
+      await this.captureKept(tenant, bookingId, money.capture, source);
+    }
+  }
+
+  /**
    * Voids the authorisation of a cancelled booking (`pi:cancel:<pay_id>`) with no transaction open, then records it
    * (the payment locked; no booking row is written). A void that fails is queued as `payment.void` (OBE-040). Answers
    * whether it was voided now.
@@ -1225,6 +1261,203 @@ export class CancellationRecorder {
       await this.enqueue(this.paymentsQueue, job.name, job.data, job.opts);
       return false;
     }
+  }
+
+  /**
+   * Captures the amount a cancellation keeps of an authorisation (see the file header), with no transaction open:
+   * `pi:capture:<pay_id>:cancellation:<amount>` (Stripe releases the rest), then records what Stripe reports
+   * (`recordKeptCapture`). A capture that fails, or whose answer is lost, never undoes the cancellation: it is
+   * recorded (`payment.capture_failed`), the staff are alerted, and the payments queue captures it once more
+   * CAPTURE_RETRY_DELAY_MS later with the same key (`payment.capture_retry`, payments.processor.ts), which alerts the
+   * staff again when it cannot. `source` names the process (`api`: the request; `system`: the worker's check). Answers
+   * whether the kept amount is captured now.
+   */
+  async captureKept(
+    tenant: CancellationTenant,
+    bookingId: string,
+    capture: KeptCapture,
+    source: "api" | "system",
+  ): Promise<boolean> {
+    const ctx: GatewayContext = {
+      tenantId: tenant.tenantId,
+      environment: tenant.environment,
+      requestId: tenant.requestId,
+    };
+    const { payment } = capture;
+    let code: string;
+    try {
+      const minorUnits = await this.minorUnits(payment.currency);
+      const gatewayPayment: GatewayPayment = {
+        id: payment.id,
+        checkoutId: payment.checkoutId,
+        providerPaymentId: payment.providerPaymentId,
+        currency: payment.currency,
+        amount: new Money(payment.amount).toFixed(minorUnits),
+        minorUnits,
+        version: payment.version,
+      };
+      const state = await this.gateway.capture(ctx, gatewayPayment, capture.amount, "cancellation");
+      if (state.status === "captured") {
+        await this.tx.run((trx) => this.recordKeptCapture(trx, tenant, bookingId, capture, state, source));
+        this.logger.info({ bookingId, paymentId: payment.id }, "bookings.cancel_kept_captured");
+        return true;
+      }
+      code = `provider_status_${state.status}`;
+    } catch (error) {
+      code = isAppError(error) ? error.code : "INTERNAL_ERROR";
+    }
+    this.logger.warn({ bookingId, paymentId: payment.id, code }, "bookings.cancel_capture_failed");
+    await this.recordCaptureFailure(tenant, bookingId, capture, code, source);
+    return false;
+  }
+
+  /**
+   * What a capture of the kept amount that Stripe reports changes, in one transaction: the booking (`FOR UPDATE`, its
+   * `amount_paid` changes), then the payment (its state through payment-state.ts, `payment.captured`), then the
+   * release's refund row (OADR-0003 point 11: booking, payment, refund): the events the capture paths write (the
+   * payment's `payment.captured`, the booking's `amount_paid` and `payment.captured`) and the release
+   * (RefundsRepository.recordRelease, with the customer-visible `refund.succeeded`), once.
+   */
+  private async recordKeptCapture(
+    trx: TenantTransaction,
+    tenant: CancellationTenant,
+    bookingId: string,
+    capture: KeptCapture,
+    state: GatewayState,
+    source: "api" | "system",
+  ): Promise<void> {
+    const now = this.clock.now();
+    const [booking] = await this.payments.lockBookings(trx, [bookingId], "update");
+    const current = await this.payments.payment(trx, capture.payment.id, true);
+    if (booking === undefined || current === undefined) {
+      return;
+    }
+    const captured = Money.min(new Money(state.amountReceived), new Money(current.amount));
+    const update = providerStateUpdate(current, state, now);
+    if (update.kind === "apply") {
+      await this.payments.updatePayment(trx, current.id, current.version, update.values);
+      await this.payments.insertEvent(trx, {
+        id: this.ids.newId("pev"),
+        payment_id: current.id,
+        type: "payment.captured",
+        source,
+        status_from: current.status,
+        status_to: update.status,
+        amount: captured.toFixed(2),
+        currency: current.currency,
+        payload: JSON.stringify({ bookingId, purpose: "cancellation", requestId: tenant.requestId }),
+        created_at: now,
+        updated_at: now,
+      });
+    }
+    if (new Money(booking.amountPaid).lessThan(captured)) {
+      await this.payments.setAmountPaid(trx, bookingId, captured.toFixed(2), now);
+      await this.recorder.event(trx, bookingId, {
+        type: "payment.captured",
+        actor: { type: "system", id: null },
+        summary: "The amount kept for the cancellation was charged; the rest of the payment was released.",
+        data: { paymentId: current.id, amount: captured.toFixed(2), purpose: "cancellation" },
+        visibleToCustomer: true,
+        requestId: tenant.requestId,
+        now,
+      });
+    }
+    // What Stripe released: the authorisation less what it captured (Stripe's word, not the estimate's).
+    const authorised = Money.max(new Money(current.amountAuthorized), captured);
+    const released = await this.refunds.recordRelease(trx, {
+      id: this.ids.newId("rfd"),
+      paymentId: current.id,
+      bookingId,
+      amount: authorised.minus(captured).toFixed(2),
+      kept: captured.toFixed(2),
+      reason: capture.reason,
+      requestedBy: { type: "customer", id: capture.customerId },
+      source,
+      now,
+    });
+    if (released !== undefined) {
+      await this.payments.insertRefundBookingEvent(trx, {
+        id: this.ids.newId("evt"),
+        kind: "succeeded",
+        bookingId,
+        refundId: released.id,
+        paymentId: current.id,
+        amount: released.amount,
+        currency: released.currency,
+        actor: { type: "system", id: null },
+        requestId: tenant.requestId,
+        // One millisecond after the capture: the timeline orders events by time.
+        now: new Date(now.getTime() + 1),
+      });
+    }
+  }
+
+  /**
+   * A capture of the kept amount that did not happen (see `captureKept`): the payment's `payment.capture_failed` (the
+   * amount and the purpose), the staff-only booking event `payment.capture_failed` and a staff alert in one
+   * transaction (the booking `FOR KEY SHARE` for the event and the outbox row, then the payment), then the payments
+   * queue's `payment.capture_retry` (job id `capture-retry-cancellation-<pay_id>`), CAPTURE_RETRY_DELAY_MS later,
+   * also when that transaction failed (the retry reads the amount from the `booking.cancelled` event). Never throws.
+   */
+  private async recordCaptureFailure(
+    tenant: CancellationTenant,
+    bookingId: string,
+    capture: KeptCapture,
+    code: string,
+    source: "api" | "system",
+  ): Promise<void> {
+    const { payment } = capture;
+    try {
+      await this.tx.run(async (trx) => {
+        const now = this.clock.now();
+        await this.payments.lockBookings(trx, [bookingId], "key share");
+        const current = await this.payments.payment(trx, payment.id, true);
+        const booking = await this.bookings.booking(trx, bookingId);
+        if (current === undefined || booking === undefined) {
+          return;
+        }
+        await this.payments.insertEvent(trx, {
+          id: this.ids.newId("pev"),
+          payment_id: current.id,
+          type: "payment.capture_failed",
+          source,
+          status_from: null,
+          status_to: null,
+          amount: null,
+          currency: null,
+          payload: JSON.stringify({ bookingId, amount: capture.amount, purpose: "cancellation", code }),
+          created_at: now,
+          updated_at: now,
+        });
+        await this.recorder.event(trx, bookingId, {
+          type: "payment.capture_failed",
+          actor: { type: "system", id: null },
+          summary:
+            "The amount kept for the cancellation could not be charged; staff will review the payment.",
+          data: { paymentId: current.id, amount: capture.amount, purpose: "cancellation", code },
+          visibleToCustomer: false,
+          requestId: tenant.requestId,
+          now,
+        });
+        await this.staffAlert(trx, booking, "cancellation_capture_failed", {
+          reason:
+            `The customer cancelled this booking, but the amount it keeps (${capture.amount} ${current.currency}: ` +
+            `the cancellation fee and the fees that are not refunded) could not be captured from the card payment ` +
+            `${current.id} (${code}). The cancellation stands. The capture is retried once in 10 minutes; if it ` +
+            "fails too, capture the kept amount from the console or release the authorisation.",
+        });
+      });
+    } catch (error) {
+      this.logger.error(
+        { bookingId, paymentId: payment.id, err: error },
+        "bookings.cancel_capture_not_recorded",
+      );
+    }
+    const job = cancellationCaptureRetryJob(tenant.tenantId, payment.id);
+    await this.enqueue(this.paymentsQueue, job.name, job.data, {
+      ...job.opts,
+      delay: CAPTURE_RETRY_DELAY_MS,
+    });
   }
 
   private async minorUnits(currency: string): Promise<number> {
@@ -1457,6 +1690,11 @@ export class CancellationService {
       payment: target?.estimate ?? { kind: "none" },
       keptFees,
       cancellationFees: net ? [] : await this.cancellationFees(trx, booking, children, minorUnits, now),
+      // The card fee unless its line is refundable (lead decision (2) of 2026-10-23, second batch).
+      keptCardFee:
+        target !== undefined && target.row.provider === "stripe"
+          ? keptCardFeeOf(target.row, minorUnits)
+          : "0",
     });
     const lines = refundLinesOf(lineTravelersOf(children, details.orderSnapshot), estimate, minorUnits);
     const stored = storedFareRulesOf(details.orderIncluded);
@@ -1718,7 +1956,10 @@ export class CancellationService {
     return booking;
   }
 
-  /** T2 after a DELETE Amadeus accepted, then the void of an authorisation; the `200` answer. */
+  /**
+   * T2 after a DELETE Amadeus accepted, then the void of an authorisation or the capture of its kept amount (no
+   * transaction open); the `200` answer.
+   */
   private async recordDeleted(
     tenant: CancellationTenant,
     bookingId: string,
@@ -1750,22 +1991,8 @@ export class CancellationService {
     if (recorded.kind === "not_live") {
       throw new AppError("BOOKING_ALREADY_CANCELLED");
     }
-    let refundStatus = recorded.money.refundStatus;
-    if (recorded.money.voidPayment !== null) {
-      refundStatus = (await this.recorder.voidAuthorisation(tenant, recorded.money.voidPayment))
-        ? "authorization_voided"
-        : "pending";
-    }
-    const cancellation = await this.tx.run(async (trx) =>
-      cancellationOfCancelled(
-        await this.bookings.booking(trx, bookingId),
-        await this.repository.cancelledEvent(trx, bookingId),
-        await this.bookings.refundsOf(trx, bookingId),
-        (await this.payments.currencyMinorUnits(trx, ask.currency)) ?? 2,
-        refundStatus,
-      ),
-    );
-    return await this.answer(bookingId, 200, cancellation);
+    await this.recorder.settleAuthorisation(tenant, bookingId, recorded.money, "api");
+    return await this.answer(bookingId, 200);
   }
 
   /** The cancellation of a booking handed to the staff (`202`). */
@@ -1789,13 +2016,17 @@ export class CancellationService {
     };
   }
 
-  /** The answer: the cancellation, and the booking in customer scope carrying it. */
-  private async answer(
-    bookingId: string,
-    status: 200 | 202,
-    cancellation: Cancellation,
-  ): Promise<CancelAnswer> {
+  /**
+   * The answer: the booking in customer scope and its cancellation, as bookings.get shows it (bookings.mapper.ts
+   * `cancellationOf`: the same block, whichever asks); `fallback` only when the booking shows none (a request the
+   * staff settled in the meantime).
+   */
+  private async answer(bookingId: string, status: 200 | 202, fallback?: Cancellation): Promise<CancelAnswer> {
     const booking: Booking = await this.customerBookings.get(bookingId, { refresh: false });
+    const cancellation = booking.cancellation ?? fallback;
+    if (cancellation === undefined || cancellation === null) {
+      throw new Error("a cancelled booking shows no cancellation");
+    }
     return {
       status,
       result: { cancellation, booking: { ...booking, cancellation } },
@@ -1832,16 +2063,7 @@ export class CancellationService {
         if (!ours) {
           return { kind: "error" as const, error: new AppError("BOOKING_ALREADY_CANCELLED") };
         }
-        return {
-          kind: "cancelled" as const,
-          cancellation: cancellationOfCancelled(
-            booking,
-            cancelled,
-            await this.bookings.refundsOf(trx, bookingId),
-            (await this.payments.currencyMinorUnits(trx, booking.currency)) ?? 2,
-            await this.recordedRefundStatus(trx, cancelled.data),
-          ),
-        };
+        return { kind: "cancelled" as const };
       }
       const state = cancellationStateOf(events);
       if (state.kind === "not_applied") {
@@ -1861,7 +2083,7 @@ export class CancellationService {
       });
       return { status, headers: { "cache-control": "no-store" }, setCookie: [], body };
     }
-    const answer = await this.answer(bookingId, 200, decided.cancellation);
+    const answer = await this.answer(bookingId, 200);
     this.logger.info({ bookingId }, "bookings.cancel_replayed");
     return {
       status: 200,
@@ -1869,24 +2091,6 @@ export class CancellationService {
       setCookie: [],
       body: answer.result,
     };
-  }
-
-  /**
-   * The `refundStatus` of a recorded cancellation without a refund row, from its `booking.cancelled` event: the status
-   * the record step wrote, except for an authorisation voided after the commit (`voidPaymentId`), whose payment says
-   * whether the void happened (`authorization_voided`) or is still queued (`pending`).
-   */
-  private async recordedRefundStatus(trx: TenantTransaction, data: unknown): Promise<RefundStatus> {
-    const event = isRecord(data) ? data : {};
-    const stored =
-      typeof event["refundStatus"] === "string" ? (event["refundStatus"] as RefundStatus) : undefined;
-    const voidPaymentId = text(event["voidPaymentId"]);
-    if (voidPaymentId !== undefined) {
-      return (await this.payments.payment(trx, voidPaymentId))?.status === "canceled"
-        ? "authorization_voided"
-        : "pending";
-    }
-    return stored ?? "not_applicable";
   }
 
   // ---- Shared ------------------------------------------------------------------------------------------------------
@@ -1954,53 +2158,6 @@ export class CancellationService {
       // Not cached this time.
     }
   }
-}
-
-/**
- * The cancellation of a booking this request (or the worker, after a DELETE without an answer) cancelled, as its rows
- * tell it: the `booking.cancelled` event's reason, comment and estimate, the newest refund, `refundStatus`.
- */
-export function cancellationOfCancelled(
-  booking: BookingRow | undefined,
-  event: CancellationEventRow | undefined,
-  refunds: readonly BookingRefundRow[],
-  minorUnits: number,
-  refundStatus: RefundStatus,
-): Cancellation {
-  if (booking === undefined) {
-    throw new AppError("NOT_FOUND");
-  }
-  const data = event !== undefined && isRecord(event.data) ? event.data : {};
-  const estimated = isRecord(data["estimatedRefund"]) ? data["estimatedRefund"] : undefined;
-  const refundId = text(data["refundId"]);
-  const refundRow = refundId === undefined ? undefined : refunds.find((row) => row.id === refundId);
-  const refund = refundRow === undefined ? null : toRefund(refundRow, booking.id, minorUnits);
-  const cancelledAt = (booking.cancelledAt ?? new Date()).toISOString();
-  return {
-    bookingId: booking.id,
-    status: "cancelled",
-    requestedAt: text(data["requestedAt"]) ?? cancelledAt,
-    cancelledAt,
-    cancelledBy: "customer",
-    reasonCode: (text(data["reasonCode"]) ?? "other") as CancellationReasonCode,
-    comment: text(data["comment"]) ?? null,
-    ticketsVoided: data["ticketsVoided"] === true,
-    estimatedRefund:
-      estimated !== undefined &&
-      typeof estimated["amount"] === "string" &&
-      typeof estimated["currency"] === "string"
-        ? money(estimated["amount"], estimated["currency"], minorUnits)
-        : null,
-    refund,
-    refundStatus:
-      refund === null
-        ? refundStatus
-        : refund.status === "cancelled"
-          ? "failed"
-          : refund.status === "succeeded" || refund.status === "failed" || refund.status === "processing"
-            ? refund.status
-            : "pending",
-  };
 }
 
 /**
@@ -2237,8 +2394,8 @@ export class CancellationChecks {
         supplierRequestId: order.supplierRequestId,
       });
     });
-    if (recorded?.kind === "cancelled" && recorded.money.voidPayment !== null) {
-      await this.recorder.voidAuthorisation(ctenant, recorded.money.voidPayment);
+    if (recorded?.kind === "cancelled") {
+      await this.recorder.settleAuthorisation(ctenant, bookingId, recorded.money, "system");
     }
     return recorded?.kind === "cancelled" ? "cancelled" : "nothing_to_check";
   }

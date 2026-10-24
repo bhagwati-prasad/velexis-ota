@@ -64,12 +64,13 @@ The order is the checkout, then the booking, then the payment, then the refund (
 | bookings.cancel and `booking.cancellation_check`, the record step and the money step | booking `FOR NO KEY UPDATE` (children, events, outbox: key share) → payment `FOR UPDATE` (`RefundsRepository.create`, its event: key share) → the new refund; an airline card's payment event: payment key share |
 | bookings.cancel, a refusal, an order not found, the flag of an unknown outcome; the check's decisions without money | booking `FOR NO KEY UPDATE` (event, outbox: key share) |
 | bookings.cancel and the check, the void of an authorisation | payment `FOR UPDATE` (its event: key share) |
+| bookings.cancel and the check, the capture of an authorisation's kept amount (FIX-W28-CANCEL) | booking `FOR UPDATE` (`amount_paid`, events: key share) → payment `FOR UPDATE` (its events: key share) → the release's new refund row; a failed capture: booking key share → payment `FOR UPDATE` (events, the staff alert's outbox row: key share) |
 | `booking.cancellation_check`, the claim | booking `FOR NO KEY UPDATE SKIP LOCKED` |
 | checkout steps (travellers, contacts, special requests, extras) | checkout `FOR UPDATE` |
 | checkout.createPayment, checkout.updatePayment | checkout `FOR UPDATE` → payments `FOR UPDATE` (events: key share) |
 | A new PaymentIntent's id, payment reads and refreshes, a replaced payment's void, a provider error | payment `FOR UPDATE` |
 | `payment.void` | payment `FOR UPDATE` |
-| `payment.capture_retry` | booking `FOR UPDATE` → payment `FOR UPDATE`; its alerts: booking key share |
+| `payment.capture_retry` | booking `FOR UPDATE` → payment `FOR UPDATE` → for a cancellation's kept amount the release's new refund row; its alerts: booking key share (a cancellation's final failure: booking key share → its payment event's payment key share → the alert) |
 | `refund.submit`: the claim, the record, a refusal | booking key share → payment key share (`RefundsRepository.lockParents`) → refund `FOR UPDATE` (before FIX-W25-BOOKINGS: the refund, then the payment's key share with its event) |
 | `refund.submit`: the release, the alert of an unknown outcome | refund (updated), or booking key share alone |
 | A refund's request (`RefundsRepository.create`) | booking key share → payment `FOR UPDATE` → the new refund |
@@ -269,7 +270,7 @@ For `checkout.complete`, `checkout.completeWithAirlineCard` and `bookings.cancel
 | Call | Idempotency |
 |---|---|
 | Stripe create PaymentIntent | `Idempotency-Key: pi:create:<pay_id>` |
-| Stripe capture, cancel | `pi:capture:<pay_id>:<amount>`, `pi:cancel:<pay_id>` |
+| Stripe capture, cancel | `pi:capture:<pay_id>:<amount>`, `pi:cancel:<pay_id>`; the capture of a cancellation's kept amount `pi:capture:<pay_id>:cancellation:<amount>` (FIX-W28-CANCEL) |
 | Stripe refund | `refund:<rfd_id>` |
 | Amadeus Flight Create Orders | Not idempotent: at most once per checkout (claim), reconciled on an unknown outcome (timeout, `5xx`, unreadable answer) |
 | Amadeus Flight Order Issue | Booking state lock + resync before retry; never two issue calls in flight |

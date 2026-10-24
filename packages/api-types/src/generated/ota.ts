@@ -1549,10 +1549,10 @@ export interface paths {
          *
          *     **Flow (NestJS `CancelBookingUseCase`, booking row locked).**
          *     1. Preconditions: booking of the key's environment (`bookings.environment = <key environment>`, otherwise `404`); `allowedActions.canCancel` (`409 BOOKING_NOT_MODIFIABLE` with `details.reason`; `409 BOOKING_ALREADY_CANCELLED`; `403 FEATURE_DISABLED` when the storefront disabled self-service cancellation). `If-Match` (booking ETag) required → `412 PRECONDITION_FAILED` when stale.
-         *     2. Recompute the quote (Redis `cxq:{bookingId}` if still valid, else **Flight Order Management** `GET …?fareRules=refunds`, getFlightOrder). If it differs from `expectedRefund` → `409 REFUND_AMOUNT_CHANGED` (`details.newRefund`), nothing cancelled.
-         *     3. Modes `release` / `void` / `refund`: **Flight Order Management** `DELETE /v1/booking/flight-orders/{id}` (cancelFlightOrder) → `204`: the airline segments are cancelled (and same-day tickets voided). Then `bookings.status = cancelled`, `cancelled_at`, `cancelled_by = customer`, segments `CANCELLED`, tickets `VOID` (void window) — refunded tickets are set `REFUNDED` once the refund is confirmed. Amadeus 409 2552 → `409 VERSION_CONFLICT`; Amadeus refusing the cancellation (e.g. ticketed outside the void window) → the request is handed to the OTA (mode `request_only`).
+         *     2. Recompute the quote (Redis `cxq:{bookingId}` if still valid, else **Flight Order Management** `GET …?fareRules=refunds`, getFlightOrder). If it differs from `expectedRefund`, or `expectedRefund` was left out → `409 REFUND_AMOUNT_CHANGED` (`details.expectedRefund`, `null` when it was left out, and `details.newRefund`), nothing cancelled: money moves only for an amount the customer saw. The booking row is then claimed; a booking another claim or writer holds at that moment answers `503 SERVICE_UNAVAILABLE` with `Retry-After` (nothing sent, nothing kept for the `Idempotency-Key`: the same key can be sent again).
+         *     3. Modes `release` / `void` / `refund`: **Flight Order Management** `DELETE /v1/booking/flight-orders/{id}` (cancelFlightOrder) → `204`: the airline segments are cancelled (and same-day tickets voided). Then `bookings.status = cancelled`, `cancelled_at`, `cancelled_by = customer`, segments `CANCELLED`, tickets `VOID` (void window) — refunded tickets are set `REFUNDED` once the refund is confirmed. Amadeus 409 2552 → `409 VERSION_CONFLICT`; Amadeus refusing the cancellation (e.g. ticketed outside the void window), or no longer having the order (`404`: cancelled or purged outside Velexis), → the request is handed to the OTA's staff (`202`, `Cancellation.status = pending`; nothing is refunded until the staff check it).
          *     4. Mode `request_only`: no Amadeus call; `Cancellation.status = pending`, `booking.cancellation_requested` event, staff notified (they finish it from the console). Answers `202`.
-         *     5. Money: an authorisation that was never captured is voided (`refundStatus: authorization_voided`); otherwise a `refunds` row is created for the estimated refund and sent to the payment provider (`pending` → `processing` → `succeeded` via webhooks); refund failures go to staff (`manual_review`), they never undo the cancellation.
+         *     5. Money: a captured payment gets a `refunds` row for the estimated refund, sent to the payment provider (`pending` → `processing` → `succeeded` via webhooks). A payment that is only authorised is settled from the authorisation: the amount the OTA keeps (the cancellation fee, the fees that are not refunded, the card fee unless it is refundable, any airline penalty the quote counts) is captured and the rest of the authorisation released, which is the customer's refund (`refundStatus: pending` while the capture is queued, then `succeeded` with `refund` = the released amount); only an authorisation of which nothing is kept is voided (`refundStatus: authorization_voided`). Refund and capture failures go to staff (`manual_review`); they never undo the cancellation.
          *     6. `booking_events` (`booking.cancelled`), notification e-mail, credit note generated (`booking_documents`).
          *
          *     **SUPPLIER_TIMEOUT (504) and retries.** The DELETE may or may not have happened; nothing is voided or refunded yet and the booking is flagged for reconciliation (background Flight Order Management GET within 15 minutes). A retry with the **same** Idempotency-Key never calls Flight Order Management DELETE again: it replays the stored outcome — the same `504` while reconciliation is undecided, then the final `200` / `202` (order found cancelled: money step 5 runs once) or the final error. A same-key request that arrives while the original is still running waits for it and returns its outcome, so the SDK's automatic retries are safe and short. Check with bookings.get(`refresh: true`) before retrying with a new key.
@@ -10004,7 +10004,7 @@ export interface components {
         };
         /** @description Self-service actions available to this caller now (status, flown segments, ticketing state, storefront settings). */
         BookingAllowedActions: {
-            /** @description bookings.cancel (self-service cancellation enabled, nothing flown, not cancelled). */
+            /** @description bookings.cancel (self-service cancellation enabled, nothing flown, not cancelled, more than 3 h before the first remaining departure, an Amadeus order, and no earlier cancellation undecided or waiting for the staff: reason `pending`). */
             canCancel: boolean;
             /** @description bookings.update contacts. */
             canModifyContacts: boolean;
@@ -10351,7 +10351,7 @@ export interface components {
             estimatedRefund: components["schemas"]["Money"];
             /** @description Airline penalties. */
             penalty: components["schemas"]["Money"];
-            /** @description OTA cancellation fee (fee_rules) and non-refundable service fees. */
+            /** @description OTA cancellation fee (fee_rules) and non-refundable service fees, including the card fee unless its `payment_card` fee rule is refundable (the Amadeus credit-card fee never is). With an authorised payment this is the amount captured on cancellation; the rest of the authorisation is released. */
             otaFee: components["schemas"]["Money"];
             /**
              * Format: date-time
@@ -10410,10 +10410,10 @@ export interface components {
             ticketsVoided: boolean;
             /** @description Refund estimate at request time. */
             estimatedRefund?: components["schemas"]["Money"] | null;
-            /** @description Refund created. */
+            /** @description Refund created. For a payment that was only authorised and of which the cancellation kept an amount, the release of the rest of the authorisation once it is done (`amount` = the released amount, `penalty` = the amount kept and captured, `status: succeeded`); `null` while that capture is queued. */
             refund: components["schemas"]["Refund"] | null;
             /**
-             * @description Money back status (`authorization_voided`: nothing was captured).
+             * @description Money back status. `authorization_voided`: the authorisation was voided or lapsed and nothing was captured. For an authorisation of which the cancellation keeps an amount (the kept amount is captured, the rest released): `pending` while the capture is queued, `succeeded` once the release is done (see `refund`), `manual_review` when the capture could not be made and the staff settle it, `not_applicable` when nothing is released. `pending` too for a cancellation that waits for the staff's check of an undecided Amadeus answer.
              * @enum {string}
              */
             refundStatus: "not_applicable" | "authorization_voided" | "pending" | "processing" | "succeeded" | "failed" | "manual_review";

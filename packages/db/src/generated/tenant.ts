@@ -797,6 +797,10 @@ export interface Payments {
   card_exp_month: number | null;
   card_exp_year: number | null;
   card_fee_amount: Generated<Numeric>;
+  /**
+   * The lines of card_fee_amount when the fee was quoted ([{source: amadeus | fee_rule, ruleId, amount, refundable}]): a cancellation refunds only the refundable ones; empty (payments before the column) = nothing refundable.
+   */
+  card_fee_lines: Generated<Json>;
   card_last4: string | null;
   checkout_id: string | null;
   created_at: Generated<Timestamp>;

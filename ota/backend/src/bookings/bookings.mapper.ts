@@ -23,6 +23,7 @@ import type { components } from "@velexis/api-types";
 import { redactPayload } from "@velexis/logger";
 import { Money, type MoneyValue } from "../pricing/pricing.types";
 import { invalidCursor } from "../reference/reference.mapper";
+import type { CancellationFacts } from "./cancellation-state";
 import { distribute, parseOffer, sellingAmadeusOffer, type ParsedOffer } from "../shopping/offers.mapper";
 import { fareRuleSummaryOf } from "../shopping/priced-offers.mapper";
 import type {
@@ -727,47 +728,233 @@ export function toBookingDocument(row: BookingDocumentRow, bookingId: string): B
   };
 }
 
-/**
- * The cancellation of a cancelled booking as the stored rows tell it: who cancelled and when, whether a ticket was
- * voided, the newest refund. The customer's typed reason and comment come with bookings.cancel (OBE-049); until then
- * the reason is the airline's for an airline cancellation and `other` otherwise, and no staff text is ever shown.
- */
-export function cancellationOf(input: {
+/** Cancellation.reasonCode: the document's typed codes (CancellationReason, the console's, the airline's). */
+const CANCELLATION_REASON_CODES: ReadonlySet<string> = new Set([
+  "change_of_plans",
+  "illness",
+  "schedule_change",
+  "duplicate_booking",
+  "found_cheaper",
+  "customer_request",
+  "duplicate",
+  "fraud",
+  "no_payment",
+  "ticketing_deadline",
+  "airline_request",
+  "other",
+]);
+
+const CANCELLED_BY: ReadonlySet<string> = new Set(["customer", "staff", "airline", "system"]);
+
+/** The payment statuses of a captured payment (its kept amount was captured). */
+const CAPTURED_PAYMENT_STATUSES: ReadonlySet<string> = new Set([
+  "captured",
+  "partially_refunded",
+  "refunded",
+]);
+
+/** What the `cancellation` block of a booking is built from (`cancellationOf`). */
+export interface CancellationInput {
   readonly booking: Pick<BookingRow, "id" | "status" | "cancelledAt" | "amountPaid">;
+  /** `bookings.cancelled_by` and `bookings.cancel_reason` (BookingDetailsRow). */
   readonly cancelledBy: string | null;
+  readonly cancelReason: string | null;
   readonly tickets: readonly Pick<BookingTicketRow, "status">[];
-  readonly refunds: readonly Refund[];
-}): Cancellation | null {
-  const { booking } = input;
-  if (booking.status !== "cancelled" || booking.cancelledAt === null) {
+  readonly refunds: readonly BookingRefundRow[];
+  readonly minorUnits: number;
+  /** The cancellation's events and the payments its money step acted on (cancellation-state.ts). */
+  readonly facts: CancellationFacts;
+  /** Customer scope never shows staff text (Cancellation.comment); console scope shows a staff member's reason too. */
+  readonly scope: "customer" | "console";
+}
+
+/** An amount and currency of an event's data as Money, or `null`. */
+function eventMoney(value: unknown, minorUnits: number): MoneyAmount | null {
+  return isRecord(value) &&
+    typeof value["amount"] === "string" &&
+    /^\d+(?:\.\d+)?$/.test(value["amount"]) &&
+    typeof value["currency"] === "string"
+    ? money(value["amount"], value["currency"], minorUnits)
+    : null;
+}
+
+/** A refund's status as Cancellation.refundStatus (a withdrawn refund gave nothing back). */
+function refundStatusOfRefund(refund: Refund): Cancellation["refundStatus"] {
+  if (refund.status === "cancelled") {
+    return "failed";
+  }
+  return refund.status === "succeeded" || refund.status === "failed" || refund.status === "processing"
+    ? refund.status
+    : "pending";
+}
+
+/**
+ * The money of a cancelled booking (Cancellation.refund and refundStatus; lead decisions (1) and (2) of 2026-10-23,
+ * second batch, FIX-W28-CANCEL), from what its `booking.cancelled` event names:
+ *
+ *   refundId           the refund the cancellation asked for: its status
+ *   voidPaymentId      the authorisation voided after the commit: `authorization_voided` once the payment is
+ *                      cancelled (nothing was captured), `pending` while the void is queued
+ *   capturePaymentId   the authorisation whose kept amount is captured, the rest released: `pending` while the capture
+ *                      is queued (or captured but the release not recorded yet), `succeeded` once the release is
+ *                      recorded, with `refund` its refunds row (the released amount); `manual_review` once the
+ *                      payments queue gave up and alerted the staff; `authorization_voided` when the authorisation
+ *                      was cancelled or lapsed (nothing captured); `not_applicable` when nothing is released (the
+ *                      whole authorisation kept)
+ *   refundStatus       otherwise, the status the record step wrote (an airline card, a refund that was refused)
+ *
+ * A cancellation of before OBE-049 (or the airline's, the staff's) shows its newest refund, or `not_applicable` when
+ * nothing was paid and `manual_review` otherwise.
+ */
+function cancellationMoneyOf(
+  input: CancellationInput,
+  data: JsonObject,
+): { readonly refund: Refund | null; readonly refundStatus: Cancellation["refundStatus"] } {
+  const { booking, minorUnits, facts } = input;
+  const refundOf = (row: BookingRefundRow | undefined): Refund | null =>
+    row === undefined ? null : toRefund(row, booking.id, minorUnits);
+  const refundId = text(data["refundId"]);
+  if (refundId !== undefined) {
+    const refund = refundOf(input.refunds.find((row) => row.id === refundId));
+    return { refund, refundStatus: refund === null ? "pending" : refundStatusOfRefund(refund) };
+  }
+  const voidPaymentId = text(data["voidPaymentId"]);
+  if (voidPaymentId !== undefined) {
+    return {
+      refund: null,
+      refundStatus:
+        facts.payments.get(voidPaymentId)?.status === "canceled" ? "authorization_voided" : "pending",
+    };
+  }
+  const capturePaymentId = text(data["capturePaymentId"]);
+  if (capturePaymentId !== undefined) {
+    // The release is the first refund of the payment (recorded with the capture); a later one is the staff's.
+    const refund = refundOf(input.refunds.find((row) => row.paymentId === capturePaymentId));
+    if (refund !== null) {
+      return { refund, refundStatus: refundStatusOfRefund(refund) };
+    }
+    const release = text(data["releaseAmount"]);
+    if (release !== undefined && /^\d+(?:\.\d+)?$/.test(release) && new Money(release).isZero()) {
+      return { refund: null, refundStatus: "not_applicable" };
+    }
+    const payment = facts.payments.get(capturePaymentId);
+    if (payment?.status === "canceled") {
+      return { refund: null, refundStatus: "authorization_voided" };
+    }
+    if (payment !== undefined && !CAPTURED_PAYMENT_STATUSES.has(payment.status) && payment.captureReviewed) {
+      return { refund: null, refundStatus: "manual_review" };
+    }
+    return { refund: null, refundStatus: "pending" };
+  }
+  const recorded = text(data["refundStatus"]);
+  const newest = input.refunds.at(-1);
+  if (newest !== undefined) {
+    const refund = refundOf(newest);
+    return { refund, refundStatus: refund === null ? "pending" : refundStatusOfRefund(refund) };
+  }
+  if (recorded !== undefined) {
+    return { refund: null, refundStatus: recorded as Cancellation["refundStatus"] };
+  }
+  return {
+    refund: null,
+    refundStatus: new Money(booking.amountPaid).isZero() ? "not_applicable" : "manual_review",
+  };
+}
+
+/**
+ * The cancellation of a booking (Booking.cancellation, "Cancellation details once requested"; FIX-W28-CANCEL), as
+ * the stored rows tell it, for bookings.get, console.bookings.get and the answers of bookings.cancel:
+ *
+ * - a cancelled booking: who cancelled and when, the typed reason (`bookings.cancel_reason` when it is one of the
+ *   document's codes, else `airline_request` for the airline and `other`), what the customer's request held (its
+ *   `booking.cancelled` event: when it was asked, the customer's comment, the estimate, whether tickets were voided)
+ *   and the money (`cancellationMoneyOf`);
+ * - a live booking whose cancellation waits for the staff (`booking.cancellation_requested`) or is undecided (a DELETE
+ *   without an answer, the flag): `pending`, with the request's reason, comment and estimate, no refund, and
+ *   `manual_review` (something was paid) or `not_applicable` for a request, `pending` while the flag is checked;
+ * - else `null`.
+ *
+ * Customer scope shows the customer's own comment only, never staff text; console scope shows a staff member's
+ * reason too.
+ */
+export function cancellationOf(input: CancellationInput): Cancellation | null {
+  const { booking, minorUnits, facts } = input;
+  const reasonOf = (code: unknown, fallback: Cancellation["reasonCode"]): Cancellation["reasonCode"] =>
+    typeof code === "string" && CANCELLATION_REASON_CODES.has(code)
+      ? (code as Cancellation["reasonCode"])
+      : fallback;
+  if (booking.status !== "cancelled") {
+    const { state } = facts;
+    if (state.kind === "requested") {
+      const data = isRecord(state.event?.data) ? state.event.data : {};
+      const paid = text(data["amountPaid"]) ?? booking.amountPaid;
+      const requestedAt = text(data["requestedAt"]) ?? state.event?.createdAt.toISOString();
+      return {
+        bookingId: booking.id,
+        status: "pending",
+        requestedAt: requestedAt ?? new Date(0).toISOString(),
+        cancelledAt: null,
+        cancelledBy: "customer",
+        reasonCode: reasonOf(data["reasonCode"], "other"),
+        comment: text(data["comment"]) ?? null,
+        ticketsVoided: false,
+        estimatedRefund: eventMoney(data["estimatedRefund"], minorUnits),
+        refund: null,
+        refundStatus:
+          /^\d+(?:\.\d+)?$/.test(paid) && new Money(paid).greaterThan(0) ? "manual_review" : "not_applicable",
+      };
+    }
+    if (state.kind === "undecided") {
+      const { flag } = state;
+      return {
+        bookingId: booking.id,
+        status: "pending",
+        requestedAt: flag.requestedAt,
+        cancelledAt: null,
+        cancelledBy: "customer",
+        reasonCode: reasonOf(flag.reasonCode, "other"),
+        comment: flag.comment,
+        ticketsVoided: false,
+        estimatedRefund: money(flag.estimate.estimatedRefund, flag.currency, minorUnits),
+        refund: null,
+        refundStatus: "pending",
+      };
+    }
     return null;
   }
-  const refund = input.refunds.at(-1) ?? null;
+  if (booking.cancelledAt === null) {
+    return null;
+  }
   const cancelledBy = (
-    ["customer", "staff", "airline", "system"].includes(input.cancelledBy ?? "")
-      ? input.cancelledBy
-      : "system"
+    CANCELLED_BY.has(input.cancelledBy ?? "") ? input.cancelledBy : "system"
   ) as Cancellation["cancelledBy"];
-  const refundStatus: Cancellation["refundStatus"] =
-    refund === null
-      ? new Money(booking.amountPaid).isZero()
-        ? "not_applicable"
-        : "manual_review"
-      : refund.status === "cancelled"
-        ? "failed"
-        : refund.status;
+  const event = facts.cancelled;
+  const eventData = isRecord(event?.data) ? event.data : {};
+  // The event of this cancellation: written by whoever cancelled (an older one of another canceller is not).
+  const data =
+    eventData["cancelledBy"] === undefined || eventData["cancelledBy"] === cancelledBy ? eventData : {};
+  const cancelledAt = booking.cancelledAt.toISOString();
+  const comment =
+    cancelledBy === "customer" || input.scope === "console"
+      ? (text(data["comment"]) ?? (input.scope === "console" ? text(data["reason"]) : undefined) ?? null)
+      : null;
   return {
     bookingId: booking.id,
     status: "cancelled",
-    requestedAt: booking.cancelledAt.toISOString(),
-    cancelledAt: booking.cancelledAt.toISOString(),
+    requestedAt: text(data["requestedAt"]) ?? cancelledAt,
+    cancelledAt,
     cancelledBy,
-    reasonCode: cancelledBy === "airline" ? "airline_request" : "other",
-    comment: null,
-    ticketsVoided: input.tickets.some((ticket) => ticket.status === "VOID"),
-    estimatedRefund: null,
-    refund,
-    refundStatus,
+    reasonCode: reasonOf(
+      input.cancelReason ?? data["reasonCode"],
+      cancelledBy === "airline" ? "airline_request" : "other",
+    ),
+    comment,
+    ticketsVoided:
+      typeof data["ticketsVoided"] === "boolean"
+        ? data["ticketsVoided"]
+        : input.tickets.some((ticket) => ticket.status === "VOID"),
+    estimatedRefund: eventMoney(data["estimatedRefund"], minorUnits),
+    ...cancellationMoneyOf(input, data),
   };
 }
 
@@ -795,6 +982,12 @@ export interface CustomerBookingInput extends BookingViewInput {
   readonly refunds: readonly BookingRefundRow[];
   readonly documents: readonly BookingDocumentRow[];
   readonly cancelledBy: string | null;
+  /** `bookings.cancel_reason` (the typed reason code of a customer's cancellation). */
+  readonly cancelReason: string | null;
+  /** The cancellation's events and the payments its money step acted on (cancellation-state.ts). */
+  readonly cancellationFacts: CancellationFacts;
+  /** Customer scope by default; console.bookings.get shows a staff member's cancellation reason too. */
+  readonly scope?: "customer" | "console";
   readonly amadeus: BookingAmadeus | null;
   readonly fareConditions: FareRuleSummary | null;
   readonly fareRules: BookingFareRules | null;
@@ -818,8 +1011,12 @@ export function toCustomerBooking(input: CustomerBookingInput): Booking {
     cancellation: cancellationOf({
       booking,
       cancelledBy: input.cancelledBy,
+      cancelReason: input.cancelReason,
       tickets: input.children.tickets,
-      refunds,
+      refunds: input.refunds,
+      minorUnits,
+      facts: input.cancellationFacts,
+      scope: input.scope ?? "customer",
     }),
     syncStatus: input.syncStatus,
     amadeus: input.amadeus,

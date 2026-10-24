@@ -13,8 +13,9 @@
 //     velexis_ota_app writes the two new tables through the default privileges of provisioning (the file has no
 //     GRANT; test/contract/migration-0002.contract.test.ts checks the file).
 // Since FIX-W27-SYNC the release holds tenant migration 0003 (`bookings.sync_claimed_at`, `bookings.sync_changes`)
-// after 0002: provisioning and the deploy fan-out apply both, so the tests above expect the release's files (0002 and
-// 0003), and one test checks the columns of 0003 itself.
+// after 0002, and since FIX-W28-CANCEL 0004 (`payments.card_fee_lines`): provisioning and the deploy fan-out apply them
+// all, so the tests above expect the release's files (0002 to 0004), and one test each checks the columns of 0003 and
+// of 0004 themselves.
 // The file runs on its own clone of the @velexis/testing template. Tenant rows are written and read as
 // velexis_ota_app through tenantTx, the application's path; the catalogue is read as velexis_migrator, a member of
 // the schemas' owner (test code may name a schema, application code never). Every test uses schemas of its own.
@@ -51,8 +52,10 @@ import { PlatformReadRepository } from "../../../src/tenancy/platform-read.repos
 
 const MIGRATION_ID = "0002_add_mvp_tenant_deltas";
 const MIGRATION_FILE = `${MIGRATION_ID}.sql`;
-/** The release's last file (FIX-W27-SYNC): a schema at version N has it too. */
-const LATEST_ID = "0003_add_booking_sync_claim";
+/** The release's files after 0002 (FIX-W27-SYNC, FIX-W28-CANCEL): a schema at version N has them too. */
+const SYNC_CLAIM_ID = "0003_add_booking_sync_claim";
+const SYNC_CLAIM_FILE = `${SYNC_CLAIM_ID}.sql`;
+const LATEST_ID = "0004_add_payment_card_fee_lines";
 const LATEST_FILE = `${LATEST_ID}.sql`;
 const GENERATED_TYPES = join(APP_DIR, "..", "..", "packages", "db", "src", "generated", "tenant.ts");
 /** The privileges of velexis_ota_app on every tenant table: exactly DML (OADR-0007 item 3). */
@@ -485,6 +488,7 @@ describe("tenant migration 0002 on PostgreSQL", () => {
     expect(result.applied.map((file) => [file.id, file.phase, file.transaction, file.status])).toEqual([
       ["0001_baseline", "expand", true, "applied"],
       [MIGRATION_ID, "expand", true, "applied"],
+      [SYNC_CLAIM_ID, "expand", true, "applied"],
       [LATEST_ID, "expand", true, "applied"],
     ]);
     // Every ledger row comes from the one provisioning transaction.
@@ -506,6 +510,8 @@ describe("tenant migration 0002 on PostgreSQL", () => {
     // 0003 (FIX-W27-SYNC).
     expect(actual["bookings.sync_claimed_at"]).toEqual({ nullable: true, hasDefault: false });
     expect(actual["bookings.sync_changes"]).toEqual({ nullable: false, hasDefault: true });
+    // 0004 (FIX-W28-CANCEL).
+    expect(actual["payments.card_fee_lines"]).toEqual({ nullable: false, hasDefault: true });
   });
 
   it("upgrades a schema at N-1 with baseline rows in payments, checkouts, bookings and storefront_settings: the rows survive and still validate [OBE-008 AC1]", async () => {
@@ -527,12 +533,14 @@ describe("tenant migration 0002 on PostgreSQL", () => {
     const upgraded = fanOut.report?.applied.find((entry) => entry.schema === schema);
     expect(upgraded?.files.map((file) => [file.id, file.status])).toEqual([
       [MIGRATION_ID, "applied"],
+      [SYNC_CLAIM_ID, "applied"],
       [LATEST_ID, "applied"],
     ]);
 
     // The rows are all there, unchanged, with the defaults of the new columns.
     const after = await upgradedRows(schema);
-    expect(after.payments).toEqual(before.payments);
+    // 0004 (FIX-W28-CANCEL): no card fee line stored, so the card fee of these payments counts as kept.
+    expect(after.payments).toEqual(before.payments.map((row) => ({ ...row, card_fee_lines: [] })));
     expect(after.checkouts).toEqual(
       before.checkouts.map((row) => ({ ...row, pricing_mode: "markup_rules" })),
     );
@@ -845,6 +853,7 @@ describe("tenant migration 0002 on PostgreSQL", () => {
     expect(result).toMatchObject({ created: false, upToDate: 1, ledgerOnly: [] });
     expect(result.applied.map((file) => [file.id, file.checksum])).toEqual([
       [MIGRATION_ID, await migrationChecksum()],
+      [SYNC_CLAIM_ID, await migrationChecksum(SYNC_CLAIM_FILE)],
       [LATEST_ID, await migrationChecksum(LATEST_FILE)],
     ]);
     const ledger = await ledgerOf(schema);
@@ -856,6 +865,12 @@ describe("tenant migration 0002 on PostgreSQL", () => {
         status: "applied",
       },
       { id: MIGRATION_ID, checksum: await migrationChecksum(), phase: "expand", status: "applied" },
+      {
+        id: SYNC_CLAIM_ID,
+        checksum: await migrationChecksum(SYNC_CLAIM_FILE),
+        phase: "expand",
+        status: "applied",
+      },
       { id: LATEST_ID, checksum: await migrationChecksum(LATEST_FILE), phase: "expand", status: "applied" },
     ]);
     expect(ledger[1]?.execution_ms).toEqual(expect.any(Number));
@@ -873,7 +888,7 @@ describe("tenant migration 0002 on PostgreSQL", () => {
       dir: TENANT_MIGRATIONS_DIR,
       url: db.urlFor("migrator"),
     });
-    expect(again).toMatchObject({ applied: [], upToDate: 3 });
+    expect(again).toMatchObject({ applied: [], upToDate: 4 });
   });
 
   it("provisions a new tenant with 0002 in its ledger; velexis_ota_app writes storefront_assets and storefront_pages through the default privileges [OBE-008 AC2]", async () => {
@@ -890,6 +905,7 @@ describe("tenant migration 0002 on PostgreSQL", () => {
     expect(payload?.migrations.map((migration) => [migration.version, migration.phase])).toEqual([
       ["0001_baseline", "expand"],
       [MIGRATION_ID, "expand"],
+      [SYNC_CLAIM_ID, "expand"],
       [LATEST_ID, "expand"],
     ]);
     const ledger = await ledgerOf(schema);
@@ -1051,5 +1067,57 @@ describe("tenant migration 0003 on PostgreSQL (FIX-W27-SYNC)", () => {
       ["sync_changes", true],
       ["sync_claimed_at", true],
     ]);
+  });
+});
+
+describe("tenant migration 0004 on PostgreSQL (FIX-W28-CANCEL)", () => {
+  it("[FIX-W28-CANCEL AC2] adds the card fee's lines, an empty list on existing payments, that holds arrays only", async () => {
+    const schema = "tenant_m4_fee_lines";
+    await provision(schema);
+    await insertBaselineRows(schema);
+
+    const payment = await tenantTx(app, schema, (trx) =>
+      trx.selectFrom("payments").select(["id", "card_fee_lines"]).orderBy("id").executeTakeFirstOrThrow(),
+    );
+    // A payment of before the column has no line: its whole card fee counts as kept.
+    expect(payment.card_fee_lines).toEqual([]);
+    const lines = [
+      { source: "amadeus", ruleId: null, amount: "1.50", refundable: false },
+      { source: "fee_rule", ruleId: "fee_01JA0000000000000000000001", amount: "2.00", refundable: true },
+    ];
+    await tenantTx(app, schema, (trx) =>
+      trx
+        .updateTable("payments")
+        .set({ card_fee_lines: JSON.stringify(lines) })
+        .where("id", "=", payment.id)
+        .execute(),
+    );
+    expect(
+      await tenantTx(app, schema, (trx) =>
+        trx
+          .selectFrom("payments")
+          .select("card_fee_lines")
+          .where("id", "=", payment.id)
+          .executeTakeFirstOrThrow(),
+      ),
+    ).toEqual({ card_fee_lines: lines });
+    expect(
+      await failure(
+        tenantTx(app, schema, (trx) =>
+          trx
+            .updateTable("payments")
+            .set({ card_fee_lines: JSON.stringify({ source: "amadeus" }) })
+            .where("id", "=", payment.id)
+            .execute(),
+        ),
+      ),
+    ).toEqual({ code: CHECK_VIOLATION, constraint: "payments_card_fee_lines_ck" });
+    // Documented like every column (conventions §9).
+    const { rows } = await sql<{ comment: string | null }>`
+      SELECT col_description(a.attrelid, a.attnum) AS comment FROM pg_catalog.pg_attribute a
+      WHERE a.attrelid = ${`${schema}.payments`}::regclass AND a.attname = 'card_fee_lines'`.execute(
+      migrator,
+    );
+    expect(rows.map((row) => (row.comment ?? "").length > 20)).toEqual([true]);
   });
 });

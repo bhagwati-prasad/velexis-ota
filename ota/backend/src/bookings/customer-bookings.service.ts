@@ -82,6 +82,7 @@ import {
   type SyncStatus,
 } from "./bookings.mapper";
 import { BookingsRepository, type BookingListSort, type BookingTimeframe } from "./bookings.repository";
+import { cancellationFactsOf, cancellationPendingOf } from "./cancellation-state";
 import { BookingTravelerDocuments, type Booking, type Warning } from "./order-recorder";
 import type { TicketingPolicy } from "./order-request.builder";
 
@@ -260,6 +261,8 @@ export class CustomerBookingsService {
       const offers = snapshotOffersOf(details.orderSnapshot);
       const storedRules = storedFareRulesOf(details.orderIncluded);
       const wantsFareRules = options.fareRules !== undefined && options.fareRules.length > 0;
+      // The cancellation block and canCancel follow the cancellation's state (FIX-W28-CANCEL).
+      const cancellationFacts = await cancellationFactsOf(trx, bookingId);
       return toCustomerBooking({
         booking,
         children,
@@ -277,12 +280,15 @@ export class CustomerBookingsService {
           documentsReady: documents.some((document) => document.status === "ready"),
           features: settings.features,
           lastRefreshAt: details.lastRefreshAt,
+          cancellationPending: cancellationPendingOf(cancellationFacts.state),
           now,
         }),
         ancillaries: await this.repository.ancillaries(trx, bookingId),
         refunds: await this.repository.refundsOf(trx, bookingId),
         documents,
         cancelledBy: details.cancelledBy,
+        cancelReason: details.cancelReason,
+        cancellationFacts,
         amadeus: customerOrderOf({
           snapshot: details.orderSnapshot,
           dictionaries: details.orderDictionaries,

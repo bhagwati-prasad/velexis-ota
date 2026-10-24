@@ -192,6 +192,7 @@ describe("the refund estimate", () => {
     payment: { kind: "stripe_captured", captured: "736.78", refundable: "736.78" },
     keptFees: "22.50",
     cancellationFees: ["15.00"],
+    keptCardFee: "0",
     ...overrides,
   });
 
@@ -246,15 +247,54 @@ describe("the refund estimate", () => {
     });
   });
 
-  it("gives the whole authorisation back (a void) and the airline's whole charge (a void reverses it)", () => {
+  it("[FIX-W28-CANCEL AC1] splits an authorisation as a capture: the kept amount is captured, the rest given back", () => {
+    // Lead decision (1) of 2026-10-23, second batch: the fees kept are captured, the rest of the authorisation released.
     expect(refundEstimateOf(input({ payment: { kind: "stripe_authorized", authorized: "736.78" } }))).toEqual(
       {
         amountPaid: "736.78",
-        estimatedRefund: "736.78",
+        estimatedRefund: "699.28",
         penalty: "0.00",
-        otaFee: "0.00",
+        otaFee: "37.50",
       },
     );
+    // Nothing kept: the whole authorisation goes back (the money step voids it).
+    expect(
+      refundEstimateOf(
+        input({
+          mode: "void",
+          payment: { kind: "stripe_authorized", authorized: "736.78" },
+          keptFees: "0",
+          cancellationFees: [],
+        }),
+      ),
+    ).toEqual({ amountPaid: "736.78", estimatedRefund: "736.78", penalty: "0.00", otaFee: "0.00" });
+    // Never more kept than the authorisation holds.
+    expect(
+      refundEstimateOf(input({ payment: { kind: "stripe_authorized", authorized: "30.00" } })),
+    ).toMatchObject({ estimatedRefund: "0.00", otaFee: "30.00" });
+  });
+
+  it("[FIX-W28-CANCEL AC2] keeps the card fee unless it is refundable, captured or authorised", () => {
+    // A card fee of 12.00 of which nothing is refundable (keptCardFeeOf), on top of the other fees kept.
+    expect(refundEstimateOf(input({ keptCardFee: "12.00" }))).toEqual({
+      amountPaid: "736.78",
+      estimatedRefund: "687.28",
+      penalty: "0.00",
+      otaFee: "49.50",
+    });
+    expect(
+      refundEstimateOf(
+        input({ payment: { kind: "stripe_authorized", authorized: "736.78" }, keptCardFee: "12.00" }),
+      ),
+    ).toMatchObject({ estimatedRefund: "687.28", otaFee: "49.50" });
+    // A refundable card fee is not kept (keptCardFee 0): the estimate of the fees alone.
+    expect(refundEstimateOf(input({ keptCardFee: "0" }))).toMatchObject({
+      estimatedRefund: "699.28",
+      otaFee: "37.50",
+    });
+  });
+
+  it("gives the airline's whole charge back (a void reverses it)", () => {
     expect(
       refundEstimateOf(input({ mode: "void", payment: { kind: "airline", charged: "714.28" } })),
     ).toMatchObject({ amountPaid: "714.28", estimatedRefund: "714.28", otaFee: "0.00" });

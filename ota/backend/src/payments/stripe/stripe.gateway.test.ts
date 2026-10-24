@@ -490,6 +490,27 @@ describe("a PaymentIntent after its session", () => {
     expect(voided.status).toBe("canceled");
   });
 
+  it("[FIX-W28-CANCEL AC1] captures a cancellation's kept amount with its own key; Stripe releases the rest", async () => {
+    const { gateway, payment: current } = await created();
+    stripe.update(current.providerPaymentId ?? "", { status: "requires_capture", amount_capturable: 141406 });
+
+    const captured = await gateway.capture(CTX, current, "25.00", "cancellation");
+
+    expect(stripe.requests.map((request) => [request.path, request.headers["idempotency-key"]])).toEqual([
+      [
+        `/v1/payment_intents/${current.providerPaymentId}/capture`,
+        `pi:capture:${current.id}:cancellation:25.00`,
+      ],
+    ]);
+    // amount_to_capture below the authorisation: the rest is released.
+    expect(stripe.requests[0]?.form).toEqual({ amount_to_capture: "2500" });
+    expect([captured.status, captured.amountReceived, captured.amountCapturable]).toEqual([
+      "captured",
+      "25.00",
+      "0.00",
+    ]);
+  });
+
   it("refuses a PaymentIntent whose metadata names another payment, as a security event", async () => {
     const { gateway, payment: current } = await created();
     stripe.update(current.providerPaymentId ?? "", {

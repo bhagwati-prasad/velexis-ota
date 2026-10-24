@@ -43,6 +43,7 @@ import {
 } from "../../tenancy/platform-read.repository";
 import {
   idempotencyKeys,
+  type CapturePurpose,
   type GatewayAccount,
   type GatewayCallFailure,
   type GatewayCard,
@@ -399,14 +400,25 @@ export class StripeGateway implements PaymentGateway {
     return stateOfPaymentIntent(intent, payment.minorUnits);
   }
 
-  async capture(ctx: GatewayContext, payment: GatewayPayment, amount: string): Promise<GatewayState> {
+  async capture(
+    ctx: GatewayContext,
+    payment: GatewayPayment,
+    amount: string,
+    purpose: CapturePurpose = "booking",
+  ): Promise<GatewayState> {
     const { client } = await this.resolveOrThrow(ctx);
     const intentId = this.intentIdOf(payment);
+    // `amount_to_capture` below the authorisation captures that much and releases the rest (a cancellation's kept
+    // amount, FIX-W28-CANCEL).
+    const idempotencyKey =
+      purpose === "cancellation"
+        ? idempotencyKeys.captureKept(payment.id, amount)
+        : idempotencyKeys.capture(payment.id, amount);
     const intent = await this.call("paymentIntents.capture", ctx, () =>
       client.paymentIntents.capture(
         intentId,
         { amount_to_capture: toMinorUnits(amount, payment.minorUnits) },
-        { idempotencyKey: idempotencyKeys.capture(payment.id, amount) },
+        { idempotencyKey },
       ),
     );
     this.checkMetadata(ctx, payment, intent);

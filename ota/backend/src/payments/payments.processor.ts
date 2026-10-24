@@ -5,7 +5,9 @@
 //   payment.void            {pay_…}  job id payment-void-<pay_id>    checkout expiry, an Amadeus refusal after the
 //                                                                     authorisation, reconciliation not found, suspension
 //   payment.capture_retry   {pay_…}  job id capture-retry-<pay_id>   a capture that failed after the order (10 minutes
-//                                                                     later, OADR-0008 point 7)
+//                                                                     later, OADR-0008 point 7); capture-retry-
+//                                                                     cancellation-<pay_id> for the amount a
+//                                                                     cancellation keeps (FIX-W28-CANCEL)
 //   refund.submit           {rfd_…}  job id refund-submit-<rfd_id>   a refund row (refunds.repository.ts) to send
 //
 // Each job resolves its tenant through the platform cache (`active` or `suspended`: suspended tenants keep their
@@ -28,6 +30,15 @@
 //                           (`payment.captured`), the booking's `amount_paid` and its `payment.captured` event. It runs
 //                           once: when it cannot capture, the staff are alerted (OADR-0008 point 7, "then staff"). The
 //                           booking keeps `ticketing_status = manual_review` either way: staff issue it.
+//                           Of a `cancelled` booking whose `booking.cancelled` event names the payment
+//                           (`capturePaymentId`; lead decision (1) of 2026-10-23, second batch, FIX-W28-CANCEL): the
+//                           amount the cancellation keeps (`captureAmount`) with `pi:capture:<pay_id>:cancellation:
+//                           <amount>`, the key of the request's capture, then besides the events above the release
+//                           (RefundsRepository.recordRelease: the rest of the authorisation as the customer's refund,
+//                           `succeeded`, and the booking's `refund.succeeded`), once. When it cannot capture, the
+//                           alert asks the staff to capture the kept amount or release the authorisation, and a
+//                           `payment.capture_failed` event with `final` makes the cancellation's `refundStatus`
+//                           `manual_review`; the cancellation stands either way.
 //   refund.submit           a refund row is claimed (`processing`, committed before the call; refunds.repository.ts) and
 //                           sent as `refund:<rfd_id>` with its metadata; the Stripe refund's id is recorded and the row
 //                           stays `processing`: its final state and the payment's refunded amount come from the webhook
@@ -76,7 +87,13 @@ import {
 } from "./payment-gateway";
 import { providerStateUpdate } from "./payment-state";
 import { PaymentsRepository, type LockedBookingRow, type PaymentRow } from "./payments.repository";
-import { RefundsRepository, refundSubmission, type RefundJobRow } from "./refunds.repository";
+import {
+  REFUND_REASONS,
+  RefundsRepository,
+  refundSubmission,
+  type RefundJobRow,
+  type RefundReason,
+} from "./refunds.repository";
 import { StripeCallError, StripeMetadataMismatchError } from "./stripe/stripe.gateway";
 
 // ---- Jobs ----------------------------------------------------------------------------------------------------------
@@ -147,6 +164,23 @@ export function paymentJob(
   readonly opts: { readonly jobId: string };
 } {
   return { name, data: { tenantId, id }, opts: { jobId: `${JOB_ID_PREFIX[name]}-${id}` } };
+}
+
+/**
+ * The `payment.capture_retry` of the amount a cancellation keeps (FIX-W28-CANCEL): the job of `paymentJob` under the
+ * id `capture-retry-cancellation-<pay_id>`, so it never meets the job of a capture of the order that failed earlier
+ * (BullMQ keeps a finished job for a day, and would ignore a second one with its id). The producer adds the delay.
+ */
+export function cancellationCaptureRetryJob(
+  tenantId: string,
+  paymentId: string,
+): {
+  readonly name: PaymentJobName;
+  readonly data: PaymentJobData;
+  readonly opts: { readonly jobId: string };
+} {
+  const job = paymentJob(PAYMENT_JOB.captureRetry, tenantId, paymentId);
+  return { ...job, opts: { jobId: `capture-retry-cancellation-${paymentId}` } };
 }
 
 /** The tenant statuses whose payment jobs run (OADR-0014 point 4); the others are skipped. */
@@ -314,6 +348,52 @@ export async function recordedCaptureAmount(
     .limit(1)
     .executeTakeFirst();
   return typeof row?.amount === "string" ? row.amount : null;
+}
+
+/** The capture a cancellation asked for of a payment (FIX-W28-CANCEL, see the file header). */
+export interface CancellationCapture {
+  /** The amount the cancellation keeps, as its `booking.cancelled` event recorded it (`captureAmount`). */
+  readonly amount: string;
+  /** The reason of the release's refund row (`refundReason`, refunds.reason). */
+  readonly reason: RefundReason;
+  /** The customer who cancelled (`cus_…`), or `null` for a guest or the system. */
+  readonly customerId: string | null;
+}
+
+/**
+ * The capture the newest `booking.cancelled` event of the payment's booking asks for of this payment
+ * (`capturePaymentId`, cancellation.service.ts: lead decision (1) of 2026-10-23, second batch), or `undefined`.
+ */
+export async function cancellationCaptureOf(
+  trx: TenantTransaction,
+  payment: Pick<PaymentRow, "id" | "bookingId">,
+): Promise<CancellationCapture | undefined> {
+  if (payment.bookingId === null) {
+    return undefined;
+  }
+  const row = await trx
+    .selectFrom("booking_events")
+    .select(["actor_type as actorType", "actor_id as actorId", "data"])
+    .where("booking_id", "=", payment.bookingId)
+    .where("type", "=", "booking.cancelled")
+    .where(sql<string>`data ->> 'capturePaymentId'`, "=", payment.id)
+    .orderBy("created_at", "desc")
+    .orderBy("id", "desc")
+    .limit(1)
+    .executeTakeFirst();
+  const data = isRecord(row?.data) ? row.data : {};
+  const amount = data["captureAmount"];
+  if (row === undefined || typeof amount !== "string" || !DECIMAL.test(amount)) {
+    return undefined;
+  }
+  const reason = data["refundReason"];
+  return {
+    amount,
+    reason: (REFUND_REASONS as readonly unknown[]).includes(reason)
+      ? (reason as RefundReason)
+      : "customer_request",
+    customerId: row.actorType === "customer" ? row.actorId : null,
+  };
 }
 
 /** The status of the booking `bookingId`, or `null` without one. */
@@ -497,27 +577,41 @@ export class PaymentJobsHandler {
         found.payment.provider === "stripe" &&
         found.payment.providerPaymentId !== null &&
         found.payment.status === "authorized";
-      return { ...found, recorded: capturable ? await recordedCaptureAmount(trx, paymentId) : null };
+      // The kept amount of a cancelled booking (FIX-W28-CANCEL): its `booking.cancelled` event names the payment.
+      const cancellation =
+        found.bookingStatus === "cancelled" ? await cancellationCaptureOf(trx, found.payment) : undefined;
+      return {
+        ...found,
+        cancellation,
+        recorded: cancellation?.amount ?? (capturable ? await recordedCaptureAmount(trx, paymentId) : null),
+      };
     });
     if (read === undefined) {
       return this.missing(PAYMENT_JOB.captureRetry, paymentId);
     }
-    const { payment } = read;
+    const { payment, cancellation } = read;
     if (payment.provider !== "stripe" || payment.providerPaymentId === null) {
       this.logger.info({ paymentId, provider: payment.provider }, "payments.capture_not_applicable");
       return "ignored";
     }
-    if (read.bookingStatus === null || !BOOKED_STATUSES.includes(read.bookingStatus)) {
-      // No order stands behind the payment (none was made, or the booking failed or was cancelled): money is never
-      // captured without an order (OADR-0008), and a booking that is not confirmed shows no payment.
+    if (
+      cancellation === undefined &&
+      (read.bookingStatus === null || !BOOKED_STATUSES.includes(read.bookingStatus))
+    ) {
+      // No order stands behind the payment (none was made, or the booking failed or was cancelled without keeping
+      // anything): money is never captured without an order (OADR-0008), but for what a cancellation keeps.
       this.logger.info({ paymentId, bookingStatus: read.bookingStatus }, "payments.capture_not_needed");
       return "unchanged";
     }
     if (CAPTURED_STATUSES.includes(payment.status)) {
-      // Captured meanwhile (a capture whose answer was lost, seen by the webhook; staff): the booking shows it.
+      // Captured meanwhile (a capture whose answer was lost, seen by the webhook; staff): the booking shows it, and a
+      // cancellation's release is recorded.
       await this.tx.run(async (trx) => {
         const booking = await this.lockBookingOf(trx, payment);
-        await this.recordBookingPayment(trx, booking, payment, payment.amountCaptured, attempt);
+        await this.recordBookingPayment(trx, booking, payment, payment.amountCaptured, attempt, cancellation);
+        if (cancellation !== undefined) {
+          await this.recordRelease(trx, payment, payment.amountCaptured, cancellation, attempt);
+        }
       });
       return "unchanged";
     }
@@ -527,9 +621,13 @@ export class PaymentJobsHandler {
         this.alerts.send(trx, payment, {
           dedupeKey: `staff.payment:${payment.id}:capture_retry_failed`,
           reason:
-            `The card payment ${payment.id} (${payment.amount} ${payment.currency}) could not be captured: its ` +
-            `authorisation is ${payment.status} at Stripe, so the booking is not paid. Contact the customer or cancel ` +
-            "the booking.",
+            cancellation === undefined
+              ? `The card payment ${payment.id} (${payment.amount} ${payment.currency}) could not be captured: its ` +
+                `authorisation is ${payment.status} at Stripe, so the booking is not paid. Contact the customer or ` +
+                "cancel the booking."
+              : `The amount the cancellation of this booking keeps (${cancellation.amount} ${payment.currency}) ` +
+                `could not be captured from the card payment ${payment.id}: its authorisation is ${payment.status} at ` +
+                "Stripe, so nothing was charged. Ask the customer for the cancellation fee, or waive it.",
         }),
       );
       this.logger.warn({ paymentId, status: payment.status }, "payments.capture_retry_impossible");
@@ -539,11 +637,61 @@ export class PaymentJobsHandler {
     const ctx = this.context(payment, attempt);
     let state: GatewayState;
     try {
-      state = await this.gateway.capture(ctx, this.gatewayPayment(read), amount);
+      state = await this.gateway.capture(
+        ctx,
+        this.gatewayPayment(read),
+        amount,
+        cancellation === undefined ? "booking" : "cancellation",
+      );
     } catch (error) {
-      return await this.afterCallFailure("capture", read, ctx, attempt, error, amount);
+      return await this.afterCallFailure("capture", read, ctx, attempt, error, amount, cancellation);
     }
-    return await this.applyState(read, state, "capture", attempt);
+    return await this.applyState(read, state, "capture", attempt, cancellation);
+  }
+
+  /**
+   * Records the release of a cancellation's capture (RefundsRepository.recordRelease: the authorisation less what was
+   * captured, as the customer's refund, `succeeded`) with the customer-visible `refund.succeeded`, once, in `trx`,
+   * which locked the payment's booking and the payment first (OADR-0003 point 11: the refund comes last).
+   */
+  private async recordRelease(
+    trx: TenantTransaction,
+    payment: PaymentRow,
+    captured: string,
+    cancellation: CancellationCapture,
+    attempt: PaymentJobAttempt,
+  ): Promise<void> {
+    if (payment.bookingId === null) {
+      return;
+    }
+    const now = this.clock.now();
+    const kept = new Money(captured);
+    const authorised = Money.max(new Money(payment.amountAuthorized), kept);
+    const released = await this.refunds.recordRelease(trx, {
+      id: this.ids.newId("rfd"),
+      paymentId: payment.id,
+      bookingId: payment.bookingId,
+      amount: authorised.minus(kept).toFixed(2),
+      kept: kept.toFixed(2),
+      reason: cancellation.reason,
+      requestedBy: { type: "customer", id: cancellation.customerId },
+      source: "system",
+      now,
+    });
+    if (released !== undefined) {
+      await this.payments.insertRefundBookingEvent(trx, {
+        id: this.ids.newId("evt"),
+        kind: "succeeded",
+        bookingId: payment.bookingId,
+        refundId: released.id,
+        paymentId: payment.id,
+        amount: released.amount,
+        currency: released.currency,
+        actor: { type: "system", id: null },
+        requestId: attempt.jobId,
+        now: new Date(now.getTime() + 1),
+      });
+    }
   }
 
   // ---- Shared by void and capture ------------------------------------------------------------------------------------
@@ -560,6 +708,7 @@ export class PaymentJobsHandler {
     attempt: PaymentJobAttempt,
     error: unknown,
     amount?: string,
+    cancellation?: CancellationCapture,
   ): Promise<PaymentJobOutcome> {
     const failure = providerFailureOf(error);
     if (failure === undefined) {
@@ -581,21 +730,38 @@ export class PaymentJobsHandler {
     // What Stripe holds now: a lost answer may have done it, or the PaymentIntent moved (expired, captured elsewhere).
     const state = await this.refreshed(ctx, read);
     if (state !== undefined) {
-      const outcome = await this.applyState(read, state, call, attempt);
+      const outcome = await this.applyState(read, state, call, attempt, cancellation);
       if (state.status === GOAL[call]) {
         return outcome;
       }
     }
     const status = state?.status ?? payment.status;
-    await this.tx.run((trx) =>
-      this.alerts.send(trx, payment, {
+    await this.tx.run(async (trx) => {
+      if (cancellation !== undefined) {
+        // The staff decide now (`refundStatus: manual_review`, bookings.mapper.ts): the payment's booking before the
+        // payment, as the event and the alert's outbox row reference them (OADR-0003 point 11).
+        await this.lockBookingOf(trx, payment, "key share");
+        await this.paymentEvent(trx, payment, attempt, this.clock.now(), {
+          type: "payment.capture_failed",
+          payload: {
+            bookingId: payment.bookingId,
+            amount: amount ?? cancellation.amount,
+            purpose: "cancellation",
+            code,
+            final: true,
+          },
+        });
+      }
+      await this.alerts.send(trx, payment, {
         dedupeKey: `staff.payment:${payment.id}:${call === "void" ? "void_failed" : "capture_retry_failed"}`,
         reason:
           call === "void"
             ? voidFailedReason(payment, status, code)
-            : captureFailedReason(payment, amount, code),
-      }),
-    );
+            : cancellation === undefined
+              ? captureFailedReason(payment, amount, code)
+              : keptCaptureFailedReason(payment, amount ?? cancellation.amount, code),
+      });
+    });
     return "failed";
   }
 
@@ -621,6 +787,7 @@ export class PaymentJobsHandler {
     state: GatewayState,
     call: PaymentCall,
     attempt: PaymentJobAttempt,
+    cancellation?: CancellationCapture,
   ): Promise<PaymentJobOutcome> {
     return await this.tx.run(async (trx) => {
       const now = this.clock.now();
@@ -657,8 +824,11 @@ export class PaymentJobsHandler {
       }
       if (call === "capture" && state.status === "captured") {
         const captured = Money.min(new Money(state.amountReceived), new Money(current.amount)).toFixed(2);
-        if (await this.recordBookingPayment(trx, booking, current, captured, attempt)) {
+        if (await this.recordBookingPayment(trx, booking, current, captured, attempt, cancellation)) {
           outcome = "applied";
+        }
+        if (cancellation !== undefined) {
+          await this.recordRelease(trx, current, captured, cancellation, attempt);
         }
       }
       return outcome;
@@ -672,11 +842,12 @@ export class PaymentJobsHandler {
   private async lockBookingOf(
     trx: TenantTransaction,
     payment: Pick<PaymentRow, "bookingId">,
+    mode: "update" | "key share" = "update",
   ): Promise<LockedBookingRow | undefined> {
     if (payment.bookingId === null) {
       return undefined;
     }
-    const [booking] = await this.payments.lockBookings(trx, [payment.bookingId], "update");
+    const [booking] = await this.payments.lockBookings(trx, [payment.bookingId], mode);
     return booking;
   }
 
@@ -691,6 +862,7 @@ export class PaymentJobsHandler {
     payment: Pick<PaymentRow, "id" | "bookingId">,
     captured: string,
     attempt: PaymentJobAttempt,
+    cancellation?: CancellationCapture,
   ): Promise<boolean> {
     if (payment.bookingId === null || !new Money(captured).greaterThan(0)) {
       return false;
@@ -718,8 +890,15 @@ export class PaymentJobsHandler {
         type: "payment.captured",
         actor_type: "system",
         actor_id: null,
-        summary: "Payment received.",
-        data: JSON.stringify({ paymentId: payment.id, amount }),
+        summary:
+          cancellation === undefined
+            ? "Payment received."
+            : "The amount kept for the cancellation was charged; the rest of the payment was released.",
+        data: JSON.stringify(
+          cancellation === undefined
+            ? { paymentId: payment.id, amount }
+            : { paymentId: payment.id, amount, purpose: "cancellation" },
+        ),
         visible_to_customer: true,
         request_id: attempt.jobId,
         created_at: now,
@@ -1015,6 +1194,17 @@ function captureFailedReason(payment: PaymentRow, amount: string | undefined, co
     `The card payment ${payment.id} (${amount ?? payment.amount} ${payment.currency}) could not be captured again ` +
     `after the order was created (${code}), so the booking is not paid. Capture it from the console or contact the ` +
     "customer before issuing."
+  );
+}
+
+/** The reason of the alert of a capture retry that did not capture what a cancellation keeps (FIX-W28-CANCEL). */
+function keptCaptureFailedReason(payment: PaymentRow, amount: string, code: string): string {
+  return (
+    `The amount the cancellation of this booking keeps (${amount} ${payment.currency}: the cancellation fee and the ` +
+    `fees that are not refunded) could not be captured from the card payment ${payment.id} after a second try ` +
+    `(${code}). The cancellation stands, and the authorisation holds the customer's funds until Stripe releases ` +
+    "them, about 7 days after the authorisation: capture the kept amount from the console, or release the " +
+    "authorisation."
   );
 }
 

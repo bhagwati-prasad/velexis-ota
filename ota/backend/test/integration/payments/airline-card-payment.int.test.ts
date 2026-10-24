@@ -418,6 +418,7 @@ async function paymentRows(tenant: Tenant, checkoutId: string) {
         "card_brand as cardBrand",
         sql<string>`amount::text`.as("amount"),
         sql<string>`card_fee_amount::text`.as("cardFee"),
+        "card_fee_lines as cardFeeLines",
       ])
       .where("checkout_id", "=", checkoutId)
       .orderBy("created_at")
@@ -752,6 +753,8 @@ describe("an airline-card payment", () => {
         cardBrand: null,
         amount: net.total,
         cardFee: "0.00",
+        // No card hint: no card fee line (FIX-W28-CANCEL).
+        cardFeeLines: [],
       },
     ]);
     expect(stripe.requests.map((req) => `${req.method} ${req.path}`)).toEqual([
@@ -847,6 +850,8 @@ describe("an airline-card payment", () => {
         id: payment.id,
         cardBrand: "MASTERCARD",
         cardFee: "1.50",
+        // The Amadeus fee alone, never refundable (FIX-W28-CANCEL AC2: the airline's price has no OTA fee line).
+        cardFeeLines: [{ source: "amadeus", ruleId: null, amount: "1.50", refundable: false }],
         amount: sum(netTotal, "35.00", "1.50"),
         nextAction: null,
       }),

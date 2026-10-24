@@ -3,6 +3,7 @@
 **Status:** Accepted
 **Date:** 2026-10-12
 **Deciders:** OTA backend tech lead. Decided during planning; revisit when OTAs need currency conversion of fixed amounts, per-customer pricing, or a pricing simulator in the OTA admin.
+**Revisions:** 2026-10-23 (lead decisions (1) and (2), second batch, FIX-W28-CANCEL): the cancellation quote's row of point 7 keeps the card fee unless its `payment_card` line is refundable, from the lines each payment stores when its card fee is quoted (the Amadeus credit-card fee is never refundable), and its kept amount is captured from a payment that is only authorised (dated note under point 7); point 9 is unchanged.
 
 ## Context
 
@@ -31,6 +32,8 @@ The tenant schema holds `markup_rules` (scope, percentage, fixed amount, per boo
    | Change | `change` rules stored, unused (no exchanges in the MVP) |
 
    The storefront shows the fee lines' `label` in the price breakdown; results pages show "from" prices without fees, as the contract's two totals intend.
+
+   **2026-10-23 (lead decisions (1) and (2), second batch, FIX-W28-CANCEL): what a cancellation keeps.** The card fee of a payment (the Amadeus credit-card fee plus the `payment_card` rules of the brand) was refunded with the rest, because the rules' `refundable` flags were not stored with the payment. Each line is now stored with the payment when its card fee is quoted (checkout.createPayment, checkout.updatePayment: `payments.card_fee_lines`, tenant migration `0004`, `[{source, ruleId, amount, refundable}]`): the Amadeus fee never refundable, an OTA line with its rule's flag at that moment, so a rule changed or deleted later changes nothing. The cancellation quote keeps, besides the `cancellation` fees and the non-refundable fees of the priced offer, the card fee less its refundable lines; a payment without lines (written before `0004`) keeps the whole card fee. The same split applies to a payment that is only authorised: the amount kept is captured and the rest of the authorisation released ([OADR-0010](0010-stripe-gateway-and-payment-webhooks.md) point 6, dated note). With `pricing_mode = 'net'` (point 9) nothing changes: the card fee's only line is the Amadeus fee, and the airline, which holds the money, reverses its whole charge.
 8. **Snapshot.** `priced_offers` and `bookings` store `markup_rule_id` (the base rule), the amounts, and the full line list in the existing jsonb payload, so a later rule change or deletion never changes a booked price.
 9. **Airline card.** With `pricing_mode = 'net'` the engine is bypassed: selling equals net, fees are only the Amadeus card fee ([OADR-0004](0004-airline-card-data-handling.md)).
 10. **Console bookings and imports** use `pricing_mode` `markup_rules`, `net` or `override` as the contract defines; `override` stores the given selling total and the difference as markup.

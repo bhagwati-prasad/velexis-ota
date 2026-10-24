@@ -8,6 +8,9 @@ import { AmadeusCallError } from "../amadeus/error-mapper";
 import type { PaymentRow } from "../payments/payments.repository";
 import type { BookingChildren, BookingRow } from "./bookings.repository";
 import {
+  authorisationSettlementOf,
+  BOOKING_BUSY_RETRY_AFTER_SECONDS,
+  BookingBusyError,
   CANCELLATION_EVENTS,
   cancellationCheckJob,
   cancellationStateOf,
@@ -20,6 +23,7 @@ import {
   pricingInputOfBooking,
   quoteValid,
   refundReasonOf,
+  retryAfterOf,
   selfServiceCancellationOf,
   unsentAnswer,
   type CancellationEventRow,
@@ -116,6 +120,32 @@ describe("the payment of the money step", () => {
   });
 });
 
+describe("an authorisation the cancellation settles", () => {
+  it("[FIX-W28-CANCEL AC1] captures the amount kept and releases the rest; voids it when nothing is kept", () => {
+    // 125.47 authorised, 100.47 back: 25.00 captured (the fees kept), 100.47 released.
+    expect(authorisationSettlementOf("125.47", "100.47", 2)).toEqual({
+      kind: "capture",
+      amount: "25.00",
+      release: "100.47",
+    });
+    // Everything kept: the whole authorisation captured, nothing released.
+    expect(authorisationSettlementOf("125.47", "0.00", 2)).toEqual({
+      kind: "capture",
+      amount: "125.47",
+      release: "0.00",
+    });
+    // Nothing kept: only then a void.
+    expect(authorisationSettlementOf("125.47", "125.47", 2)).toEqual({ kind: "void" });
+    // An estimate above the authorisation releases no more than it holds.
+    expect(authorisationSettlementOf("125.47", "200.00", 2)).toEqual({ kind: "void" });
+    expect(authorisationSettlementOf("12000", "11500", 0)).toEqual({
+      kind: "capture",
+      amount: "500",
+      release: "11500",
+    });
+  });
+});
+
 describe("how a DELETE ended", () => {
   it("tells an order Amadeus no longer has, a conflict, a refusal, a request never sent and an unknown outcome apart", () => {
     expect(deleteFailureOf(amadeusError("SUPPLIER_REJECTED", 404))).toEqual({ kind: "order_not_found" });
@@ -183,7 +213,8 @@ describe("the state of a booking's cancellation", () => {
     expect(cancellationStateOf([row(CANCELLATION_EVENTS.notApplied, {}, 1), flag])).toEqual({
       kind: "not_applied",
     });
-    expect(cancellationStateOf([row(CANCELLATION_EVENTS.requested)])).toEqual({ kind: "requested" });
+    const request = row(CANCELLATION_EVENTS.requested);
+    expect(cancellationStateOf([request])).toEqual({ kind: "requested", event: request });
     // A flag whose data cannot be read decides nothing.
     expect(cancellationStateOf([row(CANCELLATION_EVENTS.timeout, {})])).toEqual({ kind: "none" });
   });
@@ -232,6 +263,15 @@ describe("small rules", () => {
     expect(refundReasonOf("schedule_change")).toBe("schedule_change");
     expect(refundReasonOf("duplicate_booking")).toBe("duplicate");
     expect(refundReasonOf("illness")).toBe("customer_request");
+  });
+
+  it("[FIX-W28-CANCEL AC5] gives Retry-After to the 503 of a booking another claim holds, and to no other error", () => {
+    // The claim's own 503 (cancellation.service.ts bookingBusy) carries a BookingBusyError as its cause.
+    const busy = new AppError("SERVICE_UNAVAILABLE", { cause: new BookingBusyError("held") });
+    expect(retryAfterOf(busy)).toBe(BOOKING_BUSY_RETRY_AFTER_SECONDS);
+    expect(BOOKING_BUSY_RETRY_AFTER_SECONDS).toBe(1);
+    expect(retryAfterOf(new AppError("SERVICE_UNAVAILABLE"))).toBeUndefined();
+    expect(retryAfterOf(new Error("x"))).toBeUndefined();
   });
 
   it("keeps self-service cancellation off unless the OTA turned it on", () => {

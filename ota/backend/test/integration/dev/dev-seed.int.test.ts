@@ -31,10 +31,10 @@ import { PlatformReadRepository } from "../../../src/tenancy/platform-read.repos
 import { TEST_STOREFRONT_BASE_DOMAIN, testApiCredentials } from "../../helpers/api-env";
 import { unreachableRedisUrl } from "../../helpers/ports";
 
-/** The last file of migrations/tenant: the version tenant_demo reaches (OBE-008, FIX-W27-SYNC). */
-const SCHEMA_VERSION = "0003_add_booking_sync_claim";
+/** The last file of migrations/tenant: the version tenant_demo reaches (OBE-008, FIX-W27-SYNC, FIX-W28-CANCEL). */
+const SCHEMA_VERSION = "0004_add_payment_card_fee_lines";
 /** Every file of migrations/tenant, as a schema's ledger lists them. */
-const LEDGER = ["0001_baseline", "0002_add_mvp_tenant_deltas", SCHEMA_VERSION];
+const LEDGER = ["0001_baseline", "0002_add_mvp_tenant_deltas", "0003_add_booking_sync_claim", SCHEMA_VERSION];
 /** The platform dev:seed's test offices (PBE-034). */
 const OFFICES = ["DEV1A0001", "DEV1A0002", "DEV1A0003"];
 const KEY_TEXT = /\b[ps]k_test_[A-Za-z0-9]{40}\b/g;

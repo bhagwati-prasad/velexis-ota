@@ -6,8 +6,15 @@ import { isAppError } from "@velexis/errors";
 import { describe, expect, it } from "vitest";
 import { buildCreatedOrderBody } from "../../test/builders/bookings";
 import { newDocumentNumber } from "../../test/builders/checkouts";
-import type { BookingEventRow, BookingListRow, BookingRow, SummarySegmentRow } from "./bookings.repository";
+import type {
+  BookingEventRow,
+  BookingListRow,
+  BookingRefundRow,
+  BookingRow,
+  SummarySegmentRow,
+} from "./bookings.repository";
 import {
+  cancellationOf,
   customerOrderOf,
   decodeListCursor,
   encodeListCursor,
@@ -21,8 +28,15 @@ import {
   toBookingFareRules,
   toBookingSummary,
   toTicketingStatus,
+  type CancellationInput,
   type StoredFareRules,
 } from "./bookings.mapper";
+import {
+  CANCELLATION_EVENTS,
+  cancellationStateOf,
+  type CancellationEventRow,
+  type CancellationFacts,
+} from "./cancellation-state";
 
 type JsonObject = Record<string, unknown>;
 
@@ -448,5 +462,249 @@ describe("the list cursors", () => {
         expect(isAppError(error) && error.code).toBe("VALIDATION_FAILED");
       }
     }
+  });
+});
+
+describe("the cancellation of a booking (FIX-W28-CANCEL)", () => {
+  const BOOKING_ID = "bkg_01JA4CG3S8W1Z4C7F0H3M6P9T2";
+  const cancelledAt = at(-HOUR);
+  const requestedAt = at(-HOUR - 60_000).toISOString();
+  const event = (type: string, data: JsonObject, offsetMs = 0): CancellationEventRow => ({
+    type,
+    actorType: "customer",
+    actorId: "cus_1",
+    data,
+    createdAt: at(-HOUR + offsetMs),
+  });
+  const refund = (patch: Partial<BookingRefundRow>): BookingRefundRow => ({
+    id: "rfd_01JA4CG3S8W1Z4C7F0H3M6P9T2",
+    paymentId: "pay_1",
+    currency: "EUR",
+    amount: "100.47",
+    penaltyAmount: "25.00",
+    reason: "customer_request",
+    status: "succeeded",
+    createdAt: cancelledAt,
+    processedAt: cancelledAt,
+    ...patch,
+  });
+  const facts = (patch: Partial<CancellationFacts> = {}): CancellationFacts => ({
+    cancelled: undefined,
+    state: { kind: "none" },
+    payments: new Map(),
+    ...patch,
+  });
+  const input = (patch: Partial<CancellationInput> = {}): CancellationInput => ({
+    booking: { id: BOOKING_ID, status: "cancelled", cancelledAt, amountPaid: "0.00" },
+    cancelledBy: "customer",
+    cancelReason: "illness",
+    tickets: [],
+    refunds: [],
+    minorUnits: 2,
+    facts: facts(),
+    scope: "customer",
+    ...patch,
+  });
+  /** The `booking.cancelled` event of a customer's cancellation that captured the kept amount of `pay_1`. */
+  const captured = (extra: JsonObject = {}): CancellationEventRow =>
+    event(CANCELLATION_EVENTS.cancelled, {
+      cancelledBy: "customer",
+      mode: "release",
+      reasonCode: "illness",
+      comment: "Sick",
+      requestedAt,
+      ticketsVoided: false,
+      estimatedRefund: { amount: "100.47", currency: "EUR" },
+      refundStatus: "pending",
+      capturePaymentId: "pay_1",
+      captureAmount: "25.00",
+      releaseAmount: "100.47",
+      ...extra,
+    });
+
+  it("[FIX-W28-CANCEL AC3] shows the customer's typed reason, comment, request time and estimate", () => {
+    expect(cancellationOf(input({ facts: facts({ cancelled: captured() }) }))).toMatchObject({
+      bookingId: BOOKING_ID,
+      status: "cancelled",
+      cancelledBy: "customer",
+      reasonCode: "illness",
+      comment: "Sick",
+      requestedAt,
+      cancelledAt: cancelledAt.toISOString(),
+      estimatedRefund: { amount: "100.47", currency: "EUR" },
+    });
+    // An airline cancellation: its reason is the airline's (cancel_reason holds a text, not a code), no comment.
+    expect(
+      cancellationOf(
+        input({
+          cancelledBy: "airline",
+          cancelReason: "Every segment of the order was cancelled by the airline.",
+          facts: facts({ cancelled: event(CANCELLATION_EVENTS.cancelled, { cancelledBy: "airline" }) }),
+        }),
+      ),
+    ).toMatchObject({ cancelledBy: "airline", reasonCode: "airline_request", comment: null, refund: null });
+    expect(cancellationOf(input({ cancelReason: null }))?.reasonCode).toBe("other");
+  });
+
+  it("[FIX-W28-CANCEL AC1] shows a kept amount's capture pending, then the release as a succeeded refund", () => {
+    const authorised = new Map([["pay_1", { status: "authorized", captureReviewed: false }]]);
+    // Queued: pending, no refund yet.
+    expect(
+      cancellationOf(input({ facts: facts({ cancelled: captured(), payments: authorised }) })),
+    ).toMatchObject({ refund: null, refundStatus: "pending" });
+    // The payments queue gave up and alerted the staff.
+    expect(
+      cancellationOf(
+        input({
+          facts: facts({
+            cancelled: captured(),
+            payments: new Map([["pay_1", { status: "authorized", captureReviewed: true }]]),
+          }),
+        }),
+      )?.refundStatus,
+    ).toBe("manual_review");
+    // Captured and released: the release is the refund, succeeded.
+    const done = cancellationOf(
+      input({
+        refunds: [refund({})],
+        facts: facts({
+          cancelled: captured(),
+          payments: new Map([["pay_1", { status: "captured", captureReviewed: false }]]),
+        }),
+      }),
+    );
+    expect(done).toMatchObject({
+      refundStatus: "succeeded",
+      refund: {
+        id: "rfd_01JA4CG3S8W1Z4C7F0H3M6P9T2",
+        paymentId: "pay_1",
+        amount: { amount: "100.47", currency: "EUR" },
+        penalty: { amount: "25.00", currency: "EUR" },
+        status: "succeeded",
+      },
+    });
+    // The authorisation lapsed or was cancelled before any capture: nothing was captured.
+    expect(
+      cancellationOf(
+        input({
+          facts: facts({
+            cancelled: captured(),
+            payments: new Map([["pay_1", { status: "canceled", captureReviewed: false }]]),
+          }),
+        }),
+      )?.refundStatus,
+    ).toBe("authorization_voided");
+    // The whole authorisation kept: nothing goes back.
+    expect(
+      cancellationOf(input({ facts: facts({ cancelled: captured({ releaseAmount: "0.00" }) }) }))
+        ?.refundStatus,
+    ).toBe("not_applicable");
+  });
+
+  it("[FIX-W28-CANCEL AC1] says authorization_voided only once a void of an authorisation that kept nothing happened", () => {
+    const voided = event(CANCELLATION_EVENTS.cancelled, {
+      cancelledBy: "customer",
+      reasonCode: "change_of_plans",
+      refundStatus: "pending",
+      voidPaymentId: "pay_2",
+    });
+    expect(
+      cancellationOf(
+        input({
+          facts: facts({
+            cancelled: voided,
+            payments: new Map([["pay_2", { status: "canceled", captureReviewed: false }]]),
+          }),
+        }),
+      ),
+    ).toMatchObject({ refund: null, refundStatus: "authorization_voided" });
+    expect(
+      cancellationOf(
+        input({
+          facts: facts({
+            cancelled: voided,
+            payments: new Map([["pay_2", { status: "authorized", captureReviewed: false }]]),
+          }),
+        }),
+      )?.refundStatus,
+    ).toBe("pending");
+  });
+
+  it("[FIX-W28-CANCEL AC3] shows a request waiting for the staff and an undecided cancellation as pending", () => {
+    const request = event(CANCELLATION_EVENTS.requested, {
+      mode: "request_only",
+      cause: "request_only",
+      reasonCode: "duplicate_booking",
+      comment: "Booked twice",
+      requestedAt,
+      amountPaid: "125.47",
+      estimatedRefund: { amount: "0.00", currency: "EUR" },
+    });
+    const live = { id: BOOKING_ID, status: "ticketed", cancelledAt: null, amountPaid: "125.47" };
+    expect(
+      cancellationOf(
+        input({ booking: live, cancelReason: null, facts: facts({ state: cancellationStateOf([request]) }) }),
+      ),
+    ).toEqual({
+      bookingId: BOOKING_ID,
+      status: "pending",
+      requestedAt,
+      cancelledAt: null,
+      cancelledBy: "customer",
+      reasonCode: "duplicate_booking",
+      comment: "Booked twice",
+      ticketsVoided: false,
+      estimatedRefund: { amount: "0.00", currency: "EUR" },
+      refund: null,
+      refundStatus: "manual_review",
+    });
+    const flag = event(CANCELLATION_EVENTS.timeout, {
+      mode: "release",
+      reasonCode: "illness",
+      comment: "Sick",
+      estimate: { amountPaid: "125.47", estimatedRefund: "100.47", penalty: "0.00", otaFee: "25.00" },
+      currency: "EUR",
+      requestedAt,
+      until: at(10 * 60_000).toISOString(),
+      actor: { type: "customer", id: "cus_1" },
+      requestId: "req_1",
+    });
+    expect(
+      cancellationOf(input({ booking: live, facts: facts({ state: cancellationStateOf([flag]) }) })),
+    ).toMatchObject({
+      status: "pending",
+      reasonCode: "illness",
+      comment: "Sick",
+      estimatedRefund: { amount: "100.47", currency: "EUR" },
+      refundStatus: "pending",
+    });
+    // Nothing requested, or a DELETE the airline did not apply: no cancellation.
+    expect(cancellationOf(input({ booking: live }))).toBeNull();
+    expect(
+      cancellationOf(
+        input({
+          booking: live,
+          facts: facts({
+            state: cancellationStateOf([event(CANCELLATION_EVENTS.notApplied, {}, 1), flag]),
+          }),
+        }),
+      ),
+    ).toBeNull();
+  });
+
+  it("[FIX-W28-CANCEL AC3] never shows staff text in customer scope, and shows a staff member's reason in console scope", () => {
+    const staff = event(CANCELLATION_EVENTS.cancelled, {
+      cancelledBy: "staff",
+      reason: "Duplicate of another booking (internal note)",
+    });
+    const base = {
+      cancelledBy: "staff",
+      cancelReason: "duplicate",
+      facts: facts({ cancelled: staff }),
+    } as const;
+    expect(cancellationOf(input(base))).toMatchObject({ reasonCode: "duplicate", comment: null });
+    expect(cancellationOf(input({ ...base, scope: "console" }))?.comment).toBe(
+      "Duplicate of another booking (internal note)",
+    );
   });
 });

@@ -17,7 +17,8 @@
 //      accepted (`422 UNPROCESSABLE`) and its fee is quoted (card-fees.ts; Amadeus between transactions);
 //   3. one transaction locks the checkout (a checkout changed since step 2 starts again), cancels the checkout's
 //      payments that are not confirmed yet (`requires_payment_method`, `requires_action`), inserts the `payments` row
-//      (`requires_payment_method`, `capture_method = manual`, the checkout total with the card fee, the hint) with
+//      (`requires_payment_method`, `capture_method = manual`, the checkout total with the card fee and its lines with
+//      their refundable flags, `card_fee_lines`: lead decision (2) of 2026-10-23, second batch, the hint) with
 //      its `payment_events` row, and sets the checkout `payment_pending`, `terms_accepted_at`, the card fee and the
 //      total, and its expiry 15 minutes later (`expires_at + 15 min` on the first payment, at least `now + 15 min`
 //      on a later one). A checkout an airline-card payment had switched to the airline's price gets its selling price
@@ -68,10 +69,10 @@
 // nothing (no quote, no provider call). Otherwise the fee is quoted for the hint (card-fees.ts; for an airline card
 // the Amadeus fee alone, in the checkout's `net` pricing), the PaymentIntent's amount is set
 // (`pi:update:<pay_id>:<version>`; an airline-card payment has no provider to tell), and one transaction stores the
-// amount, the fee and the hint with a `payment_events` row (`payment.amount_updated`), and the checkout's card fee,
-// total and brand (its `version` + 1). A row that changed meanwhile starts the step again. A failed Stripe update moves
-// the payment's `version` on (`payment.provider_error`), so the next update never sends a key that Stripe may have
-// used for another amount, or keeps a 5xx for.
+// amount, the fee and its lines, and the hint with a `payment_events` row (`payment.amount_updated`), and the
+// checkout's card fee, total and brand (its `version` + 1). A row that changed meanwhile starts the step again. A failed
+// Stripe update moves the payment's `version` on (`payment.provider_error`), so the next update never sends a key that
+// Stripe may have used for another amount, or keeps a 5xx for.
 import { Inject, Injectable } from "@nestjs/common";
 import type { components } from "@velexis/api-types";
 import { AppError } from "@velexis/errors";
@@ -83,6 +84,7 @@ import {
   baseAmountsFor,
   baseTotalOf,
   cardFeeFor,
+  cardFeeLinesFor,
   checkoutTotalOf,
   pricingModeOf,
   type CheckoutBaseAmounts,
@@ -616,6 +618,8 @@ export class PaymentsService {
         currency: checkout.currency,
         amount: total,
         card_fee_amount: fee,
+        // Each line with whether a cancellation refunds it (lead decision (2) of 2026-10-23, second batch).
+        card_fee_lines: JSON.stringify(cardFeeLinesFor("markup_rules", quote, minorUnits)),
         status: "requires_payment_method",
         card_brand: brand,
         card_bin: bin,
@@ -934,6 +938,8 @@ export class PaymentsService {
       currency: checkout.currency,
       amount: total,
       card_fee_amount: fee,
+      // The Amadeus fee alone, never refundable (lead decision (2) of 2026-10-23, second batch).
+      card_fee_lines: JSON.stringify(cardFeeLinesFor("net", quote, minorUnits)),
       card_brand: brand,
       card_bin: bin,
       metadata: JSON.stringify({}),
@@ -1193,6 +1199,7 @@ export class PaymentsService {
         await this.repository.updatePayment(trx, locked.id, locked.version, {
           amount: total,
           card_fee_amount: fee,
+          card_fee_lines: JSON.stringify(cardFeeLinesFor(mode, quote, minorUnits)),
           card_brand: quote.brand,
           card_bin: quote.bin,
           updated_at: now,

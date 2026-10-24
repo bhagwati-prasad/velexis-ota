@@ -328,6 +328,8 @@ export interface BookingDetailsRow {
   readonly orderDictionaries: unknown;
   readonly syncError: string | null;
   readonly cancelledBy: string | null;
+  /** `cancel_reason`: the typed reason code of a customer's cancellation (or the airline's text). */
+  readonly cancelReason: string | null;
   /** The last refresh claim or sync of the booking (`sync_claimed_at` or `last_synced_at`, whichever is later). */
   readonly lastRefreshAt: Date | null;
   /** `sync_claimed_at`: the last claim of a synchronisation (the sync's or a refresh's). */
@@ -1045,6 +1047,7 @@ export class BookingsRepository {
         "b.order_dictionaries as orderDictionaries",
         "b.sync_error as syncError",
         "b.cancelled_by as cancelledBy",
+        "b.cancel_reason as cancelReason",
         "b.sync_claimed_at as syncClaimedAt",
         "b.sync_changes as syncChanges",
         lastRefreshOf.as("lastRefreshAt"),

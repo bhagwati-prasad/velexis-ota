@@ -11,12 +11,14 @@ import { APP_DIR } from "../config";
 import { priceOffer } from "../pricing/pricing-engine";
 import type { FeeLine, FeeRule } from "../pricing/pricing.types";
 import type { RulesRepository } from "../pricing/rules.repository";
+import { cardFeeLinesFor } from "../checkout/pricing-mode";
 import { parseOffer, type ParsedOffer } from "../shopping/offers.mapper";
 import {
   CardFees,
   cardFeeRequest,
   cardFeeTotal,
   changedFares,
+  keptCardFeeOf,
   pricedOfferCardFee,
   pricingInputOfOffers,
   quotedCardFee,
@@ -199,6 +201,71 @@ describe("the OTA's payment_card fees", () => {
     const input = pricingInputOfOffers([OFFER, back], CONTEXT);
 
     expect(input).toMatchObject({ netTotal: "196.94", segmentCount: 2, tripType: "round_trip" });
+  });
+});
+
+describe("the card fee a cancellation keeps (FIX-W28-CANCEL)", () => {
+  it("[FIX-W28-CANCEL AC2] stores each line with its rule's flag and keeps all but the refundable ones", () => {
+    const input = pricingInputOfOffers([OFFER], CONTEXT);
+    const quoteOf = (refundable: boolean) => {
+      const feeLines = priceOffer(input!, [], [{ ...cardRule("fee_card", "1.0000", "0.50"), refundable }], {
+        kind: "payment_card",
+        cardBrand: "VISA",
+        baseAmount: "120.00",
+      }).feeLines;
+      return { amadeusFee: "1.20", feeLines, total: cardFeeTotal("1.20", feeLines, 2) };
+    };
+
+    // A refundable rule: its line goes back, the Amadeus fee (never refundable) is kept.
+    const refundable = quoteOf(true);
+    const lines = cardFeeLinesFor("markup_rules", refundable, 2);
+    expect(lines).toEqual([
+      { source: "amadeus", ruleId: null, amount: "1.20", refundable: false },
+      { source: "fee_rule", ruleId: "fee_card", amount: "1.70", refundable: true },
+    ]);
+    expect(keptCardFeeOf({ cardFeeAmount: refundable.total, cardFeeLines: lines }, 2)).toBe("1.20");
+
+    // A rule that is not refundable: the whole card fee is kept.
+    const kept = quoteOf(false);
+    const keptLines = cardFeeLinesFor("markup_rules", kept, 2);
+    expect(keptLines.map((line) => line.refundable)).toEqual([false, false]);
+    expect(keptCardFeeOf({ cardFeeAmount: kept.total, cardFeeLines: keptLines }, 2)).toBe("2.90");
+
+    // The airline card's price: the Amadeus fee alone, kept whole; no quote, no line.
+    expect(cardFeeLinesFor("net", refundable, 2)).toEqual([
+      { source: "amadeus", ruleId: null, amount: "1.20", refundable: false },
+    ]);
+    expect(cardFeeLinesFor("markup_rules", undefined, 2)).toEqual([]);
+  });
+
+  it("[FIX-W28-CANCEL AC2] keeps the whole fee of a payment without lines, and never an Amadeus line marked refundable", () => {
+    // Payments of before tenant migration 0004 have no line: nothing is refundable.
+    expect(keptCardFeeOf({ cardFeeAmount: "3.65", cardFeeLines: [] }, 2)).toBe("3.65");
+    expect(keptCardFeeOf({ cardFeeAmount: "3.65" }, 2)).toBe("3.65");
+    expect(
+      keptCardFeeOf(
+        {
+          cardFeeAmount: "3.65",
+          cardFeeLines: [
+            { source: "amadeus", ruleId: null, amount: "1.20", refundable: true },
+            { source: "fee_rule", ruleId: "fee_x", amount: "not money", refundable: true },
+            "a line that cannot be read",
+          ],
+        },
+        2,
+      ),
+    ).toBe("3.65");
+    // Never below zero, in the currency's minor units.
+    expect(
+      keptCardFeeOf(
+        {
+          cardFeeAmount: "2",
+          cardFeeLines: [{ source: "fee_rule", ruleId: "f", amount: "5", refundable: true }],
+        },
+        0,
+      ),
+    ).toBe("0");
+    expect(keptCardFeeOf({ cardFeeAmount: "0" }, 2)).toBe("0.00");
   });
 });
 

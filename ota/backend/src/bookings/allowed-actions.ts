@@ -5,7 +5,9 @@
 //
 //   Action                       True when (the first failing rule gives the reason)
 //   canCancel                    live¹, nothing departed (`flown`), more than 3 h before the first departure
-//                                (`too_close_to_departure`), self-service cancellation on (`disabled_by_ota`)
+//                                (`too_close_to_departure`), self-service cancellation on (`disabled_by_ota`), an
+//                                Amadeus order and no cancellation undecided or waiting for the staff (`pending`):
+//                                the rules of the cancellation quote (cancellation-mode.ts, FIX-W28-CANCEL)
 //   canModifyContacts            live¹, the last flight has not landed (`flown`)
 //   canAddRemarks                as canModifyContacts
 //   canModifyTravelerDocuments   never in the MVP (`disabled_by_ota`: bookings.update answers travellers' changes
@@ -79,6 +81,11 @@ export interface AllowedActionsInput {
   readonly features: { readonly selfServiceCancellation: boolean; readonly ancillaries: boolean };
   /** The last refresh or sync of the booking (claim time), or `null`. */
   readonly lastRefreshAt: Date | null;
+  /**
+   * A cancellation of the booking is undecided (a DELETE without an answer) or waits for the staff (a request):
+   * cancellation-state.ts `cancellationPendingOf`. Absent: none.
+   */
+  readonly cancellationPending?: boolean;
   readonly now: Date;
 }
 
@@ -133,6 +140,8 @@ export function allowedActionsOf(input: AllowedActionsInput): AllowedActions {
       [!departed, "flown"],
       [before(CANCEL_CUTOFF_MS), "too_close_to_departure"],
       [input.features.selfServiceCancellation, "disabled_by_ota"],
+      [input.amadeusOrderId !== null, "pending"],
+      [input.cancellationPending !== true, "pending"],
     ]),
     canModifyContacts: firstFailing([live(), [!landed, "flown"]]),
     canModifyTravelerDocuments: firstFailing([

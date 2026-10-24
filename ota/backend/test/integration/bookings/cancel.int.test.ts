@@ -10,8 +10,11 @@
 // API's own key; guests hold a booking token row. Every booking points at an order created in the stub through its own
 // HTTP API and is written the way the record step writes it (the redacted snapshot, the order's contact and remarks),
 // with synthetic travellers and flights relative to now, a total of 125.47 EUR of which 15.00 are the booking's OTA fees
-// (no priced offer: every fee is kept) and a cancellation fee rule of 10.00 EUR: a Stripe payment captured in full is
-// estimated at 125.47 − 15.00 − 10.00 = 100.47. Payments are written as checkout.createPayment and the webhooks leave
+// (no priced offer: every fee is kept) and a cancellation fee rule of 10.00 EUR (economy): a Stripe payment captured in
+// full is estimated at 125.47 − 15.00 − 10.00 = 100.47. Since FIX-W28-CANCEL (lead decisions (1) and (2) of 2026-10-23,
+// second batch) an authorisation is split the same way, its kept 25.00 captured with
+// `pi:capture:<pay_id>:cancellation:25.00` and the rest released (only a booking that keeps nothing voids it), and a
+// card fee is kept unless its stored line is refundable. Payments are written as checkout.createPayment and the webhooks leave
 // them, with their PaymentIntents in the fake. Both processes run in-process: the API (createTestApp) and the worker
 // (WorkerModule.forRoot), whose schedulers are removed and whose e-mail and document consumers are paused (the outbox
 // rows and the queued documents are what this file checks). The worker's check of a DELETE without an answer is queued
@@ -56,6 +59,7 @@ import { newBookingReference } from "../../../src/bookings/booking-reference";
 import { localDayOf } from "../../../src/bookings/cancellation-mode";
 import {
   CANCELLATION_CHECK_JOB,
+  CANCELLATION_CHECK_MAX_RUNS,
   CancellationRecorder,
   REQUEST_ONLY_WARNING,
 } from "../../../src/bookings/cancellation.service";
@@ -70,7 +74,10 @@ import { DocumentsProcessor } from "../../../src/documents/documents.processor";
 import { TokenService } from "../../../src/identity/token.service";
 import { NotificationsProcessor } from "../../../src/notifications/notifications.processor";
 import { PAYMENT_JOB, paymentJob, PaymentsProcessor } from "../../../src/payments/payments.processor";
+import { Money } from "../../../src/pricing/pricing.types";
 import { seedStorefrontSettings } from "../../../src/provisioning/seeds/storefront-settings.seed";
+import { ReconcileProcessor, RECONCILE_SCAN_JOB } from "../../../src/bookings/reconcile.processor";
+import { minuteBucket, tenantJob } from "../../../src/jobs/fan-out";
 import type { OtaPool } from "../../../src/tenancy/tenancy.module";
 import type { TenantTransaction } from "../../../src/tenancy/tenant-tx";
 import { createWorkerApp, createWorkerLogger, WorkerModule } from "../../../src/worker.module";
@@ -359,6 +366,12 @@ interface BookingSeed {
   readonly departInMs?: number;
   /** An airline-card booking: net pricing, no OTA fee or markup, the net total. */
   readonly net?: boolean;
+  /**
+   * The cabin of its flight (ECONOMY by default, which the cancellation fee rule is scoped to) and its OTA fees (FEES
+   * by default; the markup takes the rest of TOTAL): a BUSINESS booking without fees keeps nothing on cancellation.
+   */
+  readonly cabin?: string;
+  readonly fees?: string;
 }
 
 /** A seeded booking: its id, its order at the stub and the order's contact address. */
@@ -388,6 +401,9 @@ async function seedBooking(prefix: string, seed: BookingSeed = {}): Promise<Seed
   const status = seed.status ?? (seed.ticketsIssuedAt === undefined ? "confirmed" : "ticketed");
   const ticketed = seed.ticketsIssuedAt !== undefined && seed.ticketsIssuedAt.length > 0;
   const net = seed.net === true;
+  const fees = net ? "0.00" : (seed.fees ?? FEES);
+  // The markup takes what the fees do not of TOTAL (98.47 net + 12.00 + 15.00 by default).
+  const markup = net ? "0.00" : new Money(TOTAL).minus("98.47").minus(fees).toFixed(2);
   await inTenant(async (trx) => {
     await trx
       .insertInto("bookings")
@@ -418,8 +434,8 @@ async function seedBooking(prefix: string, seed: BookingSeed = {}): Promise<Seed
         net_base_amount: "56.00",
         net_fees_amount: "0.00",
         net_services_amount: "0.00",
-        markup_amount: net ? "0.00" : "12.00",
-        fees_amount: net ? "0.00" : FEES,
+        markup_amount: markup,
+        fees_amount: fees,
         taxes_amount: "42.47",
         total_amount: net ? "98.47" : TOTAL,
         contact_email: contact["emailAddress"] as string,
@@ -451,7 +467,7 @@ async function seedBooking(prefix: string, seed: BookingSeed = {}): Promise<Seed
         arrival_local: local(new Date(outbound.getTime() + 2 * HOUR)),
         arrival_at: new Date(outbound.getTime() + 2 * HOUR),
         duration_minutes: 120,
-        cabin: "ECONOMY",
+        cabin: seed.cabin ?? "ECONOMY",
         booking_class: "Q",
         status: status === "cancelled" ? "CANCELLED" : "CONFIRMED",
       })
@@ -527,6 +543,7 @@ const stripeId = (prefix: string): string => `${prefix}_test_${randomBytes(10).t
 async function seedPayment(
   bookingId: string,
   kind: "captured" | "authorized" | "airline",
+  card: { readonly fee: string; readonly lines?: readonly JsonObject[] } = { fee: "0.00" },
 ): Promise<{ readonly id: string; readonly intentId: string | null }> {
   const id = newId("pay");
   const airline = kind === "airline";
@@ -546,6 +563,9 @@ async function seedPayment(
         capture_method: airline ? "automatic" : "manual",
         currency: "EUR",
         amount,
+        // The card fee and, since tenant migration 0004, its lines (none: a payment of before it).
+        card_fee_amount: card.fee,
+        ...(card.lines === undefined ? {} : { card_fee_lines: JSON.stringify(card.lines) }),
         amount_authorized: amount,
         amount_captured: kind === "authorized" ? "0" : amount,
         status: kind === "authorized" ? "authorized" : "captured",
@@ -735,6 +755,7 @@ const refundsOf = (bookingId: string) =>
         "requested_by_id",
         "provider_refund_id",
         sql<string>`amount::text`.as("amount"),
+        sql<string | null>`penalty_amount::text`.as("penalty_amount"),
       ])
       .where("booking_id", "=", bookingId)
       .execute(),
@@ -744,7 +765,7 @@ const paymentRow = (paymentId: string) =>
   inTenant((trx) =>
     trx
       .selectFrom("payments")
-      .select(["status", "canceled_at"])
+      .select(["status", "canceled_at", sql<string>`amount_captured::text`.as("amount_captured")])
       .where("id", "=", paymentId)
       .executeTakeFirstOrThrow(),
   );
@@ -874,7 +895,8 @@ beforeAll(async () => {
       .updateTable("storefront_settings")
       .set({ ops_alert_email: OPS_EMAIL, time_zone: TIME_ZONE })
       .execute();
-    // The OTA's cancellation fee (OADR-0005 point 7): 10.00 EUR per booking, kept.
+    // The OTA's cancellation fee (OADR-0005 point 7): 10.00 EUR per booking in economy, kept (a booking in another
+    // cabin without fees keeps nothing: FIX-W28-CANCEL's void of an authorisation).
     await trx
       .insertInto("fee_rules")
       .values({
@@ -886,7 +908,7 @@ beforeAll(async () => {
         fixed_amount: CANCELLATION_FEE,
         currency: "EUR",
         applies_per: "booking",
-        scope: JSON.stringify({}),
+        scope: JSON.stringify({ cabins: ["ECONOMY"] }),
         priority: 10,
         is_active: true,
         refundable: false,
@@ -1144,15 +1166,17 @@ describe("release: a customer cancels an unticketed booking paid by Stripe, twic
 describe("void: a customer on the storefront cancels a booking ticketed today, paid by an authorisation", () => {
   let booking: SeededBooking;
   let payment: { readonly id: string; readonly intentId: string | null };
+  let credential: Credential;
   let quoted: Response;
   let first: Response;
   let again: Response;
+  let got: Response;
   let deletes: ReturnType<typeof amadeusCalls>;
-  let voids: typeof stripe.requests;
+  let calls: typeof stripe.requests;
 
   beforeAll(async () => {
     const customer = await newCustomer();
-    const credential: Credential = { kind: "edge", customerToken: customer.token };
+    credential = { kind: "edge", customerToken: customer.token };
     booking = await seedBooking("cancel.void", { customerId: customer.id, ticketsIssuedAt: [new Date()] });
     payment = await seedPayment(booking.id, "authorized");
     quoted = await quote(booking.id, credential);
@@ -1163,42 +1187,315 @@ describe("void: a customer on the storefront cancels a booking ticketed today, p
     first = await cancel(booking.id, credential, '"1"', cancellation(quoted.body.estimatedRefund), key);
     again = await cancel(booking.id, credential, '"1"', cancellation(quoted.body.estimatedRefund), key);
     deletes = amadeusCalls("cancelFlightOrder");
-    voids = stripeRequestsAbout(payment.intentId ?? "");
+    calls = [...stripe.requests];
+    got = await request(api.server).get(`/v1/bookings/${booking.id}`).set(credentialHeaders(credential));
   }, SCENARIO_TIMEOUT_MS);
 
-  it("quotes a void of the whole authorisation until the next midnight in the OTA's time zone", () => {
+  it("[FIX-W28-CANCEL AC1] quotes a void that keeps the fees and gives the rest of the authorisation back", () => {
     expect(answer(quoted)).toEqual([200, undefined]);
     expectResponseToMatch("quoteBookingCancellation", quoted);
     expect(quoted.body).toMatchObject({
       mode: "void",
       cancellable: true,
       amountPaid: { amount: TOTAL, currency: "EUR" },
-      estimatedRefund: { amount: TOTAL, currency: "EUR" },
-      otaFee: { amount: "0.00", currency: "EUR" },
+      estimatedRefund: { amount: REFUND, currency: "EUR" },
+      otaFee: { amount: "25.00", currency: "EUR" },
       voidDeadlineAt: localDayOf(new Date(), TIME_ZONE).endsAt.toISOString(),
     });
     expect((quoted.body.lines as JsonObject[])[0]?.["ticketNumber"]).toMatch(/^075-\d{10}$/);
   });
 
-  it("[OBE-049 AC1] cancels the order once, voids its tickets and the authorisation once", async () => {
+  it("[FIX-W28-CANCEL AC1] cancels the order once, voids its tickets, captures the kept amount once and releases the rest", async () => {
     expect(answer(first)).toEqual([200, undefined]);
     expectResponseToMatch("cancelBooking", first);
     expect(first.body.cancellation).toMatchObject({
       status: "cancelled",
       ticketsVoided: true,
-      refund: null,
-      refundStatus: "authorization_voided",
+      estimatedRefund: { amount: REFUND, currency: "EUR" },
+      // The release is the refund, done once Stripe captured the kept amount.
+      refund: {
+        paymentId: payment.id,
+        amount: { amount: REFUND, currency: "EUR" },
+        penalty: { amount: "25.00", currency: "EUR" },
+        status: "succeeded",
+      },
+      refundStatus: "succeeded",
     });
     expect(answer(again)).toEqual([200, undefined]);
     expect(again.body).toEqual(first.body);
     expect(deletes.map((call) => call.status)).toEqual([204]);
     expect(await ticketStatuses(booking.id)).toEqual(["VOID"]);
-    expect(voids.map((entry) => [entry.method, entry.path, entry.headers["idempotency-key"]])).toEqual([
+    // One capture of the 25.00 kept, with the cancellation's key; no void, no refund at Stripe.
+    expect(calls.map((entry) => [entry.method, entry.path, entry.headers["idempotency-key"]])).toEqual([
+      [
+        "POST",
+        `/v1/payment_intents/${payment.intentId}/capture`,
+        `pi:capture:${payment.id}:cancellation:25.00`,
+      ],
+    ]);
+    expect(calls[0]?.form).toEqual({ amount_to_capture: "2500" });
+    expect(stripe.intents.get(payment.intentId ?? "")).toMatchObject({
+      status: "succeeded",
+      amount_received: 2500,
+    });
+    expect(await paymentRow(payment.id)).toMatchObject({ status: "captured", amount_captured: "25.00" });
+    expect(await paymentEventTypes(payment.id)).toEqual(["payment.captured", "payment.released"]);
+    expect(await refundsOf(booking.id)).toEqual([
+      expect.objectContaining({
+        payment_id: payment.id,
+        status: "succeeded",
+        amount: REFUND,
+        penalty_amount: "25.00",
+        provider_refund_id: null,
+        requested_by_type: "customer",
+      }),
+    ]);
+    expect(await bookingRow(booking.id)).toMatchObject({ status: "cancelled", amount_paid: "25.00" });
+    const visible = (await eventsOf(booking.id)).filter((event) => event.visible_to_customer);
+    expect(visible.map((event) => event.type)).toEqual([
+      "booking.cancelled",
+      "payment.captured",
+      "refund.succeeded",
+    ]);
+    expect(visible[0]?.data).toMatchObject({
+      capturePaymentId: payment.id,
+      captureAmount: "25.00",
+      releaseAmount: REFUND,
+    });
+  });
+
+  it("[FIX-W28-CANCEL AC3] shows the same cancellation in bookings.get, with the customer's reason and comment", () => {
+    expect(answer(got)).toEqual([200, undefined]);
+    expect(got.body.cancellation).toEqual(first.body.cancellation);
+    expect(got.body.cancellation).toMatchObject({ reasonCode: "change_of_plans", comment: "Trip postponed" });
+    expect(got.body.allowedActions).toMatchObject({ canCancel: false, reasons: { canCancel: "cancelled" } });
+  });
+});
+
+describe("an authorisation of which the cancellation keeps nothing", () => {
+  let booking: SeededBooking;
+  let payment: { readonly id: string; readonly intentId: string | null };
+  let quoted: Response;
+  let res: Response;
+  let calls: typeof stripe.requests;
+
+  beforeAll(async () => {
+    const customer = await newCustomer();
+    const credential: Credential = { kind: "key", customerToken: customer.token };
+    // Business class (no cancellation fee rule) and no OTA fee: nothing is kept.
+    booking = await seedBooking("cancel.void_all", {
+      customerId: customer.id,
+      cabin: "BUSINESS",
+      fees: "0.00",
+    });
+    payment = await seedPayment(booking.id, "authorized");
+    quoted = await quote(booking.id, credential);
+    stripe.reset();
+    res = await cancel(booking.id, credential, '"1"', cancellation(quoted.body.estimatedRefund));
+    calls = [...stripe.requests];
+  }, SCENARIO_TIMEOUT_MS);
+
+  it("[FIX-W28-CANCEL AC1] quotes the whole authorisation back and voids it once, nothing captured", async () => {
+    expect(quoted.body).toMatchObject({
+      mode: "release",
+      estimatedRefund: { amount: TOTAL, currency: "EUR" },
+      otaFee: { amount: "0.00", currency: "EUR" },
+    });
+    expect(answer(res)).toEqual([200, undefined]);
+    expectResponseToMatch("cancelBooking", res);
+    expect(res.body.cancellation).toMatchObject({
+      status: "cancelled",
+      refund: null,
+      refundStatus: "authorization_voided",
+    });
+    expect(calls.map((entry) => [entry.method, entry.path, entry.headers["idempotency-key"]])).toEqual([
       ["POST", `/v1/payment_intents/${payment.intentId}/cancel`, `pi:cancel:${payment.id}`],
     ]);
-    expect(await paymentRow(payment.id)).toMatchObject({ status: "canceled" });
+    expect(await paymentRow(payment.id)).toMatchObject({ status: "canceled", amount_captured: "0.00" });
     expect(await paymentEventTypes(payment.id)).toEqual(["payment.voided"]);
     expect(await refundsOf(booking.id)).toEqual([]);
+  });
+});
+
+describe("a capture of the kept amount that fails", () => {
+  let dropped: { booking: SeededBooking; payment: { id: string; intentId: string | null }; res: Response };
+  let refused: { booking: SeededBooking; payment: { id: string; intentId: string | null }; res: Response };
+  let droppedRetry: Job;
+  let refusedRetry: Job;
+  let droppedAfter: Response;
+  let refusedAfter: Response;
+  let credentials: Credential[];
+
+  /** A customer's cancellation of a booking paid by an authorisation, whose capture meets `failure`. */
+  async function cancelWith(prefix: string, failure: () => void) {
+    const customer = await newCustomer();
+    const credential: Credential = { kind: "key", customerToken: customer.token };
+    credentials.push(credential);
+    const booking = await seedBooking(prefix, { customerId: customer.id });
+    const payment = await seedPayment(booking.id, "authorized");
+    const quoted = await quote(booking.id, credential);
+    stripe.reset();
+    failure();
+    // No reset after it: the 500 kept for the capture's key must stay for the queue's retry.
+    const res = await cancel(booking.id, credential, '"1"', cancellation(quoted.body.estimatedRefund));
+    return { booking, payment, res };
+  }
+
+  /** The delayed `payment.capture_retry` of a cancellation's kept amount, run now (it is queued 10 minutes later). */
+  async function runRetry(paymentId: string): Promise<Job> {
+    const id = `capture-retry-cancellation-${paymentId}`;
+    const job = await waitFor(`the job ${id}`, async () => (await paymentsQueue.getJob(id)) ?? undefined);
+    if ((await job.getState()) === "delayed") {
+      await job.promote();
+    }
+    return await finished(paymentsQueue, id);
+  }
+
+  beforeAll(async () => {
+    credentials = [];
+    // Stripe unreachable for the capture and the SDK's one retry: nothing is kept for the key.
+    dropped = await cancelWith("cancel.capture_dropped", () => stripe.fail(2, "drop"));
+    // A 500 Stripe keeps for the key (the SDK's retry replays it): the queue's retry can only replay it too.
+    refused = await cancelWith("cancel.capture_500", () => stripe.fail(1, "server_error"));
+    droppedRetry = await runRetry(dropped.payment.id);
+    refusedRetry = await runRetry(refused.payment.id);
+    const read = (bookingId: string, credential: Credential) =>
+      request(api.server).get(`/v1/bookings/${bookingId}`).set(credentialHeaders(credential));
+    droppedAfter = await read(dropped.booking.id, credentials[0] as Credential);
+    refusedAfter = await read(refused.booking.id, credentials[1] as Credential);
+  }, SCENARIO_TIMEOUT_MS);
+
+  it("[FIX-W28-CANCEL AC1] never undoes the cancellation: 200 pending, the failure recorded and the staff alerted", async () => {
+    for (const { booking, payment, res } of [dropped, refused]) {
+      expect(answer(res)).toEqual([200, undefined]);
+      expectResponseToMatch("cancelBooking", res);
+      expect(res.body.cancellation).toMatchObject({
+        status: "cancelled",
+        refund: null,
+        refundStatus: "pending",
+      });
+      expect(await bookingRow(booking.id)).toMatchObject({ status: "cancelled" });
+      const failedEvent = (await eventsOf(booking.id)).find(
+        (event) => event.type === "payment.capture_failed",
+      );
+      expect(failedEvent).toMatchObject({ visible_to_customer: false });
+      expect(failedEvent?.data).toMatchObject({
+        paymentId: payment.id,
+        amount: "25.00",
+        purpose: "cancellation",
+      });
+      expect(
+        (await notificationsOf(booking.id))
+          .filter((row) => row.template_key === "staff.manual_review")
+          .map((row) => row.dedupe_key),
+      ).toContain(`staff.manual_review:${booking.id}:cancellation_capture_failed`);
+    }
+  });
+
+  it("[FIX-W28-CANCEL AC1] lets the payments queue capture it with the same key, then shows the release", async () => {
+    expect(droppedRetry.returnvalue).toMatchObject({ outcome: "applied" });
+    expect(await paymentRow(dropped.payment.id)).toMatchObject({
+      status: "captured",
+      amount_captured: "25.00",
+    });
+    expect(await refundsOf(dropped.booking.id)).toEqual([
+      expect.objectContaining({ status: "succeeded", amount: REFUND, provider_refund_id: null }),
+    ]);
+    expect(answer(droppedAfter)).toEqual([200, undefined]);
+    expect(droppedAfter.body.cancellation).toMatchObject({
+      refund: { amount: { amount: REFUND, currency: "EUR" }, status: "succeeded" },
+      refundStatus: "succeeded",
+    });
+  });
+
+  it("[FIX-W28-CANCEL AC1] hands a capture the retry cannot make to the staff: manual_review, the cancellation stands", async () => {
+    expect(refusedRetry.returnvalue).toMatchObject({ outcome: "failed" });
+    expect(await paymentRow(refused.payment.id)).toMatchObject({ status: "authorized" });
+    expect(await refundsOf(refused.booking.id)).toEqual([]);
+    expect(
+      (await notificationsOf(refused.booking.id))
+        .filter((row) => row.template_key === "staff.manual_review")
+        .map((row) => row.dedupe_key),
+    ).toContain(`staff.payment:${refused.payment.id}:capture_retry_failed`);
+    expect(refusedAfter.body.cancellation).toMatchObject({
+      status: "cancelled",
+      refund: null,
+      refundStatus: "manual_review",
+    });
+    expect(await bookingRow(refused.booking.id)).toMatchObject({ status: "cancelled" });
+  });
+});
+
+describe("the card fee of a cancelled booking's payment", () => {
+  /** A card fee of 3.00: the Amadeus fee 1.00 and an OTA fee rule's 2.00, refundable or not. */
+  const lines = (refundable: boolean): JsonObject[] => [
+    { source: "amadeus", ruleId: null, amount: "1.00", refundable: false },
+    { source: "fee_rule", ruleId: "fee_01JA0000000000000000000001", amount: "2.00", refundable },
+  ];
+  let refundable: { booking: SeededBooking; quoted: Response; res: Response };
+  let kept: { booking: SeededBooking; payment: { id: string; intentId: string | null }; quoted: Response };
+  let legacy: Response;
+  let keptCalls: typeof stripe.requests;
+
+  beforeAll(async () => {
+    const customer = await newCustomer();
+    const credential: Credential = { kind: "key", customerToken: customer.token };
+    const refundableBooking = await seedBooking("cancel.fee_refundable", { customerId: customer.id });
+    await seedPayment(refundableBooking.id, "captured", { fee: "3.00", lines: lines(true) });
+    const refundableQuote = await quote(refundableBooking.id, credential);
+    refundable = {
+      booking: refundableBooking,
+      quoted: refundableQuote,
+      res: await cancel(
+        refundableBooking.id,
+        credential,
+        '"1"',
+        cancellation(refundableQuote.body.estimatedRefund),
+      ),
+    };
+    // Its refund reaches the fake Stripe API before the next scenario counts Stripe's requests.
+    await finished(paymentsQueue, `refund-submit-${(await refundsOf(refundableBooking.id))[0]?.id ?? ""}`);
+    const keptBooking = await seedBooking("cancel.fee_kept", { customerId: customer.id });
+    const keptPayment = await seedPayment(keptBooking.id, "authorized", { fee: "3.00", lines: lines(false) });
+    const keptQuote = await quote(keptBooking.id, credential);
+    stripe.reset();
+    await cancel(keptBooking.id, credential, '"1"', cancellation(keptQuote.body.estimatedRefund));
+    keptCalls = [...stripe.requests];
+    kept = { booking: keptBooking, payment: keptPayment, quoted: keptQuote };
+    // A payment of before tenant migration 0004: no line, so nothing of its card fee is refundable.
+    const legacyBooking = await seedBooking("cancel.fee_legacy", { customerId: customer.id });
+    await seedPayment(legacyBooking.id, "captured", { fee: "3.00" });
+    legacy = await quote(legacyBooking.id, credential);
+  }, SCENARIO_TIMEOUT_MS);
+
+  it("[FIX-W28-CANCEL AC2] refunds a refundable card fee line and keeps the Amadeus fee", async () => {
+    // 125.47 − 25.00 (fees and cancellation fee) − 1.00 (the Amadeus card fee).
+    expect(refundable.quoted.body).toMatchObject({
+      estimatedRefund: { amount: "99.47", currency: "EUR" },
+      otaFee: { amount: "26.00", currency: "EUR" },
+    });
+    expect(answer(refundable.res)).toEqual([200, undefined]);
+    expect((await refundsOf(refundable.booking.id)).map((row) => row.amount)).toEqual(["99.47"]);
+  });
+
+  it("[FIX-W28-CANCEL AC2] keeps a card fee whose rule is not refundable, in the estimate and in the capture", async () => {
+    expect(kept.quoted.body).toMatchObject({
+      estimatedRefund: { amount: "97.47", currency: "EUR" },
+      otaFee: { amount: "28.00", currency: "EUR" },
+    });
+    expect(keptCalls.map((entry) => entry.headers["idempotency-key"])).toEqual([
+      `pi:capture:${kept.payment.id}:cancellation:28.00`,
+    ]);
+    expect(await refundsOf(kept.booking.id)).toEqual([
+      expect.objectContaining({ status: "succeeded", amount: "97.47", penalty_amount: "28.00" }),
+    ]);
+  });
+
+  it("[FIX-W28-CANCEL AC2] keeps the whole card fee of a payment without lines", () => {
+    expect(legacy.body).toMatchObject({
+      estimatedRefund: { amount: "97.47", currency: "EUR" },
+      otaFee: { amount: "28.00", currency: "EUR" },
+    });
   });
 });
 
@@ -1252,6 +1549,7 @@ describe("request_only: a guest asks to cancel a booking ticketed yesterday", ()
   let credential: Credential;
   let quoted: Response;
   let res: Response;
+  let got: Response;
   let second: Response;
   let requoted: Response;
 
@@ -1265,6 +1563,7 @@ describe("request_only: a guest asks to cancel a booking ticketed yesterday", ()
     stub.clearRequests();
     stripe.reset();
     res = await cancel(booking.id, credential, '"1"', cancellation(quoted.body.estimatedRefund));
+    got = await request(api.server).get(`/v1/bookings/${booking.id}`).set(credentialHeaders(credential));
     second = await cancel(
       booking.id,
       credential,
@@ -1317,6 +1616,19 @@ describe("request_only: a guest asks to cancel a booking ticketed yesterday", ()
       ["booking.cancellation_requested", booking.email, "guest"],
       ["staff.manual_review", OPS_EMAIL, "staff"],
     ]);
+  });
+
+  it("[FIX-W28-CANCEL AC3] shows the request in bookings.get as the pending cancellation, and offers no second one", () => {
+    expect(answer(got)).toEqual([200, undefined]);
+    expect(got.body.cancellation).toEqual(res.body.cancellation);
+    expect(got.body.cancellation).toMatchObject({
+      status: "pending",
+      reasonCode: "change_of_plans",
+      comment: "Trip postponed",
+      estimatedRefund: { amount: "0.00", currency: "EUR" },
+      refundStatus: "manual_review",
+    });
+    expect(got.body.allowedActions).toMatchObject({ canCancel: false, reasons: { canCancel: "pending" } });
   });
 
   it("refuses a second cancellation while the request waits for the staff", () => {
@@ -1375,6 +1687,7 @@ describe("a DELETE without an answer that the airline applied", () => {
   let replayedAfter: Response;
   let flagged: Awaited<ReturnType<typeof eventsOf>>;
   let statusBeforeCheck: string;
+  let gotWhileFlagged: Response;
 
   beforeAll(async () => {
     const customer = await newCustomer();
@@ -1391,6 +1704,9 @@ describe("a DELETE without an answer that the airline applied", () => {
     spy.mockRestore();
     flagged = await eventsOf(booking.id);
     statusBeforeCheck = (await bookingRow(booking.id)).status;
+    gotWhileFlagged = await request(api.server)
+      .get(`/v1/bookings/${booking.id}`)
+      .set(credentialHeaders(credential));
     replayedBefore = await cancel(booking.id, credential, '"1"', body, key);
 
     // A concurrent insert holds the booking's FOR KEY SHARE (a document row): the check still claims it (OADR-0014
@@ -1419,6 +1735,25 @@ describe("a DELETE without an answer that the airline applied", () => {
       mode: "release",
       reasonCode: "change_of_plans",
       reason: "SUPPLIER_TIMEOUT",
+    });
+  });
+
+  it("[FIX-W28-CANCEL AC3] shows the undecided cancellation in bookings.get as pending, and offers no second one", () => {
+    expect(answer(gotWhileFlagged)).toEqual([200, undefined]);
+    expect(gotWhileFlagged.body).toMatchObject({ status: "confirmed" });
+    expect(gotWhileFlagged.body.cancellation).toMatchObject({
+      status: "pending",
+      cancelledAt: null,
+      cancelledBy: "customer",
+      reasonCode: "change_of_plans",
+      comment: "Trip postponed",
+      estimatedRefund: { amount: REFUND, currency: "EUR" },
+      refund: null,
+      refundStatus: "pending",
+    });
+    expect(gotWhileFlagged.body.allowedActions).toMatchObject({
+      canCancel: false,
+      reasons: { canCancel: "pending" },
     });
   });
 
@@ -1557,7 +1892,7 @@ describe("a DELETE without an answer of a booking paid by an authorisation", () 
     replayed = await cancel(booking.id, credential, '"1"', body, key);
   }, SCENARIO_TIMEOUT_MS);
 
-  it("[OBE-049 AC1] lets the worker cancel the booking and void the authorisation once", async () => {
+  it("[FIX-W28-CANCEL AC1] lets the worker cancel the booking, capture the kept amount once and release the rest", async () => {
     expect(check.returnvalue).toEqual({ tenantId: alphaId, bookingId: booking.id, outcome: "cancelled" });
     expect(await bookingRow(booking.id)).toMatchObject({ status: "cancelled", cancelled_by: "customer" });
     expect(
@@ -1566,19 +1901,27 @@ describe("a DELETE without an answer of a booking paid by an authorisation", () 
         entry.path,
         entry.headers["idempotency-key"],
       ]),
-    ).toEqual([["POST", `/v1/payment_intents/${payment.intentId}/cancel`, `pi:cancel:${payment.id}`]]);
-    expect(await paymentRow(payment.id)).toMatchObject({ status: "canceled" });
-    expect(await paymentEventTypes(payment.id)).toEqual(["payment.voided"]);
-    expect(await refundsOf(booking.id)).toEqual([]);
+    ).toEqual([
+      [
+        "POST",
+        `/v1/payment_intents/${payment.intentId}/capture`,
+        `pi:capture:${payment.id}:cancellation:25.00`,
+      ],
+    ]);
+    expect(await paymentRow(payment.id)).toMatchObject({ status: "captured", amount_captured: "25.00" });
+    expect(await paymentEventTypes(payment.id)).toEqual(["payment.captured", "payment.released"]);
+    expect(await refundsOf(booking.id)).toEqual([
+      expect.objectContaining({ status: "succeeded", amount: REFUND, provider_refund_id: null }),
+    ]);
   });
 
-  it("answers the same key with the final 200 that says the authorisation was voided", () => {
+  it("answers the same key with the final 200 that shows the release as the refund", () => {
     expect(answer(replayed)).toEqual([200, undefined]);
     expectResponseToMatch("cancelBooking", replayed);
     expect(replayed.body.cancellation).toMatchObject({
       status: "cancelled",
-      refund: null,
-      refundStatus: "authorization_voided",
+      refund: { amount: { amount: REFUND, currency: "EUR" }, status: "succeeded" },
+      refundStatus: "succeeded",
     });
   });
 });
@@ -1837,6 +2180,10 @@ describe("the claim of a cancellation", () => {
     expect(deletesWhileBusy).toBe(0);
   });
 
+  it("[FIX-W28-CANCEL AC5] answers that 503 with Retry-After (lead decision (8) of 2026-10-23)", () => {
+    expect(busy.headers["retry-after"]).toBe("1");
+  });
+
   it("[OBE-049 AC1] claims it under a concurrent key share, locks the booking before the payment, cancels once", async () => {
     expect(answer(retried)).toEqual([200, undefined]);
     expectResponseToMatch("cancelBooking", retried);
@@ -1996,5 +2343,215 @@ describe("refusals that change nothing", () => {
     const quoted = await quote(booking.id, credential);
     expect(answer(res)).toEqual([404, "NOT_FOUND"]);
     expect(answer(quoted)).toEqual([404, "NOT_FOUND"]);
+  });
+});
+
+describe("a DELETE without an answer whose check was never queued", () => {
+  let booking: SeededBooking;
+  let deadline: number;
+  let jobsBefore: string[];
+  let scans: Job[];
+  let jobsQueued: string[];
+  let check: Job;
+
+  /** The ids of the booking's `booking.cancellation_check` jobs, whatever their state. */
+  const checkJobsOf = async (bookingId: string): Promise<string[]> =>
+    (await bookingsQueue.getJobs(["delayed", "waiting", "active", "completed", "failed", "paused"]))
+      .map((job) => job.id ?? "")
+      .filter((id) => id.startsWith(`${CANCELLATION_CHECK_JOB}:${bookingId}:`));
+
+  beforeAll(async () => {
+    const customer = await newCustomer();
+    const credential: Credential = { kind: "key", customerToken: customer.token };
+    booking = await seedBooking("cancel.check_lost", { customerId: customer.id });
+    await seedPayment(booking.id, "captured");
+    const quoted = await quote(booking.id, credential);
+    stub.clearRequests();
+    // The after-commit enqueue of the first check is lost (Redis did not answer it): CancellationRecorder.enqueue logs
+    // such a failure and goes on, so the job is simply missing.
+    const recorder = api.app.get(CancellationRecorder, { strict: false });
+    const enqueue = recorder.enqueue.bind(recorder);
+    const lost = vi
+      .spyOn(recorder, "enqueue")
+      .mockImplementation((queue, name, data, opts) =>
+        name === CANCELLATION_CHECK_JOB ? Promise.resolve() : enqueue(queue, name, data, opts),
+      );
+    const spy = nextDeleteWith("timeout");
+    const timedOut = await cancel(booking.id, credential, '"1"', cancellation(quoted.body.estimatedRefund));
+    spy.mockRestore();
+    lost.mockRestore();
+    expect(answer(timedOut)).toEqual([504, "SUPPLIER_TIMEOUT"]);
+    jobsBefore = await checkJobsOf(booking.id);
+    // The flag is older than the sweep's minute (a scan a few minutes after the DELETE).
+    const flag = await inTenant(async (trx) => {
+      await sql`UPDATE booking_events SET created_at = created_at - interval '3 minutes'
+        WHERE booking_id = ${booking.id} AND type = 'booking.cancellation_timeout'`.execute(trx);
+      return await trx
+        .selectFrom("booking_events")
+        .select("data")
+        .where("booking_id", "=", booking.id)
+        .where("type", "=", "booking.cancellation_timeout")
+        .executeTakeFirstOrThrow();
+    });
+    deadline = Date.parse(String((flag.data as JsonObject)["until"]));
+
+    // Two scans (two minutes' iterations) while the bookings consumer waits: both add the flag's first check, which
+    // BullMQ keeps once by its id.
+    const maintenance = worker.get<Queue>(getQueueToken(OTA_QUEUE.maintenance), { strict: false });
+    const bookingsWorker = worker.get(ReconcileProcessor, { strict: false }).worker;
+    await bookingsWorker.pause();
+    scans = [];
+    try {
+      const bucket = minuteBucket(new Date());
+      for (const minute of [bucket, bucket + 1]) {
+        const spec = tenantJob(RECONCILE_SCAN_JOB, alphaId, minute);
+        await maintenance.add(spec.name, spec.data, spec.opts);
+        scans.push(await finished(maintenance, spec.opts.jobId));
+      }
+      jobsQueued = await checkJobsOf(booking.id);
+    } finally {
+      bookingsWorker.resume();
+    }
+    check = await finished(bookingsQueue, jobsQueued[0] ?? "");
+    await finished(paymentsQueue, `refund-submit-${(await refundsOf(booking.id))[0]?.id ?? ""}`);
+  }, SCENARIO_TIMEOUT_MS);
+
+  it("[FIX-W28-CANCEL AC4] lets the reconcile scan queue the lost check once, under the flag's own job id", () => {
+    expect(jobsBefore).toEqual([]);
+    for (const scan of scans) {
+      expect(scan.returnvalue).toMatchObject({ counts: { cancellationChecks: 1 } });
+    }
+    expect(jobsQueued).toEqual([`${CANCELLATION_CHECK_JOB}:${booking.id}:${deadline}-1`]);
+  });
+
+  it("[FIX-W28-CANCEL AC4] checks the booking exactly once: the order is gone, the cancellation and its refund recorded", async () => {
+    expect(check.returnvalue).toEqual({ tenantId: alphaId, bookingId: booking.id, outcome: "cancelled" });
+    expect(check.attemptsMade).toBeLessThanOrEqual(1);
+    expect(await checkJobsOf(booking.id)).toEqual(jobsQueued);
+    expect(await bookingRow(booking.id)).toMatchObject({ status: "cancelled", cancelled_by: "customer" });
+    expect((await refundsOf(booking.id)).map((row) => row.amount)).toEqual([REFUND]);
+    expect(
+      (await eventsOf(booking.id))
+        .filter((event) => event.type === "booking.cancelled")
+        .map((event) => event.type),
+    ).toEqual(["booking.cancelled"]);
+  });
+});
+
+describe("a DELETE without an answer whose later check was lost", () => {
+  let booking: SeededBooking;
+  let firstCheck: Job;
+  let jobsAfterFirst: string[];
+  let deadline: number;
+  let scans: Job[];
+  let jobsQueued: string[];
+  let lastCheck: Job;
+
+  /** The ids of the booking's `booking.cancellation_check` jobs, whatever their state, sorted. */
+  const checkJobsOf = async (bookingId: string): Promise<string[]> =>
+    (await bookingsQueue.getJobs(["delayed", "waiting", "active", "completed", "failed", "paused"]))
+      .map((job) => job.id ?? "")
+      .filter((id) => id.startsWith(`${CANCELLATION_CHECK_JOB}:${bookingId}:`))
+      .sort();
+
+  beforeAll(async () => {
+    const customer = await newCustomer();
+    const credential: Credential = { kind: "key", customerToken: customer.token };
+    booking = await seedBooking("cancel.check_chain_lost", { customerId: customer.id });
+    await seedPayment(booking.id, "captured");
+    const quoted = await quote(booking.id, credential);
+    stub.clearRequests();
+    const spy = nextDeleteWith("timeout");
+    const timedOut = await cancel(booking.id, credential, '"1"', cancellation(quoted.body.estimatedRefund));
+    spy.mockRestore();
+    expect(answer(timedOut)).toEqual([504, "SUPPLIER_TIMEOUT"]);
+
+    // The first check cannot read the order (Amadeus unavailable) and queues the next one, whose enqueue is lost
+    // (CancellationRecorder.enqueue logs such a failure and goes on): the chain ends there, the flag still undecided.
+    const client = worker.get(AmadeusClient, { strict: false });
+    const reads = vi.spyOn(client, "getFlightOrder").mockRejectedValue(new AppError("SUPPLIER_UNAVAILABLE"));
+    const recorder = worker.get(CancellationRecorder, { strict: false });
+    const enqueue = recorder.enqueue.bind(recorder);
+    const lost = vi
+      .spyOn(recorder, "enqueue")
+      .mockImplementation((queue, name, data, opts) =>
+        name === CANCELLATION_CHECK_JOB ? Promise.resolve() : enqueue(queue, name, data, opts),
+      );
+    try {
+      firstCheck = await runCheck(booking.id);
+    } finally {
+      lost.mockRestore();
+      reads.mockRestore();
+    }
+    jobsAfterFirst = await checkJobsOf(booking.id);
+
+    // Six minutes after the flag's deadline: every check of a healthy chain after the deadline would have decided it.
+    deadline = Date.now() - 6 * MINUTE;
+    await inTenant((trx) =>
+      trx
+        .updateTable("booking_events")
+        .set({
+          data: sql`jsonb_set(data, '{until}', to_jsonb(${new Date(deadline).toISOString()}::text))`,
+          created_at: sql`created_at - interval '21 minutes'`,
+        })
+        .where("booking_id", "=", booking.id)
+        .where("type", "=", "booking.cancellation_timeout")
+        .execute(),
+    );
+
+    // Two scans while the bookings consumer waits: both add the chain's last check, which BullMQ keeps once by its id.
+    const maintenance = worker.get<Queue>(getQueueToken(OTA_QUEUE.maintenance), { strict: false });
+    const bookingsWorker = worker.get(ReconcileProcessor, { strict: false }).worker;
+    await bookingsWorker.pause();
+    scans = [];
+    try {
+      const bucket = minuteBucket(new Date()) + 10;
+      for (const minute of [bucket, bucket + 1]) {
+        const spec = tenantJob(RECONCILE_SCAN_JOB, alphaId, minute);
+        await maintenance.add(spec.name, spec.data, spec.opts);
+        scans.push(await finished(maintenance, spec.opts.jobId));
+      }
+      jobsQueued = await checkJobsOf(booking.id);
+    } finally {
+      bookingsWorker.resume();
+    }
+    lastCheck = await finished(
+      bookingsQueue,
+      `${CANCELLATION_CHECK_JOB}:${booking.id}:${deadline}-${CANCELLATION_CHECK_MAX_RUNS}`,
+    );
+    await finished(paymentsQueue, `refund-submit-${(await refundsOf(booking.id))[0]?.id ?? ""}`);
+  }, SCENARIO_TIMEOUT_MS);
+
+  it("[FIX-W28-CANCEL AC4] lets the reconcile scan queue the chain's last check once, after the deadline", () => {
+    expect(firstCheck.returnvalue).toEqual({
+      tenantId: alphaId,
+      bookingId: booking.id,
+      outcome: "rescheduled",
+    });
+    // The first check is the only job of the chain: the next one was lost.
+    expect(jobsAfterFirst).toHaveLength(1);
+    expect(jobsAfterFirst[0]).toMatch(new RegExp(`:${booking.id}:\\d+-1$`));
+    for (const scan of scans) {
+      expect(scan.returnvalue).toMatchObject({ counts: { cancellationChecks: 1 } });
+    }
+    expect(jobsQueued).toEqual(
+      [
+        ...jobsAfterFirst,
+        `${CANCELLATION_CHECK_JOB}:${booking.id}:${deadline}-${CANCELLATION_CHECK_MAX_RUNS}`,
+      ].sort(),
+    );
+  });
+
+  it("[FIX-W28-CANCEL AC4] decides the cancellation exactly once: the order is gone, the cancellation and its refund recorded", async () => {
+    expect(lastCheck.returnvalue).toEqual({ tenantId: alphaId, bookingId: booking.id, outcome: "cancelled" });
+    expect(lastCheck.attemptsMade).toBeLessThanOrEqual(1);
+    expect(await checkJobsOf(booking.id)).toEqual(jobsQueued);
+    expect(await bookingRow(booking.id)).toMatchObject({ status: "cancelled", cancelled_by: "customer" });
+    expect((await refundsOf(booking.id)).map((row) => row.amount)).toEqual([REFUND]);
+    expect(
+      (await eventsOf(booking.id))
+        .filter((event) => event.type === "booking.cancelled")
+        .map((event) => event.type),
+    ).toEqual(["booking.cancelled"]);
   });
 });

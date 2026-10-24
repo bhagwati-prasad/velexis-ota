@@ -20,7 +20,8 @@ Related: [db README](../../docs/velexis-sdk/db/README.md) (tenancy design), [ADR
 | `0001_baseline.sql` | Byte-for-byte copy of `tenant.sql` (a unit test compares checksums) | M0 (X-012) |
 | `0002_add_mvp_tenant_deltas.sql` | All MVP deltas below, phase `expand` | M2, one task, before the first shopping endpoint |
 | `0003_add_booking_sync_claim.sql` | `bookings.sync_claimed_at` and `bookings.sync_changes` (§3.7), phase `expand` | M3 (FIX-W27-SYNC, lead decision (3) of 2026-10-23) |
-| `0004_…` and later | Changes found during M3–M6 | When needed |
+| `0004_add_payment_card_fee_lines.sql` | `payments.card_fee_lines` (§3.8), phase `expand` | M3 (FIX-W28-CANCEL, lead decision (2) of 2026-10-23, second batch) |
+| `0005_…` and later | Changes found during M3–M6 | When needed |
 
 One file for all MVP deltas avoids number clashes between agents working in parallel; the columns used only in M3 or M4 are nullable or have safe defaults, so they cost nothing earlier. The cross-cutting [schema delta table](../../docs/mvp/architecture.md#schema-deltas-named-by-the-cross-cutting-adrs) lists `payments.provider` adding `airline` under M3; shipping it in `0002` during M2 meets that milestone early, as the platform plan does with its own `0002`. Rules for every tenant migration ([`conventions.md` §9](../../docs/mvp/conventions.md#9-database-migrations)): unqualified names, no `search_path`, no other schema except `reference` by value, `text` + `CHECK` statuses, `COMMENT ON` for every new table and column, CHECK lists extended with `NOT VALID` then `VALIDATE`, and the code works with schema versions N-1 and N. New tables need no `GRANT`: provisioning sets default privileges for `velexis_ota_app` in each schema ([OADR-0007](adr/0007-tenant-migration-runner-and-provisioning-worker.md)).
 
@@ -144,6 +145,14 @@ erDiagram
 |---|---|
 | `bookings.sync_claimed_at timestamptz` (nullable) | The claim of a synchronisation with Flight Order Management (the background sync's and the refreshes'): the sync skips a booking claimed in the last 30 minutes, a refresh is throttled by it. It replaces the staff-only `booking.sync_requested` events, about four a day per upcoming booking and one an hour near the ticketing deadline, which filled the console's timeline of 100 events. The events written before stay; no backfill (conventions §9: backfills are jobs), so a claim recorded as an event in the half hour before the upgrade is not seen and the booking may be synchronised once more. |
 | `bookings.sync_changes jsonb NOT NULL DEFAULT '[]'` with `bookings_sync_changes_ck` (an array) | What the last recorded synchronisation changed, whichever path read the order (`[{path, label, before, after}]`, JSON pointers into the booking): the console's `ConsoleSupplierSync.differences`. Empty when it changed nothing. |
+
+### 3.8 The delta of `0004`: the card fee's lines
+
+`ota/backend/migrations/tenant/0004_add_payment_card_fee_lines.sql` (FIX-W28-CANCEL, lead decision (2) of 2026-10-23, second batch; [OADR-0005](adr/0005-markup-and-fee-engine.md) point 7, [OADR-0010](adr/0010-stripe-gateway-and-payment-webhooks.md) point 6):
+
+| Change | Why |
+|---|---|
+| `payments.card_fee_lines jsonb NOT NULL DEFAULT '[]'` with `payments_card_fee_lines_ck` (an array) | The lines of `card_fee_amount` when the fee was quoted (checkout.createPayment, checkout.updatePayment): `[{source, ruleId, amount, refundable}]`, the Amadeus credit-card fee (`source: amadeus`, never refundable) and each OTA `payment_card` fee rule (`source: fee_rule`, its rule's `refundable` flag at that moment). A cancellation keeps the card fee unless its line is refundable; the rule can change or be deleted after the payment, so the flag travels with the payment. Payments written before the column keep an empty list, which counts as nothing refundable (no backfill: conventions §9). |
 
 ## 4. Encrypted columns
 

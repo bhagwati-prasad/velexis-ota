@@ -26,6 +26,7 @@ import { Injectable } from "@nestjs/common";
 import type { operations } from "@velexis/api-types";
 import { AppError } from "@velexis/errors";
 import { allowedActionsOf } from "../bookings/allowed-actions";
+import { cancellationFactsOf, cancellationPendingOf } from "../bookings/cancellation-state";
 import {
   fareConditionsOf,
   snapshotOffersOf,
@@ -261,6 +262,8 @@ export class ConsoleBookingsService {
     const offers = snapshotOffersOf(stored.orderSnapshot);
     const storedRules = storedFareRulesOf(stored.orderIncluded);
     const wantsFareRules = options.fareRules !== undefined && options.fareRules.length > 0;
+    // The cancellation block and canCancel follow the cancellation's state (FIX-W28-CANCEL).
+    const cancellationFacts = await cancellationFactsOf(trx, bookingId);
     const syncStatus =
       refreshed ??
       storedConsoleSyncStatusOf({
@@ -287,12 +290,17 @@ export class ConsoleBookingsService {
         documentsReady: documents.some((document) => document.status === "ready"),
         features: featuresOf(settingsRow?.features),
         lastRefreshAt: stored.lastRefreshAt,
+        cancellationPending: cancellationPendingOf(cancellationFacts.state),
         now,
       }),
       ancillaries: await this.bookings.ancillaries(trx, bookingId),
       refunds: await this.bookings.refundsOf(trx, bookingId),
       documents,
       cancelledBy: stored.cancelledBy,
+      cancelReason: stored.cancelReason,
+      cancellationFacts,
+      // Console scope: a staff member's cancellation reason is shown too.
+      scope: "console",
       amadeus: consoleOrderOf(stored.orderSnapshot, stored.orderDictionaries),
       fareConditions:
         offers.length === 0 ? null : fareConditionsOf(storedRules?.offers ?? [], offers, booking.currency),

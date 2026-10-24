@@ -60,6 +60,25 @@ describe("the allowed actions of a live booking", () => {
     }
   });
 
+  it("[FIX-W28-CANCEL AC3] refuses cancellation while one is undecided or waits for the staff, and without an Amadeus order", () => {
+    const pending = allowedActionsOf(input({ cancellationPending: true }));
+    expect(pending.canCancel).toBe(false);
+    expect(pending.reasons["canCancel"]).toBe("pending");
+    // The other actions do not depend on it.
+    expect(pending).toMatchObject({ canModifyContacts: true, canAddRemarks: true, canRefresh: true });
+    expect(allowedActionsOf(input({ cancellationPending: false })).canCancel).toBe(true);
+
+    const withoutOrder = allowedActionsOf(input({ amadeusOrderId: null }));
+    expect(withoutOrder.canCancel).toBe(false);
+    expect(withoutOrder.reasons["canCancel"]).toBe("pending");
+    // The quote's order of reasons: the OTA's switch comes before a pending cancellation.
+    expect(
+      allowedActionsOf(
+        input({ cancellationPending: true, features: { selfServiceCancellation: false, ancillaries: true } }),
+      ).reasons["canCancel"],
+    ).toBe("disabled_by_ota");
+  });
+
   it("refuses cancellation when the OTA has not turned self-service cancellation on", () => {
     const actions = allowedActionsOf(
       input({ features: { selfServiceCancellation: false, ancillaries: true } }),

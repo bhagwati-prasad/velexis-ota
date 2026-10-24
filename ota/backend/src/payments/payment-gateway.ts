@@ -172,6 +172,14 @@ export function failureKeptForKey(error: unknown): boolean {
 }
 
 /**
+ * What a capture is for, which names its idempotency key (OADR-0010 point 3): `booking`, the order of a booking
+ * (`pi:capture:<pay_id>:<amount>`); `cancellation`, the amount a cancelled booking keeps of its authorisation, the rest
+ * being released (lead decision (1) of 2026-10-23, second batch; FIX-W28-CANCEL: `pi:capture:<pay_id>:cancellation:
+ * <amount>`, one key per booking cancellation, so it never meets the key of a capture of the order that failed).
+ */
+export type CapturePurpose = "booking" | "cancellation";
+
+/**
  * The payment gateway. Every method resolves the tenant's account first (`account`, `424
  * PAYMENT_PROVIDER_NOT_CONFIGURED` when it cannot serve), and maps every provider failure to `502
  * PAYMENT_PROVIDER_ERROR` (nothing charged) whose cause is a `GatewayCallFailure`: the call can be sent again with the
@@ -192,8 +200,17 @@ export interface PaymentGateway {
   updateAmount(ctx: GatewayContext, payment: GatewayPayment, amount: string): Promise<GatewayState>;
   /** Reads the provider payment again (its state, card, 3-D Secure outcome and client secret). */
   refresh(ctx: GatewayContext, payment: GatewayPayment): Promise<GatewayState>;
-  /** Captures an authorised payment, idempotency `pi:capture:<pay_id>:<amount>`. */
-  capture(ctx: GatewayContext, payment: GatewayPayment, amount: string): Promise<GatewayState>;
+  /**
+   * Captures `amount` of an authorised payment and releases the rest of the authorisation, idempotency
+   * `pi:capture:<pay_id>:<amount>`, or for a cancellation's kept amount `pi:capture:<pay_id>:cancellation:<amount>`
+   * (CapturePurpose).
+   */
+  capture(
+    ctx: GatewayContext,
+    payment: GatewayPayment,
+    amount: string,
+    purpose?: CapturePurpose,
+  ): Promise<GatewayState>;
   /** Cancels (voids) a payment that is not captured, idempotency `pi:cancel:<pay_id>`. */
   void(ctx: GatewayContext, payment: GatewayPayment): Promise<GatewayState>;
   /** Refunds (part of) a captured payment, idempotency `refund:<rfd_id>`. */
@@ -208,6 +225,9 @@ export const idempotencyKeys = Object.freeze({
   create: (paymentId: string): string => `pi:create:${paymentId}`,
   update: (paymentId: string, version: number): string => `pi:update:${paymentId}:${version}`,
   capture: (paymentId: string, amount: string): string => `pi:capture:${paymentId}:${amount}`,
+  /** The capture of the amount a cancellation keeps (CapturePurpose `cancellation`, FIX-W28-CANCEL). */
+  captureKept: (paymentId: string, amount: string): string =>
+    `pi:capture:${paymentId}:cancellation:${amount}`,
   cancel: (paymentId: string): string => `pi:cancel:${paymentId}`,
   refund: (refundId: string): string => `refund:${refundId}`,
 });

@@ -404,3 +404,33 @@ export class CardFees {
     return done(fee, "amadeus");
   }
 }
+
+// ---- What a cancellation keeps of the card fee ------------------------------------------------------------------
+
+/**
+ * The part of a payment's card fee a cancellation keeps (lead decision (2) of 2026-10-23, second batch;
+ * FIX-W28-CANCEL): `card_fee_amount` less its refundable lines (`payments.card_fee_lines`, checkout/pricing-mode.ts
+ * `CardFeeLine`: an OTA `payment_card` fee whose rule was `refundable` when it was quoted), never below 0. The Amadeus
+ * credit-card fee is never refundable, whatever its line says; a line that cannot be read, and a payment without lines
+ * (written before tenant migration 0004), count as not refundable: the whole fee is kept.
+ */
+export function keptCardFeeOf(
+  payment: { readonly cardFeeAmount: string; readonly cardFeeLines?: unknown },
+  minorUnits: number,
+): string {
+  const fee = new Money(payment.cardFeeAmount);
+  let refundable = new Money(0);
+  for (const line of Array.isArray(payment.cardFeeLines) ? (payment.cardFeeLines as unknown[]) : []) {
+    const amount = isRecord(line) ? text(line["amount"]) : undefined;
+    if (
+      isRecord(line) &&
+      line["source"] === "fee_rule" &&
+      line["refundable"] === true &&
+      amount !== undefined &&
+      /^\d+(?:\.\d+)?$/.test(amount)
+    ) {
+      refundable = refundable.plus(amount);
+    }
+  }
+  return Money.max(fee.minus(refundable), 0).toFixed(minorUnits);
+}

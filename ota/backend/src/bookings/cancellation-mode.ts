@@ -20,12 +20,17 @@
 //
 // Refund estimate (release and void): what the money step gives back of the booking's payment.
 //
-//   Stripe, captured     what can still be refunded (captured − refunded − refunds in flight), less the OTA fees that
-//                        are kept: the booking's non-refundable fees (`fee_rules.refundable = false` when it was
-//                        priced, from the priced offer's snapshot: `keptFeesOf`) and the `cancellation` fees of the
-//                        engine on the booking total (OADR-0005 point 7), never below zero
-//   Stripe, authorised   the whole authorisation: the money step voids it, so nothing is charged and nothing is kept
-//   airline card         what the airline charged: a void reverses its charge (no OTA fee in net pricing)
+//   Stripe, captured     what can still be refunded (captured − refunded − refunds in flight), less what the OTA
+//                        keeps: the booking's non-refundable fees (`fee_rules.refundable = false` when it was priced,
+//                        from the priced offer's snapshot: `keptFeesOf`), the `cancellation` fees of the engine on the
+//                        booking total (OADR-0005 point 7) and the payment's card fee unless its line is refundable
+//                        (`keptCardFee`, lead decision (2) of 2026-10-23, second batch: card-fees.ts `keptCardFeeOf`;
+//                        the Amadeus credit-card fee is never refundable), never below zero
+//   Stripe, authorised   the same split of the authorisation (lead decision (1) of 2026-10-23, second batch): the money
+//                        step captures the amount kept and Stripe releases the rest, which is the refund; only a kept
+//                        amount of zero voids the authorisation (everything back)
+//   airline card         what the airline charged: a void reverses its charge (no OTA fee in net pricing; the OTA
+//                        holds no money it could keep)
 //   none                 0
 //
 // `request_only` and `not_allowed` estimate 0: the staff decide the refund of a request (flow §3 step 6). Every amount
@@ -224,6 +229,8 @@ export interface RefundEstimateInput {
   readonly keptFees: string;
   /** The amounts of the engine's `cancellation` fee lines on the booking total. */
   readonly cancellationFees: readonly string[];
+  /** The part of the payment's card fee that is kept (card-fees.ts `keptCardFeeOf`), a decimal string. */
+  readonly keptCardFee: string;
 }
 
 /** CancellationQuote's amounts, decimal strings with the currency's minor units. */
@@ -233,7 +240,7 @@ export interface RefundEstimate {
   readonly estimatedRefund: string;
   /** The airline's penalty (0 in release and void). */
   readonly penalty: string;
-  /** The OTA fees kept: non-refundable fees and the cancellation fee (`otaFee`). */
+  /** The OTA fees kept: non-refundable fees, the card fee unless refundable and the cancellation fee (`otaFee`). */
   readonly otaFee: string;
 }
 
@@ -261,8 +268,8 @@ export function refundEstimateOf(input: RefundEstimateInput): RefundEstimate {
       otaFee: fixed(zero),
     };
   }
-  if (payment.kind !== "stripe_captured") {
-    // A void releases the whole authorisation; the airline reverses its whole charge.
+  if (payment.kind === "airline") {
+    // The airline reverses its whole charge.
     return {
       amountPaid: fixed(paid),
       estimatedRefund: fixed(paid),
@@ -270,12 +277,15 @@ export function refundEstimateOf(input: RefundEstimateInput): RefundEstimate {
       otaFee: fixed(zero),
     };
   }
-  // What is left to refund, less the fees kept (never more than is left).
-  const refundable = new Money(payment.refundable);
-  const kept = Money.min(refundable, new Money(input.keptFees).plus(sumOf(input.cancellationFees)));
+  // What is left to refund of a capture, or the authorisation, less what the OTA keeps (never more than there is).
+  const base = payment.kind === "stripe_captured" ? new Money(payment.refundable) : paid;
+  const kept = Money.min(
+    base,
+    new Money(input.keptFees).plus(sumOf(input.cancellationFees)).plus(input.keptCardFee),
+  );
   return {
     amountPaid: fixed(paid),
-    estimatedRefund: fixed(Money.max(zero, refundable.minus(kept))),
+    estimatedRefund: fixed(Money.max(zero, base.minus(kept))),
     penalty: fixed(zero),
     otaFee: fixed(Money.max(zero, kept)),
   };

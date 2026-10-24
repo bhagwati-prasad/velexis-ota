@@ -14,7 +14,8 @@
 // CancellationService, behind the same guard: the quote with `Cache-Control: no-store`; the cancellation with the
 // booking's new `ETag`, `200` when the booking is cancelled and `202` when the cancellation waits for the staff
 // (`Cache-Control: no-store`). Its `Idempotency-Key` is the global idempotency interceptor's, with the replays of a `504`
-// of CancelBookingIdempotencyHooks.
+// of CancelBookingIdempotencyHooks. A cancellation whose claim found the booking held by another claim or writer answers
+// `503 SERVICE_UNAVAILABLE` with `Retry-After` (lead decision (8) of 2026-10-23, second batch: `retryAfterOf`).
 import { Controller, Get, HttpCode, Patch, Post, Res, UseGuards } from "@nestjs/common";
 import type { Response } from "express";
 import { BookingAccessGuard } from "../common/auth/booking-access.guard";
@@ -36,6 +37,7 @@ import { BookingChangesService } from "./booking-changes.service";
 import {
   CANCELLATION_CACHE_CONTROL,
   CancellationService,
+  retryAfterOf,
   type CancellationQuote,
   type CancellationResult,
 } from "./cancellation.service";
@@ -117,11 +119,17 @@ export class CustomerBookingsController {
       // The validation interceptor refuses a request without a body: never reached.
       throw new Error("cancelBooking without a validated body");
     }
-    const answer = await this.cancellations.cancel(
-      input.path.bookingId,
-      input.headers["If-Match"],
-      input.body,
-    );
+    let answer: Awaited<ReturnType<CancellationService["cancel"]>>;
+    try {
+      answer = await this.cancellations.cancel(input.path.bookingId, input.headers["If-Match"], input.body);
+    } catch (error) {
+      // A booking another claim holds: the same key can be sent again a moment later.
+      const wait = retryAfterOf(error);
+      if (wait !== undefined) {
+        res.setHeader("Retry-After", String(wait));
+      }
+      throw error;
+    }
     res.status(answer.status);
     res.setHeader("ETag", bookingEtagOf(answer.version));
     res.setHeader("Cache-Control", CANCELLATION_CACHE_CONTROL);

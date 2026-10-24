@@ -13,6 +13,11 @@
 // writes the amounts of that mode into the checkout; choosing a Stripe method again restores the selling price. The
 // CHECK of the table (`total = offer + ancillaries + fees`) holds in both modes. Pure functions: money in decimal.js,
 // never a JavaScript number, rounded to the currency's minor units.
+//
+// The card fee's lines (`cardFeeLinesFor`, lead decision (2) of 2026-10-23, second batch; FIX-W28-CANCEL): the payment
+// stores the lines its card fee is made of (`payments.card_fee_lines`, tenant migration 0004), each with whether a
+// cancellation refunds it: the Amadeus credit-card fee never is, an OTA `payment_card` fee is when its rule is
+// `refundable` (at the time the fee was quoted). In `net` mode the Amadeus fee is the only line.
 import { Money } from "../pricing/pricing.types";
 
 /** `checkouts.pricing_mode`. */
@@ -83,6 +88,60 @@ export function cardFeeFor(mode: PricingMode, quote: CardFeeParts | undefined, m
     return new Money(0).toFixed(minorUnits);
   }
   return new Money(mode === "net" ? quote.amadeusFee : quote.total).toFixed(minorUnits);
+}
+
+/** One line of a payment's card fee, as `payments.card_fee_lines` stores it (see the file header). */
+export interface CardFeeLine {
+  /** `amadeus`: the Amadeus credit-card fee of the brand; `fee_rule`: an OTA `payment_card` fee rule. */
+  readonly source: "amadeus" | "fee_rule";
+  /** The fee rule (`fee_…`) of a `fee_rule` line, else `null`. */
+  readonly ruleId: string | null;
+  /** A decimal string with the currency's minor units. */
+  readonly amount: string;
+  /** Whether a cancellation refunds it: never for the Amadeus fee, the rule's flag for an OTA fee. */
+  readonly refundable: boolean;
+}
+
+/** What the lines of a card fee are built from (card-fees.ts `CardFeeQuote`). */
+export interface CardFeeLineParts extends CardFeeParts {
+  /** The OTA's `payment_card` fee lines of the engine, with their rule and its refundable flag. */
+  readonly feeLines: readonly {
+    readonly ruleId: string;
+    readonly amount: string;
+    readonly refundable: boolean;
+  }[];
+}
+
+/**
+ * The lines of the card fee `cardFeeFor` gives in `mode` (see the file header): the Amadeus fee, then in
+ * `markup_rules` the OTA's `payment_card` lines; none without a quote. They sum to `cardFeeFor`'s amount.
+ */
+export function cardFeeLinesFor(
+  mode: PricingMode,
+  quote: CardFeeLineParts | undefined,
+  minorUnits: number,
+): CardFeeLine[] {
+  if (quote === undefined) {
+    return [];
+  }
+  const amadeus: CardFeeLine = {
+    source: "amadeus",
+    ruleId: null,
+    amount: new Money(quote.amadeusFee).toFixed(minorUnits),
+    refundable: false,
+  };
+  if (mode === "net") {
+    return [amadeus];
+  }
+  return [
+    amadeus,
+    ...quote.feeLines.map((line): CardFeeLine => ({
+      source: "fee_rule",
+      ruleId: line.ruleId,
+      amount: new Money(line.amount).toFixed(minorUnits),
+      refundable: line.refundable,
+    })),
+  ];
 }
 
 /** The amount before the card fee (`offer + ancillaries`). */

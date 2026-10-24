@@ -108,6 +108,8 @@ describe("the baseline migrations", () => {
               ["0002_add_mvp_tenant_deltas", "numbered", "expand", false],
               // The booking sync's claim column and last changes (FIX-W27-SYNC).
               ["0003_add_booking_sync_claim", "numbered", "expand", false],
+              // The card fee's lines with their refundable flag (FIX-W28-CANCEL).
+              ["0004_add_payment_card_fee_lines", "numbered", "expand", false],
             ]
           : []),
       ]);
