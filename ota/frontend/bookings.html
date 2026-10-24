@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="robots" content="noindex" />
+    <title>My bookings</title>
+    <meta name="description" content="Your upcoming, past and cancelled trips." />
+    <link rel="stylesheet" href="/src/styles/main.css" />
+    <script type="module" src="/src/pages/bookings.js"></script>
+  </head>
+  <body class="flex min-h-screen flex-col bg-surface font-body text-ink antialiased">
+    <!-- @include partials/noscript.html -->
+    <!-- @include partials/test-banner.html -->
+    <!-- @include partials/header.html -->
+    <main
+      id="main"
+      tabindex="-1"
+      class="mx-auto w-full max-w-4xl flex-1 px-4 py-8 focus:outline-none"
+      data-bookings-page
+    >
+      <h1 tabindex="-1" class="font-heading text-2xl font-semibold focus:outline-none sm:text-3xl">
+        My bookings
+      </h1>
+
+      <nav aria-label="Trips" class="mt-4 border-b border-muted/30">
+        <ul class="-mb-px flex flex-wrap gap-x-2">
+          <li>
+            <a
+              href="/bookings.html?tab=upcoming"
+              data-tab="upcoming"
+              class="inline-block min-h-6 border-b-2 border-transparent px-3 py-2 font-medium text-muted hover:text-ink aria-[current=page]:border-primary aria-[current=page]:text-ink"
+              >Upcoming</a
+            >
+          </li>
+          <li>
+            <a
+              href="/bookings.html?tab=past"
+              data-tab="past"
+              class="inline-block min-h-6 border-b-2 border-transparent px-3 py-2 font-medium text-muted hover:text-ink aria-[current=page]:border-primary aria-[current=page]:text-ink"
+              >Past</a
+            >
+          </li>
+          <li>
+            <a
+              href="/bookings.html?tab=cancelled"
+              data-tab="cancelled"
+              class="inline-block min-h-6 border-b-2 border-transparent px-3 py-2 font-medium text-muted hover:text-ink aria-[current=page]:border-primary aria-[current=page]:text-ink"
+              >Cancelled</a
+            >
+          </li>
+        </ul>
+      </nav>
+
+      <div data-bookings-state></div>
+
+      <div class="mt-6 space-y-4" aria-hidden="true" data-bookings-loading hidden>
+        <div class="h-28 rounded-ui bg-panel motion-safe:animate-pulse"></div>
+        <div class="h-28 rounded-ui bg-panel motion-safe:animate-pulse"></div>
+        <div class="h-28 rounded-ui bg-panel motion-safe:animate-pulse"></div>
+      </div>
+
+      <div class="mt-6" data-bookings-content hidden>
+        <ul class="space-y-4" data-bookings-list></ul>
+
+        <div class="rounded-ui border border-muted/30 bg-panel p-4 sm:p-5" data-bookings-empty hidden>
+          <p class="font-heading text-lg font-semibold" data-bookings-empty-title></p>
+          <div class="mt-3 space-y-2" data-bookings-empty-upcoming hidden>
+            <p>
+              <a href="/" class="min-h-6 font-medium text-primary underline underline-offset-4"
+                >Search flights</a
+              >
+            </p>
+            <p>
+              Booked as a guest?
+              <a
+                href="/lookup.html"
+                class="min-h-6 font-medium text-primary underline underline-offset-4"
+                data-lookup-link
+                >Find your booking</a
+              >
+            </p>
+          </div>
+        </div>
+
+        <p class="mt-6" data-load-more hidden>
+          <button
+            type="button"
+            class="min-h-6 rounded-ui border border-primary px-5 py-2 font-medium text-primary hover:bg-panel aria-disabled:opacity-60"
+            data-action="load-more"
+          >
+            Load more
+          </button>
+        </p>
+        <div data-load-more-state></div>
+      </div>
+    </main>
+    <!-- @include partials/footer.html -->
+
+    <!-- @include partials/templates/booking-row.html -->
+    <!-- @include partials/states.html -->
+  </body>
+</html>

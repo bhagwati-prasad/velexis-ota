@@ -1,0 +1,447 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="robots" content="noindex" />
+    <title>Your booking</title>
+    <meta
+      name="description"
+      content="Your booking: trip, travellers, tickets, documents, contact details and cancellation."
+    />
+    <link rel="stylesheet" href="/src/styles/main.css" />
+    <script type="module" src="/src/pages/booking.js"></script>
+  </head>
+  <body class="flex min-h-screen flex-col bg-surface font-body text-ink antialiased">
+    <!-- @include partials/noscript.html -->
+    <!-- @include partials/test-banner.html -->
+    <!-- @include partials/header.html -->
+    <main
+      id="main"
+      tabindex="-1"
+      class="mx-auto w-full max-w-4xl flex-1 px-4 py-8 focus:outline-none"
+      data-booking-page
+    >
+      <p class="mb-3" data-back-link hidden>
+        <a href="/bookings.html" class="min-h-6 font-medium text-primary underline underline-offset-4"
+          >My bookings</a
+        >
+      </p>
+      <h1
+        tabindex="-1"
+        class="font-heading text-2xl font-semibold focus:outline-none sm:text-3xl"
+        data-booking-title
+      >
+        Your booking
+      </h1>
+
+      <div data-booking-state></div>
+
+      <div class="mt-6 space-y-4" aria-hidden="true" data-booking-loading hidden>
+        <div class="h-24 rounded-ui bg-panel motion-safe:animate-pulse"></div>
+        <div class="h-48 rounded-ui bg-panel motion-safe:animate-pulse"></div>
+      </div>
+
+      <div class="mt-4 space-y-8" data-booking-content hidden>
+        <section aria-label="Booking status" class="space-y-1">
+          <p class="flex flex-wrap items-center gap-3">
+            <span
+              class="inline-flex items-center rounded-full border border-muted/40 px-2.5 py-0.5 text-sm font-semibold text-muted data-[status=cancellation\_requested]:border-warning data-[status=cancellation\_requested]:text-warning data-[status=confirmed]:border-success data-[status=confirmed]:text-success data-[status=failed]:border-error data-[status=failed]:text-error data-[status=partially\_ticketed]:border-warning data-[status=partially\_ticketed]:text-warning data-[status=pending]:border-warning data-[status=pending]:text-warning data-[status=ticketed]:border-success data-[status=ticketed]:text-success"
+              data-booking-status
+            ></span>
+            <span class="text-sm text-muted"
+              >Booking reference
+              <span class="font-mono text-base font-semibold text-ink" data-booking-reference></span
+            ></span>
+          </p>
+          <p class="text-sm text-muted" data-airline-references hidden></p>
+          <p class="text-sm text-muted" data-booked-at></p>
+          <p class="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-muted">
+            <span data-synced-at></span>
+            <button
+              type="button"
+              class="min-h-6 font-medium text-primary underline underline-offset-4 aria-disabled:opacity-60"
+              data-action="refresh"
+              hidden
+            >
+              Refresh from airline
+            </button>
+          </p>
+        </section>
+
+        <div data-booking-notice></div>
+
+        <p class="rounded-ui border-2 border-warning bg-panel p-4" data-booking-banner hidden></p>
+
+        <section
+          class="rounded-ui border-2 border-muted/30 bg-panel p-4 sm:p-5"
+          aria-labelledby="cancellation-title"
+          data-cancellation-block
+          hidden
+        >
+          <h2 id="cancellation-title" class="font-heading text-lg font-semibold" data-cancellation-title></h2>
+          <p class="mt-2" data-cancellation-text></p>
+          <p class="mt-2" data-cancellation-refund hidden></p>
+        </section>
+
+        <section aria-labelledby="actions-title" data-actions hidden>
+          <h2 id="actions-title" class="font-heading text-xl font-semibold">Manage your booking</h2>
+          <p class="mt-3 flex flex-wrap gap-3">
+            <button
+              type="button"
+              class="min-h-6 rounded-ui border border-primary px-4 py-2 font-medium text-primary hover:bg-panel"
+              data-action="change-contacts"
+              hidden
+            >
+              Change contact details
+            </button>
+            <button
+              type="button"
+              class="min-h-6 rounded-ui border border-primary px-4 py-2 font-medium text-primary hover:bg-panel"
+              data-action="cancel"
+              hidden
+            >
+              Cancel booking
+            </button>
+          </p>
+          <div class="mt-3" data-cancel-unavailable hidden>
+            <p class="font-medium">This booking can no longer be cancelled online.</p>
+            <p class="mt-1 text-muted" data-cancel-unavailable-support>
+              If you need to cancel it, please contact us<span data-support-contact hidden>
+                at
+                <a class="font-medium underline" data-support-link></a></span
+              >.
+            </p>
+          </div>
+        </section>
+
+        <section aria-labelledby="trip-title">
+          <h2 id="trip-title" class="font-heading text-xl font-semibold">Your trip</h2>
+          <ol class="mt-3 space-y-4" data-itineraries></ol>
+        </section>
+
+        <div class="grid gap-8 sm:grid-cols-2">
+          <section aria-labelledby="travellers-title">
+            <h2 id="travellers-title" class="font-heading text-xl font-semibold">Travellers</h2>
+            <ul class="mt-3 space-y-2" data-travellers></ul>
+          </section>
+          <section aria-labelledby="contact-title">
+            <h2 id="contact-title" class="font-heading text-xl font-semibold">Contact details</h2>
+            <ul class="mt-3 space-y-1" data-contact></ul>
+          </section>
+        </div>
+
+        <section aria-labelledby="payment-title">
+          <h2 id="payment-title" class="font-heading text-xl font-semibold">Payment</h2>
+          <dl class="mt-3 divide-y divide-muted/20 rounded-ui border border-muted/30 bg-surface px-4">
+            <div class="flex items-baseline justify-between gap-4 py-2" data-card-fee-line hidden>
+              <dt>Card fee</dt>
+              <dd class="tabular-nums" data-card-fee></dd>
+            </div>
+            <div class="flex items-baseline justify-between gap-4 py-2 text-lg font-semibold">
+              <dt>Total</dt>
+              <dd class="tabular-nums" data-total></dd>
+            </div>
+            <div class="flex items-baseline justify-between gap-4 py-2">
+              <dt>Paid</dt>
+              <dd class="tabular-nums" data-paid></dd>
+            </div>
+            <div class="flex items-baseline justify-between gap-4 py-2" data-refunded-line hidden>
+              <dt>Refunded</dt>
+              <dd class="tabular-nums" data-refunded></dd>
+            </div>
+          </dl>
+        </section>
+
+        <section id="documents" tabindex="-1" aria-labelledby="documents-title" class="focus:outline-none">
+          <h2 id="documents-title" class="font-heading text-xl font-semibold">Documents</h2>
+          <p class="mt-2 text-muted" data-documents-note hidden></p>
+          <ul class="mt-2 divide-y divide-muted/20" data-documents></ul>
+          <div data-documents-state></div>
+        </section>
+
+        <section aria-labelledby="rules-title">
+          <details class="rounded-ui border border-muted/30 bg-surface p-4" data-fare-rules>
+            <summary class="min-h-6 cursor-pointer font-heading text-xl font-semibold">
+              <span id="rules-title">Changes and refunds</span>
+            </summary>
+            <p class="mt-3 text-sm text-muted" data-rules-loading hidden>Loading the fare rules…</p>
+            <ul class="mt-3 space-y-1" data-rules-summary></ul>
+            <ul class="mt-3 space-y-2" data-rules-categories></ul>
+            <p class="mt-3 text-sm text-muted" data-rules-unavailable hidden>
+              The airline has not published detailed rules for this fare.
+            </p>
+            <div data-rules-state></div>
+          </details>
+        </section>
+
+        <section aria-labelledby="timeline-title" data-timeline>
+          <h2 id="timeline-title" class="font-heading text-xl font-semibold">History</h2>
+          <ol class="mt-3 space-y-3 border-l-2 border-muted/30 pl-4" data-timeline-list></ol>
+          <p class="mt-3 text-muted" data-timeline-empty hidden>Nothing has happened yet.</p>
+          <p class="mt-3">
+            <button
+              type="button"
+              class="min-h-6 font-medium text-primary underline underline-offset-4 aria-disabled:opacity-60"
+              data-timeline-more
+              hidden
+            >
+              Show earlier events
+            </button>
+          </p>
+          <div data-timeline-state></div>
+        </section>
+      </div>
+
+      <dialog
+        class="m-auto w-full max-w-lg rounded-ui border border-muted/30 bg-surface p-0 text-ink backdrop:bg-ink/50"
+        aria-labelledby="contacts-dialog-title"
+        data-contacts-dialog
+      >
+        <form method="post" class="space-y-4 p-5 sm:p-6" data-contacts-form>
+          <h2
+            id="contacts-dialog-title"
+            tabindex="-1"
+            class="font-heading text-xl font-semibold focus:outline-none"
+          >
+            Change contact details
+          </h2>
+          <p class="text-muted">
+            We send the airline these details and e-mail the booking to the new address.
+          </p>
+          <div data-error-summary hidden class="rounded-ui border-2 border-error bg-panel p-4"></div>
+          <div data-contacts-state></div>
+          <div class="grid gap-4 sm:grid-cols-2">
+            <label class="block">
+              <span class="block text-sm font-medium">First name</span>
+              <input
+                type="text"
+                name="contacts.0.addresseeName.firstName"
+                maxlength="56"
+                autocomplete="section-contact given-name"
+                data-error-path="/contacts/0/addresseeName"
+                class="mt-1 block w-full rounded-ui border border-muted/60 bg-surface px-3 py-2 aria-invalid:border-error"
+              />
+            </label>
+            <label class="block">
+              <span class="block text-sm font-medium">Last name</span>
+              <input
+                type="text"
+                name="contacts.0.addresseeName.lastName"
+                maxlength="56"
+                autocomplete="section-contact family-name"
+                class="mt-1 block w-full rounded-ui border border-muted/60 bg-surface px-3 py-2 aria-invalid:border-error"
+              />
+            </label>
+            <label class="block sm:col-span-2">
+              <span class="block text-sm font-medium">E-mail address</span>
+              <input
+                type="email"
+                name="contacts.0.emailAddress"
+                required
+                maxlength="254"
+                autocomplete="section-contact email"
+                spellcheck="false"
+                data-error-path="/contacts /contacts/0"
+                class="mt-1 block w-full rounded-ui border border-muted/60 bg-surface px-3 py-2 aria-invalid:border-error"
+              />
+            </label>
+            <label class="block">
+              <span class="block text-sm font-medium">Country calling code</span>
+              <input
+                type="text"
+                name="contacts.0.phones.0.countryCallingCode"
+                inputmode="tel"
+                maxlength="5"
+                pattern="\+?[0-9]{1,4}"
+                title="The country calling code, for example +44"
+                autocomplete="section-contact tel-country-code"
+                class="mt-1 block w-full rounded-ui border border-muted/60 bg-surface px-3 py-2 aria-invalid:border-error"
+              />
+            </label>
+            <label class="block">
+              <span class="block text-sm font-medium">Mobile phone number</span>
+              <input
+                type="tel"
+                name="contacts.0.phones.0.number"
+                maxlength="20"
+                autocomplete="section-contact tel-national"
+                data-error-path="/contacts/0/phones /contacts/0/phones/0"
+                class="mt-1 block w-full rounded-ui border border-muted/60 bg-surface px-3 py-2 aria-invalid:border-error"
+              />
+            </label>
+          </div>
+          <p class="flex flex-wrap gap-3">
+            <button
+              type="submit"
+              data-busy-label="Sending the change to the airline…"
+              class="min-h-6 rounded-ui bg-primary px-5 py-2 font-medium text-on-primary hover:opacity-90"
+            >
+              Save
+            </button>
+            <button
+              type="button"
+              data-action="close-dialog"
+              class="min-h-6 rounded-ui border border-muted/60 px-5 py-2 font-medium hover:bg-panel"
+            >
+              Close
+            </button>
+          </p>
+        </form>
+      </dialog>
+
+      <dialog
+        class="m-auto w-full max-w-lg rounded-ui border border-muted/30 bg-surface p-0 text-ink backdrop:bg-ink/50"
+        aria-labelledby="cancel-dialog-title"
+        data-cancel-dialog
+      >
+        <div class="space-y-4 p-5 sm:p-6">
+          <h2
+            id="cancel-dialog-title"
+            tabindex="-1"
+            class="font-heading text-xl font-semibold focus:outline-none"
+            data-cancel-title
+          >
+            Cancel your booking
+          </h2>
+          <p class="flex items-center gap-3 text-muted" data-cancel-loading hidden>
+            <span
+              class="inline-block size-4 shrink-0 rounded-full border-2 border-primary/30 border-t-primary motion-safe:animate-spin"
+              aria-hidden="true"
+            ></span>
+            <span>Checking your refund…</span>
+          </p>
+          <div data-cancel-quote hidden>
+            <p data-cancel-mode></p>
+            <p class="mt-2 text-lg font-semibold" data-cancel-refund></p>
+            <ul class="mt-2 space-y-1 text-sm text-muted" data-cancel-kept></ul>
+            <ul class="mt-2 space-y-1 text-sm" data-cancel-lines></ul>
+            <p class="mt-2 text-sm text-muted" data-cancel-valid></p>
+          </div>
+          <div data-cancel-notice></div>
+          <form method="post" class="space-y-4" data-cancel-form hidden>
+            <div data-error-summary hidden class="rounded-ui border-2 border-error bg-panel p-4"></div>
+            <label class="block">
+              <span class="block text-sm font-medium">Why do you cancel?</span>
+              <select
+                name="reasonCode"
+                required
+                class="mt-1 block w-full rounded-ui border border-muted/60 bg-surface px-3 py-2 aria-invalid:border-error"
+              >
+                <option value="">Choose a reason</option>
+                <option value="change_of_plans">My plans changed</option>
+                <option value="illness">Illness</option>
+                <option value="schedule_change">The airline changed the flight times</option>
+                <option value="duplicate_booking">I booked twice</option>
+                <option value="found_cheaper">I found a cheaper fare</option>
+                <option value="other">Another reason</option>
+              </select>
+            </label>
+            <label class="block">
+              <span class="block text-sm font-medium">Message to us (optional)</span>
+              <textarea
+                name="comment"
+                rows="3"
+                maxlength="500"
+                class="mt-1 block w-full rounded-ui border border-muted/60 bg-surface px-3 py-2 aria-invalid:border-error"
+              ></textarea>
+            </label>
+            <p class="flex flex-wrap gap-3">
+              <button
+                type="submit"
+                data-busy-label="Cancelling with the airline…"
+                class="min-h-6 rounded-ui bg-primary px-5 py-2 font-medium text-on-primary hover:opacity-90"
+                data-cancel-confirm
+              >
+                Cancel the booking
+              </button>
+              <button
+                type="button"
+                data-action="close-dialog"
+                class="min-h-6 rounded-ui border border-muted/60 px-5 py-2 font-medium hover:bg-panel"
+              >
+                Keep my booking
+              </button>
+            </p>
+          </form>
+          <div data-cancel-done hidden>
+            <p class="font-heading text-lg font-semibold" data-cancel-done-title></p>
+            <p class="mt-2" data-cancel-done-text></p>
+          </div>
+          <p data-cancel-close hidden>
+            <button
+              type="button"
+              data-action="close-dialog"
+              class="min-h-6 rounded-ui border border-muted/60 px-5 py-2 font-medium hover:bg-panel"
+            >
+              Close
+            </button>
+          </p>
+        </div>
+      </dialog>
+    </main>
+    <!-- @include partials/footer.html -->
+
+    <!-- @include partials/templates/offer-card.html -->
+    <!-- @include partials/templates/document-row.html -->
+    <template id="tpl-booking-item">
+      <li data-field="text"></li>
+    </template>
+    <template id="tpl-booking-segment">
+      <li class="text-sm" data-booking-segment data-field-data-status="status">
+        <span class="font-medium" data-field="flight"></span>
+        <span class="block text-muted" data-field="route"></span>
+        <span class="block text-muted" data-field="details" data-field-hidden="noDetails"></span>
+        <span
+          class="block font-medium text-warning"
+          data-field="statusText"
+          data-field-hidden="noStatusText"
+        ></span>
+      </li>
+    </template>
+    <template id="tpl-booking-bound">
+      <li class="rounded-ui border border-muted/30 bg-surface p-4" data-booking-bound>
+        <ol class="space-y-4" data-bound-row></ol>
+        <ul class="mt-3 space-y-2 border-t border-muted/20 pt-3" data-bound-segments></ul>
+      </li>
+    </template>
+    <template id="tpl-traveller">
+      <li data-traveller>
+        <span class="block font-medium" data-field="name"></span>
+        <span
+          class="block font-mono text-sm text-muted"
+          data-field="tickets"
+          data-field-hidden="noTickets"
+        ></span>
+      </li>
+    </template>
+    <template id="tpl-rule">
+      <li data-rule data-field-data-category="category">
+        <span class="font-medium" data-field="label"></span>
+        <span data-field="status"></span>
+        <span
+          class="block text-sm whitespace-pre-line text-muted"
+          data-field="detail"
+          data-field-hidden="noDetail"
+        ></span>
+      </li>
+    </template>
+    <template id="tpl-timeline-event">
+      <li data-timeline-event data-field-data-type="type">
+        <time class="block text-sm text-muted" data-field="time" data-field-datetime="at"></time>
+        <span data-field="summary"></span>
+      </li>
+    </template>
+    <template id="tpl-state-link">
+      <p class="mt-4">
+        <a
+          class="font-medium text-primary underline underline-offset-4"
+          data-state-link
+          data-field="label"
+          data-field-href="href"
+        ></a>
+      </p>
+    </template>
+    <!-- @include partials/states.html -->
+  </body>
+</html>

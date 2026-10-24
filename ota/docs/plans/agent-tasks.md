@@ -1571,7 +1571,8 @@ Checkout, customer accounts in cookies, Stripe on the Velexis account, the airli
   - `caddy-smoke.sh` passes with the stricter CSP, COOP `same-origin` and `no-store` on that path, the general CSP (with `worker-src 'none'`) elsewhere, and no COOP `same-origin` on any other storefront path.
 - **Verify:** `pnpm --filter @velexis/ota-frontend test && pnpm --filter @velexis/ota-frontend build && bash deploy/caddy/test/caddy-smoke.sh`
 
-### OFE-015 · Build my bookings and the booking detail page
+### OFE-015 · Build my bookings and the booking detail page ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-frontend
 - **Milestone:** M3
 - **Depends on:** OFE-013, OFE-009, OBE-049, OBE-054
