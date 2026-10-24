@@ -1013,11 +1013,15 @@ describe("the safety net of checkout.complete's capture after its record step (F
     readonly total: string;
   }
 
+  // The orders of this scenario are real PNRs in the booking queue: a traveller name of their own keeps them out of
+  // the next scenarios' searches, which read every PNR of their lead's name created in the minute before their order.
+  const LEAD = "NETCAPTURE";
+
   async function completeAndNet(crash: boolean): Promise<Completed> {
     await resetRateLimits();
     stub.setDefaultScenario("success");
     stripe.reset();
-    const { checkout, payment } = await paidCheckout();
+    const { checkout, payment } = await paidCheckout(LEAD);
     const orchestrator = api.app.get(BookingOrchestrator, { strict: false }) as unknown as {
       capture: (...args: unknown[]) => Promise<boolean>;
     };
@@ -1215,6 +1219,9 @@ describe("PNRs with the lead traveller's name but not the booking's remark", () 
         data["remarks"] = { general: [{ subType: "GENERAL_MISCELLANEOUS", text: `VELEXIS ${reference}` }] };
       }),
     ];
+    // The decoys took tokens of the tenant's Amadeus bucket on the worker's clock, still at the previous scenario's
+    // last step, so the bucket would not refill before this booking's attempts: they start from a full one.
+    await resetRateLimits();
     early = await firstAttempt(timedOut.bookingId, after(timedOut.started, 30 * SECOND));
     decision = await scanAttempt(timedOut.bookingId, after(timedOut.started, 15 * MINUTE));
     decided = await bookingRow(timedOut.bookingId);
