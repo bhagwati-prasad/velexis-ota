@@ -87,6 +87,12 @@ export function formatTotalCount(totalCount: number | null | undefined): string 
 /** The `page` of a list answer (`PageInfo` of the OTA document): only the cursor of the next page matters here. */
 export interface ListPage {
   readonly nextCursor: string | null;
+  /**
+   * Parameters the "Next page" link sets besides the cursor, and "First page" removes: what a list whose request
+   * depends on more than its URL must pin so the next page sends the same filters (the API binds a cursor to them).
+   * `/bookings` pins the time its `deadlineWithin` window counts from.
+   */
+  readonly pinned?: Readonly<Record<string, string>>;
 }
 
 export interface DataTableProps<Row, Value> {
@@ -178,7 +184,9 @@ export function DataTable<Row, Value>({
           )}
         </TableBody>
       </Table>
-      {page === undefined ? null : <CursorPagination nextCursor={page.nextCursor} />}
+      {page === undefined ? null : (
+        <CursorPagination nextCursor={page.nextCursor} pinned={page.pinned ?? {}} />
+      )}
     </div>
   );
 }
@@ -186,24 +194,37 @@ export function DataTable<Row, Value>({
 const PAGE_LINK_CLASS =
   "inline-flex h-8 items-center rounded-md border px-3 text-sm font-medium shadow-xs hover:bg-accent hover:text-accent-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none";
 
-/** "First page" on a later page and "Next page" while there is one; nothing on a single page. */
-function CursorPagination({ nextCursor }: { readonly nextCursor: string | null }) {
+/**
+ * "First page" on a later page and "Next page" while there is one; nothing on a single page. The next page's link
+ * also sets the `pinned` parameters, which the first page's link removes.
+ */
+function CursorPagination({
+  nextCursor,
+  pinned,
+}: {
+  readonly nextCursor: string | null;
+  readonly pinned: Readonly<Record<string, string>>;
+}) {
   const pathname = usePathname() ?? "";
   const searchParams = useSearchParams() ?? new URLSearchParams();
   const onLaterPage = (searchParams.get(CURSOR_PARAM) ?? "") !== "";
   if (!onLaterPage && nextCursor === null) {
     return null;
   }
+  const unpinned = Object.fromEntries(Object.keys(pinned).map((name) => [name, null]));
   return (
     <nav aria-label={TABLE_STRINGS.paginationLabel} className="flex flex-wrap justify-end gap-2">
       {onLaterPage ? (
-        <Link href={listHref(pathname, searchParams, { [CURSOR_PARAM]: null })} className={PAGE_LINK_CLASS}>
+        <Link
+          href={listHref(pathname, searchParams, { ...unpinned, [CURSOR_PARAM]: null })}
+          className={PAGE_LINK_CLASS}
+        >
           {TABLE_STRINGS.firstPage}
         </Link>
       ) : null}
       {nextCursor === null ? null : (
         <Link
-          href={listHref(pathname, searchParams, { [CURSOR_PARAM]: nextCursor })}
+          href={listHref(pathname, searchParams, { ...pinned, [CURSOR_PARAM]: nextCursor })}
           className={PAGE_LINK_CLASS}
         >
           {TABLE_STRINGS.nextPage}

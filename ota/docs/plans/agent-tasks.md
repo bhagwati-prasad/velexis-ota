@@ -2134,7 +2134,8 @@ The console API (staff sign-in by portal token, bookings, PNR import, queues, cu
   - A finance user sees payments but not queues; counts link to the matching filters (component test with a fake SDK fetch).
 - **Verify:** `pnpm --filter @velexis/ota-admin test`
 
-### OAD-006 · Build the bookings list
+### OAD-006 · Build the bookings list ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-admin
 - **Milestone:** M4
 - **Depends on:** OAD-004, OBE-061
