@@ -11,6 +11,7 @@ import { Controller, Get, HttpCode, Post, Res } from "@nestjs/common";
 import type { AccessTokenClaims } from "../auth/token.service";
 import { AccessToken } from "../common/auth/decorators";
 import { CurrentMembership, TenantRoles, type TenantMembership } from "../common/auth/tenant-role.guard";
+import { IDEMPOTENCY_KEY_HEADER } from "../common/http/idempotency.interceptor";
 import { OpenApiOperation, Validated } from "../common/http/openapi-operation.decorator";
 import { tenantRolesOf } from "../memberships/tenant-roles";
 import {
@@ -40,9 +41,11 @@ export class LifecycleController {
   @OpenApiOperation("createTenant")
   createTenant(
     @AccessToken() token: AccessTokenClaims,
+    @Validated("header") header: Readonly<Record<string, unknown>>,
     @Validated("body") body: CreateTenantRequest,
   ): Promise<TenantCreated> {
-    return this.lifecycle.createTenant(token.sub, body);
+    // The key is required by the document (checked before the handler runs); from M5 it is part of Stripe's key too.
+    return this.lifecycle.createTenant(token.sub, body, header[IDEMPOTENCY_KEY_HEADER] as string);
   }
 
   @Get(":tenantId/provisioning")

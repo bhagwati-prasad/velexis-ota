@@ -1426,7 +1426,8 @@ M5 work is merged behind the `FEATURE_*` switches (PADR-0015). The switches are 
   - An event whose enqueue is lost after commit is enqueued by the sweep (FakeClock).
 - **Verify:** `pnpm --filter @velexis/platform-backend test && pnpm --filter @velexis/platform-backend test:int -- billing`
 
-### PBE-044 · Implement Stripe customers, Checkout and the Customer Portal session
+### PBE-044 · Implement Stripe customers, Checkout and the Customer Portal session ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-backend
 - **Milestone:** M5
 - **Depends on:** PBE-043, PBE-018

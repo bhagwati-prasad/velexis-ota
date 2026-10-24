@@ -130,7 +130,7 @@ describe("FakeStripe (test/support/fake-stripe.ts)", () => {
 
     await expect(api.customers.create(params)).rejects.toThrow(/without an idempotency key/);
     const created = await api.customers.create(params, options);
-    expect(created).toMatchObject({ id: "cus_fake_1", object: "customer", email: "owner@example.com" });
+    expect(created).toMatchObject({ id: "cus_fake1", object: "customer", email: "owner@example.com" });
     expect((await api.customers.create(params, options)).id).toBe(created.id);
     await expect(
       api.customers.create({ ...params, email: "other@example.com" }, options),

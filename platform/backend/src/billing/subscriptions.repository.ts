@@ -1,7 +1,8 @@
 // The `subscriptions` repository (platform/docs/architecture.md §2.1: BillingModule owns the table). PBE-017 brings
 // the read of `getSubscription`, PBE-018 the manual trial of a new OTA (ADR-0013 point 4, the path before M5), PBE-033
 // the admin's list, detail and manual edit, with the subscription's invoices and its OTA's Stripe events (both empty
-// before M5); the Stripe Billing sync (M5) adds its writes. Kysely on the API's `PLATFORM_DB` (ADR-0005).
+// before M5), PBE-044 the `incomplete` Stripe row of an OTA created in M5 and the reads and write of Checkout; the
+// Stripe Billing sync (M5) adds its writes. Kysely on the API's `PLATFORM_DB` (ADR-0005).
 import { Inject, Injectable } from "@nestjs/common";
 import { sql, type PlatformDatabase, type Selectable } from "@velexis/db";
 import type { PlatformTransaction } from "../audit/audit.repository";
@@ -153,6 +154,36 @@ export interface ManualTrialRow {
   readonly trial_ends_at: Date | null;
 }
 
+/** The `incomplete` Stripe subscription of an OTA created from M5, written before its Checkout (PBE-044). */
+export interface NewIncompleteSubscription {
+  /** `sub_…`. */
+  readonly id: string;
+  readonly tenantId: string;
+  readonly planCode: string;
+  readonly billingInterval: string;
+  readonly now: Date;
+}
+
+/** The pre-inserted `incomplete` row as written: no trial, no provider ids until the webhook copies them. */
+export type IncompleteSubscriptionRow = ManualTrialRow & { readonly billing_interval: string };
+
+/** What Checkout reads of a tenant's current subscription (PBE-044). */
+export type CheckoutSubscriptionRow = Pick<
+  SubscriptionTable,
+  "id" | "status" | "billing_provider" | "plan_code" | "billing_interval" | "provider_subscription_id"
+>;
+
+/** What a Checkout Session records on the pre-inserted `incomplete` row. */
+export interface CheckoutSessionRecord {
+  /** `sub_…` of the `incomplete` row. */
+  readonly id: string;
+  /** `cs_…`. */
+  readonly checkoutSessionId: string;
+  readonly planCode: string;
+  readonly billingInterval: string;
+  readonly now: Date;
+}
+
 @Injectable()
 export class SubscriptionsRepository {
   constructor(@Inject(PLATFORM_DB) private readonly db: PlatformDb) {}
@@ -205,6 +236,96 @@ export class SubscriptionsRepository {
       throw new Error(`insertManualTrial: the plan ${trial.planCode} does not exist`);
     }
     return row;
+  }
+
+  /**
+   * Inserts the subscription of an OTA that pays through Stripe Checkout (M5, PBE-044) in `trx`: `incomplete`,
+   * `billing_provider = 'stripe'`, the chosen plan and interval, no trial end and no provider ids. It holds the OTA's
+   * "one current subscription" slot and keeps the dispatch gate of the setup job closed (dispatcher.ts) until the
+   * `checkout.session.completed` webhook (PBE-045) copies the Stripe subscription into it. A second current subscription
+   * of the tenant fails on `subscriptions_current_uq`.
+   */
+  async insertIncomplete(
+    trx: PlatformTransaction,
+    subscription: NewIncompleteSubscription,
+  ): Promise<IncompleteSubscriptionRow> {
+    return trx
+      .insertInto("platform.subscriptions")
+      .values({
+        id: subscription.id,
+        tenant_id: subscription.tenantId,
+        plan_code: subscription.planCode,
+        status: "incomplete",
+        billing_interval: subscription.billingInterval,
+        billing_provider: "stripe",
+        created_at: subscription.now,
+        updated_at: subscription.now,
+      })
+      .returning(["id", "plan_code", "status", "billing_provider", "billing_interval", "trial_ends_at"])
+      .executeTakeFirstOrThrow();
+  }
+
+  /**
+   * The current subscription of `tenantId` (CURRENT_SUBSCRIPTION_STATUSES) as Checkout reads it, on `db`; `undefined`
+   * when it has none (a canceled subscription, an expired Checkout).
+   */
+  async findCurrentForCheckout(
+    tenantId: string,
+    db: PlatformDb | PlatformTransaction = this.db,
+  ): Promise<CheckoutSubscriptionRow | undefined> {
+    return db
+      .selectFrom("platform.subscriptions")
+      .select([
+        "id",
+        "status",
+        "billing_provider",
+        "plan_code",
+        "billing_interval",
+        "provider_subscription_id",
+      ])
+      .where("tenant_id", "=", tenantId)
+      .where("status", "in", CURRENT_SUBSCRIPTION_STATUSES)
+      .executeTakeFirst();
+  }
+
+  /**
+   * True when `tenantId` has, or had, a subscription that Stripe created (`billing_provider = 'stripe'` with a
+   * `provider_subscription_id`, in any status): the trial of a plan is given on the first one only (PADR-0002 item 3).
+   * A pre-inserted `incomplete` row that never went through Checkout does not count.
+   */
+  async hasStripeSubscription(tenantId: string): Promise<boolean> {
+    const row = await this.db
+      .selectFrom("platform.subscriptions")
+      .select("id")
+      .where("tenant_id", "=", tenantId)
+      .where("billing_provider", "=", "stripe")
+      .where("provider_subscription_id", "is not", null)
+      .executeTakeFirst();
+    return row !== undefined;
+  }
+
+  /**
+   * Records the Checkout Session of `record` on the pre-inserted row `record.id` in `trx`: `checkout_session_id`, and
+   * the plan and interval the Session is for, with `version + 1`; only while the row is still the `incomplete` Stripe
+   * row without a Stripe subscription. True when this call changed it.
+   */
+  async recordCheckoutSession(trx: PlatformTransaction, record: CheckoutSessionRecord): Promise<boolean> {
+    const row = await trx
+      .updateTable("platform.subscriptions")
+      .set({
+        checkout_session_id: record.checkoutSessionId,
+        plan_code: record.planCode,
+        billing_interval: record.billingInterval,
+        version: sql<number>`version + 1`,
+        updated_at: record.now,
+      })
+      .where("id", "=", record.id)
+      .where("billing_provider", "=", "stripe")
+      .where("status", "=", "incomplete")
+      .where("provider_subscription_id", "is", null)
+      .returning("id")
+      .executeTakeFirst();
+    return row !== undefined;
   }
 
   /**

@@ -100,7 +100,7 @@ sequenceDiagram
 | Key taken between check and submit | Unique violation → `409 TENANT_KEY_UNAVAILABLE`; the wizard returns to step 1 with the message. |
 | Double submit | Same `Idempotency-Key` → the stored `202` is replayed; a different body with the same key → `IDEMPOTENCY_KEY_REUSED`. |
 | Too many OTAs | `422 UNPROCESSABLE` with `details.reason = "tenant_limit"`. |
-| Stripe unavailable when creating Checkout (M5) | The tenant and job are committed; the response has `checkoutUrl: null` and `checkoutError`. The setup page shows "Continue to payment", which calls `createCheckoutSession` (Stripe idempotency key `checkout:<sub_id>:<n>`). |
+| Stripe unavailable when creating Checkout (M5) | The tenant and job are committed; the response has `checkoutUrl: null` and `checkoutError`. The setup page shows "Continue to payment", which calls `createCheckoutSession` (Stripe idempotency key `checkout:<tenantId>:<Idempotency-Key>`, [PADR-0002](../adr/0002-stripe-billing-integration.md) item 3). |
 | Checkout abandoned (M5) | The Checkout Session expires after 24 h; the setup page offers "Continue to payment". After 48 h the `billing.abandoned_checkouts` job sets the tenant `failed`, cancels the job and the `incomplete` subscription; the key stays reserved. An owner can still retry, which starts a new Checkout. |
 | Redis down | `createTenant` answers `503` before writing (the idempotency store is required). |
 

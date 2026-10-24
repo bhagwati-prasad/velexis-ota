@@ -101,7 +101,12 @@ let apiRepository: StripeEventsRepository;
 let nextId = 1;
 
 beforeAll(async () => {
-  t = await createTestApp({ env: { STRIPE_BILLING_WEBHOOK_SECRET: SECRET } });
+  // The API holds a Stripe client since PBE-044 (Checkout, the Customer Portal): the same FakeStripe, so the intake
+  // tests can show that the receiver never calls it.
+  t = await createTestApp({
+    env: { STRIPE_BILLING_WEBHOOK_SECRET: SECRET },
+    overrides: [{ provide: StripeClient, useValue: stripe }],
+  });
   pool = t.app.get<PlatformPool>(PLATFORM_POOL);
   apiQueue = t.app.get<Queue>(getQueueToken(PLATFORM_QUEUE.stripeEvents), { strict: false });
   apiRepository = t.app.get(StripeEventsRepository, { strict: false });
@@ -183,8 +188,8 @@ describe("POST /webhooks/stripe/billing (receiveStripeBillingEvent)", () => {
     const counts = await apiQueue.getJobCounts();
     expect(counts["waiting"]).toBe(3);
     expect(Object.values(counts).reduce((sum, count) => sum + count, 0)).toBe(3);
-    // Stripe is never called inline: the API holds no Stripe client at all.
-    expect(() => t.app.get(StripeClient, { strict: false })).toThrow();
+    // Stripe is never called inline: the API's Stripe client (the FakeStripe) got no call from the receiver.
+    expect(t.app.get(StripeClient, { strict: false })).toBe(stripe);
     expect(stripe.calls).toEqual([]);
     expect(t.logs.withMessage("stripe.webhook_stored")).toHaveLength(3);
     expect(t.logs.withMessage("stripe.webhook_duplicate")).toHaveLength(3);

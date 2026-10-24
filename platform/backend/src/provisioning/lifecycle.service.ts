@@ -6,8 +6,10 @@
 //
 // createTenant, in order:
 //
-// 1. Before M5 (`FEATURE_STRIPE_BILLING` off) the plan is always `early_access`, whatever the request says (ADR-0013
-//    point 4). With the switch on the request is refused before anything is read: the Checkout path is PBE-044's.
+// 1. The plan. Before M5 (`FEATURE_STRIPE_BILLING` off) it is always `early_access`, whatever the request says
+//    (ADR-0013 point 4). With the switch on (PBE-044) it is the request's `planCode` (required, `400`) with its
+//    `billingInterval` (`month` when absent): a public, active plan with a Stripe Price for the interval (`422
+//    PLAN_NOT_AVAILABLE`, CheckoutService.planFor).
 // 2. The country, currency and time zone must be values of the reference data (`400 VALIDATION_FAILED`, field errors
 //    that never echo the value), as `updateTenant` checks them; the key's pattern was checked by the schema.
 // 3. One transaction (`runInTransaction`):
@@ -16,18 +18,27 @@
 //    - the key must be neither reserved nor used by any tenant row in any status (`409 TENANT_KEY_UNAVAILABLE`);
 //    - the account must own fewer than `MAX_TENANTS_PER_ACCOUNT` OTAs that are not `failed` (`422 UNPROCESSABLE`,
 //      `details.reason = "tenant_limit"`);
-//    - then the tenant (`provisioning`, storefront `test`, `created_by_account_id`), the owner membership, the manual
-//      trial (`trialing`, `manual`, `trial_ends_at = now + plans.trial_days`), the verified primary sub-domain
-//      `<key>.<STOREFRONT_BASE_DOMAIN>`, the `provision` job (`queued`, 5 attempts) and the audit row `tenant.created`.
+//    - then the tenant (`provisioning`, storefront `test`, `created_by_account_id`, the plan of step 1), the owner
+//      membership, the subscription, the verified primary sub-domain `<key>.<STOREFRONT_BASE_DOMAIN>`, the `provision`
+//      job (`queued`, 5 attempts) and the audit row `tenant.created`. The subscription is the manual trial before M5
+//      (`trialing`, `manual`, `trial_ends_at = now + plans.trial_days`) and from M5 the `incomplete` Stripe row
+//      (`billing_provider = 'stripe'`, the plan and interval, no trial end).
 //    Any error rolls all of it back. A key taken by a concurrent creation between the check and the insert fails on
 //    the unique index, which also answers `409 TENANT_KEY_UNAVAILABLE`.
-// 4. After the commit the job is dispatched (dispatcher.ts, PBE-019): before M5 the gate is open, so it becomes
+// 4. After the commit, before M5, the job is dispatched (dispatcher.ts, PBE-019): the gate is open, so it becomes
 //    `running` (attempt 1) and `tenant.provision` goes to the OTA worker. The OTA exists once the transaction has
 //    committed, so a failed dispatch never fails the call: it is logged (`provisioning.dispatch_failed`) and the job
 //    stays `queued` for the reconciler (PBE-023). An error answer here would make the portal retry, and the retry
 //    would find the key taken by this very OTA.
-// 5. The answer is `202 {tenant, provisioningJob {id, status}, checkoutUrl: null}`, with the job's status after the
-//    dispatch: `running`, or `queued` when it did not go out.
+//    From M5 nothing is dispatched: the gate stays closed while the subscription is `incomplete`, and the
+//    `checkout.session.completed` webhook dispatches the job (PBE-045), so the OTA stays `provisioning` until then.
+//    The Checkout starts instead (CheckoutService.start: the Stripe Customer, the Checkout Session with Stripe's
+//    idempotency key `checkout:<tenantId>:<Idempotency-Key>`, its id stored on the `incomplete` row). It never fails
+//    the call either: when Stripe (or anything after the commit) fails, it is logged (`billing.checkout_failed`), the
+//    OTA and its job stay as committed, and the answer carries `checkoutUrl: null` and `checkoutError` (`code`
+//    `PROVIDER_ERROR` for Stripe, `INTERNAL_ERROR` otherwise); the setup page continues with createCheckoutSession.
+// 5. The answer is `202 {tenant, provisioningJob {id, status}, checkoutUrl}`, with the job's status after the dispatch:
+//    `running`, or `queued` when it did not go out (always `queued` from M5); `checkoutUrl` is `null` before M5.
 //
 // The operation is idempotent through the global IdempotencyInterceptor (`x-idempotent: true`, PBE-009): a retry with
 // the same `Idempotency-Key` and body gets the stored `202` without running this again, and while Redis is down the
@@ -45,7 +56,13 @@
 //   goes back to `provisioning` (`version + 1`), a **new** `provision` job is queued (the failed ones stay as history)
 //   and `provisioning_job.retried` is audited. After the commit the job is dispatched as createTenant's is (never
 //   failing the call; the reconciler takes a job left `queued`), and the answer is `202 {job, checkoutUrl: null}`
-//   with the job as it is then. The new Checkout of a tenant failed by an abandoned Checkout comes with M5 (PBE-044).
+//   with the job as it is then.
+//   From M5 (PBE-044) a tenant failed by an abandoned Checkout (no current subscription, the newest one a Stripe row
+//   `incomplete_expired`, billing flow §H) gets a new `incomplete` Stripe row with the same plan and interval in the
+//   same transaction, and a pending `incomplete` row is reused. Its job is not dispatched (the gate is closed until the
+//   webhook); a new Checkout starts instead (Stripe idempotency key `checkout:<tenantId>:<new job id>`) and the answer
+//   carries its `checkoutUrl`. A plan that is no longer available or a Stripe failure is logged
+//   (`billing.checkout_failed`) and answers `checkoutUrl: null`: the owner continues with createCheckoutSession.
 // - `revealInitialKeys` (owners): one transaction locks the latest `provision` job. Its keys are revealed only once its
 //   setup succeeded and within REVEAL_WINDOW_MS (24 hours) after it finished: the ciphertext is decrypted (associated
 //   data of `revealPlace`) and, in the same update, `revealed_at` and `revealed_by_account_id` are set and the
@@ -61,6 +78,12 @@ import { InjectPinoLogger, PinoLogger } from "nestjs-pino";
 import type { PlatformTransaction } from "../audit/audit.repository";
 import { AuditService } from "../audit/audit.service";
 import { AccountsRepository } from "../auth/accounts.repository";
+import {
+  CheckoutService,
+  pendingCheckoutRowOf,
+  type BillingInterval,
+  type CheckoutPlan,
+} from "../billing/checkout.service";
 import { SubscriptionsRepository } from "../billing/subscriptions.repository";
 import type { TenantMembership, TenantStatus } from "../common/auth/tenant-role.guard";
 import { Clock } from "../common/clock";
@@ -92,10 +115,39 @@ export type TenantCreated = components["schemas"]["TenantCreated"];
 export type ProvisioningStatus = components["schemas"]["ProvisioningStatus"];
 export type ProvisioningRetried = components["schemas"]["ProvisioningRetried"];
 export type ProvisioningJob = components["schemas"]["ProvisioningJob"];
+export type CheckoutError = components["schemas"]["CheckoutError"];
 export type { InitialKeys };
 
 /** The plan of every OTA created before M5 (ADR-0013 point 4; seeded by migration 0002). */
 export const PRE_M5_PLAN_CODE = "early_access";
+
+/** The billing interval of an OTA created from M5 whose request names none. */
+export const DEFAULT_BILLING_INTERVAL: BillingInterval = "month";
+
+/** The message of `checkoutError`: safe to show, and it says how to go on. */
+export const CHECKOUT_ERROR_MESSAGE =
+  "The payment page could not be opened; continue to payment from the setup page.";
+
+/**
+ * The `checkoutError` of createTenant for an error thrown after the commit (step 4 of the file header): the code of an
+ * AppError (`PROVIDER_ERROR` for Stripe), else `INTERNAL_ERROR`; never the error's own message.
+ */
+export function checkoutErrorOf(error: unknown): CheckoutError {
+  return { code: error instanceof AppError ? error.code : "INTERNAL_ERROR", message: CHECKOUT_ERROR_MESSAGE };
+}
+
+/** A Checkout that a retry starts after its commit: the `incomplete` row and the plan it is for. */
+interface RetryCheckout {
+  readonly subscriptionId: string;
+  readonly planCode: string;
+  readonly interval: BillingInterval;
+}
+
+/** What createTenant's transaction gives back: the answer before the dispatch, and the subscription it wrote. */
+interface CreatedOta {
+  readonly created: TenantCreated;
+  readonly subscriptionId: string;
+}
 
 /** PostgreSQL's SQLSTATE of a unique violation. */
 const UNIQUE_VIOLATION = "23505";
@@ -218,6 +270,7 @@ export class LifecycleService {
     private readonly tenants: TenantsRepository,
     private readonly memberships: MembershipsRepository,
     private readonly subscriptions: SubscriptionsRepository,
+    private readonly checkout: CheckoutService,
     private readonly domains: DomainsRepository,
     private readonly jobs: ProvisioningJobsRepository,
     private readonly dispatcher: ProvisioningDispatcher,
@@ -234,25 +287,52 @@ export class LifecycleService {
     this.maxTenantsPerAccount = config.get("MAX_TENANTS_PER_ACCOUNT", { infer: true });
   }
 
-  /** createTenant for the account `accountId` (see the file header). */
-  async createTenant(accountId: string, request: CreateTenantRequest): Promise<TenantCreated> {
-    if (this.features.isEnabled("stripe_billing")) {
-      // The Checkout path of M5 (an `incomplete` Stripe subscription, the Checkout Session) is PBE-044's: refusing
-      // here, before anything is written, is better than a manual trial that the switch says should not exist.
-      throw new Error("createTenant with FEATURE_STRIPE_BILLING on is not implemented before PBE-044");
-    }
-    await this.checkReferences(request);
-    let created: TenantCreated;
+  /**
+   * createTenant for the account `accountId` (see the file header); `requestKey` is the request's `Idempotency-Key`,
+   * part of Stripe's idempotency key of the Checkout (M5).
+   */
+  async createTenant(
+    accountId: string,
+    request: CreateTenantRequest,
+    requestKey: string,
+  ): Promise<TenantCreated> {
+    const stripeBilling = this.features.isEnabled("stripe_billing");
+    await this.checkReferences(request, stripeBilling);
+    const plan =
+      stripeBilling && request.planCode !== undefined
+        ? await this.checkout.planFor(request.planCode, request.billingInterval ?? DEFAULT_BILLING_INTERVAL)
+        : undefined;
+    let ota: CreatedOta;
     try {
-      created = await runInTransaction(this.db, (trx) => this.create(trx, accountId, request));
+      ota = await runInTransaction(this.db, (trx) => this.create(trx, accountId, request, plan));
     } catch (error) {
       if (isKeyConflict(error)) {
         throw keyUnavailable(error);
       }
       throw error;
     }
-    const status = await this.dispatchAfterCreate(created);
-    return { ...created, provisioningJob: { ...created.provisioningJob, status } };
+    const { created, subscriptionId } = ota;
+    if (plan === undefined) {
+      const status = await this.dispatchAfterCreate(created);
+      return { ...created, provisioningJob: { ...created.provisioningJob, status } };
+    }
+    // From M5 the gate stays closed until the Checkout webhook (PBE-045): no dispatch, the Checkout instead.
+    try {
+      const session = await this.checkout.start({
+        tenantId: created.tenant.id,
+        accountId,
+        plan,
+        subscriptionId,
+        requestKey,
+      });
+      return { ...created, checkoutUrl: session.url };
+    } catch (error) {
+      this.logger.warn(
+        { tenantId: created.tenant.id, subscriptionId, err: error },
+        "billing.checkout_failed",
+      );
+      return { ...created, checkoutUrl: null, checkoutError: checkoutErrorOf(error) };
+    }
   }
 
   /** getProvisioning for the caller's membership (see the file header). */
@@ -275,9 +355,10 @@ export class LifecycleService {
   /** retryProvisioning by an owner (see the file header). */
   async retryProvisioning(membership: TenantMembership): Promise<ProvisioningRetried> {
     const { tenantId, accountId } = membership;
-    let jobId: string;
+    const stripeBilling = this.features.isEnabled("stripe_billing");
+    let retried: { readonly jobId: string; readonly checkout: RetryCheckout | null };
     try {
-      jobId = await runInTransaction(this.db, async (trx) => {
+      retried = await runInTransaction(this.db, async (trx) => {
         const tenant = await this.tenants.lockForUpdate(trx, tenantId);
         if (tenant === undefined) {
           throw new AppError("NOT_FOUND");
@@ -287,6 +368,7 @@ export class LifecycleService {
         if (tenant.status !== "failed" || !(await this.tenants.reopenFailed(trx, tenantId, now))) {
           throw new AppError("PROVISIONING_NOT_RETRYABLE", { details: { status: tenant.status } });
         }
+        const checkout = stripeBilling ? await this.reopenCheckout(trx, tenantId, now) : null;
         const job = await this.jobs.insertQueued(trx, {
           id: this.ids.new("job"),
           tenantId,
@@ -307,9 +389,10 @@ export class LifecycleService {
           details: {
             kind: "provision",
             ...(previous === undefined ? {} : { previousJobId: previous.id, previousError: previous.error }),
+            ...(checkout === null ? {} : { awaitingCheckout: true, subscriptionId: checkout.subscriptionId }),
           },
         });
-        return job.id;
+        return { jobId: job.id, checkout };
       });
     } catch (error) {
       if (isActiveJobConflict(error)) {
@@ -317,12 +400,18 @@ export class LifecycleService {
       }
       throw error;
     }
-    await this.dispatchQuietly(jobId, tenantId);
+    const { jobId, checkout } = retried;
+    let checkoutUrl: string | null = null;
+    if (checkout === null) {
+      await this.dispatchQuietly(jobId, tenantId);
+    } else {
+      checkoutUrl = await this.checkoutAfterRetry(membership, jobId, checkout);
+    }
     const job = await this.jobs.findProgress(jobId);
     if (job === undefined) {
       throw new Error("retryProvisioning: the job written in this request cannot be read back");
     }
-    return { job: toProvisioningJob(job), checkoutUrl: null };
+    return { job: toProvisioningJob(job), checkoutUrl };
   }
 
   /** revealInitialKeys by an owner (see the file header); the keys leave this method only after the commit. */
@@ -362,6 +451,79 @@ export class LifecycleService {
   }
 
   /**
+   * The Checkout a retry of `tenantId` waits for, in the retry's transaction (see `retryProvisioning` in the file
+   * header): a pending `incomplete` Stripe row is reused; without a current subscription, a newest Stripe row
+   * `incomplete_expired` (an abandoned Checkout) gets a new `incomplete` row with its plan and interval. `null` when the
+   * retry needs no Checkout (a manual trial, a paid Stripe subscription, or nothing to restart from).
+   */
+  private async reopenCheckout(
+    trx: PlatformTransaction,
+    tenantId: string,
+    now: Date,
+  ): Promise<RetryCheckout | null> {
+    const current = await this.subscriptions.findCurrentForCheckout(tenantId, trx);
+    if (current !== undefined) {
+      const pending = pendingCheckoutRowOf(current);
+      return pending === null
+        ? null
+        : {
+            subscriptionId: pending,
+            planCode: current.plan_code,
+            interval: current.billing_interval as BillingInterval,
+          };
+    }
+    const latest = await this.subscriptions.findShownForTenant(tenantId, trx);
+    if (
+      latest === undefined ||
+      latest.billing_provider !== "stripe" ||
+      latest.status !== "incomplete_expired"
+    ) {
+      return null;
+    }
+    const row = await this.subscriptions.insertIncomplete(trx, {
+      id: this.ids.new("sub"),
+      tenantId,
+      planCode: latest.plan_code,
+      billingInterval: latest.billing_interval,
+      now,
+    });
+    return {
+      subscriptionId: row.id,
+      planCode: row.plan_code,
+      interval: row.billing_interval as BillingInterval,
+    };
+  }
+
+  /**
+   * Starts the Checkout of a retry after its commit and returns its URL; `null` when the plan is no longer available
+   * or Stripe fails (logged as `billing.checkout_failed`). Never rejects: the retry is committed.
+   */
+  private async checkoutAfterRetry(
+    membership: TenantMembership,
+    jobId: string,
+    checkout: RetryCheckout,
+  ): Promise<string | null> {
+    const { tenantId, accountId } = membership;
+    try {
+      const plan = await this.checkout.planFor(checkout.planCode, checkout.interval);
+      const session = await this.checkout.start({
+        tenantId,
+        accountId,
+        plan,
+        subscriptionId: checkout.subscriptionId,
+        requestKey: jobId,
+      });
+      return session.url;
+    } catch (error) {
+      this.logger.warn(
+        { tenantId, jobId, subscriptionId: checkout.subscriptionId, err: error },
+        "billing.checkout_failed",
+      );
+      return null;
+    }
+  }
+
+  /**
    * Dispatches the job of an OTA that has just been created (step 4 of the file header) and returns the job's status
    * afterwards. Never rejects: the OTA is committed, and the reconciler dispatches a job left `queued`.
    */
@@ -385,12 +547,16 @@ export class LifecycleService {
     }
   }
 
-  /** The transaction of createTenant: the checks that need the database, then the six rows. */
+  /**
+   * The transaction of createTenant: the checks that need the database, then the six rows; the subscription is the
+   * manual trial without `plan` (before M5) and the `incomplete` Stripe row of `plan` with it (M5).
+   */
   private async create(
     trx: PlatformTransaction,
     accountId: string,
     request: CreateTenantRequest,
-  ): Promise<TenantCreated> {
+    plan: CheckoutPlan | undefined,
+  ): Promise<CreatedOta> {
     const account = await this.accounts.lockForUpdate(trx, accountId);
     if (account === undefined || account.status !== "active" || account.email_verified_at === null) {
       throw new AppError("EMAIL_NOT_VERIFIED");
@@ -408,7 +574,7 @@ export class LifecycleService {
 
     const now = this.clock.now();
     const tenantId = this.ids.new("ten");
-    const planCode = PRE_M5_PLAN_CODE;
+    const planCode = plan?.code ?? PRE_M5_PLAN_CODE;
     const hostname = storefrontHost(key, this.baseDomain);
     await this.tenants.insert(trx, {
       id: tenantId,
@@ -422,12 +588,17 @@ export class LifecycleService {
       now,
     });
     await this.memberships.insertOwner(trx, { id: this.ids.new("stf"), tenantId, accountId, now });
-    const subscription = await this.subscriptions.insertManualTrial(trx, {
-      id: this.ids.new("sub"),
-      tenantId,
-      planCode,
-      now,
-    });
+    const subscriptionId = this.ids.new("sub");
+    const subscription =
+      plan === undefined
+        ? await this.subscriptions.insertManualTrial(trx, { id: subscriptionId, tenantId, planCode, now })
+        : await this.subscriptions.insertIncomplete(trx, {
+            id: subscriptionId,
+            tenantId,
+            planCode,
+            billingInterval: plan.interval,
+            now,
+          });
     await this.domains.insertSubdomain(trx, { id: this.ids.new("dom"), tenantId, hostname, now });
     const job = await this.jobs.insertQueued(trx, {
       id: this.ids.new("job"),
@@ -460,6 +631,7 @@ export class LifecycleService {
         subscriptionId: subscription.id,
         subscriptionStatus: subscription.status,
         billingProvider: subscription.billing_provider,
+        ...(plan === undefined ? {} : { billingInterval: plan.interval }),
       },
     });
 
@@ -468,19 +640,23 @@ export class LifecycleService {
       throw new Error("createTenant: the tenant row written in this transaction cannot be read back");
     }
     return {
-      tenant: toTenant(row, "owner", this.baseDomain),
-      provisioningJob: { id: job.id, status: job.status },
-      checkoutUrl: null,
+      created: {
+        tenant: toTenant(row, "owner", this.baseDomain),
+        provisioningJob: { id: job.id, status: job.status },
+        checkoutUrl: null,
+      },
+      subscriptionId: subscription.id,
     };
   }
 
   /**
    * The checks of the request that the schema cannot make: the country, the currency and the time zone must be values
    * of `reference.countries`, `reference.currencies` and `reference.time_zones`, by value and stored as sent (the OTA
-   * worker copies them into the tenant's settings, which are checked against the same tables). Problems answer `400
-   * VALIDATION_FAILED` with field errors that never echo the value.
+   * worker copies them into the tenant's settings, which are checked against the same tables), and from M5
+   * (`stripeBilling`) the request must name its plan. Problems answer `400 VALIDATION_FAILED` with field errors that
+   * never echo the value.
    */
-  private async checkReferences(request: CreateTenantRequest): Promise<void> {
+  private async checkReferences(request: CreateTenantRequest, stripeBilling: boolean): Promise<void> {
     const [country, currency, timeZone] = await Promise.all([
       this.tenants.countryExists(request.countryCode),
       this.tenants.currencyExists(request.defaultCurrency),
@@ -506,6 +682,13 @@ export class LifecycleService {
         path: "/timeZone",
         code: "unknown",
         message: "Must be an IANA time zone of the reference data.",
+      });
+    }
+    if (stripeBilling && request.planCode === undefined) {
+      fieldErrors.push({
+        path: "/planCode",
+        code: "required",
+        message: "Choose the plan to subscribe to.",
       });
     }
     if (fieldErrors.length > 0) {

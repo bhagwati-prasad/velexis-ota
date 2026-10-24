@@ -16,7 +16,8 @@
 // - **Create** needs `{ idempotencyKey }` in its options, as every POST of the platform does (architecture §7): without
 //   one it throws, and the test fails. The same key with the same parameters answers the object of the first call (as
 //   Stripe does for 24 hours); the same key with other parameters throws `StripeIdempotencyError`. New objects get ids
-//   `<prefix>_fake_<n>` and Stripe's URL shapes, and are kept, so a later retrieve finds them.
+//   `<prefix>_fake<n>` and Stripe's URL shapes (a Checkout Session also its `expires_at`, 24 hours after `created`),
+//   and are kept, so a later retrieve finds them.
 // - **Failures** queued with `failNext(method, error)` are thrown by the next calls of that method, one each, before
 //   anything else happens; the call is still recorded.
 // - **Calls** are recorded in order (`calls`, `callsOf(method)`) with the id, a copy of the parameters and the
@@ -84,6 +85,9 @@ const CREATED = {
 >;
 
 type CreateMethod = keyof typeof CREATED;
+
+/** How long a created Checkout Session lives, as Stripe's default: 24 hours (`expires_at = created + 86400`). */
+export const CHECKOUT_SESSION_LIFETIME_SECONDS = 24 * 60 * 60;
 
 /** `compute()` as a promise: what it returns resolves it, what it throws rejects it (as the SDK's calls do). */
 function settle<T>(compute: () => T): Promise<T> {
@@ -308,14 +312,20 @@ export class FakeStripe extends StripeClient {
     }
     this.sequence += 1;
     const shape = CREATED[method];
-    const id = `${shape.prefix}_fake_${this.sequence}`;
+    // Stripe's shape, `<prefix>_` and letters and digits only, as the `cus_` CHECK of `billing_customers` wants it.
+    const id = `${shape.prefix}_fake${this.sequence}`;
+    const created = 1_800_000_000 + this.sequence;
     const object: Json = {
       ...(isRecord(params) ? structuredClone(params) : {}),
       id,
       object: shape.object,
       livemode: false,
-      created: 1_800_000_000 + this.sequence,
+      created,
       ...(shape.url === undefined ? {} : { url: shape.url(id) }),
+      // Stripe expires a Checkout Session 24 hours after its creation unless `expires_at` says otherwise.
+      ...(method === "checkout.sessions.create" && !(isRecord(params) && "expires_at" in params)
+        ? { expires_at: created + CHECKOUT_SESSION_LIFETIME_SECONDS }
+        : {}),
     };
     this.objects.set(id, object);
     this.byIdempotencyKey.set(`${method} ${key}`, { params: serialised, id });
