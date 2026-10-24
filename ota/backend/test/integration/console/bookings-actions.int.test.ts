@@ -651,6 +651,17 @@ const remarksOf = (bookingId: string) =>
       .execute(),
   );
 
+/** The e-mails a booking queued (FIX-W28-NOTIFY): by dedupe key, `…:new` before `…:old`. */
+const notificationsOf = (bookingId: string) =>
+  inTenant((trx) =>
+    trx
+      .selectFrom("notifications")
+      .select(["template_key", "recipient", "locale", "dedupe_key", "payload"])
+      .where("booking_id", "=", bookingId)
+      .orderBy("dedupe_key")
+      .execute(),
+  );
+
 const amadeusCalls = (operation: string) => stub.requests().filter((entry) => entry.operation === operation);
 
 /** The `[status, error code]` of an answer. */
@@ -1031,10 +1042,14 @@ describe("console.bookings.patch", () => {
 
     expect(answer(res)).toEqual([200, undefined]);
     expectResponseToMatch("consolePatchBooking", res);
-    // No e-mail template for the change yet (OBE-055): the answer says the traveller was not told.
-    expect(res.body.warnings).toEqual(
+    // notifyCustomer sends booking.updated (FIX-W28-NOTIFY): no warning, one e-mail to the unchanged contact address.
+    expect(res.body.warnings ?? []).not.toEqual(
       expect.arrayContaining([expect.objectContaining({ title: "CUSTOMER NOT NOTIFIED" })]),
     );
+    const version = Number(JSON.parse(etag)) + 1;
+    expect(
+      (await notificationsOf(bookingId)).map((row) => [row.template_key, row.recipient, row.dedupe_key]),
+    ).toEqual([["booking.updated", res.body.contactEmail, `booking.patched:${bookingId}:v${version}:new`]]);
     const traveler = (res.body.travelers as JsonObject[])[0] as { documents: JsonObject[]; name: JsonObject };
     expect(traveler.documents).toEqual([
       expect.objectContaining({
@@ -1173,6 +1188,72 @@ describe("console.bookings.patch", () => {
       ["booking.resync", "succeeded"],
       ["bookings.patch", "failed"],
     ]);
+  });
+
+  it("[FIX-W28-NOTIFY AC1] e-mails booking.updated with notifyCustomer instead of warning: the new contact address, and a notice to the previous one", async () => {
+    const agent = await staffSession("agent");
+    const customer = await newCustomer();
+    const order = await newStubOrder();
+    const bookingId = await seedBooking(order, { customerId: customer.id });
+    const previous = (await bookingRow(bookingId)).contact_email;
+    const etag = await etagOf(agent, bookingId);
+    const email = `patched.${randomBytes(3).toString("hex")}@example.com`;
+
+    const res = await agent.patch(bookingId, etag, {
+      contacts: [newContact(email)],
+      reason: "New e-mail by phone",
+      notifyCustomer: true,
+    });
+
+    expect(answer(res)).toEqual([200, undefined]);
+    expectResponseToMatch("consolePatchBooking", res);
+    expect(res.body.warnings ?? []).toEqual([]);
+    const version = Number(JSON.parse(etag)) + 1;
+    const rows = await notificationsOf(bookingId);
+    expect(rows.map((row) => [row.template_key, row.recipient, row.locale, row.dedupe_key])).toEqual([
+      ["booking.updated", email, "en", `booking.patched:${bookingId}:v${version}:new`],
+      ["booking.updated", previous, "en", `booking.patched:${bookingId}:v${version}:old`],
+    ]);
+    // The new address gets the booking as it is now; the previous one its reference and nothing else of it.
+    expect(rows[0]?.payload).toMatchObject({
+      booking: {
+        reference: res.body.reference,
+        contact: { firstName: "TESTA", lastName: "SAMPLE" },
+        url: `https://alpha.ota.example.com/booking.html?id=${bookingId}`,
+      },
+      update: { contactNotice: false, contactsChanged: true },
+    });
+    expect(rows[1]?.payload).toEqual({
+      booking: {
+        reference: res.body.reference,
+        recordLocator: "",
+        url: "",
+        total: { amount: "", currency: "" },
+        contact: { firstName: "", lastName: "" },
+        travellers: [],
+        segments: [],
+      },
+      update: { contactNotice: true, contactsChanged: true },
+    });
+    expect(JSON.stringify(rows[1]?.payload)).not.toContain(email);
+  });
+
+  it("[FIX-W28-NOTIFY AC1] e-mails nothing for a tags patch with notifyCustomer, and says so", async () => {
+    const agent = await staffSession("agent");
+    const bookingId = await seedBooking(await newStubOrder());
+    const etag = await etagOf(agent, bookingId);
+
+    const res = await agent.patch(bookingId, etag, { tags: ["vip"], notifyCustomer: true });
+
+    expect(answer(res)).toEqual([200, undefined]);
+    expectResponseToMatch("consolePatchBooking", res);
+    expect(res.body.warnings).toEqual([
+      {
+        title: "CUSTOMER NOT NOTIFIED",
+        detail: "Tags and metadata are internal: no e-mail was sent to the traveller about this change.",
+      },
+    ]);
+    expect(await notificationsOf(bookingId)).toEqual([]);
   });
 
   it("changes tags and metadata locally in any status: no Amadeus call, a new version and the audit", async () => {

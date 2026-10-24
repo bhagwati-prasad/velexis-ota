@@ -17,7 +17,9 @@
 // documents and the refresh of CustomerBookingsService are exported for them.
 //
 // bookings.update (OBE-048): BookingChangesService (with its BookingChangesRepository) changes the contacts and special
-// requests of a booking through Flight Order Management PATCH, answering through CustomerBookingsService.
+// requests of a booking through Flight Order Management PATCH, answering through CustomerBookingsService. Its
+// `booking.updated` e-mails come from BookingUpdatedEmails (FIX-W28-NOTIFY), which is exported for the staff patch of
+// ConsoleModule (console.bookings.patch with `notifyCustomer`).
 //
 // bookings.quoteCancellation and bookings.cancel (OBE-049): CancellationService (with CancellationRepository) quotes
 // and cancels through Flight Order Management, CancellationRecorder writes the cancellation and its money step (the
@@ -74,6 +76,7 @@ import { BookingChangesRepository, BookingChangesService } from "./booking-chang
 import { BookingOrchestrator, CompleteCheckoutIdempotencyHooks } from "./booking-orchestrator.service";
 import { BookingSyncJobs, BookingSyncScan } from "./booking-sync.processor";
 import { BookingSyncRepository, BookingSyncService } from "./booking-sync.service";
+import { BookingUpdatedEmails } from "./booking-updated-emails";
 import { BookingsRepository } from "./bookings.repository";
 import {
   CancelBookingIdempotencyHooks,
@@ -116,6 +119,7 @@ import { TicketingRepository, TicketingService } from "./ticketing.service";
     apiStaffAlertOptions,
     BookingChangesService,
     BookingChangesRepository,
+    BookingUpdatedEmails,
     // bookings.quoteCancellation and bookings.cancel (OBE-049).
     CancellationService,
     CancellationRepository,
@@ -145,6 +149,7 @@ import { TicketingRepository, TicketingService } from "./ticketing.service";
     BookingsRepository,
     BookingSyncService,
     BookingTravelerDocuments,
+    BookingUpdatedEmails,
     CustomerBookingsService,
     PaymentsRepository,
   ],

@@ -85,7 +85,7 @@ function leafPaths(data: SampleValue, prefix = ""): string[] {
 }
 
 describe("template keys", () => {
-  it("are the eleven MVP keys of OADR-0013, each allowed by the notification_templates key CHECK", () => {
+  it("are the MVP keys of OADR-0013 with booking.updated of its revision of 2026-10-23, each allowed by the notification_templates key CHECK", () => {
     expect(TEMPLATE_KEYS).toEqual([
       "auth.verify_email",
       "auth.password_reset",
@@ -95,6 +95,7 @@ describe("template keys", () => {
       "booking.cancelled",
       "booking.cancellation_requested",
       "booking.not_confirmed",
+      "booking.updated",
       "staff.ticketing_failed",
       "staff.manual_review",
       "staff.airline_card_alert",

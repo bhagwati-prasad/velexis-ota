@@ -85,6 +85,11 @@ import { pdfText } from "../../support/pdf-text";
 type JsonObject = Record<string, unknown>;
 type Schema = "tenant_alpha" | "tenant_beta";
 
+/**
+ * The API's OPS_ALERT_EMAIL (FIX-W28-NOTIFY: both processes read it), the last recipient of a staff alert of an OTA
+ * without an alert address or an owner (alpha has none).
+ */
+const VELEXIS_OPS = `velexis-ops-${randomBytes(4).toString("hex")}@example.com`;
 const ALPHA_HOST = "alpha.ota.example.com";
 const BETA_HOST = "beta.ota.example.com";
 const MINUTE = 60_000;
@@ -655,7 +660,11 @@ beforeAll(async () => {
     new Clock(),
   );
   stub = await startAmadeusStub({ credentials: stubCredentials });
-  api = await createTestApp({ database: db, redis, env: { AMADEUS_BASE_URL_TEST: stub.url } });
+  api = await createTestApp({
+    database: db,
+    redis,
+    env: { AMADEUS_BASE_URL_TEST: stub.url, OPS_ALERT_EMAIL: VELEXIS_OPS },
+  });
 }, OPENAPI_SETUP_TIMEOUT_MS);
 
 afterAll(async () => {
@@ -1222,7 +1231,7 @@ describe("bookings.get", () => {
           status: "captured",
         })
         .execute();
-      // The API has no OPS_ALERT_EMAIL: the OTA's own address receives the alert.
+      // The OTA's own address comes first (StaffRecipients' rule 1), before the API's OPS_ALERT_EMAIL.
       await trx.updateTable("storefront_settings").set({ ops_alert_email: opsAddress }).execute();
     });
     stub.orders.cancelByAirline(order["id"] as string);
@@ -1277,6 +1286,65 @@ describe("bookings.get", () => {
         trx.updateTable("storefront_settings").set({ ops_alert_email: null }).execute(),
       );
     }
+  });
+
+  it("[FIX-W28-NOTIFY AC2] sends the alert of a refresh to the API's OPS_ALERT_EMAIL when the OTA has no alert address and no owner", async () => {
+    const customer = await newCustomer();
+    const order = await newStubOrder();
+    const bookingId = await seedBooking({
+      customerId: customer.id,
+      departInMs: 10 * DAY,
+      amadeusOrderId: order["id"] as string,
+      snapshot: redactPayload(order),
+    });
+    const paymentId = newId("pay");
+    await inTenant("tenant_alpha", async (trx) => {
+      await trx
+        .insertInto("payments")
+        .values({
+          id: paymentId,
+          environment: "test",
+          booking_id: bookingId,
+          provider: "stripe",
+          provider_payment_id: `pi_${randomBytes(12).toString("hex")}`,
+          currency: "EUR",
+          amount: "110.47",
+          amount_authorized: "110.47",
+          amount_captured: "110.47",
+          status: "captured",
+        })
+        .execute();
+      await trx.updateTable("storefront_settings").set({ ops_alert_email: null }).execute();
+    });
+    stub.orders.cancelByAirline(order["id"] as string);
+
+    const res = await get(`/v1/bookings/${bookingId}?refresh=true`, bearer(customer.token));
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ status: "cancelled", syncStatus: "refreshed" });
+    const alerts = await inTenant("tenant_alpha", (trx) =>
+      trx
+        .selectFrom("notifications")
+        .select([
+          "template_key as templateKey",
+          "recipient",
+          "recipient_type as recipientType",
+          "dedupe_key as dedupeKey",
+        ])
+        .where("booking_id", "=", bookingId)
+        .where("template_key", "=", "staff.manual_review")
+        .execute(),
+    );
+    // Before FIX-W28-NOTIFY the API had no OPS_ALERT_EMAIL and skipped this alert.
+    expect(alerts).toEqual([
+      {
+        templateKey: "staff.manual_review",
+        recipient: VELEXIS_OPS,
+        recipientType: "staff",
+        dedupeKey: `staff.manual_review:${bookingId}:airline_cancelled`,
+      },
+    ]);
+    expect(api.sink.text()).not.toContain(VELEXIS_OPS);
   });
 
   it("writes nothing over a booking that another writer changed while its order was read", async () => {

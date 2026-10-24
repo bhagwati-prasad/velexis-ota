@@ -8,9 +8,11 @@
 // points at an order created in the stub through its own HTTP API and is written the way the record step writes it
 // (the snapshot through the redactor, the order's contact and remarks), with synthetic travellers and flights relative
 // to now. Both processes run in-process: the API (createTestApp) and the worker (WorkerModule.forRoot), whose
-// ota-notifications consumer sends the confirmations through Mailpit (its schedulers are removed: the `notify` job that
-// follows each commit is what sends). The confirmation's template is a tenant row of alpha, as an OTA writes one: the
-// code defaults of the booking e-mails are OBE-055's. Every e-mail goes to a recipient of its own (`uniqueEmail`).
+// ota-notifications consumer sends the e-mails of a contacts change through Mailpit (its schedulers are removed: the
+// `notify` job that follows each commit is what sends). They are `booking.updated` (FIX-W28-NOTIFY, OADR-0013 item 4 as
+// revised on 2026-10-23): to the new address in its language, Swedish, whose template is a tenant row of alpha as an OTA
+// writes one; to the previous address the short notice in the previous contact's language, English, the code default.
+// Every e-mail goes to a recipient of its own (`uniqueEmail`).
 // Every answer is checked against the OTA document. The stub's `timeout` scenario holds an answer for 100 ms instead of
 // 30 s.
 import { randomBytes } from "node:crypto";
@@ -604,22 +606,26 @@ beforeAll(async () => {
   alphaSk = await issueKey(alphaId);
   await inTenant(async (trx) => {
     await seedStorefrontSettings(trx, { name: "Alpha Travel", defaultCurrency: "EUR", defaultLocale: "en" });
-    // The OTA's own confirmation e-mail in Swedish, the new contacts' language (the code defaults of the booking
-    // e-mails come with OBE-055).
+    // The OTA's own `booking.updated` e-mail in Swedish, the new contacts' language (the previous contact's, English,
+    // takes the code default).
     await trx
       .insertInto("notification_templates")
       .values({
         id: newId("ntt"),
-        key: "booking.confirmed",
+        key: "booking.updated",
         channel: "email",
         locale: "sv",
-        subject: "{{brand.name}}: bokning {{booking.reference}}",
+        subject:
+          "{{#if update.contactNotice}}{{brand.name}}: nya kontaktuppgifter{{else}}{{brand.name}}: bokning " +
+          "{{booking.reference}}{{/if}}",
         body_html:
-          "<p>Hej {{booking.contact.firstName}} {{booking.contact.lastName}}, din bokning " +
-          '{{booking.reference}}: <a href="{{booking.url}}">visa den</a>.</p>',
+          "{{#if update.contactNotice}}<p>Kontaktuppgifterna för bokning {{booking.reference}} har ändrats.</p>" +
+          "{{else}}<p>Hej {{booking.contact.firstName}} {{booking.contact.lastName}}, din bokning " +
+          '{{booking.reference}}: <a href="{{booking.url}}">visa den</a>.</p>{{/if}}',
         body_text:
-          "Hej {{booking.contact.firstName}} {{booking.contact.lastName}}, din bokning {{booking.reference}}: " +
-          "{{booking.url}}",
+          "{{#if update.contactNotice}}Kontaktuppgifterna för bokning {{booking.reference}} har ändrats.{{else}}Hej " +
+          "{{booking.contact.firstName}} {{booking.contact.lastName}}, din bokning {{booking.reference}}: " +
+          "{{booking.url}}{{/if}}",
       })
       .execute();
   });
@@ -804,7 +810,7 @@ describe("a signed-in customer changes the contacts and adds a special request (
     ]);
   });
 
-  it("[OBE-048 AC1] e-mails the confirmation to the new and the old address, once each", () => {
+  it("[OBE-048 AC1] [FIX-W28-NOTIFY AC1] e-mails booking.updated to the new address and the short notice to the old one, once each", () => {
     expect(
       after.notifications.map((row) => [
         row.template_key,
@@ -814,14 +820,56 @@ describe("a signed-in customer changes the contacts and adds a special request (
         row.dedupe_key,
       ]),
     ).toEqual([
-      ["booking.confirmed", newEmail, "customer", "sv", `booking.contacts_updated:${bookingId}:v2:new`],
-      ["booking.confirmed", oldEmail, "customer", "sv", `booking.contacts_updated:${bookingId}:v2:old`],
+      ["booking.updated", newEmail, "customer", "sv", `booking.contacts_updated:${bookingId}:v2:new`],
+      ["booking.updated", oldEmail, "customer", "en", `booking.contacts_updated:${bookingId}:v2:old`],
     ]);
     expect(mails.map((mail) => mail.To.map((address) => address.Address))).toEqual([[newEmail], [oldEmail]]);
-    for (const mail of mails) {
-      expect(mail.Subject).toMatch(/^Alpha Travel: bokning [A-Z0-9]+$/);
-      expect(mail.Text).toContain("Hej TESTB SAMPLE");
-      expect(mail.Text).toContain(`https://alpha.ota.example.com/booking.html?id=${bookingId}`);
+    const [toNew] = mails;
+    // The new address: the booking as it is now, with its new contact and its page (no itinerary is ready yet).
+    expect(toNew?.Subject).toMatch(/^Alpha Travel: bokning [A-Z0-9]+$/);
+    expect(toNew?.Text).toContain("Hej TESTB SAMPLE");
+    expect(toNew?.Text).toContain(`https://alpha.ota.example.com/booking.html?id=${bookingId}`);
+    expect(after.notifications[0]?.payload).toMatchObject({
+      booking: {
+        contact: { firstName: "TESTB", lastName: "SAMPLE" },
+        travellers: [{ firstName: "TESTAA", lastName: "SAMPLE" }],
+      },
+      update: { contactNotice: false, contactsChanged: true },
+    });
+  });
+
+  it("[FIX-W28-NOTIFY AC1] gives the old address the booking reference only: no attachment, no traveller, flight, link or new address", () => {
+    const [, toOld] = mails;
+    const reference = (res.body as { reference: string }).reference;
+    expect(after.notifications[1]?.payload).toEqual({
+      booking: {
+        reference,
+        recordLocator: "",
+        url: "",
+        total: { amount: "", currency: "" },
+        contact: { firstName: "", lastName: "" },
+        travellers: [],
+        segments: [],
+      },
+      update: { contactNotice: true, contactsChanged: true },
+    });
+    // The code default's notice, in English.
+    expect(toOld?.Subject).toBe(`The contact details of booking ${reference} with Alpha Travel were changed`);
+    expect(toOld?.Attachments).toEqual([]);
+    for (const part of [toOld?.Text ?? "", toOld?.HTML ?? ""]) {
+      expect(part).toContain(reference);
+      for (const absent of [
+        newEmail,
+        "TESTAA",
+        "TESTB",
+        "IB 3436",
+        "MAD to ORY",
+        "110.47",
+        "booking.html",
+        bookingId,
+      ]) {
+        expect([absent, part.includes(absent)]).toEqual([absent, false]);
+      }
     }
   });
 
@@ -992,7 +1040,10 @@ describe("a PATCH that times out (the change was applied at Amadeus)", () => {
       ["booking.contacts_updated", { cause: "resync_after_timeout", contacts: 1 }],
       ["booking.remark_added", { cause: "resync_after_timeout", remarks: 1 }],
     ]);
-    expect(after.notifications.map((row) => row.recipient)).toEqual([newEmail, oldEmail]);
+    expect(after.notifications.map((row) => [row.template_key, row.recipient])).toEqual([
+      ["booking.updated", newEmail],
+      ["booking.updated", oldEmail],
+    ]);
   });
 
   it("makes a retry with the old If-Match stale: 412 PRECONDITION_FAILED", () => {

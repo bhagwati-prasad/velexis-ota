@@ -1,8 +1,9 @@
 // The console booking actions (OBE-062): the rules of console.bookings.patch (card data, elements, read-only fields,
 // the merges of travellers, contacts and remarks), the projection of an order's remarks and contacts on a booking, the
 // differences a resync answers and the retrieve's answer, then ConsoleBookingActionsService over fakes: a refused patch
-// reaches neither the database nor Amadeus, a stale If-Match makes no Amadeus call, and a timed-out PATCH is followed
-// by a resync before its 504. Against PostgreSQL and the Amadeus stub: test/integration/console/
+// reaches neither the database nor Amadeus, a stale If-Match makes no Amadeus call, a timed-out PATCH is followed by a
+// resync before its 504 and e-mails nothing, and a `tags`/`metadata` patch with `notifyCustomer` sends nothing and
+// warns (FIX-W28-NOTIFY). Against PostgreSQL and the Amadeus stub: test/integration/console/
 // bookings-actions.int.test.ts. Every number here is made up on the spot.
 import { AppError } from "@velexis/errors";
 import type { PinoLogger } from "nestjs-pino";
@@ -15,6 +16,7 @@ import type {
   BookingsRepository,
 } from "../bookings/bookings.repository";
 import type { BookingSyncService } from "../bookings/booking-sync.service";
+import type { BookingUpdatedEmails } from "../bookings/booking-updated-emails";
 import type { CustomerBookingsService } from "../bookings/customer-bookings.service";
 import type { BookingTravelerDocuments } from "../bookings/order-recorder";
 import type { StaffContext } from "../common/auth/staff.guard";
@@ -35,6 +37,7 @@ import {
   mergeContacts,
   mergeRemarks,
   mergeTraveler,
+  NOTIFICATION_NOT_SENT_WARNING,
   orderRemarksOf,
   patchElementsOf,
   planRemarks,
@@ -455,6 +458,10 @@ function setup(patch: () => Promise<unknown> = () => Promise.resolve({ body: {},
   const transactions: string[] = [];
   const amadeus = { patchFlightOrder: vi.fn(patch), getFlightOrder: vi.fn() };
   const refresh = vi.fn(() => Promise.resolve({ kind: "not_found" as const }));
+  const emails = { send: vi.fn(() => Promise.resolve({ updated: true, notice: false })) };
+  const consoleGet = vi.fn(() =>
+    Promise.resolve({ id: BOOKING.id, warnings: [] } as unknown as ConsoleBooking),
+  );
   const service = new ConsoleBookingActionsService(
     {
       run: (work: (trx: unknown) => Promise<unknown>) => {
@@ -474,13 +481,14 @@ function setup(patch: () => Promise<unknown> = () => Promise.resolve({ body: {},
           remarks: [],
           associatedRecords: [],
         }),
+      updateBooking: vi.fn(() => Promise.resolve()),
     } as unknown as BookingsRepository,
     {
       details: () => Promise.resolve({ tags: [], ticketingAgreement: null }),
     } as unknown as ConsoleBookingsRepository,
     {} as BookingTravelerDocuments,
     { refresh } as unknown as CustomerBookingsService,
-    {} as ConsoleBookingsService,
+    { get: consoleGet } as unknown as ConsoleBookingsService,
     amadeus as unknown as AmadeusClient,
     { record: vi.fn() } as unknown as StaffActionsWriter,
     { require: () => TENANT, requestId: () => TENANT.requestId } as unknown as TenantContext,
@@ -489,8 +497,9 @@ function setup(patch: () => Promise<unknown> = () => Promise.resolve({ body: {},
     new Clock(),
     { info: vi.fn(), warn: vi.fn() } as unknown as PinoLogger,
     {} as BookingSyncService,
+    emails as unknown as BookingUpdatedEmails,
   );
-  return { service, amadeus, refresh, transactions };
+  return { service, amadeus, refresh, transactions, emails };
 }
 
 describe("ConsoleBookingActionsService.retrieve", () => {
@@ -554,5 +563,31 @@ describe("ConsoleBookingActionsService.patch", () => {
       contacts: [{ emailAddress: "new@example.com" }],
     });
     expect(refresh).toHaveBeenCalledWith(TENANT, BOOKING.id, "console.bookings.patch", {}, { throttleMs: 0 });
+  });
+
+  it("[FIX-W28-NOTIFY AC1] e-mails nothing after a timed-out PATCH, even with notifyCustomer", async () => {
+    const { service, emails } = setup(() => Promise.reject(new AppError("SUPPLIER_TIMEOUT")));
+
+    const error = await rejectionOf(
+      service.patch(BOOKING.id, '"3"', {
+        contacts: [{ emailAddress: "new@example.com" }],
+        notifyCustomer: true,
+      }),
+    );
+
+    expect(error.code).toBe("SUPPLIER_TIMEOUT");
+    expect(emails.send).not.toHaveBeenCalled();
+  });
+
+  it("[FIX-W28-NOTIFY AC1] sends nothing for a tags patch with notifyCustomer, and says so in a warning", async () => {
+    const { service, emails, amadeus } = setup();
+
+    const booking = await service.patch(BOOKING.id, '"3"', { tags: ["vip"], notifyCustomer: true });
+    const quiet = await service.patch(BOOKING.id, '"3"', { tags: ["vip"] });
+
+    expect(amadeus.patchFlightOrder).not.toHaveBeenCalled();
+    expect(emails.send).not.toHaveBeenCalled();
+    expect(booking.warnings).toEqual([NOTIFICATION_NOT_SENT_WARNING]);
+    expect(quiet.warnings).toEqual([]);
   });
 });

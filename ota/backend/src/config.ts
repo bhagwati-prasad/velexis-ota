@@ -172,6 +172,14 @@ const sharedSchema = {
   // adapter exists, so neither process starts with it. Both units read ota-backend.env, which holds them.
   STORAGE_DRIVER: env.enum(STORAGE_DRIVERS, { default: "local" }),
   STORAGE_DIR: env.dir({ default: DEFAULT_STORAGE_DIR }),
+  // Velexis ops, one plain address (EMAIL_ADDRESS): the last recipient of an OTA's staff alerts, after the OTA's
+  // `ops_alert_email` and its owners (notifications/staff-recipients.ts, OADR-0013 item 5), and the recipient of the
+  // operational alerts of the OTA backend (airline-card abuse, refused Amadeus credentials; OADR-0004). Both processes
+  // raise staff alerts (checkout.complete, a refresh and the console in the API; the jobs in the worker), so both read
+  // it since FIX-W28-NOTIFY (lead decision (4) of 2026-10-23); before, only the worker had it and the API skipped an
+  // alert of an OTA without an address or an owner. Optional: without it such an alert is skipped and logged. Both
+  // units read ota-backend.env, which holds it.
+  OPS_ALERT_EMAIL: env.string({ pattern: EMAIL_ADDRESS, optional: true }),
 } as const;
 
 /**
@@ -299,9 +307,6 @@ export const workerConfigSchema = {
   // development), from the address of MAIL_FROM with the OTA's brand name as the display name.
   SMTP_URL: env.url({ protocols: ["smtp:", "smtps:"] }),
   MAIL_FROM: env.string({ pattern: MAIL_FROM_PATTERN }),
-  // Velexis ops, one plain address: the recipient of the operational alerts of the OTA backend (airline-card abuse,
-  // refused Amadeus credentials; OADR-0004). The tasks that raise them read it from the notifications module.
-  OPS_ALERT_EMAIL: env.string({ pattern: EMAIL_ADDRESS }),
   // The OTA admin's public base URL: the links of staff alert e-mails (OADR-0013 item 4).
   PUBLIC_OTA_ADMIN_URL: env.url({ protocols: ["https:", "http:"] }),
 } as const;

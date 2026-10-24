@@ -58,8 +58,11 @@
 //          OrderRecorder.event (the cancelled itinerary follows it), the traveller's `booking.cancelled` e-mail (once
 //          per booking, dedupe key) and, when the booking has an authorised or captured payment, a staff alert
 //          (StaffAlerts, `staff.manual_review:<bkg_…>:airline_cancelled`, once per booking; lead decision (3) of
-//          2026-10-23). The money is staff's (flow §3 step 4: the authorisation is voided or the capture refunded from
-//          the console). A schedule change of the same read is part of the cancellation, not an event of its own;
+//          2026-10-23). The money is staff's (flow §3 step 4): a Stripe payment's authorisation is voided or its
+//          capture refunded from the console; an airline-card payment (provider `airline`, OADR-0004: the airline
+//          charged the card) is refunded through the airline, which the console can neither release nor refund, and
+//          the alert says so in its own words (`airlineCancellationReason`; FIX-W28-NOTIFY, lead decision (6) of
+//          2026-10-23). A schedule change of the same read is part of the cancellation, not an event of its own;
 //        - always: the redacted `order_snapshot`, `order_dictionaries`, `order_included` (the bag options read with
 //          `include=bags`, the fare rules read with `fareRules`), the order's forms of identification cut to their
 //          last 4 characters (`form_of_identifications`, OBE-062's maskedIdentifications), the order's associated
@@ -86,6 +89,7 @@ import { IdGenerator } from "../common/ids";
 import type { SharedConfig } from "../config";
 import { InvalidNotificationError, OutboxService } from "../notifications/outbox.service";
 import { storefrontUrl } from "../notifications/renderer";
+import { AIRLINE_PROVIDER } from "../payments/airline-card/airline-card.gateway";
 import { Money } from "../pricing/pricing.types";
 import { warningsOf } from "../shopping/priced-offers.mapper";
 import type { PlatformTenant } from "../tenancy/platform-read.types";
@@ -216,11 +220,59 @@ export interface DueSyncQuery {
 /** A payment of a booking that holds the traveller's money (HELD_PAYMENT_STATUSES). */
 export interface HeldPaymentRow {
   readonly id: string;
+  /** `stripe`, or `airline` (AIRLINE_PROVIDER, OADR-0004) for a card the airline charged. */
+  readonly provider: string;
   readonly status: string;
   readonly currency: string;
   readonly amountAuthorized: string;
   readonly amountCaptured: string;
   readonly amountRefunded: string;
+}
+
+/** What a held payment holds: its captured amount less its refunds when positive, else its authorised amount. */
+function heldMoney(payment: HeldPaymentRow): { readonly captured: boolean; readonly amount: string } {
+  const captured = new Money(payment.amountCaptured).minus(payment.amountRefunded);
+  return captured.greaterThan(0)
+    ? { captured: true, amount: captured.toFixed(2) }
+    : { captured: false, amount: new Money(payment.amountAuthorized).toFixed(2) };
+}
+
+/**
+ * The reason of the staff alert of an airline cancellation of a booking whose payments hold the traveller's money (lead
+ * decisions (3) and (6) of 2026-10-23), each payment named with what it holds. A Stripe payment is released or refunded
+ * from the console; an airline-card payment (`provider = airline`) was charged by the airline, so its refund goes
+ * through the airline and the console can neither release nor refund it. Ids, amounts and currencies only.
+ */
+export function airlineCancellationReason(reference: string, held: readonly HeldPaymentRow[]): string {
+  const inConsole = held.filter((payment) => payment.provider !== AIRLINE_PROVIDER);
+  const airline = held.filter((payment) => payment.provider === AIRLINE_PROVIDER);
+  const sentences: string[] = [];
+  if (inConsole.length > 0) {
+    const money = inConsole.map((payment) => {
+      const { captured, amount } = heldMoney(payment);
+      return `${payment.id} ${captured ? "captured" : "authorised"} ${amount} ${payment.currency}`;
+    });
+    sentences.push(
+      `The airline cancelled every flight of booking ${reference}, and its payment still holds the ` +
+        `traveller's money (${money.join("; ")}). Release the authorisation or refund the payment from the console.`,
+    );
+  }
+  if (airline.length > 0) {
+    const money = airline
+      .map(
+        (payment) => `${payment.id} charged by the airline ${heldMoney(payment).amount} ${payment.currency}`,
+      )
+      .join("; ");
+    sentences.push(
+      inConsole.length > 0
+        ? `The traveller also paid with a card the airline charged (${money}): that refund goes through the ` +
+            "airline, not the console, which can neither release nor refund an airline-card payment."
+        : `The airline cancelled every flight of booking ${reference}, and the traveller paid with a card the ` +
+            `airline charged (${money}). The refund goes through the airline (its refund rules, in Amadeus or with ` +
+            "the airline), not the console, which can neither release nor refund an airline-card payment.",
+    );
+  }
+  return sentences.join(" ");
 }
 
 /** The sync's queries on `bookings`, `booking_segments` and `payments` (tenant repository: `tenantTx` first). */
@@ -328,6 +380,7 @@ export class BookingSyncRepository {
       .selectFrom("payments")
       .select([
         "id",
+        "provider",
         "status",
         sql<string>`currency::text`.as("currency"),
         sql<string>`amount_authorized::text`.as("amountAuthorized"),
@@ -1196,8 +1249,8 @@ export class BookingSyncService {
 
   /**
    * The staff alert of an airline cancellation of a booking whose payment holds the traveller's money (an authorisation
-   * or a capture): `staff.manual_review`, once per booking (lead decision (3) of 2026-10-23). Answers how many payments
-   * hold money (0: no alert).
+   * or a capture): `staff.manual_review`, once per booking (lead decision (3) of 2026-10-23), worded for the payments'
+   * method (`airlineCancellationReason`, lead decision (6)). Answers how many payments hold money (0: no alert).
    */
   private async cancellationAlert(
     trx: TenantTransaction,
@@ -1209,20 +1262,12 @@ export class BookingSyncService {
     if (held.length === 0) {
       return 0;
     }
-    const money = held.map((payment) => {
-      const captured = new Money(payment.amountCaptured).minus(payment.amountRefunded);
-      return captured.greaterThan(0)
-        ? `${payment.id} captured ${captured.toFixed(2)} ${payment.currency}`
-        : `${payment.id} authorised ${new Money(payment.amountAuthorized).toFixed(2)} ${payment.currency}`;
-    });
     await this.alerts.send(trx, {
       settings,
       fallbackLocale: tenant.defaultLocale ?? "en",
       booking: { id: booking.id, reference: booking.reference, recordLocator: booking.recordLocator },
       dedupeKey: `staff.manual_review:${booking.id}:${AIRLINE_CANCELLED_ALERT}`,
-      reason:
-        `The airline cancelled every flight of booking ${booking.reference}, and its payment still holds the ` +
-        `traveller's money (${money.join("; ")}). Release the authorisation or refund the payment from the console.`,
+      reason: airlineCancellationReason(booking.reference, held),
     });
     return held.length;
   }

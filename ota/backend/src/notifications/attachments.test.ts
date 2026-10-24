@@ -6,11 +6,14 @@ import { createHash } from "node:crypto";
 import type { StorageAdapter } from "@velexis/db/storage";
 import type { PinoLogger } from "nestjs-pino";
 import { describe, expect, it, vi } from "vitest";
+import { bookingUpdatedData, contactNoticeData } from "../bookings/booking-updated-emails";
 import type { TenantContext } from "../tenancy/tenant-context";
+import type { TenantTransaction } from "../tenancy/tenant-tx";
 import {
   ATTACHMENT_RECHECK_MS,
   ATTACHMENT_WAIT_MS,
   attachmentRuleOf,
+  isContactNotice,
   MAX_ATTACHMENT_BYTES,
   NotificationAttachments,
   planAttachments,
@@ -20,6 +23,7 @@ import {
   type BookingDocumentsState,
 } from "./attachments";
 import { wakeJob } from "./notifications.processor";
+import type { NotificationRow } from "./outbox.repository";
 
 const QUEUED = new Date("2026-11-01T10:00:00.000Z");
 const at = (ms: number): Date => new Date(QUEUED.getTime() + ms);
@@ -72,6 +76,73 @@ describe("the documents an e-mail attaches", () => {
         }),
       ),
     ).toEqual([RECEIPT_B, RECEIPT_A]);
+  });
+
+  it("[FIX-W28-NOTIFY AC1] booking.updated attaches the itinerary, except its notice to the previous contact address", () => {
+    const full = bookingUpdatedData({
+      booking: {
+        id: "bkg_01J9ZA2B4C6D8E0F2G4H6J8K0M",
+        reference: "VX7K2M9Q",
+        recordLocator: null,
+        totalAmount: "412.30",
+        currency: "EUR",
+        customerId: null,
+      },
+      travelers: [],
+      segments: [],
+      contact: { firstName: "Alex", lastName: "Martin" },
+      bookingUrl: "https://demo.ota.example.com/booking.html?id=bkg_01J9ZA2B4C6D8E0F2G4H6J8K0M",
+      contactsChanged: true,
+    });
+    const notice = contactNoticeData("VX7K2M9Q");
+
+    expect(attachmentRuleOf("booking.updated", full)).toBe("itinerary");
+    expect(attachmentRuleOf("booking.updated", notice)).toBeUndefined();
+    // A row without a readable payload is not a notice: the key's rule.
+    expect(attachmentRuleOf("booking.updated")).toBe("itinerary");
+    expect([
+      isContactNotice(notice),
+      isContactNotice(full),
+      isContactNotice(null),
+      isContactNotice([]),
+    ]).toEqual([true, false, false, false]);
+    // Only booking.updated has a notice: the flag means nothing for another key.
+    expect(attachmentRuleOf("booking.confirmed", notice)).toBe("itinerary");
+  });
+
+  it("[FIX-W28-NOTIFY AC1] plans no attachment for the notice, and the itinerary for the e-mail to the new address", async () => {
+    const attachments = new NotificationAttachments(
+      {} as StorageAdapter,
+      {} as TenantContext,
+      { warn: vi.fn() } as unknown as PinoLogger,
+    );
+    const query = {
+      select: () => query,
+      where: () => query,
+      orderBy: () => query,
+      groupBy: () => query,
+      execute: () => Promise.resolve([]),
+    };
+    const trx = { selectFrom: vi.fn(() => query) } as unknown as TenantTransaction;
+    const booking = "bkg_01J9ZA2B4C6D8E0F2G4H6J8K0M";
+
+    const plans = await attachments.plan(
+      trx,
+      [
+        { id: "ntf_new", template_key: "booking.updated", booking_id: booking, payload: { update: {} } },
+        {
+          id: "ntf_old",
+          template_key: "booking.updated",
+          booking_id: booking,
+          payload: contactNoticeData("VX") as NotificationRow["payload"],
+        },
+      ],
+      QUEUED,
+    );
+
+    // The new address's e-mail has a plan (here: nothing ready and never asked for, so the link); the notice none.
+    expect(plans.get("ntf_new")).toEqual({ kind: "link" });
+    expect(plans.has("ntf_old")).toBe(false);
   });
 
   it("are all ready or none: a missing receipt, no e-ticket or no itinerary attaches nothing", () => {

@@ -134,10 +134,11 @@ export interface RefundRow {
   readonly version: number;
 }
 
-/** What a staff alert about a payment needs (OBE-039): where it goes, in which locale, and the booking it names. */
+/**
+ * What a staff alert about a payment needs (OBE-039): its locale and the booking it names. Where it goes is
+ * StaffRecipients' choice (OBE-055), which reads `ops_alert_email` itself.
+ */
 export interface PaymentAlertFacts {
-  /** `storefront_settings.ops_alert_email`, or `null` when the OTA set none. */
-  readonly opsAlertEmail: string | null;
   /** `storefront_settings.default_locale`, or `null` without a settings row. */
   readonly defaultLocale: string | null;
   /** The booking's reference and record locator, when the payment has a booking. */
@@ -753,11 +754,11 @@ export class PaymentsRepository {
     return result.numUpdatedRows > 0n;
   }
 
-  /** The facts of a staff alert about a payment: the alert address, the locale and the booking `bookingId`. */
+  /** The facts of a staff alert about a payment: the locale and the booking `bookingId`. */
   async alertFacts(trx: TenantTransaction, bookingId: string | null): Promise<PaymentAlertFacts> {
     const settings = await trx
       .selectFrom("storefront_settings")
-      .select(["ops_alert_email as opsAlertEmail", "default_locale as defaultLocale"])
+      .select("default_locale as defaultLocale")
       .executeTakeFirst();
     const booking =
       bookingId === null
@@ -768,7 +769,6 @@ export class PaymentsRepository {
             .where("id", "=", bookingId)
             .executeTakeFirst();
     return {
-      opsAlertEmail: settings?.opsAlertEmail ?? null,
       defaultLocale: settings?.defaultLocale ?? null,
       bookingReference: booking?.reference ?? null,
       recordLocator: booking?.recordLocator ?? null,

@@ -9014,8 +9014,9 @@ paths:
         `version` are updated; `booking_events` (`booking.contacts_updated`, `booking.documents_updated`,
         `booking.loyalty_updated`, `booking.remark_added`) and a confirmation notification are written. Returns the
         updated booking with a new `ETag`. In the MVP the new primary e-mail becomes the booking's contact e-mail (guest
-        lookup, notifications), and a changed contacts list sends a confirmation e-mail of the booking as it is now to
-        the new primary address and to the previous one when it differs.
+        lookup, notifications), and a changed contacts list sends the `booking.updated` e-mail of the booking as it is
+        now to the new primary address (the itinerary attached when one is ready) and, when the address changed, a short
+        notice to the previous one that names the booking reference only (no other booking data, no attachment).
 
 
         **Timeout.** When the PATCH times out (the change may have been applied), the order is read back with Flight
@@ -12392,12 +12393,17 @@ paths:
         `queuing_office_id`, `owner_office_id`; `version` + 1; `booking_events` `booking.patched` (diff, hidden from the
         customer unless contacts/documents changed), `staff_actions` (`booking.patch`, before/after, reason),
         `supplier_requests`. Added chargeable services re-price the booking (`pricing`, `totals.ancillaries`) and are
-        not charged to the customer automatically. `notifyCustomer=true` sends the updated itinerary.
+        not charged to the customer automatically. `notifyCustomer=true` queues the `booking.updated` e-mail
+        (`notifications`, in the same transaction) to the booking's contact e-mail after the change, with the itinerary
+        attached when one is ready, and, when the change moved the contact e-mail, a short notice to the previous
+        address that names the booking reference only; a patch that times out e-mails nothing.
 
 
         **Local-only changes.** `tags` (replace bookings.tags) and `metadata` (replace bookings.metadata) never reach
         Amadeus: a body with only `tags` / `metadata` (+ `reason`) makes no Amadeus call, works in every status (also
-        cancelled, failed, pending), increments `version` and is audited (`staff_actions` `booking.tags_updated`).
+        cancelled, failed, pending), increments `version` and is audited (`staff_actions` `booking.tags_updated`). It
+        changes nothing the traveller sees, so `notifyCustomer` sends no e-mail there: the answer carries the warning
+        `CUSTOMER NOT NOTIFIED` instead.
 
 
         **Preconditions.** `If-Match` (412 when stale); for Amadeus elements the booking must not be `cancelled` (409
@@ -40469,7 +40475,11 @@ components:
             call.
         notifyCustomer:
           type: boolean
-          description: 'E-mail the updated itinerary to the primary contact. Default: `false`.'
+          description: >-
+            E-mail the traveller about the change: `booking.updated` to the booking's contact e-mail (the itinerary
+            attached when one is ready), and a short notice to the previous address when the change moved it. A patch
+            of `tags` and `metadata` alone sends nothing and answers the warning `CUSTOMER NOT NOTIFIED`. Default:
+            `false`.
         reason:
           type: string
           maxLength: 500
@@ -44346,12 +44356,17 @@ components:
         - booking.cancelled
         - booking.cancellation_requested
         - booking.not_confirmed
+        - booking.updated
         - staff.ticketing_failed
         - staff.manual_review
         - staff.airline_card_alert
       description: >-
         The notification template keys of the MVP (OADR-0013 point 4): customers `auth.*`, travellers `booking.*`, the
-        OTA's staff `staff.*`. Later releases add keys with their code defaults.
+        OTA's staff `staff.*`. Later releases add keys with their code defaults. `booking.updated` (OADR-0013 point 4 as
+        revised on 2026-10-23) tells the traveller that the booking changed: a contacts change (bookings.update) and a
+        staff patch with `notifyCustomer` (console.bookings.patch) send it to the booking's contact e-mail, the
+        itinerary attached when one is ready; when the contact e-mail changed, the previous address gets a short notice
+        of the same key (`update.contactNotice`: the booking reference only, no other booking data, no attachment).
     NotificationChannel:
       type: string
       enum:

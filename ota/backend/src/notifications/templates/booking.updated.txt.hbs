@@ -1,0 +1,52 @@
+{{#if update.contactNotice}}
+Hello,
+
+The contact details of booking {{booking.reference}} with {{brand.name}} were changed. From now on the e-mails about
+this booking go to the new contact address, not to this one.
+
+If you did not ask for this change, please tell {{brand.name}} at once{{#if brand.supportEmail}} at {{brand.supportEmail}}{{/if}}{{#if brand.supportPhone}}{{#if brand.supportEmail}} or{{/if}} on {{brand.supportPhone}}{{/if}}.
+{{else}}
+{{#if booking.contact.firstName}}Hello {{booking.contact.firstName}},{{else}}Hello,{{/if}}
+
+Your booking with {{brand.name}} has been updated. Here it is as it stands now.
+{{#if update.contactsChanged}}
+Its contact details were changed: {{brand.name}} now sends the e-mails about this booking to this address.
+{{/if}}
+
+Booking reference: {{booking.reference}}
+{{#if booking.recordLocator}}
+Airline reference: {{booking.recordLocator}}
+{{/if}}
+Total: {{booking.total.amount}} {{booking.total.currency}}
+
+Flights (local times):
+{{#each booking.segments}}
+- {{carrierCode}} {{flightNumber}}, {{origin}} to {{destination}}: departs {{departureAt}}, arrives {{arrivalAt}}
+{{/each}}
+
+Travellers:
+{{#each booking.travellers}}
+- {{firstName}} {{lastName}}
+{{/each}}
+
+{{#if documents.attached}}
+Your current itinerary is attached to this e-mail as a PDF.
+{{else}}
+Your current itinerary can be downloaded on your booking page.
+{{/if}}
+
+View your booking:
+{{booking.url}}
+{{#if brand.supportEmail}}
+
+Questions? Write to {{brand.supportEmail}}{{#if brand.supportPhone}} or call {{brand.supportPhone}}{{/if}}.
+{{else}}
+{{#if brand.supportPhone}}
+
+Questions? Call {{brand.supportPhone}}.
+{{/if}}
+{{/if}}
+{{/if}}
+
+{{brand.name}}
+{{brand.storefrontUrl}}

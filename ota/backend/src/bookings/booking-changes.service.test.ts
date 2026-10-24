@@ -24,7 +24,6 @@ import {
   contactRequirementOf,
   contactsMatch,
   contactValuesOf,
-  CONTACTS_CONFIRMATION_TEMPLATE,
   CONTACTS_UPDATED_EVENT,
   flightOfferRefsOf,
   newRemarksOf,
@@ -40,6 +39,7 @@ import {
   type BookingChangesRepository,
   type BookingUpdateRequest,
 } from "./booking-changes.service";
+import { BOOKING_UPDATED_TEMPLATE, BookingUpdatedEmails } from "./booking-updated-emails";
 import type {
   BookingChildren,
   BookingRemarkRow,
@@ -539,12 +539,16 @@ function setup(
     recorder as unknown as OrderRecorder,
     customerBookings as unknown as CustomerBookingsService,
     amadeus as unknown as AmadeusClient,
-    outbox as unknown as OutboxService,
+    new BookingUpdatedEmails(
+      outbox as unknown as OutboxService,
+      bookings as unknown as BookingsRepository,
+      { get: () => "ota.example.com" } as unknown as ConfigService<never, true>,
+      { error: vi.fn() } as unknown as PinoLogger,
+    ),
     { require: () => TENANT, requestId: () => TENANT.requestId } as unknown as TenantContext,
     { require: () => ({ bookingId: BOOKING_ID, via: "customer" }) } as unknown as BookingAccessContext,
     new IdGenerator(new Clock()),
     new Clock(),
-    { get: () => "ota.example.com" } as unknown as ConfigService<never, true>,
     { info: vi.fn(), warn: vi.fn(), error: vi.fn() } as unknown as PinoLogger,
   );
   return { service, amadeus, bookings, repository, recorder, outbox, customerBookings, transactions, writes };
@@ -674,7 +678,7 @@ describe("BookingChangesService.update: the PATCH and the record", () => {
     });
   });
 
-  it("[OBE-048 AC1] records the contacts, the request, a new version, the events and both confirmations", async () => {
+  it("[OBE-048 AC1] [FIX-W28-NOTIFY AC1] records the contacts, the request, a new version, the events and both e-mails", async () => {
     const { service, writes, bookings, repository, outbox } = setup();
 
     await service.update(BOOKING_ID, '"3"', {
@@ -700,9 +704,30 @@ describe("BookingChangesService.update: the PATCH and the record", () => {
     });
     const mails = outbox.enqueue.mock.calls.map((call) => call[1] as unknown as JsonObject);
     expect(mails.map((mail) => [mail["templateKey"], mail["to"], mail["dedupeKey"]])).toEqual([
-      [CONTACTS_CONFIRMATION_TEMPLATE, "new@example.com", `booking.contacts_updated:${BOOKING_ID}:v4:new`],
-      [CONTACTS_CONFIRMATION_TEMPLATE, "old@example.com", `booking.contacts_updated:${BOOKING_ID}:v4:old`],
+      [BOOKING_UPDATED_TEMPLATE, "new@example.com", `booking.contacts_updated:${BOOKING_ID}:v4:new`],
+      [BOOKING_UPDATED_TEMPLATE, "old@example.com", `booking.contacts_updated:${BOOKING_ID}:v4:old`],
     ]);
+    // The new address gets the booking as it is now; the old one the reference and nothing else of the booking.
+    expect(mails[0]?.["data"]).toMatchObject({
+      booking: {
+        contact: { firstName: "TESTA", lastName: "SAMPLE" },
+        travellers: [{ firstName: "TESTA", lastName: "SAMPLE" }],
+        url: `https://alpha.ota.example.com/booking.html?id=${BOOKING_ID}`,
+      },
+      update: { contactNotice: false, contactsChanged: true },
+    });
+    expect(mails[1]?.["data"]).toEqual({
+      booking: {
+        reference: "VXK7M2Q9",
+        recordLocator: "",
+        url: "",
+        total: { amount: "", currency: "" },
+        contact: { firstName: "", lastName: "" },
+        travellers: [],
+        segments: [],
+      },
+      update: { contactNotice: true, contactsChanged: true },
+    });
   });
 
   it("[OBE-048 AC2] answers Amadeus 2552 as 409 VERSION_CONFLICT and records nothing", async () => {

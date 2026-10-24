@@ -19,12 +19,17 @@
 // 2 minutes is not waited for: the worker's Clock is moved ahead. Every scenario runs in a `beforeAll` hook with an
 // explicit budget (it waits for jobs, documents and Mailpit) and its tests read what it left; every e-mail goes to a
 // recipient of its own (`uniqueEmail`).
+//
+// FIX-W28-NOTIFY (OADR-0013 item 4 as revised on 2026-10-23): the `booking.updated` e-mails of a contacts change, queued
+// by BookingUpdatedEmails (the API's writer of bookings.update and of the staff patch) on the worker's outbox for a
+// booking whose itinerary is ready: the new address gets it attached, the previous one a notice without attachment.
 import { createHash, randomBytes } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getQueueToken } from "@nestjs/bullmq";
 import type { INestApplicationContext } from "@nestjs/common";
+import { ConfigService } from "@nestjs/config";
 import { encryptValue } from "@velexis/crypto";
 import {
   createPlatformDb,
@@ -40,9 +45,11 @@ import { createTestDatabase, useRedis, type TestDatabase, type TestRedis } from 
 import { startAmadeusStub, type AmadeusStub } from "@velexis/testing/amadeus";
 import { mailpit, uniqueEmail, waitForMessage, type MailpitMessage } from "@velexis/testing/mailpit";
 import type { Job, Queue } from "bullmq";
+import type { PinoLogger } from "nestjs-pino";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { AmadeusClient } from "../../../src/amadeus/amadeus.client";
 import { newBookingReference } from "../../../src/bookings/booking-reference";
+import { BookingUpdatedEmails } from "../../../src/bookings/booking-updated-emails";
 import { BookingsRepository } from "../../../src/bookings/bookings.repository";
 import { OrderRecorder, readCreatedOrder, type CreatedOrder } from "../../../src/bookings/order-recorder";
 import { buildCreateOrderRequest } from "../../../src/bookings/order-request.builder";
@@ -632,6 +639,90 @@ describe("[OBE-055 AC2] a booking flow", () => {
     ]);
     // The e-mails waited for their documents without using an attempt.
     expect(sink.text()).toContain("notifications.waiting_for_documents");
+  });
+});
+
+describe("[FIX-W28-NOTIFY AC1] the booking.updated e-mails of a contacts change", () => {
+  const previous = uniqueEmail("fixw28-previous");
+  const next = uniqueEmail("fixw28-next");
+  let booking: FlowBooking;
+  let itinerary: Awaited<ReturnType<typeof readyDocumentsOf>>;
+  let updated: MailpitMessage;
+  let notice: MailpitMessage;
+
+  beforeAll(async () => {
+    addresses.push(previous, next);
+    const order = await createOrder("alpha");
+    booking = await insertPendingBooking("alpha", previous);
+    await recordOrder(booking, order);
+    // The confirmation waits for the itinerary: once it arrived, the itinerary is ready.
+    await waitForMessage({ to: previous, subject: /is confirmed$/, timeoutMs: MAIL_WAIT_MS });
+    itinerary = (await readyDocumentsOf(booking)).filter((row) => row.kind === "itinerary");
+    const emails = new BookingUpdatedEmails(
+      app.get(OutboxService, { strict: false }),
+      app.get(BookingsRepository, { strict: false }),
+      app.get(ConfigService),
+      { error: vi.fn() } as unknown as PinoLogger,
+    );
+    // As bookings.update queues them after the contacts changed to `next` (the API's call, on this worker's outbox).
+    await inWorker("alpha", async (trx) => {
+      const repository = app.get(BookingsRepository, { strict: false });
+      const row = await repository.booking(trx, booking.id);
+      if (row === undefined) {
+        throw new Error("the booking is missing");
+      }
+      const children = await repository.children(trx, booking.id);
+      await emails.send(trx, {
+        tenantKey: "alpha",
+        booking: row,
+        travelers: children.travelers,
+        segments: children.segments,
+        contact: { email: next, firstName: "TESTB", lastName: "SAMPLE", language: "en" },
+        previousEmail: previous,
+        previousLanguage: "en",
+        contactsChanged: true,
+        dedupePrefix: "booking.contacts_updated",
+        version: row.version + 1,
+      });
+    });
+    [updated, notice] = await Promise.all([
+      waitForMessage({ to: next, subject: /has been updated$/, timeoutMs: MAIL_WAIT_MS }),
+      waitForMessage({ to: previous, subject: /were changed$/, timeoutMs: MAIL_WAIT_MS }),
+    ]);
+  }, SCENARIO_TIMEOUT_MS);
+
+  it("[FIX-W28-NOTIFY AC1] sends the new address the booking as it is now with the ready itinerary attached", async () => {
+    expect(updated.Subject).toBe(`Your booking ${booking.reference} with alpha Travel has been updated`);
+    expect(updated.Attachments).toHaveLength(1);
+    const [attachment] = updated.Attachments;
+    expect(attachment?.FileName).toBe(`${booking.reference}-itinerary.pdf`);
+    const bytes = await attachmentBytes(updated, attachment?.PartID ?? "");
+    expect(itinerary.map((row) => row.contentHash)).toEqual([sha256(bytes)]);
+    expect(updated.Text).toContain("Hello TESTB,");
+    expect(updated.Text).toContain("- TESTA SAMPLE");
+    expect(updated.Text).toContain("Your current itinerary is attached to this e-mail as a PDF.");
+    expect(updated.Text).toContain(`https://alpha.ota.example.com/booking.html?id=${booking.id}`);
+  });
+
+  it("[FIX-W28-NOTIFY AC1] sends the previous address a notice with the reference only and no attachment", async () => {
+    expect(notice.Subject).toBe(
+      `The contact details of booking ${booking.reference} with alpha Travel were changed`,
+    );
+    expect(notice.Attachments).toEqual([]);
+    for (const part of [notice.Text, notice.HTML]) {
+      expect(part).toContain(booking.reference);
+      for (const absent of [next, "TESTA", "TESTB", "itinerary", "booking.html", booking.id, "115.00"]) {
+        expect([absent, part.includes(absent)]).toEqual([absent, false]);
+      }
+    }
+    // Both rows share one transaction's time: by dedupe key, `…:new` before `…:old`.
+    const rows = (await notificationsOf("alpha", booking.id))
+      .filter((row) => row.template_key === "booking.updated")
+      .sort((a, b) => (a.dedupe_key ?? "").localeCompare(b.dedupe_key ?? ""));
+    expect(rows.map((row) => [row.recipient, row.status, row.attempts])).toEqual([
+      [next, "sent", 1],
+      [previous, "sent", 1],
+    ]);
   });
 });
 

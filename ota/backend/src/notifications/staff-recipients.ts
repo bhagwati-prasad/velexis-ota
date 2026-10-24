@@ -8,8 +8,9 @@
 //   2. else the e-mail addresses of the tenant's owners, read from the platform (read only: `platform.tenant_memberships`
 //      and the readable columns of `platform.accounts`, PlatformReadRepository.ownerEmails): active owner memberships
 //      whose account is active or locked, verified and not erased, the founder first, at most MAX_OWNER_RECIPIENTS;
-//   3. else, in the worker only, Velexis ops (OPS_ALERT_EMAIL), so that no alert is lost when an OTA has neither; the
-//      API has no such address and skips (and logs) the alert.
+//   3. else Velexis ops (OPS_ALERT_EMAIL), so that no alert is lost when an OTA has neither. Both processes read it
+//      (the shared configuration since FIX-W28-NOTIFY, lead decision (4) of 2026-10-23: before, only the worker had it,
+//      and an alert the API raised, such as a refresh's, was skipped); a process without it skips (and logs) the alert.
 // The owners are read on a second connection of the process's pool while the caller's transaction is open: one short
 // read-only query with the platform reads' statement timeout, rare (an alert), and a failure of it never fails the
 // caller's change: it is logged and the alert goes to rule 3.
@@ -89,7 +90,7 @@ export function ownerRecipients(
 /** Chooses the recipients of the staff alerts and queues them (see the file header). Both processes. */
 @Injectable()
 export class StaffRecipients {
-  /** OPS_ALERT_EMAIL in the worker; `null` in the API, which has none. */
+  /** OPS_ALERT_EMAIL of either process; `null` when the process has none (it is optional). */
   private readonly fallback: string | null;
 
   constructor(

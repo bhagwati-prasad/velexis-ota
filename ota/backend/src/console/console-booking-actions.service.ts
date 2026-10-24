@@ -48,8 +48,13 @@
 //   order columns follow it (below), the travellers sent are stored as sent (documents sealed again; Amadeus answers
 //   may mask them), `tags`/`metadata`, `last_synced_at`, `version + 1`, the event `booking.patched` (visible to the
 //   customer when contacts or documents changed) and the `booking.patch` staff action with the redacted before and
-//   after. `notifyCustomer` has no e-mail template yet (the default templates are OBE-055's): the answer carries a
-//   warning instead.
+//   after. With `notifyCustomer` the same transaction queues the `booking.updated` e-mail of the booking as it is now
+//   to its contact e-mail (the itinerary attached when one is ready) and, when the change moved that address, the short
+//   notice of the same key to the previous one, which names the booking reference only (BookingUpdatedEmails of
+//   bookings/booking-updated-emails.ts, dedupe keys `booking.patched:<bkg_…>:v<version>:new|old`; OADR-0013 point 4
+//   as revised on 2026-10-23, lead decision (3) of 2026-10-23, FIX-W28-NOTIFY). A patch that timed out e-mails
+//   nothing. A patch of `tags`/`metadata` alone changes nothing the traveller sees: its `notifyCustomer` sends no
+//   e-mail and the answer carries the warning NOTIFICATION_NOT_SENT_WARNING instead.
 //
 // - `resync` (`bookings:write`): a refresh through the background sync's service (BookingSyncService.refresh, OBE-045,
 //   as OBE-062's question asked; lead decision (3) of 2026-10-23, FIX-W27-SYNC: the claim in
@@ -105,6 +110,7 @@ import {
   type BookingTravelerRow,
 } from "../bookings/bookings.repository";
 import { BookingSyncService } from "../bookings/booking-sync.service";
+import { BookingUpdatedEmails } from "../bookings/booking-updated-emails";
 import { CustomerBookingsService } from "../bookings/customer-bookings.service";
 import { BookingTravelerDocuments, deadlineLocalOf, eventActorOf } from "../bookings/order-recorder";
 import {
@@ -205,10 +211,13 @@ export const UNSUPPORTED_PATCH_ELEMENTS = ["flightOffers", "tickets", "associate
 export const LOCAL_PATCH_ELEMENTS = ["tags", "metadata"] as const;
 type LocalPatchElement = (typeof LOCAL_PATCH_ELEMENTS)[number];
 
-/** The warning of a patch with `notifyCustomer`, until the e-mail exists. */
+/** The prefix of the dedupe keys of a patch's `booking.updated` e-mails: `booking.patched:<bkg_…>:v<version>:new|old`. */
+export const PATCH_EMAIL_DEDUPE = "booking.patched";
+
+/** The warning of a `tags`/`metadata` patch with `notifyCustomer`: nothing the traveller sees changed, nothing sent. */
 export const NOTIFICATION_NOT_SENT_WARNING: Warning = Object.freeze({
   title: "CUSTOMER NOT NOTIFIED",
-  detail: "No e-mail was sent to the traveller about this change: tell them yourself.",
+  detail: "Tags and metadata are internal: no e-mail was sent to the traveller about this change.",
 });
 
 /**
@@ -855,6 +864,7 @@ export class ConsoleBookingActionsService {
     private readonly clock: Clock,
     @InjectPinoLogger(ConsoleBookingActionsService.name) private readonly logger: PinoLogger,
     private readonly sync: BookingSyncService,
+    private readonly emails: BookingUpdatedEmails,
   ) {}
 
   // ---- console.bookings.retrieve -----------------------------------------------------------------------------------
@@ -985,7 +995,7 @@ export class ConsoleBookingActionsService {
     const elements = patchElementsOf(body);
     if (elements.amadeus.length === 0) {
       await this.tx.run((trx) => this.patchLocally(trx, tenant, bookingId, ifMatch, body));
-      return await this.answer(bookingId, body);
+      return await this.answer(bookingId, body.notifyCustomer === true);
     }
     const prepared = await this.tx.run((trx) =>
       this.preparePatch(trx, tenant, bookingId, ifMatch, body, elements.amadeus),
@@ -1023,13 +1033,13 @@ export class ConsoleBookingActionsService {
         supplierRequestId: reply.call.supplierRequestId,
       }),
     );
-    return await this.answer(bookingId, body);
+    return await this.answer(bookingId, false);
   }
 
-  /** The console booking after a patch, with the warning of a `notifyCustomer` that sent nothing. */
-  private async answer(bookingId: string, body: ConsolePatchRequest): Promise<ConsoleBooking> {
+  /** The console booking after a patch, with the warning of a `notifyCustomer` that sent nothing (`notSent`). */
+  private async answer(bookingId: string, notSent: boolean): Promise<ConsoleBooking> {
     const booking = await this.consoleBookings.get(bookingId, { refresh: false });
-    return body.notifyCustomer === true
+    return notSent
       ? { ...booking, warnings: [...(booking.warnings ?? []), { ...NOTIFICATION_NOT_SENT_WARNING }] }
       : booking;
   }
@@ -1334,6 +1344,48 @@ export class ConsoleBookingActionsService {
         ...(body.tags === undefined ? {} : { tags: body.tags }),
         ...(body.metadata === undefined ? {} : { metadata: body.metadata }),
       },
+    });
+    if (body.notifyCustomer === true) {
+      await this.notifyCustomer(trx, tenant, booking, {
+        contactsChanged: projected.changed.includes("contacts"),
+        previousLanguage: children.contacts.find((row) => row.isPrimary)?.language ?? null,
+      });
+    }
+  }
+
+  /**
+   * The `booking.updated` e-mails of a patch with `notifyCustomer` (see the file header), in the record's transaction:
+   * the booking read again as the patch left it (`before` is the row it locked first: its previous contact e-mail; the
+   * previous primary contact's language is the notice's locale).
+   */
+  private async notifyCustomer(
+    trx: TenantTransaction,
+    tenant: RequestTenant,
+    before: BookingRow,
+    change: { readonly contactsChanged: boolean; readonly previousLanguage: string | null },
+  ): Promise<void> {
+    const booking = await this.bookings.booking(trx, before.id);
+    if (booking === undefined) {
+      throw new AppError("NOT_FOUND");
+    }
+    const children = await this.bookings.children(trx, booking.id);
+    const primary = children.contacts.find((row) => row.isPrimary);
+    await this.emails.send(trx, {
+      tenantKey: tenant.key,
+      booking,
+      travelers: children.travelers,
+      segments: children.segments,
+      contact: {
+        email: booking.contactEmail,
+        firstName: primary?.firstName ?? null,
+        lastName: primary?.lastName ?? null,
+        language: primary?.language ?? null,
+      },
+      previousEmail: before.contactEmail,
+      previousLanguage: change.previousLanguage,
+      contactsChanged: change.contactsChanged,
+      dedupePrefix: PATCH_EMAIL_DEDUPE,
+      version: booking.version,
     });
   }
 

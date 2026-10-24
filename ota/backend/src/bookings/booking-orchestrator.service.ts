@@ -2079,9 +2079,9 @@ export class BookingOrchestrator {
   }
 
   /**
-   * A staff alert (`staff.manual_review`) to `ops_alert_email`, else the owners (notifications/staff-recipients.ts);
-   * skipped (and logged) when the OTA has neither: the API has no OPS_ALERT_EMAIL (a worker variable). Its console link
-   * is `https://admin.<STOREFRONT_BASE_DOMAIN>/bookings/<bkg_…>`: the API has no PUBLIC_OTA_ADMIN_URL either.
+   * A staff alert (`staff.manual_review`) to `ops_alert_email`, else the owners, else OPS_ALERT_EMAIL, which the API
+   * reads too since FIX-W28-NOTIFY (notifications/staff-recipients.ts); skipped (and logged) only without any. Its
+   * console link is `https://admin.<STOREFRONT_BASE_DOMAIN>/bookings/<bkg_…>`: the API has no PUBLIC_OTA_ADMIN_URL.
    */
   private async staffAlert(
     trx: TenantTransaction,

@@ -34,10 +34,12 @@
 //     (when another writer changed the booking since T1, only the answer's contacts and remarks are merged into the
 //     stored snapshot: the rest of the answer may be older than that write); `version + 1`; the customer-visible events
 //     `booking.contacts_updated` and `booking.remark_added`, one millisecond apart in that order (OrderRecorder.event;
-//     their data holds counts, never an address); and, when the contacts changed, a confirmation e-mail of the booking
-//     as it is now to the new primary address and to the previous `contact_email` when it differs (dedupe keys
-//     `booking.contacts_updated:<bkg_…>:v<version>:new|old`). OADR-0013 point 4 has no template key of its own for a
-//     contacts change: the confirmation is `booking.confirmed`, the MVP key that confirms a booking to its traveller.
+//     their data holds counts, never an address); and, when the contacts changed, the `booking.updated` e-mail of the
+//     booking as it is now to the new primary address (the itinerary attached when one is ready) and, when the address
+//     changed, the short notice of the same key to the previous `contact_email`, which names the booking reference only
+//     (no other booking data, no attachment; BookingUpdatedEmails of booking-updated-emails.ts, dedupe keys
+//     `booking.contacts_updated:<bkg_…>:v<version>:new|old`; OADR-0013 point 4 as revised on 2026-10-23, lead decision
+//     (3) of 2026-10-23, FIX-W28-NOTIFY: `booking.confirmed` sent both before).
 //     After an unknown outcome ("resynced") only what the order read shows of the requested change is recorded:
 //     contacts equal to those sent, special requests sent that the order has (the events' data says
 //     `cause: resync_after_timeout`, or `resync_after_supplier_error` after another unknown outcome); nothing else, and
@@ -47,7 +49,6 @@
 // is locked (the lock order of OADR-0003 point 11 starts with the checkout, which this does not touch); the event and
 // outbox rows' foreign-key locks come after it.
 import { Injectable } from "@nestjs/common";
-import { ConfigService } from "@nestjs/config";
 import type { components } from "@velexis/api-types";
 import type { Insertable, TenantDatabase } from "@velexis/db";
 import { AppError, isAppError, type FieldError, type OtaErrorCode } from "@velexis/errors";
@@ -67,20 +68,17 @@ import {
 import { BookingAccessContext } from "../common/auth/booking-access.guard";
 import { Clock } from "../common/clock";
 import { IdGenerator } from "../common/ids";
-import type { SharedConfig } from "../config";
-import { InvalidNotificationError, OutboxService } from "../notifications/outbox.service";
-import { storefrontUrl } from "../notifications/renderer";
 import { TenantContext, type RequestTenant } from "../tenancy/tenant-context";
 import { TenantTx, type TenantTransaction } from "../tenancy/tenant-tx";
 import { allowedActionsOf, type ActionReason, type BookingAction } from "./allowed-actions";
 import { createFailureKind } from "./booking-orchestrator.service";
 import { VELEXIS_REMARK_PREFIX, velexisRemarkText } from "./booking-reference";
+import { BookingUpdatedEmails } from "./booking-updated-emails";
 import {
   BookingsRepository,
   type BookingChildren,
   type BookingContactRow,
   type BookingRemarkRow,
-  type BookingRow,
 } from "./bookings.repository";
 import { CustomerBookingsService } from "./customer-bookings.service";
 import { eventActorOf, OrderRecorder, type Booking } from "./order-recorder";
@@ -113,11 +111,8 @@ export const TRAVELER_CHANGES_FEATURE = "travelerChanges";
 export const CONTACTS_UPDATED_EVENT = "booking.contacts_updated";
 export const REMARK_ADDED_EVENT = "booking.remark_added";
 
-/** The confirmation e-mail of a contacts change (see the file header). */
-export const CONTACTS_CONFIRMATION_TEMPLATE = "booking.confirmed";
-
-/** The prefix of the confirmation's dedupe keys: `booking.contacts_updated:<bkg_…>:v<version>:new|old`. */
-export const CONTACTS_CONFIRMATION_DEDUPE = "booking.contacts_updated";
+/** The prefix of the e-mails' dedupe keys: `booking.contacts_updated:<bkg_…>:v<version>:new|old` (see the file header). */
+export const CONTACTS_UPDATED_DEDUPE = "booking.contacts_updated";
 
 /**
  * The client's errors bookings.update passes on: the codes its operation documents (`x-error-codes`); any other
@@ -141,9 +136,6 @@ const CONTACT_PURPOSES: ReadonlySet<string> = new Set([
   "INVOICE",
   "STANDARD_WITHOUT_TRANSMISSION",
 ]);
-
-/** A BCP 47 tag the outbox accepts as a locale (outbox.service.ts). */
-const LOCALE = /^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8}){0,3}$/;
 
 // ---- Pure rules -----------------------------------------------------------------------------------------------------
 
@@ -641,8 +633,6 @@ function contactRowOf(
 
 @Injectable()
 export class BookingChangesService {
-  private readonly baseDomain: string;
-
   constructor(
     private readonly tx: TenantTx,
     private readonly bookings: BookingsRepository,
@@ -650,16 +640,13 @@ export class BookingChangesService {
     private readonly recorder: OrderRecorder,
     private readonly customerBookings: CustomerBookingsService,
     private readonly amadeus: AmadeusClient,
-    private readonly outbox: OutboxService,
+    private readonly emails: BookingUpdatedEmails,
     private readonly tenants: TenantContext,
     private readonly access: BookingAccessContext,
     private readonly ids: IdGenerator,
     private readonly clock: Clock,
-    config: ConfigService<SharedConfig, true>,
     @InjectPinoLogger(BookingChangesService.name) private readonly logger: PinoLogger,
-  ) {
-    this.baseDomain = config.get("STOREFRONT_BASE_DOMAIN", { infer: true });
-  }
+  ) {}
 
   /** bookings.update (see the file header); answers the booking in customer scope. */
   async update(bookingId: string, ifMatch: string, body: BookingUpdateRequest): Promise<Booking> {
@@ -973,76 +960,27 @@ export class BookingChangesService {
         now: new Date(now.getTime() + 1),
       });
     }
-    if (contacts !== undefined && primary !== undefined) {
-      await this.confirmations(trx, tenant, booking, children, primary, version);
+    if (contacts !== undefined && primary?.email !== null && primary?.email !== undefined) {
+      // The booking as it is now: the e-mail to the new address, and the notice to the previous one (see the header).
+      await this.emails.send(trx, {
+        tenantKey: tenant.key,
+        booking,
+        travelers: children.travelers,
+        segments: children.segments,
+        contact: {
+          email: primary.email,
+          firstName: primary.firstName,
+          lastName: primary.lastName,
+          language: primary.language,
+        },
+        previousEmail: booking.contactEmail,
+        previousLanguage: children.contacts.find((row) => row.isPrimary)?.language ?? null,
+        contactsChanged: true,
+        dedupePrefix: CONTACTS_UPDATED_DEDUPE,
+        version,
+      });
     }
     return true;
-  }
-
-  /**
-   * The confirmation of a contacts change (see the file header) to the new primary address and, when it differs, to
-   * the previous `contact_email`. A call the outbox refuses (InvalidNotificationError, raised before any SQL) is logged
-   * and skipped: the change happened at Amadeus and is recorded all the same.
-   */
-  private async confirmations(
-    trx: TenantTransaction,
-    tenant: RequestTenant,
-    booking: BookingRow,
-    children: BookingChildren,
-    primary: ContactValues,
-    version: number,
-  ): Promise<void> {
-    if (primary.email === null) {
-      return;
-    }
-    const settings = await this.bookings.settings(trx);
-    const locale =
-      primary.language !== null && LOCALE.test(primary.language)
-        ? primary.language
-        : (settings?.defaultLocale ?? "en");
-    const data = {
-      booking: {
-        reference: booking.reference,
-        recordLocator: booking.recordLocator ?? "",
-        url: `${storefrontUrl(tenant.key, this.baseDomain)}/booking.html?id=${booking.id}`,
-        total: { amount: booking.totalAmount, currency: booking.currency },
-        contact: { firstName: primary.firstName ?? "", lastName: primary.lastName ?? "" },
-        travellers: children.travelers.map((traveler) => ({
-          firstName: traveler.firstName,
-          lastName: traveler.lastName,
-        })),
-        segments: children.segments.map((segment) => ({
-          origin: segment.departureIata,
-          destination: segment.arrivalIata,
-          departureAt: segment.departureLocal,
-          arrivalAt: segment.arrivalLocal,
-          carrierCode: segment.carrierCode,
-          flightNumber: segment.flightNumber,
-        })),
-      },
-    };
-    const recipients: Array<[string, "new" | "old"]> = [[primary.email, "new"]];
-    if (booking.contactEmail.toLowerCase() !== primary.email.toLowerCase()) {
-      recipients.push([booking.contactEmail, "old"]);
-    }
-    for (const [to, which] of recipients) {
-      try {
-        await this.outbox.enqueue(trx, {
-          templateKey: CONTACTS_CONFIRMATION_TEMPLATE,
-          to,
-          locale,
-          customerId: booking.customerId,
-          bookingId: booking.id,
-          dedupeKey: `${CONTACTS_CONFIRMATION_DEDUPE}:${booking.id}:v${version}:${which}`,
-          data,
-        });
-      } catch (error) {
-        if (!(error instanceof InvalidNotificationError)) {
-          throw error;
-        }
-        this.logger.error({ bookingId: booking.id, err: error }, "bookings.update_confirmation_invalid");
-      }
-    }
   }
 
   private callContext(tenant: RequestTenant, bookingId: string, office: string | null): AmadeusCallContext {

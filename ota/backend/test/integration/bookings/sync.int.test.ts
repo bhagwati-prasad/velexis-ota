@@ -644,7 +644,11 @@ async function refreshAs(booking: SeededBooking): Promise<RefreshOutcome> {
 }
 
 /** A Stripe payment of the booking that holds the traveller's money (`captured` or `authorized`) for its total. */
-async function insertPayment(booking: SeededBooking, status: "captured" | "authorized"): Promise<string> {
+async function insertPayment(
+  booking: SeededBooking,
+  status: "captured" | "authorized",
+  method: "stripe" | "airline_card" = "stripe",
+): Promise<string> {
   const id = newId("pay");
   await tx(booking.key, (trx) =>
     trx
@@ -653,13 +657,15 @@ async function insertPayment(booking: SeededBooking, status: "captured" | "autho
         id,
         environment: "test",
         booking_id: booking.id,
-        provider: "stripe",
-        provider_payment_id: `pi_${randomBytes(12).toString("hex")}`,
         currency: "EUR",
         amount: "115.00",
         amount_authorized: "115.00",
         amount_captured: status === "captured" ? "115.00" : "0",
         status,
+        ...(method === "stripe"
+          ? { provider: "stripe", provider_payment_id: `pi_${randomBytes(12).toString("hex")}` }
+          : // A card the airline charged (OADR-0004): no PSP reference, captured at once by the airline.
+            { provider: "airline", method: "airline_card", capture_method: "automatic" }),
       })
       .execute(),
   );
@@ -1060,6 +1066,10 @@ describe("a cancellation by the airline", () => {
         },
       },
     ]);
+    // A Stripe payment keeps the console's wording (FIX-W28-NOTIFY AC4: the airline-card wording is its own).
+    expect(JSON.stringify(alerts[0]?.payload)).toContain(
+      "Release the authorisation or refund the payment from the console.",
+    );
     // booking.cancelled through OrderRecorder.event, and the traveller's e-mail, as for any cancellation.
     expect((await eventsOf(booking)).map((event) => event.type)).toEqual(["booking.cancelled"]);
     expect((await notificationsOf(booking)).map((row) => row.templateKey)).toEqual([
@@ -1075,6 +1085,34 @@ describe("a cancellation by the airline", () => {
     expect(
       (await notificationsOf(booking)).filter((row) => row.templateKey === "staff.manual_review"),
     ).toHaveLength(1);
+  });
+
+  it("[FIX-W28-NOTIFY AC4] words the alert of an airline-card payment for a refund through the airline, not the console", async () => {
+    const paymentId = await insertPayment(booking, "captured", "airline_card");
+    stub.orders.cancelByAirline(booking.orderId);
+
+    expect(await syncJob(booking, T0)).toMatchObject({
+      outcome: "synced",
+      changes: { cancelledByAirline: true },
+    });
+
+    const alerts = (await notificationsOf(booking)).filter(
+      (row) => row.templateKey === "staff.manual_review",
+    );
+    expect(alerts).toEqual([
+      expect.objectContaining({
+        dedupeKey: `staff.manual_review:${booking.id}:${AIRLINE_CANCELLED_ALERT}`,
+        payload: expect.objectContaining({
+          review: {
+            reason: expect.stringContaining(
+              `${paymentId} charged by the airline 115.00 EUR). The refund goes through the airline`,
+            ) as unknown,
+          },
+        }) as unknown,
+      }),
+    ]);
+    const reason = JSON.stringify(alerts[0]?.payload);
+    expect(reason).not.toContain("Release the authorisation or refund the payment from the console");
   });
 
   it("[FIX-W27-SYNC AC3] alerts staff about an authorised payment too, and not about a booking without one", async () => {

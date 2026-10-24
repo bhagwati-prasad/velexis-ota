@@ -1,9 +1,12 @@
 // Who gets an OTA's staff alerts, without PostgreSQL (OBE-055; OADR-0013 item 5): `ops_alert_email`, else the owners
-// read from the platform, else Velexis ops in the worker; one outbox row per recipient. The platform's tables, the
-// outbox and Mailpit are used in test/integration/notifications/booking-emails.int.test.ts.
-import type { ConfigService } from "@nestjs/config";
+// read from the platform, else Velexis ops (OPS_ALERT_EMAIL, in both processes since FIX-W28-NOTIFY); one outbox row per
+// recipient. The platform's tables, the outbox and Mailpit are used in
+// test/integration/notifications/booking-emails.int.test.ts.
+import { ConfigService } from "@nestjs/config";
 import type { PinoLogger } from "nestjs-pino";
 import { describe, expect, it, vi } from "vitest";
+import { testApiVariables, testWorkerVariables } from "../../test/helpers/api-env";
+import { loadApiConfig, loadWorkerConfig } from "../config";
 import type { PlatformReadRepository } from "../tenancy/platform-read.repository";
 import type { TenantContext } from "../tenancy/tenant-context";
 import type { TenantTransaction } from "../tenancy/tenant-tx";
@@ -53,6 +56,8 @@ function trxWith(opsAlertEmail: string | null | undefined): TenantTransaction {
 function recipientsWith(options: {
   readonly owners?: readonly { accountId: string; email: string }[] | Error;
   readonly fallback?: string;
+  /** A process's ConfigService instead of the stub that answers `fallback`. */
+  readonly config?: ConfigService;
 }) {
   const platform = {
     ownerEmails: vi.fn(() =>
@@ -69,9 +74,11 @@ function recipientsWith(options: {
       return Promise.resolve({ notificationId: `ntf_${queued.length}`, queued: true });
     }),
   } as unknown as OutboxService;
-  const config = {
-    get: (name: string) => (name === "OPS_ALERT_EMAIL" ? options.fallback : undefined),
-  } as unknown as ConfigService;
+  const config =
+    options.config ??
+    ({
+      get: (name: string) => (name === "OPS_ALERT_EMAIL" ? options.fallback : undefined),
+    } as unknown as ConfigService);
   const logger = { warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as unknown as PinoLogger;
   return {
     service: new StaffRecipients(platform, tenants, outbox, config, logger),
@@ -115,7 +122,7 @@ describe("StaffRecipients.resolve", () => {
     );
   });
 
-  it("falls back to Velexis ops (the worker's OPS_ALERT_EMAIL) without owners, or when they cannot be read", async () => {
+  it("falls back to Velexis ops (OPS_ALERT_EMAIL) without owners, or when they cannot be read", async () => {
     const none = recipientsWith({ owners: [], fallback: VELEXIS_OPS });
     const failing = recipientsWith({ owners: new Error("statement timeout"), fallback: VELEXIS_OPS });
 
@@ -131,10 +138,34 @@ describe("StaffRecipients.resolve", () => {
     );
   });
 
-  it("is nobody in the API (no OPS_ALERT_EMAIL) for an OTA without an address or owners", async () => {
+  it("is nobody in a process without OPS_ALERT_EMAIL (it is optional) for an OTA without an address or owners", async () => {
     const { service } = recipientsWith({ owners: [] });
 
     expect(await service.resolve(trxWith(null))).toEqual([]);
+  });
+
+  it("[FIX-W28-NOTIFY AC2] falls back to OPS_ALERT_EMAIL in the API as in the worker: each reads it from its own configuration", async () => {
+    const services = {
+      APP_ENV: "test",
+      DATABASE_URL: "postgres://velexis_ota_app:dummy-ota-password@127.0.0.1:5432/velexis",
+      REDIS_URL: "redis://:dummy-redis-password@127.0.0.1:6379/0",
+      OPS_ALERT_EMAIL: VELEXIS_OPS,
+    };
+    const api = loadApiConfig({ ...services, ...testApiVariables() });
+    const worker = loadWorkerConfig({
+      ...services,
+      ...testWorkerVariables(),
+      OPS_ALERT_EMAIL: VELEXIS_OPS,
+      DATABASE_PROVISIONER_URL: "postgres://velexis_provisioner:dummy-password@127.0.0.1:5432/velexis",
+    });
+
+    for (const config of [api, worker]) {
+      const { service } = recipientsWith({ owners: [], config: new ConfigService(config) });
+
+      expect(await service.resolve(trxWith(null))).toEqual([
+        { email: VELEXIS_OPS, source: "velexis_ops", accountId: null },
+      ]);
+    }
   });
 });
 

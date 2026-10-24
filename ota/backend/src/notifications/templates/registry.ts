@@ -1,7 +1,8 @@
 // The notification templates the code knows (OADR-0013 items 3 and 4): the MVP keys, the variables each key may use
 // (its allow-list) with sample data for the console preview, and the loader of the English code defaults
 // `<key>.{subject,html,txt}.hbs` in this folder. OBE-030 wrote the defaults of the account e-mails, OBE-055 those of the
-// nine booking and staff keys, so every MVP key has one; the provisioning seed (provisioning/seeds/templates.seed.ts)
+// nine booking and staff keys and FIX-W28-NOTIFY the one of `booking.updated` (OADR-0013 item 4 as revised on
+// 2026-10-23), so every MVP key has one; the provisioning seed (provisioning/seeds/templates.seed.ts)
 // copies the defaults into a new tenant's `notification_templates`, and every key without a row uses the code default
 // at send time. templates.test.ts compiles each default in strict mode against its allow-list and renders it with its
 // sample data.
@@ -11,16 +12,20 @@
 //   - the key's `links`: the renderer, which builds each on the tenant's storefront host from a secret value of the
 //     e-mail (`/account/verify.html?token=…`, OADR-0015 point 5); the secret travels only encrypted
 //     (`notifications.secret_payload_ciphertext`) and the link exists only while the e-mail is rendered;
-//   - `documents.attached` (DOCUMENTS_ATTACHED_VARIABLE, `booking.confirmed` and `booking.ticketed` only): the sender,
-//     when it sends the e-mail: true when the booking's documents are attached, false when they were not ready within
-//     the wait of OADR-0013 item 8 and the e-mail points to the booking page instead (attachments.ts);
+//   - `documents.attached` (DOCUMENTS_ATTACHED_VARIABLE, `booking.confirmed`, `booking.ticketed` and `booking.updated`
+//     only): the sender, when it sends the e-mail: true when the booking's documents are attached, false when they were
+//     not ready within the wait of OADR-0013 item 8 and the e-mail points to the booking page instead, and always false
+//     for the short notice of `booking.updated` to a previous contact address, which attaches nothing (attachments.ts);
 //   - everything else: the code that queues the e-mail (`callerVariables`), stored in `notifications.payload`. The
 //     booking e-mails' `booking.url` is `/booking.html?id=bkg_…` on the tenant's storefront host (OADR-0015 point 5),
 //     the staff alerts' `booking.consoleUrl` the booking's page in the OTA admin.
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 
-/** The MVP template keys of OADR-0013 item 4, in the order of the decision. E-mail only. */
+/**
+ * The MVP template keys of OADR-0013 item 4, in the order of the decision, with `booking.updated` of its revision of
+ * 2026-10-23 after the other traveller keys. E-mail only.
+ */
 export const TEMPLATE_KEYS = Object.freeze([
   "auth.verify_email",
   "auth.password_reset",
@@ -30,6 +35,7 @@ export const TEMPLATE_KEYS = Object.freeze([
   "booking.cancelled",
   "booking.cancellation_requested",
   "booking.not_confirmed",
+  "booking.updated",
   "staff.ticketing_failed",
   "staff.manual_review",
   "staff.airline_card_alert",
@@ -97,6 +103,13 @@ export interface TemplateDefinition {
   /** The link variables the renderer builds from those secrets. */
   readonly links: readonly TemplateLink[];
 }
+
+/**
+ * The variable of `booking.updated` that marks the short notice to the previous contact address after the contact
+ * e-mail changed (OADR-0013 item 4 as revised on 2026-10-23): only `booking.reference` is filled, every other booking
+ * variable is empty, and the sender attaches nothing (attachments.ts).
+ */
+export const CONTACT_NOTICE_VARIABLE = "update.contactNotice";
 
 /** The variables whose names start with this are filled by the renderer from the tenant's settings. */
 export const BRAND_VARIABLE_PREFIX = "brand.";
@@ -291,6 +304,28 @@ export const TEMPLATE_REGISTRY: Readonly<Record<TemplateKey, TemplateDefinition>
   "booking.not_confirmed": define("booking.not_confirmed", "traveller", BOOKING_VARIABLES, {
     booking: SAMPLE_BOOKING,
   }),
+  "booking.updated": define(
+    "booking.updated",
+    "traveller",
+    [
+      ...BOOKING_VARIABLES,
+      variable(
+        CONTACT_NOTICE_VARIABLE,
+        "True for the short notice to the previous contact address after the contact e-mail changed: only " +
+          "booking.reference is filled (every other booking variable is empty) and nothing is attached.",
+      ),
+      variable("update.contactsChanged", "True when the change replaced the booking's contact details."),
+      variable(
+        DOCUMENTS_ATTACHED_VARIABLE,
+        "True when the itinerary PDF is attached to the e-mail (never for the notice to the previous address).",
+      ),
+    ],
+    {
+      booking: SAMPLE_BOOKING,
+      update: { contactNotice: false, contactsChanged: true },
+      documents: { attached: true },
+    },
+  ),
   "staff.ticketing_failed": define(
     "staff.ticketing_failed",
     "staff",

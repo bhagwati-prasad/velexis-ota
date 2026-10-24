@@ -33,8 +33,6 @@ export interface BookingSettingsRow {
   readonly timeZone: string;
   readonly bookingQueueNumber: number | null;
   readonly bookingQueueCategory: number;
-  readonly opsAlertEmail: string | null;
-  readonly supportEmail: string | null;
   readonly defaultLocale: string;
 }
 
@@ -454,8 +452,6 @@ export class BookingsRepository {
         "time_zone as timeZone",
         "booking_queue_number as bookingQueueNumber",
         "booking_queue_category as bookingQueueCategory",
-        "ops_alert_email as opsAlertEmail",
-        "support_email as supportEmail",
         "default_locale as defaultLocale",
       ])
       .executeTakeFirst();

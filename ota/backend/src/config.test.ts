@@ -140,6 +140,7 @@ describe("the privileged DSNs", () => {
       "LOG_LEVEL",
       "MASTER_KEY_CURRENT",
       "MASTER_KEY_DIR",
+      "OPS_ALERT_EMAIL",
       "OTA_ADMIN_SERVICE_KEY",
       "PORT",
       "PUBLIC_OTA_API_URL",
@@ -576,7 +577,8 @@ describe("the webhook signing secrets of the Velexis account (OBE-039)", () => {
 });
 
 describe("the e-mail settings of the worker (OBE-030)", () => {
-  const EMAIL_SETTINGS = ["SMTP_URL", "MAIL_FROM", "OPS_ALERT_EMAIL", "PUBLIC_OTA_ADMIN_URL"];
+  // OPS_ALERT_EMAIL was one of them until FIX-W28-NOTIFY moved it to the variables of both processes (below).
+  const EMAIL_SETTINGS = ["SMTP_URL", "MAIL_FROM", "PUBLIC_OTA_ADMIN_URL"];
 
   it("are required by the worker and never read by the API", () => {
     const rest = Object.fromEntries(
@@ -587,7 +589,6 @@ describe("the e-mail settings of the worker (OBE-030)", () => {
 
     expect(error.problems.map((problem) => problem.variable).sort()).toEqual([
       "MAIL_FROM",
-      "OPS_ALERT_EMAIL",
       "PUBLIC_OTA_ADMIN_URL",
       "SMTP_URL",
     ]);
@@ -631,6 +632,55 @@ describe("the e-mail settings of the worker (OBE-030)", () => {
     expect(
       loadWorkerConfig({ ...WORKER_ENV, SMTP_URL: "smtps://user:dummy@smtp.example.com:465" }).SMTP_URL,
     ).toBe("smtps://user:dummy@smtp.example.com:465");
+  });
+});
+
+describe("the Velexis ops address of both processes (FIX-W28-NOTIFY, lead decision (4) of 2026-10-23)", () => {
+  it("[FIX-W28-NOTIFY AC2] is read by the API as by the worker, so StaffRecipients has the same last resort in both", () => {
+    const address = "ops@velexis.example";
+
+    expect(loadApiConfig({ ...API_ENV, OPS_ALERT_EMAIL: address }).OPS_ALERT_EMAIL).toBe(address);
+    expect(loadWorkerConfig({ ...WORKER_ENV, OPS_ALERT_EMAIL: address }).OPS_ALERT_EMAIL).toBe(address);
+    expect(Object.keys(apiConfigSchema)).toContain("OPS_ALERT_EMAIL");
+    expect(Object.keys(workerConfigSchema)).toContain("OPS_ALERT_EMAIL");
+  });
+
+  it("[FIX-W28-NOTIFY AC2] is optional in both processes: neither needs it to start, and an empty value is none", () => {
+    const withoutAddress = Object.fromEntries(
+      Object.entries(WORKER_ENV).filter(([name]) => name !== "OPS_ALERT_EMAIL"),
+    );
+
+    expect(loadApiConfig(API_ENV).OPS_ALERT_EMAIL).toBeUndefined();
+    expect(loadWorkerConfig(withoutAddress).OPS_ALERT_EMAIL).toBeUndefined();
+    expect(loadApiConfig({ ...API_ENV, OPS_ALERT_EMAIL: "" }).OPS_ALERT_EMAIL).toBeUndefined();
+  });
+
+  it("[FIX-W28-NOTIFY AC2] is one plain e-mail address in both processes, refused otherwise without printing it", () => {
+    for (const value of [
+      "Ops <ops@example.com>",
+      "ops@example.com, other@example.com",
+      "not an address",
+      "ops@example.com\r\nBcc: x@example.com",
+    ]) {
+      for (const load of [
+        () => loadApiConfig({ ...API_ENV, OPS_ALERT_EMAIL: value }),
+        () => loadWorkerConfig({ ...WORKER_ENV, OPS_ALERT_EMAIL: value }),
+      ]) {
+        const error = configErrorOf(load);
+
+        expect([value, error.problems.map((problem) => problem.variable)]).toEqual([
+          value,
+          ["OPS_ALERT_EMAIL"],
+        ]);
+        expect(error.message).not.toContain(value);
+      }
+    }
+  });
+
+  it("[FIX-W28-NOTIFY AC2] is in the env file both units read on the VM, and in the development examples", () => {
+    expect(renderedTemplate("ota-backend.env.example")["OPS_ALERT_EMAIL"]).toMatch(/@/);
+    expect(renderedTemplate("ota-worker.env.example")).not.toHaveProperty("OPS_ALERT_EMAIL");
+    expect(readEnvFile(join(APP_DIR, ".env.example"))["OPS_ALERT_EMAIL"]).toBe("ops@example.com");
   });
 });
 
@@ -793,6 +843,8 @@ describe("example and template files", () => {
       expect(api.DATABASE_URL).toContain("velexis_ota_app");
       expect(api.PORT).toBe(4000);
       expect(api.STOREFRONT_BASE_DOMAIN).toBe("ota.example.com");
+      // FIX-W28-NOTIFY: both processes read the Velexis ops address.
+      expect([api.OPS_ALERT_EMAIL, worker.OPS_ALERT_EMAIL]).toEqual(["ops@example.com", "ops@example.com"]);
       expect(worker.HEALTH_PORT).toBe(4001);
       expect(worker.DATABASE_PROVISIONER_URL).toContain("velexis_provisioner");
       // OBE-030: Mailpit, and a sender on the Velexis-controlled sending domain.

@@ -190,16 +190,20 @@ export const RECONCILE_QUEUE_LIST_MAX = 500;
  * A Queue List answer of the booking queue that holds this many entries or more (or whose `meta.count` says the queue
  * does) raises the staff alert `booking_queue_nearly_full` (lead decision (5) of 2026-10-23: 80 % of the
  * RECONCILE_QUEUE_LIST_MAX one answer can carry; cleaning the queue stays manual in Amadeus: the runbook "Cleaning the
- * booking queue" of ota/backend/README.md §4), at most once a day per OTA (`bookingQueueAlertKey`, the UTC day).
+ * booking queue" of ota/backend/README.md §4), at most once a UTC day per OTA and environment (`bookingQueueAlertKey`;
+ * test and live separately since FIX-W28-NOTIFY, lead decision (5) of 2026-10-23).
  */
 export const BOOKING_QUEUE_ALERT_ENTRIES = 400;
 
 /** The kind of the staff alert of a booking queue that is nearly full (its dedupe key's middle part). */
 export const BOOKING_QUEUE_ALERT = "booking_queue_nearly_full";
 
-/** The dedupe key of the queue alert of the UTC day of `now`: one alert per OTA (tenant schema) and day. */
-export const bookingQueueAlertKey = (now: Date): string =>
-  `staff.manual_review:${BOOKING_QUEUE_ALERT}:${now.toISOString().slice(0, 10)}`;
+/**
+ * The dedupe key of the queue alert of `environment` (`test`, `live`) and the UTC day of `now`: one alert per OTA (tenant
+ * schema), environment and day, so a test queue that fills never silences the live one's alert.
+ */
+export const bookingQueueAlertKey = (now: Date, environment: string): string =>
+  `staff.manual_review:${BOOKING_QUEUE_ALERT}:${environment}:${now.toISOString().slice(0, 10)}`;
 
 /** When `payment.capture_retry` runs after a failed capture (OADR-0008 point 7). */
 export const CAPTURE_RETRY_DELAY_MS = 10 * 60_000;
@@ -1859,8 +1863,9 @@ export class ReconcileService {
 
   /**
    * The staff alert of a booking queue that is nearly full (lead decision (5) of 2026-10-23): `staff.manual_review`
-   * about the OTA, not a booking, at most once a UTC day per OTA (`bookingQueueAlertKey`), in a short transaction of
-   * its own between two Amadeus calls. Its failure is logged and never changes the search.
+   * about the OTA, not a booking, at most once a UTC day per OTA and environment (`bookingQueueAlertKey`, the
+   * environment of the booking whose search read the queue), in a short transaction of its own between two Amadeus
+   * calls. Its failure is logged and never changes the search.
    */
   private async queueNearlyFull(
     tenant: PlatformTenant,
@@ -1879,7 +1884,7 @@ export class ReconcileService {
           fallbackLocale: tenant.defaultLocale,
           booking: null,
           path: "bookings",
-          dedupeKey: bookingQueueAlertKey(now),
+          dedupeKey: bookingQueueAlertKey(now, claim.environment),
           reason:
             `The booking queue ${queue} (category ${category}) of ${office} (${claim.environment}) holds ${entries} ` +
             `PNRs; one Queue List answer carries at most ${RECONCILE_QUEUE_LIST_MAX}, and a fuller queue leaves the ` +

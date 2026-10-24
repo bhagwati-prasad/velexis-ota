@@ -276,7 +276,7 @@ const ORIGINAL_CONSOLE_PERMISSIONS: Readonly<Record<string, string>> = {
   consoleAmadeusCancelFlightOrder: "amadeus:write",
 };
 
-/** The MVP template keys of api-changes part 2 §2.6. */
+/** The MVP template keys of api-changes part 2 §2.6, with `booking.updated` of OADR-0013 item 4 as revised on 2026-10-23. */
 const SPEC_TEMPLATE_KEYS = [
   "auth.verify_email",
   "auth.password_reset",
@@ -286,6 +286,7 @@ const SPEC_TEMPLATE_KEYS = [
   "booking.cancelled",
   "booking.cancellation_requested",
   "booking.not_confirmed",
+  "booking.updated",
   "staff.ticketing_failed",
   "staff.manual_review",
   "staff.airline_card_alert",

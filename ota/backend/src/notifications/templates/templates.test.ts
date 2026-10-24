@@ -5,6 +5,7 @@
 // documents attached or the booking page instead, the console link for staff. The sending paths (attachments, staff
 // recipients) run against PostgreSQL, Redis and Mailpit in test/integration/notifications/booking-emails.int.test.ts.
 import { beforeAll, describe, expect, it } from "vitest";
+import { contactNoticeData } from "../../bookings/booking-updated-emails";
 import { ATTACHMENT_RULES } from "../attachments";
 import {
   compileTemplate,
@@ -79,7 +80,7 @@ function unescapeAttribute(value: string): string {
 const hrefsOf = (html: string): string[] =>
   [...html.matchAll(/href="([^"]*)"/g)].map((match) => unescapeAttribute(match[1] ?? ""));
 
-// Reading the 33 files and checking and compiling them takes a few milliseconds; once, here, with the default budget.
+// Reading the 36 files and checking and compiling them takes a few milliseconds; once, here, with the default budget.
 beforeAll(async () => {
   for (const key of TEMPLATE_KEYS) {
     const source = await loadTemplateDefault(key);
@@ -224,6 +225,11 @@ describe("the booking e-mails", () => {
       "The e-ticket receipts are attached",
       "The e-ticket receipts will be ready to download on your booking page",
     ],
+    [
+      "booking.updated",
+      "Your current itinerary is attached",
+      "Your current itinerary can be downloaded on your booking page",
+    ],
   ] as const)(
     "[OBE-055 step 3] %s says whether its documents are attached or on the booking page",
     (key, attached, link) => {
@@ -240,6 +246,50 @@ describe("the booking e-mails", () => {
       }
     },
   );
+
+  it("[FIX-W28-NOTIFY AC1] booking.updated says that the booking changed, and that its contact details did when they did", () => {
+    const changed = compiledOf("booking.updated").render(sample("booking.updated"));
+    const unchanged = compiledOf("booking.updated").render(
+      withValue(sample("booking.updated"), "update.contactsChanged", false),
+    );
+
+    expect(changed.subject).toBe("Your booking VX7K2M9Q with Demo Travel has been updated");
+    for (const part of [changed.html ?? "", changed.text]) {
+      expect(part).toContain("Your booking with Demo Travel has been updated.");
+      expect(part).toContain("Its contact details were changed");
+    }
+    // The booking as it stands now: its traveller and flight (the other booking e-mails' checks cover the rest).
+    expect(changed.text).toContain("- Alex Martin");
+    expect(changed.text).toContain("- AF 6, CDG to JFK");
+    for (const part of [unchanged.html ?? "", unchanged.text]) {
+      expect(part).toContain("Your booking with Demo Travel has been updated.");
+      expect(part).not.toContain("Its contact details were changed");
+    }
+  });
+
+  it("[FIX-W28-NOTIFY AC1] booking.updated's notice to the previous contact address names the booking reference and nothing else of it", () => {
+    const rendered = compiledOf("booking.updated").render({
+      ...contactNoticeData("VX7K2M9Q"),
+      brand: sample("booking.updated")["brand"] as SampleData,
+      documents: { attached: false },
+    });
+
+    expect(rendered.subject).toBe("The contact details of booking VX7K2M9Q with Demo Travel were changed");
+    for (const part of [rendered.html ?? "", rendered.text]) {
+      expect(part).toContain("The contact details of booking");
+      expect(part).toContain("VX7K2M9Q");
+      expect(part).toContain("If you did not ask for this change, please tell Demo Travel at once");
+      expect(part).toContain("support@demo.example.com");
+      // No flight, traveller, amount, document or booking page.
+      for (const absent of ["Flights", "Travellers", "Total", "itinerary", "booking.html", "View"]) {
+        expect([absent, part.includes(absent)]).toEqual([absent, false]);
+      }
+    }
+    // Its only links are the OTA's storefront and its support address.
+    for (const href of hrefsOf(rendered.html ?? "")) {
+      expect(href === "https://demo.ota.example.com" || href.startsWith("mailto:"), href).toBe(true);
+    }
+  });
 
   it("[OBE-055 step 1] the e-ticket e-mail lists each ticket with its traveller", () => {
     const rendered = compiledOf("booking.ticketed").render(sample("booking.ticketed"));
@@ -312,7 +362,8 @@ describe("the variables the sender fills", () => {
   it("[OBE-055 step 3] documents.attached is a variable of exactly the keys that attach documents, never a caller's", () => {
     const attaching = TEMPLATE_KEYS.filter((key) => attachesDocuments(key));
 
-    expect(attaching).toEqual(["booking.confirmed", "booking.ticketed"]);
+    // booking.updated attaches the itinerary too (FIX-W28-NOTIFY), except its notice (attachments.ts).
+    expect(attaching).toEqual(["booking.confirmed", "booking.ticketed", "booking.updated"]);
     expect(Object.keys(ATTACHMENT_RULES).sort()).toEqual([...attaching].sort());
     for (const key of TEMPLATE_KEYS) {
       expect(callerVariables(key).map((entry) => entry.name)).not.toContain(DOCUMENTS_ATTACHED_VARIABLE);

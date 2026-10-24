@@ -5,7 +5,11 @@
 //
 //   booking.confirmed  the booking's itinerary: its newest `ready` row;
 //   booking.ticketed   the e-ticket receipts: the newest `ready` receipt of every e-ticket of the booking
-//                      (`booking_tickets.document_type = ETICKET`), in ticket number order.
+//                      (`booking_tickets.document_type = ETICKET`), in ticket number order;
+//   booking.updated    the booking's itinerary, as booking.confirmed (OADR-0013 item 4 as revised on 2026-10-23: a
+//                      contacts change, a staff patch with `notifyCustomer`), except the short notice of the same key to
+//                      the previous contact address (`update.contactNotice` true in its payload, CONTACT_NOTICE_VARIABLE),
+//                      which attaches nothing: it has no plan and is sent at once, without attachments.
 //
 // When the e-mail is claimed, `plan` decides in the claim's transaction (the documents are rendered after the commit
 // that queued the e-mail, in the `ota-documents` queue, so the first claim usually finds them missing):
@@ -19,8 +23,8 @@
 // The wait runs from when the documents were asked for: the newest booking event that asks for them
 // (DOCUMENT_TRIGGERS of documents.processor.ts: every trigger renders an itinerary, those with `receipts` the e-ticket
 // receipts). The record step and the ticketing job write that event in the transaction that queues the e-mail, so they
-// wait the full 2 minutes; a confirmation queued later for a booking whose itinerary failed long ago (the contacts
-// change of OBE-048 sends `booking.confirmed` too) goes with the link at once instead of waiting for nothing.
+// wait the full 2 minutes; an e-mail queued later for a booking whose itinerary failed long ago (the `booking.updated`
+// of a contacts change, OBE-048, or of a staff patch, OBE-062) goes with the link at once instead of waiting for nothing.
 // All or nothing: a receipt that failed for one ticket sends the e-mail with the link, never with part of the receipts.
 //
 // `load` reads the files of an `attach` plan from storage just before the e-mail is sent, outside any transaction:
@@ -58,6 +62,7 @@ export type AttachedDocuments = "itinerary" | "e_ticket_receipts";
 export const ATTACHMENT_RULES: Readonly<Partial<Record<TemplateKey, AttachedDocuments>>> = Object.freeze({
   "booking.confirmed": "itinerary",
   "booking.ticketed": "e_ticket_receipts",
+  "booking.updated": "itinerary",
 });
 
 /** The ticket type that gets a receipt (`booking_tickets.document_type`), as the documents module renders them. */
@@ -167,9 +172,27 @@ const RECEIPT_TRIGGERS: readonly string[] = Object.freeze(
     .map(([type]) => type),
 );
 
-/** The rule of a row's key, or `undefined` for a key that attaches nothing. */
-export function attachmentRuleOf(templateKey: string): AttachedDocuments | undefined {
-  return isTemplateKey(templateKey) ? ATTACHMENT_RULES[templateKey] : undefined;
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
+/**
+ * True when a row's payload is the short notice of `booking.updated` to a previous contact address: its
+ * `update.contactNotice` (CONTACT_NOTICE_VARIABLE) is true.
+ */
+export function isContactNotice(payload: unknown): boolean {
+  const update = isRecord(payload) ? payload["update"] : undefined;
+  return isRecord(update) && update["contactNotice"] === true;
+}
+
+/**
+ * The rule of a row: its key's, or `undefined` for a key that attaches nothing and for the short notice of
+ * `booking.updated` to a previous contact address (`payload`, see the file header).
+ */
+export function attachmentRuleOf(templateKey: string, payload?: unknown): AttachedDocuments | undefined {
+  if (!isTemplateKey(templateKey) || (templateKey === "booking.updated" && isContactNotice(payload))) {
+    return undefined;
+  }
+  return ATTACHMENT_RULES[templateKey];
 }
 
 const sha256 = (bytes: Buffer): string => createHash("sha256").update(bytes).digest("hex");
@@ -190,14 +213,15 @@ export class NotificationAttachments {
 
   /**
    * In `trx`, the claim's transaction of the tenant of the current context: the plan of each claimed row whose key
-   * attaches documents, by row id, with its booking's documents as `now` finds them. Rows of other keys have none.
+   * attaches documents, by row id, with its booking's documents as `now` finds them. Rows of other keys, and the notice
+   * of `booking.updated` to a previous contact address, have none.
    */
   async plan(
     trx: TenantTransaction,
-    rows: readonly Pick<NotificationRow, "id" | "template_key" | "booking_id">[],
+    rows: readonly Pick<NotificationRow, "id" | "template_key" | "booking_id" | "payload">[],
     now: Date,
   ): Promise<ReadonlyMap<string, AttachmentPlan>> {
-    const attaching = rows.filter((row) => attachmentRuleOf(row.template_key) !== undefined);
+    const attaching = rows.filter((row) => attachmentRuleOf(row.template_key, row.payload) !== undefined);
     const plans = new Map<string, AttachmentPlan>();
     if (attaching.length === 0) {
       return plans;
@@ -207,7 +231,7 @@ export class NotificationAttachments {
       attaching.flatMap((row) => (row.booking_id === null ? [] : [row.booking_id])),
     );
     for (const row of attaching) {
-      const rule = attachmentRuleOf(row.template_key);
+      const rule = attachmentRuleOf(row.template_key, row.payload);
       if (rule === undefined) {
         continue;
       }

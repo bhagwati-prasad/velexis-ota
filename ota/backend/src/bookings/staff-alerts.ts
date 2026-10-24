@@ -1,15 +1,20 @@
 // The staff alerts of the bookings module (OADR-0013 point 5, OADR-0003 point 5): an outbox `staff.manual_review`
 // e-mail to the recipients of OBE-055's StaffRecipients (notifications/staff-recipients.ts: the OTA's
-// `ops_alert_email`, else its owners, else, in the worker only, OPS_ALERT_EMAIL), in the storefront's default locale,
+// `ops_alert_email`, else its owners, else OPS_ALERT_EMAIL, in both processes), in the storefront's default locale,
 // with the booking's reference and a console link, once per dedupe key and recipient. The reconciler's
 // alerts (OBE-043) are written with it, and since FIX-W27-SYNC (lead decisions (3) and (5) of 2026-10-23) the alert
-// of an airline cancellation of a paid booking, which the background sync or a refresh finds, and the alert of a booking
-// queue that is nearly full (a Queue List answer of 400 or more entries, at most once a day per OTA).
+// of an airline cancellation of a paid booking, which the background sync or a refresh finds (worded for the payment's
+// method: a Stripe payment is released or refunded from the console, an airline-card payment is refunded through the
+// airline; FIX-W28-NOTIFY, lead decision (6) of 2026-10-23), and the alert of a booking queue that is nearly full (a
+// Queue List answer of 400 or more entries, at most once a UTC day per OTA and environment since FIX-W28-NOTIFY, lead
+// decision (5) of 2026-10-23).
 //
 // It runs in both processes, which do not have the same configuration: the worker links to PUBLIC_OTA_ADMIN_URL
 // (`workerStaffAlertOptions`); the API has none, so it links to `https://admin.<STOREFRONT_BASE_DOMAIN>/…`
-// (`apiStaffAlertOptions`). StaffRecipients falls back to OPS_ALERT_EMAIL in the worker only; the API skips (and logs)
-// an alert of an OTA with neither an alert address nor an owner, as checkout.complete's alerts do.
+// (`apiStaffAlertOptions`). StaffRecipients falls back to OPS_ALERT_EMAIL in both processes (the shared configuration
+// since FIX-W28-NOTIFY, lead decision (4) of 2026-10-23), so an alert a refresh raises in the API is not skipped for
+// want of a recipient; a process without OPS_ALERT_EMAIL skips (and logs) an alert of an OTA with neither an alert
+// address nor an owner.
 import { Inject, Injectable, type FactoryProvider } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { InjectPinoLogger, PinoLogger } from "nestjs-pino";

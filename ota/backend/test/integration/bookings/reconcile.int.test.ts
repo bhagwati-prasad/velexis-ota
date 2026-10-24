@@ -142,6 +142,10 @@ let tenantDb: TenantDb;
 let alphaId: string;
 let alphaSk: string;
 let office: string;
+/** The stub's client credentials of this run (built at run time). */
+let stubCredentials: { readonly clientId: string; readonly secret: string };
+/** The worker's log lines (FIX-W28-NOTIFY: whether each nearly-full search queued its alert). */
+const workerLogs = new MemorySink();
 let bookingsQueue: Queue;
 let paymentsQueue: Queue;
 let maintenance: Queue;
@@ -156,7 +160,11 @@ const stubClock = { now: (): Date => new Date(Date.now() + stubShiftMs) };
 
 const quietPoolLogger = { error: (): void => undefined };
 
-async function insertAccount(clientId: string, secret: string): Promise<string> {
+async function insertAccount(
+  clientId: string,
+  secret: string,
+  environment: "test" | "live" = "test",
+): Promise<string> {
   const id = newId("ama");
   const { ciphertext, kekId } = await encryptValue(secret, {
     aad: `platform.amadeus_accounts.client_secret_ciphertext:${id}`,
@@ -166,8 +174,8 @@ async function insertAccount(clientId: string, secret: string): Promise<string> 
     .insertInto("platform.amadeus_accounts")
     .values({
       id,
-      name: "Velexis test",
-      environment: "test",
+      name: `Velexis ${environment}`,
+      environment,
       // The stub, as dev:seed writes it in development: the worker reads the account's base URL.
       base_url: stub.url,
       client_id: clientId,
@@ -755,6 +763,7 @@ beforeAll(async () => {
   tenantDb = createTenantDb(otaPool, { appEnv: "test" });
   const clientId = `velexis-test-${randomBytes(4).toString("hex")}`;
   const secret = randomBytes(24).toString("base64url");
+  stubCredentials = { clientId, secret };
   stub = await startAmadeusStub({
     credentials: { clientId, clientSecret: secret },
     clock: stubClock,
@@ -797,7 +806,7 @@ beforeAll(async () => {
   @Module({
     imports: [
       stripeEndpointModule(stripe.endpoint),
-      WorkerModule.forRoot(config, { logger: createWorkerLogger(config, new MemorySink()) }),
+      WorkerModule.forRoot(config, { logger: createWorkerLogger(config, workerLogs) }),
     ],
   })
   class WorkerRootModule {}
@@ -2086,9 +2095,40 @@ async function queueAlerts() {
   );
 }
 
+/**
+ * The Queue List answers of the bookings in `padded.bookings` hold `padded.entries` entries: the stub's own, padded
+ * with PNRs of other travellers created long ago (outside every search window), as a queue nobody cleaned would hold
+ * them. Each scenario sets the spy in its own hook: `restoreMocks` (vitest.int.config.ts) removes it before every test.
+ */
+const padded = { bookings: new Set<string>(), entries: 0 };
+
+function padQueueLists(): void {
+  const client = worker.get(AmadeusClient, { strict: false });
+  if (vi.isMockFunction(client.listQueue)) {
+    vi.mocked(client.listQueue).mockRestore();
+  }
+  const real = client.listQueue.bind(client);
+  vi.spyOn(client, "listQueue").mockImplementation(async (context, input, options) => {
+    const reply = await real(context, input, options);
+    if (context.bookingId !== undefined && padded.bookings.has(context.bookingId)) {
+      const body = reply.body as { meta?: Record<string, unknown>; data?: unknown[] };
+      const data = [...(body.data ?? [])];
+      for (let index = data.length; index < padded.entries; index += 1) {
+        data.push({
+          type: "pnrList",
+          id: `Q${index.toString(36).toUpperCase().padStart(5, "0")}-2000-01-01`,
+          creation: { dateTime: "2000-01-01T00:00" },
+          travelers: [{ names: [{ firstName: "OTHER", lastName: "PADDING" }] }],
+        });
+      }
+      body.data = data;
+      body.meta = { ...body.meta, count: data.length };
+    }
+    return reply;
+  });
+}
+
 describe("a booking queue that is nearly full (FIX-W27-SYNC, lead decision (5) of 2026-10-23)", () => {
-  /** The Queue List answers of these bookings hold this many entries (the stub's own, then old PNRs of others). */
-  let entries = 0;
   let below: TimedOut;
   let full: TimedOut;
   let again: TimedOut;
@@ -2103,42 +2143,23 @@ describe("a booking queue that is nearly full (FIX-W27-SYNC, lead decision (5) o
     below = await timedOutCompletion("timeout-lost", undefined, "QUEUEBELOW");
     full = await timedOutCompletion("timeout-lost", undefined, "QUEUEFULL");
     again = await timedOutCompletion("timeout-lost", undefined, "QUEUEAGAIN");
-    const ours = new Set([below.bookingId, full.bookingId, again.bookingId]);
-    // Queue List of these bookings: the stub's entries, padded with PNRs of other travellers created long ago (outside
-    // every search window), up to `entries`, as a queue nobody cleaned would hold them.
-    const client = worker.get(AmadeusClient, { strict: false });
-    const real = client.listQueue.bind(client);
-    vi.spyOn(client, "listQueue").mockImplementation(async (context, input, options) => {
-      const reply = await real(context, input, options);
-      if (context.bookingId !== undefined && ours.has(context.bookingId)) {
-        const body = reply.body as { meta?: Record<string, unknown>; data?: unknown[] };
-        const data = [...(body.data ?? [])];
-        for (let index = data.length; index < entries; index += 1) {
-          data.push({
-            type: "pnrList",
-            id: `Q${index.toString(36).toUpperCase().padStart(5, "0")}-2000-01-01`,
-            creation: { dateTime: "2000-01-01T00:00" },
-            travelers: [{ names: [{ firstName: "OTHER", lastName: "PADDING" }] }],
-          });
-        }
-        body.data = data;
-        body.meta = { ...body.meta, count: data.length };
-      }
-      return reply;
-    });
+    padQueueLists();
+    for (const booking of [below, full, again]) {
+      padded.bookings.add(booking.bookingId);
+    }
     // Every first attempt at the same instant (the same UTC day), 30 s after the last of the three claims.
     at = new Date(
       Math.max(below.started.getTime(), full.started.getTime(), again.started.getTime()) + 30 * SECOND,
     );
-    entries = BOOKING_QUEUE_ALERT_ENTRIES - 1;
+    padded.entries = BOOKING_QUEUE_ALERT_ENTRIES - 1;
     results = [await firstAttempt(below.bookingId, at)];
-    entries = BOOKING_QUEUE_ALERT_ENTRIES;
+    padded.entries = BOOKING_QUEUE_ALERT_ENTRIES;
     results.push(await firstAttempt(full.bookingId, at));
     results.push(await firstAttempt(again.bookingId, at));
     sameDay = await queueAlerts();
     // A day later (past its reconcile_until): one attempt of the first booking, its queue fuller still.
     nextDay = new Date(at.getTime() + 24 * 60 * MINUTE);
-    entries = BOOKING_QUEUE_ALERT_ENTRIES + 50;
+    padded.entries = BOOKING_QUEUE_ALERT_ENTRIES + 50;
     clock.set(nextDay);
     const job = reconcileJob(alphaId, below.bookingId, minuteBucket(nextDay));
     await bookingsQueue.add(job.name, job.data, { jobId: job.opts.jobId });
@@ -2154,7 +2175,7 @@ describe("a booking queue that is nearly full (FIX-W27-SYNC, lead decision (5) o
         recipient: OPS_EMAIL,
         recipientType: "staff",
         bookingId: null,
-        dedupeKey: bookingQueueAlertKey(at),
+        dedupeKey: bookingQueueAlertKey(at, "test"),
         payload: {
           booking: {
             reference: "",
@@ -2172,14 +2193,14 @@ describe("a booking queue that is nearly full (FIX-W27-SYNC, lead decision (5) o
     // The next day's search of a queue as full alerts again, with its count.
     expect(later).toHaveLength(2);
     expect(later[1]).toMatchObject({
-      dedupeKey: bookingQueueAlertKey(nextDay),
+      dedupeKey: bookingQueueAlertKey(nextDay, "test"),
       payload: {
         review: {
           reason: expect.stringContaining(`holds ${BOOKING_QUEUE_ALERT_ENTRIES + 50} PNRs`) as unknown,
         },
       },
     });
-    expect(bookingQueueAlertKey(nextDay)).not.toBe(bookingQueueAlertKey(at));
+    expect(bookingQueueAlertKey(nextDay, "test")).not.toBe(bookingQueueAlertKey(at, "test"));
   });
 
   it("[FIX-W27-SYNC AC6] leaves the search's result as it is: the padding is no candidate and nothing is truncated", () => {
@@ -2191,5 +2212,111 @@ describe("a booking queue that is nearly full (FIX-W27-SYNC, lead decision (5) o
     expect(withAlert).toEqual([withoutAlert, withoutAlert]);
     // After it, the complete search of 450 entries proves the order absent, as without the alert.
     expect(results[3]).toMatchObject({ outcome: "not_found" });
+  });
+});
+
+// ---- FIX-W28-NOTIFY (lead decision (5) of 2026-10-23): the queue alert once a day per OTA and environment -----------
+
+/**
+ * Alpha's live supplier connection on a live Velexis account whose base URL is the stub too (the stub answers either
+ * environment), so a live booking's search reads the same stub; the office is the test connection's.
+ */
+async function insertLiveConnection(): Promise<void> {
+  const accountId = await insertAccount(stubCredentials.clientId, stubCredentials.secret, "live");
+  await migrator
+    .insertInto("platform.supplier_connections")
+    .values({
+      id: newId("sc"),
+      tenant_id: alphaId,
+      environment: "live",
+      credential_source: "velexis",
+      amadeus_account_id: accountId,
+      office_ids: [office],
+      default_office_id: office,
+      queuing_office_id: office,
+      owner_office_id: office,
+      status: "active",
+    })
+    .execute();
+}
+
+describe("a nearly full booking queue in test and in live on the same day (FIX-W28-NOTIFY, lead decision (5) of 2026-10-23)", () => {
+  let inTest: TimedOut;
+  let firstLive: TimedOut;
+  let secondLive: TimedOut;
+  let at: Date;
+  let results: ReconcileJobResult[];
+  let alerts: Awaited<ReturnType<typeof queueAlerts>>;
+
+  beforeAll(async () => {
+    await insertLiveConnection();
+    useWorkerClock();
+    inTest = await timedOutCompletion("timeout-lost", undefined, "QUEUEINTEST");
+    firstLive = await timedOutCompletion("timeout-lost", undefined, "QUEUELIVEONE");
+    secondLive = await timedOutCompletion("timeout-lost", undefined, "QUEUELIVETWO");
+    // Two of them are live bookings: their searches read the queue of alpha's live connection.
+    await alphaTx((trx) =>
+      trx
+        .updateTable("bookings")
+        .set({ environment: "live" })
+        .where("id", "in", [firstLive.bookingId, secondLive.bookingId])
+        .execute(),
+    );
+    padQueueLists();
+    for (const booking of [inTest, firstLive, secondLive]) {
+      padded.bookings.add(booking.bookingId);
+    }
+    padded.entries = BOOKING_QUEUE_ALERT_ENTRIES;
+    // Every first attempt at the same instant (one UTC day): the test queue's search first, then the two live ones.
+    at = new Date(
+      Math.max(inTest.started.getTime(), firstLive.started.getTime(), secondLive.started.getTime()) +
+        30 * SECOND,
+    );
+    results = [];
+    for (const booking of [inTest, firstLive, secondLive]) {
+      results.push(await firstAttempt(booking.bookingId, at));
+    }
+    alerts = await queueAlerts();
+  }, SCENARIO_TIMEOUT_MS);
+
+  it("[FIX-W28-NOTIFY AC3] alerts staff about the live queue although the test queue's alert of the day exists, and once only", () => {
+    const ofDay = (environment: "test" | "live") =>
+      alerts.filter((row) => row.dedupeKey === bookingQueueAlertKey(at, environment));
+
+    // The test queue's alert of the day (this scenario's, or an earlier one's of the same UTC day): one row.
+    expect(ofDay("test")).toHaveLength(1);
+    // The live queue's: one row too, although the test one exists; the second live search of the day adds none.
+    expect(ofDay("live")).toEqual([
+      {
+        templateKey: "staff.manual_review",
+        recipient: OPS_EMAIL,
+        recipientType: "staff",
+        bookingId: null,
+        dedupeKey: bookingQueueAlertKey(at, "live"),
+        payload: {
+          booking: {
+            reference: "",
+            recordLocator: "",
+            consoleUrl: expect.stringMatching(/\/bookings$/) as unknown,
+          },
+          review: {
+            reason: expect.stringMatching(
+              new RegExp(`\\(live\\) holds ${BOOKING_QUEUE_ALERT_ENTRIES} PNRs`),
+            ) as unknown,
+          },
+        },
+      },
+    ]);
+    // Both live searches read a nearly full queue and reached the alert: the first queued it, the second found the
+    // live key of the day taken and queued nothing.
+    const nearlyFull = workerLogs
+      .records()
+      .filter((line) => line["msg"] === "bookings.booking_queue_nearly_full");
+    const queuedBy = (booking: TimedOut) =>
+      nearlyFull.filter((line) => line["bookingId"] === booking.bookingId).map((line) => line["queued"]);
+    expect([queuedBy(firstLive), queuedBy(secondLive)]).toEqual([[true], [false]]);
+    expect(queuedBy(inTest)).toHaveLength(1);
+    // Each search went on as without the alert: complete, nothing found, still pending before reconcile_until.
+    expect(results.map((result) => result.outcome)).toEqual(["pending", "pending", "pending"]);
   });
 });

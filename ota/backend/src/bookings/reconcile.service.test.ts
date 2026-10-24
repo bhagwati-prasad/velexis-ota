@@ -212,12 +212,23 @@ describe("the PNRs of the booking queue worth reading", () => {
     // The alert at 80 % of what one answer carries (lead decision (5) of 2026-10-23).
     expect(BOOKING_QUEUE_ALERT_ENTRIES).toBe(RECONCILE_QUEUE_LIST_MAX * 0.8);
     // Once a UTC day: the same key all day, another the next day.
-    expect(bookingQueueAlertKey(new Date("2027-01-15T00:00:00.000Z"))).toBe(
-      bookingQueueAlertKey(new Date("2027-01-15T23:59:59.999Z")),
+    expect(bookingQueueAlertKey(new Date("2027-01-15T00:00:00.000Z"), "live")).toBe(
+      bookingQueueAlertKey(new Date("2027-01-15T23:59:59.999Z"), "live"),
     );
-    expect(bookingQueueAlertKey(new Date("2027-01-16T00:00:00.000Z"))).toBe(
-      "staff.manual_review:booking_queue_nearly_full:2027-01-16",
+    expect(bookingQueueAlertKey(new Date("2027-01-16T00:00:00.000Z"), "live")).toBe(
+      "staff.manual_review:booking_queue_nearly_full:live:2027-01-16",
     );
+  });
+
+  it("[FIX-W28-NOTIFY AC3] key the nearly-full alert by environment too: test and live each once a UTC day", () => {
+    const morning = new Date("2027-01-15T06:00:00.000Z");
+    const evening = new Date("2027-01-15T21:00:00.000Z");
+
+    expect(bookingQueueAlertKey(morning, "test")).not.toBe(bookingQueueAlertKey(morning, "live"));
+    expect(bookingQueueAlertKey(morning, "test")).toBe(
+      "staff.manual_review:booking_queue_nearly_full:test:2027-01-15",
+    );
+    expect(bookingQueueAlertKey(evening, "live")).toBe(bookingQueueAlertKey(morning, "live"));
   });
 
   it("[FIX-W25-BOOKINGS AC1] are read at most RECONCILE_MAX_READS per attempt, the next attempt going on from there", () => {
