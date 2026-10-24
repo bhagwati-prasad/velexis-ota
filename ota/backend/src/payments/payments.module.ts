@@ -13,7 +13,9 @@
 //     `payment_card` fee rules (PricingModule) and, for an Amadeus card fee, the Amadeus client (AmadeusModule); the
 //     inert `AirlineCardGateway` of the airline-card method (OBE-050; API only: it reads AIRLINE_CARD_ENABLED); and the
 //     receiver of the Velexis Stripe account's webhooks (OBE-039, webhooks/), which stores each event and queues it on
-//     `ota-stripe-events`.
+//     `ota-stripe-events`; and checkout.completeWithAirlineCard (OBE-051, airline-card/airline-card-completion.*): its
+//     controller, service, idempotency hooks and abuse limits (Redis), which hand the booking to BookingsModule's
+//     BookingOrchestrator.
 //   - `PaymentsWorkerModule` (worker only, OBE-039): the `ota-stripe-events` consumer (stripe-events.processor.ts),
 //     which reads each stored event's object again from Stripe with the Velexis keys (StripeClientFactory) and applies
 //     it to the tenant's payments and refunds; its staff alerts go through the worker's global OutboxService. Since
@@ -35,6 +37,13 @@ import { IdentityModule } from "../identity/identity.module";
 import { PricingModule } from "../pricing/pricing.module";
 import { ShoppingModule } from "../shopping/shopping.module";
 import { TenancyModule } from "../tenancy/tenancy.module";
+import { BookingsModule } from "../bookings/bookings.module";
+import { AirlineCardLimits } from "./airline-card/abuse-limits";
+import { AirlineCardCompletionController } from "./airline-card/airline-card-completion.controller";
+import {
+  AirlineCardCompletionIdempotencyHooks,
+  AirlineCardCompletionService,
+} from "./airline-card/airline-card-completion.service";
 import { AirlineCardGateway } from "./airline-card/airline-card.gateway";
 import { AuthorisationWatchProcessor } from "./authorisation-watch.processor";
 import { CardFees } from "./card-fees";
@@ -66,14 +75,19 @@ export { PaymentGatewayModule };
     AmadeusModule,
     IdentityModule,
     QueuesModule,
+    // checkout.completeWithAirlineCard's booking (OBE-051); BookingsModule never imports this module.
+    BookingsModule,
   ],
-  controllers: [PaymentsController, StripeVelexisWebhookController],
+  controllers: [PaymentsController, StripeVelexisWebhookController, AirlineCardCompletionController],
   // RequestContext only reads the request context (nestjs-cls): this module's instance sees the scope the guards set.
   providers: [
     PaymentsService,
     PaymentsRepository,
     CardFees,
     AirlineCardGateway,
+    AirlineCardCompletionService,
+    AirlineCardCompletionIdempotencyHooks,
+    AirlineCardLimits,
     RequestContext,
     WebhookReceiverService,
   ],

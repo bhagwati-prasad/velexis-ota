@@ -45,12 +45,18 @@ The order is the checkout, then the booking, then the payment, then the refund (
 | checkout.complete, the failure (`failBooking`) | checkout `FOR UPDATE` (after a void) → booking `FOR UPDATE` → payment `FOR UPDATE` (after a void; its event: key share) |
 | checkout.complete, the capture and the failed capture | booking `FOR UPDATE` → payment `FOR UPDATE` (events, the alert: key share) |
 | checkout.complete, the issue (two transactions) | booking `FOR UPDATE` |
+| checkout.completeWithAirlineCard T1b, what is sent (`recordSending`, OBE-051) | booking `FOR UPDATE` → payment `FOR UPDATE` (`processing` with the card's brand, BIN and last 4; its event: key share) |
+| checkout.completeWithAirlineCard T2, the record step and the airline's charge (OBE-051) | checkout `FOR UPDATE` → booking `FOR UPDATE` (children, events, outbox, the staff alert of an order without every ticket: key share) → payment `FOR UPDATE` (`settleAirlineCardOrder`, its event: key share) → the checkout updated |
+| checkout.completeWithAirlineCard, a refusal, a decline, a request not sent, a higher re-price (`failBooking`, OBE-051) | checkout `FOR UPDATE` (a re-price only, which moves it) → booking `FOR UPDATE` (event: key share) → payment `FOR UPDATE` (`failed`, or awaiting the card again; its event: key share) |
+| checkout.completeWithAirlineCard, the abuse alerts of a decline (OBE-051) | booking key share (the outbox rows) |
 | guest token of a booking | booking key share |
 | `bookings.reconcile_scan`, the adoption | bookings `FOR NO KEY UPDATE SKIP LOCKED` (events: key share; before FIX-W26-BOOKINGS `FOR UPDATE SKIP LOCKED`) |
 | `booking.reconcile`, the claim | booking `FOR NO KEY UPDATE SKIP LOCKED` (before FIX-W26-BOOKINGS `FOR UPDATE SKIP LOCKED`) |
 | `booking.reconcile`, found | checkout `FOR UPDATE` → booking `FOR UPDATE` (children, events, outbox: key share) → checkout updated |
 | `booking.reconcile`, the capture and the failed capture | booking `FOR UPDATE` → payment `FOR UPDATE` (events, the alert: key share) |
 | `booking.reconcile`, not found | checkout `FOR UPDATE` → booking `FOR UPDATE` → payments `FOR UPDATE` (events, outbox: key share) → checkout updated (before FIX-W25-BOOKINGS: booking, payments, then checkout) |
+| `booking.reconcile`, found, an airline-card booking (OBE-051) | checkout `FOR UPDATE` → booking `FOR UPDATE` (children, events, outbox: key share) → payment `FOR UPDATE` (`settleAirlineCardOrder`, its event: key share) → checkout updated |
+| `booking.reconcile`, not found, an airline-card booking (OBE-051: the staff's review, never a failure) | checkout `FOR UPDATE` → booking `FOR UPDATE` → payments `FOR UPDATE` (event, outbox: key share) |
 | `booking.reconcile`, the manual review and the staff alerts | booking `FOR UPDATE` (event, outbox: key share), or booking key share alone |
 | `booking.reconcile`, a retry after the deadline (FIX-W26-BOOKINGS) | booking `FOR UPDATE` (event: key share) |
 | `ticketing.issue` and the reconciliation's inline issuance, the claim | booking `FOR NO KEY UPDATE SKIP LOCKED` (before FIX-W26-BOOKINGS `FOR UPDATE SKIP LOCKED`) |
@@ -172,6 +178,8 @@ sequenceDiagram
   O->>D: T2 booking ticketed, payment captured (brand, BIN, last 4), events, outbox
   O-->>B: 201 CheckoutCompletion
 ```
+
+Outcomes (OBE-051; [flow](flows/checkout-airline-card.md) §4): the airline's charge is recorded in the record step's transaction (T2): the payment `captured` for its amount with `payment_events` `airline.charged` when the order came back with every ticket, else `processing` with the booking's ticketing in `manual_review` (the card is gone, so no issue is retried), a staff alert and `201` with the warning `TICKETING_MANUAL_REVIEW`. A refusal fails the booking and the payment (`airline.declined` for a declined card, which counts as one of the checkout's three attempts, counted before the booking fails and frees the checkout); a request that was not sent leaves the payment awaiting the card; a higher re-price moves the checkout and its payment to the new total (`409 PRICE_CHANGED`, nothing sent). The limits are checked again right before the card is sent, after the claim, so a completion running while the checkout's third decline was counted is refused unsent. The payment of a declined card takes the traveller's next card.
 
 Differences from the Stripe path:
 

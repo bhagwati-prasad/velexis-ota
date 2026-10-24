@@ -71,6 +71,9 @@ export const SEARCH_SINGLE_FLIGHT_TTL_SECONDS = 30;
 export const CANCELLATION_QUOTE_TTL_SECONDS = 10 * MINUTE;
 /** Airline-card attempts of one checkout (OADR-0004). */
 export const AIRLINE_CARD_ATTEMPTS_TTL_SECONDS = 2 * HOUR;
+/** The window of a tenant's airline-card declines, and how long 20 of them suspend the method (OADR-0004 point 6). */
+export const AIRLINE_CARD_DECLINES_TTL_SECONDS = HOUR;
+export const AIRLINE_CARD_SUSPENSION_TTL_SECONDS = HOUR;
 /** Customer sign-in lockout counter (ADR-0008). */
 export const SIGN_IN_LOCKOUT_TTL_SECONDS = 15 * MINUTE;
 /** Amadeus tokens are stored until `expires_in` minus this margin (ADR-0012, OADR-0001 point 5). */
@@ -435,6 +438,16 @@ export const redisKeys = Object.freeze({
   acChk: tenantBuilder("acChk", "t:<tenantId>:<env>:ac:chk:<checkoutId>", (checkoutId: string) => ({
     segments: ["ac", "chk", part("acChk", "checkoutId", "checkoutId", checkoutId)],
     ttlSeconds: AIRLINE_CARD_ATTEMPTS_TTL_SECONDS,
+  })),
+  /** `t:<tenantId>:<env>:ac:declines`: airline-card declines of the tenant in the hour since the first (OBE-051). */
+  acDeclines: tenantBuilder("acDeclines", "t:<tenantId>:<env>:ac:declines", () => ({
+    segments: ["ac", "declines"],
+    ttlSeconds: AIRLINE_CARD_DECLINES_TTL_SECONDS,
+  })),
+  /** `t:<tenantId>:<env>:ac:suspended`: the airline card suspended for an hour after 20 declines (OBE-051). */
+  acSuspended: tenantBuilder("acSuspended", "t:<tenantId>:<env>:ac:suspended", () => ({
+    segments: ["ac", "suspended"],
+    ttlSeconds: AIRLINE_CARD_SUSPENSION_TTL_SECONDS,
   })),
   /** `t:<tenantId>:<env>:authfail:<sha256(email)>`: customer sign-in failures of one identity. */
   authfail: tenantBuilder("authfail", "t:<tenantId>:<env>:authfail:<sha256>", (emailSha256: string) => ({

@@ -79,6 +79,45 @@
 // details, or its `Set-Cookie`), or the final `502 SUPPLIER_ERROR` ("nothing was booked") once it proved it absent. A
 // payment whose booking failed that way is not used again (`402 PAYMENT_REQUIRED`): its authorisation is being
 // voided.
+//
+// checkout.completeWithAirlineCard (completeCheckoutWithAirlineCard, edge only; OBE-051; OADR-0004 points 2, 3, 5 and
+// 7, ota/docs/flows/checkout-airline-card.md §3 steps 5–7 and §4, architecture-booking.md §3) runs the same five steps
+// with the card the airline charges (`completeWithAirlineCard`; the completion service of payments/airline-card/ checked
+// the switches, the limits and the card, and holds the card in a SensitiveCard that it discards once this returns):
+//   0. The payment named by `paymentId` must be the checkout's `airline_card` payment awaiting the card
+//      (`requires_payment_method`, or `failed` after a declined attempt; `422 UNPROCESSABLE` otherwise, a Stripe payment
+//      too), in the checkout's `net` pricing, for exactly the checkout total, which must be `expectedTotal` (`409
+//      PAYMENT_AMOUNT_MISMATCH`); a card of another brand than the one its Amadeus card fee was quoted for
+//      (`checkouts.payment_brand`), or a card whose fee was never quoted (no brand yet: the airline would charge a fee
+//      the traveller did not see), is `409 PAYMENT_AMOUNT_MISMATCH` too (`details.reason = "card_changed"`). No
+//      provider is called.
+//   1. The claim as above: the booking `pending`, at the airline's price (`pricing_mode = net`, `markup_amount = 0`,
+//      no OTA fee), with `issue_requested` always true.
+//   2. A re-price as above, never with a void: a higher total fails the booking and moves the checkout and its payment
+//      to the new total (`409 PRICE_CHANGED`; the traveller confirms it and types the card again). Right before the
+//      card is sent the completion service checks the limits once more (`beforeSend`): a decline of a concurrent
+//      completion of the checkout counted since its first check, or a suspension since, fails the booking unsent (the
+//      payment awaiting the card) and answers the limit's `403` (or `503`). Under the booking's lock `recordSending`
+//      also sets the payment `processing` with the card's brand, BIN and last 4. Flight Create Orders is sent with
+//      `issue = true` and `formOfPayments: [{creditCard: {brand, holder (upper case), number, expiryDate "YYYY-MM",
+//      securityCode, flightOfferIds, paymentOperationContext: {interactionCondition: ECOMMERCE}}}]` (no 3-D Secure);
+//      the copy for `supplier_requests` (brand, holder, the last 4 digits; no expiry, no security code) is built from
+//      the SensitiveCard before the call and given to the client as `redactedRequest`, and the request body is dropped
+//      after the call. Outcomes: a refusal fails the booking and the payment (`failed` with the public code;
+//      `airline.declined` for a declined card, whose answer the completion service gives: `402 PAYMENT_DECLINED`, or
+//      `403 PAYMENT_ATTEMPTS_EXCEEDED` at the third; it counts the decline before the booking fails, which frees the
+//      checkout, so a concurrent completion's `beforeSend` sees it); not sent: the booking `failed`, the payment
+//      awaiting the card again; unknown: as above, the payment `processing`, and the reconciliation records the order
+//      or sends the booking to the staff's review, never to a failure (the card may have been charged).
+//   3. Record (T2) as above; in the same transaction the payment (locked after the checkout and the booking) is
+//      `captured` for its amount (`amount_captured = amount`, `payment_events` `airline.charged`, the booking's
+//      `amount_paid`) when the order came back with every ticket (`settleAirlineCardOrder` of reconcile.service.ts,
+//      which the reconciliation's record step uses too). An order without every ticket stays `processing`: Flight Order
+//      Issue never carries the card (it is gone), so the booking's ticketing goes to `manual_review` (the ticketing
+//      job never takes it), the staff are alerted, and the answer is `201` with the warning `TICKETING_MANUAL_REVIEW`.
+//   4. and 5. Nothing: the airline charged the card, and the order was issued at its creation.
+// Same-key retries of a `504` are answered from the booking as for checkout.complete
+// (AirlineCardCompletionIdempotencyHooks of payments/airline-card/airline-card-completion.service.ts).
 import { InjectQueue } from "@nestjs/bullmq";
 import { Inject, Injectable } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
@@ -129,6 +168,8 @@ import { OTA_QUEUE } from "../common/queues/queue-names";
 import type { SharedConfig } from "../config";
 import { InvalidNotificationError } from "../notifications/outbox.service";
 import { StaffRecipients } from "../notifications/staff-recipients";
+import { AIRLINE_CARD_METHOD, AIRLINE_PROVIDER } from "../payments/airline-card/airline-card.gateway";
+import type { SensitiveCard } from "../payments/airline-card/sensitive-card";
 import {
   PAYMENT_GATEWAY,
   type GatewayContext,
@@ -180,6 +221,7 @@ import {
   type Warning,
 } from "./order-recorder";
 import {
+  amadeusOfferIdsOf,
   buildCreateOrderRequest,
   buildIssueRequest,
   issueAtCreate,
@@ -189,10 +231,13 @@ import {
   type TicketingPolicy,
 } from "./order-request.builder";
 import {
+  AIRLINE_CARD_NOT_TICKETED,
   CAPTURE_RETRY_DELAY_MS,
   RECONCILE_WINDOW_MS,
   reconcileJob,
   ReconcileRepository,
+  settleAirlineCardOrder,
+  type AirlineCardSettlementDeps,
 } from "./reconcile.service";
 
 export { CAPTURE_RETRY_DELAY_MS, RECONCILE_WINDOW_MS };
@@ -207,6 +252,67 @@ export interface CompleteCheckoutInput {
   readonly body: CheckoutCompleteRequest;
   readonly acceptLanguage?: string | undefined;
 }
+
+/** The booking of a card the airline declined, for the completion service's answer and alerts. */
+export interface DeclinedBooking {
+  readonly id: string;
+  readonly reference: string;
+  readonly checkoutId: string;
+  /** The OTA's default locale (its staff alerts). */
+  readonly locale: string;
+}
+
+/**
+ * The input of checkout.completeWithAirlineCard (OBE-051), after the completion service's checks: the switches, the
+ * limits, the card's Luhn digit, expiry and brand.
+ */
+export interface AirlineCardCompletionInput {
+  readonly checkoutId: string;
+  readonly paymentId: string;
+  readonly expectedTotal: MoneyAmount;
+  /** The traveller's card, in memory for this request only: the completion service discards it once this returns. */
+  readonly card: SensitiveCard;
+  readonly acceptLanguage?: string | undefined;
+  /**
+   * The limits checked once more right before the card is sent (the claim committed, so no other completion of the
+   * checkout can send a card meanwhile): throws the limit's error (`403 PAYMENT_ATTEMPTS_EXCEEDED`, `403
+   * FEATURE_DISABLED` while suspended, `503 SERVICE_UNAVAILABLE`), and the booking then fails unsent.
+   */
+  readonly beforeSend: () => Promise<void>;
+  /**
+   * The answer to a card the airline declined, called before the booking and the payment are recorded `failed` (which
+   * frees the checkout for the next completion, whose `beforeSend` must see this attempt): the completion service
+   * counts the attempt and alerts (`402 PAYMENT_DECLINED`, or `403 PAYMENT_ATTEMPTS_EXCEEDED`).
+   */
+  readonly declined: (booking: DeclinedBooking, error: AppError) => Promise<AppError>;
+}
+
+/** What both completions share once their bodies are read. */
+interface CompletionRequest {
+  readonly checkoutId: string;
+  /** The payment to complete with; the checkout's active one when absent (checkout.complete only). */
+  readonly paymentId: string | undefined;
+  readonly expectedTotal: MoneyAmount | undefined;
+  readonly acceptLanguage: string | undefined;
+  /** The card of checkout.completeWithAirlineCard; `undefined` for a Stripe payment. */
+  readonly airline: AirlineCardSend | undefined;
+}
+
+/** The airline card of a completion, the last check of the limits and the answer to a decline. */
+interface AirlineCardSend {
+  readonly card: SensitiveCard;
+  readonly beforeSend: AirlineCardCompletionInput["beforeSend"];
+  readonly declined: AirlineCardCompletionInput["declined"];
+}
+
+/** The warning of an airline-card order that came back without every ticket (`201`, OADR-0004). */
+export const TICKETING_MANUAL_REVIEW_WARNING = "TICKETING_MANUAL_REVIEW";
+
+/** `paymentOperationContext` of the airline card (no 3-D Secure in the MVP, ADR-0011 (B)). */
+const AIRLINE_CARD_OPERATION_CONTEXT = Object.freeze({ interactionCondition: "ECOMMERCE" });
+
+/** The statuses of an airline-card payment that a completion may send the card for. */
+const AIRLINE_CARD_PAYABLE: ReadonlySet<string> = new Set(["requires_payment_method", "failed"]);
 
 /** A priced offer older than this is priced again before the order (contract step 4, `repriceAfterMinutes`). */
 export const REPRICE_AFTER_MS = 10 * 60_000;
@@ -431,11 +537,14 @@ export function replayedTimeout(response: IdempotencyResponse): IdempotencyRespo
 /**
  * The final error of a checkout.complete whose booking failed after its `504` (the reconciliation proved the order
  * absent): `502 SUPPLIER_ERROR`, the public code of a reconciled create-order that failed; nothing was booked and the
- * authorisation is released.
+ * authorisation is released. An airline-card booking is never failed by the reconciliation (the card may have been
+ * charged); one the staff failed answers with the airline's wording (`airline`).
  */
-export function reconciledFailure(bookingId: string): AppError {
+export function reconciledFailure(bookingId: string, airline = false): AppError {
   return new AppError("SUPPLIER_ERROR", {
-    message: "The airline did not confirm the booking. Nothing was booked and your payment was released.",
+    message: airline
+      ? "The airline did not confirm the booking. Nothing was booked; a charge on your card is reversed by the airline."
+      : "The airline did not confirm the booking. Nothing was booked and your payment was released.",
     details: { bookingId, bookingStatus: "failed" },
   });
 }
@@ -519,6 +628,85 @@ export function createFailureKind(error: unknown): CreateFailureKind {
   return "unknown";
 }
 
+/** True for an airline-card payment (`payments.method = airline_card`): the airline charges it (OADR-0004). */
+export function isAirlineCard(payment: Pick<PaymentRow, "method">): boolean {
+  return payment.method === AIRLINE_CARD_METHOD;
+}
+
+/** The `formOfPayments` entry of the airline card for the offers (`creditCard`, Amadeus CreditCard). */
+function creditCardFormOfPayment(creditCard: object, flightOfferIds: readonly string[]): JsonObject[] {
+  return [
+    {
+      creditCard: {
+        ...creditCard,
+        flightOfferIds: [...flightOfferIds],
+        paymentOperationContext: { ...AIRLINE_CARD_OPERATION_CONTEXT },
+      },
+    },
+  ];
+}
+
+/**
+ * The Flight Create Orders body of an airline-card booking (OBE-051): the builder's body with `formOfPayments`
+ * replaced by the card for the offers. `card.toAmadeusCreditCard()` is read here and nowhere else; the body is handed
+ * to the Amadeus client and dropped after the call.
+ */
+export function airlineCardOrderBody(
+  body: { readonly data: JsonObject },
+  card: SensitiveCard,
+  flightOfferIds: readonly string[],
+): { readonly data: JsonObject } {
+  return {
+    data: {
+      ...body.data,
+      formOfPayments: creditCardFormOfPayment(card.toAmadeusCreditCard(), flightOfferIds),
+    },
+  };
+}
+
+/**
+ * The copy of an airline-card order body that `supplier_requests` keeps (OADR-0004 point 2): the card's brand, holder
+ * and last 4 digits, no expiry and no security code. Built before the call.
+ */
+export function redactedAirlineCardOrderBody(
+  body: { readonly data: JsonObject },
+  card: SensitiveCard,
+  flightOfferIds: readonly string[],
+): { readonly data: JsonObject } {
+  return {
+    data: {
+      ...body.data,
+      formOfPayments: creditCardFormOfPayment(card.toRedactedCreditCard(), flightOfferIds),
+    },
+  };
+}
+
+/** The answer to a card the airline declined (Amadeus 1304): `402 PAYMENT_DECLINED`, the supplier issue for console. */
+export function airlineCardDeclined(error: AppError): AppError {
+  return new AppError("PAYMENT_DECLINED", {
+    message: "The airline declined the card. Check the card details or pay with another card.",
+    ...(error.supplier === undefined ? {} : { supplier: error.supplier }),
+    cause: error,
+  });
+}
+
+/**
+ * The OTA's share of a booking in its pricing mode: the priced offer's markup, rule and fees at the selling price, none
+ * at the airline's price (`net`: the airline charges its fare, OADR-0004 point 4; `bookings_net_pricing_ck`).
+ */
+export function sellingPartsOf(
+  pricingMode: string,
+  priced: Pick<CheckoutPricedOffer["row"], "markupAmount" | "markupRuleId" | "feeAmount">,
+): { readonly markup_amount: string; readonly markup_rule_id: string | null; readonly fees_amount: string } {
+  return pricingMode === "net"
+    ? { markup_amount: "0", markup_rule_id: null, fees_amount: "0" }
+    : {
+        markup_amount: priced.markupAmount,
+        markup_rule_id: priced.markupRuleId,
+        fees_amount: priced.feeAmount,
+      };
+}
+
 @Injectable()
 export class BookingOrchestrator {
   private readonly baseDomain: string;
@@ -558,17 +746,62 @@ export class BookingOrchestrator {
   async complete(input: CompleteCheckoutInput): Promise<CheckoutCompletion> {
     const tenant = this.tenants.require();
     const ctx = this.gatewayContext(tenant);
-    let claimed:
-      { readonly prepared: Prepared; readonly claim: Claimed; readonly state: GatewayState } | undefined;
-    let connection: ResolvedAmadeusConnection | undefined;
-    for (let attempt = 1; attempt <= CLAIM_ATTEMPTS && claimed === undefined; attempt += 1) {
-      const prepared = await this.tx.run((trx) => this.prepare(trx, tenant, input));
-      connection ??= await this.connections.resolve(tenant.tenantId, tenant.environment);
+    const request: CompletionRequest = {
+      checkoutId: input.checkoutId,
+      paymentId: input.body.paymentId,
+      expectedTotal: input.body.expectedTotal,
+      acceptLanguage: input.acceptLanguage,
+      airline: undefined,
+    };
+    return await this.completeWith(tenant, ctx, request, async (prepared) => {
       const state = await this.gateway.refresh(
         ctx,
         this.gatewayPaymentOf(prepared.payment, prepared.minorUnits),
       );
-      this.checkPaymentState(prepared, state, input.body);
+      this.checkPaymentState(prepared, state, request);
+      return state;
+    });
+  }
+
+  /**
+   * checkout.completeWithAirlineCard (OBE-051, see the file header): the same steps with the card the airline charges.
+   * The caller (the completion service) checked the switches, the limits and the card, and discards the card once this
+   * returns or throws.
+   */
+  async completeWithAirlineCard(input: AirlineCardCompletionInput): Promise<CheckoutCompletion> {
+    const tenant = this.tenants.require();
+    const ctx = this.gatewayContext(tenant);
+    const request: CompletionRequest = {
+      checkoutId: input.checkoutId,
+      paymentId: input.paymentId,
+      expectedTotal: input.expectedTotal,
+      acceptLanguage: input.acceptLanguage,
+      airline: { card: input.card, beforeSend: input.beforeSend, declined: input.declined },
+    };
+    return await this.completeWith(tenant, ctx, request, (prepared) => {
+      this.checkAirlinePayment(prepared, input.expectedTotal, input.card);
+      return Promise.resolve(undefined);
+    });
+  }
+
+  /**
+   * Steps 0 and 1, then the rest (see the file header): `admit` checks the payment step 0 read (Stripe: its
+   * PaymentIntent, read again; the airline card: its amount and card) and answers the provider's state, if any.
+   */
+  private async completeWith(
+    tenant: RequestTenant,
+    ctx: GatewayContext,
+    request: CompletionRequest,
+    admit: (prepared: Prepared) => Promise<GatewayState | undefined>,
+  ): Promise<CheckoutCompletion> {
+    let claimed:
+      | { readonly prepared: Prepared; readonly claim: Claimed; readonly state: GatewayState | undefined }
+      | undefined;
+    let connection: ResolvedAmadeusConnection | undefined;
+    for (let attempt = 1; attempt <= CLAIM_ATTEMPTS && claimed === undefined; attempt += 1) {
+      const prepared = await this.tx.run((trx) => this.prepare(trx, tenant, request));
+      connection ??= await this.connections.resolve(tenant.tenantId, tenant.environment);
+      const state = await admit(prepared);
       const claim = await this.claim(tenant, prepared, state, connection);
       if (claim !== undefined) {
         claimed = { prepared, claim, state };
@@ -587,7 +820,7 @@ export class BookingOrchestrator {
       claimed.prepared,
       claimed.claim,
       claimed.state,
-      input,
+      request,
     );
   }
 
@@ -596,7 +829,7 @@ export class BookingOrchestrator {
   private async prepare(
     trx: TenantTransaction,
     tenant: RequestTenant,
-    input: CompleteCheckoutInput,
+    input: CompletionRequest,
   ): Promise<Prepared> {
     const now = this.clock.now();
     const checkout = await this.checkouts.checkout(trx, input.checkoutId);
@@ -648,7 +881,7 @@ export class BookingOrchestrator {
         fieldErrors: progress.missing.slice(0, MAX_FIELD_ERRORS),
       });
     }
-    const paymentId = input.body.paymentId ?? (await this.repository.activePaymentId(trx, checkout.id));
+    const paymentId = input.paymentId ?? (await this.repository.activePaymentId(trx, checkout.id));
     if (paymentId === undefined) {
       throw new AppError("PAYMENT_REQUIRED", { message: "Pay for the checkout before completing it." });
     }
@@ -660,19 +893,20 @@ export class BookingOrchestrator {
     ) {
       throw new AppError("NOT_FOUND", { message: "No payment with this id." });
     }
-    if (payment.method === "airline_card") {
+    const extras = await this.repository.checkoutExtras(trx, checkout.id);
+    if (input.airline !== undefined) {
+      this.checkAirlinePayable(payment, extras?.pricingMode);
+    } else if (payment.method === AIRLINE_CARD_METHOD) {
       throw new AppError("UNPROCESSABLE", {
         message: "Complete an airline-card payment with checkout.completeWithAirlineCard.",
         details: { reason: "use_airline_card_completion" },
       });
-    }
-    if (payment.provider !== "stripe") {
+    } else if (payment.provider !== "stripe") {
       throw new AppError("UNPROCESSABLE", {
         message: "This payment cannot complete the checkout.",
         details: { reason: "payment_provider_not_supported" },
       });
-    }
-    if (
+    } else if (
       payment.providerPaymentId === null ||
       ["canceled", "refunded", "partially_refunded"].includes(payment.status) ||
       // The reconciliation proved the order of this payment's booking absent: its authorisation is being voided.
@@ -680,7 +914,6 @@ export class BookingOrchestrator {
     ) {
       throw new AppError("PAYMENT_REQUIRED", { message: "Pay for the checkout before completing it." });
     }
-    const extras = await this.repository.checkoutExtras(trx, checkout.id);
     const policy = POLICIES.find((entry) => entry === settings.ticketingPolicy) ?? "issue_after_payment";
     return {
       checkout,
@@ -697,8 +930,72 @@ export class BookingOrchestrator {
     };
   }
 
+  /**
+   * An airline-card completion's payment (step 0, see the file header): the checkout's `airline_card` payment awaiting
+   * the card, in the checkout's `net` pricing; `422 UNPROCESSABLE` otherwise.
+   */
+  private checkAirlinePayable(payment: PaymentRow, pricingMode: string | undefined): void {
+    if (payment.method !== AIRLINE_CARD_METHOD || payment.provider !== AIRLINE_PROVIDER) {
+      throw new AppError("UNPROCESSABLE", {
+        message: "This payment is not an airline-card payment: complete it with checkout.complete.",
+        details: { reason: "not_airline_card_payment" },
+      });
+    }
+    if (!AIRLINE_CARD_PAYABLE.has(payment.status)) {
+      throw new AppError("UNPROCESSABLE", {
+        message: "This payment does not take a card any more. Start the payment again.",
+        details: { reason: "payment_not_awaiting_card", status: payment.status },
+      });
+    }
+    if (pricingMode !== "net") {
+      // checkout.createPayment {method: "airline_card"} sets it; a card payment made since cancelled this one.
+      throw new AppError("UNPROCESSABLE", {
+        message: "The checkout is not at the airline's price. Start the payment again.",
+        details: { reason: "pricing_mode_not_net" },
+      });
+    }
+  }
+
+  /**
+   * The airline-card payment must hold the checkout total, which must be the `expectedTotal` the traveller saw, and its
+   * Amadeus card fee must have been quoted for this card's brand (`checkouts.payment_brand`, the brand of the last card
+   * hint: checkout.createPayment and checkout.updatePayment keep it). A total without a quoted fee (no brand yet) holds
+   * no card fee, while the airline charges the fee of the card's brand: refused too. `409 PAYMENT_AMOUNT_MISMATCH`
+   * otherwise (step 0). Nothing is sent and the attempt is not counted.
+   */
+  private checkAirlinePayment(prepared: Prepared, expected: MoneyAmount, card: SensitiveCard): void {
+    const { checkout, payment, minorUnits } = prepared;
+    const details = {
+      paymentId: payment.id,
+      paymentAmount: this.money(payment.amount, payment.currency, minorUnits),
+      checkoutTotal: this.money(checkout.totalAmount, checkout.currency, minorUnits),
+    };
+    if (payment.currency !== checkout.currency || !new Money(payment.amount).equals(checkout.totalAmount)) {
+      throw new AppError("PAYMENT_AMOUNT_MISMATCH", {
+        message: "The total changed after the payment was created. Please start the payment again.",
+        details,
+      });
+    }
+    if (expected.currency !== payment.currency || !new Money(expected.amount).equals(payment.amount)) {
+      throw new AppError("PAYMENT_AMOUNT_MISMATCH", {
+        message: "The amount the airline charges is not the one you confirmed. Please review it.",
+        details: { ...details, expectedTotal: { amount: expected.amount, currency: expected.currency } },
+      });
+    }
+    if (checkout.paymentBrand !== card.brand()) {
+      // The Amadeus card fee in the total was quoted for another brand, or for none (checkout.updatePayment).
+      throw new AppError("PAYMENT_AMOUNT_MISMATCH", {
+        message:
+          checkout.paymentBrand === null
+            ? "The card fee was not quoted for this card yet. Update the payment with this card and review the total."
+            : "The card fee was quoted for another card. Update the payment with this card and review the total.",
+        details: { ...details, reason: "card_changed" },
+      });
+    }
+  }
+
   /** The PaymentIntent must hold the checkout total (step 0). */
-  private checkPaymentState(prepared: Prepared, state: GatewayState, body: CheckoutCompleteRequest): void {
+  private checkPaymentState(prepared: Prepared, state: GatewayState, body: CompletionRequest): void {
     const { checkout, payment, minorUnits } = prepared;
     if (state.status === "failed") {
       throw new AppError("PAYMENT_DECLINED", { message: "The payment was declined. Pay with another card." });
@@ -744,7 +1041,7 @@ export class BookingOrchestrator {
   private async claim(
     tenant: RequestTenant,
     prepared: Prepared,
-    state: GatewayState,
+    state: GatewayState | undefined,
     connection: ResolvedAmadeusConnection,
   ): Promise<Claimed | undefined> {
     for (let attempt = 1; ; attempt += 1) {
@@ -769,7 +1066,7 @@ export class BookingOrchestrator {
     trx: TenantTransaction,
     tenant: RequestTenant,
     prepared: Prepared,
-    state: GatewayState,
+    state: GatewayState | undefined,
     connection: ResolvedAmadeusConnection,
   ): Promise<Claimed | undefined> {
     const now = this.clock.now();
@@ -792,17 +1089,24 @@ export class BookingOrchestrator {
       throw new AppError("CHECKOUT_ALREADY_COMPLETED");
     }
     let payment = await this.payments.payment(trx, prepared.payment.id, true);
-    if (payment === undefined || payment.providerPaymentId !== state.providerPaymentId) {
+    if (state === undefined) {
+      // The airline card: the payment step 0 checked, unchanged since (no provider state to apply).
+      if (
+        payment === undefined ||
+        payment.version !== prepared.payment.version ||
+        !AIRLINE_CARD_PAYABLE.has(payment.status)
+      ) {
+        return undefined;
+      }
+    } else if (payment === undefined || payment.providerPaymentId !== state.providerPaymentId) {
       return undefined;
-    }
-    if (
+    } else if (
       !["requires_payment_method", "requires_action", "processing", "authorized", "captured"].includes(
         payment.status,
       )
     ) {
       throw new AppError("PAYMENT_REQUIRED", { message: "The payment is not authorised." });
-    }
-    if (payment.status !== state.status) {
+    } else if (payment.status !== state.status) {
       const { values } = stateValues(payment, state, now);
       await this.payments.updatePayment(trx, payment.id, payment.version, values);
       await this.paymentEvent(trx, payment, {
@@ -860,7 +1164,10 @@ export class BookingOrchestrator {
       queuing_office_id: connection.offices.queuing,
       owner_office_id: connection.offices.owner,
       last_ticketing_date: priced.row.lastTicketingDate,
-      issue_requested: issueAtCreate(prepared.policy, requiresInstantTicketing(confirmedPayloadsOf(priced))),
+      // The airline card is always sent with issue=true (the card is used once, OADR-0004).
+      issue_requested:
+        isAirlineCard(prepared.payment) ||
+        issueAtCreate(prepared.policy, requiresInstantTicketing(confirmedPayloadsOf(priced))),
       ticketing_status: "pending",
       trip_type: tripTypeOf(itineraries.length, summary?.tripType),
       origin_iata: itineraries[0]?.originCode ?? firstSegment.departure.iataCode,
@@ -872,14 +1179,13 @@ export class BookingOrchestrator {
       travelers_count: Math.max(1, prepared.travelers.length),
       currency: checkout.currency,
       pricing_mode: prepared.pricingMode,
-      markup_rule_id: priced.row.markupRuleId,
       // The Amadeus total with the booked services (a child priced offer's net is its flights'), as the column holds.
       net_amount: new Money(priced.row.netTotal).plus(netServices).toFixed(prepared.minorUnits),
       net_base_amount: amounts.base,
       net_fees_amount: amounts.fees,
       net_services_amount: netServices,
-      markup_amount: priced.row.markupAmount,
-      fees_amount: priced.row.feeAmount,
+      // No markup and no OTA fee at the airline's price (`net`, the airline card).
+      ...sellingPartsOf(prepared.pricingMode, priced.row),
       card_fee_amount: checkout.feesAmount,
       ancillaries_amount: checkout.ancillariesAmount,
       taxes_amount: amounts.taxes,
@@ -925,8 +1231,8 @@ export class BookingOrchestrator {
     connection: ResolvedAmadeusConnection,
     prepared: Prepared,
     claim: Claimed,
-    state: GatewayState,
-    input: CompleteCheckoutInput,
+    state: GatewayState | undefined,
+    input: CompletionRequest,
   ): Promise<CheckoutCompletion> {
     const { booking } = claim;
     const warnings: Warning[] = [];
@@ -949,10 +1255,24 @@ export class BookingOrchestrator {
     }
 
     const flightOffers = confirmedPayloadsOf(priced);
-    const issue = issueAtCreate(prepared.policy, requiresInstantTicketing(flightOffers));
+    // The airline card is used once: the order is issued at its creation (OADR-0004).
+    const issue =
+      input.airline !== undefined || issueAtCreate(prepared.policy, requiresInstantTicketing(flightOffers));
+    if (input.airline !== undefined) {
+      // The limits once more, right before the card is sent (see the file header, step 2): a refusal sends nothing.
+      try {
+        await input.airline.beforeSend();
+      } catch (error) {
+        await this.failBooking(tenant, prepared, claim, {
+          code: error instanceof AppError ? error.code : "INTERNAL_ERROR",
+          voided: false,
+        });
+        throw error;
+      }
+    }
     let decided: AppError | undefined;
     try {
-      decided = await this.recordSending(prepared, claim, { repriced, issue });
+      decided = await this.recordSending(prepared, claim, { repriced, issue, card: input.airline?.card });
     } catch (error) {
       // Nothing was sent: the booking fails and the authorisation is kept, as for a request that never left.
       await this.failBooking(tenant, prepared, claim, { code: "INTERNAL_ERROR", voided: false });
@@ -979,12 +1299,14 @@ export class BookingOrchestrator {
         offices: connection.offices,
         issue,
       });
-      reply = await this.amadeus.createFlightOrders(this.callContext(tenant, booking.id), {
-        body: request.body as unknown as Parameters<AmadeusClient["createFlightOrders"]>[1]["body"],
-        query: request.query,
-      });
+      reply = await this.sendOrder(tenant, booking.id, request, flightOffers, input.airline?.card);
     } catch (error) {
-      throw await this.afterCreateFailure(tenant, ctx, prepared, claim, error, { priced, repriced, issue });
+      throw await this.afterCreateFailure(tenant, ctx, prepared, claim, error, {
+        priced,
+        repriced,
+        issue,
+        airline: input.airline,
+      });
     }
     const order = readCreatedOrder(reply.body);
     if (order === undefined) {
@@ -997,7 +1319,7 @@ export class BookingOrchestrator {
     }
     warnings.push(...order.warnings);
 
-    let recorded: RecordedOrder;
+    let recorded: { readonly result: RecordedOrder; readonly airlineCaptured: boolean | undefined };
     try {
       recorded = await this.tx.run(async (trx) => {
         const now = this.clock.now();
@@ -1036,7 +1358,29 @@ export class BookingOrchestrator {
           completed_at: now,
           updated_at: now,
         });
-        return result;
+        if (input.airline === undefined) {
+          return { result, airlineCaptured: undefined };
+        }
+        // Step 3 of the airline card: the airline charged the card for an order with every ticket (the payment
+        // locked after the checkout and the booking, OADR-0003 point 11).
+        const settled = await settleAirlineCardOrder(trx, this.settlementDeps(), {
+          bookingId: booking.id,
+          coverage: result.coverage,
+          actor: eventActorOf(tenant.actor),
+          source: "api",
+          requestId: this.requestId(tenant),
+          now: new Date(now.getTime() + 1),
+        });
+        if (settled?.captured !== true) {
+          await this.staffAlert(trx, current, AIRLINE_CARD_NOT_TICKETED, {
+            reason:
+              `The airline created the order of booking ${current.reference} paid by airline card, but did not ` +
+              "issue every ticket. The card cannot be used again: check the order in the office, then issue the " +
+              "tickets with another form of payment or cancel the booking from the console.",
+            locale: prepared.settings.defaultLocale,
+          });
+        }
+        return { result, airlineCaptured: settled?.captured ?? false };
       });
     } catch (error) {
       // The order exists at Amadeus, but T2 rolled back: the booking is still `pending` with its claim, and the
@@ -1045,24 +1389,42 @@ export class BookingOrchestrator {
       throw await this.unknownOutcome(tenant, prepared, claim, "record_failed", { repriced, issue });
     }
 
-    // Step 4: money.
-    let captured = state.status === "captured";
-    const mustCapture = prepared.policy !== "manual_review" || recorded.coverage !== "none";
-    if (!captured && mustCapture) {
-      captured = await this.capture(tenant, ctx, prepared, claim, total, recorded.status, warnings);
-    } else if (!captured) {
-      await this.tx.run(async (trx) => {
-        await this.staffAlert(trx, booking, "manual_review_policy", {
-          reason:
-            "The ticketing policy of the OTA is manual review: issue the tickets from the console, which captures the payment first.",
-          locale: prepared.settings.defaultLocale,
+    if (recorded.airlineCaptured !== undefined) {
+      // Steps 4 and 5 of the airline card: the airline charged the card, and issued what it issued at the creation.
+      if (!recorded.airlineCaptured) {
+        warnings.push(
+          ownWarning(
+            TICKETING_MANUAL_REVIEW_WARNING,
+            "Your booking is confirmed, but the airline has not issued every ticket yet. Our team checks it and " +
+              "contacts you; do not pay again.",
+          ),
+        );
+      }
+    } else if (state !== undefined) {
+      // Step 4: money.
+      let captured = state.status === "captured";
+      const mustCapture = prepared.policy !== "manual_review" || recorded.result.coverage !== "none";
+      if (!captured && mustCapture) {
+        captured = await this.capture(tenant, ctx, prepared, claim, total, recorded.result.status, warnings);
+      } else if (!captured) {
+        await this.tx.run(async (trx) => {
+          await this.staffAlert(trx, booking, "manual_review_policy", {
+            reason:
+              "The ticketing policy of the OTA is manual review: issue the tickets from the console, which captures the payment first.",
+            locale: prepared.settings.defaultLocale,
+          });
         });
-      });
-    }
+      }
 
-    // Step 5: issue.
-    if (captured && prepared.policy === "issue_after_payment" && recorded.coverage === "none" && !issue) {
-      await this.issue(tenant, booking, order, warnings);
+      // Step 5: issue.
+      if (
+        captured &&
+        prepared.policy === "issue_after_payment" &&
+        recorded.result.coverage === "none" &&
+        !issue
+      ) {
+        await this.issue(tenant, booking, order, warnings);
+      }
     }
 
     const completion = await this.answer(tenant, prepared, booking.id, warnings);
@@ -1073,12 +1435,43 @@ export class BookingOrchestrator {
         status: completion.booking.status,
         ticketingStatus: completion.booking.ticketing.status,
         policy: prepared.policy,
+        method: prepared.payment.method,
         // Whether step 2 priced the offers again; never the re-priced offer itself (it holds Amadeus's answer).
         repriced: repriced !== undefined,
       },
       "bookings.completed",
     );
     return completion;
+  }
+
+  /**
+   * Sends Flight Create Orders. With the airline card (OBE-051), the copy for `supplier_requests` is built from the
+   * SensitiveCard first, then the body with the card's values, which is handed to the client alone and dropped once it
+   * answered (see the file header).
+   */
+  private async sendOrder(
+    tenant: RequestTenant,
+    bookingId: string,
+    request: ReturnType<typeof buildCreateOrderRequest>,
+    flightOffers: readonly unknown[],
+    card: SensitiveCard | undefined,
+  ): Promise<AmadeusResponse<unknown>> {
+    type Body = Parameters<AmadeusClient["createFlightOrders"]>[1]["body"];
+    const context = this.callContext(tenant, bookingId);
+    if (card === undefined) {
+      return await this.amadeus.createFlightOrders(context, {
+        body: request.body as unknown as Body,
+        query: request.query,
+      });
+    }
+    const offerIds = amadeusOfferIdsOf(flightOffers);
+    const redactedRequest = redactedAirlineCardOrderBody(request.body, card, offerIds);
+    // The body with the card is built in the call and referenced nowhere else: it ends with this call.
+    return await this.amadeus.createFlightOrders(
+      context,
+      { body: airlineCardOrderBody(request.body, card, offerIds) as unknown as Body, query: request.query },
+      { redactedRequest },
+    );
   }
 
   // ---- Step 2: re-price --------------------------------------------------------------------------------------------
@@ -1093,7 +1486,7 @@ export class BookingOrchestrator {
     ctx: GatewayContext,
     prepared: Prepared,
     claim: Claimed,
-    input: CompleteCheckoutInput,
+    input: CompletionRequest,
   ): Promise<Repriced | undefined> {
     const now = this.clock.now();
     const { priced, checkout, minorUnits } = prepared;
@@ -1149,13 +1542,16 @@ export class BookingOrchestrator {
         remove: dropped.map((row) => row.id),
       },
     };
-    const expected = input.body.expectedTotal;
+    const expected = input.expectedTotal;
     const higher =
       new Money(newTotal).greaterThan(checkout.totalAmount) ||
       (expected !== undefined && new Money(newTotal).greaterThan(expected.amount));
     if (higher || dropped.length > 0) {
-      // Never booked without an extra the customer chose and paid for: the price-changed path of the contract.
-      const voided = await this.voidPayment(tenant, ctx, prepared, claim.payment);
+      // Never booked without an extra the customer chose and paid for: the price-changed path of the contract. An
+      // airline-card payment has nothing to void: it follows the checkout to the new total (failBooking).
+      const voided = isAirlineCard(prepared.payment)
+        ? false
+        : await this.voidPayment(tenant, ctx, prepared, claim.payment);
       await this.failBooking(tenant, prepared, claim, {
         code: "PRICE_CHANGED",
         voided,
@@ -1195,7 +1591,7 @@ export class BookingOrchestrator {
     ctx: GatewayContext,
     prepared: Prepared,
     claim: Claimed,
-    input: CompleteCheckoutInput,
+    input: CompletionRequest,
     travelers: AmadeusTravelers | undefined,
   ): Promise<RepriceQuote> {
     try {
@@ -1227,7 +1623,7 @@ export class BookingOrchestrator {
     ctx: GatewayContext,
     prepared: Prepared,
     claim: Claimed,
-    input: CompleteCheckoutInput,
+    input: CompletionRequest,
     travelers: AmadeusTravelers | undefined,
   ): Promise<RepriceQuote> {
     const { checkout } = prepared;
@@ -1360,10 +1756,15 @@ export class BookingOrchestrator {
     error: unknown,
   ): Promise<unknown> {
     if (error instanceof AppError && error.code === "SOLD_OUT") {
-      await this.failBooking(tenant, prepared, claim, {
-        code: "SOLD_OUT",
-        voided: await this.voidPayment(tenant, ctx, prepared, claim.payment),
-      });
+      // An airline-card payment has nothing to void: it fails with the code (the card was never sent).
+      await this.failBooking(
+        tenant,
+        prepared,
+        claim,
+        isAirlineCard(prepared.payment)
+          ? { code: "SOLD_OUT", voided: false, paymentFailed: true }
+          : { code: "SOLD_OUT", voided: await this.voidPayment(tenant, ctx, prepared, claim.payment) },
+      );
       return error;
     }
     await this.failBooking(tenant, prepared, claim, {
@@ -1386,7 +1787,12 @@ export class BookingOrchestrator {
   private async recordSending(
     prepared: Prepared,
     claim: Claimed,
-    sent: { readonly repriced: Repriced | undefined; readonly issue: boolean },
+    sent: {
+      readonly repriced: Repriced | undefined;
+      readonly issue: boolean;
+      /** The airline card about to be sent (OBE-051); `undefined` for a Stripe payment. */
+      readonly card: SensitiveCard | undefined;
+    },
   ): Promise<AppError | undefined> {
     return await this.tx.run(async (trx): Promise<AppError | undefined> => {
       const now = this.clock.now();
@@ -1401,7 +1807,7 @@ export class BookingOrchestrator {
           "bookings.decided_before_send",
         );
         return booking.status === "failed"
-          ? reconciledFailure(booking.id)
+          ? reconciledFailure(booking.id, sent.card !== undefined)
           : booking.status === "pending"
             ? supplierTimeout(booking.id)
             : existingBookingError(booking);
@@ -1413,7 +1819,46 @@ export class BookingOrchestrator {
           updated_at: now,
         });
       }
+      if (sent.card !== undefined) {
+        // The lock order: the booking, then the payment (OADR-0003 point 11).
+        await this.airlineCardSending(trx, claim, sent.card, sent.repriced?.total, now);
+      }
       return undefined;
+    });
+  }
+
+  /**
+   * The airline-card payment of a claim about to be sent (OBE-051): `processing`, with the brand, BIN and last 4 of the
+   * card sent (ADR-0011 (B): nothing more of the card is kept), no failure, and the amount the order holds after an
+   * accepted re-price (a lower total: the airline charges the order's).
+   */
+  private async airlineCardSending(
+    trx: TenantTransaction,
+    claim: Claimed,
+    card: SensitiveCard,
+    repricedTotal: string | undefined,
+    now: Date,
+  ): Promise<void> {
+    const payment = await this.payments.payment(trx, claim.payment.id, true);
+    if (payment === undefined || !AIRLINE_CARD_PAYABLE.has(payment.status)) {
+      throw new Error("the airline-card payment of a claim is not awaiting the card");
+    }
+    await this.payments.updatePayment(trx, payment.id, payment.version, {
+      status: "processing",
+      card_brand: card.brand(),
+      card_bin: card.bin(),
+      card_last4: card.last4(),
+      failure_code: null,
+      failure_message: null,
+      ...(repricedTotal === undefined ? {} : { amount: repricedTotal }),
+      updated_at: now,
+    });
+    await this.paymentEvent(trx, payment, {
+      type: "payment.processing",
+      statusFrom: payment.status,
+      statusTo: "processing",
+      payload: { bookingId: claim.booking.id, source: "checkout.completeWithAirlineCard" },
+      now,
     });
   }
 
@@ -1431,9 +1876,7 @@ export class BookingOrchestrator {
       net_fees_amount: amounts.fees,
       net_services_amount: repriced.netServices,
       taxes_amount: amounts.taxes,
-      markup_amount: priced.row.markupAmount,
-      markup_rule_id: priced.row.markupRuleId,
-      fees_amount: priced.row.feeAmount,
+      ...sellingPartsOf(prepared.pricingMode, priced.row),
       ancillaries_amount: repriced.ancillaries,
       total_amount: repriced.total,
       last_ticketing_date: priced.row.lastTicketingDate,
@@ -1499,9 +1942,10 @@ export class BookingOrchestrator {
       readonly priced: CheckoutPricedOffer;
       readonly repriced: Repriced | undefined;
       readonly issue: boolean;
+      readonly airline?: AirlineCardSend | undefined;
     },
   ): Promise<unknown> {
-    const { priced } = sent;
+    const { priced, airline } = sent;
     const kind = createFailureKind(error);
     const code = error instanceof AppError ? error.code : "INTERNAL_ERROR";
     this.logger.warn(
@@ -1515,13 +1959,37 @@ export class BookingOrchestrator {
       await this.failBooking(tenant, prepared, claim, { code, voided: false });
       return notSentAnswer(error);
     }
-    const voided = await this.voidPayment(tenant, ctx, prepared, claim.payment);
-    await this.failBooking(tenant, prepared, claim, { code, voided });
     const { checkout, minorUnits } = prepared;
-    return rejectionAnswer(error as AppError, {
+    const priceDetails = {
       oldPrice: this.money(checkout.totalAmount, checkout.currency, minorUnits),
       pricedOfferId: priced.row.id,
-    });
+    };
+    if (airline !== undefined) {
+      // The airline refused the order or the card: nothing to void, the payment fails with the code (OADR-0004). A
+      // declined card is counted first: failing the booking frees the checkout for the next completion, which must see
+      // this attempt (`beforeSend`). The booking fails whatever the count gave.
+      let answer: unknown;
+      try {
+        answer =
+          code === "PAYMENT_DECLINED"
+            ? await airline.declined(
+                {
+                  id: claim.booking.id,
+                  reference: claim.booking.reference,
+                  checkoutId: checkout.id,
+                  locale: prepared.settings.defaultLocale,
+                },
+                airlineCardDeclined(error as AppError),
+              )
+            : rejectionAnswer(error as AppError, priceDetails);
+      } finally {
+        await this.failBooking(tenant, prepared, claim, { code, voided: false, paymentFailed: true });
+      }
+      return answer;
+    }
+    const voided = await this.voidPayment(tenant, ctx, prepared, claim.payment);
+    await this.failBooking(tenant, prepared, claim, { code, voided });
+    return rejectionAnswer(error as AppError, priceDetails);
   }
 
   /**
@@ -1614,7 +2082,10 @@ export class BookingOrchestrator {
   /**
    * The booking is `failed` (`checkout_id` cleared so the checkout can be completed again), with its event; a voided
    * payment is `canceled` and its checkout `open` again (moved to a re-priced offer when given); a payment that was
-   * not voided keeps the checkout `payment_pending`.
+   * not voided keeps the checkout `payment_pending`. An airline-card payment (OBE-051) is never voided: it fails with
+   * the code when the airline refused the order or the card (`paymentFailed`), else it awaits the card again
+   * (`requires_payment_method`, for the checkout's total); a re-price moves the checkout (still `payment_pending`) and
+   * the payment to the new total.
    */
   private async failBooking(
     tenant: RequestTenant,
@@ -1625,12 +2096,16 @@ export class BookingOrchestrator {
       /** The provider's state after a void, `null` when the void call failed, `false` when nothing was voided. */
       readonly voided: GatewayState | null | false;
       readonly moveTo?: Repriced;
+      /** The airline card: the airline refused the order or the card, so the payment fails with `code`. */
+      readonly paymentFailed?: boolean;
     },
   ): Promise<void> {
+    const airline = isAirlineCard(prepared.payment);
     await this.tx.run(async (trx) => {
       const now = this.clock.now();
-      // The lock order: the checkout (reopened below after a void), the booking, then the payment (OADR-0003 point 11).
-      if (failure.voided !== false) {
+      // The lock order: the checkout (reopened below after a void, or moved), the booking, then the payment (OADR-0003
+      // point 11).
+      if (failure.voided !== false || (airline && failure.moveTo !== undefined)) {
         await this.checkouts.checkout(trx, prepared.checkout.id, true);
       }
       const booking = await this.repository.booking(trx, claim.booking.id, true);
@@ -1660,6 +2135,10 @@ export class BookingOrchestrator {
         requestId: this.requestId(tenant),
         now,
       });
+      if (airline) {
+        await this.airlineCardFailed(trx, prepared, claim, failure, booking.id, now);
+        return;
+      }
       if (failure.voided === false) {
         return;
       }
@@ -1683,6 +2162,60 @@ export class BookingOrchestrator {
         await this.moveCheckout(trx, prepared, failure.moveTo, now, "open");
       }
     });
+  }
+
+  /**
+   * The airline-card payment of a failed booking (`failBooking`, OBE-051), locked after the checkout and the booking:
+   * `failed` with the public code (`airline.declined` for a declined card, `payment.failed` otherwise) when the airline
+   * refused; otherwise awaiting the card again for the checkout's total, which a re-price moves with the checkout.
+   */
+  private async airlineCardFailed(
+    trx: TenantTransaction,
+    prepared: Prepared,
+    claim: Claimed,
+    failure: { readonly code: string; readonly moveTo?: Repriced; readonly paymentFailed?: boolean },
+    bookingId: string,
+    now: Date,
+  ): Promise<void> {
+    const payment = await this.payments.payment(trx, claim.payment.id, true);
+    if (payment !== undefined && failure.paymentFailed === true) {
+      await this.payments.updatePayment(trx, payment.id, payment.version, {
+        status: "failed",
+        failure_code: failure.code,
+        failure_message: null,
+        updated_at: now,
+      });
+      await this.paymentEvent(trx, payment, {
+        type: failure.code === "PAYMENT_DECLINED" ? "airline.declined" : "payment.failed",
+        statusFrom: payment.status,
+        statusTo: "failed",
+        amount: payment.amount,
+        payload: { bookingId, code: failure.code },
+        now,
+      });
+    } else if (payment !== undefined) {
+      const amount = failure.moveTo?.total ?? prepared.checkout.totalAmount;
+      const changed =
+        payment.status !== "requires_payment_method" || !new Money(payment.amount).equals(amount);
+      if (changed) {
+        await this.payments.updatePayment(trx, payment.id, payment.version, {
+          status: "requires_payment_method",
+          amount,
+          updated_at: now,
+        });
+        await this.paymentEvent(trx, payment, {
+          type: failure.moveTo === undefined ? "payment.requires_payment_method" : "payment.amount_updated",
+          statusFrom: payment.status,
+          statusTo: "requires_payment_method",
+          amount,
+          payload: { bookingId, code: failure.code },
+          now,
+        });
+      }
+    }
+    if (failure.moveTo !== undefined) {
+      await this.moveCheckout(trx, prepared, failure.moveTo, now);
+    }
   }
 
   // ---- Step 4: money -----------------------------------------------------------------------------------------------
@@ -2014,10 +2547,11 @@ export class BookingOrchestrator {
   // ---- Same-key retries (OBE-043) ----------------------------------------------------------------------------------
 
   /**
-   * The answer to a same-key retry of a checkout.complete whose stored answer is a `504` linked to its booking (the
-   * idempotency `resolveReplay` hook; see the file header): the same `504` (`replayed: true`) while the booking is
-   * `pending`, the final `502 SUPPLIER_ERROR` once it failed, else the final `201` built from the booking. `undefined`
-   * (the stored answer) for any other record, or a booking this request cannot read.
+   * The answer to a same-key retry of a checkout.complete or checkout.completeWithAirlineCard whose stored answer is a
+   * `504` linked to its booking (the idempotency `resolveReplay` hook; see the file header): the same `504`
+   * (`replayed: true`) while the booking is `pending` (an airline-card booking in the staff's review included), the
+   * final `502 SUPPLIER_ERROR` once it failed, else the final `201` built from the booking. `undefined` (the stored
+   * answer) for any other record, or a booking this request cannot read.
    */
   async replay(record: IdempotencyRecord): Promise<IdempotencyResponse | undefined> {
     if (record.resource?.type !== "booking" || record.response.status !== 504) {
@@ -2034,9 +2568,14 @@ export class BookingOrchestrator {
         return replayedTimeout(record.response);
       }
       if (booking.status === "failed") {
-        const { status, body } = toErrorEnvelope(reconciledFailure(booking.id), this.requestId(tenant), {
-          exposeSupplier: this.requestContext.isConsoleScope(),
-        });
+        const airline = record.operationId === "completeCheckoutWithAirlineCard";
+        const { status, body } = toErrorEnvelope(
+          reconciledFailure(booking.id, airline),
+          this.requestId(tenant),
+          {
+            exposeSupplier: this.requestContext.isConsoleScope(),
+          },
+        );
         return { status, headers: { "cache-control": "no-store" }, setCookie: [], body };
       }
       if (booking.checkoutId === null) {
@@ -2168,6 +2707,11 @@ export class BookingOrchestrator {
       created_at: event.now,
       updated_at: event.now,
     });
+  }
+
+  /** What `settleAirlineCardOrder` (reconcile.service.ts) writes with. */
+  private settlementDeps(): AirlineCardSettlementDeps {
+    return { bookings: this.repository, payments: this.payments, recorder: this.recorder, ids: this.ids };
   }
 
   private callContext(tenant: RequestTenant, bookingId: string, orderOffice?: string): AmadeusCallContext {

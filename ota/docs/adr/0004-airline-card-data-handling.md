@@ -3,6 +3,7 @@
 **Status:** Accepted
 **Date:** 2026-10-12
 **Deciders:** OTA backend tech lead. Decided during planning; revisit when a card vault or forwarding service can reach the Amadeus endpoint (ADR-0011 follow-up), when a 3-D Secure server is added, or after the M6 security review.
+**Revisions:** 2026-10-23 (refinements of points 5 and 6 as OBE-051 built them, proposed for the lead's confirmation; dated notes): the payment of a declined card takes the traveller's next card, a card of another brand than the quoted one (or any card before a quote) is refused before it is sent, the third decline answers the `403` itself, the limits are checked again right before the card is sent, and a suspended method answers `403 FEATURE_DISABLED` with `details.reason = "suspended"`.
 
 ## Context
 
@@ -41,11 +42,13 @@ The airline charges its own fare: the Amadeus total of the order, plus the airli
 - `payments`: `provider = 'airline'`, `method = 'airline_card'`, `capture_method = 'automatic'`, `card_brand`, `card_bin`, `card_last4`; status `captured` (amount captured = amount) when the order came back with tickets, `failed` with a public failure code on refusal, `processing` while undecided. The database CHECK `payments_airline_card_ck` refuses expiry, PSP ids and 3-D Secure data on these rows ([`../data-model.md`](../data-model.md) §3.1).
 - `payment_events`: `airline.charged`, `airline.declined`, `airline.void_expected` with amounts only.
 - Refunds are not made by Velexis: a void or a refund at the airline reverses its charge. The console refuses Stripe refunds on these payments.
+- **2026-10-23 (OBE-051, proposed).** The payment is `processing` from the moment its card is sent (with the card's brand, BIN and last 4), and the airline's charge is recorded in the same transaction as the order (`airline.charged`); an order without every ticket keeps it `processing` for the staff. The payment of a declined card is `failed` and takes the traveller's next card on the same checkout (the storefront's card page keeps its `paymentId`); a request that was not sent leaves it awaiting the card, and a re-price that raises the total before anything is sent moves it with the checkout to the new total. A card of another brand than the one the Amadeus card fee was quoted for (`checkouts.payment_brand`, kept by `checkout.updatePayment`), or any card while no card fee was quoted (no brand yet: the total holds no card fee), is refused with `409 PAYMENT_AMOUNT_MISMATCH` (`details.reason = "card_changed"`) before it is sent, so the airline never charges a fee the traveller did not see.
 
 ### 6. Abuse defence
 
 - Limits: 5 per minute per IP, 3 attempts per checkout (`t:<tenantId>:<env>:ac:chk:<checkoutId>`), 60 per hour per tenant; without Redis the route answers `503` rather than run unlimited.
 - Three declines on a checkout lock it (`403 PAYMENT_ATTEMPTS_EXCEEDED`) and alert the OTA (`staff.airline_card_alert`) and Velexis ops (`OPS_ALERT_EMAIL`). A tenant passing 20 declines in an hour has the method suspended for an hour (Redis flag) and ops are alerted.
+- **2026-10-23 (OBE-051, proposed).** An attempt is a card the airline declined: the third decline answers `403 PAYMENT_ATTEMPTS_EXCEEDED` itself and every later request on the checkout is refused before anything is sent (the limits are checked before the booking's claim and again right before the card is sent, and a decline is counted before its booking fails and frees the checkout, so a completion running at the same time as the third decline is refused too), while a card the server refuses (Luhn, expiry, brand) or a request that never sent the card is no attempt. The tenant's declines count per storefront environment in a fixed window of an hour (`t:<tenantId>:<env>:ac:declines`); the 20th sets the flag `t:<tenantId>:<env>:ac:suspended` for an hour, once (`SET NX`), and while it is set the route answers `403 FEATURE_DISABLED` with `details.reason = "suspended"`. The OTA's alert goes to its staff recipients (OADR-0013 item 5); the Velexis ops alert is the same e-mail to `OPS_ALERT_EMAIL` when the process has it, and an error log line (`payments.airline_card_attempts_exceeded`, `payments.airline_card_suspended`).
 
 ### 7. Timeouts
 

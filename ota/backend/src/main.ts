@@ -19,11 +19,16 @@ import { API_APP, loadApiConfig, type ApiConfig } from "./config";
 /** The interface the API listens on. Never a public address: Caddy is the only client. */
 export const API_HOST = "127.0.0.1";
 
+/** The JSON body limit of checkout.completeWithAirlineCard (OADR-0004 point 2): a card and a few ids fit easily. */
+export const AIRLINE_CARD_BODY_LIMIT_BYTES = 10 * 1024;
+
 /**
  * The per-route JSON body limits in bytes, by operation, where a route needs less than the 256 KB default
- * (architecture §3, step 2). The airline-card completion route adds its 10 KB here (OBE-051).
+ * (architecture §3, step 2): the 10 KB of the airline-card completion route (OBE-051).
  */
-export const JSON_BODY_LIMITS: JsonBodyLimits = Object.freeze({});
+export const JSON_BODY_LIMITS: JsonBodyLimits = Object.freeze({
+  completeCheckoutWithAirlineCard: AIRLINE_CARD_BODY_LIMIT_BYTES,
+});
 
 export interface StartApiOptions {
   /** The variables to validate instead of the process environment (tests). No `.env.local` file is read then. */

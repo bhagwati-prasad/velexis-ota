@@ -6,17 +6,29 @@
 // fixtures. The flow itself, with PostgreSQL, Redis, the stub and the fake Stripe API, is test/integration/bookings.
 import { AppError } from "@velexis/errors";
 import { describe, expect, it } from "vitest";
-import { amadeusFixtureBody, buildCreatedOrderBody } from "../../test/builders/bookings";
+import {
+  amadeusFixtureBody,
+  buildCreatedOrderBody,
+  buildOrderRequestInput,
+} from "../../test/builders/bookings";
 import { AmadeusCallError, mapAmadeusError } from "../amadeus/error-mapper";
+import { SensitiveCard } from "../payments/airline-card/sensitive-card";
 import { parseOffer, type ParsedOffer } from "../shopping/offers.mapper";
 import {
+  airlineCardDeclined,
+  airlineCardOrderBody,
   CAPTURE_RETRY_DELAY_MS,
   createFailureKind,
+  isAirlineCard,
   notSentAnswer,
   PAYMENT_JOBS,
+  reconciledFailure,
+  redactedAirlineCardOrderBody,
   REPRICE_AFTER_MS,
   rejectionAnswer,
+  sellingPartsOf,
 } from "./booking-orchestrator.service";
+import { buildCreateOrderRequest } from "./order-request.builder";
 import {
   deadlineLocalOf,
   FIRST_TICKETING_RETRY_MS,
@@ -288,5 +300,96 @@ describe("the segments recorded", () => {
     expect(plans[0]?.fareDetails).toEqual([
       { travelerId: "1", cabin: "ECONOMY", fareBasis: "ADNNALB4", brandedFare: "BASIC", class: "A" },
     ]);
+  });
+});
+
+describe("the Flight Create Orders of an airline-card booking (OBE-051)", () => {
+  // Test data only: Visa's documented test PAN and a made-up security code, holder and expiry.
+  const TEST_PAN = "4111111111111111";
+  const card = (): SensitiveCard =>
+    SensitiveCard.from({
+      brand: "VISA",
+      holderName: "Anna Berg",
+      number: TEST_PAN,
+      expiryMonth: 3,
+      expiryYear: 2098,
+      securityCode: "123",
+    });
+  const built = buildCreateOrderRequest(buildOrderRequestInput({ issue: true }));
+
+  it("pays the offers with the card: brand, holder in upper case, YYYY-MM expiry, ECOMMERCE, no 3-D Secure [OBE-051 AC1]", () => {
+    const body = airlineCardOrderBody(built.body, card(), ["1"]);
+
+    expect(body.data["formOfPayments"]).toEqual([
+      {
+        creditCard: {
+          brand: "VISA",
+          holder: "ANNA BERG",
+          number: TEST_PAN,
+          expiryDate: "2098-03",
+          securityCode: "123",
+          flightOfferIds: ["1"],
+          paymentOperationContext: { interactionCondition: "ECOMMERCE" },
+        },
+      },
+    ]);
+    // Everything else is the builder's order, which the request keeps unchanged.
+    const { formOfPayments: _sent, ...rest } = body.data;
+    const { formOfPayments: _other, ...expected } = built.body.data;
+    expect(rest).toEqual(expected);
+    expect(built.body.data["formOfPayments"]).toEqual([
+      { other: { method: expect.any(String), flightOfferIds: expect.any(Array) } },
+    ]);
+  });
+
+  it("keeps for supplier_requests a copy built from the card with the last 4 digits only: no expiry, no code", () => {
+    const redacted = redactedAirlineCardOrderBody(built.body, card(), ["1"]);
+    const text = JSON.stringify(redacted);
+
+    expect(redacted.data["formOfPayments"]).toEqual([
+      {
+        creditCard: {
+          brand: "VISA",
+          holder: "ANNA BERG",
+          number: "1111",
+          flightOfferIds: ["1"],
+          paymentOperationContext: { interactionCondition: "ECOMMERCE" },
+        },
+      },
+    ]);
+    expect(text).not.toContain(TEST_PAN);
+    expect(text).not.toContain(TEST_PAN.slice(-12));
+    expect(text).not.toContain('"123"');
+    expect(text).not.toContain("2098");
+  });
+
+  it("answers a card the airline declined 402 PAYMENT_DECLINED, the supplier issue for console scope only", () => {
+    const declined = airlineCardDeclined(httpError(400, 1304));
+
+    expect([declined.code, declined.status]).toEqual(["PAYMENT_DECLINED", 402]);
+    expect(declined.supplier).toMatchObject({ provider: "amadeus", code: 1304 });
+    expect(declined.message).not.toContain(TEST_PAN.slice(-4));
+  });
+
+  it("keeps no OTA markup and no OTA fee at the airline's price (bookings_net_pricing_ck)", () => {
+    const priced = { markupAmount: "41.20", markupRuleId: "mkr_1", feeAmount: "5.00" };
+
+    expect(sellingPartsOf("net", priced)).toEqual({
+      markup_amount: "0",
+      markup_rule_id: null,
+      fees_amount: "0",
+    });
+    expect(sellingPartsOf("markup_rules", priced)).toEqual({
+      markup_amount: "41.20",
+      markup_rule_id: "mkr_1",
+      fees_amount: "5.00",
+    });
+  });
+
+  it("tells an airline-card payment by its method, and words a failed airline-card booking for the airline", () => {
+    expect(isAirlineCard({ method: "airline_card" })).toBe(true);
+    expect(isAirlineCard({ method: "card" })).toBe(false);
+    expect(reconciledFailure("bkg_1", true).message).toContain("reversed by the airline");
+    expect(reconciledFailure("bkg_1").message).toContain("your payment was released");
   });
 });

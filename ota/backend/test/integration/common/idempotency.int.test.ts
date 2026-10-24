@@ -35,7 +35,6 @@ import {
   type IdempotencyRecord,
   type IdempotencyResource,
   type IdempotencyResponse,
-  type IdempotentInput,
 } from "../../../src/common/http/idempotency.service";
 import { IdempotencyRepository } from "../../../src/common/http/idempotency.repository";
 import { OpenApiOperation } from "../../../src/common/http/openapi-operation.decorator";
@@ -88,15 +87,9 @@ class IdempotencyProbe {
   }
 }
 
-/** OBE-051's hook as its task describes it: the card is hashed as `{brand, last4}`. */
-@Injectable()
-@IdempotencyHooksFor(["completeCheckoutWithAirlineCard"])
-class AirlineCardHooks implements IdempotencyHooks {
-  hashInput(input: IdempotentInput): unknown {
-    const { card, ...rest } = input.body as { card: { brand: string; number: string } };
-    return { ...input, body: { ...rest, card: { brand: card.brand, last4: card.number.slice(-4) } } };
-  }
-}
+// completeCheckoutWithAirlineCard's hashInput is the application's own since OBE-051
+// (AirlineCardCompletionIdempotencyHooks of src/payments/airline-card/airline-card-completion.service.ts): the probe of
+// that operation is hashed with it, the card as `{brand, last4}`. Before OBE-051 this file registered a stand-in.
 
 /** Whether the stand-in reconciliation job has decided the booking of a stored 504. */
 let decided = false;
@@ -247,7 +240,7 @@ beforeAll(async () => {
     database: db,
     redis,
     controllers: [IdempotencyProbe],
-    providers: [AirlineCardHooks, TimeoutHooks],
+    providers: [TimeoutHooks],
   });
 }, OPENAPI_SETUP_TIMEOUT_MS);
 

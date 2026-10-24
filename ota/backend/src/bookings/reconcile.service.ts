@@ -69,7 +69,14 @@
 //        or an order that cannot be read) goes to the review at the deadline;
 //      - anything else waits for the next attempt: a search before `reconcile_until` that found nothing, or that was
 //        incomplete.
-//    An airline-card booking is recorded when found but never failed automatically: OBE-051 adds its manual review.
+//    An airline-card booking (OBE-051, OADR-0004 point 7) is never failed automatically, as the airline may have charged
+//    the card: found, its order is recorded and its payment settled as checkout.completeWithAirlineCard settles it
+//    (`settleAirlineCardOrder`: `captured` with `airline.charged` when every ticket came back, else the booking's
+//    ticketing in `manual_review` and a staff alert); not found by `reconcile_until` (or no booking queue), it goes to
+//    the staff's review instead of the failure: the booking stays `pending` with its checkout and its `processing`
+//    payment, `reconcile_outcome = manual_review`, `ticketing_status = manual_review`, the staff event
+//    `booking.reconcile_manual_review` (`reason: airline_card_not_found`) and a staff alert; the scan stops. Before
+//    OBE-051 such a booking stayed `pending` without an outcome and every attempt answered `pending` (`airline_card`).
 //
 // Log lines carry ids, attempt numbers, counts and codes, never a name, a record locator of another booking or a body.
 import { Inject, Injectable } from "@nestjs/common";
@@ -118,6 +125,7 @@ import {
   type CheckoutTravelerView,
   type CreatedOrder,
   type RecordedOrder,
+  type TicketCoverage,
 } from "./order-recorder";
 import { VELEXIS_REMARK_SUBTYPE, type TicketingPolicy } from "./order-request.builder";
 import { StaffAlerts } from "./staff-alerts";
@@ -758,6 +766,128 @@ export class ReconcileRepository {
   }
 }
 
+// ---- The airline card's settlement (OBE-051) ------------------------------------------------------------------------
+
+/** The kind (dedupe key's last part) of the staff alert of an airline-card order without every ticket. */
+export const AIRLINE_CARD_NOT_TICKETED = "airline_card_not_ticketed";
+
+/** The reason and alert kind of an airline-card booking whose order was not found by `reconcile_until`. */
+export const AIRLINE_CARD_NOT_FOUND = "airline_card_not_found";
+
+/** The booking event of an airline-card order without every ticket (staff only): the staff decide. */
+export const AIRLINE_CARD_TICKETING_REVIEW_EVENT = "booking.ticketing_manual_review";
+
+/** What `settleAirlineCardOrder` writes with: the orchestration's or the reconciliation's own repositories. */
+export interface AirlineCardSettlementDeps {
+  readonly bookings: BookingsRepository;
+  readonly payments: PaymentsRepository;
+  readonly recorder: OrderRecorder;
+  readonly ids: IdGenerator;
+}
+
+/** What `settleAirlineCardOrder` did. */
+export interface AirlineCardSettlement {
+  readonly paymentId: string;
+  /** True when the airline charged the card (every ticket came back): the payment is `captured`. */
+  readonly captured: boolean;
+}
+
+/**
+ * The payment of an airline-card booking whose order was just recorded (OADR-0004 point 5; OBE-051), in the record
+ * step's transaction, which locked the checkout and the booking: the booking's airline-card payment is locked next
+ * (OADR-0003 point 11). An order with every ticket: the airline charged the card, so the payment is `captured` for its
+ * amount (`amount_authorized = amount_captured = amount`, `payment_events` `airline.charged` with the amount only),
+ * the booking's `amount_paid` is that amount and the customer's timeline says so (`payment.captured`). Otherwise the
+ * payment stays `processing` (the staff check what the airline charged) and the booking's ticketing goes to
+ * `manual_review` without a next attempt: Flight Order Issue never carries the card, which is gone (api-changes.md
+ * §3.2), so the ticketing job never takes it (it skips airline-card bookings anyway); the caller alerts the staff
+ * (AIRLINE_CARD_NOT_TICKETED). `undefined` for a booking without an airline-card payment.
+ */
+export async function settleAirlineCardOrder(
+  trx: TenantTransaction,
+  deps: AirlineCardSettlementDeps,
+  input: {
+    readonly bookingId: string;
+    readonly coverage: TicketCoverage;
+    readonly actor: { readonly type: string; readonly id: string | null };
+    /** `payment_events.source`: the API's request or the worker's job. */
+    readonly source: "api" | "system";
+    readonly requestId: string;
+    readonly now: Date;
+  },
+): Promise<AirlineCardSettlement | undefined> {
+  const { bookingId, now } = input;
+  let paymentId: string | undefined;
+  for (const id of await deps.bookings.paymentIdsOf(trx, bookingId)) {
+    const row = await deps.payments.payment(trx, id);
+    if (row?.method === "airline_card") {
+      paymentId = row.id;
+    }
+  }
+  const payment = paymentId === undefined ? undefined : await deps.payments.payment(trx, paymentId, true);
+  if (payment === undefined) {
+    return undefined;
+  }
+  if (input.coverage !== "full") {
+    await deps.bookings.updateBooking(trx, bookingId, {
+      ticketing_status: "manual_review",
+      ticketing_next_attempt_at: null,
+      ticketing_error_code: "TICKETING_FAILED",
+      ticketing_error:
+        "Flight Create Orders with issue=true and the airline card returned no ticket for every traveller; the card " +
+        "cannot be used again",
+      updated_at: now,
+    });
+    await deps.recorder.event(trx, bookingId, {
+      type: AIRLINE_CARD_TICKETING_REVIEW_EVENT,
+      actor: input.actor,
+      summary:
+        "The airline did not issue every ticket of the order paid by airline card; staff check the order and decide.",
+      data: { paymentId: payment.id, coverage: input.coverage },
+      visibleToCustomer: false,
+      requestId: input.requestId,
+      now,
+    });
+    return { paymentId: payment.id, captured: false };
+  }
+  if (payment.status !== "captured") {
+    await deps.payments.updatePayment(trx, payment.id, payment.version, {
+      status: "captured",
+      amount_authorized: payment.amount,
+      amount_captured: payment.amount,
+      authorized_at: payment.authorizedAt ?? now,
+      captured_at: payment.capturedAt ?? now,
+      failure_code: null,
+      failure_message: null,
+      updated_at: now,
+    });
+    await deps.payments.insertEvent(trx, {
+      id: deps.ids.newId("pev"),
+      payment_id: payment.id,
+      type: "airline.charged",
+      source: input.source,
+      status_from: payment.status,
+      status_to: "captured",
+      amount: payment.amount,
+      currency: payment.currency,
+      payload: JSON.stringify({ bookingId }),
+      created_at: now,
+      updated_at: now,
+    });
+    await deps.bookings.updateBooking(trx, bookingId, { amount_paid: payment.amount, updated_at: now });
+    await deps.recorder.event(trx, bookingId, {
+      type: "payment.captured",
+      actor: input.actor,
+      summary: "The airline charged your card.",
+      data: { paymentId: payment.id, amount: payment.amount },
+      visibleToCustomer: true,
+      requestId: input.requestId,
+      now,
+    });
+  }
+  return { paymentId: payment.id, captured: true };
+}
+
 // ---- The service ----------------------------------------------------------------------------------------------------
 
 /** Why an attempt did nothing. */
@@ -790,8 +920,6 @@ export type ReconcileWait =
    * RECONCILE_DEADLINE_RETRIES more attempts (lead decision (3) of 2026-10-22): the next attempt searches again.
    */
   | "deadline_retry"
-  /** Not found, but the booking is paid by airline card: no automatic failure (OBE-051 adds the manual review). */
-  | "airline_card"
   /** The order was found but could not be recorded: the next attempt tries again, staff were alerted. */
   | "record_failed";
 
@@ -818,6 +946,15 @@ export type ReconcileOutcome =
    * `reconcile_outcome = manual_review`, and the staff decide (OADR-0003 point 5).
    */
   | { readonly outcome: "manual_review"; readonly attempts: number; readonly gap: SearchGap }
+  /**
+   * An airline-card booking whose order was not found by `reconcile_until` (or without a booking queue): the staff's
+   * review instead of the failure, as the airline may have charged the card (OBE-051, OADR-0004 point 7).
+   */
+  | {
+      readonly outcome: "manual_review";
+      readonly attempts: number;
+      readonly reason: typeof AIRLINE_CARD_NOT_FOUND;
+    }
   /** Decided meanwhile by another attempt or by staff, or another attempt claimed it since: nothing written. */
   | { readonly outcome: "decided_elsewhere" | "claim_lost"; readonly attempts: number };
 
@@ -1229,7 +1366,14 @@ export class ReconcileService {
       travelers.push({ row, documents: opened.documents, discounts: opened.discounts });
     }
     const policy = POLICIES.find((entry) => entry === settings.ticketingPolicy) ?? "issue_after_payment";
-    let recorded: { readonly result: RecordedOrder; readonly issueRequested: boolean } | undefined;
+    let recorded:
+      | {
+          readonly result: RecordedOrder;
+          readonly issueRequested: boolean;
+          /** The airline-card payment's settlement (OBE-051); `undefined` for a booking paid otherwise. */
+          readonly airline: AirlineCardSettlement | undefined;
+        }
+      | undefined;
     try {
       recorded = await this.tx.run(async (trx) => {
         const now = this.clock.now();
@@ -1287,7 +1431,28 @@ export class ReconcileService {
           // One millisecond after the record step's events: the timeline orders by time, then by the random id.
           now: new Date(now.getTime() + 1),
         });
-        return { result, issueRequested: booking.issueRequested };
+        // An airline-card booking: the airline charged the card with the order (OBE-051), nothing to capture.
+        const airline = await settleAirlineCardOrder(
+          trx,
+          { bookings: this.bookings, payments: this.payments, recorder: this.recorder, ids: this.ids },
+          {
+            bookingId: id,
+            coverage: result.coverage,
+            actor: SYSTEM_ACTOR,
+            source: "system",
+            requestId,
+            now: new Date(now.getTime() + 2),
+          },
+        );
+        if (airline?.captured === false) {
+          await this.staffAlert(trx, tenant, booking, settings, AIRLINE_CARD_NOT_TICKETED, {
+            reason:
+              `The order of booking ${booking.reference}, paid by airline card, was found after a timeout without ` +
+              "every ticket. The card cannot be used again: check the order in the office, then issue the tickets " +
+              "with another form of payment or cancel the booking from the console.",
+          });
+        }
+        return { result, issueRequested: booking.issueRequested, airline };
       });
     } catch (error) {
       // The order exists at Amadeus but T2 rolled back: the booking stays pending, and the next attempt finds it again.
@@ -1310,6 +1475,18 @@ export class ReconcileService {
       { tenantId: tenant.id, bookingId: id, attempt: claim.attempts, status: result.status },
       "bookings.reconcile_found",
     );
+
+    if (recorded.airline !== undefined) {
+      // The airline card: charged by the airline with the order, which was issued at its creation (OBE-051).
+      const final = await this.tx.run((trx) => this.bookings.booking(trx, id));
+      return {
+        outcome: "found",
+        attempts: claim.attempts,
+        status: final?.status ?? result.status,
+        captured: recorded.airline.captured,
+        ticketing: null,
+      };
+    }
 
     // The money, as checkout.complete's step 4.
     const mustCapture = policy !== "manual_review" || result.coverage !== "none";
@@ -1538,8 +1715,8 @@ export class ReconcileService {
       }
       const payments = await this.repository.lockPayments(trx, id);
       if (payments.some((payment) => payment.method === "airline_card")) {
-        // The airline may have charged the card: never an automatic failure (OADR-0003 point 5; OBE-051).
-        return { outcome: "pending", attempts: claim.attempts, reason: "airline_card" };
+        // The airline may have charged the card: never an automatic failure, the staff decide (OADR-0004 point 7).
+        return await this.airlineCardReview(trx, tenant, claim, current, settings, noQueue, requestId, now);
       }
       await this.bookings.updateBooking(trx, id, {
         status: "failed",
@@ -1626,10 +1803,10 @@ export class ReconcileService {
         { tenantId: tenant.id, bookingId: id, attempt: claim.attempts, noQueue, voids: decided.voids },
         "bookings.reconcile_not_found",
       );
-    } else if (decided.outcome === "pending") {
+    } else if (decided.outcome === "manual_review") {
       this.logger.warn(
-        { bookingId: id, attempt: claim.attempts },
-        "bookings.reconcile_airline_card_undecided",
+        { tenantId: tenant.id, bookingId: id, attempt: claim.attempts, noQueue },
+        "bookings.reconcile_airline_card_review",
       );
     } else {
       this.logger.warn(
@@ -1638,6 +1815,58 @@ export class ReconcileService {
       );
     }
     return decided;
+  }
+
+  /**
+   * An airline-card booking whose order was not found by `reconcile_until` (or without a booking queue; see the file
+   * header), in the not-found decision's transaction, which locked the checkout, the booking and its payments: the
+   * staff's review, nothing else changes (the checkout stays locked by the pending booking, the payment `processing`).
+   */
+  private async airlineCardReview(
+    trx: TenantTransaction,
+    tenant: PlatformTenant,
+    claim: Claim,
+    booking: ReconcileBookingRow,
+    settings: BookingSettingsRow | undefined,
+    noQueue: boolean,
+    requestId: string,
+    now: Date,
+  ): Promise<ReconcileOutcome> {
+    await this.bookings.updateBooking(trx, booking.id, {
+      reconcile_outcome: "manual_review",
+      ticketing_status: "manual_review",
+      ticketing_next_attempt_at: null,
+      updated_at: now,
+    });
+    await this.recorder.event(trx, booking.id, {
+      type: RECONCILE_MANUAL_REVIEW_EVENT,
+      actor: SYSTEM_ACTOR,
+      statusFrom: "pending",
+      statusTo: "pending",
+      summary:
+        `The order of booking ${booking.reference}, paid by airline card, was not found by ` +
+        `${claim.until.toISOString()}; the airline may have charged the card, so the staff decide.`,
+      data: {
+        reconcileOutcome: "manual_review",
+        reason: AIRLINE_CARD_NOT_FOUND,
+        attempt: claim.attempts,
+        bookingQueue: !noQueue,
+      },
+      visibleToCustomer: false,
+      requestId,
+      now,
+    });
+    await this.staffAlert(trx, tenant, booking, settings, `reconcile_${AIRLINE_CARD_NOT_FOUND}`, {
+      reason: noQueue
+        ? `Amadeus did not confirm booking ${booking.reference}, paid by airline card, and the OTA has no booking ` +
+          "queue, so the order could not be looked for. The airline may have charged the card: look for the order " +
+          `with the remark VELEXIS ${booking.reference} in the office, then settle the booking from the console.`
+        : `Amadeus did not confirm booking ${booking.reference}, paid by airline card, and its order was not found ` +
+          "in the booking queue within 15 minutes. The airline may have charged the card: look for the order with " +
+          `the remark VELEXIS ${booking.reference} in the office, then settle the booking from the console (a ` +
+          "charge without an order is reversed by the airline).",
+    });
+    return { outcome: "manual_review", attempts: claim.attempts, reason: AIRLINE_CARD_NOT_FOUND };
   }
 
   // ---- Step 3: undecided ---------------------------------------------------------------------------------------

@@ -78,13 +78,15 @@ sequenceDiagram
 | Situation | Booking | Payment | Answer |
 |---|---|---|---|
 | Card invalid (Luhn, expired) | none | unchanged | `400 VALIDATION_FAILED` (`fieldErrors[].code`), not counted as an attempt |
-| Airline or Amadeus refuses the card | `failed` | `failed` with the public failure code | `402 PAYMENT_DECLINED`; third refusal → `403 PAYMENT_ATTEMPTS_EXCEEDED` and staff alert |
-| Price changed at re-price | `failed` (console only) | unchanged | `409 PRICE_CHANGED`; the card is discarded, the traveller confirms and types it again |
+| Airline or Amadeus refuses the card | `failed` | `failed` with the public failure code (`airline.declined`); it takes the traveller's next card | `402 PAYMENT_DECLINED`; third refusal → `403 PAYMENT_ATTEMPTS_EXCEEDED` and staff alert |
+| Price changed at re-price | `failed` (console only) | awaiting the card again, for the new total (the checkout moves to it) | `409 PRICE_CHANGED`; the card is discarded, the traveller confirms and types it again |
+| A card of another brand than the one the card fee was quoted for (`checkout.updatePayment`), or any card before a card fee was quoted | none | unchanged | `409 PAYMENT_AMOUNT_MISMATCH` (`details.reason = "card_changed"`), not counted as an attempt |
 | Sold out, data invalid | `failed` | `failed` | `409 SOLD_OUT`, `422 TRAVELER_DATA_INVALID` |
 | Order created but no tickets in the answer | `confirmed`, ticketing `manual_review` | `processing` | `201` with a warning; staff check the order (the card cannot be used again) |
 | Timeout, Amadeus `5xx` or an unreadable answer | `pending`, reconciling | `processing` | `504`; found → `201` on replay; not found → `manual_review`, never `failed` automatically |
 | Another completion's booking is `pending` | that booking | unchanged | `504 SUPPLIER_TIMEOUT` with its `bookingId` (OADR-0003 point 2); the card is never sent. The other checkout steps answer `409 CHECKOUT_BEING_COMPLETED` |
-| Repeated declines from one IP or tenant | — | — | Rate limits, staff alert `staff.airline_card_alert`, Velexis ops alert |
+| Repeated declines from one IP or tenant | — | — | Rate limits, staff alert `staff.airline_card_alert`, Velexis ops alert; 20 declines of the tenant within an hour suspend the method for an hour (`403 FEATURE_DISABLED`, `details.reason = "suspended"`) |
+| The checkout's third decline (or a suspension) counted while another completion of it is under way | `failed` (console only) | unchanged, awaiting the card | The limits are checked again right before the card is sent: `403 PAYMENT_ATTEMPTS_EXCEEDED` (or `FEATURE_DISABLED`), the card is never sent |
 
 ## 5. Tables
 

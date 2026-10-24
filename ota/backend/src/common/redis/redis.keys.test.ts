@@ -54,6 +54,8 @@ const SAMPLES: Readonly<Record<RedisKeyBuilderName, readonly unknown[]>> = {
   search: [TENANT_ID, "live", HASH],
   cxq: [TENANT_ID, "test", BOOKING_ID],
   acChk: [TENANT_ID, "live", CHECKOUT_ID],
+  acDeclines: [TENANT_ID, "test"],
+  acSuspended: [TENANT_ID, "live"],
   authfail: [TENANT_ID, "test", HASH],
 };
 
@@ -87,11 +89,21 @@ const EXPECTED: Readonly<Record<RedisKeyBuilderName, Omit<RedisKey, "key"> & { r
   search: { key: `t:${TENANT_ID}:live:search:${HASH}`, ttlSeconds: 30, kind: "tenant" },
   cxq: { key: `t:${TENANT_ID}:test:cxq:${BOOKING_ID}`, ttlSeconds: 600, kind: "tenant" },
   acChk: { key: `t:${TENANT_ID}:live:ac:chk:${CHECKOUT_ID}`, ttlSeconds: 7200, kind: "tenant" },
+  acDeclines: { key: `t:${TENANT_ID}:test:ac:declines`, ttlSeconds: 3600, kind: "tenant" },
+  acSuspended: { key: `t:${TENANT_ID}:live:ac:suspended`, ttlSeconds: 3600, kind: "tenant" },
   authfail: { key: `t:${TENANT_ID}:test:authfail:${HASH}`, ttlSeconds: 900, kind: "tenant" },
 };
 
 /** The task's list of tenant-data builders (OBE-002 step 2). */
-const TENANT_DATA_BUILDERS: readonly RedisKeyBuilderName[] = ["sf", "search", "cxq", "acChk", "authfail"];
+const TENANT_DATA_BUILDERS: readonly RedisKeyBuilderName[] = [
+  "sf",
+  "search",
+  "cxq",
+  "acChk",
+  "acDeclines",
+  "acSuspended",
+  "authfail",
+];
 
 /** What a builder of any registry returns, unchecked: the test below also feeds it broken builders. */
 interface LooseKey {

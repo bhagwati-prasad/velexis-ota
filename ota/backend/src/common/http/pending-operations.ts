@@ -34,8 +34,6 @@ export const PENDING_OPERATIONS: Readonly<Partial<Record<OtaOperationId, Pending
   updateSavedTraveler: "deferred",
   // Flights
   searchFlightAvailabilities: "deferred",
-  // Checkout and payments
-  completeCheckoutWithAirlineCard: "OBE-051",
   // Customer bookings
   getBookingAncillaries: "deferred",
   addBookingAncillaries: "deferred",

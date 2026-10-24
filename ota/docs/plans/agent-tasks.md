@@ -1285,7 +1285,8 @@ Checkout, customer accounts in cookies, Stripe on the Velexis account, the airli
   - `JSON.stringify`, template strings and `util.inspect` of a `SensitiveCard` never show the number; the redaction test covers every new path.
 - **Verify:** `pnpm --filter @velexis/logger test && pnpm --filter @velexis/ota-backend test -- payments && pnpm --filter @velexis/ota-backend test:int -- payments`
 
-### OBE-051 · Implement checkout.completeWithAirlineCard
+### OBE-051 · Implement checkout.completeWithAirlineCard ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-backend
 - **Milestone:** M3
 - **Depends on:** OBE-050, OBE-043
