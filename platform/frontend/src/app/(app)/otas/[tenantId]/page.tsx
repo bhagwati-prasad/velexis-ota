@@ -3,6 +3,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 
 import { OnboardingChecklist } from "@/components/onboarding-checklist";
+import { ConsoleLaunchNotice, OpenConsoleButton, consoleProblemOf } from "@/components/open-console-button";
 import { StatusBadge } from "@/components/status-badge";
 import { TenantBanner } from "@/components/tenant-banner";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -52,12 +53,23 @@ function SetupNotice({ tenant }: { readonly tenant: Tenant }) {
  * `billing_notice`; test mode), the storefront link `https://<primaryHost>/`, the OTA's key, the caller's role, and
  * the onboarding checklist of `getOnboarding`, each item linking to its page. The tenant comes from the layout's
  * `getTenant` (the same request's cached answer); "Edit the OTA profile" shows only to roles that may edit it.
+ * "Open console" (PFE-017) posts to the launch route handler; when a launch was refused, the handler comes back here
+ * with `?console=<problem>` and the page says why (`ConsoleLaunchNotice`: a suspension with its reason and, for a
+ * billing suspension, the billing link; set-up; the rate limit; an unavailable API).
  */
 export default async function OtaDashboardPage({
   params,
-}: Readonly<{ params: Promise<{ tenantId: string }> }>) {
+  searchParams,
+}: Readonly<{
+  params: Promise<{ tenantId: string }>;
+  searchParams?: Promise<Record<string, string | string[] | undefined>>;
+}>) {
   const { tenantId } = await params;
-  const [loaded, onboarding] = await Promise.all([requireTenant(tenantId), loadOnboarding(tenantId)]);
+  const [loaded, onboarding, query] = await Promise.all([
+    requireTenant(tenantId),
+    loadOnboarding(tenantId),
+    searchParams ?? Promise.resolve({}),
+  ]);
   if (loaded.error !== undefined) {
     // The layout renders the portal's message for this failure in place of the page.
     return null;
@@ -65,6 +77,7 @@ export default async function OtaDashboardPage({
   const { tenant } = loaded;
   const role = tenant.myRole;
   const storefrontUrl = `https://${tenant.primaryHost}/`;
+  const consoleFailure = consoleProblemOf(query);
 
   return (
     <div className="mx-auto grid max-w-4xl gap-8">
@@ -77,13 +90,19 @@ export default async function OtaDashboardPage({
           </div>
           <p className="text-muted-foreground">{OTA_DASHBOARD_STRINGS.intro}</p>
         </div>
-        {can(role, "editProfile") ? (
-          <Button asChild variant="outline">
-            <Link href={otaPath(tenant.id, "/settings")}>{OTA_DASHBOARD_STRINGS.editProfile}</Link>
-          </Button>
-        ) : null}
+        <div className="flex flex-wrap gap-2">
+          {can(role, "editProfile") ? (
+            <Button asChild variant="outline">
+              <Link href={otaPath(tenant.id, "/settings")}>{OTA_DASHBOARD_STRINGS.editProfile}</Link>
+            </Button>
+          ) : null}
+          {can(role, "openConsole") ? <OpenConsoleButton tenantId={tenant.id} /> : null}
+        </div>
       </div>
 
+      {consoleFailure === undefined ? null : (
+        <ConsoleLaunchNotice failure={consoleFailure} tenantId={tenant.id} role={role} />
+      )}
       <TenantBanner tenant={tenant} role={role} />
       <SetupNotice tenant={tenant} />
 

@@ -8,7 +8,7 @@ import { NextResponse, type NextRequest } from "next/server";
 
 import { createPlatformApi, requestIdOf } from "@/lib/api";
 import { getConfig, type PortalConfig } from "@/lib/config";
-import { NONCE_HEADER, contentSecurityPolicy, createNonce } from "@/lib/csp";
+import { NONCE_HEADER, contentSecurityPolicy, createNonce, isHandOffPath } from "@/lib/csp";
 import {
   ACCESS_TOKEN_COOKIE,
   INVITATION_COOKIE,
@@ -226,10 +226,13 @@ function redirectTo(url: URL): NextResponse {
 export async function middleware(request: NextRequest): Promise<NextResponse> {
   const settings = getConfig();
   const nonce = createNonce();
+  // The "Open console" hand-off page posts only to the OTA admin (PADR-0007 point 4). Next.js keeps this response
+  // header over a route handler's own, so the hand-off's policy is chosen here.
   const csp = contentSecurityPolicy({
     nonce,
     otaAdminUrl: settings.PUBLIC_OTA_ADMIN_URL,
     development: settings.APP_ENV === "development",
+    handOff: isHandOffPath(request.nextUrl.pathname),
   });
 
   // Caddy sets a request id on every request (ADR-0016); without a valid one (development) the request gets a fresh

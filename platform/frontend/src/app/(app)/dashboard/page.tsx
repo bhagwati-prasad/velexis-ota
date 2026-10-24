@@ -3,6 +3,7 @@ import type { Metadata } from "next";
 import { headers } from "next/headers";
 import Link from "next/link";
 
+import { OpenConsoleButton } from "@/components/open-console-button";
 import { StatusBadge } from "@/components/status-badge";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -37,7 +38,11 @@ async function planNames(): Promise<ReadonlyMap<string, string>> {
   return new Map((plans.data?.data ?? []).map((plan) => [plan.code, plan.name]));
 }
 
-/** One OTA: name (to its set-up page or overview), status, key, plan, the caller's role and its storefront. */
+/**
+ * One OTA: name (to its set-up page or overview), status, key, plan, the caller's role, its storefront and "Open
+ * console" (every role may open it, scope §1.2; the launch explains on the OTA's overview why an OTA that is not
+ * active has no console).
+ */
 function OtaCard({
   tenant,
   planName,
@@ -85,6 +90,9 @@ function OtaCard({
             </a>
           </dd>
         </dl>
+        <div className="mt-auto flex">
+          <OpenConsoleButton tenantId={tenant.id} tenantName={tenant.name} variant="outline" />
+        </div>
       </article>
     </li>
   );
@@ -92,9 +100,10 @@ function OtaCard({
 
 /**
  * `/dashboard` (README §2 Signed in): the account's OTAs (`listTenants`, oldest first) with status, plan, the
- * caller's role and the storefront link `https://<key>.<STOREFRONT_BASE_DOMAIN>/`; each name opens the OTA (its
- * set-up page while it is being set up or failed). "Create an OTA" shows only for a verified account (`getMe`); the
- * `(app)` layout already sends unverified accounts to `/verify-pending`, but the page does not rely on it.
+ * caller's role, the storefront link `https://<key>.<STOREFRONT_BASE_DOMAIN>/` and "Open console" (PFE-017); each
+ * name opens the OTA (its set-up page while it is being set up or failed). "Create an OTA" shows only for a verified
+ * account (`getMe`); the `(app)` layout already sends unverified accounts to `/verify-pending`, but the page does not
+ * rely on it.
  */
 export default async function DashboardPage() {
   const settings = getConfig();

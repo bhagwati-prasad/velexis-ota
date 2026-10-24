@@ -9,6 +9,22 @@ export const NONCE_HEADER = "x-nonce";
 /** A base64 nonce: only these characters may go into the header. */
 const NONCE = /^[A-Za-z0-9+/]{22,}={0,2}$/;
 
+/** `value` is a nonce this module accepts: base64, at least 128 bits. */
+export function isNonce(value: unknown): value is string {
+  return typeof value === "string" && NONCE.test(value);
+}
+
+/**
+ * The path of the "Open console" hand-off page (`/otas/{tenantId}/console/launch`, PADR-0007 point 4): its policy
+ * lets forms post to the OTA admin only (`handOff`).
+ */
+const HAND_OFF_PATH = /^\/otas\/[^/]+\/console\/launch$/;
+
+/** `pathname` is the hand-off page's path. */
+export function isHandOffPath(pathname: string): boolean {
+  return HAND_OFF_PATH.test(pathname);
+}
+
 /** A fresh nonce of 128 random bits, base64-encoded. */
 export function createNonce(): string {
   return Buffer.from(crypto.getRandomValues(new Uint8Array(16))).toString("base64");
@@ -24,6 +40,11 @@ export interface CspOptions {
    * `'unsafe-eval'` there, and only there.
    */
   readonly development: boolean;
+  /**
+   * The "Open console" hand-off page (PFE-017, PADR-0007 point 4): its one form posts the portal token to the OTA
+   * admin's `/sso`, so `form-action` allows the origin of `PUBLIC_OTA_ADMIN_URL` alone, not the portal itself.
+   */
+  readonly handOff?: boolean;
 }
 
 /**
@@ -33,11 +54,11 @@ export interface CspOptions {
  * - images from the portal and `data:` URLs; fonts, frames and everything else from the portal only;
  * - `connect-src 'self'`: the browser talks to the portal only (server actions), never to the API;
  * - forms post to the portal, or to the OTA admin for the SSO hand-off; Stripe pages are reached by redirects,
- *   never in frames;
+ *   never in frames; the hand-off page itself (`handOff`) posts only to the OTA admin;
  * - the portal is never framed (`frame-ancestors 'none'`), `<base>` cannot point elsewhere, no plugins.
  */
 export function contentSecurityPolicy(options: CspOptions): string {
-  if (!NONCE.test(options.nonce)) {
+  if (!isNonce(options.nonce)) {
     throw new TypeError("The CSP nonce must be a base64 string of at least 128 bits");
   }
   const otaAdminOrigin = new URL(options.otaAdminUrl).origin;
@@ -53,7 +74,7 @@ export function contentSecurityPolicy(options: CspOptions): string {
     ["img-src", "'self'", "data:"],
     ["font-src", "'self'"],
     ["connect-src", "'self'"],
-    ["form-action", "'self'", otaAdminOrigin],
+    ["form-action", ...(options.handOff === true ? [] : ["'self'"]), otaAdminOrigin],
     ["frame-ancestors", "'none'"],
     ["base-uri", "'self'"],
     ["object-src", "'none'"],

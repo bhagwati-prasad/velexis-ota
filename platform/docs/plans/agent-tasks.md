@@ -1316,7 +1316,8 @@ The OTA group builds the OTA admin and the console in M4. The platform issues th
   - Saving a default office outside `office_ids` answers `VALIDATION_FAILED`; a valid change publishes `{type: "connection", tenantId}`; a stale `If-Match` answers 412 [PF-53 AC1].
 - **Verify:** `pnpm --filter @velexis/platform-backend test && pnpm --filter @velexis/platform-backend test:int -- connections`
 
-### PFE-017 · Build the Open console launch handler and the console picker
+### PFE-017 · Build the Open console launch handler and the console picker ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-frontend
 - **Milestone:** M4
 - **Depends on:** PFE-010, PBE-039

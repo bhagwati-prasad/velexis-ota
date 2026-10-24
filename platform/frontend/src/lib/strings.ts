@@ -1511,3 +1511,45 @@ export const SECURITY_STRINGS = Object.freeze({
   rateLimited: "Too many changes in a short time. Wait a minute, then try again.",
   formExpired: "This form has expired. Reload the page and try again.",
 });
+
+// ---- Open console: the hand-off to the OTA admin and the console picker (PFE-017) ------------------------------
+
+/** "Open console" (PADR-0007): the button, the hand-off page, the picker and why a launch was refused. */
+export const CONSOLE_STRINGS = Object.freeze({
+  openConsole: "Open console",
+  /** Read after the button's visible text by screen readers, so each button of a list names its OTA. */
+  openConsoleFor: (otaName: string) => ` for ${otaName}`,
+  // The hand-off page of the launch route handler (plain HTML, no React).
+  handOffTitle: "Opening the OTA admin",
+  handOffHeading: "Opening the OTA admin…",
+  handOffFallback: "If the OTA admin does not open by itself, select Continue.",
+  handOffContinue: "Continue",
+  // `/console`: the picker the OTA admin sends people to without a session (PADR-0007 point 5).
+  pickerTitle: "Open the OTA admin",
+  pickerIntro:
+    "Choose the OTA whose console you want to open. The OTA admin opens signed in with your role in that OTA.",
+  pickerListLabel: "Your OTAs",
+  pickerSelected: "Selected",
+  pickerRole: "Your role",
+  pickerNotMember:
+    "You are not a member of the OTA the OTA admin asked for, or no longer are. Ask an owner of that OTA to invite you again, or choose one of your OTAs.",
+  pickerEmptyTitle: "You are not a member of any OTA",
+  pickerEmpty: "Create an OTA, or open the link in an invitation e-mail to join someone else's OTA.",
+  pickerDashboardLink: "Go to My OTAs",
+  pickerUnavailableTitle: "Your OTAs could not be loaded",
+  // Why the console could not be opened (the launch's redirect back to the OTA dashboard or the security page).
+  problemTitle: "The console could not be opened",
+  problems: Object.freeze({
+    provisioning: "Velexis is still setting up this OTA. Its console opens when the set-up is done.",
+    failed: "The set-up of this OTA failed, so it has no console yet. The set-up page shows what happened.",
+    suspended: "This OTA is suspended, and its console stays closed until the OTA is resumed.",
+    not_active: "This OTA is not active, so its console cannot be opened.",
+    rate_limited: "The console was opened too often in a short time. Wait a minute, then try again.",
+    unavailable: "The console could not be opened just now. Try again in a moment.",
+    mfa_required:
+      "This OTA is live, so its console needs two-factor authentication on your account. Turn it on below, then open the console again.",
+  }),
+  /** A billing suspension, for roles that cannot open the billing page. */
+  billingAskOwner: "Ask an owner or a finance member of this OTA to settle the payment.",
+  openAgain: "Open the console again",
+});

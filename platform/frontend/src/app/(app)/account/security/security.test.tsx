@@ -331,7 +331,7 @@ async function openAccount(): Promise<void> {
 /** `/account/security` for one request, inside the redirect boundary. */
 async function openSecurity(): Promise<void> {
   vi.spyOn(console, "error").mockImplementation(() => undefined);
-  const page = await SecurityPage();
+  const page = await SecurityPage({});
   render(<RedirectBoundary>{page}</RedirectBoundary>);
 }
 
@@ -1290,9 +1290,9 @@ describe("/account/security password and page", () => {
 
   it("sends an ended session to sign-in and back, and keeps the other sections when a list fails", async () => {
     routes({ "GET /v1/me/sessions": () => apiError("UNAUTHENTICATED", 401) });
-    await expect(SecurityPage()).rejects.toThrow("NEXT_REDIRECT /sign-in?next=%2Faccount%2Fsecurity");
+    await expect(SecurityPage({})).rejects.toThrow("NEXT_REDIRECT /sign-in?next=%2Faccount%2Fsecurity");
     routes({ "GET /v1/me": () => apiError("TOKEN_EXPIRED", 401) });
-    await expect(SecurityPage()).rejects.toThrow("NEXT_REDIRECT /sign-in?next=%2Faccount%2Fsecurity");
+    await expect(SecurityPage({})).rejects.toThrow("NEXT_REDIRECT /sign-in?next=%2Faccount%2Fsecurity");
 
     routes({ "GET /v1/me/sessions": () => apiError("SERVICE_UNAVAILABLE", 503) });
     await openSecurity();
@@ -1315,7 +1315,7 @@ describe("/account/security password and page", () => {
 
     beforeEach(async () => {
       routes({ "GET /v1/me": () => json(account(MFA_ON), 200) });
-      rendered = await serverRenderAndHydrate(await SecurityPage());
+      rendered = await serverRenderAndHydrate(await SecurityPage({}));
     }, WARM_UP_TIMEOUT_MS);
 
     afterEach(() => {
