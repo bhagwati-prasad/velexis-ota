@@ -1520,8 +1520,8 @@ export class CancellationRecorder {
 
   /**
    * A staff alert (`staff.manual_review`) through StaffAlerts (staff-alerts.ts): to `ops_alert_email`, else the owners,
-   * else, in the worker only, OPS_ALERT_EMAIL (notifications/staff-recipients.ts); skipped and logged without one, as
-   * is a call the outbox refuses. Once per booking and kind.
+   * else OPS_ALERT_EMAIL (both processes since FIX-W28-NOTIFY; notifications/staff-recipients.ts); skipped and logged
+   * without any, as is a call the outbox refuses. Once per booking and kind.
    */
   private async staffAlert(
     trx: TenantTransaction,
