@@ -12,7 +12,8 @@
 //   - `brand()`, `bin()` (first 6 digits) and `last4()` are the only readers: what ADR-0011 (B) allows to be kept;
 //   - `toAmadeusCreditCard()` is the only method that returns the full values, for the Amadeus request body alone
 //     (`formOfPayments[].creditCard`, OBE-051), and `toRedactedCreditCard()` the copy that may be persisted with the
-//     supplier request (brand, holder and last 4; no security code, no expiry);
+//     supplier request (brand and last 4; no holder, no expiry, no security code: FIX-W29-SECURITY, lead decision (1)
+//     of 2026-10-24, every stored or logged copy keeps at most brand, BIN and last 4);
 //   - `discard()` blanks the fields once the request is done; every reader refuses a discarded card.
 //
 // Nothing here logs, stores or throws a value: a malformed input is refused with the name of the field only.
@@ -48,10 +49,12 @@ export interface AmadeusCreditCard {
   readonly securityCode: string;
 }
 
-/** The copy of the card that may be persisted with a supplier request: no security code, no expiry, last 4 only. */
+/**
+ * The copy of the card that may be persisted with a supplier request: the brand and the last 4 digits only (no holder,
+ * no expiry, no security code).
+ */
 export interface RedactedCreditCard {
   readonly brand: string;
-  readonly holder: string;
   /** The last 4 digits. */
   readonly number: string;
 }
@@ -144,10 +147,10 @@ export class SensitiveCard {
     };
   }
 
-  /** The persisted copy of the card in a redacted supplier request: brand, holder and the last 4 digits. */
+  /** The persisted copy of the card in a redacted supplier request: the brand and the last 4 digits. */
   toRedactedCreditCard(): RedactedCreditCard {
     this.#check();
-    return { brand: this.#brand, holder: this.#holderName.toUpperCase(), number: this.last4() };
+    return { brand: this.#brand, number: this.last4() };
   }
 
   /** Blanks the card once the request is done (OBE-051's `finally`); every reader refuses it afterwards. */

@@ -825,11 +825,11 @@ describe("a card the airline charges (stub success)", () => {
         },
       },
     ]);
+    // Brand and last 4 only: no holder, no expiry, no security code (FIX-W29-SECURITY).
     expect((sent?.redacted as { data: { formOfPayments: unknown[] } }).data.formOfPayments).toEqual([
       {
         creditCard: {
           brand: "VISA",
-          holder: "ANNA BERG",
           number: "1111",
           flightOfferIds: offerIds,
           paymentOperationContext: { interactionCondition: "ECOMMERCE" },
@@ -848,6 +848,121 @@ describe("a card the airline charges (stub success)", () => {
     expect(amadeusCalls("createFlightOrders")).toHaveLength(1);
     expectNoCard(stored, "the tenant's rows");
     expectNoCard(logs, "the API's log lines");
+  });
+});
+
+describe("the card holder and the expiry, also when Amadeus echoes them (FIX-W29-SECURITY)", () => {
+  // A holder and an expiry month used by no other scenario, so a match can only come from this completion.
+  const HOLDER = "Ingrid Solberg";
+  const EXPIRY_MONTH = 10;
+  const expiry = `${EXPIRY_YEAR}-${String(EXPIRY_MONTH).padStart(2, "0")}`;
+  let answer: Answer;
+  let echoes = 0;
+  let rows: {
+    readonly supplierRequests: Array<{ request: string | null; response: string | null }>;
+    readonly booking: { formOfPayments: string; snapshot: string | null };
+    readonly idempotency: string;
+  };
+  let stored: string;
+  let logs: string;
+
+  beforeAll(async () => {
+    await resetRateLimits();
+    const paid = await airlineCheckout();
+    // Amadeus may echo the card it charged with its holder and expiry (the stub masks the number and leaves both
+    // out): every answer of this completion that holds forms of payment gets them, as the airline would send them.
+    const client = api.app.get(AmadeusClient, { strict: false }) as unknown as {
+      fetch: (url: string, init?: RequestInit) => Promise<Response>;
+    };
+    const realFetch = client.fetch;
+    const spy = vi.spyOn(client, "fetch").mockImplementation(async (url, init) => {
+      const response = await realFetch(url, init);
+      const text = await response.text();
+      let body: { data?: { formOfPayments?: Array<{ creditCard?: Record<string, unknown> }> } };
+      try {
+        body = JSON.parse(text) as typeof body;
+      } catch {
+        return new Response(text, { status: response.status, headers: response.headers });
+      }
+      for (const entry of body.data?.formOfPayments ?? []) {
+        if (entry.creditCard !== undefined) {
+          entry.creditCard = { ...entry.creditCard, holder: HOLDER.toUpperCase(), expiryDate: expiry };
+          echoes += 1;
+        }
+      }
+      return new Response(JSON.stringify(body), { status: response.status, headers: response.headers });
+    });
+    try {
+      answer = await complete(paid, { card: cardOf({ holderName: HOLDER, expiryMonth: EXPIRY_MONTH }) });
+    } finally {
+      spy.mockRestore();
+    }
+    const bookingId = completionOf(answer).booking.id;
+    rows = await alphaTx(async (trx) => ({
+      supplierRequests: await trx
+        .selectFrom("supplier_requests")
+        .select([
+          sql<string | null>`request_body::text`.as("request"),
+          sql<string | null>`response_body::text`.as("response"),
+        ])
+        .where("booking_id", "=", bookingId)
+        .execute(),
+      booking: await trx
+        .selectFrom("bookings")
+        .select([
+          sql<string>`form_of_payments::text`.as("formOfPayments"),
+          sql<string | null>`order_snapshot::text`.as("snapshot"),
+        ])
+        .where("id", "=", bookingId)
+        .executeTakeFirstOrThrow(),
+      idempotency:
+        (
+          await sql<{
+            text: string | null;
+          }>`SELECT string_agg(t::text, ' ') AS text FROM idempotency_keys t`.execute(trx)
+        ).rows[0]?.text ?? "",
+    }));
+    stored = await storedText();
+    logs = api.sink.text();
+  }, SCENARIO_TIMEOUT_MS);
+
+  it("[FIX-W29-SECURITY AC2] completes the airline-card checkout while Amadeus echoes the holder and the expiry", () => {
+    expect(answer.status).toBe(201);
+    expect(completionOf(answer).booking.status).toBe("ticketed");
+    expect(echoes).toBeGreaterThan(0);
+    expect(rows.supplierRequests.length).toBeGreaterThan(0);
+  });
+
+  it("[FIX-W29-SECURITY AC2] keeps brand and last 4 of the card in bookings.form_of_payments and order_snapshot, without holder or expiry", () => {
+    /** The `creditCard` objects of a list of forms of payment. */
+    const cardsOf = (entries: unknown): unknown[] =>
+      (Array.isArray(entries) ? (entries as Array<{ creditCard?: unknown }>) : []).flatMap((entry) =>
+        entry.creditCard === undefined ? [] : [entry.creditCard],
+      );
+    const snapshot = JSON.parse(rows.booking.snapshot ?? "{}") as { formOfPayments?: unknown };
+    for (const [what, cards] of [
+      ["bookings.form_of_payments", cardsOf(JSON.parse(rows.booking.formOfPayments))],
+      ["bookings.order_snapshot", cardsOf(snapshot.formOfPayments)],
+    ] as const) {
+      expect(cards, what).toEqual([{ brand: "VISA", number: "1111", flightOfferIds: expect.any(Array) }]);
+    }
+  });
+
+  it("[FIX-W29-SECURITY AC2] finds no holder name or expiry in supplier_requests, bookings, order_snapshot, idempotency rows or the logs", () => {
+    const texts: Array<readonly [string, string]> = [
+      ["supplier_requests", rows.supplierRequests.map((row) => `${row.request} ${row.response}`).join(" ")],
+      ["bookings.form_of_payments", rows.booking.formOfPayments],
+      ["bookings.order_snapshot", rows.booking.snapshot ?? ""],
+      ["idempotency_keys", rows.idempotency],
+      ["the tenant's rows", stored],
+      ["the API's log lines", logs],
+    ];
+    for (const [what, text] of texts) {
+      expect(text, what).not.toContain(HOLDER);
+      expect(text, what).not.toContain(HOLDER.toUpperCase());
+      expect(text, what).not.toContain(expiry);
+      expectNoCard(text, what);
+    }
   });
 });
 

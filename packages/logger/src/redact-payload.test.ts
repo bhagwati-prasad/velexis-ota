@@ -74,19 +74,134 @@ describe("redactPayload", () => {
     expect(input).toEqual(snapshot);
     expect(output).not.toBe(input);
     const data = output["data"] as Json;
+    // The holder and the expiry go too since FIX-W29-SECURITY (lead decision (1) of 2026-10-24): brand and last 4 stay.
     expect(data["formOfPayments"]).toEqual([
       {
         creditCard: {
           brand: "VISA",
-          holder: "JORGE GONZALES",
           number: "1111",
-          expiryDate: "2030-12",
           flightOfferIds: ["1"],
         },
       },
     ]);
     expect(JSON.stringify(output)).not.toContain(TEST_PAN);
     expect(JSON.stringify(output)).not.toContain("securityCode");
+  });
+
+  it("drops a card's holder and expiry in every spelling, in a card and anywhere below formOfPayments, at any depth [FIX-W29-SECURITY AC2]", () => {
+    // What Amadeus echoes of the card it charged (number masked by Amadeus), the airline-card body's spellings, a
+    // virtual card of a B2B wallet, and a holder nested deeper inside a form of payment.
+    const formOfPayments = (): Json[] => [
+      {
+        creditCard: {
+          brand: "VISA",
+          holder: "JORGE GONZALES",
+          number: "XXXXXXXXXXXX1111",
+          expiryDate: "2030-12",
+          flightOfferIds: ["1"],
+        },
+      },
+      {
+        b2bWallet: {
+          cardId: "1",
+          virtualCreditCardDetails: { brand: "VISA", holder: "JORGE GONZALES", expiry_date: "2030-12" },
+          reportingData: [{ name: "holder", value: "x" }],
+        },
+      },
+      {
+        other: {
+          method: "ACCOUNT",
+          payer: { holderName: "JORGE GONZALES", expiryMonth: 12, expiryYear: 2030 },
+        },
+      },
+    ];
+    const kept: Json[] = [
+      { creditCard: { brand: "VISA", number: "1111", flightOfferIds: ["1"] } },
+      {
+        b2bWallet: {
+          cardId: "1",
+          virtualCreditCardDetails: { brand: "VISA" },
+          reportingData: [{ name: "holder", value: "x" }],
+        },
+      },
+      { other: { method: "ACCOUNT", payer: {} } },
+    ];
+    const input = deepFreeze({
+      // An order's data as order_snapshot keeps it, the column bookings.form_of_payments, a reply nested deeper
+      // (supplier_requests.response_body), a card outside a form of payment, and the completion body's card.
+      data: { type: "flight-order", id: "eJzTd9f3NjIJdgMADeQCtg", formOfPayments: formOfPayments() },
+      form_of_payments: formOfPayments(),
+      reply: { body: { data: { formOfPayments: formOfPayments() } } },
+      payment: {
+        creditCard: { brand: "VISA", holder: "JORGE GONZALES", expiryDate: "2030-12", number: TEST_PAN },
+      },
+      card: {
+        brand: "VISA",
+        holderName: "Jorge Gonzales",
+        number: TEST_PAN,
+        expiryMonth: 12,
+        expiryYear: 2030,
+      },
+    });
+
+    const output = redactPayload(input);
+
+    expect(output).toEqual({
+      data: { type: "flight-order", id: "eJzTd9f3NjIJdgMADeQCtg", formOfPayments: kept },
+      form_of_payments: kept,
+      reply: { body: { data: { formOfPayments: kept } } },
+      payment: { creditCard: { brand: "VISA", number: "1111" } },
+      card: { brand: "VISA", number: "1111" },
+    });
+    const text = JSON.stringify(output);
+    for (const value of ["JORGE GONZALES", "Jorge Gonzales", "2030-12", "2030", TEST_PAN]) {
+      expect(text).not.toContain(value);
+    }
+    expect(redactPayload(output)).toEqual(output);
+  });
+
+  it("drops a holder and an expiry nested inside a card, in a form of payment and outside one [FIX-W29-SECURITY AC2]", () => {
+    // A card that carries the holder and the expiry one or two objects further down (an issuer's or a 3-D Secure
+    // block), below formOfPayments and as a card of its own: neither copy keeps them.
+    const nested = (): Json => ({
+      brand: "VISA",
+      number: TEST_PAN,
+      paymentOperationContext: {
+        interactionCondition: "ECOMMERCE",
+        cardholder: { holder: "JORGE GONZALES", holderName: "Jorge Gonzales", expiry_date: "2030-12" },
+      },
+      issuer: { expiryMonth: 12, expiryYear: 2030, country: "ES" },
+      flightOfferIds: ["1"],
+    });
+    const kept: Json = {
+      brand: "VISA",
+      number: "1111",
+      paymentOperationContext: { interactionCondition: "ECOMMERCE", cardholder: {} },
+      issuer: { country: "ES" },
+      flightOfferIds: ["1"],
+    };
+
+    const output = redactPayload(
+      deepFreeze({ data: { formOfPayments: [{ creditCard: nested() }] }, payment: { card: nested() } }),
+    );
+
+    expect(output).toEqual({ data: { formOfPayments: [{ creditCard: kept }] }, payment: { card: kept } });
+    const text = JSON.stringify(output);
+    for (const value of ["JORGE GONZALES", "Jorge Gonzales", "2030-12", "2030", TEST_PAN]) {
+      expect(text).not.toContain(value);
+    }
+  });
+
+  it("keeps the expiry of an identity document and the holder flag of a traveller document [FIX-W29-SECURITY AC2]", () => {
+    const traveler = {
+      documents: [{ documentType: "PASSPORT", number: "PX48213579", expiryDate: "2030-04-14", holder: true }],
+    };
+
+    expect(redactPayload({ travelers: [traveler] })).toEqual({
+      travelers: [
+        { documents: [{ documentType: "PASSPORT", number: "3579", expiryDate: "2030-04-14", holder: true }] },
+      ],
+    });
   });
 
   it("returns a deep copy that shares no object with the input [X-003 AC3]", () => {

@@ -12,6 +12,9 @@
 // Header names are lower case and every name maps to the list of its values as received, so a header that a
 // proxy appended instead of replacing shows up as two values.
 //
+// GET /redirect answers 302 instead, with `Location: /landing?<the request's own query>` and the same echo, so the
+// smoke test can show which query values of a redirect's `Location` reach Caddy's access log (FIX-W29-SECURITY).
+//
 // On the platform API port (3100) it also plays Caddy's on-demand TLS `ask` endpoint (ADR-0018):
 // GET /internal/tls/ask?domain=<host> answers 200 only for the hosts of ECHO_ASK_ALLOW (comma-separated, default
 // acme.ota.localhost) and 404 for anything else, and prints one line `ask <host> <status>` to stdout.
@@ -23,6 +26,7 @@ import { createServer } from "node:http";
 const HOST = "127.0.0.1";
 const ASK_PORT = 3100;
 const ASK_PATH = "/internal/tls/ask";
+const REDIRECT_PATH = "/redirect";
 
 const ports = (process.env.ECHO_PORTS ?? "3000,3001,3002,3100,4000")
   .split(",")
@@ -39,11 +43,12 @@ if (ports.length === 0 || ports.some((p) => !Number.isInteger(p) || p < 1 || p >
   process.exit(2);
 }
 
-function send(res, status, body) {
+function send(res, status, body, headers = {}) {
   const text = `${JSON.stringify(body)}\n`;
   res.writeHead(status, {
     "content-type": "application/json",
     "content-length": Buffer.byteLength(text),
+    ...headers,
   });
   res.end(text);
 }
@@ -61,12 +66,12 @@ function handler(port) {
         send(res, status, { ask: domain, allowed: status === 200 });
         return;
       }
-      send(res, 200, {
-        port,
-        method: req.method,
-        url: req.url,
-        headers: req.headersDistinct,
-      });
+      const echo = { port, method: req.method, url: req.url, headers: req.headersDistinct };
+      if (req.method === "GET" && url.pathname === REDIRECT_PATH) {
+        send(res, 302, echo, { location: `/landing${url.search}` });
+        return;
+      }
+      send(res, 200, echo);
     });
   };
 }

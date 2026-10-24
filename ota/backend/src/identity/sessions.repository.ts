@@ -122,6 +122,21 @@ export class SessionsRepository {
       .executeTakeFirst();
   }
 
+  /**
+   * Customer `customerId`'s state that decides whether it may hold a session (`mayHoldSession`), read without a lock:
+   * the customer guard's check of every customer-scope request (identity/customer-access.ts, FIX-W29-SECURITY).
+   */
+  async findSessionCustomer(
+    trx: TenantTransaction,
+    customerId: string,
+  ): Promise<SessionCustomer | undefined> {
+    return trx
+      .selectFrom("customers")
+      .select(["id", "status", "deleted_at"])
+      .where("id", "=", customerId)
+      .executeTakeFirst();
+  }
+
   /** Takes the customer's `FOR UPDATE` lock for the rest of `trx` (before revoking every family of it). */
   async lockCustomerForUpdate(
     trx: TenantTransaction,

@@ -76,6 +76,11 @@ export const AIRLINE_CARD_DECLINES_TTL_SECONDS = HOUR;
 export const AIRLINE_CARD_SUSPENSION_TTL_SECONDS = HOUR;
 /** Customer sign-in lockout counter (ADR-0008). */
 export const SIGN_IN_LOCKOUT_TTL_SECONDS = 15 * MINUTE;
+/**
+ * Whether a signed-in customer may still act (FIX-W29-SECURITY, ADR-0008): how long the customer guard trusts the
+ * database's last answer, and how long a revocation keeps it from trusting a cached one.
+ */
+export const CUSTOMER_ACCESS_TTL_SECONDS = MINUTE;
 /** Amadeus tokens are stored until `expires_in` minus this margin (ADR-0012, OADR-0001 point 5). */
 export const AMADEUS_TOKEN_EXPIRY_MARGIN_SECONDS = 60;
 /** `expires_in` of an Amadeus `client_credentials` token, used when a reader builds the key without a response. */
@@ -111,6 +116,7 @@ const PARTS = {
   keyId: { pattern: prefixedId("key"), rule: "an API key id (key_ + ULID)" },
   bookingId: { pattern: prefixedId("bkg"), rule: "a booking id (bkg_ + ULID)" },
   checkoutId: { pattern: prefixedId("chk"), rule: "a checkout id (chk_ + ULID)" },
+  customerId: { pattern: prefixedId("cus"), rule: "a customer id (cus_ + ULID)" },
   amadeusAccountId: { pattern: prefixedId("ama"), rule: "an Amadeus account id (ama_ + ULID)" },
   credentialId: {
     pattern: prefixedId("ama|sc"),
@@ -454,6 +460,20 @@ export const redisKeys = Object.freeze({
     segments: ["authfail", part("authfail", "emailSha256", "sha256", emailSha256)],
     ttlSeconds: SIGN_IN_LOCKOUT_TTL_SECONDS,
   })),
+  /**
+   * `t:<tenantId>:<env>:cust:<customerId>`: whether a signed-in customer may still act (FIX-W29-SECURITY, ADR-0008
+   * note of 2026-10-24; identity/customer-access.ts). `1`: the database said so at most a minute ago (the customer
+   * guard writes it with `NX`); `0`: account.delete (or a path that disables a customer) revoked it after its commit,
+   * in both environments, and the guard reads the database for as long as it lives and caches nothing over it.
+   */
+  customerAccess: tenantBuilder(
+    "customerAccess",
+    "t:<tenantId>:<env>:cust:<customerId>",
+    (customerId: string) => ({
+      segments: ["cust", part("customerAccess", "customerId", "customerId", customerId)],
+      ttlSeconds: CUSTOMER_ACCESS_TTL_SECONDS,
+    }),
+  ),
 });
 
 /** The names of the builders. */

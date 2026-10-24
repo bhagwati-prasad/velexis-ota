@@ -379,12 +379,11 @@ describe("the request hash", () => {
         travelers: [{ documents: [{ documentType: "PASSPORT", number: passport, birthPlace: "Bergen" }] }],
       },
     });
+    // The card counts by its brand and last 4: its holder and expiry are no part of it (FIX-W29-SECURITY).
     const masked = {
       ...issue("", "", ""),
       body: {
-        formOfPayments: [
-          { creditCard: { brand: "VISA", holder: "ANNA BERG", number: "4242", expiryDate: "2030-12" } },
-        ],
+        formOfPayments: [{ creditCard: { brand: "VISA", number: "4242" } }],
         travelers: [{ documents: [{ documentType: "PASSPORT", number: "7731" }] }],
       },
     };

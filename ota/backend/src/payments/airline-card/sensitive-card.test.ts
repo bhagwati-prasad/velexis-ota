@@ -151,14 +151,13 @@ describe("the readers of a SensitiveCard", () => {
     });
   });
 
-  it("give a redacted copy for a persisted supplier request: last 4, no security code, no expiry", () => {
+  it("give a redacted copy for a persisted supplier request: brand and last 4, no holder, no expiry, no security code [FIX-W29-SECURITY AC2]", () => {
     const redacted = SensitiveCard.from(input()).toRedactedCreditCard();
 
-    expect(redacted).toEqual({ brand: "VISA", holder: "JORGE GONZALES", number: "1111" });
+    expect(redacted).toEqual({ brand: "VISA", number: "1111" });
     const text = JSON.stringify(redacted);
-    expect(text).not.toContain(TEST_PAN_LAST_12);
-    expect(text).not.toContain(`"${TEST_CVV}"`);
-    expect(text).not.toContain("2030");
+    expectNothingOfTheCard(text);
+    expect(text).not.toMatch(/holder|expiry/i);
   });
 
   it("refuse a discarded card, which still serialises as [redacted card]", () => {

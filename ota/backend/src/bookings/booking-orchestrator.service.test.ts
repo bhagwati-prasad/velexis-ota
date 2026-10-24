@@ -342,7 +342,7 @@ describe("the Flight Create Orders of an airline-card booking (OBE-051)", () => 
     ]);
   });
 
-  it("keeps for supplier_requests a copy built from the card with the last 4 digits only: no expiry, no code", () => {
+  it("keeps for supplier_requests a copy built from the card with the brand and the last 4 digits only: no holder, no expiry, no code [FIX-W29-SECURITY AC2]", () => {
     const redacted = redactedAirlineCardOrderBody(built.body, card(), ["1"]);
     const text = JSON.stringify(redacted);
 
@@ -350,7 +350,6 @@ describe("the Flight Create Orders of an airline-card booking (OBE-051)", () => 
       {
         creditCard: {
           brand: "VISA",
-          holder: "ANNA BERG",
           number: "1111",
           flightOfferIds: ["1"],
           paymentOperationContext: { interactionCondition: "ECOMMERCE" },
@@ -361,6 +360,7 @@ describe("the Flight Create Orders of an airline-card booking (OBE-051)", () => 
     expect(text).not.toContain(TEST_PAN.slice(-12));
     expect(text).not.toContain('"123"');
     expect(text).not.toContain("2098");
+    expect(text).not.toContain("ANNA BERG");
   });
 
   it("answers a card the airline declined 402 PAYMENT_DECLINED, the supplier issue for console scope only", () => {

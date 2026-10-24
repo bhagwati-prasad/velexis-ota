@@ -27,7 +27,15 @@
 // A verified token makes the customer the request's actor (`TenantContext.setActor`, `customer`/`cus_…`) and puts
 // `{customerId, sessionId, accessTokenExpiresAt}` into the request context (`CustomerContext`), where services read
 // it. Tokens are stateless for their 15 minutes (ADR-0008 "Access tokens"): revoking a session stops its refresh
-// token, and sign-out, password change and account deletion also clear the edge's cookies.
+// token, and sign-out, password change and account deletion also clear the edge's cookies. One thing is checked on
+// every request all the same (FIX-W29-SECURITY, ADR-0008's note of 2026-10-24): the token's customer must still be
+// allowed to hold a session, neither deleted nor disabled (`CustomerAccess.mayAct`: a Redis key cached for a minute,
+// revoked by account.delete, read from the database when missing or revoked or when Redis cannot answer). A token of
+// such a customer is refused with `401 UNAUTHENTICATED` (logged with the reason `customer_inactive`), the answer
+// account.* gives it (OBE-035), on every operation, an optional one included, but account.delete
+// (`INACTIVE_CUSTOMER_OPERATIONS`): its idempotent replay answers the stored deletion to the customer that made it, so a
+// client whose answer was lost learns that its account is deleted, and a new deletion is refused by the service with
+// the same `401 UNAUTHENTICATED`.
 //
 // In console scope (the scope guard marked it: a `console:automation` key, later a staff token) the bearer token is a
 // staff token, which the staff guards of OBE-059 and OBE-060 check; this guard leaves such requests alone.
@@ -37,6 +45,7 @@ import { AppError } from "@velexis/errors";
 import type { Request } from "express";
 import { ClsService } from "nestjs-cls";
 import { InjectPinoLogger, PinoLogger } from "nestjs-pino";
+import { CustomerAccess } from "../../identity/customer-access";
 import { bearerTokenOf, TokenService } from "../../identity/token.service";
 import { CallerContext } from "../../tenancy/caller-resolver";
 import { TenantContext } from "../../tenancy/tenant-context";
@@ -72,6 +81,14 @@ const NONE: CustomerRequirements = Object.freeze({ key: "none", edge: "none" });
  * refresh token when the access token has expired. Every other operation answers `401 TOKEN_EXPIRED`.
  */
 export const EXPIRED_TOKEN_AS_GUEST: ReadonlySet<string> = new Set(["signOut"]);
+
+/**
+ * The operations on which the valid token of a customer that may no longer act (deleted or disabled) still reaches the
+ * handler: account.delete, whose idempotent replay answers the stored deletion to the customer that made it (OBE-035);
+ * anything else of it is refused by AccountService with `401 UNAUTHENTICATED`. Every other operation refuses such a
+ * token in the guard (FIX-W29-SECURITY).
+ */
+export const INACTIVE_CUSTOMER_OPERATIONS: ReadonlySet<string> = new Set(["deleteAccount"]);
 
 const isObject = (value: unknown): value is Record<string, unknown> =>
   value !== null && typeof value === "object" && !Array.isArray(value);
@@ -197,6 +214,7 @@ export class CustomerGuard implements CanActivate {
     private readonly context: RequestContext,
     private readonly tokens: TokenService,
     private readonly customers: CustomerContext,
+    private readonly access: CustomerAccess,
     openApi: OpenApiDocument,
     @InjectPinoLogger(CustomerGuard.name) private readonly logger: PinoLogger,
   ) {
@@ -253,6 +271,10 @@ export class CustomerGuard implements CanActivate {
       throw new AppError(verdict.reason === "expired" ? "TOKEN_EXPIRED" : "UNAUTHENTICATED");
     }
     const { sub, sid, exp } = verdict.claims;
+    if (!INACTIVE_CUSTOMER_OPERATIONS.has(operationId) && !(await this.access.mayAct(sub))) {
+      this.logger.info({ reason: "customer_inactive", callerType: caller.type }, "customer.token_refused");
+      throw new AppError("UNAUTHENTICATED");
+    }
     this.customers.set({ customerId: sub, sessionId: sid, accessTokenExpiresAt: new Date(exp * 1000) });
     this.tenants.setActor({ type: "customer", id: sub });
     return true;

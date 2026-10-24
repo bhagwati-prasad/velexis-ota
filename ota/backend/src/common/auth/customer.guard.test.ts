@@ -16,6 +16,7 @@ import { beforeAll, describe, expect, it } from "vitest";
 import { testApiCredentials } from "../../../test/helpers/api-env";
 import { OPENAPI_SETUP_TIMEOUT_MS } from "../../../test/helpers/openapi";
 import type { ApiConfig } from "../../config";
+import type { CustomerAccess } from "../../identity/customer-access";
 import { ACCESS_TOKEN_TTL_SECONDS, CLOCK_SKEW_SECONDS, TokenService } from "../../identity/token.service";
 import type { CallerContext, EdgeCaller, KeyCaller, Caller } from "../../tenancy/caller-resolver";
 import type { ContextActor, RequestTenant, TenantContext } from "../../tenancy/tenant-context";
@@ -62,9 +63,17 @@ class Handlers {
   signIn(): void {}
   signOut(): void {}
   getBooking(): void {}
+  deleteAccount(): void {}
   unbound(): void {}
 }
-for (const operationId of ["getSession", "createFlightSearch", "signIn", "signOut", "getBooking"] as const) {
+for (const operationId of [
+  "getSession",
+  "createFlightSearch",
+  "signIn",
+  "signOut",
+  "getBooking",
+  "deleteAccount",
+] as const) {
   Reflect.defineMetadata(OPENAPI_OPERATION, operationId, Handlers.prototype[operationId]);
 }
 type HandlerName = keyof Handlers;
@@ -85,6 +94,8 @@ interface Harness {
   readonly refusals: unknown[];
   /** How often it recorded an expired token that it let through as none. */
   readonly expired: { count: number };
+  /** The customers whose access the guard checked (`CustomerAccess.mayAct`), in order. */
+  readonly accessChecks: string[];
 }
 
 interface HarnessOptions {
@@ -92,6 +103,8 @@ interface HarnessOptions {
   readonly tenantId?: string;
   readonly consoleScope?: boolean;
   readonly clock?: FakeClock;
+  /** What `CustomerAccess.mayAct` answers: the customer may still act (default), or was deleted or disabled. */
+  readonly mayAct?: boolean;
 }
 
 function harness(options: HarnessOptions = {}): Harness {
@@ -99,6 +112,7 @@ function harness(options: HarnessOptions = {}): Harness {
   const customers: CustomerPrincipal[] = [];
   const refusals: unknown[] = [];
   const expired = { count: 0 };
+  const accessChecks: string[] = [];
   const caller = "caller" in options ? options.caller : KEY;
   const tenants = {
     require: () => ({ tenantId: options.tenantId ?? TENANT_A }) as RequestTenant,
@@ -116,10 +130,16 @@ function harness(options: HarnessOptions = {}): Harness {
         expired.count += 1;
       },
     } as unknown as CustomerContext,
+    {
+      mayAct: (customerId: string) => {
+        accessChecks.push(customerId);
+        return Promise.resolve(options.mayAct ?? true);
+      },
+    } as unknown as CustomerAccess,
     document,
     { info: (fields: { reason: unknown }) => refusals.push(fields.reason) } as unknown as PinoLogger,
   );
-  return { guard, actors, customers, refusals, expired };
+  return { guard, actors, customers, refusals, expired, accessChecks };
 }
 
 /** An execution context of `handler` with the request's headers and cookies. */
@@ -330,6 +350,55 @@ describe("CustomerGuard", () => {
     );
     expect(await outcome(anonymous.guard.canActivate(execution("getSession")))).toBe("passed");
     expect([...plain.actors, ...console.actors, ...anonymous.actors]).toEqual([]);
+  });
+
+  it("answers 401 UNAUTHENTICATED to a valid token of a deleted or disabled customer on every operation, by key or edge [FIX-W29-SECURITY AC3]", async () => {
+    const token = await accessToken();
+    const key = harness({ mayAct: false });
+    const edge = harness({ caller: EDGE, mayAct: false });
+
+    for (const handler of ["getSession", "getBooking", "createFlightSearch", "signOut"] as const) {
+      expect(await outcome(key.guard.canActivate(execution(handler, bearer(token)))), handler).toBe(
+        "401 UNAUTHENTICATED",
+      );
+      expect(await outcome(edge.guard.canActivate(execution(handler, cookie(token)))), handler).toBe(
+        "401 UNAUTHENTICATED",
+      );
+    }
+    // Neither became the request's customer; each refusal was logged with its reason, never the token.
+    expect([key.actors, key.customers, edge.actors, edge.customers]).toEqual([[], [], [], []]);
+    expect([...key.refusals, ...edge.refusals]).toEqual(Array(8).fill("customer_inactive"));
+    expect([...key.accessChecks, ...edge.accessChecks]).toEqual(Array(8).fill(CUSTOMER));
+  });
+
+  it("lets a deleted customer's token reach account.delete, whose replay answers the stored deletion (OBE-035) [FIX-W29-SECURITY AC3]", async () => {
+    const token = await accessToken();
+    const key = harness({ mayAct: false });
+    const edge = harness({ caller: EDGE, mayAct: false });
+
+    expect(await outcome(key.guard.canActivate(execution("deleteAccount", bearer(token))))).toBe("passed");
+    expect(await outcome(edge.guard.canActivate(execution("deleteAccount", cookie(token))))).toBe("passed");
+    expect([key.accessChecks, edge.accessChecks, key.refusals, edge.refusals]).toEqual([[], [], [], []]);
+    expect(key.customers.map((customer) => customer.customerId)).toEqual([CUSTOMER]);
+  });
+
+  it("asks whether the customer may still act only for a token it verified [FIX-W29-SECURITY AC3]", async () => {
+    const token = await accessToken();
+    const { guard, accessChecks } = harness();
+
+    expect(await outcome(guard.canActivate(execution("getSession", bearer(token))))).toBe("passed");
+    expect(await outcome(guard.canActivate(execution("getSession", bearer("garbage"))))).toBe(
+      "401 UNAUTHENTICATED",
+    );
+    expect(await outcome(guard.canActivate(execution("createFlightSearch")))).toBe("passed");
+    expect(await outcome(guard.canActivate(execution("signIn", bearer(token))))).toBe("passed");
+    const expired = harness({
+      clock: new FakeClock(Date.parse(START) + (ACCESS_TOKEN_TTL_SECONDS + CLOCK_SKEW_SECONDS) * 1000),
+    });
+    expect(await outcome(expired.guard.canActivate(execution("getSession", bearer(token))))).toBe(
+      "401 TOKEN_EXPIRED",
+    );
+    expect([accessChecks, expired.accessChecks]).toEqual([[CUSTOMER], []]);
   });
 
   it("fails loudly when it runs before the caller guard", async () => {

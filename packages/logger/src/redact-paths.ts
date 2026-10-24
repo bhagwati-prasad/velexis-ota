@@ -40,7 +40,12 @@
  * airline-card completion body (the `card` paths above), and its fields `holderName`, `expiryMonth` and `expiryYear` at
  * the top level and one level down for a card flattened into another object (`number` and `securityCode` are covered
  * by the card paths and `securityCode`); the headers the storefront edge and Stripe send, `x-velexis-edge`,
- * `x-csrf-token`, `x-booking-token` and `stripe-signature`. A payout account's `holderName` is censored too.
+ * `x-csrf-token`, `x-booking-token` and `stripe-signature`. A payout account's `holderName` is censored too. The
+ * holder and the expiry as Amadeus spells them (`holder`, `expiryDate` of a `creditCard`; FIX-W29-SECURITY) are
+ * censored at the same depths for a card flattened into a log object; inside a `creditCard` or below `formOfPayments`
+ * they never reach a line, because those whole objects are censored at depths 1 to 8, deeper than the identity
+ * document numbers. An `expiryDate` or `holder` of the top level or one level down is censored whatever it belongs to
+ * (an identity document's expiry too): logs carry ids and outcomes, not these values.
  *
  * Every path costs time on every line (about 0.1 ms per line for this list): log events, not loops.
  */
@@ -87,6 +92,8 @@ export const REDACT_PATHS: readonly string[] = Object.freeze([
   "holderName",
   "expiryMonth",
   "expiryYear",
+  "holder",
+  "expiryDate",
 
   // Depth 2: the same keys one level down, and the code and state of an MFA or OAuth body at the top level.
   "*.password",
@@ -125,6 +132,8 @@ export const REDACT_PATHS: readonly string[] = Object.freeze([
   "*.holderName",
   "*.expiryMonth",
   "*.expiryYear",
+  "*.holder",
+  "*.expiryDate",
   "mfa.code",
   "mfa.state",
   "oauth.code",

@@ -1278,8 +1278,9 @@ describe("console.bookings.get", () => {
           kind: "creditCard",
           brand: "VISA",
           last4: "4242",
-          holder: "TESTA SAMPLE",
-          expiryDate: "2030-12",
+          // The redactor keeps no holder and no expiry of a card (FIX-W29-SECURITY).
+          holder: null,
+          expiryDate: null,
           method: null,
           cardFriendlyName: null,
           flightOfferIds: ["2"],

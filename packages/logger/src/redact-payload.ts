@@ -6,14 +6,17 @@ export const CIRCULAR_REFERENCE = "[Circular]";
 
 /**
  * How the value of a key is treated:
- * - `card`: a payment card (`card`, `creditCard`, …), whose `number` keeps its last 4 digits;
+ * - `card`: a payment card (`card`, `creditCard`, …), whose `number` keeps its last 4 digits and whose holder and
+ *   expiry are dropped;
+ * - `formOfPayment`: everything below an Amadeus `formOfPayments` list or nested inside a card, where the holder and
+ *   the expiry of a card are dropped at any depth (FIX-W29-SECURITY);
  * - `documents` / `document`: identity documents (`documents`, `document`) and the forms of identification of an
  *   Amadeus flight order (`formOfIdentifications`: passport, identity card or driving licence numbers), whose
  *   `number` keeps its last 4 characters;
  * - `credentialBody`: an MFA or OAuth body (`mfa`, `oauth`), whose `code` and `state` are secrets at any depth;
  * - `plain`: anything else.
  */
-type Kind = "plain" | "card" | "documents" | "document" | "credentialBody";
+type Kind = "plain" | "card" | "formOfPayment" | "documents" | "document" | "credentialBody";
 
 /** Keys are compared in lower case without `-` and `_`, so `security_code` and `X-Api-Key` match too. */
 function normalise(key: string): string {
@@ -22,6 +25,21 @@ function normalise(key: string): string {
 
 /** Parents whose `number` is a card number (Amadeus `creditCard`, `virtualCreditCardDetails`). */
 const CARD_PARENTS = new Set(["card", "creditcard", "paymentcard", "virtualcreditcarddetails"]);
+/** The forms of payment of an Amadeus flight order: everything below them belongs to a payment. */
+const FORM_OF_PAYMENT_PARENTS = new Set(["formofpayments"]);
+/**
+ * Dropped from a card, from anything nested inside one and from anything below a form of payment (FIX-W29-SECURITY,
+ * OADR-0004 point 2): the card holder's name and the expiry, as Amadeus spells them (`holder`, `expiryDate`) and as the airline-card completion body
+ * does (`holderName`, `expiryMonth`, `expiryYear`). A stored copy of a card keeps at most its brand, BIN and last 4.
+ * An identity document's `expiryDate` is not a card's and stays.
+ */
+const CARD_HOLDER_AND_EXPIRY_KEYS = new Set([
+  "holder",
+  "holdername",
+  "expirydate",
+  "expirymonth",
+  "expiryyear",
+]);
 /** Lists of identity documents: Amadeus `documents` and `formOfIdentifications` (FIX-W26-SECURITY). */
 const DOCUMENT_LIST_PARENTS = new Set(["documents", "formofidentifications"]);
 const DOCUMENT_PARENTS = new Set(["document"]);
@@ -87,8 +105,22 @@ function childKind(key: string, kind: Kind): Kind {
   if (DOCUMENT_PARENTS.has(key)) {
     return "document";
   }
-  // Everything below an MFA or OAuth body stays part of it.
-  return kind === "credentialBody" || CREDENTIAL_BODY_PARENTS.has(key) ? "credentialBody" : "plain";
+  // Everything below an MFA or OAuth body stays part of it. Everything below a form of payment, and everything nested
+  // inside a card (`formOfPayments[].creditCard.<object>` included), keeps dropping a card's holder and expiry.
+  if (kind === "credentialBody" || CREDENTIAL_BODY_PARENTS.has(key)) {
+    return "credentialBody";
+  }
+  return kind === "card" || kind === "formOfPayment" || FORM_OF_PAYMENT_PARENTS.has(key)
+    ? "formOfPayment"
+    : "plain";
+}
+
+/** Whether `key` (normalised) of an object of `kind` is left out of the copy. */
+function dropped(key: string, kind: Kind): boolean {
+  return (
+    DROPPED_KEYS.has(key) ||
+    ((kind === "card" || kind === "formOfPayment") && CARD_HOLDER_AND_EXPIRY_KEYS.has(key))
+  );
 }
 
 function redactEntry(key: string, value: unknown, kind: Kind, ancestors: Set<object>): unknown {
@@ -117,7 +149,7 @@ function redactEntry(key: string, value: unknown, kind: Kind, ancestors: Set<obj
 function redactObject(source: object, kind: Kind, ancestors: Set<object>): Record<string, unknown> {
   const copy: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(source)) {
-    if (DROPPED_KEYS.has(normalise(key))) {
+    if (dropped(normalise(key), kind)) {
       continue;
     }
     // defineProperty keeps a `__proto__` key of parsed JSON as data instead of changing the prototype.
@@ -164,7 +196,9 @@ function redactValue(value: unknown, kind: Kind, ancestors: Set<object>): unknow
  * `order_snapshot`, `booking_events.data`, `staff_actions` before/after, `idempotency_keys.response_body`,
  * `payment_events.payload`, `notifications.payload`, `priced_offers.amadeus_request` and the platform
  * audit log (`platform_audit_log.details`). It returns a deep copy and never mutates its input:
- * - card `number` fields (under `card`, `creditCard`, …) keep their last 4 digits;
+ * - card `number` fields (under `card`, `creditCard`, …) keep their last 4 digits, and a card's holder and expiry
+ *   (`holder`, `holderName`, `expiryDate`, `expiryMonth`, `expiryYear`) are dropped, anywhere in a card and anywhere
+ *   below `formOfPayments` (FIX-W29-SECURITY: a stored card keeps at most its brand, BIN and last 4);
  * - `documents[].number`, `formOfIdentifications[].number`, `cardNumber` and `certificateNumber` keep their last 4
  *   characters;
  * - `securityCode`, `cvc`, `cvv`, `birthPlace` and `issuanceLocation` are dropped;

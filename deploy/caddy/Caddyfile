@@ -36,6 +36,34 @@
 
 # ---- Snippets ---------------------------------------------------------------------------------------
 
+# Query values that never reach a log line (FIX-W29-SECURITY; deployment-single-vm.md §12). The access log deletes them
+# from the request's `uri`, from its `Referer` (a page's own address with the whole query, which the browser sends with
+# every same-origin request of the page: its scripts, styles and data fetches) and from a redirect's `Location`:
+#   - secrets: the signature of a signed URL (`sig`), single-use tokens (`token`), and Stripe's client secrets, which
+#     the 3-D Secure return puts into the storefront's /checkout/complete address (`payment_intent_client_secret`; a
+#     setup intent's `setup_intent_client_secret`; `client_secret` of Stripe's older redirect flows). The ids and the
+#     outcome (`payment_intent`, `setup_intent`, `redirect_status`) stay;
+#   - personal data that the portal and the admin sites put into their URLs: a list's free-text search (`q`), e-mail
+#     addresses (`email`, `customerEmail`), a traveller's name (`travelerLastName`), the free-text target of the
+#     platform's audit log (`targetId`), and the page a sign-in returns to (`next`, which carries that page's query).
+# A page that puts a new secret or personal value into its URL adds its parameter here and to caddy-smoke.sh.
+(log_query_filter) {
+	delete sig
+	delete token
+	delete client_secret
+	delete payment_intent_client_secret
+	delete setup_intent_client_secret
+	delete q
+	delete email
+	delete customerEmail
+	delete travelerLastName
+	delete targetId
+	delete next
+}
+
+# The access log of every site. Credential headers are deleted (Cookie, Set-Cookie and Authorization are redacted by
+# Caddy itself, see the global options), and so is Next.js's router state, which the portal and the admin sites send
+# with every navigation and server action: it holds the current page's query.
 (access_log) {
 	log {
 		output stderr
@@ -47,9 +75,15 @@
 				request>headers>X-Booking-Token delete
 				request>headers>X-Velexis-Edge delete
 				request>headers>X-Velexis-Service-Key delete
+				request>headers>Next-Router-State-Tree delete
 				request>uri query {
-					delete sig
-					delete token
+					import log_query_filter
+				}
+				request>headers>Referer query {
+					import log_query_filter
+				}
+				resp_headers>Location query {
+					import log_query_filter
 				}
 			}
 		}

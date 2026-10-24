@@ -11,7 +11,8 @@
 //     form of identification numbers are cut to their last 4 here as in customer scope;
 //   - traveller documents are shown as customer scope shows them (`numberMasked`, decrypted only to build it): the full
 //     numbers are the audited console.bookings.retrieve's (OBE-062), as the document's ConsoleBookingExample shows;
-//   - forms of payment come from `bookings.form_of_payments` (redacted at write: brand, last 4, holder, expiry, method);
+//   - forms of payment come from `bookings.form_of_payments` (redacted at write: brand, last 4, method; no holder and no
+//     expiry since FIX-W29-SECURITY, so `holder` and `expiryDate` are null for every booking recorded since);
 //   - event data passes the shared redactor; staff actions carry no before or after, Amadeus calls no bodies.
 //
 // The sync state (ConsoleBookingSyncStatus): `not_applicable` without an Amadeus order (pending, failed), else

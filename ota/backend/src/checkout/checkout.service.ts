@@ -16,7 +16,11 @@
 //      `expires_at = now + checkout_ttl_minutes`, the locale of the body, else of `Accept-Language`, else the
 //      storefront's), one empty `checkout_travelers` row per traveller of the priced offer (type, held infant's adult)
 //      and, for a customer with `prefillContactFromAccount` (default true), the primary contact from the profile;
-//      the customer's other `open` checkouts of the same priced offer become `abandoned`.
+//      the customer's other `open` checkouts of the same priced offer become `abandoned`. Right after the insert the
+//      customer is read again (FIX-W29-SECURITY): an account.delete that committed after the first read, or whose lock
+//      the insert's foreign key waited for, makes it `401 UNAUTHENTICATED` and nothing is written, so no open checkout
+//      of a deleted customer survives a deletion that ran beside its creation (the deletion abandons every checkout
+//      committed before it took its locks).
 //   The idempotency interceptor stores the `201` under the request's `Idempotency-Key`: a retry answers the same
 //   checkout.
 //
@@ -220,6 +224,16 @@ export class CheckoutService {
         created_at: now,
         updated_at: now,
       });
+      if (customer !== undefined) {
+        // FIX-W29-SECURITY: the customer was read before the insert, and an account.delete may have committed since
+        // (or held the customer's lock, which the insert's foreign key waited for). This read is a statement of its
+        // own after the insert, so it sees that deletion; the deletion's own read of the open checkouts, after its
+        // locks, sees every checkout inserted before it. No lock is added: the insert's FOR KEY SHARE is the only one.
+        const current = await this.repository.customer(trx, customer.id);
+        if (current === undefined || current.status === "disabled" || current.status === "deleted") {
+          throw new AppError("UNAUTHENTICATED");
+        }
+      }
       await this.repository.insertTravelers(
         trx,
         offerTravelersOf(priced.pricedOffer).map((traveler, position) => ({

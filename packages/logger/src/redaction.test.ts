@@ -449,6 +449,8 @@ describe("redaction through createLogger", () => {
       "holderName",
       "expiryMonth",
       "expiryYear",
+      "holder",
+      "expiryDate",
     ]);
     const { logger, sink } = testLogger();
     for (const key of keys) {
@@ -905,6 +907,97 @@ describe("the airline card's redaction paths (ota/docs/architecture.md §9)", ()
         last4: "1111",
       },
     });
+  });
+});
+
+/** The holder and the expiry of a card as Amadeus spells them (Flight Create Orders `creditCard`; FIX-W29-SECURITY). */
+const AMADEUS_CARD_KEYS = ["holder", "expiryDate"] as const;
+const AMADEUS_CARD_FIELD_PATHS = [...AMADEUS_CARD_KEYS, ...AMADEUS_CARD_KEYS.map((key) => `*.${key}`)];
+
+/** The forms of payment of an Amadeus Flight Create Orders answer: the airline echoes the card it charged. */
+function echoedFormOfPayments(): LogRecord[] {
+  return [
+    {
+      creditCard: {
+        brand: "VISA",
+        holder: "JORGE GONZALES",
+        number: "XXXXXXXXXXXX1111",
+        expiryDate: "2030-12",
+        flightOfferIds: ["1"],
+      },
+    },
+    {
+      b2bWallet: {
+        cardId: "1",
+        virtualCreditCardDetails: { holder: "JORGE GONZALES", expiryDate: "2030-12" },
+      },
+    },
+  ];
+}
+
+describe("the card holder and the expiry (FIX-W29-SECURITY)", () => {
+  it("lists the Amadeus spellings at the depths of the airline-card fields, in order from shallow to deep [FIX-W29-SECURITY AC2]", () => {
+    for (const path of AMADEUS_CARD_FIELD_PATHS) {
+      expect(REDACT_PATHS).toContain(path);
+    }
+    const depthOf = (path: string): number => path.split(/\.|\[/).length;
+    // The depths of the airline-card body's holderName, expiryMonth and expiryYear: the top level and one down.
+    expect(new Set(AMADEUS_CARD_FIELD_PATHS.map(depthOf))).toEqual(
+      new Set(AIRLINE_CARD_FIELD_PATHS.map(depthOf)),
+    );
+    const depths = REDACT_PATHS.map(depthOf);
+    expect(depths).toEqual([...depths].sort((a, b) => a - b));
+  });
+
+  for (const path of AMADEUS_CARD_FIELD_PATHS) {
+    it(`censors ${path} and keeps its sibling and the caller's object [FIX-W29-SECURITY AC2]`, () => {
+      const { logger, sink } = testLogger();
+      const value = path.endsWith("holder") ? `HOLDER ${TEST_BEARER_TOKEN}` : `2030-12 ${TEST_BEARER_TOKEN}`;
+      const { logged, keys } = objectAtPath(path, value);
+      const snapshot = structuredClone(logged);
+
+      logger.info(logged, "airline_card.sensitive");
+
+      const line = sink.lines[0] ?? "";
+      expect(line).not.toContain(TEST_BEARER_TOKEN);
+      const [record] = sink.records();
+      expect(readPath(record ?? {}, keys)).toBe(REDACT_CENSOR);
+      expect(readPath(record ?? {}, [...keys.slice(0, -1), "keep"])).toBe("visible");
+      expect(logged).toEqual(snapshot);
+    });
+  }
+
+  for (let depth = 1; depth <= 8; depth += 1) {
+    it(`logs the forms of payment an Amadeus answer echoes, at depth ${depth}, without the holder or the expiry [FIX-W29-SECURITY AC2]`, () => {
+      const { logger, sink } = testLogger();
+      const logged = nestAt(depth, {
+        formOfPayments: echoedFormOfPayments(),
+        orderId: "eJzTd9f3NjIJdgMADeQCtg",
+      });
+      const snapshot = structuredClone(logged);
+
+      logger.warn(logged, "supplier.response");
+
+      const line = sink.lines[0] ?? "";
+      expect(line).not.toContain("JORGE GONZALES");
+      expect(line).not.toContain("2030-12");
+      expect(valueAt(JSON.parse(line) as LogRecord, depth, "formOfPayments")).toBe(REDACT_CENSOR);
+      expect(valueAt(JSON.parse(line) as LogRecord, depth, "orderId")).toBe("eJzTd9f3NjIJdgMADeQCtg");
+      expect(logged).toEqual(snapshot);
+    });
+  }
+
+  it("censors the holder and the expiry of an Amadeus card flattened into a log object, at the top level and one down [FIX-W29-SECURITY AC2]", () => {
+    const { logger, sink } = testLogger();
+    const flattened = { brand: "VISA", holder: "JORGE GONZALES", expiryDate: "2030-12", last4: "1111" };
+
+    logger.warn({ ...flattened, attempt: { ...flattened } }, "airline_card.flattened");
+
+    const line = sink.lines[0] ?? "";
+    expect(line).not.toContain("JORGE GONZALES");
+    expect(line).not.toContain("2030-12");
+    const censored = { brand: "VISA", holder: REDACT_CENSOR, expiryDate: REDACT_CENSOR, last4: "1111" };
+    expect(sink.records()[0]).toMatchObject({ ...censored, attempt: censored });
   });
 });
 

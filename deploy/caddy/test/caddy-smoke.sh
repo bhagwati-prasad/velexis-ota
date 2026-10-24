@@ -38,7 +38,12 @@
 #     after a header change and the new header is served, Caddy listens on TCP only on 8080 and 8443, and
 #     nothing listens on TCP 2019;
 #   - and, for ADR-0027 row 4, TLS 1.2 and 1.3 are accepted, TLS 1.1 is refused, every host sends HSTS (error
-#     pages included), and neither the edge secret nor a client's forged copy reaches Caddy's log.
+#     pages included), and neither the edge secret nor a client's forged copy reaches Caddy's log;
+#   - on every host (FIX-W29-SECURITY), a request whose query, `Referer` and redirect `Location` carry the values of
+#     the Caddyfile's `(log_query_filter)` (signatures and tokens, Stripe's client secrets of the 3-D Secure return, and
+#     the e-mail addresses, names, searches and return paths of the portal and the admin sites) and whose
+#     `Next-Router-State-Tree` holds a page's query still succeeds, reaches its app with every value, and leaves none
+#     of them in its access log line, which keeps the other values (`payment_intent`, `redirect_status`, ...).
 #
 # Settings (environment): CADDY, SMOKE_NODE, SMOKE_TMPDIR (parent of the temporary folder; default TMPDIR or
 # /tmp; the admin socket path must stay under 100 bytes), SMOKE_KEEP=1 (keep the temporary folder and its logs).
@@ -248,6 +253,9 @@ ln -s releases/smoke "$ROOT/srv/velexis/current" # as on the VM: current -> rele
 printf '<!doctype html>\n<title>Smoke storefront</title>\n<p>storefront index</p>\n' >"$RELEASE/storefront/index.html"
 printf '<!doctype html>\n<title>Not found</title>\n<p>storefront 404</p>\n' >"$RELEASE/storefront/404.html"
 printf 'export const smoke = 1;\n' >"$RELEASE/storefront/assets/a.js"
+mkdir -p "$RELEASE/storefront/checkout"
+printf '<!doctype html>\n<title>Complete</title>\n<p>storefront complete page</p>\n' \
+  >"$RELEASE/storefront/checkout/complete.html"
 
 EDGE_SECRET="smoke-edge-$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')"
 FORGED_EDGE="forged-edge-$(head -c 8 /dev/urandom | od -An -tx1 | tr -d ' \n')"
@@ -416,6 +424,102 @@ for app in "${NEXT_HOSTS[@]}"; do
   same "$host has HSTS (ADR-0027)" "$(header Strict-Transport-Security)" "max-age=31536000"
   same "$host sends X-Frame-Options DENY" "$(header X-Frame-Options)" DENY
   same "$host hides the Server header" "$(header_count Server)" 0
+done
+
+# ---- 6b. what the access log keeps of a URL (FIX-W29-SECURITY) ------------------------------------------------
+step "Access log: no secret and no personal value of a URL (query, Referer, Location, Next.js router state)"
+# Every value is a marker of letters and digits that no other request of this run sends, so a grep that finds it in a
+# log line found this step's value, however the filter re-encoded the query around it. The request ids find each
+# request's own log line.
+MARK="$(head -c 6 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+# The parameters of the Caddyfile's (log_query_filter), in its order.
+LOG_PARAMS=(sig token client_secret payment_intent_client_secret setup_intent_client_secret q email customerEmail
+  travelerLastName targetId next)
+value_of() { printf 'smk%s%s' "${1//_/}" "$MARK"; } # parameter -> its marker value
+KEEP="smkkeep$MARK"                                # a value every log line keeps: the filter deletes only its list
+ROUTER="smkrouter$MARK"                            # the page query inside Next.js's router state header
+# Stripe's 3-D Secure return (OFE-013) adds payment_intent, payment_intent_client_secret and redirect_status; `next`
+# carries another page's path and query, as the sign-in links of the portal and the admin sites do.
+LOG_QUERY="keep=$KEEP&payment_intent=pi_$KEEP&redirect_status=succeeded"
+for name in "${LOG_PARAMS[@]}"; do
+  if [ "$name" = next ]; then
+    LOG_QUERY+="&next=%2Fbookings%3FcustomerEmail%3D$(value_of next)"
+  else
+    LOG_QUERY+="&$name=$(value_of "$name")"
+  fi
+done
+ROUTER_TREE="%5B%22%22%2C%7B%22children%22%3A%5B%22__PAGE__%3F%7B%5C%22q%5C%22%3A%5C%22$ROUTER%5C%22%7D%22%2C%7B%7D%5D%7D%5D"
+contains() { case "$1" in *"$2"*) return 0 ;; esac; return 1; }
+has_every_value() { # text -> true when it holds the marker of every parameter
+  local name
+  for name in "${LOG_PARAMS[@]}"; do contains "$1" "$(value_of "$name")" || return 1; done
+}
+LOG_HOSTS=("$TENANT" "$PLATFORM" "admin.$PLATFORM" "admin.$STOREFRONT" "api.$PLATFORM" "api.$STOREFRONT")
+LOG_REQUESTS=() # "<request id> <host> <path>" of each request of this step
+n=0
+for host in "${LOG_HOSTS[@]}"; do
+  # The storefront's page is the static page Stripe returns to; its /api goes to the OTA API like the other hosts.
+  if [ "$host" = "$TENANT" ]; then pages=(/checkout/complete.html /api/redirect); else pages=(/hello /redirect); fi
+  for page in "${pages[@]}"; do
+    n=$((n + 1))
+    id="smoke-log-$n-$MARK"
+    LOG_REQUESTS+=("$id $host $page")
+    fetch "$host" "$page?$LOG_QUERY" -H "X-Request-Id: $id" -H "Next-Router-State-Tree: $ROUTER_TREE" \
+      -H "Referer: https://$host:$HTTPS_PORT/page?$LOG_QUERY&ref=$KEEP"
+    case "$page" in
+      */redirect)
+        same "$host$page answers the app's redirect (302) [FIX-W29-SECURITY AC1]" "$STATUS" 302
+        check "$host$page: the client gets the app's Location with every value [FIX-W29-SECURITY AC1]" \
+          has_every_value "$(header Location)"
+        ;;
+      /checkout/complete.html)
+        same "$host$page (Stripe's return) answers 200 [FIX-W29-SECURITY AC1]" "$STATUS" 200
+        check "$host$page serves the storefront's page" cmp -s "$BODY" "$RELEASE/storefront/checkout/complete.html"
+        ;;
+      *) same "$host$page answers 200 [FIX-W29-SECURITY AC1]" "$STATUS" 200 ;;
+    esac
+    if [ "$page" != /checkout/complete.html ]; then
+      check "$host$page reaches the app with every value of its query [FIX-W29-SECURITY AC1]" has_every_value "$(json url)"
+    fi
+  done
+done
+
+log_line() { grep -F "\"$1\"" "$TMP/caddy.log" | grep -F '"logger":"http.log.access' | head -n 1; }
+logged_all() { local entry; for entry in "${LOG_REQUESTS[@]}"; do [ -n "$(log_line "${entry%% *}")" ] || return 1; done; }
+check "Caddy wrote the access log line of each request of this step" retry 20 logged_all
+LOG_LINES="$(for entry in "${LOG_REQUESTS[@]}"; do log_line "${entry%% *}"; done)"
+for name in "${LOG_PARAMS[@]}"; do
+  check "no access log line keeps the $name value (URI, Referer or Location; six hosts) [FIX-W29-SECURITY AC1]" \
+    not grep -qF -- "$(value_of "$name")" <<<"$LOG_LINES"
+done
+check "no access log line keeps Next.js's router state (Next-Router-State-Tree) [FIX-W29-SECURITY AC1]" \
+  not grep -qF -- "$ROUTER" <<<"$LOG_LINES"
+logged() { # request id, field (uri, referer or location) -> what its access log line holds there
+  # shellcheck disable=SC2016 # JavaScript, not shell
+  log_line "$1" | "$NODE" -e '
+    const line = JSON.parse(require("fs").readFileSync(0, "utf8"));
+    const field = process.argv[1];
+    const value = field === "uri" ? line.request?.uri
+      : field === "referer" ? line.request?.headers?.Referer?.[0] : line.resp_headers?.Location?.[0];
+    process.stdout.write(value ?? "");
+  ' "$2"
+}
+for entry in "${LOG_REQUESTS[@]}"; do
+  read -r id host page <<<"$entry"
+  uri="$(logged "$id" uri)"
+  check "$host$page: the logged URI keeps the other values [FIX-W29-SECURITY AC1]" contains "$uri" "keep=$KEEP"
+  check "$host$page: the logged Referer keeps the other values [FIX-W29-SECURITY AC1]" \
+    contains "$(logged "$id" referer)" "ref=$KEEP"
+  if [ "$page" = /checkout/complete.html ]; then
+    check "$host$page: the logged URI keeps Stripe's payment_intent [FIX-W29-SECURITY AC1]" \
+      contains "$uri" "payment_intent=pi_$KEEP"
+    check "$host$page: the logged URI keeps Stripe's redirect_status [FIX-W29-SECURITY AC1]" \
+      contains "$uri" "redirect_status=succeeded"
+  fi
+  if contains "$page" /redirect; then
+    check "$host$page: the logged Location keeps the other values [FIX-W29-SECURITY AC1]" \
+      contains "$(logged "$id" location)" "keep=$KEEP"
+  fi
 done
 
 # ---- 7. hosts without a certificate ---------------------------------------------------------------------------

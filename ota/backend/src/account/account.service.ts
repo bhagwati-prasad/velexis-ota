@@ -65,6 +65,10 @@
 //   random bits that are not kept: a salted hash that cannot be linked back to the address, and two deletions of one
 //   address never meet on `customers_email_lower_uq`. The address can sign up again at once. Names, phone and date
 //   of birth stay until the erasure job (OBE-087, M6); bookings keep their `customer_id` until it detaches them.
+//   After the commit, before anything else, `CustomerAccess.revoke` revokes what the customer guard cached of the
+//   customer (FIX-W29-SECURITY): from then on its still valid access tokens are refused with `401 UNAUTHENTICATED` on
+//   every customer-scope operation, not only on account.*, and a checkout.create that read the customer before the
+//   commit finds it deleted after its insert (checkout.service.ts).
 // - The answer is `202 AccountDeletion` (`scheduled`, erasure due 30 days later, the kept records when the customer
 //   has bookings); the controller clears the edge's session cookies and rotates its CSRF value. `reason` is logged (an
 //   enum), `comment` is accepted and not kept (free text may carry personal data, and the tenant has no column for
@@ -90,6 +94,7 @@ import {
 import { IdGenerator } from "../common/ids";
 import { OTA_QUEUE } from "../common/queues/queue-names";
 import { EMAIL_ADDRESS } from "../config";
+import { CustomerAccess } from "../identity/customer-access";
 import { CustomersRepository, type CustomerRecord } from "../identity/customers.repository";
 import { normaliseEmail, SignInLockout } from "../identity/lockout";
 import { mayHoldSession, SessionsService } from "../identity/sessions.service";
@@ -328,6 +333,7 @@ export class AccountService {
     private readonly tenants: TenantContext,
     private readonly ids: IdGenerator,
     private readonly clock: Clock,
+    private readonly access: CustomerAccess,
     @InjectQueue(OTA_QUEUE.payments) private readonly paymentsQueue: Queue,
     @InjectPinoLogger(AccountService.name) private readonly logger: PinoLogger,
   ) {}
@@ -529,6 +535,8 @@ export class AccountService {
       if (blocking.length > 0) {
         return { blocking };
       }
+      // First after the commit: the customer guard stops trusting what it cached of this customer (FIX-W29-SECURITY).
+      afterCommit(trx, () => this.access.revoke(tenant.tenantId, customerId));
       const now = this.clock.now();
       const deleted = {
         customerId,

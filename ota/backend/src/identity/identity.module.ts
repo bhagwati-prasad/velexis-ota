@@ -14,6 +14,7 @@ import { CookieWriter } from "../common/http/cookie-writer";
 import { RequestContext } from "../common/http/request-context";
 import { TenancyModule } from "../tenancy/tenancy.module";
 import { AuthController, RefreshIdempotencyHooks } from "./auth.controller";
+import { CustomerAccess } from "./customer-access";
 import { CustomersRepository } from "./customers.repository";
 import { SignInLockout } from "./lockout";
 import { CustomerPasswordPolicy } from "./password-policy";
@@ -55,6 +56,8 @@ import { VerificationService } from "./verification.service";
     ChangePasswordIdempotencyHooks,
     RefreshIdempotencyHooks,
     CustomerContext,
+    // Whether the customer of a valid token may still act: the customer guard asks it, account.delete revokes it.
+    CustomerAccess,
     CookieWriter,
     StaffTokens,
     StaffSessions,
@@ -69,6 +72,7 @@ import { VerificationService } from "./verification.service";
     TokenService,
     SessionsService,
     CustomerContext,
+    CustomerAccess,
     CustomerPasswordPolicy,
     VerificationService,
     StaffTokens,

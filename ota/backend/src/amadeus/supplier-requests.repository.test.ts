@@ -83,12 +83,9 @@ describe("a stored body", () => {
       nationality: "GB",
       holder: true,
     });
-    expect(payment?.creditCard).toEqual({
-      brand: "VISA",
-      holder: "ALEX TESTER",
-      number: "1111",
-      expiryDate: "2030-12",
-    });
+    // Brand and last 4 only: the holder and the expiry are dropped too (FIX-W29-SECURITY).
+    expect(payment?.creditCard).toEqual({ brand: "VISA", number: "1111" });
+    expect(json).not.toContain("2030-12");
     expect(traveler?.contact).toEqual({
       emailAddress: "a***@example.com",
       phones: [{ deviceType: "MOBILE", countryCallingCode: "44", number: "******0123" }],

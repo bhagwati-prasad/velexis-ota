@@ -101,9 +101,9 @@
 //      also sets the payment `processing` with the card's brand, BIN and last 4. Flight Create Orders is sent with
 //      `issue = true` and `formOfPayments: [{creditCard: {brand, holder (upper case), number, expiryDate "YYYY-MM",
 //      securityCode, flightOfferIds, paymentOperationContext: {interactionCondition: ECOMMERCE}}}]` (no 3-D Secure);
-//      the copy for `supplier_requests` (brand, holder, the last 4 digits; no expiry, no security code) is built from
-//      the SensitiveCard before the call and given to the client as `redactedRequest`, and the request body is dropped
-//      after the call. Outcomes: a refusal fails the booking and the payment (`failed` with the public code;
+//      the copy for `supplier_requests` (brand and the last 4 digits; no holder, no expiry, no security code) is
+//      built from the SensitiveCard before the call and given to the client as `redactedRequest`, and the request body
+//      is dropped after the call. Outcomes: a refusal fails the booking and the payment (`failed` with the public code;
 //      `airline.declined` for a declined card, whose answer the completion service gives: `402 PAYMENT_DECLINED`, or
 //      `403 PAYMENT_ATTEMPTS_EXCEEDED` at the third; it counts the decline before the booking fails, which frees the
 //      checkout, so a concurrent completion's `beforeSend` sees it); not sent: the booking `failed`, the payment
@@ -665,8 +665,8 @@ export function airlineCardOrderBody(
 }
 
 /**
- * The copy of an airline-card order body that `supplier_requests` keeps (OADR-0004 point 2): the card's brand, holder
- * and last 4 digits, no expiry and no security code. Built before the call.
+ * The copy of an airline-card order body that `supplier_requests` keeps (OADR-0004 point 2): the card's brand and last
+ * 4 digits; no holder, no expiry and no security code (FIX-W29-SECURITY). Built before the call.
  */
 export function redactedAirlineCardOrderBody(
   body: { readonly data: JsonObject },

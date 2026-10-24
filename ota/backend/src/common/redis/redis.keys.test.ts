@@ -27,6 +27,7 @@ const CONNECTION_ID = "sc_01M4TA6X7Y8Z9A0B1C2D3E4F5G";
 const FAMILY_ID = "sfm_01M4TA7H8J9K0M1N2P3Q4R5S6T";
 const STAFF_ID = "stf_01M4TA8V9W0X1Y2Z3A4B5C6D7E";
 const HASH = "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08";
+const CUSTOMER_ID = "cus_01M4TA9B0C1D2E3F4G5H6J7K8M";
 
 /** Arguments for every builder. Typed by the builder names, so a new builder does not compile until it is listed. */
 const SAMPLES: Readonly<Record<RedisKeyBuilderName, readonly unknown[]>> = {
@@ -57,6 +58,7 @@ const SAMPLES: Readonly<Record<RedisKeyBuilderName, readonly unknown[]>> = {
   acDeclines: [TENANT_ID, "test"],
   acSuspended: [TENANT_ID, "live"],
   authfail: [TENANT_ID, "test", HASH],
+  customerAccess: [TENANT_ID, "live", CUSTOMER_ID],
 };
 
 /** What ota/docs/architecture.md §7 (and the ADRs it cites) says each builder gives for the samples above. */
@@ -92,6 +94,7 @@ const EXPECTED: Readonly<Record<RedisKeyBuilderName, Omit<RedisKey, "key"> & { r
   acDeclines: { key: `t:${TENANT_ID}:test:ac:declines`, ttlSeconds: 3600, kind: "tenant" },
   acSuspended: { key: `t:${TENANT_ID}:live:ac:suspended`, ttlSeconds: 3600, kind: "tenant" },
   authfail: { key: `t:${TENANT_ID}:test:authfail:${HASH}`, ttlSeconds: 900, kind: "tenant" },
+  customerAccess: { key: `t:${TENANT_ID}:live:cust:${CUSTOMER_ID}`, ttlSeconds: 60, kind: "tenant" },
 };
 
 /** The task's list of tenant-data builders (OBE-002 step 2). */
@@ -103,6 +106,7 @@ const TENANT_DATA_BUILDERS: readonly RedisKeyBuilderName[] = [
   "acDeclines",
   "acSuspended",
   "authfail",
+  "customerAccess",
 ];
 
 /** What a builder of any registry returns, unchecked: the test below also feeds it broken builders. */
@@ -273,6 +277,10 @@ describe("redisKeys", () => {
       [() => redisKeys.member(TENANT_ID, ACCOUNT_ID), /accountId must be an account id/],
       [() => redisKeys.staffDenyMember(ACCOUNT_ID), /redisKeys\.staffDenyMember: staffId must be a staff id/],
       [() => redisKeys.tenantByKey("Acme"), /tenantKey must be a tenant key/],
+      [
+        () => redisKeys.customerAccess(TENANT_ID, "test", BOOKING_ID),
+        /redisKeys\.customerAccess: customerId must be a customer id/,
+      ],
     ];
     for (const [build, message] of refusals) {
       expect(build, String(message)).toThrow(message);
