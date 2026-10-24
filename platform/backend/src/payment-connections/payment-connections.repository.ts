@@ -8,8 +8,9 @@
 // M1 brings the `velexis` test row of a new OTA, which the provisioning post-step `create_payment_connection` inserts
 // (PBE-022, flows/stripe-payments-account.md §A step 1), and the portal's list, read without the ciphertext columns
 // (`listForTenant`, PBE-027), and the platform admin's switch of a connection's status (`lockForTenant` and
-// `setStatus`, PBE-030, `adminSetConnectionStatus`); the descriptor update (PBE-038), go-live's live row and the M5
-// modes (Connect Standard, API keys) add their reads and writes.
+// `setStatus`, PBE-030, `adminSetConnectionStatus`). M3 adds the portal's descriptor update (`tenantStatusForShare`,
+// `lockForTenant` and `setStatementDescriptorSuffix`, PBE-038); go-live's live row and the M5 modes (Connect Standard,
+// API keys) add their reads and writes.
 import { Inject, Injectable } from "@nestjs/common";
 import { sql, type PlatformDatabase, type Selectable } from "@velexis/db";
 import type { PlatformTransaction } from "../audit/audit.repository";
@@ -172,6 +173,40 @@ export class PaymentConnectionsRepository {
     return trx
       .updateTable("platform.payment_provider_connections")
       .set((eb) => ({ status, version: eb("version", "+", 1), updated_at: now }))
+      .where("id", "=", id)
+      .returning(PAYMENT_CONNECTION_VIEW_COLUMNS)
+      .executeTakeFirstOrThrow();
+  }
+
+  /**
+   * The status of the tenant `tenantId`, read in `trx` with `FOR SHARE`, so the tenant cannot be suspended (or change
+   * otherwise) until `trx` ends; `undefined` when there is no such tenant. A write to a tenant's connection takes this
+   * lock before it locks the connection (`lockForTenant`): the tenant first, then its connection.
+   */
+  async tenantStatusForShare(trx: PlatformTransaction, tenantId: string): Promise<string | undefined> {
+    const row = await trx
+      .selectFrom("platform.tenants")
+      .select("status")
+      .where("id", "=", tenantId)
+      .forShare()
+      .executeTakeFirst();
+    return row?.status;
+  }
+
+  /**
+   * Sets the card statement descriptor suffix of a connection locked by `lockForTenant`, with `version + 1`, in `trx`
+   * (`updatePaymentConnection`, PBE-038). The suffix must meet descriptor.ts's rules of a typed suffix; the column's
+   * CHECK refuses anything else. The row comes back without the ciphertexts.
+   */
+  async setStatementDescriptorSuffix(
+    trx: PlatformTransaction,
+    id: string,
+    suffix: string,
+    now: Date,
+  ): Promise<PaymentConnectionView> {
+    return trx
+      .updateTable("platform.payment_provider_connections")
+      .set((eb) => ({ statement_descriptor_suffix: suffix, version: eb("version", "+", 1), updated_at: now }))
       .where("id", "=", id)
       .returning(PAYMENT_CONNECTION_VIEW_COLUMNS)
       .executeTakeFirstOrThrow();

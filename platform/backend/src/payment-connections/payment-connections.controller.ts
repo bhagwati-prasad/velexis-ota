@@ -1,21 +1,35 @@
 // The payment connection routes of the portal (platform/docs/api-inventory-resources.md §4; scope §1.2 "See Amadeus and
-// payment connections (masked)"): `listPaymentConnections` since PBE-027. Owners, admins and finance members see the
-// Stripe connection of each environment; TenantRoleGuard answers `404` to non-members and `403` to the other roles
-// before the handler runs. The rows are read without the secrets' ciphertexts, and `toPaymentConnection` answers what
-// the portal shows: the mode, the status, the OTA's account id and Stripe publishable key where the mode has them, the
-// statement descriptor suffix and the Connect capabilities, never a secret key or a webhook secret. `webhookUrl` (API-key
-// mode) and `pendingSubmission` stay `null` until the M5 API-key connections and credential submissions (PBE-052,
-// PBE-057); the descriptor update comes with M3 (PBE-038).
-import { Controller, Get } from "@nestjs/common";
+// payment connections (masked)"): `listPaymentConnections` since PBE-027 and `updatePaymentConnection` since PBE-038.
+// Thin: each handler binds its operation, reads the validated request and makes one PaymentConnectionsService call.
+//
+// - `listPaymentConnections`: owners, admins and finance members see the Stripe connection of each environment. The
+//   rows are read without the secrets' ciphertexts, and `toPaymentConnection` answers what the portal shows: the mode,
+//   the status, the OTA's account id and Stripe publishable key where the mode has them, the statement descriptor
+//   suffix and the Connect capabilities, never a secret key or a webhook secret. `webhookUrl` (API-key mode) and
+//   `pendingSubmission` stay `null` until the M5 API-key connections and credential submissions (PBE-052, PBE-057).
+// - `updatePaymentConnection` (`PATCH …/payment-connections/{environment}`, `If-Match`): owners and admins change the
+//   card statement descriptor suffix (payment-connections.service.ts); the answer is the connection as the list maps
+//   it, with its new version in `ETag`.
+//
+// TenantRoleGuard answers `404` to non-members and `403` to the other roles before a handler runs.
+import { Controller, Get, Patch, Res } from "@nestjs/common";
 import type { components } from "@velexis/api-types/platform";
 import { CurrentMembership, TenantRoles, type TenantMembership } from "../common/auth/tenant-role.guard";
-import { OpenApiOperation } from "../common/http/openapi-operation.decorator";
+import { etagOf, versionOfIfMatch } from "../common/http/if-match";
+import { OpenApiOperation, Validated } from "../common/http/openapi-operation.decorator";
 import { tenantRolesOf } from "../memberships/tenant-roles";
-import { PaymentConnectionsRepository, type PaymentConnectionView } from "./payment-connections.repository";
+import type { PaymentConnectionView, PaymentEnvironment } from "./payment-connections.repository";
+import { PaymentConnectionsService } from "./payment-connections.service";
 
 export type PaymentConnection = components["schemas"]["PaymentConnection"];
 export type PaymentConnectionList = components["schemas"]["PaymentConnectionList"];
+export type UpdatePaymentConnectionRequest = components["schemas"]["UpdatePaymentConnectionRequest"];
 type PaymentCapabilities = components["schemas"]["PaymentCapabilities"];
+
+/** The part of the Express response the handlers write. */
+interface HeaderTarget {
+  setHeader(name: string, value: string): unknown;
+}
 
 /** The capability flags of `PaymentCapabilities`, as `account.updated` stores them (M5). */
 const CAPABILITY_FLAGS = ["chargesEnabled", "payoutsEnabled", "detailsSubmitted"] as const;
@@ -58,7 +72,7 @@ export function toPaymentConnection(row: PaymentConnectionView): PaymentConnecti
 
 @Controller("v1/tenants/:tenantId/payment-connections")
 export class PaymentConnectionsController {
-  constructor(private readonly connections: PaymentConnectionsRepository) {}
+  constructor(private readonly connections: PaymentConnectionsService) {}
 
   @Get()
   @OpenApiOperation("listPaymentConnections")
@@ -66,7 +80,27 @@ export class PaymentConnectionsController {
   async listPaymentConnections(
     @CurrentMembership() membership: TenantMembership,
   ): Promise<PaymentConnectionList> {
-    const rows = await this.connections.listForTenant(membership.tenantId);
+    const rows = await this.connections.list(membership.tenantId);
     return { data: rows.map(toPaymentConnection) };
+  }
+
+  @Patch(":environment")
+  @OpenApiOperation("updatePaymentConnection")
+  @TenantRoles(...tenantRolesOf("updatePaymentConnection"))
+  async updatePaymentConnection(
+    @CurrentMembership() membership: TenantMembership,
+    @Validated("path") path: Readonly<Record<string, unknown>>,
+    @Validated("header") header: Readonly<Record<string, unknown>>,
+    @Validated("body") body: UpdatePaymentConnectionRequest,
+    @Res({ passthrough: true }) res: HeaderTarget,
+  ): Promise<PaymentConnection> {
+    const row = await this.connections.updateStatementDescriptor(
+      membership,
+      path["environment"] as PaymentEnvironment,
+      versionOfIfMatch(header["if-match"] as string),
+      body.statementDescriptorSuffix,
+    );
+    res.setHeader("ETag", etagOf(row.version));
+    return toPaymentConnection(row);
   }
 }

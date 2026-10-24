@@ -1253,7 +1253,8 @@ The OTA group builds checkout, Stripe payments on the Velexis account and the ai
   - `pnpm contracts:lint` is clean; the parity test passes with the three new pending entries.
 - **Verify:** `pnpm contracts:lint && pnpm contracts:generate && pnpm --filter @velexis/platform-backend test`
 
-### PBE-038 · Implement the statement descriptor update
+### PBE-038 · Implement the statement descriptor update ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-backend
 - **Milestone:** M3
 - **Depends on:** PBE-037, PBE-027

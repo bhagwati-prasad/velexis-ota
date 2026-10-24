@@ -3,16 +3,19 @@
 // modules of a higher layer (ProvisioningModule creates the `velexis` test connection of a new OTA, PBE-022), and the
 // statement descriptor rules (descriptor.ts, plain functions).
 //
-// - `PaymentConnectionsModule.forApi()` (AppModule) adds the portal's payment routes: `listPaymentConnections`
-//   (PBE-027); the descriptor update (PBE-038) and the M5 Connect Standard and API-key modes join it, and the Connect
-//   account events a worker part.
+// - `PaymentConnectionsModule.forApi()` (AppModule) adds the portal's payment routes over PaymentConnectionsService:
+//   `listPaymentConnections` (PBE-027) and the descriptor update `updatePaymentConnection` (PBE-038); the M5 Connect
+//   Standard and API-key modes join it, and the Connect account events a worker part.
 //
-// It uses the global CommonModule (PLATFORM_DB).
+// It uses the global CommonModule (Clock, PLATFORM_DB) and RedisModule (the InvalidationPublisher), and AuditModule.
 import { Module, type DynamicModule } from "@nestjs/common";
+import { AuditModule } from "../audit/audit.module";
 import { PaymentConnectionsController } from "./payment-connections.controller";
 import { PaymentConnectionsRepository } from "./payment-connections.repository";
+import { PaymentConnectionsService } from "./payment-connections.service";
 
 @Module({
+  imports: [AuditModule],
   providers: [PaymentConnectionsRepository],
   exports: [PaymentConnectionsRepository],
 })
@@ -22,6 +25,7 @@ export class PaymentConnectionsModule {
     return {
       module: PaymentConnectionsModule,
       controllers: [PaymentConnectionsController],
+      providers: [PaymentConnectionsService],
     };
   }
 }
