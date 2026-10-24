@@ -14,7 +14,11 @@
 // and addNote (console-booking-actions.service.ts), which call Amadeus through AmadeusModule's client. Since OBE-068:
 // console.payments.list, get, capture and refund (console-payments.controller.ts, console-payments.service.ts), which
 // read and change the payments module's rows (PaymentsRepository from BookingsModule, RefundsRepository), call Stripe
-// through PaymentGatewayModule's gateway and queue `refund.submit` on `ota-payments` (QueuesModule).
+// through PaymentGatewayModule's gateway and queue `refund.submit` on `ota-payments` (QueuesModule). Since OBE-063:
+// console.bookings.issue and cancel (console-booking-actions.service.ts), which claim a booking for its issuance with the
+// ticketing job's TicketingRepository (a plain provider, provided here again), record tickets with BookingsModule's
+// OrderRecorder, capture through ConsolePaymentsService, cancel through BookingsModule's CancellationService, and
+// answer the same-key replays of a cancellation's `504` (ConsoleCancelBookingIdempotencyHooks).
 import { Global, Module } from "@nestjs/common";
 import { AmadeusModule } from "../amadeus/amadeus.module";
 import { BookingsModule } from "../bookings/bookings.module";
@@ -25,7 +29,11 @@ import { QueuesModule } from "../common/queues/queues.module";
 import { PaymentGatewayModule } from "../payments/payment-gateway.module";
 import { RefundsRepository } from "../payments/refunds.repository";
 import { TenancyModule } from "../tenancy/tenancy.module";
-import { ConsoleBookingActionsService } from "./console-booking-actions.service";
+import { TicketingRepository } from "../bookings/ticketing.service";
+import {
+  ConsoleBookingActionsService,
+  ConsoleCancelBookingIdempotencyHooks,
+} from "./console-booking-actions.service";
 import { ConsoleBookingsController } from "./console-bookings.controller";
 import { ConsoleBookingsRepository } from "./console-bookings.repository";
 import { ConsoleBookingsService } from "./console-bookings.service";
@@ -49,6 +57,8 @@ import { StaffActionsWriter } from "./staff-actions.writer";
     ConsoleBookingsRepository,
     ConsoleBookingsService,
     ConsoleBookingActionsService,
+    ConsoleCancelBookingIdempotencyHooks,
+    TicketingRepository,
     ConsolePaymentsService,
     RefundsRepository,
   ],

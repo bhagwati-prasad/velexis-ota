@@ -11,13 +11,21 @@
 // it opts in with `@AuditedRead`, and its use case writes the `order.retrieve` row with the booking, which the
 // interceptor then leaves alone. patch and resync answer the booking's new `ETag`;
 // addNote answers `201` with `Location` (the booking, anchored at the note), and its `Idempotency-Key` is the
-// idempotency interceptor's. Issue and cancel (OBE-063) and the PNR lookup and import (OBE-064) join this controller.
+// idempotency interceptor's. The PNR lookup and import (OBE-064) join this controller.
+//
+// Since OBE-063: console.bookings.issue (`bookings:issue`) and cancel (`bookings:cancel`), both `If-Match` and
+// `Idempotency-Key`, over the same service: each answers the booking with its new `ETag`; a claim that found the booking
+// held by another claim or writer answers `503 SERVICE_UNAVAILABLE` with `Retry-After` (`retryAfterOf`, as
+// bookings.cancel's), which the idempotency layer does not keep. Their use cases write the `booking.issue` and
+// `booking.cancel` staff actions.
+//
 // Nest registers a controller's routes in the order of its methods, and Express tries them in that order: the literal
 // `GET by-record-locator` must be declared before `GET :bookingId`, or the get handler answers it (the route-parity
 // test reads the router's order and fails then).
 import { Controller, Get, HttpCode, Patch, Post, Res } from "@nestjs/common";
 import type { Response } from "express";
 import { bookingEtagOf } from "../bookings/bookings.mapper";
+import { retryAfterOf } from "../bookings/cancellation.service";
 import {
   OpenApiInput,
   OpenApiOperation,
@@ -36,6 +44,19 @@ import {
 } from "./console-bookings.mapper";
 import { ConsoleBookingsService } from "./console-bookings.service";
 import { AuditedRead } from "./staff-actions.writer";
+
+/** Runs a use case; its `503` of a booking another claim holds gets `Retry-After` (the same key can come again). */
+async function withRetryAfter<T>(res: Response, run: () => Promise<T>): Promise<T> {
+  try {
+    return await run();
+  } catch (error) {
+    const wait = retryAfterOf(error);
+    if (wait !== undefined) {
+      res.setHeader("Retry-After", String(wait));
+    }
+    throw error;
+  }
+}
 
 /** The validated body of an operation; the validation interceptor refuses a request without one, never reached. */
 function bodyOf<B>(operationId: string, body: B | undefined): B {
@@ -88,6 +109,40 @@ export class ConsoleBookingsController {
       input.path.bookingId,
       input.headers["If-Match"],
       bodyOf("consolePatchBooking", input.body),
+    );
+    res.setHeader("ETag", bookingEtagOf(booking.version));
+    res.setHeader("Cache-Control", CONSOLE_BOOKING_CACHE_CONTROL);
+    return booking;
+  }
+
+  @Post(":bookingId/issuance")
+  @HttpCode(200)
+  @OpenApiOperation("consoleIssueBooking")
+  async issue(
+    @OpenApiInput() input: ValidatedInput<"consoleIssueBooking">,
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<ConsoleBooking> {
+    const booking = await withRetryAfter(res, () =>
+      this.actions.issue(input.path.bookingId, input.headers["If-Match"], input.body ?? {}),
+    );
+    res.setHeader("ETag", bookingEtagOf(booking.version));
+    res.setHeader("Cache-Control", CONSOLE_BOOKING_CACHE_CONTROL);
+    return booking;
+  }
+
+  @Post(":bookingId/cancellation")
+  @HttpCode(200)
+  @OpenApiOperation("consoleCancelBooking")
+  async cancel(
+    @OpenApiInput() input: ValidatedInput<"consoleCancelBooking">,
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<ConsoleBooking> {
+    const booking = await withRetryAfter(res, () =>
+      this.actions.cancel(
+        input.path.bookingId,
+        input.headers["If-Match"],
+        bodyOf("consoleCancelBooking", input.body),
+      ),
     );
     res.setHeader("ETag", bookingEtagOf(booking.version));
     res.setHeader("Cache-Control", CONSOLE_BOOKING_CACHE_CONTROL);

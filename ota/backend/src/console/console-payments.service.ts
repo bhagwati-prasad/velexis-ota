@@ -481,6 +481,27 @@ export class ConsolePaymentsService {
   async capture(paymentId: string, ifMatch: string, body: ConsoleCaptureRequest): Promise<ConsolePayment> {
     const tenant = this.tenants.require();
     const plan = await this.tx.run((trx) => this.planCapture(trx, tenant, paymentId, ifMatch, body));
+    await this.captureAndRecord(tenant, plan, body.reason);
+    return await this.read(tenant, paymentId);
+  }
+
+  /**
+   * The capture of console.bookings.issue (OBE-063: an authorised Stripe payment is captured before the order is
+   * issued): the whole authorisation of payment `paymentId` of the request's environment, as `capture` without an
+   * amount (`pi:capture:<pay_id>:<amount>`, the same checks, failures and record, its `payment.capture` staff action
+   * with `reason`), without the payment's `If-Match` (the issuance's is the booking's).
+   */
+  async captureForIssue(paymentId: string, reason: string): Promise<void> {
+    const tenant = this.tenants.require();
+    const plan = await this.tx.run(async (trx) => {
+      const row = await this.paymentOfEnvironment(trx, tenant, paymentId);
+      return await this.planCapture(trx, tenant, paymentId, paymentEtagOf(row.version), { reason });
+    });
+    await this.captureAndRecord(tenant, plan, reason);
+  }
+
+  /** The capture of a planned payment with no transaction open, then its record (T2; see the file header). */
+  private async captureAndRecord(tenant: RequestTenant, plan: CapturePlan, reason: string): Promise<void> {
     const ctx = this.context(tenant, plan.row);
     let state: GatewayState;
     try {
@@ -488,8 +509,7 @@ export class ConsolePaymentsService {
     } catch (error) {
       state = await this.afterCaptureFailure(ctx, plan, error);
     }
-    await this.tx.run((trx) => this.recordCapture(trx, tenant, plan, state, body.reason));
-    return await this.read(tenant, paymentId);
+    await this.tx.run((trx) => this.recordCapture(trx, tenant, plan, state, reason));
   }
 
   /** T1 of a capture: the checks of the file header, and the amount. */

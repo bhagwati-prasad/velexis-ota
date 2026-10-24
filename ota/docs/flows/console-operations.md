@@ -34,6 +34,7 @@ sequenceDiagram
   AD->>O: console.bookings.issue (service key, Bearer staff token, X-Velexis-Environment: live, If-Match, Idempotency-Key)
   O->>O: tid = tenant, permission bookings:issue, live allowed for role
   O->>S: capture authorised payment (capturePayment default true)
+  O->>A: Flight Order Management GET (the resync first: tickets already issued are recorded, not issued again)
   O->>A: Flight Order Issue
   O->>D: tickets, booking ticketed, booking_events, staff_actions booking.issue (redacted before/after)
   O-->>AD: booking (new ETag)
@@ -47,8 +48,8 @@ sequenceDiagram
 | Bookings list and detail | `console.bookings.list`, `.get` | `bookings:read` | — (`refresh=true`: GET) | Indexes lead with `environment`; filters of db README §10 |
 | Amadeus order view | `console.bookings.retrieve` | `bookings:read` | Flight Order Management GET | Net prices, full documents (decrypted for display, never logged) |
 | Patch | `console.bookings.patch` | `bookings:write` | PATCH | `If-Match`; 2552 → `409 VERSION_CONFLICT`; `notifyCustomer` e-mails `booking.updated` (and a notice to a previous contact address) after a change Amadeus answered, a `tags`/`metadata` patch only warns (FIX-W28-NOTIFY) |
-| Issue | `console.bookings.issue` | `bookings:issue` | Flight Order Issue | Captures first; `allowUnpaid` owner/admin only |
-| Cancel | `console.bookings.cancel` | `bookings:cancel` | DELETE | Refund modes `none`, `full`, `amount` |
+| Issue | `console.bookings.issue` | `bookings:issue` | GET (the resync first), Flight Order Issue (GET after an unknown outcome) | Captures first; `allowUnpaid` owner/admin only; the ticketing job's claim; airline card only with `other` `CASH`/`ACCOUNT` (OBE-063) |
+| Cancel | `console.bookings.cancel` | `bookings:cancel` | GET, DELETE | Refund modes `none`, `full`, `amount` through the money step of bookings.cancel; airline cards never through Stripe (OBE-063) |
 | Resync, notes | `console.bookings.resync`, `.addNote` | `bookings:write` | GET (resync) | Notes are `booking_events` visible to staff only |
 | PNR lookup and import | `console.bookings.findByRecordLocator`, `.import` | `bookings:read`, `bookings:write` | Get Flight Order By Record Locator | Only orders owned by the tenant's offices (`403 OFFICE_NOT_ALLOWED`); `409 ORDER_ALREADY_IMPORTED` |
 | Queues | `console.queues.list`, `.listSnapshots` | `queues:read` | Queue List | Office of the tenant only; poller stores snapshots every 15 min |
@@ -72,6 +73,8 @@ sequenceDiagram
    - audited reads: viewing a customer (`customer.view`), the PNR lookup (`pnr.lookup`), the order retrieve (`order.retrieve`) and the raw Amadeus reads (`amadeus.<operationId>`); each handler opts in with `@AuditedRead` ([`../../backend/README.md`](../../backend/README.md)).
 
    Other successful reads (the bookings list and detail, queues, the customer search, the supplier log, settings) and the session calls `console.auth.refresh`, `signOut` and `me` write none. A `429 RATE_LIMITED` writes none either: the rate-limit guard logs the staff member or key, the operation and the limit.
+
+8. **Issue and cancel** (OBE-063, [`../../backend/README.md`](../../backend/README.md) "Console: the booking actions"). `console.bookings.issue` takes the ticketing job's claim (`ticketing_status = in_progress`, OBE-044), so the job and a staff issuance never run together, captures an authorised Stripe payment through console.payments.capture's path (its own `payment.capture` staff action), reads the order first as every attempt of the job does ([OADR-0008](../adr/0008-ticketing-policy.md) point 4: tickets an earlier, timed-out issuance made are recorded, not issued again; the order is never issued without that read), then sends Flight Order Issue once; after a timeout it reads the order back and records tickets it finds, never issuing again in the request ([OADR-0003](../adr/0003-booking-orchestration-and-supplier-timeout-recovery.md) point 7). An airline-card booking whose card the airline did not charge is unpaid: it needs `allowUnpaid` (owner or admin) and an `other` form of payment. `console.bookings.cancel` is bookings.cancel's claim, DELETE, record and money steps with the staff's decision instead of a quote, refused (`409 BOOKING_NOT_MODIFIABLE`, `ticketing_in_progress`) while a staff issuance or the job holds a fresh ticketing claim: `refund.mode` gives the amount that goes back (`none` nothing, `full` all that can be refunded, `amount` that amount); an authorisation is split as for a customer (the rest of the amount captured, lead decision (1) of 2026-10-23, second batch), voided whole when the request has no `refund`. `cancelled_by = staff`, `cancel_reason` `<reasonCode>: <reason>`; the staff member's text stays out of the customer-visible events. A DELETE without an answer is flagged and checked by the worker like a customer's; an order Amadeus no longer has is recorded as cancelled, with a warning, because the staff asked for it.
 
 ## 4. Failure handling
 

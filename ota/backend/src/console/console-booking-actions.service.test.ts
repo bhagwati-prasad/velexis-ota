@@ -3,12 +3,15 @@
 // differences a resync answers and the retrieve's answer, then ConsoleBookingActionsService over fakes: a refused patch
 // reaches neither the database nor Amadeus, a stale If-Match makes no Amadeus call, a timed-out PATCH is followed by a
 // resync before its 504 and e-mails nothing, and a `tags`/`metadata` patch with `notifyCustomer` sends nothing and
-// warns (FIX-W28-NOTIFY). Against PostgreSQL and the Amadeus stub: test/integration/console/
-// bookings-actions.int.test.ts. Every number here is made up on the spot.
+// warns (FIX-W28-NOTIFY); since OBE-063 the rules of console.bookings.issue (card data, `allowUnpaid`, an airline
+// card's settlement, how the booking's payments pay it, the resync before the issuance, the answers of a failed
+// issuance). Against PostgreSQL and the Amadeus stub: test/integration/console/bookings-actions.int.test.ts and
+// issue-cancel.int.test.ts. Every number here is made up on the spot.
 import { AppError } from "@velexis/errors";
 import type { PinoLogger } from "nestjs-pino";
 import { describe, expect, it, vi } from "vitest";
 import type { AmadeusClient } from "../amadeus/amadeus.client";
+import { AmadeusCallError } from "../amadeus/error-mapper";
 import type {
   BookingChildren,
   BookingRemarkRow,
@@ -18,10 +21,13 @@ import type {
 import type { BookingSyncService } from "../bookings/booking-sync.service";
 import type { BookingUpdatedEmails } from "../bookings/booking-updated-emails";
 import type { CustomerBookingsService } from "../bookings/customer-bookings.service";
-import type { BookingTravelerDocuments } from "../bookings/order-recorder";
+import type { CancellationService } from "../bookings/cancellation.service";
+import type { BookingTravelerDocuments, OrderRecorder } from "../bookings/order-recorder";
+import type { TicketingRepository } from "../bookings/ticketing.service";
 import type { StaffContext } from "../common/auth/staff.guard";
 import { Clock } from "../common/clock";
 import { IdGenerator } from "../common/ids";
+import type { PaymentsRepository } from "../payments/payments.repository";
 import type { RequestTenant, TenantContext } from "../tenancy/tenant-context";
 import type { TenantSchema } from "@velexis/db";
 import type { TenantTx } from "../tenancy/tenant-tx";
@@ -33,6 +39,10 @@ import {
   consoleSyncChanges,
   contactValuesOf,
   flightOfferRefsOf,
+  issueAnswerOf,
+  issuedBeforeIssue,
+  issuePaymentOf,
+  issueResyncAnswerOf,
   keptOrderDataOf,
   mergeContacts,
   mergeRemarks,
@@ -41,12 +51,15 @@ import {
   orderRemarksOf,
   patchElementsOf,
   planRemarks,
+  refuseAirlineCardIssue,
+  refuseIssueRequest,
   refusePatchRequest,
   type ConsolePatchRequest,
 } from "./console-booking-actions.service";
 import type { ConsoleBooking } from "./console-bookings.mapper";
 import type { ConsoleBookingsRepository } from "./console-bookings.repository";
 import type { ConsoleBookingsService } from "./console-bookings.service";
+import type { ConsolePaymentsService } from "./console-payments.service";
 import type { StaffActionsWriter } from "./staff-actions.writer";
 
 type JsonObject = Record<string, unknown>;
@@ -498,6 +511,11 @@ function setup(patch: () => Promise<unknown> = () => Promise.resolve({ body: {},
     { info: vi.fn(), warn: vi.fn() } as unknown as PinoLogger,
     {} as BookingSyncService,
     emails as unknown as BookingUpdatedEmails,
+    {} as TicketingRepository,
+    {} as OrderRecorder,
+    {} as PaymentsRepository,
+    {} as ConsolePaymentsService,
+    {} as CancellationService,
   );
   return { service, amadeus, refresh, transactions, emails };
 }
@@ -589,5 +607,119 @@ describe("ConsoleBookingActionsService.patch", () => {
     expect(emails.send).not.toHaveBeenCalled();
     expect(booking.warnings).toEqual([NOTIFICATION_NOT_SENT_WARNING]);
     expect(quiet.warnings).toEqual([]);
+  });
+});
+
+describe("console.bookings.issue's rules (OBE-063)", () => {
+  it("[OBE-063 AC2] refuses card data, and allowUnpaid but to an owner or an admin (a console key has no role)", () => {
+    expect(
+      errorOf(() =>
+        refuseIssueRequest(
+          { formOfPayments: [{ creditCard: { brand: "VISA", number: TEST_CARD } }] },
+          "owner",
+        ),
+      ),
+    ).toMatchObject({ code: "FEATURE_DISABLED", details: { feature: "consoleCardPayment" } });
+    for (const role of ["agent", "finance", "viewer", undefined] as const) {
+      expect(errorOf(() => refuseIssueRequest({ allowUnpaid: true }, role))).toMatchObject({
+        code: "FORBIDDEN",
+        details: { option: "allowUnpaid", allowedRoles: ["owner", "admin"], role: role ?? null },
+      });
+    }
+    for (const role of ["owner", "admin"] as const) {
+      expect(() => refuseIssueRequest({ allowUnpaid: true }, role)).not.toThrow();
+    }
+    expect(() => refuseIssueRequest({ allowUnpaid: false }, "agent")).not.toThrow();
+  });
+
+  it("issues an airline-card booking with `other` CASH or ACCOUNT only", () => {
+    const cash = { other: { method: "CASH", flightOfferIds: ["1"] } };
+    expect(() => refuseAirlineCardIssue([cash, { other: { method: "ACCOUNT" } }])).not.toThrow();
+    expect(errorOf(() => refuseAirlineCardIssue(undefined)).fieldErrors).toEqual([
+      expect.objectContaining({ path: "/formOfPayments", code: "required" }),
+    ]);
+    expect(
+      errorOf(() =>
+        refuseAirlineCardIssue([
+          cash,
+          { other: { method: "CHECK" } },
+          { b2bWallet: { cardId: "1" } },
+          { ...cash, b2bWallet: { cardId: "1" } },
+        ]),
+      ).fieldErrors?.map((error) => error.path),
+    ).toEqual(["/formOfPayments/1", "/formOfPayments/2", "/formOfPayments/3"]);
+  });
+
+  it("[OBE-063 AC1] captures an authorised Stripe payment first, needs none for a console booking, and else allowUnpaid", () => {
+    const pay = (status: string, provider = "stripe") => ({
+      id: `pay_${status}`,
+      provider,
+      status,
+      providerPaymentId: provider === "stripe" ? "pi_1" : null,
+    });
+    expect(
+      issuePaymentOf({ channel: "storefront", payments: [pay("authorized")], capturePayment: true }),
+    ).toEqual({ kind: "capture", paymentId: "pay_authorized" });
+    expect(
+      issuePaymentOf({ channel: "storefront", payments: [pay("authorized")], capturePayment: false }),
+    ).toEqual({ kind: "unpaid" });
+    expect(
+      issuePaymentOf({
+        channel: "storefront",
+        payments: [pay("failed"), pay("captured")],
+        capturePayment: true,
+      }),
+    ).toEqual({ kind: "paid" });
+    expect(
+      issuePaymentOf({
+        channel: "storefront",
+        payments: [pay("processing", "airline")],
+        capturePayment: true,
+      }),
+    ).toEqual({ kind: "unpaid" });
+    expect(issuePaymentOf({ channel: "storefront", payments: [], capturePayment: true })).toEqual({
+      kind: "unpaid",
+    });
+    for (const channel of ["console", "import"]) {
+      expect(issuePaymentOf({ channel, payments: [], capturePayment: true })).toEqual({
+        kind: "not_applicable",
+      });
+    }
+  });
+
+  it("answers a failed issuance in the operation's codes", () => {
+    for (const code of [
+      "TICKETING_FAILED",
+      "SUPPLIER_REJECTED",
+      "VERSION_CONFLICT",
+      "SUPPLIER_TIMEOUT",
+    ] as const) {
+      expect((issueAnswerOf(new AppError(code)) as AppError).code).toBe(code);
+    }
+    expect((issueAnswerOf(new AppError("TRAVELER_DATA_INVALID")) as AppError).code).toBe("SUPPLIER_REJECTED");
+    expect((issueAnswerOf(new AppError("OFFICE_NOT_ALLOWED")) as AppError).code).toBe("SUPPLIER_ERROR");
+  });
+
+  it("records the tickets the resync before an issuance finds instead of issuing again (OADR-0008 point 4)", () => {
+    expect(issuedBeforeIssue("confirmed", "full")).toBe(true);
+    expect(issuedBeforeIssue("confirmed", "partial")).toBe(true);
+    expect(issuedBeforeIssue("confirmed", "none")).toBe(false);
+    // A partially ticketed booking's own tickets are no reason to skip the issuance of the others.
+    expect(issuedBeforeIssue("partially_ticketed", "partial")).toBe(false);
+    expect(issuedBeforeIssue("partially_ticketed", "full")).toBe(true);
+  });
+
+  it("answers a failed resync before an issuance without a 504: nothing was sent for issuance", () => {
+    const amadeus404 = new AppError("SUPPLIER_ERROR", {
+      cause: new AmadeusCallError("getFlightOrder", { kind: "http", status: 404, issues: [] }),
+    });
+    expect((issueResyncAnswerOf(amadeus404) as AppError).code).toBe("SUPPLIER_REJECTED");
+    expect((issueResyncAnswerOf(new AppError("SUPPLIER_TIMEOUT")) as AppError).code).toBe(
+      "SUPPLIER_UNAVAILABLE",
+    );
+    for (const code of ["SUPPLIER_UNAVAILABLE", "SUPPLIER_ERROR", "RATE_LIMITED"] as const) {
+      expect((issueResyncAnswerOf(new AppError(code)) as AppError).code).toBe(code);
+    }
+    expect((issueResyncAnswerOf(new AppError("OFFICE_NOT_ALLOWED")) as AppError).code).toBe("SUPPLIER_ERROR");
   });
 });

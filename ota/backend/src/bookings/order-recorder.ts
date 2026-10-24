@@ -807,6 +807,11 @@ export class OrderRecorder {
       readonly supplierRequestId?: string | null;
       readonly requestId: string;
       readonly now: Date;
+      /**
+       * `false` keeps the traveller's e-mail of the event out of the outbox (console.bookings.issue with
+       * `notifyCustomer: false`, OBE-063); the documents are asked for all the same.
+       */
+      readonly notifyCustomer?: boolean;
     },
   ): Promise<void> {
     await this.repository.insertEvent(trx, {
@@ -826,7 +831,7 @@ export class OrderRecorder {
       updated_at: event.now,
     });
     await this.documentRequests.afterBookingEvent(trx, bookingId, event.type);
-    if (event.type === TICKETED_EVENT) {
+    if (event.type === TICKETED_EVENT && event.notifyCustomer !== false) {
       await this.ticketedEmail(trx, bookingId);
     }
   }

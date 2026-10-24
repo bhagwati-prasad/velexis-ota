@@ -1,7 +1,8 @@
 // The pure rules of bookings.cancel (OBE-049, cancellation.service.ts): which payment the money step acts on, how a
 // Flight Order Management DELETE ended, the answers of errors that changed nothing, the state a booking's cancellation
-// events give, the worker's reading of an order, and the facts the fee engine prices a booking's cancellation with.
-// No service is called; the flows are proven in test/integration/bookings/cancel.int.test.ts.
+// events give, the worker's reading of an order, and the facts the fee engine prices a booking's cancellation with;
+// since OBE-063 the rules of a staff cancellation (console.bookings.cancel): the refund modes, the refunds reasons, the
+// stored reason, the flag's staff part and the airline's refusal. No service is called; the flows are proven in test/integration/bookings/cancel.int.test.ts.
 import { AppError } from "@velexis/errors";
 import { describe, expect, it } from "vitest";
 import { AmadeusCallError } from "../amadeus/error-mapper";
@@ -14,7 +15,9 @@ import {
   CANCELLATION_EVENTS,
   cancellationCheckJob,
   cancellationStateOf,
+  cancelReasonOf,
   checkRunOf,
+  consoleRefundReasonOf,
   deleteFailureOf,
   flagOf,
   moneyOf,
@@ -25,6 +28,9 @@ import {
   refundReasonOf,
   retryAfterOf,
   selfServiceCancellationOf,
+  staffCancellationOf,
+  staffRefundOf,
+  staffRefusalOf,
   unsentAnswer,
   type CancellationEventRow,
   type CancellationQuote,
@@ -344,5 +350,146 @@ describe("small rules", () => {
       source: "GDS",
       channel: "storefront",
     });
+  });
+});
+
+describe("a staff cancellation (OBE-063)", () => {
+  const captured = moneyOf([payment({})], new Map());
+  const authorised = moneyOf([payment({ status: "authorized", amountCaptured: "0" })], new Map());
+  const airline = moneyOf(
+    [payment({ provider: "airline", method: "airline_card", providerPaymentId: null })],
+    new Map(),
+  );
+  const eur = (amount: string) => ({ amount, currency: "EUR" });
+  const refusal = (run: () => unknown): AppError => {
+    try {
+      run();
+    } catch (error) {
+      if (error instanceof AppError) {
+        return error;
+      }
+      throw error;
+    }
+    throw new Error("expected an AppError");
+  };
+
+  it("[OBE-063 AC3] gives back nothing, all that can be refunded, or the amount of a captured payment", () => {
+    expect(staffRefundOf(captured, undefined, "EUR", 2)).toEqual({
+      mode: "default",
+      estimate: { amountPaid: "125.47", estimatedRefund: "0.00", penalty: "0.00", otaFee: "125.47" },
+    });
+    expect(staffRefundOf(captured, { mode: "none" }, "EUR", 2).estimate.estimatedRefund).toBe("0.00");
+    expect(staffRefundOf(captured, { mode: "full" }, "EUR", 2).estimate.estimatedRefund).toBe("125.47");
+    expect(staffRefundOf(captured, { mode: "amount", amount: eur("60.00") }, "EUR", 2)).toEqual({
+      mode: "amount",
+      estimate: { amountPaid: "125.47", estimatedRefund: "60.00", penalty: "0.00", otaFee: "65.47" },
+    });
+    const above = refusal(() => staffRefundOf(captured, { mode: "amount", amount: eur("125.48") }, "EUR", 2));
+    expect([above.code, above.details]).toEqual([
+      "UNPROCESSABLE",
+      { reason: "amount_exceeds_captured", refundable: eur("125.47") },
+    ]);
+  });
+
+  it("voids an authorisation without a refund, keeps all of it with none, and splits it with an amount", () => {
+    expect(staffRefundOf(authorised, undefined, "EUR", 2).estimate.estimatedRefund).toBe("125.47");
+    expect(staffRefundOf(authorised, { mode: "full" }, "EUR", 2).estimate.estimatedRefund).toBe("125.47");
+    expect(staffRefundOf(authorised, { mode: "none" }, "EUR", 2).estimate.estimatedRefund).toBe("0.00");
+    expect(
+      staffRefundOf(authorised, { mode: "amount", amount: eur("100.47") }, "EUR", 2).estimate,
+    ).toMatchObject({ estimatedRefund: "100.47", otaFee: "25.00" });
+    expect(
+      refusal(() => staffRefundOf(authorised, { mode: "amount", amount: eur("200.00") }, "EUR", 2)).details,
+    ).toMatchObject({ reason: "amount_exceeds_authorized" });
+  });
+
+  it("never refunds an airline card through Stripe, nor a booking without a payment", () => {
+    expect(staffRefundOf(airline, undefined, "EUR", 2).estimate.estimatedRefund).toBe("0.00");
+    for (const refund of [{ mode: "full" as const }, { mode: "amount" as const, amount: eur("10.00") }]) {
+      expect(refusal(() => staffRefundOf(airline, refund, "EUR", 2)).details).toEqual({
+        reason: "refund_via_airline",
+      });
+    }
+    expect(staffRefundOf(undefined, { mode: "full" }, "EUR", 2).estimate).toEqual({
+      amountPaid: "0.00",
+      estimatedRefund: "0.00",
+      penalty: "0.00",
+      otaFee: "0.00",
+    });
+    expect(
+      refusal(() => staffRefundOf(undefined, { mode: "amount", amount: eur("1.00") }, "EUR", 2)).details,
+    ).toMatchObject({ reason: "amount_exceeds_captured" });
+    // An airline card the airline has not charged (no tickets): never through Stripe either.
+    expect(refusal(() => staffRefundOf(undefined, { mode: "full" }, "EUR", 2, true)).details).toEqual({
+      reason: "refund_via_airline",
+    });
+  });
+
+  it("refuses an amount without mode amount, a mode amount without one, another currency and a bad amount", () => {
+    const paths = (run: () => unknown) => refusal(run).fieldErrors?.map((error) => error.path);
+    expect(paths(() => staffRefundOf(captured, { mode: "full", amount: eur("1.00") }, "EUR", 2))).toEqual([
+      "/refund/amount",
+    ]);
+    expect(paths(() => staffRefundOf(captured, { mode: "amount" }, "EUR", 2))).toEqual(["/refund/amount"]);
+    for (const amount of ["0", "0.00", "1.234", "-1", "1e3"]) {
+      expect(paths(() => staffRefundOf(captured, { mode: "amount", amount: eur(amount) }, "EUR", 2))).toEqual(
+        ["/refund/amount/amount"],
+      );
+    }
+    expect(paths(() => staffRefundOf(captured, { mode: "amount", amount: eur("1.50") }, "EUR", 0))).toEqual([
+      "/refund/amount/amount",
+    ]);
+    const currency = refusal(() =>
+      staffRefundOf(captured, { mode: "amount", amount: { amount: "1.00", currency: "USD" } }, "EUR", 2),
+    );
+    expect([currency.code, currency.details]).toEqual([
+      "UNPROCESSABLE",
+      { reason: "currency_mismatch", currency: "EUR" },
+    ]);
+  });
+
+  it("maps the console's reason codes to refund reasons, as the document says", () => {
+    for (const code of ["customer_request", "duplicate", "fraud", "schedule_change", "other"]) {
+      expect(consoleRefundReasonOf(code)).toBe(code);
+    }
+    for (const code of ["no_payment", "ticketing_deadline", "airline_request"]) {
+      expect(consoleRefundReasonOf(code)).toBe("booking_cancelled");
+    }
+  });
+
+  it("stores the customer's code, or the staff's `<reasonCode>: <reason>`", () => {
+    expect(cancelReasonOf({ reasonCode: "illness", staff: undefined })).toBe("illness");
+    expect(
+      cancelReasonOf({
+        reasonCode: "fraud",
+        staff: { reason: "Card reported stolen", refundMode: "full", notifyCustomer: true },
+      }),
+    ).toBe("fraud: Card reported stolen");
+  });
+
+  it("reads the staff's part of a flag, and nothing of a customer's or of data it cannot read", () => {
+    const staff = { reason: "Card reported stolen", refundMode: "full", notifyCustomer: false };
+    expect(
+      staffCancellationOf({
+        cancelledBy: "staff",
+        staff,
+        actor: { type: "staff", id: "stf_1" },
+      }),
+    ).toEqual({ staff, actor: { type: "staff", id: "stf_1" } });
+    expect(
+      staffCancellationOf({ cancelledBy: "staff", staff, actor: { type: "api_key", id: "key_1" } })?.actor,
+    ).toEqual({ type: "api_key", id: "key_1" });
+    expect(staffCancellationOf({ actor: { type: "customer", id: "cus_1" } })).toBeUndefined();
+    expect(
+      staffCancellationOf({ cancelledBy: "staff", staff: { ...staff, refundMode: "most" } }),
+    ).toBeUndefined();
+    expect(staffCancellationOf(null)).toBeUndefined();
+  });
+
+  it("answers the airline's refusal of a staff DELETE as 422 SUPPLIER_REJECTED with its supplier issue", () => {
+    const rejected = amadeusError("SUPPLIER_REJECTED", 400);
+    expect(staffRefusalOf(rejected)).toBe(rejected);
+    const other = staffRefusalOf(amadeusError("TRAVELER_DATA_INVALID", 400));
+    expect([other.code, other.cause]).toEqual(["SUPPLIER_REJECTED", expect.any(AppError)]);
   });
 });

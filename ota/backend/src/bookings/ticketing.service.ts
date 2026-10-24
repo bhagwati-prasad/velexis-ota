@@ -35,6 +35,14 @@
 // Staff alerts go to `storefront_settings.ops_alert_email`, else to the owners' e-mails read from the platform, else to
 // OPS_ALERT_EMAIL (Velexis ops): notifications/staff-recipients.ts (OBE-055, OADR-0013 item 5). Log lines carry ids,
 // attempt numbers and error codes, never an Amadeus body, a ticket or a person's data.
+//
+// console.bookings.issue (OBE-063, console/console-booking-actions.service.ts) takes the same claim in the API: the
+// booking `FOR NO KEY UPDATE SKIP LOCKED` through TicketingRepository.lock, a fresh claim of this job or of another
+// request refused (`ticketingClaimFresh`), then `in_progress` with `ticketing_last_attempt_at = now` as its fencing
+// token, so the job skips the booking while staff issue it (claimSkip: `not_due`) and a staff issuance never runs
+// next to the job's. Like each attempt of the job it reads the order first (step 2: tickets an earlier, timed-out call
+// issued are recorded, not issued again), and its result step records the tickets with the job's own step
+// (`recordIssuedTickets`). console.bookings.cancel refuses a booking while such a claim is fresh.
 import { Injectable } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { AppError } from "@velexis/errors";
@@ -307,6 +315,84 @@ export function claimSkip(
   return retryDue || abandoned ? undefined : "not_due";
 }
 
+/**
+ * Whether a booking's ticketing claim is fresh at `now`: `in_progress` and claimed less than TICKETING_CLAIM_TTL_MS ago,
+ * by this job or by a staff issuance (console.bookings.issue refuses to claim such a booking; an older claim is
+ * abandoned and may be taken over).
+ */
+export function ticketingClaimFresh(
+  row: Pick<TicketingBookingRow, "ticketingStatus" | "ticketingLastAttemptAt">,
+  now: Date,
+): boolean {
+  return (
+    row.ticketingStatus === "in_progress" &&
+    row.ticketingLastAttemptAt !== null &&
+    now.getTime() - row.ticketingLastAttemptAt.getTime() <= TICKETING_CLAIM_TTL_MS
+  );
+}
+
+/** What the result step writes with the tickets (the event's facts). */
+export interface IssuedTicketsEvent {
+  readonly actor: { readonly type: string; readonly id: string | null };
+  readonly summary: string;
+  readonly data: Record<string, unknown>;
+  readonly supplierRequestId: string | null;
+  readonly requestId: string;
+  readonly now: Date;
+  /** Queue the traveller's `booking.ticketed` e-mail (default); the e-ticket receipts are queued in every case. */
+  readonly notifyCustomer?: boolean;
+}
+
+/**
+ * The result step of an issuance with tickets, in the caller's transaction, whose caller locked the booking and
+ * checked its claim (the ticketing job's `fenced`, console.bookings.issue's own fence): `booking_tickets` (a number the
+ * booking has already is kept), `ticketed` / `issued` (or `partially_ticketed` / `partially_issued`), `issued_at`, no
+ * next attempt or error, the redacted `order_snapshot`, `last_synced_at`, `version + 1`, and the event
+ * `booking.ticketed` (OrderRecorder.event: the receipts and, unless `notifyCustomer` is false, the e-mail). Answers the
+ * statuses written.
+ */
+export async function recordIssuedTickets(
+  trx: TenantTransaction,
+  deps: { readonly bookings: BookingsRepository; readonly recorder: OrderRecorder },
+  current: Pick<TicketingBookingRow, "id" | "status" | "issuedAt">,
+  order: CreatedOrder,
+  event: IssuedTicketsEvent,
+): Promise<{ readonly status: string; readonly ticketingStatus: string }> {
+  const coverage = ticketCoverage(order.travelerIds, order.tickets);
+  if (coverage === "none") {
+    throw new Error("recordIssuedTickets: an order without tickets");
+  }
+  const { now } = event;
+  const travelerIds = await deps.bookings.travelerIds(trx, current.id);
+  await deps.bookings.insertTickets(trx, deps.recorder.ticketRows(current.id, order, travelerIds, now));
+  const state = ticketingStateOf(coverage, { issueRequested: true, policy: "issue_after_payment" });
+  await deps.bookings.updateBooking(trx, current.id, {
+    status: state.status,
+    ticketing_status: state.ticketingStatus,
+    issued_at: current.issuedAt ?? now,
+    ticketing_next_attempt_at: null,
+    ticketing_error_code: null,
+    ticketing_error: null,
+    order_snapshot: JSON.stringify(redactPayload(order.data)),
+    last_synced_at: now,
+    updated_at: now,
+  });
+  await deps.recorder.event(trx, current.id, {
+    type: "booking.ticketed",
+    actor: event.actor,
+    statusFrom: current.status,
+    statusTo: state.status,
+    summary: event.summary,
+    data: event.data,
+    visibleToCustomer: true,
+    supplierRequestId: event.supplierRequestId,
+    requestId: event.requestId,
+    now,
+    ...(event.notifyCustomer === false ? { notifyCustomer: false } : {}),
+  });
+  return { status: state.status, ticketingStatus: state.ticketingStatus };
+}
+
 /** The API code of a failed call: an AppError's code, `INTERNAL_ERROR` for anything else (a bug). */
 function codeOf(error: unknown): string {
   return error instanceof AppError ? error.code : "INTERNAL_ERROR";
@@ -567,29 +653,11 @@ export class TicketingService {
       if (current === undefined) {
         return false;
       }
-      const travelerIds = await this.bookings.travelerIds(trx, current.id);
-      await this.bookings.insertTickets(trx, this.recorder.ticketRows(current.id, order, travelerIds, now));
-      const state = ticketingStateOf(coverage, { issueRequested: true, policy: "issue_after_payment" });
-      await this.bookings.updateBooking(trx, current.id, {
-        status: state.status,
-        ticketing_status: state.ticketingStatus,
-        issued_at: current.issuedAt ?? now,
-        ticketing_next_attempt_at: null,
-        ticketing_error_code: null,
-        ticketing_error: null,
-        order_snapshot: JSON.stringify(redactPayload(order.data)),
-        last_synced_at: now,
-        updated_at: now,
-      });
-      await this.recorder.event(trx, current.id, {
-        type: "booking.ticketed",
+      await recordIssuedTickets(trx, { bookings: this.bookings, recorder: this.recorder }, current, order, {
         actor: SYSTEM_ACTOR,
-        statusFrom: current.status,
-        statusTo: state.status,
         summary:
           via === "resync" ? "E-tickets issued (found at the airline and recorded)." : "E-tickets issued.",
         data: { tickets: order.tickets.map((ticket) => ticket.documentNumber), attempt: claim.attempts, via },
-        visibleToCustomer: true,
         supplierRequestId,
         requestId,
         now,

@@ -15,6 +15,7 @@ import type {
 } from "./bookings.repository";
 import {
   cancellationOf,
+  cancelReasonParts,
   customerOrderOf,
   decodeListCursor,
   encodeListCursor,
@@ -706,5 +707,63 @@ describe("the cancellation of a booking (FIX-W28-CANCEL)", () => {
     expect(cancellationOf(input({ ...base, scope: "console" }))?.comment).toBe(
       "Duplicate of another booking (internal note)",
     );
+  });
+
+  it("[OBE-063 AC3] reads a staff cancellation's `<reasonCode>: <reason>`: the code everywhere, the text in console scope only", () => {
+    const staff = {
+      cancelledBy: "staff",
+      cancelReason: "fraud: Card reported stolen by the issuer",
+      // The customer-visible event names the code and never the staff member's text.
+      facts: facts({
+        cancelled: event(CANCELLATION_EVENTS.cancelled, { cancelledBy: "staff", reasonCode: "fraud" }),
+      }),
+    } as const;
+    expect(cancellationOf(input(staff))).toMatchObject({
+      cancelledBy: "staff",
+      reasonCode: "fraud",
+      comment: null,
+    });
+    expect(cancellationOf(input({ ...staff, scope: "console" }))).toMatchObject({
+      reasonCode: "fraud",
+      comment: "Card reported stolen by the issuer",
+    });
+    expect(cancelReasonParts("no_payment: Unpaid after 3 reminders")).toEqual({
+      code: "no_payment",
+      text: "Unpaid after 3 reminders",
+    });
+    expect(cancelReasonParts("illness")).toEqual({ code: "illness", text: null });
+    expect(cancelReasonParts("Every segment was cancelled: by the airline")).toEqual({
+      code: null,
+      text: "Every segment was cancelled: by the airline",
+    });
+    expect(cancelReasonParts(null)).toEqual({ code: null, text: null });
+  });
+
+  it("shows an undecided staff cancellation (a DELETE without an answer) as the staff's, without its text", () => {
+    const live = { id: BOOKING_ID, status: "ticketed", cancelledAt: null, amountPaid: "125.47" };
+    const flag = event(CANCELLATION_EVENTS.timeout, {
+      mode: "void",
+      reasonCode: "fraud",
+      estimate: { amountPaid: "125.47", estimatedRefund: "125.47", penalty: "0.00", otaFee: "0.00" },
+      currency: "EUR",
+      requestedAt,
+      until: at(10 * 60_000).toISOString(),
+      actor: { type: "staff", id: "stf_1" },
+      requestId: "req_1",
+      cancelledBy: "staff",
+      staff: { reason: "Card reported stolen", refundMode: "full", notifyCustomer: true },
+    });
+    for (const scope of ["customer", "console"] as const) {
+      const pending = cancellationOf(
+        input({ booking: live, scope, facts: facts({ state: cancellationStateOf([flag]) }) }),
+      );
+      expect(pending).toMatchObject({
+        status: "pending",
+        cancelledBy: "staff",
+        reasonCode: "fraud",
+        comment: null,
+      });
+      expect(JSON.stringify(pending)).not.toContain("Card reported stolen");
+    }
   });
 });

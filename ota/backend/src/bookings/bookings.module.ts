@@ -152,6 +152,10 @@ import { TicketingRepository, TicketingService } from "./ticketing.service";
     BookingUpdatedEmails,
     CustomerBookingsService,
     PaymentsRepository,
+    // console.bookings.issue records tickets with the ticketing job's step, and cancel cancels through the
+    // cancellation's (OBE-063).
+    OrderRecorder,
+    CancellationService,
   ],
 })
 export class BookingsModule {}

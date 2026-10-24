@@ -746,6 +746,27 @@ const CANCELLATION_REASON_CODES: ReadonlySet<string> = new Set([
 
 const CANCELLED_BY: ReadonlySet<string> = new Set(["customer", "staff", "airline", "system"]);
 
+/**
+ * The parts of `bookings.cancel_reason`: a customer's cancellation stores its reason code; a staff cancellation
+ * (console.bookings.cancel, OBE-063) `<reasonCode>: <reason>`, the document's form, whose text only console scope shows.
+ * A value that does not start with one of the document's codes is free text (`code` `null`).
+ */
+export function cancelReasonParts(value: string | null): {
+  readonly code: string | null;
+  readonly text: string | null;
+} {
+  if (value === null) {
+    return { code: null, text: null };
+  }
+  const separator = value.indexOf(": ");
+  const code = separator < 0 ? value : value.slice(0, separator);
+  if (!CANCELLATION_REASON_CODES.has(code)) {
+    return { code: null, text: value.trim() === "" ? null : value };
+  }
+  const rest = separator < 0 ? "" : value.slice(separator + 2).trim();
+  return { code, text: rest === "" ? null : rest };
+}
+
 /** The payment statuses of a captured payment (its kept amount was captured). */
 const CAPTURED_PAYMENT_STATUSES: ReadonlySet<string> = new Set([
   "captured",
@@ -911,7 +932,8 @@ export function cancellationOf(input: CancellationInput): Cancellation | null {
         status: "pending",
         requestedAt: flag.requestedAt,
         cancelledAt: null,
-        cancelledBy: "customer",
+        // A staff cancellation's flag says so (OBE-063); its text is never in the flag's customer-facing fields.
+        cancelledBy: flag.cancelledBy,
         reasonCode: reasonOf(flag.reasonCode, "other"),
         comment: flag.comment,
         ticketsVoided: false,
@@ -934,9 +956,15 @@ export function cancellationOf(input: CancellationInput): Cancellation | null {
   const data =
     eventData["cancelledBy"] === undefined || eventData["cancelledBy"] === cancelledBy ? eventData : {};
   const cancelledAt = booking.cancelledAt.toISOString();
+  // A staff cancellation's text is in `cancel_reason` (`<reasonCode>: <reason>`), never in its customer-visible event.
+  const stored = cancelReasonParts(input.cancelReason);
   const comment =
     cancelledBy === "customer" || input.scope === "console"
-      ? (text(data["comment"]) ?? (input.scope === "console" ? text(data["reason"]) : undefined) ?? null)
+      ? (text(data["comment"]) ??
+        (input.scope === "console"
+          ? (text(data["reason"]) ?? (stored.code === null ? null : stored.text))
+          : null) ??
+        null)
       : null;
   return {
     bookingId: booking.id,
@@ -945,7 +973,7 @@ export function cancellationOf(input: CancellationInput): Cancellation | null {
     cancelledAt,
     cancelledBy,
     reasonCode: reasonOf(
-      input.cancelReason ?? data["reasonCode"],
+      input.cancelReason === null ? data["reasonCode"] : (stored.code ?? input.cancelReason),
       cancelledBy === "airline" ? "airline_request" : "other",
     ),
     comment,

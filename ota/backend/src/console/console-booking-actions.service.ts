@@ -87,18 +87,70 @@
 // identification (passport, identity card, driving licence numbers) cut to their last 4, as console.bookings.get shows
 // them (`keptOrderDataOf`, `maskedIdentifications`; the shared redactor cuts them the same way since FIX-W26-SECURITY,
 // and cutting a cut number again changes nothing). Only Amadeus and the retrieve's answer see them in full.
+//
+// Since OBE-063 (flow console-operations.md §1 and §2 "Issue", "Cancel", OADR-0008 point 1, OADR-0018 point 8, the
+// document's consoleIssueBooking and consoleCancelBooking):
+//
+// - `issue` (`bookings:issue`, `If-Match`, `Idempotency-Key`). Before anything is read: a `creditCard` form of payment
+//   (or a B2B wallet's virtual card) answers `403 FEATURE_DISABLED` (`consoleCardPayment`), and `allowUnpaid` from
+//   anyone but an owner or an admin (a console key included) `403 FORBIDDEN` (`details.option = "allowUnpaid"`). Then
+//   the ticketing claim of the ticketing job (T1, ticketing.service.ts): the booking `FOR NO KEY UPDATE SKIP LOCKED`
+//   (held: `503 SERVICE_UNAVAILABLE` with `Retry-After`), the `If-Match`, the status (`ticketed` or issued: `409
+//   ALREADY_ISSUED`; `cancelled`: `409 BOOKING_ALREADY_CANCELLED`; no order: `409 BOOKING_NOT_MODIFIABLE`), no
+//   undecided cancellation and no fresh claim of the job or of another request (`409 BOOKING_NOT_MODIFIABLE`,
+//   `details.reason` `cancellation_pending` or `ticketing_in_progress`), an airline-card booking only with `other`
+//   forms of payment `CASH` or `ACCOUNT` (the OTA's own settlement with the airline; `400 VALIDATION_FAILED` at
+//   `/formOfPayments` otherwise), and the payment (`issuePaymentOf`): a captured one is paid, an authorised Stripe
+//   payment is captured first (`capturePayment`, default true), a console or imported booking without payment needs
+//   none, anything else answers `402 PAYMENT_REQUIRED` unless `allowUnpaid`. The claim writes `ticketing_status =
+//   in_progress` with `ticketing_last_attempt_at = now`, its fencing token, so the ticketing job skips the booking. The
+//   capture (no transaction open): console.payments.capture's (ConsolePaymentsService.captureForIssue, its
+//   `payment.capture` staff action), whose failure releases the claim and answers `402 PAYMENT_DECLINED` (a Stripe that
+//   does not answer: `502 PAYMENT_PROVIDER_ERROR`, which the same key can retry): nothing is issued. Then the resync,
+//   always first, as the job's every attempt (OADR-0008 point 4, OADR-0003 point 7: an issuance that timed out, the
+//   job's or an earlier staff request's, may have issued): Flight Order Management GET, whose tickets for every
+//   traveller (or, for a booking without any yet, for some) are recorded as found, without a second issuance
+//   (`resyncBeforeIssue`); a GET that fails releases the claim and answers its error (a timeout as `503
+//   SUPPLIER_UNAVAILABLE`, no issuance being in doubt; an order Amadeus no longer has as `422 SUPPLIER_REJECTED`), so
+//   the order is never issued without it. Then Flight Order Issue with the request's forms of payment, or the
+//   OTA-merchant `other` of the booking's offers (the job's). An answer without a reliable outcome (a timeout, an
+//   Amadeus `5xx`, an unreadable `2xx`) is followed by Flight Order Management GET (the resync of OADR-0003 point 7,
+//   never a second issuance): tickets found are recorded, else the claim is released and the answer is the call's (`504
+//   SUPPLIER_TIMEOUT`: resync before retrying). A refusal (`502 TICKETING_FAILED`, `422 SUPPLIER_REJECTED`, `409
+//   VERSION_CONFLICT`) releases the claim: the ticketing status it found (an abandoned `in_progress` as `failed`), its
+//   next attempt, the error code and a staff-only `booking.ticketing_failed` event. With tickets (T2, fenced by the
+//   claim): the job's result step (`recordIssuedTickets`: tickets, status, snapshot, `booking.ticketed` with the
+//   receipts and, unless `notifyCustomer: false`, the e-mail) and the `booking.issue` staff action with the redacted
+//   before and after. The idempotency interceptor serialises a double submit of one key: the second request replays the
+//   first answer, so the payment is captured and the order issued once.
+// - `cancel` (`bookings:cancel`, `If-Match`, `Idempotency-Key`): CancellationService.cancelByStaff (see its file
+//   header: the refresh, the claim, the DELETE, the record and money steps of OBE-049 with `refund.mode`, the flag
+//   and the worker's check of a DELETE without an answer), whose record step's transaction writes the `booking.cancel`
+//   staff action; the answer is the booking, with ORDER_GONE_WARNING when Amadeus no longer had the order. The
+//   same-key replays of its `504` are answered from the booking (ConsoleCancelBookingIdempotencyHooks).
 import { Injectable } from "@nestjs/common";
 import type { components, operations } from "@velexis/api-types";
 import type { Insertable, TenantDatabase, Updateable } from "@velexis/db";
 import { AppError, isAppError, type FieldError, type OtaErrorCode } from "@velexis/errors";
 import { redactPayload } from "@velexis/logger";
 import { InjectPinoLogger, PinoLogger } from "nestjs-pino";
-import { AmadeusClient, requestPath, type PatchFlightOrderRequest } from "../amadeus/amadeus.client";
+import {
+  AmadeusClient,
+  requestPath,
+  type IssueFlightOrderRequest,
+  type PatchFlightOrderRequest,
+} from "../amadeus/amadeus.client";
 import type { AmadeusCallContext } from "../amadeus/call-context";
 import { AmadeusCallError } from "../amadeus/error-mapper";
 import { AMADEUS_OPERATIONS } from "../amadeus/limits";
+import {
+  createFailureKind,
+  pendingBookingOf,
+  replayedTimeout,
+} from "../bookings/booking-orchestrator.service";
 import { VELEXIS_REMARK_PREFIX, velexisRemarkText } from "../bookings/booking-reference";
 import {
+  bookingEtagOf,
   dictionariesOf,
   offerFareRulesOf,
   type FareRuleType,
@@ -114,13 +166,46 @@ import {
 } from "../bookings/bookings.repository";
 import { BookingSyncService } from "../bookings/booking-sync.service";
 import { BookingUpdatedEmails, type BookingUpdatedEmail } from "../bookings/booking-updated-emails";
+import {
+  bookingBusy,
+  CancellationService,
+  cancellationStateOf,
+  ORDER_GONE_WARNING,
+  type StaffCancelRecord,
+} from "../bookings/cancellation.service";
 import { CustomerBookingsService } from "../bookings/customer-bookings.service";
-import { BookingTravelerDocuments, deadlineLocalOf, eventActorOf } from "../bookings/order-recorder";
+import {
+  BookingTravelerDocuments,
+  deadlineLocalOf,
+  eventActorOf,
+  OrderRecorder,
+  readCreatedOrder,
+  ticketCoverage,
+  type CreatedOrder,
+  type TicketCoverage,
+} from "../bookings/order-recorder";
 import {
   amadeusOrderContactOf,
   amadeusTravelerOf,
+  buildIssueRequest,
   VELEXIS_REMARK_SUBTYPE,
 } from "../bookings/order-request.builder";
+import {
+  recordIssuedTickets,
+  TicketingRepository,
+  ticketingClaimFresh,
+  type TicketingBookingRow,
+} from "../bookings/ticketing.service";
+import { cancellationEventsOf } from "../bookings/cancellation-state";
+import {
+  IdempotencyHooksFor,
+  type IdempotencyHooks,
+  type IdempotencyRecord,
+  type IdempotencyResource,
+  type IdempotencyResponse,
+} from "../common/http/idempotency.service";
+import { PaymentsRepository, type PaymentRow } from "../payments/payments.repository";
+import type { StaffRole } from "../tenancy/platform-read.repository";
 import type { AmadeusDiscount, StoredDocument } from "../checkout/traveler-documents";
 import { ifMatchSatisfied } from "../checkout/checkout.mapper";
 import { StaffContext } from "../common/auth/staff.guard";
@@ -129,6 +214,7 @@ import { IdGenerator } from "../common/ids";
 import { TenantContext, type RequestTenant } from "../tenancy/tenant-context";
 import { TenantTx, type TenantTransaction } from "../tenancy/tenant-tx";
 import {
+  CONSOLE_BOOKING_CACHE_CONTROL,
   CONSOLE_REFRESH_THROTTLE_MS,
   maskedIdentifications,
   type ConsoleBooking,
@@ -139,6 +225,7 @@ import {
   type ConsoleBookingDetailsRow,
 } from "./console-bookings.repository";
 import { ConsoleBookingsService } from "./console-bookings.service";
+import { ConsolePaymentsService } from "./console-payments.service";
 import { StaffActionsWriter } from "./staff-actions.writer";
 
 type Schemas = components["schemas"];
@@ -152,6 +239,8 @@ export type ConsoleFlightOrderRetrieval = Schemas["ConsoleFlightOrderRetrieval"]
 export type ConsoleBookingResyncResult = Schemas["ConsoleBookingResyncResult"];
 export type ConsoleBookingNote = Schemas["ConsoleBookingNote"];
 export type ConsoleSyncChange = Schemas["ConsoleSyncChange"];
+export type ConsoleIssueRequest = Schemas["ConsoleBookingIssueRequest"];
+export type ConsoleCancelRequest = Schemas["ConsoleBookingCancelRequest"];
 type ConsoleActor = Schemas["ConsoleActor"];
 type Warning = Schemas["Warning"];
 
@@ -175,6 +264,8 @@ export const CONSOLE_BOOKING_ACTIONS = Object.freeze({
   tagsUpdated: "booking.tags_updated",
   resync: "booking.resync",
   note: "booking.note",
+  issue: "booking.issue",
+  cancel: "booking.cancel",
 });
 
 /** The booking events the actions write (staff notes are `staff.note`, STAFF_NOTE_EVENT). */
@@ -186,6 +277,7 @@ const OPERATIONS = Object.freeze({
   retrieve: "console.bookings.retrieve",
   patch: "console.bookings.patch",
   resync: "console.bookings.resync",
+  issue: "console.bookings.issue",
 });
 
 /** `details.feature` of the refusals of console.bookings.patch (`403 FEATURE_DISABLED`). */
@@ -372,6 +464,160 @@ export function refusePatchRequest(body: ConsolePatchRequest): void {
     });
   }
 }
+
+// ---- console.bookings.issue's rules (OBE-063) --------------------------------------------------------------------------
+
+/** The roles that may issue a booking that is not paid (`allowUnpaid`; the document: owner and admin only). */
+export const ALLOW_UNPAID_ROLES: readonly StaffRole[] = Object.freeze(["owner", "admin"]);
+
+/**
+ * The `other` methods an airline-card booking is issued with (OADR-0018 point 8): the OTA's own settlement with the
+ * airline, never a card.
+ */
+export const AIRLINE_CARD_SETTLEMENT_METHODS: readonly string[] = Object.freeze(["CASH", "ACCOUNT"]);
+
+/** The booking statuses an issuance takes: an order without tickets for every traveller. */
+const ISSUABLE_STATUSES: ReadonlySet<string> = new Set(["confirmed", "partially_ticketed"]);
+
+/** The payment statuses of a payment that captured money (the booking is paid). */
+const PAID_STATUSES: ReadonlySet<string> = new Set(["captured", "partially_refunded"]);
+
+/** The `payment.capture` staff action's reason of a capture before an issuance without a reason of its own. */
+export const ISSUE_CAPTURE_REASON = "Captured before issuing the tickets (console.bookings.issue).";
+
+/**
+ * The refusals of an issuance that need no booking (see the file header): card data (`403 FEATURE_DISABLED`), and
+ * `allowUnpaid` from a caller whose `role` is not owner or admin (a console key has none: `403 FORBIDDEN`).
+ */
+export function refuseIssueRequest(body: ConsoleIssueRequest, role: StaffRole | undefined): void {
+  if (carriesCardData(body.formOfPayments)) {
+    throw new AppError("FEATURE_DISABLED", {
+      message: "Card payments cannot be entered in the console.",
+      details: { feature: CONSOLE_CARD_PAYMENT_FEATURE },
+    });
+  }
+  if (body.allowUnpaid === true && (role === undefined || !ALLOW_UNPAID_ROLES.includes(role))) {
+    throw new AppError("FORBIDDEN", {
+      message: "Only an owner or an admin may issue a booking that is not paid.",
+      details: { option: "allowUnpaid", allowedRoles: [...ALLOW_UNPAID_ROLES], role: role ?? null },
+    });
+  }
+}
+
+/**
+ * An airline-card booking is issued only with `other` forms of payment `CASH` or `ACCOUNT` (OADR-0018 point 8): the
+ * card cannot be charged again. `400 VALIDATION_FAILED` at `/formOfPayments` otherwise.
+ */
+export function refuseAirlineCardIssue(formOfPayments: unknown): void {
+  const entries = Array.isArray(formOfPayments) ? formOfPayments : [];
+  const message = "An airline-card booking is issued with an `other` form of payment, CASH or ACCOUNT.";
+  if (entries.length === 0) {
+    throw new AppError("VALIDATION_FAILED", {
+      fieldErrors: [{ path: "/formOfPayments", code: "required", message }],
+    });
+  }
+  const refused: FieldError[] = entries.flatMap((entry: unknown, index) => {
+    const other = isRecord(entry) && isRecord(entry["other"]) ? entry["other"] : undefined;
+    const settled =
+      other !== undefined &&
+      Object.keys(entry as JsonObject).length === 1 &&
+      AIRLINE_CARD_SETTLEMENT_METHODS.includes(String(other["method"]));
+    return settled ? [] : [{ path: `/formOfPayments/${index}`, code: "airline_card_settlement", message }];
+  });
+  if (refused.length > 0) {
+    throw new AppError("VALIDATION_FAILED", { fieldErrors: refused });
+  }
+}
+
+/** How an issuance is paid (`issuePaymentOf`). */
+export type IssuePayment =
+  /** A payment captured money (Stripe, or the airline that charged its card). */
+  | { readonly kind: "paid" }
+  /** An authorised Stripe payment, captured before the issuance. */
+  | { readonly kind: "capture"; readonly paymentId: string }
+  /** A console or imported booking without a payment: none is needed (`paymentStatus = not_applicable`). */
+  | { readonly kind: "not_applicable" }
+  /** Anything else: issued only with `allowUnpaid`. */
+  | { readonly kind: "unpaid" };
+
+/** How the booking's payments pay an issuance (see the file header). */
+export function issuePaymentOf(input: {
+  readonly channel: string;
+  readonly payments: readonly Pick<PaymentRow, "id" | "provider" | "status" | "providerPaymentId">[];
+  readonly capturePayment: boolean;
+}): IssuePayment {
+  if (input.payments.some((payment) => PAID_STATUSES.has(payment.status))) {
+    return { kind: "paid" };
+  }
+  const authorised = input.payments.find(
+    (payment) =>
+      payment.provider === "stripe" && payment.status === "authorized" && payment.providerPaymentId !== null,
+  );
+  if (authorised !== undefined && input.capturePayment) {
+    return { kind: "capture", paymentId: authorised.id };
+  }
+  if (input.payments.length === 0 && input.channel !== "storefront") {
+    return { kind: "not_applicable" };
+  }
+  return { kind: "unpaid" };
+}
+
+/** The codes an issuance passes on as they are (its `x-error-codes` and the `503` of every operation). */
+const ISSUE_SUPPLIER_CODES: ReadonlySet<string> = new Set<OtaErrorCode>([
+  ...SUPPLIER_CODES,
+  "VERSION_CONFLICT",
+  "TICKETING_FAILED",
+]);
+
+/**
+ * The answer of a failed Flight Order Issue: the codes the operation documents as they are, the airline's refusal of
+ * the travellers' data as `422 SUPPLIER_REJECTED` (with its supplier issue), any other `502 SUPPLIER_ERROR`.
+ */
+export function issueAnswerOf(error: unknown): unknown {
+  if (
+    isAppError(error) &&
+    (error.code === "TRAVELER_DATA_INVALID" || error.code === "CONTACT_DATA_INVALID")
+  ) {
+    return new AppError("SUPPLIER_REJECTED", {
+      ...(error.supplier === undefined ? {} : { supplier: error.supplier }),
+      cause: error,
+    });
+  }
+  return documented(error, ISSUE_SUPPLIER_CODES);
+}
+
+/**
+ * The answer of a failed resync before an issuance (`resyncBeforeIssue`): nothing was sent for issuance, so a timeout
+ * is `503 SUPPLIER_UNAVAILABLE` (a `504` would tell the staff that tickets may have been issued), an order Amadeus no
+ * longer has `422 SUPPLIER_REJECTED` (resync the booking), the other documented codes as they are, anything else
+ * `502 SUPPLIER_ERROR`.
+ */
+export function issueResyncAnswerOf(error: unknown): unknown {
+  if (isOrderNotFound(error)) {
+    return new AppError("SUPPLIER_REJECTED", {
+      message: "Amadeus no longer has this order: resync the booking.",
+      ...(error.supplier === undefined ? {} : { supplier: error.supplier }),
+      cause: error,
+    });
+  }
+  if (isAppError(error) && error.code === "SUPPLIER_TIMEOUT") {
+    return new AppError("SUPPLIER_UNAVAILABLE", { cause: error });
+  }
+  return documented(error, ISSUE_SUPPLIER_CODES);
+}
+
+/**
+ * Whether the order the resync before an issuance read holds tickets an earlier call issued, which are recorded
+ * instead of issued again (OADR-0008 point 4): tickets for every traveller, or, for a booking without any ticket yet
+ * (`confirmed`), for some (the ticketing job records those as well). A `partially_ticketed` booking's own tickets are
+ * no reason to skip the issuance of the others.
+ */
+export function issuedBeforeIssue(bookingStatus: string, coverage: TicketCoverage): boolean {
+  return coverage === "full" || (coverage === "partial" && bookingStatus === "confirmed");
+}
+
+/** The API code of a failed call: an AppError's, `INTERNAL_ERROR` for anything else (a bug). */
+const codeOf = (error: unknown): string => (isAppError(error) ? error.code : "INTERNAL_ERROR");
 
 /** The purpose of an Amadeus contact (`STANDARD` when it has none). */
 const purposeOf = (contact: JsonObject): string => text(contact["purpose"]) ?? "STANDARD";
@@ -857,6 +1103,18 @@ interface PreparedPatch {
   readonly sentRemarkKeys: ReadonlySet<string>;
 }
 
+/** What T1 of an issuance claimed and read. */
+interface IssueClaim {
+  /** The booking as the claim found it (before `in_progress`). */
+  readonly booking: TicketingBookingRow;
+  readonly orderId: string;
+  /** `ticketing_last_attempt_at` of the claim: its fencing token. */
+  readonly claimedAt: Date;
+  readonly payment: IssuePayment;
+  /** The ids of the order's flight offers (the default form of payment names them). */
+  readonly offerIds: readonly string[];
+}
+
 /** Why an order is projected on the booking. */
 type ProjectionCause = "patch" | "resync" | "patch_timeout";
 
@@ -884,6 +1142,11 @@ export class ConsoleBookingActionsService {
     @InjectPinoLogger(ConsoleBookingActionsService.name) private readonly logger: PinoLogger,
     private readonly sync: BookingSyncService,
     private readonly emails: BookingUpdatedEmails,
+    private readonly ticketing: TicketingRepository,
+    private readonly recorder: OrderRecorder,
+    private readonly payments: PaymentsRepository,
+    private readonly consolePayments: ConsolePaymentsService,
+    private readonly cancellations: CancellationService,
   ) {}
 
   // ---- console.bookings.retrieve -----------------------------------------------------------------------------------
@@ -1830,6 +2093,475 @@ export class ConsoleBookingActionsService {
     };
   }
 
+  // ---- console.bookings.issue (OBE-063) ----------------------------------------------------------------------------
+
+  /** Issues the booking's tickets, capturing an authorised payment first (see the file header); answers the booking. */
+  async issue(bookingId: string, ifMatch: string, body: ConsoleIssueRequest): Promise<ConsoleBooking> {
+    refuseIssueRequest(body, this.staff.get()?.member.role);
+    const tenant = this.tenants.require();
+    const claim = await this.tx.run((trx) => this.claimIssue(trx, tenant, bookingId, ifMatch, body));
+    if (claim.payment.kind === "capture") {
+      await this.captureBeforeIssue(tenant, claim, claim.payment.paymentId, body);
+    }
+    const context = this.callContext(tenant, bookingId, OPERATIONS.issue, claim.booking.ownerOfficeId);
+    const found = await this.resyncBeforeIssue(tenant, claim, context);
+    if (found !== undefined) {
+      await this.tx.run((trx) =>
+        this.recordIssue(trx, tenant, claim, body, found.order, {
+          via: "resync",
+          supplierRequestId: found.supplierRequestId,
+        }),
+      );
+      this.logger.info({ bookingId }, "console.bookings.issue_found_before_issue");
+      return await this.consoleBookings.get(bookingId, { refresh: false });
+    }
+    const formOfPayments =
+      body.formOfPayments === undefined
+        ? buildIssueRequest(claim.offerIds).data.formOfPayments
+        : body.formOfPayments.map((entry) => ({ ...entry }));
+    let order: CreatedOrder | undefined;
+    let supplierRequestId: string | null = null;
+    try {
+      const reply = await this.amadeus.issueFlightOrder(context, {
+        flightOrderId: claim.orderId,
+        // The request's forms of payment, validated and free of card data (refuseIssueRequest), or the job's default.
+        body: { data: { formOfPayments } } as unknown as IssueFlightOrderRequest["body"],
+      });
+      order = readCreatedOrder(reply.body);
+      supplierRequestId = reply.call.supplierRequestId;
+    } catch (error) {
+      if (createFailureKind(error) !== "unknown") {
+        // A refusal, or a call that never reached Amadeus: nothing was issued.
+        await this.releaseIssue(tenant, claim, codeOf(error));
+        throw issueAnswerOf(error);
+      }
+      return await this.afterUnknownIssue(tenant, claim, body, error);
+    }
+    if (order === undefined) {
+      // A 2xx that cannot be read: the tickets may exist, so the order is read back as after a timeout.
+      return await this.afterUnknownIssue(tenant, claim, body, new AppError("SUPPLIER_ERROR"));
+    }
+    if (ticketCoverage(order.travelerIds, order.tickets) === "none") {
+      await this.releaseIssue(tenant, claim, "TICKETING_FAILED");
+      throw new AppError("TICKETING_FAILED", { message: "Flight Order Issue answered without a ticket." });
+    }
+    await this.tx.run((trx) =>
+      this.recordIssue(trx, tenant, claim, body, order, { via: "issue", supplierRequestId }),
+    );
+    return await this.consoleBookings.get(bookingId, { refresh: false });
+  }
+
+  /**
+   * T1 of an issuance: the ticketing claim (see the file header). Answers the claim's facts; throws the refusals.
+   */
+  private async claimIssue(
+    trx: TenantTransaction,
+    tenant: RequestTenant,
+    bookingId: string,
+    ifMatch: string,
+    body: ConsoleIssueRequest,
+  ): Promise<IssueClaim> {
+    const now = this.clock.now();
+    const row = await this.ticketing.lock(trx, bookingId, { skipLocked: true });
+    if (row === undefined) {
+      const exists = await this.bookings.booking(trx, bookingId);
+      if (exists === undefined || exists.environment !== tenant.environment) {
+        throw new AppError("NOT_FOUND");
+      }
+      throw bookingBusy();
+    }
+    if (row.environment !== tenant.environment) {
+      throw new AppError("NOT_FOUND");
+    }
+    if (!ifMatchSatisfied(ifMatch, row.version)) {
+      throw new AppError("PRECONDITION_FAILED", { details: { currentVersion: row.version } });
+    }
+    if (row.status === "cancelled") {
+      throw new AppError("BOOKING_ALREADY_CANCELLED");
+    }
+    if (row.status === "ticketed" || row.ticketingStatus === "issued") {
+      throw new AppError("ALREADY_ISSUED", { details: { status: row.status } });
+    }
+    if (row.amadeusOrderId === null || !ISSUABLE_STATUSES.has(row.status)) {
+      throw new AppError("BOOKING_NOT_MODIFIABLE", {
+        message: "The booking has no Amadeus order to issue.",
+        details: { status: row.status },
+      });
+    }
+    if (cancellationStateOf(await cancellationEventsOf(trx, bookingId)).kind === "undecided") {
+      throw new AppError("BOOKING_NOT_MODIFIABLE", {
+        message: "A cancellation of this booking is being checked with the airline.",
+        details: { reason: "cancellation_pending" },
+      });
+    }
+    if (ticketingClaimFresh(row, now)) {
+      throw new AppError("BOOKING_NOT_MODIFIABLE", {
+        message: "The tickets of this booking are being issued right now: reload it in a moment.",
+        details: { reason: "ticketing_in_progress" },
+      });
+    }
+    if (row.paidByAirlineCard) {
+      refuseAirlineCardIssue(body.formOfPayments);
+    }
+    const payments: PaymentRow[] = [];
+    for (const id of await this.bookings.paymentIdsOf(trx, bookingId)) {
+      const payment = await this.payments.payment(trx, id);
+      if (payment !== undefined) {
+        payments.push(payment);
+      }
+    }
+    const booking = await this.bookings.booking(trx, bookingId);
+    const stored = await this.bookings.bookingDetails(trx, bookingId);
+    if (booking === undefined || stored === undefined) {
+      throw new AppError("NOT_FOUND");
+    }
+    const payment = issuePaymentOf({
+      channel: booking.channel,
+      payments,
+      capturePayment: body.capturePayment !== false,
+    });
+    if (payment.kind === "unpaid" && body.allowUnpaid !== true) {
+      throw new AppError("PAYMENT_REQUIRED", {
+        message: "The booking is not paid: capture its payment, or issue it unpaid (owner or admin).",
+        details: { paymentStatus: "unpaid" },
+      });
+    }
+    const children = await this.bookings.children(trx, bookingId);
+    await this.bookings.updateBooking(trx, bookingId, {
+      ticketing_status: "in_progress",
+      ticketing_last_attempt_at: now,
+      ticketing_next_attempt_at: null,
+      updated_at: now,
+    });
+    return {
+      booking: row,
+      orderId: row.amadeusOrderId,
+      claimedAt: now,
+      payment,
+      offerIds: flightOfferRefsOf(stored.orderSnapshot, children).map((ref) => String(ref["id"])),
+    };
+  }
+
+  /**
+   * The capture of an authorised Stripe payment before the issuance (console.payments.capture's, with its staff
+   * action). A capture that does not happen releases the claim and answers `402 PAYMENT_DECLINED` (a Stripe that does
+   * not answer: its `502`, which the same key can retry); a payment captured meanwhile is paid all the same.
+   */
+  private async captureBeforeIssue(
+    tenant: RequestTenant,
+    claim: IssueClaim,
+    paymentId: string,
+    body: ConsoleIssueRequest,
+  ): Promise<void> {
+    try {
+      await this.consolePayments.captureForIssue(paymentId, body.reason ?? ISSUE_CAPTURE_REASON);
+      return;
+    } catch (error) {
+      const now = await this.tx.run((trx) => this.payments.payment(trx, paymentId));
+      if (now !== undefined && PAID_STATUSES.has(now.status)) {
+        // Captured by someone else in the meantime (a staff capture, a retry job): the booking is paid.
+        this.logger.info({ bookingId: claim.booking.id, paymentId }, "console.bookings.issue_paid_meanwhile");
+        return;
+      }
+      const code = codeOf(error);
+      this.logger.warn(
+        { bookingId: claim.booking.id, paymentId, code },
+        "console.bookings.issue_capture_failed",
+      );
+      await this.releaseIssue(tenant, claim, code === "PAYMENT_PROVIDER_ERROR" ? code : "PAYMENT_DECLINED");
+      if (isAppError(error) && error.code === "PAYMENT_PROVIDER_ERROR") {
+        throw error;
+      }
+      throw new AppError("PAYMENT_DECLINED", {
+        message: "The payment could not be captured; nothing was issued.",
+        details: { paymentId },
+        cause: error,
+      });
+    }
+  }
+
+  /**
+   * The resync before an issuance (see the file header; OADR-0008 point 4): Flight Order Management GET of the claimed
+   * order. Answers the order and its call when it holds tickets an earlier call issued (`issuedBeforeIssue`), which are
+   * recorded instead of issued again, else `undefined` (the issuance follows). A GET that fails releases the claim and
+   * throws its answer (`issueResyncAnswerOf`): the order is never issued without it.
+   */
+  private async resyncBeforeIssue(
+    tenant: RequestTenant,
+    claim: IssueClaim,
+    context: AmadeusCallContext,
+  ): Promise<{ readonly order: CreatedOrder; readonly supplierRequestId: string | null } | undefined> {
+    let order: CreatedOrder | undefined;
+    let supplierRequestId: string | null;
+    try {
+      const reply = await this.amadeus.getFlightOrder(context, { flightOrderId: claim.orderId });
+      order = readCreatedOrder(reply.body);
+      supplierRequestId = reply.call.supplierRequestId;
+    } catch (error) {
+      this.logger.warn(
+        { bookingId: claim.booking.id, code: codeOf(error) },
+        "console.bookings.issue_resync_first_failed",
+      );
+      await this.releaseIssue(tenant, claim, codeOf(error));
+      throw issueResyncAnswerOf(error);
+    }
+    if (order === undefined) {
+      await this.releaseIssue(tenant, claim, "SUPPLIER_ERROR");
+      throw new AppError("SUPPLIER_ERROR", {
+        message: "The order read before the issuance could not be read; nothing was issued.",
+      });
+    }
+    return issuedBeforeIssue(claim.booking.status, ticketCoverage(order.travelerIds, order.tickets))
+      ? { order, supplierRequestId }
+      : undefined;
+  }
+
+  /**
+   * After a Flight Order Issue without a reliable outcome (OADR-0003 point 7: no second issuance in the request): the
+   * order read back; its tickets are recorded and the booking answered, or the claim is released and the call's error
+   * answered (`504`: resync before retrying, Amadeus may still issue).
+   */
+  private async afterUnknownIssue(
+    tenant: RequestTenant,
+    claim: IssueClaim,
+    body: ConsoleIssueRequest,
+    error: unknown,
+  ): Promise<ConsoleBooking> {
+    const bookingId = claim.booking.id;
+    try {
+      const reply = await this.amadeus.getFlightOrder(
+        this.callContext(tenant, bookingId, OPERATIONS.issue, claim.booking.ownerOfficeId),
+        { flightOrderId: claim.orderId },
+      );
+      const order = readCreatedOrder(reply.body);
+      if (order !== undefined && ticketCoverage(order.travelerIds, order.tickets) !== "none") {
+        await this.tx.run((trx) =>
+          this.recordIssue(trx, tenant, claim, body, order, {
+            via: "resync",
+            supplierRequestId: reply.call.supplierRequestId,
+          }),
+        );
+        this.logger.info({ bookingId }, "console.bookings.issue_found_after_unknown");
+        return await this.consoleBookings.get(bookingId, { refresh: false });
+      }
+    } catch (readError) {
+      this.logger.warn({ bookingId, code: codeOf(readError) }, "console.bookings.issue_resync_failed");
+    }
+    await this.releaseIssue(tenant, claim, codeOf(error));
+    throw issueAnswerOf(error);
+  }
+
+  /**
+   * The booking locked again (`FOR UPDATE`) when it still holds this issuance's claim (`in_progress` with the claim's
+   * `ticketing_last_attempt_at`, still issuable), else `undefined`.
+   */
+  private async fencedIssue(
+    trx: TenantTransaction,
+    claim: IssueClaim,
+  ): Promise<TicketingBookingRow | undefined> {
+    const current = await this.ticketing.lock(trx, claim.booking.id, { skipLocked: false });
+    if (
+      current === undefined ||
+      !ISSUABLE_STATUSES.has(current.status) ||
+      current.ticketingStatus !== "in_progress" ||
+      current.ticketingLastAttemptAt?.getTime() !== claim.claimedAt.getTime()
+    ) {
+      this.logger.warn(
+        { bookingId: claim.booking.id, version: current?.version },
+        "console.bookings.issue_claim_lost",
+      );
+      return undefined;
+    }
+    return current;
+  }
+
+  /** T2 of an issuance with tickets (see the file header): the job's result step and the `booking.issue` staff action. */
+  private async recordIssue(
+    trx: TenantTransaction,
+    tenant: RequestTenant,
+    claim: IssueClaim,
+    body: ConsoleIssueRequest,
+    order: CreatedOrder,
+    via: { readonly via: "issue" | "resync"; readonly supplierRequestId: string | null },
+  ): Promise<void> {
+    const now = this.clock.now();
+    const current = await this.fencedIssue(trx, claim);
+    const recorded =
+      current === undefined
+        ? undefined
+        : await recordIssuedTickets(
+            trx,
+            { bookings: this.bookings, recorder: this.recorder },
+            current,
+            order,
+            {
+              actor: eventActorOf(tenant.actor),
+              summary:
+                via.via === "resync"
+                  ? "E-tickets issued by the travel agency (found at the airline and recorded)."
+                  : "E-tickets issued by the travel agency.",
+              data: {
+                tickets: order.tickets.map((ticket) => ticket.documentNumber),
+                via: via.via === "resync" ? "console_resync" : "console",
+              },
+              supplierRequestId: via.supplierRequestId,
+              requestId: this.requestId(tenant),
+              now,
+              notifyCustomer: body.notifyCustomer !== false,
+            },
+          );
+    await this.audit.record(trx, {
+      action: CONSOLE_BOOKING_ACTIONS.issue,
+      targetType: "booking",
+      targetId: claim.booking.id,
+      bookingId: claim.booking.id,
+      reason: body.reason ?? null,
+      before: {
+        status: claim.booking.status,
+        ticketingStatus: claim.booking.ticketingStatus,
+        version: claim.booking.version,
+        payment: claim.payment.kind,
+      },
+      after: {
+        status: recorded?.status ?? current?.status ?? null,
+        ticketingStatus: recorded?.ticketingStatus ?? null,
+        tickets: order.tickets.length,
+        via: via.via,
+        captured: claim.payment.kind === "capture" && body.capturePayment !== false,
+        allowUnpaid: claim.payment.kind === "unpaid",
+        formOfPayments: redactPayload(body.formOfPayments ?? "default"),
+        notifyCustomer: body.notifyCustomer !== false,
+        ...(recorded === undefined ? { claimLost: true } : {}),
+      },
+    });
+  }
+
+  /**
+   * Releases an issuance's claim that issued nothing (see the file header), fenced by the claim: the ticketing status it
+   * found (an abandoned `in_progress` as `failed`) and its next attempt, the error, and a staff-only
+   * `booking.ticketing_failed` event. Never throws: a release that fails is logged (an `in_progress` claim older than 5
+   * minutes is abandoned and taken over).
+   */
+  private async releaseIssue(tenant: RequestTenant, claim: IssueClaim, code: string): Promise<void> {
+    try {
+      await this.tx.run(async (trx) => {
+        const now = this.clock.now();
+        const current = await this.fencedIssue(trx, claim);
+        if (current === undefined) {
+          return;
+        }
+        const previous = claim.booking.ticketingStatus;
+        await this.bookings.updateBooking(trx, current.id, {
+          ticketing_status: previous === "in_progress" ? "failed" : previous,
+          ticketing_next_attempt_at: previous === "in_progress" ? null : claim.booking.ticketingNextAttemptAt,
+          ticketing_error_code: code,
+          ticketing_error: `Staff issuance failed: ${code}`,
+          updated_at: now,
+        });
+        await this.recorder.event(trx, current.id, {
+          type: "booking.ticketing_failed",
+          actor: eventActorOf(tenant.actor),
+          statusFrom: current.status,
+          statusTo: current.status,
+          summary: "The travel agency's issuance did not issue the tickets.",
+          data: { via: "console", code },
+          visibleToCustomer: false,
+          requestId: this.requestId(tenant),
+          now,
+        });
+      });
+    } catch (error) {
+      this.logger.error({ bookingId: claim.booking.id, err: error }, "console.bookings.issue_release_failed");
+    }
+  }
+
+  // ---- console.bookings.cancel (OBE-063) ---------------------------------------------------------------------------
+
+  /** Cancels the booking for the staff (see the file header); answers the booking. */
+  async cancel(bookingId: string, ifMatch: string, body: ConsoleCancelRequest): Promise<ConsoleBooking> {
+    const outcome = await this.cancellations.cancelByStaff(
+      bookingId,
+      ifMatch,
+      {
+        reasonCode: body.reasonCode,
+        reason: body.reason,
+        refund: body.refund,
+        notifyCustomer: body.notifyCustomer,
+      },
+      (trx, record) => this.recordCancel(trx, bookingId, record),
+    );
+    const booking = await this.consoleBookings.get(bookingId, { refresh: false });
+    return outcome.orderNotFound
+      ? { ...booking, warnings: [...(booking.warnings ?? []), { ...ORDER_GONE_WARNING }] }
+      : booking;
+  }
+
+  /** The `booking.cancel` staff action, in the record step's transaction (redacted before and after). */
+  private async recordCancel(
+    trx: TenantTransaction,
+    bookingId: string,
+    record: StaffCancelRecord,
+  ): Promise<void> {
+    const { money, ask } = record;
+    await this.audit.record(trx, {
+      action: CONSOLE_BOOKING_ACTIONS.cancel,
+      targetType: "booking",
+      targetId: bookingId,
+      bookingId,
+      reason: ask.staff?.reason ?? null,
+      before: {
+        status: record.before.status,
+        version: record.before.version,
+        amountPaid: record.before.amountPaid,
+      },
+      after: {
+        status: "cancelled",
+        reasonCode: ask.reasonCode,
+        cause: record.cause,
+        ticketsVoided: record.ticketsVoided,
+        refundMode: record.before.refundMode,
+        refund: { amount: ask.estimate.estimatedRefund, currency: ask.currency },
+        refundStatus: money.refundStatus,
+        ...(money.refund === null ? {} : { refundId: money.refund.id }),
+        ...(money.voidPayment === null ? {} : { voidPaymentId: money.voidPayment.id }),
+        ...(money.capture === null
+          ? {}
+          : { capturePaymentId: money.capture.payment.id, captureAmount: money.capture.amount }),
+        notifyCustomer: ask.staff?.notifyCustomer ?? true,
+      },
+    });
+  }
+
+  /**
+   * The answer of a same-key replay of console.bookings.cancel's stored `504` (ConsoleCancelBookingIdempotencyHooks),
+   * from the booking (never an Amadeus call): the same `504` while the worker has not decided, then the booking (`200`)
+   * or the final error.
+   */
+  async replayCancel(record: IdempotencyRecord): Promise<IdempotencyResponse | undefined> {
+    if (record.resource?.type !== "booking" || record.response.status !== 504) {
+      return undefined;
+    }
+    const bookingId = record.resource.id;
+    const decided = await this.cancellations.decideReplay(bookingId, "staff");
+    if (decided === undefined) {
+      return undefined;
+    }
+    if (decided.kind === "undecided") {
+      return replayedTimeout(record.response);
+    }
+    if (decided.kind === "error") {
+      return this.cancellations.errorReplay(decided.error);
+    }
+    const booking = await this.consoleBookings.get(bookingId, { refresh: false });
+    this.logger.info({ bookingId }, "console.bookings.cancel_replayed");
+    return {
+      status: 200,
+      headers: { etag: bookingEtagOf(booking.version), "cache-control": CONSOLE_BOOKING_CACHE_CONTROL },
+      setCookie: [],
+      body: booking,
+    };
+  }
+
   // ---- Shared ------------------------------------------------------------------------------------------------------
 
   /** The booking of the request's environment (`lock`: `FOR UPDATE`); another environment's or none is a 404. */
@@ -1942,4 +2674,24 @@ function contactRowOf(
     created_at: new Date(now.getTime() + index),
     updated_at: now,
   };
+}
+
+/**
+ * The idempotency hooks of console.bookings.cancel (as CancelBookingIdempotencyHooks of bookings.cancel): a `504
+ * SUPPLIER_TIMEOUT` of a DELETE without an answer is linked to its booking and kept, and its same-key replays are
+ * answered from the booking (`ConsoleBookingActionsService.replayCancel`): the same `504` until the worker decides,
+ * then the booking or the final error.
+ */
+@Injectable()
+@IdempotencyHooksFor(["consoleCancelBooking"])
+export class ConsoleCancelBookingIdempotencyHooks implements IdempotencyHooks {
+  constructor(private readonly actions: ConsoleBookingActionsService) {}
+
+  resourceOf(response: IdempotencyResponse): IdempotencyResource | undefined {
+    return pendingBookingOf(response);
+  }
+
+  resolveReplay(record: IdempotencyRecord): Promise<IdempotencyResponse | undefined> {
+    return this.actions.replayCancel(record);
+  }
 }

@@ -68,6 +68,8 @@ export interface CancellationFlag {
   readonly until: string;
   readonly actor: ContextActor;
   readonly requestId: string;
+  /** Who asked: the customer (bookings.cancel), or the staff (console.bookings.cancel, OBE-063: data `cancelledBy`). */
+  readonly cancelledBy: "customer" | "staff";
 }
 
 /** The flag of `row`, or `undefined` when its data cannot be read. */
@@ -101,6 +103,7 @@ export function flagOf(row: CancellationEventRow): CancellationFlag | undefined 
       id: text(actor["id"]) ?? null,
     },
     requestId: text(data["requestId"]) ?? "unknown",
+    cancelledBy: data["cancelledBy"] === "staff" ? "staff" : "customer",
   };
 }
 

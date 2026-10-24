@@ -137,6 +137,33 @@
 // lost a later check (a flag still undecided 5 minutes after its deadline) gets its last check (run
 // CANCELLATION_CHECK_MAX_RUNS) from the same scan.
 //
+// **A staff cancellation** (`cancelByStaff`, console.bookings.cancel, OBE-063; the document's consoleCancelBooking,
+// flow console-operations.md §2 "Cancel", change-and-cancel.md §3 step 6): the same claim, DELETE, record step, money
+// step, unknown outcome and worker's check, with what the staff decide instead of the quote. No self-service window and
+// no quote: the checks are the booking of the environment, `409 BOOKING_ALREADY_CANCELLED`, `412`, an Amadeus order
+// (`409 BOOKING_NOT_MODIFIABLE`), no undecided cancellation (`details.reason = "pending"`; a customer's request waiting
+// for the staff is what the staff finish here), no fresh ticketing claim of a staff issuance or of the ticketing job
+// (`details.reason = "ticketing_in_progress"`: its capture would race the money step) and no segment departed
+// (`details.reason = "flown"`, after the GET that refreshes the order and its ticket states through the customer
+// refresh, without its throttle). `refund.mode` gives the amount that goes back (`staffRefundOf`, the estimate's
+// `estimatedRefund`, so the money step and the worker's check read it as they read a customer's): `none` (and no
+// `refund` for a captured payment) nothing, `full` what can still be refunded, `amount` that amount (`422
+// UNPROCESSABLE` above it, `amount_exceeds_captured` or `amount_exceeds_authorized`). An authorisation follows lead
+// decision (1) of 2026-10-23, second batch, as a customer's cancellation: the amount that does not go back is captured,
+// the rest released, and only an authorisation of which nothing is kept is voided; a request without `refund` voids it
+// whole, as the document says of an uncaptured authorisation (staff keep nothing of it unless they say so). An airline
+// card is never refunded through Stripe (`422 UNPROCESSABLE`, `details.reason = "refund_via_airline"`, for `full` and
+// `amount`): the airline's void expectation is recorded. The record step writes `cancelled_by = staff` and
+// `cancel_reason` `<reasonCode>: <reason>`; the customer-visible `booking.cancelled` event names the reason code and
+// never the staff member's text; refunds take the document's mapping of the reason code (`consoleRefundReasonOf`),
+// `reason_note` the staff member's text and `requested_by` the staff member; `notifyCustomer: false` sends no
+// `booking.cancelled` e-mail. The caller (the console) writes its `booking.cancel` staff action in the record step's
+// transaction (`audit`). An Amadeus refusal answers `422 SUPPLIER_REJECTED` (no request for the staff: they are the
+// staff); an order Amadeus no longer has (`404`, the staff cancelled it at the airline or it was purged) is recorded as
+// cancelled, with the money step, since the staff asked for it. A DELETE without an answer is flagged and checked by
+// the worker as a customer's (OADR-0003 point 7): the flag holds the staff's part of the ask (`staffCancellationOf`),
+// and the console's same-key replays are answered from the booking (`decideReplay` with `staff`).
+//
 // Log lines carry ids, modes and codes, never an amount with a person's data, an address or an Amadeus body.
 import { InjectQueue } from "@nestjs/bullmq";
 import { Inject, Injectable } from "@nestjs/common";
@@ -250,6 +277,7 @@ import { CustomerBookingsService, ORDER_NOT_FOUND_WARNING } from "./customer-boo
 import { eventActorOf, OrderRecorder, type Booking, type Warning } from "./order-recorder";
 import { StaffAlerts } from "./staff-alerts";
 import { jobRequestId } from "./ticketing.processor";
+import { ticketingClaimFresh } from "./ticketing.service";
 
 // The cancellation's events and state moved to cancellation-state.ts (FIX-W28-CANCEL: bookings.get reads them too); they
 // are still read from here.
@@ -310,6 +338,27 @@ export function refundReasonOf(reasonCode: string): RefundReason {
   }
   return reasonCode === "duplicate_booking" ? "duplicate" : "customer_request";
 }
+
+/**
+ * The refunds reason of each console reason code (ConsoleBookingCancelRequest.reasonCode's description, the
+ * `refunds.reason` CHECK): `no_payment`, `ticketing_deadline` and `airline_request` become `booking_cancelled`, the
+ * others keep their value.
+ */
+export function consoleRefundReasonOf(reasonCode: string): RefundReason {
+  switch (reasonCode) {
+    case "customer_request":
+    case "duplicate":
+    case "fraud":
+    case "schedule_change":
+    case "other":
+      return reasonCode;
+    default:
+      return "booking_cancelled";
+  }
+}
+
+/** `supplier_requests.operation` of a staff cancellation's calls (the refresh and the DELETE). */
+export const STAFF_CANCEL_OPERATION = "console.bookings.cancel";
 
 /** The codes of the client's errors bookings.cancel passes on; any other becomes `502 SUPPLIER_ERROR`. */
 const DOCUMENTED_SUPPLIER_CODES: ReadonlySet<string> = new Set<OtaErrorCode>([
@@ -500,7 +549,7 @@ export const BOOKING_BUSY_RETRY_AFTER_SECONDS = 1;
  * transient `503` with `Retry-After` (lead decision (8) of 2026-10-23, second batch), which the idempotency layer does
  * not keep, so the same key can be sent again a moment later.
  */
-const bookingBusy = (): AppError =>
+export const bookingBusy = (): AppError =>
   new AppError("SERVICE_UNAVAILABLE", {
     message: "The booking is being updated. Please try again in a moment.",
     cause: new BookingBusyError("another claim or writer holds the booking"),
@@ -542,6 +591,21 @@ export function deleteFailureOf(error: unknown): DeleteOutcome {
     return { kind: "refused", code: isAppError(error) ? error.code : "SUPPLIER_REJECTED" };
   }
   return kind === "not_sent" ? { kind: "not_sent", error } : { kind: "unknown", error };
+}
+
+/**
+ * The answer of a DELETE the airline refused for a staff cancellation (console.bookings.cancel, OBE-063): `422
+ * SUPPLIER_REJECTED` with the supplier issue (the console shows it), whatever code the refusal was mapped to.
+ */
+export function staffRefusalOf(error: unknown): AppError {
+  if (isAppError(error) && error.code === "SUPPLIER_REJECTED") {
+    return error;
+  }
+  return new AppError("SUPPLIER_REJECTED", {
+    message: "The airline refused the cancellation: handle it with the airline.",
+    ...(isAppError(error) && error.supplier !== undefined ? { supplier: error.supplier } : {}),
+    cause: error,
+  });
 }
 
 /**
@@ -673,6 +737,21 @@ export class CancellationRepository {
     return row?.response ?? undefined;
   }
 
+  /**
+   * The booking's ticketing claim (`ticketing_status` and its fencing token `ticketing_last_attempt_at`, OBE-044), or
+   * `undefined` for no such booking.
+   */
+  async ticketingClaim(
+    trx: TenantTransaction,
+    bookingId: string,
+  ): Promise<{ readonly ticketingStatus: string; readonly ticketingLastAttemptAt: Date | null } | undefined> {
+    return await trx
+      .selectFrom("bookings")
+      .select(["ticketing_status as ticketingStatus", "ticketing_last_attempt_at as ticketingLastAttemptAt"])
+      .where("id", "=", bookingId)
+      .executeTakeFirst();
+  }
+
   /** The events of a cancellation's state (CANCELLATION_EVENTS but `cancelled`), newest first, at most 50. */
   async cancellationEvents(trx: TenantTransaction, bookingId: string): Promise<CancellationEventRow[]> {
     return await cancellationEventsOf(trx, bookingId);
@@ -691,19 +770,26 @@ export class CancellationRepository {
     return await undecidedFlags(trx, window);
   }
 
-  /** The cancellation recorded on the booking, `version + 1` (see the file header). */
+  /**
+   * The cancellation recorded on the booking, `version + 1` (see the file header): `cancelled_by` the customer or the
+   * staff, `cancel_reason` the customer's reason code or the staff's `<reasonCode>: <reason>`.
+   */
   async markCancelled(
     trx: TenantTransaction,
     bookingId: string,
-    values: { readonly reasonCode: string; readonly now: Date },
+    values: {
+      readonly cancelledBy: "customer" | "staff";
+      readonly cancelReason: string;
+      readonly now: Date;
+    },
   ): Promise<void> {
     await trx
       .updateTable("bookings")
       .set({
         status: "cancelled",
         cancelled_at: values.now,
-        cancelled_by: "customer",
-        cancel_reason: values.reasonCode,
+        cancelled_by: values.cancelledBy,
+        cancel_reason: values.cancelReason,
         ticketing_status: sql<string>`case when ticketing_status in ('pending', 'in_progress', 'failed',
           'manual_review') then 'not_applicable' else ticketing_status end`,
         ticketing_next_attempt_at: null,
@@ -759,6 +845,156 @@ export interface CancellationAsk {
   readonly actor: ContextActor;
   /** When the customer asked (the request's time). */
   readonly requestedAt: Date;
+  /** A staff cancellation's own part (console.bookings.cancel, OBE-063); absent for a customer's. */
+  readonly staff?: StaffCancellation | undefined;
+}
+
+/** `refund.mode` of console.bookings.cancel, `default` when the request has no `refund`. */
+export type StaffRefundMode = "default" | "none" | "full" | "amount";
+
+/** What a staff cancellation adds to the ask (see the file header, "A staff cancellation"). */
+export interface StaffCancellation {
+  /** The staff member's justification: `cancel_reason` after the code, `refunds.reason_note`. */
+  readonly reason: string;
+  readonly refundMode: StaffRefundMode;
+  /** The traveller's `booking.cancelled` e-mail (`notifyCustomer`, default true). */
+  readonly notifyCustomer: boolean;
+}
+
+/** Who asked for a cancellation's refunds and releases (`refunds.requested_by`). */
+function refundRequesterOf(ask: CancellationAsk): KeptCapture["requestedBy"] {
+  if (ask.staff !== undefined) {
+    // A console key has no staff member: its staff action names the key.
+    return { type: "staff", id: ask.actor.type === "staff" ? ask.actor.id : null };
+  }
+  return { type: "customer", id: ask.actor.type === "customer" ? ask.actor.id : null };
+}
+
+/** The `refunds.reason` of a cancellation's refunds and releases. */
+const refundReasonOfAsk = (ask: CancellationAsk): RefundReason =>
+  ask.staff === undefined ? refundReasonOf(ask.reasonCode) : consoleRefundReasonOf(ask.reasonCode);
+
+/** `bookings.cancel_reason`: the customer's reason code, or the staff's `<reasonCode>: <reason>`. */
+export const cancelReasonOf = (ask: Pick<CancellationAsk, "reasonCode" | "staff">): string =>
+  ask.staff === undefined ? ask.reasonCode : `${ask.reasonCode}: ${ask.staff.reason}`;
+
+/** A refund of console.bookings.cancel (ConsoleBookingCancelRequest.refund). */
+export interface StaffRefundRequest {
+  readonly mode: "none" | "full" | "amount";
+  readonly amount?: MoneyAmount | undefined;
+}
+
+/** A decimal amount of a request: digits, at most two decimals, no sign (`numeric(12,2)`). */
+const REQUEST_DECIMAL = /^(?:0|[1-9][0-9]{0,9})(?:\.[0-9]{1,2})?$/;
+
+/** `422 UNPROCESSABLE` of a staff refund the payment cannot take. */
+function refundRefused(reason: string, message: string, details: JsonObject = {}): AppError {
+  return new AppError("UNPROCESSABLE", { message, details: { reason, ...details } });
+}
+
+/**
+ * The estimate of a staff cancellation (see the file header): what was paid and what goes back for `refund` (absent:
+ * `default`) on the payment the money step acts on (`moneyOf`), in `currency` with `minorUnits` decimals. Throws the
+ * request's refusals: `400 VALIDATION_FAILED` for an amount without mode `amount`, a mode `amount` without one or an
+ * amount that is not positive with at most the currency's decimals; `422 UNPROCESSABLE` for another currency
+ * (`currency_mismatch`), an amount above what can be refunded or was authorised, a refund of an airline card
+ * (`refund_via_airline`; `airlineCard`: the booking has an airline-card payment, charged or not) or of a booking
+ * without a payment.
+ */
+export function staffRefundOf(
+  target: MoneyPayment | undefined,
+  refund: StaffRefundRequest | undefined,
+  currency: string,
+  minorUnits: number,
+  airlineCard = target?.estimate.kind === "airline",
+): { readonly mode: StaffRefundMode; readonly estimate: RefundEstimate } {
+  const mode: StaffRefundMode = refund?.mode ?? "default";
+  let amount: MoneyValue | undefined;
+  if (refund?.amount !== undefined && mode !== "amount") {
+    throw new AppError("VALIDATION_FAILED", {
+      fieldErrors: [
+        { path: "/refund/amount", code: "not_allowed", message: "is only sent with mode amount" },
+      ],
+    });
+  }
+  if (mode === "amount") {
+    if (refund?.amount === undefined) {
+      throw new AppError("VALIDATION_FAILED", {
+        fieldErrors: [{ path: "/refund/amount", code: "required", message: "is required with mode amount" }],
+      });
+    }
+    if (refund.amount.currency !== currency) {
+      throw refundRefused(
+        "currency_mismatch",
+        `The amount must be in the booking's currency (${currency}).`,
+        {
+          currency,
+        },
+      );
+    }
+    const value = REQUEST_DECIMAL.test(refund.amount.amount) ? new Money(refund.amount.amount) : undefined;
+    if (value === undefined || !value.greaterThan(0) || value.decimalPlaces() > minorUnits) {
+      throw new AppError("VALIDATION_FAILED", {
+        fieldErrors: [
+          {
+            path: "/refund/amount/amount",
+            code: "amount",
+            message: `must be a positive amount with at most ${Math.min(minorUnits, 2)} decimals`,
+          },
+        ],
+      });
+    }
+    amount = value;
+  }
+  const fixed = (value: MoneyValue | string): string => new Money(value).toFixed(minorUnits);
+  const estimateOf = (paid: string, back: MoneyValue | string): RefundEstimate => {
+    const kept = Money.max(new Money(paid).minus(back), new Money("0"));
+    return {
+      amountPaid: fixed(paid),
+      estimatedRefund: fixed(back),
+      penalty: fixed("0"),
+      otaFee: fixed(kept),
+    };
+  };
+  const estimate = target?.estimate ?? { kind: "none" as const };
+  if (airlineCard && (mode === "full" || mode === "amount")) {
+    throw refundRefused(
+      "refund_via_airline",
+      "The airline charged this card; it is refunded by the airline when the booking is cancelled.",
+    );
+  }
+  switch (estimate.kind) {
+    case "none":
+      if (mode === "amount") {
+        throw refundRefused("amount_exceeds_captured", "The booking has no payment to refund.", {
+          refundable: { amount: fixed("0"), currency },
+        });
+      }
+      return { mode, estimate: estimateOf("0", "0") };
+    case "airline":
+      return { mode, estimate: estimateOf(estimate.charged, "0") };
+    case "stripe_captured": {
+      const back =
+        mode === "full" ? new Money(estimate.refundable) : mode === "amount" ? amount : new Money("0");
+      if (back !== undefined && back.greaterThan(estimate.refundable)) {
+        throw refundRefused("amount_exceeds_captured", "The refund is above what can still be refunded.", {
+          refundable: { amount: fixed(estimate.refundable), currency },
+        });
+      }
+      return { mode, estimate: estimateOf(estimate.captured, back ?? "0") };
+    }
+    case "stripe_authorized": {
+      // Without `refund` the authorisation is voided whole (the document); `none` keeps all of it.
+      const back =
+        mode === "amount" ? amount : mode === "none" ? new Money("0") : new Money(estimate.authorized);
+      if (back !== undefined && back.greaterThan(estimate.authorized)) {
+        throw refundRefused("amount_exceeds_authorized", "The refund is above the authorised amount.", {
+          authorized: { amount: fixed(estimate.authorized), currency },
+        });
+      }
+      return { mode, estimate: estimateOf(estimate.authorized, back ?? "0") };
+    }
+  }
 }
 
 /** What the record step did with the money. */
@@ -788,8 +1024,11 @@ export interface KeptCapture {
   /** What goes back to the customer: the authorisation less `amount`. */
   readonly release: string;
   readonly reason: RefundReason;
-  /** The customer who cancelled (`cus_…`), or `null` for a guest. */
-  readonly customerId: string | null;
+  /**
+   * Who cancelled (`refunds.requested_by` of the release): the customer (`cus_…`, `null` for a guest), or the staff
+   * member (`stf_…`, `null` for a console key) of a staff cancellation.
+   */
+  readonly requestedBy: { readonly type: "customer" | "staff"; readonly id: string | null };
 }
 
 /**
@@ -855,14 +1094,18 @@ export class CancellationRecorder {
 
   /**
    * The record step and the money step (see the file header), in `trx`, whose caller locked the booking `FOR NO KEY
-   * UPDATE` and found it live. `via` says what proved the cancellation (the DELETE's `204`, or the worker's read).
+   * UPDATE` and found it live. `via` says what proved the cancellation (the DELETE's `204`, the worker's read, or, for
+   * a staff cancellation, an order Amadeus no longer has).
    */
   async recordCancelled(
     trx: TenantTransaction,
     tenant: CancellationTenant,
     bookingId: string,
     ask: CancellationAsk,
-    via: { readonly cause: "deleted" | "checked"; readonly supplierRequestId: string | null },
+    via: {
+      readonly cause: "deleted" | "checked" | "order_not_found";
+      readonly supplierRequestId: string | null;
+    },
   ): Promise<RecordedCancellation> {
     const now = this.clock.now();
     const booking = await this.bookings.booking(trx, bookingId);
@@ -873,7 +1116,12 @@ export class CancellationRecorder {
       return { kind: "not_live", status: booking.status };
     }
     const children = await this.bookings.children(trx, bookingId);
-    await this.repository.markCancelled(trx, bookingId, { reasonCode: ask.reasonCode, now });
+    const cancelledBy = ask.staff === undefined ? "customer" : "staff";
+    await this.repository.markCancelled(trx, bookingId, {
+      cancelledBy,
+      cancelReason: cancelReasonOf(ask),
+      now,
+    });
     const voided = await this.repository.cancelChildren(trx, bookingId, now);
     const money = await this.moneyStep(
       trx,
@@ -891,11 +1139,13 @@ export class CancellationRecorder {
       statusTo: "cancelled",
       summary: `Booking ${booking.reference} cancelled.`,
       data: {
-        cancelledBy: "customer",
+        cancelledBy,
         mode: ask.mode,
         reasonCode: ask.reasonCode,
         // The reason of a refund or release this cancellation records (refunds.reason).
-        refundReason: refundReasonOf(ask.reasonCode),
+        refundReason: refundReasonOfAsk(ask),
+        // A staff cancellation's refund mode; never the staff member's text (the event is the customer's to see).
+        ...(ask.staff === undefined ? {} : { refundMode: ask.staff.refundMode }),
         ...(ask.comment === null ? {} : { comment: ask.comment }),
         requestedAt: ask.requestedAt.toISOString(),
         ticketsVoided: voided > 0,
@@ -914,6 +1164,7 @@ export class CancellationRecorder {
               releaseAmount: money.capture.release,
             }),
         ...(via.cause === "checked" ? { cause: "checked_after_timeout" } : {}),
+        ...(via.cause === "order_not_found" ? { cause: "order_not_found" } : {}),
       },
       visibleToCustomer: true,
       supplierRequestId: via.supplierRequestId,
@@ -936,13 +1187,15 @@ export class CancellationRecorder {
         now: new Date(now.getTime() + 1),
       });
     }
-    await this.travellerEmail(trx, tenant, booking, children, "booking.cancelled", {
-      dedupeKey: `booking.cancelled:${booking.id}`,
-      refund:
-        money.refundStatus === "not_applicable" && new Money(ask.estimate.estimatedRefund).isZero()
-          ? { amount: "", currency: "" }
-          : { amount: money.refund?.amount ?? ask.estimate.estimatedRefund, currency: ask.currency },
-    });
+    if (ask.staff?.notifyCustomer !== false) {
+      await this.travellerEmail(trx, tenant, booking, children, "booking.cancelled", {
+        dedupeKey: `booking.cancelled:${booking.id}`,
+        refund:
+          money.refundStatus === "not_applicable" && new Money(ask.estimate.estimatedRefund).isZero()
+            ? { amount: "", currency: "" }
+            : { amount: money.refund?.amount ?? ask.estimate.estimatedRefund, currency: ask.currency },
+      });
+    }
     this.logger.info(
       { bookingId, mode: ask.mode, refundStatus: money.refundStatus, cause: via.cause },
       "bookings.cancelled",
@@ -1052,8 +1305,8 @@ export class CancellationRecorder {
             payment: row,
             amount: settlement.amount,
             release: settlement.release,
-            reason: refundReasonOf(ask.reasonCode),
-            customerId: ask.actor.type === "customer" ? ask.actor.id : null,
+            reason: refundReasonOfAsk(ask),
+            requestedBy: refundRequesterOf(ask),
           },
         };
       }
@@ -1072,17 +1325,18 @@ export class CancellationRecorder {
       paymentId: row.id,
       bookingId: booking.id,
       amount: wanted.toFixed(2),
-      reason: refundReasonOf(ask.reasonCode),
-      reasonNote: `${CANCEL_OPERATION}: ${ask.reasonCode}`,
-      requestedBy: { type: "customer", id: ask.actor.type === "customer" ? ask.actor.id : null },
+      reason: refundReasonOfAsk(ask),
+      reasonNote:
+        ask.staff === undefined ? `${CANCEL_OPERATION}: ${ask.reasonCode}` : ask.staff.reason.slice(0, 500),
+      requestedBy: refundRequesterOf(ask),
       now,
     });
     if (!created.ok) {
       this.logger.warn({ bookingId: booking.id, reason: created.reason }, "bookings.cancel_refund_refused");
       await this.staffAlert(trx, booking, "cancellation_refund", {
         reason:
-          `The customer cancelled this booking, but its refund could not be asked for (${created.reason}): ` +
-          "refund the customer from the console.",
+          `${ask.staff === undefined ? "The customer" : "The staff"} cancelled this booking, but its refund could ` +
+          `not be asked for (${created.reason}): refund the customer from the console.`,
       });
       return { refundStatus: "manual_review", refund: null, voidPayment: null, capture: null };
     }
@@ -1181,6 +1435,8 @@ export class CancellationRecorder {
         actor: { type: ask.actor.type, id: ask.actor.id },
         requestId: tenant.requestId,
         reason,
+        // A staff cancellation's part (a staff-only event): the worker's check reads it (`staffCancellationOf`).
+        ...(ask.staff === undefined ? {} : { cancelledBy: "staff", staff: { ...ask.staff } }),
       },
       visibleToCustomer: false,
       requestId: tenant.requestId,
@@ -1423,7 +1679,7 @@ export class CancellationRecorder {
       amount: authorised.minus(captured).toFixed(2),
       kept: captured.toFixed(2),
       reason: capture.reason,
-      requestedBy: { type: "customer", id: capture.customerId },
+      requestedBy: capture.requestedBy,
       source,
       now,
     });
@@ -1493,7 +1749,8 @@ export class CancellationRecorder {
         });
         await this.staffAlert(trx, booking, "cancellation_capture_failed", {
           reason:
-            `The customer cancelled this booking, but the amount it keeps (${capture.amount} ${current.currency}: ` +
+            `${capture.requestedBy.type === "staff" ? "The staff" : "The customer"} cancelled this booking, but ` +
+            `the amount it keeps (${capture.amount} ${current.currency}: ` +
             `the cancellation fee and the fees that are not refunded) could not be captured from the card payment ` +
             `${current.id} (${code}). The cancellation stands. The capture is retried once in 10 minutes; if it ` +
             "fails too, capture the kept amount from the console or release the authorisation.",
@@ -1634,6 +1891,56 @@ type Claim =
       readonly booking: BookingRow;
       readonly orderId: string;
     };
+
+/** Where the cancellation of a stored `504` stands for a same-key replay (`decideReplay`). */
+export type ReplayDecision =
+  | { readonly kind: "undecided" }
+  | { readonly kind: "cancelled" }
+  | { readonly kind: "error"; readonly error: AppError };
+
+/** What console.bookings.cancel asks (ConsoleBookingCancelRequest, OBE-063). */
+export interface StaffCancelRequest {
+  readonly reasonCode: string;
+  readonly reason: string;
+  readonly refund?: StaffRefundRequest | undefined;
+  readonly notifyCustomer?: boolean | undefined;
+}
+
+/** What a staff cancellation recorded, for the console's staff action (written in the record step's transaction). */
+export interface StaffCancelRecord {
+  /** The booking as the claim found it. */
+  readonly before: {
+    readonly status: string;
+    readonly version: number;
+    readonly amountPaid: string;
+    readonly refundMode: StaffRefundMode;
+  };
+  readonly ask: CancellationAsk;
+  readonly money: RecordedMoney;
+  readonly ticketsVoided: boolean;
+  /** `deleted`: Amadeus cancelled the order; `order_not_found`: Amadeus no longer had it. */
+  readonly cause: "deleted" | "order_not_found";
+}
+
+/** What console.bookings.cancel answers with the booking: an order Amadeus no longer had is a warning. */
+export interface StaffCancelOutcome {
+  readonly orderNotFound: boolean;
+}
+
+/** The warning of a staff cancellation whose order Amadeus no longer had (the booking was cancelled locally). */
+export const ORDER_GONE_WARNING: Warning = Object.freeze({
+  title: "ORDER NOT FOUND AT AMADEUS",
+  detail:
+    "Amadeus no longer has this order (cancelled at the airline or purged): the booking was cancelled in Velexis " +
+    "and its money settled as asked. Check the office if the order should still exist.",
+});
+
+/** What the claim of a staff cancellation read. */
+interface StaffClaim {
+  readonly booking: BookingRow;
+  readonly orderId: string;
+  readonly ask: CancellationAsk;
+}
 
 @Injectable()
 export class CancellationService {
@@ -2047,6 +2354,231 @@ export class CancellationService {
     return await this.answer(bookingId, 200);
   }
 
+  // ---- console.bookings.cancel (OBE-063) ---------------------------------------------------------------------------
+
+  /**
+   * Cancels the booking for OTA staff (see the file header, "A staff cancellation"); `audit` writes the console's staff
+   * action in the record step's transaction. The caller answers the booking.
+   */
+  async cancelByStaff(
+    bookingId: string,
+    ifMatch: string,
+    request: StaffCancelRequest,
+    audit: (trx: TenantTransaction, record: StaffCancelRecord) => Promise<void>,
+  ): Promise<StaffCancelOutcome> {
+    const tenant = this.tenants.require();
+    const requestedAt = this.clock.now();
+    // 1. The checks without a lock: no Amadeus call for a request that is refused anyway.
+    await this.tx.run((trx) => this.staffCheck(trx, tenant, bookingId, ifMatch, request, requestedAt, false));
+    // 2. The order read again: its ticket states and flown segments recorded through the refresh, without its throttle.
+    try {
+      await this.customerBookings.refresh(tenant, bookingId, STAFF_CANCEL_OPERATION, {}, { throttleMs: 0 });
+    } catch (error) {
+      throw unsentAnswer(error);
+    }
+    // 3. The claim: the checks again under the booking's lock, then `version + 1`.
+    const claim = await this.tx.run(async (trx) => {
+      const checked = await this.staffCheck(trx, tenant, bookingId, ifMatch, request, requestedAt, true);
+      await this.repository.bumpVersion(trx, bookingId, this.clock.now());
+      return checked;
+    });
+    const ctenant = this.cancellationTenant(tenant);
+    const before = {
+      status: claim.booking.status,
+      version: claim.booking.version,
+      amountPaid: claim.booking.amountPaid,
+      refundMode: claim.ask.staff?.refundMode ?? "default",
+    };
+    // 4. Flight Order Management DELETE, no transaction open.
+    let outcome: DeleteOutcome;
+    let failure: unknown;
+    try {
+      const reply = await this.amadeus.cancelFlightOrder(
+        { ...this.callContext(tenant, claim.booking), operation: STAFF_CANCEL_OPERATION },
+        { flightOrderId: claim.orderId },
+      );
+      outcome = { kind: "cancelled", supplierRequestId: reply.call.supplierRequestId };
+    } catch (error) {
+      failure = error;
+      outcome = deleteFailureOf(error);
+    }
+    switch (outcome.kind) {
+      case "cancelled":
+      case "order_not_found": {
+        const cause = outcome.kind === "cancelled" ? "deleted" : "order_not_found";
+        await this.recordStaffCancelled(ctenant, bookingId, claim.ask, before, {
+          cause,
+          supplierRequestId: outcome.kind === "cancelled" ? outcome.supplierRequestId : null,
+          audit,
+        });
+        return { orderNotFound: cause === "order_not_found" };
+      }
+      case "refused":
+        // The staff asked: nothing is handed to them as a request. The airline's refusal, with its supplier issue.
+        this.logger.info({ bookingId, code: outcome.code }, "bookings.staff_cancel_refused");
+        throw staffRefusalOf(failure);
+      case "version_conflict":
+        throw outcome.error;
+      case "not_sent":
+        throw unsentAnswer(outcome.error);
+      case "unknown":
+        throw await this.unknownOutcome(
+          ctenant,
+          bookingId,
+          claim.ask,
+          isAppError(outcome.error) ? outcome.error.code : "UNKNOWN",
+          outcome.error,
+        );
+    }
+  }
+
+  /**
+   * The checks of a staff cancellation on the booking as `trx` reads it, and its ask (see the file header); `lock`
+   * claims the booking first (`FOR NO KEY UPDATE SKIP LOCKED`: a booking another claim or writer holds answers the
+   * transient `503`).
+   */
+  private async staffCheck(
+    trx: TenantTransaction,
+    tenant: RequestTenant,
+    bookingId: string,
+    ifMatch: string,
+    request: StaffCancelRequest,
+    requestedAt: Date,
+    lock: boolean,
+  ): Promise<StaffClaim> {
+    if (lock && !(await this.repository.lock(trx, bookingId, true))) {
+      if ((await this.bookings.booking(trx, bookingId)) === undefined) {
+        throw new AppError("NOT_FOUND");
+      }
+      throw bookingBusy();
+    }
+    const booking = await this.bookings.booking(trx, bookingId);
+    if (booking === undefined || booking.environment !== tenant.environment) {
+      throw new AppError("NOT_FOUND");
+    }
+    if (booking.status === "cancelled") {
+      throw new AppError("BOOKING_ALREADY_CANCELLED");
+    }
+    if (!ifMatchSatisfied(ifMatch, booking.version)) {
+      throw new AppError("PRECONDITION_FAILED", { details: { currentVersion: booking.version } });
+    }
+    if (booking.amadeusOrderId === null || !LIVE_STATUSES.has(booking.status)) {
+      throw new AppError("BOOKING_NOT_MODIFIABLE", {
+        message: "The booking has no Amadeus order to cancel.",
+        details: { status: booking.status },
+      });
+    }
+    // An undecided cancellation is checked by the worker; a customer's request waiting for the staff is finished here.
+    const state = cancellationStateOf(await this.repository.cancellationEvents(trx, bookingId));
+    if (state.kind === "undecided") {
+      throw cancellationPending();
+    }
+    // A staff issuance or the ticketing job holds a fresh claim (OBE-044): its capture and Flight Order Issue would race
+    // the DELETE and the money step (an authorisation captured while it is voided), so the staff wait for its outcome.
+    const ticketing = await this.repository.ticketingClaim(trx, bookingId);
+    if (ticketing !== undefined && ticketingClaimFresh(ticketing, this.clock.now())) {
+      throw new AppError("BOOKING_NOT_MODIFIABLE", {
+        message: "The tickets of this booking are being issued right now: reload it in a moment.",
+        details: { reason: "ticketing_in_progress" },
+      });
+    }
+    const children = await this.bookings.children(trx, bookingId);
+    const now = this.clock.now().getTime();
+    if (children.segments.some((segment) => segment.isFlown || segment.departureAt.getTime() <= now)) {
+      throw new AppError("BOOKING_NOT_MODIFIABLE", {
+        message: "A flight of this booking has departed: cancel the rest with the airline.",
+        details: { reason: "flown" },
+      });
+    }
+    const rows: PaymentRow[] = [];
+    const inFlight = new Map<string, string>();
+    for (const id of await this.bookings.paymentIdsOf(trx, bookingId)) {
+      const row = await this.payments.payment(trx, id);
+      if (row !== undefined) {
+        rows.push(row);
+        inFlight.set(row.id, await this.refunds.inFlightAmount(trx, row.id));
+      }
+    }
+    const minorUnits = (await this.payments.currencyMinorUnits(trx, booking.currency)) ?? 2;
+    const refund = staffRefundOf(
+      moneyOf(rows, inFlight),
+      request.refund,
+      booking.currency,
+      minorUnits,
+      rows.some((row) => row.provider === AIRLINE_PROVIDER),
+    );
+    const holdsSeats = children.tickets.some((ticket) => !SETTLED_TICKET_STATUSES.has(ticket.status));
+    return {
+      booking,
+      orderId: booking.amadeusOrderId,
+      ask: {
+        // What the DELETE does: voids the tickets that hold a seat, else releases the seats.
+        mode: holdsSeats ? "void" : "release",
+        reasonCode: request.reasonCode,
+        comment: null,
+        estimate: refund.estimate,
+        currency: booking.currency,
+        actor: tenant.actor,
+        requestedAt,
+        staff: {
+          reason: request.reason.trim(),
+          refundMode: refund.mode,
+          notifyCustomer: request.notifyCustomer !== false,
+        },
+      },
+    };
+  }
+
+  /**
+   * T2 of a staff cancellation whose order Amadeus cancelled or no longer has: the record step and the money step with
+   * the console's staff action (`audit`) in one transaction, then the void or the capture of an authorisation (no
+   * transaction open). A T2 that fails is decided like a DELETE without an answer, as a customer's.
+   */
+  private async recordStaffCancelled(
+    tenant: CancellationTenant,
+    bookingId: string,
+    ask: CancellationAsk,
+    before: StaffCancelRecord["before"],
+    via: {
+      readonly cause: StaffCancelRecord["cause"];
+      readonly supplierRequestId: string | null;
+      readonly audit: (trx: TenantTransaction, record: StaffCancelRecord) => Promise<void>;
+    },
+  ): Promise<void> {
+    let recorded: RecordedCancellation;
+    try {
+      recorded = await this.tx.run(async (trx) => {
+        if (!(await this.repository.lock(trx, bookingId))) {
+          throw new AppError("NOT_FOUND");
+        }
+        const result = await this.recorder.recordCancelled(trx, tenant, bookingId, ask, {
+          cause: via.cause,
+          supplierRequestId: via.supplierRequestId,
+        });
+        if (result.kind === "cancelled") {
+          await via.audit(trx, {
+            before,
+            ask,
+            money: result.money,
+            ticketsVoided: result.ticketsVoided,
+            cause: via.cause,
+          });
+        }
+        return result;
+      });
+    } catch (error) {
+      if (isAppError(error) && error.code === "NOT_FOUND") {
+        throw error;
+      }
+      this.logger.error({ bookingId, err: error }, "bookings.staff_cancel_record_failed");
+      throw await this.unknownOutcome(tenant, bookingId, ask, "record_failed", error);
+    }
+    if (recorded.kind === "not_live") {
+      throw new AppError("BOOKING_ALREADY_CANCELLED");
+    }
+    await this.recorder.settleAuthorisation(tenant, bookingId, recorded.money, "api");
+  }
+
   /** The cancellation of a booking handed to the staff (`202`). */
   private pendingCancellation(
     bookingId: string,
@@ -2097,8 +2629,38 @@ export class CancellationService {
       return undefined;
     }
     const bookingId = record.resource.id;
+    const decided = await this.decideReplay(bookingId, "customer");
+    if (decided === undefined) {
+      return undefined;
+    }
+    if (decided.kind === "undecided") {
+      return replayedTimeout(record.response);
+    }
+    if (decided.kind === "error") {
+      return this.errorReplay(decided.error);
+    }
+    const answer = await this.answer(bookingId, 200);
+    this.logger.info({ bookingId }, "bookings.cancel_replayed");
+    return {
+      status: 200,
+      headers: { etag: bookingEtagOf(answer.version), "cache-control": CANCELLATION_CACHE_CONTROL },
+      setCookie: [],
+      body: answer.result,
+    };
+  }
+
+  /**
+   * Where the cancellation of a stored `504` stands, from the booking of the request's environment (never an Amadeus
+   * call): `undecided` while the worker has not decided; `cancelled` once a cancellation of `cancelledBy` (the
+   * customer's bookings.cancel, the staff's console.bookings.cancel) recorded it after the flag; else the final error.
+   * `undefined` for a booking of another environment or none.
+   */
+  async decideReplay(
+    bookingId: string,
+    cancelledBy: "customer" | "staff",
+  ): Promise<ReplayDecision | undefined> {
     const tenant = this.tenants.require();
-    const decided = await this.tx.run(async (trx) => {
+    return await this.tx.run(async (trx): Promise<ReplayDecision | undefined> => {
       const booking = await this.bookings.booking(trx, bookingId);
       if (booking === undefined || booking.environment !== tenant.environment) {
         return undefined;
@@ -2110,39 +2672,27 @@ export class CancellationService {
         const ours =
           cancelled !== undefined &&
           isRecord(cancelled.data) &&
-          cancelled.data["cancelledBy"] === "customer" &&
+          cancelled.data["cancelledBy"] === cancelledBy &&
           (flagged < 0 || cancelled.createdAt.getTime() >= (events[flagged]?.createdAt.getTime() ?? 0));
-        if (!ours) {
-          return { kind: "error" as const, error: new AppError("BOOKING_ALREADY_CANCELLED") };
-        }
-        return { kind: "cancelled" as const };
+        return ours
+          ? { kind: "cancelled" }
+          : { kind: "error", error: new AppError("BOOKING_ALREADY_CANCELLED") };
       }
       const state = cancellationStateOf(events);
       if (state.kind === "not_applied") {
-        return { kind: "error" as const, error: cancellationNotApplied(bookingId) };
+        return { kind: "error", error: cancellationNotApplied(bookingId) };
       }
-      return { kind: "undecided" as const };
+      return { kind: "undecided" };
     });
-    if (decided === undefined) {
-      return undefined;
-    }
-    if (decided.kind === "undecided") {
-      return replayedTimeout(record.response);
-    }
-    if (decided.kind === "error") {
-      const { status, body } = toErrorEnvelope(decided.error, this.requestId(tenant), {
-        exposeSupplier: this.requestContext.isConsoleScope(),
-      });
-      return { status, headers: { "cache-control": "no-store" }, setCookie: [], body };
-    }
-    const answer = await this.answer(bookingId, 200);
-    this.logger.info({ bookingId }, "bookings.cancel_replayed");
-    return {
-      status: 200,
-      headers: { etag: bookingEtagOf(answer.version), "cache-control": CANCELLATION_CACHE_CONTROL },
-      setCookie: [],
-      body: answer.result,
-    };
+  }
+
+  /** The stored answer of a replay that ends in `error` (`Cache-Control: no-store`). */
+  errorReplay(error: AppError): IdempotencyResponse {
+    const tenant = this.tenants.require();
+    const { status, body } = toErrorEnvelope(error, this.requestId(tenant), {
+      exposeSupplier: this.requestContext.isConsoleScope(),
+    });
+    return { status, headers: { "cache-control": "no-store" }, setCookie: [], body };
   }
 
   // ---- Shared ------------------------------------------------------------------------------------------------------
@@ -2314,7 +2864,34 @@ type CheckClaim =
       readonly booking: BookingRow;
       readonly orderId: string;
       readonly flag: CancellationFlag;
+      /** The staff's part of a staff cancellation's flag, with its actor; `undefined` for a customer's. */
+      readonly staff: ReturnType<typeof staffCancellationOf>;
     };
+
+const STAFF_REFUND_MODES: readonly StaffRefundMode[] = ["default", "none", "full", "amount"];
+
+/**
+ * The staff's part of a cancellation flag's data (a staff cancellation's `booking.cancellation_timeout`, see the file
+ * header) and the staff member or console key who asked, or `undefined` for a customer's flag or data that cannot be
+ * read.
+ */
+export function staffCancellationOf(
+  data: unknown,
+): { readonly staff: StaffCancellation; readonly actor: ContextActor } | undefined {
+  if (!isRecord(data) || data["cancelledBy"] !== "staff" || !isRecord(data["staff"])) {
+    return undefined;
+  }
+  const staff = data["staff"];
+  const reason = staff["reason"];
+  const refundMode = STAFF_REFUND_MODES.find((mode) => mode === staff["refundMode"]);
+  const notifyCustomer = staff["notifyCustomer"];
+  if (typeof reason !== "string" || refundMode === undefined || typeof notifyCustomer !== "boolean") {
+    return undefined;
+  }
+  const actor = isRecord(data["actor"]) ? data["actor"] : {};
+  const type = actor["type"] === "staff" || actor["type"] === "api_key" ? actor["type"] : "system";
+  return { staff: { reason, refundMode, notifyCustomer }, actor: { type, id: text(actor["id"]) ?? null } };
+}
 
 /** How the order read of a check ended. */
 type OrderState =
@@ -2384,9 +2961,19 @@ export class CancellationChecks {
       if (booking === undefined || !LIVE_STATUSES.has(booking.status) || booking.amadeusOrderId === null) {
         return { kind: "nothing" };
       }
-      const state = cancellationStateOf(await this.repository.cancellationEvents(trx, bookingId));
+      const events = await this.repository.cancellationEvents(trx, bookingId);
+      const state = cancellationStateOf(events);
       return state.kind === "undecided"
-        ? { kind: "claimed", booking, orderId: booking.amadeusOrderId, flag: state.flag }
+        ? {
+            kind: "claimed",
+            booking,
+            orderId: booking.amadeusOrderId,
+            flag: state.flag,
+            // The flag cancellationStateOf read: the newest one.
+            staff: staffCancellationOf(
+              events.find((event) => event.type === CANCELLATION_EVENTS.timeout)?.data,
+            ),
+          }
         : { kind: "nothing" };
     });
     if (claim.kind === "nothing") {
@@ -2434,8 +3021,9 @@ export class CancellationChecks {
       comment: flag.comment,
       estimate: flag.estimate,
       currency: flag.currency,
-      actor: flag.actor,
+      actor: claim.staff?.actor ?? flag.actor,
       requestedAt: new Date(flag.requestedAt),
+      staff: claim.staff?.staff,
     };
     const recorded = await this.tx.run(async (trx) => {
       if (!(await this.stillUndecided(trx, bookingId))) {

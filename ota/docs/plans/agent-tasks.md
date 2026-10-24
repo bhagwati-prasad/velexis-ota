@@ -1781,7 +1781,8 @@ The console API (staff sign-in by portal token, bookings, PNR import, queues, cu
   - Notes appear in the console booking but never in `bookings.listEvents` for customers.
 - **Verify:** `pnpm --filter @velexis/ota-backend test -- console && pnpm --filter @velexis/ota-backend test:int -- console`
 
-### OBE-063 · Implement console issue and cancel with payments
+### OBE-063 · Implement console issue and cancel with payments ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-backend
 - **Milestone:** M4
 - **Depends on:** OBE-062, OBE-044, OBE-049
