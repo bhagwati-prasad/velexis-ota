@@ -2154,7 +2154,8 @@ The console API (staff sign-in by portal token, bookings, PNR import, queues, cu
   - "Next" uses `page.nextCursor`; `totalCount` is shown when present.
 - **Verify:** `pnpm --filter @velexis/ota-admin test`
 
-### OAD-007 · Build the booking detail page
+### OAD-007 · Build the booking detail page ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-admin
 - **Milestone:** M4
 - **Depends on:** OAD-006, OBE-062
