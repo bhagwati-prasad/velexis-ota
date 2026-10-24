@@ -5,6 +5,7 @@
 //   t = await createTestApp({ overrides: [{ provide: StripeClient, useValue: stripe }] });
 //   stripe.put(stripeFixture("customer.subscription.updated").data.object);   // what a retrieve answers
 //   stripe.failNext("subscriptions.retrieve", FakeStripe.apiError(503));      // Stripe down for one call
+//   stripe.failNext("customers.create", FakeStripe.apiError(500), { created: true, storedForKey: true });
 //   …
 //   expect(stripe.callsOf("subscriptions.retrieve")).toEqual([expect.objectContaining({ id: "sub_test_alpha_1" })]);
 //
@@ -18,8 +19,16 @@
 //   Stripe does for 24 hours); the same key with other parameters throws `StripeIdempotencyError`. New objects get ids
 //   `<prefix>_fake<n>` and Stripe's URL shapes (a Checkout Session also its `expires_at`, 24 hours after `created`),
 //   and are kept, so a later retrieve finds them.
+// - **Search** (`customers.search`) answers the stored Customers whose `metadata.velexis_tenant_id` is the one of the
+//   query `metadata['velexis_tenant_id']:'<id>'`, the only query the platform sends (any other throws), as a
+//   `search_result` page. Unlike Stripe's search, whose index may lag up to a minute, it sees a Customer at once.
 // - **Failures** queued with `failNext(method, error)` are thrown by the next calls of that method, one each, before
-//   anything else happens; the call is still recorded.
+//   anything else happens; the call is still recorded. For a create, `failNext(method, error, options)` plays what
+//   Stripe does with an idempotency key on a failure: `created` makes (and keeps) the object before the error is
+//   thrown, as when Stripe made it but its answer was a 5xx or never arrived; `storedForKey` stores the failure for
+//   the call's idempotency key, so every later call with that key and the same parameters throws it again, as Stripe
+//   replays a stored 5xx for 24 hours. Without `storedForKey`, a later call with the key answers the object made with
+//   `created`, or makes one.
 // - **Calls** are recorded in order (`calls`, `callsOf(method)`) with the id, a copy of the parameters and the
 //   idempotency key, so a test asserts what the platform asked for, and that it asked for nothing (`calls` empty).
 // - `notConfigured()` makes `api()` throw StripeNotConfiguredError, as the application does without STRIPE_SECRET_KEY.
@@ -34,6 +43,7 @@ import {
 export const FAKE_STRIPE_METHODS = Object.freeze([
   "customers.create",
   "customers.retrieve",
+  "customers.search",
   "checkout.sessions.create",
   "checkout.sessions.retrieve",
   "billingPortal.sessions.create",
@@ -54,6 +64,26 @@ export interface FakeStripeCall {
   readonly params: unknown;
   /** `options.idempotencyKey`, or `undefined`. */
   readonly idempotencyKey: string | undefined;
+}
+
+/** What a failure of a create leaves behind at Stripe (`failNext`, file header). */
+export interface FakeStripeFailureOptions {
+  /** Stripe made the object before it failed: it is kept, so a retrieve or a search finds it. */
+  readonly created?: boolean;
+  /** Stripe stored the failure for the idempotency key: later calls with the key throw it again. */
+  readonly storedForKey?: boolean;
+}
+
+/** A failure queued by `failNext`. */
+interface QueuedFailure extends FakeStripeFailureOptions {
+  readonly error: Error;
+}
+
+/** What Stripe keeps for an idempotency key: the parameters, and the object made or the failure answered. */
+interface KeyRecord {
+  readonly params: string;
+  readonly id?: string;
+  readonly error?: Error;
 }
 
 /** A Stripe object the fake can hold: an id and Stripe's `object` type. */
@@ -100,8 +130,8 @@ export class FakeStripe extends StripeClient {
   /** Every call, in order. */
   readonly calls: FakeStripeCall[] = [];
   private readonly objects = new Map<string, Json>();
-  private readonly failures = new Map<FakeStripeMethod, Error[]>();
-  private readonly byIdempotencyKey = new Map<string, { readonly params: string; readonly id: string }>();
+  private readonly failures = new Map<FakeStripeMethod, QueuedFailure[]>();
+  private readonly byIdempotencyKey = new Map<string, KeyRecord>();
   private sequence = 0;
   private configured = true;
   private readonly resources: StripeApi;
@@ -119,6 +149,11 @@ export class FakeStripe extends StripeClient {
             id,
             params,
           ),
+        // The SDK's promise also pages through the results; the platform reads one page.
+        search: (params: unknown, options?: unknown) =>
+          settle(() =>
+            this.searchCustomersNow(params, options),
+          ) as unknown as Stripe.ApiSearchResultPromise<Stripe.Customer>,
       },
       checkout: {
         sessions: {
@@ -212,10 +247,18 @@ export class FakeStripe extends StripeClient {
     return object === undefined ? undefined : (structuredClone(object) as unknown as FakeStripeObject);
   }
 
-  /** The next call of `method` throws `error` (several calls queue several errors, in order). */
-  failNext(method: FakeStripeMethod, error: Error): this {
+  /**
+   * The next call of `method` throws `error` (several calls queue several errors, in order). The options of a create
+   * say what Stripe kept of the failed call (file header).
+   */
+  failNext(method: FakeStripeMethod, error: Error, options: FakeStripeFailureOptions = {}): this {
+    if ((options.created === true || options.storedForKey === true) && !(method in CREATED)) {
+      throw new TypeError(
+        `FakeStripe.failNext: ${method} makes nothing; created and storedForKey are for creates`,
+      );
+    }
     const queued = this.failures.get(method) ?? [];
-    queued.push(error);
+    queued.push({ error, ...options });
     this.failures.set(method, queued);
     return this;
   }
@@ -235,7 +278,16 @@ export class FakeStripe extends StripeClient {
     return this;
   }
 
-  private record(method: FakeStripeMethod, id: string | undefined, params: unknown, options: unknown): void {
+  /**
+   * Records a call and takes the next failure queued for its method: a plain one is thrown here, before anything
+   * else happens; one with options is answered to the create, which plays it.
+   */
+  private record(
+    method: FakeStripeMethod,
+    id: string | undefined,
+    params: unknown,
+    options: unknown,
+  ): QueuedFailure | undefined {
     const idempotencyKey = isRecord(options) ? options["idempotencyKey"] : undefined;
     this.calls.push({
       method,
@@ -244,9 +296,10 @@ export class FakeStripe extends StripeClient {
       idempotencyKey: typeof idempotencyKey === "string" ? idempotencyKey : undefined,
     });
     const failure = this.failures.get(method)?.shift();
-    if (failure !== undefined) {
-      throw failure;
+    if (failure !== undefined && failure.created !== true && failure.storedForKey !== true) {
+      throw failure.error;
     }
+    return failure;
   }
 
   private retrieve<T>(
@@ -281,12 +334,43 @@ export class FakeStripe extends StripeClient {
     return this.response<T>(answer);
   }
 
+  /** `customers.search` with the one query the platform sends (file header). */
+  private searchCustomersNow(params: unknown, options: unknown): Stripe.ApiSearchResult<Stripe.Customer> {
+    this.record("customers.search", undefined, params, options);
+    const query = isRecord(params) ? params["query"] : undefined;
+    const match =
+      typeof query === "string" ? /^metadata\['velexis_tenant_id'\]:'([^'\\]+)'$/.exec(query) : null;
+    if (match === null) {
+      throw new Error(
+        "FakeStripe: customers.search knows only the query metadata['velexis_tenant_id']:'<id>'",
+      );
+    }
+    const data = [...this.objects.values()]
+      .filter((object) => {
+        const metadata = object["metadata"];
+        return (
+          object["object"] === "customer" &&
+          object["deleted"] !== true &&
+          isRecord(metadata) &&
+          metadata["velexis_tenant_id"] === match[1]
+        );
+      })
+      .map((object) => structuredClone(object));
+    return this.response<Stripe.ApiSearchResult<Stripe.Customer>>({
+      object: "search_result",
+      url: "/v1/customers/search",
+      has_more: false,
+      next_page: null,
+      data,
+    });
+  }
+
   private create<T>(method: CreateMethod, params: unknown, options: unknown): Promise<Stripe.Response<T>> {
     return settle(() => this.createNow<T>(method, params, options));
   }
 
   private createNow<T>(method: CreateMethod, params: unknown, options: unknown): Stripe.Response<T> {
-    this.record(method, undefined, params, options);
+    const failure = this.record(method, undefined, params, options);
     const key = isRecord(options) ? options["idempotencyKey"] : undefined;
     if (typeof key !== "string" || key.length === 0) {
       throw new Error(
@@ -304,11 +388,20 @@ export class FakeStripe extends StripeClient {
           statusCode: 400,
         });
       }
-      const object = this.objects.get(earlier.id);
+      if (earlier.error !== undefined) {
+        // Stripe replays the stored failure of the key.
+        throw earlier.error;
+      }
+      const object = earlier.id === undefined ? undefined : this.objects.get(earlier.id);
       if (object === undefined) {
         throw new Error(`FakeStripe: the object of idempotency key ${key} was removed`);
       }
       return this.response<T>(structuredClone(object));
+    }
+    if (failure !== undefined && failure.created !== true) {
+      // storedForKey without created: nothing was made, the failure is what the key answers from now on.
+      this.byIdempotencyKey.set(`${method} ${key}`, { params: serialised, error: failure.error });
+      throw failure.error;
     }
     this.sequence += 1;
     const shape = CREATED[method];
@@ -328,6 +421,16 @@ export class FakeStripe extends StripeClient {
         : {}),
     };
     this.objects.set(id, object);
+    if (failure !== undefined) {
+      // Made, but the answer was a failure: the key replays the failure when Stripe stored it, else the object.
+      this.byIdempotencyKey.set(
+        `${method} ${key}`,
+        failure.storedForKey === true
+          ? { params: serialised, error: failure.error }
+          : { params: serialised, id },
+      );
+      throw failure.error;
+    }
     this.byIdempotencyKey.set(`${method} ${key}`, { params: serialised, id });
     return this.response<T>(structuredClone(object));
   }

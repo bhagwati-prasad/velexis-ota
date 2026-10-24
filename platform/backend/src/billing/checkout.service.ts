@@ -6,8 +6,15 @@
 // createCheckoutSession (below). Every Stripe call runs without an open transaction (architecture §2.3):
 //
 // 1. The OTA's Stripe Customer: the stored `billing_customers` row, else a new Customer (the owner's e-mail address,
-//    the OTA's legal name or name, `metadata.velexis_tenant_id`; Stripe idempotency key `customer:<tenantId>`), stored
-//    with `ON CONFLICT DO NOTHING` (PADR-0002 item 1: one Customer per OTA, reused after a cancellation).
+//    the OTA's legal name or name, `metadata.velexis_tenant_id`), stored with `ON CONFLICT DO NOTHING` (PADR-0002
+//    item 1: one Customer per OTA, reused after a cancellation). Its Stripe idempotency key is `customer:<tenantId>`
+//    for the first attempt, so two first Checkouts of one OTA at once get the same Customer. Stripe replays a stored
+//    5xx for the same key for 24 hours, so a failure that spent the key (a 5xx, no answer, or the key refused as used
+//    with other parameters: `keySpent` of stripe-billing.gateway.ts) moves the creation to its next attempt
+//    (`billing_customer_attempts`), whose key is `customer:<tenantId>:<n>`; before it creates a Customer, attempt n
+//    looks for one an earlier attempt made (`customers.search` on `metadata.velexis_tenant_id`) and stores that one
+//    instead (PADR-0002 item 3, revision of 2026-10-24; FIX-W29-PLATFORM). One Stripe error therefore costs the owner
+//    one click, never a day.
 // 2. The Checkout Session of `checkoutSessionParams` (stripe-billing.gateway.ts): the plan's price for the interval, the
 //    Velexis metadata (`velexis_subscription_id` when an `incomplete` row was written before), the plan's trial only
 //    when the OTA never had a Stripe subscription, `payment_method_collection: "always"`, success URL
@@ -50,10 +57,12 @@ import { BillingCustomersRepository } from "./billing-customers.repository";
 import { PlansRepository, type PublicPlanRow } from "./plans.repository";
 import {
   checkoutSessionParams,
+  customerIdempotencyKey,
   providerError,
   StripeBillingFailure,
   StripeBillingGateway,
   type CreatedCheckoutSession,
+  type CreatedCustomer,
 } from "./stripe-billing.gateway";
 import { SubscriptionsRepository, type CheckoutSubscriptionRow } from "./subscriptions.repository";
 
@@ -256,7 +265,10 @@ export class CheckoutService {
     }
   }
 
-  /** The stored Stripe Customer of `tenantId`, else a new one (step 1 of `start`). */
+  /**
+   * The stored Stripe Customer of `tenantId`, else the one an earlier failed attempt made, else a new one (step 1 of
+   * `start`).
+   */
   private async customerOf(tenantId: string, accountId: string): Promise<string> {
     const stored = await this.customers.find(tenantId);
     if (stored !== undefined) {
@@ -266,18 +278,58 @@ export class CheckoutService {
     if (context === undefined) {
       throw new Error("CheckoutService: the tenant or the account of the Checkout does not exist");
     }
-    const created = await this.gateway.createCustomer(
-      { tenantId, email: context.email, name: context.name },
-      idempotencyKey("customer", tenantId),
-    );
+    const attempt = await this.customers.customerAttempt(tenantId);
+    if (attempt > 0) {
+      // An earlier attempt spent its key without an answer the platform could use: Stripe may have made its Customer.
+      const earlier = await this.gateway.findCustomer(tenantId);
+      if (earlier !== undefined) {
+        this.logger.info({ tenantId, customerId: earlier.id, attempt }, "billing.customer_found");
+        return this.storeCustomer(tenantId, earlier, earlier.email ?? context.email);
+      }
+    }
+    let created: CreatedCustomer;
+    try {
+      created = await this.gateway.createCustomer(
+        { tenantId, email: context.email, name: context.name },
+        customerIdempotencyKey(tenantId, attempt),
+      );
+    } catch (error) {
+      if (error instanceof StripeBillingFailure && error.keySpent) {
+        await this.moveCustomerAttempt(tenantId, attempt);
+      }
+      throw error;
+    }
+    return this.storeCustomer(tenantId, created, context.email);
+  }
+
+  /** Stores the Customer of `tenantId` unless it has one already; answers the stored one's id. */
+  private async storeCustomer(
+    tenantId: string,
+    customer: CreatedCustomer,
+    billingEmail: string,
+  ): Promise<string> {
     const row = await this.customers.insertIfAbsent({
       tenantId,
-      customerId: created.id,
-      livemode: created.livemode,
-      billingEmail: context.email,
+      customerId: customer.id,
+      livemode: customer.livemode,
+      billingEmail,
       now: this.clock.now(),
     });
     return row.provider_customer_id;
+  }
+
+  /**
+   * Moves the Customer creation of `tenantId` on from attempt `from`, whose key a failure spent. A failure to write it
+   * is logged and not thrown: the caller answers the Stripe failure, and the next attempt sends the same key, gets the
+   * same failure replayed and moves it then.
+   */
+  private async moveCustomerAttempt(tenantId: string, from: number): Promise<void> {
+    try {
+      const attempt = await this.customers.advanceCustomerAttempt({ tenantId, from, now: this.clock.now() });
+      this.logger.warn({ tenantId, attempt }, "billing.customer_attempt_moved");
+    } catch (error) {
+      this.logger.warn({ tenantId, attempt: from, err: error }, "billing.customer_attempt_not_moved");
+    }
   }
 
   /** A link into the portal on PUBLIC_PORTAL_URL, never a host taken from a request. */

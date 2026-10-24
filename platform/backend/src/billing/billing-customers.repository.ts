@@ -6,6 +6,11 @@
 // `customerContext` reads what a new Customer is made of: the OTA's legal name, else its name, and the e-mail address
 // of the owner who starts the Checkout. It reads `tenants` and `accounts` (the tables of TenantsModule and AuthModule,
 // same layer) without writing them, as the other billing reads join `tenants`.
+//
+// `billing_customer_attempts` (migration 0003, PADR-0002 item 3 revision of 2026-10-24) holds the attempt of the
+// Customer creation while it has failed: no row is attempt 0 (Stripe idempotency key `customer:<tenantId>`), a row
+// attempt n (`customer:<tenantId>:<n>`). `advanceCustomerAttempt` moves it on after a failure that spent the key, as a
+// compare-and-set, so concurrent failures of one attempt move it once.
 import { Inject, Injectable } from "@nestjs/common";
 import { sql, type PlatformDatabase, type Selectable } from "@velexis/db";
 import type { PlatformTransaction } from "../audit/audit.repository";
@@ -38,6 +43,14 @@ export interface NewBillingCustomer {
 
 const ROW_COLUMNS = ["tenant_id", "provider_customer_id", "livemode"] as const;
 
+/** A Customer creation that moves on from attempt `from` (`advanceCustomerAttempt`). */
+export interface CustomerAttemptMove {
+  readonly tenantId: string;
+  /** The attempt whose key the failure spent. */
+  readonly from: number;
+  readonly now: Date;
+}
+
 @Injectable()
 export class BillingCustomersRepository {
   constructor(@Inject(PLATFORM_DB) private readonly db: PlatformDb) {}
@@ -65,6 +78,41 @@ export class BillingCustomersRepository {
       .select([sql<string>`coalesce(t.legal_name, t.name)`.as("name"), "a.email"])
       .where("t.id", "=", tenantId)
       .executeTakeFirst();
+  }
+
+  /** The attempt of the next Stripe Customer creation of `tenantId`: 0 until a creation spent its key. */
+  async customerAttempt(tenantId: string): Promise<number> {
+    const row = await this.db
+      .selectFrom("platform.billing_customer_attempts")
+      .select("attempt")
+      .where("tenant_id", "=", tenantId)
+      .executeTakeFirst();
+    return row?.attempt ?? 0;
+  }
+
+  /**
+   * Moves the Customer creation of `tenantId` from attempt `from` to `from + 1`, unless another request moved it from
+   * `from` already (one statement: an insert of attempt 1, or an update guarded by the attempt it saw), and answers the
+   * attempt now stored.
+   */
+  async advanceCustomerAttempt(move: CustomerAttemptMove): Promise<number> {
+    if (!Number.isSafeInteger(move.from) || move.from < 0) {
+      throw new RangeError("advanceCustomerAttempt: the attempt must be a whole number from 0");
+    }
+    await this.db
+      .insertInto("platform.billing_customer_attempts")
+      .values({ tenant_id: move.tenantId, attempt: move.from + 1, updated_at: move.now })
+      .onConflict((conflict) =>
+        conflict
+          .column("tenant_id")
+          .doUpdateSet((eb) => ({
+            attempt: eb.ref("excluded.attempt"),
+            updated_at: eb.ref("excluded.updated_at"),
+          }))
+          .where("platform.billing_customer_attempts.attempt", "=", move.from),
+      )
+      .execute();
+    return this.customerAttempt(move.tenantId);
   }
 
   /**

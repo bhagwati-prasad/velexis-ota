@@ -7,10 +7,17 @@
 //    (status, body, `ETag` and `Location`). Keys are per account, so two accounts never share one.
 // 2. Same key and same fingerprint: the stored status and body are answered again, and the handler does not run.
 //    Same key, another fingerprint: `409 IDEMPOTENCY_KEY_REUSED`.
-// 3. No record yet: the request takes the lock `vx:idem:<accountId>:<key>:lock` (10 s), runs the handler, stores a
-//    2xx answer, and releases the lock. A concurrent duplicate waits for the lock (polling, at most 10 s) and then
-//    answers the stored record; if the first request failed (nothing stored), the duplicate runs itself. A lock still
-//    held after 10 s answers `503 SERVICE_UNAVAILABLE`.
+// 3. No record yet: the request takes the lock `vx:idem:<accountId>:<key>:lock` (10 s TTL, a random token as its
+//    value), runs the handler, stores a 2xx answer, and releases the lock. While the handler runs, the lock is renewed
+//    every 3 s (`extendKeyIfValue`: its 10 s TTL again, only while it still holds this request's token), so a handler
+//    that waits longer than 10 s on Stripe (createTenant and createCheckoutSession: a 10 s timeout and one retry per
+//    call, FIX-W29-PLATFORM, PADR-0002 revision of 2026-10-24) keeps it to the end; the renewal stops when the answer
+//    is stored. A lock that was lost all the same (Redis unreachable for a whole TTL) is logged
+//    (`idempotency.lock_lost`) and not renewed again; the token check keeps a request from ever renewing or releasing
+//    the lock of another one. A concurrent duplicate waits for the lock (polling, at most 10 s) and then answers the
+//    stored record; if the first request failed (nothing stored), the duplicate runs itself. A lock still held after
+//    the duplicate's 10 s answers `503 SERVICE_UNAVAILABLE` ("still being processed; try again shortly"): the handler
+//    never runs twice at once.
 // 4. Errors are not stored, so a retry after a failure runs again. Neither are answers with `Cache-Control: no-store`
 //    (they carry a secret shown once, api-inventory §2).
 // 5. Redis down before the handler runs answers `503 SERVICE_UNAVAILABLE`, before anything is written. A failure to
@@ -33,6 +40,7 @@ import { defer, lastValueFrom, type Observable } from "rxjs";
 import {
   IDEMPOTENCY_LOCK_TTL_SECONDS,
   deleteKeyIfValue,
+  extendKeyIfValue,
   redisKeys,
   setKey,
   setKeyIfAbsent,
@@ -45,8 +53,16 @@ import { RequestContext } from "./request-context";
 
 /** The request header, lower case as Node delivers it. */
 export const IDEMPOTENCY_KEY_HEADER = "idempotency-key";
-/** The longest a concurrent duplicate waits for the first request: the lock's TTL. */
+/**
+ * The longest a concurrent duplicate waits for the first request (10 s, the lock's TTL): then it answers `503
+ * SERVICE_UNAVAILABLE` if the first one still runs.
+ */
 export const IDEMPOTENCY_WAIT_MS = IDEMPOTENCY_LOCK_TTL_SECONDS * 1000;
+/**
+ * How often the request that holds the lock renews it while its handler runs: a third of its TTL, so two renewals in a
+ * row may fail or come late before the lock can expire under a running handler.
+ */
+export const IDEMPOTENCY_LOCK_RENEW_MS = 3_000;
 /** How often a waiting duplicate looks for the stored answer. */
 export const IDEMPOTENCY_POLL_MS = 50;
 /** The response headers stored with the answer and set again on a replay. */
@@ -214,6 +230,7 @@ export class IdempotencyInterceptor implements NestInterceptor {
       }
       const token = randomUUID();
       if (await this.lock(lock, token)) {
+        const renewal = this.keepLocked(operationId, lock, token);
         try {
           // A duplicate may have stored its answer between the read above and the lock.
           const raced = await this.read(record);
@@ -224,6 +241,7 @@ export class IdempotencyInterceptor implements NestInterceptor {
           await this.store(record, fingerprint, res, body);
           return body;
         } finally {
+          renewal.stop();
           await this.unlock(lock, token);
         }
       }
@@ -254,11 +272,51 @@ export class IdempotencyInterceptor implements NestInterceptor {
     }
   }
 
+  /**
+   * Renews the lock `key` of the request that holds it with `token`, every IDEMPOTENCY_LOCK_RENEW_MS until `stop()`
+   * (file header, item 3). A renewal that finds the lock gone or held by another request logs
+   * `idempotency.lock_lost` and ends the renewals; a Redis error is logged (`idempotency.lock_renew_failed`) and the
+   * next renewal tries again, the lock lasting its TTL from the last renewal that worked. One renewal at a time: the
+   * next is scheduled when the previous one has answered.
+   */
+  private keepLocked(operationId: string, key: RedisKey, token: string): { stop(): void } {
+    let stopped = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const renew = async (): Promise<void> => {
+      let held = true;
+      try {
+        held = await extendKeyIfValue(this.redis, key, token);
+      } catch (error) {
+        this.logger.warn({ err: error, operationId }, "idempotency.lock_renew_failed");
+      }
+      if (stopped) {
+        return;
+      }
+      if (!held) {
+        this.logger.warn({ operationId }, "idempotency.lock_lost");
+        return;
+      }
+      schedule();
+    };
+    const schedule = (): void => {
+      timer = setTimeout(() => void renew(), IDEMPOTENCY_LOCK_RENEW_MS);
+      // A request in flight keeps the process up, not its renewal timer.
+      timer.unref();
+    };
+    schedule();
+    return {
+      stop: () => {
+        stopped = true;
+        clearTimeout(timer);
+      },
+    };
+  }
+
   private async unlock(key: RedisKey, token: string): Promise<void> {
     try {
       await deleteKeyIfValue(this.redis, key, token);
     } catch (error) {
-      // The lock expires on its own after 10 s.
+      // The lock expires on its own 10 s after its last renewal.
       this.logger.warn({ err: error }, "idempotency.unlock_failed");
     }
   }

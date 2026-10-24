@@ -98,9 +98,9 @@ sequenceDiagram
 | Wrong password 5 times | `423 ACCOUNT_LOCKED` for 15 minutes; audit `auth.locked`. |
 | Lost authenticator | Recovery code at the MFA step; otherwise support resets MFA in the admin after an identity check ([`platform-admin-operations.md`](platform-admin-operations.md)). |
 | Key taken between check and submit | Unique violation → `409 TENANT_KEY_UNAVAILABLE`; the wizard returns to step 1 with the message. |
-| Double submit | Same `Idempotency-Key` → the stored `202` is replayed; a different body with the same key → `IDEMPOTENCY_KEY_REUSED`. |
+| Double submit | Same `Idempotency-Key` → the stored `202` is replayed; a different body with the same key → `IDEMPOTENCY_KEY_REUSED`. A second submit while the first still runs (its Stripe calls may take longer than the 10-second lock, which the first request renews until it answers) waits up to 10 seconds and replays the answer, or answers `503`; it never runs the creation a second time. |
 | Too many OTAs | `422 UNPROCESSABLE` with `details.reason = "tenant_limit"`. |
-| Stripe unavailable when creating Checkout (M5) | The tenant and job are committed; the response has `checkoutUrl: null` and `checkoutError`. The setup page shows "Continue to payment", which calls `createCheckoutSession` (Stripe idempotency key `checkout:<tenantId>:<Idempotency-Key>`, [PADR-0002](../adr/0002-stripe-billing-integration.md) item 3). |
+| Stripe unavailable when creating Checkout (M5) | The tenant and job are committed; the response has `checkoutUrl: null` and `checkoutError`. The setup page shows "Continue to payment", which calls `createCheckoutSession` (Stripe idempotency key `checkout:<tenantId>:<Idempotency-Key>`, [PADR-0002](../adr/0002-stripe-billing-integration.md) item 3). When the Customer could not be created (a Stripe 5xx or no answer, which Stripe would replay for the key `customer:<tenantId>` for 24 hours), that call looks for the Customer the failed attempt may have made and otherwise creates it under `customer:<tenantId>:<n>` (`billing_customer_attempts`, PADR-0002 item 3 revision of 2026-10-24). |
 | Checkout abandoned (M5) | The Checkout Session expires after 24 h; the setup page offers "Continue to payment". After 48 h the `billing.abandoned_checkouts` job sets the tenant `failed`, cancels the job and the `incomplete` subscription; the key stays reserved. An owner can still retry, which starts a new Checkout. |
 | Redis down | `createTenant` answers `503` before writing (the idempotency store is required). |
 
@@ -115,6 +115,7 @@ sequenceDiagram
 | `email_outbox` | insert, status, secret purge |
 | `tenants`, `tenant_memberships`, `subscriptions`, `tenant_domains`, `provisioning_jobs` | insert (create OTA) |
 | `billing_customers` | insert or reuse (M5) |
+| `billing_customer_attempts` | the attempt of the Customer creation after a Stripe failure that spent its key (M5) |
 | `platform_audit_log` | `account.signed_up`, `account.email_verified`, `auth.sign_in`, `auth.sign_in_failed`, `auth.locked`, `tenant.created` |
 | Redis | `mfach:*`, `vx:idem:*`, `rl:*` |
 

@@ -1,16 +1,24 @@
 // The Stripe Billing gateway (PBE-044; platform/docs/architecture.md §2.1 BillingModule, §2.3 `*.gateway.ts`, PADR-0002
-// items 1, 3 and 10, subscription-billing flow §B and §F): the three Stripe calls of the portal's billing, on the
+// items 1, 3 and 10, subscription-billing flow §B and §F): the Stripe calls of the portal's billing, on the
 // StripeClient of common/stripe (the `stripe` 18 SDK, its pinned API version, 10-second timeout and one network
 // retry):
 //
-//   createCustomer         customers.create({email, name, metadata.velexis_tenant_id})       key `customer:<tenantId>`
+//   createCustomer         customers.create({email, name, metadata.velexis_tenant_id})       key `customer:<tenantId>[:<n>]`
+//   findCustomer           customers.search(metadata['velexis_tenant_id']:'<tenantId>')      (a read, no key)
 //   createCheckoutSession  checkout.sessions.create(checkoutSessionParams(…), see below)     key `checkout:<tenantId>:<…>`
 //   createPortalSession    billingPortal.sessions.create({customer, return_url})             key `portal_session:<tenantId>:<uuid>`
 //
-// Every POST carries its idempotency key (architecture §7): one Stripe Customer per tenant (`customer:<tenantId>`, so
-// two first Checkouts of one OTA at once get the same Customer), and one Checkout Session per request key
-// (`checkout:<tenantId>:<Idempotency-Key>`, PADR-0002 item 3), so a retried request opens the same page. A Customer
-// Portal session signs its holder in, so each call makes a new one; its key only covers the SDK's network retry.
+// Every POST carries its idempotency key (architecture §7): one Stripe Customer per tenant (`customerIdempotencyKey`:
+// `customer:<tenantId>` for the first attempt, so two first Checkouts of one OTA at once get the same Customer, and
+// `customer:<tenantId>:<n>` for attempt n after a failure that spent the key, PADR-0002 item 3 revision of 2026-10-24),
+// and one Checkout Session per request key (`checkout:<tenantId>:<Idempotency-Key>`, PADR-0002 item 3), so a retried
+// request opens the same page. A Customer Portal session signs its holder in, so each call makes a new one; its key
+// only covers the SDK's network retry.
+//
+// A failure `keySpent` means the key must not be sent again for a new object: Stripe answered a 5xx (which it stores
+// for the key and replays for 24 hours), no answer came (a timeout or a lost connection, after the SDK's own retry:
+// Stripe may have made the object, or stored a failure), or Stripe refused the key as used with other parameters
+// (`idempotency_error`). CheckoutService then moves the Customer creation to its next attempt.
 //
 // Callers never hold a transaction open across these calls (architecture §2.3). A Stripe failure, or an answer the
 // platform cannot use (a Checkout Session without a URL), throws StripeBillingFailure: the operation, Stripe's error
@@ -20,11 +28,16 @@
 import { Injectable } from "@nestjs/common";
 import { AppError } from "@velexis/errors";
 import Stripe from "stripe";
-import { StripeClient, StripeNotConfiguredError, type StripeApi } from "../common/stripe/stripe.client";
+import {
+  idempotencyKey,
+  StripeClient,
+  StripeNotConfiguredError,
+  type StripeApi,
+} from "../common/stripe/stripe.client";
 
 /** A Stripe call of this gateway. */
 export type StripeBillingOperation =
-  "customers.create" | "checkout.sessions.create" | "billingPortal.sessions.create";
+  "customers.create" | "customers.search" | "checkout.sessions.create" | "billingPortal.sessions.create";
 
 /** The Velexis metadata of a Checkout Session and of the subscription it creates (PADR-0002 item 3). */
 export interface CheckoutMetadata {
@@ -91,6 +104,27 @@ export interface CreatedCustomer {
   readonly livemode: boolean;
 }
 
+/** A Stripe Customer of an OTA that an earlier attempt made, as `findCustomer` finds it. */
+export interface FoundCustomer extends CreatedCustomer {
+  /** The e-mail address the Customer has at Stripe, or `null`. */
+  readonly email: string | null;
+}
+
+/**
+ * The Stripe idempotency key of attempt `attempt` of the Customer creation of `tenantId` (PADR-0002 item 3, revision of
+ * 2026-10-24): `customer:<tenantId>` for attempt 0, the key before the revision, and `customer:<tenantId>:<attempt>`
+ * for the attempts after a failure that spent the key.
+ */
+export function customerIdempotencyKey(tenantId: string, attempt: number): string {
+  if (!Number.isSafeInteger(attempt) || attempt < 0) {
+    throw new RangeError("customerIdempotencyKey: the attempt must be a whole number from 0");
+  }
+  return idempotencyKey("customer", attempt === 0 ? tenantId : `${tenantId}:${String(attempt)}`);
+}
+
+/** An id that is safe inside a quoted value of Stripe's search query language: letters, digits and `_`. */
+const SEARCHABLE_ID = /^[A-Za-z0-9_]{1,64}$/;
+
 /** A Checkout Session, as created. */
 export interface CreatedCheckoutSession {
   /** `cs_…`. */
@@ -117,6 +151,11 @@ export class StripeBillingFailure extends Error {
     readonly summary: string,
     /** True for a network failure, a rate limit or a 5xx: the same call may work later. */
     readonly retryable: boolean,
+    /**
+     * True when the call's idempotency key must not be sent again for a new object: a 5xx, no answer, or a key used
+     * with other parameters (file header).
+     */
+    readonly keySpent = false,
   ) {
     super(`Stripe ${operation} failed: ${summary}`);
   }
@@ -146,6 +185,11 @@ export function stripeBillingFailureOf(
       error instanceof Stripe.errors.StripeAPIError ||
       status === 429 ||
       (status !== undefined && status >= 500);
+    const keySpent =
+      connection ||
+      error instanceof Stripe.errors.StripeAPIError ||
+      error instanceof Stripe.errors.StripeIdempotencyError ||
+      (status !== undefined && status >= 500);
     const rawType: unknown = error.rawType;
     const type = connection ? "connection_error" : isStripeIdentifier(rawType) ? rawType : "error";
     const code = isStripeIdentifier(error.code) ? ` (${error.code})` : "";
@@ -153,6 +197,7 @@ export function stripeBillingFailureOf(
       operation,
       `${type} ${status === undefined ? "no_status" : String(status)}${code}`,
       retryable,
+      keySpent,
     );
   }
   const name = error instanceof Error && /^[A-Za-z]{1,60}$/.test(error.name) ? error.name : "Error";
@@ -183,6 +228,26 @@ export class StripeBillingGateway {
       ),
     );
     return { id: customer.id, livemode: customer.livemode };
+  }
+
+  /**
+   * The Stripe Customer that an earlier attempt made for `tenantId` (its `metadata.velexis_tenant_id`), or `undefined`:
+   * `customers.search`, one page, the oldest Customer when there are several. Stripe's search index may lag behind a
+   * Customer made in the last minute (PADR-0002 item 3, revision of 2026-10-24).
+   */
+  async findCustomer(tenantId: string): Promise<FoundCustomer | undefined> {
+    if (!SEARCHABLE_ID.test(tenantId)) {
+      throw new TypeError("findCustomer: the tenant id must be letters, digits and _");
+    }
+    const page = await this.call("customers.search", (api) =>
+      api.customers.search({ query: `metadata['velexis_tenant_id']:'${tenantId}'`, limit: 10 }),
+    );
+    const [oldest] = [...page.data].sort(
+      (a, b) => a.created - b.created || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
+    );
+    return oldest === undefined
+      ? undefined
+      : { id: oldest.id, livemode: oldest.livemode, email: oldest.email ?? null };
   }
 
   /** Creates the Checkout Session of `params` with the idempotency key `idempotencyKey`. */

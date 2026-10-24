@@ -299,6 +299,21 @@ export interface PlatformApiKeys {
   updated_at: Generated<Timestamp>;
 }
 
+export interface PlatformBillingCustomerAttempts {
+  /**
+   * Attempt of the next customers.create: Stripe idempotency key customer:<tenant_id>:<attempt>.
+   */
+  attempt: number;
+  /**
+   * Tenant whose Stripe Customer is being created.
+   */
+  tenant_id: string;
+  /**
+   * When a failed attempt moved it on.
+   */
+  updated_at: Generated<Timestamp>;
+}
+
 export interface PlatformBillingCustomers {
   /**
    * Invoice e-mail last synced from Stripe.
@@ -1210,6 +1225,7 @@ export interface PlatformDatabase {
   "platform.amadeus_offices": PlatformAmadeusOffices;
   "platform.api_key_tenant_grants": PlatformApiKeyTenantGrants;
   "platform.api_keys": PlatformApiKeys;
+  "platform.billing_customer_attempts": PlatformBillingCustomerAttempts;
   "platform.billing_customers": PlatformBillingCustomers;
   "platform.credential_submissions": PlatformCredentialSubmissions;
   "platform.email_outbox": PlatformEmailOutbox;

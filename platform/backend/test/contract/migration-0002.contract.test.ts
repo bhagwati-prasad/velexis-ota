@@ -16,6 +16,8 @@ import { beforeAll, describe, expect, expectTypeOf, it } from "vitest";
 const REPO = resolve(__dirname, "..", "..", "..", "..");
 const MIGRATIONS_DIR = join(REPO, "platform", "backend", "migrations", "platform");
 const MIGRATION_FILE = "0002_add_mvp_platform_deltas.sql";
+/** The numbered platform files after 0002, deltas found during implementation (migration-0003.contract.test.ts, …). */
+const LATER_FILES = ["0003_add_billing_customer_attempts.sql"] as const;
 /** The three documents, in the order their SQL blocks are concatenated. */
 const DOCUMENTS = [
   "platform/docs/data-model-migration-0002.md",
@@ -129,7 +131,11 @@ describe("migration 0002 and its three documents", () => {
 
   it("is read by the runner as the second platform file: expand, one transaction, with its SHA-256 [PBE-002 AC2]", async () => {
     const files = await readMigrationFiles(MIGRATIONS_DIR, "platform");
-    expect(files.numbered.map((file) => file.file)).toEqual(["0001_baseline.sql", MIGRATION_FILE]);
+    expect(files.numbered.map((file) => file.file)).toEqual([
+      "0001_baseline.sql",
+      MIGRATION_FILE,
+      ...LATER_FILES,
+    ]);
     const migration = files.numbered[1];
     expect(migration).toMatchObject({
       kind: "numbered",

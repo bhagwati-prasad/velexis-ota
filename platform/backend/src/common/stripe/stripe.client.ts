@@ -66,7 +66,7 @@ export function idempotencyKey(purpose: string, rowId: string): string {
  * real client is a StripeApi as it is and the fake of a test implements exactly these.
  */
 export interface StripeApi {
-  readonly customers: Pick<Stripe.CustomersResource, "create" | "retrieve">;
+  readonly customers: Pick<Stripe.CustomersResource, "create" | "retrieve" | "search">;
   readonly checkout: { readonly sessions: Pick<Stripe.Checkout.SessionsResource, "create" | "retrieve"> };
   readonly billingPortal: { readonly sessions: Pick<Stripe.BillingPortal.SessionsResource, "create"> };
   readonly subscriptions: Pick<Stripe.SubscriptionsResource, "retrieve">;

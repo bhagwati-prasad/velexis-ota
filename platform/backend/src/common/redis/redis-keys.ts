@@ -6,10 +6,10 @@
 // - a key is never written by hand: a module asks a builder here for `{ key, ttlSeconds }` (`redisKeys.portalToken
 //   (digest)`), and no string or template literal elsewhere in `src/` starts with one of the key prefixes below;
 // - a key is only written through the helpers at the end of this file (`setKey`, `setKeyIfAbsent`,
-//   `incrementInWindow` and `setKeyIfHigher`, which always set the builder's TTL in the same command, and
-//   `deleteKeyIfValue`, which releases a lock). No other file calls an ioredis
-//   command that creates or changes a key (`set`, `incr`, `hset`, `eval`, `multi`, …). Reading (`get`, `getdel`,
-//   `pttl`) and deleting (`del`) are free.
+//   `incrementInWindow` and `setKeyIfHigher`, which always set the builder's TTL in the same command,
+//   `extendKeyIfValue`, which gives a held lock its TTL again, and `deleteKeyIfValue`, which releases a lock). No
+//   other file calls an ioredis command that creates or changes a key (`set`, `incr`, `hset`, `eval`, `multi`, …).
+//   Reading (`get`, `getdel`, `pttl`) and deleting (`del`) are free.
 //
 // Builders validate every part they put into a key (ids, host names, digests), so a key never holds a `:` from user
 // input, or a raw secret where a digest belongs. Their errors name the builder, the part and its rule, never the
@@ -47,7 +47,10 @@ export const STAFF_DENY_ACCOUNT_TTL_SECONDS = 30 * DAY;
 export const API_KEY_USED_TTL_SECONDS = DAY;
 /** A stored idempotent response is replayed for 24 hours (conventions §2, architecture §3 item 10). */
 export const IDEMPOTENCY_TTL_SECONDS = DAY;
-/** The lock a concurrent duplicate of an idempotent request waits on. */
+/**
+ * The lock a concurrent duplicate of an idempotent request waits on. Its holder renews it while its handler runs
+ * (`extendKeyIfValue`, idempotency.interceptor.ts), so it ends at most 10 s after the holder stopped renewing it.
+ */
 export const IDEMPOTENCY_LOCK_TTL_SECONDS = 10;
 /** An MFA challenge of the sign-in (PADR-0008). */
 export const MFA_CHALLENGE_TTL_SECONDS = 5 * MINUTE;
@@ -285,6 +288,17 @@ redis.call('SET', KEYS[1], ARGV[1], 'EX', ARGV[2])
 return 1
 `;
 
+/**
+ * Renews a lock: the key's TTL (ARGV[2] seconds) again, only while the key still holds this holder's token, so a lock
+ * that expired, or that another holder took since, is never extended by the holder that lost it.
+ */
+const EXTEND_IF_VALUE = `
+if redis.call('GET', KEYS[1]) == ARGV[1] then
+  return redis.call('EXPIRE', KEYS[1], ARGV[2])
+end
+return 0
+`;
+
 /** Releases a lock: `DEL` only while the key still holds this holder's token. */
 const DELETE_IF_VALUE = `
 if redis.call('GET', KEYS[1]) == ARGV[1] then
@@ -321,6 +335,14 @@ export async function setKeyIfHigher(client: RedisWriter, key: RedisKey, value: 
     throw new RangeError("setKeyIfHigher: the value must be a safe integer");
   }
   return Number(await client.eval(SET_IF_HIGHER, 1, key.key, String(value), String(key.ttlSeconds))) === 1;
+}
+
+/**
+ * Gives `key` its full TTL again, only while it holds `value` (the renewal of a lock taken with `setKeyIfAbsent`, see
+ * the script above); true when renewed, false when the key expired or holds another value (the lock was lost).
+ */
+export async function extendKeyIfValue(client: RedisWriter, key: RedisKey, value: string): Promise<boolean> {
+  return Number(await client.eval(EXTEND_IF_VALUE, 1, key.key, value, String(key.ttlSeconds))) === 1;
 }
 
 /** Deletes `key` only while it holds `value` (the release of a lock taken with `setKeyIfAbsent`). */

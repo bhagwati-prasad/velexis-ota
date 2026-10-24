@@ -5,7 +5,9 @@
 // Session with the flow's parameters, the closed dispatch gate, `checkoutError` when Stripe fails),
 // createCheckoutSession, createCustomerPortalSession, the new Checkout of retryProvisioning after an abandoned one, and,
 // last in the file on an application of its own, the same calls with the switch off. Every answer is checked against
-// the platform document.
+// the platform document. FIX-W29-PLATFORM adds the attempts of the Customer creation: after a Stripe 5xx (which Stripe
+// replays for its key for 24 hours) the next Checkout uses `customer:<tenantId>:<n>` and first looks for a Customer the
+// failed attempt made (`platform.billing_customer_attempts`, PADR-0002 item 3 revision of 2026-10-24).
 //
 // The Stripe keys of the switched-on application are the development values of `.env.example` (no secret): nothing
 // reaches Stripe. The abandoned Checkout of the retry test is written as billing.abandoned_checkouts (PBE-047) leaves
@@ -16,6 +18,7 @@ import { validateJob } from "@velexis/api-types/jobs";
 import { expectResponseToMatch, responseChecker } from "@velexis/testing";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { TokenService } from "../../../src/auth/token.service";
+import { BillingCustomersRepository } from "../../../src/billing/billing-customers.repository";
 import { checkoutSessionParams } from "../../../src/billing/stripe-billing.gateway";
 import { PLATFORM_POOL, type PlatformPool } from "../../../src/common/database";
 import { StripeClient } from "../../../src/common/stripe/stripe.client";
@@ -183,6 +186,17 @@ const subscriptionsOf = (h: Harness, tenantId: string): Promise<Row[]> =>
 
 const customersOf = (h: Harness, tenantId: string): Promise<Row[]> =>
   rowsOf(h, "SELECT * FROM platform.billing_customers WHERE tenant_id = $1", [tenantId]);
+
+const attemptsOf = (h: Harness, tenantId: string): Promise<Row[]> =>
+  rowsOf(h, "SELECT attempt FROM platform.billing_customer_attempts WHERE tenant_id = $1", [tenantId]);
+
+/** The Customers the fake Stripe holds for `tenantId` (its `metadata.velexis_tenant_id`). */
+async function stripeCustomersOf(h: Harness, tenantId: string): Promise<string[]> {
+  const page = await h.stripe
+    .api()
+    .customers.search({ query: `metadata['velexis_tenant_id']:'${tenantId}'` });
+  return page.data.map((customer) => customer.id);
+}
 
 const auditOf = (h: Harness, tenantId: string, action: string): Promise<Row[]> =>
   rowsOf(h, "SELECT * FROM platform.platform_audit_log WHERE tenant_id = $1 AND action = $2 ORDER BY id", [
@@ -579,6 +593,89 @@ describe("with FEATURE_STRIPE_BILLING on", () => {
     }
     // PADR-0002 item 1: the stored Customers are reused, also after a cancellation.
     expect(h.stripe.callsOf("customers.create")).toEqual([]);
+  });
+
+  it("[FIX-W29-PLATFORM AC2] a Stripe 5xx of customers.create does not block the OTA's Checkout: the next one finds the Customer Stripe made, or creates it under customer:<tenantId>:1", async () => {
+    const founder = await insertAccount(h.pool, { email: "founder.fix29@example.com" });
+    h.stripe.reset();
+    // Stripe made the Customer, then answered 500, and replays that 500 for `customer:<tenantId>` for 24 hours.
+    h.stripe.failNext("customers.create", FakeStripe.apiError(500), { created: true, storedForKey: true });
+
+    const res = await createTenant(h, founder.id, body("tromso", { planCode: "starter" }));
+
+    expect(outcomeOf(res)).toBe("202");
+    const tenantId = (res.body as Created).tenant.id;
+    expect(res.body).toMatchObject({ checkoutUrl: null, checkoutError: { code: "PROVIDER_ERROR" } });
+    expect(await customersOf(h, tenantId)).toEqual([]);
+    expect(await attemptsOf(h, tenantId)).toEqual([{ attempt: 1 }]);
+    const [made] = await stripeCustomersOf(h, tenantId);
+    h.stripe.calls.length = 0;
+
+    const later = await checkoutSession(h, founder.id, tenantId, {
+      planCode: "starter",
+      billingInterval: "month",
+    });
+
+    expect(outcomeOf(later)).toBe("201");
+    expectResponseToMatch("createCheckoutSession", later, { document: "platform" });
+    expect(h.stripe.calls.map((call) => call.method)).toEqual([
+      "customers.search",
+      "checkout.sessions.create",
+    ]);
+    expect(await customersOf(h, tenantId)).toEqual([
+      expect.objectContaining({ provider_customer_id: made, billing_email: "founder.fix29@example.com" }),
+    ]);
+    expect(await stripeCustomersOf(h, tenantId)).toEqual([made]);
+    expect((h.stripe.callsOf("checkout.sessions.create")[0]?.params as Row)["customer"]).toBe(made);
+
+    // Stripe made nothing: the search finds nothing and the Customer is created under the attempt's own key.
+    const { tenant: manual } = await insertOta(h.pool, { subscription: {}, members: [[founder, "owner"]] });
+    h.stripe.calls.length = 0;
+    h.stripe.failNext("customers.create", FakeStripe.apiError(503), { storedForKey: true });
+    const failed = await checkoutSession(h, founder.id, manual.id, {
+      planCode: "starter",
+      billingInterval: "month",
+    });
+    const retried = await checkoutSession(h, founder.id, manual.id, {
+      planCode: "starter",
+      billingInterval: "month",
+    });
+
+    expect([outcomeOf(failed), outcomeOf(retried)]).toEqual(["502 PROVIDER_ERROR", "201"]);
+    expectResponseToMatch("createCheckoutSession", failed, { document: "platform" });
+    expect(h.stripe.calls.map((call) => [call.method, call.idempotencyKey])).toEqual([
+      ["customers.create", `customer:${manual.id}`],
+      ["customers.search", undefined],
+      ["customers.create", `customer:${manual.id}:1`],
+      ["checkout.sessions.create", expect.stringMatching(new RegExp(`^checkout:${manual.id}:`))],
+    ]);
+    expect(await attemptsOf(h, manual.id)).toEqual([{ attempt: 1 }]);
+    const [stored] = await customersOf(h, manual.id);
+    expect(await stripeCustomersOf(h, manual.id)).toEqual([stored?.["provider_customer_id"]]);
+    expect(h.t.logs.withMessage("billing.customer_attempt_moved")).toEqual([
+      expect.objectContaining({ tenantId, attempt: 1 }),
+      expect.objectContaining({ tenantId: manual.id, attempt: 1 }),
+    ]);
+  });
+
+  it("[FIX-W29-PLATFORM AC2] moves an attempt once, however many requests saw it fail at the same time", async () => {
+    const owner = await insertAccount(h.pool);
+    const { tenant } = await insertOta(h.pool, { subscription: {}, members: [[owner, "owner"]] });
+    const customers = h.t.app.get(BillingCustomersRepository, { strict: false });
+    const now = h.t.clock.now();
+
+    expect(await customers.customerAttempt(tenant.id)).toBe(0);
+    const first = await Promise.all(
+      [0, 0, 0].map((from) => customers.advanceCustomerAttempt({ tenantId: tenant.id, from, now })),
+    );
+    expect(first).toEqual([1, 1, 1]);
+    const second = await Promise.all(
+      [1, 1].map((from) => customers.advanceCustomerAttempt({ tenantId: tenant.id, from, now })),
+    );
+    expect(second).toEqual([2, 2]);
+    // A request that saw attempt 1 fail after another moved it on changes nothing.
+    expect(await customers.advanceCustomerAttempt({ tenantId: tenant.id, from: 1, now })).toBe(2);
+    expect(await attemptsOf(h, tenant.id)).toEqual([{ attempt: 2 }]);
   });
 
   it("[PBE-044 AC3] owners get a Customer Portal URL with no-store; finance members, admins, agents and viewers get 403, non-members 404 [PF-72 AC1]", async () => {

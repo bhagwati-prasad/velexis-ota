@@ -106,10 +106,16 @@ describe("createTestDatabase", () => {
       { name: "tenant_beta", owner: "velexis_provisioner" },
     ]);
     // Every set was applied by the real runner: its ledger records the baseline (and the repeatable OTA grants), the
-    // platform set the MVP deltas of its migration 0002 (PBE-002) and the tenant schemas those of theirs (OBE-008) and
-    // the booking sync's claim column of 0003 (FIX-W27-SYNC) and the card fee's lines of 0004 (FIX-W28-CANCEL).
+    // platform set the MVP deltas of its migration 0002 (PBE-002) and the Stripe Customer attempts of 0003
+    // (FIX-W29-PLATFORM), and the tenant schemas those of theirs (OBE-008) and the booking sync's claim column of 0003
+    // (FIX-W27-SYNC) and the card fee's lines of 0004 (FIX-W28-CANCEL).
     const ledgers: Record<string, string[]> = {
-      platform: ["0001_baseline", "0002_add_mvp_platform_deltas", "R__ota_read_access"],
+      platform: [
+        "0001_baseline",
+        "0002_add_mvp_platform_deltas",
+        "0003_add_billing_customer_attempts",
+        "R__ota_read_access",
+      ],
       reference: ["0001_baseline"],
       tenant_alpha: [
         "0001_baseline",

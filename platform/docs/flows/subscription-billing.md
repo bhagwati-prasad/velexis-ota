@@ -59,7 +59,7 @@ sequenceDiagram
 
 1. **New OTA (M5).** `createTenant` inserts the subscription `incomplete` and calls Checkout ([`signup-and-create-ota.md`](signup-and-create-ota.md)).
 2. **Existing OTA** (manual trial ending, canceled subscription, or Checkout abandoned): `createCheckoutSession` on the Billing page. No subscription row is inserted up front, because the current manual row still holds the "one current subscription" slot; the webhook creates the Stripe row.
-3. Session parameters: `mode: 'subscription'`; `customer` from `billing_customers` (created with `email = owner e-mail`, `name = legal name or name`, `metadata.velexis_tenant_id` when missing); `line_items: [{price, quantity: 1}]`; `client_reference_id: ten_…`; `metadata` and `subscription_data.metadata`: `velexis_tenant_id`, `velexis_subscription_id` (when pre-inserted), `velexis_plan_code`; `subscription_data.trial_period_days` = `plans.trial_days` only for a tenant's first Stripe subscription; `payment_method_collection: 'always'`; `success_url = https://platform.example.com/otas/{id}/setup?checkout=success`; `cancel_url = https://platform.example.com/otas/{id}/billing?checkout=canceled`. Stripe idempotency key `checkout:<tenantId>:<Idempotency-Key>`.
+3. Session parameters: `mode: 'subscription'`; `customer` from `billing_customers` (created with `email = owner e-mail`, `name = legal name or name`, `metadata.velexis_tenant_id` when missing, Stripe idempotency key `customer:<tenantId>`; after a Stripe 5xx, no answer or a refused key, the next attempt first looks for the Customer that attempt made with `customers.search` and otherwise creates it under `customer:<tenantId>:<n>`, the attempt kept in `billing_customer_attempts`, [PADR-0002](../adr/0002-stripe-billing-integration.md) item 3 revision of 2026-10-24); `line_items: [{price, quantity: 1}]`; `client_reference_id: ten_…`; `metadata` and `subscription_data.metadata`: `velexis_tenant_id`, `velexis_subscription_id` (when pre-inserted), `velexis_plan_code`; `subscription_data.trial_period_days` = `plans.trial_days` only for a tenant's first Stripe subscription; `payment_method_collection: 'always'`; `success_url = https://platform.example.com/otas/{id}/setup?checkout=success`; `cancel_url = https://platform.example.com/otas/{id}/billing?checkout=canceled`. Stripe idempotency key `checkout:<tenantId>:<Idempotency-Key>`.
 
 ### C. Webhook intake
 
@@ -114,7 +114,7 @@ Billing never deletes data. Reactivation is a new Checkout (canceled) or a succe
 
 ## Tables touched
 
-`plans`, `billing_customers`, `subscriptions`, `invoices`, `stripe_events`, `tenants` (`plan_code`, suspension), `provisioning_jobs` (dispatch, suspend, resume), `email_outbox`, `platform_audit_log`. Reads `reference.currencies`.
+`plans`, `billing_customers`, `billing_customer_attempts`, `subscriptions`, `invoices`, `stripe_events`, `tenants` (`plan_code`, suspension), `provisioning_jobs` (dispatch, suspend, resume), `email_outbox`, `platform_audit_log`. Reads `reference.currencies`.
 
 ## Tests that prove it
 

@@ -11,6 +11,7 @@ import {
   IDEMPOTENCY_LOCK_TTL_SECONDS,
   REDIS_KEY_PREFIXES,
   deleteKeyIfValue,
+  extendKeyIfValue,
   incrementInWindow,
   redisKeys,
   setKey,
@@ -203,6 +204,21 @@ describe("the write helpers", () => {
     for (const value of [1.5, Number.NaN, Number.MAX_SAFE_INTEGER + 1]) {
       await expect(setKeyIfHigher(raised.client, step, value), String(value)).rejects.toThrow(RangeError);
     }
+  });
+
+  it("[FIX-W29-PLATFORM AC1] extendKeyIfValue gives the key its TTL again only while it holds the value, in one script", async () => {
+    const renewed = recordingClient({ eval: 1 });
+    const lost = recordingClient({ eval: 0 });
+
+    await expect(extendKeyIfValue(renewed.client, lock, "token-1")).resolves.toBe(true);
+    await expect(extendKeyIfValue(lost.client, lock, "token-1")).resolves.toBe(false);
+
+    const [call] = renewed.calls;
+    expect(call?.slice(0, 1)).toEqual(["eval"]);
+    expect(call?.slice(2)).toEqual([1, lock.key, "token-1", String(IDEMPOTENCY_LOCK_TTL_SECONDS)]);
+    expect(String(call?.[1])).toMatch(
+      /if redis\.call\('GET', KEYS\[1\]\) == ARGV\[1\] then\s+return redis\.call\('EXPIRE', KEYS\[1\], ARGV\[2\]\)\s+end\s+return 0/,
+    );
   });
 
   it("deleteKeyIfValue deletes only while the key holds the value", async () => {

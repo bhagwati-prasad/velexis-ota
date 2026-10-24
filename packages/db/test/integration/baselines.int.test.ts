@@ -8,7 +8,8 @@
 //   - the platform and reference sets are applied as `pnpm db:migrate` applies them: the commands of the
 //     `migrate` script of packages/db/package.json, through runMigrateCli, as velexis_migrator. The platform folder
 //     also holds 0002_add_mvp_platform_deltas.sql (PBE-002), so its 11 tables and its two OTA grants
-//     (amadeus_accounts, amadeus_offices) are expected next to the baseline's;
+//     (amadeus_accounts, amadeus_offices) are expected next to the baseline's, and
+//     0003_add_billing_customer_attempts.sql (FIX-W29-PLATFORM), one table the OTA role may not read;
 //   - the tenant set is applied to tenant_alpha through the runner library (readMigrationFiles, recordMigration)
 //     in one provisioning transaction as velexis_provisioner (db README §3; migrateTenantSchema of X-013 replaces
 //     this helper). The tenant folder also holds 0002_add_mvp_tenant_deltas.sql (OBE-008), so its 2 tables are
@@ -75,6 +76,11 @@ const MIGRATION_0002 = {
   otaReadableTables: ["amadeus_accounts", "amadeus_offices"],
   /** Tables on which 0002 revokes UPDATE, DELETE and TRUNCATE from velexis_platform_app (data-model.md §4.7). */
   appendOnlyTables: ["platform_audit_log"],
+};
+/** Platform migration 0003 (FIX-W29-PLATFORM): one table, not granted to velexis_ota_app. */
+const MIGRATION_0003 = {
+  file: "0003_add_billing_customer_attempts.sql",
+  tables: ["billing_customer_attempts"],
 };
 /** What tenant migration 0002 (OBE-008, ota/docs/data-model-migration-0002.md) adds after the tenant baseline. */
 const TENANT_MIGRATION_0002 = {
@@ -406,13 +412,17 @@ describe("the baselines and the OTA read grants on PostgreSQL", () => {
     const referenceTables = await ddlTables("reference.sql");
     expect(platformTables).toHaveLength(16);
     expect(referenceTables).toHaveLength(7);
-    // The platform set continues with 0002 (PBE-002), which creates 11 more tables.
+    // The platform set continues with 0002 (PBE-002), which creates 11 more tables, and 0003 (FIX-W29-PLATFORM), one.
     const migrationTables = createdTables(
       await readFile(join(REPO, "platform/backend/migrations/platform", MIGRATION_0002.file), "utf8"),
     );
     expect(migrationTables).toEqual(MIGRATION_0002.tables);
+    const migration0003Tables = createdTables(
+      await readFile(join(REPO, "platform/backend/migrations/platform", MIGRATION_0003.file), "utf8"),
+    );
+    expect(migration0003Tables).toEqual(MIGRATION_0003.tables);
     expect(await tablesOf("platform")).toEqual(
-      [...platformTables, ...migrationTables, "schema_migrations"].sort(),
+      [...platformTables, ...migrationTables, ...migration0003Tables, "schema_migrations"].sort(),
     );
     expect(await tablesOf("reference")).toEqual([...referenceTables, "schema_migrations"].sort());
 
@@ -645,8 +655,8 @@ describe("the baselines and the OTA read grants on PostgreSQL", () => {
         "AND NOT a.attisdropped AND a.attgenerated = '' AND a.attidentity = '' ORDER BY c.relname, a.attnum",
     );
     expect(targets.map((target) => target.table)).toEqual(await tablesOf("platform"));
-    // 16 baseline tables, the ledger and the 11 tables of migration 0002.
-    expect(targets).toHaveLength(17 + MIGRATION_0002.tables.length);
+    // 16 baseline tables, the ledger, the 11 tables of migration 0002 and the one of 0003.
+    expect(targets).toHaveLength(17 + MIGRATION_0002.tables.length + MIGRATION_0003.tables.length);
     for (const { table, column } of targets) {
       const update =
         `UPDATE platform.${pg.escapeIdentifier(table)} ` +
@@ -756,6 +766,7 @@ describe("the baselines and the OTA read grants on PostgreSQL", () => {
     ).toEqual([
       ["platform", "0001_baseline.sql", "applied"],
       ["platform", MIGRATION_0002.file, "applied"],
+      ["platform", MIGRATION_0003.file, "applied"],
       ["platform", "R__ota_read_access.sql", "applied"],
       ["reference", "0001_baseline.sql", "applied"],
     ]);

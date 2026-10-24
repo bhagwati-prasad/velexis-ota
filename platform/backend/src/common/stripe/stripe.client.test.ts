@@ -169,11 +169,61 @@ describe("FakeStripe (test/support/fake-stripe.ts)", () => {
     );
     expect((await api.prices.retrieve("price_test_growth_month")).id).toBe("price_test_growth_month");
     expect(stripe.calls).toHaveLength(3);
-    expect(FAKE_STRIPE_METHODS).toHaveLength(8);
+    expect(FAKE_STRIPE_METHODS).toHaveLength(9);
 
     expect(() => stripe.notConfigured().api()).toThrow(StripeNotConfiguredError);
     expect(stripe.isConfigured()).toBe(false);
     expect(stripe.reset().isConfigured()).toBe(true);
     expect(stripe.calls).toEqual([]);
+  });
+
+  it("[FIX-W29-PLATFORM AC2] plays what Stripe keeps of a failed create: the object made, and the failure replayed for the key", async () => {
+    const stripe = new FakeStripe();
+    const api = stripe.api();
+    const params = { email: "owner@example.com", metadata: { velexis_tenant_id: "ten_test_alpha" } };
+    const search = { query: "metadata['velexis_tenant_id']:'ten_test_alpha'" };
+    // Made, then a 500 that the key replays: the Customer exists and is found, the key answers the 500 again.
+    stripe.failNext("customers.create", FakeStripe.apiError(500), { created: true, storedForKey: true });
+    await expect(api.customers.create(params, { idempotencyKey: "customer:ten_test_alpha" })).rejects.toThrow(
+      /500/,
+    );
+    const [made] = (await api.customers.search(search)).data;
+    expect(made).toMatchObject({ object: "customer", email: "owner@example.com" });
+    await expect(
+      api.customers.create(params, { idempotencyKey: "customer:ten_test_alpha" }),
+    ).rejects.toBeInstanceOf(Stripe.errors.StripeAPIError);
+    // Nothing made, a stored 500: replayed, and still nothing to find.
+    const other = { ...params, metadata: { velexis_tenant_id: "ten_test_beta" } };
+    stripe.failNext("customers.create", FakeStripe.apiError(500), { storedForKey: true });
+    await expect(api.customers.create(other, { idempotencyKey: "customer:ten_test_beta" })).rejects.toThrow(
+      /500/,
+    );
+    await expect(api.customers.create(other, { idempotencyKey: "customer:ten_test_beta" })).rejects.toThrow(
+      /500/,
+    );
+    expect(
+      (await api.customers.search({ query: "metadata['velexis_tenant_id']:'ten_test_beta'" })).data,
+    ).toEqual([]);
+    // Made, but no answer: the key answers the object afterwards.
+    const gamma = { ...params, metadata: { velexis_tenant_id: "ten_test_gamma" } };
+    stripe.failNext("customers.create", FakeStripe.connectionError(), { created: true });
+    await expect(
+      api.customers.create(gamma, { idempotencyKey: "customer:ten_test_gamma" }),
+    ).rejects.toBeInstanceOf(Stripe.errors.StripeConnectionError);
+    const replayed = await api.customers.create(gamma, { idempotencyKey: "customer:ten_test_gamma" });
+    expect(
+      (await api.customers.search({ query: "metadata['velexis_tenant_id']:'ten_test_gamma'" })).data,
+    ).toEqual([expect.objectContaining({ id: replayed.id })]);
+
+    await expect(api.customers.search({ query: "email:'owner@example.com'" })).rejects.toThrow(/knows only/);
+    expect(() =>
+      stripe.failNext("prices.retrieve", FakeStripe.apiError(500), { storedForKey: true }),
+    ).toThrow(/for creates/);
+    expect(stripe.callsOf("customers.search").map((call) => call.idempotencyKey)).toEqual([
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+    ]);
   });
 });

@@ -102,7 +102,13 @@ describe("the baseline migrations", () => {
       // with its own (OBE-008).
       expect(files.numbered.map((file) => [file.id, file.kind, file.phase, file.noTransaction])).toEqual([
         ["0001_baseline", "numbered", "expand", false],
-        ...(set === "platform" ? [["0002_add_mvp_platform_deltas", "numbered", "expand", false]] : []),
+        ...(set === "platform"
+          ? [
+              ["0002_add_mvp_platform_deltas", "numbered", "expand", false],
+              // The attempts of a tenant's Stripe Customer creation (FIX-W29-PLATFORM).
+              ["0003_add_billing_customer_attempts", "numbered", "expand", false],
+            ]
+          : []),
         ...(set === "tenant"
           ? [
               ["0002_add_mvp_tenant_deltas", "numbered", "expand", false],

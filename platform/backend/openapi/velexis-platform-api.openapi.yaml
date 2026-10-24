@@ -1555,7 +1555,9 @@ paths:
 
         **Idempotent** (`Idempotency-Key`, 24 hours): a retry with the same key and body replays the `202`, another
         body answers `409 IDEMPOTENCY_KEY_REUSED`, and while the idempotency store (Redis) is down the call answers `503
-        SERVICE_UNAVAILABLE` before writing anything. The setup progresses in `getProvisioning`.
+        SERVICE_UNAVAILABLE` before writing anything. A request with the same key that arrives while the first one
+        still runs waits up to 10 seconds and replays its answer, or answers `503 SERVICE_UNAVAILABLE` (try again
+        shortly). The setup progresses in `getProvisioning`.
       tags:
         - Tenants
       security:
@@ -1583,6 +1585,7 @@ paths:
         - tenant_domains
         - provisioning_jobs
         - billing_customers
+        - billing_customer_attempts
         - platform_audit_log
       parameters:
         - $ref: '#/components/parameters/IdempotencyKey'
@@ -2040,6 +2043,7 @@ paths:
         - subscriptions
         - provisioning_jobs
         - billing_customers
+        - billing_customer_attempts
         - platform_audit_log
       responses:
         '202':
@@ -5476,7 +5480,9 @@ paths:
         any tenant status, so a suspended or failed OTA can pay.
 
 
-        The API creates or reuses the OTA's Stripe Customer (`billing_customers`) and creates a Checkout Session in
+        The API creates or reuses the OTA's Stripe Customer (`billing_customers`; after a Stripe failure that left its
+        creation undecided, the next call looks for the Customer that attempt made and otherwise creates it under a
+        new Stripe idempotency key, `billing_customer_attempts`) and creates a Checkout Session in
         `subscription` mode with the plan's price, `client_reference_id` (the OTA id), the Velexis metadata, a trial
         only on the OTA's first Stripe subscription, `payment_method_collection: always`, and success and cancel URLs
         on the portal; Stripe's idempotency key is `checkout:<tenantId>:<Idempotency-Key>`. A Stripe failure answers
@@ -5485,7 +5491,9 @@ paths:
 
         **Idempotent** (`Idempotency-Key`, 24 hours): a retry with the same key and body replays the `201` with the
         same URL, another body answers `409 IDEMPOTENCY_KEY_REUSED`, and while the idempotency store (Redis) is down
-        the call answers `503 SERVICE_UNAVAILABLE` before writing anything.
+        the call answers `503 SERVICE_UNAVAILABLE` before writing anything. A request with the same key that arrives
+        while the first one still runs waits up to 10 seconds and replays its answer, or answers `503
+        SERVICE_UNAVAILABLE` (try again shortly).
       tags:
         - Billing
       security:
@@ -5515,6 +5523,7 @@ paths:
         - plans
         - subscriptions
         - billing_customers
+        - billing_customer_attempts
         - platform_audit_log
       parameters:
         - $ref: '#/components/parameters/IdempotencyKey'

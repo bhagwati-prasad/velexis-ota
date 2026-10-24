@@ -35,6 +35,15 @@ const PLATFORM_MIGRATIONS = join(REPO, "platform", "backend", "migrations", "pla
 const SCHEMAS_SQL = join(REPO, "deploy", "postgres", "schemas.sql");
 const BASELINE_ID = "0001_baseline";
 const MIGRATION_ID = "0002_add_mvp_platform_deltas";
+/**
+ * The numbered platform migrations after 0002 and the tables each creates: the real folder holds them, so the
+ * template and the upgrade apply them too (migrate-0003.int.test.ts and later files test each one).
+ */
+const LATER_MIGRATIONS = [
+  { id: "0003_add_billing_customer_attempts", tables: ["billing_customer_attempts"] },
+] as const;
+const LATER_IDS = LATER_MIGRATIONS.map((migration) => migration.id);
+const LATER_TABLES = LATER_MIGRATIONS.flatMap((migration) => migration.tables);
 
 /** The 16 tables of the baseline (docs/velexis-sdk/db/platform.sql), plus the runner's ledger. */
 const BASELINE_TABLES = [
@@ -255,16 +264,17 @@ describe("migration 0002 from scratch", () => {
     expect(rows.map(({ id, phase, status }) => ({ id, phase, status }))).toEqual([
       { id: BASELINE_ID, phase: "expand", status: "applied" },
       { id: MIGRATION_ID, phase: "expand", status: "applied" },
+      ...LATER_IDS.map((id) => ({ id, phase: "expand", status: "applied" })),
       { id: "R__ota_read_access", phase: "repeatable", status: "applied" },
     ]);
     expect(rows[1]?.["checksum"]).toBe(await sha256(join(PLATFORM_MIGRATIONS, `${MIGRATION_ID}.sql`)));
   });
 
-  it("has the 16 baseline tables and the 11 new tables [PBE-002 AC2]", async () => {
+  it("has the 16 baseline tables, the 11 new tables and those of the later migrations [PBE-002 AC2]", async () => {
     expect(NEW_TABLES).toHaveLength(11);
     expect(BASELINE_TABLES).toHaveLength(16);
     expect(await platformTables(migrator)).toEqual(
-      sorted([...BASELINE_TABLES, ...NEW_TABLES, "schema_migrations"]),
+      sorted([...BASELINE_TABLES, ...NEW_TABLES, ...LATER_TABLES, "schema_migrations"]),
     );
     // Seeded by 0002: tenants.plan_code is NOT NULL, so M1 tenants need a plan before paid plans exist.
     const { rows } = await migrator.query(
@@ -372,6 +382,7 @@ describe("migration 0002 as an upgrade from 0001", () => {
       upgradeRun.applied.map(({ id, phase, status, transaction }) => ({ id, phase, status, transaction })),
     ).toEqual([
       { id: MIGRATION_ID, phase: "expand", status: "applied", transaction: true },
+      ...LATER_IDS.map((id) => ({ id, phase: "expand", status: "applied", transaction: true })),
       { id: "R__ota_read_access", phase: "repeatable", status: "applied", transaction: true },
     ]);
     expect(upgradeRun.upToDate).toBe(1);
@@ -379,10 +390,11 @@ describe("migration 0002 as an upgrade from 0001", () => {
     expect((await ledger(migrator)).map((row) => [row["id"], row["phase"], row["status"]])).toEqual([
       [BASELINE_ID, "expand", "applied"],
       [MIGRATION_ID, "expand", "applied"],
+      ...LATER_IDS.map((id) => [id, "expand", "applied"]),
       ["R__ota_read_access", "repeatable", "applied"],
     ]);
     expect(await platformTables(migrator)).toEqual(
-      sorted([...BASELINE_TABLES, ...NEW_TABLES, "schema_migrations"]),
+      sorted([...BASELINE_TABLES, ...NEW_TABLES, ...LATER_TABLES, "schema_migrations"]),
     );
   });
 
@@ -437,6 +449,6 @@ describe("migration 0002 as an upgrade from 0001", () => {
       url: databaseUrl(adminUrl, name, TEST_ROLES.migrator),
     });
     expect(again.applied).toEqual([]);
-    expect(again.upToDate).toBe(3);
+    expect(again.upToDate).toBe(3 + LATER_IDS.length);
   });
 });

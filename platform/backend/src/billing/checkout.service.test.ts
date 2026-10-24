@@ -1,9 +1,11 @@
 // Stripe Checkout and the Customer Portal without a database (PBE-044; subscription-billing flow §B and §F, PADR-0002
 // items 1 and 3): the Checkout Session's parameters, the trial on the first Stripe subscription only, the reuse of the
 // OTA's Stripe Customer, the plan rule (`PLAN_NOT_AVAILABLE`), the `CONFLICT`s, and what a Stripe failure answers and
-// leaves behind. CheckoutService runs over the FakeStripe of test/support/fake-stripe.ts and stand-ins of its
-// repositories that record what they are asked to write. test/integration/billing/checkout.int.test.ts runs the same
-// rules through HTTP and PostgreSQL, with createTenant and retryProvisioning.
+// leaves behind, including the attempts of the Customer creation after a failure that spent its idempotency key
+// (FIX-W29-PLATFORM; PADR-0002 item 3, revision of 2026-10-24). CheckoutService runs over the FakeStripe of
+// test/support/fake-stripe.ts and stand-ins of its repositories that record what they are asked to write.
+// test/integration/billing/checkout.int.test.ts runs the same rules through HTTP and PostgreSQL, with createTenant and
+// retryProvisioning.
 import type { ConfigService } from "@nestjs/config";
 import { isAppError, type AppError } from "@velexis/errors";
 import { FakeClock } from "@velexis/testing";
@@ -20,6 +22,7 @@ import type { PlatformBackendConfig } from "../config";
 import type {
   BillingCustomerRow,
   BillingCustomersRepository,
+  CustomerAttemptMove,
   CustomerContext,
   NewBillingCustomer,
 } from "./billing-customers.repository";
@@ -33,6 +36,7 @@ import {
 import type { PlansRepository, PublicPlanRow } from "./plans.repository";
 import {
   checkoutSessionParams,
+  customerIdempotencyKey,
   providerError,
   StripeBillingGateway,
   stripeBillingFailureOf,
@@ -89,10 +93,16 @@ interface World {
   context: CustomerContext | undefined;
   current: CheckoutSubscriptionRow | undefined;
   hadStripeSubscription: boolean;
+  /** The attempt of the Customer creation (`billing_customer_attempts`; 0 without a row). */
+  attempt: number;
+  /** An error `advanceCustomerAttempt` throws (the database down), or `undefined`. */
+  moveFailure: Error | undefined;
+  readonly moves: CustomerAttemptMove[];
   readonly insertedCustomers: NewBillingCustomer[];
   readonly recorded: CheckoutSessionRecord[];
   readonly audited: AuditEntry[];
   readonly logs: Array<{ readonly line: unknown; readonly msg: unknown }>;
+  readonly warnings: Array<{ readonly line: unknown; readonly msg: unknown }>;
 }
 
 interface Harness {
@@ -108,16 +118,32 @@ function harness(world: Partial<World> = {}): Harness {
     context: { name: "Nordic Fares AB", email: "owner@example.com" },
     current: undefined,
     hadStripeSubscription: false,
+    attempt: 0,
+    moveFailure: undefined,
+    moves: [],
     insertedCustomers: [],
     recorded: [],
     audited: [],
     logs: [],
+    warnings: [],
     ...world,
   };
   const plans = { listPublicActive: () => Promise.resolve(state.plans) } as unknown as PlansRepository;
   const customers = {
     find: () => Promise.resolve(state.customer),
     customerContext: () => Promise.resolve(state.context),
+    customerAttempt: () => Promise.resolve(state.attempt),
+    // The compare-and-set of the repository: only the attempt that failed moves on.
+    advanceCustomerAttempt: (move: CustomerAttemptMove) => {
+      if (state.moveFailure !== undefined) {
+        return Promise.reject(state.moveFailure);
+      }
+      state.moves.push(move);
+      if (state.attempt === move.from) {
+        state.attempt = move.from + 1;
+      }
+      return Promise.resolve(state.attempt);
+    },
     insertIfAbsent: (customer: NewBillingCustomer) => {
       state.insertedCustomers.push(customer);
       state.customer ??= {
@@ -151,6 +177,7 @@ function harness(world: Partial<World> = {}): Harness {
   } as unknown as ConfigService<PlatformBackendConfig, true>;
   const logger = {
     info: (line: unknown, msg: unknown) => state.logs.push({ line, msg }),
+    warn: (line: unknown, msg: unknown) => state.warnings.push({ line, msg }),
   } as unknown as PinoLogger;
   const stripe = new FakeStripe();
   const service = new CheckoutService(
@@ -434,6 +461,170 @@ describe("CheckoutService.start", () => {
   });
 });
 
+describe("CheckoutService.start: the Customer after a failure that spent its key", () => {
+  const input = {
+    tenantId: TENANT,
+    accountId: ACCOUNT,
+    plan: STARTER_MONTH,
+    subscriptionId: SUBSCRIPTION,
+    requestKey: REQUEST_KEY,
+  };
+  const customerParams = {
+    email: "owner@example.com",
+    name: "Nordic Fares AB",
+    metadata: { velexis_tenant_id: TENANT },
+  };
+
+  it("[FIX-W29-PLATFORM AC2] after a Stripe 5xx that Stripe replays for its key, the next attempt creates the Customer under customer:<tenantId>:1", async () => {
+    const { service, stripe, world } = harness();
+    stripe.failNext("customers.create", FakeStripe.apiError(500), { storedForKey: true });
+
+    const error = await failureOf(() => service.start(input));
+
+    expect([error.code, error.details]).toEqual(["PROVIDER_ERROR", { provider: "stripe" }]);
+    expect(world.moves).toEqual([{ tenantId: TENANT, from: 0, now: NOW }]);
+    expect(world.attempt).toBe(1);
+    expect(world.warnings).toEqual([
+      { line: { tenantId: TENANT, attempt: 1 }, msg: "billing.customer_attempt_moved" },
+    ]);
+    // What the fix avoids: Stripe answers the first key with the stored 500 again, for 24 hours.
+    await expect(
+      stripe.api().customers.create(customerParams, { idempotencyKey: `customer:${TENANT}` }),
+    ).rejects.toBeInstanceOf(Stripe.errors.StripeAPIError);
+    stripe.calls.length = 0;
+
+    const session = await service.start(input);
+
+    expect(stripe.calls.map((call) => [call.method, call.idempotencyKey])).toEqual([
+      ["customers.search", undefined],
+      ["customers.create", `customer:${TENANT}:1`],
+      ["checkout.sessions.create", `checkout:${TENANT}:${REQUEST_KEY}`],
+    ]);
+    expect(stripe.callsOf("customers.search")[0]?.params).toEqual({
+      query: `metadata['velexis_tenant_id']:'${TENANT}'`,
+      limit: 10,
+    });
+    expect(stripe.callsOf("customers.create")[0]?.params).toEqual(customerParams);
+    expect(world.insertedCustomers.map((customer) => customer.customerId)).toEqual([
+      (stripe.callsOf("checkout.sessions.create")[0]?.params as { customer: string }).customer,
+    ]);
+    expect(world.recorded).toEqual([expect.objectContaining({ checkoutSessionId: session.id })]);
+    expect(world.attempt).toBe(1);
+  });
+
+  it("[FIX-W29-PLATFORM AC2] stores the Customer that Stripe made before its 5xx instead of making a second one", async () => {
+    const { service, stripe, world } = harness();
+    stripe.failNext("customers.create", FakeStripe.apiError(500), { created: true, storedForKey: true });
+
+    expect((await failureOf(() => service.start(input))).code).toBe("PROVIDER_ERROR");
+    const made = (await stripe.api().customers.search({ query: `metadata['velexis_tenant_id']:'${TENANT}'` }))
+      .data;
+    expect(made.map((customer) => customer.id)).toEqual([expect.stringMatching(/^cus_/)]);
+    stripe.calls.length = 0;
+
+    await service.start(input);
+
+    expect(stripe.calls.map((call) => call.method)).toEqual(["customers.search", "checkout.sessions.create"]);
+    expect(world.insertedCustomers).toEqual([
+      {
+        tenantId: TENANT,
+        customerId: made[0]?.id,
+        livemode: false,
+        billingEmail: "owner@example.com",
+        now: NOW,
+      },
+    ]);
+    expect((stripe.callsOf("checkout.sessions.create")[0]?.params as { customer: string }).customer).toBe(
+      made[0]?.id,
+    );
+    expect(world.logs).toContainEqual({
+      line: { tenantId: TENANT, customerId: made[0]?.id, attempt: 1 },
+      msg: "billing.customer_found",
+    });
+  });
+
+  it("[FIX-W29-PLATFORM AC2] moves the attempt after a timeout and after a key Stripe refuses, never after a rate limit or a refused request", async () => {
+    const spent = [
+      FakeStripe.connectionError(),
+      FakeStripe.apiError(503),
+      new Stripe.errors.StripeIdempotencyError({
+        message: "Keys for idempotent requests can only be used with the same parameters.",
+        type: "idempotency_error",
+        statusCode: 400,
+      }),
+    ];
+    for (const failure of spent) {
+      const { service, stripe, world } = harness();
+      stripe.failNext("customers.create", failure);
+
+      expect((await failureOf(() => service.start(input))).code, failure.name).toBe("PROVIDER_ERROR");
+      expect(world.attempt, failure.name).toBe(1);
+    }
+    for (const failure of [FakeStripe.apiError(429), FakeStripe.apiError(400, "parameter_invalid_empty")]) {
+      const { service, stripe, world } = harness();
+      stripe.failNext("customers.create", failure);
+
+      expect((await failureOf(() => service.start(input))).code, failure.name).toBe("PROVIDER_ERROR");
+      expect([world.attempt, world.moves], failure.name).toEqual([0, []]);
+      // The key was not spent: the next attempt sends it again, without a search.
+      stripe.calls.length = 0;
+      await service.start(input);
+      expect(stripe.calls.map((call) => [call.method, call.idempotencyKey])[0], failure.name).toEqual([
+        "customers.create",
+        `customer:${TENANT}`,
+      ]);
+    }
+  });
+
+  it("[FIX-W29-PLATFORM AC2] a timeout whose Customer Stripe made is found by the next attempt: one Customer, one creation", async () => {
+    const { service, stripe, world } = harness();
+    stripe.failNext("customers.create", FakeStripe.connectionError(), { created: true });
+
+    expect((await failureOf(() => service.start(input))).code).toBe("PROVIDER_ERROR");
+    await service.start(input);
+
+    expect(stripe.callsOf("customers.create")).toHaveLength(1);
+    expect(world.insertedCustomers).toHaveLength(1);
+    expect(
+      (await stripe.api().customers.search({ query: `metadata['velexis_tenant_id']:'${TENANT}'` })).data,
+    ).toHaveLength(1);
+  });
+
+  it("[FIX-W29-PLATFORM AC2] goes on from a stored attempt: a failed search answers 502 without creating; a failed move is logged and the Stripe failure answered", async () => {
+    const searchDown = harness({ attempt: 2 });
+    searchDown.stripe.failNext("customers.search", FakeStripe.apiError(503));
+
+    expect((await failureOf(() => searchDown.service.start(input))).code).toBe("PROVIDER_ERROR");
+    expect(searchDown.stripe.calls.map((call) => call.method)).toEqual(["customers.search"]);
+    await searchDown.service.start(input);
+    expect(searchDown.stripe.callsOf("customers.create").map((call) => call.idempotencyKey)).toEqual([
+      `customer:${TENANT}:2`,
+    ]);
+
+    const databaseDown = harness({ moveFailure: new Error("connection terminated") });
+    databaseDown.stripe.failNext("customers.create", FakeStripe.apiError(502));
+    const error = await failureOf(() => databaseDown.service.start(input));
+    expect([error.code, databaseDown.world.attempt]).toEqual(["PROVIDER_ERROR", 0]);
+    expect(databaseDown.world.warnings).toEqual([
+      {
+        line: { tenantId: TENANT, attempt: 0, err: databaseDown.world.moveFailure },
+        msg: "billing.customer_attempt_not_moved",
+      },
+    ]);
+  });
+});
+
+describe("customerIdempotencyKey", () => {
+  it("[FIX-W29-PLATFORM AC2] keeps customer:<tenantId> for the first attempt and adds the attempt after", () => {
+    expect(customerIdempotencyKey(TENANT, 0)).toBe(`customer:${TENANT}`);
+    expect(customerIdempotencyKey(TENANT, 1)).toBe(`customer:${TENANT}:1`);
+    expect(customerIdempotencyKey(TENANT, 12)).toBe(`customer:${TENANT}:12`);
+    for (const attempt of [-1, 1.5, Number.NaN]) {
+      expect(() => customerIdempotencyKey(TENANT, attempt), String(attempt)).toThrow(RangeError);
+    }
+  });
+});
+
 describe("CheckoutService.createCheckoutSession", () => {
   it("[PBE-044 AC2] answers 409 CONFLICT for an OTA whose Stripe subscription is current, before calling Stripe", async () => {
     for (const status of PORTAL_MANAGED_STATUSES) {
@@ -573,6 +764,25 @@ describe("stripeBillingFailureOf and providerError", () => {
     expect(stripeBillingFailureOf("checkout.sessions.create", FakeStripe.apiError(429)).retryable).toBe(true);
     const connection = stripeBillingFailureOf("checkout.sessions.create", FakeStripe.connectionError());
     expect([connection.summary, connection.retryable]).toEqual(["connection_error no_status", true]);
+    // FIX-W29-PLATFORM AC2: a 5xx, no answer, or a key used with other parameters spends the key; nothing else does.
+    expect(
+      [
+        FakeStripe.apiError(500),
+        FakeStripe.apiError(503),
+        FakeStripe.connectionError(),
+        new Stripe.errors.StripeIdempotencyError({
+          message: "reused",
+          type: "idempotency_error",
+          statusCode: 400,
+        }),
+        FakeStripe.apiError(429),
+        FakeStripe.apiError(409, "idempotency_key_in_use"),
+        FakeStripe.apiError(404, "resource_missing"),
+        new StripeNotConfiguredError(),
+        new TypeError("x"),
+      ].map((error) => stripeBillingFailureOf("customers.create", error).keySpent),
+    ).toEqual([true, true, true, true, false, false, false, false, false]);
+    expect(invalid.keySpent).toBe(false);
     const notConfigured = stripeBillingFailureOf("customers.create", new StripeNotConfiguredError());
     expect(notConfigured.retryable).toBe(false);
     expect(stripeBillingFailureOf("customers.create", new TypeError("x@example.com")).summary).toBe(

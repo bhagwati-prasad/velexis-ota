@@ -2,7 +2,10 @@
 // this file's Redis database. Test-only routes bind `createTenant`, the operation the document marks `x-idempotent`,
 // so the interceptor applies to them as to the real route; each request carries a portal access token of the
 // application's TokenService, so PortalAuthGuard (PBE-012) puts the account into the request context as it does for
-// the real route. The handler counts its side effects, and can be held at a gate to make two requests overlap.
+// the real route. The handler counts its side effects, and can be held at a gate to make two requests overlap. The
+// renewal of the lock on Redis itself (FIX-W29-PLATFORM) is checked here with the helper the interceptor uses; the
+// renewal while a handler runs longer than the lock's TTL is proven with fake timers in
+// src/common/http/idempotency.interceptor.test.ts.
 import { randomUUID } from "node:crypto";
 import { Controller, HttpCode, Post, Res } from "@nestjs/common";
 import { AppError } from "@velexis/errors";
@@ -11,6 +14,7 @@ import { Redis } from "ioredis";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { TokenService } from "../../../src/auth/token.service";
 import { OpenApiOperation, Validated } from "../../../src/common/http/openapi-operation.decorator";
+import { extendKeyIfValue, redisKeys, setKeyIfAbsent } from "../../../src/common/redis/redis-keys";
 import { REDIS_CLIENT } from "../../../src/common/redis/redis.module";
 import { testId } from "../../builders/platform-rows";
 import { createTestApp, type TestApp } from "../../support/app";
@@ -246,6 +250,27 @@ describe("idempotent requests with Redis up", () => {
     expect([failed.status, retried.status]).toEqual([409, 409]);
     expect(effects.created).toEqual(["acme", "acme"]);
     expect(await redis.exists(`vx:idem:${ACCOUNT_A}:${key}`)).toBe(0);
+  });
+
+  it("[FIX-W29-PLATFORM AC1] renews a held lock on Redis only with its holder's token, and never brings back a lock that is gone", async () => {
+    const lock = redisKeys.idempotencyLock(ACCOUNT_A, randomUUID());
+    expect(await setKeyIfAbsent(redis, lock, "holder-token")).toBe(true);
+    // As if the lock had run down under a long handler: 3 s left, far from both 0 and its 10 s TTL, so the checks
+    // below hold however slowly the round trips run (no timing between them is relied on).
+    const leftMs = 3_000;
+    await redis.pexpire(lock.key, leftMs);
+
+    expect(await extendKeyIfValue(redis, lock, "another-token")).toBe(false);
+    expect(await redis.pttl(lock.key)).toBeLessThanOrEqual(leftMs);
+    expect(await extendKeyIfValue(redis, lock, "holder-token")).toBe(true);
+    const renewed = await redis.pttl(lock.key);
+    expect(renewed).toBeGreaterThan(leftMs);
+    expect(renewed).toBeLessThanOrEqual(lock.ttlSeconds * 1000);
+    expect(await redis.get(lock.key)).toBe("holder-token");
+
+    await redis.del(lock.key);
+    expect(await extendKeyIfValue(redis, lock, "holder-token")).toBe(false);
+    expect(await redis.exists(lock.key)).toBe(0);
   });
 
   it("never stores a `Cache-Control: no-store` answer for a replay", async () => {

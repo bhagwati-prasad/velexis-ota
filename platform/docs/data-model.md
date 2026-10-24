@@ -12,7 +12,7 @@ Related: [`architecture.md`](architecture.md), [`api-inventory.md`](api-inventor
 | Column descriptions | [`dictionary.json`](../../docs/velexis-sdk/db/dictionary.json) |
 | Baseline ER diagrams | [`er/er-platform.mmd`](../../docs/velexis-sdk/db/er/er-platform.mmd), [`er/er-reference.mmd`](../../docs/velexis-sdk/db/er/er-reference.mmd), [`er/er-overview.mmd`](../../docs/velexis-sdk/db/er/er-overview.mmd) |
 | Design (provisioning, runner, routing, security) | [`db/README.md`](../../docs/velexis-sdk/db/README.md) §3, §4, §5, §8 |
-| Platform migrations | `platform/backend/migrations/platform/0001_baseline.sql`, `0002_add_mvp_platform_deltas.sql` |
+| Platform migrations | `platform/backend/migrations/platform/0001_baseline.sql`, `0002_add_mvp_platform_deltas.sql`, and the deltas found during implementation: `0003_add_billing_customer_attempts.sql` (§4.10) |
 | Reference migrations | `platform/backend/migrations/reference/0001_baseline.sql` (no delta in the MVP) |
 | Reference data files and loader | `tools/reference-data/data/*.csv` (`@velexis/reference-data`), loaded by `pnpm db:seed:reference` with the `velexis_platform_app` role; the backend's `ref:load` script is only a shortcut for it ([ADR-0024](../../docs/mvp/adr/0024-reference-data-sources-and-loader.md)) |
 
@@ -36,6 +36,7 @@ Related: [`architecture.md`](architecture.md), [`api-inventory.md`](api-inventor
 | `subscriptions` | baseline + `0002` | billing | | M1 (manual), M5 (Stripe) |
 | `invoices` | baseline + `0002` | billing | | M5 |
 | `billing_customers` | **new** | billing | | M5 |
+| `billing_customer_attempts` | **new** (`0003`) | billing | | M5 |
 | `stripe_events` | **new** | common (inbox), billing sync, payment-connections | | M5 |
 | `api_keys` | baseline | api-keys | ✓ | M1 |
 | `api_key_tenant_grants` | baseline | (unused in the MVP: hosting keys are later) | ✓ | — |
@@ -60,6 +61,7 @@ erDiagram
   accounts ||--o{ account_tokens : "verification and reset"
   accounts ||--o{ account_recovery_codes : "MFA recovery"
   tenants ||--o| billing_customers : "Stripe customer"
+  tenants ||--o| billing_customer_attempts : "Stripe customer attempt (0003)"
   tenants ||--o{ subscriptions : ""
   tenants ||--o{ supplier_connections : "per environment"
   amadeus_accounts ||--o{ amadeus_offices : "office pool"
@@ -160,6 +162,14 @@ erDiagram
 | Columns for staff `last_active_at` updates | The OTA backend cannot write `tenant_memberships`; the portal does not show console activity in the MVP. |
 | A `reference` delta | The baseline reference tables are enough for the MVP. |
 | Per-tenant data keys | Out of the MVP ([ADR-0010](../../docs/mvp/adr/0010-secrets-envelope-encryption.md) follow-up). |
+
+### 4.10 After `0002`
+
+Deltas found during implementation, one numbered migration each ([`conventions.md` §9](../../docs/mvp/conventions.md#9-database-migrations)).
+
+| Migration | Change | Why |
+|---|---|---|
+| `0003_add_billing_customer_attempts` (FIX-W29-PLATFORM) | New `billing_customer_attempts` (`tenant_id` primary key and foreign key, `attempt` from 1, `updated_at`), DML for `velexis_platform_app`, nothing for the OTA role | Stripe replays a stored 5xx for the same idempotency key for 24 hours, so the Customer creation of a tenant's Checkout moves to the key `customer:<tenantId>:<attempt>` after a failure that spent `customer:<tenantId>` (no row is attempt 0), and the next attempt first looks for a Customer the failed one made. It cannot live in `billing_customers`, whose rows exist only once a Customer does ([PADR-0002](adr/0002-stripe-billing-integration.md) item 3, revision of 2026-10-24). |
 
 ## 5. Encrypted columns and their associated data
 
