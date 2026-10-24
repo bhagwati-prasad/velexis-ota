@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="robots" content="noindex" />
+    <title>Completing your booking – Checkout</title>
+    <meta name="description" content="Your booking is being completed with the airline." />
+    <link rel="stylesheet" href="/src/styles/main.css" />
+    <script type="module" src="/src/pages/checkout-complete.js"></script>
+  </head>
+  <body class="flex min-h-screen flex-col bg-surface font-body text-ink antialiased">
+    <!-- @include partials/noscript.html -->
+    <!-- @include partials/test-banner.html -->
+    <!-- @include partials/header.html -->
+    <main
+      id="main"
+      tabindex="-1"
+      class="mx-auto w-full max-w-3xl flex-1 px-4 py-8 focus:outline-none"
+      data-complete-page
+    >
+      <h1 class="font-heading text-2xl font-semibold sm:text-3xl">Completing your booking</h1>
+
+      <section class="mt-6 rounded-ui border border-muted/30 bg-panel p-4 sm:p-5" data-complete-progress>
+        <div class="flex items-center gap-4">
+          <span
+            class="inline-block size-6 shrink-0 rounded-full border-4 border-primary/30 border-t-primary motion-safe:animate-spin"
+            aria-hidden="true"
+          ></span>
+          <p class="font-medium" data-complete-step>Checking your payment…</p>
+        </div>
+        <p class="mt-3 text-sm text-muted" data-complete-hint>
+          This can take up to a minute. Do not close this page or press Back.
+        </p>
+      </section>
+
+      <div data-complete-state></div>
+    </main>
+    <!-- @include partials/footer.html -->
+
+    <template id="tpl-state-link">
+      <p class="mt-4">
+        <a
+          class="font-medium text-primary underline underline-offset-4"
+          data-state-link
+          data-field="label"
+          data-field-href="href"
+        ></a>
+      </p>
+    </template>
+    <!-- @include partials/states.html -->
+  </body>
+</html>

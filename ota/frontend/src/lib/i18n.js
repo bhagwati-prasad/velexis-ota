@@ -428,6 +428,50 @@ export const STRINGS = Object.freeze({
   "payCard.newTotalOnly": "The new total is {new}. Review it, then pay.",
   "payCard.providerError": "The payment service is not answering. Nothing was charged. Please try again.",
   "payCard.updateFailed": "The card form could not show the new total. Please try again.",
+  // Complete page (src/pages/checkout-complete.js, docs/pages.md §10).
+  "complete.checkingPayment": "Checking your payment…",
+  "complete.waitingForBank": "Waiting for your bank to confirm the payment…",
+  "complete.booking": "Booking your flight with the airline. Do not close this page.",
+  "complete.booked": "Your booking is confirmed. Opening your confirmation…",
+  "complete.confirming": "We are confirming your booking with the airline",
+  "complete.missing": "We could not find this payment",
+  "complete.notConfirmed": "Your bank has not confirmed the payment yet",
+  "complete.paymentFailed": "Payment did not go through",
+  "complete.backToCard": "Back to the card payment",
+  "complete.newTotal": "The new total is {new} (before: {old}).",
+  "complete.newTotalOnly": "The new total is {new}.",
+  "complete.notBooked": "Your booking did not go through",
+  "complete.checkDetails": "Check your details",
+  "complete.amountMismatch": "Your payment no longer matches the total",
+  "complete.stillRunning": "Your booking is still being completed",
+  // Confirmation page (src/pages/confirmation.js, docs/pages.md §11).
+  "confirmation.title": "Your booking",
+  "confirmation.loading": "Loading your booking…",
+  "confirmation.ticketed": "Your tickets are issued",
+  "confirmation.confirmed": "Booking confirmed",
+  "confirmation.pending": "We are confirming your booking with the airline",
+  "confirmation.failed": "Your booking did not go through",
+  "confirmation.cancelled": "This booking is cancelled",
+  "confirmation.ticketedText": "Your e-tickets are ready.",
+  "confirmation.ticketedEmail": "Your e-tickets are ready. We have sent them to {email}.",
+  "confirmation.confirmedText": "Your tickets are being issued. We will e-mail you when they are ready.",
+  "confirmation.confirmedEmail":
+    "Your tickets are being issued. We will e-mail them to {email} when they are ready.",
+  "confirmation.pendingText":
+    "This can take a few minutes. Please do not book again: this page updates by itself, and we will e-mail you.",
+  "confirmation.pendingEmail":
+    "This can take a few minutes. Please do not book again: this page updates by itself, and we will e-mail {email}.",
+  "confirmation.stillPending":
+    "We are still confirming your booking. We will e-mail you as soon as it is decided, or check again now.",
+  "confirmation.failedText": "You have not been charged.",
+  "confirmation.cancelledText": "The details of the cancellation are on your booking page.",
+  "confirmation.ticket": "{number}: {name}",
+  "confirmation.traveller": "{firstName} {lastName}",
+  "confirmation.airlineReference": "{originSystemCode} {reference}",
+  "confirmation.airlineReferences": "Airline reference for online check-in: {references}",
+  "confirmation.missing": "We could not find this booking",
+  "confirmation.findBooking": "Find your booking",
+  "confirmation.lookup": "Find your booking with its reference",
   // AmadeusDocumentType: the documents a traveller can show.
   "document.PASSPORT": "Passport",
   "document.IDENTITY_CARD": "ID card",
@@ -560,6 +604,24 @@ export const STRINGS = Object.freeze({
     "Prices are held for a short time only. Price the flight again to see the current price.",
   "stateHint.email-not-verified": "Open the link in the e-mail we sent you, then try again.",
   "stateHint.card-unavailable": "Nothing was charged. Please try again in a moment.",
+  "stateHint.payment-not-confirmed":
+    "Nothing is booked yet. Try again in a moment, or go back to the card payment.",
+  "stateHint.complete-payment-failed":
+    "Nothing was booked and your card was not charged. Try again with the same card or another one.",
+  "stateHint.complete-price-changed": "Your card has not been charged. Check the new total, then pay again.",
+  "stateHint.complete-sold-out": "Nothing was booked and you have not been charged. Choose another flight.",
+  "stateHint.complete-expired": "The amount reserved on your card is released. Search again to book.",
+  "stateHint.complete-offer-expired":
+    "Your card has not been charged. Fares are held for a short time only: search again to see the current prices.",
+  "stateHint.complete-not-booked": "The airline could not confirm it. You have not been charged.",
+  "stateHint.complete-incomplete": "Your card has not been charged. Check your details, then pay again.",
+  "stateHint.complete-amount-mismatch": "Nothing was charged. Start the payment again from the payment step.",
+  "stateHint.complete-still-running":
+    "Try again in a moment to see the outcome. Your flight will not be booked twice.",
+  "stateHint.complete-confirming":
+    "This can take a few minutes. Please do not pay again: try again in a moment to see the outcome.",
+  "stateHint.confirmation-lookup":
+    "Open this page in the browser you booked with, or find your booking with its reference and the last name of a traveller.",
 });
 
 const plurals = new Intl.PluralRules(LANGUAGE);

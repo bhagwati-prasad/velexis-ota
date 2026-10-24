@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="robots" content="noindex" />
+    <title>Your booking</title>
+    <meta name="description" content="The confirmation of your booking and the status of your tickets." />
+    <link rel="stylesheet" href="/src/styles/main.css" />
+    <script type="module" src="/src/pages/confirmation.js"></script>
+  </head>
+  <body class="flex min-h-screen flex-col bg-surface font-body text-ink antialiased">
+    <!-- @include partials/noscript.html -->
+    <!-- @include partials/test-banner.html -->
+    <!-- @include partials/header.html -->
+    <main
+      id="main"
+      tabindex="-1"
+      class="mx-auto w-full max-w-4xl flex-1 px-4 py-8 focus:outline-none"
+      data-confirmation-page
+    >
+      <h1
+        tabindex="-1"
+        class="font-heading text-2xl font-semibold focus:outline-none sm:text-3xl"
+        data-confirmation-title
+      >
+        Your booking
+      </h1>
+
+      <div data-confirmation-state></div>
+
+      <div class="mt-6 space-y-4" aria-hidden="true" data-confirmation-loading hidden>
+        <div class="h-24 rounded-ui bg-panel motion-safe:animate-pulse"></div>
+        <div class="h-48 rounded-ui bg-panel motion-safe:animate-pulse"></div>
+      </div>
+
+      <div class="mt-6 space-y-6" data-confirmation-content hidden>
+        <section
+          class="rounded-ui border-2 border-muted/30 bg-panel p-4 sm:p-5"
+          aria-labelledby="status-heading"
+          data-status-panel
+        >
+          <h2 id="status-heading" class="sr-only">Status</h2>
+          <p class="text-lg" data-status-text></p>
+          <p class="mt-3 flex items-center gap-3 text-sm text-muted" data-status-progress hidden>
+            <span
+              class="inline-block size-4 shrink-0 rounded-full border-2 border-primary/30 border-t-primary motion-safe:animate-spin"
+              aria-hidden="true"
+            ></span>
+            <span>Checking again in a few seconds…</span>
+          </p>
+          <div class="mt-3" data-status-still-pending hidden>
+            <p data-status-still-pending-text></p>
+            <p class="mt-3">
+              <button
+                type="button"
+                data-check-again
+                class="min-h-6 rounded-ui bg-primary px-4 py-2 font-medium text-on-primary hover:opacity-90"
+              >
+                Check again
+              </button>
+            </p>
+          </div>
+          <div class="mt-4" data-tickets-block hidden>
+            <h3 class="font-heading font-semibold">Ticket numbers</h3>
+            <ul class="mt-2 space-y-1 font-mono text-sm" data-tickets></ul>
+          </div>
+          <p class="mt-4 flex flex-wrap gap-x-6 gap-y-2" data-booking-links hidden>
+            <a
+              href="/booking.html"
+              class="min-h-6 font-medium text-primary underline underline-offset-4"
+              data-booking-link
+              >View your booking</a
+            >
+            <a
+              href="/booking.html"
+              class="min-h-6 font-medium text-primary underline underline-offset-4"
+              data-documents-link
+              >Your documents</a
+            >
+          </p>
+          <p class="mt-4" data-search-link hidden>
+            <a href="/" class="min-h-6 font-medium text-primary underline underline-offset-4"
+              >Search flights</a
+            >
+          </p>
+        </section>
+
+        <section aria-labelledby="reference-title" data-reference-block>
+          <h2 id="reference-title" class="font-heading text-xl font-semibold">Booking reference</h2>
+          <p class="mt-1 font-mono text-2xl font-semibold tracking-wider" data-reference></p>
+          <p class="mt-1 text-sm text-muted" data-airline-references hidden></p>
+        </section>
+
+        <section
+          class="rounded-ui border border-muted/30 bg-surface p-4 sm:p-5"
+          aria-labelledby="guest-title"
+          data-guest-block
+          hidden
+        >
+          <h2 id="guest-title" class="font-heading text-lg font-semibold">Save your reference</h2>
+          <p class="mt-2">
+            You booked as a guest. With your booking reference and the last name of a traveller you can find
+            this booking at any time.
+          </p>
+          <p class="mt-3">
+            <a
+              href="/lookup.html"
+              class="min-h-6 font-medium text-primary underline underline-offset-4"
+              data-lookup-link
+              >Find your booking later</a
+            >
+          </p>
+          <div class="mt-4" data-create-account hidden>
+            <p>Create an account with the e-mail address of this booking to see it in My bookings.</p>
+            <p class="mt-2">
+              <a
+                href="/account/sign-up.html"
+                class="min-h-6 font-medium text-primary underline underline-offset-4"
+                data-create-account-link
+                >Create an account</a
+              >
+            </p>
+          </div>
+        </section>
+
+        <section aria-labelledby="trip-title" data-trip-block>
+          <h2 id="trip-title" class="font-heading text-xl font-semibold">Your trip</h2>
+          <ol class="mt-3 space-y-4 rounded-ui border border-muted/30 bg-surface p-4" data-itineraries></ol>
+          <div class="mt-4 grid gap-4 sm:grid-cols-2">
+            <div>
+              <h3 class="font-heading font-semibold">Travellers</h3>
+              <ul class="mt-2 space-y-1" data-travellers></ul>
+            </div>
+            <dl class="divide-y divide-muted/20">
+              <div class="flex items-baseline justify-between gap-4 py-2 text-lg font-semibold">
+                <dt>Total</dt>
+                <dd class="tabular-nums" data-total></dd>
+              </div>
+            </dl>
+          </div>
+        </section>
+      </div>
+    </main>
+    <!-- @include partials/footer.html -->
+
+    <!-- @include partials/templates/offer-card.html -->
+    <template id="tpl-confirmation-item">
+      <li data-field="text"></li>
+    </template>
+    <template id="tpl-state-link">
+      <p class="mt-4">
+        <a
+          class="font-medium text-primary underline underline-offset-4"
+          data-state-link
+          data-field="label"
+          data-field-href="href"
+        ></a>
+      </p>
+    </template>
+    <!-- @include partials/states.html -->
+  </body>
+</html>

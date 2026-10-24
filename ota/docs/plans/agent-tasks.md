@@ -1534,7 +1534,8 @@ Checkout, customer accounts in cookies, Stripe on the Velexis account, the airli
   - The page never reads card data itself (no input elements outside Stripe's iframe).
 - **Verify:** `pnpm --filter @velexis/ota-frontend test && pnpm --filter @velexis/ota-frontend build`
 
-### OFE-013 · Build the complete and confirmation pages
+### OFE-013 · Build the complete and confirmation pages ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-frontend
 - **Milestone:** M3
 - **Depends on:** OFE-012, SDK-010, OBE-042, OBE-046, OBE-047

@@ -241,6 +241,15 @@ Seats: there is no seat map in the MVP ([scope §2.2](../../docs/scope.md#22-hos
 | `409 CHECKOUT_ALREADY_COMPLETED` | Straight to the confirmation of `details.bookingId` |
 | `504 SUPPLIER_TIMEOUT` | Confirmation page in pending mode with `details.bookingId`; never call `complete` with a new key |
 | `410 CHECKOUT_EXPIRED` | "Your session expired; the authorisation is released", back to search |
+| `409 CHECKOUT_BEING_COMPLETED` | Confirmation page in pending mode with `details.bookingId` (the checkout names it when the answer does not) |
+| Still `processing` / `requires_action` after 60 s | "Your bank has not confirmed the payment yet" with Retry (waits again) and the card page |
+| Payment `requires_payment_method` (never confirmed, or 3-D Secure failed) | As `failed`: "Payment did not go through", back to the card page |
+| `502 SUPPLIER_ERROR` / `TICKETING_FAILED` (the airline refused the order, or the reconciliation proved it absent) | "Your booking did not go through", nothing charged; the payment step and the search |
+| `422 CHECKOUT_INCOMPLETE` / `TRAVELER_DATA_INVALID` / `CONTACT_DATA_INVALID` | "Some details are still missing", back to the travellers step |
+| `503`, connection failures, `429`, `502 PAYMENT_PROVIDER_ERROR`, `409 CONFLICT` (the first request with this key is still running) | The state with Retry, which sends the **same** key |
+
+- **No automatic redirect to the card page.** A payment that did not go through is a link back, so a payment the API refuses cannot send the traveller between the two pages for ever.
+- **The address.** Stripe's `payment_intent`, `payment_intent_client_secret` and `redirect_status` are taken out of the address bar with `history.replaceState` before `boot()` runs, so no request of the page carries the client secret in its `Referer`. Without `payment=`, the checkout's active payment (`checkout.get`) is completed. An address without a valid `chk_…`, or a payment of another checkout, shows "We could not find this payment"; an airline-card payment opens its own page.
 
 ## 11. Confirmation: `/confirmation.html?booking=bkg_…` (M3)
 
@@ -258,4 +267,8 @@ Seats: there is no seat map in the MVP ([scope §2.2](../../docs/scope.md#22-hos
 | `bookingStatus = pending` (after a timeout) | "We are confirming your booking with the airline", polling every 10 s |
 | `failed` | "Your booking did not go through. You have not been charged." |
 | Guests | "Save your reference" with the lookup link; "Create an account" when `features.customerAccounts` |
-| `401 UNAUTHENTICATED` (no guest token) | Link to `/lookup.html` |
+| `401 UNAUTHENTICATED` (no guest token) | Link to `/lookup.html` (and sign-in, when the OTA has customer accounts and nobody is signed in) |
+| `404`, or an address without a valid `bkg_…` | "We could not find this booking", link to `/lookup.html` |
+
+- **`pending=1`** (from the complete and airline-card pages after `504 SUPPLIER_TIMEOUT` or `409 CHECKOUT_BEING_COMPLETED`) shows "We are confirming your booking" while the booking loads. Once the booking is decided the page reads it again (record locator, tickets) and removes `pending=1` with `history.replaceState`, so a reload shows the final state.
+- **Polling.** The first `getTicketingStatus` goes with `bookings.get`; the next ones follow `pollAfterSeconds` (10 s while pending) and stop when it is `null`. A failed poll leaves the state on the screen and tries again 10 s later (after `Retry-After` for `429`; after an airline error once without `refresh`); `401` or `404` stop it. A pending booking is polled for 30 minutes, then the page says it will e-mail and offers "Check again"; tickets being issued are polled for 10 minutes (the page already says they follow by e-mail).
