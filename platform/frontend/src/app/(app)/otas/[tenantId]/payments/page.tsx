@@ -2,14 +2,15 @@ import type { components } from "@velexis/api-types/platform";
 import type { Metadata } from "next";
 import { notFound, redirect } from "next/navigation";
 
-import { byEnvironment, ConnectionCard } from "@/components/connection-card";
+import { DescriptorForm } from "@/app/(app)/otas/[tenantId]/payments/descriptor-form";
+import { byEnvironment, ConnectionCard, type PaymentConnection } from "@/components/connection-card";
 import { NotAllowed } from "@/components/not-allowed";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { platformApi, type ApiResult } from "@/lib/api";
 import { errorMessage } from "@/lib/errors";
 import { can, otaPath } from "@/lib/roles";
-import { PAYMENTS_STRINGS } from "@/lib/strings";
-import { requireTenant } from "@/lib/tenant";
+import { DESCRIPTOR_STRINGS, PAYMENTS_STRINGS } from "@/lib/strings";
+import { requireTenant, type Tenant } from "@/lib/tenant";
 
 export const metadata: Metadata = { title: PAYMENTS_STRINGS.title };
 
@@ -42,12 +43,40 @@ async function loadConnections(tenantId: string): Promise<ApiResult<PaymentConne
 }
 
 /**
+ * What a Velexis-mode card adds for the caller (PFE-016; flows/stripe-payments-account.md §A item 3): owners and admins
+ * the statement suffix form, finance members a note that only owners and admins change it (they read the suffix in the
+ * card's details). Cards of the OTA's own Stripe account (M5) add nothing: the OTA backend sends no suffix for them.
+ */
+function descriptorPart(tenant: Tenant, connection: PaymentConnection) {
+  if (connection.accountMode !== "velexis") {
+    return null;
+  }
+  if (!can(tenant.myRole, "manageConnections")) {
+    return (
+      <p className="text-sm text-muted-foreground" data-descriptor-role-note="">
+        {DESCRIPTOR_STRINGS.roleNote}
+      </p>
+    );
+  }
+  return (
+    <DescriptorForm
+      tenantId={tenant.id}
+      environment={connection.environment}
+      version={connection.version}
+      suffix={connection.statementDescriptorSuffix}
+      tenantStatus={tenant.status}
+    />
+  );
+}
+
+/**
  * `/otas/[tenantId]/payments` (README §2 Signed in; flows/stripe-payments-account.md §A; PF-60): the OTA's Stripe
- * connections for owners, admins and finance members, read-only: one `ConnectionCard` per environment, test first
- * ("Velexis Stripe account, test, active"), with the account mode, the card statement suffix and, for the OTA's own
- * account (M5), its capabilities. The tenant comes from the layout's `getTenant` (the same request's cached answer);
- * another role gets the not-allowed page without a call. The descriptor suffix edit comes with M3, Stripe Connect,
- * API keys and the way back to Velexis payments with PFE-024, payout account and settlements with PFE-025.
+ * connections for owners, admins and finance members: one `ConnectionCard` per environment, test first ("Velexis Stripe
+ * account, test, active"), with the account mode, the card statement suffix and, for the OTA's own account (M5), its
+ * capabilities. On each Velexis-mode card owners and admins change the suffix (`DescriptorForm`, PFE-016) with a preview
+ * of the card statement line; finance members read it. The tenant comes from the layout's `getTenant` (the same
+ * request's cached answer); another role gets the not-allowed page without a call. Stripe Connect, API keys and the way
+ * back to Velexis payments come with PFE-024, payout account and settlements with PFE-025.
  */
 export default async function PaymentsPage({ params }: Readonly<{ params: Promise<{ tenantId: string }> }>) {
   const { tenantId } = await params;
@@ -83,7 +112,9 @@ export default async function PaymentsPage({ params }: Readonly<{ params: Promis
               kind="payment"
               connection={connection}
               timeZone={tenant.timeZone}
-            />
+            >
+              {descriptorPart(tenant, connection)}
+            </ConnectionCard>
           ))}
         </div>
       )}

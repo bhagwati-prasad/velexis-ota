@@ -1268,7 +1268,8 @@ The OTA group builds checkout, Stripe payments on the Velexis account and the ai
   - A valid suffix is saved and published as a `connection` invalidation; `"ACME*TRAVEL"` and a 23-character suffix answer `VALIDATION_FAILED`; a stale `If-Match` answers 412 [PF-60].
 - **Verify:** `pnpm --filter @velexis/platform-backend test && pnpm --filter @velexis/platform-backend test:int -- connections`
 
-### PFE-016 · Add the statement descriptor form to the payments page
+### PFE-016 · Add the statement descriptor form to the payments page ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-frontend
 - **Milestone:** M3
 - **Depends on:** PFE-013, PBE-038

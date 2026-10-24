@@ -1325,6 +1325,65 @@ export const PAYMENTS_STRINGS = Object.freeze({
   unavailableTitle: "The payment connections could not be loaded",
 });
 
+/**
+ * The card statement suffix form of a Velexis-mode payment connection on `/otas/[tenantId]/payments` (PFE-016; PF-60):
+ * its rules (those of the API's `StatementDescriptorSuffix`), the statement line preview and the answers of
+ * `updatePaymentConnection`.
+ */
+export const DESCRIPTOR_STRINGS = Object.freeze({
+  title: "Change the card statement suffix",
+  intro:
+    "Your customers' card statements show this suffix after Velexis's name, so they recognise the payment for your OTA.",
+  label: "New suffix",
+  hint: "2 to 22 characters: the letters A to Z, digits and spaces, with at least one letter.",
+  previewTitle: "How a card statement shows it",
+  previewEmpty: "Type a suffix to see the statement line.",
+  previewInvalid: "The statement line shows here once the suffix follows the rules.",
+  /** The length of the suffix as typed (trimmed), against the API's limit. */
+  length: (count: number) => `${count} of 22 characters`,
+  /** A statement line longer than 22 characters loses the end of the suffix. */
+  previewCut: (fits: number) =>
+    `A card statement shows at most 22 characters, so the end of this suffix is cut. Up to ${fits} characters show in full.`,
+  previewHint: "Banks print the line in their own way, most of them in capital letters.",
+  /** One message per rule a suffix breaks (`DescriptorProblem` and the API's field error codes). */
+  problems: Object.freeze({
+    required: "Enter a card statement suffix.",
+    forbiddenCharacter: "Card statements cannot show the characters < > \\ ' \" or *. Remove them.",
+    characters: "Use only the letters A to Z, digits and spaces: no accents, punctuation or other symbols.",
+    minLength: "Use at least 2 characters.",
+    maxLength: "Use at most 22 characters.",
+    letter: "Include at least one letter.",
+    start: "Start the suffix with a letter or a digit.",
+    /** The API refused the suffix by a rule the portal has no own words for (its `pattern`). */
+    rules:
+      "Use 2 to 22 characters: the letters A to Z, digits and spaces, starting with a letter or a digit and with at least one letter.",
+  }),
+  submit: "Save the suffix",
+  submitting: "Saving…",
+  saved:
+    "The card statement suffix is saved. New card payments show it within a minute; payments made before keep the suffix they had.",
+  readOnlyTitle: "The suffix cannot be changed right now",
+  /** Why the suffix is read-only, for each OTA status but `active` (PADR-0014 item 5). */
+  readOnly: Object.freeze({
+    provisioning: "Velexis is still setting up this OTA. You can change the suffix once the set-up is done.",
+    suspended: "This OTA is suspended, so its payment settings are read-only until it is resumed.",
+    failed: "The set-up of this OTA failed, so its payment settings cannot be changed.",
+  }),
+  /** Finance members read the suffix in the card, without the form. */
+  roleNote: "Only owners and admins can change the card statement suffix.",
+  stale:
+    "Someone else changed this suffix in the meantime. Reload the page to see it, then make your change again.",
+  reload: "Reload the page",
+  notActive:
+    "This OTA is not active any more, so its payment settings cannot be changed. Reload the page to see why.",
+  forbidden:
+    "Your role in this OTA does not allow changing the card statement suffix any more. Reload the page.",
+  removed:
+    "This payment connection is not there any more, or you are not a member of this OTA any more. Reload the page.",
+  formExpired: "This form has expired. Reload the page and try again.",
+  rateLimited: "Too many changes in a short time. Wait a minute, then try again.",
+});
+
 /** `/otas/[tenantId]/billing` (PF-75; plans, Checkout and invoices with PFE-021). */
 export const BILLING_STRINGS = Object.freeze({
   title: "Billing",

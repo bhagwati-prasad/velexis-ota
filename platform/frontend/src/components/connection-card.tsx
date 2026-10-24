@@ -144,6 +144,7 @@ function Card({
   notes,
   details,
   submission,
+  children,
 }: {
   readonly kind: "amadeus" | "payment";
   readonly environment: Environment;
@@ -153,6 +154,8 @@ function Card({
   readonly notes: readonly string[];
   readonly details: readonly Detail[];
   readonly submission: PendingSubmission | null;
+  /** What the page adds at the end of the card (the statement suffix form of a Velexis-mode payment card, PFE-016). */
+  readonly children?: ReactNode;
 }) {
   const headingId = `${kind}-connection-${environment}`;
   return (
@@ -183,6 +186,7 @@ function Card({
       ))}
       <Details details={details} />
       {submission === null ? null : <Submission submission={submission} />}
+      {children}
     </section>
   );
 }
@@ -260,9 +264,11 @@ function AmadeusCard({
 function PaymentCard({
   connection,
   timeZone,
+  children,
 }: {
   readonly connection: PaymentConnection;
   readonly timeZone: string;
+  readonly children?: ReactNode;
 }) {
   const details: Detail[] = [
     {
@@ -345,7 +351,9 @@ function PaymentCard({
       notes={notes}
       details={details}
       submission={connection.pendingSubmission}
-    />
+    >
+      {children}
+    </Card>
   );
 }
 
@@ -361,6 +369,8 @@ export type ConnectionCardProps =
       readonly connection: PaymentConnection;
       /** The IANA zone of the dates (the OTA's); UTC when absent. */
       readonly timeZone?: string;
+      /** What the page adds at the end of the card: the statement suffix form of PFE-016, or its role note. */
+      readonly children?: ReactNode;
     };
 
 /**
@@ -376,6 +386,8 @@ export function ConnectionCard(props: ConnectionCardProps) {
   return props.kind === "amadeus" ? (
     <AmadeusCard connection={props.connection} timeZone={timeZone} />
   ) : (
-    <PaymentCard connection={props.connection} timeZone={timeZone} />
+    <PaymentCard connection={props.connection} timeZone={timeZone}>
+      {props.children}
+    </PaymentCard>
   );
 }
