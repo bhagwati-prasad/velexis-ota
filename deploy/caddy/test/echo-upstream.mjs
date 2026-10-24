@@ -10,7 +10,9 @@
 //   {"port":4000,"method":"GET","url":"/x","headers":{"x-velexis-host":["acme.ota.localhost"],...}}
 //
 // Header names are lower case and every name maps to the list of its values as received, so a header that a
-// proxy appended instead of replacing shows up as two values.
+// proxy appended instead of replacing shows up as two values. Every answer carries
+// `Cross-Origin-Opener-Policy: same-origin`, as helmet adds it to every answer of both APIs, so the smoke test can
+// prove that the storefront does not pass it on to its /api/* answers (OFE-014, OADR-0017 point 3).
 //
 // GET /redirect answers 302 instead, with `Location: /landing?<the request's own query>` and the same echo, so the
 // smoke test can show which query values of a redirect's `Location` reach Caddy's access log (FIX-W29-SECURITY).
@@ -48,6 +50,7 @@ function send(res, status, body, headers = {}) {
   res.writeHead(status, {
     "content-type": "application/json",
     "content-length": Buffer.byteLength(text),
+    "cross-origin-opener-policy": "same-origin",
     ...headers,
   });
   res.end(text);

@@ -221,6 +221,21 @@ Seats: there is no seat map in the MVP ([scope §2.2](../../docs/scope.md#22-hos
 | `409 SOLD_OUT` | "This flight sold out", back to results |
 | `504 SUPPLIER_TIMEOUT` (`details.bookingId`) | Go to `/confirmation.html?booking=…&pending=1`; never resubmit the card |
 | `403 FEATURE_DISABLED` | "This payment method is not available", back to the payment step |
+| Connection lost or timed out during Pay | `checkout.get`: a booking opens the confirmation in pending mode; without one "The payment did not go through", the card typed again; if the checkout cannot be read, "We could not check whether your booking went through" with "Try again" (the check, never the card) |
+| `409 PAYMENT_AMOUNT_MISMATCH` | The payment read again; "The total changed. Type your card again to see the final total." |
+| `409 CHECKOUT_ALREADY_COMPLETED` / `CHECKOUT_BEING_COMPLETED` | The confirmation of `details.bookingId` (`pending=1` while it is being completed) |
+| `410 CHECKOUT_EXPIRED` / `OFFER_EXPIRED` | "Your session expired", with "Price this flight again" |
+| `422 CHECKOUT_INCOMPLETE` / `TRAVELER_DATA_INVALID` / `CONTACT_DATA_INVALID` | "Some details are still missing", back to the travellers step |
+| `422 UNPROCESSABLE` (brand), or a brand outside `payment.airlineCard.cardBrands` | "We cannot take this card", with the accepted brands; no fee is quoted |
+| `502 SUPPLIER_ERROR` / `TICKETING_FAILED` | "Your booking did not go through", the card not charged; the payment step and the search |
+| `429 RATE_LIMITED` on Pay | "Busy", Pay enabled again after `Retry-After` |
+| `409 PRICE_CHANGED` on `updatePayment` | "The airline changed the price", back to the payment step (the fee quote changed nothing) |
+| `409 PAYMENT_NOT_UPDATABLE`, or a `cancelled` payment at load | "This payment can no longer be used", back to the payment step |
+
+- **Where its state comes from** ([OADR-0017](../../docs/adr/0017-airline-card-form-isolation.md) point 5). The checkout and payment ids from the address, everything else from the API: a fresh `storefront.get` (`cache: "no-store"`, never the `sessionStorage` copy that other pages write), `checkout.get` and `checkout.getPayment`. The page does not run boot(); header and footer are the static partials, with the OTA's name, theme and test banner applied. The form appears only when `storefront.get` offers the method (`supportedMethods` lists `airline_card` and `airlineCard.enabled`), which the API leaves out while the method is switched off or suspended.
+- **Where a payment belongs.** A card payment opens the card page; a payment a completion already took (`processing`, `authorized`, `captured`) opens its booking's confirmation (`pending=1` until decided); a completed checkout its confirmation; an expired one "Your session expired". A `failed` payment (a declined card) takes the next card. An address without valid `chk_…` and `pay_…` ids, or a payment of another checkout, shows "We could not find this payment".
+- **Review, then Pay.** The button says "Review the total" until the airline's card fee is quoted for the card's brand and BIN, then "Pay €…" with the amount the airline charges; a submit before the quote answered shows the review first. The holder name, the Luhn digit, the expiry, the security code length and the brand are checked before anything is sent (the API checks them again), so a typing mistake never counts as an attempt and its values stay for the correction.
+- **The inputs are emptied** after every answer of the completion (success, decline, error), on `pagehide` and on a back-forward cache restore. The API's decline carries no attempt count, so the page states the rule: a booking takes at most three cards.
 
 ## 10. Complete: `/checkout/complete.html?id=chk_…&payment=pay_…` (M3)
 

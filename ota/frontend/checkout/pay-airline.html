@@ -1,0 +1,285 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="robots" content="noindex" />
+    <title>Pay with your card – Checkout</title>
+    <meta name="description" content="Pay for your booking with your card; the airline charges it." />
+    <!-- Its own bundle only (OADR-0017): no third-party script, font or image on this page. -->
+    <link rel="stylesheet" href="/src/styles/main.css" />
+    <script type="module" src="/src/pages/checkout-pay-airline.js"></script>
+  </head>
+  <body class="flex min-h-screen flex-col bg-surface font-body text-ink antialiased">
+    <noscript>
+      <p class="border-b border-warning bg-panel px-4 py-3 text-center text-sm text-ink" role="note">
+        Paying with your card on this page needs JavaScript. Turn it on in your browser, or go back and choose
+        another payment method.
+      </p>
+    </noscript>
+    <!-- @include partials/test-banner.html -->
+    <!-- @include partials/header.html -->
+    <main
+      id="main"
+      tabindex="-1"
+      class="mx-auto w-full max-w-6xl flex-1 px-4 py-8 focus:outline-none"
+      data-pay-airline-page
+    >
+      <p class="mb-3">
+        <a
+          href="/"
+          hidden
+          class="min-h-6 font-medium text-primary underline underline-offset-4"
+          data-back-link
+          >Change the payment method</a
+        >
+      </p>
+      <h1 class="font-heading text-2xl font-semibold sm:text-3xl">Pay with your card</h1>
+
+      <div data-pay-state></div>
+
+      <div class="mt-6 space-y-4" aria-hidden="true" data-pay-loading hidden>
+        <div class="h-48 rounded-ui bg-panel motion-safe:animate-pulse"></div>
+        <div class="h-24 rounded-ui bg-panel motion-safe:animate-pulse"></div>
+      </div>
+
+      <div class="mt-6 grid items-start gap-6 lg:grid-cols-[1fr_20rem]" data-pay-content hidden>
+        <div class="min-w-0 space-y-6">
+          <section class="rounded-ui border border-muted/30 bg-panel p-4" aria-labelledby="charged-by-title">
+            <h2 id="charged-by-title" class="font-heading text-lg font-semibold">
+              The airline charges your card
+            </h2>
+            <p class="mt-2" data-airline-notice>
+              The airline charges your card. The price is the airline's price.
+            </p>
+          </section>
+
+          <div data-pay-notice></div>
+
+          <!-- No `name` on the card inputs and no `action`: a submit that never reaches the page's script sends
+               nothing (OADR-0017 point 4). -->
+          <form method="post" novalidate class="space-y-4" aria-labelledby="card-title" data-card-form>
+            <h2 id="card-title" tabindex="-1" class="font-heading text-xl font-semibold focus:outline-none">
+              Your card
+            </h2>
+            <p class="text-muted" data-accepted-brands hidden>
+              We accept: <span data-accepted-brand-list></span>
+            </p>
+
+            <div
+              class="rounded-ui border-2 border-error bg-surface p-4"
+              tabindex="-1"
+              data-card-errors
+              hidden
+            >
+              <p class="font-semibold">Check the card details</p>
+              <ul class="mt-2 list-disc pl-5" data-card-error-list></ul>
+            </div>
+
+            <div>
+              <label for="card-holder" class="block text-sm font-medium">Name on the card</label>
+              <input
+                id="card-holder"
+                type="text"
+                autocomplete="cc-name"
+                autocapitalize="characters"
+                autocorrect="off"
+                spellcheck="false"
+                maxlength="64"
+                required
+                aria-describedby="card-holder-error"
+                data-card-input="holder"
+                class="mt-1 block w-full rounded-ui border border-muted/60 bg-surface px-3 py-2 aria-invalid:border-error"
+              />
+              <p
+                id="card-holder-error"
+                class="mt-1 text-sm font-medium text-error"
+                data-field-error
+                hidden
+              ></p>
+            </div>
+
+            <div>
+              <label for="card-number" class="block text-sm font-medium">Card number</label>
+              <input
+                id="card-number"
+                type="text"
+                inputmode="numeric"
+                autocomplete="cc-number"
+                autocorrect="off"
+                spellcheck="false"
+                maxlength="23"
+                required
+                aria-describedby="card-number-brand card-number-error"
+                data-card-input="number"
+                class="mt-1 block w-full rounded-ui border border-muted/60 bg-surface px-3 py-2 font-mono aria-invalid:border-error"
+              />
+              <p
+                id="card-number-brand"
+                class="mt-1 text-sm text-muted"
+                aria-live="polite"
+                data-card-brand
+              ></p>
+              <p
+                id="card-number-error"
+                class="mt-1 text-sm font-medium text-error"
+                data-field-error
+                hidden
+              ></p>
+            </div>
+
+            <fieldset aria-describedby="card-expiry-error">
+              <legend class="text-sm font-medium">Expiry date</legend>
+              <div class="mt-1 flex flex-wrap gap-4">
+                <div>
+                  <label for="card-expiry-month" class="block text-sm">Month (MM)</label>
+                  <input
+                    id="card-expiry-month"
+                    type="text"
+                    inputmode="numeric"
+                    autocomplete="cc-exp-month"
+                    autocorrect="off"
+                    spellcheck="false"
+                    maxlength="2"
+                    required
+                    data-card-input="month"
+                    class="mt-1 block w-20 rounded-ui border border-muted/60 bg-surface px-3 py-2 font-mono aria-invalid:border-error"
+                  />
+                </div>
+                <div>
+                  <label for="card-expiry-year" class="block text-sm">Year (YYYY)</label>
+                  <input
+                    id="card-expiry-year"
+                    type="text"
+                    inputmode="numeric"
+                    autocomplete="cc-exp-year"
+                    autocorrect="off"
+                    spellcheck="false"
+                    maxlength="4"
+                    required
+                    data-card-input="year"
+                    class="mt-1 block w-24 rounded-ui border border-muted/60 bg-surface px-3 py-2 font-mono aria-invalid:border-error"
+                  />
+                </div>
+              </div>
+              <p
+                id="card-expiry-error"
+                class="mt-1 text-sm font-medium text-error"
+                data-field-error
+                hidden
+              ></p>
+            </fieldset>
+
+            <div>
+              <label for="card-csc" class="block text-sm font-medium">Security code</label>
+              <input
+                id="card-csc"
+                type="text"
+                inputmode="numeric"
+                autocomplete="cc-csc"
+                autocorrect="off"
+                spellcheck="false"
+                maxlength="4"
+                required
+                aria-describedby="card-csc-hint card-csc-error"
+                data-card-input="csc"
+                class="mt-1 block w-24 rounded-ui border border-muted/60 bg-surface px-3 py-2 font-mono aria-invalid:border-error"
+              />
+              <p id="card-csc-hint" class="mt-1 text-sm text-muted">
+                3 digits on the back of the card, 4 on the front of an American Express card.
+              </p>
+              <p id="card-csc-error" class="mt-1 text-sm font-medium text-error" data-field-error hidden></p>
+            </div>
+
+            <section
+              class="rounded-ui border border-muted/30 bg-surface p-4 sm:p-5"
+              aria-labelledby="review-title"
+              data-review-panel
+              hidden
+            >
+              <h2
+                id="review-title"
+                tabindex="-1"
+                class="font-heading text-xl font-semibold focus:outline-none"
+              >
+                Your final total
+              </h2>
+              <dl class="mt-3 divide-y divide-muted/20">
+                <div class="flex items-baseline justify-between gap-4 py-2">
+                  <dt>Card</dt>
+                  <dd data-review-card></dd>
+                </div>
+                <div class="flex items-baseline justify-between gap-4 py-2">
+                  <dt>Card fee</dt>
+                  <dd class="tabular-nums" data-review-card-fee></dd>
+                </div>
+                <div class="flex items-baseline justify-between gap-4 py-2 text-lg font-semibold">
+                  <dt>Total to pay</dt>
+                  <dd class="tabular-nums" data-review-total></dd>
+                </div>
+              </dl>
+              <p class="mt-3 text-sm text-muted" data-review-notice></p>
+            </section>
+
+            <p>
+              <button
+                type="submit"
+                data-pay-button
+                data-busy-label="Paying… Do not close this page."
+                class="min-h-6 rounded-ui bg-primary px-5 py-2 font-medium text-on-primary hover:opacity-90 aria-disabled:opacity-60"
+              >
+                Review the total
+              </button>
+            </p>
+            <p class="font-medium" data-pay-progress hidden>
+              Booking your flight with the airline. Do not close this page or press Back.
+            </p>
+          </form>
+        </div>
+
+        <aside
+          aria-labelledby="summary-title"
+          class="rounded-ui border border-muted/30 bg-panel p-4 lg:sticky lg:top-4"
+        >
+          <h2 id="summary-title" class="font-heading text-lg font-semibold">Your trip</h2>
+          <ul class="mt-3 space-y-1" data-pay-trip></ul>
+          <dl class="mt-4 divide-y divide-muted/20 text-sm">
+            <div class="flex items-baseline justify-between gap-4 py-2">
+              <dt>Flights, taxes and fees</dt>
+              <dd class="tabular-nums" data-total-offer></dd>
+            </div>
+            <div class="flex items-baseline justify-between gap-4 py-2" data-total-extras-row hidden>
+              <dt>Extras</dt>
+              <dd class="tabular-nums" data-total-extras></dd>
+            </div>
+            <div class="flex items-baseline justify-between gap-4 py-2" data-total-card-fee-row hidden>
+              <dt>Card fee</dt>
+              <dd class="tabular-nums" data-total-card-fee></dd>
+            </div>
+            <div class="flex items-baseline justify-between gap-4 py-2 text-lg font-semibold">
+              <dt>Total</dt>
+              <dd class="tabular-nums" data-total></dd>
+            </div>
+          </dl>
+          <p class="mt-3 text-sm text-muted" data-pay-expiry></p>
+        </aside>
+      </div>
+    </main>
+    <!-- @include partials/footer.html -->
+
+    <template id="tpl-card-error">
+      <li><a class="underline" data-field="message" data-field-href="href"></a></li>
+    </template>
+    <template id="tpl-state-link">
+      <p class="mt-4">
+        <a
+          class="font-medium text-primary underline underline-offset-4"
+          data-state-link
+          data-field="label"
+          data-field-href="href"
+        ></a>
+      </p>
+    </template>
+    <!-- @include partials/states.html -->
+  </body>
+</html>

@@ -25,7 +25,12 @@
 #   - on acme.ota.localhost, /api/x reaches the OTA API (4000) as /x with X-Velexis-Edge equal to the secret and
 #     X-Velexis-Host equal to the host, even when the client sends forged ones; /api/internal/* and
 #     /api/health/* (except live) never reach it, also as path variants (//, upper case, %2F, ../);
-#   - the storefront sends its CSP, /assets/* is `immutable` and the rest `no-cache`;
+#   - the storefront sends its CSP (with `worker-src 'none'`), /assets/* is `immutable` and the rest `no-cache`;
+#   - the airline-card page (/checkout/pay-airline.html and /checkout/pay-airline, task OFE-014, OADR-0017 point 3)
+#     gets its own CSP without any Stripe host instead of the storefront's, `Cross-Origin-Opener-Policy: same-origin`
+#     and `Cache-Control: no-store`, also through path variants that serve it; no other storefront path (pages,
+#     assets, the 404 page, the /api proxy, whose upstream sends COOP `same-origin` as the APIs' helmet does) sends
+#     COOP `same-origin`;
 #   - on api.ota.localhost and api.platform.localhost, /internal/* and /health/ready (and the same variants)
 #     answer 404 without reaching the upstream, /health/live reaches it, and client copies of the edge headers are
 #     removed;
@@ -70,7 +75,14 @@ PROD_ADMIN=unix//run/caddy/admin.sock
 PLACEHOLDER_HOSTS="*.ota.example.com admin.ota.example.com admin.platform.example.com api.ota.example.com api.platform.example.com platform.example.com"
 # deployment-single-vm.md §6: the storefront release and the maintenance page, without any VELEXIS_ROOT prefix.
 PROD_ROOTS="/srv/velexis/current/storefront /srv/velexis/maintenance"
-CSP_DIRECTIVES=("default-src 'self'" "frame-ancestors 'none'" "object-src 'none'" "base-uri 'self'")
+CSP_DIRECTIVES=("default-src 'self'" "frame-ancestors 'none'" "object-src 'none'" "base-uri 'self'" "worker-src 'none'")
+# The general storefront CSP is the one that allows Stripe.js (the card page's).
+STOREFRONT_SCRIPTS="script-src 'self' https://js.stripe.com https://*.js.stripe.com"
+# OADR-0017 point 3: the airline-card page's own CSP, without any Stripe host, and `worker-src 'none'` as on every
+# storefront page.
+PAY_AIRLINE_DIRECTIVES=("default-src 'self'" "script-src 'self'" "connect-src 'self'" "frame-src 'none'"
+  "img-src 'self' data:" "style-src 'self'" "font-src 'self'" "form-action 'self'" "frame-ancestors 'none'"
+  "base-uri 'self'" "object-src 'none'" "worker-src 'none'")
 
 FAILED=0
 pass() { printf 'PASS %s\n' "$*"; }
@@ -254,8 +266,12 @@ printf '<!doctype html>\n<title>Smoke storefront</title>\n<p>storefront index</p
 printf '<!doctype html>\n<title>Not found</title>\n<p>storefront 404</p>\n' >"$RELEASE/storefront/404.html"
 printf 'export const smoke = 1;\n' >"$RELEASE/storefront/assets/a.js"
 mkdir -p "$RELEASE/storefront/checkout"
-printf '<!doctype html>\n<title>Complete</title>\n<p>storefront complete page</p>\n' \
-  >"$RELEASE/storefront/checkout/complete.html"
+for page in pay-airline pay-card complete; do
+  printf '<!doctype html>\n<title>Smoke %s</title>\n<p>storefront %s</p>\n' "$page" "$page" \
+    >"$RELEASE/storefront/checkout/$page.html"
+done
+printf '<!doctype html>\n<title>Smoke checkout</title>\n<p>storefront checkout</p>\n' >"$RELEASE/storefront/checkout.html"
+CARD_PAGE="$RELEASE/storefront/checkout/pay-airline.html"
 
 EDGE_SECRET="smoke-edge-$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')"
 FORGED_EDGE="forged-edge-$(head -c 8 /dev/urandom | od -An -tx1 | tr -d ' \n')"
@@ -396,6 +412,66 @@ check "an unknown storefront path serves the storefront's 404.html" cmp -s "$BOD
 check "the storefront 404 page has the storefront CSP" csp_ok
 same "the storefront 404 page has HSTS (ADR-0027)" "$(header Strict-Transport-Security)" "max-age=31536000"
 same "the storefront 404 page hides the Server header" "$(header_count Server)" 0
+
+# ---- 5b. the airline-card page (OFE-014, OADR-0017 point 3) ----------------------------------------------------
+step "Airline-card page on $TENANT: its own CSP, COOP same-origin and no-store; COOP same-origin nowhere else"
+csp_has() { # directive... -> the last response has exactly one CSP, and it holds each directive as written
+  local csp d
+  [ "$(header_count Content-Security-Policy)" -eq 1 ] || return 1
+  csp="$(header Content-Security-Policy)"
+  for d in "$@"; do case "; $csp;" in *"; $d;"*) ;; *) return 1 ;; esac; done
+}
+no_stripe_in_csp() { ! grep -qi stripe <<<"$(header Content-Security-Policy)"; }
+coop_values() { # every Cross-Origin-Opener-Policy value of the last response, one per line
+  awk '{ sub(/\r$/, "") }
+    index($0, ":") && tolower(substr($0, 1, index($0, ":") - 1)) == "cross-origin-opener-policy" {
+      v = substr($0, index($0, ":") + 1); sub(/^ +/, "", v); sub(/ +$/, "", v); print v
+    }' "$HEADERS"
+}
+no_coop_same_origin() { ! coop_values | grep -qix 'same-origin'; }
+card_page_headers() { # label: the last response is the airline-card page with its own headers
+  check "$1 serves the airline-card page" cmp -s "$BODY" "$CARD_PAGE"
+  check "$1 has the airline-card CSP, and no other CSP [OFE-014 AC3]" csp_has "${PAY_AIRLINE_DIRECTIVES[@]}"
+  check "$1: its CSP names no Stripe host [OFE-014 AC3]" no_stripe_in_csp
+  same "$1 sends Cross-Origin-Opener-Policy same-origin, once [OFE-014 AC3]" "$(coop_values)" same-origin
+  same "$1 is Cache-Control no-store, once [OFE-014 AC3]" \
+    "$(header_count Cache-Control) $(header Cache-Control)" "1 no-store"
+  same "$1 has HSTS (ADR-0027)" "$(header Strict-Transport-Security)" "max-age=31536000"
+  same "$1 has X-Content-Type-Options nosniff" "$(header X-Content-Type-Options)" nosniff
+  same "$1 hides the Server header" "$(header_count Server)" 0
+}
+for path in /checkout/pay-airline.html /checkout/pay-airline "/checkout/pay-airline.html?id=chk_smoke&payment=pay_smoke"; do
+  fetch "$TENANT" "$path"
+  same "$path answers 200 [OFE-014 AC3]" "$STATUS" 200
+  card_page_headers "$path"
+done
+# Other spellings of the path (sent as they are): wherever Caddy serves the card page, it sends the page's headers.
+for path in /checkout//pay-airline.html /checkout/./pay-airline.html /checkout/x/../pay-airline.html \
+  /checkout/%70ay-airline.html /CHECKOUT/PAY-AIRLINE.HTML /checkout/pay-airline.html/; do
+  fetch "$TENANT" "$path" --path-as-is
+  if [ "$STATUS" = 200 ] && cmp -s "$BODY" "$CARD_PAGE"; then
+    card_page_headers "$path (variant)"
+  else
+    # Not the page (a 404, or the file server's redirect to the canonical path): the storefront's headers.
+    pass "$path (variant) answers $STATUS, not the airline-card page"
+    check "$path (variant): no Cross-Origin-Opener-Policy same-origin" no_coop_same_origin
+  fi
+done
+
+# Every other kind of storefront response keeps the storefront CSP and never sends COOP same-origin, so a window that
+# one of these pages opens on the card page lands in another browsing context group.
+for path in / /assets/a.js /checkout/pay-card.html /checkout/pay-card /checkout/complete.html /checkout.html \
+  /checkout/pay-airline-x.html /no/such/page /api/x; do
+  fetch "$TENANT" "$path"
+  check "$path ($STATUS): no Cross-Origin-Opener-Policy same-origin [OFE-014 AC3]" no_coop_same_origin
+  check "$path ($STATUS): the storefront CSP with worker-src 'none' [OFE-014 AC3]" \
+    csp_has "${CSP_DIRECTIVES[@]}" "$STOREFRONT_SCRIPTS"
+done
+# The upstream sends COOP same-origin on every answer, as the APIs' helmet does: the API host passes it on, so the
+# /api/x check above proves that the storefront removes it rather than that nothing sent it.
+fetch "api.$STOREFRONT" /x
+same "the OTA API's own answer (api.$STOREFRONT) carries the upstream's COOP same-origin [OFE-014 AC3]" \
+  "$(coop_values)" same-origin
 
 # ---- 6. the API hosts -------------------------------------------------------------------------------------------
 for api in "api.$STOREFRONT 4000" "api.$PLATFORM 3100"; do

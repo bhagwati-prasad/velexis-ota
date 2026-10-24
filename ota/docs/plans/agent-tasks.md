@@ -1551,7 +1551,8 @@ Checkout, customer accounts in cookies, Stripe on the Velexis account, the airli
   - The pending state polls until the booking is decided, then shows the final state (fake timers).
 - **Verify:** `pnpm --filter @velexis/ota-frontend test && pnpm --filter @velexis/ota-frontend build`
 
-### OFE-014 · Build the isolated airline-card payment page
+### OFE-014 · Build the isolated airline-card payment page ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-frontend
 - **Milestone:** M3
 - **Depends on:** OFE-013, OBE-051

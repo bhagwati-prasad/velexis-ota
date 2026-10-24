@@ -163,13 +163,18 @@
 }
 
 # Storefront headers: strict CSP (ADR-0018). Deferred like security_headers, so the 404 page imports them again.
+# `worker-src 'none'`: no script of the origin can register a service worker in front of the airline-card page
+# (OADR-0017 point 3). No storefront answer but that page's sends Cross-Origin-Opener-Policy: the OTA API's helmet
+# adds `same-origin` to every answer, so `-Cross-Origin-Opener-Policy` removes it from the proxied /api/* answers
+# (the airline-card page's own block sets it again, after this one).
 (storefront_headers) {
 	header {
 		Strict-Transport-Security "max-age=31536000"
-		Content-Security-Policy "default-src 'self'; script-src 'self' https://js.stripe.com https://*.js.stripe.com; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self' https://api.stripe.com; frame-src https://js.stripe.com https://*.js.stripe.com https://hooks.stripe.com; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'"
+		Content-Security-Policy "default-src 'self'; script-src 'self' https://js.stripe.com https://*.js.stripe.com; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self' https://api.stripe.com; frame-src https://js.stripe.com https://*.js.stripe.com https://hooks.stripe.com; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'; worker-src 'none'"
 		Referrer-Policy "strict-origin-when-cross-origin"
 		X-Content-Type-Options "nosniff"
 		Permissions-Policy "camera=(), microphone=(), geolocation=()"
+		-Cross-Origin-Opener-Policy
 		-Server
 	}
 }
@@ -180,6 +185,19 @@
 	import storefront_headers
 	import request_id
 	encode zstd gzip
+
+	# The airline-card page (OADR-0017 point 3; its file and `try_files`' name for it): a CSP without any Stripe host,
+	# `Cross-Origin-Opener-Policy: same-origin`, so a window that any other page of the origin opens on it gets no handle
+	# on its card inputs, and `no-store`. Same-named directives with a matcher run before the storefront's header block
+	# without one, and deferred header blocks apply in reverse order when the response is written: these values replace
+	# the storefront CSP and the file server's `no-cache`. Error pages (handle_errors) keep the storefront headers.
+	@pay_airline path /checkout/pay-airline.html /checkout/pay-airline
+	header @pay_airline {
+		Content-Security-Policy "default-src 'self'; script-src 'self'; connect-src 'self'; frame-src 'none'; img-src 'self' data:; style-src 'self'; font-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'self'; object-src 'none'; worker-src 'none'"
+		Cross-Origin-Opener-Policy "same-origin"
+		Cache-Control "no-store"
+		defer
+	}
 
 	# Internal endpoints and readiness details of the OTA API are never public, as on the API hosts. This must be
 	# a handle of its own before `handle /api/*`: a plain `respond` sorts after `handle` and would never run.

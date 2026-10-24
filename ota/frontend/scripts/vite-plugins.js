@@ -17,14 +17,15 @@ import { dirname, join, posix, relative, resolve, sep } from "node:path";
 /**
  * Response headers of the `(storefront)` snippet in deploy/caddy/Caddyfile that `vite preview` sends, so E2E runs
  * see production headers (OADR-0015 point 11). A copy, not a live read: test/csp.test.js fails when the Caddyfile
- * changes and this copy does not. Strict-Transport-Security is left out because the preview is plain HTTP.
+ * changes and this copy does not. Strict-Transport-Security is left out because the preview is plain HTTP. The
+ * airline-card page has headers of its own (PAY_AIRLINE_HEADERS of vite.config.js, OADR-0017 point 3).
  */
 export const STOREFRONT_HEADERS = Object.freeze({
   "Content-Security-Policy":
     "default-src 'self'; script-src 'self' https://js.stripe.com https://*.js.stripe.com; style-src 'self'; " +
     "img-src 'self' data:; font-src 'self'; connect-src 'self' https://api.stripe.com; " +
     "frame-src https://js.stripe.com https://*.js.stripe.com https://hooks.stripe.com; frame-ancestors 'none'; " +
-    "base-uri 'self'; form-action 'self'; object-src 'none'",
+    "base-uri 'self'; form-action 'self'; object-src 'none'; worker-src 'none'",
   "Referrer-Policy": "strict-origin-when-cross-origin",
   "X-Content-Type-Options": "nosniff",
   "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
@@ -301,8 +302,13 @@ export function storefrontApiProxy(env) {
       origin: `https://${host}`,
     },
     // While the OTA API is down, answer like the `api_unavailable` snippet of the Caddyfile. Registered before
-    // Vite's own handler, which then only logs the error.
+    // Vite's own handler, which then only logs the error. The API's helmet adds `Cross-Origin-Opener-Policy:
+    // same-origin` to every answer; like the Caddyfile's storefront headers, the proxy drops it, so only the
+    // airline-card page sends COOP `same-origin` on the storefront origin (OADR-0017 point 3).
     configure: (proxy) => {
+      proxy.on("proxyRes", (proxyRes) => {
+        delete proxyRes.headers["cross-origin-opener-policy"];
+      });
       proxy.on("error", (_err, req, res) => {
         if ("writeHead" in res && !res.headersSent && !res.writableEnded) {
           res.writeHead(503, {
