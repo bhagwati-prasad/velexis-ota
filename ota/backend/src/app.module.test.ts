@@ -1,12 +1,18 @@
 // The API's request pipeline, in process (no PostgreSQL or Redis: the health probes connect on the first readiness
 // check only, and the vx:invalidate subscriber tries a Redis where nothing listens). A probe controller stands in for
 // the business routes that later tasks add.
+//
+// The applications start in setup hooks, never in a test's 5 s bound (the lead's test timing rule; FIX-W28-FOLLOWUPS):
+// a test whose log lines are counted gets its own application (`appPerTest`, a beforeEach hook), the others share one
+// per block (`appForBlock`, a beforeAll hook). They are closed together after the file: each close waits up to
+// BULLMQ_STARTUP_SETTLE_MS (1 s) for the queues that cannot reach their Redis, which took about 1 s of every test while
+// each test closed its own.
 import { Body, Controller, Get, Module, Post, Req, type INestApplication } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { ClsService } from "nestjs-cls";
 import { PinoLogger } from "nestjs-pino";
 import request from "supertest";
-import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { testApiVariables } from "../test/helpers/api-env";
 import { MemorySink, type LogLine } from "../test/helpers/log-sink";
 import { OPENAPI_SETUP_TIMEOUT_MS, preloadOpenApiDocument } from "../test/helpers/openapi";
@@ -59,20 +65,69 @@ class ProbeController {
   }
 }
 
+/**
+ * The budget of a hook that starts one application: the module graph on the preloaded document, about 0.1 s alone, a
+ * few seconds while every package's tests run at once on a 4-CPU runner (2.3 s were measured inside a test before
+ * FIX-W28-FOLLOWUPS). The budget only stops a start that hangs.
+ */
+const APP_START_TIMEOUT_MS = 30_000;
+
+/**
+ * The budget of the hook that closes every application of the file at once: each close waits up to
+ * BULLMQ_STARTUP_SETTLE_MS (1 s) for its queues, which never reach the unreachable Redis, and they wait together.
+ */
+const APP_CLOSE_TIMEOUT_MS = 30_000;
+
+/** An application the setup hooks started. */
+interface StartedApp {
+  readonly app: INestApplication;
+  readonly sink: MemorySink;
+  readonly config: ApiConfig;
+}
+
 const apps: INestApplication[] = [];
 
 // The applications the tests start reuse the OTA document, parsed and compiled once, here (test/helpers/openapi.ts).
 beforeAll(preloadOpenApiDocument, OPENAPI_SETUP_TIMEOUT_MS);
 
-afterEach(async () => {
+afterAll(async () => {
   await Promise.all(apps.splice(0).map((app) => app.close()));
-});
+}, APP_CLOSE_TIMEOUT_MS);
 
-async function startApp(env: Record<string, string> = {}): Promise<{
-  app: INestApplication;
-  sink: MemorySink;
-  config: ApiConfig;
-}> {
+/** The application a setup hook started, for the test that reads it. */
+function started(current: StartedApp | undefined): StartedApp {
+  if (current === undefined) {
+    throw new Error("the setup hook started no application");
+  }
+  return current;
+}
+
+/**
+ * Gives each test of the current block an application of its own, started in its beforeEach hook (after `prepare`,
+ * which may stub the environment: Vitest unstubs it before each test's hooks), so no line of another test reaches its
+ * sink.
+ */
+function appPerTest(env: Record<string, string> = {}, prepare?: () => void): () => StartedApp {
+  let current: StartedApp | undefined;
+  beforeEach(async () => {
+    current = undefined;
+    prepare?.();
+    current = await startApp(env);
+  }, APP_START_TIMEOUT_MS);
+  return () => started(current);
+}
+
+/** Gives the tests of the current block one application, started in its beforeAll hook. */
+function appForBlock(env: Record<string, string> = {}): () => StartedApp {
+  let current: StartedApp | undefined;
+  beforeAll(async () => {
+    current = await startApp(env);
+  }, APP_START_TIMEOUT_MS);
+  return () => started(current);
+}
+
+/** Starts an application with ENV and `env` (closed after the file); only the setup hooks call it. */
+async function startApp(env: Record<string, string> = {}): Promise<StartedApp> {
   const config = loadApiConfig({ ...ENV, REDIS_URL: await unreachableRedisUrl(), ...env });
   const sink = new MemorySink();
   @Module({
@@ -99,8 +154,11 @@ async function requestLines(sink: MemorySink, from: number, count: number): Prom
 }
 
 describe("request id and request logging", () => {
+  // Every test counts the log lines of its own requests: each has an application of its own.
+  const current = appPerTest();
+
   it("logs one request line and every handler line with the requestId it returns in X-Request-Id [OBE-001 AC4]", async () => {
-    const { app, sink } = await startApp();
+    const { app, sink } = current();
     const before = sink.lines.length;
 
     const response = await request(app.getHttpServer()).get("/v1/probe?token=secret-query-value");
@@ -117,7 +175,7 @@ describe("request id and request logging", () => {
   });
 
   it("keeps a valid incoming X-Request-Id and replaces an invalid one [OBE-001 AC4]", async () => {
-    const { app, sink } = await startApp();
+    const { app, sink } = current();
 
     const before = sink.lines.length;
     const kept = await request(app.getHttpServer()).get("/v1/probe").set("X-Request-Id", "caddy-req-0001");
@@ -131,7 +189,7 @@ describe("request id and request logging", () => {
   });
 
   it("puts the same requestId into the request context (nestjs-cls) [OBE-001 AC4]", async () => {
-    const { app } = await startApp();
+    const { app } = current();
 
     for (const header of [undefined, "caddy-req-0002", "bad id!"]) {
       const call = request(app.getHttpServer()).get("/v1/probe");
@@ -141,7 +199,7 @@ describe("request id and request logging", () => {
   });
 
   it("logs unmatched routes with their requestId and never logs bodies or credential headers [OBE-001 AC4]", async () => {
-    const { app, sink } = await startApp();
+    const { app, sink } = current();
     const before = sink.lines.length;
 
     const missing = await request(app.getHttpServer()).get("/v1/unknown");
@@ -176,7 +234,7 @@ describe("request id and request logging", () => {
   });
 
   it("logs every line of a failed request, Nest's error line included, with its requestId [OBE-001 AC4]", async () => {
-    const { app, sink } = await startApp();
+    const { app, sink } = current();
     const before = sink.lines.length;
 
     const response = await request(app.getHttpServer()).get("/v1/probe/fail");
@@ -206,7 +264,7 @@ describe("request id and request logging", () => {
   });
 
   it("does not log the health endpoints", async () => {
-    const { app, sink } = await startApp();
+    const { app, sink } = current();
     const before = sink.lines.length;
 
     const health = await request(app.getHttpServer()).get("/health/live");
@@ -223,8 +281,11 @@ describe("request id and request logging", () => {
 });
 
 describe("HTTP settings", () => {
+  // These tests read their own responses only: they share an application of the default settings.
+  const defaults = appForBlock();
+
   it("believes X-Forwarded-For from loopback proxies only (TRUST_PROXY=loopback by default)", async () => {
-    const { app } = await startApp();
+    const { app } = defaults();
 
     const response = await request(app.getHttpServer())
       .get("/v1/probe")
@@ -233,41 +294,52 @@ describe("HTTP settings", () => {
     expect((response.body as { ip: string }).ip).toBe("203.0.113.7");
   });
 
-  it("ignores X-Forwarded-For when the connecting address is not a trusted proxy", async () => {
-    const { app } = await startApp({ TRUST_PROXY: "10.0.0.0/8" });
-
-    const response = await request(app.getHttpServer())
-      .get("/v1/probe")
-      .set("X-Forwarded-For", "203.0.113.7");
-
-    expect((response.body as { ip: string }).ip).toMatch(/^(::ffff:)?127\.0\.0\.1$|^::1$/);
-  });
-
   it("sends no X-Powered-By header", async () => {
-    const { app } = await startApp();
+    const { app } = defaults();
 
     const response = await request(app.getHttpServer()).get("/health/live");
 
     expect(response.headers["x-powered-by"]).toBeUndefined();
   });
+
+  describe("with TRUST_PROXY=10.0.0.0/8", () => {
+    const behindOtherProxy = appForBlock({ TRUST_PROXY: "10.0.0.0/8" });
+
+    it("ignores X-Forwarded-For when the connecting address is not a trusted proxy", async () => {
+      const { app } = behindOtherProxy();
+
+      const response = await request(app.getHttpServer())
+        .get("/v1/probe")
+        .set("X-Forwarded-For", "203.0.113.7");
+
+      expect((response.body as { ip: string }).ip).toMatch(/^(::ffff:)?127\.0\.0\.1$|^::1$/);
+    });
+  });
 });
 
 describe("module graph", () => {
-  it("answers from the validated configuration only, never from process.env [OBE-001 AC3]", async () => {
-    // The worker's and the deploy's DSNs set in the API's environment stay invisible to it.
-    vi.stubEnv("DATABASE_PROVISIONER_URL", "postgres://velexis_provisioner:dummy@127.0.0.1:5432/velexis");
-    vi.stubEnv("DATABASE_MIGRATOR_URL", "postgres://velexis_migrator:dummy@127.0.0.1:5432/velexis");
-    const { app, config } = await startApp();
-    const configService = app.get(ConfigService);
+  describe("with the worker's and the deploy's DSNs in process.env", () => {
+    // The worker's and the deploy's DSNs set in the API's environment, from its start to the test's reads, stay
+    // invisible to it.
+    const current = appPerTest({}, () => {
+      vi.stubEnv("DATABASE_PROVISIONER_URL", "postgres://velexis_provisioner:dummy@127.0.0.1:5432/velexis");
+      vi.stubEnv("DATABASE_MIGRATOR_URL", "postgres://velexis_migrator:dummy@127.0.0.1:5432/velexis");
+    });
 
-    expect(configService.get("DATABASE_PROVISIONER_URL")).toBeUndefined();
-    expect(configService.get("DATABASE_MIGRATOR_URL")).toBeUndefined();
-    expect(configService.get("DATABASE_URL")).toBe(config.DATABASE_URL);
-    expect(configService.get("PORT")).toBe(4000);
+    it("answers from the validated configuration only, never from process.env [OBE-001 AC3]", () => {
+      const { app, config } = current();
+      const configService = app.get(ConfigService);
+      expect(configService.get("DATABASE_PROVISIONER_URL")).toBeUndefined();
+      expect(configService.get("DATABASE_MIGRATOR_URL")).toBeUndefined();
+      expect(configService.get("DATABASE_URL")).toBe(config.DATABASE_URL);
+      expect(configService.get("PORT")).toBe(4000);
+    });
   });
 
-  it("provides Clock and IdGenerator to every module", async () => {
-    const { app } = await startApp();
+  const defaults = appForBlock();
+
+  it("provides Clock and IdGenerator to every module", () => {
+    const { app } = defaults();
 
     expect(app.get(Clock).now()).toBeInstanceOf(Date);
     expect(app.get(IdGenerator).newId("bkg")).toMatch(/^bkg_[0-9A-HJKMNP-TV-Z]{26}$/);

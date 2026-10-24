@@ -52,8 +52,11 @@
 // (outbox `staff.manual_review` to `ops_alert_email`, else the owners, else OPS_ALERT_EMAIL, once per payment or refund
 // and kind; notifications/staff-recipients.ts) and the job ends. A refund Stripe refused is `failed` (the cancellation
 // stands, flows/change-and-cancel.md §4); one whose outcome is unknown is released (`pending`; the webhook still finds
-// it by its `refund_id`) and alerted. A PaymentIntent whose metadata names another tenant or payment is a security
-// event (logged by the gateway) and changes nothing.
+// it by its `refund_id`) and alerted, once Stripe kept the answer or after the last attempt whatever its error (since
+// FIX-W28-FOLLOWUPS, lead decision (7) of 2026-10-23, second batch, an error that is not a provider failure too). A
+// refund whose job failed before its claim was never sent: the refunds sweep sends it again (refunds-sweep.processor.ts).
+// A PaymentIntent whose metadata names another tenant or payment is a security event (logged by the gateway) and
+// changes nothing.
 //
 // Log lines carry ids, job names, outcomes, statuses and Stripe's error codes, never a Stripe object, an e-mail address
 // or a payload.
@@ -1017,7 +1020,7 @@ export class PaymentJobsHandler {
 
   /**
    * After a failed submission: a refusal fails the refund (and alerts the staff); an unknown outcome releases the
-   * claim, and is tried again by BullMQ when it may pass, else alerted.
+   * claim, and is tried again by BullMQ when it may pass, else alerted; the last attempt alerts whatever the error.
    */
   private async afterRefundFailure(
     claim: Extract<RefundClaim, { kind: "claimed" }>,
@@ -1044,14 +1047,33 @@ export class PaymentJobsHandler {
       return "failed";
     }
     // No answer, or one that cannot tell: the refund may exist at Stripe (the webhook finds it by its refund_id).
-    await this.tx.run((trx) => this.refunds.release(trx, row.id, version, this.clock.now()));
-    if (failure === undefined) {
+    let releaseFailure: { readonly error: unknown } | undefined;
+    try {
+      await this.tx.run((trx) => this.refunds.release(trx, row.id, version, this.clock.now()));
+    } catch (releaseError) {
+      if (!attempt.last) {
+        // The claim stays until its lease ends; BullMQ's next attempt waits for it, then sends with the same key.
+        throw releaseError;
+      }
+      releaseFailure = { error: releaseError };
+    }
+    if (failure === undefined && !attempt.last) {
+      // Not a provider failure (a database error, say): BullMQ tries again, with the same key.
       throw error;
     }
     if (failure === "retry" && !attempt.last) {
       throw new PaymentProviderUnavailableError(`Stripe could not take the refund ${row.id} now (${code})`);
     }
+    // An answer Stripe keeps for the key, or the last attempt whatever its error (since FIX-W28-FOLLOWUPS, lead decision
+    // (7) of 2026-10-23, second batch, also an error that is not a provider failure, and a release that failed): the
+    // refunds sweep never sends a claimed row again, so the staff check the payment before refunding again.
     await this.alertRefund(row.id, "not_submitted", code);
+    if (releaseFailure !== undefined) {
+      throw releaseFailure.error;
+    }
+    if (failure === undefined) {
+      throw error;
+    }
     if (failure === "retry") {
       throw new PaymentProviderUnavailableError(`Stripe could not take the refund ${row.id} (${code})`);
     }

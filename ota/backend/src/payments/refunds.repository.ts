@@ -45,6 +45,9 @@
 // down at the commit, or the after-commit task failed) is still `pending` at NEW_REFUND_VERSION: a claim, and the release
 // of a claim, bump the version, so such a row was never sent to Stripe. `unclaimedRefundIds` lists those rows for the
 // `refunds.sweep` schedule (refunds-sweep.processor.ts), which queues the producers' own job for each again.
+// Since FIX-W28-FOLLOWUPS (lead decision (7) of 2026-10-23, second batch) the sweep also re-sends such a row whose
+// `refund.submit` job finished without claiming it (failed for good before its claim, or completed without one):
+// `stillUnclaimed` reads those rows again just before the sweep replaces their finished job.
 import { Injectable } from "@nestjs/common";
 import { sql, type TenantDatabase, type Updateable } from "@velexis/db";
 import { newId } from "../common/ids";
@@ -379,6 +382,29 @@ export class RefundsRepository {
       query = query.forUpdate();
     }
     return await query.executeTakeFirst();
+  }
+
+  /**
+   * Which of the refunds `ids` are still unclaimed: `pending` at NEW_REFUND_VERSION without a Stripe id, as
+   * `unclaimedRefundIds` found them, read again without a lock (every producer queues the row's one job id, and the
+   * sweep asks only about rows whose job BullMQ has finished, so no job of theirs can claim them meanwhile). The sweep's
+   * check before it removes a finished `refund.submit` job and queues it again (refunds-sweep.processor.ts).
+   */
+  async stillUnclaimed(trx: TenantTransaction, ids: readonly string[]): Promise<string[]> {
+    if (ids.length === 0) {
+      return [];
+    }
+    const rows = await trx
+      .selectFrom("refunds")
+      .select("id")
+      .where("id", "in", [...ids])
+      .where("status", "=", "pending")
+      .where("version", "=", NEW_REFUND_VERSION)
+      .where("provider_refund_id", "is", null)
+      .orderBy("created_at")
+      .orderBy("id")
+      .execute();
+    return rows.map((row) => row.id);
   }
 
   /**

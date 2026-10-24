@@ -814,6 +814,74 @@ describe("PaymentJobsHandler", () => {
     expect(alerts.send).not.toHaveBeenCalled();
   });
 
+  it("[FIX-W28-FOLLOWUPS AC3] alerts the staff once, on the last attempt, when a submission fails with an error that is not a provider failure", async () => {
+    const { instance, gateway, refunds, alerts } = handler({
+      payment: paymentRow({ status: "captured", amountCaptured: "452.10" }),
+      refund: refundRow(),
+    });
+    // Not a provider failure (no AppError of the gateway): a database error while the gateway read the connection.
+    const failure = new Error("Connection terminated unexpectedly");
+    gateway.refund.mockRejectedValue(failure);
+
+    // Before the last attempt: released and tried again by BullMQ with the same key, no alert yet.
+    await expect(instance.run(PAYMENT_JOB.refundSubmit, REFUND_ID, ATTEMPT)).rejects.toBe(failure);
+    expect(alerts.send).not.toHaveBeenCalled();
+    // The last attempt: released, alerted, and the job fails with the error (BullMQ keeps it; the sweep leaves the
+    // released row alone).
+    await expect(instance.run(PAYMENT_JOB.refundSubmit, REFUND_ID, { ...ATTEMPT, last: true })).rejects.toBe(
+      failure,
+    );
+
+    expect(refunds.release).toHaveBeenCalledTimes(2);
+    expect(refunds.markFailed).not.toHaveBeenCalled();
+    expect(alerts.send).toHaveBeenCalledExactlyOnceWith(
+      expect.anything(),
+      expect.objectContaining({ id: PAYMENT_ID }),
+      {
+        dedupeKey: `staff.refund:${REFUND_ID}:not_submitted`,
+        reason: expect.stringContaining(
+          "could not be confirmed at Stripe (Error). Check the payment in the console",
+        ),
+      },
+    );
+  });
+
+  it("[FIX-W28-FOLLOWUPS AC3] alerts the staff on the last attempt even when the release of the claim fails too", async () => {
+    const { instance, gateway, refunds, alerts } = handler({
+      payment: paymentRow({ status: "captured", amountCaptured: "452.10" }),
+      refund: refundRow(),
+    });
+    gateway.refund.mockRejectedValue(stripeFailure(null));
+    const releaseFailure = new Error("Connection terminated unexpectedly");
+    refunds.release.mockRejectedValue(releaseFailure);
+
+    await expect(instance.run(PAYMENT_JOB.refundSubmit, REFUND_ID, { ...ATTEMPT, last: true })).rejects.toBe(
+      releaseFailure,
+    );
+
+    expect(alerts.send).toHaveBeenCalledExactlyOnceWith(
+      expect.anything(),
+      expect.objectContaining({ id: PAYMENT_ID }),
+      {
+        dedupeKey: `staff.refund:${REFUND_ID}:not_submitted`,
+        reason: expect.stringContaining("(provider_unreachable)"),
+      },
+    );
+  });
+
+  it("tries a submission whose claim could not be released again before the last attempt, without an alert", async () => {
+    const { instance, gateway, refunds, alerts } = handler({
+      payment: paymentRow({ status: "captured", amountCaptured: "452.10" }),
+      refund: refundRow(),
+    });
+    gateway.refund.mockRejectedValue(stripeFailure(500));
+    const releaseFailure = new Error("Connection terminated unexpectedly");
+    refunds.release.mockRejectedValue(releaseFailure);
+
+    await expect(instance.run(PAYMENT_JOB.refundSubmit, REFUND_ID, ATTEMPT)).rejects.toBe(releaseFailure);
+    expect(alerts.send).not.toHaveBeenCalled();
+  });
+
   it("[FIX-W25-BOOKINGS AC3] locks a refund's payment and booking before the refund in the claim and the refusal", async () => {
     const { instance, gateway, payments, refunds } = handler({
       payment: paymentRow({ status: "captured", amountCaptured: "452.10" }),

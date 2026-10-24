@@ -11,7 +11,9 @@
 //   imported after it, say) would answer the literal route's requests.
 //
 // The routes are read from the application itself (its controllers and their Nest route metadata, and the order of
-// Express' router), as main.ts builds it.
+// Express' router), as main.ts builds it. The application, and the probe applications of the failure tests (each with
+// controllers that break a rule), start in setup hooks, never in a test's 5 s bound (the lead's test timing rule;
+// FIX-W28-FOLLOWUPS); the probes are read and closed there, together, and the tests assert on what was read.
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { Controller, Get, RequestMethod, type INestApplication, type Type } from "@nestjs/common";
@@ -286,8 +288,76 @@ function send(server: TestApp["server"], method: string, url: string): request.T
   }
 }
 
+// ---- The probes: applications with controllers that break a rule ------------------------------------------------
+
+/** A handler without an operation. */
+@Controller("v1/unlisted")
+class UnlistedController {
+  @Get()
+  list(): object {
+    return {};
+  }
+}
+
+@Controller("v1")
+class MisboundController {
+  // Implemented while still pending (a deferred operation: getSession was the example until OBE-033 served it).
+  @Get("account/data-exports/:dataExportId")
+  @OpenApiOperation("getAccountDataExport")
+  dataExport(): object {
+    return {};
+  }
+
+  // Two handlers of listSavedTravelers, one without @OpenApiOperation. Deferred operations, which stay pending
+  // through the MVP: the application has no handler of its own for them.
+  @Get("account/saved-travelers")
+  @OpenApiOperation("listSavedTravelers")
+  savedTravelers(): object {
+    return {};
+  }
+
+  @Get("account/saved-travelers")
+  savedTravelersAgain(): object {
+    return {};
+  }
+
+  // Names an operation whose route is another one.
+  @Get("account/preferences")
+  @OpenApiOperation("resolveStorefrontHost")
+  preferences(): object {
+    return {};
+  }
+}
+
+// Registered before the application's routes, so before the 501 route of consoleFindBookingByRecordLocator.
+@Controller("v1/console/bookings")
+class EarlyController {
+  @Get(":bookingId")
+  get(): object {
+    return { answeredBy: "consoleGetBooking" };
+  }
+}
+
+/** What the probe applications gave: their handlers' routes, the router's routes, and a request the early one hid. */
+interface Probes {
+  readonly unlisted: HandlerRoute[];
+  readonly misbound: HandlerRoute[];
+  readonly early: { readonly hidden: request.Response; readonly registered: RegisteredRoute[] };
+}
+
+/** Starts a probe application, reads it with `read`, and closes it. */
+async function probe<T>(controller: Type<unknown>, read: (probe: TestApp) => Promise<T> | T): Promise<T> {
+  const app = await createTestApp({ controllers: [controller] });
+  try {
+    return await read(app);
+  } finally {
+    await app.close();
+  }
+}
+
 let api: TestApp;
 let routes: HandlerRoute[];
+let probes: Probes;
 
 // Building the app parses the OpenAPI document and compiles its request validators (the HTTP module's
 // OpenApiDocument provider): a few seconds alone, several times longer on a machine that runs every package's tests
@@ -295,6 +365,22 @@ let routes: HandlerRoute[];
 beforeAll(async () => {
   api = await createTestApp();
   routes = collectRoutes(api.app);
+}, 60_000);
+
+// The three probe applications start on the document the hook above compiled, are read, and close together: each close
+// waits up to BULLMQ_STARTUP_SETTLE_MS (1 s) for queues that cannot reach their Redis, which took about 1 s of each
+// failure test while it closed its own probe. Starting three applications takes well under a second alone, a few
+// seconds while every package's tests run at once on a 4-CPU runner; the budget only stops a start that hangs.
+beforeAll(async () => {
+  const [unlisted, misbound, early] = await Promise.all([
+    probe(UnlistedController, (app) => collectRoutes(app.app)),
+    probe(MisboundController, (app) => collectRoutes(app.app)),
+    probe(EarlyController, async (app) => ({
+      hidden: await send(app.server, "get", "/v1/console/bookings/by-record-locator"),
+      registered: registeredRoutes(app.app),
+    })),
+  ]);
+  probes = { unlisted, misbound, early };
 }, 60_000);
 
 afterAll(async () => {
@@ -314,29 +400,17 @@ describe("route parity", () => {
     ).toEqual([]);
   });
 
-  it("fails for a handler without an operation [OBE-010 AC3]", async () => {
-    @Controller("v1/unlisted")
-    class UnlistedController {
-      @Get()
-      list(): object {
-        return {};
-      }
-    }
-    const probe = await createTestApp({ controllers: [UnlistedController] });
-    try {
-      const problems = routeParityProblems({
-        operations: DOCUMENT_OPERATIONS,
-        routes: collectRoutes(probe.app),
-        pending: PENDING_OPERATIONS,
-        undocumented: UNDOCUMENTED_ROUTES,
-      });
+  it("fails for a handler without an operation [OBE-010 AC3]", () => {
+    const problems = routeParityProblems({
+      operations: DOCUMENT_OPERATIONS,
+      routes: probes.unlisted,
+      pending: PENDING_OPERATIONS,
+      undocumented: UNDOCUMENTED_ROUTES,
+    });
 
-      expect(problems).toEqual([
-        "UnlistedController.list (GET /v1/unlisted) has no operation in the OTA document",
-      ]);
-    } finally {
-      await probe.close();
-    }
+    expect(problems).toEqual([
+      "UnlistedController.list (GET /v1/unlisted) has no operation in the OTA document",
+    ]);
   });
 
   it("fails for an operation with neither a handler nor a pending entry [OBE-010 AC3]", () => {
@@ -353,65 +427,31 @@ describe("route parity", () => {
     expect(problems).toEqual(["getAccountDataExport has neither a handler nor a pending entry"]);
   });
 
-  it("fails for a handler next to a pending entry, two handlers, a handler of another route and a missing binding", async () => {
-    @Controller("v1")
-    class MisboundController {
-      // Implemented while still pending (a deferred operation: getSession was the example until OBE-033 served it).
-      @Get("account/data-exports/:dataExportId")
-      @OpenApiOperation("getAccountDataExport")
-      dataExport(): object {
-        return {};
-      }
+  it("fails for a handler next to a pending entry, two handlers, a handler of another route and a missing binding", () => {
+    const {
+      listSavedTravelers: _savedTravelers,
+      getAccountPreferences: _preferences,
+      ...pending
+    } = PENDING_OPERATIONS;
+    const problems = routeParityProblems({
+      operations: DOCUMENT_OPERATIONS,
+      routes: probes.misbound.filter(
+        (route) => route.pending !== "listSavedTravelers" && route.pending !== "getAccountPreferences",
+      ),
+      pending: { ...pending, notAnOperation: "OBE-999" },
+      undocumented: [...UNDOCUMENTED_ROUTES, "GET /v1/nowhere"],
+    });
 
-      // Two handlers of listSavedTravelers, one without @OpenApiOperation. Deferred operations, which stay pending
-      // through the MVP: the application has no handler of its own for them.
-      @Get("account/saved-travelers")
-      @OpenApiOperation("listSavedTravelers")
-      savedTravelers(): object {
-        return {};
-      }
-
-      @Get("account/saved-travelers")
-      savedTravelersAgain(): object {
-        return {};
-      }
-
-      // Names an operation whose route is another one.
-      @Get("account/preferences")
-      @OpenApiOperation("resolveStorefrontHost")
-      preferences(): object {
-        return {};
-      }
-    }
-    const probe = await createTestApp({ controllers: [MisboundController] });
-    try {
-      const {
-        listSavedTravelers: _savedTravelers,
-        getAccountPreferences: _preferences,
-        ...pending
-      } = PENDING_OPERATIONS;
-      const problems = routeParityProblems({
-        operations: DOCUMENT_OPERATIONS,
-        routes: collectRoutes(probe.app).filter(
-          (route) => route.pending !== "listSavedTravelers" && route.pending !== "getAccountPreferences",
-        ),
-        pending: { ...pending, notAnOperation: "OBE-999" },
-        undocumented: [...UNDOCUMENTED_ROUTES, "GET /v1/nowhere"],
-      });
-
-      expect(problems.sort()).toEqual(
-        [
-          "MisboundController.savedTravelersAgain (GET /v1/account/saved-travelers) handles listSavedTravelers without @OpenApiOperation",
-          "MisboundController.preferences (GET /v1/account/preferences) names resolveStorefrontHost, whose route is GET /v1/storefront/resolve",
-          "getAccountDataExport has a handler (MisboundController.dataExport) and a pending entry",
-          "listSavedTravelers has 2 handlers",
-          "pending-operations.ts lists notAnOperation, which the OTA document does not have",
-          "GET /v1/nowhere is in UNDOCUMENTED_ROUTES but no handler serves it",
-        ].sort(),
-      );
-    } finally {
-      await probe.close();
-    }
+    expect(problems.sort()).toEqual(
+      [
+        "MisboundController.savedTravelersAgain (GET /v1/account/saved-travelers) handles listSavedTravelers without @OpenApiOperation",
+        "MisboundController.preferences (GET /v1/account/preferences) names resolveStorefrontHost, whose route is GET /v1/storefront/resolve",
+        "getAccountDataExport has a handler (MisboundController.dataExport) and a pending entry",
+        "listSavedTravelers has 2 handlers",
+        "pending-operations.ts lists notAnOperation, which the OTA document does not have",
+        "GET /v1/nowhere is in UNDOCUMENTED_ROUTES but no handler serves it",
+      ].sort(),
+    );
   });
 
   it("registers no route after a route of the same method that answers its requests", () => {
@@ -424,26 +464,13 @@ describe("route parity", () => {
     expect(shadowedRoutes(registered)).toEqual([]);
   });
 
-  it("fails for a route registered after a route with a parameter where it has a literal segment", async () => {
-    // Registered before the application's routes, so before the 501 route of consoleFindBookingByRecordLocator.
-    @Controller("v1/console/bookings")
-    class EarlyController {
-      @Get(":bookingId")
-      get(): object {
-        return { answeredBy: "consoleGetBooking" };
-      }
-    }
-    const probe = await createTestApp({ controllers: [EarlyController] });
-    try {
-      const hidden = await send(probe.server, "get", "/v1/console/bookings/by-record-locator");
+  it("fails for a route registered after a route with a parameter where it has a literal segment", () => {
+    const { hidden, registered } = probes.early;
 
-      expect(hidden.body).toEqual({ answeredBy: "consoleGetBooking" });
-      expect(shadowedRoutes(registeredRoutes(probe.app))).toEqual([
-        "GET /v1/console/bookings/by-record-locator is registered after GET /v1/console/bookings/{bookingId}, which answers its requests",
-      ]);
-    } finally {
-      await probe.close();
-    }
+    expect(hidden.body).toEqual({ answeredBy: "consoleGetBooking" });
+    expect(shadowedRoutes(registered)).toEqual([
+      "GET /v1/console/bookings/by-record-locator is registered after GET /v1/console/bookings/{bookingId}, which answers its requests",
+    ]);
 
     const literal = { method: "GET", path: "/v1/console/bookings/by-record-locator" };
     const parameter = { method: "GET", path: "/v1/console/bookings/{bookingId}" };

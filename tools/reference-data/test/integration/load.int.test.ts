@@ -124,6 +124,17 @@ interface TestDatabase {
   readonly otaUrl: string;
 }
 
+/**
+ * The budget of a scenario's setup hook: a fresh database (CREATE DATABASE, the bootstrap statements and the platform
+ * and reference migrations, a few seconds) and up to four loads of the full datasets with their reads, which task
+ * X-018 bounds at 30 s per full load on a developer machine (about 1-3 s per scenario alone). The bound only stops a
+ * scenario that hangs.
+ */
+const SCENARIO_TIMEOUT_MS = 60_000;
+
+/** The budget of the hook that drops the scenarios' databases (seven DROP DATABASE) and their temporary folders. */
+const CLEANUP_TIMEOUT_MS = 60_000;
+
 let urls: TestUrls | undefined;
 const dropDatabases: Array<() => Promise<void>> = [];
 const tempDirs: string[] = [];
@@ -137,7 +148,7 @@ afterAll(async () => {
     await drop();
   }
   await Promise.all(tempDirs.map((dir) => rm(dir, { recursive: true, force: true })));
-});
+}, CLEANUP_TIMEOUT_MS);
 
 /** A fresh database, bootstrapped and migrated as described at the top of this file. */
 async function freshDatabase(): Promise<TestDatabase> {
@@ -265,247 +276,365 @@ async function typicalAirports(count: number): Promise<ReferenceRow[]> {
 }
 
 describe("loadReferenceData on PostgreSQL 16", () => {
-  it("inserts every row on the first load and reports zero inserts and updates on the second [X-018 AC1]", async () => {
-    const db = await freshDatabase();
-    const data = await committedData();
+  // Each scenario creates its database, loads, edits and reads in its setup hook, with its own budget (the lead's test
+  // timing rule; FIX-W28-FOLLOWUPS: the tests no longer need Vitest's raised 60 s test timeout), and its test asserts
+  // on what the hook recorded.
 
-    const first = await loadReferenceData({ url: db.platformUrl, dataDir: DATA_DIR });
-    for (const table of LOAD_ORDER) {
-      expect(first.tables[table], table).toEqual({
-        inserted: data.tables[table].length,
-        updated: 0,
-        deactivated: 0,
-      });
-      // Every row, every column, exactly as in the files (with the overrides of overrides.csv).
-      const loaded = await tableRows(db.adminUrl, table);
-      const { key } = REFERENCE_TABLES[table];
-      expect(loaded.size, table).toBe(data.tables[table].length);
-      for (const row of data.tables[table]) {
-        expect(loaded.get(row[key] ?? ""), `${table} ${row[key]}`).toEqual(row);
+  describe("a first load and a second one", () => {
+    let data: ReferenceDataSet;
+    let first: LoadReferenceDataResult;
+    let loaded: Map<ReferenceTable, Map<string, ReferenceRow>>;
+    let second: LoadReferenceDataResult;
+    let before: Record<string, string>;
+    let after: Record<string, string>;
+
+    beforeAll(async () => {
+      const db = await freshDatabase();
+      data = await committedData();
+      first = await loadReferenceData({ url: db.platformUrl, dataDir: DATA_DIR });
+      loaded = new Map();
+      for (const table of LOAD_ORDER) {
+        loaded.set(table, await tableRows(db.adminUrl, table));
       }
-    }
-    expect(first.overrides).toBe(data.overrides);
+      before = await fingerprint(db.adminUrl);
+      second = await loadReferenceData({ url: db.platformUrl, dataDir: DATA_DIR });
+      after = await fingerprint(db.adminUrl);
+    }, SCENARIO_TIMEOUT_MS);
 
-    const before = await fingerprint(db.adminUrl);
-    const second = await loadReferenceData({ url: db.platformUrl, dataDir: DATA_DIR });
-    expect(second.tables).toEqual(allZero());
-    // Nothing was written: not even updated_at moved.
-    expect(await fingerprint(db.adminUrl)).toEqual(before);
-  });
+    it("inserts every row on the first load and reports zero inserts and updates on the second [X-018 AC1]", () => {
+      for (const table of LOAD_ORDER) {
+        expect(first.tables[table], table).toEqual({
+          inserted: data.tables[table].length,
+          updated: 0,
+          deactivated: 0,
+        });
+        // Every row, every column, exactly as in the files (with the overrides of overrides.csv).
+        const rows = loaded.get(table) ?? new Map<string, ReferenceRow>();
+        const { key } = REFERENCE_TABLES[table];
+        expect(rows.size, table).toBe(data.tables[table].length);
+        for (const row of data.tables[table]) {
+          expect(rows.get(row[key] ?? ""), `${table} ${row[key]}`).toEqual(row);
+        }
+      }
+      expect(first.overrides).toBe(data.overrides);
 
-  it("sets is_active to false on an airport removed from the file and keeps its row [X-018 AC2]", async () => {
-    const db = await freshDatabase();
-    const data = await committedData();
-    await loadReferenceData({ url: db.platformUrl, dataDir: DATA_DIR });
-    const [removed] = await typicalAirports(1);
-    const code = removed?.["iata_code"] ?? "";
-    const loadedBefore = (await tableRows(db.adminUrl, "airports")).get(code);
-
-    const dir = await copyOfData();
-    await writeTable(
-      dir,
-      "airports",
-      data.tables.airports.filter((row) => row["iata_code"] !== code),
-    );
-    const result = await loadReferenceData({ url: db.platformUrl, dataDir: dir });
-    expect(result.tables).toEqual({ ...allZero(), airports: { inserted: 0, updated: 0, deactivated: 1 } });
-
-    const after = await tableRows(db.adminUrl, "airports");
-    expect(after.size).toBe(data.tables.airports.length);
-    expect(after.get(code)).toEqual({ ...loadedBefore, is_active: "false" });
-
-    // The row stays inactive: a second run with the same files changes nothing.
-    const again = await loadReferenceData({ url: db.platformUrl, dataDir: dir });
-    expect(again.tables).toEqual(allZero());
-
-    // Back in the file, the code is active again.
-    const restored = await loadReferenceData({ url: db.platformUrl, dataDir: DATA_DIR });
-    expect(restored.tables).toEqual({ ...allZero(), airports: { inserted: 0, updated: 1, deactivated: 0 } });
-    expect((await tableRows(db.adminUrl, "airports")).get(code)).toEqual(loadedBefore);
-  });
-
-  it("fails with a permission error as velexis_ota_app and changes nothing [X-018 AC3]", async () => {
-    const db = await freshDatabase();
-    const data = await committedData();
-    await loadReferenceData({ url: db.platformUrl, dataDir: DATA_DIR });
-    const before = await fingerprint(db.adminUrl);
-
-    // Files that would change every kind of row: a renamed currency, a removed airport.
-    const dir = await copyOfData();
-    await writeTable(
-      dir,
-      "currencies",
-      data.tables.currencies.map((row) => (row["code"] === "EUR" ? { ...row, name: "Euro (renamed)" } : row)),
-    );
-    const [removed] = await typicalAirports(1);
-    await writeTable(
-      dir,
-      "airports",
-      data.tables.airports.filter((row) => row["iata_code"] !== removed?.["iata_code"]),
-    );
-
-    const failure = await loadReferenceData({ url: db.otaUrl, dataDir: dir }).then(
-      () => undefined,
-      (error: unknown) => error,
-    );
-    expect(failure).toBeInstanceOf(ReferenceLoadError);
-    expect(failure).toMatchObject({ code: "42501", table: "currencies" });
-    expect((failure as Error).message).toMatch(/permission denied for table currencies/);
-    expect(await fingerprint(db.adminUrl)).toEqual(before);
-
-    // The CLI reports it as one JSON line and exits 1, without the DSN or its password.
-    let stdout = "";
-    let stderr = "";
-    const code = await runLoadCli(["--data", dir], {
-      stdout: { write: (chunk: string) => (stdout += chunk) },
-      stderr: { write: (chunk: string) => (stderr += chunk) },
-      env: { APP_ENV: "test", DATABASE_URL: db.otaUrl },
+      expect(second.tables).toEqual(allZero());
+      // Nothing was written: not even updated_at moved.
+      expect(after).toEqual(before);
     });
-    expect(code).toBe(1);
-    expect(stderr).toBe("");
-    const lines = stdout.trimEnd().split("\n");
-    expect(lines).toHaveLength(1);
-    const line = JSON.parse(lines[0] ?? "") as { msg?: string; level?: number; err?: { code?: string } };
-    expect(line).toMatchObject({ msg: "reference.load_failed", level: 50, err: { code: "42501" } });
-    const password = decodeURIComponent(new URL(db.otaUrl).password);
-    expect(password).not.toBe("");
-    expect(stdout).not.toContain(password);
-    expect(stdout).not.toContain(db.otaUrl);
-    expect(await fingerprint(db.adminUrl)).toEqual(before);
   });
 
-  it("loads the full datasets with `pnpm db:seed:reference`'s command in less than 30 s [X-018 AC4]", async () => {
-    const db = await freshDatabase();
-    const data = await committedData();
-    // The `load` script of package.json, which the root `pnpm db:seed:reference` runs in this folder.
-    const pkg = JSON.parse(await readFile(join(PACKAGE_DIR, "package.json"), "utf8")) as {
-      scripts: Record<string, string>;
-    };
-    const [node, script, ...argv] = (pkg.scripts["load"] ?? "").trim().split(/\s+/);
-    expect([node, script]).toEqual(["node", "dist/cli/load.js"]);
+  describe("an airport removed from the file, then back", () => {
+    let data: ReferenceDataSet;
+    let code: string;
+    let loadedBefore: ReferenceRow | undefined;
+    let result: LoadReferenceDataResult;
+    let after: Map<string, ReferenceRow>;
+    let again: LoadReferenceDataResult;
+    let restored: LoadReferenceDataResult;
+    let restoredRow: ReferenceRow | undefined;
 
-    let stdout = "";
-    const started = performance.now();
-    const code = await runLoadCli(argv, {
-      stdout: { write: (chunk: string) => (stdout += chunk) },
-      stderr: { write: () => undefined },
-      env: { APP_ENV: "test", DATABASE_URL: db.platformUrl },
-      cwd: PACKAGE_DIR,
+    beforeAll(async () => {
+      const db = await freshDatabase();
+      data = await committedData();
+      await loadReferenceData({ url: db.platformUrl, dataDir: DATA_DIR });
+      const [removed] = await typicalAirports(1);
+      code = removed?.["iata_code"] ?? "";
+      loadedBefore = (await tableRows(db.adminUrl, "airports")).get(code);
+
+      const dir = await copyOfData();
+      await writeTable(
+        dir,
+        "airports",
+        data.tables.airports.filter((row) => row["iata_code"] !== code),
+      );
+      result = await loadReferenceData({ url: db.platformUrl, dataDir: dir });
+      after = await tableRows(db.adminUrl, "airports");
+      // The row stays inactive: a second run with the same files changes nothing.
+      again = await loadReferenceData({ url: db.platformUrl, dataDir: dir });
+      // Back in the file, the code is active again.
+      restored = await loadReferenceData({ url: db.platformUrl, dataDir: DATA_DIR });
+      restoredRow = (await tableRows(db.adminUrl, "airports")).get(code);
+    }, SCENARIO_TIMEOUT_MS);
+
+    it("sets is_active to false on an airport removed from the file and keeps its row [X-018 AC2]", () => {
+      expect(result.tables).toEqual({ ...allZero(), airports: { inserted: 0, updated: 0, deactivated: 1 } });
+
+      expect(after.size).toBe(data.tables.airports.length);
+      expect(after.get(code)).toEqual({ ...loadedBefore, is_active: "false" });
+
+      // The row stays inactive: a second run with the same files changes nothing.
+      expect(again.tables).toEqual(allZero());
+
+      // Back in the file, the code is active again.
+      expect(restored.tables).toEqual({
+        ...allZero(),
+        airports: { inserted: 0, updated: 1, deactivated: 0 },
+      });
+      expect(restoredRow).toEqual(loadedBefore);
     });
-    const elapsed = performance.now() - started;
-    expect(code).toBe(0);
-    expect(elapsed).toBeLessThan(FULL_LOAD_BUDGET_MS);
+  });
 
-    const lines = stdout.trimEnd().split("\n");
-    expect(lines).toHaveLength(1);
-    const line = JSON.parse(lines[0] ?? "") as LoadReferenceDataResult & { msg?: string; app?: string };
-    expect(line).toMatchObject({ msg: "reference.loaded", app: "reference-loader" });
-    for (const table of LOAD_ORDER) {
-      expect(line.tables[table], table).toEqual({
-        inserted: data.tables[table].length,
+  describe("a load as velexis_ota_app", () => {
+    let db: TestDatabase;
+    let before: Record<string, string>;
+    let failure: unknown;
+    let afterFailure: Record<string, string>;
+    let cli: { readonly code: number; readonly stdout: string; readonly stderr: string };
+    let afterCli: Record<string, string>;
+
+    beforeAll(async () => {
+      db = await freshDatabase();
+      const data = await committedData();
+      await loadReferenceData({ url: db.platformUrl, dataDir: DATA_DIR });
+      before = await fingerprint(db.adminUrl);
+
+      // Files that would change every kind of row: a renamed currency, a removed airport.
+      const dir = await copyOfData();
+      await writeTable(
+        dir,
+        "currencies",
+        data.tables.currencies.map((row) =>
+          row["code"] === "EUR" ? { ...row, name: "Euro (renamed)" } : row,
+        ),
+      );
+      const [removed] = await typicalAirports(1);
+      await writeTable(
+        dir,
+        "airports",
+        data.tables.airports.filter((row) => row["iata_code"] !== removed?.["iata_code"]),
+      );
+
+      failure = await loadReferenceData({ url: db.otaUrl, dataDir: dir }).then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      afterFailure = await fingerprint(db.adminUrl);
+
+      // The CLI reports it as one JSON line and exits 1, without the DSN or its password.
+      let stdout = "";
+      let stderr = "";
+      const code = await runLoadCli(["--data", dir], {
+        stdout: { write: (chunk: string) => (stdout += chunk) },
+        stderr: { write: (chunk: string) => (stderr += chunk) },
+        env: { APP_ENV: "test", DATABASE_URL: db.otaUrl },
+      });
+      cli = { code, stdout, stderr };
+      afterCli = await fingerprint(db.adminUrl);
+    }, SCENARIO_TIMEOUT_MS);
+
+    it("fails with a permission error as velexis_ota_app and changes nothing [X-018 AC3]", () => {
+      expect(failure).toBeInstanceOf(ReferenceLoadError);
+      expect(failure).toMatchObject({ code: "42501", table: "currencies" });
+      expect((failure as Error).message).toMatch(/permission denied for table currencies/);
+      expect(afterFailure).toEqual(before);
+
+      // The CLI reports it as one JSON line and exits 1, without the DSN or its password.
+      const { code, stdout, stderr } = cli;
+      expect(code).toBe(1);
+      expect(stderr).toBe("");
+      const lines = stdout.trimEnd().split("\n");
+      expect(lines).toHaveLength(1);
+      const line = JSON.parse(lines[0] ?? "") as { msg?: string; level?: number; err?: { code?: string } };
+      expect(line).toMatchObject({ msg: "reference.load_failed", level: 50, err: { code: "42501" } });
+      const password = decodeURIComponent(new URL(db.otaUrl).password);
+      expect(password).not.toBe("");
+      expect(stdout).not.toContain(password);
+      expect(stdout).not.toContain(db.otaUrl);
+      expect(afterCli).toEqual(before);
+    });
+  });
+
+  describe("`pnpm db:seed:reference`'s command on a new database", () => {
+    let data: ReferenceDataSet;
+    let script: { readonly node: string | undefined; readonly file: string | undefined };
+    let code: number;
+    let stdout: string;
+    let elapsed: number;
+
+    beforeAll(async () => {
+      const db = await freshDatabase();
+      data = await committedData();
+      // The `load` script of package.json, which the root `pnpm db:seed:reference` runs in this folder.
+      const pkg = JSON.parse(await readFile(join(PACKAGE_DIR, "package.json"), "utf8")) as {
+        scripts: Record<string, string>;
+      };
+      const [node, file, ...argv] = (pkg.scripts["load"] ?? "").trim().split(/\s+/);
+      script = { node, file };
+
+      stdout = "";
+      const started = performance.now();
+      code = await runLoadCli(argv, {
+        stdout: { write: (chunk: string) => (stdout += chunk) },
+        stderr: { write: () => undefined },
+        env: { APP_ENV: "test", DATABASE_URL: db.platformUrl },
+        cwd: PACKAGE_DIR,
+      });
+      elapsed = performance.now() - started;
+    }, SCENARIO_TIMEOUT_MS);
+
+    it("loads the full datasets with `pnpm db:seed:reference`'s command in less than 30 s [X-018 AC4]", () => {
+      expect([script.node, script.file]).toEqual(["node", "dist/cli/load.js"]);
+      expect(code).toBe(0);
+      expect(elapsed).toBeLessThan(FULL_LOAD_BUDGET_MS);
+
+      const lines = stdout.trimEnd().split("\n");
+      expect(lines).toHaveLength(1);
+      const line = JSON.parse(lines[0] ?? "") as LoadReferenceDataResult & { msg?: string; app?: string };
+      expect(line).toMatchObject({ msg: "reference.loaded", app: "reference-loader" });
+      for (const table of LOAD_ORDER) {
+        expect(line.tables[table], table).toEqual({
+          inserted: data.tables[table].length,
+          updated: 0,
+          deactivated: 0,
+        });
+      }
+      expect(line.durationMs).toBeLessThan(FULL_LOAD_BUDGET_MS);
+    });
+  });
+
+  describe("overrides.csv over the files", () => {
+    let data: ReferenceDataSet;
+    let airport: ReferenceRow | undefined;
+    let code: string;
+    let first: LoadReferenceDataResult;
+    let overriddenName: string | null | undefined;
+    let overriddenSymbol: string | null | undefined;
+    let second: LoadReferenceDataResult;
+    let plain: LoadReferenceDataResult;
+    let plainName: string | null | undefined;
+
+    beforeAll(async () => {
+      const db = await freshDatabase();
+      data = await committedData();
+      [airport] = await typicalAirports(1);
+      code = airport?.["iata_code"] ?? "";
+      const dir = await copyOfData();
+      await writeFile(
+        join(dir, OVERRIDES_FILE),
+        `table,key,column,value\nairports,${code},name,"Overridden, Airport"\ncurrencies,EUR,symbol,\n`,
+      );
+
+      first = await loadReferenceData({ url: db.platformUrl, dataDir: dir });
+      overriddenName = (await tableRows(db.adminUrl, "airports")).get(code)?.["name"];
+      overriddenSymbol = (await tableRows(db.adminUrl, "currencies")).get("EUR")?.["symbol"];
+      second = await loadReferenceData({ url: db.platformUrl, dataDir: dir });
+      // Without the overrides, the file values come back.
+      plain = await loadReferenceData({ url: db.platformUrl, dataDir: DATA_DIR });
+      plainName = (await tableRows(db.adminUrl, "airports")).get(code)?.["name"];
+    }, SCENARIO_TIMEOUT_MS);
+
+    it("applies overrides.csv over the files, and a second run still changes nothing", () => {
+      expect(first.overrides).toBe(2);
+      expect(first.tables.airports).toEqual({
+        inserted: data.tables.airports.length,
         updated: 0,
         deactivated: 0,
       });
-    }
-    expect(line.durationMs).toBeLessThan(FULL_LOAD_BUDGET_MS);
+      expect(overriddenName).toBe("Overridden, Airport");
+      expect(overriddenSymbol).toBeNull();
+
+      expect(second.tables).toEqual(allZero());
+
+      // Without the overrides, the file values come back.
+      expect(plain.tables).toEqual({
+        ...allZero(),
+        currencies: { inserted: 0, updated: 1, deactivated: 0 },
+        airports: { inserted: 0, updated: 1, deactivated: 0 },
+      });
+      expect(plainName).toBe(airport?.["name"]);
+    });
   });
 
-  it("applies overrides.csv over the files, and a second run still changes nothing", async () => {
-    const db = await freshDatabase();
-    const data = await committedData();
-    const [airport] = await typicalAirports(1);
-    const code = airport?.["iata_code"] ?? "";
-    const dir = await copyOfData();
-    await writeFile(
-      join(dir, OVERRIDES_FILE),
-      `table,key,column,value\nairports,${code},name,"Overridden, Airport"\ncurrencies,EUR,symbol,\n`,
-    );
+  describe("ICAO codes that move between airports", () => {
+    let codes: { readonly a: ReferenceRow | undefined; readonly b: ReferenceRow | undefined };
+    let c: ReferenceRow | undefined;
+    let target: ReferenceRow | undefined;
+    let result: LoadReferenceDataResult;
+    let after: Map<string, ReferenceRow>;
+    let again: LoadReferenceDataResult;
 
-    const first = await loadReferenceData({ url: db.platformUrl, dataDir: dir });
-    expect(first.overrides).toBe(2);
-    expect(first.tables.airports).toEqual({
-      inserted: data.tables.airports.length,
-      updated: 0,
-      deactivated: 0,
-    });
-    expect((await tableRows(db.adminUrl, "airports")).get(code)?.["name"]).toBe("Overridden, Airport");
-    expect((await tableRows(db.adminUrl, "currencies")).get("EUR")?.["symbol"]).toBeNull();
-
-    const second = await loadReferenceData({ url: db.platformUrl, dataDir: dir });
-    expect(second.tables).toEqual(allZero());
-
-    // Without the overrides, the file values come back.
-    const plain = await loadReferenceData({ url: db.platformUrl, dataDir: DATA_DIR });
-    expect(plain.tables).toEqual({
-      ...allZero(),
-      currencies: { inserted: 0, updated: 1, deactivated: 0 },
-      airports: { inserted: 0, updated: 1, deactivated: 0 },
-    });
-    expect((await tableRows(db.adminUrl, "airports")).get(code)?.["name"]).toBe(airport?.["name"]);
-  });
-
-  it("moves ICAO codes between airports without breaking their UNIQUE constraint", async () => {
-    const db = await freshDatabase();
-    const data = await committedData();
-    await loadReferenceData({ url: db.platformUrl, dataDir: DATA_DIR });
-    const [a, b, c] = await typicalAirports(3);
-    const target = data.tables.airports.find(
-      (row) => row["icao_code"] === null && row["is_active"] === "true",
-    );
-    expect(target).toBeDefined();
     const icao = (row: ReferenceRow | undefined) => row?.["icao_code"] ?? null;
     const codeOf = (row: ReferenceRow | undefined) => row?.["iata_code"] ?? "";
 
-    // A and B swap their codes; C leaves the file and its code goes to an airport that had none.
-    const dir = await copyOfData();
-    const newCodes = new Map([
-      [codeOf(a), icao(b)],
-      [codeOf(b), icao(a)],
-      [codeOf(target), icao(c)],
-    ]);
-    const moved = data.tables.airports
-      .filter((row) => row["iata_code"] !== codeOf(c))
-      .map((row) => {
-        const code = row["iata_code"] ?? "";
-        return newCodes.has(code) ? { ...row, icao_code: newCodes.get(code) ?? null } : row;
-      });
-    await writeTable(dir, "airports", moved);
+    beforeAll(async () => {
+      const db = await freshDatabase();
+      const data = await committedData();
+      await loadReferenceData({ url: db.platformUrl, dataDir: DATA_DIR });
+      const [a, b, third] = await typicalAirports(3);
+      codes = { a, b };
+      c = third;
+      target = data.tables.airports.find((row) => row["icao_code"] === null && row["is_active"] === "true");
 
-    const result = await loadReferenceData({ url: db.platformUrl, dataDir: dir });
-    expect(result.tables).toEqual({ ...allZero(), airports: { inserted: 0, updated: 3, deactivated: 1 } });
-    const after = await tableRows(db.adminUrl, "airports");
-    expect(after.get(codeOf(a))?.["icao_code"]).toBe(icao(b));
-    expect(after.get(codeOf(b))?.["icao_code"]).toBe(icao(a));
-    expect(after.get(codeOf(target))?.["icao_code"]).toBe(icao(c));
-    expect(after.get(codeOf(c))).toMatchObject({ icao_code: null, is_active: "false" });
+      // A and B swap their codes; C leaves the file and its code goes to an airport that had none.
+      const dir = await copyOfData();
+      const newCodes = new Map([
+        [codeOf(a), icao(b)],
+        [codeOf(b), icao(a)],
+        [codeOf(target), icao(c)],
+      ]);
+      const moved = data.tables.airports
+        .filter((row) => row["iata_code"] !== codeOf(c))
+        .map((row) => {
+          const code = row["iata_code"] ?? "";
+          return newCodes.has(code) ? { ...row, icao_code: newCodes.get(code) ?? null } : row;
+        });
+      await writeTable(dir, "airports", moved);
 
-    const again = await loadReferenceData({ url: db.platformUrl, dataDir: dir });
-    expect(again.tables).toEqual(allZero());
+      result = await loadReferenceData({ url: db.platformUrl, dataDir: dir });
+      after = await tableRows(db.adminUrl, "airports");
+      again = await loadReferenceData({ url: db.platformUrl, dataDir: dir });
+    }, SCENARIO_TIMEOUT_MS);
+
+    it("moves ICAO codes between airports without breaking their UNIQUE constraint", () => {
+      const { a, b } = codes;
+      expect(target).toBeDefined();
+
+      expect(result.tables).toEqual({ ...allZero(), airports: { inserted: 0, updated: 3, deactivated: 1 } });
+      expect(after.get(codeOf(a))?.["icao_code"]).toBe(icao(b));
+      expect(after.get(codeOf(b))?.["icao_code"]).toBe(icao(a));
+      expect(after.get(codeOf(target))?.["icao_code"]).toBe(icao(c));
+      expect(after.get(codeOf(c))).toMatchObject({ icao_code: null, is_active: "false" });
+
+      expect(again.tables).toEqual(allZero());
+    });
   });
 
-  it("rolls the whole load back when a later table fails", async () => {
-    const db = await freshDatabase();
-    const data = await committedData();
-    const before = await fingerprint(db.adminUrl);
-    // The airports come after five tables that load fine; one of them names a city that does not exist.
-    const dir = await copyOfData();
-    const [airport] = await typicalAirports(1);
-    await writeTable(
-      dir,
-      "airports",
-      data.tables.airports.map((row) =>
-        row["iata_code"] === airport?.["iata_code"] ? { ...row, city_code: "QQQ" } : row,
-      ),
-    );
-    expect(data.tables.cities.some((row) => row["iata_code"] === "QQQ")).toBe(false);
+  describe("a later table that fails", () => {
+    let data: ReferenceDataSet;
+    let before: Record<string, string>;
+    let failure: unknown;
+    let after: Record<string, string>;
 
-    const failure = await loadReferenceData({ url: db.platformUrl, dataDir: dir }).then(
-      () => undefined,
-      (error: unknown) => error,
-    );
-    expect(failure).toBeInstanceOf(ReferenceLoadError);
-    expect(failure).toMatchObject({ code: "23503", table: "airports" });
-    // Not even the currencies, loaded first, were kept.
-    expect(await fingerprint(db.adminUrl)).toEqual(before);
+    beforeAll(async () => {
+      const db = await freshDatabase();
+      data = await committedData();
+      before = await fingerprint(db.adminUrl);
+      // The airports come after five tables that load fine; one of them names a city that does not exist.
+      const dir = await copyOfData();
+      const [airport] = await typicalAirports(1);
+      await writeTable(
+        dir,
+        "airports",
+        data.tables.airports.map((row) =>
+          row["iata_code"] === airport?.["iata_code"] ? { ...row, city_code: "QQQ" } : row,
+        ),
+      );
+
+      failure = await loadReferenceData({ url: db.platformUrl, dataDir: dir }).then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      after = await fingerprint(db.adminUrl);
+    }, SCENARIO_TIMEOUT_MS);
+
+    it("rolls the whole load back when a later table fails", () => {
+      expect(data.tables.cities.some((row) => row["iata_code"] === "QQQ")).toBe(false);
+
+      expect(failure).toBeInstanceOf(ReferenceLoadError);
+      expect(failure).toMatchObject({ code: "23503", table: "airports" });
+      // Not even the currencies, loaded first, were kept.
+      expect(after).toEqual(before);
+    });
   });
 });

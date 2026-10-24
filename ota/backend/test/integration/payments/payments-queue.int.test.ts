@@ -19,7 +19,11 @@
 // FIX-W27-FOLLOWUPS (lead decision (4) of 2026-10-23): the `refunds.sweep` schedule, run through the fan-out as the
 // scheduler adds it, queues `refund.submit` for the refunds whose enqueue was lost (the file asks for them through
 // RefundsRepository and adds no job), and leaves the others alone; a full batch continues with the next one, so a lost
-// enqueue behind a batch of refunds whose jobs wait is reached in the same run (OADR-0014 point 2).
+// enqueue behind a batch of refunds whose jobs wait is reached in the same run (OADR-0014 point 2). FIX-W28-FOLLOWUPS
+// (lead decision (7) of 2026-10-23, second batch): it also sends, once, a refund whose job finished without claiming it
+// (one that failed for good before its claim, a double of the repository standing for the database that does not
+// answer, and one that completed before its row existed), by replacing the finished job under its id, and leaves the
+// refunds whose finished jobs claimed them.
 import { randomBytes } from "node:crypto";
 import { getQueueToken } from "@nestjs/bullmq";
 import { Module, type INestApplicationContext } from "@nestjs/common";
@@ -887,9 +891,68 @@ describe("refunds", () => {
   });
 });
 
+// ---- The sweep's helpers (FIX-W27-FOLLOWUPS, FIX-W28-FOLLOWUPS) ----------------------------------------------------
+
+/** A request the sweep counts as lost: asked for more than REFUND_SWEEP_AFTER_MS ago. */
+const longAgo = (): Date => new Date(Date.now() - REFUND_SWEEP_AFTER_MS - 5 * 60_000);
+
+interface RefundState {
+  readonly status: string;
+  readonly version: number;
+  readonly providerRefundId: string | null;
+  readonly updatedAt: Date;
+}
+
+async function refundOf(id: string, tenant: TenantKey = "alpha"): Promise<RefundState> {
+  return await txOf(tenant)(
+    async (trx) =>
+      await trx
+        .selectFrom("refunds")
+        .select(["status", "version", "provider_refund_id as providerRefundId", "updated_at as updatedAt"])
+        .where("id", "=", id)
+        .executeTakeFirstOrThrow(),
+  );
+}
+
+/**
+ * A customer's refund of `amount` asked for at `now`, whose `refund.submit` enqueue was lost: no job is added. `id` is
+ * the new row's id (a fresh `rfd_…` when left out).
+ */
+async function askRefund(
+  paymentId: string,
+  amount: string,
+  now: Date,
+  tenant: TenantKey = "alpha",
+  id: string = newId("rfd"),
+): Promise<string> {
+  const result = await txOf(tenant)((trx) =>
+    refunds.create(trx, {
+      id,
+      paymentId,
+      amount,
+      reason: "booking_cancelled",
+      requestedBy: { type: "customer", id: newId("cus") },
+      now,
+    }),
+  );
+  if (!result.ok) {
+    throw new Error(`the refund of ${amount} was refused (${result.reason})`);
+  }
+  return result.refund.id;
+}
+
+/** Runs the sweep of `tenantId` for the iteration of minute `bucket`, as the fan-out adds it, and waits for it. */
+async function sweep(tenantId: string, bucket: number): Promise<Job> {
+  const spec = tenantJob(REFUNDS_SWEEP_JOB, tenantId, bucket);
+  await maintenance.add(spec.name, spec.data, spec.opts);
+  return await finished(maintenance, spec.opts.jobId);
+}
+
+/** The Stripe refund requests of the refund `id` (its idempotency key). */
+const submissionsOf = (id: string) =>
+  requestsTo("POST", "/v1/refunds").filter((call) => call.headers["idempotency-key"] === `refund:${id}`);
+
 describe("refunds.sweep (FIX-W27-FOLLOWUPS)", () => {
-  /** A request the sweep counts as lost: asked for more than REFUND_SWEEP_AFTER_MS ago. */
-  const longAgo = (): Date => new Date(Date.now() - REFUND_SWEEP_AFTER_MS - 5 * 60_000);
   let lost: string;
   let lostBeta: string;
   let fresh: string;
@@ -901,58 +964,6 @@ describe("refunds.sweep (FIX-W27-FOLLOWUPS)", () => {
   let untouched: Map<string, RefundState>;
   const sweeps: Job[] = [];
   let submissions: Record<TenantKey, Job>;
-
-  interface RefundState {
-    readonly status: string;
-    readonly version: number;
-    readonly providerRefundId: string | null;
-    readonly updatedAt: Date;
-  }
-
-  async function refundOf(id: string, tenant: TenantKey = "alpha"): Promise<RefundState> {
-    return await txOf(tenant)(
-      async (trx) =>
-        await trx
-          .selectFrom("refunds")
-          .select(["status", "version", "provider_refund_id as providerRefundId", "updated_at as updatedAt"])
-          .where("id", "=", id)
-          .executeTakeFirstOrThrow(),
-    );
-  }
-
-  /** A customer's refund of `amount` asked for at `now`, whose `refund.submit` enqueue was lost: no job is added. */
-  async function askRefund(
-    paymentId: string,
-    amount: string,
-    now: Date,
-    tenant: TenantKey = "alpha",
-  ): Promise<string> {
-    const result = await txOf(tenant)((trx) =>
-      refunds.create(trx, {
-        id: newId("rfd"),
-        paymentId,
-        amount,
-        reason: "booking_cancelled",
-        requestedBy: { type: "customer", id: newId("cus") },
-        now,
-      }),
-    );
-    if (!result.ok) {
-      throw new Error(`the refund of ${amount} was refused (${result.reason})`);
-    }
-    return result.refund.id;
-  }
-
-  /** Runs the sweep of `tenantId` for the iteration of minute `bucket`, as the fan-out adds it, and waits for it. */
-  async function sweep(tenantId: string, bucket: number): Promise<Job> {
-    const spec = tenantJob(REFUNDS_SWEEP_JOB, tenantId, bucket);
-    await maintenance.add(spec.name, spec.data, spec.opts);
-    return await finished(maintenance, spec.opts.jobId);
-  }
-
-  /** The Stripe refund requests of the refund `id` (its idempotency key). */
-  const submissionsOf = (id: string) =>
-    requestsTo("POST", "/v1/refunds").filter((call) => call.headers["idempotency-key"] === `refund:${id}`);
 
   beforeAll(async () => {
     const payment = await stripePayment(
@@ -1024,17 +1035,17 @@ describe("refunds.sweep (FIX-W27-FOLLOWUPS)", () => {
         task: REFUNDS_SWEEP_JOB,
         tenantId: alphaId,
         outcome: "done",
-        counts: { refunds: 2 },
+        counts: { refunds: 2, resent: 0 },
       }),
       expect.objectContaining({
         task: REFUNDS_SWEEP_JOB,
         tenantId: betaId,
         outcome: "done",
-        counts: { refunds: 1 },
+        counts: { refunds: 1, resent: 0 },
       }),
       // The later run: the lost refunds are claimed and sent now; the waiting one is found again, its job kept.
-      expect.objectContaining({ tenantId: alphaId, outcome: "done", counts: { refunds: 1 } }),
-      expect.objectContaining({ tenantId: betaId, outcome: "done", counts: { refunds: 0 } }),
+      expect.objectContaining({ tenantId: alphaId, outcome: "done", counts: { refunds: 1, resent: 0 } }),
+      expect.objectContaining({ tenantId: betaId, outcome: "done", counts: { refunds: 0, resent: 0 } }),
     ]);
     const cases = [
       { tenant: "alpha", tenantId: alphaId, id: lost, job: submissions.alpha },
@@ -1122,13 +1133,13 @@ describe("refunds.sweep (FIX-W27-FOLLOWUPS)", () => {
         expect.objectContaining({
           tenantId: betaId,
           outcome: "done",
-          counts: { refunds: REFUND_SWEEP_BATCH },
+          counts: { refunds: REFUND_SWEEP_BATCH, resent: 0 },
           continued: true,
         }),
         expect.objectContaining({
           tenantId: betaId,
           outcome: "done",
-          counts: { refunds: 1 },
+          counts: { refunds: 1, resent: 0 },
           continued: false,
         }),
       ]);
@@ -1158,6 +1169,192 @@ describe("refunds.sweep (FIX-W27-FOLLOWUPS)", () => {
       const states = await Promise.all(held.map((id) => payments.getJobState(submitJobId(id))));
       expect(new Set(states)).toEqual(new Set(["delayed"]));
     });
+  });
+});
+
+describe("refunds.sweep and the refund.submit jobs that finished without a claim (FIX-W28-FOLLOWUPS)", () => {
+  /** Its job failed for good before its claim: the claim's first statement failed (the database "down"). */
+  let failedBeforeClaim: string;
+  /** Its job completed without a claim: it ran before the row was there (`missing`). */
+  let completedWithoutClaim: string;
+  /** Sent by its own job, which completed. */
+  let submittedByJob: string;
+  /** Claimed by a submission in flight; its own job found the claim on its last attempt and failed for good. */
+  let claimedByOther: string;
+  /** Released by its job after an answer Stripe kept (a 5xx), and alerted: the staff check it. */
+  let releasedByJob: string;
+  /** What the refunds and their jobs were before the sweep ran. */
+  const before = new Map<
+    string,
+    { refund: RefundState; state: string; finishedOn: number | undefined; submissions: number }
+  >();
+  /** The refunds the first sweep was to find (the file's other scenarios may leave lost enqueues behind). */
+  let found: string[];
+  const runs: Job[] = [];
+  let resubmissions: Record<"failedBeforeClaim" | "completedWithoutClaim", Job>;
+
+  const submitJobId = (id: string): string => paymentJob(PAYMENT_JOB.refundSubmit, alphaId, id).opts.jobId;
+
+  /**
+   * Adds the producers' job of `id` with one attempt (the producers' five would take 7.5 minutes of backoff to fail for
+   * good) and waits until it has finished.
+   */
+  async function runOnce(id: string): Promise<Job> {
+    const spec = paymentJob(PAYMENT_JOB.refundSubmit, alphaId, id);
+    await payments.add(spec.name, spec.data, { ...spec.opts, attempts: 1 });
+    return await finished(payments, spec.opts.jobId);
+  }
+
+  beforeAll(async () => {
+    const payment = await stripePayment(
+      { status: "captured", amountCaptured: "452.10" },
+      { status: "succeeded", amount_capturable: 0, amount_received: 45210 },
+    );
+
+    // The claim's first statement (the parents' locks) fails for this refund, as when the database does not answer:
+    // the attempt fails before anything was claimed or sent. The double is removed once the job has failed.
+    failedBeforeClaim = await askRefund(payment.id, "20.00", longAgo());
+    const lockParents = RefundsRepository.prototype.lockParents;
+    const down = vi.spyOn(RefundsRepository.prototype, "lockParents").mockImplementation(function (
+      this: RefundsRepository,
+      trx: TenantTransaction,
+      id: string,
+    ) {
+      return id === failedBeforeClaim
+        ? Promise.reject(new Error("Connection terminated unexpectedly"))
+        : lockParents.call(this, trx, id);
+    });
+    try {
+      await runOnce(failedBeforeClaim);
+    } finally {
+      down.mockRestore();
+    }
+
+    // The job ran before the row existed (`missing`), then the row came.
+    completedWithoutClaim = newId("rfd");
+    await runPaymentJob(PAYMENT_JOB.refundSubmit, completedWithoutClaim);
+    await askRefund(payment.id, "20.00", longAgo(), "alpha", completedWithoutClaim);
+
+    // Rows that were claimed, whose jobs finished too: none of them is sent again.
+    submittedByJob = await askRefund(payment.id, "20.00", longAgo());
+    await runPaymentJob(PAYMENT_JOB.refundSubmit, submittedByJob);
+    claimedByOther = await askRefund(payment.id, "20.00", longAgo());
+    await alphaTx(async (trx) => {
+      if ((await refunds.claim(trx, claimedByOther, 1, new Date())) === undefined) {
+        throw new Error(`the refund ${claimedByOther} could not be claimed`);
+      }
+    });
+    await runOnce(claimedByOther);
+    releasedByJob = await askRefund(payment.id, "20.00", longAgo());
+    stripe.fail(1, "server_error");
+    await runPaymentJob(PAYMENT_JOB.refundSubmit, releasedByJob);
+
+    for (const id of [
+      failedBeforeClaim,
+      completedWithoutClaim,
+      submittedByJob,
+      claimedByOther,
+      releasedByJob,
+    ]) {
+      const job = await payments.getJob(submitJobId(id));
+      before.set(id, {
+        refund: await refundOf(id),
+        state: await payments.getJobState(submitJobId(id)),
+        finishedOn: job?.finishedOn,
+        submissions: submissionsOf(id).length,
+      });
+    }
+
+    found = await alphaTx((trx) =>
+      refunds.unclaimedRefundIds(trx, new Date(Date.now() - REFUND_SWEEP_AFTER_MS), REFUND_SWEEP_BATCH),
+    );
+    const bucket = minuteBucket(new Date()) + 60;
+    runs.push(await sweep(alphaId, bucket));
+    resubmissions = {
+      failedBeforeClaim: await finished(payments, submitJobId(failedBeforeClaim)),
+      completedWithoutClaim: await finished(payments, submitJobId(completedWithoutClaim)),
+    };
+    // A later iteration, after the submissions.
+    runs.push(await sweep(alphaId, bucket + 5));
+  }, SCENARIO_TIMEOUT_MS);
+
+  it("[FIX-W28-FOLLOWUPS AC1] finds the two refunds pending and unclaimed, their jobs finished", () => {
+    expect(before.get(failedBeforeClaim)).toMatchObject({
+      refund: { status: "pending", version: 1, providerRefundId: null },
+      state: "failed",
+      submissions: 0,
+    });
+    expect(before.get(completedWithoutClaim)).toMatchObject({
+      refund: { status: "pending", version: 1, providerRefundId: null },
+      state: "completed",
+      submissions: 0,
+    });
+    expect(found).toEqual(expect.arrayContaining([failedBeforeClaim, completedWithoutClaim]));
+    expect(found).not.toEqual(expect.arrayContaining([submittedByJob]));
+  });
+
+  it("[FIX-W28-FOLLOWUPS AC1] sends a refund whose job failed for good or completed before its claim once, through its own job id", async () => {
+    expect(runs.map((job) => job.returnvalue as unknown)).toEqual([
+      expect.objectContaining({
+        task: REFUNDS_SWEEP_JOB,
+        tenantId: alphaId,
+        outcome: "done",
+        counts: { refunds: found.length, resent: 2 },
+      }),
+      // The later run: both are claimed and sent; a finished job is replaced once only.
+      expect.objectContaining({
+        tenantId: alphaId,
+        outcome: "done",
+        counts: expect.objectContaining({ resent: 0 }),
+      }),
+    ]);
+    for (const [name, id] of [
+      ["failedBeforeClaim", failedBeforeClaim],
+      ["completedWithoutClaim", completedWithoutClaim],
+    ] as const) {
+      const job = resubmissions[name];
+      expect(job.id, name).toBe(`refund-submit-${id}`);
+      expect(job.returnvalue, name).toEqual({
+        tenantId: alphaId,
+        job: "refund.submit",
+        id,
+        outcome: "applied",
+      } satisfies PaymentJobResult);
+      const calls = submissionsOf(id);
+      expect(calls, name).toHaveLength(1);
+      expect(calls[0]?.form, name).toMatchObject({
+        amount: "2000",
+        metadata: { refund_id: id, velexis_tenant_id: alphaId, velexis_environment: "test" },
+      });
+      expect(await refundOf(id), name).toMatchObject({
+        status: "processing",
+        providerRefundId: expect.stringMatching(/^re_test_/),
+      });
+    }
+  });
+
+  it("[FIX-W28-FOLLOWUPS AC2] leaves a refund its job sent, one claimed by another submission and a released claim, and their finished jobs", async () => {
+    for (const id of [submittedByJob, claimedByOther, releasedByJob]) {
+      const was = before.get(id);
+      expect(await refundOf(id), id).toEqual(was?.refund);
+      const job = await payments.getJob(submitJobId(id));
+      expect([await payments.getJobState(submitJobId(id)), job?.finishedOn], id).toEqual([
+        was?.state,
+        was?.finishedOn,
+      ]);
+    }
+    expect([before.get(submittedByJob)?.state, before.get(claimedByOther)?.state]).toEqual([
+      "completed",
+      "failed",
+    ]);
+    // Sent once by its own job; never sent while another submission holds it; the released claim's one submission
+    // (with the SDK's network retry of the 5xx), which the staff were alerted to check.
+    expect(submissionsOf(submittedByJob)).toHaveLength(1);
+    expect(submissionsOf(claimedByOther)).toEqual([]);
+    expect(submissionsOf(releasedByJob)).toHaveLength(1 + STRIPE_MAX_NETWORK_RETRIES);
+    expect((await alertsLike(`staff.refund:${releasedByJob}:`)).map((alert) => alert.dedupeKey)).toEqual([
+      `staff.refund:${releasedByJob}:not_submitted`,
+    ]);
   });
 });
 

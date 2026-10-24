@@ -7,6 +7,10 @@
 // The Amadeus local date-times (`departure.at`, `lastTicketingDateTime`, …) carry no UTC offset, as Amadeus sends
 // them; they are described by a local date-time pattern, not `format: date-time` (RFC 3339, offset required), which
 // made twelve examples and real Amadeus data invalid (OBE-010).
+//
+// Every validation of the document's examples runs in a setup hook with its own budget (the lead's test timing rule;
+// FIX-W28-FOLLOWUPS: the request, parameter and schema examples took up to 2.5 s inside their tests while every
+// package's tests ran at once); the tests assert on each outcome the hooks recorded.
 import { otaOperations, type OtaOperationId } from "@velexis/api-types/operations";
 import { expectResponseToMatch } from "@velexis/testing";
 import { beforeAll, describe, expect, it } from "vitest";
@@ -145,98 +149,136 @@ describe("response conformance", () => {
   });
 });
 
-describe("request and schema examples", () => {
-  it("validates every request body example with the operation's body schema", () => {
-    let checked = 0;
-    for (const [operationId, operation] of rawOperations()) {
-      const body = document.resolve(operation["requestBody"]);
-      const media =
-        isObject(body) && isObject(body["content"]) ? body["content"]["application/json"] : undefined;
-      if (!isObject(media)) {
-        continue;
-      }
-      const validate = document.compile(media["schema"]);
-      for (const example of examplesOf(media, `${operationId} request`)) {
-        expect([example.where, validate(example.value), validate.errors ?? []]).toEqual([
-          example.where,
-          true,
-          [],
-        ]);
-        checked += 1;
+/** The outcome of one request body example: where it is, whether it validated, and the validator's errors. */
+type RequestExampleOutcome = readonly [where: string, valid: boolean, errors: readonly unknown[]];
+
+/** Every `application/json` request body example of the document, through the operation's body schema. */
+function validateRequestExamples(): RequestExampleOutcome[] {
+  const outcomes: RequestExampleOutcome[] = [];
+  for (const [operationId, operation] of rawOperations()) {
+    const body = document.resolve(operation["requestBody"]);
+    const media =
+      isObject(body) && isObject(body["content"]) ? body["content"]["application/json"] : undefined;
+    if (!isObject(media)) {
+      continue;
+    }
+    const validate = document.compile(media["schema"]);
+    for (const example of examplesOf(media, `${operationId} request`)) {
+      outcomes.push([example.where, validate(example.value), [...(validate.errors ?? [])]]);
+    }
+  }
+  return outcomes;
+}
+
+/** The outcome of one parameter example: where it is and whether it validated. */
+type ParameterExampleOutcome = readonly [where: string, valid: boolean];
+
+/** Every example of every parameter of the document, through the parameter's schema. */
+function validateParameterExamples(): ParameterExampleOutcome[] {
+  const outcomes: ParameterExampleOutcome[] = [];
+  for (const [operationId, operation] of rawOperations()) {
+    for (const raw of (operation["parameters"] as unknown[] | undefined) ?? []) {
+      const parameter = document.resolve(raw) as JsonObject;
+      const validate = document.compile(parameter["schema"]);
+      const where = `${operationId} ${String(parameter["in"])} ${String(parameter["name"])}`;
+      const examples = [
+        ...("example" in parameter ? [parameter["example"]] : []),
+        ...(Array.isArray(parameter["examples"]) ? parameter["examples"] : []),
+        ...examplesOf({ examples: isObject(parameter["examples"]) ? parameter["examples"] : {} }, where).map(
+          (example) => example.value,
+        ),
+      ];
+      for (const value of examples) {
+        outcomes.push([where, validate(value)]);
       }
     }
-    expect(checked).toBeGreaterThan(50);
+  }
+  return outcomes;
+}
+
+/** What validating the examples of components.schemas gave: how many, and the ones that failed. */
+interface SchemaExamples {
+  readonly checked: number;
+  readonly failures: readonly string[];
+}
+
+/** Every example of components.schemas (nested schemas included), through the schema that carries it. */
+function validateSchemaExamples(): SchemaExamples {
+  const schemas = (document.document["components"] as JsonObject)["schemas"] as JsonObject;
+  const failures: string[] = [];
+  let checked = 0;
+  const visit = (schema: unknown, pointer: string): void => {
+    if (!isObject(schema)) {
+      return;
+    }
+    const examples = [
+      ...(Array.isArray(schema["examples"]) ? schema["examples"] : []),
+      ...("example" in schema ? [schema["example"]] : []),
+    ];
+    if (examples.length > 0) {
+      const validate = document.compile(schema);
+      examples.forEach((value, index) => {
+        checked += 1;
+        if (!validate(value)) {
+          failures.push(`${pointer} example ${index}`);
+        }
+      });
+    }
+    for (const keyword of ["properties", "patternProperties", "$defs", "dependentSchemas"]) {
+      const children = schema[keyword];
+      if (isObject(children)) {
+        for (const [name, child] of Object.entries(children)) {
+          visit(child, `${pointer}/${keyword}/${name}`);
+        }
+      }
+    }
+    for (const keyword of ["allOf", "anyOf", "oneOf", "prefixItems"]) {
+      const children = schema[keyword];
+      if (Array.isArray(children)) {
+        children.forEach((child, index) => visit(child, `${pointer}/${keyword}/${index}`));
+      }
+    }
+    for (const keyword of ["items", "not", "if", "then", "else", "additionalProperties", "contains"]) {
+      visit(schema[keyword], `${pointer}/${keyword}`);
+    }
+  };
+  for (const [name, schema] of Object.entries(schemas)) {
+    visit(schema, `#/components/schemas/${name}`);
+  }
+  return { checked, failures };
+}
+
+describe("request and schema examples", () => {
+  let requestExamples: RequestExampleOutcome[];
+  let parameterExamples: ParameterExampleOutcome[];
+  let schemaExamples: SchemaExamples;
+
+  // One validator is compiled per request body, parameter and schema with examples, several hundred: about 0.5 s
+  // alone, up to several seconds while every package's tests run at once on a 4-CPU runner. That happens once, in
+  // this hook with its own budget (as the replay hook above), so the tests below assert on its outcomes.
+  beforeAll(() => {
+    requestExamples = validateRequestExamples();
+    parameterExamples = validateParameterExamples();
+    schemaExamples = validateSchemaExamples();
+  }, 60_000);
+
+  it("validates every request body example with the operation's body schema", () => {
+    for (const [where, valid, errors] of requestExamples) {
+      expect([where, valid, errors]).toEqual([where, true, []]);
+    }
+    expect(requestExamples.length).toBeGreaterThan(50);
   });
 
   it("validates every parameter example with the parameter's schema", () => {
-    let checked = 0;
-    for (const [operationId, operation] of rawOperations()) {
-      for (const raw of (operation["parameters"] as unknown[] | undefined) ?? []) {
-        const parameter = document.resolve(raw) as JsonObject;
-        const validate = document.compile(parameter["schema"]);
-        const where = `${operationId} ${String(parameter["in"])} ${String(parameter["name"])}`;
-        const examples = [
-          ...("example" in parameter ? [parameter["example"]] : []),
-          ...(Array.isArray(parameter["examples"]) ? parameter["examples"] : []),
-          ...examplesOf(
-            { examples: isObject(parameter["examples"]) ? parameter["examples"] : {} },
-            where,
-          ).map((example) => example.value),
-        ];
-        for (const value of examples) {
-          expect([where, validate(value)]).toEqual([where, true]);
-          checked += 1;
-        }
-      }
+    for (const [where, valid] of parameterExamples) {
+      expect([where, valid]).toEqual([where, true]);
     }
-    expect(checked).toBeGreaterThan(0);
+    expect(parameterExamples.length).toBeGreaterThan(0);
   });
 
   it("validates every example of components.schemas with the schema that carries it", () => {
-    const schemas = (document.document["components"] as JsonObject)["schemas"] as JsonObject;
-    const failures: string[] = [];
-    let checked = 0;
-    const visit = (schema: unknown, pointer: string): void => {
-      if (!isObject(schema)) {
-        return;
-      }
-      const examples = [
-        ...(Array.isArray(schema["examples"]) ? schema["examples"] : []),
-        ...("example" in schema ? [schema["example"]] : []),
-      ];
-      if (examples.length > 0) {
-        const validate = document.compile(schema);
-        examples.forEach((value, index) => {
-          checked += 1;
-          if (!validate(value)) {
-            failures.push(`${pointer} example ${index}`);
-          }
-        });
-      }
-      for (const keyword of ["properties", "patternProperties", "$defs", "dependentSchemas"]) {
-        const children = schema[keyword];
-        if (isObject(children)) {
-          for (const [name, child] of Object.entries(children)) {
-            visit(child, `${pointer}/${keyword}/${name}`);
-          }
-        }
-      }
-      for (const keyword of ["allOf", "anyOf", "oneOf", "prefixItems"]) {
-        const children = schema[keyword];
-        if (Array.isArray(children)) {
-          children.forEach((child, index) => visit(child, `${pointer}/${keyword}/${index}`));
-        }
-      }
-      for (const keyword of ["items", "not", "if", "then", "else", "additionalProperties", "contains"]) {
-        visit(schema[keyword], `${pointer}/${keyword}`);
-      }
-    };
-    for (const [name, schema] of Object.entries(schemas)) {
-      visit(schema, `#/components/schemas/${name}`);
-    }
-
-    expect(failures).toEqual([]);
-    expect(checked).toBeGreaterThan(300);
+    expect(schemaExamples.failures).toEqual([]);
+    expect(schemaExamples.checked).toBeGreaterThan(300);
   });
 });
 
