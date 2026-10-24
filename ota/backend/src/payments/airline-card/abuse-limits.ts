@@ -22,6 +22,12 @@
 // item 2). Without Redis the route refuses with `503 SERVICE_UNAVAILABLE` rather than run without its limits
 // (architecture §10): `assertAvailable` fails the request, and a decline that cannot be counted is logged (the
 // declined card's booking fails all the same; the next request meets the Redis outage at `assertAvailable`).
+//
+// The suspension is also read where the method is offered (lead decision (2) of 2026-10-24, FIX-W29-OTA; OADR-0004
+// point 6 as revised that day): `suspension` tells storefront.get not to list the method while the flag is set, and
+// `assertNotSuspended` refuses checkout.createPayment {method: "airline_card"} with the same `403 FEATURE_DISABLED`
+// (`details.reason = "suspended"`). A Redis that cannot say counts as suspended there too: storefront.get leaves the
+// method out, and createPayment answers `503 SERVICE_UNAVAILABLE`, as the completion would.
 import { Inject, Injectable } from "@nestjs/common";
 import { AppError } from "@velexis/errors";
 import type { Redis } from "ioredis";
@@ -74,6 +80,17 @@ if declines >= tonumber(ARGV[4]) then
 end
 return { attempts, declines, suspendedNow }
 `;
+
+/** Whether the suspension flag of a tenant and environment is set: 1 or 0. */
+const READ_SUSPENSION = `
+return redis.call('EXISTS', KEYS[1])
+`;
+
+/**
+ * What the suspension flag says of the method for a tenant and environment: `available`, `suspended` while it is set,
+ * `unknown` when Redis cannot say (the method is then never offered).
+ */
+export type AirlineCardSuspension = "available" | "suspended" | "unknown";
 
 /** Whose limits: the tenant, the environment and the checkout of the request. */
 export interface AirlineCardScope {
@@ -175,6 +192,35 @@ export class AirlineCardLimits {
       suspendedNow: suspendedNow === 1,
       locked: attempts >= AIRLINE_CARD_MAX_ATTEMPTS,
     };
+  }
+
+  /**
+   * The suspension of the method for the tenant and environment (see the file header): `suspended` while the flag is
+   * set, `unknown` when Redis does not answer or answers something else, `available` otherwise. Never throws.
+   */
+  async suspension(tenantId: string, environment: KeyEnvironment): Promise<AirlineCardSuspension> {
+    const suspendedKey = redisKeys.acSuspended(tenantId, environment);
+    try {
+      const reply = await this.command(() => this.redis.eval(READ_SUSPENSION, 1, suspendedKey.key));
+      return reply === 1 ? "suspended" : reply === 0 ? "available" : "unknown";
+    } catch {
+      return "unknown";
+    }
+  }
+
+  /**
+   * Refuses to prepare a payment of a method that is suspended (checkout.createPayment, see the file header): `403
+   * FEATURE_DISABLED` (`details.reason = "suspended"`) while the flag is set, `503 SERVICE_UNAVAILABLE` when Redis
+   * cannot say.
+   */
+  async assertNotSuspended(tenantId: string, environment: KeyEnvironment): Promise<void> {
+    const suspension = await this.suspension(tenantId, environment);
+    if (suspension === "suspended") {
+      throw suspendedMethod();
+    }
+    if (suspension === "unknown") {
+      throw unavailable();
+    }
   }
 
   /** A Redis command; a client that waits to reconnect or fails is `503 SERVICE_UNAVAILABLE`. */

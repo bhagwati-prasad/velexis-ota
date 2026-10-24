@@ -356,8 +356,11 @@ paths:
         `acct_…` as `accountId`; `api_keys`: the OTA's own publishable key). Only for the hosted storefront's edge, and
         only when the global switch `AIRLINE_CARD_ENABLED` and the OTA's `airline_card_enabled_test` / `_live` for the
         environment are on, `payment.supportedMethods` adds `airline_card` and `payment.airlineCard` describes it (card
-        brands, `chargedBy: airline`, the localised notice); key callers always get `airlineCard: null`. The cache keeps
-        only the caller-independent part; the caller-specific fields are added on each request.
+        brands, `chargedBy: airline`, the localised notice); key callers always get `airlineCard: null`. While twenty
+        declines of the OTA's storefront environment within an hour suspend the method there (for an hour), and when the
+        suspension cannot be read, the method is left out for the edge too (`airlineCard: null`), as
+        checkout.createPayment refuses it then. The cache keeps only the caller-independent part; the caller-specific
+        fields are added on each request.
 
 
         **Amadeus.** None.
@@ -2360,8 +2363,9 @@ paths:
         stored as `pendingEmail` and a verification email is sent to it (`notifications`, template `auth.verify_email`),
         at most one a minute (`429 RATE_LIMITED`, `Retry-After`, `details.reason: verification_email`); a link sent for
         an earlier change stops working. Sending the current address again withdraws a pending change. Sign-in keeps
-        using the old email until `auth.verifyEmail` confirms the new one. The MVP sends no security notice to the old
-        address (the notification templates have no key for it).
+        using the old email until `auth.verifyEmail` confirms the new one. A security notice goes to the current address
+        with the verification email (template `account.email_changed`): when the change was asked for, never the new
+        address and no link that acts on the account.
 
 
         **Marketing consent.** Changing `marketingConsent` updates `customers` and appends a `customer_consents` event
@@ -2672,7 +2676,9 @@ paths:
         awaiting payment, ticketing or a refund (`409 ACCOUNT_DELETION_BLOCKED`, `details.bookingIds`, oldest first): a
         `pending` booking, a `confirmed` or `partially_ticketed` one whose tickets are not all issued, one other than
         `failed` with a payment that is `requires_action`, `processing` or `authorized`, or one with a `pending` or
-        `processing` refund. Live bookings always count; test bookings count for a request in the test environment.
+        `processing` refund. Live bookings always count; test bookings count for a request in the test environment, and
+        a `pending` booking (its order may exist and its checkout waits for the reconciliation) counts whatever its
+        environment.
 
 
         **Data export.** The MVP offers no data export: `exportData: true` answers `403 FEATURE_DISABLED`
@@ -2683,9 +2689,9 @@ paths:
         **Immediate effects (one transaction).** All `customer_sessions` are revoked (`account_deleted`), the identity is
         disabled, open password reset links end, `customers.status` becomes `deleted` and the email is replaced by a
         salted hash so the address can register again; marketing consent is withdrawn (`customer_consents`). Open and
-        payment-pending checkouts are abandoned (not one whose booking is still `pending`: the reconciliation decides
-        it), and the payments of those checkouts that are not confirmed yet or only authorised are voided after the
-        commit. The MVP queues no confirmation email (the notification templates have no key for it).
+        payment-pending checkouts are abandoned, and the payments of those checkouts that are not confirmed yet or only
+        authorised are voided after the commit. A confirmation email is queued to the address before it was replaced
+        (template `account.deleted`: when, the erasure date, whether booking records are kept).
 
 
         **Erasure job.** Within 30 days (normally 24 h after the export is delivered) a background job hard-deletes
@@ -7366,13 +7372,16 @@ paths:
         **Airline card** (`method: airline_card`, hosted storefront only). Refused unless the global switch
         `AIRLINE_CARD_ENABLED` and the OTA's `storefront_settings.airline_card_enabled_test` / `_live` for the
         environment are on (`403 FEATURE_DISABLED`, `details.feature = "airlineCard"`), and unless the caller is the
-        storefront edge (`403 SCOPE_NOT_ALLOWED`). `provider` must be absent; `returnUrl` and `savePaymentMethod` are
-        ignored. The checkout switches to the airline's price (`checkouts.pricing_mode = net`): the totals become the
-        Amadeus total of the priced offer and its Amadeus-priced extras, plus the Amadeus card fee once the brand is
-        known, without OTA markup or fees. Any other active payment of the checkout is cancelled, and the payment is
-        recorded with `provider = airline`, `captureMethod = automatic`, status `requires_payment_method` and
-        `nextAction.type = airline_card_form`. No payment provider is called; the storefront shows its own card form
-        and calls checkout.completeWithAirlineCard. Choosing `card` again restores the selling price.
+        storefront edge (`403 SCOPE_NOT_ALLOWED`). While twenty declines of the OTA's storefront environment within an
+        hour suspend the method there (for an hour) it is refused too (`403 FEATURE_DISABLED`, `details.reason =
+        "suspended"`), and `503 SERVICE_UNAVAILABLE` when the suspension cannot be read; storefront.get leaves the
+        method out meanwhile. `provider` must be absent; `returnUrl` and `savePaymentMethod` are ignored. The checkout
+        switches to the airline's price (`checkouts.pricing_mode = net`): the totals become the Amadeus total of the
+        priced offer and its Amadeus-priced extras, plus the Amadeus card fee once the brand is known, without OTA
+        markup or fees. Any other active payment of the checkout is cancelled, and the payment is recorded with
+        `provider = airline`, `captureMethod = automatic`, status `requires_payment_method` and `nextAction.type =
+        airline_card_form`. No payment provider is called; the storefront shows its own card form and calls
+        checkout.completeWithAirlineCard. Choosing `card` again restores the selling price.
 
 
         **Front end.** Use `clientSecret` + `providerPublicKey` with the provider SDK (Stripe.js `confirmPayment`, Adyen
@@ -7687,7 +7696,11 @@ paths:
 
 
         **Airline card** (`provider = airline`). The Amadeus credit-card fee for the brand and BIN is quoted exactly as
-        above, without OTA card surcharges (the checkout is at the airline's price), and no provider is called.
+        above, without OTA card surcharges (the checkout is at the airline's price), and no provider is called. A
+        `failed` airline-card payment (the airline declined its card, or refused the order) takes the hint of the
+        traveller's next card too, while it is its checkout's newest payment: the card fee of another brand is quoted on
+        the same `paymentId`, the payment stays `failed` (its `card` is `null` until the next card is sent), and
+        checkout.completeWithAirlineCard then takes a card of that brand.
 
 
         **Idempotency.** `PATCH` with the same hint is idempotent (no second quote or provider update); no
@@ -12420,7 +12433,10 @@ paths:
         not charged to the customer automatically. `notifyCustomer=true` queues the `booking.updated` e-mail
         (`notifications`, in the same transaction) to the booking's contact e-mail after the change, with the itinerary
         attached when one is ready, and, when the change moved the contact e-mail, a short notice to the previous
-        address that names the booking reference only; a patch that times out e-mails nothing.
+        address that names the booking reference only; a patch that times out e-mails nothing. An e-mail the outbox
+        refuses (an address or data it cannot send) never undoes the change: the answer carries the warning `CUSTOMER
+        NOT NOTIFIED` (the e-mail to the contact address), or `PREVIOUS CONTACT NOT NOTIFIED` (the notice to the previous
+        address), so the staff member tells the traveller.
 
 
         **Local-only changes.** `tags` (replace bookings.tags) and `metadata` (replace bookings.metadata) never reach
@@ -44377,6 +44393,8 @@ components:
       enum:
         - auth.verify_email
         - auth.password_reset
+        - account.email_changed
+        - account.deleted
         - booking.confirmed
         - booking.ticketed
         - booking.ticketing_delayed
@@ -44388,9 +44406,13 @@ components:
         - staff.manual_review
         - staff.airline_card_alert
       description: >-
-        The notification template keys of the MVP (OADR-0013 point 4): customers `auth.*`, travellers `booking.*`, the
-        OTA's staff `staff.*`. Later releases add keys with their code defaults. `booking.updated` (OADR-0013 point 4 as
-        revised on 2026-10-23) tells the traveller that the booking changed: a contacts change (bookings.update) and a
+        The notification template keys of the MVP (OADR-0013 point 4): customers `auth.*` and `account.*`, travellers
+        `booking.*`, the OTA's staff `staff.*`. Later releases add keys with their code defaults.
+        `account.email_changed` and `account.deleted` (OADR-0013 point 4 as revised on 2026-10-24): account.update sends
+        the first to the current address when a change of the address is asked for (a security notice: when, never the
+        new address, no link that acts on the account), account.delete the second, its confirmation, to the address
+        before it was replaced (when, the erasure date, whether booking records are kept). `booking.updated` (OADR-0013
+        point 4 as revised on 2026-10-23) tells the traveller that the booking changed: a contacts change (bookings.update) and a
         staff patch with `notifyCustomer` (console.bookings.patch) send it to the booking's contact e-mail, the
         itinerary attached when one is ready; when the contact e-mail changed, the previous address gets a short notice
         of the same key (`update.contactNotice`: the booking reference only, no other booking data, no attachment).

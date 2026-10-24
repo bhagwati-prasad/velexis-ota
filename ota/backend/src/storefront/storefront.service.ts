@@ -22,7 +22,10 @@
 // the tenant's environment (its connection is cached for 60 seconds and dropped on the platform's `connection`
 // invalidation), and `storefrontFor` adds it, so a change of the connection shows within that minute. Nor is the
 // airline card's global switch (`AIRLINE_CARD_ENABLED`, OBE-050): `storefrontFor` adds the edge-only airline card from
-// it and the entry's flag on every request, so no caller's answer is ever taken from another's.
+// it and the entry's flag on every request, so no caller's answer is ever taken from another's. Nor is the airline
+// card's suspension (lead decision (2) of 2026-10-24, FIX-W29-OTA; OADR-0004 point 6): when the method would be offered
+// (the edge, both switches on), the flag `t:<tenantId>:<env>:ac:suspended` that 20 declines within an hour set is read
+// on every request (AirlineCardLimits.suspension), and the method is left out while it is set or when Redis cannot say.
 import { Inject, Injectable } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { AppError } from "@velexis/errors";
@@ -31,11 +34,13 @@ import { PinoLogger } from "nestjs-pino";
 import { redisKeys, type RedisKey } from "../common/redis/redis.keys";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
 import type { ApiConfig } from "../config";
+import { AirlineCardLimits } from "../payments/airline-card/abuse-limits";
 import { PAYMENT_GATEWAY, type GatewayAccount, type PaymentGateway } from "../payments/payment-gateway";
 import { PlatformCache } from "../tenancy/platform-cache";
 import { TenantContext, type RequestTenant } from "../tenancy/tenant-context";
 import { TenantTx } from "../tenancy/tenant-tx";
 import {
+  airlineCardOffered,
   decodeCachedStorefront,
   encodeCachedStorefront,
   localesOf,
@@ -70,6 +75,7 @@ export class StorefrontService {
     private readonly platform: PlatformCache,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
     @Inject(PAYMENT_GATEWAY) private readonly payments: PaymentGateway,
+    private readonly airlineCardLimits: AirlineCardLimits,
     config: ConfigService<ApiConfig, true>,
     private readonly logger: PinoLogger,
   ) {
@@ -82,13 +88,27 @@ export class StorefrontService {
   /** `storefront.get` for `caller`, in the locale `Accept-Language` asks for (else the default one). */
   async get(caller: StorefrontCaller, acceptLanguage: string | undefined): Promise<StorefrontConfig> {
     const entry = await this.entry(acceptLanguage);
-    const payment = await this.paymentAccount(this.tenants.require());
-    return storefrontFor(entry, {
+    const tenant = this.tenants.require();
+    const payment = await this.paymentAccount(tenant);
+    const audience = {
       caller,
       publicApiUrl: this.publicApiUrl,
       payment,
       airlineCardSwitch: this.airlineCardSwitch,
+    };
+    return storefrontFor(entry, {
+      ...audience,
+      airlineCardSuspended: airlineCardOffered(entry, audience) && (await this.airlineCardSuspended(tenant)),
     });
+  }
+
+  /** True while the airline card is suspended for the tenant's environment, or when Redis cannot say (logged). */
+  private async airlineCardSuspended(tenant: RequestTenant): Promise<boolean> {
+    const suspension = await this.airlineCardLimits.suspension(tenant.tenantId, tenant.environment);
+    if (suspension === "unknown") {
+      this.logger.warn({ tenantId: tenant.tenantId }, "storefront.airline_card_suspension_unknown");
+    }
+    return suspension !== "available";
   }
 
   /**

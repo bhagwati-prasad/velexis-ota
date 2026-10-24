@@ -64,6 +64,7 @@ import type { TenantTransaction } from "../../../src/tenancy/tenant-tx";
 import { createWorkerApp, createWorkerLogger, WorkerModule } from "../../../src/worker.module";
 import { buildContactInput, buildTravelerInput, dateFromToday } from "../../builders/checkouts";
 import {
+  edgeHeaders,
   edgeWriteHeaders,
   newApiKey,
   testApiCredentials,
@@ -88,6 +89,8 @@ const OPERATION = "completeCheckoutWithAirlineCard";
 // Test data only: Visa's documented test PAN, the stub's declined test card and a made-up security code.
 const TEST_PAN = "4111111111111111";
 const DECLINED_PAN = "4000000000000002";
+/** Mastercard's documented test number. */
+const MASTERCARD_PAN = "5555555555554444";
 const TEST_CVV = "123";
 /** Three years ahead: never expired, within the schema's 2026–2099. */
 const EXPIRY_YEAR = new Date().getUTCFullYear() + 3;
@@ -333,7 +336,8 @@ interface AirlineCheckout {
   readonly payment: PaymentBody;
 }
 
-async function airlineCheckout(options: { readonly hint?: boolean } = {}): Promise<AirlineCheckout> {
+/** A guest checkout of alpha with its traveller and contact, ready for a payment; its id. */
+async function readyCheckout(): Promise<string> {
   const pricedOfferId = await newPricedOffer();
   const created = await request(api.server)
     .post("/v1/checkouts")
@@ -351,10 +355,20 @@ async function airlineCheckout(options: { readonly hint?: boolean } = {}): Promi
     .set(edgeWrite())
     .send({ contacts: [buildContactInput()] });
   expect(contacts.status).toBe(200);
-  const paid = await request(api.server)
+  return checkoutId;
+}
+
+/** checkout.createPayment {method: "airline_card"} of `checkoutId` on the edge. */
+async function createAirlinePayment(checkoutId: string): Promise<request.Response> {
+  return await request(api.server)
     .post(`/v1/checkouts/${checkoutId}/payments`)
     .set({ ...edgeWrite(), "Idempotency-Key": idempotencyKey() })
     .send({ method: "airline_card", termsAccepted: true });
+}
+
+async function airlineCheckout(options: { readonly hint?: boolean } = {}): Promise<AirlineCheckout> {
+  const checkoutId = await readyCheckout();
+  const paid = await createAirlinePayment(checkoutId);
   expect(paid.status).toBe(201);
   let payment = paid.body as PaymentBody;
   if (options.hint !== false) {
@@ -600,7 +614,11 @@ beforeAll(async () => {
   preloadOpenApiDocument();
   // The response validators of these operations compile on their first check: here, with every status checked below.
   const checker = responseChecker("ota");
-  for (const [operationId, statuses] of [[OPERATION, [201, 400, 402, 403, 409, 422, 504]]] as const) {
+  for (const [operationId, statuses] of [
+    [OPERATION, [201, 400, 402, 403, 409, 422, 504]],
+    ["updatePayment", [200]],
+    ["createCheckoutPayment", [403]],
+  ] as const) {
     for (const status of statuses) {
       checker.check(operationId, { status, body: {} });
     }
@@ -1120,6 +1138,132 @@ describe("cards the airline declines (stub card 4000000000000002)", () => {
     ]);
     // One order was sent for the other checkout: its decline; the refusal while suspended sent nothing.
     expect(await bookingsOfCheckout(other.checkout.id)).toHaveLength(1);
+  });
+});
+
+describe("a declined card's payment and the traveller's next card, of another brand (FIX-W29-OTA)", () => {
+  let paid: AirlineCheckout;
+  let declinedAnswer: Answer;
+  let unquoted: Answer;
+  let hinted: { readonly status: number; readonly body: PaymentBody & { readonly status: string } };
+  let hintedRow: Awaited<ReturnType<typeof paymentRow>>;
+  let checkoutBrand: string | null;
+  let updates: Awaited<ReturnType<typeof paymentEvents>>;
+  let charged: Answer;
+  let chargedRow: Awaited<ReturnType<typeof paymentRow>>;
+
+  beforeAll(async () => {
+    await resetRateLimits();
+    paid = await airlineCheckout();
+    stub.clearRequests();
+    declinedAnswer = await complete(paid, { card: cardOf({ number: DECLINED_PAN }) });
+    const mastercard = cardOf({ brand: "MASTERCARD", number: MASTERCARD_PAN });
+    // The fee in the total was quoted for VISA: refused unsent, as OADR-0004 point 5 asks.
+    unquoted = await complete(paid, { card: mastercard });
+    const res = await request(api.server)
+      .patch(`/v1/payments/${paid.payment.id}`)
+      .set(edgeWrite())
+      .send({ card: { brand: "MASTERCARD", bin: MASTERCARD_PAN.slice(0, 6) } });
+    expectResponseToMatch("updatePayment", res);
+    hinted = { status: res.status, body: res.body as PaymentBody & { readonly status: string } };
+    hintedRow = await paymentRow(paid.payment.id);
+    checkoutBrand = (
+      await alphaTx((trx) =>
+        trx
+          .selectFrom("checkouts")
+          .select("payment_brand")
+          .where("id", "=", paid.checkout.id)
+          .executeTakeFirstOrThrow(),
+      )
+    ).payment_brand;
+    updates = (await paymentEvents(paid.payment.id)).filter(
+      (event) => event.type === "payment.amount_updated",
+    );
+    charged = await complete({ checkout: paid.checkout, payment: hinted.body }, { card: mastercard });
+    chargedRow = await paymentRow(paid.payment.id);
+  }, SCENARIO_TIMEOUT_MS);
+
+  it("[FIX-W29-OTA AC1] re-quotes another brand on the same paymentId after a decline, then the airline charges that card", () => {
+    expect([declinedAnswer.status, errorOf(declinedAnswer).code]).toEqual([402, "PAYMENT_DECLINED"]);
+    expect([unquoted.status, errorOf(unquoted).code, errorOf(unquoted).details?.["reason"]]).toEqual([
+      409,
+      "PAYMENT_AMOUNT_MISMATCH",
+      "card_changed",
+    ]);
+    // The declined payment takes the next card's hint: still `failed`, the declined card's last 4 gone.
+    expect(hinted.status).toBe(200);
+    expect(hinted.body).toMatchObject({ id: paid.payment.id, status: "failed", card: null });
+    expect(hintedRow).toMatchObject({ status: "failed", card_brand: "MASTERCARD", card_last4: null });
+    expect(hintedRow.card_bin).toBe(MASTERCARD_PAN.slice(0, 6));
+    expect(checkoutBrand).toBe("MASTERCARD");
+    expect(updates.at(-1)?.payload).toMatchObject({ cardBrand: "MASTERCARD" });
+    expect([charged.status, completionOf(charged).booking.status]).toEqual([201, "ticketed"]);
+    expect(chargedRow).toMatchObject({ status: "captured", card_brand: "MASTERCARD", card_last4: "4444" });
+    // One order for the declined card, one for the charged one; the refused one sent nothing.
+    expect(amadeusCalls("createFlightOrders")).toHaveLength(2);
+    expectNoCard(JSON.stringify(hinted.body), "the updated payment");
+  });
+});
+
+describe("the airline card while it is suspended for the tenant (FIX-W29-OTA)", () => {
+  let offered: readonly string[];
+  let hidden: readonly string[];
+  let refused: request.Response;
+  let unknownMethods: readonly string[];
+  let unknownRefused: request.Response;
+  let offeredAgain: readonly string[];
+  let createdAgain: request.Response;
+
+  /** The payment methods storefront.get offers the hosted storefront of alpha. */
+  async function edgeMethods(): Promise<readonly string[]> {
+    const res = await request(api.server).get("/v1/storefront").set(edgeHeaders(ALPHA_HOST));
+    expect(res.status).toBe(200);
+    return (res.body as { payment: { supportedMethods: string[] } }).payment.supportedMethods;
+  }
+
+  beforeAll(async () => {
+    await resetRateLimits();
+    const flag = `t:${alphaId}:test:ac:suspended`;
+    offered = await edgeMethods();
+    const checkoutId = await readyCheckout();
+    // The flag the tenant's 20th decline of the hour sets (OBE-051).
+    await redis.client.set(flag, "1", "EX", 3600);
+    try {
+      hidden = await edgeMethods();
+      refused = await createAirlinePayment(checkoutId);
+    } finally {
+      await redis.client.del(flag);
+    }
+    // A Redis that cannot say whether the method is suspended never lets it be offered.
+    const limits = api.app.get(AirlineCardLimits, { strict: false });
+    const spy = vi.spyOn(limits, "suspension").mockResolvedValue("unknown");
+    try {
+      unknownMethods = await edgeMethods();
+      unknownRefused = await createAirlinePayment(checkoutId);
+    } finally {
+      spy.mockRestore();
+    }
+    offeredAgain = await edgeMethods();
+    createdAgain = await createAirlinePayment(checkoutId);
+  }, SCENARIO_TIMEOUT_MS);
+
+  it("[FIX-W29-OTA AC1] leaves the method out of storefront.get and refuses checkout.createPayment while suspended", () => {
+    expect(offered).toContain("airline_card");
+    expect(hidden).not.toContain("airline_card");
+    expect(refused.status).toBe(403);
+    expectResponseToMatch("createCheckoutPayment", refused);
+    expect((refused.body as ErrorBody).error).toMatchObject({
+      code: "FEATURE_DISABLED",
+      details: { feature: "airlineCard", reason: "suspended" },
+    });
+    expect(unknownMethods).not.toContain("airline_card");
+    expect([unknownRefused.status, (unknownRefused.body as ErrorBody).error.code]).toEqual([
+      503,
+      "SERVICE_UNAVAILABLE",
+    ]);
+    // Once the hour is over (the flag gone), the method is offered again.
+    expect(offeredAgain).toContain("airline_card");
+    expect(createdAgain.status).toBe(201);
   });
 });
 

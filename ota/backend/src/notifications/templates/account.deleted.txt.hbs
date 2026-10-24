@@ -1,0 +1,16 @@
+{{#if customer.firstName}}Hello {{customer.firstName}},{{else}}Hello,{{/if}}
+
+Your {{brand.name}} account was deleted on {{deletion.requestedAt}} (UTC), as you asked. You can no longer sign in to
+it, and the personal data of the account is erased by {{deletion.erasureDueBy}} (UTC) at the latest.
+{{#if deletion.bookingsKept}}
+
+The records of your bookings are kept for as long as airline settlement, tax and accounting rules require, then
+deleted.
+{{/if}}
+
+You can create a new account with this e-mail address at any time.
+
+If you did not ask for this, tell {{brand.name}} at once{{#if brand.supportEmail}} at {{brand.supportEmail}}{{/if}}{{#if brand.supportPhone}}{{#if brand.supportEmail}} or{{/if}} on {{brand.supportPhone}}{{/if}}.
+
+{{brand.name}}
+{{brand.storefrontUrl}}

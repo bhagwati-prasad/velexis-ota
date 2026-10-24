@@ -61,6 +61,7 @@ import { AmadeusClient } from "../../../src/amadeus/amadeus.client";
 import { newBookingReference } from "../../../src/bookings/booking-reference";
 import { OrderRecorder, readCreatedOrder } from "../../../src/bookings/order-recorder";
 import { buildCreateOrderRequest } from "../../../src/bookings/order-request.builder";
+import { BookingOrchestrator } from "../../../src/bookings/booking-orchestrator.service";
 import {
   RECONCILE_SCAN_JOB,
   ReconcileScan,
@@ -87,6 +88,7 @@ import { newId } from "../../../src/common/ids";
 import { OTA_QUEUE } from "../../../src/common/queues/queue-names";
 import { loadWorkerConfig } from "../../../src/config";
 import { jobTenant, minuteBucket, tenantJob } from "../../../src/jobs/fan-out";
+import { PAYMENT_JOB, paymentJob } from "../../../src/payments/payments.processor";
 import { Money } from "../../../src/pricing/pricing.types";
 import { seedDefaultMarkupRule } from "../../../src/provisioning/seeds/markup-rules.seed";
 import { seedStorefrontSettings } from "../../../src/provisioning/seeds/storefront-settings.seed";
@@ -105,6 +107,7 @@ import {
   type RowLockOrderObservation,
 } from "../../helpers/lock-order";
 import { MemorySink } from "../../helpers/log-sink";
+import { runDelayedPaymentJob, type FinishedPaymentJob } from "../../helpers/payment-jobs";
 import { useNextApplicationLoggerOutsideRequests } from "../../helpers/nest-pino";
 import { OPENAPI_SETUP_TIMEOUT_MS, preloadOpenApiDocument } from "../../helpers/openapi";
 import { createTestApp, type TestApp } from "../../support/create-test-app";
@@ -395,6 +398,7 @@ async function bookingRow(bookingId: string) {
         "status",
         "ticketing_status",
         "ticketing_requested_at",
+        "ticketing_next_attempt_at",
         "checkout_id",
         "priced_offer_id",
         "record_locator",
@@ -849,6 +853,7 @@ describe("an order whose answer was lost but that exists (stub timeout)", () => 
   let decided: Awaited<ReturnType<typeof bookingRow>>;
   let finalReplay: Answer;
   let otherKey: Answer;
+  let net: FinishedPaymentJob;
 
   beforeAll(async () => {
     useWorkerClock();
@@ -866,9 +871,20 @@ describe("an order whose answer was lost but that exists (stub timeout)", () => 
     foundAt = after(timedOut.started, 2 * MINUTE);
     found = await scanAttempt(timedOut.bookingId, foundAt);
     decided = await bookingRow(timedOut.bookingId);
+    // The safety net the found decision's record step queued before its commit (FIX-W29-OTA), run now.
+    net = await runDelayedPaymentJob(worker, paymentsQueue, `capture-retry-${timedOut.payment.id}`);
     finalReplay = await complete(timedOut.checkout.id, { key: timedOut.key });
     otherKey = await complete(timedOut.checkout.id);
   }, SCENARIO_TIMEOUT_MS);
+
+  it("[FIX-W29-OTA AC3] queues the capture's safety net in the found decision's record step, which finds it captured", () => {
+    expect(net).toEqual({
+      state: "completed",
+      returnvalue: expect.objectContaining({ outcome: "unchanged" }),
+    });
+    // The capture of the decision is the only one (the next test reads the same list).
+    expect(stripePostsOf(timedOut.payment, "/capture")).toHaveLength(1);
+  });
 
   it("[OBE-043 AC1] keeps the booking pending, queues the first booking.reconcile 30 s later and replays the same 504", () => {
     expect(pendingRow).toMatchObject({
@@ -978,6 +994,108 @@ describe("an order whose answer was lost but that exists (stub timeout)", () => 
     });
     // Flight Create Orders was sent once for the checkout, whatever the retries.
     expect(amadeusCalls("createFlightOrders")).toHaveLength(1);
+  });
+});
+
+describe("the safety net of checkout.complete's capture after its record step (FIX-W29-OTA)", () => {
+  /** A paid checkout completed with the stub's success; `crash` makes the API stop before step 4's Stripe call. */
+  interface Completed {
+    readonly payment: PaymentBody;
+    readonly answer: Answer;
+    readonly bookingId: string;
+    readonly paymentBefore: Awaited<ReturnType<typeof paymentRow>>;
+    readonly capturesBefore: number;
+    readonly net: FinishedPaymentJob;
+    readonly again: FinishedPaymentJob;
+    readonly captures: Array<string | undefined>;
+    readonly bookingAfter: Awaited<ReturnType<typeof bookingRow>>;
+    readonly paymentAfter: Awaited<ReturnType<typeof paymentRow>>;
+    readonly total: string;
+  }
+
+  async function completeAndNet(crash: boolean): Promise<Completed> {
+    await resetRateLimits();
+    stub.setDefaultScenario("success");
+    stripe.reset();
+    const { checkout, payment } = await paidCheckout();
+    const orchestrator = api.app.get(BookingOrchestrator, { strict: false }) as unknown as {
+      capture: (...args: unknown[]) => Promise<boolean>;
+    };
+    const stopped = crash
+      ? vi
+          .spyOn(orchestrator, "capture")
+          .mockRejectedValue(new Error("the process stopped before the Stripe call (simulated)"))
+      : undefined;
+    let answer: Answer;
+    try {
+      answer = await complete(checkout.id);
+    } finally {
+      stopped?.mockRestore();
+    }
+    const paymentBefore = await paymentRow(payment.id);
+    const bookingId = paymentBefore.booking_id ?? "";
+    const capturesBefore = stripePostsOf(payment, "/capture").length;
+    const net = await runDelayedPaymentJob(worker, paymentsQueue, `capture-retry-${payment.id}`);
+    // The retry a capture failure queues, under the net's id: accepted again now that the net completed.
+    const retry = paymentJob(PAYMENT_JOB.captureRetry, alphaId, payment.id);
+    await paymentsQueue.add(retry.name, retry.data, { ...retry.opts, delay: 10 * MINUTE });
+    const again = await runDelayedPaymentJob(worker, paymentsQueue, retry.opts.jobId);
+    return {
+      payment,
+      answer,
+      bookingId,
+      paymentBefore,
+      capturesBefore,
+      net,
+      again,
+      captures: stripePostsOf(payment, "/capture").map((req) => req.headers["idempotency-key"]),
+      bookingAfter: await bookingRow(bookingId),
+      paymentAfter: await paymentRow(payment.id),
+      total: checkout.totals.total.amount,
+    };
+  }
+
+  let normal: Completed;
+  let crashed: Completed;
+
+  beforeAll(async () => {
+    useWorkerClock();
+    normal = await completeAndNet(false);
+    crashed = await completeAndNet(true);
+  }, SCENARIO_TIMEOUT_MS);
+
+  it("[FIX-W29-OTA AC3] the normal path captures once: the safety net finds the payment captured and changes nothing", () => {
+    expect(normal.answer.status).toBe(201);
+    expect(normal.capturesBefore).toBe(1);
+    expect(normal.net).toEqual({
+      state: "completed",
+      returnvalue: expect.objectContaining({ outcome: "unchanged" }),
+    });
+    expect(normal.again.returnvalue).toMatchObject({ outcome: "unchanged" });
+    expect(normal.captures).toEqual([`pi:capture:${normal.payment.id}:${normal.total}`]);
+    expect(normal.paymentAfter).toMatchObject({ status: "captured" });
+  });
+
+  it("[FIX-W29-OTA AC3] a crash between the record step's commit and the capture is captured by the safety net exactly once", () => {
+    // The order was recorded and the request stopped before Stripe: the booking stands, the payment only authorised.
+    expect(crashed.answer.status).toBe(500);
+    expect(crashed.capturesBefore).toBe(0);
+    expect(crashed.paymentBefore).toMatchObject({ status: "authorized" });
+    expect(crashed.net).toEqual({
+      state: "completed",
+      returnvalue: expect.objectContaining({ outcome: "applied" }),
+    });
+    expect(crashed.again.returnvalue).toMatchObject({ outcome: "unchanged" });
+    // One capture of the booking's total, with the key the request would have sent.
+    expect(crashed.captures).toEqual([`pi:capture:${crashed.payment.id}:${crashed.total}`]);
+    expect(crashed.paymentAfter).toMatchObject({ status: "captured", booking_id: crashed.bookingId });
+    expect(crashed.bookingAfter).toMatchObject({ status: "confirmed", paid: crashed.total });
+    // Step 5 never ran either (issue_after_payment): the net makes the issuance due, and the ticketing scan issues it.
+    expect(crashed.bookingAfter).toMatchObject({ ticketing_status: "pending" });
+    expect(crashed.bookingAfter.ticketing_requested_at).toBeInstanceOf(Date);
+    expect(crashed.bookingAfter.ticketing_next_attempt_at).toEqual(
+      crashed.bookingAfter.ticketing_requested_at,
+    );
   });
 });
 

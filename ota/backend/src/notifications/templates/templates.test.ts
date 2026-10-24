@@ -80,7 +80,7 @@ function unescapeAttribute(value: string): string {
 const hrefsOf = (html: string): string[] =>
   [...html.matchAll(/href="([^"]*)"/g)].map((match) => unescapeAttribute(match[1] ?? ""));
 
-// Reading the 36 files and checking and compiling them takes a few milliseconds; once, here, with the default budget.
+// Reading the 42 files and checking and compiling them takes a few milliseconds; once, here, with the default budget.
 beforeAll(async () => {
   for (const key of TEMPLATE_KEYS) {
     const source = await loadTemplateDefault(key);
@@ -320,6 +320,56 @@ describe("the booking e-mails", () => {
     expect(rendered.html).toContain("&lt;script&gt;alert(1)&lt;/script&gt;");
     expect(rendered.html).toContain("O&#x27;Brien &amp; Co");
     expect(rendered.text).toContain("- <script>alert(1)</script> O'Brien & Co");
+  });
+});
+
+describe("the account e-mails (FIX-W29-OTA)", () => {
+  /** The `href` values allowed in an account notice: the OTA's storefront and its support address, nothing that acts. */
+  const expectOnlyStorefrontLinks = (html: string): void => {
+    for (const href of hrefsOf(html)) {
+      expect(href === "https://demo.ota.example.com" || href.startsWith("mailto:"), href).toBe(true);
+    }
+  };
+
+  it("[FIX-W29-OTA AC2] account.email_changed warns the previous address without the new one and without a link that acts", () => {
+    const rendered = compiledOf("account.email_changed").render(sample("account.email_changed"));
+
+    expect(rendered.subject).toBe("The e-mail address of your Demo Travel account is being changed");
+    for (const part of [rendered.html ?? "", rendered.text.replace(/\s+/g, " ")]) {
+      expect(part).toContain("Hello Alex,");
+      expect(part).toContain("2026-11-01T10:00:00Z");
+      expect(part).toContain("Until it is confirmed you keep signing in with this address");
+      expect(part).toContain("If you did not, someone may know your password");
+      expect(part).toContain("support@demo.example.com");
+      // No token, no verification, reset or account link: the e-mail only informs.
+      for (const absent of ["token", "verify", "reset-password", "/account"]) {
+        expect([absent, part.includes(absent)]).toEqual([absent, false]);
+      }
+    }
+    // The only e-mail address in it is the OTA's support address: the new address is no variable of the key.
+    expect(rendered.text.match(/[^\s@]+@[^\s@]+/g)).toEqual(["support@demo.example.com"]);
+    expectOnlyStorefrontLinks(rendered.html ?? "");
+  });
+
+  it("[FIX-W29-OTA AC2] account.deleted confirms the deletion, the erasure date and the kept booking records", () => {
+    const kept = compiledOf("account.deleted").render(sample("account.deleted"));
+    const none = compiledOf("account.deleted").render(
+      withValue(sample("account.deleted"), "deletion.bookingsKept", false),
+    );
+
+    expect(kept.subject).toBe("Your Demo Travel account has been deleted");
+    for (const part of [kept.html ?? "", kept.text.replace(/\s+/g, " ")]) {
+      expect(part).toContain(
+        "Your Demo Travel account was deleted on 2026-11-01T10:00:00Z (UTC), as you asked.",
+      );
+      expect(part).toContain("erased by 2026-12-01T10:00:00Z (UTC) at the latest");
+      expect(part).toContain("The records of your bookings are kept");
+      expect(part).toContain("If you did not ask for this, tell Demo Travel at once");
+    }
+    for (const part of [none.html ?? "", none.text]) {
+      expect(part).not.toContain("The records of your bookings are kept");
+    }
+    expectOnlyStorefrontLinks(kept.html ?? "");
   });
 });
 

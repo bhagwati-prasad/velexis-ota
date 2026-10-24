@@ -18,8 +18,11 @@ import type { TenantTransaction, TenantTx } from "../tenancy/tenant-tx";
 import { AUTHORISATION_WATCH_JOB, authorisationAlertReason } from "./authorisation-watch.processor";
 import type { GatewayState, PaymentGateway } from "./payment-gateway";
 import {
+  addSafetyNet,
   attemptOf,
   cancellationCaptureRetryJob,
+  isCancellationCaptureJob,
+  safetyNetJob,
   captureAmountOf,
   failureCodeOf,
   isPaymentJobName,
@@ -205,6 +208,45 @@ describe("the jobs of ota-payments", () => {
     expect(attemptOf(job(0, 5))).toEqual({ jobId: "payment-void-x", last: false });
     expect(attemptOf(job(4, 5))).toEqual({ jobId: "payment-void-x", last: true });
     expect(attemptOf(job(0))).toEqual({ jobId: "payment-void-x", last: true });
+  });
+});
+
+describe("the safety nets of a capture or a void after a commit (FIX-W29-OTA)", () => {
+  it("[FIX-W29-OTA AC3] are the retry jobs of their calls, delayed and removed once they completed", () => {
+    const delay = 10 * 60_000;
+    expect(safetyNetJob("capture", TENANT.id, PAYMENT_ID, delay)).toEqual({
+      name: PAYMENT_JOB.captureRetry,
+      data: { tenantId: TENANT.id, id: PAYMENT_ID },
+      opts: { jobId: `capture-retry-${PAYMENT_ID}`, delay, removeOnComplete: true },
+    });
+    // The kept amount's net is the retry a failed capture of the cancellation queues: one job, never two.
+    const kept = safetyNetJob("cancellation_capture", TENANT.id, PAYMENT_ID, delay);
+    expect(kept.opts.jobId).toBe(cancellationCaptureRetryJob(TENANT.id, PAYMENT_ID).opts.jobId);
+    expect(kept).toMatchObject({ name: PAYMENT_JOB.captureRetry, opts: { delay, removeOnComplete: true } });
+    // The void's net has an id of its own: a failed void's `payment-void-<pay_id>` runs at once, beside it.
+    expect(safetyNetJob("cancellation_void", TENANT.id, PAYMENT_ID, delay)).toEqual({
+      name: PAYMENT_JOB.void,
+      data: { tenantId: TENANT.id, id: PAYMENT_ID },
+      opts: { jobId: `payment-void-cancellation-${PAYMENT_ID}`, delay, removeOnComplete: true },
+    });
+    expect(isCancellationCaptureJob(kept.opts.jobId)).toBe(true);
+    expect(isCancellationCaptureJob(`capture-retry-${PAYMENT_ID}`)).toBe(false);
+  });
+
+  it("[FIX-W29-OTA AC3] are added without ever failing the record step: a refusal or a Redis that does not answer is reported", async () => {
+    vi.useFakeTimers();
+    try {
+      const net = safetyNetJob("capture", TENANT.id, PAYMENT_ID, 600_000);
+      const added = { add: vi.fn(() => Promise.resolve({})) };
+      expect(await addSafetyNet(added, net)).toBe("added");
+      expect(added.add).toHaveBeenCalledExactlyOnceWith(net.name, net.data, net.opts);
+      expect(await addSafetyNet({ add: () => Promise.reject(new Error("READONLY")) }, net)).toBe("failed");
+      const hanging = addSafetyNet({ add: () => new Promise(() => undefined) }, net, 2000);
+      await vi.advanceTimersByTimeAsync(2000);
+      expect(await hanging).toBe("timeout");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
@@ -429,6 +471,7 @@ function handler(
     updatePayment: vi.fn(() => Promise.resolve(true)),
     insertEvent: vi.fn(() => Promise.resolve()),
     insertRefundBookingEvent: vi.fn(() => Promise.resolve()),
+    requestIssuanceAfterPayment: vi.fn(() => Promise.resolve(false)),
   };
   const refunds = {
     lockParents: vi.fn(() => Promise.resolve()),
@@ -495,6 +538,97 @@ describe("PaymentJobsHandler", () => {
       3,
       expect.objectContaining({ status: "captured" }),
     );
+  });
+
+  it("[FIX-W29-OTA AC3] captures the booking's total as a safety net without a failed capture's amount, within the authorisation", async () => {
+    const bookingId = "bkg_01JBPAYMENTS0000000000000";
+    const { instance, gateway, payments } = handler({
+      payment: paymentRow({ bookingId }),
+      // The job's reads: the booking stands, no `payment.capture_failed` amount, the booking's (re-priced) total.
+      trx: readsOnly({ status: "confirmed", amount: null, total: "400.00" }),
+      lockedBookings: [{ id: bookingId, amountPaid: "0.00" }],
+    });
+    gateway.capture.mockResolvedValue(intentState("captured", { amountReceived: "400.00" }));
+
+    expect(
+      await instance.run(PAYMENT_JOB.captureRetry, PAYMENT_ID, {
+        jobId: `capture-retry-${PAYMENT_ID}`,
+        last: false,
+      }),
+    ).toBe("applied");
+    expect(gateway.capture).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ tenantId: TENANT.id }),
+      expect.objectContaining({ id: PAYMENT_ID }),
+      "400.00",
+      "booking",
+    );
+    // Then the issuance step 5 would have asked for, in the same transaction, the booking locked before.
+    expect(payments.requestIssuanceAfterPayment).toHaveBeenCalledExactlyOnceWith(
+      expect.anything(),
+      bookingId,
+      expect.any(Date),
+    );
+    expect(payments.lockBookings.mock.invocationCallOrder[0]).toBeLessThan(
+      payments.requestIssuanceAfterPayment.mock.invocationCallOrder[0] ?? 0,
+    );
+  });
+
+  it("[FIX-W29-OTA AC3] asks for the issuance of an order whose payment was captured before a stop, never for a cancellation's", async () => {
+    const bookingId = "bkg_01JBPAYMENTS0000000000000";
+    // Captured before the process stopped (step 4 recorded, step 5 never ran): the net captures nothing more.
+    const order = handler({
+      payment: paymentRow({ bookingId, status: "captured", amountCaptured: "452.10" }),
+      trx: readsOnly({ status: "confirmed", amount: null, total: "452.10" }),
+      lockedBookings: [{ id: bookingId, amountPaid: "452.10" }],
+    });
+    expect(
+      await order.instance.run(PAYMENT_JOB.captureRetry, PAYMENT_ID, {
+        jobId: `capture-retry-${PAYMENT_ID}`,
+        last: false,
+      }),
+    ).toBe("unchanged");
+    expect(order.gateway.capture).not.toHaveBeenCalled();
+    expect(order.payments.requestIssuanceAfterPayment).toHaveBeenCalledExactlyOnceWith(
+      expect.anything(),
+      bookingId,
+      expect.any(Date),
+    );
+
+    // A cancelled booking's kept amount: the booking is cancelled, nothing is issued.
+    const kept = handler({
+      payment: paymentRow({ bookingId }),
+      trx: readsOnly({
+        status: "cancelled",
+        actorType: "customer",
+        actorId: "cus_01JBPAYMENTS0000000000000",
+        data: { capturePaymentId: PAYMENT_ID, captureAmount: "25.00", refundReason: "duplicate" },
+      }),
+      lockedBookings: [{ id: bookingId, amountPaid: "0.00" }],
+    });
+    kept.gateway.capture.mockResolvedValue(intentState("captured", { amountReceived: "25.00" }));
+    expect(
+      await kept.instance.run(PAYMENT_JOB.captureRetry, PAYMENT_ID, {
+        jobId: `capture-retry-cancellation-${PAYMENT_ID}`,
+        last: false,
+      }),
+    ).toBe("applied");
+    expect(kept.payments.requestIssuanceAfterPayment).not.toHaveBeenCalled();
+  });
+
+  it("[FIX-W29-OTA AC3] captures nothing for a cancellation's safety net whose record step rolled back: the booking stands", async () => {
+    const { instance, gateway, payments } = handler({
+      payment: paymentRow({ bookingId: "bkg_01JBPAYMENTS0000000000000" }),
+      trx: readsOnly({ status: "confirmed", amount: "452.10", total: "452.10" }),
+    });
+
+    expect(
+      await instance.run(PAYMENT_JOB.captureRetry, PAYMENT_ID, {
+        jobId: `capture-retry-cancellation-${PAYMENT_ID}`,
+        last: false,
+      }),
+    ).toBe("unchanged");
+    expect(gateway.capture).not.toHaveBeenCalled();
+    expect(payments.updatePayment).not.toHaveBeenCalled();
   });
 
   it("[FIX-W28-CANCEL AC1] captures a cancelled booking's kept amount with the cancellation's key, then records the release", async () => {

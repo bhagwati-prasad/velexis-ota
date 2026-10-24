@@ -139,6 +139,7 @@ Failure outcomes, as the contract fixes them:
 | Amadeus rejects (a `4xx`: sold out, data) | `failed` | voided | open | `409 SOLD_OUT`, `422 TRAVELER_DATA_INVALID`, `502 SUPPLIER_ERROR` |
 | The request never reached the order (token, rate limits, a connection never made, an Amadeus `401`, `403` or `429` without a business code) | `failed` | unchanged (authorised) | `payment_pending` | The error, e.g. `503 SUPPLIER_UNAVAILABLE` ([OADR-0003](adr/0003-booking-orchestration-and-supplier-timeout-recovery.md) point 9) |
 | Capture fails after the order exists | `confirmed`, `ticketing_status = manual_review` | `authorized`, `payment.capture_retry` queued, staff alerted | completed | `201` with a warning |
+| The process stops between the record step's commit and the capture | `confirmed` | `authorized`; the record step's safety net (`payment.capture_retry`, queued before the commit, 10 minutes later) captures it once, and makes the issuance of `issue_after_payment` due for the ticketing scan (FIX-W29-OTA, [OADR-0010](adr/0010-stripe-gateway-and-payment-webhooks.md) point 6) | completed | none (the request ended) |
 | Issue fails | `confirmed`, `ticketing_status = failed` | captured | completed | `201`, ticketing job retries |
 | Amadeus timeout, `5xx` or unreadable answer on create | `pending`, reconciling | unchanged | `payment_pending`, locked | `504 SUPPLIER_TIMEOUT` (§4) |
 | A checkout step while the booking is `pending` | unchanged | unchanged | unchanged | `409 CHECKOUT_BEING_COMPLETED` |

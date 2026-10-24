@@ -14,8 +14,8 @@
 //     inert `AirlineCardGateway` of the airline-card method (OBE-050; API only: it reads AIRLINE_CARD_ENABLED); and the
 //     receiver of the Velexis Stripe account's webhooks (OBE-039, webhooks/), which stores each event and queues it on
 //     `ota-stripe-events`; and checkout.completeWithAirlineCard (OBE-051, airline-card/airline-card-completion.*): its
-//     controller, service, idempotency hooks and abuse limits (Redis), which hand the booking to BookingsModule's
-//     BookingOrchestrator.
+//     controller, service and idempotency hooks, with the abuse limits (Redis) of PaymentGatewayModule, which hand the
+//     booking to BookingsModule's BookingOrchestrator.
 //   - `PaymentsWorkerModule` (worker only, OBE-039): the `ota-stripe-events` consumer (stripe-events.processor.ts),
 //     which reads each stored event's object again from Stripe with the Velexis keys (StripeClientFactory) and applies
 //     it to the tenant's payments and refunds; its staff alerts go through the worker's global OutboxService. Since
@@ -38,7 +38,6 @@ import { PricingModule } from "../pricing/pricing.module";
 import { ShoppingModule } from "../shopping/shopping.module";
 import { TenancyModule } from "../tenancy/tenancy.module";
 import { BookingsModule } from "../bookings/bookings.module";
-import { AirlineCardLimits } from "./airline-card/abuse-limits";
 import { AirlineCardCompletionController } from "./airline-card/airline-card-completion.controller";
 import {
   AirlineCardCompletionIdempotencyHooks,
@@ -87,7 +86,6 @@ export { PaymentGatewayModule };
     AirlineCardGateway,
     AirlineCardCompletionService,
     AirlineCardCompletionIdempotencyHooks,
-    AirlineCardLimits,
     RequestContext,
     WebhookReceiverService,
   ],

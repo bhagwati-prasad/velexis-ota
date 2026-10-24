@@ -11,6 +11,7 @@ import {
   acceptedLocales,
   AIRLINE_CARD_NOTICES,
   airlineCardNotice,
+  airlineCardOffered,
   assetUrl,
   brandInitials,
   BUNDLED_FONTS,
@@ -646,6 +647,22 @@ describe("the payment account (OBE-038)", () => {
       expect(config.payment.supportedMethods).toEqual(["card"]);
       expect(config.payment.airlineCard).toBeNull();
     }
+  });
+
+  it("[FIX-W29-OTA AC1] leaves the airline card out while it is suspended for the tenant and environment, the card method kept", () => {
+    const flagged = toCachedStorefront(source(seededRow({ airlineCardEnabledTest: true })));
+    const switchOn = { airlineCardSwitch: true, payment: velexis };
+
+    expect(airlineCardOffered(flagged, { ...EDGE, ...switchOn })).toBe(true);
+    expect(airlineCardOffered(flagged, { ...KEY, ...switchOn })).toBe(false);
+    expect(airlineCardOffered(entry, { ...EDGE, ...switchOn })).toBe(false);
+    const suspended = storefrontFor(flagged, { ...EDGE, ...switchOn, airlineCardSuspended: true });
+    const notSuspended = storefrontFor(flagged, { ...EDGE, ...switchOn, airlineCardSuspended: false });
+
+    expectValid(suspended);
+    expect(suspended.payment.supportedMethods).toEqual(["card"]);
+    expect(suspended.payment.airlineCard).toBeNull();
+    expect(notSuspended.payment.supportedMethods).toEqual(["card", "airline_card"]);
   });
 
   it("gives the airline-card notice in the entry's language, English otherwise", () => {

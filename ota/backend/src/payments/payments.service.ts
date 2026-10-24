@@ -44,6 +44,10 @@
 //      (the completion is edge-only, so `pk_` and `sk_` callers, console scope included, may not prepare it either);
 //      `400 VALIDATION_FAILED` for a `provider` (`/provider`: it must be absent); `returnUrl` and `savePaymentMethod`
 //      are ignored;
+//      While the method is suspended for the tenant and environment (the Redis flag of 20 declines within an hour,
+//      OBE-051) it is `403 FEATURE_DISABLED` with `details.reason = "suspended"` too, and `503 SERVICE_UNAVAILABLE` when
+//      Redis cannot say (AirlineCardLimits.assertNotSuspended; lead decision (2) of 2026-10-24, FIX-W29-OTA): the
+//      method is not offered while storefront.get leaves it out;
 //   2. the checkout as for a card (`409`, `410`, `422 CHECKOUT_INCOMPLETE`), `403 FEATURE_DISABLED` while the tenant's
 //      `storefront_settings.airline_card_enabled_<env>` is off, and a card hint's brand must be accepted (`422
 //      UNPROCESSABLE`); its Amadeus credit-card fee is quoted as for a card (card-fees.ts, between transactions);
@@ -64,7 +68,10 @@
 //
 // updatePayment {card: {brand, bin?}}: only a Stripe card payment or airline-card payment of a checkout that
 // checkout.complete is not completing (`409 CHECKOUT_BEING_COMPLETED`, before the provider call and again under the
-// lock), unconfirmed (`409 PAYMENT_NOT_UPDATABLE` with `details.status`), of a checkout that is neither completed
+// lock), unconfirmed (`409 PAYMENT_NOT_UPDATABLE` with `details.status`; an airline-card payment whose card was refused,
+// `failed`, takes the hint of the traveller's next card while it is its checkout's newest payment, and stays `failed`
+// with the refused card's last 4 dropped, lead decision (2) of 2026-10-24, FIX-W29-OTA, OADR-0004 point 5: a card of
+// another brand is quoted on the same `paymentId`), of a checkout that is neither completed
 // (`409`) nor expired (`410`), a brand the storefront accepts (`422 UNPROCESSABLE`). The same hint again changes
 // nothing (no quote, no provider call). Otherwise the fee is quoted for the hint (card-fees.ts; for an airline card
 // the Amadeus fee alone, in the checkout's `net` pricing), the PaymentIntent's amount is set
@@ -106,6 +113,7 @@ import {
   AirlineCardGateway,
   airlineCardNextAction,
 } from "./airline-card/airline-card.gateway";
+import { AirlineCardLimits } from "./airline-card/abuse-limits";
 import { CardFees, type CardFeePlan, type CardFeeQuote, type CardHint } from "./card-fees";
 import {
   failureKeptForKey,
@@ -421,6 +429,7 @@ export class PaymentsService {
     private readonly cardFees: CardFees,
     @Inject(PAYMENT_GATEWAY) private readonly gateway: PaymentGateway,
     private readonly airlineCard: AirlineCardGateway,
+    private readonly airlineCardLimits: AirlineCardLimits,
     private readonly clock: Clock,
     private readonly ids: IdGenerator,
     private readonly logger: PinoLogger,
@@ -853,6 +862,8 @@ export class PaymentsService {
         ],
       });
     }
+    // Not offered while 20 declines of the hour suspend it (FIX-W29-OTA), as storefront.get leaves it out.
+    await this.airlineCardLimits.assertNotSuspended(tenant.tenantId, tenant.environment);
     const hint: CardHint | undefined =
       body.card === undefined ? undefined : { brand: body.card.brand, bin: body.card.bin };
     for (let attempt = 1; attempt <= STEP_ATTEMPTS; attempt += 1) {
@@ -1126,13 +1137,16 @@ export class PaymentsService {
           }
         }
         await this.checkouts.refuseWhileCompleting(trx, row.checkoutId);
-        if (row.status !== "requires_payment_method") {
+        const checkout = await this.checkoutOf(trx, row.checkoutId);
+        if (
+          row.status !== "requires_payment_method" &&
+          !(airline && (await this.takesNextCard(trx, row, checkout)))
+        ) {
           throw new AppError("PAYMENT_NOT_UPDATABLE", {
             message: "The payment can no longer be changed: create a new payment.",
             details: { status: apiStatusOf(row.status) },
           });
         }
-        const checkout = await this.checkoutOf(trx, row.checkoutId);
         const status = effectiveStatus(checkout, now);
         if (status === "completed") {
           throw new AppError("CHECKOUT_ALREADY_COMPLETED");
@@ -1202,6 +1216,8 @@ export class PaymentsService {
           card_fee_lines: JSON.stringify(cardFeeLinesFor(mode, quote, minorUnits)),
           card_brand: quote.brand,
           card_bin: quote.bin,
+          // A declined airline card's last 4 digits do not belong to the next card (FIX-W29-OTA).
+          ...(locked.status === "failed" ? { card_last4: null } : {}),
           updated_at: now,
         });
         await this.event(trx, locked, {
@@ -1242,6 +1258,23 @@ export class PaymentsService {
       });
     }
     throw new AppError("CONFLICT", { message: "The payment changed while it was updated; try again." });
+  }
+
+  /**
+   * Whether a `failed` airline-card payment takes the hint of the traveller's next card (see the file header), as
+   * checkout.completeWithAirlineCard takes the next card on it (OADR-0004 point 5): while it is still the newest payment
+   * of its checkout, which is at the airline's price. A payment another one replaced since is not changed.
+   */
+  private async takesNextCard(
+    trx: TenantTransaction,
+    row: PaymentRow,
+    checkout: PaymentCheckoutRow,
+  ): Promise<boolean> {
+    return (
+      row.status === "failed" &&
+      checkout.pricingMode === "net" &&
+      (await this.repository.newestPaymentIdOfCheckout(trx, checkout.id)) === row.id
+    );
   }
 
   /**

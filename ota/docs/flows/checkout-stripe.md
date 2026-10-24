@@ -69,6 +69,7 @@ sequenceDiagram
 | Amadeus timeout, `5xx` or unreadable answer at order creation | `504 SUPPLIER_TIMEOUT` with `bookingId`; booking `pending` with `reconcile_until`, nothing voided; reconciliation ([OADR-0003](../adr/0003-booking-orchestration-and-supplier-timeout-recovery.md)) | "We are confirming your booking" page that polls `bookings.getTicketingStatus` |
 | A checkout step while its booking is `pending` | `409 CHECKOUT_BEING_COMPLETED` with `bookingId`; nothing changes | The same confirmation page |
 | Capture fails after the order exists | Booking `confirmed`, ticketing `manual_review`, capture retried, staff alerted | Confirmation with "tickets are being issued" |
+| The process stops between the record step's commit and the capture | Booking `confirmed`, payment authorised; the safety net the record step queued before its commit (`payment.capture_retry`, `capture-retry-<pay_id>`, 10 minutes later) captures the booking's total with the request's key, once, and makes the issuance of `issue_after_payment` due for the ticketing scan (lead decision (4) of 2026-10-24, FIX-W29-OTA; [OADR-0010](../adr/0010-stripe-gateway-and-payment-webhooks.md) point 6) | The request fails; the booking is confirmed and paid within minutes, then ticketed |
 | Issue fails | Booking `confirmed`, ticketing `failed`, retries until the deadline | Same |
 | Webhook before the payment row has the PaymentIntent id | Lookup by `metadata.payment_id` | — |
 

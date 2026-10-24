@@ -24,6 +24,7 @@ const KEY_CHECK = /^[a-z]+(\.[a-z_]+)+$/;
 /** OADR-0013 item 4: customers get the account e-mails, travellers the booking e-mails, staff the alerts. */
 const AUDIENCE_BY_GROUP: Readonly<Record<string, string>> = {
   auth: "customer",
+  account: "customer",
   booking: "traveller",
   staff: "staff",
 };
@@ -85,10 +86,12 @@ function leafPaths(data: SampleValue, prefix = ""): string[] {
 }
 
 describe("template keys", () => {
-  it("are the MVP keys of OADR-0013 with booking.updated of its revision of 2026-10-23, each allowed by the notification_templates key CHECK", () => {
+  it("[FIX-W29-OTA AC2] are the MVP keys of OADR-0013 with booking.updated of its revision of 2026-10-23 and the account keys of 2026-10-24, each allowed by the notification_templates key CHECK", () => {
     expect(TEMPLATE_KEYS).toEqual([
       "auth.verify_email",
       "auth.password_reset",
+      "account.email_changed",
+      "account.deleted",
       "booking.confirmed",
       "booking.ticketed",
       "booking.ticketing_delayed",

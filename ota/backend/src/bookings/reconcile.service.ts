@@ -46,7 +46,10 @@
 //        `pi:capture:<pay_id>:<amount>` of the booking's total, which checkout.complete records before Flight Create
 //        Orders (the priced offer the order was sent from, a re-price included) and never more than the authorisation
 //        (not for the `manual_review` policy without tickets, whose staff are alerted), a failed capture handled as
-//        checkout.complete handles it (`manual_review`, `payment.capture_retry` 10 minutes later, staff alert); then,
+//        checkout.complete handles it (`manual_review`, `payment.capture_retry` 10 minutes later, staff alert), and its
+//        safety net added by T2 before its commit as checkout.complete's record step adds it (the same delayed
+//        `capture-retry-<pay_id>`, lead decision (4) of 2026-10-24, FIX-W29-OTA: a worker that stopped between the
+//        commit and the capture leaves no authorisation behind, as the decided booking is never claimed again); then,
 //        for `issue_after_payment`, the issuance through the ticketing job's own attempt (ticketing.service.ts: a
 //        resync first, then Flight Order Issue), its next attempt set to now so the ticketing scan takes it over when
 //        needed;
@@ -109,7 +112,13 @@ import {
   type PaymentGateway,
 } from "../payments/payment-gateway";
 import { providerStateUpdate } from "../payments/payment-state";
-import { captureAmountOf, PAYMENT_JOB, paymentJob } from "../payments/payments.processor";
+import {
+  addSafetyNet,
+  captureAmountOf,
+  PAYMENT_JOB,
+  paymentJob,
+  safetyNetJob,
+} from "../payments/payments.processor";
 import { PaymentsRepository, type PaymentRow } from "../payments/payments.repository";
 import { Money } from "../pricing/pricing.types";
 import { parseOffer, type ParsedOffer } from "../shopping/offers.mapper";
@@ -215,6 +224,15 @@ export const bookingQueueAlertKey = (now: Date, environment: string): string =>
 
 /** When `payment.capture_retry` runs after a failed capture (OADR-0008 point 7). */
 export const CAPTURE_RETRY_DELAY_MS = 10 * 60_000;
+
+/**
+ * Whether the money step captures the payment of a recorded order (checkout.complete's step 4, the reconciliation's
+ * found decision): unless the policy is `manual_review` and no ticket was issued (staff issue from the console, which
+ * captures first).
+ */
+export function mustCaptureOrder(policy: string, recorded: Pick<RecordedOrder, "coverage">): boolean {
+  return policy !== "manual_review" || recorded.coverage !== "none";
+}
 
 /** The Velexis operation of the reconciliation's Amadeus calls (`supplier_requests.operation`). */
 export const RECONCILE_OPERATION = "booking.reconcile";
@@ -1452,6 +1470,13 @@ export class ReconcileService {
               "with another form of payment or cancel the booking from the console.",
           });
         }
+        if (airline === undefined && mustCaptureOrder(policy, result)) {
+          // The capture below runs after this commit: its safety net is added before it (FIX-W29-OTA).
+          const payment = await this.capturablePayment(trx, id);
+          if (payment !== undefined && payment.status !== "captured") {
+            await this.queueCaptureSafetyNet(tenant, id, payment.id);
+          }
+        }
         return { result, issueRequested: booking.issueRequested, airline };
       });
     } catch (error) {
@@ -1489,7 +1514,7 @@ export class ReconcileService {
     }
 
     // The money, as checkout.complete's step 4.
-    const mustCapture = policy !== "manual_review" || result.coverage !== "none";
+    const mustCapture = mustCaptureOrder(policy, result);
     const issueDue =
       policy === "issue_after_payment" && result.coverage === "none" && !recorded.issueRequested;
     let captured = false;
@@ -1537,14 +1562,7 @@ export class ReconcileService {
     const id = claim.booking.id;
     const read = await this.tx.run(async (trx) => {
       const booking = await this.bookings.booking(trx, id);
-      const paymentIds = await this.bookings.paymentIdsOf(trx, id);
-      let payment: PaymentRow | undefined;
-      for (const paymentId of paymentIds) {
-        const row = await this.payments.payment(trx, paymentId);
-        if (row?.provider === "stripe" && row.providerPaymentId !== null) {
-          payment = row;
-        }
-      }
+      const payment = await this.capturablePayment(trx, id);
       const minorUnits =
         booking === undefined ? 2 : ((await this.payments.currencyMinorUnits(trx, booking.currency)) ?? 2);
       return { booking, payment, minorUnits };
@@ -1628,6 +1646,41 @@ export class ReconcileService {
       });
     });
     return true;
+  }
+
+  /** The booking's Stripe payment with a PaymentIntent (the last one), or `undefined` (an airline-card booking). */
+  private async capturablePayment(
+    trx: TenantTransaction,
+    bookingId: string,
+  ): Promise<PaymentRow | undefined> {
+    let payment: PaymentRow | undefined;
+    for (const paymentId of await this.bookings.paymentIdsOf(trx, bookingId)) {
+      const row = await this.payments.payment(trx, paymentId);
+      if (row?.provider === "stripe" && row.providerPaymentId !== null) {
+        payment = row;
+      }
+    }
+    return payment;
+  }
+
+  /**
+   * The safety net of the capture after the record step (lead decision (4) of 2026-10-24, FIX-W29-OTA; see the file
+   * header): the delayed `payment.capture_retry` of the payment (`capture-retry-<pay_id>`), added in the record step's
+   * transaction before its commit. Never throws: a net Redis does not take is logged.
+   */
+  private async queueCaptureSafetyNet(
+    tenant: PlatformTenant,
+    bookingId: string,
+    paymentId: string,
+  ): Promise<void> {
+    const net = safetyNetJob("capture", tenant.id, paymentId, CAPTURE_RETRY_DELAY_MS);
+    const outcome = await addSafetyNet(this.paymentsQueue, net);
+    if (outcome !== "added") {
+      this.logger.warn(
+        { bookingId, jobId: net.opts.jobId, outcome },
+        "bookings.capture_safety_net_not_queued",
+      );
+    }
   }
 
   /** A failed capture after the order was recorded: as checkout.complete's (see the file header). */

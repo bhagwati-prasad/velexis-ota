@@ -1517,10 +1517,16 @@ describe("a refresh that stores a new ticket of a ticketed booking (FIX-W26-BOOK
       const finished = async (key: string): Promise<DocumentRenderJobResult> => {
         const job = await vi.waitFor(async () => {
           const id = await documents.getDeduplicationJobId(key);
-          const found = id === null ? undefined : await Job.fromId(documents, id);
-          const state = await found?.getState();
-          if (found === undefined || (state !== "completed" && state !== "failed")) {
+          // The state first, then the job (FIX-W29-OTA): BullMQ writes a finished job's return value in the script
+          // that moves it to completed or failed, so a job read once its state is final holds its result. Read the
+          // other way round, a job read while it ran and seen completed a moment later had no result (`null`).
+          const state = id === null ? undefined : await documents.getJobState(id);
+          if (id === null || (state !== "completed" && state !== "failed")) {
             throw new Error(`job ${key} has not finished`);
+          }
+          const found = await Job.fromId(documents, id);
+          if (found === undefined) {
+            throw new Error(`job ${key} cannot be read`);
           }
           return found;
         }, RENDER_WAIT);

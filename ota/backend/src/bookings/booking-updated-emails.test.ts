@@ -81,7 +81,7 @@ describe("BookingUpdatedEmails.send", () => {
 
     const result = await emails.send(TRX, INPUT);
 
-    expect(result).toEqual({ updated: true, notice: true });
+    expect(result).toEqual({ updated: true, notice: true, refused: [] });
     expect(queued[0]).toEqual({
       templateKey: BOOKING_UPDATED_TEMPLATE,
       to: "new@example.com",
@@ -156,7 +156,7 @@ describe("BookingUpdatedEmails.send", () => {
       dedupePrefix: "booking.patched",
     });
 
-    expect(result).toEqual({ updated: true, notice: false });
+    expect(result).toEqual({ updated: true, notice: false, refused: [] });
     expect(queued.map((mail) => [mail.to, mail.locale, mail.dedupeKey])).toEqual([
       ["Old@Example.com", "fr", `booking.patched:${BOOKING_ID}:v4:new`],
     ]);
@@ -164,15 +164,23 @@ describe("BookingUpdatedEmails.send", () => {
     expect((await setup().emails.send(TRX, { ...INPUT, previousEmail: null })).notice).toBe(false);
   });
 
-  it("logs and skips an e-mail the outbox refuses, and says when a repeated key queued nothing", async () => {
+  it("[FIX-W29-OTA AC4] logs and skips an e-mail the outbox refuses and names it, and says when a repeated key queued nothing", async () => {
     const refused = setup({ refuse: true });
     const repeated = setup({ queued: false });
 
-    expect(await refused.emails.send(TRX, INPUT)).toEqual({ updated: false, notice: false });
+    expect(await refused.emails.send(TRX, INPUT)).toEqual({
+      updated: false,
+      notice: false,
+      refused: ["updated", "notice"],
+    });
     expect(refused.logger.error).toHaveBeenCalledWith(
       expect.objectContaining({ bookingId: BOOKING_ID, template: BOOKING_UPDATED_TEMPLATE }),
       "bookings.update_email_invalid",
     );
-    expect(await repeated.emails.send(TRX, INPUT)).toEqual({ updated: false, notice: false });
+    expect(await refused.emails.send(TRX, { ...INPUT, previousEmail: null })).toMatchObject({
+      refused: ["updated"],
+    });
+    // A repeated key is no refusal: the e-mail was queued before.
+    expect(await repeated.emails.send(TRX, INPUT)).toEqual({ updated: false, notice: false, refused: [] });
   });
 });

@@ -19,8 +19,9 @@
 // when PostgreSQL ends that cycle with a deadlock. The bookings, payments and refunds that may hold a deletion back
 // are read without a lock: a booking claimed for one of the locked checkouts is either committed before the lock was
 // granted (and seen here) or waits for this transaction and finds its checkout abandoned. A checkout whose booking is
-// still `pending` (a test booking that does not hold back a deletion in the live environment) is locked but never
-// abandoned: nothing of it changes until the reconciliation decides (OADR-0003 point 10). The payments of the
+// still `pending` is never abandoned: nothing of it changes until the reconciliation decides (OADR-0003 point 10);
+// since FIX-W29-OTA (lead decision (3) of 2026-10-24) such a booking holds the deletion back whatever its environment,
+// so the rule is a safeguard only. The payments of the
 // abandoned checkouts whose authorisation may still hold money (`voidablePaymentsOf`) are read in the same
 // transaction, for the `payment.void` jobs the service queues after the commit.
 import { Injectable } from "@nestjs/common";
@@ -246,10 +247,12 @@ export class AccountRepository {
   }
 
   /**
-   * The customer's bookings of `environments` that still wait for payment, ticketing or a refund (the document's
-   * `ACCOUNT_DELETION_BLOCKED`), oldest first, at most `MAX_BLOCKING_BOOKINGS`:
+   * The customer's bookings that still wait for payment, ticketing or a refund (the document's
+   * `ACCOUNT_DELETION_BLOCKED`), oldest first, at most `MAX_BLOCKING_BOOKINGS`: those of `environments`, and every
+   * `pending` one whatever its environment (lead decision (3) of 2026-10-24, FIX-W29-OTA):
    *
-   * - `pending`: the order is being created or reconciled, its payment authorised and not yet captured or released;
+   * - `pending`: the order is being created or reconciled, its payment authorised and not yet captured or released (its
+   *   checkout stays open for the reconciliation, OADR-0003 point 10, so a deletion never leaves it behind);
    * - `confirmed` or `partially_ticketed` while tickets are still awaited (`AWAITING_TICKETING_STATUSES`);
    * - any but a `failed` one with a payment whose money has not moved yet (`AWAITING_PAYMENT_STATUSES`: an uncaptured
    *   authorisation, a payment being processed); a failed booking booked nothing, and its authorisation is released;
@@ -264,31 +267,35 @@ export class AccountRepository {
       .selectFrom("bookings as b")
       .select("b.id")
       .where("b.customer_id", "=", customerId)
-      .where("b.environment", "in", [...environments])
       .where((eb) =>
         eb.or([
           eb("b.status", "=", "pending"),
           eb.and([
-            eb("b.status", "in", ["confirmed", "partially_ticketed"]),
-            eb("b.ticketing_status", "in", [...AWAITING_TICKETING_STATUSES]),
+            eb("b.environment", "in", [...environments]),
+            eb.or([
+              eb.and([
+                eb("b.status", "in", ["confirmed", "partially_ticketed"]),
+                eb("b.ticketing_status", "in", [...AWAITING_TICKETING_STATUSES]),
+              ]),
+              eb.and([
+                eb("b.status", "<>", "failed"),
+                eb.exists(
+                  eb
+                    .selectFrom("payments as p")
+                    .select("p.id")
+                    .whereRef("p.booking_id", "=", "b.id")
+                    .where("p.status", "in", [...AWAITING_PAYMENT_STATUSES]),
+                ),
+              ]),
+              eb.exists(
+                eb
+                  .selectFrom("refunds as r")
+                  .select("r.id")
+                  .whereRef("r.booking_id", "=", "b.id")
+                  .where("r.status", "in", [...AWAITING_REFUND_STATUSES]),
+              ),
+            ]),
           ]),
-          eb.and([
-            eb("b.status", "<>", "failed"),
-            eb.exists(
-              eb
-                .selectFrom("payments as p")
-                .select("p.id")
-                .whereRef("p.booking_id", "=", "b.id")
-                .where("p.status", "in", [...AWAITING_PAYMENT_STATUSES]),
-            ),
-          ]),
-          eb.exists(
-            eb
-              .selectFrom("refunds as r")
-              .select("r.id")
-              .whereRef("r.booking_id", "=", "b.id")
-              .where("r.status", "in", [...AWAITING_REFUND_STATUSES]),
-          ),
         ]),
       )
       .orderBy("b.created_at")

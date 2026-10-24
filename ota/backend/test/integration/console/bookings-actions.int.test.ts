@@ -49,6 +49,7 @@ import { redisKeys } from "../../../src/common/redis/redis.keys";
 import type { ApiConfig } from "../../../src/config";
 import { documentRenderKey } from "../../../src/documents/documents.processor";
 import { TokenService } from "../../../src/identity/token.service";
+import { InvalidNotificationError, OutboxService } from "../../../src/notifications/outbox.service";
 import { seedStorefrontSettings } from "../../../src/provisioning/seeds/storefront-settings.seed";
 import type { OtaPool } from "../../../src/tenancy/tenancy.module";
 import type { TenantTransaction } from "../../../src/tenancy/tenant-tx";
@@ -1236,6 +1237,51 @@ describe("console.bookings.patch", () => {
       update: { contactNotice: true, contactsChanged: true },
     });
     expect(JSON.stringify(rows[1]?.payload)).not.toContain(email);
+  });
+
+  it("[FIX-W29-OTA AC4] warns when the outbox refuses the booking.updated e-mails of a patch, which stands", async () => {
+    const agent = await staffSession("agent");
+    const bookingId = await seedBooking(await newStubOrder());
+    const etag = await etagOf(agent, bookingId);
+    const email = `refused.${randomBytes(3).toString("hex")}@example.com`;
+    const outbox = api.app.get(OutboxService, { strict: false });
+    const enqueue = outbox.enqueue.bind(outbox);
+    // The outbox refuses both booking.updated e-mails (as it refuses an address or data it cannot send).
+    const refusing = vi.spyOn(outbox, "enqueue").mockImplementation(async (trx, input) => {
+      if (input.templateKey === "booking.updated") {
+        throw new InvalidNotificationError("E-mail booking.updated: refused by the test");
+      }
+      return await enqueue(trx, input);
+    });
+    let res: Response;
+    try {
+      res = await agent.patch(bookingId, etag, {
+        contacts: [newContact(email)],
+        reason: "New e-mail by phone",
+        notifyCustomer: true,
+      });
+    } finally {
+      refusing.mockRestore();
+    }
+
+    expect(answer(res)).toEqual([200, undefined]);
+    expectResponseToMatch("consolePatchBooking", res);
+    expect(res.body.warnings).toEqual([
+      {
+        title: "CUSTOMER NOT NOTIFIED",
+        detail:
+          "The e-mail about this change could not be queued for the booking's contact address: tell the traveller yourself.",
+      },
+      {
+        title: "PREVIOUS CONTACT NOT NOTIFIED",
+        detail: "The notice of the contact change could not be queued for the previous contact address.",
+      },
+    ]);
+    // The change stands; nothing was queued for the traveller.
+    expect((await bookingRow(bookingId)).contact_email).toBe(email);
+    expect(
+      (await notificationsOf(bookingId)).filter((row) => row.template_key === "booking.updated"),
+    ).toEqual([]);
   });
 
   it("[FIX-W28-NOTIFY AC1] e-mails nothing for a tags patch with notifyCustomer, and says so", async () => {

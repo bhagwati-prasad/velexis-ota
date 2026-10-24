@@ -2,7 +2,8 @@
 // the hosted storefront and of storefronts built with the SDK, from the tenant's `storefront_settings` through the
 // tenancy module's `TenantTx`, cached in Redis per tenant, environment and locale (OADR-0012 point 7). The content
 // pages and the public assets join in M4 (OBE-071, OBE-072). The payment section's account comes from the payment
-// gateway (PaymentGatewayModule, OBE-038). It exports its repository to the settings context, whose console
+// gateway (PaymentGatewayModule, OBE-038), and so does the airline card's suspension (its abuse limits,
+// AirlineCardLimits; FIX-W29-OTA). It exports its repository to the settings context, whose console
 // operations read and write the same row (OBE-070). API only; the worker never imports it.
 import { Module } from "@nestjs/common";
 import { CookieWriter } from "../common/http/cookie-writer";

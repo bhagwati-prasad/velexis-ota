@@ -96,6 +96,16 @@
 //   airline card         `payment_events` `airline.void_expected` only (the airline reverses its charge; no Stripe
 //                        call, no `refunds` row). `refundStatus: not_applicable`
 //
+// The safety net (lead decision (4) of 2026-10-24, FIX-W29-OTA): the capture of the kept amount and the void run after
+// the record step's commit, so a process that stopped in between would have left the authorisation held until the
+// authorisation watch's alert after 5 days. The record step therefore ends by adding, before its commit and on its own,
+// the job that would retry that call, delayed 10 minutes (`queueSafetyNet`, payments.processor.ts `safetyNetJob`):
+// `payment.capture_retry` under `capture-retry-cancellation-<pay_id>`, the id of the retry a failed capture queues (so
+// it is that retry), or `payment.void` under `payment-void-cancellation-<pay_id>`. On the normal path it finds the
+// payment captured (and the release recorded) or voided and changes nothing; after a crash it captures the kept amount
+// with the same key, or voids, once. A record step that rolled back leaves a job that does nothing: the capture job
+// captures only for a recorded cancellation, and the void never touches the payment of a booking that stands.
+//
 // Lock order (OADR-0003 point 11: checkout, booking, payment, refund; a foreign-key lock counts as a lock of the
 // parent). No transaction here locks the checkout. T1 claims the booking `FOR NO KEY UPDATE SKIP LOCKED`, T2 locks it
 // `FOR NO KEY UPDATE` and waits (OADR-0014 point 6: the foreign-key `FOR KEY SHARE` of another transaction's event,
@@ -169,7 +179,13 @@ import {
 } from "../payments/payment-gateway";
 import { providerStateUpdate } from "../payments/payment-state";
 import { keptCardFeeOf } from "../payments/card-fees";
-import { cancellationCaptureRetryJob, PAYMENT_JOB, paymentJob } from "../payments/payments.processor";
+import {
+  addSafetyNet,
+  cancellationCaptureRetryJob,
+  PAYMENT_JOB,
+  paymentJob,
+  safetyNetJob,
+} from "../payments/payments.processor";
 import { PaymentsRepository, type PaymentRow } from "../payments/payments.repository";
 import {
   REFUNDABLE_PAYMENT_STATUSES,
@@ -931,7 +947,43 @@ export class CancellationRecorder {
       { bookingId, mode: ask.mode, refundStatus: money.refundStatus, cause: via.cause },
       "bookings.cancelled",
     );
+    await this.queueSafetyNet(tenant, bookingId, money);
     return { kind: "cancelled", money, ticketsVoided: voided > 0 };
+  }
+
+  /**
+   * The safety net of the money step's part after the commit (lead decision (4) of 2026-10-24, FIX-W29-OTA; see the
+   * file header): the delayed `payment.capture_retry` of the kept amount (`capture-retry-cancellation-<pay_id>`, the id
+   * of the retry its failure queues) or `payment.void` (`payment-void-cancellation-<pay_id>`), added by the record step
+   * before its commit, on its own (payments.processor.ts `safetyNetJob`). Never throws: a net Redis does not take is
+   * logged, and the call after the commit still runs.
+   */
+  private async queueSafetyNet(
+    tenant: CancellationTenant,
+    bookingId: string,
+    money: RecordedMoney,
+  ): Promise<void> {
+    const net =
+      money.capture !== null
+        ? safetyNetJob(
+            "cancellation_capture",
+            tenant.tenantId,
+            money.capture.payment.id,
+            CAPTURE_RETRY_DELAY_MS,
+          )
+        : money.voidPayment !== null
+          ? safetyNetJob("cancellation_void", tenant.tenantId, money.voidPayment.id, CAPTURE_RETRY_DELAY_MS)
+          : undefined;
+    if (net === undefined) {
+      return;
+    }
+    const outcome = await addSafetyNet(this.paymentsQueue, net);
+    if (outcome !== "added") {
+      this.logger.warn(
+        { bookingId, jobId: net.opts.jobId, outcome },
+        "bookings.cancel_safety_net_not_queued",
+      );
+    }
   }
 
   /** The money step (see the file header), once: the caller's transaction cancelled the booking under its lock. */

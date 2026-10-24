@@ -145,7 +145,7 @@ The body is a **Markdown subset**: headings 2–4, paragraphs, bold, italic, bul
 - `put` upserts the row (`If-Match` when it exists); the server compiles subject, HTML and text with Handlebars in strict mode and checks every variable against the allow-list → `422 TEMPLATE_INVALID` with `details.errors[{part, line, message}]`.
 - `preview` renders with the template's `sample_data`, or with variables in the body, and returns `{subject, html, text}`. The OTA admin shows the HTML in a sandboxed `iframe` (`sandbox` without scripts).
 - `reset` deletes the row, so the code default applies again.
-- MVP keys: `auth.verify_email`, `auth.password_reset`, `booking.confirmed`, `booking.ticketed`, `booking.ticketing_delayed`, `booking.cancelled`, `booking.cancellation_requested`, `booking.not_confirmed`, `staff.ticketing_failed`, `staff.manual_review`, `staff.airline_card_alert`; since 2026-10-23 (OADR-0013 point 4 as revised, FIX-W28-NOTIFY) also `booking.updated`, after `booking.not_confirmed`.
+- MVP keys: `auth.verify_email`, `auth.password_reset`, `booking.confirmed`, `booking.ticketed`, `booking.ticketing_delayed`, `booking.cancelled`, `booking.cancellation_requested`, `booking.not_confirmed`, `staff.ticketing_failed`, `staff.manual_review`, `staff.airline_card_alert`; since 2026-10-23 (OADR-0013 point 4 as revised, FIX-W28-NOTIFY) also `booking.updated`, after `booking.not_confirmed`; since 2026-10-24 (OADR-0013 point 4 as revised, FIX-W29-OTA) also `account.email_changed` and `account.deleted`, after `auth.password_reset`.
 
 ## 3. Console payments (`payments`, `payment_events`, `refunds`)
 

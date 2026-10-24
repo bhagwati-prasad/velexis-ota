@@ -73,7 +73,12 @@ import { loadWorkerConfig, type ApiConfig } from "../../../src/config";
 import { DocumentsProcessor } from "../../../src/documents/documents.processor";
 import { TokenService } from "../../../src/identity/token.service";
 import { NotificationsProcessor } from "../../../src/notifications/notifications.processor";
-import { PAYMENT_JOB, paymentJob, PaymentsProcessor } from "../../../src/payments/payments.processor";
+import {
+  cancellationCaptureRetryJob,
+  PAYMENT_JOB,
+  paymentJob,
+  PaymentsProcessor,
+} from "../../../src/payments/payments.processor";
 import { Money } from "../../../src/pricing/pricing.types";
 import { seedStorefrontSettings } from "../../../src/provisioning/seeds/storefront-settings.seed";
 import { ReconcileProcessor, RECONCILE_SCAN_JOB } from "../../../src/bookings/reconcile.processor";
@@ -91,6 +96,10 @@ import {
 } from "../../helpers/api-env";
 import { startFakeStripe, stripeEndpointModule, type FakeStripe } from "../../helpers/fake-stripe";
 import { holdKeyShare, probeLockOrder } from "../../helpers/lock-order";
+import {
+  runDelayedPaymentJob as runPaymentJobNow,
+  type FinishedPaymentJob,
+} from "../../helpers/payment-jobs";
 import { MemorySink } from "../../helpers/log-sink";
 import { useNextApplicationLoggerOutsideRequests } from "../../helpers/nest-pino";
 import { OPENAPI_SETUP_TIMEOUT_MS, preloadOpenApiDocument } from "../../helpers/openapi";
@@ -807,6 +816,10 @@ async function waitFor<T>(what: string, check: () => Promise<T | undefined>): Pr
   }
 }
 
+/** Runs the delayed job `id` of `ota-payments` now and answers how the worker finished it (test/helpers). */
+const runDelayedPaymentJob = (id: string): Promise<FinishedPaymentJob> =>
+  runPaymentJobNow(worker, paymentsQueue, id);
+
 /** Waits until the job `id` of `queue` has finished (completed or failed) and answers it. */
 async function finished(queue: Queue, id: string): Promise<Job> {
   return await waitFor(`the job ${id}`, async () => {
@@ -1320,8 +1333,8 @@ describe("an authorisation of which the cancellation keeps nothing", () => {
 describe("a capture of the kept amount that fails", () => {
   let dropped: { booking: SeededBooking; payment: { id: string; intentId: string | null }; res: Response };
   let refused: { booking: SeededBooking; payment: { id: string; intentId: string | null }; res: Response };
-  let droppedRetry: Job;
-  let refusedRetry: Job;
+  let droppedRetry: FinishedPaymentJob;
+  let refusedRetry: FinishedPaymentJob;
   let droppedAfter: Response;
   let refusedAfter: Response;
   let credentials: Credential[];
@@ -1341,14 +1354,12 @@ describe("a capture of the kept amount that fails", () => {
     return { booking, payment, res };
   }
 
-  /** The delayed `payment.capture_retry` of a cancellation's kept amount, run now (it is queued 10 minutes later). */
-  async function runRetry(paymentId: string): Promise<Job> {
-    const id = `capture-retry-cancellation-${paymentId}`;
-    const job = await waitFor(`the job ${id}`, async () => (await paymentsQueue.getJob(id)) ?? undefined);
-    if ((await job.getState()) === "delayed") {
-      await job.promote();
-    }
-    return await finished(paymentsQueue, id);
+  /**
+   * The delayed `payment.capture_retry` of a cancellation's kept amount, run now (it is queued 10 minutes later): since
+   * FIX-W29-OTA the record step's safety net, whose id the failure's retry shares.
+   */
+  async function runRetry(paymentId: string): Promise<FinishedPaymentJob> {
+    return await runDelayedPaymentJob(`capture-retry-cancellation-${paymentId}`);
   }
 
   beforeAll(async () => {
@@ -1423,6 +1434,182 @@ describe("a capture of the kept amount that fails", () => {
       refundStatus: "manual_review",
     });
     expect(await bookingRow(refused.booking.id)).toMatchObject({ status: "cancelled" });
+  });
+});
+
+describe("the safety net of a cancellation's capture or void after the commit (FIX-W29-OTA)", () => {
+  /** What one cancellation of a booking paid by an authorisation left, and its safety net's run. */
+  interface Netted {
+    readonly booking: SeededBooking;
+    readonly payment: { readonly id: string; readonly intentId: string | null };
+    readonly res: Response;
+    /** The Stripe calls of the request (none after a crash before the call). */
+    readonly requestCalls: number;
+    readonly paymentBefore: Awaited<ReturnType<typeof paymentRow>>;
+    readonly net: FinishedPaymentJob;
+    /** True when no finished job holds the net's id once it completed (`removeOnComplete`). */
+    readonly netRemoved: boolean;
+    /** A second run of the same retry after the net (as a capture failure would queue it): changes nothing. */
+    readonly again: FinishedPaymentJob | undefined;
+    /** Every Stripe call about the PaymentIntent, the request's and the jobs'. */
+    readonly calls: Array<readonly [string, string, string | undefined]>;
+    readonly after: Response;
+  }
+
+  /**
+   * A customer's cancellation of a booking paid by an authorisation, the API stopping between the record step's commit
+   * and the Stripe call when `crash` (simulated: the money step's part after the commit never runs), then the record
+   * step's safety net run by the worker (`net`, its job id).
+   */
+  async function cancelAndNet(
+    prefix: string,
+    options: {
+      readonly crash: boolean;
+      readonly keepNothing?: boolean;
+      readonly net: (paymentId: string) => string;
+    },
+  ): Promise<Netted> {
+    const customer = await newCustomer();
+    const credential: Credential = { kind: "key", customerToken: customer.token };
+    const booking = await seedBooking(
+      prefix,
+      options.keepNothing === true
+        ? { customerId: customer.id, cabin: "BUSINESS", fees: "0.00" }
+        : { customerId: customer.id },
+    );
+    const payment = await seedPayment(booking.id, "authorized");
+    const quoted = await quote(booking.id, credential);
+    stripe.reset();
+    const recorder = api.app.get(CancellationRecorder, { strict: false });
+    const crash = options.crash
+      ? vi
+          .spyOn(recorder, "settleAuthorisation")
+          .mockRejectedValue(new Error("the process stopped before the Stripe call (simulated)"))
+      : undefined;
+    let res: Response;
+    try {
+      res = await cancel(booking.id, credential, '"1"', cancellation(quoted.body.estimatedRefund));
+    } finally {
+      crash?.mockRestore();
+    }
+    const requestCalls = stripe.requests.length;
+    const paymentBefore = await paymentRow(payment.id);
+    const net = await runDelayedPaymentJob(options.net(payment.id));
+    const netRemoved = (await paymentsQueue.getJob(options.net(payment.id))) === undefined;
+    let again: FinishedPaymentJob | undefined;
+    if (options.keepNothing !== true) {
+      // The retry a capture failure queues, under the net's id: accepted again now that the net completed.
+      const retry = cancellationCaptureRetryJob(alphaId, payment.id);
+      await paymentsQueue.add(retry.name, retry.data, { ...retry.opts, delay: 10 * MINUTE });
+      again = await runDelayedPaymentJob(retry.opts.jobId);
+    }
+    const calls = stripe.requests.map(
+      (entry) => [entry.method, entry.path, entry.headers["idempotency-key"]] as const,
+    );
+    const after = await request(api.server)
+      .get(`/v1/bookings/${booking.id}`)
+      .set(credentialHeaders(credential));
+    return { booking, payment, res, requestCalls, paymentBefore, net, netRemoved, again, calls, after };
+  }
+
+  const keptNet = (paymentId: string): string => `capture-retry-cancellation-${paymentId}`;
+  const voidNet = (paymentId: string): string => `payment-void-cancellation-${paymentId}`;
+  let normal: Netted;
+  let crashed: Netted;
+  let normalVoid: Netted;
+  let crashedVoid: Netted;
+
+  beforeAll(async () => {
+    normal = await cancelAndNet("cancel.net_normal", { crash: false, net: keptNet });
+    crashed = await cancelAndNet("cancel.net_crash", { crash: true, net: keptNet });
+    normalVoid = await cancelAndNet("cancel.net_void", { crash: false, keepNothing: true, net: voidNet });
+    crashedVoid = await cancelAndNet("cancel.net_void_crash", {
+      crash: true,
+      keepNothing: true,
+      net: voidNet,
+    });
+  }, SCENARIO_TIMEOUT_MS);
+
+  it("[FIX-W29-OTA AC3] the normal path captures the kept amount once: its safety net finds it captured and changes nothing", async () => {
+    expect(answer(normal.res)).toEqual([200, undefined]);
+    expect(normal.paymentBefore).toMatchObject({ status: "captured", amount_captured: "25.00" });
+    expect(normal.net).toEqual({
+      state: "completed",
+      returnvalue: expect.objectContaining({ outcome: "unchanged" }),
+    });
+    expect(normal.again?.returnvalue).toMatchObject({ outcome: "unchanged" });
+    expect(normal.calls).toEqual([
+      [
+        "POST",
+        `/v1/payment_intents/${normal.payment.intentId}/capture`,
+        `pi:capture:${normal.payment.id}:cancellation:25.00`,
+      ],
+    ]);
+    expect(await paymentEventTypes(normal.payment.id)).toEqual(["payment.captured", "payment.released"]);
+    expect(await refundsOf(normal.booking.id)).toHaveLength(1);
+    // The net is removed once it completed: no finished job holds its id, so a later retry of it is never ignored.
+    expect(normal.netRemoved).toBe(true);
+  });
+
+  it("[FIX-W29-OTA AC3] a crash between the commit and the Stripe call is captured by the safety net exactly once", async () => {
+    // The request recorded the cancellation and stopped before Stripe: nothing captured, the authorisation held.
+    expect(crashed.res.status).toBe(500);
+    expect(crashed.requestCalls).toBe(0);
+    expect(crashed.paymentBefore).toMatchObject({ status: "authorized", amount_captured: "0.00" });
+    expect(await bookingRow(crashed.booking.id)).toMatchObject({ status: "cancelled", amount_paid: "25.00" });
+    expect(crashed.net).toEqual({
+      state: "completed",
+      returnvalue: expect.objectContaining({ outcome: "applied" }),
+    });
+    expect(crashed.again?.returnvalue).toMatchObject({ outcome: "unchanged" });
+    // One capture, with the request's own key, by the net; the second run finds it captured.
+    expect(crashed.calls).toEqual([
+      [
+        "POST",
+        `/v1/payment_intents/${crashed.payment.intentId}/capture`,
+        `pi:capture:${crashed.payment.id}:cancellation:25.00`,
+      ],
+    ]);
+    expect(await paymentRow(crashed.payment.id)).toMatchObject({
+      status: "captured",
+      amount_captured: "25.00",
+    });
+    expect(await refundsOf(crashed.booking.id)).toEqual([
+      expect.objectContaining({ status: "succeeded", amount: REFUND, penalty_amount: "25.00" }),
+    ]);
+    expect(crashed.after.body.cancellation).toMatchObject({
+      status: "cancelled",
+      refund: { amount: { amount: REFUND, currency: "EUR" }, status: "succeeded" },
+      refundStatus: "succeeded",
+    });
+  });
+
+  it("[FIX-W29-OTA AC3] voids once on the normal path and after a crash, through the void's own safety net", async () => {
+    expect(answer(normalVoid.res)).toEqual([200, undefined]);
+    expect(normalVoid.net.returnvalue).toMatchObject({ outcome: "unchanged" });
+    expect(normalVoid.calls).toEqual([
+      [
+        "POST",
+        `/v1/payment_intents/${normalVoid.payment.intentId}/cancel`,
+        `pi:cancel:${normalVoid.payment.id}`,
+      ],
+    ]);
+    expect(crashedVoid.res.status).toBe(500);
+    expect(crashedVoid.requestCalls).toBe(0);
+    expect(crashedVoid.paymentBefore).toMatchObject({ status: "authorized" });
+    expect(crashedVoid.net.returnvalue).toMatchObject({ outcome: "applied" });
+    expect(crashedVoid.calls).toEqual([
+      [
+        "POST",
+        `/v1/payment_intents/${crashedVoid.payment.intentId}/cancel`,
+        `pi:cancel:${crashedVoid.payment.id}`,
+      ],
+    ]);
+    for (const { payment } of [normalVoid, crashedVoid]) {
+      expect(await paymentRow(payment.id)).toMatchObject({ status: "canceled", amount_captured: "0.00" });
+      expect(await paymentEventTypes(payment.id)).toEqual(["payment.voided"]);
+    }
+    expect(crashedVoid.after.body.cancellation).toMatchObject({ refundStatus: "authorization_voided" });
   });
 });
 

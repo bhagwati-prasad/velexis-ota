@@ -54,7 +54,10 @@
 //   bookings/booking-updated-emails.ts, dedupe keys `booking.patched:<bkg_…>:v<version>:new|old`; OADR-0013 point 4
 //   as revised on 2026-10-23, lead decision (3) of 2026-10-23, FIX-W28-NOTIFY). A patch that timed out e-mails
 //   nothing. A patch of `tags`/`metadata` alone changes nothing the traveller sees: its `notifyCustomer` sends no
-//   e-mail and the answer carries the warning NOTIFICATION_NOT_SENT_WARNING instead.
+//   e-mail and the answer carries the warning NOTIFICATION_NOT_SENT_WARNING instead. An e-mail the outbox refuses (an
+//   address or data it cannot send: logged, the change recorded all the same) adds the warning
+//   NOTIFICATION_REFUSED_WARNING, or CONTACT_NOTICE_REFUSED_WARNING for the notice to the previous address, to the
+//   answer, so the staff member knows the traveller was not told (lead decision (6) of 2026-10-24, FIX-W29-OTA).
 //
 // - `resync` (`bookings:write`): a refresh through the background sync's service (BookingSyncService.refresh, OBE-045,
 //   as OBE-062's question asked; lead decision (3) of 2026-10-23, FIX-W27-SYNC: the claim in
@@ -110,7 +113,7 @@ import {
   type BookingTravelerRow,
 } from "../bookings/bookings.repository";
 import { BookingSyncService } from "../bookings/booking-sync.service";
-import { BookingUpdatedEmails } from "../bookings/booking-updated-emails";
+import { BookingUpdatedEmails, type BookingUpdatedEmail } from "../bookings/booking-updated-emails";
 import { CustomerBookingsService } from "../bookings/customer-bookings.service";
 import { BookingTravelerDocuments, deadlineLocalOf, eventActorOf } from "../bookings/order-recorder";
 import {
@@ -218,6 +221,22 @@ export const PATCH_EMAIL_DEDUPE = "booking.patched";
 export const NOTIFICATION_NOT_SENT_WARNING: Warning = Object.freeze({
   title: "CUSTOMER NOT NOTIFIED",
   detail: "Tags and metadata are internal: no e-mail was sent to the traveller about this change.",
+});
+
+/**
+ * The warning of a patch whose `booking.updated` e-mail to the contact e-mail the outbox refused (lead decision (6) of
+ * 2026-10-24): the change is recorded, the traveller was not told.
+ */
+export const NOTIFICATION_REFUSED_WARNING: Warning = Object.freeze({
+  title: "CUSTOMER NOT NOTIFIED",
+  detail:
+    "The e-mail about this change could not be queued for the booking's contact address: tell the traveller yourself.",
+});
+
+/** The warning of a patch whose notice to the previous contact address the outbox refused (lead decision (6)). */
+export const CONTACT_NOTICE_REFUSED_WARNING: Warning = Object.freeze({
+  title: "PREVIOUS CONTACT NOT NOTIFIED",
+  detail: "The notice of the contact change could not be queued for the previous contact address.",
 });
 
 /**
@@ -995,7 +1014,10 @@ export class ConsoleBookingActionsService {
     const elements = patchElementsOf(body);
     if (elements.amadeus.length === 0) {
       await this.tx.run((trx) => this.patchLocally(trx, tenant, bookingId, ifMatch, body));
-      return await this.answer(bookingId, body.notifyCustomer === true);
+      return await this.answer(
+        bookingId,
+        body.notifyCustomer === true ? [NOTIFICATION_NOT_SENT_WARNING] : [],
+      );
     }
     const prepared = await this.tx.run((trx) =>
       this.preparePatch(trx, tenant, bookingId, ifMatch, body, elements.amadeus),
@@ -1026,21 +1048,29 @@ export class ConsoleBookingActionsService {
       await this.resyncAfterTimeout(tenant, bookingId, prepared);
       throw new AppError("SUPPLIER_ERROR");
     }
-    await this.tx.run((trx) =>
+    const refused = await this.tx.run((trx) =>
       this.recordPatch(trx, tenant, bookingId, body, elements.amadeus, prepared, {
         data: replyData,
         dictionaries: isRecord(replyBody) ? replyBody["dictionaries"] : undefined,
         supplierRequestId: reply.call.supplierRequestId,
       }),
     );
-    return await this.answer(bookingId, false);
+    return await this.answer(
+      bookingId,
+      refused.map((email) =>
+        email === "updated" ? NOTIFICATION_REFUSED_WARNING : CONTACT_NOTICE_REFUSED_WARNING,
+      ),
+    );
   }
 
-  /** The console booking after a patch, with the warning of a `notifyCustomer` that sent nothing (`notSent`). */
-  private async answer(bookingId: string, notSent: boolean): Promise<ConsoleBooking> {
+  /**
+   * The console booking after a patch, with the warnings of a `notifyCustomer` that sent nothing (a `tags`/`metadata`
+   * patch, or an e-mail the outbox refused).
+   */
+  private async answer(bookingId: string, notices: readonly Warning[]): Promise<ConsoleBooking> {
     const booking = await this.consoleBookings.get(bookingId, { refresh: false });
-    return notSent
-      ? { ...booking, warnings: [...(booking.warnings ?? []), { ...NOTIFICATION_NOT_SENT_WARNING }] }
+    return notices.length > 0
+      ? { ...booking, warnings: [...(booking.warnings ?? []), ...notices.map((warning) => ({ ...warning }))] }
       : booking;
   }
 
@@ -1262,7 +1292,10 @@ export class ConsoleBookingActionsService {
     };
   }
 
-  /** T2 of a patch: the answer recorded on the booking (see the file header). */
+  /**
+   * T2 of a patch: the answer recorded on the booking (see the file header). Answers the `booking.updated` e-mails the
+   * outbox refused (none without `notifyCustomer`).
+   */
   private async recordPatch(
     trx: TenantTransaction,
     tenant: RequestTenant,
@@ -1275,7 +1308,7 @@ export class ConsoleBookingActionsService {
       readonly dictionaries: unknown;
       readonly supplierRequestId: string | null;
     },
-  ): Promise<void> {
+  ): Promise<readonly BookingUpdatedEmail[]> {
     const now = this.clock.now();
     const booking = await this.bookings.booking(trx, bookingId, true);
     const details = await this.repository.details(trx, bookingId);
@@ -1345,32 +1378,33 @@ export class ConsoleBookingActionsService {
         ...(body.metadata === undefined ? {} : { metadata: body.metadata }),
       },
     });
-    if (body.notifyCustomer === true) {
-      await this.notifyCustomer(trx, tenant, booking, {
-        contactsChanged: projected.changed.includes("contacts"),
-        previousLanguage: children.contacts.find((row) => row.isPrimary)?.language ?? null,
-      });
+    if (body.notifyCustomer !== true) {
+      return [];
     }
+    return await this.notifyCustomer(trx, tenant, booking, {
+      contactsChanged: projected.changed.includes("contacts"),
+      previousLanguage: children.contacts.find((row) => row.isPrimary)?.language ?? null,
+    });
   }
 
   /**
    * The `booking.updated` e-mails of a patch with `notifyCustomer` (see the file header), in the record's transaction:
    * the booking read again as the patch left it (`before` is the row it locked first: its previous contact e-mail; the
-   * previous primary contact's language is the notice's locale).
+   * previous primary contact's language is the notice's locale). Answers the e-mails the outbox refused.
    */
   private async notifyCustomer(
     trx: TenantTransaction,
     tenant: RequestTenant,
     before: BookingRow,
     change: { readonly contactsChanged: boolean; readonly previousLanguage: string | null },
-  ): Promise<void> {
+  ): Promise<readonly BookingUpdatedEmail[]> {
     const booking = await this.bookings.booking(trx, before.id);
     if (booking === undefined) {
       throw new AppError("NOT_FOUND");
     }
     const children = await this.bookings.children(trx, booking.id);
     const primary = children.contacts.find((row) => row.isPrimary);
-    await this.emails.send(trx, {
+    const sent = await this.emails.send(trx, {
       tenantKey: tenant.key,
       booking,
       travelers: children.travelers,
@@ -1387,6 +1421,7 @@ export class ConsoleBookingActionsService {
       dedupePrefix: PATCH_EMAIL_DEDUPE,
       version: booking.version,
     });
+    return sent.refused;
   }
 
   /**

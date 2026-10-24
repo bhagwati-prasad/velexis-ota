@@ -157,20 +157,31 @@ describe("the OTA's day", () => {
   });
 
   it("is 23 or 25 hours long on the days the clocks change, and its bounds are midnights in the zone", () => {
-    // The European Union changes its clocks on the last Sundays of March and October: find them around now.
-    const lengths = new Set<number>();
-    for (let offset = 0; offset < 400; offset += 1) {
-      const day = localDayOf(at(offset * DAY), ZONE);
-      const length = day.endsAt.getTime() - day.startsAt.getTime();
-      if (length !== DAY) {
-        lengths.add(length);
-        expect(localDayOf(day.startsAt, ZONE).date).toBe(day.date);
-        expect(localDayOf(new Date(day.startsAt.getTime() - 1), ZONE).date).not.toBe(day.date);
-        expect(localDayOf(new Date(day.endsAt.getTime() - 1), ZONE).date).toBe(day.date);
-        expect(localDayOf(day.endsAt, ZONE).date).not.toBe(day.date);
+    // The European Union changes its clocks on the last Sundays of March and October: find them around now. The walk
+    // goes from each day's end to the next day, so it sees every local day once whatever the time of day it starts
+    // at (FIX-W29-OTA: a sample every 24 hours from now missed Paris's 23-hour day when now was between about 22:00
+    // and 23:00 UTC). It starts from now and from now's date at 22:30 UTC, the time of day that failed.
+    const lateEvening = new Date(now);
+    lateEvening.setUTCHours(22, 30, 0, 0);
+    for (const from of [now, lateEvening]) {
+      const lengths = new Set<number>();
+      let day = localDayOf(from, ZONE);
+      for (let count = 0; count < 400; count += 1) {
+        const length = day.endsAt.getTime() - day.startsAt.getTime();
+        if (length !== DAY) {
+          lengths.add(length);
+          expect(localDayOf(day.startsAt, ZONE).date).toBe(day.date);
+          expect(localDayOf(new Date(day.startsAt.getTime() - 1), ZONE).date).not.toBe(day.date);
+          expect(localDayOf(new Date(day.endsAt.getTime() - 1), ZONE).date).toBe(day.date);
+          expect(localDayOf(day.endsAt, ZONE).date).not.toBe(day.date);
+        }
+        const next = localDayOf(day.endsAt, ZONE);
+        // The next day starts where this one ends: no local day is skipped.
+        expect(next.startsAt.getTime()).toBe(day.endsAt.getTime());
+        day = next;
       }
+      expect([...lengths].sort()).toEqual([23 * HOUR, 25 * HOUR]);
     }
-    expect([...lengths].sort()).toEqual([23 * HOUR, 25 * HOUR]);
   });
 
   it("falls back to UTC for a time zone the runtime does not know", () => {

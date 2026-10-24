@@ -36,7 +36,9 @@
 // setting for its environment (`airlineCardEnabled`, from `airline_card_enabled_<env>`). `storefrontFor` decides per
 // request: `airline_card` is appended to `supportedMethods` and `payment.airlineCard` is filled (`enabled`, the
 // accepted brands, `chargedBy: "airline"` and the localised notice) only when the caller is the storefront edge, the
-// global switch `AIRLINE_CARD_ENABLED` is on and the entry's flag is on. The completion is edge-only, so `pk_` and
+// global switch `AIRLINE_CARD_ENABLED` is on and the entry's flag is on, and the method is not suspended for the
+// tenant and environment (`airlineCardSuspended`: the Redis flag of 20 declines within an hour, or a Redis that cannot
+// say; lead decision (2) of 2026-10-24, FIX-W29-OTA, OADR-0004 point 6). The completion is edge-only, so `pk_` and
 // `sk_` callers never see the method, whichever caller filled the cache; for them `airlineCard` is always null. The
 // method does not need a Stripe account: the airline charges the card.
 import type { components } from "@velexis/api-types";
@@ -128,6 +130,11 @@ export interface StorefrontAudience {
   readonly payment?: StorefrontPaymentAccount | null | undefined;
   /** AIRLINE_CARD_ENABLED, the global switch of the airline card (absent: off). */
   readonly airlineCardSwitch?: boolean | undefined;
+  /**
+   * True while the airline card is suspended for the tenant and environment, or when Redis cannot say (the method is
+   * then left out; absent: not suspended).
+   */
+  readonly airlineCardSuspended?: boolean | undefined;
 }
 
 /** The payment methods `storefront.get` may list for the payment account (what checkout.createPayment takes). */
@@ -198,11 +205,19 @@ export function airlineCardNotice(locale: string): string {
 }
 
 /**
+ * Whether the airline card may be offered to `audience` before its suspension is known: the storefront edge, the global
+ * switch and the tenant's setting of the entry's environment.
+ */
+export function airlineCardOffered(entry: CachedStorefront, audience: StorefrontAudience): boolean {
+  return audience.caller === "edge" && audience.airlineCardSwitch === true && entry.airlineCardEnabled;
+}
+
+/**
  * The airline card of one request (see the file header): for the storefront edge only, when the global switch and the
- * tenant's setting of the entry's environment are both on; `null` for every key caller.
+ * tenant's setting of the entry's environment are both on and the method is not suspended; `null` for every key caller.
  */
 export function airlineCardFor(entry: CachedStorefront, audience: StorefrontAudience): AirlineCard | null {
-  if (audience.caller !== "edge" || audience.airlineCardSwitch !== true || !entry.airlineCardEnabled) {
+  if (!airlineCardOffered(entry, audience) || audience.airlineCardSuspended === true) {
     return null;
   }
   return {
@@ -977,7 +992,8 @@ export function storefrontFor(entry: CachedStorefront, audience: StorefrontAudie
       faviconUrl: url(assets.favicon) ?? codeBadge(initials, "square"),
     },
     seo: { ...config.seo, ogImageUrl: url(assets.ogImage) },
-    // `airline_card` and `airlineCard` for the edge only, when the flag and AIRLINE_CARD_ENABLED are on.
+    // `airline_card` and `airlineCard` for the edge only, when the flag and AIRLINE_CARD_ENABLED are on and the method
+    // is not suspended.
     payment: paymentConfigFor(config.payment, audience.payment, airlineCardFor(entry, audience)),
   };
 }

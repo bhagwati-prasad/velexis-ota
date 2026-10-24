@@ -83,6 +83,34 @@ describe("the limits before a completion", () => {
   });
 });
 
+describe("the suspension where the method is offered (FIX-W29-OTA)", () => {
+  it("[FIX-W29-OTA AC1] reads the tenant's flag of the environment: available, suspended, or unknown without an answer", async () => {
+    const free = client(0);
+    expect(await new AirlineCardLimits(free).suspension(SCOPE.tenantId, "live")).toBe("available");
+    expect(free.eval).toHaveBeenCalledWith(expect.any(String), 1, `t:${SCOPE.tenantId}:live:ac:suspended`);
+    expect(await new AirlineCardLimits(client(1)).suspension(SCOPE.tenantId, "test")).toBe("suspended");
+    // A Redis that waits to reconnect, fails or answers something else never lets the method be offered.
+    const down = client(0, "reconnecting");
+    expect(await new AirlineCardLimits(down).suspension(SCOPE.tenantId, "test")).toBe("unknown");
+    expect(down.eval).not.toHaveBeenCalled();
+    expect(
+      await new AirlineCardLimits(client(new Error("ECONNRESET"))).suspension(SCOPE.tenantId, "test"),
+    ).toBe("unknown");
+    expect(await new AirlineCardLimits(client("OK")).suspension(SCOPE.tenantId, "test")).toBe("unknown");
+    expect(await new AirlineCardLimits(client([0])).suspension(SCOPE.tenantId, "test")).toBe("unknown");
+  });
+
+  it("[FIX-W29-OTA AC1] refuses to prepare a payment while suspended (403 FEATURE_DISABLED, reason suspended), 503 when Redis cannot say", async () => {
+    await new AirlineCardLimits(client(0)).assertNotSuspended(SCOPE.tenantId, "test");
+    expect(
+      await refusal(new AirlineCardLimits(client(1)).assertNotSuspended(SCOPE.tenantId, "test")),
+    ).toEqual(["FEATURE_DISABLED", "suspended"]);
+    expect(
+      (await refusal(new AirlineCardLimits(client(0, "end")).assertNotSuspended(SCOPE.tenantId, "test")))[0],
+    ).toBe("SERVICE_UNAVAILABLE");
+  });
+});
+
 describe("a counted decline", () => {
   it("counts on the checkout and the tenant with their TTLs, and locks the checkout at the third", async () => {
     const second = client([2, 7, 0]);

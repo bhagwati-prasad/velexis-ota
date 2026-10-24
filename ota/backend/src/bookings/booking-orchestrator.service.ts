@@ -57,7 +57,12 @@
 //      issued (staff issue from the console, which captures first; the staff are alerted). A failed capture leaves the
 //      booking `confirmed` with `ticketing_status = manual_review` (a ticketed one keeps `issued`), queues
 //      `payment.capture_retry` on `ota-payments` (10 minutes later, OADR-0008 point 7; OBE-040 runs it), alerts the
-//      staff (`staff.manual_review`), and the answer is `201` with the warning `CAPTURE_FAILED`.
+//      staff (`staff.manual_review`), and the answer is `201` with the warning `CAPTURE_FAILED`. The capture runs after
+//      the record step's commit, so the record step adds its safety net before that commit (lead decision (4) of
+//      2026-10-24, FIX-W29-OTA; payments.processor.ts): the same `payment.capture_retry`, `capture-retry-<pay_id>`,
+//      delayed 10 minutes and removed once it completed. It is the retry of a failed capture (BullMQ ignores the
+//      failure's add while it holds the job), finds a captured payment and changes nothing on the normal path, and
+//      captures the booking's total with the request's key once after a process that stopped before the capture.
 //   5. Issue. `issue_after_payment` after a capture: Flight Order Issue, then the tickets (T4). A failure leaves the
 //      booking `confirmed` with `ticketing_status = failed` and the next attempt 5 minutes later (OBE-044 retries).
 //
@@ -178,6 +183,7 @@ import {
   type PaymentGateway,
 } from "../payments/payment-gateway";
 import { PaymentsRepository, type PaymentRow } from "../payments/payments.repository";
+import { addSafetyNet, safetyNetJob } from "../payments/payments.processor";
 import { stateValues, toPayment } from "../payments/payments.service";
 import { Money, type FeeLine } from "../pricing/pricing.types";
 import { parseOffer, type ParsedOffer } from "../shopping/offers.mapper";
@@ -233,6 +239,7 @@ import {
 import {
   AIRLINE_CARD_NOT_TICKETED,
   CAPTURE_RETRY_DELAY_MS,
+  mustCaptureOrder,
   RECONCILE_WINDOW_MS,
   reconcileJob,
   ReconcileRepository,
@@ -1359,6 +1366,14 @@ export class BookingOrchestrator {
           updated_at: now,
         });
         if (input.airline === undefined) {
+          // Step 4's capture runs after this commit: its safety net is added before it (FIX-W29-OTA).
+          if (
+            state !== undefined &&
+            state.status !== "captured" &&
+            mustCaptureOrder(prepared.policy, result)
+          ) {
+            await this.queueCaptureSafetyNet(tenant, booking.id, claim.payment.id);
+          }
           return { result, airlineCaptured: undefined };
         }
         // Step 3 of the airline card: the airline charged the card for an order with every ticket (the payment
@@ -1403,7 +1418,7 @@ export class BookingOrchestrator {
     } else if (state !== undefined) {
       // Step 4: money.
       let captured = state.status === "captured";
-      const mustCapture = prepared.policy !== "manual_review" || recorded.result.coverage !== "none";
+      const mustCapture = mustCaptureOrder(prepared.policy, recorded.result);
       if (!captured && mustCapture) {
         captured = await this.capture(tenant, ctx, prepared, claim, total, recorded.result.status, warnings);
       } else if (!captured) {
@@ -2219,6 +2234,27 @@ export class BookingOrchestrator {
   }
 
   // ---- Step 4: money -----------------------------------------------------------------------------------------------
+
+  /**
+   * The safety net of step 4's capture (lead decision (4) of 2026-10-24, FIX-W29-OTA; see the file header): the delayed
+   * `payment.capture_retry` of the payment (`capture-retry-<pay_id>`, the id of the retry a failed capture queues),
+   * added in the record step's transaction before its commit, on its own (payments.processor.ts `safetyNetJob`). Never
+   * throws: a net Redis does not take is logged, and the capture after the commit still runs.
+   */
+  private async queueCaptureSafetyNet(
+    tenant: RequestTenant,
+    bookingId: string,
+    paymentId: string,
+  ): Promise<void> {
+    const net = safetyNetJob("capture", tenant.tenantId, paymentId, CAPTURE_RETRY_DELAY_MS);
+    const outcome = await addSafetyNet(this.paymentsQueue, net);
+    if (outcome !== "added") {
+      this.logger.warn(
+        { bookingId, jobId: net.opts.jobId, outcome },
+        "bookings.capture_safety_net_not_queued",
+      );
+    }
+  }
 
   /** Captures `amount`; answers whether it was captured (a failure is recorded, see the file header). */
   private async capture(

@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>The e-mail address of your account is being changed</title>
+  </head>
+  <body style="margin:0;padding:24px;background:#f5f6f8;font-family:Arial,Helvetica,sans-serif;color:#1f2933;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:560px;margin:0 auto;background:#ffffff;border-radius:8px;">
+      <tr>
+        <td style="padding:32px;">
+          <p style="margin:0 0 16px;font-size:20px;font-weight:bold;">{{brand.name}}</p>
+          <p style="margin:0 0 16px;">{{#if customer.firstName}}Hello {{customer.firstName}},{{else}}Hello,{{/if}}</p>
+          <p style="margin:0 0 16px;">On {{change.requestedAt}} (UTC), a change of the e-mail address of your {{brand.name}} account was asked for, with your password. We sent a confirmation link to the new address. Until it is confirmed you keep signing in with this address; once it is, the account's e-mails go to the new address and no longer to this one.</p>
+          <p style="margin:0 0 16px;">If you asked for this change, there is nothing more to do.</p>
+          <p style="margin:0 0 16px;">If you did not, someone may know your password: change it in your account, or reset it from the sign-in page of {{brand.name}}, and tell {{brand.name}} at once{{#if brand.supportEmail}} at <a href="mailto:{{brand.supportEmail}}">{{brand.supportEmail}}</a>{{/if}}{{#if brand.supportPhone}}{{#if brand.supportEmail}} or{{/if}} on {{brand.supportPhone}}{{/if}}.</p>
+          <p style="margin:0;font-size:14px;"><a href="{{brand.storefrontUrl}}">{{brand.name}}</a></p>
+        </td>
+      </tr>
+    </table>
+  </body>
+</html>

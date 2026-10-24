@@ -38,7 +38,13 @@ import {
   type TestDatabase,
   type TestRedis,
 } from "@velexis/testing";
-import { extractLinks, mailpit, uniqueEmail, waitForMessage } from "@velexis/testing/mailpit";
+import {
+  extractLinks,
+  mailpit,
+  uniqueEmail,
+  waitForMessage,
+  type MailpitMessage,
+} from "@velexis/testing/mailpit";
 import type { Queue } from "bullmq";
 import request, { type Response } from "supertest";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -78,6 +84,9 @@ const SETUP_TIMEOUT_MS = Math.max(OPENAPI_SETUP_TIMEOUT_MS, 90_000);
 const SCENARIO_TIMEOUT_MS = 60_000;
 /** How long a scenario waits at most for one e-mail. */
 const MAIL_WAIT_MS = 20_000;
+/** The subjects of the account e-mails of FIX-W29-OTA (OADR-0013 item 4 as revised on 2026-10-24). */
+const EMAIL_CHANGED_SUBJECT = /account is being changed$/;
+const ACCOUNT_DELETED_SUBJECT = /account has been deleted$/;
 
 const ALPHA_HOST = "alpha.ota.example.com";
 const BETA_HOST = "beta.ota.example.com";
@@ -976,6 +985,7 @@ describe("account.update of the e-mail address", () => {
   let beforeChange: Awaited<ReturnType<typeof customerState>>;
   let pending: Awaited<ReturnType<typeof customerState>>;
   let mail: { token: string; link: string };
+  let notice: MailpitMessage;
 
   beforeAll(async () => {
     customerId = await insertCustomer("tenant_alpha", email);
@@ -1015,6 +1025,7 @@ describe("account.update of the e-mail address", () => {
       '"2"',
     );
     mail = await verificationTokenOfMail(newEmail);
+    notice = await waitForMessage({ to: email, subject: EMAIL_CHANGED_SUBJECT, timeoutMs: MAIL_WAIT_MS });
     answers["oldAddressBefore"] = await new KeyClient().post("/v1/auth/sign-in", {
       email,
       password: PASSWORD,
@@ -1089,6 +1100,27 @@ describe("account.update of the e-mail address", () => {
     for (const res of [answers["newAddressAfter"], answers["oldAddressBefore"]]) {
       secrets.push(res?.body.session?.accessToken ?? "", res?.body.session?.refreshToken ?? "");
     }
+  });
+
+  it("[FIX-W29-OTA AC2] e-mails a security notice to the current address once: when, never the new address, no link that acts", async () => {
+    expect(notice.Subject).toBe("The e-mail address of your Alpha Travel account is being changed");
+    expect(notice.To.map((to) => to.Address)).toEqual([email]);
+    for (const part of [notice.Text, notice.HTML]) {
+      expect(part).toContain("Hello Anna,");
+      expect(part).toContain("Until it is confirmed you keep signing in with this address");
+      expect(part).not.toContain(newEmail);
+      expect(part).not.toContain(mail.token);
+      expect(part).not.toContain("token=");
+    }
+    // Its only link is the OTA's storefront (and a support address when the OTA has one): nothing acts on the account.
+    for (const link of extractLinks(notice)) {
+      expect(link === `https://${ALPHA_HOST}` || link.startsWith("mailto:"), link).toBe(true);
+    }
+    // The refused second change (429) queued none.
+    const state = await customerState("tenant_alpha", customerId);
+    expect(state.notifications.filter((row) => row.template_key === "account.email_changed")).toEqual([
+      expect.objectContaining({ recipient: email, recipient_type: "customer", status: "sent" }),
+    ]);
   });
 
   it("keeps the token and the passwords in clear nowhere: not in the outbox row, not in a log line", async () => {
@@ -1198,6 +1230,7 @@ describe("[OBE-035 AC2] account.delete in edge mode: the session cookie no longe
   let checkoutsAfter: Record<string, string>;
   const voidJobs: Record<string, { name: string; data: unknown } | undefined> = {};
   let bookingCustomers: Record<string, string | null>;
+  let confirmation: MailpitMessage;
 
   beforeAll(async () => {
     customerId = await insertCustomer("tenant_alpha", email);
@@ -1267,6 +1300,11 @@ describe("[OBE-035 AC2] account.delete in edge mode: the session cookie no longe
     for (const [name, paymentId] of Object.entries(payments)) {
       voidJobs[name] = await voidJobOf(paymentId);
     }
+    confirmation = await waitForMessage({
+      to: email,
+      subject: ACCOUNT_DELETED_SUBJECT,
+      timeoutMs: MAIL_WAIT_MS,
+    });
     bookingCustomers = Object.fromEntries(
       (
         await inTenant("tenant_alpha", (trx) =>
@@ -1407,6 +1445,26 @@ describe("[OBE-035 AC2] account.delete in edge mode: the session cookie no longe
     expect([voidJobs["captured"], voidJobs["others"]]).toEqual([undefined, undefined]);
   });
 
+  it("[FIX-W29-OTA AC2] e-mails the deletion's confirmation to the address before it was replaced, with the kept booking records", async () => {
+    expect(confirmation.Subject).toBe("Your Alpha Travel account has been deleted");
+    for (const part of [confirmation.Text.replace(/\s+/g, " "), confirmation.HTML]) {
+      expect(part).toContain("Hello Anna,");
+      expect(part).toContain("account was deleted on");
+      expect(part).toContain("The records of your bookings are kept");
+    }
+    for (const link of extractLinks(confirmation)) {
+      expect(link === `https://${ALPHA_HOST}` || link.startsWith("mailto:"), link).toBe(true);
+    }
+    const state = await customerState("tenant_alpha", customerId);
+    expect(state.notifications.filter((row) => row.template_key === "account.deleted")).toEqual([
+      expect.objectContaining({
+        recipient: email,
+        dedupe_key: `account.deleted:${customerId}`,
+        status: "sent",
+      }),
+    ]);
+  });
+
   it("[OBE-035] frees the address: it can sign up again as a new customer", () => {
     expect(answers["signUpAgain"]?.status).toBe(201);
     expect(answers["signUpAgain"]?.body.customer.id).not.toBe(customerId);
@@ -1503,6 +1561,17 @@ describe("account.delete by a key caller, its replay, and the bookings that hold
     expect(answers["replay"]?.body).toEqual(answers["delete"]?.body);
   });
 
+  it("[FIX-W29-OTA AC2] confirms a deletion without bookings once, replay included, and keeps none of its records", async () => {
+    const confirmation = await waitForMessage({
+      to: email,
+      subject: ACCOUNT_DELETED_SUBJECT,
+      timeoutMs: MAIL_WAIT_MS,
+    });
+    expect(confirmation.Text).not.toContain("The records of your bookings are kept");
+    const state = await customerState("tenant_alpha", customerId);
+    expect(state.notifications.filter((row) => row.template_key === "account.deleted")).toHaveLength(1);
+  });
+
   it("[OBE-035] answers 409 ACCOUNT_DELETION_BLOCKED with the bookings that wait for payment, tickets or a refund", () => {
     expect(outcome(answers["blocked"])).toEqual([409, "ACCOUNT_DELETION_BLOCKED"]);
     expectResponseToMatch("deleteAccount", answers["blocked"] as Response);
@@ -1517,12 +1586,14 @@ describe("account.delete by a key caller, its replay, and the bookings that hold
   });
 });
 
-describe("account.delete in the live environment while a test booking is still pending", () => {
+describe("account.delete in the live environment while a test booking is still pending (FIX-W29-OTA)", () => {
   const email = uniqueEmail("obe035-delete-live");
   let customerId = "";
+  let pendingBooking = "";
   const checkouts: Record<string, string> = {};
   const payments: Record<string, string> = {};
   let answer: Response;
+  let before: Awaited<ReturnType<typeof customerState>>;
   let state: Awaited<ReturnType<typeof customerState>>;
   let checkoutsAfter: Record<string, string>;
   const voidJobs: Record<string, { name: string; data: unknown } | undefined> = {};
@@ -1530,9 +1601,10 @@ describe("account.delete in the live environment while a test booking is still p
   beforeAll(async () => {
     customerId = await insertCustomer("tenant_alpha", email);
     // A test checkout that checkout.complete claimed: its booking is `pending` (an unknown outcome being reconciled),
-    // with the authorisation it is made with; and another test checkout waiting for its payment.
+    // with the authorisation it is made with; another test checkout waiting for its payment; and a test booking
+    // waiting for its tickets, which holds back only a deletion in the test environment.
     checkouts["claimed"] = await insertCheckout(customerId, "payment_pending");
-    const pendingBooking = await insertBooking({
+    pendingBooking = await insertBooking({
       customerId,
       status: "pending",
       ageSeconds: 30,
@@ -1546,7 +1618,9 @@ describe("account.delete in the live environment while a test booking is still p
     );
     checkouts["waiting"] = await insertCheckout(customerId, "payment_pending");
     payments["waiting"] = await insertCheckoutPayment(checkouts["waiting"], customerId, "authorized");
+    await insertBooking({ customerId, status: "confirmed", ageSeconds: 20, payment: "captured" });
     const session = await bearerSignIn(email);
+    before = await customerState("tenant_alpha", customerId);
     answer = await new KeyClient(alphaLiveKey).post(
       "/v1/account/deletion",
       { currentPassword: PASSWORD },
@@ -1559,19 +1633,18 @@ describe("account.delete in the live environment while a test booking is still p
     }
   }, SCENARIO_TIMEOUT_MS);
 
-  it("[OBE-035] deletes, but leaves the checkout of the pending booking and its authorisation to the reconciliation", () => {
-    expect(answer.status).toBe(202);
+  it("[FIX-W29-OTA AC2] answers 409 ACCOUNT_DELETION_BLOCKED with the pending test booking, whatever the environment, and changes nothing", () => {
+    expect(outcome(answer)).toEqual([409, "ACCOUNT_DELETION_BLOCKED"]);
     expectResponseToMatch("deleteAccount", answer);
-    expect(state.customer.status).toBe("deleted");
+    // The test booking waiting for its tickets does not hold back a deletion in the live environment.
+    expect(answer.body.error.details).toEqual({ bookingIds: [pendingBooking] });
+    expect(state.customer).toEqual(before.customer);
+    expect(state.notifications.filter((row) => row.template_key === "account.deleted")).toEqual([]);
     expect(checkoutsAfter).toEqual({
       [checkouts["claimed"] as string]: "payment_pending",
-      [checkouts["waiting"] as string]: "abandoned",
+      [checkouts["waiting"] as string]: "payment_pending",
     });
-    expect(voidJobs["claimed"]).toBeUndefined();
-    expect(voidJobs["waiting"]).toEqual({
-      name: "payment.void",
-      data: { tenantId: expect.stringMatching(/^ten_/) as string, id: payments["waiting"] },
-    });
+    expect(voidJobs).toEqual({ claimed: undefined, waiting: undefined });
   });
 });
 

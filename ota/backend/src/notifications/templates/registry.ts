@@ -1,8 +1,9 @@
 // The notification templates the code knows (OADR-0013 items 3 and 4): the MVP keys, the variables each key may use
 // (its allow-list) with sample data for the console preview, and the loader of the English code defaults
 // `<key>.{subject,html,txt}.hbs` in this folder. OBE-030 wrote the defaults of the account e-mails, OBE-055 those of the
-// nine booking and staff keys and FIX-W28-NOTIFY the one of `booking.updated` (OADR-0013 item 4 as revised on
-// 2026-10-23), so every MVP key has one; the provisioning seed (provisioning/seeds/templates.seed.ts)
+// nine booking and staff keys, FIX-W28-NOTIFY the one of `booking.updated` (OADR-0013 item 4 as revised on
+// 2026-10-23) and FIX-W29-OTA those of `account.email_changed` and `account.deleted` (OADR-0013 item 4 as revised on
+// 2026-10-24), so every MVP key has one; the provisioning seed (provisioning/seeds/templates.seed.ts)
 // copies the defaults into a new tenant's `notification_templates`, and every key without a row uses the code default
 // at send time. templates.test.ts compiles each default in strict mode against its allow-list and renders it with its
 // sample data.
@@ -24,11 +25,14 @@ import { join } from "node:path";
 
 /**
  * The MVP template keys of OADR-0013 item 4, in the order of the decision, with `booking.updated` of its revision of
- * 2026-10-23 after the other traveller keys. E-mail only.
+ * 2026-10-23 after the other traveller keys and `account.email_changed` and `account.deleted` of its revision of
+ * 2026-10-24 after the other customer keys. E-mail only.
  */
 export const TEMPLATE_KEYS = Object.freeze([
   "auth.verify_email",
   "auth.password_reset",
+  "account.email_changed",
+  "account.deleted",
   "booking.confirmed",
   "booking.ticketed",
   "booking.ticketing_delayed",
@@ -254,6 +258,43 @@ export const TEMPLATE_REGISTRY: Readonly<Record<TemplateKey, TemplateDefinition>
       expiresAt: "2026-11-01T11:00:00Z",
     },
     [tokenLink("resetUrl", "/account/reset-password.html")],
+  ),
+  "account.email_changed": define(
+    "account.email_changed",
+    "customer",
+    [
+      ...CUSTOMER_VARIABLES,
+      variable(
+        "change.requestedAt",
+        "When the change of the account's e-mail address was asked for (ISO 8601 UTC). The new address is never a " +
+          "variable: the notice goes to the previous address.",
+      ),
+    ],
+    { customer: SAMPLE_CUSTOMER, change: { requestedAt: "2026-11-01T10:00:00Z" } },
+  ),
+  "account.deleted": define(
+    "account.deleted",
+    "customer",
+    [
+      ...CUSTOMER_VARIABLES,
+      variable("deletion.requestedAt", "When the account was deleted (ISO 8601 UTC)."),
+      variable(
+        "deletion.erasureDueBy",
+        "The latest date by which the account's personal data is erased (ISO 8601 UTC).",
+      ),
+      variable(
+        "deletion.bookingsKept",
+        "True when the customer has bookings, whose records are kept for the legal retention periods.",
+      ),
+    ],
+    {
+      customer: SAMPLE_CUSTOMER,
+      deletion: {
+        requestedAt: "2026-11-01T10:00:00Z",
+        erasureDueBy: "2026-12-01T10:00:00Z",
+        bookingsKept: true,
+      },
+    },
   ),
   "booking.confirmed": define(
     "booking.confirmed",

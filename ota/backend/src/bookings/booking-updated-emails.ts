@@ -19,8 +19,9 @@
 //
 // Dedupe keys `<prefix>:<bkg_…>:v<version>:new|old`, the prefix the caller's (`booking.contacts_updated` for
 // bookings.update, `booking.patched` for the console). A call the outbox refuses (InvalidNotificationError, raised before
-// any SQL) is logged and skipped: the change happened at Amadeus and is recorded all the same. Log lines carry ids only,
-// never an address.
+// any SQL) is logged and skipped: the change happened at Amadeus and is recorded all the same. `send` says which e-mails
+// were refused (`refused`), so console.bookings.patch can warn the staff member that nobody was told (lead decision (6)
+// of 2026-10-24, FIX-W29-OTA). Log lines carry ids only, never an address.
 import { Injectable } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { InjectPinoLogger, PinoLogger } from "nestjs-pino";
@@ -81,13 +82,21 @@ export interface BookingUpdatedInput extends UpdatedBooking {
   readonly version: number;
 }
 
+/** Which e-mail of a change: the full one to the contact e-mail, or the notice to the previous address. */
+export type BookingUpdatedEmail = "updated" | "notice";
+
 /** What `send` queued. */
 export interface BookingUpdatedResult {
   /** The full e-mail to the contact e-mail was queued now. */
   readonly updated: boolean;
   /** The notice to the previous address was queued now (`false` when the address did not change). */
   readonly notice: boolean;
+  /** The e-mails the outbox refused (logged and skipped), in that order; empty when none was. */
+  readonly refused: readonly BookingUpdatedEmail[];
 }
+
+/** How one e-mail went: queued now, queued before (its dedupe key), or refused by the outbox. */
+type EmailOutcome = "queued" | "duplicate" | "refused";
 
 /** The variables of the full e-mail (see the file header). */
 export function bookingUpdatedData(
@@ -176,18 +185,25 @@ export class BookingUpdatedEmails {
     });
     const previous = input.previousEmail;
     const moved = previous !== null && previous.toLowerCase() !== input.contact.email.toLowerCase();
-    const notice = moved
+    const notice: EmailOutcome | undefined = moved
       ? await this.enqueue(trx, input, {
           to: previous,
           locale: localeOf(input.previousLanguage),
           dedupeKey: `${key}:old`,
           data: contactNoticeData(input.booking.reference),
         })
-      : false;
-    return { updated, notice };
+      : undefined;
+    return {
+      updated: updated === "queued",
+      notice: notice === "queued",
+      refused: [
+        ...(updated === "refused" ? (["updated"] as const) : []),
+        ...(notice === "refused" ? (["notice"] as const) : []),
+      ],
+    };
   }
 
-  /** One e-mail; `false` when it was queued before (its dedupe key) or the outbox refused it (logged). */
+  /** One e-mail: queued now, queued before (its dedupe key), or refused by the outbox (logged). */
   private async enqueue(
     trx: TenantTransaction,
     input: BookingUpdatedInput,
@@ -197,7 +213,7 @@ export class BookingUpdatedEmails {
       readonly dedupeKey: string;
       readonly data: Record<string, unknown>;
     },
-  ): Promise<boolean> {
+  ): Promise<EmailOutcome> {
     try {
       const result = await this.outbox.enqueue(trx, {
         templateKey: BOOKING_UPDATED_TEMPLATE,
@@ -208,7 +224,7 @@ export class BookingUpdatedEmails {
         dedupeKey: email.dedupeKey,
         data: email.data,
       });
-      return result.queued;
+      return result.queued ? "queued" : "duplicate";
     } catch (error) {
       if (!(error instanceof InvalidNotificationError)) {
         throw error;
@@ -217,7 +233,7 @@ export class BookingUpdatedEmails {
         { bookingId: input.booking.id, template: BOOKING_UPDATED_TEMPLATE, err: error },
         "bookings.update_email_invalid",
       );
-      return false;
+      return "refused";
     }
   }
 }

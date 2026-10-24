@@ -10,6 +10,25 @@
 //                                                                     cancellation keeps (FIX-W28-CANCEL)
 //   refund.submit           {rfd_…}  job id refund-submit-<rfd_id>   a refund row (refunds.repository.ts) to send
 //
+// The safety net (lead decision (4) of 2026-10-24, FIX-W29-OTA; OADR-0010 point 6, OADR-0003 point 7). A capture or a
+// void that runs after a commit (checkout.complete's and the reconciliation's capture after the record step, a
+// cancellation's capture of the kept amount or its void) would be lost if the process stopped between the commit and
+// the Stripe call: the authorisation would wait for the authorisation watch's alert after 5 days. So the record step
+// queues, before its commit and on its own, the job that would retry that call, delayed CAPTURE_RETRY_DELAY_MS
+// (`safetyNetJob`): `capture-retry-<pay_id>` for an order's capture, `capture-retry-cancellation-<pay_id>` for the
+// kept amount, `payment-void-cancellation-<pay_id>` for a cancellation's void. A capture's safety net has the id of the
+// retry its failure would queue, so it is that retry (BullMQ ignores the failure's add while it holds the job); it is
+// removed once it completed (`removeOnComplete`), so a later producer of that id is never ignored for a day. On the
+// normal path it finds the payment captured or voided and changes nothing; after a crash it captures with the request's
+// own key (`pi:capture:<pay_id>:<amount>`, the booking's total; `pi:capture:<pay_id>:cancellation:<amount>`) or voids
+// (`pi:cancel:<pay_id>`), once. An order's capture is followed by its issuance: when the net finds the payment
+// captured (by itself or before a stop) and the booking still waiting for the issuance that checkout.complete's step 5
+// or the reconciliation asks for after their capture (`confirmed`, `ticketing_status = pending`, never asked: the
+// `issue_after_payment` policy), it makes the issuance due now, as the reconciliation's capture does, and the ticketing
+// scan issues it (`requestIssuance`; PaymentsRepository.requestIssuanceAfterPayment). A record step that rolled back
+// after the enqueue leaves a job that finds nothing to do: a cancellation's capture job captures only for a recorded
+// cancellation (`isCancellationCaptureJob`), and the void never voids the payment of a booking that stands.
+//
 // Each job resolves its tenant through the platform cache (`active` or `suspended`: suspended tenants keep their
 // obligations to paid travellers, OADR-0014 point 4; any other is skipped), then re-reads its row in a tenant
 // transaction and does nothing when the state already moved (OADR-0010 point 6). The Stripe call goes through the
@@ -25,11 +44,13 @@
 //                           (`confirmed`, `ticketed`, `partially_ticketed`): it is captured, never voided.
 //   payment.capture_retry   an `authorized` payment of a booking that still stands (`confirmed`, `ticketed`,
 //                           `partially_ticketed`; never a payment without one): `pi:capture:<pay_id>:<amount>` with
-//                           the amount of the orchestrator's `payment.capture_failed` event (so the key is the first
+//                           the amount of the orchestrator's `payment.capture_failed` event, or without one (a safety
+//                           net, below) the booking's total, within the authorisation (so the key is the first
 //                           capture's: a capture whose answer was lost is found again), then `captured`
 //                           (`payment.captured`), the booking's `amount_paid` and its `payment.captured` event. It runs
 //                           once: when it cannot capture, the staff are alerted (OADR-0008 point 7, "then staff"). The
-//                           booking keeps `ticketing_status = manual_review` either way: staff issue it.
+//                           booking of a failed capture keeps `ticketing_status = manual_review` either way: staff
+//                           issue it (a safety net's booking that waits for its issuance is made due, above).
 //                           Of a `cancelled` booking whose `booking.cancelled` event names the payment
 //                           (`capturePaymentId`; lead decision (1) of 2026-10-23, second batch, FIX-W28-CANCEL): the
 //                           amount the cancellation keeps (`captureAmount`) with `pi:capture:<pay_id>:cancellation:
@@ -183,7 +204,72 @@ export function cancellationCaptureRetryJob(
   readonly opts: { readonly jobId: string };
 } {
   const job = paymentJob(PAYMENT_JOB.captureRetry, tenantId, paymentId);
-  return { ...job, opts: { jobId: `capture-retry-cancellation-${paymentId}` } };
+  return { ...job, opts: { jobId: `${CANCELLATION_CAPTURE_JOB_PREFIX}${paymentId}` } };
+}
+
+/** The first part of the job id of a cancellation's capture retry (`cancellationCaptureRetryJob`). */
+export const CANCELLATION_CAPTURE_JOB_PREFIX = "capture-retry-cancellation-";
+
+/** True for the job id of a cancellation's capture retry or safety net: it captures only for a recorded cancellation. */
+export function isCancellationCaptureJob(jobId: string): boolean {
+  return jobId.startsWith(CANCELLATION_CAPTURE_JOB_PREFIX);
+}
+
+/** What a safety net covers (see the file header). */
+export type SafetyNetKind = "capture" | "cancellation_capture" | "cancellation_void";
+
+/** How long the add of a safety net may wait for Redis inside its record step's transaction. */
+export const SAFETY_NET_ENQUEUE_TIMEOUT_MS = 2000;
+
+/**
+ * The safety net of a capture or a void that runs after a commit (see the file header): the job, delayed `delayMs`,
+ * removed once it completed.
+ */
+export function safetyNetJob(
+  kind: SafetyNetKind,
+  tenantId: string,
+  paymentId: string,
+  delayMs: number,
+): {
+  readonly name: PaymentJobName;
+  readonly data: PaymentJobData;
+  readonly opts: { readonly jobId: string; readonly delay: number; readonly removeOnComplete: true };
+} {
+  const job =
+    kind === "capture"
+      ? paymentJob(PAYMENT_JOB.captureRetry, tenantId, paymentId)
+      : kind === "cancellation_capture"
+        ? cancellationCaptureRetryJob(tenantId, paymentId)
+        : {
+            ...paymentJob(PAYMENT_JOB.void, tenantId, paymentId),
+            opts: { jobId: `payment-void-cancellation-${paymentId}` },
+          };
+  return { ...job, opts: { jobId: job.opts.jobId, delay: delayMs, removeOnComplete: true } };
+}
+
+/**
+ * Adds a safety net (`safetyNetJob`) from inside its record step's transaction, before the commit: waits at most
+ * SAFETY_NET_ENQUEUE_TIMEOUT_MS for Redis and never throws. Answers `added`, or why not (the caller logs it: without
+ * the net, the call after the commit still runs, and its failure path still queues its retry).
+ */
+export async function addSafetyNet(
+  queue: { add(name: string, data: unknown, opts: Record<string, unknown>): Promise<unknown> },
+  job: ReturnType<typeof safetyNetJob>,
+  timeoutMs: number = SAFETY_NET_ENQUEUE_TIMEOUT_MS,
+): Promise<"added" | "failed" | "timeout"> {
+  let timer: NodeJS.Timeout | undefined;
+  const added = queue.add(job.name, job.data, { ...job.opts }).then(
+    () => "added" as const,
+    () => "failed" as const,
+  );
+  const timedOut = new Promise<"timeout">((resolveTimeout) => {
+    timer = setTimeout(() => resolveTimeout("timeout"), timeoutMs);
+  });
+  try {
+    return await Promise.race([added, timedOut]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /** The tenant statuses whose payment jobs run (OADR-0014 point 4); the others are skipped. */
@@ -399,6 +485,23 @@ export async function cancellationCaptureOf(
   };
 }
 
+/**
+ * The total of the booking `bookingId`, or `null` without one: what checkout.complete and the reconciliation capture
+ * (the priced offer the order was sent from), the amount of a capture retry without a failed capture's event (the
+ * safety net after a crash between the record step and the capture, FIX-W29-OTA).
+ */
+async function bookingTotal(trx: TenantTransaction, bookingId: string | null): Promise<string | null> {
+  if (bookingId === null) {
+    return null;
+  }
+  const row = await trx
+    .selectFrom("bookings")
+    .select(sql<string>`total_amount::text`.as("total"))
+    .where("id", "=", bookingId)
+    .executeTakeFirst();
+  return row?.total ?? null;
+}
+
 /** The status of the booking `bookingId`, or `null` without one. */
 async function bookingStatus(trx: TenantTransaction, bookingId: string | null): Promise<string | null> {
   if (bookingId === null) {
@@ -583,10 +686,16 @@ export class PaymentJobsHandler {
       // The kept amount of a cancelled booking (FIX-W28-CANCEL): its `booking.cancelled` event names the payment.
       const cancellation =
         found.bookingStatus === "cancelled" ? await cancellationCaptureOf(trx, found.payment) : undefined;
+      // The amount of the failed capture, else (the safety net after a crash, FIX-W29-OTA) the booking's total.
       return {
         ...found,
         cancellation,
-        recorded: cancellation?.amount ?? (capturable ? await recordedCaptureAmount(trx, paymentId) : null),
+        recorded:
+          cancellation?.amount ??
+          (capturable
+            ? ((await recordedCaptureAmount(trx, paymentId)) ??
+              (await bookingTotal(trx, found.payment.bookingId)))
+            : null),
       };
     });
     if (read === undefined) {
@@ -596,6 +705,12 @@ export class PaymentJobsHandler {
     if (payment.provider !== "stripe" || payment.providerPaymentId === null) {
       this.logger.info({ paymentId, provider: payment.provider }, "payments.capture_not_applicable");
       return "ignored";
+    }
+    if (cancellation === undefined && isCancellationCaptureJob(attempt.jobId)) {
+      // The safety net of a cancellation whose record step rolled back (FIX-W29-OTA): nothing was cancelled, so the
+      // order's money is not this job's to capture.
+      this.logger.info({ paymentId, bookingStatus: read.bookingStatus }, "payments.capture_not_needed");
+      return "unchanged";
     }
     if (
       cancellation === undefined &&
@@ -614,6 +729,8 @@ export class PaymentJobsHandler {
         await this.recordBookingPayment(trx, booking, payment, payment.amountCaptured, attempt, cancellation);
         if (cancellation !== undefined) {
           await this.recordRelease(trx, payment, payment.amountCaptured, cancellation, attempt);
+        } else {
+          await this.requestIssuance(trx, booking, payment, attempt);
         }
       });
       return "unchanged";
@@ -832,10 +949,37 @@ export class PaymentJobsHandler {
         }
         if (cancellation !== undefined) {
           await this.recordRelease(trx, current, captured, cancellation, attempt);
+        } else {
+          await this.requestIssuance(trx, booking, current, attempt);
         }
       }
       return outcome;
     });
+  }
+
+  /**
+   * After an order's payment is captured by this job (not a cancellation's): the issuance that checkout.complete's
+   * step 5 or the reconciliation would have asked for right after their capture, when the booking still waits for it
+   * (`PaymentsRepository.requestIssuanceAfterPayment`: `issue_after_payment`, never asked). Only a safety net after a
+   * process that stopped between a record step and its capture, or between the capture and the issuance, finds such a
+   * booking (FIX-W29-OTA): the ticketing scan then issues it, as it would issue a failed attempt's retry. A failed
+   * capture's retry finds the booking in `manual_review` (staff issue it), and the normal path finds it asked for.
+   */
+  private async requestIssuance(
+    trx: TenantTransaction,
+    booking: LockedBookingRow | undefined,
+    payment: Pick<PaymentRow, "id" | "bookingId">,
+    attempt: PaymentJobAttempt,
+  ): Promise<void> {
+    if (booking === undefined || booking.id !== payment.bookingId) {
+      return;
+    }
+    if (await this.payments.requestIssuanceAfterPayment(trx, booking.id, this.clock.now())) {
+      this.logger.info(
+        { paymentId: payment.id, bookingId: booking.id, jobId: attempt.jobId },
+        "payments.issuance_requested",
+      );
+    }
   }
 
   /**

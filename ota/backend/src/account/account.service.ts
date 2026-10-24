@@ -32,8 +32,11 @@
 //   which then moves it into `email` and the identity's subject (verification.service.ts). At most one verification
 //   e-mail a minute per identity, as for the resend: an address change within a minute of the last link is `429
 //   RATE_LIMITED` with `Retry-After` and `details.reason: verification_email`. Sending the current address again
-//   withdraws a pending change (`pendingEmail` back to `null`, its link dropped). The document's security notice to the
-//   old address is not sent: OADR-0013 item 4 lists no template key for it (OBE-035's questions).
+//   withdraws a pending change (`pendingEmail` back to `null`, its link dropped). With the verification link, the same
+//   transaction queues the document's security notice to the current address, `account.email_changed` (OADR-0013
+//   item 4 as revised on 2026-10-24, lead decision (3), FIX-W29-OTA): when the change was asked for, in the customer's
+//   language, never the new address and no link that acts on the account (a call the outbox refuses is logged and
+//   skipped, as the booking e-mails' are; the change stands).
 // - Then, in one transaction under the customer's `FOR UPDATE` lock, the version is compared again, the verified hash
 //   must still be the stored one (a password changed meanwhile is `422`), and the changed columns are written with
 //   `version` + 1 (a request that changes nothing keeps the version).
@@ -51,11 +54,12 @@
 //   payment, ticketing or a refund (`AccountRepository.blockingBookings`) answers `409 ACCOUNT_DELETION_BLOCKED` with
 //   `details.bookingIds` and changes nothing; live bookings always count, test bookings when the request is in the
 //   test environment (test money is not real, so a forgotten test booking never holds back the erasure of a live
-//   customer). Otherwise: the
-//   checkouts become `abandoned` (the customer can no longer finish them, and a still valid access token cannot turn
-//   them into bookings of a deleted account), except one whose booking is still `pending` (only a test booking from
-//   the live environment gets here: OADR-0003 point 10 keeps the checkout and its authorisation for the
-//   reconciliation); the Stripe payments of the abandoned checkouts that are not confirmed yet or authorised, and pay
+//   customer), and a `pending` booking whatever its environment (lead decision (3) of 2026-10-24, FIX-W29-OTA: its
+//   order may exist and its checkout stays open for the reconciliation, OADR-0003 point 10, so no deletion leaves an
+//   open checkout of a deleted customer behind). Otherwise: the checkouts become `abandoned` (the customer can no
+//   longer finish them, and a still valid access token cannot turn them into bookings of a deleted account; one whose
+//   booking is still `pending` is never abandoned, a safeguard only now); the Stripe payments of the abandoned
+//   checkouts that are not confirmed yet or authorised, and pay
 //   for no order, get a `payment.void` job on `ota-payments` after the commit (as the checkout expiry voids an expired
 //   checkout's: the deleted customer's card is not held until Stripe drops the authorisation; an enqueue that fails is
 //   logged, never the answer's failure, and the daily authorisation watch still sees the payment); every session is
@@ -72,7 +76,10 @@
 // - The answer is `202 AccountDeletion` (`scheduled`, erasure due 30 days later, the kept records when the customer
 //   has bookings); the controller clears the edge's session cookies and rotates its CSRF value. `reason` is logged (an
 //   enum), `comment` is accepted and not kept (free text may carry personal data, and the tenant has no column for
-//   it). The document's confirmation e-mail is not sent: OADR-0013 item 4 lists no template key for it.
+//   it). The same transaction queues the document's confirmation e-mail, `account.deleted` (OADR-0013 item 4 as revised
+//   on 2026-10-24, FIX-W29-OTA), to the address before it was replaced, in the customer's language: when the account
+//   was deleted, the erasure date and whether booking records are kept (once per customer; a call the outbox refuses
+//   is logged and skipped).
 //
 // Passwords, tokens and addresses are never logged: the log lines carry ids, field names and outcomes only.
 import { randomBytes } from "node:crypto";
@@ -98,12 +105,13 @@ import { CustomerAccess } from "../identity/customer-access";
 import { CustomersRepository, type CustomerRecord } from "../identity/customers.repository";
 import { normaliseEmail, SignInLockout } from "../identity/lockout";
 import { mayHoldSession, SessionsService } from "../identity/sessions.service";
-import { RESEND_INTERVAL_MS, VerificationService } from "../identity/verification.service";
+import { emailInstant, RESEND_INTERVAL_MS, VerificationService } from "../identity/verification.service";
+import { InvalidNotificationError, OutboxService } from "../notifications/outbox.service";
 import { PAYMENT_JOB, paymentJob } from "../payments/payments.processor";
 import { canonicalLocale } from "../storefront/storefront.mapper";
 import { TenantContext } from "../tenancy/tenant-context";
 import { afterCommit, TenantTx, type TenantTransaction } from "../tenancy/tenant-tx";
-import type { AccountDeletionOutcome } from "./account.mapper";
+import { ERASURE_DUE_AFTER_MS, type AccountDeletionOutcome } from "./account.mapper";
 import { AccountRepository, type AccountPasswordIdentity, type ProfileUpdate } from "./account.repository";
 
 type Schemas = components["schemas"];
@@ -298,11 +306,18 @@ export function deletedAddress(email: string, key: Uint8Array): string {
 
 /**
  * The environments whose bookings may hold a deletion back: live bookings always, test bookings when the request is in
- * the test environment (see the file header).
+ * the test environment (see the file header). A `pending` booking holds it back whatever its environment
+ * (`AccountRepository.blockingBookings`).
  */
 export function deletionEnvironments(environment: "test" | "live"): readonly ("test" | "live")[] {
   return environment === "test" ? ["test", "live"] : ["live"];
 }
+
+/** The template of the security notice to the current address when its change is asked for (FIX-W29-OTA). */
+export const EMAIL_CHANGED_TEMPLATE = "account.email_changed";
+
+/** The template of the deletion's confirmation (FIX-W29-OTA). */
+export const ACCOUNT_DELETED_TEMPLATE = "account.deleted";
 
 /** The date of `now` in UTC (`YYYY-MM-DD`). */
 function utcDate(now: Date): string {
@@ -334,6 +349,7 @@ export class AccountService {
     private readonly ids: IdGenerator,
     private readonly clock: Clock,
     private readonly access: CustomerAccess,
+    private readonly outbox: OutboxService,
     @InjectQueue(OTA_QUEUE.payments) private readonly paymentsQueue: Queue,
     @InjectPinoLogger(AccountService.name) private readonly logger: PinoLogger,
   ) {}
@@ -538,6 +554,23 @@ export class AccountService {
       // First after the commit: the customer guard stops trusting what it cached of this customer (FIX-W29-SECURITY).
       afterCommit(trx, () => this.access.revoke(tenant.tenantId, customerId));
       const now = this.clock.now();
+      const hasBookings = await this.repository.hasBookings(trx, customerId);
+      // The confirmation goes to the address before the placeholder replaces it.
+      await this.notify(trx, {
+        templateKey: ACCOUNT_DELETED_TEMPLATE,
+        to: customer.email,
+        locale: await this.localeOf(trx, customerId),
+        customerId,
+        data: {
+          customer: { firstName: customer.first_name ?? "" },
+          deletion: {
+            requestedAt: emailInstant(now),
+            erasureDueBy: emailInstant(new Date(now.getTime() + ERASURE_DUE_AFTER_MS)),
+            bookingsKept: hasBookings,
+          },
+        },
+        dedupeKey: `${ACCOUNT_DELETED_TEMPLATE}:${customerId}`,
+      });
       const deleted = {
         customerId,
         placeholder: deletedAddress(customer.email, randomBytes(DELETED_ADDRESS_KEY_BYTES)),
@@ -568,7 +601,7 @@ export class AccountService {
         paymentVoidsQueued: voids.length,
         revokedSessions,
         disabledIdentities,
-        hasBookings: await this.repository.hasBookings(trx, customerId),
+        hasBookings,
       };
     });
   }
@@ -632,18 +665,58 @@ export class AccountService {
     if (customer.pending_email !== email) {
       context.set.pending_email = email;
     }
-    const settings = await this.customers.accountSettings(trx);
+    const locale = await this.localeOf(trx, customer.id);
     await this.verifications.issue(trx, {
       customerId: customer.id,
       identityId: identity.identityId,
       to: email,
       firstName: context.firstName,
-      locale:
-        canonicalLocale(await this.customers.preferredLocale(trx, customer.id)) ??
-        canonicalLocale(settings?.defaultLocale) ??
-        "en",
+      locale,
+    });
+    // The security notice to the current address: when, never the new address, no link (see the file header).
+    await this.notify(trx, {
+      templateKey: EMAIL_CHANGED_TEMPLATE,
+      to: customer.email,
+      locale,
+      customerId: customer.id,
+      data: {
+        customer: { firstName: context.firstName ?? "" },
+        change: { requestedAt: emailInstant(context.now) },
+      },
+      dedupeKey: `${EMAIL_CHANGED_TEMPLATE}:${identity.identityId}:${context.now.getTime()}`,
     });
     return "requested";
+  }
+
+  /** The language of the customer's e-mails: their preference, else the storefront's default locale, else English. */
+  private async localeOf(trx: TenantTransaction, customerId: string): Promise<string> {
+    const settings = await this.customers.accountSettings(trx);
+    return (
+      canonicalLocale(await this.customers.preferredLocale(trx, customerId)) ??
+      canonicalLocale(settings?.defaultLocale) ??
+      "en"
+    );
+  }
+
+  /**
+   * One account e-mail in `trx` (see the file header); a call the outbox refuses is logged by template and customer,
+   * never the address, and skipped: the change it reports stands.
+   */
+  private async notify(
+    trx: TenantTransaction,
+    email: Parameters<OutboxService["enqueue"]>[1] & { readonly customerId: string },
+  ): Promise<void> {
+    try {
+      await this.outbox.enqueue(trx, email);
+    } catch (error) {
+      if (!(error instanceof InvalidNotificationError)) {
+        throw error;
+      }
+      this.logger.error(
+        { customerId: email.customerId, template: email.templateKey },
+        "customer.account_email_invalid",
+      );
+    }
   }
 
   /**

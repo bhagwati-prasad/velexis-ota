@@ -54,7 +54,7 @@ import {
   type IdempotencyResponse,
   type IdempotentInput,
 } from "../../common/http/idempotency.service";
-import { EMAIL_ADDRESS } from "../../config";
+import type { ApiConfig } from "../../config";
 import { InvalidNotificationError, OutboxService } from "../../notifications/outbox.service";
 import { StaffRecipients } from "../../notifications/staff-recipients";
 import { CallerContext } from "../../tenancy/caller-resolver";
@@ -115,19 +115,14 @@ export class AirlineCardCompletionService {
     private readonly staffRecipients: StaffRecipients,
     private readonly outbox: OutboxService,
     private readonly clock: Clock,
-    config: ConfigService,
+    config: ConfigService<ApiConfig, true>,
     private readonly logger: PinoLogger,
   ) {
     logger.setContext(AirlineCardCompletionService.name);
-    // OPS_ALERT_EMAIL is optional (a shared variable since lead decision (4) of 2026-10-23): read untyped, as
-    // StaffRecipients reads it.
-    const ops: unknown = config.get("OPS_ALERT_EMAIL");
-    this.opsEmail = typeof ops === "string" && EMAIL_ADDRESS.test(ops) ? ops : null;
-    const domain: unknown = config.get("STOREFRONT_BASE_DOMAIN");
-    if (typeof domain !== "string") {
-      throw new Error("STOREFRONT_BASE_DOMAIN is not configured");
-    }
-    this.baseDomain = domain;
+    // OPS_ALERT_EMAIL is optional, a key of the shared configuration since lead decision (4) of 2026-10-23 (config.ts
+    // checks it is one plain address): read through its typed key (lead decision (2) of 2026-10-24, FIX-W29-OTA).
+    this.opsEmail = config.get("OPS_ALERT_EMAIL", { infer: true }) ?? null;
+    this.baseDomain = config.get("STOREFRONT_BASE_DOMAIN", { infer: true });
   }
 
   /** Completes the checkout with the airline card (see the file header). */

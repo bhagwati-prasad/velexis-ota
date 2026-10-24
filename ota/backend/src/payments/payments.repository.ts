@@ -577,6 +577,32 @@ export class PaymentsRepository {
     return await (mode === "update" ? query.forUpdate() : query.forKeyShare()).execute();
   }
 
+  /**
+   * Makes the issuance of booking `bookingId` due now (`ticketing_requested_at` and `ticketing_next_attempt_at`), as
+   * checkout.complete's step 5 and the reconciliation's capture ask for it after the payment, when the booking still
+   * waits for it: `confirmed` with its order, `ticketing_status = pending` and never asked for (only the
+   * `issue_after_payment` policy leaves a booking so; `manual_review` waits for staff, `issue_at_booking` asked at the
+   * order's creation). The ticketing scan then issues it (ticketing.service.ts). The caller locked the booking `FOR
+   * UPDATE`. Answers whether it was made due.
+   */
+  async requestIssuanceAfterPayment(trx: TenantTransaction, bookingId: string, now: Date): Promise<boolean> {
+    const result = await trx
+      .updateTable("bookings")
+      .set({
+        ticketing_requested_at: now,
+        ticketing_next_attempt_at: now,
+        updated_at: now,
+        version: sql`version + 1`,
+      })
+      .where("id", "=", bookingId)
+      .where("status", "=", "confirmed")
+      .where("amadeus_order_id", "is not", null)
+      .where("ticketing_status", "=", "pending")
+      .where("ticketing_requested_at", "is", null)
+      .executeTakeFirst();
+    return result.numUpdatedRows > 0n;
+  }
+
   /** The checkout's payments in one of `statuses`, oldest first, locked `FOR UPDATE`. */
   async paymentsOfCheckout(
     trx: TenantTransaction,
@@ -600,6 +626,19 @@ export class PaymentsRepository {
       }
     }
     return rows;
+  }
+
+  /** The id of the newest payment of checkout `checkoutId` (any status), or `undefined` without one. */
+  async newestPaymentIdOfCheckout(trx: TenantTransaction, checkoutId: string): Promise<string | undefined> {
+    const row = await trx
+      .selectFrom("payments")
+      .select("id")
+      .where("checkout_id", "=", checkoutId)
+      .orderBy("created_at", "desc")
+      .orderBy("id", "desc")
+      .limit(1)
+      .executeTakeFirst();
+    return row?.id;
   }
 
   async insertPayment(trx: TenantTransaction, row: Insertable<Db["payments"]>): Promise<void> {
