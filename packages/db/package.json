@@ -44,7 +44,7 @@
   "dependencies": {
     "@velexis/config": "workspace:*",
     "@velexis/logger": "workspace:*",
-    "kysely": "0.28.17",
+    "kysely": "0.28.18",
     "pg": "8.23.1"
   },
   "devDependencies": {

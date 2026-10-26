@@ -413,8 +413,8 @@ importers:
         specifier: workspace:*
         version: link:../logger
       kysely:
-        specifier: 0.28.17
-        version: 0.28.17
+        specifier: 0.28.18
+        version: 0.28.18
       pg:
         specifier: 8.23.1
         version: 8.23.1
@@ -427,7 +427,7 @@ importers:
         version: 8.23.1
       kysely-codegen:
         specifier: 0.18.5
-        version: 0.18.5(kysely@0.28.17)(pg@8.23.1)(typescript@5.6.3)
+        version: 0.18.5(kysely@0.28.18)(pg@8.23.1)(typescript@5.6.3)
       typescript:
         specifier: 5.6.3
         version: 5.6.3
@@ -1679,12 +1679,14 @@ packages:
   '@opentelemetry/sdk-trace-base@2.11.0':
     resolution: {integrity: sha512-H19x/TX/LZdqiYOjM7fqtSxwlplC5pgelavqbQdHbhdq0q/AI/TGkM2dfGuuynTXmJPeF2HoZVoPDu+TGoW78A==}
     engines: {node: ^18.19.0 || >=20.6.0}
+    deprecated: Use @opentelemetry/sdk-trace package
     peerDependencies:
       '@opentelemetry/api': '>=1.3.0 <1.10.0'
 
   '@opentelemetry/sdk-trace-node@2.11.0':
     resolution: {integrity: sha512-CuvCMJmZxswhNLlM2LfuLOW3h3fZujA4hsG4B+Sz4dX2zvaXO8Ng74cnDHWD64gLszTlhiG3c0iNUjj4g+0/sA==}
     engines: {node: ^18.19.0 || >=20.6.0}
+    deprecated: Use @opentelemetry/sdk-trace package
     peerDependencies:
       '@opentelemetry/api': '>=1.0.0 <1.10.0'
 
@@ -3839,8 +3841,8 @@ packages:
       tedious:
         optional: true
 
-  kysely@0.28.17:
-    resolution: {integrity: sha512-nbD8lB9EB3wNdMhOCdx5Li8DxnLbvKByylRLcJ1h+4SkrowVeECAyZlyiKMThF7xFdRz0jSQ2MoJr+wXux2y0Q==}
+  kysely@0.28.18:
+    resolution: {integrity: sha512-lf6nEHwPlaWbUDw5rycPSkEVGVC7sF7hzY7kH0OryleqK8Ym0zZ+RjI8o+RpHHlxpbKVC1d+UoQSW8GFxGQf4Q==}
     engines: {node: '>=20.0.0'}
 
   leven@3.1.0:
@@ -8048,14 +8050,14 @@ snapshots:
     dependencies:
       json-buffer: 3.0.1
 
-  kysely-codegen@0.18.5(kysely@0.28.17)(pg@8.23.1)(typescript@5.6.3):
+  kysely-codegen@0.18.5(kysely@0.28.18)(pg@8.23.1)(typescript@5.6.3):
     dependencies:
       chalk: 4.1.2
       cosmiconfig: 9.0.2(typescript@5.6.3)
       dotenv: 16.6.1
       dotenv-expand: 12.0.3
       git-diff: 2.0.7
-      kysely: 0.28.17
+      kysely: 0.28.18
       micromatch: 4.0.8
       minimist: 1.2.8
       pluralize: 8.0.0
@@ -8065,7 +8067,7 @@ snapshots:
     transitivePeerDependencies:
       - typescript
 
-  kysely@0.28.17: {}
+  kysely@0.28.18: {}
 
   leven@3.1.0: {}
 
