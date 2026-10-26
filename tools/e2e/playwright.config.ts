@@ -17,6 +17,8 @@ const isTrue = (value: string | undefined): boolean => value === "1" || value ==
 const CI = isTrue(process.env["CI"]);
 /** Set by the nightly job when the Stripe test secrets are configured (PADR-0017 item 4). */
 const WITH_STRIPE = isTrue(process.env["E2E_STRIPE"]);
+/** A Chromium binary to use instead of the revision the pinned Playwright installs (a machine image that has another). */
+const CHROMIUM = process.env["E2E_CHROMIUM_EXECUTABLE"];
 
 const desktopChrome = devices["Desktop Chrome"];
 
@@ -66,6 +68,7 @@ export default defineConfig({
     trace: "retain-on-failure",
     screenshot: "only-on-failure",
     video: "off",
+    ...(CHROMIUM === undefined || CHROMIUM === "" ? {} : { launchOptions: { executablePath: CHROMIUM } }),
   },
   projects,
 });

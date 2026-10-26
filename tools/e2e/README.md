@@ -92,6 +92,7 @@ Read through [`@velexis/config`](../../packages/config/README.md) from the envir
 | `E2E_REDIS_DB` | `15` | The stack's Redis database (1 to 15, never 0, the developer's `pnpm dev`), emptied at start and stop. `useRedis` of `@velexis/testing` gives Vitest worker *n* database 1 + (*n* % 15), so it reaches 15 only with 14 workers or more |
 | `E2E_STRIPE` | `false` | `1` defines the `portal-stripe` project and passes the two Stripe values below to the platform backend |
 | `STRIPE_SECRET_KEY`, `STRIPE_BILLING_WEBHOOK_SECRET` | — | With `E2E_STRIPE=1` only, and only test-mode values (`sk_test_…`, `whsec_…`); a live key is refused |
+| `E2E_CHROMIUM_EXECUTABLE` | — | A Chromium binary to launch instead of the revision the pinned Playwright installs, on a machine whose image holds another revision and cannot run `playwright install` (for example `/opt/pw-browsers/chromium`). CI leaves it unset |
 
 The global setup passes `E2E_DATABASE_NAME` (the stack's database) to the test workers.
 
