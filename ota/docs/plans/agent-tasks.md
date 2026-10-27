@@ -851,6 +851,7 @@ The OTA backend gets its contract extensions, request pipeline, tenancy, Amadeus
 - **Verify:** `pnpm --filter @velexis/ota-frontend test && pnpm --filter @velexis/ota-frontend build`
 
 ### OFE-008 · Add the storefront Playwright project and the M2 search journey
+- **Status:** in progress (branch claude/intelligent-bardeen-90hhu7; pending: AC1 in the nightly E2E workflow on GitHub, the `storefront` project's first run there)
 - **Component:** ota-frontend
 - **Milestone:** M2
 - **Depends on:** OFE-007, PFE-014, OBE-026, SDK-007

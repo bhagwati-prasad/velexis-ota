@@ -9,8 +9,14 @@
 //      then run `pnpm db:migrate` and `pnpm db:seed:reference` against it;
 //   4. start the BUILT apps on their ports of docs/mvp/architecture.md §3: the platform API (3100) and worker (3101),
 //      the portal (3000) and the platform admin (3001) from their Next.js standalone servers, and with E2E_WITH_OTA=1
-//      the Amadeus stub (4900) and the OTA worker (4001);
-//   5. wait until each answers GET /health/ready with 200 (the stub, which has no health route, with its 404).
+//      the Amadeus stub (4900), the OTA worker (4001), the OTA API (4000) and `vite preview` of the built storefront
+//      twice (OFE-008): on 4173 for the demo OTA's host and on 4174 for the host of the OTA a journey suspends, each
+//      with the preview proxy to the OTA API and the production headers of the Caddyfile (OADR-0015 point 11);
+//   5. wait until each answers GET /health/ready with 200 (the stub, which has no health route, with its 404; a
+//      storefront preview with its home page);
+//   6. with E2E_WITH_OTA=1, run the platform's and then the OTA backend's `dev:seed` from their built CLIs: the
+//      Velexis test Amadeus account with its test offices, then the demo OTA `tenant_demo` on demo.ota.example.com.
+//      What they print on stdout (a password, a TOTP set-up URI, two API keys, shown once) is discarded, never logged.
 // Teardown stops every process (SIGTERM, then SIGKILL after 10 s), drops the database and empties the Redis database.
 //
 // Every app gets its environment from the `.env.example` files (the root one, then its own: the same precedence as the
@@ -60,6 +66,10 @@ export const STACK_PORTS = Object.freeze({
   platformWorker: 3101,
   otaApi: 4000,
   otaWorker: 4001,
+  /** `vite preview` of the storefront for the demo OTA (STOREFRONT_PREVIEW_PORT's default). */
+  storefront: 4173,
+  /** A second `vite preview` of the same build, for the host of SUSPENDED_TENANT_KEY. */
+  suspendedStorefront: 4174,
   amadeusStub: 4900,
 } as const);
 
@@ -71,11 +81,33 @@ export const PORTAL_URL = origin(STACK_PORTS.portal);
 export const PLATFORM_ADMIN_URL = origin(STACK_PORTS.platformAdmin);
 /** The platform API, which the tests may call to arrange data (PADR-0017 item 5). */
 export const PLATFORM_API_URL = origin(STACK_PORTS.platformApi);
-/** The OTA admin and the OTA API: not started by this harness yet (the OTA plan adds them), but their URLs are set. */
+/** The OTA admin: not started by this harness yet (OAD-016 adds it), but its URL is set. */
 export const OTA_ADMIN_URL = origin(STACK_PORTS.otaAdmin);
+/** The OTA API (E2E_WITH_OTA=1), which the storefront previews proxy `/api/*` to. */
 export const OTA_API_URL = origin(STACK_PORTS.otaApi);
 /** The Amadeus stub (`AMADEUS_BASE_URL_TEST` and `_LIVE` of every app). */
 export const AMADEUS_STUB_URL = origin(STACK_PORTS.amadeusStub);
+
+/**
+ * `STOREFRONT_BASE_DOMAIN` of every process: `<key>.<base>` is the storefront sub-domain of the tenant `<key>`. The
+ * value of the `.env.example` files, set by the stack so the OTA API, the seed and the previews always agree.
+ */
+export const STOREFRONT_BASE_DOMAIN = "ota.example.com";
+/** The demo OTA that the OTA backend's `dev:seed` creates (`tenant_demo`, "Demo Travel", storefront `test`). */
+export const DEMO_TENANT_KEY = "demo";
+/** The storefront host of the demo OTA: the X-Velexis-Host that the preview on STOREFRONT_URL sends. */
+export const DEMO_STOREFRONT_HOST = `${DEMO_TENANT_KEY}.${STOREFRONT_BASE_DOMAIN}`;
+/**
+ * The key of the OTA that a journey suspends (support/ota.ts `withSuspendedTenant`): its own tenant, so that no other
+ * journey ever sees the demo OTA suspended. The stack only serves its host; the journey creates the tenant.
+ */
+export const SUSPENDED_TENANT_KEY = "suspended";
+/** The X-Velexis-Host that the preview on SUSPENDED_STOREFRONT_URL sends. */
+export const SUSPENDED_STOREFRONT_HOST = `${SUSPENDED_TENANT_KEY}.${STOREFRONT_BASE_DOMAIN}`;
+/** The built storefront for the demo OTA: base URL of the `storefront` project (E2E_WITH_OTA=1). */
+export const STOREFRONT_URL = origin(STACK_PORTS.storefront);
+/** The same build for the host of SUSPENDED_TENANT_KEY (E2E_WITH_OTA=1). */
+export const SUSPENDED_STOREFRONT_URL = origin(STACK_PORTS.suspendedStorefront);
 
 /** The name of every database this harness creates: `velexis_e2e_<runId>`. */
 export const E2E_DATABASE_PREFIX = "velexis_e2e_";
@@ -106,7 +138,10 @@ export const STACK_SETTINGS_SCHEMA = {
   SMTP_URL: env.url({ protocols: ["smtp:", "smtps:"] }),
   /** Mailpit's API, where the tests read that e-mail (support/mailpit.ts). */
   MAILPIT_API_URL: env.url({ protocols: ["http:", "https:"] }),
-  /** `1` also starts the Amadeus stub and the OTA worker (journeys that provision an OTA). */
+  /**
+   * `1` also starts the Amadeus stub, the OTA worker and API and the storefront previews, and seeds the demo OTA
+   * (journeys that provision an OTA, and the `storefront` project).
+   */
   E2E_WITH_OTA: env.bool({ default: false }),
   /**
    * The Redis database of the stack, emptied when the stack starts and stops. Not 0 (the developer's `pnpm dev`).
@@ -192,7 +227,10 @@ export function stackDatabaseUrl(context: StackContext, role: TestRole): string 
   return databaseUrl(context.settings.TEST_DATABASE_ADMIN_URL, context.databaseName, TEST_ROLES[role]);
 }
 
-/** The processes of the stack, and the platform CLI that support/seed.ts runs. */
+/**
+ * The processes of the stack, the platform CLI that support/seed.ts and the platform's `dev:seed` run, and the OTA
+ * backend's CLI that runs its `dev:seed`.
+ */
 export type ServiceName =
   | "platform-api"
   | "platform-worker"
@@ -200,7 +238,11 @@ export type ServiceName =
   | "portal"
   | "platform-admin"
   | "amadeus-stub"
-  | "ota-worker";
+  | "ota-worker"
+  | "ota-api"
+  | "ota-cli"
+  | "storefront"
+  | "suspended-storefront";
 
 /** The `.env.example` files of each process, root first: a later file wins, as `<app>/.env.local` does. */
 const EXAMPLE_ENV_FILES: Readonly<Record<ServiceName, readonly string[]>> = {
@@ -211,14 +253,20 @@ const EXAMPLE_ENV_FILES: Readonly<Record<ServiceName, readonly string[]>> = {
   "platform-admin": [".env.example", "platform/admin/.env.example"],
   "amadeus-stub": [".env.example"],
   "ota-worker": [".env.example", "ota/backend/.env.example"],
+  "ota-api": [".env.example", "ota/backend/.env.example"],
+  "ota-cli": [".env.example", "ota/backend/.env.example"],
+  storefront: [".env.example", "ota/frontend/.env.example"],
+  "suspended-storefront": [".env.example", "ota/frontend/.env.example"],
 };
 
 /**
  * DSNs no process gets from the `.env.example` files or the developer's shell, which name the development database
  * `velexis`: each backend process gets the stack database's DSN of its own role instead (`serviceOverrides`), the
- * Next.js apps and the stub get none. The migrator's and the test admin's DSNs are for `pnpm db:migrate` and the
- * harness only (root .env.example: "Never given to a running app"); the provisioner's is the OTA worker's alone
- * (ADR-0004, ADR-0026).
+ * Next.js apps, the stub and the storefront previews get none. The migrator's and the test admin's DSNs are for
+ * `pnpm db:migrate` and the harness only (root .env.example: "Never given to a running app"); the one exception is the
+ * OTA backend's development-only `dev:seed`, a command and no app, which writes the demo OTA's platform rows as the
+ * migrator (ota/backend/README.md §5). The provisioner's DSN is the OTA worker's and that seed's alone (ADR-0004,
+ * ADR-0026).
  */
 const WITHHELD = [
   "DATABASE_URL",
@@ -264,6 +312,7 @@ function stackOverrides(context: StackContext): Record<string, string> {
     OTA_API_URL,
     AMADEUS_BASE_URL_TEST: AMADEUS_STUB_URL,
     AMADEUS_BASE_URL_LIVE: AMADEUS_STUB_URL,
+    STOREFRONT_BASE_DOMAIN,
     NEXT_TELEMETRY_DISABLED: "1",
   };
 }
@@ -308,6 +357,29 @@ function serviceOverrides(name: ServiceName, context: StackContext): Record<stri
         PORT: String(STACK_PORTS.otaApi),
         HEALTH_PORT: String(STACK_PORTS.otaWorker),
       };
+    case "ota-api":
+      return {
+        DATABASE_URL: stackDatabaseUrl(context, "ota"),
+        PORT: String(STACK_PORTS.otaApi),
+        HEALTH_PORT: String(STACK_PORTS.otaWorker),
+      };
+    case "ota-cli":
+      // `dev:seed`: the demo OTA's platform rows as the migrator, its schema as the provisioner, read back as the app.
+      return {
+        DATABASE_URL: stackDatabaseUrl(context, "ota"),
+        DATABASE_PROVISIONER_URL: stackDatabaseUrl(context, "provisioner"),
+        DATABASE_MIGRATOR_URL: stackDatabaseUrl(context, "migrator"),
+      };
+    case "storefront":
+      return {
+        STOREFRONT_PREVIEW_PORT: String(STACK_PORTS.storefront),
+        STOREFRONT_DEV_HOST: DEMO_STOREFRONT_HOST,
+      };
+    case "suspended-storefront":
+      return {
+        STOREFRONT_PREVIEW_PORT: String(STACK_PORTS.suspendedStorefront),
+        STOREFRONT_DEV_HOST: SUSPENDED_STOREFRONT_HOST,
+      };
   }
 }
 
@@ -337,11 +409,13 @@ export function childEnv(values: Readonly<Record<string, string>>): NodeJS.Proce
 
 /** One process of the stack. */
 export interface ServiceSpec {
-  readonly name: Exclude<ServiceName, "platform-cli">;
-  /** The built entry point, relative to the repository root. */
+  readonly name: Exclude<ServiceName, "platform-cli" | "ota-cli">;
+  /** The built entry point, relative to the repository root: what must exist before the stack starts. */
   readonly entry: string;
   /** The command that builds it. */
   readonly build: string;
+  /** What `node` runs, relative to the repository root, and its arguments: `[entry]` for every app but a preview. */
+  readonly argv: readonly string[];
   /** The working directory, relative to the repository root. */
   readonly cwd: string;
   readonly port: number;
@@ -357,18 +431,40 @@ const ok = (status: number): boolean => status === 200;
 /** The Next.js apps: the standalone server, plus the static assets that `deploy/scripts/pack-release.sh` copies. */
 const NEXT_APPS = ["platform/frontend", "platform/admin"] as const;
 
+/** Vite's command line in the storefront package: `vite preview` serves the built `dist/` (ota/frontend/README.md §11). */
+const VITE_BIN = "ota/frontend/node_modules/vite/bin/vite.js";
+
 /** The processes of a stack in start order; the OTA ones only with E2E_WITH_OTA=1. */
 export function stackServices(context: StackContext): readonly ServiceSpec[] {
   const service = (
     name: ServiceSpec["name"],
-    spec: Omit<ServiceSpec, "name" | "readyUrl" | "isReady" | "env"> & { isReady?: ServiceSpec["isReady"] },
-  ): ServiceSpec => ({
-    name,
-    ...spec,
-    readyUrl: `${origin(spec.port)}${READY_PATH}`,
-    isReady: spec.isReady ?? ok,
-    env: serviceEnv(name, context),
-  });
+    spec: Omit<ServiceSpec, "name" | "argv" | "readyUrl" | "isReady" | "env"> & {
+      argv?: ServiceSpec["argv"];
+      readyPath?: string;
+      isReady?: ServiceSpec["isReady"];
+    },
+  ): ServiceSpec => {
+    const { readyPath, ...rest } = spec;
+    return {
+      name,
+      ...rest,
+      argv: spec.argv ?? [spec.entry],
+      readyUrl: `${origin(spec.port)}${readyPath ?? READY_PATH}`,
+      isReady: spec.isReady ?? ok,
+      env: serviceEnv(name, context),
+    };
+  };
+  // `vite preview` of the built storefront with the preview proxy and the production headers (vite.config.js), bound to
+  // 127.0.0.1 (Vite's default `localhost` may resolve to ::1 only). Ready when it serves the home page.
+  const storefront = (name: "storefront" | "suspended-storefront", port: number): ServiceSpec =>
+    service(name, {
+      entry: "ota/frontend/dist/index.html",
+      build: "pnpm --filter @velexis/ota-frontend build",
+      argv: [VITE_BIN, "preview", "--host", STACK_HOST],
+      cwd: "ota/frontend",
+      port,
+      readyPath: "/",
+    });
   const platform = [
     service("platform-api", {
       entry: "platform/backend/dist/main.js",
@@ -414,11 +510,67 @@ export function stackServices(context: StackContext): readonly ServiceSpec[] {
       cwd: "ota/backend",
       port: STACK_PORTS.otaWorker,
     }),
+    service("ota-api", {
+      entry: "ota/backend/dist/main.js",
+      build: "pnpm --filter @velexis/ota-backend build",
+      cwd: "ota/backend",
+      port: STACK_PORTS.otaApi,
+    }),
+    storefront("storefront", STACK_PORTS.storefront),
+    storefront("suspended-storefront", STACK_PORTS.suspendedStorefront),
   ];
 }
 
+/** A command the stack runs once it is ready (E2E_WITH_OTA=1): a built CLI of a backend. */
+export interface SeedCommand {
+  /** The log file's name in STACK_LOG_DIR. */
+  readonly name: "platform-dev-seed" | "ota-dev-seed";
+  /** The built CLI, relative to the repository root. */
+  readonly entry: string;
+  /** The command that builds it. */
+  readonly build: string;
+  /** What `node` runs: the CLI and its arguments. */
+  readonly argv: readonly string[];
+  /** The working directory, relative to the repository root. */
+  readonly cwd: string;
+  readonly env: Readonly<Record<string, string>>;
+}
+
+/**
+ * The development seeds, in order (E2E_WITH_OTA=1; nothing otherwise): the platform's `dev:seed` (the platform admin
+ * `admin@example.com`, the Velexis test Amadeus account, verified against the stub, and its ten test offices), then the
+ * OTA backend's (the demo OTA on DEMO_STOREFRONT_HOST with an Amadeus test connection and `tenant_demo`). Both are
+ * idempotent: a journey that runs one again changes nothing.
+ */
+export function seedCommands(context: StackContext): readonly SeedCommand[] {
+  if (!context.settings.E2E_WITH_OTA) {
+    return [];
+  }
+  return [
+    {
+      name: "platform-dev-seed",
+      entry: "platform/backend/dist/cli.js",
+      build: "pnpm --filter @velexis/platform-backend build",
+      argv: ["platform/backend/dist/cli.js", "dev:seed"],
+      cwd: "platform/backend",
+      env: serviceEnv("platform-cli", context),
+    },
+    {
+      name: "ota-dev-seed",
+      entry: "ota/backend/dist/cli.js",
+      build: "pnpm --filter @velexis/ota-backend build",
+      argv: ["ota/backend/dist/cli.js", "dev:seed"],
+      cwd: "ota/backend",
+      env: serviceEnv("ota-cli", context),
+    },
+  ];
+}
+
+/** Something the stack runs from a build: an app or a seed's CLI. */
+export type BuiltEntry = Pick<ServiceSpec, "entry" | "build"> & { readonly name: string };
+
 /** Throws one error that lists every entry point that is not built, with the command that builds it. */
-export function assertBuilt(services: readonly ServiceSpec[]): void {
+export function assertBuilt(services: readonly BuiltEntry[]): void {
   const missing = services.filter((service) => {
     try {
       accessSync(join(REPO_ROOT, service.entry), constants.R_OK);
@@ -497,8 +649,9 @@ function startService(spec: ServiceSpec): RunningService {
   const logFile = join(STACK_LOG_DIR, `${spec.name}.log`);
   const fd = openSync(logFile, "w");
   let child: ChildProcess;
+  const [script = spec.entry, ...args] = spec.argv;
   try {
-    child = spawn(process.execPath, ["--enable-source-maps", join(REPO_ROOT, spec.entry)], {
+    child = spawn(process.execPath, ["--enable-source-maps", join(REPO_ROOT, script), ...args], {
       cwd: join(REPO_ROOT, spec.cwd),
       env: childEnv(spec.env),
       stdio: ["ignore", fd, fd],
@@ -583,17 +736,35 @@ async function stopService(running: RunningService): Promise<void> {
   }
 }
 
-/** Runs `pnpm <args>` in the repository root with `values` on top of the environment; output to `<logName>.log`. */
-async function runPnpm(
-  args: readonly string[],
-  values: Record<string, string>,
-  logName: string,
-): Promise<void> {
-  const logFile = join(STACK_LOG_DIR, `${logName}.log`);
+/** How a one-off command of the stack runs. */
+interface CommandOptions {
+  /** The command as an error message names it. */
+  readonly label: string;
+  /** The working directory, relative to the repository root. */
+  readonly cwd: string;
+  /** Put on top of the harness's environment (`childEnv`). */
+  readonly env: Readonly<Record<string, string>>;
+  /** Its log file: `<logName>.log` in `logDir` (default STACK_LOG_DIR). */
+  readonly logName: string;
+  readonly logDir?: string;
+  /**
+   * `discard` drops stdout and logs stderr only: for the seeds, which print a password, a TOTP set-up URI and API
+   * keys once on stdout and their problems on stderr. Default `log`: both streams.
+   */
+  readonly stdout?: "log" | "discard";
+}
+
+/** Runs `command args` to its end; rejects with the end of its log when it fails or takes too long. */
+async function runCommand(command: string, args: readonly string[], options: CommandOptions): Promise<void> {
+  const logFile = join(options.logDir ?? STACK_LOG_DIR, `${options.logName}.log`);
   const fd = openSync(logFile, "w");
   let child: ChildProcess;
   try {
-    child = spawn("pnpm", [...args], { cwd: REPO_ROOT, env: childEnv(values), stdio: ["ignore", fd, fd] });
+    child = spawn(command, [...args], {
+      cwd: join(REPO_ROOT, options.cwd),
+      env: childEnv(options.env),
+      stdio: ["ignore", options.stdout === "discard" ? "ignore" : fd, fd],
+    });
   } finally {
     closeSync(fd);
   }
@@ -614,8 +785,33 @@ async function runPnpm(
     });
   });
   if (outcome !== undefined) {
-    throw new Error(`pnpm ${args.join(" ")} ${outcome}. Its output (${logFile}):\n${logTail(logFile)}`);
+    throw new Error(`${options.label} ${outcome}. Its output (${logFile}):\n${logTail(logFile)}`);
   }
+}
+
+/** Runs `pnpm <args>` in the repository root with `values` on top of the environment; output to `<logName>.log`. */
+async function runPnpm(
+  args: readonly string[],
+  values: Record<string, string>,
+  logName: string,
+): Promise<void> {
+  await runCommand("pnpm", args, { label: `pnpm ${args.join(" ")}`, cwd: ".", env: values, logName });
+}
+
+/**
+ * Runs a seed's built CLI with `node` (a path relative to the repository root, or absolute) and logs its stderr to
+ * `<name>.log` in `logDir`. Its stdout, which holds secrets shown once, is discarded: never logged, never in an error.
+ */
+export async function runSeed(seed: SeedCommand, logDir = STACK_LOG_DIR): Promise<void> {
+  const [script = seed.entry, ...args] = seed.argv;
+  await runCommand(process.execPath, ["--enable-source-maps", resolve(REPO_ROOT, script), ...args], {
+    label: `node ${seed.argv.join(" ")}`,
+    cwd: seed.cwd,
+    env: seed.env,
+    logName: seed.name,
+    logDir,
+    stdout: "discard",
+  });
 }
 
 // ---- Database and Redis -------------------------------------------------------------------------------------
@@ -700,12 +896,13 @@ export interface Stack {
   stop(): Promise<void>;
 }
 
-/** Starts the stack of `settings` (steps 2 to 5 of the header). On failure it cleans up and rethrows. */
+/** Starts the stack of `settings` (steps 2 to 6 of the header). On failure it cleans up and rethrows. */
 export async function startStack(settings: StackSettings): Promise<Stack> {
   const started = performance.now();
   const context = stackContext(settings, newDatabaseName());
   const services = stackServices(context);
-  assertBuilt(services);
+  const seeds = seedCommands(context);
+  assertBuilt([...services, ...seeds]);
   await assertPortsFree(services);
   await mkdir(STACK_LOG_DIR, { recursive: true });
 
@@ -772,6 +969,12 @@ export async function startStack(settings: StackSettings): Promise<Stack> {
       running.push(startService(spec));
     }
     await Promise.all(running.map((service) => waitUntilReady(service, cancelReadiness.signal)));
+    // After the stub is ready: the platform's seed verifies the test Amadeus account against it.
+    for (const seed of seeds) {
+      const seedStarted = performance.now();
+      await runSeed(seed);
+      say(`${seed.name} done (${seconds(seedStarted)})`);
+    }
   } catch (error) {
     cancelReadiness.abort();
     await stop().catch((stopError: unknown) => say(String(stopError)));

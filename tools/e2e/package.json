@@ -2,7 +2,7 @@
   "name": "@velexis/e2e",
   "version": "0.0.0",
   "private": true,
-  "description": "Playwright end-to-end harness (ADR-0015, PADR-0017): starts the built stack on a fresh database and runs the portal and platform admin journeys with Mailpit, TOTP and axe helpers. Test-only, never shipped.",
+  "description": "Playwright end-to-end harness (ADR-0015, PADR-0017): starts the built stack on a fresh database and runs the portal, platform admin and storefront journeys with Mailpit, TOTP and axe helpers. Test-only, never shipped.",
   "license": "UNLICENSED",
   "type": "commonjs",
   "scripts": {
@@ -19,6 +19,7 @@
     "@types/pg": "8.23.1",
     "@velexis/api-types": "workspace:*",
     "@velexis/config": "workspace:*",
+    "@velexis/db": "workspace:*",
     "@velexis/testing": "workspace:*",
     "eslint": "9.39.5",
     "ioredis": "5.11.1",

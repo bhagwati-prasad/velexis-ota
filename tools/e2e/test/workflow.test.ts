@@ -42,6 +42,9 @@ const steps = job?.steps ?? [];
 const runs = steps.map((step) => step.run ?? "");
 const indexOfRun = (pattern: RegExp): number => runs.findIndex((run) => pattern.test(run));
 
+/** The run of the projects that need no Stripe: the platform's (PFE-014) and the storefront (OFE-008). */
+const PROJECTS_RUN = "pnpm test:e2e -- --project=portal --project=platform-admin --project=storefront";
+
 describe(".github/workflows/e2e.yml", () => {
   it("runs nightly, on demand and on pull requests labelled e2e only [PFE-014 AC2]", () => {
     expect(workflow.on.schedule?.[0]?.cron).toMatch(/^\d+ \d+ \* \* \*$/);
@@ -68,7 +71,8 @@ describe(".github/workflows/e2e.yml", () => {
     const bootstrap = indexOfRun(/deploy\/postgres\/bootstrap\.sql/);
     const build = runs.indexOf("pnpm build");
     const browsers = indexOfRun(/playwright install --with-deps chromium/);
-    const projects = runs.indexOf("pnpm test:e2e -- --project=portal --project=platform-admin");
+    // OFE-008 added the storefront project to the same run.
+    const projects = runs.indexOf(PROJECTS_RUN);
     expect(bootstrap).toBeGreaterThanOrEqual(0);
     expect(build).toBeGreaterThan(bootstrap);
     expect(browsers).toBeGreaterThan(build);
@@ -81,6 +85,20 @@ describe(".github/workflows/e2e.yml", () => {
       MAILPIT_API_URL: "http://127.0.0.1:8025",
       E2E_WITH_OTA: "1",
     });
+  });
+
+  it("runs the storefront project in the same run, against the stack with the OTA backend [OFE-008 AC1]", () => {
+    const projects = runs.indexOf(PROJECTS_RUN);
+    expect(projects).toBeGreaterThan(runs.indexOf("pnpm build"));
+    expect(steps[projects]?.if).toBeUndefined();
+    expect(steps[projects]?.name).toContain("[OFE-008 AC1]");
+    // The storefront project exists only with E2E_WITH_OTA=1 (playwright.config.ts), which the job sets for every step.
+    expect(job?.env["E2E_WITH_OTA"]).toBe("1");
+    expect(steps[projects]?.env?.["E2E_WITH_OTA"]).toBeUndefined();
+    // `pnpm dev:keys` before the stack: the OTA backend's dev:seed hashes the demo OTA's keys with the pepper.
+    expect(indexOfRun(/^pnpm dev:keys$/)).toBeGreaterThanOrEqual(0);
+    expect(indexOfRun(/^pnpm dev:keys$/)).toBeLessThan(projects);
+    expect(runs.filter((run) => /--project=storefront/.test(run))).toHaveLength(1);
   });
 
   it("runs portal-stripe only at night and only with the Stripe test secrets (PADR-0017 item 4)", () => {

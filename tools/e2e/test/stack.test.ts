@@ -1,21 +1,32 @@
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:net";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { ConfigError } from "@velexis/config";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   assertBuilt,
   assertPortsFree,
   childEnv,
+  DEMO_STOREFRONT_HOST,
   exampleEnv,
   newDatabaseName,
+  OTA_API_URL,
   PLATFORM_ADMIN_URL,
   PLATFORM_API_URL,
   PORTAL_URL,
   readStackSettings,
   runningStackContext,
+  runSeed,
+  seedCommands,
   serviceEnv,
   stackContext,
   stackServices,
   STACK_PORTS,
+  STOREFRONT_URL,
+  SUSPENDED_STOREFRONT_HOST,
+  SUSPENDED_STOREFRONT_URL,
+  type SeedCommand,
   type ServiceName,
   type ServiceSpec,
   type StackSettings,
@@ -43,7 +54,20 @@ const ALL_SERVICES: readonly ServiceName[] = [
   "platform-admin",
   "amadeus-stub",
   "ota-worker",
+  "ota-api",
+  "ota-cli",
+  "storefront",
+  "suspended-storefront",
 ];
+
+/** The processes and commands that get no DSN at all: the Next.js apps, the stub and the storefront previews. */
+const WITHOUT_DSN = [
+  "portal",
+  "platform-admin",
+  "amadeus-stub",
+  "storefront",
+  "suspended-storefront",
+] as const;
 
 describe("readStackSettings", () => {
   it("defaults to the platform stack without OTA or Stripe, on Redis database 15", () => {
@@ -125,20 +149,57 @@ describe("serviceEnv", () => {
     const otaWorker = serviceEnv("ota-worker", context);
     expect(otaWorker["DATABASE_URL"]).toBe(dsn("velexis_ota_app", "dev_ota"));
     expect(otaWorker["DATABASE_PROVISIONER_URL"]).toBe(dsn("velexis_provisioner", "dev_provisioner"));
+    expect(serviceEnv("ota-api", context)["DATABASE_URL"]).toBe(dsn("velexis_ota_app", "dev_ota"));
+    expect(serviceEnv("ota-cli", context)).toMatchObject({
+      DATABASE_URL: dsn("velexis_ota_app", "dev_ota"),
+      DATABASE_PROVISIONER_URL: dsn("velexis_provisioner", "dev_provisioner"),
+    });
   });
 
-  it("never gives the migrator's or the test admin's DSN, and no DSN at all to the Next.js apps and the stub", () => {
+  it("never gives the migrator's or the test admin's DSN, and no DSN at all to the Next.js apps, the stub and the previews", () => {
     for (const name of ALL_SERVICES) {
       const values = serviceEnv(name, context);
-      expect(values["DATABASE_MIGRATOR_URL"]).toBeUndefined();
       expect(values["TEST_DATABASE_ADMIN_URL"]).toBeUndefined();
-      if (name !== "ota-worker") {
+      if (name !== "ota-cli") {
+        expect(values["DATABASE_MIGRATOR_URL"]).toBeUndefined();
+      }
+      if (name !== "ota-worker" && name !== "ota-cli") {
         expect(values["DATABASE_PROVISIONER_URL"]).toBeUndefined();
       }
     }
-    for (const name of ["portal", "platform-admin", "amadeus-stub"] as const) {
+    for (const name of WITHOUT_DSN) {
       expect(serviceEnv(name, context)["DATABASE_URL"]).toBeUndefined();
     }
+  });
+
+  it("gives the migrator's DSN of the stack database to the OTA backend's dev:seed only, a command and no app [OFE-008 AC1]", () => {
+    expect(serviceEnv("ota-cli", context)["DATABASE_MIGRATOR_URL"]).toBe(
+      dsn("velexis_migrator", "dev_migrator"),
+    );
+    expect(serviceEnv("ota-api", context)["DATABASE_MIGRATOR_URL"]).toBeUndefined();
+  });
+
+  it("points each storefront preview at the OTA API with its own host and port, and the API's edge secret [OFE-008 AC1]", () => {
+    const api = serviceEnv("ota-api", context);
+    expect(serviceEnv("storefront", context)).toMatchObject({
+      OTA_API_URL,
+      STOREFRONT_PREVIEW_PORT: "4173",
+      STOREFRONT_DEV_HOST: DEMO_STOREFRONT_HOST,
+      VELEXIS_EDGE_SECRET: api["VELEXIS_EDGE_SECRET"],
+    });
+    expect(serviceEnv("suspended-storefront", context)).toMatchObject({
+      OTA_API_URL,
+      STOREFRONT_PREVIEW_PORT: "4174",
+      STOREFRONT_DEV_HOST: SUSPENDED_STOREFRONT_HOST,
+      VELEXIS_EDGE_SECRET: api["VELEXIS_EDGE_SECRET"],
+    });
+    expect(DEMO_STOREFRONT_HOST).toBe("demo.ota.example.com");
+    expect(SUSPENDED_STOREFRONT_HOST).toBe("suspended.ota.example.com");
+    // The seed, the API and the previews agree on the base domain of the storefront hosts.
+    for (const name of ["ota-api", "ota-cli", "storefront", "suspended-storefront"] as const) {
+      expect(serviceEnv(name, context)["STOREFRONT_BASE_DOMAIN"]).toBe("ota.example.com");
+    }
+    expect(api).toMatchObject({ PORT: "4000" });
   });
 
   it("points every process at the stack's Redis database, Mailpit, ports and 127.0.0.1 public URLs", () => {
@@ -213,7 +274,7 @@ describe("childEnv", () => {
 });
 
 describe("stackServices", () => {
-  it("starts the platform processes, and the stub and the OTA worker only with E2E_WITH_OTA=1", () => {
+  it("starts the platform processes, and the OTA ones only with E2E_WITH_OTA=1 [OFE-008 AC1]", () => {
     const platform = stackServices(stackContext(settings(), DATABASE)).map((service) => service.name);
     expect(platform).toEqual(["platform-api", "platform-worker", "portal", "platform-admin"]);
     const withOta = stackServices(stackContext(settings({ E2E_WITH_OTA: "1" }), DATABASE));
@@ -224,19 +285,116 @@ describe("stackServices", () => {
       "portal",
       "platform-admin",
       "ota-worker",
+      "ota-api",
+      "storefront",
+      "suspended-storefront",
     ]);
     expect(new Set(withOta.map((service) => service.port)).size).toBe(withOta.length);
   });
 
-  it("waits for /health/ready with 200, and for the stub's 404", () => {
+  it("waits for /health/ready with 200, for the stub's 404 and for each preview's home page [OFE-008 AC1]", () => {
     const services = stackServices(stackContext(settings({ E2E_WITH_OTA: "1" }), DATABASE));
+    const previews: readonly string[] = ["storefront", "suspended-storefront"];
     for (const service of services) {
-      expect(service.readyUrl).toBe(`http://127.0.0.1:${service.port}/health/ready`);
+      expect(service.readyUrl).toBe(
+        `http://127.0.0.1:${service.port}${previews.includes(service.name) ? "/" : "/health/ready"}`,
+      );
       expect(service.isReady(200)).toBe(service.name !== "amadeus-stub");
       expect(service.isReady(404)).toBe(service.name === "amadeus-stub");
       expect(service.isReady(503)).toBe(false);
     }
     expect(services.find((service) => service.name === "portal")?.port).toBe(STACK_PORTS.portal);
+    expect(services.find((service) => service.name === "storefront")?.readyUrl).toBe(`${STOREFRONT_URL}/`);
+    expect(services.find((service) => service.name === "suspended-storefront")?.readyUrl).toBe(
+      `${SUSPENDED_STOREFRONT_URL}/`,
+    );
+  });
+
+  it("runs the built apps with node, and `vite preview` of the built storefront on 127.0.0.1 [OFE-008 AC1]", () => {
+    const services = stackServices(stackContext(settings({ E2E_WITH_OTA: "1" }), DATABASE));
+    for (const service of services) {
+      if (service.name === "storefront" || service.name === "suspended-storefront") {
+        expect(service.argv).toEqual([
+          "ota/frontend/node_modules/vite/bin/vite.js",
+          "preview",
+          "--host",
+          "127.0.0.1",
+        ]);
+        expect(service).toMatchObject({
+          entry: "ota/frontend/dist/index.html",
+          build: "pnpm --filter @velexis/ota-frontend build",
+          cwd: "ota/frontend",
+        });
+      } else {
+        expect(service.argv).toEqual([service.entry]);
+      }
+    }
+    expect(services.find((service) => service.name === "ota-api")).toMatchObject({
+      entry: "ota/backend/dist/main.js",
+      port: 4000,
+    });
+  });
+});
+
+describe("seedCommands", () => {
+  it("runs nothing without E2E_WITH_OTA, else the platform's dev:seed and then the OTA backend's [OFE-008 AC1]", () => {
+    expect(seedCommands(stackContext(settings(), DATABASE))).toEqual([]);
+    const context = stackContext(settings({ E2E_WITH_OTA: "1" }), DATABASE);
+    const seeds = seedCommands(context);
+    expect(seeds.map((seed) => [seed.name, seed.argv])).toEqual([
+      ["platform-dev-seed", ["platform/backend/dist/cli.js", "dev:seed"]],
+      ["ota-dev-seed", ["ota/backend/dist/cli.js", "dev:seed"]],
+    ]);
+    expect(seeds[0]?.env).toEqual(serviceEnv("platform-cli", context));
+    expect(seeds[1]?.env).toEqual(serviceEnv("ota-cli", context));
+    expect(seeds.map((seed) => seed.entry)).toEqual([
+      "platform/backend/dist/cli.js",
+      "ota/backend/dist/cli.js",
+    ]);
+  });
+});
+
+describe("runSeed", () => {
+  const dir = mkdtempSync(join(tmpdir(), "ofe-008-seed-"));
+
+  /** A stand-in seed that prints a secret on stdout and a problem on stderr, then exits with `code`. */
+  const fakeSeed = (code: number): SeedCommand => {
+    const script = join(dir, `seed-${code}.js`);
+    writeFileSync(
+      script,
+      'process.stdout.write("Password: e2e-secret-shown-once\\n");\n' +
+        'process.stderr.write("dev:seed: the stub is not running\\n");\n' +
+        `process.exitCode = ${code};\n`,
+    );
+    return { name: "ota-dev-seed", entry: script, build: "none", argv: [script], cwd: ".", env: {} };
+  };
+
+  /** The log of the seed that succeeded, and what the failing one rejected with. */
+  let succeededLog = "";
+  let failure: unknown;
+
+  // Spawning the two stand-in seeds (a node process each, about 50 ms idle) happens here, not in the tests' 5 s
+  // budget: 20 s for both on a loaded machine.
+  beforeAll(async () => {
+    await runSeed(fakeSeed(0), dir);
+    succeededLog = readFileSync(join(dir, "ota-dev-seed.log"), "utf8");
+    try {
+      await runSeed(fakeSeed(1), dir);
+    } catch (caught) {
+      failure = caught;
+    }
+  }, 20_000);
+  afterAll(() => rmSync(dir, { recursive: true, force: true }));
+
+  it("discards what a seed prints on stdout and logs its stderr [OFE-008 AC1]", () => {
+    expect(succeededLog).toBe("dev:seed: the stub is not running\n");
+    expect(succeededLog).not.toContain("e2e-secret-shown-once");
+  });
+
+  it("fails with the seed's stderr, never its stdout, when it exits with an error [OFE-008 AC1]", () => {
+    expect(failure).toBeInstanceOf(Error);
+    expect(String(failure)).toMatch(/exited with code 1[\s\S]*dev:seed: the stub is not running/);
+    expect(String(failure)).not.toContain("e2e-secret-shown-once");
   });
 });
 

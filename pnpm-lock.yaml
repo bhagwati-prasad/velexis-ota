@@ -903,6 +903,9 @@ importers:
       '@velexis/config':
         specifier: workspace:*
         version: link:../../packages/config
+      '@velexis/db':
+        specifier: workspace:*
+        version: link:../../packages/db
       '@velexis/testing':
         specifier: workspace:*
         version: link:../../packages/testing
