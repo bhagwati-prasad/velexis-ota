@@ -4,10 +4,11 @@
 // storefront shows a button exactly when its action is true, and every false action has its reason.
 //
 //   Action                       True when (the first failing rule gives the reason)
-//   canCancel                    live¹, nothing departed (`flown`), more than 3 h before the first departure
-//                                (`too_close_to_departure`), self-service cancellation on (`disabled_by_ota`), an
-//                                Amadeus order and no cancellation undecided or waiting for the staff (`pending`):
-//                                the rules of the cancellation quote (cancellation-mode.ts, FIX-W28-CANCEL)
+//   canCancel                    live¹, the departure rule (`cancelDepartureReasonOf`: nothing departed, `flown`;
+//                                more than 3 h before the first departure, `too_close_to_departure`), self-service
+//                                cancellation on (`disabled_by_ota`), an Amadeus order and no cancellation undecided
+//                                or waiting for the staff (`pending`): the rules of the cancellation quote and of
+//                                bookings.cancel (cancellation-mode.ts, FIX-W28-CANCEL)
 //   canModifyContacts            live¹, the last flight has not landed (`flown`)
 //   canAddRemarks                as canModifyContacts
 //   canModifyTravelerDocuments   never in the MVP (`disabled_by_ota`: bookings.update answers travellers' changes
@@ -25,6 +26,14 @@
 // "Departed" means a segment is flown (Amadeus `isFlown`) or its departure instant has passed; "landed" means every
 // segment is flown or the booking's last arrival has passed. The 3-hour and 24-hour windows count from the first
 // segment that has not departed yet.
+//
+// One departure rule for every cancellation (lead decision (1) of 2026-10-26, FIX-W30-OTA): `cancelDepartureReasonOf`
+// is the only place that says whether a booking may still be cancelled for its flights, so a booking is never offered
+// for cancellation that the cancellation then refuses. canCancel here (bookings.get, the customer's bookings list)
+// and the mode of bookings.quoteCancellation and bookings.cancel (cancellation-mode.ts) use it with the self-service
+// window (CANCEL_CUTOFF_MS); the console's canCancel (console-bookings.mapper.ts `consoleActionsOf`) and
+// console.bookings.cancel (cancellation.service.ts `staffCheck`) use it without a window (OBE-063: staff have no
+// self-service window), so they refuse once anything departed, never on the landing of the last flight.
 import type { components } from "@velexis/api-types";
 
 type AllowedActions = components["schemas"]["BookingAllowedActions"];
@@ -48,6 +57,9 @@ export type BookingAction = (typeof BOOKING_ACTIONS)[number];
 
 /** Cancellation stops this long before the first remaining departure (change-and-cancel §3 step 3). */
 export const CANCEL_CUTOFF_MS = 3 * 60 * 60_000;
+
+/** The window of a staff cancellation (console.bookings.cancel, OBE-063): none, only a departure stops it. */
+export const STAFF_CANCEL_CUTOFF_MS = 0;
 
 /** Extra bags stop this long before the first remaining departure (BookingAllowedActions.canAddAncillaries). */
 export const ANCILLARIES_CUTOFF_MS = 24 * 60 * 60_000;
@@ -108,16 +120,18 @@ function firstFailing(rules: ReadonlyArray<readonly [boolean, ActionReason]>): A
   return rules.find(([passes]) => !passes)?.[1];
 }
 
-/** The allowed actions of a booking at `input.now` (see the file header). */
-export function allowedActionsOf(input: AllowedActionsInput): AllowedActions {
-  const now = input.now.getTime();
-  const state = stateReason(input.status);
-  const departed = input.segments.some((segment) => segment.isFlown || segment.departureAt.getTime() <= now);
-  const landed =
-    input.lastArrivalAt.getTime() <= now ||
-    (input.segments.length > 0 && input.segments.every((segment) => segment.isFlown));
-  const next = input.segments
-    .filter((segment) => !segment.isFlown && segment.departureAt.getTime() > now)
+/** A segment departed at `now`: flown (Amadeus `isFlown`), or its departure instant has passed. */
+function departedAt(segment: Pick<ActionSegment, "departureAt" | "isFlown">, now: number): boolean {
+  return segment.isFlown || segment.departureAt.getTime() <= now;
+}
+
+/** The departure instant (epoch ms) of the first segment that has not departed at `now`, or `undefined`. */
+function nextDepartureOf(
+  segments: readonly Pick<ActionSegment, "departureAt" | "isFlown">[],
+  now: number,
+): number | undefined {
+  return segments
+    .filter((segment) => !departedAt(segment, now))
     .reduce<number | undefined>(
       (earliest, segment) =>
         earliest === undefined || segment.departureAt.getTime() < earliest
@@ -125,7 +139,42 @@ export function allowedActionsOf(input: AllowedActionsInput): AllowedActions {
           : earliest,
       undefined,
     );
+}
+
+/**
+ * The departure rule of every cancellation (see the file header; lead decision (1) of 2026-10-26, FIX-W30-OTA): `flown`
+ * once any segment departed (flown, or its departure instant passed), even while a later flight has not landed; with a
+ * window (`cutoffMs` > 0, the self-service CANCEL_CUTOFF_MS), `too_close_to_departure` within it of the first
+ * departure, or without a departure to count from; else `undefined`: the flights allow the cancellation. A staff
+ * cancellation passes STAFF_CANCEL_CUTOFF_MS (no window).
+ */
+export function cancelDepartureReasonOf(
+  segments: readonly Pick<ActionSegment, "departureAt" | "isFlown">[],
+  now: Date,
+  cutoffMs: number = CANCEL_CUTOFF_MS,
+): "flown" | "too_close_to_departure" | undefined {
+  const at = now.getTime();
+  if (segments.some((segment) => departedAt(segment, at))) {
+    return "flown";
+  }
+  if (cutoffMs <= 0) {
+    return undefined;
+  }
+  const next = nextDepartureOf(segments, at);
+  return next !== undefined && next - at > cutoffMs ? undefined : "too_close_to_departure";
+}
+
+/** The allowed actions of a booking at `input.now` (see the file header). */
+export function allowedActionsOf(input: AllowedActionsInput): AllowedActions {
+  const now = input.now.getTime();
+  const state = stateReason(input.status);
+  const departed = input.segments.some((segment) => departedAt(segment, now));
+  const landed =
+    input.lastArrivalAt.getTime() <= now ||
+    (input.segments.length > 0 && input.segments.every((segment) => segment.isFlown));
+  const next = nextDepartureOf(input.segments, now);
   const before = (cutoffMs: number): boolean => next !== undefined && next - now > cutoffMs;
+  const departure = cancelDepartureReasonOf(input.segments, input.now, CANCEL_CUTOFF_MS);
   const throttled = input.lastRefreshAt !== null && now - input.lastRefreshAt.getTime() < REFRESH_THROTTLE_MS;
   const ticketed =
     input.ticketingStatus === "issued" ||
@@ -137,8 +186,7 @@ export function allowedActionsOf(input: AllowedActionsInput): AllowedActions {
   const failing: Record<BookingAction, ActionReason | undefined> = {
     canCancel: firstFailing([
       live(),
-      [!departed, "flown"],
-      [before(CANCEL_CUTOFF_MS), "too_close_to_departure"],
+      [departure === undefined, departure ?? "flown"],
       [input.features.selfServiceCancellation, "disabled_by_ota"],
       [input.amadeusOrderId !== null, "pending"],
       [input.cancellationPending !== true, "pending"],

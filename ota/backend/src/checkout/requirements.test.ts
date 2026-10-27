@@ -666,6 +666,21 @@ describe("contactErrors", () => {
       ),
     ).toEqual([]);
   });
+
+  it("[FIX-W30-OTA AC1] accepts the US's calling code 1, with or without +, and refuses four digits", () => {
+    const withCode = (countryCallingCode: string): ContactInput => ({
+      ...primary,
+      phones: [{ deviceType: "MOBILE", countryCallingCode, number: "2025550143" }],
+    });
+    for (const code of ["1", "+1", "44", "+353"]) {
+      expect([code, contactErrors([withCode(code)], requirement)]).toEqual([code, []]);
+    }
+    for (const code of ["1234", "+1234"]) {
+      expect(codes(contactErrors([withCode(code)], requirement))).toEqual([
+        ["/contacts/0/phones/0/countryCallingCode", "PHONE_INVALID"],
+      ]);
+    }
+  });
 });
 
 describe("remarkErrors", () => {

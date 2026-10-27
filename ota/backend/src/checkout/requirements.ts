@@ -323,7 +323,11 @@ const NAME_PART = /^[A-Za-z][A-Za-z '-]*$/;
 export const MAX_NAME_LENGTH = 57;
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const PHONE_NUMBER = /^[0-9]{1,15}$/;
-const CALLING_CODE = /^\+?[0-9]{1,4}$/;
+/**
+ * The document's `AmadeusPhone.countryCallingCode` since FIX-W30-OTA (lead decision (1) of 2026-10-26): one to three
+ * digits, `1` for North America included, with an optional leading `+`; sent to Amadeus as given.
+ */
+const CALLING_CODE = /^\+?[0-9]{1,3}$/;
 const COUNTRY = /^[A-Z]{2}$/;
 /** Amadeus resident card and certificate numbers, anchored (the document's pattern is not): masked values fail it. */
 export const DISCOUNT_NUMBER = /^[0-9A-Z][0-9]{0,12}[A-Z]$/;
@@ -411,7 +415,7 @@ function phoneErrors(phones: readonly AmadeusPhone[] | undefined, base: string):
         error(
           `${base}/${index}/countryCallingCode`,
           "PHONE_INVALID",
-          "Enter the country calling code with one to four digits.",
+          "Enter the country calling code with one to three digits.",
         ),
       );
     }

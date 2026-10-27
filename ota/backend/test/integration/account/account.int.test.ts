@@ -974,6 +974,55 @@ describe("account.update of the profile", () => {
   });
 });
 
+describe("account.update of a North American phone (FIX-W30-OTA)", () => {
+  const email = uniqueEmail("fixw30-phone");
+  let customerId = "";
+  const answers: Record<string, Response> = {};
+  let afterUs: Awaited<ReturnType<typeof customerState>>;
+  let final: Awaited<ReturnType<typeof customerState>>;
+
+  beforeAll(async () => {
+    customerId = await insertCustomer("tenant_alpha", email);
+    const session = await bearerSignIn(email);
+    const client = new KeyClient();
+    const phone = (countryCallingCode: string) => ({
+      phone: { deviceType: "MOBILE", countryCallingCode, number: "2025550143" },
+    });
+    answers["us"] = await client.patch("/v1/account", phone("1"), session.accessToken, '"1"');
+    afterUs = await customerState("tenant_alpha", customerId);
+    answers["usWithPlus"] = await client.patch("/v1/account", phone("+1"), session.accessToken, '"2"');
+    answers["letters"] = await client.patch("/v1/account", phone("1a"), session.accessToken, '"2"');
+    answers["fourDigits"] = await client.patch("/v1/account", phone("1234"), session.accessToken, '"2"');
+    final = await customerState("tenant_alpha", customerId);
+  }, SCENARIO_TIMEOUT_MS);
+
+  it("[FIX-W30-OTA AC1] takes the US's calling code 1 and stores it as customers keeps it", () => {
+    const res = answers["us"];
+    expect(res?.status).toBe(200);
+    expectResponseToMatch("updateAccount", res as Response);
+    expect(res?.body).toMatchObject({ phone: { countryCallingCode: "1", number: "2025550143" }, version: 2 });
+    expect(afterUs.customer).toMatchObject({
+      phone_country_code: "1",
+      phone_number: "2025550143",
+      version: 2,
+    });
+    // With a leading +, the same phone: nothing changes, not even the version.
+    expect([answers["usWithPlus"]?.status, answers["usWithPlus"]?.body.version]).toEqual([200, 2]);
+  });
+
+  it("[FIX-W30-OTA AC1] still refuses letters and four digits with 400 on /phone/countryCallingCode, changing nothing", () => {
+    for (const name of ["letters", "fourDigits"]) {
+      const res = answers[name] as Response;
+      expect([name, ...outcome(res)]).toEqual([name, 400, "VALIDATION_FAILED"]);
+      expectResponseToMatch("updateAccount", res);
+      expect(res.body.error.fieldErrors).toContainEqual(
+        expect.objectContaining({ path: "/phone/countryCallingCode", code: "pattern" }),
+      );
+    }
+    expect(final.customer).toEqual(afterUs.customer);
+  });
+});
+
 describe("account.update of the e-mail address", () => {
   const email = uniqueEmail("obe035-email");
   const newEmail = uniqueEmail("obe035-email-new");

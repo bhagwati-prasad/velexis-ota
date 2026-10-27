@@ -71,6 +71,36 @@ export type RefundReason = (typeof REFUND_REASONS)[number];
 export const REFUND_REQUESTERS = ["customer", "staff", "system"] as const;
 export type RefundRequester = (typeof REFUND_REQUESTERS)[number];
 
+/**
+ * Who asked for the refunds and the release of a cancellation (`refunds.requested_by_type` and `_id`): the customer
+ * (`cus_…`, `null` for a guest holding the booking's token), the staff (`stf_…`, `null` for a console key, whose staff
+ * action names the key), or the system. `cancelledBy` is the cancellation's own word (`bookings.cancelled_by`, the
+ * `booking.cancelled` event's `cancelledBy`); without one, the actor's type decides. The request's money step
+ * (cancellation.service.ts) and the payments queue's capture retry of the kept amount (payments.processor.ts) both
+ * record it from here, so a release that the retry records names the cancellation's real requester (FIX-W30-OTA, lead
+ * decision (1) of 2026-10-26; before, the retry wrote `customer` for a staff cancellation too).
+ */
+export function cancellationRequesterOf(
+  cancelledBy: unknown,
+  actor: { readonly type: string | null; readonly id: string | null },
+): { readonly type: RefundRequester; readonly id: string | null } {
+  const by =
+    cancelledBy === "customer" || cancelledBy === "staff"
+      ? cancelledBy
+      : actor.type === "staff" || actor.type === "api_key"
+        ? "staff"
+        : actor.type === "customer" || actor.type === "guest"
+          ? "customer"
+          : "system";
+  if (by === "staff") {
+    return { type: "staff", id: actor.type === "staff" ? actor.id : null };
+  }
+  if (by === "customer") {
+    return { type: "customer", id: actor.type === "customer" ? actor.id : null };
+  }
+  return { type: "system", id: null };
+}
+
 /** The refund statuses whose amount is not final yet: asked for, or sent to Stripe. */
 export const IN_FLIGHT_REFUND_STATUSES = ["pending", "processing"] as const;
 

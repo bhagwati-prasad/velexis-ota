@@ -39,6 +39,7 @@ import {
 } from "./payments.processor";
 import type { PaymentRow, PaymentsRepository } from "./payments.repository";
 import {
+  cancellationRequesterOf,
   isRefundAmount,
   REFUND_CLAIM_LEASE_MS,
   refundableAmount,
@@ -247,6 +248,37 @@ describe("the safety nets of a capture or a void after a commit (FIX-W29-OTA)", 
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("the requester of a cancellation's refunds and release (FIX-W30-OTA)", () => {
+  it("[FIX-W30-OTA AC7] is the cancellation's real requester: the customer, the staff member or the system", () => {
+    const customer = { type: "customer", id: "cus_01JBREQUESTER0000000000001" };
+    const staff = { type: "staff", id: "stf_01JBREQUESTER0000000000001" };
+    expect(cancellationRequesterOf("customer", customer)).toEqual(customer);
+    expect(cancellationRequesterOf("customer", { type: "guest", id: null })).toEqual({
+      type: "customer",
+      id: null,
+    });
+    expect(cancellationRequesterOf("staff", staff)).toEqual(staff);
+    // A console key cancels for the staff: its staff action names the key, the refund no staff member.
+    expect(
+      cancellationRequesterOf("staff", { type: "api_key", id: "key_01JBREQUESTER000000000001" }),
+    ).toEqual({
+      type: "staff",
+      id: null,
+    });
+    // An event without `cancelledBy`: the actor's type decides.
+    expect(cancellationRequesterOf(undefined, staff)).toEqual(staff);
+    expect(cancellationRequesterOf(undefined, customer)).toEqual(customer);
+    expect(cancellationRequesterOf(undefined, { type: "system", id: null })).toEqual({
+      type: "system",
+      id: null,
+    });
+    expect(cancellationRequesterOf("airline", { type: "supplier", id: null })).toEqual({
+      type: "system",
+      id: null,
+    });
   });
 });
 

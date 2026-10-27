@@ -6,9 +6,12 @@ import {
   ANCILLARIES_CUTOFF_MS,
   BOOKING_ACTIONS,
   CANCEL_CUTOFF_MS,
+  cancelDepartureReasonOf,
   REFRESH_THROTTLE_MS,
+  STAFF_CANCEL_CUTOFF_MS,
   type AllowedActionsInput,
 } from "./allowed-actions";
+import { cancellationModeOf } from "./cancellation-mode";
 
 const HOUR = 60 * 60_000;
 const DAY = 24 * HOUR;
@@ -188,5 +191,95 @@ describe("the allowed actions of a booking that is not live", () => {
 
     expect(actions.canDownloadDocuments).toBe(true);
     expect(actions.reasons["canCancel"]).toBe("cancelled");
+  });
+});
+
+describe("the one departure rule of a cancellation (FIX-W30-OTA)", () => {
+  /** Segments of a trip whose first flight left `departedMsAgo` ago and lands 2 hours after it left. */
+  const departedNotLanded = (departedMsAgo: number, isFlown = false) => [
+    { departureAt: at(-departedMsAgo), arrivalAt: at(2 * HOUR - departedMsAgo), isFlown },
+    { departureAt: at(5 * DAY), arrivalAt: at(5 * DAY + 3 * HOUR), isFlown: false },
+  ];
+  /** The trips the rule is checked on, and what it says of each with and without the self-service window. */
+  const trips = [
+    {
+      name: "first flight departed, not landed",
+      segments: departedNotLanded(HOUR),
+      selfService: "flown",
+      staff: "flown",
+    },
+    {
+      name: "first flight flown (Amadeus)",
+      segments: departedNotLanded(-DAY, true),
+      selfService: "flown",
+      staff: "flown",
+    },
+    { name: "leaves at this instant", segments: departedNotLanded(0), selfService: "flown", staff: "flown" },
+    {
+      name: "leaves within 3 hours",
+      segments: departedNotLanded(-(CANCEL_CUTOFF_MS - 60_000)),
+      selfService: "too_close_to_departure",
+      staff: undefined,
+    },
+    {
+      name: "leaves in exactly 3 hours",
+      segments: departedNotLanded(-CANCEL_CUTOFF_MS),
+      selfService: "too_close_to_departure",
+      staff: undefined,
+    },
+    {
+      name: "leaves in more than 3 hours",
+      segments: departedNotLanded(-(CANCEL_CUTOFF_MS + 60_000)),
+      selfService: undefined,
+      staff: undefined,
+    },
+    { name: "no segment", segments: [], selfService: "too_close_to_departure", staff: undefined },
+  ] as const;
+
+  it("[FIX-W30-OTA AC3] refuses once anything departed, landed or not, and within 3 hours of the first departure for self-service", () => {
+    for (const trip of trips) {
+      expect([trip.name, cancelDepartureReasonOf(trip.segments, now)]).toEqual([trip.name, trip.selfService]);
+      expect([trip.name, cancelDepartureReasonOf(trip.segments, now, CANCEL_CUTOFF_MS)]).toEqual([
+        trip.name,
+        trip.selfService,
+      ]);
+      expect([trip.name, cancelDepartureReasonOf(trip.segments, now, STAFF_CANCEL_CUTOFF_MS)]).toEqual([
+        trip.name,
+        trip.staff,
+      ]);
+    }
+  });
+
+  it("[FIX-W30-OTA AC3] gives canCancel and the cancellation mode the same answer: never offered, then refused", () => {
+    for (const trip of trips) {
+      const lastArrivalAt = at(5 * DAY + 3 * HOUR);
+      const actions = allowedActionsOf(input({ segments: trip.segments, lastArrivalAt }));
+      const mode = cancellationModeOf({
+        status: "confirmed",
+        ticketingStatus: "pending",
+        amadeusOrderId: "eJzTd9f3NjIJdgMADeQCtg",
+        lastArrivalAt,
+        segments: trip.segments,
+        tickets: [],
+        selfServiceCancellation: true,
+        timeZone: "UTC",
+        now,
+      });
+      expect([trip.name, actions.canCancel, actions.reasons["canCancel"]]).toEqual([
+        trip.name,
+        trip.selfService === undefined,
+        trip.selfService,
+      ]);
+      expect([trip.name, mode.mode !== "not_allowed", mode.notAllowedReason]).toEqual([
+        trip.name,
+        actions.canCancel,
+        actions.reasons["canCancel"] ?? null,
+      ]);
+    }
+    // A trip whose first flight departed but did not land keeps contacts and remarks, never the cancellation.
+    const departed = allowedActionsOf(
+      input({ segments: departedNotLanded(HOUR), lastArrivalAt: at(5 * DAY) }),
+    );
+    expect(departed).toMatchObject({ canCancel: false, canModifyContacts: true, canAddRemarks: true });
   });
 });

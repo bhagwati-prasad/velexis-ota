@@ -40,7 +40,8 @@ import {
 } from "@velexis/testing";
 import { startAmadeusStub, type AmadeusStub } from "@velexis/testing/amadeus";
 import request from "supertest";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { CheckoutRepository } from "../../../src/checkout/checkout.repository";
 import { Clock } from "../../../src/common/clock";
 import { newId } from "../../../src/common/ids";
 import type { ApiConfig } from "../../../src/config";
@@ -399,7 +400,7 @@ beforeAll(async () => {
   for (const [operationId, statuses] of [
     ["createFlightSearch", [201]],
     ["priceFlightOffers", [201]],
-    ["createCheckout", [201, 401, 403, 404, 410]],
+    ["createCheckout", [201, 401, 403, 404, 409, 410]],
     ["getCheckout", [200, 404]],
     ["setCheckoutTravelers", [200, 400, 404, 409, 410, 412, 422]],
     ["setCheckoutContacts", [200, 404, 410, 412, 422]],
@@ -945,6 +946,59 @@ describe("checks of the steps", () => {
     ]);
   });
 
+  it("[FIX-W30-OTA AC1] takes a US phone (calling code 1) in contacts and travellers, and still refuses letters or four digits on the field", async () => {
+    const { body: checkout } = await keyCheckout();
+    const usPhones = (countryCallingCode: string) => [
+      { deviceType: "MOBILE" as const, countryCallingCode, number: "2025550143" },
+    ];
+    const traveler = (countryCallingCode: string) => {
+      const input = buildTravelerInput();
+      return { ...input, contact: { ...input.contact, phones: usPhones(countryCallingCode) } };
+    };
+
+    const travelers = await put(keyHeaders(alphaSk), checkout.id, "travelers", {
+      travelers: [traveler("1")],
+    });
+    expect(travelers.status).toBe(200);
+    expectResponseToMatch("setCheckoutTravelers", travelers);
+    expect((travelers.body as CheckoutBody).travelers[0]).toMatchObject({
+      complete: true,
+      contact: { phones: usPhones("1") },
+    });
+    const contacts = await put(keyHeaders(alphaSk), checkout.id, "contacts", {
+      contacts: [buildContactInput({ phones: usPhones("+1") })],
+    });
+    expect(contacts.status).toBe(200);
+    expectResponseToMatch("setCheckoutContacts", contacts);
+    // Kept as the traveller gave it: Flight Create Orders sends it to Amadeus unchanged.
+    expect((contacts.body as CheckoutBody).contacts[0]?.phones).toEqual(usPhones("+1"));
+    expect(contacts.body).toMatchObject({ version: 3, progress: { contactsComplete: true } });
+
+    for (const code of ["1a", "1234"]) {
+      const badTraveler = await put(keyHeaders(alphaSk), checkout.id, "travelers", {
+        travelers: [traveler(code)],
+      });
+      expect([code, badTraveler.status]).toEqual([code, 400]);
+      expectResponseToMatch("setCheckoutTravelers", badTraveler);
+      expect((badTraveler.body as ErrorBody).error).toMatchObject({
+        code: "VALIDATION_FAILED",
+        fieldErrors: [{ path: "/travelers/0/contact/phones/0/countryCallingCode", code: "pattern" }],
+      });
+      const badContact = await put(keyHeaders(alphaSk), checkout.id, "contacts", {
+        contacts: [buildContactInput({ phones: usPhones(code) })],
+      });
+      expect([code, badContact.status]).toEqual([code, 400]);
+      expect((badContact.body as ErrorBody).error).toMatchObject({
+        code: "VALIDATION_FAILED",
+        fieldErrors: [{ path: "/contacts/0/phones/0/countryCallingCode", code: "pattern" }],
+      });
+      expect(JSON.stringify([badTraveler.body, badContact.body])).not.toContain("2025550143");
+    }
+    // Nothing of the refused requests was stored.
+    const after = await get(keyHeaders(alphaSk), checkout.id);
+    expect(after.body).toMatchObject({ version: 3 });
+  });
+
   it("answers 400 for requests of unknown travellers, and replaces the requests as a whole", async () => {
     const { body: checkout } = await keyCheckout();
 
@@ -1160,5 +1214,109 @@ describe("who may open and read a checkout", () => {
       expectResponseToMatch("createCheckout", res);
       expect((res.body as ErrorBody).error.code).toBe("EMAIL_NOT_VERIFIED");
     });
+  });
+});
+
+describe("a console checkout of a customer's priced offer (FIX-W30-OTA)", () => {
+  /** Marks `customerId` deleted (as account.delete leaves it) or disabled, in its own committed transaction. */
+  const markCustomer = (customerId: string, status: "deleted" | "disabled") =>
+    tenantTx(tenantDb, "tenant_alpha", (trx) =>
+      trx
+        .updateTable("customers")
+        .set(
+          status === "deleted"
+            ? {
+                status,
+                deleted_at: new Date(),
+                email: `${randomBytes(16).toString("hex")}@deleted.invalid`,
+                pending_email: null,
+              }
+            : { status },
+        )
+        .where("id", "=", customerId)
+        .execute(),
+    );
+
+  /** The checkouts opened from `pricedOfferId`. */
+  const checkoutsOf = (pricedOfferId: string) =>
+    tenantTx(tenantDb, "tenant_alpha", (trx) =>
+      trx
+        .selectFrom("checkouts")
+        .select(["id", "customer_id", "channel"])
+        .where("base_priced_offer_id", "=", pricedOfferId)
+        .execute(),
+    );
+
+  it("[FIX-W30-OTA AC6] opens it for the customer while the account stands", async () => {
+    const customer = await newCustomer();
+    const pricedOffer = await newPricedOffer(() => keyHeaders(alphaSk, bearer(customer.token)));
+
+    const res = await create(keyHeaders(alphaConsole, CONSOLE), { pricedOfferId: pricedOffer.id });
+
+    expect(res.status).toBe(201);
+    expectResponseToMatch("createCheckout", res);
+    expect(res.body).toMatchObject({ channel: "console", customerId: customer.id, isGuest: false });
+  });
+
+  it("[FIX-W30-OTA AC6] refuses a deleted or a disabled customer's priced offer with 409 CONFLICT, writing nothing", async () => {
+    for (const status of ["deleted", "disabled"] as const) {
+      const customer = await newCustomer();
+      const pricedOffer = await newPricedOffer(() => keyHeaders(alphaSk, bearer(customer.token)));
+      await markCustomer(customer.id, status);
+
+      const res = await create(keyHeaders(alphaConsole, CONSOLE), { pricedOfferId: pricedOffer.id });
+
+      expect([status, res.status]).toEqual([status, 409]);
+      expectResponseToMatch("createCheckout", res);
+      expect((res.body as ErrorBody).error).toMatchObject({
+        code: "CONFLICT",
+        details: { reason: `customer_${status}` },
+      });
+      expect(await checkoutsOf(pricedOffer.id)).toEqual([]);
+      // As customer scope refuses the customer's own token (FIX-W29-SECURITY).
+      const own = await create(keyHeaders(alphaSk, bearer(customer.token)), {
+        pricedOfferId: pricedOffer.id,
+      });
+      expect([status, own.status, (own.body as ErrorBody).error.code]).toEqual([
+        status,
+        401,
+        "UNAUTHENTICATED",
+      ]);
+    }
+  });
+
+  it("[FIX-W30-OTA AC6] refuses it too when the deletion commits after the console read the customer, leaving no checkout", async () => {
+    const customer = await newCustomer();
+    const pricedOffer = await newPricedOffer(() => keyHeaders(alphaSk, bearer(customer.token)));
+    // CheckoutRepository is provided by more than one module: the spy sits on the class. The first read of the
+    // customer (before the insert) sees it active; the deletion commits right after it, before the insert.
+    const readCustomer = CheckoutRepository.prototype.customer;
+    let reads = 0;
+    const spy = vi.spyOn(CheckoutRepository.prototype, "customer").mockImplementation(async function (
+      this: CheckoutRepository,
+      trx,
+      id,
+    ) {
+      const row = await readCustomer.call(this, trx, id);
+      reads += 1;
+      if (reads === 1 && id === customer.id) {
+        await markCustomer(customer.id, "deleted");
+      }
+      return row;
+    });
+    let res;
+    try {
+      res = await create(keyHeaders(alphaConsole, CONSOLE), { pricedOfferId: pricedOffer.id });
+    } finally {
+      spy.mockRestore();
+    }
+
+    expect(reads).toBe(2);
+    expect(res.status).toBe(409);
+    expect((res.body as ErrorBody).error).toMatchObject({
+      code: "CONFLICT",
+      details: { reason: "customer_deleted" },
+    });
+    expect(await checkoutsOf(pricedOffer.id)).toEqual([]);
   });
 });

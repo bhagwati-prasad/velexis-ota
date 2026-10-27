@@ -435,7 +435,7 @@ export interface paths {
          *
          *     **Marketing consent.** Changing `marketingConsent` updates `customers` and appends a `customer_consents` event (source `account`).
          *
-         *     **Fields not changed here.** Password (`auth.changePassword`), preferences (`account.preferences.update`), travellers (`account.savedTravelers.*`). Null clears `phone`/`dateOfBirth`; `phone` needs `countryCallingCode` (1–4 digits, a leading `+` is dropped) and `number` (1–15 digits), and `deviceType` is not kept. A date of birth in the future is refused (`400 VALIDATION_FAILED`). **Amadeus.** None.
+         *     **Fields not changed here.** Password (`auth.changePassword`), preferences (`account.preferences.update`), travellers (`account.savedTravelers.*`). Null clears `phone`/`dateOfBirth`; `phone` needs `countryCallingCode` (1–3 digits, a leading `+` is dropped) and `number` (1–15 digits), and `deviceType` is not kept. A date of birth in the future is refused (`400 VALIDATION_FAILED`). **Amadeus.** None.
          */
         patch: operations["updateAccount"];
         trace?: never;
@@ -1081,7 +1081,7 @@ export interface paths {
          * Open a checkout from a priced offer
          * @description Opens a checkout (`chk_…`) for a priced offer (`prc_…` from flights.price). No Amadeus call: everything comes from the stored priced offer.
          *
-         *     **Who.** Signed-in customers (customer token) or guests (publishable/secret key only) when `storefront_settings.guest_checkout_enabled`; otherwise guests get `401 UNAUTHENTICATED` (sign in first). When `require_email_verification` is on, unverified customers get `403 EMAIL_NOT_VERIFIED`. Staff may open a checkout for a customer from the console (staff token, `channel: console`). A priced offer created by a signed-in customer can only be checked out by that customer (`404` otherwise).
+         *     **Who.** Signed-in customers (customer token) or guests (publishable/secret key only) when `storefront_settings.guest_checkout_enabled`; otherwise guests get `401 UNAUTHENTICATED` (sign in first). When `require_email_verification` is on, unverified customers get `403 EMAIL_NOT_VERIFIED`. A customer whose account was deleted or disabled is `401 UNAUTHENTICATED`, also when the deletion commits while the checkout is opened. Staff may open a checkout for a customer from the console (staff token, `channel: console`): the checkout is the priced offer's customer's, or a guest checkout when no customer priced it; when that customer's account was deleted or disabled (also while the checkout is opened) the console gets `409 CONFLICT` with `details.reason` `customer_deleted` or `customer_disabled` and nothing is written (FIX-W30-OTA). A priced offer created by a signed-in customer can only be checked out by that customer (`404` otherwise).
          *
          *     **Environment.** The priced offer must belong to the calling key's environment (`priced_offers.environment = <key environment>`): a priced offer of the other environment answers `404 NOT_FOUND`, and the checkout is created with that environment (`checkouts.environment`). Every later step of the checkout and its payments checks the same predicate.
          *
@@ -1550,7 +1550,7 @@ export interface paths {
          * @description Self-service cancellation. Call bookings.quoteCancellation first and pass its `estimatedRefund` as `expectedRefund`, with the customer's `reasonCode` (CancellationReason) and optional free-text `comment`.
          *
          *     **Flow (NestJS `CancelBookingUseCase`, booking row locked).**
-         *     1. Preconditions: booking of the key's environment (`bookings.environment = <key environment>`, otherwise `404`); `allowedActions.canCancel` (`409 BOOKING_NOT_MODIFIABLE` with `details.reason`; `409 BOOKING_ALREADY_CANCELLED`; `403 FEATURE_DISABLED` when the storefront disabled self-service cancellation). `If-Match` (booking ETag) required → `412 PRECONDITION_FAILED` when stale.
+         *     1. Preconditions: booking of the key's environment (`bookings.environment = <key environment>`, otherwise `404`); `allowedActions.canCancel` (`409 BOOKING_NOT_MODIFIABLE` with `details.reason`, `flown` once a segment departed and `too_close_to_departure` 3 hours or less before the first departure, the one rule bookings.get shows; `409 BOOKING_ALREADY_CANCELLED`; `403 FEATURE_DISABLED` when the storefront disabled self-service cancellation); no issuance in progress (a fresh ticketing claim of the ticketing job or of a staff issuance: `409 BOOKING_NOT_MODIFIABLE` with `details.reason = ticketing_in_progress`, as console.bookings.cancel answers, and nothing is sent to Amadeus). `If-Match` (booking ETag) required → `412 PRECONDITION_FAILED` when stale.
          *     2. Recompute the quote (Redis `cxq:{bookingId}` if still valid, else **Flight Order Management** `GET …?fareRules=refunds`, getFlightOrder). If it differs from `expectedRefund`, or `expectedRefund` was left out → `409 REFUND_AMOUNT_CHANGED` (`details.expectedRefund`, `null` when it was left out, and `details.newRefund`), nothing cancelled: money moves only for an amount the customer saw. The booking row is then claimed; a booking another claim or writer holds at that moment answers `503 SERVICE_UNAVAILABLE` with `Retry-After` (nothing sent, nothing kept for the `Idempotency-Key`: the same key can be sent again).
          *     3. Modes `release` / `void` / `refund`: **Flight Order Management** `DELETE /v1/booking/flight-orders/{id}` (cancelFlightOrder) → `204`: the airline segments are cancelled (and same-day tickets voided). Then `bookings.status = cancelled`, `cancelled_at`, `cancelled_by = customer`, segments `CANCELLED`, tickets `VOID` (void window) — refunded tickets are set `REFUNDED` once the refund is confirmed. Amadeus 409 2552 → `409 VERSION_CONFLICT`; Amadeus refusing the cancellation (e.g. ticketed outside the void window), or no longer having the order (`404`: cancelled or purged outside Velexis), → the request is handed to the OTA's staff (`202`, `Cancellation.status = pending`; nothing is refunded until the staff check it).
          *     4. Mode `request_only`: no Amadeus call; `Cancellation.status = pending`, `booking.cancellation_requested` event, staff notified (they finish it from the console). Answers `202`.
@@ -2029,7 +2029,7 @@ export interface paths {
          *
          *     **Steps.** (1) **Flight Order Management GET** (getFlightOrder) refreshes the order to verify nothing is flown and to record ticket states. (2) **Flight Order Management DELETE** `/v1/booking/flight-orders/{id}` (cancelFlightOrder) — Amadeus answers 204; unissued orders are cancelled, issued tickets are voided by Amadeus when still voidable; otherwise Amadeus refuses (`422 SUPPLIER_REJECTED` with `error.supplier`) and the cancellation must be handled with the airline (refund/exchange outside this API). (3) Persist: `bookings.status = cancelled`, `cancelled_at`, `cancelled_by = staff`, `cancel_reason` (reasonCode + reason), segments/tickets updated, `version` + 1; `booking_events` `booking.cancelled` (visible to the customer), `staff_actions` `booking.cancel` (before/after, reason), `supplier_requests` for both calls. (4) Money: an uncaptured authorisation is voided; for captured payments `refund.mode` decides — `none` (default for console/imported bookings), `full` (the captured amount minus nothing), `amount` (`refund.amount` ≤ captured, else `422 UNPROCESSABLE`) — refunds are created at the PSP (`refunds`, `payment_events`) asynchronously; `refunds.reason` is mapped from `reasonCode` (`no_payment`, `ticketing_deadline`, `airline_request` → `booking_cancelled`; the other codes unchanged, matching the refunds.reason CHECK) and `refunds.reason_note` = `reason`. (5) The customer is notified unless `notifyCustomer=false`.
          *
-         *     **Preconditions.** `If-Match`; not already cancelled (`409 BOOKING_ALREADY_CANCELLED`); has an Amadeus order (`409 BOOKING_NOT_MODIFIABLE` for failed/pending); no flown segment (`409 BOOKING_NOT_MODIFIABLE`, `details.reason = flown`). Permission `bookings:cancel`. Unlike bookings.cancel (customer scope) there is no self-service window or cancellation-quote requirement.
+         *     **Preconditions.** `If-Match`; not already cancelled (`409 BOOKING_ALREADY_CANCELLED`); has an Amadeus order (`409 BOOKING_NOT_MODIFIABLE` for failed/pending); no segment departed, flown or past its departure time (`409 BOOKING_NOT_MODIFIABLE`, `details.reason = flown`; `consoleActions.canCancel` follows the same rule); no issuance in progress (a fresh ticketing claim of the ticketing job or of a staff issuance: `409 BOOKING_NOT_MODIFIABLE`, `details.reason = ticketing_in_progress`). Permission `bookings:cancel`. Unlike bookings.cancel (customer scope) there is no self-service window or cancellation-quote requirement.
          *
          *     **Idempotency.** Required; a retry returns the stored result. A timeout (`504`) leaves the booking unchanged locally: resync, then retry with the same key.
          *
@@ -5470,7 +5470,7 @@ export interface components {
         /** @description phone information (Amadeus definition, merged from: FlightAvailabilitiesSearch, FlightOffersPrice, FlightCreateOrders, FlightOrderIssue, GetFlightOrderByRecordLocator, FlightOrderManagement) */
         AmadeusPhone: {
             deviceType?: components["schemas"]["AmadeusPhoneDeviceType"];
-            /** @description Country calling code of the phone number, as defined by the International Communication Union. Examples - "1" for US, "371" for Latvia. */
+            /** @description Country calling code of the phone number, as defined by the International Communication Union. Examples - "1" for US, "371" for Latvia. Velexis: one to three digits of an ITU country calling code, optionally with a leading `+` (`1`, `+1`, `44`, `371`), sent to Amadeus as given. Amadeus's own pattern `[0-9+]{2,5}` refused the `1` of the United States, Canada and the rest of North America (lead decision (1) of 2026-10-26, FIX-W30-OTA, OADR-0003 follow-ups); anything else, such as letters or four digits, is `400 VALIDATION_FAILED` on the field. */
             countryCallingCode?: string;
             /** @description Phone number. Composed of digits only. The number of digits depends on the country. */
             number?: string;
@@ -10006,7 +10006,7 @@ export interface components {
         };
         /** @description Self-service actions available to this caller now (status, flown segments, ticketing state, storefront settings). */
         BookingAllowedActions: {
-            /** @description bookings.cancel (self-service cancellation enabled, nothing flown, not cancelled, more than 3 h before the first remaining departure, an Amadeus order, and no earlier cancellation undecided or waiting for the staff: reason `pending`). */
+            /** @description bookings.cancel (self-service cancellation enabled, nothing departed (no segment flown or past its departure time: reason `flown`), not cancelled, more than 3 h before the first departure (reason `too_close_to_departure`), an Amadeus order, and no earlier cancellation undecided or waiting for the staff: reason `pending`). bookings.cancel refuses on the same rule. */
             canCancel: boolean;
             /** @description bookings.update contacts. */
             canModifyContacts: boolean;
@@ -11141,9 +11141,9 @@ export interface components {
             brand?: components["schemas"]["AmadeusCreditCardBrand"] | null;
             /** @description Last four digits. */
             last4?: string | null;
-            /** @description Card holder. */
+            /** @description Card holder. Always `null` for bookings written since 2026-10-24: stored copies of a card keep its brand and last 4 only (FIX-W29-SECURITY, OADR-0004), and the copies of older bookings are scrubbed by the one-off `tenants:scrub-card-copies` command (FIX-W30-OTA). */
             holder?: string | null;
-            /** @description YYYY-MM. */
+            /** @description YYYY-MM. Always `null` for bookings written since 2026-10-24, as `holder` (FIX-W29-SECURITY, OADR-0004; older copies scrubbed by `tenants:scrub-card-copies`, FIX-W30-OTA). */
             expiryDate?: string | null;
             /** @description Other method (ACCOUNT, CHECK, CASH, NONREFUNDABLE, PYTON). */
             method?: components["schemas"]["AmadeusOtherPaymentMethod"] | null;

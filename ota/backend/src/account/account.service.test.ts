@@ -95,6 +95,29 @@ describe("profileChangesOf", () => {
   });
 });
 
+describe("profileChangesOf: the calling code (FIX-W30-OTA)", () => {
+  it("[FIX-W30-OTA AC1] keeps the US's 1, with or without +, as customers stores it, and refuses four digits or letters", () => {
+    for (const code of ["1", "+1", " +1 "]) {
+      expect(
+        profileChangesOf(
+          { phone: { deviceType: "MOBILE", countryCallingCode: code, number: "2025550143" } },
+          TODAY,
+        ),
+      ).toEqual({ phone: { countryCallingCode: "1", number: "2025550143" } });
+    }
+    expect(profileChangesOf({ phone: { countryCallingCode: "353", number: "861234567" } }, TODAY)).toEqual({
+      phone: { countryCallingCode: "353", number: "861234567" },
+    });
+    for (const code of ["1234", "+1234", "1a", "ab", "+"]) {
+      expect(
+        fieldErrorsOf(() =>
+          profileChangesOf({ phone: { countryCallingCode: code, number: "2025550143" } }, TODAY),
+        ),
+      ).toEqual([["/phone/countryCallingCode", "pattern"]]);
+    }
+  });
+});
+
 describe("deletedAddress", () => {
   it("[OBE-035] is the HMAC-SHA-256 of the normalised address at deleted.invalid, never the address", () => {
     const key = randomBytes(32);

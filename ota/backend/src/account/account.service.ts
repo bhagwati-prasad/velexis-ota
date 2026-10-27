@@ -14,7 +14,8 @@
 // account.update (`If-Match` required; quoted, weak or bare versions as checkout.mapper.ts `ifMatchSatisfied` reads
 // them; a stale one is `412 PRECONDITION_FAILED` and changes nothing):
 //
-// - names are trimmed and must not be blank; `phone` needs `countryCallingCode` (one to four digits, a leading `+` is
+// - names are trimmed and must not be blank; `phone` needs `countryCallingCode` (one to three digits, the ITU calling
+//   code, `1` for North America included, the document's pattern since FIX-W30-OTA; a leading `+` is
 //   dropped) and `number` (one to fifteen digits), as `customers` stores them (`deviceType` is not kept); `null` clears
 //   `phone` or `dateOfBirth`; a date of birth in the future is refused. Problems are `400 VALIDATION_FAILED` with field
 //   errors that never quote the value.
@@ -158,8 +159,11 @@ type DeletionResult =
       readonly hasBookings: boolean;
     };
 
-/** A calling code as `customers.phone_country_code` stores it, after an optional leading `+`. */
-const CALLING_CODE = /^\+?([0-9]{1,4})$/;
+/**
+ * A calling code as `customers.phone_country_code` stores it, after an optional leading `+`: one to three digits, the
+ * document's `AmadeusPhone.countryCallingCode` (FIX-W30-OTA).
+ */
+const CALLING_CODE = /^\+?([0-9]{1,3})$/;
 
 /** A phone number as `customers.phone_number` stores it. */
 const PHONE_NUMBER = /^[0-9]{1,15}$/;
@@ -250,7 +254,7 @@ export function profileChangesOf(body: CustomerUpdateRequest, today: string): Pr
       errors.push({
         path: "/phone/countryCallingCode",
         code: "pattern",
-        message: "Enter the country calling code with one to four digits.",
+        message: "Enter the country calling code with one to three digits.",
       });
     }
     if (body.phone.number === undefined) {

@@ -82,6 +82,7 @@ import {
 import { Money } from "../../../src/pricing/pricing.types";
 import { seedStorefrontSettings } from "../../../src/provisioning/seeds/storefront-settings.seed";
 import { ReconcileProcessor, RECONCILE_SCAN_JOB } from "../../../src/bookings/reconcile.processor";
+import { ticketingJob } from "../../../src/bookings/ticketing.processor";
 import { minuteBucket, tenantJob } from "../../../src/jobs/fan-out";
 import type { OtaPool } from "../../../src/tenancy/tenancy.module";
 import type { TenantTransaction } from "../../../src/tenancy/tenant-tx";
@@ -864,6 +865,7 @@ beforeAll(async () => {
     ["quoteBookingCancellation", [200]],
     ["cancelBooking", [200, 202, 403, 409, 412, 502, 504]],
     ["listBookingEvents", [200]],
+    ["getBooking", [200]],
   ] as const) {
     for (const status of statuses) {
       checker.check(operationId, { status, body: {} });
@@ -1441,6 +1443,8 @@ describe("the safety net of a cancellation's capture or void after the commit (F
   /** What one cancellation of a booking paid by an authorisation left, and its safety net's run. */
   interface Netted {
     readonly booking: SeededBooking;
+    /** The customer who cancelled (`cus_…`). */
+    readonly customerId: string;
     readonly payment: { readonly id: string; readonly intentId: string | null };
     readonly res: Response;
     /** The Stripe calls of the request (none after a crash before the call). */
@@ -1509,7 +1513,19 @@ describe("the safety net of a cancellation's capture or void after the commit (F
     const after = await request(api.server)
       .get(`/v1/bookings/${booking.id}`)
       .set(credentialHeaders(credential));
-    return { booking, payment, res, requestCalls, paymentBefore, net, netRemoved, again, calls, after };
+    return {
+      booking,
+      customerId: customer.id,
+      payment,
+      res,
+      requestCalls,
+      paymentBefore,
+      net,
+      netRemoved,
+      again,
+      calls,
+      after,
+    };
   }
 
   const keptNet = (paymentId: string): string => `capture-retry-cancellation-${paymentId}`;
@@ -1582,6 +1598,20 @@ describe("the safety net of a cancellation's capture or void after the commit (F
       refund: { amount: { amount: REFUND, currency: "EUR" }, status: "succeeded" },
       refundStatus: "succeeded",
     });
+  });
+
+  it("[FIX-W30-OTA AC7] records the release of the safety net's capture as asked for by the customer who cancelled", async () => {
+    // The capture retry recorded the release (not the request, which stopped before Stripe): it names the requester
+    // the cancellation's own record names, as the request's release does on the normal path.
+    for (const netted of [crashed, normal]) {
+      expect(await refundsOf(netted.booking.id)).toEqual([
+        expect.objectContaining({
+          status: "succeeded",
+          requested_by_type: "customer",
+          requested_by_id: netted.customerId,
+        }),
+      ]);
+    }
   });
 
   it("[FIX-W29-OTA AC3] voids once on the normal path and after a crash, through the void's own safety net", async () => {
@@ -2530,6 +2560,167 @@ describe("refusals that change nothing", () => {
     const quoted = await quote(booking.id, credential);
     expect(answer(res)).toEqual([404, "NOT_FOUND"]);
     expect(answer(quoted)).toEqual([404, "NOT_FOUND"]);
+  });
+});
+
+describe("one departure rule for canCancel and the cancellation (FIX-W30-OTA)", () => {
+  it("[FIX-W30-OTA AC3] shows canCancel false for a booking whose first flight departed but did not land, and refuses its cancellation with flown", async () => {
+    // Its flight left an hour ago and lands in an hour.
+    const booking = await seedBooking("cancel.departed", { customerId: null, departInMs: -HOUR });
+    const guest = { kind: "key", bookingToken: await guestToken(booking.id) } as const;
+    await seedPayment(booking.id, "captured");
+
+    const read = await request(api.server).get(`/v1/bookings/${booking.id}`).set(credentialHeaders(guest));
+    expect(answer(read)).toEqual([200, undefined]);
+    expectResponseToMatch("getBooking", read);
+    expect(read.body.allowedActions).toMatchObject({
+      canCancel: false,
+      // Not landed: the contacts can still change.
+      canModifyContacts: true,
+      reasons: { canCancel: "flown" },
+    });
+    const quoted = await quote(booking.id, guest);
+    expect(quoted.body).toMatchObject({ mode: "not_allowed", notAllowedReason: "flown", cancellable: false });
+    stub.clearRequests();
+    const res = await cancel(
+      booking.id,
+      guest,
+      String(read.headers["etag"]),
+      cancellation(quoted.body.estimatedRefund),
+    );
+
+    expect(answer(res)).toEqual([409, "BOOKING_NOT_MODIFIABLE"]);
+    expectResponseToMatch("cancelBooking", res);
+    expect(res.body.error.details).toEqual({ reason: "flown", action: "canCancel" });
+    expect(amadeusCalls("cancelFlightOrder")).toEqual([]);
+    expect(await bookingRow(booking.id)).toMatchObject({ status: "confirmed" });
+  });
+});
+
+describe("a customer's cancellation while the tickets are being issued (FIX-W30-OTA)", () => {
+  /** What the scenario of the ticketing job held at Flight Order Issue left. */
+  let held: {
+    readonly booking: SeededBooking;
+    readonly payment: { readonly id: string; readonly intentId: string | null };
+    /** The booking row when the cancellation was refused: the issuance's claim. */
+    readonly claimed: Awaited<ReturnType<typeof bookingRow>>;
+    readonly refused: Response;
+    readonly deletes: number;
+    readonly stripeCalls: number;
+    readonly issuance: Job;
+  };
+
+  // The ticketing job claims the booking (`in_progress`, committed) and waits at Flight Order Issue, held by a barrier
+  // on the worker's Amadeus client, while the customer reads the booking, quotes and cancels it; then the barrier
+  // opens and the issuance ends. No timing between the two is assumed.
+  beforeAll(async () => {
+    const customer = await newCustomer();
+    const credential: Credential = { kind: "key", customerToken: customer.token };
+    const booking = await seedBooking("cancel.issuing", { customerId: customer.id });
+    const payment = await seedPayment(booking.id, "captured");
+    // Due for an issuance now (a retry whose time has come).
+    await inTenant((trx) =>
+      trx
+        .updateTable("bookings")
+        .set({ ticketing_next_attempt_at: new Date(Date.now() - MINUTE) })
+        .where("id", "=", booking.id)
+        .execute(),
+    );
+    const client = worker.get(AmadeusClient, { strict: false });
+    const issue = client.issueFlightOrder.bind(client);
+    let reached = false;
+    let pass = (): void => undefined;
+    const passed = new Promise<void>((resolvePass) => {
+      pass = resolvePass;
+    });
+    const spy = vi.spyOn(client, "issueFlightOrder").mockImplementationOnce(async (context, req, options) => {
+      reached = true;
+      await passed;
+      return await issue(context, req, options);
+    });
+    const ticketingQueue = worker.get<Queue>(getQueueToken(OTA_QUEUE.ticketing), { strict: false });
+    const job = ticketingJob(alphaId, booking.id, minuteBucket(new Date()));
+    try {
+      await ticketingQueue.add(job.name, job.data, job.opts);
+      await waitFor("the issuance to reach Flight Order Issue", () =>
+        Promise.resolve(reached ? true : undefined),
+      );
+      const quoted = await quote(booking.id, credential);
+      // The claim moved the booking's version: the customer cancels with the ETag they read now.
+      const read = await request(api.server)
+        .get(`/v1/bookings/${booking.id}`)
+        .set(credentialHeaders(credential));
+      stub.clearRequests();
+      stripe.reset();
+      const refused = await cancel(
+        booking.id,
+        credential,
+        String(read.headers["etag"]),
+        cancellation(quoted.body.estimatedRefund),
+      );
+      const deletes = amadeusCalls("cancelFlightOrder").length;
+      const stripeCalls = stripeRequestsAbout(payment.intentId ?? "").length;
+      const claimed = await bookingRow(booking.id);
+      pass();
+      const issuance = await finished(ticketingQueue, job.opts.jobId);
+      held = { booking, payment, claimed, refused, deletes, stripeCalls, issuance };
+    } finally {
+      pass();
+      spy.mockRestore();
+    }
+  }, SCENARIO_TIMEOUT_MS);
+
+  it("[FIX-W30-OTA AC2] answers the staff cancellation's 409 ticketing_in_progress: no DELETE racing the issuance, no money moved", async () => {
+    expect(held.claimed).toMatchObject({ status: "confirmed", ticketing_status: "in_progress" });
+    expect(answer(held.refused)).toEqual([409, "BOOKING_NOT_MODIFIABLE"]);
+    expectResponseToMatch("cancelBooking", held.refused);
+    expect(held.refused.body.error.details).toEqual({ reason: "ticketing_in_progress" });
+    expect(held.deletes).toBe(0);
+    expect(held.stripeCalls).toBe(0);
+    expect(await refundsOf(held.booking.id)).toEqual([]);
+    expect((await eventsOf(held.booking.id)).map((event) => event.type)).not.toContain("booking.cancelled");
+  });
+
+  it("[FIX-W30-OTA AC2] lets the issuance end undisturbed: the booking is ticketed and still cancellable once it ended", async () => {
+    expect(held.issuance.returnvalue).toMatchObject({ outcome: "ticketed" });
+    expect(await bookingRow(held.booking.id)).toMatchObject({
+      status: "ticketed",
+      ticketing_status: "issued",
+    });
+    expect(await stubOrderStatus(held.booking.orderId)).toBe(200);
+    const read = await request(api.server)
+      .get(`/v1/bookings/${held.booking.id}`)
+      .set(credentialHeaders({ kind: "key", bookingToken: await guestToken(held.booking.id) }));
+    expect(read.body.allowedActions).toMatchObject({ canCancel: true });
+  });
+
+  it("[FIX-W30-OTA AC2] refuses while a staff issuance's claim is fresh, and cancels once the claim is abandoned (5 minutes)", async () => {
+    const booking = await seedBooking("cancel.claimed", { customerId: null });
+    const guest = { kind: "key", bookingToken: await guestToken(booking.id) } as const;
+    const payment = await seedPayment(booking.id, "captured");
+    const claimAt = (at: Date) =>
+      inTenant((trx) =>
+        trx
+          .updateTable("bookings")
+          .set({ ticketing_status: "in_progress", ticketing_last_attempt_at: at })
+          .where("id", "=", booking.id)
+          .execute(),
+      );
+    await claimAt(new Date());
+    const quoted = await quote(booking.id, guest);
+    stub.clearRequests();
+    stripe.reset();
+
+    const refused = await cancel(booking.id, guest, '"1"', cancellation(quoted.body.estimatedRefund));
+    expect(answer(refused)).toEqual([409, "BOOKING_NOT_MODIFIABLE"]);
+    expect(refused.body.error.details).toEqual({ reason: "ticketing_in_progress" });
+    expect(stub.requests().filter((entry) => entry.operation === "cancelFlightOrder")).toEqual([]);
+    expect(stripeRequestsAbout(payment.intentId ?? "")).toEqual([]);
+
+    await claimAt(new Date(Date.now() - 6 * MINUTE));
+    const cancelled = await cancel(booking.id, guest, '"1"', cancellation(quoted.body.estimatedRefund));
+    expect(answer(cancelled)).toEqual([200, undefined]);
+    expect(amadeusCalls("cancelFlightOrder").map((call) => call.status)).toEqual([204]);
   });
 });
 

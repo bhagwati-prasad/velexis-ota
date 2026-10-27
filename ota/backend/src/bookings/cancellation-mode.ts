@@ -5,8 +5,9 @@
 // Modes, the first that applies:
 //
 //   not_allowed    the booking's `canCancel` is false (allowed-actions.ts, the same rule the storefront shows):
-//                  `cancelled`, `flown` (a segment flown or departed), `too_close_to_departure` (3 hours or less
-//                  before the first remaining departure), `disabled_by_ota` (self-service cancellation off in the
+//                  `cancelled`, `flown` (a segment flown or departed, even while a later flight has not landed) and
+//                  `too_close_to_departure` (3 hours or less before the first departure), both from the one departure
+//                  rule `cancelDepartureReasonOf` (FIX-W30-OTA), `disabled_by_ota` (self-service cancellation off in the
 //                  storefront settings), and `pending` for a booking that is not live (`pending`, `failed`) or has no
 //                  Amadeus order yet
 //   release        nothing is ticketed: no ticket that still holds a seat (every stored ticket `VOID` or `REFUNDED`,

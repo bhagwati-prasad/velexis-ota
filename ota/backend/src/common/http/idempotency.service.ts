@@ -7,16 +7,19 @@
 //    `key_…`), or `edge-<first 16 hex of sha256(__Host-vx_csrf)>` for a storefront visitor without a session.
 // 2. Claim, in a short transaction of its own: insert the record `processing` with the request hash (SHA-256 of the
 //    canonical `{operationId, path, query, body}`, or of what the operation's `hashInput` hook makes of it) and a lease
-//    (`locked_until`, 2 minutes). The hash is unkeyed, so it never covers a value that is guessable from it: card and
-//    identity document data count as the shared redactor keeps them (numbers by their last 4, security codes, birth
-//    place and issuance location left out; OADR-0004, PCI DSS 3.5.1), and a request whose hashed input still carries a
-//    password is refused before anything is hashed or stored (its operation needs a `hashInput` hook that leaves the
-//    password out). Tokens stay in the hash: they are random, and leaving them out would let the key alone replay an
-//    answer with a session. When the key was seen:
+//    (`locked_until`, 2 minutes), which the request renews every 30 s while its handler runs (`keepLease`, lead
+//    decision (1) of 2026-10-26, FIX-W30-OTA): a handler slower than the lease (an Amadeus timeout and its retries)
+//    keeps it, and only a record whose process died is taken over. The hash is unkeyed, so it never covers a value
+//    that is guessable from it: card and identity document data count as the shared redactor keeps them (numbers by
+//    their last 4, security codes, birth place and issuance location left out; OADR-0004, PCI DSS 3.5.1), and a
+//    request whose hashed input still carries a password is refused before anything is hashed or stored (its
+//    operation needs a `hashInput` hook that leaves the password out). Tokens stay in the hash: they are random, and
+//    leaving them out would let the key alone replay an answer with a session. When the key was seen:
 //    - another hash → `409 IDEMPOTENCY_KEY_REUSED`;
 //    - `completed` or `failed` → the stored answer is replayed (through the operation's `resolveReplay` hook);
-//    - `processing` → the request waits (polling, up to 60 s) and then replays, or answers `409 CONFLICT`; a record
-//      whose lease ran out (its process died) is taken over by the waiting request;
+//    - `processing` → the request waits (polling, up to 60 s) and then replays, or answers `409 CONFLICT`
+//      (`details.reason: idempotency_key_in_use`); a record whose lease ran out (its process died: a live request keeps
+//      renewing it) is taken over by the waiting request;
 //    - a record past its 24 h retention is gone: the key starts afresh.
 // 3. Outcome, in another short transaction: 2xx (`completed`) and final 4xx (`failed`) answers are stored for 24 h,
 //    and so is a `504` that the operation's `resourceOf` hook links to a resource (a booking being reconciled). The
@@ -61,10 +64,17 @@ export const IDEMPOTENCY_RETENTION_MS = 24 * 60 * 60 * 1000;
 /** How long a request waits for another one with the same key before it answers `409 CONFLICT`. */
 export const IDEMPOTENCY_WAIT_MS = 60_000;
 /**
- * The lease of a request in flight: longer than the longest handler (checkout.complete gives Amadeus 60 s), so only
- * a record whose process died is taken over.
+ * The lease of a request in flight. The request that holds it renews it every IDEMPOTENCY_LEASE_RENEW_MS while its
+ * handler runs (`keepLease`, FIX-W30-OTA), so a handler slower than the lease (checkout.complete gives Amadeus 60 s
+ * per call, and a timeout may be followed by a re-price and its retries) keeps it, and only a record whose process
+ * died is taken over: 2 minutes after the last renewal that worked.
  */
 export const IDEMPOTENCY_LEASE_MS = 120_000;
+/**
+ * How often the request that holds a lease renews it while its handler runs: a quarter of the lease, so three renewals
+ * in a row may fail (a database that does not answer for a moment) or come late before the lease can run out.
+ */
+export const IDEMPOTENCY_LEASE_RENEW_MS = 30_000;
 /** The first pause of a waiting request; it doubles up to `IDEMPOTENCY_MAX_POLL_MS`. */
 export const IDEMPOTENCY_POLL_MS = 100;
 export const IDEMPOTENCY_MAX_POLL_MS = 1_000;
@@ -178,7 +188,17 @@ export interface IdempotencyTicket {
   readonly id: string;
   readonly operationId: OtaOperationId;
   readonly schemaName: TenantSchema;
-  readonly lease: Date;
+  /**
+   * The lease the request holds, its token (`locked_until`): the claim's, then each renewal's (`keepLease`). Only the
+   * renewal changes it, and `stop` waits for a renewal in flight, so the outcome is settled with the record's lease.
+   */
+  lease: Date;
+}
+
+/** The renewal of a ticket's lease while its handler runs (`IdempotencyService.keepLease`). */
+export interface IdempotencyLeaseRenewal {
+  /** Ends the renewals and waits for one in flight; call it before the outcome is settled or released. */
+  stop(): Promise<void>;
 }
 
 /** What a request does after the claim: run the handler, or send a stored answer. */
@@ -566,6 +586,58 @@ export class IdempotencyService implements OnModuleInit {
     } catch (error) {
       this.logger.error({ err: error, operationId: ticket.operationId }, "idempotency.settle_failed");
     }
+  }
+
+  /**
+   * Renews the lease of `ticket` every IDEMPOTENCY_LEASE_RENEW_MS until `stop()` (lead decision (1) of 2026-10-26,
+   * FIX-W30-OTA, as FIX-W29-PLATFORM renews the platform's Redis lock): each renewal sets `locked_until` to
+   * IDEMPOTENCY_LEASE_MS from now with the ticket's lease as the token (`IdempotencyRepository.extendLease`), in a
+   * short transaction of its own, and the new value becomes the ticket's lease. A renewal that finds the record no
+   * longer the request's (its lease ran out and a waiting request took it over) logs `idempotency.lease_lost` and ends
+   * the renewals: a lost lease is never renewed, and the outcome is then not written either (`settle`). A failing
+   * renewal is logged (`idempotency.lease_renew_failed`) and the next one tries again, the lease lasting its 2 minutes
+   * from the last renewal that worked. One renewal at a time: the next is scheduled when the previous one has ended.
+   */
+  keepLease(ticket: IdempotencyTicket): IdempotencyLeaseRenewal {
+    let stopped = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let inFlight: Promise<void> = Promise.resolve();
+    const renew = async (): Promise<void> => {
+      const now = this.clock.now();
+      const next = new Date(now.getTime() + IDEMPOTENCY_LEASE_MS);
+      let held: boolean;
+      try {
+        held = await this.tx.run((trx) => this.records.extendLease(trx, ticket.id, ticket.lease, next, now));
+      } catch (error) {
+        this.logger.warn({ err: error, operationId: ticket.operationId }, "idempotency.lease_renew_failed");
+        schedule();
+        return;
+      }
+      if (!held) {
+        this.logger.warn({ operationId: ticket.operationId }, "idempotency.lease_lost");
+        return;
+      }
+      ticket.lease = next;
+      schedule();
+    };
+    const schedule = (): void => {
+      if (stopped) {
+        return;
+      }
+      timer = setTimeout(() => {
+        inFlight = renew();
+      }, IDEMPOTENCY_LEASE_RENEW_MS);
+      // A request in flight keeps the process up, not its renewal timer.
+      timer.unref();
+    };
+    schedule();
+    return {
+      stop: async () => {
+        stopped = true;
+        clearTimeout(timer);
+        await inFlight;
+      },
+    };
   }
 
   /** Deletes the record in flight of `ticket` (an answer that cannot be stored); failures are logged, never thrown. */

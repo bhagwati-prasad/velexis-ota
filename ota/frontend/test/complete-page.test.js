@@ -762,4 +762,17 @@ describe("complete page: the page itself", () => {
     expect(pageHtml).not.toContain("js.stripe.com");
     expect(pageHtml).not.toMatch(/<(?:input|select|textarea|form)\b/i);
   });
+
+  it("[FIX-W30-OTA AC7] sends only the origin as Referer before its module takes Stripe's return parameters out", () => {
+    // Stripe returns here with `payment_intent_client_secret` in the address: the requests the browser makes before
+    // the page module runs (its script, the module preloads, the stylesheet) must not carry it in their Referer, as
+    // account/verify.html keeps its token out. `strict-origin`, not `no-referrer`: with it the SDK's same-origin
+    // writes would send `Origin: null`.
+    const children = Array.from(pageDocument.head.children);
+    const policies = children.filter((element) => element.matches('meta[name="referrer"]'));
+    expect(policies.map((element) => element.getAttribute("content"))).toEqual(["strict-origin"]);
+    const firstRequest = children.findIndex((element) => element.matches("link, script, style, base"));
+    expect(firstRequest).toBeGreaterThan(-1);
+    expect(children.indexOf(/** @type {Element} */ (policies[0]))).toBeLessThan(firstRequest);
+  });
 });

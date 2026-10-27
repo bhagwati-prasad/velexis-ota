@@ -23,11 +23,14 @@
 // recorded synchronisation's diff (FIX-W27-SYNC; `toSupplierSync`).
 //
 // `consoleActions` weighs the caller's permissions (the role's, or a key's own) and the booking's state; a refused
-// action names its reason (`no_permission` first). The list cursor is opaque base64url JSON: the sort key (an instant
+// action names its reason (`no_permission` first). `canCancel` follows the departure rule console.bookings.cancel
+// checks (`cancelDepartureReasonOf` without the self-service window, FIX-W30-OTA): `flown` once any segment departed,
+// not only once the last one landed, which `canIssue` keeps. The list cursor is opaque base64url JSON: the sort key (an instant
 // in UTC with microseconds, a total, or `null` for a booking without a ticketing deadline), the id and a fingerprint of
 // the environment, filters and sort, so a cursor of other filters is refused (`400 VALIDATION_FAILED`).
 import type { components } from "@velexis/api-types";
 import { redactPayload } from "@velexis/logger";
+import { cancelDepartureReasonOf, STAFF_CANCEL_CUTOFF_MS } from "../bookings/allowed-actions";
 import { VELEXIS_REMARK_PREFIX } from "../bookings/booking-reference";
 import {
   dictionariesOf,
@@ -554,7 +557,8 @@ export interface ConsoleActionsInput {
   readonly amadeusOrderId: string | null;
   readonly ticketingDeadlineAt: Date | null;
   readonly lastArrivalAt: Date;
-  readonly segments: readonly { readonly isFlown: boolean }[];
+  /** The booking's segments: their departure instants and Amadeus `isFlown` (the departure rule of canCancel). */
+  readonly segments: readonly { readonly departureAt: Date; readonly isFlown: boolean }[];
   /** The last refresh claim or sync (`bookingDetails.lastRefreshAt`). */
   readonly lastRefreshAt: Date | null;
   readonly now: Date;
@@ -608,7 +612,17 @@ export function consoleActionsOf(input: ConsoleActionsInput): ConsoleBookingActi
   return {
     canIssue: decide("canIssue", "bookings:issue", issueReason()),
     canPatch: decide("canPatch", "bookings:write", live()),
-    canCancel: decide("canCancel", "bookings:cancel", live() ?? (flown ? "flown" : undefined)),
+    // The one departure rule of every cancellation (bookings/allowed-actions.ts, FIX-W30-OTA), without the
+    // self-service window, as console.bookings.cancel checks it: refused once any segment departed, not only landed.
+    canCancel: decide(
+      "canCancel",
+      "bookings:cancel",
+      live() ??
+        // Without a window the rule answers `flown` or nothing.
+        (cancelDepartureReasonOf(input.segments, input.now, STAFF_CANCEL_CUTOFF_MS) === undefined
+          ? undefined
+          : "flown"),
+    ),
     canResync: decide("canResync", "bookings:write", withoutOrder() ?? (throttled ? "throttled" : undefined)),
     canRetrieve: decide("canRetrieve", "bookings:read", withoutOrder()),
     canAddNote: decide("canAddNote", "bookings:write", undefined),

@@ -49,7 +49,11 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 import { AmadeusClient } from "../../../src/amadeus/amadeus.client";
 import { AMADEUS_LIMITS, DEFAULT_AMADEUS_LIMITS, type AmadeusLimits } from "../../../src/amadeus/limits";
 import { newBookingReference } from "../../../src/bookings/booking-reference";
-import { CANCELLATION_CHECK_JOB, ORDER_GONE_WARNING } from "../../../src/bookings/cancellation.service";
+import {
+  CANCELLATION_CHECK_JOB,
+  CancellationRecorder,
+  ORDER_GONE_WARNING,
+} from "../../../src/bookings/cancellation.service";
 import { buildCreateOrderRequest } from "../../../src/bookings/order-request.builder";
 import { newId } from "../../../src/common/ids";
 import { OTA_QUEUE } from "../../../src/common/queues/queue-names";
@@ -67,6 +71,7 @@ import { buildOrderContact, buildOrderRequestInput } from "../../builders/bookin
 import { testApiCredentials, testKeyProvider, testWorkerVariables } from "../../helpers/api-env";
 import { startFakeStripe, stripeEndpointModule, type FakeStripe } from "../../helpers/fake-stripe";
 import { MemorySink } from "../../helpers/log-sink";
+import { runDelayedPaymentJob } from "../../helpers/payment-jobs";
 import { useNextApplicationLoggerOutsideRequests } from "../../helpers/nest-pino";
 import { OPENAPI_SETUP_TIMEOUT_MS, preloadOpenApiDocument } from "../../helpers/openapi";
 import { createTestApp, type TestApp } from "../../support/create-test-app";
@@ -392,6 +397,8 @@ interface BookingSeed {
   readonly ticketingStatus?: string;
   /** A ticketed booking (an e-ticket issued an hour ago), for a cancellation that voids it. */
   readonly ticketed?: boolean;
+  /** The departure, relative to now (10 days by default); the flight lasts 2 hours. */
+  readonly departInMs?: number;
 }
 
 interface SeededBooking {
@@ -408,7 +415,7 @@ async function seedBooking(prefix: string, seed: BookingSeed = {}): Promise<Seed
   const email = uniqueEmail(prefix);
   const id = newId("bkg");
   const now = Date.now();
-  const outbound = new Date(now + 10 * DAY);
+  const outbound = new Date(now + (seed.departInMs ?? 10 * DAY));
   const order = await newStubOrder(email, outbound);
   // The order's segment, whose terminals the booking keeps as the record step does (a refresh then changes nothing).
   const flight =
@@ -1539,5 +1546,74 @@ describe("console.bookings.cancel", () => {
     ).toMatchObject({
       cause: "order_not_found",
     });
+  });
+});
+
+describe("console.bookings.cancel: the departure rule and the release's requester (FIX-W30-OTA)", () => {
+  it("[FIX-W30-OTA AC3] shows canCancel false for a booking whose first flight departed but did not land, and refuses its cancellation with flown", async () => {
+    const owner = await staff("owner");
+    // Its flight left an hour ago and lands in an hour.
+    const booking = await seedBooking("cancel.departed", { departInMs: -HOUR });
+    await seedPayment(booking.id, "captured");
+
+    const read = await owner.get(`${BOOKINGS}/${booking.id}`);
+    expect(answer(read)).toEqual([200, undefined]);
+    expectResponseToMatch("consoleGetBooking", read);
+    expect(read.body.consoleActions).toMatchObject({
+      canCancel: false,
+      canPatch: true,
+      reasons: { canCancel: "flown" },
+    });
+    stub.clearRequests();
+    const res = await owner.cancel(booking.id, read.headers["etag"] as string, {
+      reasonCode: "customer_request",
+      reason: "Customer asked after take-off",
+    });
+
+    expect(answer(res)).toEqual([409, "BOOKING_NOT_MODIFIABLE"]);
+    expectResponseToMatch("consoleCancelBooking", res);
+    expect(res.body.error.details).toMatchObject({ reason: "flown" });
+    expect(amadeusCalls("cancelFlightOrder")).toEqual([]);
+    expect(await bookingRow(booking.id)).toMatchObject({ status: "confirmed" });
+  });
+
+  it("[FIX-W30-OTA AC7] records the release that a capture retry makes as asked for by the staff member who cancelled", async () => {
+    const agent = await staff("agent");
+    const booking = await seedBooking("cancel.net_staff");
+    const payment = await seedPayment(booking.id, "authorized");
+    const etag = await etagOf(agent, booking.id);
+    stripe.reset();
+    // The API stops between the record step's commit and the capture of the kept amount (simulated): the capture is
+    // left to the record step's safety net, `payment.capture_retry` of the payments queue.
+    const recorder = api.app.get(CancellationRecorder, { strict: false });
+    const crash = vi
+      .spyOn(recorder, "settleAuthorisation")
+      .mockRejectedValue(new Error("the process stopped before the Stripe call (simulated)"));
+    let res: Response;
+    try {
+      res = await agent.cancel(booking.id, etag, {
+        reasonCode: "customer_request",
+        reason: "Customer called; the change fee is kept",
+        refund: { mode: "amount", amount: { amount: "100.47", currency: "EUR" } },
+      });
+    } finally {
+      crash.mockRestore();
+    }
+    expect(res.status).toBe(500);
+    expect(stripeRequestsAbout(payment.intentId)).toEqual([]);
+
+    const net = await runDelayedPaymentJob(worker, paymentsQueue, `capture-retry-cancellation-${payment.id}`);
+
+    expect(net).toEqual({ state: "completed", returnvalue: expect.objectContaining({ outcome: "applied" }) });
+    expect(await paymentRow(payment.id)).toMatchObject({ status: "captured", amount_captured: "25.00" });
+    expect(await refundsOf(booking.id)).toEqual([
+      expect.objectContaining({
+        status: "succeeded",
+        amount: "100.47",
+        reason: "customer_request",
+        requested_by_type: "staff",
+        requested_by_id: agent.member.staffId,
+      }),
+    ]);
   });
 });

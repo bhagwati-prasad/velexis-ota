@@ -26,13 +26,16 @@
 //      `412 PRECONDITION_FAILED` (`details.currentVersion`), `403 FEATURE_DISABLED` (`details.feature =
 //      "selfServiceCancellation"`) when the storefront has self-service cancellation off, `409 BOOKING_NOT_MODIFIABLE`
 //      (`details.reason = "pending"`) while an earlier cancellation is undecided (a DELETE without an answer, below) or
-//      a cancellation request waits for the staff.
+//      a cancellation request waits for the staff, and `409 BOOKING_NOT_MODIFIABLE` (`details.reason =
+//      "ticketing_in_progress"`, the staff cancellation's refusal: `ticketingInProgress`) while the ticketing job or a
+//      staff issuance holds a fresh ticketing claim (OADR-0014 point 6; FIX-W30-OTA, lead decision (1) of 2026-10-26).
 //   2. The quote: the cached one when it was made for the booking's current `version` and is still valid (a void
 //      window that has closed is not, nor is a `not_allowed` quote: quoteValid), else a new one (the refresh above; a
 //      timeout of that read answers `503 SUPPLIER_UNAVAILABLE`, as nothing was sent that could cancel). `not_allowed`
-//      answers its reason (`409 BOOKING_NOT_MODIFIABLE`, `details.reason`, `details.action = "canCancel"`). A missing
-//      or different `expectedRefund` answers `409 REFUND_AMOUNT_CHANGED` with `details.expectedRefund` and
-//      `details.newRefund`, and nothing is cancelled.
+//      answers its reason (`409 BOOKING_NOT_MODIFIABLE`, `details.reason`, `details.action = "canCancel"`; `flown` and
+//      `too_close_to_departure` come from the departure rule bookings.get's canCancel shows, allowed-actions.ts
+//      `cancelDepartureReasonOf`, FIX-W30-OTA). A missing or different `expectedRefund` answers `409
+//      REFUND_AMOUNT_CHANGED` with `details.expectedRefund` and `details.newRefund`, and nothing is cancelled.
 //   3. The claim (T1): the booking locked `FOR NO KEY UPDATE SKIP LOCKED` (OADR-0014 point 6, lead addition to OBE-049:
 //      a booking another claim or writer holds is skipped and answered `503 SERVICE_UNAVAILABLE` with `Retry-After`
 //      (`retryAfterOf`, lead decision (8) of 2026-10-23, second batch), which the idempotency layer does not keep, so
@@ -143,10 +146,12 @@
 // no quote: the checks are the booking of the environment, `409 BOOKING_ALREADY_CANCELLED`, `412`, an Amadeus order
 // (`409 BOOKING_NOT_MODIFIABLE`), no undecided cancellation (`details.reason = "pending"`; a customer's request waiting
 // for the staff is what the staff finish here), no fresh ticketing claim of a staff issuance or of the ticketing job
-// (`details.reason = "ticketing_in_progress"`: its capture would race the money step) and no segment departed
-// (`details.reason = "flown"`, after the GET that refreshes the order and its ticket states through the customer
-// refresh, without its throttle). `refund.mode` gives the amount that goes back (`staffRefundOf`, the estimate's
-// `estimatedRefund`, so the money step and the worker's check read it as they read a customer's): `none` (and no
+// (`details.reason = "ticketing_in_progress"`: its capture would race the money step; `ticketingInProgress`, which
+// bookings.cancel answers too since FIX-W30-OTA) and no segment departed (`details.reason = "flown"`, after the GET
+// that refreshes the order and its ticket states through the customer refresh, without its throttle; the departure
+// rule of `cancelDepartureReasonOf` without the self-service window, which the console's canCancel shows).
+// `refund.mode` gives the amount that goes back (`staffRefundOf`, the estimate's `estimatedRefund`, so the money step
+// and the worker's check read it as they read a customer's): `none` (and no
 // `refund` for a captured payment) nothing, `full` what can still be refunded, `amount` that amount (`422
 // UNPROCESSABLE` above it, `amount_exceeds_captured` or `amount_exceeds_authorized`). An authorisation follows lead
 // decision (1) of 2026-10-23, second batch, as a customer's cancellation: the amount that does not go back is captured,
@@ -215,10 +220,12 @@ import {
 } from "../payments/payments.processor";
 import { PaymentsRepository, type PaymentRow } from "../payments/payments.repository";
 import {
+  cancellationRequesterOf,
   REFUNDABLE_PAYMENT_STATUSES,
   refundableAmount,
   RefundsRepository,
   type RefundReason,
+  type RefundRequester,
 } from "../payments/refunds.repository";
 import { priceOffer } from "../pricing/pricing-engine";
 import {
@@ -247,6 +254,7 @@ import {
   toBookingFareRules,
   type BookingFareRule,
 } from "./bookings.mapper";
+import { cancelDepartureReasonOf, STAFF_CANCEL_CUTOFF_MS } from "./allowed-actions";
 import { BookingsRepository, type BookingChildren, type BookingRow } from "./bookings.repository";
 import {
   cancellationModeOf,
@@ -569,6 +577,17 @@ const cancellationPending = (): AppError =>
     details: { reason: "pending", action: "canCancel" },
   });
 
+/**
+ * The tickets of the booking are being issued: the ticketing job or a staff issuance holds a fresh claim (OADR-0014
+ * point 6). The refusal of console.bookings.cancel since OBE-063's review, and of bookings.cancel since FIX-W30-OTA:
+ * a DELETE and its money step would race the issuance's capture and Flight Order Issue.
+ */
+export const ticketingInProgress = (): AppError =>
+  new AppError("BOOKING_NOT_MODIFIABLE", {
+    message: "The tickets of this booking are being issued right now: reload it in a moment.",
+    details: { reason: "ticketing_in_progress" },
+  });
+
 /** How a Flight Order Management DELETE ended (see the file header). */
 export type DeleteOutcome =
   | { readonly kind: "cancelled"; readonly supplierRequestId: string | null }
@@ -861,13 +880,12 @@ export interface StaffCancellation {
   readonly notifyCustomer: boolean;
 }
 
-/** Who asked for a cancellation's refunds and releases (`refunds.requested_by`). */
+/**
+ * Who asked for a cancellation's refunds and releases (`refunds.requested_by`): `cancellationRequesterOf`, which the
+ * payments queue's capture retry uses too (FIX-W30-OTA). A console key has no staff member: its staff action names it.
+ */
 function refundRequesterOf(ask: CancellationAsk): KeptCapture["requestedBy"] {
-  if (ask.staff !== undefined) {
-    // A console key has no staff member: its staff action names the key.
-    return { type: "staff", id: ask.actor.type === "staff" ? ask.actor.id : null };
-  }
-  return { type: "customer", id: ask.actor.type === "customer" ? ask.actor.id : null };
+  return cancellationRequesterOf(ask.staff === undefined ? "customer" : "staff", ask.actor);
 }
 
 /** The `refunds.reason` of a cancellation's refunds and releases. */
@@ -1028,7 +1046,7 @@ export interface KeptCapture {
    * Who cancelled (`refunds.requested_by` of the release): the customer (`cus_…`, `null` for a guest), or the staff
    * member (`stf_…`, `null` for a console key) of a staff cancellation.
    */
-  readonly requestedBy: { readonly type: "customer" | "staff"; readonly id: string | null };
+  readonly requestedBy: { readonly type: RefundRequester; readonly id: string | null };
 }
 
 /**
@@ -2293,11 +2311,27 @@ export class CancellationService {
     if (state.kind === "undecided" || state.kind === "requested") {
       throw cancellationPending();
     }
+    // An issuance in progress (FIX-W30-OTA): the staff cancellation's check. Before the quote (no Amadeus call for a
+    // request refused anyway) and again under the claim's lock, which a ticketing claim also takes: the claim never
+    // passes while an issuance holds a fresh claim, so no DELETE races it.
+    await this.refuseWhileIssuing(trx, bookingId);
     if (quoteVersion !== undefined && quoteVersion !== booking.version) {
       // The booking changed after the quote (a refresh stored new tickets): its estimate may be another.
       throw new AppError("PRECONDITION_FAILED", { details: { currentVersion: booking.version } });
     }
     return { row: booking, version: booking.version };
+  }
+
+  /**
+   * `409 BOOKING_NOT_MODIFIABLE` (`ticketing_in_progress`) while the ticketing job or a staff issuance holds a fresh
+   * claim of the booking (OBE-044, OADR-0014 point 6; `ticketingClaimFresh`): the check of every cancellation, the
+   * customer's (FIX-W30-OTA) and the staff's (OBE-063).
+   */
+  private async refuseWhileIssuing(trx: TenantTransaction, bookingId: string): Promise<void> {
+    const ticketing = await this.repository.ticketingClaim(trx, bookingId);
+    if (ticketing !== undefined && ticketingClaimFresh(ticketing, this.clock.now())) {
+      throw ticketingInProgress();
+    }
   }
 
   /** The booking locked `FOR NO KEY UPDATE` and still live; `409 BOOKING_ALREADY_CANCELLED` when it is not. */
@@ -2475,16 +2509,11 @@ export class CancellationService {
     }
     // A staff issuance or the ticketing job holds a fresh claim (OBE-044): its capture and Flight Order Issue would race
     // the DELETE and the money step (an authorisation captured while it is voided), so the staff wait for its outcome.
-    const ticketing = await this.repository.ticketingClaim(trx, bookingId);
-    if (ticketing !== undefined && ticketingClaimFresh(ticketing, this.clock.now())) {
-      throw new AppError("BOOKING_NOT_MODIFIABLE", {
-        message: "The tickets of this booking are being issued right now: reload it in a moment.",
-        details: { reason: "ticketing_in_progress" },
-      });
-    }
+    await this.refuseWhileIssuing(trx, bookingId);
     const children = await this.bookings.children(trx, bookingId);
-    const now = this.clock.now().getTime();
-    if (children.segments.some((segment) => segment.isFlown || segment.departureAt.getTime() <= now)) {
+    // The one departure rule of every cancellation, without the self-service window (allowed-actions.ts, FIX-W30-OTA):
+    // the console's canCancel shows the same.
+    if (cancelDepartureReasonOf(children.segments, this.clock.now(), STAFF_CANCEL_CUTOFF_MS) !== undefined) {
       throw new AppError("BOOKING_NOT_MODIFIABLE", {
         message: "A flight of this booking has departed: cancel the rest with the airline.",
         details: { reason: "flown" },

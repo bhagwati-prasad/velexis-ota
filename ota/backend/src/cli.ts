@@ -1,10 +1,13 @@
 // dist/cli.js: one-off commands of the OTA backend (README §5), run as `node dist/cli.js <command> [args]` (on the VM
 // through `velexis-run ota`). This file is the command registry: OBE-007 adds `tenants:report-migrations`
 // (provisioning/report-migrations.command.ts, the deploy step after the tenant fan-out) and `dev:seed`
-// (dev/dev-seed.command.ts, development only); later tasks add `amadeus:ping`. A command's module is loaded only when it
-// runs, so `help` needs neither a configuration nor a connection. Exit codes: 0 success, 1 error or unknown command.
+// (dev/dev-seed.command.ts, development only); FIX-W30-OTA adds `tenants:scrub-card-copies`
+// (payments/airline-card/scrub-card-copies.command.ts, the one-off scrub of the card copies stored before
+// FIX-W29-SECURITY); later tasks add `amadeus:ping`. A command's module is loaded only when it runs, so `help` needs
+// neither a configuration nor a connection. Exit codes: 0 success, 1 error or unknown command.
 import type { EnvSource } from "@velexis/config";
 import type * as DevSeedCommand from "./dev/dev-seed.command";
+import type * as ScrubCardCopiesCommand from "./payments/airline-card/scrub-card-copies.command";
 import type * as ReportMigrationsCommand from "./provisioning/report-migrations.command";
 
 /** Where the CLI writes: `process.stdout` and `process.stderr`, or a test's buffers. */
@@ -53,6 +56,11 @@ function devSeedCommand(): Promise<typeof DevSeedCommand> {
   return import("./dev/dev-seed.command.js");
 }
 
+/** The scrub of the stored card copies, loaded when it runs (payments/airline-card/scrub-card-copies.command.ts). */
+function scrubCardCopiesCommand(): Promise<typeof ScrubCardCopiesCommand> {
+  return import("./payments/airline-card/scrub-card-copies.command.js");
+}
+
 const COMMANDS: ReadonlyMap<string, CliCommand> = new Map<string, CliCommand>([
   [
     "help",
@@ -80,6 +88,16 @@ const COMMANDS: ReadonlyMap<string, CliCommand> = new Map<string, CliCommand>([
       summary: "Development only: the demo OTA (tenant_demo) with its host, connections and test API keys",
       async run(args, io) {
         return (await devSeedCommand()).runDevSeed(args, io);
+      },
+    },
+  ],
+  [
+    "tenants:scrub-card-copies",
+    {
+      summary:
+        "--tenant <key> | --all [--batch-size <n>]: drop the card holder and expiry from card copies stored before 2026-10-24",
+      async run(args, io) {
+        return (await scrubCardCopiesCommand()).runScrubCardCopies(args, io);
       },
     },
   ],
