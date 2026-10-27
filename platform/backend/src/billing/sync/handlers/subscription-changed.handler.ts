@@ -5,16 +5,20 @@
 // The handler never trusts the payload or the order of events (PADR-0002 item 5): it re-fetches the subscription
 // (`subscriptions.retrieve(event.objectId)`), so a duplicate or a late event writes Stripe's current state again and
 // changes nothing, and any order of events ends with the same rows. Stripe is called before the transaction, never
-// inside it (architecture §2.3). Then:
+// inside it (architecture §2.3). The re-fetch and the write run under the lock of the Stripe subscription
+// (subscription-lock.ts, FIX-W30-PLATFORM, PADR-0002 item 5 revision of 2026-10-26), taken before the re-fetch and
+// confirmed in the transaction just before its commit: two events of one subscription that overlap in the worker
+// (concurrency 2) run one after the other, so an older re-fetch never commits after a newer one. Then:
 //
 // 1. The row: the Stripe row with this `provider_subscription_id`, else the pre-inserted row its
 //    `metadata.velexis_subscription_id` names (the `incomplete` row of an OTA created in M5). Without either the event
 //    ends `ignored` (`UNKNOWN_SUBSCRIPTION`): a subscription of an existing OTA (a manual trial, a canceled
 //    subscription) gets its row from `checkout.session.completed`, which re-fetches it in turn.
-// 2. One transaction (`runInTransaction`) locks the tenant's row first (the lock order of every tenant change), then
-//    the subscription's row. A subscription whose `metadata.velexis_tenant_id` names another OTA than its row, or whose
-//    Customer `billing_customers` stores for another OTA, fails for good (`TENANT_MISMATCH`, `CUSTOMER_CONFLICT`) and
-//    writes nothing, as for a completed Checkout. Then `syncInTransaction` runs:
+// 2. One transaction (`runInTransaction`) locks the tenant's row first, then the subscription's row (billing's lock
+//    order, flow §D; the admin's manual edit keeps it too). A subscription whose `metadata.velexis_tenant_id` names
+//    another OTA than its row, or whose Customer `billing_customers` stores for another OTA, fails for good
+//    (`TENANT_MISMATCH`, `CUSTOMER_CONFLICT`) and writes nothing, as for a completed Checkout. Then
+//    `syncInTransaction` runs:
 //    - the price is mapped to its plan (price-to-plan.ts; `UNKNOWN_PRICE` fails the event);
 //    - a row that takes the "one current subscription" slot (a current status, or always for a completed Checkout)
 //      replaces the tenant's other current row when that one is a manual trial or an unpaid (`incomplete`) Stripe row:
@@ -30,7 +34,7 @@
 //    - one `subscription.updated` audit row (actor `system`, `billing.sync`; the event id as request id) when anything
 //      changed: the subscription's fields and the tenant's plan and banner before and after, the replaced rows.
 // 3. After the commit: the invalidation, the dispatch of the provision job and of the suspend or resume job (never
-//    failing the event; the reconciler takes a job left `queued`).
+//    failing the event; the reconciler takes a job left `queued`). Then the subscription's lock is released.
 //
 // The event resolves to the tenant (`stripe_events.tenant_id`). Log lines carry ids and statuses, never an e-mail
 // address or a payload.
@@ -65,6 +69,7 @@ import {
 } from "../../subscriptions.repository";
 import { PriceToPlan, type SubscriptionPlan } from "../price-to-plan";
 import { BillingStatusRules, RESUMING_STATUSES, type AppliedBillingRules } from "../status-rules";
+import { SubscriptionSyncLock, type HeldSubscriptionLock } from "../subscription-lock";
 
 /** The event types of this handler. */
 export const SUBSCRIPTION_EVENT_TYPES = Object.freeze([
@@ -323,6 +328,7 @@ export class SubscriptionChangedHandler implements StripeEventHandler {
     private readonly audit: AuditService,
     private readonly ids: IdGenerator,
     private readonly clock: Clock,
+    private readonly lock: SubscriptionSyncLock,
     @Inject(PLATFORM_DB) private readonly db: PlatformDb,
     @InjectPinoLogger(SubscriptionChangedHandler.name) private readonly logger: PinoLogger,
   ) {}
@@ -332,6 +338,15 @@ export class SubscriptionChangedHandler implements StripeEventHandler {
     if (objectId === null || !STRIPE_SUBSCRIPTION_ID.test(objectId)) {
       return { status: "ignored", reason: "NO_SUBSCRIPTION: the event names no Stripe subscription" };
     }
+    return this.lock.run(objectId, { eventId: event.id }, (held) => this.syncLocked(event, objectId, held));
+  }
+
+  /** The re-fetch and the write of `handle`, while `held` is the subscription's lock (file header). */
+  private async syncLocked(
+    event: StripeInboxEvent,
+    objectId: string,
+    held: HeldSubscriptionLock,
+  ): Promise<StripeEventOutcome> {
     const subscription = await this.stripe.api().subscriptions.retrieve(objectId);
     const hint = velexisSubscriptionIdOf(subscription.metadata);
     const ref =
@@ -374,6 +389,8 @@ export class SubscriptionChangedHandler implements StripeEventHandler {
         checkoutSessionId: null,
         replacesCurrent: false,
       });
+      // The last statement before the commit: the write commits only while the lock is this event's.
+      await held.confirm();
       return { status: "processed", tenantId: tenant.id };
     });
   }

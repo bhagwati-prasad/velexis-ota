@@ -3,7 +3,8 @@
 // the admin's list, detail and manual edit, with the subscription's invoices and its OTA's Stripe events (both empty
 // before M5), PBE-044 the `incomplete` Stripe row of an OTA created in M5 and the reads and write of Checkout, PBE-045
 // the reads and writes of the Stripe Billing sync (a Stripe subscription copied into its row, by its provider id or the
-// pre-inserted row it names, and the current row it replaces). Kysely on the API's `PLATFORM_DB` (ADR-0005).
+// pre-inserted row it names, and the current row it replaces), FIX-W30-PLATFORM the subscription's tenant that the
+// manual edit locks first (billing's lock order). Kysely on the API's `PLATFORM_DB` (ADR-0005).
 import { Inject, Injectable } from "@nestjs/common";
 import { sql, type PlatformDatabase, type Selectable } from "@velexis/db";
 import type { PlatformTransaction } from "../audit/audit.repository";
@@ -240,7 +241,10 @@ export interface StripeSubscriptionWrite {
   readonly changed: boolean;
 }
 
-/** The row of a Stripe subscription and its tenant, read without a lock to find the tenant to lock first. */
+/**
+ * The row of a subscription and its tenant, read without a lock to find the tenant to lock first (billing sync, and the
+ * manual edit since FIX-W30-PLATFORM).
+ */
 export interface SubscriptionRef {
   readonly id: string;
   readonly tenant_id: string;
@@ -676,7 +680,26 @@ export class SubscriptionsRepository {
     return this.adminViews(db).where("s.id", "=", id).executeTakeFirst();
   }
 
-  /** The subscription `id`, locked for the rest of the caller's transaction (`FOR UPDATE`). */
+  /**
+   * The subscription `id` and its tenant, read without a lock on `db`; `undefined` for none. A subscription never moves
+   * to another tenant, so the manual edit reads it to lock the tenant's row first and the subscription's after it
+   * (billing's lock order, flow §D: FIX-W30-PLATFORM).
+   */
+  async findRef(
+    id: string,
+    db: PlatformDb | PlatformTransaction = this.db,
+  ): Promise<SubscriptionRef | undefined> {
+    return db
+      .selectFrom("platform.subscriptions")
+      .select(["id", "tenant_id"])
+      .where("id", "=", id)
+      .executeTakeFirst();
+  }
+
+  /**
+   * The subscription `id`, locked for the rest of the caller's transaction (`FOR UPDATE`). The caller has locked the
+   * subscription's tenant first (billing's lock order).
+   */
   async lockForUpdate(trx: PlatformTransaction, id: string): Promise<LockedSubscription | undefined> {
     return trx
       .selectFrom("platform.subscriptions")

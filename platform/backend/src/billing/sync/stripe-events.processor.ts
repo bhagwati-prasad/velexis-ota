@@ -12,7 +12,10 @@
 //    handlers are those of handlers/ (PBE-045: `checkout.session.completed`, `customer.subscription.created`, `…updated`
 //    and `…deleted`, with the price-to-plan map and the status rules); the invoice events (PBE-046) and the Connect
 //    account events (PBE-056) follow. A handler applies its change in one transaction of its own and dispatches the
-//    jobs it queued after that commit, so this processor holds no transaction while a handler calls Stripe.
+//    jobs it queued after that commit, so this processor holds no transaction while a handler calls Stripe. The two
+//    jobs this processor runs at once may be events of one subscription: the billing handlers re-fetch and write it
+//    under its lock (subscription-lock.ts, FIX-W30-PLATFORM), so they run one after the other, and one that waits
+//    30 s for it fails with the retryable `SUBSCRIPTION_BUSY` like any retryable failure below.
 // 3. Finish: `processed` or `ignored` with `processed_at`, the reason of an ignored event in `last_error`, and the
 //    tenant the handler resolved it to.
 //

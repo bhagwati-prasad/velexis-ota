@@ -21,6 +21,9 @@
 //   (trialing or past due) and its plan differs from `tenants.plan_code`, the tenant moves to it (`version + 1`) in the
 //   same transaction and a `tenant` invalidation goes out after the commit, so the OTA backend reloads the quotas. A
 //   plan change on a canceled subscription is history and leaves the tenant alone.
+// - The edit locks the tenant's row first, then the subscription's (FIX-W30-PLATFORM, lead decision (2) of
+//   2026-10-26): billing's lock order (flow §D), which billing sync keeps too, so an edit and a billing-sync write of
+//   the same OTA (a completed Checkout replacing the manual trial) wait for each other in turn, never in a circle.
 //
 // The tenant write needs TenantsModule's repository, a module of BillingModule's own layer (architecture §2.2), so
 // AdminModule (layer 4) provides this service, as it provides ProvisioningJobsRepository; BillingModule provides
@@ -243,7 +246,8 @@ export class SubscriptionsService {
   /**
    * adminUpdateManualSubscription: the changes of `request` that differ from the stored row, with `version + 1`, one
    * `subscription.manually_updated` audit row holding the reason, the changed fields before and after and, when the
-   * tenant's plan followed, its plan before and after, and a `tenant` invalidation after the commit in that case.
+   * tenant's plan followed, its plan before and after, and a `tenant` invalidation after the commit in that case. The
+   * tenant's row is locked before the subscription's (file header).
    */
   async updateManual(
     claims: Pick<AccessTokenClaims, "sub">,
@@ -253,6 +257,11 @@ export class SubscriptionsService {
   ): Promise<AdminSubscription> {
     const now = this.clock.now();
     return runInTransaction(this.db, async (trx) => {
+      // Billing's lock order (file header): the tenant's row, then the subscription's.
+      const ref = await this.subscriptions.findRef(subscriptionId, trx);
+      if (ref === undefined || (await this.tenants.lockForUpdate(trx, ref.tenant_id)) === undefined) {
+        throw new AppError("NOT_FOUND");
+      }
       const current = await this.subscriptions.lockForUpdate(trx, subscriptionId);
       if (current === undefined) {
         throw new AppError("NOT_FOUND");

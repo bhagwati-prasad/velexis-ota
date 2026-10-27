@@ -2,11 +2,16 @@
 // 6, ADR-0013 point 3, scope PF-71 and PF-73 AC1, lead decision (5) of 2026-10-24): the webhook, never the browser's
 // redirect, makes a Checkout's subscription the OTA's (PBE-044 starts the Checkout).
 //
-// The handler re-fetches the Checkout Session with `expand: ["subscription"]` before any transaction (it never trusts
-// the payload or the order of events, PADR-0002 item 5). A session that is not `mode: subscription` or not `complete`,
-// or whose `client_reference_id` names no OTA, ends `ignored`. A session whose metadata names another OTA than its
-// `client_reference_id`, without a subscription or with a Customer of another shape fails for good (an admin looks).
-// Then one transaction (`runInTransaction`) locks the tenant's row and:
+// The handler re-fetches the Checkout Session before any transaction (it never trusts the payload or the order of
+// events, PADR-0002 item 5). A session that is not `mode: subscription` or not `complete`, or whose
+// `client_reference_id` names no OTA, ends `ignored`. A session whose metadata names another OTA than its
+// `client_reference_id`, or without a subscription, fails for good (an admin looks). The session no longer changes
+// once complete; its subscription does, so the handler takes the lock of that Stripe subscription
+// (subscription-lock.ts, FIX-W30-PLATFORM, PADR-0002 item 5 revision of 2026-10-26), which the subscription's own
+// events take too, and re-fetches the subscription under it (`subscriptions.retrieve`): two events of one
+// subscription that overlap in the worker run one after the other, so an older re-fetch never commits after a newer
+// one. A subscription whose metadata names another OTA, or whose Customer is of another shape, fails for good. Then
+// one transaction (`runInTransaction`) locks the tenant's row (billing's lock order, flow §D) and:
 //
 // 1. stores the session's Customer as the OTA's Stripe Customer (`billing_customers`: inserted, or updated with this
 //    Customer, its `livemode` and the e-mail address Checkout collected; PADR-0002 item 1). A Customer another OTA holds
@@ -24,6 +29,7 @@
 //    job (the active one when there is one; the failed ones stay as history), `provisioning_job.retried` audited
 //    (actor `system`, `billing.sync`, the Session), the `tenant` invalidation and the dispatch after the commit.
 //
+// The lock is confirmed in the transaction just before its commit and released after the work that follows the commit.
 // A duplicate or a second event of the same session writes nothing new and dispatches nothing: the job is `running`
 // (or done) and the tenant no longer `failed`, so provisioning starts exactly once. The event resolves to the tenant.
 import { Inject, Injectable } from "@nestjs/common";
@@ -50,11 +56,13 @@ import { TenantsRepository, type TenantRecord } from "../../../tenants/tenants.r
 import { BillingCustomersRepository } from "../../billing-customers.repository";
 import { SubscriptionsRepository } from "../../subscriptions.repository";
 import { RESUMING_STATUSES } from "../status-rules";
+import { SubscriptionSyncLock, type HeldSubscriptionLock } from "../subscription-lock";
 import {
   BILLING_SYNC_LABEL,
   billingSyncActor,
   CUSTOMER_ID,
   dispatchAfterCommit,
+  STRIPE_SUBSCRIPTION_ID,
   stripeIdOf,
   SubscriptionChangedHandler,
   TENANT_ID,
@@ -66,10 +74,11 @@ import {
 /** A Checkout Session id (`cs_`, letters, digits, underscores). */
 export const CHECKOUT_SESSION_ID = /^cs_[A-Za-z0-9_]{1,250}$/;
 
-/** What the Session names, checked before the transaction. */
+/** What the Session and its re-fetched subscription name, checked before the transaction. */
 interface CompletedCheckout {
   readonly session: Stripe.Checkout.Session;
   readonly tenantId: string;
+  /** The subscription as Stripe answered it under its lock. */
   readonly subscription: Stripe.Subscription;
   readonly customerId: string;
   /** `metadata.velexis_subscription_id` of the Session or its subscription. */
@@ -91,6 +100,7 @@ export class CheckoutSessionCompletedHandler implements StripeEventHandler {
     private readonly invalidations: InvalidationPublisher,
     private readonly ids: IdGenerator,
     private readonly clock: Clock,
+    private readonly lock: SubscriptionSyncLock,
     @Inject(PLATFORM_DB) private readonly db: PlatformDb,
     @InjectPinoLogger(CheckoutSessionCompletedHandler.name) private readonly logger: PinoLogger,
   ) {}
@@ -100,9 +110,7 @@ export class CheckoutSessionCompletedHandler implements StripeEventHandler {
     if (objectId === null || !CHECKOUT_SESSION_ID.test(objectId)) {
       return { status: "ignored", reason: "NO_CHECKOUT_SESSION: the event names no Checkout Session" };
     }
-    const session = await this.stripe
-      .api()
-      .checkout.sessions.retrieve(objectId, { expand: ["subscription"] });
+    const session = await this.stripe.api().checkout.sessions.retrieve(objectId);
     if (session.mode !== "subscription") {
       return { status: "ignored", reason: `NOT_SUBSCRIPTION_MODE: the session is in ${session.mode} mode` };
     }
@@ -113,7 +121,21 @@ export class CheckoutSessionCompletedHandler implements StripeEventHandler {
     if (tenantId === null || !TENANT_ID.test(tenantId) || !(await this.tenants.exists(tenantId))) {
       return { status: "ignored", reason: "UNKNOWN_TENANT: the session's client_reference_id names no OTA" };
     }
-    const checkout = await this.completedCheckout(session, tenantId);
+    const subscriptionId = this.subscriptionIdOf(session, tenantId);
+    return this.lock.run(subscriptionId, { eventId: event.id }, (held) =>
+      this.syncLocked(event, session, tenantId, held),
+    );
+  }
+
+  /** The subscription's re-fetch and the write of `handle`, while `held` is its lock (file header). */
+  private async syncLocked(
+    event: StripeInboxEvent,
+    session: Stripe.Checkout.Session,
+    tenantId: string,
+    held: HeldSubscriptionLock,
+  ): Promise<StripeEventOutcome> {
+    const subscription = await this.stripe.api().subscriptions.retrieve(held.subscriptionId);
+    const checkout = this.completedCheckout(session, tenantId, subscription);
     const actor = billingSyncActor(event);
     return runInTransaction(this.db, async (trx): Promise<StripeEventOutcome> => {
       const tenant = await this.tenants.lockForUpdate(trx, tenantId);
@@ -167,30 +189,46 @@ export class CheckoutSessionCompletedHandler implements StripeEventHandler {
       if (tenant.status === "failed" && this.paidByThisCheckout(synced)) {
         await this.reopenFailed(trx, tenant, actor, { checkoutSessionId: session.id, synced, now });
       }
+      // The last statement before the commit: the write commits only while the lock is this event's.
+      await held.confirm();
       return { status: "processed", tenantId };
     });
   }
 
   /**
-   * The subscription, the Customer and the pre-inserted row of a completed `session` of `tenantId`, re-fetching the
-   * subscription when the expansion did not; throws StripeEventFailure (not retryable) when they do not fit together.
+   * The Stripe subscription a completed `session` of `tenantId` created, whose lock the handler takes; throws
+   * StripeEventFailure (not retryable) for a session whose metadata names another OTA or that has no subscription.
    */
-  private async completedCheckout(
-    session: Stripe.Checkout.Session,
-    tenantId: string,
-  ): Promise<CompletedCheckout> {
-    const fail = (code: string, message: string): StripeEventFailure =>
-      new StripeEventFailure(code, message, { retryable: false, tenantId });
+  private subscriptionIdOf(session: Stripe.Checkout.Session, tenantId: string): string {
     const metadataTenant = velexisTenantIdOf(session.metadata);
     if (metadataTenant !== undefined && metadataTenant !== tenantId) {
-      throw fail("TENANT_MISMATCH", "the session's metadata names another OTA than its client_reference_id");
+      throw new StripeEventFailure(
+        "TENANT_MISMATCH",
+        "the session's metadata names another OTA than its client_reference_id",
+        { retryable: false, tenantId },
+      );
     }
-    const reference = session.subscription;
-    if (reference === null) {
-      throw fail("NO_SUBSCRIPTION", "the completed session has no subscription");
+    const subscriptionId = stripeIdOf(session.subscription);
+    if (subscriptionId === undefined || !STRIPE_SUBSCRIPTION_ID.test(subscriptionId)) {
+      throw new StripeEventFailure("NO_SUBSCRIPTION", "the completed session has no subscription", {
+        retryable: false,
+        tenantId,
+      });
     }
-    const subscription =
-      typeof reference === "string" ? await this.stripe.api().subscriptions.retrieve(reference) : reference;
+    return subscriptionId;
+  }
+
+  /**
+   * The Customer and the pre-inserted row of a completed `session` of `tenantId` and its `subscription`, re-fetched
+   * under its lock; throws StripeEventFailure (not retryable) when they do not fit together.
+   */
+  private completedCheckout(
+    session: Stripe.Checkout.Session,
+    tenantId: string,
+    subscription: Stripe.Subscription,
+  ): CompletedCheckout {
+    const fail = (code: string, message: string): StripeEventFailure =>
+      new StripeEventFailure(code, message, { retryable: false, tenantId });
     const subscriptionTenant = velexisTenantIdOf(subscription.metadata);
     if (subscriptionTenant !== undefined && subscriptionTenant !== tenantId) {
       throw fail("TENANT_MISMATCH", "the subscription's metadata names another OTA than the session");

@@ -26,6 +26,8 @@ const ACCOUNT_ID = "acc_01M4TA0Z9N3QKX8V5B7C2D4E6F";
 const KEY_ID = "key_01M4TA2B3C4D5E6F7G8H9J0K1M";
 const HASH = "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08";
 const IDEMPOTENCY_KEY = "8d3c6c1e-2f4b-4a51-9b7e-0c1d2e3f4a5b";
+/** A Stripe subscription id of Stripe's shape. */
+const STRIPE_SUBSCRIPTION_ID = "sub_1QFixW30PlatformLock0001";
 
 /** Arguments for every builder. Typed by the builder names, so a new builder does not compile until it is listed. */
 const SAMPLES: Readonly<Record<RedisKeyBuilderName, readonly unknown[]>> = {
@@ -34,6 +36,7 @@ const SAMPLES: Readonly<Record<RedisKeyBuilderName, readonly unknown[]>> = {
   apiKeyUsed: [KEY_ID],
   idempotency: [ACCOUNT_ID, IDEMPOTENCY_KEY],
   idempotencyLock: [ACCOUNT_ID, IDEMPOTENCY_KEY],
+  stripeSubscriptionLock: [STRIPE_SUBSCRIPTION_ID],
   mfaChallenge: [HASH],
   mfaChallengeAttempts: [HASH],
   mfaSetup: [ACCOUNT_ID],
@@ -51,6 +54,7 @@ const EXPECTED: Readonly<Record<RedisKeyBuilderName, { readonly key: string; rea
     apiKeyUsed: { key: `apikey:used:${KEY_ID}`, ttlSeconds: 86400 },
     idempotency: { key: `vx:idem:${ACCOUNT_ID}:${IDEMPOTENCY_KEY}`, ttlSeconds: 86400 },
     idempotencyLock: { key: `vx:idem:${ACCOUNT_ID}:${IDEMPOTENCY_KEY}:lock`, ttlSeconds: 10 },
+    stripeSubscriptionLock: { key: `vx:stripe:sub:${STRIPE_SUBSCRIPTION_ID}:lock`, ttlSeconds: 15 },
     mfaChallenge: { key: `mfach:${HASH}`, ttlSeconds: 300 },
     mfaChallengeAttempts: { key: `mfach:${HASH}:attempts`, ttlSeconds: 300 },
     mfaSetup: { key: `mfasetup:${ACCOUNT_ID}`, ttlSeconds: 600 },
@@ -112,6 +116,14 @@ describe("redisKeys", () => {
       [() => redisKeys.throttle("Sign-Up", HASH, 60), /throttler must be a throttler name/],
       [() => redisKeys.throttle("sign_up", "203.0.113.7", 60), /tracker must be a throttler tracker/],
       [() => redisKeys.stripeOAuthState("state:1"), /stateSha256 must be a SHA-256 digest/],
+      [
+        () => redisKeys.stripeSubscriptionLock(`${STRIPE_SUBSCRIPTION_ID}:x`),
+        /must be a Stripe subscription id/,
+      ],
+      [
+        () => redisKeys.stripeSubscriptionLock("cus_TestFixW30"),
+        /subscriptionId must be a Stripe subscription id/,
+      ],
     ];
     for (const [build, message] of refusals) {
       expect(build, String(message)).toThrow(message);

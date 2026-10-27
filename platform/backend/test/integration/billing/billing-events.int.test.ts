@@ -9,6 +9,9 @@
 //
 // Each test arranges OTAs of its own with the builders (ids of this file's range, so the invalidations of other test
 // files on the same Redis server never match), delivers one event at a time and waits until its inbox row is done.
+// The tests of FIX-W30-PLATFORM (the last block) deliver two events at once, which the worker (concurrency 2) runs
+// together, and hold one of them at a barrier: a re-fetch whose answer reaches the handler only when the test says,
+// or a repository call inside a transaction; the admin's manual edit runs through the API at the same time.
 // Nothing answers `ota-tenant-ops` here: a dispatched job stays `running`, and its message waits in the queue, where
 // the tests count it. The job schedulers are not registered (JobSchedulerRegistry replaced), so the reconciler never
 // dispatches anything behind the tests' backs. The Stripe keys are the development values of `.env.example`.
@@ -32,6 +35,7 @@ import { Redis } from "ioredis";
 import type Stripe from "stripe";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { TokenService } from "../../../src/auth/token.service";
+import { SubscriptionsRepository } from "../../../src/billing/subscriptions.repository";
 import { Clock } from "../../../src/common/clock";
 import { PLATFORM_POOL, type PlatformPool } from "../../../src/common/database";
 import { JobSchedulerRegistry } from "../../../src/common/queues/scheduler.registry";
@@ -417,8 +421,15 @@ async function arrangeNewOta(ids: StripeIds, status: Stripe.Subscription.Status 
   return { owner, tenant, row: subscription, job };
 }
 
-/** An active OTA that pays the Stripe subscription of `ids` (`active`), with the row billing sync wrote for it. */
-async function arrangePayingOta(ids: StripeIds, tenant: Partial<TenantRow> = {}) {
+/**
+ * An active OTA that pays the Stripe subscription of `ids` (`active`, unless `subscription` says otherwise), with the
+ * row billing sync wrote for it.
+ */
+async function arrangePayingOta(
+  ids: StripeIds,
+  tenant: Partial<TenantRow> = {},
+  subscription: Partial<SubscriptionRow> = {},
+) {
   const owner = await newOwner();
   const ota = await arrangeOta(
     owner,
@@ -432,6 +443,7 @@ async function arrangePayingOta(ids: StripeIds, tenant: Partial<TenantRow> = {})
       provider_subscription_id: ids.subscriptionId,
       provider_price_id: GROWTH.month,
       checkout_session_id: ids.sessionId,
+      ...subscription,
     },
   );
   return { owner, ...ota };
@@ -480,12 +492,19 @@ describe("checkout.session.completed and customer.subscription.* (worker)", () =
       expect(await deliver(delivery)).toMatchObject({ status: "processed", tenant_id: reverse.tenant.id });
     }
 
-    // The handlers re-fetched: the Checkout Session with its subscription expanded.
+    // The handlers re-fetched: the Checkout Session, and its subscription under the subscription's lock
+    // (FIX-W30-PLATFORM: no longer expanded with the session, which is fetched before the lock).
     expect(stripe.callsOf("checkout.sessions.retrieve").slice(checkoutCalls)).toEqual(
       [forwardIds.sessionId, forwardIds.sessionId, reverseIds.sessionId, reverseIds.sessionId].map((id) =>
-        expect.objectContaining({ id, params: { expand: ["subscription"] } }),
+        expect.objectContaining({ id, params: undefined }),
       ),
     );
+    for (const ids of [forwardIds, reverseIds]) {
+      // Four re-fetches of the subscription: two by its own events and two by the Checkout's.
+      expect(
+        stripe.callsOf("subscriptions.retrieve").filter((call) => call.id === ids.subscriptionId),
+      ).toHaveLength(4);
+    }
     const finalRows = async (ota: typeof forward, ids: StripeIds) => {
       const values = new Map<string, string>([
         [ota.tenant.id, "<tenant>"],
@@ -1056,6 +1075,357 @@ describe("checkout.session.completed and customer.subscription.* (worker)", () =
     });
     expect(await subscriptionsOf(tenant.id)).toEqual([
       expect.objectContaining({ billing_provider: "manual" }),
+    ]);
+  });
+});
+
+// ---- FIX-W30-PLATFORM: overlapping events of one subscription, and the lock order of the manual edit ----------------
+
+/** A gate a test opens once: `opened` resolves when `open()` is called. */
+interface Gate {
+  readonly opened: Promise<void>;
+  open(): void;
+}
+
+function gate(): Gate {
+  let open: () => void = () => undefined;
+  const opened = new Promise<void>((resolveGate) => {
+    open = resolveGate;
+  });
+  return { opened, open };
+}
+
+/**
+ * Holds the next `subscriptions.retrieve`: Stripe answers the state it has when the call is made, and the answer
+ * reaches the handler only once `release` is opened (a slow answer). `answered` opens when Stripe has answered.
+ */
+function holdNextSubscriptionRetrieve(): { readonly answered: Gate; readonly release: Gate } {
+  const answered = gate();
+  const release = gate();
+  const resource = stripe.api().subscriptions;
+  const retrieve = resource.retrieve.bind(resource) as (id: string) => Promise<Stripe.Subscription>;
+  const held = async (id: string): Promise<Stripe.Subscription> => {
+    const answer = await retrieve(id);
+    answered.open();
+    await release.opened;
+    return answer;
+  };
+  vi.spyOn(resource, "retrieve").mockImplementationOnce(held as unknown as typeof resource.retrieve);
+  return { answered, release };
+}
+
+/** Posts `delivery` as Stripe does, without waiting for the worker. */
+async function post(delivery: Delivery): Promise<void> {
+  const res = await t.http
+    .post(PATH)
+    .set("Content-Type", "application/json")
+    .set("Stripe-Signature", delivery.header)
+    .send(delivery.payload);
+  expect(res.status).toBe(200);
+}
+
+/** Waits until the worker is done with `delivery`; answers its inbox row. */
+function doneWith(delivery: Delivery): Promise<Row> {
+  return vi.waitFor(async () => {
+    const row = (await rowsOf("SELECT * FROM platform.stripe_events WHERE id = $1", [delivery.eventId]))[0];
+    expect(["processed", "ignored", "failed"]).toContain(row?.["status"]);
+    return row as Row;
+  }, WAIT);
+}
+
+/**
+ * The worker's `billing.sync_lock_waiting` lines of the event of `delivery`: it waited for the lock of its
+ * subscription. nestjs-pino keeps one root logger per process, so a line of the worker's module graph may land in
+ * either sink.
+ */
+function lockWaitsOf(delivery: Delivery): Array<Record<string, unknown>> {
+  return [...t.logs.lines, ...workerLogs.lines].filter(
+    (line) => line["msg"] === "billing.sync_lock_waiting" && line["eventId"] === delivery.eventId,
+  );
+}
+
+/**
+ * Waits until the event of `delivery`, delivered while another event of its subscription is held, has run beside it
+ * (worker concurrency 2): it waits for the subscription's lock, or, were there no lock, it is done already.
+ */
+async function ranBeside(delivery: Delivery): Promise<void> {
+  await vi.waitFor(async () => {
+    const row = (
+      await rowsOf("SELECT status FROM platform.stripe_events WHERE id = $1", [delivery.eventId])
+    )[0];
+    expect(
+      lockWaitsOf(delivery).length > 0 ||
+        ["processed", "ignored", "failed"].includes(String(row?.["status"])),
+    ).toBe(true);
+  }, WAIT);
+}
+
+/** Waits until a session of this file's database waits for a lock another session holds. */
+async function aSessionWaitsForALock(): Promise<void> {
+  await vi.waitFor(async () => {
+    const waiting = await rowsOf(
+      "SELECT pid FROM pg_stat_activity WHERE datname = current_database() AND cardinality(pg_blocking_pids(pid)) > 0",
+      [],
+    );
+    expect(waiting.length).toBeGreaterThanOrEqual(1);
+  }, WAIT);
+}
+
+/** One `subscription.updated` audit row: its event and the row's status before and after (none when unchanged). */
+interface StatusStep {
+  readonly eventId: unknown;
+  readonly before: unknown;
+  readonly after: unknown;
+}
+
+/** The `subscription.updated` audit rows of the row `subscriptionId`, in the order they were written. */
+async function statusTrail(tenantId: string, subscriptionId: string): Promise<StatusStep[]> {
+  return (await auditOf(tenantId, "subscription.updated"))
+    .filter((row) => row["target_id"] === subscriptionId)
+    .map((row) => {
+      const details = row["details"] as {
+        eventId?: unknown;
+        before?: { status?: unknown };
+        after?: { status?: unknown };
+      };
+      return { eventId: details.eventId, before: details.before?.status, after: details.after?.status };
+    });
+}
+
+/** The answer of the admin's manual edit of `subscriptionId` (adminUpdateManualSubscription) with `body`. */
+async function adminPatch(
+  adminId: string,
+  subscriptionId: string,
+  version: number,
+  body: Record<string, unknown>,
+): Promise<{ readonly status: number; readonly body: unknown }> {
+  const { token } = await tokens.sign({
+    aud: "platform_admin",
+    sub: adminId,
+    sid: FAMILY,
+    ev: true,
+    amr: ["pwd", "otp"],
+  });
+  const res = await t.http
+    .patch(`/v1/admin/subscriptions/${subscriptionId}`)
+    .set({ Authorization: `Bearer ${token}`, ...t.bffHeaders("203.0.113.46") })
+    .set("If-Match", `"${version}"`)
+    .send(body);
+  return { status: res.status, body: res.body as unknown };
+}
+
+const REASON = "FIX-W30-PLATFORM: the pilot moves to another plan.";
+
+/**
+ * Both directions of one Stripe change for two `customer.subscription.updated` events: the row's state before them,
+ * the older state Stripe answers the first re-fetch, Stripe's newest state that the second event is about, and the
+ * tenant's banner the newest state leaves.
+ */
+const DIRECTIONS = [
+  // The renewal failed, then the owner paid.
+  { start: "active", older: "past_due", newest: "active", notice: null },
+  // The owner had paid, then the next renewal failed.
+  { start: "past_due", older: "active", newest: "past_due", notice: "past_due" },
+] as const;
+
+describe("events of one subscription at once, and the manual edit beside billing sync (FIX-W30-PLATFORM)", () => {
+  for (const { start, older, newest, notice } of DIRECTIONS) {
+    it(`[FIX-W30-PLATFORM AC1] two events of one subscription processed at once end in its newest state (${older}, then ${newest}), though the first re-fetch is answered before the change and held until the second event runs`, async () => {
+      const ids = stripeIds();
+      const { tenant, subscription } = await arrangePayingOta(
+        ids,
+        { billing_notice: start === "past_due" ? "past_due" : null },
+        { status: start },
+      );
+      // Stripe's state when the first event re-fetches.
+      stripeNow(ids, tenant.id, { status: older });
+      const hold = holdNextSubscriptionRetrieve();
+      const first = subscriptionEvent(ids.subscriptionId);
+      await post(first);
+      await hold.answered.opened;
+
+      // Stripe's newest state, which the second event is about.
+      stripeNow(ids, tenant.id, { status: newest });
+      const second = subscriptionEvent(ids.subscriptionId);
+      await post(second);
+      await ranBeside(second);
+      hold.release.open();
+
+      expect(await doneWith(first)).toMatchObject({ status: "processed", attempts: 1 });
+      expect(await doneWith(second)).toMatchObject({ status: "processed", attempts: 1 });
+      // The older answer committed first, then the second event re-fetched the newest state and wrote it.
+      expect(await subscriptionsOf(tenant.id)).toEqual([
+        expect.objectContaining({ id: subscription.id, status: newest, version: subscription.version + 2 }),
+      ]);
+      expect(await tenantOf(tenant.id)).toMatchObject({ status: "active", billing_notice: notice });
+      expect(await statusTrail(tenant.id, subscription.id)).toEqual([
+        { eventId: first.eventId, before: start, after: older },
+        { eventId: second.eventId, before: older, after: newest },
+      ]);
+      // The second event had waited for the subscription's lock: it re-fetched once, after the first one's commit.
+      expect(lockWaitsOf(second)).toEqual([
+        expect.objectContaining({ providerSubscriptionId: ids.subscriptionId }),
+      ]);
+      expect(
+        stripe.callsOf("subscriptions.retrieve").filter((call) => call.id === ids.subscriptionId),
+      ).toHaveLength(2);
+    });
+  }
+
+  for (const order of ["the Checkout's", "the subscription's"] as const) {
+    it(`[FIX-W30-PLATFORM AC1] a completed Checkout and its subscription's event processed at once end in the newest state when ${order} re-fetch is held`, async () => {
+      const ids = stripeIds();
+      // A new OTA whose Checkout is paid but whose first payment Stripe still confirms: `incomplete`.
+      const { tenant, row, job } = await arrangeNewOta(ids, "incomplete");
+      const checkout = checkoutEvent(ids.sessionId);
+      const update = subscriptionEvent(ids.subscriptionId);
+      const [held, other] = order === "the Checkout's" ? [checkout, update] : [update, checkout];
+      const hold = holdNextSubscriptionRetrieve();
+      await post(held);
+      await hold.answered.opened;
+
+      // The payment is confirmed: the subscription is `trialing` now.
+      stripe.put(
+        stripeSubscription(ids, tenant.id, {
+          status: "trialing",
+          pendingRowId: row.id,
+          trialEnd: trialEndOf(),
+        }),
+      );
+      await post(other);
+      await ranBeside(other);
+      hold.release.open();
+
+      expect(await doneWith(held)).toMatchObject({ status: "processed", tenant_id: tenant.id });
+      expect(await doneWith(other)).toMatchObject({ status: "processed", tenant_id: tenant.id });
+      expect(await subscriptionsOf(tenant.id)).toEqual([
+        expect.objectContaining({
+          id: row.id,
+          status: "trialing",
+          provider_subscription_id: ids.subscriptionId,
+          checkout_session_id: ids.sessionId,
+        }),
+      ]);
+      // The held event wrote the older answer first (the Stripe ids, the row still `incomplete`), then the other one
+      // re-fetched and wrote the newest state.
+      expect(await statusTrail(tenant.id, row.id)).toEqual([
+        { eventId: held.eventId, before: undefined, after: undefined },
+        { eventId: other.eventId, before: "incomplete", after: "trialing" },
+      ]);
+      // The gate opened with `trialing`: provisioning started once, after the newest state was written.
+      expect(await jobsOf(tenant.id)).toEqual([
+        expect.objectContaining({ id: job.id, status: "running", attempt: 1 }),
+      ]);
+      expect(await messagesOf(job.id)).toEqual([{ name: "tenant.provision", attempt: 1 }]);
+      expect(lockWaitsOf(other)).toHaveLength(1);
+    });
+  }
+
+  it("[FIX-W30-PLATFORM AC2] the manual edit waits for a billing-sync write that holds the tenant, and the write that replaces the manual trial never deadlocks with it", async () => {
+    const ids = stripeIds();
+    const owner = await newOwner();
+    const admin = await insertAccount(pool, {
+      id: testId("acc", next++),
+      is_platform_admin: true,
+      mfa_enabled: true,
+    });
+    const { tenant, subscription: manual } = await arrangeOta(
+      owner,
+      {},
+      { status: "trialing", billing_provider: "manual" },
+    );
+    stripe.put(
+      checkoutSession(ids, tenant.id, { email: owner.email }),
+      stripeSubscription(ids, tenant.id, { status: "active" }),
+    );
+    // Billing sync stops inside its transaction, holding the tenant's row, before it locks the manual trial it
+    // replaces.
+    const syncHolds = gate();
+    const syncGoes = gate();
+    const lockOtherCurrent = SubscriptionsRepository.prototype.lockOtherCurrent;
+    vi.spyOn(SubscriptionsRepository.prototype, "lockOtherCurrent").mockImplementationOnce(async function (
+      this: SubscriptionsRepository,
+      ...args: Parameters<SubscriptionsRepository["lockOtherCurrent"]>
+    ) {
+      syncHolds.open();
+      await syncGoes.opened;
+      return lockOtherCurrent.apply(this, args);
+    });
+    const delivery = checkoutEvent(ids.sessionId);
+    await post(delivery);
+    await syncHolds.opened;
+
+    // The admin moves the trial to another plan meanwhile: the edit waits for the tenant's row, holding nothing.
+    const edit = adminPatch(admin.id, manual.id, manual.version, { planCode: STARTER.code, reason: REASON });
+    await aSessionWaitsForALock();
+    syncGoes.open();
+
+    expect(await doneWith(delivery)).toMatchObject({ status: "processed", attempts: 1 });
+    // Then the edit finds the trial replaced (its version moved) and answers 412; it wrote nothing.
+    const answer = await edit;
+    expect(answer.status, JSON.stringify(answer.body)).toBe(412);
+    const [manualAfter, stripeRow] = await subscriptionsOf(tenant.id);
+    expect(manualAfter).toMatchObject({ id: manual.id, status: "canceled", version: manual.version + 1 });
+    expect(stripeRow).toMatchObject({ status: "active", provider_subscription_id: ids.subscriptionId });
+    expect(await tenantOf(tenant.id)).toMatchObject({ plan_code: GROWTH.code });
+    expect(await auditOf(tenant.id, "subscription.manually_updated")).toEqual([]);
+  });
+
+  it("[FIX-W30-PLATFORM AC2] a billing-sync write waits for a manual edit that holds the tenant and its trial, and runs after it without a deadlock", async () => {
+    const ids = stripeIds();
+    const owner = await newOwner();
+    const admin = await insertAccount(pool, {
+      id: testId("acc", next++),
+      is_platform_admin: true,
+      mfa_enabled: true,
+    });
+    const { tenant, subscription: manual } = await arrangeOta(
+      owner,
+      {},
+      { status: "trialing", billing_provider: "manual" },
+    );
+    stripe.put(
+      checkoutSession(ids, tenant.id, { email: owner.email }),
+      stripeSubscription(ids, tenant.id, { status: "active" }),
+    );
+    // The edit stops once it holds its locks: the tenant's row, then the trial's.
+    const editHolds = gate();
+    const editGoes = gate();
+    const lockForUpdate = SubscriptionsRepository.prototype.lockForUpdate;
+    vi.spyOn(SubscriptionsRepository.prototype, "lockForUpdate").mockImplementationOnce(async function (
+      this: SubscriptionsRepository,
+      ...args: Parameters<SubscriptionsRepository["lockForUpdate"]>
+    ) {
+      const locked = await lockForUpdate.apply(this, args);
+      editHolds.open();
+      await editGoes.opened;
+      return locked;
+    });
+    const edit = adminPatch(admin.id, manual.id, manual.version, { planCode: STARTER.code, reason: REASON });
+    await editHolds.opened;
+
+    // The completed Checkout comes meanwhile: billing sync waits for the tenant's row.
+    const delivery = checkoutEvent(ids.sessionId);
+    await post(delivery);
+    await aSessionWaitsForALock();
+    editGoes.open();
+
+    const answer = await edit;
+    expect(answer.status, JSON.stringify(answer.body)).toBe(200);
+    expect(answer.body).toMatchObject({ planCode: STARTER.code, version: manual.version + 1 });
+    expect(await doneWith(delivery)).toMatchObject({ status: "processed", attempts: 1 });
+    // The edit committed first; billing sync then replaced the edited trial and moved the tenant to the paid plan.
+    const [manualAfter, stripeRow] = await subscriptionsOf(tenant.id);
+    expect(manualAfter).toMatchObject({
+      id: manual.id,
+      plan_code: STARTER.code,
+      status: "canceled",
+      version: manual.version + 2,
+    });
+    expect(stripeRow).toMatchObject({ status: "active", provider_subscription_id: ids.subscriptionId });
+    expect(await tenantOf(tenant.id)).toMatchObject({ plan_code: GROWTH.code });
+    expect(await auditOf(tenant.id, "subscription.manually_updated")).toEqual([
+      expect.objectContaining({ target_id: manual.id }),
     ]);
   });
 });

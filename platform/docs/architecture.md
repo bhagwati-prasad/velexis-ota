@@ -118,6 +118,7 @@ The portal and the platform admin call the API from their own servers on `127.0.
 - One `pg.Pool` with role `velexis_platform_app` (`DATABASE_URL`). Short platform transactions through `platformDb` ([ADR-0005](../../docs/mvp/adr/0005-data-access-kysely-sql-migrations.md)). No access to tenant schemas: the role has no privileges there.
 - Every state change writes its `platform_audit_log` row **in the same transaction**, and publishes `vx:invalidate` and enqueues jobs **after** commit.
 - Mutable aggregates use the `version` column; PATCH operations take `If-Match`.
+- **Lock order of billing** (FIX-W30-PLATFORM, [billing flow §D](flows/subscription-billing.md#d-processing-worker-platform-stripe-events-concurrency-2)): a transaction that locks a tenant's row and its subscription rows locks the **tenant's row first**: billing sync (after the Redis lock of its Stripe subscription, taken before any transaction) and the platform admin's manual subscription edit, so the two never wait for each other in a circle.
 - Secrets are envelope-encrypted with `@velexis/crypto`. The associated data is `"platform.<table>.<column>:<row id>"` ([ADR-0010](../../docs/mvp/adr/0010-secrets-envelope-encryption.md)).
 
 ## 5. Worker: queues and schedules
@@ -215,7 +216,7 @@ The three new types extend the list of [`docs/mvp/architecture.md` §4](../../do
 | `staffdeny:acct:<accountId>` | Platform API | OTA API (staff guard and refresh) | 30 days | Epoch ms cut-off: staff families created before it are revoked. Written on sign out everywhere, password change or reset, MFA reset, account disable (new; refines `staffdeny:<familyId>`). |
 | `apikey:used:<keyId>` | OTA API | Platform worker (`GETDEL`) | 1 day | `{at, ip}` of the last use, flushed every 5 minutes |
 
-Platform-only keys: `vx:idem:*` (idempotency, 24 h), `mfach:<sha256>` (MFA challenge, 5 min), `mfach:<sha256>:attempts` (codes tried against a challenge, 5 min), `mfasetup:<accountId>` (pending TOTP secret, encrypted, 10 min), `mfastep:<accountId>` (last TOTP time step the account used, so each code works once, 90 s), `stripe:oauth:<sha256(state)>` (Connect OAuth state, 10 min), `tlsask:<host>` (positive `ask` answer only, 60 s; negative answers stay in a bounded in-process cache, [PADR-0004](adr/0004-custom-domain-verification.md) item 6), `rl:*` (throttler). All have a TTL, as `noeviction` requires.
+Platform-only keys: `vx:idem:*` (idempotency, 24 h), `vx:stripe:sub:<sub_…>:lock` (the lock of one Stripe subscription's sync, held by the billing event that re-fetches and writes it, 15 s renewed every 5 s while it runs, FIX-W30-PLATFORM, [PADR-0002](adr/0002-stripe-billing-integration.md) item 5), `mfach:<sha256>` (MFA challenge, 5 min), `mfach:<sha256>:attempts` (codes tried against a challenge, 5 min), `mfasetup:<accountId>` (pending TOTP secret, encrypted, 10 min), `mfastep:<accountId>` (last TOTP time step the account used, so each code works once, 90 s), `stripe:oauth:<sha256(state)>` (Connect OAuth state, 10 min), `tlsask:<host>` (positive `ask` answer only, 60 s; negative answers stay in a bounded in-process cache, [PADR-0004](adr/0004-custom-domain-verification.md) item 6), `rl:*` (throttler). All have a TTL, as `noeviction` requires.
 
 ## 7. External services
 
