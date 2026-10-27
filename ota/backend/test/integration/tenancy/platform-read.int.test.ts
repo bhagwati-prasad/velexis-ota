@@ -33,11 +33,6 @@ import { MemorySink } from "../../helpers/log-sink";
 import { OPENAPI_SETUP_TIMEOUT_MS, preloadOpenApiDocument } from "../../helpers/openapi";
 import { unreachableRedisUrl } from "../../helpers/ports";
 
-/**
- * Dummy Redis URL: nothing in the worker graph connects to Redis (the readiness probe connects on its first check). The
- * API graph connects its vx:invalidate subscriber at start-up (OBE-012), so it gets `unreachableRedisUrl()` instead.
- */
-const REDIS_URL = "redis://:dummy@127.0.0.1:6379/0";
 /** SQLSTATE insufficient_privilege. */
 const PERMISSION_DENIED = "42501";
 /** SQLSTATE query_canceled, which `statement_timeout` raises. */
@@ -77,14 +72,18 @@ function tenancyOf(app: INestApplicationContext, sink: MemorySink): Tenancy {
   };
 }
 
-/** The worker graph (`WorkerModule.forRoot`) with `TenancyModule.forWorker()`, as the provisioning module imports it. */
+/**
+ * The worker graph (`WorkerModule.forRoot`) with `TenancyModule.forWorker()`, as the provisioning module imports it.
+ * Its Redis is unreachable, as the API graph's: the graph's BullMQ connection registers the schedules at start-up, and
+ * its consumers would run their fan-outs, which read the tenants on this pool, next to the file's acquire counts.
+ */
 async function startWorkerTenancy(...extraImports: Type[]): Promise<Tenancy> {
   const config = loadWorkerConfig({
     ...testWorkerVariables(),
     APP_ENV: "test",
     DATABASE_URL: db.urlFor("ota"),
     DATABASE_PROVISIONER_URL: db.urlFor("provisioner"),
-    REDIS_URL,
+    REDIS_URL: await unreachableRedisUrl(),
   });
   const sink = new MemorySink();
   @Module({
