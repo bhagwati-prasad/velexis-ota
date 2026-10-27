@@ -460,6 +460,41 @@ jobs:
       - name: Integration tests
         run: pnpm test:int
 
+      - name: PAN-absence proof ran in full (OBE-052)
+        # ota/backend/test/integration/payments/pan-absence.int.test.ts (ota/docs/flows/checkout-airline-card.md §7,
+        # OF-05 AC1) runs in `pnpm test:int` above like every integration file, and writes what it scanned after each
+        # path, never a card value, to its report. A missing report (the file skipped, renamed or filtered out by a
+        # pattern), a path left out, a place it could not read or anything it found fails the build.
+        run: |
+          node - ota/backend/node_modules/.cache/pan-absence/report.json <<'EOF'
+          const { existsSync, readFileSync } = require("node:fs");
+          const file = process.argv[2];
+          const paths = ["success", "decline", "timeout", "timeout-lost", "validation-error", "idempotent-replay", "cancel"];
+          const fail = (message) => {
+            console.log(`::error::${message}`);
+            process.exit(1);
+          };
+          if (!existsSync(file)) {
+            fail(`The PAN-absence test did not run: ${file} is missing.`);
+          }
+          const report = JSON.parse(readFileSync(file, "utf8"));
+          for (const scan of report.scans) {
+            console.log(`${scan.path} (${scan.moment}): ${scan.findings.length} found, ${scan.errors.length} unreadable, ${JSON.stringify(scan.counts)}`);
+            for (const finding of [...scan.findings, ...scan.errors]) {
+              console.log(`  ${JSON.stringify(finding)}`);
+            }
+          }
+          const scanned = new Set(report.scans.filter((scan) => scan.moment === "after").map((scan) => scan.path));
+          const missing = paths.filter((path) => !scanned.has(path));
+          if (missing.length > 0) {
+            fail(`The PAN-absence test left out: ${missing.join(", ")}.`);
+          }
+          const dirty = report.scans.some((scan) => scan.findings.length > 0 || scan.errors.length > 0);
+          if (dirty || report.complete !== true) {
+            fail("The PAN-absence test found card data or could not read a place (the scans above).");
+          }
+          EOF
+
       - name: Build
         run: pnpm build
 

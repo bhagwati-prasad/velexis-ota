@@ -1306,7 +1306,8 @@ Checkout, customer accounts in cookies, Stripe on the Velexis account, the airli
   - A lost answer (`timeout-lost`) ends in `manual_review`, not `failed`.
 - **Verify:** `pnpm --filter @velexis/ota-backend test -- payments && pnpm --filter @velexis/ota-backend test:int -- payments`
 
-### OBE-052 · Prove the card number never reaches a log, table, Redis or queue
+### OBE-052 · Prove the card number never reaches a log, table, Redis or queue ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-backend
 - **Milestone:** M3
 - **Depends on:** OBE-051, OBE-049

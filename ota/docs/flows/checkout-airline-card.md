@@ -99,7 +99,7 @@ sequenceDiagram
 
 ## 7. Tests and controls (M3, verified again in M6)
 
-- **PAN never persisted:** an integration test submits test PAN `4111111111111111` and CVV `123` through success, decline, timeout and validation-error paths, then scans every tenant table, Redis keys, BullMQ job data and the captured log output for the PAN, its last 12 digits and the CVV; none may appear.
+- **PAN never persisted:** an integration test (OBE-052, `ota/backend/test/integration/payments/pan-absence.int.test.ts`) submits test PAN `4111111111111111` and CVV `123` through the success, decline, timeout, lost-answer (`timeout-lost`), validation-error and idempotent-replay paths and cancels the successful booking, then scans every tenant table (ciphertext columns decrypted), Redis keys and values, BullMQ job data and the captured log output of the API and the worker for the PAN, its last 12 digits, the CVV and, since FIX-W29-SECURITY, the holder's name and the expiry date; none may appear. It runs in every CI build, and a missing or incomplete report of it fails the build.
 - **Edge only:** `pk_`, `sk_` and service-key calls get `403 SCOPE_NOT_ALLOWED`.
 - **Kill switch:** with `AIRLINE_CARD_ENABLED=false` the method is absent from `storefront.get` and every call is refused; while the method is suspended for the tenant and environment (or the suspension cannot be read) it is absent too and `checkout.createPayment` refuses it (FIX-W29-OTA).
 - **Limits:** the fourth attempt on one checkout is refused.
