@@ -842,8 +842,8 @@ Common commands: backend `pnpm --filter @velexis/platform-backend test`, `test:i
   - The landing and pricing pages render without JavaScript errors and with one `h1` each.
 - **Verify:** `pnpm --filter @velexis/platform-frontend test`
 
-### PFE-005 · Build sign-up, e-mail verification and the verify-pending page
-- **Status:** in progress (branch claude/intelligent-bardeen-90hhu7; pending: AC3, the PFE-015 end-to-end journey through Mailpit, which PFE-015 writes)
+### PFE-005 · Build sign-up, e-mail verification and the verify-pending page ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-frontend
 - **Milestone:** M1
 - **Depends on:** PFE-003, PBE-013
@@ -1025,6 +1025,7 @@ Common commands: backend `pnpm --filter @velexis/platform-backend test`, `test:i
 - **Verify:** `pnpm --filter @velexis/platform-backend build && pnpm --filter @velexis/platform-frontend build && pnpm --filter @velexis/platform-admin build && pnpm test:e2e -- --project=portal --project=platform-admin specs/smoke.e2e.ts`
 
 ### PFE-015 · Write the portal M1 end-to-end journeys
+- **Status:** in progress (branch claude/intelligent-bardeen-90hhu7; pending: AC1's run of the `e2e` workflow on GitHub, a CI job only the integrator can start)
 - **Component:** platform-frontend
 - **Milestone:** M1
 - **Depends on:** PFE-014, PFE-007, PFE-009, PFE-011, PFE-012, PFE-013, PBE-035

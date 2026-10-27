@@ -6,7 +6,13 @@ import { cn } from "@/lib/utils";
 
 function Table({ className, ...props }: React.ComponentProps<"table">) {
   return (
-    <div data-slot="table-container" className="relative w-full overflow-x-auto">
+    // A table wider than its column scrolls sideways: the container takes the keyboard focus, so the arrow keys
+    // scroll it too (WCAG 2.1.1, axe `scrollable-region-focusable`; found by the PFE-015 journeys).
+    <div
+      data-slot="table-container"
+      tabIndex={0}
+      className="relative w-full overflow-x-auto rounded-md outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
+    >
       <table data-slot="table" className={cn("w-full caption-bottom text-sm", className)} {...props} />
     </div>
   );
