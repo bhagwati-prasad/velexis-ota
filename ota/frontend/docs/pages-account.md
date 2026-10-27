@@ -91,6 +91,14 @@ How the page decides (OFE-015, `booking.html`, `src/pages/booking.js`, `src/comp
 | `429 RATE_LIMITED` | "Too many attempts, try again in N minutes" |
 | `400 VALIDATION_FAILED` | Field errors |
 
+How the page decides (OFE-016, `lookup.html`, `src/pages/lookup.js`):
+
+- **Who.** Everybody: a guest who lost the booking's cookie, a traveller on another device, a customer who booked as a guest. Below the form a visitor is offered sign-in to My bookings and a signed-in customer a link to My bookings (neither without customer accounts).
+- **The request.** The reference loses the spaces a copy from an e-mail may bring and goes out in capitals (the API compares it case-insensitively), the last name trimmed. `bookings.lookup({ bookingReference, lastName })` carries a new idempotency key for every submit (`crypto.randomUUID()`): the API keeps an answer under its key for 24 hours, so a corrected name with the first try's key would replay that `404` (or answer `409 IDEMPOTENCY_KEY_REUSED`); the SDK's own retries of one submit keep its key. A second submit while one runs sends nothing. Success opens `/booking.html?id=bkg_…` (only an id of the contract's pattern); the guest token is in the httpOnly `__Host-vx_bt` cookie and never in the page.
+- **One message for every mismatch.** Every `404` shows "We could not find a booking with these details" with the same hint, focuses it and marks neither field, whatever its body carries (no `fieldErrors`, `details`, message or request id of it is shown), so a wrong reference, a wrong name and both look the same. The typed values stay for a correction. Only the format checks before any request (nothing empty, a reference of 5 to 10 letters and digits, a last name of at most 60 characters) and the API's `400` mark a field, through the error summary of `lib/forms.js`.
+- **Too many attempts.** `429` says the wait of `retryAfterSeconds` ("try again in N minutes", in seconds under a minute) and disables the button until it has passed; a submit by the Enter key or a script does nothing meanwhile. Then the message goes, the button comes back and the live region says "You can try again now". A `429` without a wait says "try again later" and leaves the button on.
+- **Other failures** show the shared states: "not available right now" for `503` and connection failures, "Something went wrong" with the request id and the support address for anything else.
+
 ## 5. Authentication pages (M3)
 
 All forms keep paste and password managers working (`autocomplete="email"`, `current-password`, `new-password`). A `next` parameter is accepted only as a relative path starting with a single `/`.

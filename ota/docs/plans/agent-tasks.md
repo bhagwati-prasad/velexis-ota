@@ -1594,7 +1594,8 @@ Checkout, customer accounts in cookies, Stripe on the Velexis account, the airli
   - Document links are fetched on click, never pre-generated (signed URLs expire in 5 minutes).
 - **Verify:** `pnpm --filter @velexis/ota-frontend test && pnpm --filter @velexis/ota-frontend build`
 
-### OFE-016 · Build the guest lookup page
+### OFE-016 · Build the guest lookup page ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-frontend
 - **Milestone:** M3
 - **Depends on:** OFE-015, OBE-047
