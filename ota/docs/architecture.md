@@ -72,6 +72,7 @@ flowchart TB
   settings --> pricing
   settings --> storefront
   jobs --> bookings
+  jobs --> checkout
   jobs --> shopping
   jobs --> notifications
   provisioning --> tenancy
