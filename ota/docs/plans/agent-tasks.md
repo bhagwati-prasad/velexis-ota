@@ -2174,7 +2174,8 @@ The console API (staff sign-in by portal token, bookings, PNR import, queues, cu
   - `console.bookings.retrieve` is not called until the order view is opened.
 - **Verify:** `pnpm --filter @velexis/ota-admin test`
 
-### OAD-008 · Build the booking actions
+### OAD-008 · Build the booking actions ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-admin
 - **Milestone:** M4
 - **Depends on:** OAD-007, OBE-063, OBE-068

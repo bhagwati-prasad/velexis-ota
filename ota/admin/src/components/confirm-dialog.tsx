@@ -118,8 +118,11 @@ export interface ConfirmDialogProps {
   readonly idempotencyKey: string;
   /** Hidden fields of the action (`bookingId`, `version` for `ifMatch`). */
   readonly fields?: Readonly<Record<string, string>>;
-  /** Other inputs of the action (amount, refund mode), above the reason. */
-  readonly children?: ReactNode;
+  /**
+   * Other inputs of the action (amount, refund mode), above the reason. A function gets the dialog's current state, so
+   * the inputs can show their own field errors (`fieldError(state, name)`); a reopened dialog passes the initial state.
+   */
+  readonly children?: ReactNode | ((state: ActionState) => ReactNode);
   /** Bounds of the reason; 3 to 500 characters by default. */
   readonly reasonMinLength?: number;
   readonly reasonMaxLength?: number;
@@ -217,7 +220,7 @@ interface ConfirmFormProps {
   readonly destructive: boolean;
   readonly pending: boolean;
   readonly state: ActionState;
-  readonly children?: ReactNode;
+  readonly children?: ReactNode | ((state: ActionState) => ReactNode);
   readonly onCancel: () => void;
   readonly onSubmit: (formData: FormData) => void;
 }
@@ -274,7 +277,7 @@ function ConfirmForm({
           {CONFIRM_STRINGS.liveWarning}
         </p>
       ) : null}
-      {children}
+      {typeof children === "function" ? children(state) : children}
       <div className="grid gap-2">
         <Label htmlFor={reasonId}>{CONFIRM_STRINGS.reasonLabel}</Label>
         <p id={hintId} className="text-sm text-muted-foreground">
