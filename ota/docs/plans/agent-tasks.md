@@ -132,7 +132,7 @@ The OTA side of M1 is the provisioning worker (OF-11): the platform's `tenant.pr
   - Every key builder has a TTL; a test lists the builders and fails on a new one without TTL, or on a tenant-data builder whose key does not start with `t:<tenantId>:<env>:`.
   - A `tenant.provision` fixture from PBE-004 validates; one with an extra field is refused as unrecoverable (integration test with a real queue).
   - `@velexis/api-types` tests still pass with the extended `OTA_QUEUES`.
-- **Verify:** `pnpm --filter @velexis/api-types test && pnpm --filter @velexis/ota-backend test && pnpm --filter @velexis/ota-backend test:int -- common`
+- **Verify:** `pnpm --filter @velexis/api-types test && pnpm --filter @velexis/ota-backend test && pnpm --filter @velexis/ota-backend test:int common`
 
 ### OBE-003 · Add the read-only platform repository for tenants ✅
 - **Status:** done (branch claude/intelligent-bardeen-90hhu7)
@@ -150,7 +150,7 @@ The OTA side of M1 is the provisioning worker (OF-11): the platform's `tenant.pr
   - Reads return the mapped row; an unknown id returns `null`.
   - The OTA role cannot write `platform.tenants` (test asserts the PostgreSQL error code 42501).
   - A tenant row with a malformed `schema_name` is refused before any tenant SQL.
-- **Verify:** `pnpm --filter @velexis/ota-backend test:int -- tenancy`
+- **Verify:** `pnpm --filter @velexis/ota-backend test:int tenancy`
 
 ### OBE-004 · Write the provisioning seeds for settings, the default markup rule and template defaults ✅
 - **Status:** done (branch claude/intelligent-bardeen-90hhu7)
@@ -169,7 +169,7 @@ The OTA side of M1 is the provisioning worker (OF-11): the platform's `tenant.pr
   - On a fresh tenant schema the seeds create one settings row and one default markup rule; running them twice changes nothing.
   - An existing settings row edited by the test is not overwritten by a second run.
   - With a template file present in a test fixture directory, one `notification_templates` row is seeded per key.
-- **Verify:** `pnpm --filter @velexis/ota-backend test:int -- provisioning`
+- **Verify:** `pnpm --filter @velexis/ota-backend test:int provisioning`
 
 ### OBE-005 · Implement the tenant.provision consumer in one provisioner transaction ✅
 - **Status:** done (branch claude/intelligent-bardeen-90hhu7)
@@ -190,7 +190,7 @@ The OTA side of M1 is the provisioning worker (OF-11): the platform's `tenant.pr
   - Re-running the message is harmless and answers `tenant.provisioned` again [OF-11 AC2].
   - A crash injected after the migrations but before commit leaves no schema.
   - The API process cannot construct the provisioner pool (config test).
-- **Verify:** `pnpm --filter @velexis/ota-backend build && pnpm --filter @velexis/ota-backend test:int -- provisioning`
+- **Verify:** `pnpm --filter @velexis/ota-backend build && pnpm --filter @velexis/ota-backend test:int provisioning`
 
 ### OBE-006 · Implement tenant.migrate and classify provisioning failures ✅
 - **Status:** done (branch claude/intelligent-bardeen-90hhu7)
@@ -208,7 +208,7 @@ The OTA side of M1 is the provisioning worker (OF-11): the platform's `tenant.pr
   - A forced lock timeout (a second connection holding the advisory lock) ends in `tenant.provision_failed {retryable: true}` after the in-attempt retries.
   - An edited, already applied migration file ends in `retryable: false` and changes nothing.
   - `tenant.migrate` on a schema at N-1 applies the pending file and reports the full ledger.
-- **Verify:** `pnpm --filter @velexis/ota-backend test && pnpm --filter @velexis/ota-backend test:int -- provisioning`
+- **Verify:** `pnpm --filter @velexis/ota-backend test && pnpm --filter @velexis/ota-backend test:int provisioning`
 
 ### OBE-007 · Add the tenants:report-migrations and dev:seed commands and run the report at deploy ✅
 - **Status:** done (branch claude/intelligent-bardeen-90hhu7)
@@ -230,7 +230,7 @@ The OTA side of M1 is the provisioning worker (OF-11): the platform's `tenant.pr
   - `dev:seed` twice leaves one tenant, one schema and two keys; the printed `sk_test` authenticates once OBE-011 exists (asserted later by OBE-026).
   - With `APP_ENV=production` it exits 1 without writing anything.
   - `deploy.test.sh` passes with the cases of step 5; `shellcheck -S style` is clean for `deploy.sh`.
-- **Verify:** `pnpm --filter @velexis/ota-backend test && pnpm --filter @velexis/ota-backend test:int -- dev && bash deploy/scripts/test/deploy.test.sh && shellcheck -S style deploy/scripts/deploy.sh`
+- **Verify:** `pnpm --filter @velexis/ota-backend test && pnpm --filter @velexis/ota-backend test:int dev && bash deploy/scripts/test/deploy.test.sh && shellcheck -S style deploy/scripts/deploy.sh`
 
 ## M2 — Search & price
 
@@ -253,7 +253,7 @@ The OTA backend gets its contract extensions, request pipeline, tenancy, Amadeus
   - Every test of §3 passes; inserting `provider = 'airline'` with `card_exp_month` fails with `payments_airline_card_ck`.
   - A tenant provisioned by OBE-005 after this task has `0002` in its ledger; `velexis_ota_app` can write `storefront_assets` and `storefront_pages` without any `GRANT` in the file (default privileges).
   - `git diff --exit-code packages/db/src/generated` is clean after `pnpm db:codegen`.
-- **Verify:** `pnpm db:codegen && pnpm --filter @velexis/ota-backend test -- contract && pnpm --filter @velexis/ota-backend test:int -- migrations`
+- **Verify:** `pnpm db:codegen && pnpm --filter @velexis/ota-backend test -- contract && pnpm --filter @velexis/ota-backend test:int migrations`
 
 ### OBE-009 · Spec-first: edge and cookie mode, environment header, vendor extensions and x-milestone ✅
 - **Status:** done (branch claude/intelligent-bardeen-90hhu7)
@@ -314,7 +314,7 @@ The OTA backend gets its contract extensions, request pipeline, tenancy, Amadeus
   - A wrong edge secret answers 401 without any database query (spy on the repository).
   - A valid `sk_test` key is accepted; the same key revoked, expired or with a one-character change is refused with 401; a `pk_` key from a non-listed origin is refused.
   - Edge header plus `X-Api-Key` answers 400.
-- **Verify:** `pnpm --filter @velexis/ota-backend test && pnpm --filter @velexis/ota-backend test:int -- tenancy`
+- **Verify:** `pnpm --filter @velexis/ota-backend test && pnpm --filter @velexis/ota-backend test:int tenancy`
 
 ### OBE-012 · Resolve the tenant with Redis caches and the vx:invalidate subscriber ✅
 - **Status:** done (branch claude/intelligent-bardeen-90hhu7)
@@ -334,7 +334,7 @@ The OTA backend gets its contract extensions, request pipeline, tenancy, Amadeus
   - Edge requests resolve the tenant from a verified host and the tenant's storefront environment [OF-01 AC1].
   - A suspended tenant answers `403 TENANT_SUSPENDED` within one second of the invalidation and at most 60 s without it [OF-01 AC3].
   - Every invalidation type deletes exactly its keys (table-driven test); unknown hosts are negatively cached for 10 s.
-- **Verify:** `pnpm --filter @velexis/ota-backend test && pnpm --filter @velexis/ota-backend test:int -- tenancy`
+- **Verify:** `pnpm --filter @velexis/ota-backend test && pnpm --filter @velexis/ota-backend test:int tenancy`
 
 ### OBE-013 · Add the scope guard, CSRF guard, rate limits and key-usage counters ✅
 - **Status:** done (branch claude/intelligent-bardeen-90hhu7)
@@ -353,7 +353,7 @@ The OTA backend gets its contract extensions, request pipeline, tenancy, Amadeus
   - Edge POST without the header, with a different header, or with a foreign `Origin` answers 403 `CSRF_TOKEN_INVALID`; GET needs no header [OF-03 AC2 groundwork].
   - The 31st search in a minute from one IP answers 429 with `Retry-After`.
   - Ten requests with one key within a minute write `apikey:used:<keyId>` once.
-- **Verify:** `pnpm --filter @velexis/ota-backend test && pnpm --filter @velexis/ota-backend test:int -- common`
+- **Verify:** `pnpm --filter @velexis/ota-backend test && pnpm --filter @velexis/ota-backend test:int common`
 
 ### OBE-014 · Add the idempotency interceptor ✅
 - **Status:** done (branch claude/intelligent-bardeen-90hhu7)
@@ -373,7 +373,7 @@ The OTA backend gets its contract extensions, request pipeline, tenancy, Amadeus
   - Two requests with the same key and body produce one handler execution and identical responses; a different body answers 409 `IDEMPOTENCY_KEY_REUSED`.
   - A transient 503 lets the same key be retried; a stored 422 is replayed.
   - A replay of a token-carrying response decrypts `response_ciphertext`; the plain body column holds no token.
-- **Verify:** `pnpm --filter @velexis/ota-backend test && pnpm --filter @velexis/ota-backend test:int -- common`
+- **Verify:** `pnpm --filter @velexis/ota-backend test && pnpm --filter @velexis/ota-backend test:int common`
 
 ### OBE-015 · Implement the reference endpoints ✅
 - **Status:** done (branch claude/intelligent-bardeen-90hhu7)
@@ -391,7 +391,7 @@ The OTA backend gets its contract extensions, request pipeline, tenancy, Amadeus
   - `searchLocations?keyword=par` returns `PAR` before airports named "Parma"; unknown IATA codes answer 404.
   - Every response validates against the document (`expectResponseToMatch`) in edge and key mode.
   - No tenant table is touched (query log assertion).
-- **Verify:** `pnpm --filter @velexis/ota-backend test && pnpm --filter @velexis/ota-backend test:int -- reference`
+- **Verify:** `pnpm --filter @velexis/ota-backend test && pnpm --filter @velexis/ota-backend test:int reference`
 
 ### OBE-016 · Implement storefront.get with the CSRF cookie and the response cache ✅
 - **Status:** done (branch claude/intelligent-bardeen-90hhu7)
@@ -411,7 +411,7 @@ The OTA backend gets its contract extensions, request pipeline, tenancy, Amadeus
   - The response validates against `StorefrontConfig` and contains no internal column (`booking_queue_number`, `ops_alert_email`).
   - A second call within 5 minutes reads no settings row (cache hit asserted).
   - A `pk_` call followed by an edge call for the same tenant and locale (one cache fill) returns absolute asset URLs to the key and relative `/api/v1/assets/…` paths to the edge, and the reverse order gives the same answers.
-- **Verify:** `pnpm --filter @velexis/ota-backend test && pnpm --filter @velexis/ota-backend test:int -- storefront`
+- **Verify:** `pnpm --filter @velexis/ota-backend test && pnpm --filter @velexis/ota-backend test:int storefront`
 
 ### OBE-017 · Build the Amadeus connection resolver and token provider ✅
 - **Status:** done (branch claude/intelligent-bardeen-90hhu7)
@@ -429,7 +429,7 @@ The OTA backend gets its contract extensions, request pipeline, tenancy, Amadeus
   - 50 concurrent calls cause one token request against the stub (integration test).
   - A connection without an active row, or with a `badcred` flag, answers 424; the token in Redis is ciphertext.
   - `pnpm --filter @velexis/ota-backend amadeus:types` is deterministic (second run, no diff).
-- **Verify:** `pnpm --filter @velexis/ota-backend amadeus:types && git diff --exit-code ota/backend/src/amadeus/generated && pnpm --filter @velexis/ota-backend test:int -- amadeus`
+- **Verify:** `pnpm --filter @velexis/ota-backend amadeus:types && git diff --exit-code ota/backend/src/amadeus/generated && pnpm --filter @velexis/ota-backend test:int amadeus`
 
 ### OBE-018 · Add rate limits, timeouts, retries, error mapping and supplier_requests to the Amadeus client ✅
 - **Status:** done (branch claude/intelligent-bardeen-90hhu7)
@@ -449,7 +449,7 @@ The OTA backend gets its contract extensions, request pipeline, tenancy, Amadeus
   - Stub scenario `timeout` on a read gives one retry then `504 SUPPLIER_TIMEOUT`; on `createFlightOrders` it gives no retry.
   - A request carrying a passport number is stored masked in `supplier_requests`; the log line has no body.
   - An empty tenant bucket answers 429 without calling the stub (`requests()` count unchanged).
-- **Verify:** `pnpm --filter @velexis/ota-backend test && pnpm --filter @velexis/ota-backend test:int -- amadeus`
+- **Verify:** `pnpm --filter @velexis/ota-backend test && pnpm --filter @velexis/ota-backend test:int amadeus`
 
 ### OBE-019 · Stub the shopping operations: price, upsell and availability ✅
 - **Status:** done (branch claude/intelligent-bardeen-90hhu7)
@@ -486,7 +486,7 @@ The OTA backend gets its contract extensions, request pipeline, tenancy, Amadeus
   - A table of at least 25 cases (stacking, caps, rounding, negative markup, foreign fixed currency, per-segment) passes, and `selling = net + Σ lines` holds in every case.
   - The engine never uses JavaScript numbers for money (lint rule or test grepping for `Number(` and `parseFloat` in `src/pricing/`).
   - Tenant B's rules never apply to tenant A.
-- **Verify:** `pnpm --filter @velexis/ota-backend test -- pricing && pnpm --filter @velexis/ota-backend test:int -- pricing`
+- **Verify:** `pnpm --filter @velexis/ota-backend test -- pricing && pnpm --filter @velexis/ota-backend test:int pricing`
 
 ### OBE-021 · Implement flights.search, getSearch and listResults ✅
 - **Status:** done (branch claude/intelligent-bardeen-90hhu7)
@@ -506,7 +506,7 @@ The OTA backend gets its contract extensions, request pipeline, tenancy, Amadeus
   - Search, filter and sort work against the stub with selling prices only; a JSON walk finds no `net*` field in customer responses [OF-02 AC1].
   - A search past `expires_at` answers 410 `SEARCH_EXPIRED` [OF-02 AC2]; destination `ZZZ` answers 201 with zero offers.
   - Two identical concurrent searches make one stub call.
-- **Verify:** `pnpm --filter @velexis/ota-backend test -- shopping && pnpm --filter @velexis/ota-backend test:int -- shopping`
+- **Verify:** `pnpm --filter @velexis/ota-backend test -- shopping && pnpm --filter @velexis/ota-backend test:int shopping`
 
 ### OBE-022 · Implement flights.getOffer and flights.upsell ✅
 - **Status:** done (branch claude/intelligent-bardeen-90hhu7)
@@ -523,7 +523,7 @@ The OTA backend gets its contract extensions, request pipeline, tenancy, Amadeus
 - **Acceptance:**
   - Upsell returns the brand alternatives as new `off_` ids with selling prices; `sold-out` answers 409 `SOLD_OUT`.
   - Tenant B gets 404 for tenant A's `off_` id.
-- **Verify:** `pnpm --filter @velexis/ota-backend test:int -- shopping`
+- **Verify:** `pnpm --filter @velexis/ota-backend test:int shopping`
 
 ### OBE-023 · Implement flights.price, getPricedOffer, getAncillaries and getFareRules ✅
 - **Status:** done (branch claude/intelligent-bardeen-90hhu7)
@@ -540,7 +540,7 @@ The OTA backend gets its contract extensions, request pipeline, tenancy, Amadeus
 - **Acceptance:**
   - Stub `price-changed` returns 200 with `priceChanged: true` and both totals; the stored row satisfies `selling = net + markup + fees`.
   - An expired priced offer answers 410 `OFFER_EXPIRED`; customer responses carry no net amount.
-- **Verify:** `pnpm --filter @velexis/ota-backend test -- shopping && pnpm --filter @velexis/ota-backend test:int -- shopping`
+- **Verify:** `pnpm --filter @velexis/ota-backend test -- shopping && pnpm --filter @velexis/ota-backend test:int shopping`
 
 ### OBE-024 · Add the scheduler framework and the offers.purge job ✅
 - **Status:** done (branch claude/intelligent-bardeen-90hhu7)
@@ -558,7 +558,7 @@ The OTA backend gets its contract extensions, request pipeline, tenancy, Amadeus
   - Two overlapping scheduler runs enqueue one job per tenant (deterministic ids).
   - The purge deletes an expired search and keeps one whose priced offer a checkout references (FakeClock).
   - `provisioning` and `failed` tenants are skipped.
-- **Verify:** `pnpm --filter @velexis/ota-backend test -- jobs && pnpm --filter @velexis/ota-backend test:int -- jobs`
+- **Verify:** `pnpm --filter @velexis/ota-backend test -- jobs && pnpm --filter @velexis/ota-backend test:int jobs`
 
 ### OBE-025 · Report queue ages in worker readiness and add amadeus:ping
 - **Component:** ota-backend
@@ -593,7 +593,7 @@ The OTA backend gets its contract extensions, request pipeline, tenancy, Amadeus
   - A token or key of tenant A is never accepted at tenant B [OF-01 AC2].
   - Search, results, offer, upsell and price work in both modes with selling prices only [OF-02 AC1].
   - The pool-of-one run passes.
-- **Verify:** `pnpm --filter @velexis/ota-backend test:int -- m2`
+- **Verify:** `pnpm --filter @velexis/ota-backend test:int m2`
 
 ### OBE-027 · Confirm the Amadeus error table and the booking-queue convention against the test environment
 - **Component:** ota-backend
@@ -911,7 +911,7 @@ Checkout, customer accounts in cookies, Stripe on the Velexis account, the airli
   - An outbox row inserted in a rolled-back transaction is never sent; a committed one arrives in Mailpit (`waitForMessage`).
   - After sending, `secret_payload_ciphertext` is NULL; with SMTP down the row stays `pending` and is retried.
   - A tenant template using a variable outside the allow-list fails to render with a clear error; the code default is used when the tenant row is inactive.
-- **Verify:** `pnpm --filter @velexis/ota-backend test -- notifications && pnpm --filter @velexis/ota-backend test:int -- notifications`
+- **Verify:** `pnpm --filter @velexis/ota-backend test -- notifications && pnpm --filter @velexis/ota-backend test:int notifications`
 
 ### OBE-031 · Add token signing, customer sessions, the cookie writer and the customer guard ✅
 - **Status:** done (branch claude/intelligent-bardeen-90hhu7)
@@ -930,7 +930,7 @@ Checkout, customer accounts in cookies, Stripe on the Velexis account, the airli
   - A token of tenant A presented at tenant B answers 401 [OF-01 AC2].
   - Reusing a rotated refresh token revokes every session of the family (integration test).
   - Cookies carry `__Host-`, `Secure`, `HttpOnly`, `SameSite=Lax`, `Path=/` and no `Domain`; key callers never receive `Set-Cookie`.
-- **Verify:** `pnpm --filter @velexis/ota-backend test -- identity && pnpm --filter @velexis/ota-backend test:int -- identity`
+- **Verify:** `pnpm --filter @velexis/ota-backend test -- identity && pnpm --filter @velexis/ota-backend test:int identity`
 
 ### OBE-032 · Implement customer sign-up, e-mail verification and resend ✅
 - **Status:** done (branch claude/intelligent-bardeen-90hhu7)
@@ -949,7 +949,7 @@ Checkout, customer accounts in cookies, Stripe on the Velexis account, the airli
   - Sign-up then the Mailpit link verifies the address; the token is single use and expires.
   - The same e-mail at two tenants creates two customers; a duplicate at one tenant answers 409.
   - Edge sign-up with verification off returns `session: null` and sets the cookies; bearer sign-up returns tokens.
-- **Verify:** `pnpm --filter @velexis/ota-backend test:int -- identity`
+- **Verify:** `pnpm --filter @velexis/ota-backend test:int identity`
 
 ### OBE-033 · Implement sign-in with lockout, refresh rotation, sign-out and getSession ✅
 - **Status:** done (branch claude/intelligent-bardeen-90hhu7)
@@ -968,7 +968,7 @@ Checkout, customer accounts in cookies, Stripe on the Velexis account, the airli
   - The fifth wrong password locks the identity; the sixth attempt answers 423 even with the right password.
   - Edge sign-in, refresh and change of session never put a token in the body; bearer mode is unchanged (both modes tested).
   - Refresh with an old rotated token revokes the family and clears both cookies.
-- **Verify:** `pnpm --filter @velexis/ota-backend test -- identity && pnpm --filter @velexis/ota-backend test:int -- identity`
+- **Verify:** `pnpm --filter @velexis/ota-backend test -- identity && pnpm --filter @velexis/ota-backend test:int identity`
 
 ### OBE-034 · Implement password reset and change ✅
 - **Status:** done (branch claude/intelligent-bardeen-90hhu7)
@@ -987,7 +987,7 @@ Checkout, customer accounts in cookies, Stripe on the Velexis account, the airli
   - A reset link works once; after use every older session is revoked.
   - Unknown and known e-mails get byte-identical responses (apart from `requestId`).
   - Change password with a wrong current password answers 401 and changes nothing.
-- **Verify:** `pnpm --filter @velexis/ota-backend test:int -- identity`
+- **Verify:** `pnpm --filter @velexis/ota-backend test:int identity`
 
 ### OBE-035 · Implement account get, update and delete ✅
 - **Status:** done (branch claude/intelligent-bardeen-90hhu7)
@@ -1005,7 +1005,7 @@ Checkout, customer accounts in cookies, Stripe on the Velexis account, the airli
   - A stale `If-Match` answers 412; tenant B cannot read tenant A's customer.
   - After deletion the session cookie no longer works and sign-in answers 401.
   - `account.preferences.get` answers 501 `NOT_IMPLEMENTED`.
-- **Verify:** `pnpm --filter @velexis/ota-backend test:int -- account`
+- **Verify:** `pnpm --filter @velexis/ota-backend test:int account`
 
 ### OBE-036 · Implement checkout create, get, travellers, contacts and remarks ✅
 - **Status:** done (branch claude/intelligent-bardeen-90hhu7)
@@ -1024,7 +1024,7 @@ Checkout, customer accounts in cookies, Stripe on the Velexis account, the airli
   - A full checkout can be filled step by step in edge and key mode; responses validate against the document.
   - The database holds no plain document number (query asserts the ciphertext column and the absence of the number in every text column).
   - Tenant B gets 404 for tenant A's `chk_` id; an expired checkout answers 410.
-- **Verify:** `pnpm --filter @velexis/ota-backend test -- checkout && pnpm --filter @velexis/ota-backend test:int -- checkout`
+- **Verify:** `pnpm --filter @velexis/ota-backend test -- checkout && pnpm --filter @velexis/ota-backend test:int checkout`
 
 ### OBE-037 · Implement checkout.setAncillaries with re-pricing and service fees ✅
 - **Status:** done (branch claude/intelligent-bardeen-90hhu7)
@@ -1041,7 +1041,7 @@ Checkout, customer accounts in cookies, Stripe on the Velexis account, the airli
 - **Acceptance:**
   - Adding a bag re-prices into a child priced offer and the checkout totals satisfy `total = offer + ancillaries + fees`.
   - A mismatching `expectedTotal` answers 409 and changes nothing.
-- **Verify:** `pnpm --filter @velexis/ota-backend test:int -- checkout`
+- **Verify:** `pnpm --filter @velexis/ota-backend test:int checkout`
 
 ### OBE-038 · Add the Stripe gateway and the checkout payment endpoints in Velexis mode ✅
 - **Status:** done (branch claude/intelligent-bardeen-90hhu7)
@@ -1061,7 +1061,7 @@ Checkout, customer accounts in cookies, Stripe on the Velexis account, the airli
   - With Stripe mocked at the HTTP layer, the PaymentIntent carries manual capture, the four metadata keys and the idempotency key; the `payments` row exists before the Stripe call (call-order assertion).
   - Stripe unreachable answers `502 PAYMENT_PROVIDER_ERROR` and charges nothing; the same idempotency key can be retried.
   - `storefront.get` shows `accountMode: "velexis"` and the merchant name; no secret key appears in any response.
-- **Verify:** `pnpm --filter @velexis/ota-backend test -- payments && pnpm --filter @velexis/ota-backend test:int -- payments`
+- **Verify:** `pnpm --filter @velexis/ota-backend test -- payments && pnpm --filter @velexis/ota-backend test:int payments`
 
 ### OBE-039 · Receive Stripe webhooks and process them with re-fetch ✅
 - **Status:** done (branch claude/intelligent-bardeen-90hhu7)
@@ -1080,7 +1080,7 @@ Checkout, customer accounts in cookies, Stripe on the Velexis account, the airli
   - A payload changed after signing answers 400; an event with an unknown tenant answers 200 and writes nothing.
   - A signed `livemode: true` event on `/velexis/test` answers 200, writes nothing and logs a security event.
   - The processor applies Stripe's re-fetched state even when the event body is stale (fixture with an old status).
-- **Verify:** `pnpm --filter @velexis/ota-backend test -- payments && pnpm --filter @velexis/ota-backend test -- contract && pnpm --filter @velexis/ota-backend test:int -- payments`
+- **Verify:** `pnpm --filter @velexis/ota-backend test -- payments && pnpm --filter @velexis/ota-backend test -- contract && pnpm --filter @velexis/ota-backend test:int payments`
 
 ### OBE-040 · Add the payments queue: voids, capture retries, refunds and the authorisation watch ✅
 - **Status:** done (branch claude/intelligent-bardeen-90hhu7)
@@ -1098,7 +1098,7 @@ Checkout, customer accounts in cookies, Stripe on the Velexis account, the airli
   - A void job for an already cancelled payment makes no Stripe call.
   - Two `refund.submit` jobs for one refund row make one Stripe refund call (same idempotency key).
   - The watch alerts once per payment (FakeClock).
-- **Verify:** `pnpm --filter @velexis/ota-backend test -- payments && pnpm --filter @velexis/ota-backend test:int -- payments`
+- **Verify:** `pnpm --filter @velexis/ota-backend test -- payments && pnpm --filter @velexis/ota-backend test:int payments`
 
 ### OBE-041 · Stub the order operations with in-memory orders and scenarios ✅
 - **Status:** done (branch claude/intelligent-bardeen-90hhu7)
@@ -1136,7 +1136,7 @@ Checkout, customer accounts in cookies, Stripe on the Velexis account, the airli
   - Authorise, create the order, capture and issue succeed for each ticketing policy [OF-04 AC1].
   - An Amadeus rejection voids the authorisation and keeps the checkout open [OF-04 AC2].
   - Two calls with the same key create one order; another key answers `409 CHECKOUT_ALREADY_COMPLETED`; no transaction is open during the Amadeus call (spy on the pool).
-- **Verify:** `pnpm --filter @velexis/ota-backend test -- bookings && pnpm --filter @velexis/ota-backend test:int -- bookings`
+- **Verify:** `pnpm --filter @velexis/ota-backend test -- bookings && pnpm --filter @velexis/ota-backend test:int bookings`
 
 ### OBE-043 · Reconcile timed-out orders and replay the 504 ✅
 - **Status:** done (branch claude/intelligent-bardeen-90hhu7)
@@ -1155,7 +1155,7 @@ Checkout, customer accounts in cookies, Stripe on the Velexis account, the airli
   - Stub `timeout`: the replay answers 504 until the reconciler finds the order, then 201 with the booking; the booking is reconciled within 15 minutes (FakeClock) [OF-04 AC3].
   - Stub `timeout-lost`: after 15 minutes the authorisation is voided, the booking is `failed` and the traveller e-mail is queued.
   - A PNR with the right name but no `VELEXIS` remark is never accepted.
-- **Verify:** `pnpm --filter @velexis/ota-backend test -- bookings && pnpm --filter @velexis/ota-backend test:int -- bookings`
+- **Verify:** `pnpm --filter @velexis/ota-backend test -- bookings && pnpm --filter @velexis/ota-backend test:int bookings`
 
 ### OBE-044 · Retry ticketing until the deadline with resync ✅
 - **Status:** done (branch claude/intelligent-bardeen-90hhu7)
@@ -1172,7 +1172,7 @@ Checkout, customer accounts in cookies, Stripe on the Velexis account, the airli
 - **Acceptance:**
   - Stub `ticketing-failed`: attempts follow the schedule and stop at deadline − 2 h; alerts are written once [OF-06 AC1].
   - A timed-out issue followed by a GET that shows tickets makes no second issue call [OF-06 AC2].
-- **Verify:** `pnpm --filter @velexis/ota-backend test -- bookings && pnpm --filter @velexis/ota-backend test:int -- bookings`
+- **Verify:** `pnpm --filter @velexis/ota-backend test -- bookings && pnpm --filter @velexis/ota-backend test:int bookings`
 
 ### OBE-045 · Sync bookings with Amadeus on a schedule ✅
 - **Status:** done (branch claude/intelligent-bardeen-90hhu7)
@@ -1190,7 +1190,7 @@ Checkout, customer accounts in cookies, Stripe on the Velexis account, the airli
   - A segment time change in the stub produces one `booking.schedule_changed` event and an updated segment.
   - An order cancelled in the stub becomes `cancelled` with `cancelled_by = airline`.
   - A concurrent change of the booking (version bump) makes the sync retry instead of overwriting.
-- **Verify:** `pnpm --filter @velexis/ota-backend test -- bookings && pnpm --filter @velexis/ota-backend test:int -- bookings`
+- **Verify:** `pnpm --filter @velexis/ota-backend test -- bookings && pnpm --filter @velexis/ota-backend test:int bookings`
 
 ### OBE-046 · Implement customer bookings: list, get, ticketing status, events and fare rules ✅
 - **Status:** done (branch claude/intelligent-bardeen-90hhu7)
@@ -1209,7 +1209,7 @@ Checkout, customer accounts in cookies, Stripe on the Velexis account, the airli
   - The three lists return the bookings that db README §10 defines for each timeframe [OF-07 AC1].
   - Another customer's booking, or a test booking seen from a live storefront, answers 404.
   - Staff-only events (notes) never appear in `bookings.listEvents`.
-- **Verify:** `pnpm --filter @velexis/ota-backend test -- bookings && pnpm --filter @velexis/ota-backend test:int -- bookings`
+- **Verify:** `pnpm --filter @velexis/ota-backend test -- bookings && pnpm --filter @velexis/ota-backend test:int bookings`
 
 ### OBE-047 · Implement guest booking tokens and bookings.lookup ✅
 - **Status:** done (branch claude/intelligent-bardeen-90hhu7)
@@ -1228,7 +1228,7 @@ Checkout, customer accounts in cookies, Stripe on the Velexis account, the airli
   - Wrong reference and wrong name give identical 404 bodies apart from `requestId`; the sixth failure answers 429 [OF-07 AC2].
   - A sixth guest booking drops the oldest cookie entry; the cookie is `HttpOnly`.
   - A guest token of booking A cannot open booking B.
-- **Verify:** `pnpm --filter @velexis/ota-backend test -- bookings && pnpm --filter @velexis/ota-backend test:int -- bookings`
+- **Verify:** `pnpm --filter @velexis/ota-backend test -- bookings && pnpm --filter @velexis/ota-backend test:int bookings`
 
 ### OBE-048 · Implement bookings.update for contacts and remarks ✅
 - **Status:** done (branch claude/intelligent-bardeen-90hhu7)
@@ -1246,7 +1246,7 @@ Checkout, customer accounts in cookies, Stripe on the Velexis account, the airli
 - **Acceptance:**
   - Contacts change at Amadeus (stub) and in the booking, and both addresses get an e-mail [OF-08 AC1].
   - Stub `version-conflict` answers 409 and changes nothing locally.
-- **Verify:** `pnpm --filter @velexis/ota-backend test:int -- bookings`
+- **Verify:** `pnpm --filter @velexis/ota-backend test:int bookings`
 
 ### OBE-049 · Implement cancellation quotes and cancellation with the money step ✅
 - **Status:** done (branch claude/intelligent-bardeen-90hhu7)
@@ -1265,7 +1265,7 @@ Checkout, customer accounts in cookies, Stripe on the Velexis account, the airli
   - Release and void cancel the order and void or refund the payment exactly once, even with two calls on the same key and a retried refund job [OF-08 AC2].
   - Mode unit tests cover unticketed, ticketed today, ticketed yesterday and flown fixtures.
   - Cancelling an airline-card booking makes no Stripe call and writes the `payment_events` row.
-- **Verify:** `pnpm --filter @velexis/ota-backend test -- bookings && pnpm --filter @velexis/ota-backend test:int -- bookings`
+- **Verify:** `pnpm --filter @velexis/ota-backend test -- bookings && pnpm --filter @velexis/ota-backend test:int bookings`
 
 ### OBE-050 · Add the airline-card gateway, SensitiveCard and net pricing ✅
 - **Status:** done (branch claude/intelligent-bardeen-90hhu7)
@@ -1285,7 +1285,7 @@ Checkout, customer accounts in cookies, Stripe on the Velexis account, the airli
   - With the switch off, the method is absent from `storefront.get` and `createPayment` answers 403 [OF-05 AC3]; with it on, a `pk_` call followed by an edge call (one cache fill) shows `airline_card` to the edge only.
   - A key caller gets `403 SCOPE_NOT_ALLOWED` [OF-05 AC2 groundwork].
   - `JSON.stringify`, template strings and `util.inspect` of a `SensitiveCard` never show the number; the redaction test covers every new path.
-- **Verify:** `pnpm --filter @velexis/logger test && pnpm --filter @velexis/ota-backend test -- payments && pnpm --filter @velexis/ota-backend test:int -- payments`
+- **Verify:** `pnpm --filter @velexis/logger test && pnpm --filter @velexis/ota-backend test -- payments && pnpm --filter @velexis/ota-backend test:int payments`
 
 ### OBE-051 · Implement checkout.completeWithAirlineCard ✅
 - **Status:** done (branch claude/intelligent-bardeen-90hhu7)
@@ -1305,7 +1305,7 @@ Checkout, customer accounts in cookies, Stripe on the Velexis account, the airli
   - Success against the stub returns 201 with a ticketed booking and a captured payment carrying last 4 only.
   - `pk_`, `sk_` and (later) service-key callers get `403 SCOPE_NOT_ALLOWED` [OF-05 AC2]; the fourth attempt on a checkout is refused.
   - A lost answer (`timeout-lost`) ends in `manual_review`, not `failed`.
-- **Verify:** `pnpm --filter @velexis/ota-backend test -- payments && pnpm --filter @velexis/ota-backend test:int -- payments`
+- **Verify:** `pnpm --filter @velexis/ota-backend test -- payments && pnpm --filter @velexis/ota-backend test:int payments`
 
 ### OBE-052 · Prove the card number never reaches a log, table, Redis or queue ✅
 - **Status:** done (branch claude/intelligent-bardeen-90hhu7)
@@ -1322,7 +1322,7 @@ Checkout, customer accounts in cookies, Stripe on the Velexis account, the airli
 - **Acceptance:**
   - None of the values appears anywhere after any path [OF-05 AC1].
   - Deliberately logging the request body in a scratch branch makes the test fail (documented in the test file's header as a manual check).
-- **Verify:** `pnpm --filter @velexis/ota-backend test:int -- pan-absence`
+- **Verify:** `pnpm --filter @velexis/ota-backend test:int pan-absence`
 
 ### OBE-053 · Render itinerary and e-ticket PDFs in the documents queue ✅
 - **Status:** done (branch claude/intelligent-bardeen-90hhu7)
@@ -1340,7 +1340,7 @@ Checkout, customer accounts in cookies, Stripe on the Velexis account, the airli
   - Rendering the same booking version twice produces the same hash and one row.
   - A ticketed booking gets one receipt per ticket and the earlier itinerary becomes `superseded`.
   - No document number appears in full in the PDF text (only the masked form).
-- **Verify:** `pnpm --filter @velexis/ota-backend test -- documents && pnpm --filter @velexis/ota-backend test:int -- documents`
+- **Verify:** `pnpm --filter @velexis/ota-backend test -- documents && pnpm --filter @velexis/ota-backend test:int documents`
 
 ### OBE-054 · Implement document listing, signed download URLs and the file endpoint ✅
 - **Status:** done (branch claude/intelligent-bardeen-90hhu7)
@@ -1358,7 +1358,7 @@ Checkout, customer accounts in cookies, Stripe on the Velexis account, the airli
 - **Acceptance:**
   - Expired or tampered signatures answer 403; another tenant's key answers 404.
   - The edge receives a same-origin path, a key caller an absolute URL on `api.ota.example.com`.
-- **Verify:** `pnpm --filter @velexis/ota-backend test -- documents && pnpm --filter @velexis/ota-backend test -- contract && pnpm --filter @velexis/ota-backend test:int -- documents`
+- **Verify:** `pnpm --filter @velexis/ota-backend test -- documents && pnpm --filter @velexis/ota-backend test -- contract && pnpm --filter @velexis/ota-backend test:int documents`
 
 ### OBE-055 · Write the booking and staff e-mail templates with attachments ✅
 - **Status:** done (branch claude/intelligent-bardeen-90hhu7)
@@ -1377,7 +1377,7 @@ Checkout, customer accounts in cookies, Stripe on the Velexis account, the airli
   - Every default compiles and renders with its sample data; a variable outside the allow-list fails the test.
   - A booking flow produces the confirmation with the itinerary attached and, after ticketing, the e-ticket e-mail with receipts (Mailpit).
   - Staff alerts go to `ops_alert_email` when set, else to the owners.
-- **Verify:** `pnpm --filter @velexis/ota-backend test -- notifications && pnpm --filter @velexis/ota-backend test:int -- notifications`
+- **Verify:** `pnpm --filter @velexis/ota-backend test -- notifications && pnpm --filter @velexis/ota-backend test:int notifications`
 
 ### OBE-056 · Add the checkout expiry and retention schedulers ✅
 - **Status:** done (branch claude/intelligent-bardeen-90hhu7)
@@ -1395,7 +1395,7 @@ Checkout, customer accounts in cookies, Stripe on the Velexis account, the airli
   - An expired checkout with an authorised payment ends `expired` and its void job runs once (FakeClock).
   - A checkout past `expires_at` whose booking is `pending` with `reconcile_until` (an Amadeus `5xx` on Flight Create Orders) is skipped: it keeps its status, its payment stays `authorized` with the booking, no `payment.void` job is queued, and with more such checkouts due than the batch of 50 the same run still expires the tenant's other due checkouts (FakeClock).
   - Retention deletes only rows past their limits and never touches bookings, payments, refunds, events, documents or staff actions.
-- **Verify:** `pnpm --filter @velexis/ota-backend test:int -- jobs`
+- **Verify:** `pnpm --filter @velexis/ota-backend test:int jobs`
 
 ### OBE-057 · Prove cookie sessions, CSRF and both caller modes for customer operations ✅
 - **Status:** done (branch claude/intelligent-bardeen-90hhu7)
@@ -1413,7 +1413,7 @@ Checkout, customer accounts in cookies, Stripe on the Velexis account, the airli
   - No token ever appears in a storefront response body or a JS-readable cookie [OF-03 AC1].
   - Every state-changing edge call without a matching `X-CSRF-Token` answers `403 CSRF_TOKEN_INVALID` [OF-03 AC2].
   - Cross-tenant access answers 401 or 404 in every case.
-- **Verify:** `pnpm --filter @velexis/ota-backend test:int -- m3`
+- **Verify:** `pnpm --filter @velexis/ota-backend test:int m3`
 
 ### SDK-008 · Write the auth and account namespaces with cookie-mode results ✅
 - **Status:** done (branch claude/intelligent-bardeen-90hhu7)
@@ -1731,7 +1731,7 @@ The console API (staff sign-in by portal token, bookings, PNR import, queues, cu
   - A portal token works once; the second use and a token for another tenant answer 401.
   - A `staffdeny:acct` cut-off newer than the family makes the next request and refresh fail; a membership invalidation for a removed member takes effect within one second.
   - `console.auth.me` returns the permissions of scope §1.3 for each of the five roles.
-- **Verify:** `pnpm --filter @velexis/ota-backend test -- identity && pnpm --filter @velexis/ota-backend test:int -- console`
+- **Verify:** `pnpm --filter @velexis/ota-backend test -- identity && pnpm --filter @velexis/ota-backend test:int console`
 
 ### OBE-060 · Enforce service-key rules, environments, permissions and staff_actions ✅
 - **Status:** done (branch claude/intelligent-bardeen-90hhu7)
@@ -1752,7 +1752,7 @@ The console API (staff sign-in by portal token, bookings, PNR import, queues, cu
   - Eleven `console.auth.signIn` attempts in a minute from one end-user IP through the service caller get `429` on the eleventh, while a different end-user IP is still served; `staff_actions` rows carry the forwarded IP and user agent, not `127.0.0.1`.
   - A viewer asking for `live` gets `403 ENVIRONMENT_NOT_ALLOWED`; an agent calling a settings write gets `403 FORBIDDEN` with the permission in `details`, and a `denied` row is written.
   - `staff_actions` rows contain no token and no full document number (redaction test).
-- **Verify:** `pnpm --filter @velexis/ota-backend test && pnpm --filter @velexis/ota-backend test:int -- console`
+- **Verify:** `pnpm --filter @velexis/ota-backend test && pnpm --filter @velexis/ota-backend test:int console`
 
 ### OBE-061 · Implement console bookings list and get ✅
 - **Status:** done (branch claude/intelligent-bardeen-90hhu7)
@@ -1769,7 +1769,7 @@ The console API (staff sign-in by portal token, bookings, PNR import, queues, cu
 - **Acceptance:**
   - Each needs-attention filter returns exactly the seeded bookings it should.
   - Test-environment staff never see live bookings; customer-scope fields such as net amounts appear only here.
-- **Verify:** `pnpm --filter @velexis/ota-backend test:int -- console`
+- **Verify:** `pnpm --filter @velexis/ota-backend test:int console`
 
 ### OBE-062 · Implement console retrieve, patch, resync and notes ✅
 - **Status:** done (branch claude/intelligent-bardeen-90hhu7)
@@ -1787,7 +1787,7 @@ The console API (staff sign-in by portal token, bookings, PNR import, queues, cu
 - **Acceptance:**
   - Patch with a stale version answers 412; with `creditCard` answers 403 and makes no Amadeus call.
   - Notes appear in the console booking but never in `bookings.listEvents` for customers.
-- **Verify:** `pnpm --filter @velexis/ota-backend test -- console && pnpm --filter @velexis/ota-backend test:int -- console`
+- **Verify:** `pnpm --filter @velexis/ota-backend test -- console && pnpm --filter @velexis/ota-backend test:int console`
 
 ### OBE-063 · Implement console issue and cancel with payments ✅
 - **Status:** done (branch claude/intelligent-bardeen-90hhu7)
@@ -1805,7 +1805,7 @@ The console API (staff sign-in by portal token, bookings, PNR import, queues, cu
   - Issue of a `manual_review` Stripe booking captures then issues, once, even with a double submit on the same key.
   - An agent cannot use `allowUnpaid`; an owner can.
   - Cancel with `refund.mode = amount` creates one refund row and one Stripe refund.
-- **Verify:** `pnpm --filter @velexis/ota-backend test:int -- console`
+- **Verify:** `pnpm --filter @velexis/ota-backend test:int console`
 
 ### OBE-064 · Implement PNR lookup and import
 - **Component:** ota-backend
@@ -1821,7 +1821,7 @@ The console API (staff sign-in by portal token, bookings, PNR import, queues, cu
 - **Acceptance:**
   - Two tenants on the shared account: tenant B cannot find or import tenant A's PNR [OF-09 AC3].
   - Importing the same order twice answers 409 the second time.
-- **Verify:** `pnpm --filter @velexis/ota-backend test -- console && pnpm --filter @velexis/ota-backend test:int -- console`
+- **Verify:** `pnpm --filter @velexis/ota-backend test -- console && pnpm --filter @velexis/ota-backend test:int console`
 
 ### OBE-065 · Implement queues, snapshots and the queue poller
 - **Component:** ota-backend
@@ -1838,7 +1838,7 @@ The console API (staff sign-in by portal token, bookings, PNR import, queues, cu
 - **Acceptance:**
   - The poller stores a snapshot per monitored queue and skips suspended tenants.
   - An order on the booking queue without a local booking is shown as orphan.
-- **Verify:** `pnpm --filter @velexis/ota-backend test:int -- console`
+- **Verify:** `pnpm --filter @velexis/ota-backend test:int console`
 
 ### OBE-066 · Implement console customers and the supplier log
 - **Component:** ota-backend
@@ -1854,7 +1854,7 @@ The console API (staff sign-in by portal token, bookings, PNR import, queues, cu
 - **Acceptance:**
   - Deleted customers are shown as deleted without personal data beyond what the contract allows.
   - The supplier log never shows a full card number or document number (seeded redacted rows checked).
-- **Verify:** `pnpm --filter @velexis/ota-backend test:int -- console`
+- **Verify:** `pnpm --filter @velexis/ota-backend test:int console`
 
 ### OBE-067 · Implement the read-only raw Amadeus console operations
 - **Component:** ota-backend
@@ -1870,7 +1870,7 @@ The console API (staff sign-in by portal token, bookings, PNR import, queues, cu
 - **Acceptance:**
   - Each read reaches the stub with the tenant's offices; another tenant's office is refused before any call [OF-09 AC3].
   - `console.amadeus.createFlightOrders` answers 501 `NOT_IMPLEMENTED`.
-- **Verify:** `pnpm --filter @velexis/ota-backend test:int -- console`
+- **Verify:** `pnpm --filter @velexis/ota-backend test:int console`
 
 ### OBE-068 · Implement console payments list, get, capture and refund ✅
 - **Status:** done (branch claude/intelligent-bardeen-90hhu7)
@@ -1888,7 +1888,7 @@ The console API (staff sign-in by portal token, bookings, PNR import, queues, cu
 - **Acceptance:**
   - A finance user can refund, an agent gets 403; a refund above the captured amount answers 422.
   - Capturing twice with the same key captures once.
-- **Verify:** `pnpm --filter @velexis/ota-backend test -- console && pnpm --filter @velexis/ota-backend test:int -- console`
+- **Verify:** `pnpm --filter @velexis/ota-backend test -- console && pnpm --filter @velexis/ota-backend test:int console`
 
 ### OBE-069 · Implement markup and fee rule settings ✅
 - **Status:** done (branch claude/intelligent-bardeen-90hhu7)
@@ -1906,7 +1906,7 @@ The console API (staff sign-in by portal token, bookings, PNR import, queues, cu
 - **Acceptance:**
   - A markup change applies to the next search, not to an existing search's offers [OF-10 AC1].
   - Deleting the default rule answers 409; a viewer can list but not create.
-- **Verify:** `pnpm --filter @velexis/ota-backend test -- settings && pnpm --filter @velexis/ota-backend test:int -- settings`
+- **Verify:** `pnpm --filter @velexis/ota-backend test -- settings && pnpm --filter @velexis/ota-backend test:int settings`
 
 ### OBE-070 · Implement storefront settings get and update ✅
 - **Status:** done (branch claude/intelligent-bardeen-90hhu7)
@@ -1924,7 +1924,7 @@ The console API (staff sign-in by portal token, bookings, PNR import, queues, cu
 - **Acceptance:**
   - A branding change is returned by the next uncached `storefront.get`, so the storefront shows it within 5 minutes [OF-10 AC2].
   - `paymentTiming: pay_later` answers 422; `enabledLive: true` with the switch off answers 403.
-- **Verify:** `pnpm --filter @velexis/ota-backend test -- settings && pnpm --filter @velexis/ota-backend test:int -- settings`
+- **Verify:** `pnpm --filter @velexis/ota-backend test -- settings && pnpm --filter @velexis/ota-backend test:int settings`
 
 ### OBE-071 · Implement asset upload, list, delete and public download
 - **Component:** ota-backend
@@ -1942,7 +1942,7 @@ The console API (staff sign-in by portal token, bookings, PNR import, queues, cu
   - An SVG renamed to `.png` is refused by the sniffer; a 1.2 MB PNG answers 422 `size`.
   - The public asset carries the three headers; an unknown asset answers 404.
   - Deleting a logo in use answers 409.
-- **Verify:** `pnpm --filter @velexis/ota-backend test -- settings && pnpm --filter @velexis/ota-backend test:int -- settings`
+- **Verify:** `pnpm --filter @velexis/ota-backend test -- settings && pnpm --filter @velexis/ota-backend test:int settings`
 
 ### OBE-072 · Implement content pages with the Markdown-subset parser and the public page endpoints
 - **Component:** ota-backend
@@ -1959,7 +1959,7 @@ The console API (staff sign-in by portal token, bookings, PNR import, queues, cu
 - **Acceptance:**
   - `<script>`, raw HTML, tables and `javascript:` links are refused with the line number; a fuzz test of 1 000 random inputs never throws an unhandled error.
   - A published page appears in `storefront.listPages` within the cache window; an unpublished one answers 404.
-- **Verify:** `pnpm --filter @velexis/ota-backend test -- storefront && pnpm --filter @velexis/ota-backend test:int -- settings`
+- **Verify:** `pnpm --filter @velexis/ota-backend test -- storefront && pnpm --filter @velexis/ota-backend test:int settings`
 
 ### OBE-073 · Implement notification template settings with preview and reset
 - **Component:** ota-backend
@@ -1975,7 +1975,7 @@ The console API (staff sign-in by portal token, bookings, PNR import, queues, cu
 - **Acceptance:**
   - A template that does not compile or uses an unknown variable is refused with 422 `TEMPLATE_INVALID` [OF-10 AC3].
   - After `reset` the next e-mail uses the code default.
-- **Verify:** `pnpm --filter @velexis/ota-backend test -- settings && pnpm --filter @velexis/ota-backend test:int -- settings`
+- **Verify:** `pnpm --filter @velexis/ota-backend test -- settings && pnpm --filter @velexis/ota-backend test:int settings`
 
 ### OBE-074 · Handle tenant.suspend and tenant.resume
 - **Component:** ota-backend
@@ -1992,7 +1992,7 @@ The console API (staff sign-in by portal token, bookings, PNR import, queues, cu
   - Suspend expires an open checkout and enqueues its void; a staff session created before it is refused; the ticketing job still runs for a paid booking.
   - Suspend skips a `payment_pending` checkout whose booking is `pending` with `reconcile_until` (an Amadeus `5xx` on Flight Create Orders): it keeps its status, its payment stays `authorized` with the booking and no `payment.void` job is queued for it, while the tenant's other open checkouts are expired; a checkout that a claim takes after the suspension selected it, before it locked the row, is not expired either.
   - Resume lets staff sign in again; both events validate against PBE-004's schemas.
-- **Verify:** `pnpm --filter @velexis/ota-backend test -- provisioning && pnpm --filter @velexis/ota-backend test:int -- provisioning`
+- **Verify:** `pnpm --filter @velexis/ota-backend test -- provisioning && pnpm --filter @velexis/ota-backend test:int provisioning`
 
 ### OBE-075 · Prove the permission matrix, staff audit and office isolation across console operations
 - **Component:** ota-backend
@@ -2009,7 +2009,7 @@ The console API (staff sign-in by portal token, bookings, PNR import, queues, cu
 - **Acceptance:**
   - Every state-changing and every refused console call, and every audited read, writes `staff_actions`, and no other successful read does [OF-09 AC1]; permissions follow scope §1.3 [OF-09 AC2]; PNR import accepts only the tenant's offices [OF-09 AC3].
   - The parity and totals assertions of step 4 pass.
-- **Verify:** `pnpm --filter @velexis/ota-backend test -- contract && pnpm --filter @velexis/ota-backend test:int -- m4`
+- **Verify:** `pnpm --filter @velexis/ota-backend test -- contract && pnpm --filter @velexis/ota-backend test:int m4`
 
 ### SDK-011 · Write the console namespace for auth, bookings, queues, customers, supplier log and raw Amadeus ✅
 - **Status:** done (branch claude/intelligent-bardeen-90hhu7)
@@ -2380,7 +2380,7 @@ The platform turns on own Stripe, own Amadeus credentials, custom domains and go
 - **Acceptance:**
   - The same code serves all three modes: table-driven tests assert the key, the `Stripe-Account` header and the storefront config per mode [OF-12 AC1].
   - The decrypted secret never appears in a log line or an error.
-- **Verify:** `pnpm --filter @velexis/ota-backend test -- payments && pnpm --filter @velexis/ota-backend test:int -- payments`
+- **Verify:** `pnpm --filter @velexis/ota-backend test -- payments && pnpm --filter @velexis/ota-backend test:int payments`
 
 ### OBE-078 · Receive Connect and per-connection Stripe webhooks
 - **Component:** ota-backend
@@ -2398,7 +2398,7 @@ The platform turns on own Stripe, own Amadeus credentials, custom domains and go
   - Signed fixtures for both endpoints are stored and processed once; a fixture signed with another connection's secret answers 400.
   - An event for an unknown `acct_` is acknowledged with 200 and ignored.
   - Forged metadata: a correctly signed Connect event from tenant A's account, and a `c/<ppc_id>` event of tenant A, each carrying `metadata.velexis_tenant_id` of tenant B, write no `payment_events` row in either schema, raise no staff alert and log a security event; a `livemode` mismatch behaves the same.
-- **Verify:** `pnpm --filter @velexis/ota-backend test:int -- payments`
+- **Verify:** `pnpm --filter @velexis/ota-backend test:int payments`
 
 ### OBE-079 · Use OTA-owned Amadeus credentials and the releasing-office rule
 - **Component:** ota-backend
@@ -2414,7 +2414,7 @@ The platform turns on own Stripe, own Amadeus credentials, custom domains and go
 - **Acceptance:**
   - After a switch to own credentials, new searches use the tenant's credentials while the sync of an old booking still uses the Velexis account [OF-12 AC2].
   - An office `available` again (released) no longer routes to the Velexis account.
-- **Verify:** `pnpm --filter @velexis/ota-backend test -- amadeus && pnpm --filter @velexis/ota-backend test:int -- amadeus`
+- **Verify:** `pnpm --filter @velexis/ota-backend test -- amadeus && pnpm --filter @velexis/ota-backend test:int amadeus`
 
 ### OBE-080 · Resolve verified custom domains and use the primary host in e-mail links
 - **Component:** ota-backend
@@ -2430,7 +2430,7 @@ The platform turns on own Stripe, own Amadeus credentials, custom domains and go
 - **Acceptance:**
   - A verified custom domain resolves within one second of the `domain` invalidation; a removed one stops resolving.
   - Booking e-mails link to the primary custom domain when it is set.
-- **Verify:** `pnpm --filter @velexis/ota-backend test && pnpm --filter @velexis/ota-backend test:int -- tenancy`
+- **Verify:** `pnpm --filter @velexis/ota-backend test && pnpm --filter @velexis/ota-backend test:int tenancy`
 
 ### OBE-081 · Serve the live environment for live tenants
 - **Component:** ota-backend
@@ -2446,7 +2446,7 @@ The platform turns on own Stripe, own Amadeus credentials, custom domains and go
 - **Acceptance:**
   - Within one second of the invalidation the storefront config reports `environment: "live"` and searches use the live connection (stub on a second port).
   - A test booking is not visible from the live storefront nor in the live console view.
-- **Verify:** `pnpm --filter @velexis/ota-backend test:int -- tenancy`
+- **Verify:** `pnpm --filter @velexis/ota-backend test:int tenancy`
 
 ### OBE-082 · Expose the billing notice to the console
 - **Component:** ota-backend
@@ -2460,7 +2460,7 @@ The platform turns on own Stripe, own Amadeus credentials, custom domains and go
   2. A `tenant` invalidation refreshes it within one second.
 - **Acceptance:**
   - Setting `billing_notice = 'past_due'` on the platform row (as migrator in the test) shows in the next `console.auth.me` after the invalidation.
-- **Verify:** `pnpm --filter @velexis/ota-backend test:int -- console`
+- **Verify:** `pnpm --filter @velexis/ota-backend test:int console`
 
 ### OBE-083 · Prove own Stripe, own Amadeus and go-live across the backends
 - **Component:** ota-backend
@@ -2542,7 +2542,7 @@ Security review, the PCI controls of the airline-card flow and the gate for live
 - **Acceptance:**
   - The auth matrix, rate-limit, header and redaction tests pass.
   - `security-review.md` lists no open high finding; `pnpm audit --prod` shows no high or critical issue.
-- **Verify:** `pnpm --filter @velexis/ota-backend test -- contract && pnpm --filter @velexis/ota-backend test:int -- m6 && bash deploy/caddy/test/caddy-smoke.sh && pnpm audit --prod`
+- **Verify:** `pnpm --filter @velexis/ota-backend test -- contract && pnpm --filter @velexis/ota-backend test:int m6 && bash deploy/caddy/test/caddy-smoke.sh && pnpm audit --prod`
 
 ### OFE-023 · Publish the storefront script inventory for the daily integrity check
 - **Component:** ota-frontend
@@ -2604,7 +2604,7 @@ Security review, the PCI controls of the airline-card flow and the gate for live
 - **Acceptance:**
   - A customer deleted 31 days ago (FakeClock) is anonymised; one deleted 29 days ago is untouched.
   - Bookings, payments and refunds keep their amounts and references after erasure.
-- **Verify:** `pnpm --filter @velexis/ota-backend test -- account && pnpm --filter @velexis/ota-backend test:int -- account`
+- **Verify:** `pnpm --filter @velexis/ota-backend test -- account && pnpm --filter @velexis/ota-backend test:int account`
 
 ### OBE-088 · Measure OTA performance and memory against the VM budget
 - **Component:** ota-backend
