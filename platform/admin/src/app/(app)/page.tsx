@@ -32,7 +32,13 @@ function filtered(pathname: string, filters: Readonly<Record<string, string>>): 
 }
 
 const COUNT_LINK_CLASS =
-  "grid gap-1 rounded-xl border bg-card p-4 text-card-foreground shadow-xs outline-none hover:bg-accent hover:text-accent-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50";
+  "group grid gap-1 rounded-xl border bg-card p-4 text-card-foreground shadow-xs outline-none hover:bg-accent hover:text-accent-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50";
+
+/**
+ * Muted text inside a link with the hover background: it takes the hover's foreground, because muted text on
+ * `bg-accent` has a contrast of 4.35:1, under the 4.5:1 of WCAG 1.4.3 (found by the PAD-010 journeys).
+ */
+const MUTED_IN_LINK_CLASS = "text-muted-foreground group-hover:text-accent-foreground";
 
 /** One count that opens its filtered list; the link's name is the number and what it counts ("14 Active"). */
 function CountLink({
@@ -53,7 +59,7 @@ function CountLink({
       <span className={cn("text-2xl font-semibold tabular-nums", flagged && "text-red-900")}>
         {formatCount(count)}
       </span>{" "}
-      <span className="text-sm text-muted-foreground">{label}</span>
+      <span className={cn("text-sm", MUTED_IN_LINK_CLASS)}>{label}</span>
     </Link>
   );
 }
@@ -170,7 +176,7 @@ function DashboardView({ dashboard }: { readonly dashboard: Dashboard }) {
                 <Link
                   href={`/queues/${encodeURIComponent(queue)}`}
                   className={cn(
-                    "flex items-baseline justify-between gap-4 rounded-md border px-3 py-2 text-sm outline-none hover:bg-accent hover:text-accent-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50",
+                    "group flex items-baseline justify-between gap-4 rounded-md border px-3 py-2 text-sm outline-none hover:bg-accent hover:text-accent-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50",
                     count > 0 && "border-red-300",
                   )}
                   data-count={count}
@@ -179,7 +185,7 @@ function DashboardView({ dashboard }: { readonly dashboard: Dashboard }) {
                   <span
                     className={cn(
                       "tabular-nums",
-                      count > 0 ? "font-medium text-red-900" : "text-muted-foreground",
+                      count > 0 ? "font-medium text-red-900" : MUTED_IN_LINK_CLASS,
                     )}
                   >
                     {formatCount(count)} {DASHBOARD_STRINGS.failedJobs(count)}

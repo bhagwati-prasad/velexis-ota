@@ -1185,6 +1185,7 @@ Common commands: backend `pnpm --filter @velexis/platform-backend test`, `test:i
 - **Verify:** `pnpm --filter @velexis/platform-admin test`
 
 ### PAD-010 · Write the platform admin M1 end-to-end journeys
+- **Status:** in progress (branch claude/intelligent-bardeen-90hhu7; pending: the first run of the `e2e` workflow (GitHub CI))
 - **Component:** platform-admin
 - **Milestone:** M1
 - **Depends on:** PFE-014, PFE-010, PFE-013, PAD-005, PAD-006, PAD-007, PAD-008, PAD-009
