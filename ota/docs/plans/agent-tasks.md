@@ -1396,7 +1396,8 @@ Checkout, customer accounts in cookies, Stripe on the Velexis account, the airli
   - Retention deletes only rows past their limits and never touches bookings, payments, refunds, events, documents or staff actions.
 - **Verify:** `pnpm --filter @velexis/ota-backend test:int -- jobs`
 
-### OBE-057 · Prove cookie sessions, CSRF and both caller modes for customer operations
+### OBE-057 · Prove cookie sessions, CSRF and both caller modes for customer operations ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-backend
 - **Milestone:** M3
 - **Depends on:** OBE-035, OBE-047, OBE-049, OBE-054
