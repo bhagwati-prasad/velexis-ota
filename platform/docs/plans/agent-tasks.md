@@ -1024,8 +1024,8 @@ Common commands: backend `pnpm --filter @velexis/platform-backend test`, `test:i
   - The workflow file is valid (`actionlint` or GitHub's check in the PR) and runs the two projects.
 - **Verify:** `pnpm --filter @velexis/platform-backend build && pnpm --filter @velexis/platform-frontend build && pnpm --filter @velexis/platform-admin build && pnpm test:e2e -- --project=portal --project=platform-admin specs/smoke.e2e.ts`
 
-### PFE-015 · Write the portal M1 end-to-end journeys
-- **Status:** in progress (branch claude/intelligent-bardeen-90hhu7; pending: AC1's run of the `e2e` workflow on GitHub, a CI job only the integrator can start)
+### PFE-015 · Write the portal M1 end-to-end journeys ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-frontend
 - **Milestone:** M1
 - **Depends on:** PFE-014, PFE-007, PFE-009, PFE-011, PFE-012, PFE-013, PBE-035
@@ -1184,8 +1184,8 @@ Common commands: backend `pnpm --filter @velexis/platform-backend test`, `test:i
   - The audit filters are kept in the URL and the CSV download streams [PF-85].
 - **Verify:** `pnpm --filter @velexis/platform-admin test`
 
-### PAD-010 · Write the platform admin M1 end-to-end journeys
-- **Status:** in progress (branch claude/intelligent-bardeen-90hhu7; pending: the first run of the `e2e` workflow (GitHub CI))
+### PAD-010 · Write the platform admin M1 end-to-end journeys ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-admin
 - **Milestone:** M1
 - **Depends on:** PFE-014, PFE-010, PFE-013, PAD-005, PAD-006, PAD-007, PAD-008, PAD-009
