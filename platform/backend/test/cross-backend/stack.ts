@@ -1,20 +1,21 @@
 // The cross-backend stack of `pnpm --filter @velexis/platform-backend test:xb` (PBE-035; PADR-0017 item 2,
-// platform/docs/flows/provisioning.md "Tests that prove it"). PBE-036 and PFE-019 reuse it. One stack per test file,
-// started in a `beforeAll` hook with an explicit timeout:
+// platform/docs/flows/provisioning.md and flows/api-keys.md "Tests that prove it"). PBE-036 adds the OTA API to it;
+// PFE-019 reuses it. One stack per test file, started in a `beforeAll` hook with an explicit timeout:
 //
-//   const stack = await startStack();                       // the steps below, or a clear error
+//   const stack = await startStack({ otaApi: true });       // the steps below, or a clear error
 //   const owner = await signUpOwner(stack, { label: "xb-owner", ip: "203.0.113.35" });
 //   const ota = await createOta(stack, owner, { key: "acme", name: "Acme Travel" });
 //   const setup = await waitForSetup(stack, owner, ota.tenantId);   // `active` within 60 s, or a clear error
+//   const answer = await callOtaApi(requireOtaApi(stack), "/v1/storefront", { "X-Api-Key": key });
 //   await stack.stop();                                     // in afterAll
 //
 // `startStack` runs, in this order:
 //
-//   1. **The gate.** The OTA side is the BUILT OTA backend: `ota/backend/dist/worker.js` (PADR-0017 item 2). In CI,
-//      test:xb runs after the `Build` step, because `pnpm test:int` builds only each package's dependencies and
-//      ota/backend is none of platform/backend's. When an entry point is missing, `startStack` throws
-//      `OtaBuildMissingError` before it creates a database or starts a process: a clear failure that names the build
-//      command, never a timeout.
+//   1. **The gate.** The OTA side is the BUILT OTA backend: `ota/backend/dist/worker.js`, and `dist/main.js` when the
+//      OTA API is asked for (PADR-0017 item 2). In CI, test:xb runs after the `Build` step, because `pnpm test:int`
+//      builds only each package's dependencies and ota/backend is none of platform/backend's. When an entry point is
+//      missing, `startStack` throws `OtaBuildMissingError` before it creates a database or starts a process: a clear
+//      failure that names the build command, never a timeout.
 //   2. **The platform API** on one `createTestDatabase()` clone and one Redis database (`useRedis()`):
 //      `createTestApp()` of test/support/app.ts (the application of main.ts with its own JWT key and key folder) on
 //      the real Clock, as dist/main.js runs. The platform side runs from its sources, as in `pnpm test:int`, so
@@ -32,8 +33,19 @@
 //      Redis database, the platform's key folder (the OTA zone holds identical copies of the KEK and the API key
 //      pepper, ADR-0010) and a free HEALTH_PORT. It is ready when `GET /health/ready` answers 200; when it exits
 //      first, or is not ready within 60 s, `startStack` fails with its last output lines.
+//   7. **The OTA API**, only with `otaApi: true` (PBE-036): `node ota/backend/dist/main.js`, a child process, with
+//      DATABASE_URL of velexis_ota_app on the same clone, the same Redis database (so it shares the platform row
+//      caches with the worker; the platform's `vx:invalidate` events reach it whatever the database, as Redis pub/sub
+//      is not scoped to one), the platform's key folder, the stack folder's own OTA signing key and document URL key,
+//      and a free PORT; PUBLIC_OTA_API_URL is its own
+//      address. Ready and failing as the worker. `callOtaApi` calls it as a storefront's server code would: directly,
+//      on 127.0.0.1, with `X-Api-Key`.
 //
-// The OTA process gets its environment from the `.env.example` files (the root one, then ota/backend's), without
+// The OTA processes share a **stack folder** (a new temporary folder, mode 0700, deleted by `stop()`): their
+// STORAGE_DIR, and the OTA API's JWT signing key (a fresh Ed25519 PKCS#8 PEM file) and document URL key (32 random
+// bytes in base64), both of mode 0600. So the stack never depends on the `.local/` folder of `pnpm dev:keys`.
+//
+// Each OTA process gets its environment from the `.env.example` files (the root one, then ota/backend's), without
 // the DSNs of the development database, with the stack's values on top, and nothing else: no variable of this
 // process (CI's job DSNs included) reaches it, and the migrator's DSN never does (OADR-0007, ADR-0021). The OTA
 // backend's config still fills unset variables from a developer's `.env.local` files (`loadDevEnvFiles`, APP_ENV
@@ -43,12 +55,23 @@
 // keys; nothing here is a secret. Its output (redacted JSON lines) is kept in memory, and the last lines appear in
 // every error about it.
 //
-// `stop()` stops the OTA processes (SIGTERM, SIGKILL after 10 s), the platform worker, the stub and the API, then
-// drops the database (createTestApp's `close()`). Test-only code: nothing under src/ imports it.
+// `stop()` stops the OTA processes (SIGTERM, SIGKILL after 10 s), the platform worker, the stub and the API, drops
+// the database (createTestApp's `close()`) and deletes the stack folder. Test-only code: nothing under src/ imports
+// it.
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomBytes, randomUUID } from "node:crypto";
-import { accessSync, constants, readFileSync } from "node:fs";
+import {
+  accessSync,
+  chmodSync,
+  constants,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { createServer } from "node:net";
+import { tmpdir } from "node:os";
 import { join, relative, resolve, sep } from "node:path";
 import { performance } from "node:perf_hooks";
 import { setTimeout as delay } from "node:timers/promises";
@@ -71,6 +94,7 @@ import {
   TEST_STOREFRONT_BASE_DOMAIN,
   type TestApp,
 } from "../support/app";
+import { ed25519PrivateKeyPem } from "../support/jwt-key";
 import { TEST_MAIL_ENV } from "../support/master-key";
 
 /** The repository root (this file is platform/backend/test/cross-backend/stack.ts). */
@@ -84,6 +108,9 @@ export const OTA_BUILD_COMMAND = "pnpm --filter @velexis/ota-backend build";
 
 /** The built OTA worker, relative to the OTA backend folder. */
 export const OTA_WORKER_ENTRY = "dist/worker.js";
+
+/** The built OTA API, relative to the OTA backend folder (started with `otaApi: true`). */
+export const OTA_API_ENTRY = "dist/main.js";
 
 /** Every app of the stack listens on the loopback interface only, as on the VM. */
 export const STACK_HOST = "127.0.0.1";
@@ -114,6 +141,9 @@ export const VERIFY_SUBJECT = "Confirm your e-mail address for Velexis";
  * 60 s bound, plus the reads after it in the same minute at this pace, stays under the limit and never meets a 429.
  */
 export const SETUP_POLL_MS = 250;
+
+/** How long one call of `callOtaApi` may take before it fails. */
+export const OTA_CALL_TIMEOUT_MS = 5_000;
 
 /** How long an OTA process may take to exit after SIGTERM before it gets SIGKILL. */
 const STOP_TIMEOUT_MS = 10_000;
@@ -234,13 +264,52 @@ export async function freePort(): Promise<number> {
   return address.port;
 }
 
+/** The stack folder of the OTA processes (see the file header). */
+export interface StackFolder {
+  /** STORAGE_DIR of the OTA processes: an empty folder, mode 0700. */
+  readonly storageDir: string;
+  /** JWT_PRIVATE_KEY_FILE of the OTA API: a fresh Ed25519 key, PKCS#8 PEM, mode 0600. */
+  readonly jwtPrivateKeyFile: string;
+  /** DOCUMENT_URL_KEY_FILE of the OTA API: 32 random bytes in base64, mode 0600. */
+  readonly documentUrlKeyFile: string;
+  /** Deletes the folder and everything in it. Idempotent. */
+  remove(): void;
+}
+
+/** Writes `content` into `file` with mode 0600, whatever the umask, as `pnpm dev:keys` writes its key files. */
+function writeKeyFile(file: string, content: string): void {
+  writeFileSync(file, content, { mode: 0o600 });
+  chmodSync(file, 0o600);
+}
+
+/**
+ * Creates a stack folder: a new temporary folder (mode 0700) with an empty `storage/` and the OTA API's two key files.
+ * The keys are generated on the spot and are no secret.
+ */
+export function createStackFolder(): StackFolder {
+  const dir = mkdtempSync(join(tmpdir(), "velexis-xb-stack-"));
+  chmodSync(dir, 0o700);
+  const storageDir = join(dir, "storage");
+  mkdirSync(storageDir, { mode: 0o700 });
+  const jwtPrivateKeyFile = join(dir, "ota-jwt-ed25519.pem");
+  writeKeyFile(jwtPrivateKeyFile, ed25519PrivateKeyPem());
+  const documentUrlKeyFile = join(dir, "document-url.key");
+  writeKeyFile(documentUrlKeyFile, `${randomBytes(32).toString("base64")}\n`);
+  return {
+    storageDir,
+    jwtPrivateKeyFile,
+    documentUrlKeyFile,
+    remove: () => rmSync(dir, { recursive: true, force: true }),
+  };
+}
+
 // ---- OTA processes ---------------------------------------------------------------------------------------------
 
 /** One process of the built OTA backend, while it runs. */
 export interface OtaProcess {
-  /** `ota-worker` (PBE-035); PBE-036 adds the API. */
+  /** `ota-worker` (PBE-035) or `ota-api` (PBE-036). */
   readonly name: string;
-  /** The port its readiness check answers on (HEALTH_PORT of the worker). */
+  /** The port its readiness check answers on (HEALTH_PORT of the worker, PORT of the API). */
   readonly port: number;
   /** `http://127.0.0.1:<port>`. */
   readonly url: string;
@@ -386,6 +455,37 @@ export async function startOtaProcess(spec: OtaProcessSpec): Promise<OtaProcess>
   );
 }
 
+/** An answer of the OTA API: the status and the parsed JSON body (`undefined` without one). */
+export interface OtaAnswer {
+  readonly status: number;
+  readonly body: unknown;
+}
+
+/**
+ * `GET <path>` on the OTA API with `headers`, from this process on 127.0.0.1, as a storefront's server code calls it
+ * (no `X-Forwarded-*`). Resolves with the status and the parsed body; rejects when no answer comes within
+ * OTA_CALL_TIMEOUT_MS or the body is not JSON. Never logs a header or the body (they may hold a key).
+ */
+export async function callOtaApi(
+  api: Pick<OtaProcess, "url">,
+  path: string,
+  headers: Readonly<Record<string, string>> = {},
+): Promise<OtaAnswer> {
+  const response = await fetch(`${api.url}${path}`, {
+    headers: { Accept: "application/json", ...headers },
+    redirect: "manual",
+    signal: AbortSignal.timeout(OTA_CALL_TIMEOUT_MS),
+  });
+  const text = await response.text();
+  let body: unknown;
+  try {
+    body = text === "" ? undefined : JSON.parse(text);
+  } catch {
+    throw new Error(`GET ${path} on the OTA API answered ${response.status} with a body that is not JSON`);
+  }
+  return { status: response.status, body };
+}
+
 // ---- The stack -------------------------------------------------------------------------------------------------
 
 export interface StartStackOptions {
@@ -393,6 +493,8 @@ export interface StartStackOptions {
   readonly otaBackendDir?: string;
   /** Variables over the platform API's and worker's test defaults (createTestApp's `env`). */
   readonly env?: Readonly<Record<string, string>>;
+  /** Starts the built OTA API too (step 7 of the file header); default `false`. */
+  readonly otaApi?: boolean;
 }
 
 /** A started stack (see the file header). */
@@ -412,6 +514,8 @@ export interface Stack {
   readonly amadeusStub: AmadeusStub;
   /** The OTA worker (ota/backend/dist/worker.js). */
   readonly otaWorker: OtaProcess;
+  /** The OTA API (ota/backend/dist/main.js) when the stack was started with `otaApi: true`; see `requireOtaApi`. */
+  readonly otaApi: OtaProcess | undefined;
   /** The environment the OTA processes start from: `.env.example` values and the stack's (see the file header). */
   otaEnv(): Record<string, string>;
   /** Stops everything and drops the database (see the file header). Idempotent. */
@@ -433,10 +537,24 @@ async function runDevSeed(cliEnv: Record<string, string>): Promise<void> {
   }
 }
 
-/** Starts the stack (steps 1 to 6 of the file header). On a failure it stops what it started and rethrows. */
+/**
+ * The stack's OTA API, or a clear error when the stack was started without it (`startStack({ otaApi: true })`).
+ */
+export function requireOtaApi(stack: Pick<Stack, "otaApi">): OtaProcess {
+  if (stack.otaApi === undefined) {
+    throw new Error("This stack has no OTA API: start it with startStack({ otaApi: true }).");
+  }
+  return stack.otaApi;
+}
+
+/**
+ * Starts the stack (steps 1 to 6 of the file header, and 7 with `otaApi: true`). On a failure it stops what it
+ * started and rethrows.
+ */
 export async function startStack(options: StartStackOptions = {}): Promise<Stack> {
   const otaBackendDir = options.otaBackendDir ?? OTA_BACKEND_DIR;
-  assertOtaBuilt(otaBackendDir, [OTA_WORKER_ENTRY]);
+  const withOtaApi = options.otaApi === true;
+  assertOtaBuilt(otaBackendDir, withOtaApi ? [OTA_WORKER_ENTRY, OTA_API_ENTRY] : [OTA_WORKER_ENTRY]);
   const settings = readSettings();
 
   const cleanups: Array<() => Promise<void>> = [];
@@ -451,6 +569,9 @@ export async function startStack(options: StartStackOptions = {}): Promise<Stack
   };
 
   try {
+    // Removed last: the OTA processes that use it stop first.
+    const folder = createStackFolder();
+    cleanups.push(() => Promise.resolve(folder.remove()));
     const api = await createTestApp({
       // The real Clock, as dist/main.js runs: the OTA worker and PostgreSQL run on real time too.
       overrides: [{ provide: Clock, useValue: new Clock() }],
@@ -508,6 +629,7 @@ export async function startStack(options: StartStackOptions = {}): Promise<Stack
       STOREFRONT_BASE_DOMAIN: TEST_STOREFRONT_BASE_DOMAIN,
       AMADEUS_BASE_URL_TEST: amadeusStub.url,
       AMADEUS_BASE_URL_LIVE: amadeusStub.url,
+      STORAGE_DIR: folder.storageDir,
     });
     const healthPort = await freePort();
     const otaWorker = await startOtaProcess({
@@ -524,6 +646,26 @@ export async function startStack(options: StartStackOptions = {}): Promise<Stack
     });
     cleanups.push(() => otaWorker.stop());
 
+    let otaApi: OtaProcess | undefined;
+    if (withOtaApi) {
+      const port = await freePort();
+      const started = await startOtaProcess({
+        name: "ota-api",
+        entry: OTA_API_ENTRY,
+        port,
+        otaBackendDir,
+        env: {
+          ...otaEnv(),
+          PORT: String(port),
+          PUBLIC_OTA_API_URL: `http://${STACK_HOST}:${port}`,
+          JWT_PRIVATE_KEY_FILE: folder.jwtPrivateKeyFile,
+          DOCUMENT_URL_KEY_FILE: folder.documentUrlKeyFile,
+        },
+      });
+      cleanups.push(() => started.stop());
+      otaApi = started;
+    }
+
     let stopped: Promise<void> | undefined;
     return {
       api,
@@ -532,6 +674,7 @@ export async function startStack(options: StartStackOptions = {}): Promise<Stack
       workerLogs,
       amadeusStub,
       otaWorker,
+      otaApi,
       otaEnv,
       stop: () => (stopped ??= cleanUp()),
     };

@@ -1205,7 +1205,8 @@ Common commands: backend `pnpm --filter @velexis/platform-backend test`, `test:i
 
 The OTA group builds tenancy, shopping and the storefront in M2. The platform proves that what it publishes (keys, domains, tenant status, invalidations) works on the OTA side.
 
-### PBE-036 · Prove invalidation coverage and API key acceptance across the backends
+### PBE-036 · Prove invalidation coverage and API key acceptance across the backends ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-backend
 - **Milestone:** M2
 - **Depends on:** PBE-021, PBE-030, PBE-032, PBE-033, PBE-035
