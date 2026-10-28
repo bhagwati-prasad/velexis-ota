@@ -24,7 +24,11 @@
 // (PricingModule's RulesRepository) and record its order with BookingsModule's repositories and OrderRecorder. Since
 // OBE-065: console.queues.list and listSnapshots (queues.controller.ts, queues.service.ts), which read queues through
 // AmadeusModule's client and keep the reads in `queue_snapshots` (queue-snapshots.repository.ts); the queue poller that
-// writes the same rows runs in the worker, where JobsModule provides it.
+// writes the same rows runs in the worker, where JobsModule provides it. Since OBE-066: console.customers.list and get
+// (customers.controller.ts, customers.service.ts, customers.repository.ts), which read the customers and, for their
+// statistics and recent bookings, the bookings and payments of the environment (through ConsoleBookingsRepository and
+// BookingsModule's PaymentsRepository), and console.supplierRequests.list (supplier-log.controller.ts,
+// supplier-log.repository.ts), the redacted Amadeus call log.
 import { Global, Module } from "@nestjs/common";
 import { AmadeusModule } from "../amadeus/amadeus.module";
 import { BookingsModule } from "../bookings/bookings.module";
@@ -46,11 +50,16 @@ import { ConsoleBookingsRepository } from "./console-bookings.repository";
 import { ConsoleBookingsService } from "./console-bookings.service";
 import { ConsolePaymentsController } from "./console-payments.controller";
 import { ConsolePaymentsService } from "./console-payments.service";
+import { ConsoleCustomersController } from "./customers.controller";
+import { ConsoleCustomersRepository } from "./customers.repository";
+import { ConsoleCustomersService } from "./customers.service";
 import { PnrImportRepository, PnrImportService } from "./pnr-import.service";
 import { QueueSnapshotsRepository } from "./queue-snapshots.repository";
 import { QueuesController } from "./queues.controller";
 import { QueuesService } from "./queues.service";
 import { StaffActionsWriter } from "./staff-actions.writer";
+import { ConsoleSupplierLogController } from "./supplier-log.controller";
+import { SupplierLogRepository } from "./supplier-log.repository";
 
 @Global()
 @Module({
@@ -62,7 +71,13 @@ import { StaffActionsWriter } from "./staff-actions.writer";
     QueuesModule,
     PricingModule,
   ],
-  controllers: [ConsoleBookingsController, ConsolePaymentsController, QueuesController],
+  controllers: [
+    ConsoleBookingsController,
+    ConsolePaymentsController,
+    QueuesController,
+    ConsoleCustomersController,
+    ConsoleSupplierLogController,
+  ],
   providers: [
     StaffActionsWriter,
     { provide: StaffRefusalAudit, useExisting: StaffActionsWriter },
@@ -83,6 +98,9 @@ import { StaffActionsWriter } from "./staff-actions.writer";
     PnrImportRepository,
     QueueSnapshotsRepository,
     QueuesService,
+    ConsoleCustomersRepository,
+    ConsoleCustomersService,
+    SupplierLogRepository,
   ],
   exports: [StaffActionsWriter, StaffRefusalAudit],
 })

@@ -1844,7 +1844,8 @@ The console API (staff sign-in by portal token, bookings, PNR import, queues, cu
   - An order on the booking queue without a local booking is shown as orphan.
 - **Verify:** `pnpm --filter @velexis/ota-backend test:int console`
 
-### OBE-066 · Implement console customers and the supplier log
+### OBE-066 · Implement console customers and the supplier log ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-backend
 - **Milestone:** M4
 - **Depends on:** OBE-060

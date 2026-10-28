@@ -37,10 +37,6 @@ export const PENDING_OPERATIONS: Readonly<Partial<Record<OtaOperationId, Pending
   createBookingPayment: "deferred",
   // Console: bookings
   consoleCreateBooking: "deferred",
-  // Console: queues, customers, supplier log
-  consoleListCustomers: "OBE-066",
-  consoleGetCustomer: "OBE-066",
-  consoleListSupplierRequests: "OBE-066",
   // Console: raw Amadeus (reads in M4, writes deferred)
   consoleAmadeusGetFlightOffers: "OBE-067",
   consoleAmadeusSearchFlightOffers: "OBE-067",
