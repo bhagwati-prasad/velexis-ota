@@ -7,6 +7,7 @@
 //   Checkout expiry               50        checkouts.expire (M3)
 //   Offer purge                   500       offers.purge (M2, shopping/offers-purge.processor.ts)
 //   Notification outbox           100       notify (M3)
+//   Monitored queues (Queue List) 5         queues.poll (M4, console/queue-poller.processor.ts)
 //
 // A per-tenant job that filled its batch re-enqueues itself (fan-out.ts), at the back of `ota-maintenance`, so the
 // other tenants' jobs run in between. MAX_CONTINUATIONS bounds how often one scheduler run does so for a tenant; what
@@ -22,6 +23,13 @@ export const JOB_BATCH_LIMITS = Object.freeze({
   searchPurge: 500,
   /** Outbox rows one `notify` job sends per tenant. */
   notificationOutbox: 100,
+  /**
+   * Monitored queues one `queues.poll` job reads per tenant (OBE-065): Queue List waits up to 15 s, and once more after
+   * a timeout or a `5xx`, so a tenant with more queues continues in the next job and an Amadeus outage never holds one
+   * of the queue's two workers for long. The platform allows 20 queues per connection, two connections per tenant: at
+   * most 8 jobs per run.
+   */
+  queuePoll: 5,
 } as const);
 
 /**

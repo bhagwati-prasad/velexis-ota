@@ -21,7 +21,10 @@
 // answer the same-key replays of a cancellation's `504` (ConsoleCancelBookingIdempotencyHooks). Since OBE-064:
 // console.bookings.findByRecordLocator and import (pnr-import.service.ts, on the bookings controller), which read the
 // connection's offices (AmadeusModule's ConnectionResolver), price an import with the tenant's markup and fee rules
-// (PricingModule's RulesRepository) and record its order with BookingsModule's repositories and OrderRecorder.
+// (PricingModule's RulesRepository) and record its order with BookingsModule's repositories and OrderRecorder. Since
+// OBE-065: console.queues.list and listSnapshots (queues.controller.ts, queues.service.ts), which read queues through
+// AmadeusModule's client and keep the reads in `queue_snapshots` (queue-snapshots.repository.ts); the queue poller that
+// writes the same rows runs in the worker, where JobsModule provides it.
 import { Global, Module } from "@nestjs/common";
 import { AmadeusModule } from "../amadeus/amadeus.module";
 import { BookingsModule } from "../bookings/bookings.module";
@@ -44,6 +47,9 @@ import { ConsoleBookingsService } from "./console-bookings.service";
 import { ConsolePaymentsController } from "./console-payments.controller";
 import { ConsolePaymentsService } from "./console-payments.service";
 import { PnrImportRepository, PnrImportService } from "./pnr-import.service";
+import { QueueSnapshotsRepository } from "./queue-snapshots.repository";
+import { QueuesController } from "./queues.controller";
+import { QueuesService } from "./queues.service";
 import { StaffActionsWriter } from "./staff-actions.writer";
 
 @Global()
@@ -56,7 +62,7 @@ import { StaffActionsWriter } from "./staff-actions.writer";
     QueuesModule,
     PricingModule,
   ],
-  controllers: [ConsoleBookingsController, ConsolePaymentsController],
+  controllers: [ConsoleBookingsController, ConsolePaymentsController, QueuesController],
   providers: [
     StaffActionsWriter,
     { provide: StaffRefusalAudit, useExisting: StaffActionsWriter },
@@ -75,6 +81,8 @@ import { StaffActionsWriter } from "./staff-actions.writer";
     RefundsRepository,
     PnrImportService,
     PnrImportRepository,
+    QueueSnapshotsRepository,
+    QueuesService,
   ],
   exports: [StaffActionsWriter, StaffRefusalAudit],
 })

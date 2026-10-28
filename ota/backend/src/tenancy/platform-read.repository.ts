@@ -9,8 +9,10 @@
 // OBE-024 (`tenantIdsByStatus`, for src/jobs/fan-out.ts), the default payment connection of an environment in OBE-038
 // (`paymentConnection`, for the Stripe gateway of src/payments/), a staff member's membership with its account in
 // OBE-059 (`staffMember`, for the staff sessions of src/identity/staff/), the account modes of a tenant's payment
-// connections in OBE-068 (`paymentConnectionModes`, for console.payments of src/console/), and the e-mail addresses
-// of a tenant's owners in OBE-055 (`ownerEmails`, for the staff alerts of src/notifications/staff-recipients.ts).
+// connections in OBE-068 (`paymentConnectionModes`, for console.payments of src/console/), the e-mail addresses of a
+// tenant's owners in OBE-055 (`ownerEmails`, for the staff alerts of src/notifications/staff-recipients.ts), and the
+// monitored queues of a tenant's Amadeus connections in OBE-065 (`monitoredQueues`, for the queue poller of
+// src/console/queue-poller.processor.ts).
 import { Inject, Injectable } from "@nestjs/common";
 import {
   assertTenantSchema,
@@ -216,6 +218,86 @@ type AmadeusAccountRow = Pick<
   Selectable<PlatformDatabase["platform.amadeus_accounts"]>,
   (typeof AMADEUS_ACCOUNT_COLUMNS)[number]
 >;
+
+/** A queue the queue poller reads (`platform.supplier_connections.monitored_queues`, the portal's list). */
+export interface PlatformMonitoredQueue {
+  /** The office whose queue is read (Queue List `officeId`). */
+  readonly officeId: string;
+  /** The queue number, 0–99 (Queue List `queue-id`). */
+  readonly queueId: number;
+  /** The category, 0–254 (Queue List `category`). */
+  readonly category: number;
+}
+
+/** The monitored queues of one of a tenant's Amadeus connections (OBE-065, `monitoredQueues`). */
+export interface PlatformMonitoredQueues {
+  /** `sc_` + ULID. */
+  readonly connectionId: string;
+  readonly environment: AmadeusEnvironment;
+  /** Only an `active` connection is polled (the connection resolver serves no other). */
+  readonly status: AmadeusCredentialStatus;
+  /** The well-formed entries of the list, each once, in the platform's order, at most MAX_MONITORED_QUEUES. */
+  readonly queues: readonly PlatformMonitoredQueue[];
+  /** Entries that are not a queue the poller can read (another shape or range), or beyond MAX_MONITORED_QUEUES. */
+  readonly invalid: number;
+}
+
+/** How many queues of one connection are polled at most: the platform document's `maxItems` of `monitoredQueues`. */
+export const MAX_MONITORED_QUEUES = 20;
+
+/** An Amadeus office id (`NCE1A0955`), as the platform document's `AmadeusOfficeId` writes it. */
+const OFFICE_ID_PATTERN = /^[A-Z0-9]{9}$/;
+/** The largest queue number and category of Queue List, as the OTA document's console parameters bound them. */
+const MAX_QUEUE_ID = 99;
+const MAX_QUEUE_CATEGORY = 254;
+
+const isIntegerIn = (value: unknown, max: number): value is number =>
+  typeof value === "number" && Number.isSafeInteger(value) && value >= 0 && value <= max;
+
+/**
+ * The queues of a `monitored_queues` value (`[{officeId, queueId, category}]`, jsonb): each well-formed entry once (an
+ * office id, a queue 0–99, a category 0–254, no other field), in order, at most MAX_MONITORED_QUEUES; everything else
+ * (a value that is not a list, an entry of another shape, a repeated or surplus entry) is counted as `invalid`.
+ */
+export function parseMonitoredQueues(value: unknown): {
+  readonly queues: readonly PlatformMonitoredQueue[];
+  readonly invalid: number;
+} {
+  if (!Array.isArray(value)) {
+    return { queues: [], invalid: value === null || value === undefined ? 0 : 1 };
+  }
+  const queues: PlatformMonitoredQueue[] = [];
+  const seen = new Set<string>();
+  let invalid = 0;
+  for (const entry of value as readonly unknown[]) {
+    const fields =
+      typeof entry === "object" && entry !== null && !Array.isArray(entry)
+        ? (entry as Record<string, unknown>)
+        : undefined;
+    const officeId = fields?.["officeId"];
+    const queueId = fields?.["queueId"];
+    const category = fields?.["category"];
+    if (
+      fields === undefined ||
+      Object.keys(fields).some((key) => key !== "officeId" && key !== "queueId" && key !== "category") ||
+      typeof officeId !== "string" ||
+      !OFFICE_ID_PATTERN.test(officeId) ||
+      !isIntegerIn(queueId, MAX_QUEUE_ID) ||
+      !isIntegerIn(category, MAX_QUEUE_CATEGORY)
+    ) {
+      invalid += 1;
+      continue;
+    }
+    const key = `${officeId}/${queueId}/${category}`;
+    if (seen.has(key) || queues.length >= MAX_MONITORED_QUEUES) {
+      invalid += 1;
+      continue;
+    }
+    seen.add(key);
+    queues.push(Object.freeze({ officeId, queueId, category }));
+  }
+  return { queues: Object.freeze(queues), invalid };
+}
 
 /** `platform.payment_provider_connections.provider` (the baseline CHECK). */
 export const PAYMENT_PROVIDERS = ["stripe", "adyen", "checkout_com", "paypal", "manual"] as const;
@@ -506,6 +588,37 @@ export class PlatformReadRepository {
         .executeTakeFirst(),
     );
     return row === undefined ? null : toPlatformAmadeusAccount(row);
+  }
+
+  /**
+   * The queues the queue poller reads for tenant `tenantId` (OBE-065): one entry per Amadeus connection of the tenant
+   * (`platform.supplier_connections`, provider `amadeus`, whatever its status), test before live, with its status and
+   * the well-formed entries of its `monitored_queues` (`parseMonitoredQueues`). Nothing else of the connection is
+   * read: the calls resolve it through the connection resolver. A value that cannot be a tenant id is unknown without
+   * a query. An environment or status outside the CHECK lists throws `UnexpectedPlatformValueError`.
+   */
+  async monitoredQueues(tenantId: string): Promise<PlatformMonitoredQueues[]> {
+    if (!TENANT_ID_PATTERN.test(tenantId)) {
+      return [];
+    }
+    const rows = await this.read((trx) =>
+      trx
+        .selectFrom("platform.supplier_connections")
+        .select(["id", "environment", "status", "monitored_queues"])
+        .where("tenant_id", "=", tenantId)
+        .where("provider", "=", "amadeus")
+        .orderBy("environment", "desc")
+        .execute(),
+    );
+    const column = (name: string) => `platform.supplier_connections.${name}`;
+    return rows.map((row) =>
+      Object.freeze({
+        connectionId: row.id,
+        environment: oneOf(row.environment, AMADEUS_ENVIRONMENTS, column("environment"), row.id),
+        status: oneOf(row.status, AMADEUS_CREDENTIAL_STATUSES, column("status"), row.id),
+        ...parseMonitoredQueues(row.monitored_queues),
+      }),
+    );
   }
 
   /**

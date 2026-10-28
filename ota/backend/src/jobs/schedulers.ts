@@ -6,7 +6,8 @@
 // deterministic id, which the module that owns the work handles (`@TenantJob("<schedule id>")`). Schedules join this
 // list with the task that adds their work (M3: notifications.sweep with OBE-030, payments.authorisation_watch with
 // OBE-040, ticketing.scan with OBE-044, bookings.reconcile_scan with OBE-043, bookings.sync_scan with OBE-045,
-// refunds.sweep with FIX-W27-FOLLOWUPS, checkouts.expire and retention.daily with OBE-056; M4: queues.poll).
+// refunds.sweep with FIX-W27-FOLLOWUPS, checkouts.expire and retention.daily with OBE-056; M4: queues.poll with
+// OBE-065).
 //
 // Target tenants (OADR-0014 point 4): a schedule names the statuses it runs for, `active` and possibly `suspended`
 // (suspended tenants keep their obligations to paid travellers, but nothing that starts new supplier activity runs for
@@ -166,6 +167,15 @@ export const OTA_SCHEDULES: readonly ScheduleDefinition[] = Object.freeze([
     statuses: ["active", "suspended"],
     description:
       "Delete, in batches of 1 000, supplier_requests older than 90 days, queue_snapshots older than 30 days, expired idempotency_keys, and customer sessions, password reset tokens and booking access tokens expired more than 7 days ago; never bookings, payments, refunds, events, documents or staff actions (jobs/retention.processor.ts)",
+  }),
+  schedule({
+    id: "queues.poll",
+    pattern: "*/15 * * * *",
+    milestone: "M4",
+    // A Queue List read is new supplier activity: a suspended OTA's queues are not polled (OADR-0014 point 4).
+    statuses: ["active"],
+    description:
+      "Read each monitored queue of the tenant's active Amadeus connections (platform.supplier_connections.monitored_queues, test and live) with Queue List and store one queue_snapshots row per queue, 5 queues per job (console/queue-poller.processor.ts)",
   }),
 ]);
 

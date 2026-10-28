@@ -8,13 +8,18 @@
 // notifications`) or, when its module is imported by the worker, provides it there. The runner finds them all among
 // the worker's providers. The checkout expiry (OBE-056) is provided here too (`jobs → checkout`): the checkout module
 // is the API's only. The retention purge (OBE-056) is this module's own work (`retention.processor.ts`,
-// `retention.repository.ts`). The platform repository, the platform cache, the tenant context and `TenantTx` come from
-// `TenancyModule.forWorker()`, the queues from QueuesModule, Clock from the global CommonModule; the tenant context
-// needs the worker's request-context module (nestjs-cls, worker.module.ts).
+// `retention.repository.ts`). The queue poller (OBE-065) is the console's (`jobs → console`): its handler and the
+// `queue_snapshots` repository are provided here, with the worker's Amadeus client (AmadeusWorkerModule). The platform
+// repository, the platform cache, the tenant context and `TenantTx` come from `TenancyModule.forWorker()`, the queues
+// from QueuesModule, Clock from the global CommonModule; the tenant context needs the worker's request-context module
+// (nestjs-cls, worker.module.ts).
 import { Module } from "@nestjs/common";
 import { DiscoveryModule } from "@nestjs/core";
+import { AmadeusWorkerModule } from "../amadeus/amadeus.module";
 import { CheckoutExpiryProcessor } from "../checkout/checkout-expiry.processor";
 import { QueuesModule } from "../common/queues/queues.module";
+import { QueuePollerProcessor } from "../console/queue-poller.processor";
+import { QueueSnapshotsRepository } from "../console/queue-snapshots.repository";
 import { OffersPurgeProcessor } from "../shopping/offers-purge.processor";
 import { TenancyModule } from "../tenancy/tenancy.module";
 import { FanOutService, MaintenanceProcessor, TenantJobRunner } from "./fan-out";
@@ -23,7 +28,7 @@ import { RetentionRepository } from "./retention.repository";
 import { JobSchedulerRegistry } from "./schedulers";
 
 @Module({
-  imports: [DiscoveryModule, TenancyModule.forWorker(), QueuesModule],
+  imports: [DiscoveryModule, TenancyModule.forWorker(), QueuesModule, AmadeusWorkerModule],
   providers: [
     JobSchedulerRegistry,
     FanOutService,
@@ -33,6 +38,8 @@ import { JobSchedulerRegistry } from "./schedulers";
     CheckoutExpiryProcessor,
     RetentionRepository,
     RetentionProcessor,
+    QueueSnapshotsRepository,
+    QueuePollerProcessor,
   ],
 })
 export class JobsModule {}

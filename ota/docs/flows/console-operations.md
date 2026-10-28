@@ -52,7 +52,7 @@ sequenceDiagram
 | Cancel | `console.bookings.cancel` | `bookings:cancel` | GET, DELETE | Refund modes `none`, `full`, `amount` through the money step of bookings.cancel; airline cards never through Stripe (OBE-063) |
 | Resync, notes | `console.bookings.resync`, `.addNote` | `bookings:write` | GET (resync) | Notes are `booking_events` visible to staff only |
 | PNR lookup and import | `console.bookings.findByRecordLocator`, `.import` | `bookings:read`, `bookings:write` | Get Flight Order By Record Locator | Only orders owned by the tenant's offices (`403 OFFICE_NOT_ALLOWED`); `409 ORDER_ALREADY_IMPORTED` |
-| Queues | `console.queues.list`, `.listSnapshots` | `queues:read` | Queue List | Office of the tenant only; poller stores snapshots every 15 min |
+| Queues | `console.queues.list`, `.listSnapshots` | `queues:read` | Queue List | Office of the tenant only; each read stored as a snapshot, each PNR linked to the OTA's booking of its record locator or shown as an orphan (OADR-0003's booking queue view); the poller (`queues.poll`) stores snapshots of the monitored queues every 15 min, active tenants only (OBE-065) |
 | Customers | `console.customers.list`, `.get` | `customers:read` | — | Search by e-mail and name prefixes |
 | Supplier log | `console.supplierRequests.list` | `supplier_requests:read` | — | Redacted bodies |
 | Raw Amadeus (read) | `console.amadeus.searchFlightOffers`, `.getFlightOffers`, `.searchFlightAvailabilities`, `.upsellAirOffers`, `.quoteAirOffers`, `.getFlightOrder`, `.getFlightOrderByReference`, `.getQueue` | `amadeus:read` | As named | Net prices; office isolation; raw writes deferred |

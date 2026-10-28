@@ -38,8 +38,6 @@ export const PENDING_OPERATIONS: Readonly<Partial<Record<OtaOperationId, Pending
   // Console: bookings
   consoleCreateBooking: "deferred",
   // Console: queues, customers, supplier log
-  consoleListQueue: "OBE-065",
-  consoleListQueueSnapshots: "OBE-065",
   consoleListCustomers: "OBE-066",
   consoleGetCustomer: "OBE-066",
   consoleListSupplierRequests: "OBE-066",

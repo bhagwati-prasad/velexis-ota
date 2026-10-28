@@ -1826,7 +1826,8 @@ The console API (staff sign-in by portal token, bookings, PNR import, queues, cu
   - Importing the same order twice answers 409 the second time.
 - **Verify:** `pnpm --filter @velexis/ota-backend test -- console && pnpm --filter @velexis/ota-backend test:int console`
 
-### OBE-065 · Implement queues, snapshots and the queue poller
+### OBE-065 · Implement queues, snapshots and the queue poller ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-backend
 - **Milestone:** M4
 - **Depends on:** OBE-060, OBE-041
