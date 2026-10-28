@@ -1573,6 +1573,36 @@ describe("checkout page: steps and data", () => {
       ["post", false],
     ]);
   });
+
+  it("[OFE-017] every definition list holds only dt and dd groups (axe definition-list), the payment total too", () => {
+    // The guest Stripe journey's axe check found the payment step's note as a bare <dd> after a <div> group: a
+    // serious `definition-list` violation. The note is a paragraph under the list now.
+    const page = /** @type {Document} */ (pageDocuments["checkout.html"]);
+    const roots = [page, ...Array.from(page.querySelectorAll("template"), (template) => template.content)];
+    const lists = roots.flatMap((root) => Array.from(root.querySelectorAll("dl")));
+    expect(lists.length).toBeGreaterThan(1);
+    /**
+     * Whether the tag names of a list's or a group's children are properly ordered: every dd follows a dt or dd of the
+     * same group, so a dd right after a div group (or first in a group) is not.
+     * @param {string[]} tags
+     */
+    const ordered = (tags) =>
+      tags.every((tag, index) => tag !== "DD" || tags[index - 1] === "DT" || tags[index - 1] === "DD");
+    for (const list of lists) {
+      const tags = Array.from(list.children, (child) => child.tagName).filter(
+        (tag) => tag !== "SCRIPT" && tag !== "TEMPLATE",
+      );
+      expect(tags.every((tag) => ["DT", "DD", "DIV"].includes(tag))).toBe(true);
+      expect(ordered(tags)).toBe(true);
+      for (const group of Array.from(list.children).filter((child) => child.tagName === "DIV")) {
+        const groupTags = Array.from(group.children, (item) => item.tagName);
+        expect(groupTags.every((tag) => tag === "DT" || tag === "DD")).toBe(true);
+        expect(ordered(groupTags)).toBe(true);
+      }
+    }
+    expect(page.querySelector("[data-payment-total-note]")?.closest("dl")).toBeNull();
+    expect(page.querySelector("[data-payment-total]")?.closest("dl")).not.toBeNull();
+  });
 });
 
 describe("checkout page: helpers", () => {

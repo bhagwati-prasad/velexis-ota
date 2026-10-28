@@ -1614,6 +1614,7 @@ Checkout, customer accounts in cookies, Stripe on the Velexis account, the airli
 - **Verify:** `pnpm --filter @velexis/ota-frontend test && pnpm --filter @velexis/ota-frontend build`
 
 ### OFE-017 · Write the guest Stripe checkout journey
+- **Status:** in progress (branch claude/intelligent-bardeen-90hhu7; pending: the nightly run with the Stripe test keys)
 - **Component:** ota-frontend
 - **Milestone:** M3
 - **Depends on:** OFE-013, OFE-015, OFE-008, OBE-047, OBE-055

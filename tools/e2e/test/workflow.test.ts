@@ -98,7 +98,8 @@ describe(".github/workflows/e2e.yml", () => {
     // `pnpm dev:keys` before the stack: the OTA backend's dev:seed hashes the demo OTA's keys with the pepper.
     expect(indexOfRun(/^pnpm dev:keys$/)).toBeGreaterThanOrEqual(0);
     expect(indexOfRun(/^pnpm dev:keys$/)).toBeLessThan(projects);
-    expect(runs.filter((run) => /--project=storefront/.test(run))).toHaveLength(1);
+    // The project's whole name: `--project=storefront-stripe` (OFE-017, nightly) is another project.
+    expect(runs.filter((run) => /--project=storefront(?![\w-])/.test(run))).toHaveLength(1);
   });
 
   it("runs portal-stripe only at night and only with the Stripe test secrets (PADR-0017 item 4)", () => {
@@ -106,6 +107,46 @@ describe(".github/workflows/e2e.yml", () => {
     expect(stripe?.if).toBe("github.event_name == 'schedule' && env.STRIPE_CONFIGURED == 'true'");
     expect(stripe?.env?.["E2E_STRIPE"]).toBe("1");
     expect(runs.filter((run) => /portal-stripe/.test(run))).toHaveLength(1);
+  });
+
+  it("runs storefront-stripe only at night, with the Stripe test keys and the Stripe CLI whose checksum it checked [OFE-017 AC1]", () => {
+    const index = steps.findIndex((step) => /--project=storefront-stripe/.test(step.run ?? ""));
+    const step = steps[index];
+    expect(step?.name).toContain("[OFE-017 AC1] [OFE-017 AC2]");
+    // Nightly, and only when the three secrets exist: the platform's two (E2E_STRIPE=1 needs them) and the
+    // publishable key of the same test account.
+    expect(step?.if).toBe("github.event_name == 'schedule' && env.STOREFRONT_STRIPE_CONFIGURED == 'true'");
+    expect(job?.env["STOREFRONT_STRIPE_CONFIGURED"]).toBe(
+      "${{ secrets.E2E_STRIPE_SECRET_KEY != '' && secrets.E2E_STRIPE_BILLING_WEBHOOK_SECRET != '' && " +
+        "secrets.E2E_STRIPE_PUBLISHABLE_KEY != '' }}",
+    );
+    expect(step?.env).toMatchObject({
+      E2E_STRIPE: "1",
+      STRIPE_SECRET_KEY: "${{ secrets.E2E_STRIPE_SECRET_KEY }}",
+      STRIPE_BILLING_WEBHOOK_SECRET: "${{ secrets.E2E_STRIPE_BILLING_WEBHOOK_SECRET }}",
+      STRIPE_SECRET_KEY_TEST: "${{ secrets.E2E_STRIPE_SECRET_KEY }}",
+      STRIPE_PUBLISHABLE_KEY_TEST: "${{ secrets.E2E_STRIPE_PUBLISHABLE_KEY }}",
+      STRIPE_CLI_VERSION: expect.stringMatching(/^1\.\d+\.\d+$/),
+      STRIPE_CLI_SHA256: expect.stringMatching(/^[0-9a-f]{64}$/),
+    });
+    // The pinned release binary, its SHA-256 checked before anything runs, then the journeys with that CLI.
+    const lines = (step?.run ?? "").trim().split("\n");
+    expect(lines[0]).toMatch(
+      /^curl -fsSL -o "\$RUNNER_TEMP\/stripe\.tgz" "https:\/\/github\.com\/stripe\/stripe-cli\/releases\/download\/v\$\{STRIPE_CLI_VERSION\}\//,
+    );
+    expect(lines[1]).toBe('echo "${STRIPE_CLI_SHA256}  $RUNNER_TEMP/stripe.tgz" | sha256sum -c -');
+    expect(lines.at(-1)).toBe(
+      'E2E_STRIPE_CLI="$RUNNER_TEMP/stripe-cli/stripe" pnpm test:e2e -- --project=storefront-stripe',
+    );
+    // After the other runs, and the only one of the project; the run of the other projects never selects it.
+    expect(index).toBeGreaterThan(runs.indexOf(PROJECTS_RUN));
+    expect(index).toBeGreaterThan(
+      steps.findIndex((other) => /--project=portal-stripe/.test(other.run ?? "")),
+    );
+    expect(runs.filter((run) => /storefront-stripe/.test(run))).toHaveLength(1);
+    expect(index).toBeLessThan(
+      steps.findIndex((other) => other.uses?.startsWith("actions/upload-artifact@")),
+    );
   });
 
   it("uploads traces, screenshots, the report and the stack's logs when a step fails [PFE-014 AC2]", () => {

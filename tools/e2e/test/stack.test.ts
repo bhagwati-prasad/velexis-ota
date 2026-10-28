@@ -12,6 +12,7 @@ import {
   exampleEnv,
   newDatabaseName,
   OTA_API_URL,
+  otaStripeKeys,
   PLATFORM_ADMIN_URL,
   PLATFORM_API_URL,
   PORTAL_URL,
@@ -110,6 +111,138 @@ describe("readStackSettings", () => {
         STRIPE_BILLING_WEBHOOK_SECRET: "whsec_abc",
       }).E2E_STRIPE,
     ).toBe(true);
+  });
+});
+
+describe("the OTA's Stripe test keys (OFE-017)", () => {
+  // Built at run time, so that no secret scanner takes these test values for leaked keys.
+  const SECRET_KEY = ["sk", "test", "ofe017"].join("_");
+  const PUBLISHABLE_KEY = ["pk", "test", "ofe017"].join("_");
+  const PLATFORM = {
+    E2E_STRIPE: "1",
+    STRIPE_SECRET_KEY: "sk_test_abc",
+    STRIPE_BILLING_WEBHOOK_SECRET: "whsec_abc",
+  } as const;
+
+  it("with E2E_STRIPE=1 takes both keys or neither, in test mode only, and refuses live keys [OFE-017 AC1]", () => {
+    expect(otaStripeKeys(settings({ ...PLATFORM, E2E_WITH_OTA: "1" }))).toBeUndefined();
+    expect(() => settings({ ...PLATFORM, STRIPE_SECRET_KEY_TEST: SECRET_KEY })).toThrow(
+      /needs both, in test mode .*: STRIPE_PUBLISHABLE_KEY_TEST\./,
+    );
+    expect(() => settings({ ...PLATFORM, STRIPE_PUBLISHABLE_KEY_TEST: PUBLISHABLE_KEY })).toThrow(
+      /: STRIPE_SECRET_KEY_TEST\./,
+    );
+    const liveSecret = ["sk", "live", "ofe017"].join("_");
+    const livePublishable = ["pk", "live", "ofe017"].join("_");
+    let message = "";
+    try {
+      settings({
+        ...PLATFORM,
+        STRIPE_SECRET_KEY_TEST: liveSecret,
+        STRIPE_PUBLISHABLE_KEY_TEST: livePublishable,
+      });
+    } catch (error) {
+      message = String(error);
+    }
+    expect(message).toMatch(/STRIPE_SECRET_KEY_TEST, STRIPE_PUBLISHABLE_KEY_TEST\. Live keys are never used/);
+    expect(message).not.toContain(liveSecret);
+    // A restricted test key is a test key too (the OTA backend's own pattern).
+    const restricted = ["rk", "test", "ofe017"].join("_");
+    expect(
+      settings({
+        ...PLATFORM,
+        STRIPE_SECRET_KEY_TEST: restricted,
+        STRIPE_PUBLISHABLE_KEY_TEST: PUBLISHABLE_KEY,
+      }).STRIPE_SECRET_KEY_TEST,
+    ).toBe(restricted);
+  });
+
+  it("turns Stripe on for the OTA only with E2E_STRIPE=1, E2E_WITH_OTA=1 and both keys [OFE-017 AC1]", () => {
+    const keys = { STRIPE_SECRET_KEY_TEST: SECRET_KEY, STRIPE_PUBLISHABLE_KEY_TEST: PUBLISHABLE_KEY };
+    expect(otaStripeKeys(settings({ ...PLATFORM, ...keys, E2E_WITH_OTA: "1" }))).toEqual({
+      secretKey: SECRET_KEY,
+      publishableKey: PUBLISHABLE_KEY,
+    });
+    expect(otaStripeKeys(settings({ ...PLATFORM, ...keys }))).toBeUndefined();
+    // Without E2E_STRIPE the keys are not even read: the stack keeps the dummies.
+    expect(otaStripeKeys(settings({ ...keys, E2E_WITH_OTA: "1" }))).toBeUndefined();
+    expect(settings().E2E_STRIPE_CLI).toBe("stripe");
+    expect(settings({ E2E_STRIPE_CLI: "/opt/stripe/stripe" }).E2E_STRIPE_CLI).toBe("/opt/stripe/stripe");
+  });
+
+  it("gives the keys to the OTA API and worker, and the forwarder's signing secret to the API alone [OFE-017 AC1]", () => {
+    const webhookSecret = ["whsec", "ofe017forwarder"].join("_");
+    const stripe = stackContext(
+      settings({
+        ...PLATFORM,
+        E2E_WITH_OTA: "1",
+        STRIPE_SECRET_KEY_TEST: SECRET_KEY,
+        STRIPE_PUBLISHABLE_KEY_TEST: PUBLISHABLE_KEY,
+      }),
+      DATABASE,
+      { webhookSecret },
+    );
+    expect(stripe.stripeWebhookSecret).toBe(webhookSecret);
+    expect(serviceEnv("ota-api", stripe)).toMatchObject({
+      STRIPE_SECRET_KEY_TEST: SECRET_KEY,
+      STRIPE_PUBLISHABLE_KEY_TEST: PUBLISHABLE_KEY,
+      STRIPE_WEBHOOK_SECRET_VELEXIS_TEST: webhookSecret,
+    });
+    const worker = serviceEnv("ota-worker", stripe);
+    expect(worker).toMatchObject({
+      STRIPE_SECRET_KEY_TEST: SECRET_KEY,
+      STRIPE_PUBLISHABLE_KEY_TEST: PUBLISHABLE_KEY,
+    });
+    expect(worker["STRIPE_WEBHOOK_SECRET_VELEXIS_TEST"]).not.toBe(webhookSecret);
+    for (const name of ALL_SERVICES.filter((service) => service !== "ota-api" && service !== "ota-worker")) {
+      const values = serviceEnv(name, stripe);
+      expect(values["STRIPE_SECRET_KEY_TEST"]).not.toBe(SECRET_KEY);
+      expect(values["STRIPE_WEBHOOK_SECRET_VELEXIS_TEST"]).not.toBe(webhookSecret);
+    }
+  });
+
+  it("takes the .env.example dummies for no keys: a .env.local copied from it turns nothing on [OFE-017 AC1]", () => {
+    // docs/mvp/local-development.md §2 copies .env.example to .env.local, which the harness reads: its dummies must
+    // not start a forwarder that Stripe refuses, which would fail every project of the run (portal-stripe too).
+    const dummies = exampleEnv([".env.example", "ota/backend/.env.example"]);
+    const dummySecret = dummies["STRIPE_SECRET_KEY_TEST"] ?? "";
+    const dummyPublishable = dummies["STRIPE_PUBLISHABLE_KEY_TEST"] ?? "";
+    expect(dummySecret).toMatch(/^sk_test_/);
+    expect(dummyPublishable).toMatch(/^pk_test_/);
+    const withDummies = settings({
+      ...PLATFORM,
+      E2E_WITH_OTA: "1",
+      STRIPE_SECRET_KEY_TEST: dummySecret,
+      STRIPE_PUBLISHABLE_KEY_TEST: dummyPublishable,
+    });
+    expect(otaStripeKeys(withDummies)).toBeUndefined();
+    expect(serviceEnv("ota-api", stackContext(withDummies, DATABASE))["STRIPE_SECRET_KEY_TEST"]).toBe(
+      dummySecret,
+    );
+    // A real key next to a dummy is one key: both are needed.
+    expect(() =>
+      settings({
+        ...PLATFORM,
+        E2E_WITH_OTA: "1",
+        STRIPE_SECRET_KEY_TEST: SECRET_KEY,
+        STRIPE_PUBLISHABLE_KEY_TEST: dummyPublishable,
+      }),
+    ).toThrow(/needs both, in test mode .*: STRIPE_PUBLISHABLE_KEY_TEST\./);
+  });
+
+  it("keeps the .env.example dummies of the OTA processes without the keys", () => {
+    const dummies = exampleEnv([".env.example", "ota/backend/.env.example"]);
+    const context = stackContext(settings({ E2E_WITH_OTA: "1" }), DATABASE);
+    expect(context.stripeWebhookSecret).toBeUndefined();
+    for (const name of ["ota-api", "ota-worker"] as const) {
+      for (const variable of [
+        "STRIPE_SECRET_KEY_TEST",
+        "STRIPE_PUBLISHABLE_KEY_TEST",
+        "STRIPE_WEBHOOK_SECRET_VELEXIS_TEST",
+      ]) {
+        expect(serviceEnv(name, context)[variable]).toBe(dummies[variable]);
+      }
+    }
   });
 });
 

@@ -297,7 +297,7 @@ The variables are listed in [`.env.example`](.env.example) (`STOREFRONT_DEV_PORT
 Journeys (one per main flow, [ADR-0015](../../docs/mvp/adr/0015-testing-strategy.md)):
 
 1. **M2** search → filter and sort → offer → branded fare → price; no-offers and expired-search states (stub magic values such as destination `ZZZ`).
-2. **M3** guest checkout with Stripe and a 3-D Secure test card → confirmation → e-mail in Mailpit → booking page through the guest cookie.
+2. **M3** guest checkout with Stripe and a 3-D Secure test card → confirmation → e-mail in Mailpit → booking page through the guest cookie; and the airline's sold-out at completion with the authorisation voided (`checkout-stripe.e2e.ts`, OFE-017: nightly in the `storefront-stripe` project, with Stripe's test mode and the Stripe CLI, [`tools/e2e/README.md`](../../tools/e2e/README.md#stripe-journeys-of-the-storefront)).
 3. **M3** airline-card checkout in the test environment → confirmation; decline and attempt-limit states.
 4. **M3** sign-up → verify through the Mailpit link → sign-in → my bookings tabs → change contacts → cancel with refund preview; guest lookup; session refresh after access-token expiry.
 5. **M3** keyboard-only checkout.

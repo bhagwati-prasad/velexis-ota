@@ -2,8 +2,8 @@
 //
 // One global setup (support/stack.ts) starts the built stack on a fresh database for the whole run and stops it at
 // the end. Projects select their spec files by name; a spec shared by several projects (specs/smoke.e2e.ts) pins each
-// test to its project with a tag. The OTA plan adds its projects here: `storefront` (OFE-008) and `ota-admin`
-// (OAD-016).
+// test to its project with a tag. The OTA plan adds its projects here: `storefront` (OFE-008), the nightly
+// `storefront-stripe` (OFE-017) and `ota-admin` (OAD-016).
 import { defineConfig, devices, type Project } from "@playwright/test";
 import { loadDevEnvFiles } from "@velexis/config";
 import { PROJECT_TAGS } from "./support/fixtures";
@@ -25,42 +25,67 @@ const CHROMIUM = process.env["E2E_CHROMIUM_EXECUTABLE"];
 
 const desktopChrome = devices["Desktop Chrome"];
 
-const projects: Project[] = [
-  {
-    name: "portal",
-    testMatch: ["specs/smoke.e2e.ts", "specs/portal-*.e2e.ts", "specs/console-*.e2e.ts"],
-    // Stripe journeys run in `portal-stripe` only; admin tests of the smoke spec in `platform-admin`.
-    grepInvert: [tag(PROJECT_TAGS.stripe), tag(PROJECT_TAGS.platformAdmin)],
-    use: { ...desktopChrome, baseURL: PORTAL_URL },
-  },
-  {
-    name: "platform-admin",
-    testMatch: ["specs/smoke.e2e.ts", "specs/admin-*.e2e.ts"],
-    grepInvert: [tag(PROJECT_TAGS.portal)],
-    use: { ...desktopChrome, baseURL: PLATFORM_ADMIN_URL },
-  },
-];
-
-if (WITH_OTA) {
-  // The hosted storefront's journeys (OFE-008, and the M3 journeys of ota/frontend/README.md §13): the production build
-  // in `vite preview` for the demo OTA, with the preview proxy to the OTA API and the Caddyfile's headers. Without
-  // E2E_WITH_OTA=1 nothing serves it, so the project does not exist and `--project=storefront` fails at once.
-  projects.push({
-    name: "storefront",
-    testMatch: ["specs/storefront/**/*.e2e.ts"],
-    use: { ...desktopChrome, baseURL: STOREFRONT_URL },
-  });
+/** Which parts of the stack a run has: E2E_WITH_OTA and E2E_STRIPE. */
+export interface ProjectOptions {
+  readonly withOta: boolean;
+  readonly withStripe: boolean;
 }
 
-if (WITH_STRIPE) {
-  // Nightly only: Stripe Checkout and the Customer Portal in Stripe's test mode, over the network. Without
-  // E2E_STRIPE=1 the project does not exist, so `--project=portal-stripe` fails instead of running without Stripe.
-  projects.push({
-    name: "portal-stripe",
-    testMatch: ["specs/portal-*.e2e.ts"],
-    grep: tag(PROJECT_TAGS.stripe),
-    use: { ...desktopChrome, baseURL: PORTAL_URL },
-  });
+/** The projects of a run with `options`; a project whose stack part is missing does not exist, so selecting it fails. */
+export function projectsFor(options: ProjectOptions): Project[] {
+  const projects: Project[] = [
+    {
+      name: "portal",
+      testMatch: ["specs/smoke.e2e.ts", "specs/portal-*.e2e.ts", "specs/console-*.e2e.ts"],
+      // Stripe journeys run in `portal-stripe` only; admin tests of the smoke spec in `platform-admin`.
+      grepInvert: [tag(PROJECT_TAGS.stripe), tag(PROJECT_TAGS.platformAdmin)],
+      use: { ...desktopChrome, baseURL: PORTAL_URL },
+    },
+    {
+      name: "platform-admin",
+      testMatch: ["specs/smoke.e2e.ts", "specs/admin-*.e2e.ts"],
+      grepInvert: [tag(PROJECT_TAGS.portal)],
+      use: { ...desktopChrome, baseURL: PLATFORM_ADMIN_URL },
+    },
+  ];
+
+  if (options.withOta) {
+    // The hosted storefront's journeys (OFE-008, and the M3 journeys of ota/frontend/README.md §13): the production
+    // build in `vite preview` for the demo OTA, with the preview proxy to the OTA API and the Caddyfile's headers.
+    // Without E2E_WITH_OTA=1 nothing serves it, so the project does not exist and `--project=storefront` fails at once.
+    // Its Stripe journeys (tagged `@stripe`) run in `storefront-stripe` only.
+    projects.push({
+      name: "storefront",
+      testMatch: ["specs/storefront/**/*.e2e.ts"],
+      grepInvert: [tag(PROJECT_TAGS.stripe)],
+      use: { ...desktopChrome, baseURL: STOREFRONT_URL },
+    });
+  }
+
+  if (options.withStripe) {
+    // Nightly only: Stripe Checkout and the Customer Portal in Stripe's test mode, over the network. Without
+    // E2E_STRIPE=1 the project does not exist, so `--project=portal-stripe` fails instead of running without Stripe.
+    projects.push({
+      name: "portal-stripe",
+      testMatch: ["specs/portal-*.e2e.ts"],
+      grep: tag(PROJECT_TAGS.stripe),
+      use: { ...desktopChrome, baseURL: PORTAL_URL },
+    });
+  }
+
+  if (options.withOta && options.withStripe) {
+    // Nightly only (OFE-017): the storefront's journeys tagged `@stripe`, with Stripe.js, the Payment Element and
+    // 3-D Secure in Stripe's test mode over the network, and the Stripe CLI forwarder of the stack (support/stripe.ts)
+    // that the OTA's test keys turn on. Without both E2E_WITH_OTA=1 and E2E_STRIPE=1 the project does not exist, so
+    // `--project=storefront-stripe` fails instead of running without Stripe.
+    projects.push({
+      name: "storefront-stripe",
+      testMatch: ["specs/storefront/**/*.e2e.ts"],
+      grep: tag(PROJECT_TAGS.stripe),
+      use: { ...desktopChrome, baseURL: STOREFRONT_URL },
+    });
+  }
+  return projects;
 }
 
 export default defineConfig({
@@ -84,5 +109,5 @@ export default defineConfig({
     video: "off",
     ...(CHROMIUM === undefined || CHROMIUM === "" ? {} : { launchOptions: { executablePath: CHROMIUM } }),
   },
-  projects,
+  projects: projectsFor({ withOta: WITH_OTA, withStripe: WITH_STRIPE }),
 });

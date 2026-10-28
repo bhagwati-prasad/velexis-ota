@@ -2,11 +2,14 @@
 //
 // Setup, in this order, so a broken prerequisite fails in seconds with a message that says what to do:
 //   1. read the harness settings (TEST_DATABASE_ADMIN_URL, REDIS_URL, SMTP_URL, MAILPIT_API_URL, E2E_WITH_OTA,
-//      E2E_REDIS_DB, E2E_STRIPE) through @velexis/config, after the development .env.local files;
+//      E2E_REDIS_DB, E2E_STRIPE and its Stripe values) through @velexis/config, after the development .env.local files;
 //   2. check that every app is built and that every port of the stack is free;
 //   3. empty the stack's own Redis database, create a fresh PostgreSQL database `velexis_e2e_<runId>` like
 //      deploy/postgres/bootstrap.sql does (owner velexis_migrator, the database grants, deploy/postgres/schemas.sql),
 //      then run `pnpm db:migrate` and `pnpm db:seed:reference` against it;
+//   3b. with E2E_STRIPE=1, E2E_WITH_OTA=1 and the OTA's Stripe test keys (OFE-017), start the Stripe CLI forwarder of
+//      support/stripe.ts (`stripe listen` to the OTA API's /webhooks/stripe/velexis/test) and wait for its signing
+//      secret, which the OTA API gets as STRIPE_WEBHOOK_SECRET_VELEXIS_TEST (the keys go to the OTA API and worker);
 //   4. start the BUILT apps on their ports of docs/mvp/architecture.md §3: the platform API (3100) and worker (3101),
 //      the portal (3000) and the platform admin (3001) from their Next.js standalone servers, and with E2E_WITH_OTA=1
 //      the Amadeus stub (4900), the OTA worker (4001), the OTA API (4000) and `vite preview` of the built storefront
@@ -17,7 +20,8 @@
 //   6. with E2E_WITH_OTA=1, run the platform's and then the OTA backend's `dev:seed` from their built CLIs: the
 //      Velexis test Amadeus account with its test offices, then the demo OTA `tenant_demo` on demo.ota.example.com.
 //      What they print on stdout (a password, a TOTP set-up URI, two API keys, shown once) is discarded, never logged.
-// Teardown stops every process (SIGTERM, then SIGKILL after 10 s), drops the database and empties the Redis database.
+// Teardown stops every process and the forwarder (SIGTERM, then SIGKILL after 10 s), drops the database and empties the
+// Redis database.
 //
 // Every app gets its environment from the `.env.example` files (the root one, then its own: the same precedence as the
 // `.env.local` files in development), with the stack's database, Redis, ports and public URLs on top. So a variable a
@@ -46,6 +50,7 @@ import {
 } from "@velexis/testing";
 import Redis from "ioredis";
 import pg from "pg";
+import { OTA_WEBHOOK_PATH, startStripeForwarder, stripeCliEnv, type StripeForwarder } from "./stripe";
 
 /** tools/e2e (this file is tools/e2e/support/stack.ts). */
 export const E2E_DIR = resolve(__dirname, "..");
@@ -158,6 +163,16 @@ export const STACK_SETTINGS_SCHEMA = {
   STRIPE_SECRET_KEY: env.string({ optional: true }),
   /** With E2E_STRIPE=1: the signing secret of the `stripe listen` forwarding to /webhooks/stripe/billing. */
   STRIPE_BILLING_WEBHOOK_SECRET: env.string({ optional: true }),
+  /**
+   * With E2E_STRIPE=1, both or neither, test mode only (OFE-017): the Velexis Stripe account's secret and publishable
+   * keys. With E2E_WITH_OTA=1 too they go to the OTA API and worker (`velexis`-mode payments of the demo OTA) instead
+   * of the dummies of their `.env.example`, and the secret key to the Stripe CLI forwarder (support/stripe.ts). The
+   * `storefront-stripe` journeys need them; without them the stack runs as before and those journeys fail at once.
+   */
+  STRIPE_SECRET_KEY_TEST: env.string({ optional: true }),
+  STRIPE_PUBLISHABLE_KEY_TEST: env.string({ optional: true }),
+  /** The Stripe CLI 1.x the forwarder runs: a name on PATH or a path. */
+  E2E_STRIPE_CLI: env.string({ default: "stripe" }),
 } as const;
 
 export type StackSettings = ConfigOf<typeof STACK_SETTINGS_SCHEMA>;
@@ -167,6 +182,33 @@ const STRIPE_TEST_VALUES = {
   STRIPE_SECRET_KEY: /^sk_test_[A-Za-z0-9_]+$/,
   STRIPE_BILLING_WEBHOOK_SECRET: /^whsec_[A-Za-z0-9_]+$/,
 } as const;
+
+/** The OTA's Stripe keys the stack accepts with E2E_STRIPE=1 (both or neither): test mode only (the OTA's patterns). */
+const OTA_STRIPE_TEST_VALUES = {
+  STRIPE_SECRET_KEY_TEST: /^(?:sk|rk)_test_[A-Za-z0-9_]+$/,
+  STRIPE_PUBLISHABLE_KEY_TEST: /^pk_test_[A-Za-z0-9_]+$/,
+} as const;
+
+type OtaStripeVariable = keyof typeof OTA_STRIPE_TEST_VALUES;
+const OTA_STRIPE_VARIABLES = Object.keys(OTA_STRIPE_TEST_VALUES) as OtaStripeVariable[];
+
+/**
+ * The OTA's Stripe keys of `settings` that are set and are not the dummy of the OTA's `.env.example` files
+ * (`sk_test_replace_me`, `pk_test_replace_me`). A developer's `.env.local` copied from `.env.example`
+ * (docs/mvp/local-development.md §2) holds those dummies, which the harness reads like any setting: they are no keys,
+ * so they never turn on the forwarder, which Stripe would refuse, failing every project of the run.
+ */
+function givenOtaStripeKeys(settings: StackSettings): Partial<Record<OtaStripeVariable, string>> {
+  const dummies = exampleEnv(EXAMPLE_ENV_FILES["ota-api"]);
+  const given: Partial<Record<OtaStripeVariable, string>> = {};
+  for (const variable of OTA_STRIPE_VARIABLES) {
+    const value = settings[variable];
+    if (value !== undefined && value !== dummies[variable]) {
+      given[variable] = value;
+    }
+  }
+  return given;
+}
 
 /**
  * The harness settings from `source`, or from the process environment after the `.env.local` files of tools/e2e and
@@ -190,8 +232,46 @@ export function readStackSettings(source?: EnvSource): StackSettings {
           "never used in tests.",
       );
     }
+    const otaKeys = givenOtaStripeKeys(settings);
+    if (Object.keys(otaKeys).length > 0) {
+      const badOta = OTA_STRIPE_VARIABLES.filter(
+        (variable) => !OTA_STRIPE_TEST_VALUES[variable].test(otaKeys[variable] ?? ""),
+      );
+      if (badOta.length > 0) {
+        throw new Error(
+          `E2E_STRIPE=1 with the OTA's Stripe keys needs both, in test mode (sk_test_… or rk_test_…, pk_test_…; ` +
+            `the dummies of .env.example are no keys): ${badOta.join(", ")}. Live keys are never used in tests.`,
+        );
+      }
+    }
   }
   return settings;
+}
+
+/** The OTA's Stripe test keys of a stack. */
+export interface OtaStripeKeys {
+  readonly secretKey: string;
+  readonly publishableKey: string;
+}
+
+/**
+ * The OTA's Stripe test keys when the stack pays through Stripe's test mode (OFE-017): E2E_STRIPE=1, E2E_WITH_OTA=1
+ * and both keys (checked by `readStackSettings`; the dummies of `.env.example` are no keys). Then the stack starts the
+ * Stripe CLI forwarder and the OTA API and worker get the keys; otherwise `undefined`, and they keep the dummies of
+ * their `.env.example`.
+ */
+export function otaStripeKeys(settings: StackSettings): OtaStripeKeys | undefined {
+  const { STRIPE_SECRET_KEY_TEST: secretKey, STRIPE_PUBLISHABLE_KEY_TEST: publishableKey } =
+    givenOtaStripeKeys(settings);
+  if (
+    !settings.E2E_STRIPE ||
+    !settings.E2E_WITH_OTA ||
+    secretKey === undefined ||
+    publishableKey === undefined
+  ) {
+    return undefined;
+  }
+  return { secretKey, publishableKey };
 }
 
 // ---- The stack's context and the environment of each process -------------------------------------------------
@@ -203,6 +283,11 @@ export interface StackContext {
   readonly databaseName: string;
   /** REDIS_URL with the stack's database (E2E_REDIS_DB) as its path. */
   readonly redisUrl: string;
+  /**
+   * The signing secret of the Stripe CLI forwarder (`otaStripeKeys`), once it runs: the OTA API's
+   * STRIPE_WEBHOOK_SECRET_VELEXIS_TEST. Never printed, never handed to the test workers.
+   */
+  readonly stripeWebhookSecret?: string;
 }
 
 /** A new database name: `velexis_e2e_` and a base-36 timestamp and 6 random hex digits. */
@@ -210,8 +295,12 @@ export function newDatabaseName(): string {
   return `${E2E_DATABASE_PREFIX}${Date.now().toString(36)}_${randomBytes(3).toString("hex")}`;
 }
 
-/** The context of a stack on `databaseName`. */
-export function stackContext(settings: StackSettings, databaseName: string): StackContext {
+/** The context of a stack on `databaseName` (with the forwarder's signing secret once it runs). */
+export function stackContext(
+  settings: StackSettings,
+  databaseName: string,
+  stripe: { readonly webhookSecret?: string } = {},
+): StackContext {
   if (!/^velexis_e2e_[a-z0-9_]{1,40}$/.test(databaseName)) {
     throw new TypeError(`not a database name of this harness: ${databaseName}`);
   }
@@ -219,6 +308,7 @@ export function stackContext(settings: StackSettings, databaseName: string): Sta
     settings,
     databaseName,
     redisUrl: redisUrlWithDatabase(settings.REDIS_URL, settings.E2E_REDIS_DB),
+    ...(stripe.webhookSecret === undefined ? {} : { stripeWebhookSecret: stripe.webhookSecret }),
   });
 }
 
@@ -332,6 +422,24 @@ function stripeOverrides(settings: StackSettings): Record<string, string> {
   return values;
 }
 
+/**
+ * With `otaStripeKeys`, the OTA's Stripe test keys for the OTA API and worker instead of the dummies, and for the API
+ * the forwarder's signing secret, which verifies the deliveries the Stripe CLI signs; otherwise nothing.
+ */
+function otaStripeOverrides(name: "ota-api" | "ota-worker", context: StackContext): Record<string, string> {
+  const keys = otaStripeKeys(context.settings);
+  if (keys === undefined) {
+    return {};
+  }
+  return {
+    STRIPE_SECRET_KEY_TEST: keys.secretKey,
+    STRIPE_PUBLISHABLE_KEY_TEST: keys.publishableKey,
+    ...(name === "ota-api" && context.stripeWebhookSecret !== undefined
+      ? { STRIPE_WEBHOOK_SECRET_VELEXIS_TEST: context.stripeWebhookSecret }
+      : {}),
+  };
+}
+
 /** The variables that differ per process. */
 function serviceOverrides(name: ServiceName, context: StackContext): Record<string, string> {
   switch (name) {
@@ -356,12 +464,14 @@ function serviceOverrides(name: ServiceName, context: StackContext): Record<stri
         DATABASE_PROVISIONER_URL: stackDatabaseUrl(context, "provisioner"),
         PORT: String(STACK_PORTS.otaApi),
         HEALTH_PORT: String(STACK_PORTS.otaWorker),
+        ...otaStripeOverrides(name, context),
       };
     case "ota-api":
       return {
         DATABASE_URL: stackDatabaseUrl(context, "ota"),
         PORT: String(STACK_PORTS.otaApi),
         HEALTH_PORT: String(STACK_PORTS.otaWorker),
+        ...otaStripeOverrides(name, context),
       };
     case "ota-cli":
       // `dev:seed`: the demo OTA's platform rows as the migrator, its schema as the provisioner, read back as the app.
@@ -902,11 +1012,13 @@ export async function startStack(settings: StackSettings): Promise<Stack> {
   const context = stackContext(settings, newDatabaseName());
   const services = stackServices(context);
   const seeds = seedCommands(context);
+  const stripeKeys = otaStripeKeys(settings);
   assertBuilt([...services, ...seeds]);
   await assertPortsFree(services);
   await mkdir(STACK_LOG_DIR, { recursive: true });
 
   const running: RunningService[] = [];
+  let forwarder: StripeForwarder | undefined;
   const cancelReadiness = new AbortController();
   // Set before CREATE DATABASE: a failure after it (grants, schemas.sql) still drops the database, and dropping one
   // that was never created is a no-op.
@@ -918,6 +1030,7 @@ export async function startStack(settings: StackSettings): Promise<Stack> {
         service.child.kill("SIGKILL");
       }
     }
+    forwarder?.kill();
   };
   process.once("exit", killAll);
 
@@ -933,6 +1046,7 @@ export async function startStack(settings: StackSettings): Promise<Stack> {
         problems.push(`${service.spec.name}: ${String(error)}`),
       );
     }
+    await forwarder?.stop().catch((error: unknown) => problems.push(`stripe-cli: ${String(error)}`));
     process.off("exit", killAll);
     if (databaseRequested) {
       await dropDatabase(settings.TEST_DATABASE_ADMIN_URL, context.databaseName).catch((error: unknown) =>
@@ -964,8 +1078,23 @@ export async function startStack(settings: StackSettings): Promise<Stack> {
       "db-seed-reference",
     );
     say(`database ${context.databaseName} migrated and seeded (${seconds(step)})`);
+    // Step 3b: the Stripe CLI forwarder before the apps, so the OTA API starts with its signing secret.
+    let toStart = services;
+    if (stripeKeys !== undefined) {
+      const forwarderStarted = performance.now();
+      forwarder = await startStripeForwarder({
+        cli: settings.E2E_STRIPE_CLI,
+        env: childEnv(stripeCliEnv(stripeKeys.secretKey)),
+        forwardTo: `${OTA_API_URL}${OTA_WEBHOOK_PATH}`,
+        logFile: join(STACK_LOG_DIR, "stripe-cli.log"),
+      });
+      say(`stripe-cli forwarding to ${OTA_API_URL}${OTA_WEBHOOK_PATH} (${seconds(forwarderStarted)})`);
+      toStart = stackServices(
+        stackContext(settings, context.databaseName, { webhookSecret: forwarder.webhookSecret }),
+      );
+    }
     await syncNextStaticAssets();
-    for (const spec of services) {
+    for (const spec of toStart) {
       running.push(startService(spec));
     }
     await Promise.all(running.map((service) => waitUntilReady(service, cancelReadiness.signal)));
