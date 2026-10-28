@@ -20204,7 +20204,8 @@ paths:
         **Worker.** The worker serves the same paths and answers on `127.0.0.1:HEALTH_PORT` (no Nest pipeline). From
         OBE-025 (M2) its readiness also reports the BullMQ queues in `queues`: per queue the waiting jobs, the age of
         the oldest one and the jobs failed in the last hour. Old jobs do not make it unready: the on-VM check decides
-        the alert threshold.
+        the alert threshold. The queues are read in parallel with the checks, within 1 second: when Redis refuses or
+        does not answer them in time, `queues` is left out (the queue part is unknown) and the answer is not delayed.
       tags:
         - Internal
       security: []
@@ -45006,7 +45007,8 @@ components:
             $ref: '#/components/schemas/HealthQueue'
           description: >-
             The worker's health port only, from OBE-025 (M2): every OTA queue by name (`ota-payments`,
-            `ota-stripe-events`, …). The API's readiness has no `queues`.
+            `ota-stripe-events`, …). The API's readiness has no `queues`; the worker's has none while the queues are
+            unknown (Redis did not answer them within 1 second).
     HealthDependencyStatus:
       type: string
       enum:

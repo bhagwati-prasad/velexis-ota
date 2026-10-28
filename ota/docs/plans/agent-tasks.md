@@ -560,7 +560,8 @@ The OTA backend gets its contract extensions, request pipeline, tenancy, Amadeus
   - `provisioning` and `failed` tenants are skipped.
 - **Verify:** `pnpm --filter @velexis/ota-backend test -- jobs && pnpm --filter @velexis/ota-backend test:int jobs`
 
-### OBE-025 · Report queue ages in worker readiness and add amadeus:ping
+### OBE-025 · Report queue ages in worker readiness and add amadeus:ping ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-backend
 - **Milestone:** M2
 - **Depends on:** OBE-024, OBE-018

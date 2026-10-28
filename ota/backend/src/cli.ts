@@ -3,9 +3,11 @@
 // (provisioning/report-migrations.command.ts, the deploy step after the tenant fan-out) and `dev:seed`
 // (dev/dev-seed.command.ts, development only); FIX-W30-OTA adds `tenants:scrub-card-copies`
 // (payments/airline-card/scrub-card-copies.command.ts, the one-off scrub of the card copies stored before
-// FIX-W29-SECURITY); later tasks add `amadeus:ping`. A command's module is loaded only when it runs, so `help` needs
-// neither a configuration nor a connection. Exit codes: 0 success, 1 error or unknown command.
+// FIX-W29-SECURITY); OBE-025 adds `amadeus:ping` (amadeus/amadeus-ping.command.ts, the support check of one OTA's
+// Amadeus connection). A command's module is loaded only when it runs, so `help` needs neither a configuration nor a
+// connection. Exit codes: 0 success, 1 error or unknown command.
 import type { EnvSource } from "@velexis/config";
+import type * as AmadeusPingCommand from "./amadeus/amadeus-ping.command";
 import type * as DevSeedCommand from "./dev/dev-seed.command";
 import type * as ScrubCardCopiesCommand from "./payments/airline-card/scrub-card-copies.command";
 import type * as ReportMigrationsCommand from "./provisioning/report-migrations.command";
@@ -61,6 +63,11 @@ function scrubCardCopiesCommand(): Promise<typeof ScrubCardCopiesCommand> {
   return import("./payments/airline-card/scrub-card-copies.command.js");
 }
 
+/** The support check of an OTA's Amadeus connection, loaded when it runs (amadeus/amadeus-ping.command.ts). */
+function amadeusPingCommand(): Promise<typeof AmadeusPingCommand> {
+  return import("./amadeus/amadeus-ping.command.js");
+}
+
 const COMMANDS: ReadonlyMap<string, CliCommand> = new Map<string, CliCommand>([
   [
     "help",
@@ -98,6 +105,16 @@ const COMMANDS: ReadonlyMap<string, CliCommand> = new Map<string, CliCommand>([
         "--tenant <key> | --all [--batch-size <n>]: drop the card holder and expiry from card copies stored before 2026-10-24",
       async run(args, io) {
         return (await scrubCardCopiesCommand()).runScrubCardCopies(args, io);
+      },
+    },
+  ],
+  [
+    "amadeus:ping",
+    {
+      summary:
+        "--tenant <key> --env <test|live>: resolve an OTA's Amadeus connection, get a token and run one cheap read",
+      async run(args, io) {
+        return (await amadeusPingCommand()).runAmadeusPing(args, io);
       },
     },
   ],

@@ -3167,7 +3167,7 @@ export interface paths {
          *
          *     **Local only.** Caddy blocks `/health/ready` publicly (and `/api/health/ready` on the storefront hosts). The API answers it without a credential only on a direct loopback connection (the socket peer is loopback and neither `X-Forwarded-For` nor `X-Forwarded-Host` is present, OADR-0009 rule 1.2); any other request without a credential answers `401 INVALID_API_KEY`, and a credential sent anyway is checked as on every route, with the answers healthLive lists (`400`, `401`, `403 ORIGIN_NOT_ALLOWED`, and `503 SERVICE_UNAVAILABLE` with the error envelope instead of the readiness body when the key cannot be looked up). Never cached (`Cache-Control: no-store`) and never logged per request.
          *
-         *     **Worker.** The worker serves the same paths and answers on `127.0.0.1:HEALTH_PORT` (no Nest pipeline). From OBE-025 (M2) its readiness also reports the BullMQ queues in `queues`: per queue the waiting jobs, the age of the oldest one and the jobs failed in the last hour. Old jobs do not make it unready: the on-VM check decides the alert threshold.
+         *     **Worker.** The worker serves the same paths and answers on `127.0.0.1:HEALTH_PORT` (no Nest pipeline). From OBE-025 (M2) its readiness also reports the BullMQ queues in `queues`: per queue the waiting jobs, the age of the oldest one and the jobs failed in the last hour. Old jobs do not make it unready: the on-VM check decides the alert threshold. The queues are read in parallel with the checks, within 1 second: when Redis refuses or does not answer them in time, `queues` is left out (the queue part is unknown) and the answer is not delayed.
          */
         get: operations["healthReady"];
         put?: never;
@@ -13460,7 +13460,7 @@ export interface components {
                 /** @description Redis (`PING`). */
                 redis: components["schemas"]["HealthDependencyStatus"];
             };
-            /** @description The worker's health port only, from OBE-025 (M2): every OTA queue by name (`ota-payments`, `ota-stripe-events`, …). The API's readiness has no `queues`. */
+            /** @description The worker's health port only, from OBE-025 (M2): every OTA queue by name (`ota-payments`, `ota-stripe-events`, …). The API's readiness has no `queues`; the worker's has none while the queues are unknown (Redis did not answer them within 1 second). */
             queues?: {
                 [key: string]: components["schemas"]["HealthQueue"];
             };
