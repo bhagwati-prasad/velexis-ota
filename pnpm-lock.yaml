@@ -355,8 +355,8 @@ importers:
         version: 3.0.1(ajv@8.20.0)
     devDependencies:
       '@redocly/cli':
-        specifier: 1.34.21
-        version: 1.34.21(ajv@8.20.0)
+        specifier: 1.34.22
+        version: 1.34.22(ajv@8.20.0)
       '@types/node':
         specifier: 22.20.5
         version: 22.20.5
@@ -2316,8 +2316,8 @@ packages:
   '@redocly/ajv@8.11.2':
     resolution: {integrity: sha512-io1JpnwtIcvojV7QKDUSIuMN/ikdOUd1ReEnUnMKGfDVridQZ31J0MmIuqwuRjWDZfmvr+Q0MqCcfHM2gTivOg==}
 
-  '@redocly/cli@1.34.21':
-    resolution: {integrity: sha512-cWZMh6z6AqJ5Q2nQz2K5XhOnwVWcidtnk4NMjMvdHHpGtjnsPSWKg4fdyWhY46ze5SXu6GxFLTLbMoXGz2JJHA==}
+  '@redocly/cli@1.34.22':
+    resolution: {integrity: sha512-0z65bJjhnTt0E50dUz2rrHLlUox+v/Z+X5LJCWrXZJYK+My0FoB2SNnWIEghSbgCPBmoKkKrYcDvlWzYVF3kYg==}
     engines: {node: '>=18.17.0', npm: '>=9.5.0'}
     hasBin: true
 
@@ -2328,12 +2328,12 @@ packages:
     resolution: {integrity: sha512-ypeBZ/6BKXR9+7/TtbKhbl4UgD7raHhPS12oknlKno2A8+lnFkxIwiE/Aklu6L2cd/ioH+fCWuMxi9/p3EyAPw==}
     engines: {node: '>=18.17.0', npm: '>=9.5.0'}
 
-  '@redocly/openapi-core@1.34.21':
-    resolution: {integrity: sha512-yXMiBFYJbP5JOaxPzx2tJhK+v8h2Wu2uhad1Ro6GzVT8E3F4GcQ7sbLPJ9w4zvGjfxroD0bIh5B0pDtnLV/qUA==}
+  '@redocly/openapi-core@1.34.22':
+    resolution: {integrity: sha512-dEyx4uHh6Pc6ZkdU9Xe8rA4h12Odq6QKU/fqseBn07xwVwskhHiF3KHhqmw5BR+jAiFTvKTmwCafFql/k1pSzA==}
     engines: {node: '>=18.17.0', npm: '>=9.5.0'}
 
-  '@redocly/respect-core@1.34.21':
-    resolution: {integrity: sha512-4qTfsJJg51mHqOqcgkw9QLy4wHckt+tqWcBeqhl9/w+4tiOmku06Sx4DqW2a3732jHXIPd0/T1xsehNt4lOhXw==}
+  '@redocly/respect-core@1.34.22':
+    resolution: {integrity: sha512-4gc75TuNNavPq3YqYaIwevtIpKX6lQSdExLAxwpj1rQ0HHc260N4WSH0eI2TGCGAeM9JeSIhF9CRitqp9OcMjg==}
     engines: {node: '>=18.17.0', npm: '>=9.5.0'}
 
   '@rollup/rollup-android-arm-eabi@4.64.5':
@@ -4245,8 +4245,8 @@ packages:
   openapi-sampler@1.7.0:
     resolution: {integrity: sha512-fWq32F5vqGpgRJYIarC/9Y1wC9tKnRDcCOjsDJ7MIcSv2HsE7kNifcXIZ8FVtNStBUWxYrEk/MKqVF0SwZ5gog==}
 
-  openapi-sampler@1.7.6:
-    resolution: {integrity: sha512-MvWOm3vdgX7CZ6CNfu2wOFMGhC/pq03BxYTL/DKCkyPWfR6XIwUJnOV32mQGgCcUm1tY/y1jj7F2yqx1DieIWw==}
+  openapi-sampler@1.7.9:
+    resolution: {integrity: sha512-r3D6O5m3O6mhMpQkr+kddfVX6A5jos6/B9BRWiYk4dR0/jgoEbLtD853fDL3CDIyrlXRIL+sI7ap36VSeHSEPQ==}
 
   openapi-typescript-helpers@0.0.15:
     resolution: {integrity: sha512-opyTPaunsklCBpTK8JGef6mfPhLSnyy5a0IN9vKtx3+4aExf+KxEqYwIy3hqkedXIB97u357uLMJsOnm3GVjsw==}
@@ -6495,7 +6495,7 @@ snapshots:
       require-from-string: 2.0.2
       uri-js-replace: 1.0.1
 
-  '@redocly/cli@1.34.21(ajv@8.20.0)':
+  '@redocly/cli@1.34.22(ajv@8.20.0)':
     dependencies:
       '@opentelemetry/api': 1.9.0
       '@opentelemetry/exporter-trace-otlp-http': 0.222.0(@opentelemetry/api@1.9.0)
@@ -6503,8 +6503,8 @@ snapshots:
       '@opentelemetry/sdk-trace-node': 2.11.0(@opentelemetry/api@1.9.0)
       '@opentelemetry/semantic-conventions': 1.27.0
       '@redocly/config': 0.22.0
-      '@redocly/openapi-core': 1.34.21
-      '@redocly/respect-core': 1.34.21(ajv@8.20.0)
+      '@redocly/openapi-core': 1.34.22
+      '@redocly/respect-core': 1.34.22(ajv@8.20.0)
       abort-controller: 3.0.0
       chokidar: 4.0.3
       colorette: 1.4.0
@@ -6549,7 +6549,7 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  '@redocly/openapi-core@1.34.21':
+  '@redocly/openapi-core@1.34.22':
     dependencies:
       '@redocly/ajv': 8.11.2
       '@redocly/config': 0.22.0
@@ -6563,11 +6563,11 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  '@redocly/respect-core@1.34.21(ajv@8.20.0)':
+  '@redocly/respect-core@1.34.22(ajv@8.20.0)':
     dependencies:
       '@faker-js/faker': 7.6.0
       '@redocly/ajv': 8.11.2
-      '@redocly/openapi-core': 1.34.21
+      '@redocly/openapi-core': 1.34.22
       better-ajv-errors: 1.2.0(ajv@8.20.0)
       colorette: 2.0.20
       concat-stream: 2.0.0
@@ -8450,7 +8450,7 @@ snapshots:
       fast-xml-parser: 5.11.2
       json-pointer: 0.6.2
 
-  openapi-sampler@1.7.6:
+  openapi-sampler@1.7.9:
     dependencies:
       '@types/json-schema': 7.0.15
       fast-xml-parser: 5.11.2
@@ -8789,7 +8789,7 @@ snapshots:
 
   redoc@2.5.3(core-js@3.32.1)(mobx@6.12.3)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(styled-components@6.5.3(react-dom@19.3.1(react@19.3.1))(react@19.3.1)):
     dependencies:
-      '@redocly/openapi-core': 1.34.21
+      '@redocly/openapi-core': 1.34.22
       classnames: 2.5.1
       core-js: 3.32.1
       decko: 1.2.0
@@ -8801,7 +8801,7 @@ snapshots:
       marked: 4.3.0
       mobx: 6.12.3
       mobx-react: 9.2.0(mobx@6.12.3)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
-      openapi-sampler: 1.7.6
+      openapi-sampler: 1.7.9
       path-browserify: 1.0.1
       perfect-scrollbar: 1.5.6
       polished: 4.3.1
