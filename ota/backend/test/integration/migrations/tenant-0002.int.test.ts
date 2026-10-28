@@ -13,9 +13,10 @@
 //     velexis_ota_app writes the two new tables through the default privileges of provisioning (the file has no
 //     GRANT; test/contract/migration-0002.contract.test.ts checks the file).
 // Since FIX-W27-SYNC the release holds tenant migration 0003 (`bookings.sync_claimed_at`, `bookings.sync_changes`)
-// after 0002, and since FIX-W28-CANCEL 0004 (`payments.card_fee_lines`): provisioning and the deploy fan-out apply them
-// all, so the tests above expect the release's files (0002 to 0004), and one test each checks the columns of 0003 and
-// of 0004 themselves.
+// after 0002, since FIX-W28-CANCEL 0004 (`payments.card_fee_lines`) and since FIX-W31-OTA 0005
+// (`bookings.cancellation_claimed_at` and the calling-code CHECKs of one to three digits): provisioning and the deploy
+// fan-out apply them all, so the tests above expect the release's files (0002 to 0005), and one test each checks the
+// changes of 0003, of 0004 and of 0005 themselves.
 // The file runs on its own clone of the @velexis/testing template. Tenant rows are written and read as
 // velexis_ota_app through tenantTx, the application's path; the catalogue is read as velexis_migrator, a member of
 // the schemas' owner (test code may name a schema, application code never). Every test uses schemas of its own.
@@ -35,7 +36,12 @@ import {
   type TenantDatabase,
   type TenantDb,
 } from "@velexis/db";
-import { BASELINE_FILE, migrateTenants, migrateTenantSchema } from "@velexis/db/migrate";
+import {
+  BASELINE_FILE,
+  migrateTenants,
+  migrateTenantSchema,
+  TenantMigrationFailedError,
+} from "@velexis/db/migrate";
 import { createTestDatabase, type TestDatabase } from "@velexis/testing";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { Clock } from "../../../src/common/clock";
@@ -52,10 +58,12 @@ import { PlatformReadRepository } from "../../../src/tenancy/platform-read.repos
 
 const MIGRATION_ID = "0002_add_mvp_tenant_deltas";
 const MIGRATION_FILE = `${MIGRATION_ID}.sql`;
-/** The release's files after 0002 (FIX-W27-SYNC, FIX-W28-CANCEL): a schema at version N has them too. */
+/** The release's files after 0002 (FIX-W27-SYNC, FIX-W28-CANCEL, FIX-W31-OTA): a schema at version N has them too. */
 const SYNC_CLAIM_ID = "0003_add_booking_sync_claim";
 const SYNC_CLAIM_FILE = `${SYNC_CLAIM_ID}.sql`;
-const LATEST_ID = "0004_add_payment_card_fee_lines";
+const CARD_FEE_LINES_ID = "0004_add_payment_card_fee_lines";
+const CARD_FEE_LINES_FILE = `${CARD_FEE_LINES_ID}.sql`;
+const LATEST_ID = "0005_add_cancellation_claim_tighten_calling_codes";
 const LATEST_FILE = `${LATEST_ID}.sql`;
 const GENERATED_TYPES = join(APP_DIR, "..", "..", "packages", "db", "src", "generated", "tenant.ts");
 /** The privileges of velexis_ota_app on every tenant table: exactly DML (OADR-0007 item 3). */
@@ -489,7 +497,8 @@ describe("tenant migration 0002 on PostgreSQL", () => {
       ["0001_baseline", "expand", true, "applied"],
       [MIGRATION_ID, "expand", true, "applied"],
       [SYNC_CLAIM_ID, "expand", true, "applied"],
-      [LATEST_ID, "expand", true, "applied"],
+      [CARD_FEE_LINES_ID, "expand", true, "applied"],
+      [LATEST_ID, "contract", true, "applied"],
     ]);
     // Every ledger row comes from the one provisioning transaction.
     expect(new Set((await ledgerOf(schema)).map((row) => row.xid)).size).toBe(1);
@@ -512,6 +521,8 @@ describe("tenant migration 0002 on PostgreSQL", () => {
     expect(actual["bookings.sync_changes"]).toEqual({ nullable: false, hasDefault: true });
     // 0004 (FIX-W28-CANCEL).
     expect(actual["payments.card_fee_lines"]).toEqual({ nullable: false, hasDefault: true });
+    // 0005 (FIX-W31-OTA).
+    expect(actual["bookings.cancellation_claimed_at"]).toEqual({ nullable: true, hasDefault: false });
   });
 
   it("upgrades a schema at N-1 with baseline rows in payments, checkouts, bookings and storefront_settings: the rows survive and still validate [OBE-008 AC1]", async () => {
@@ -534,6 +545,7 @@ describe("tenant migration 0002 on PostgreSQL", () => {
     expect(upgraded?.files.map((file) => [file.id, file.status])).toEqual([
       [MIGRATION_ID, "applied"],
       [SYNC_CLAIM_ID, "applied"],
+      [CARD_FEE_LINES_ID, "applied"],
       [LATEST_ID, "applied"],
     ]);
 
@@ -554,6 +566,8 @@ describe("tenant migration 0002 on PostgreSQL", () => {
         // 0003 (FIX-W27-SYNC): no claim yet, no change recorded.
         sync_claimed_at: null,
         sync_changes: [],
+        // 0005 (FIX-W31-OTA): no cancellation claimed.
+        cancellation_claimed_at: null,
       })),
     );
     expect(after.storefrontSettings).toEqual(
@@ -854,6 +868,7 @@ describe("tenant migration 0002 on PostgreSQL", () => {
     expect(result.applied.map((file) => [file.id, file.checksum])).toEqual([
       [MIGRATION_ID, await migrationChecksum()],
       [SYNC_CLAIM_ID, await migrationChecksum(SYNC_CLAIM_FILE)],
+      [CARD_FEE_LINES_ID, await migrationChecksum(CARD_FEE_LINES_FILE)],
       [LATEST_ID, await migrationChecksum(LATEST_FILE)],
     ]);
     const ledger = await ledgerOf(schema);
@@ -871,7 +886,13 @@ describe("tenant migration 0002 on PostgreSQL", () => {
         phase: "expand",
         status: "applied",
       },
-      { id: LATEST_ID, checksum: await migrationChecksum(LATEST_FILE), phase: "expand", status: "applied" },
+      {
+        id: CARD_FEE_LINES_ID,
+        checksum: await migrationChecksum(CARD_FEE_LINES_FILE),
+        phase: "expand",
+        status: "applied",
+      },
+      { id: LATEST_ID, checksum: await migrationChecksum(LATEST_FILE), phase: "contract", status: "applied" },
     ]);
     expect(ledger[1]?.execution_ms).toEqual(expect.any(Number));
     // The ledger row and the two tables of 0002 were written by one transaction, a later one than the baseline's.
@@ -888,7 +909,7 @@ describe("tenant migration 0002 on PostgreSQL", () => {
       dir: TENANT_MIGRATIONS_DIR,
       url: db.urlFor("migrator"),
     });
-    expect(again).toMatchObject({ applied: [], upToDate: 4 });
+    expect(again).toMatchObject({ applied: [], upToDate: 5 });
   });
 
   it("provisions a new tenant with 0002 in its ledger; velexis_ota_app writes storefront_assets and storefront_pages through the default privileges [OBE-008 AC2]", async () => {
@@ -906,7 +927,8 @@ describe("tenant migration 0002 on PostgreSQL", () => {
       ["0001_baseline", "expand"],
       [MIGRATION_ID, "expand"],
       [SYNC_CLAIM_ID, "expand"],
-      [LATEST_ID, "expand"],
+      [CARD_FEE_LINES_ID, "expand"],
+      [LATEST_ID, "contract"],
     ]);
     const ledger = await ledgerOf(schema);
     expect(ledger.map(({ id, checksum }) => [id, checksum]).find(([id]) => id === MIGRATION_ID)).toEqual([
@@ -1119,5 +1141,245 @@ describe("tenant migration 0004 on PostgreSQL (FIX-W28-CANCEL)", () => {
       migrator,
     );
     expect(rows.map((row) => (row.comment ?? "").length > 20)).toEqual([true]);
+  });
+});
+
+describe("tenant migration 0005 on PostgreSQL (FIX-W31-OTA)", () => {
+  /** The folder of the release before 0005 (0001 to 0004), as a schema at version N-1 has it. */
+  async function folderBefore0005(): Promise<string> {
+    const dir = await mkdtemp(join(tmpdir(), "velexis-fix-w31-n-minus-1-"));
+    folders.push(dir);
+    for (const file of [BASELINE_FILE, MIGRATION_FILE, SYNC_CLAIM_FILE, CARD_FEE_LINES_FILE]) {
+      await copyFile(join(TENANT_MIGRATIONS_DIR, file), join(dir, file));
+    }
+    return dir;
+  }
+
+  /** A schema at version N-1 (0004), provisioned as the worker does. */
+  async function schemaBefore0005(schema: string): Promise<void> {
+    await provision(schema, await folderBefore0005());
+    expect((await ledgerOf(schema)).map((row) => row.id)).toEqual([
+      "0001_baseline",
+      MIGRATION_ID,
+      SYNC_CLAIM_ID,
+      CARD_FEE_LINES_ID,
+    ]);
+  }
+
+  /** Inserts a customer with a phone of `code` (the baseline allows one to four digits) and, with `saved`, a saved traveller of its. */
+  async function insertPhones(
+    schema: string,
+    customerCode: string | null,
+    savedCode?: string | null,
+  ): Promise<{ readonly customerId: string; readonly travelerId: string | undefined }> {
+    const customerId = newId("cus", NOW);
+    const travelerId = savedCode === undefined ? undefined : newId("trv", NOW);
+    await tenantTx(app, schema, async (trx) => {
+      await trx
+        .insertInto("customers")
+        .values({
+          id: customerId,
+          email: `${customerId.toLowerCase()}@example.com`,
+          phone_country_code: customerCode,
+          phone_number: customerCode === null ? null : "5550100",
+        })
+        .execute();
+      if (travelerId !== undefined) {
+        await trx
+          .insertInto("saved_travelers")
+          .values({
+            id: travelerId,
+            customer_id: customerId,
+            first_name: "ANNA",
+            last_name: "BERG",
+            phone_country_code: savedCode ?? null,
+            phone_number: savedCode === null || savedCode === undefined ? null : "5550101",
+          })
+          .execute();
+      }
+    });
+    return { customerId, travelerId };
+  }
+
+  const phoneCodes = (schema: string) =>
+    tenantTx(app, schema, async (trx) => ({
+      customers: (await trx.selectFrom("customers").select("phone_country_code").orderBy("id").execute()).map(
+        (row) => row.phone_country_code,
+      ),
+      savedTravelers: (
+        await trx.selectFrom("saved_travelers").select("phone_country_code").orderBy("id").execute()
+      ).map((row) => row.phone_country_code),
+    }));
+
+  /** The CHECK constraints of a table's `phone_country_code`, with their definition and validation state. */
+  async function phoneChecks(schema: string, table: "customers" | "saved_travelers") {
+    const { rows } = await sql<{ name: string; definition: string; validated: boolean }>`
+      SELECT conname AS name, pg_get_constraintdef(oid) AS definition, convalidated AS validated
+      FROM pg_catalog.pg_constraint
+      WHERE conrelid = ${`${schema}.${table}`}::regclass AND contype = 'c'
+        AND pg_get_constraintdef(oid) LIKE '%phone_country_code%'
+      ORDER BY conname`.execute(migrator);
+    return rows;
+  }
+
+  /** The release's 0005 on `schema`, as `migrate.js tenant` and the deploy fan-out run it (velexis_migrator). */
+  const migrateTo0005 = (schema: string) =>
+    migrateTenantSchema({ schema, dir: TENANT_MIGRATIONS_DIR, url: db.urlFor("migrator") });
+
+  it("[FIX-W31-OTA AC3] tightens the calling-code CHECKs of a schema whose rows hold one to three digits, keeps the rows, and refuses four digits afterwards", async () => {
+    const schema = "tenant_m5_valid";
+    await schemaBefore0005(schema);
+    const first = await insertPhones(schema, "44", "1");
+    await insertPhones(schema, "353", "971");
+    await insertPhones(schema, null, null);
+    const before = await phoneCodes(schema);
+    expect(await phoneChecks(schema, "customers")).toEqual([
+      expect.objectContaining({ name: "customers_phone_country_code_check", validated: true }),
+    ]);
+
+    const result = await migrateTo0005(schema);
+
+    expect(result.applied.map((file) => [file.id, file.phase, file.status])).toEqual([
+      [LATEST_ID, "contract", "applied"],
+    ]);
+    expect(await phoneCodes(schema)).toEqual(before);
+    for (const table of ["customers", "saved_travelers"] as const) {
+      expect(await phoneChecks(schema, table)).toEqual([
+        {
+          name: `${table}_phone_country_code_ck`,
+          definition: "CHECK ((phone_country_code ~ '^[0-9]{1,3}$'::text))",
+          validated: true,
+        },
+      ]);
+    }
+    // A four-digit code (a NANP area code such as 1268) is refused by the database now; three digits still pass.
+    const setCustomer = (code: string) =>
+      tenantTx(app, schema, (trx) =>
+        trx
+          .updateTable("customers")
+          .set({ phone_country_code: code })
+          .where("id", "=", first.customerId)
+          .execute(),
+      );
+    expect(await failure(setCustomer("1268"))).toEqual({
+      code: CHECK_VIOLATION,
+      constraint: "customers_phone_country_code_ck",
+    });
+    await setCustomer("297");
+    expect(
+      await failure(
+        tenantTx(app, schema, (trx) =>
+          trx
+            .updateTable("saved_travelers")
+            .set({ phone_country_code: "1268" })
+            .where("id", "=", first.travelerId ?? "")
+            .execute(),
+        ),
+      ),
+    ).toEqual({ code: CHECK_VIOLATION, constraint: "saved_travelers_phone_country_code_ck" });
+    expect(
+      await failure(
+        tenantTx(app, schema, (trx) =>
+          trx
+            .insertInto("customers")
+            .values({
+              id: newId("cus", NOW),
+              email: `four-digits-${schema}@example.com`,
+              phone_country_code: "1809",
+              phone_number: "5550102",
+            })
+            .execute(),
+        ),
+      ),
+    ).toEqual({ code: CHECK_VIOLATION, constraint: "customers_phone_country_code_ck" });
+
+    // The cancellation's claim column: empty, documented like every column (conventions §9).
+    const { rows: claimColumn } = await sql<{ notNull: boolean; comment: string | null }>`
+      SELECT a.attnotnull AS "notNull", col_description(a.attrelid, a.attnum) AS comment
+      FROM pg_catalog.pg_attribute a
+      WHERE a.attrelid = ${`${schema}.bookings`}::regclass AND a.attname = 'cancellation_claimed_at'`.execute(
+      migrator,
+    );
+    expect(claimColumn.map((row) => [row.notNull, (row.comment ?? "").length > 20])).toEqual([[false, true]]);
+  });
+
+  it("[FIX-W31-OTA AC3] refuses to run while a stored calling code has four digits, naming the table, the column and the count, and rewrites nothing", async () => {
+    const schema = "tenant_m5_four_digits";
+    await schemaBefore0005(schema);
+    const fine = await insertPhones(schema, "44");
+    const antigua = await insertPhones(schema, "1268", "1");
+    const dominican = await insertPhones(schema, "1809");
+    const before = await phoneCodes(schema);
+
+    const refused = await migrateTo0005(schema).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+
+    expect(refused).toBeInstanceOf(TenantMigrationFailedError);
+    const failed = refused as TenantMigrationFailedError;
+    expect(failed.file).toBe(LATEST_FILE);
+    expect(failed.failure.message).toBe(
+      "customers.phone_country_code: 2 row(s) hold a calling code of more than three digits; correct them, then run the migration again",
+    );
+    // The schema's transaction rolled back: still at 0004, the rows and the old CHECK as they were.
+    expect((await ledgerOf(schema)).map((row) => row.id)).toEqual([
+      "0001_baseline",
+      MIGRATION_ID,
+      SYNC_CLAIM_ID,
+      CARD_FEE_LINES_ID,
+    ]);
+    expect(await phoneCodes(schema)).toEqual(before);
+    expect((await phoneChecks(schema, "customers")).map((row) => row.name)).toEqual([
+      "customers_phone_country_code_check",
+    ]);
+    const { rows: claimColumn } = await sql<{ column: string }>`
+      SELECT column_name AS column FROM information_schema.columns
+      WHERE table_schema = ${schema} AND table_name = 'bookings' AND column_name = 'cancellation_claimed_at'`.execute(
+      migrator,
+    );
+    expect(claimColumn).toEqual([]);
+
+    // The customers are corrected by hand; a saved traveller of four digits stops the next run in its turn.
+    await tenantTx(app, schema, async (trx) => {
+      await trx
+        .updateTable("customers")
+        .set({ phone_country_code: "1" })
+        .where("id", "in", [antigua.customerId, dominican.customerId])
+        .execute();
+      await trx
+        .updateTable("saved_travelers")
+        .set({ phone_country_code: "1441" })
+        .where("id", "=", antigua.travelerId ?? "")
+        .execute();
+    });
+    const again = await migrateTo0005(schema).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    expect((again as TenantMigrationFailedError).failure.message).toBe(
+      "saved_travelers.phone_country_code: 1 row(s) hold a calling code of more than three digits; correct them, then run the migration again",
+    );
+
+    await tenantTx(app, schema, (trx) =>
+      trx
+        .updateTable("saved_travelers")
+        .set({ phone_country_code: "1" })
+        .where("id", "=", antigua.travelerId ?? "")
+        .execute(),
+    );
+    const applied = await migrateTo0005(schema);
+    expect(applied.applied.map((file) => file.id)).toEqual([LATEST_ID]);
+    expect(
+      (
+        await tenantTx(app, schema, (trx) =>
+          trx
+            .selectFrom("customers")
+            .select("phone_country_code")
+            .where("id", "=", fine.customerId)
+            .execute(),
+        )
+      ).map((row) => row.phone_country_code),
+    ).toEqual(["44"]);
   });
 });

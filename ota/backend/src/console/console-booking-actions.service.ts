@@ -97,7 +97,9 @@
 //   the ticketing claim of the ticketing job (T1, ticketing.service.ts): the booking `FOR NO KEY UPDATE SKIP LOCKED`
 //   (held: `503 SERVICE_UNAVAILABLE` with `Retry-After`), the `If-Match`, the status (`ticketed` or issued: `409
 //   ALREADY_ISSUED`; `cancelled`: `409 BOOKING_ALREADY_CANCELLED`; no order: `409 BOOKING_NOT_MODIFIABLE`), no
-//   undecided cancellation and no fresh claim of the job or of another request (`409 BOOKING_NOT_MODIFIABLE`,
+//   cancellation holding it (an undecided one, and since FIX-W31-OTA, lead decision (1) of 2026-10-27, one whose claim
+//   committed less than 5 minutes ago and whose DELETE has no recorded outcome yet: cancellation-state.ts
+//   `cancellationHoldOf`) and no fresh claim of the job or of another request (`409 BOOKING_NOT_MODIFIABLE`,
 //   `details.reason` `cancellation_pending` or `ticketing_in_progress`), an airline-card booking only with `other`
 //   forms of payment `CASH` or `ACCOUNT` (the OTA's own settlement with the airline; `400 VALIDATION_FAILED` at
 //   `/formOfPayments` otherwise), and the payment (`issuePaymentOf`): a captured one is paid, an authorised Stripe
@@ -169,7 +171,6 @@ import { BookingUpdatedEmails, type BookingUpdatedEmail } from "../bookings/book
 import {
   bookingBusy,
   CancellationService,
-  cancellationStateOf,
   ORDER_GONE_WARNING,
   type StaffCancelRecord,
 } from "../bookings/cancellation.service";
@@ -196,7 +197,7 @@ import {
   ticketingClaimFresh,
   type TicketingBookingRow,
 } from "../bookings/ticketing.service";
-import { cancellationEventsOf } from "../bookings/cancellation-state";
+import { cancellationHoldOf } from "../bookings/cancellation-state";
 import {
   IdempotencyHooksFor,
   type IdempotencyHooks,
@@ -2188,7 +2189,9 @@ export class ConsoleBookingActionsService {
         details: { status: row.status },
       });
     }
-    if (cancellationStateOf(await cancellationEventsOf(trx, bookingId)).kind === "undecided") {
+    // A cancellation holds the booking (FIX-W31-OTA, cancellation-state.ts `cancellationHoldOf`): its DELETE is in
+    // flight (a fresh `cancellation_claimed_at`) or got no answer and is undecided, as before.
+    if (cancellationHoldOf(row, now) !== undefined) {
       throw new AppError("BOOKING_NOT_MODIFIABLE", {
         message: "A cancellation of this booking is being checked with the airline.",
         details: { reason: "cancellation_pending" },

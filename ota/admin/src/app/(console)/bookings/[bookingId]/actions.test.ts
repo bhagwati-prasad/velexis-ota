@@ -31,7 +31,7 @@ vi.mock("next/headers", () => nextHeaders);
 vi.mock("next/cache", () => nextCache);
 vi.mock("next/navigation", () => ({ redirect: vi.fn(fakeRedirect) }));
 
-import { INITIAL_ACTION_STATE, type ActionState } from "@/lib/action-state";
+import { INITIAL_ACTION_STATE, actionKeyAfter, type ActionState } from "@/lib/action-state";
 import {
   ENVIRONMENT_COOKIE,
   STAFF_ACCESS_TOKEN_COOKIE,
@@ -1182,5 +1182,168 @@ describe("every action", () => {
       );
     }
     expect(actionRequests()).toEqual([]);
+  });
+});
+
+// ---- The idempotency key after a refusal (FIX-W31-OTA) ----------------------------------------------------------------
+
+describe("the idempotency key after a refusal (OADR-0018 point 5, revision of 2026-10-27)", () => {
+  const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+
+  /** The cancel dialog's form with mode `amount`: what staff typed, and the key the dialog holds. */
+  function cancelAmountForm(key: string, amount: string): FormData {
+    return formOf({
+      bookingId: BOOKING_ID,
+      version: VERSION,
+      actionKey: key,
+      reason: "Change fee kept, the rest refunded",
+      reasonCode: "customer_request",
+      refundMode: "amount",
+      amount,
+      currency: "EUR",
+    });
+  }
+
+  /**
+   * `route` as the OTA API answers it with idempotency keys (idempotency.service.ts): a first request is answered by
+   * `answer`, and a 2xx or a final 4xx (not `429`) is kept under its key; the same key with the same body replays the
+   * kept answer, with another body it is `409 IDEMPOTENCY_KEY_REUSED`. Transient answers (`429`, `5xx`) are not kept.
+   */
+  function keyedRoute(route: string, answer: (body: unknown) => Response): void {
+    const kept = new Map<string, { readonly body: string; readonly response: Response }>();
+    api.on(route, (request) => {
+      const key = request.headers.get("Idempotency-Key") ?? "";
+      const body = JSON.stringify(request.body ?? null);
+      const known = kept.get(key);
+      if (known !== undefined) {
+        return known.body === body ? known.response.clone() : apiError("IDEMPOTENCY_KEY_REUSED", 409);
+      }
+      const response = answer(request.body);
+      if (response.status < 500 && response.status !== 429) {
+        kept.set(key, { body, response: response.clone() });
+      }
+      return response;
+    });
+  }
+
+  /** The `Idempotency-Key` of every request of `route`, in order. */
+  const keysSent = (route: string) =>
+    api.sent(route).map((request) => request.headers.get("Idempotency-Key"));
+
+  it("[FIX-W31-OTA AC2] a 422 then a corrected resubmit sends a new key and succeeds", async () => {
+    signedIn();
+    keyedRoute(CANCEL, (body) =>
+      Number((body as { refund?: { amount?: { amount?: string } } }).refund?.amount?.amount) > 100
+        ? apiError("UNPROCESSABLE", 422, {
+            details: { reason: "amount_exceeds_captured", refundable: { amount: "100.00", currency: "EUR" } },
+          })
+        : bookingAnswer({ status: "cancelled" }),
+    );
+    const rendered = randomUUID();
+
+    const refused = await cancelBooking(INITIAL_ACTION_STATE, cancelAmountForm(rendered, "120.50"));
+
+    expect(refused).toMatchObject({
+      ok: false,
+      code: "UNPROCESSABLE",
+      fieldErrors: { amount: "The amount is above what can still be refunded. Reload the page to see it." },
+    });
+    expect(refused.nextActionKey).toMatch(UUID);
+    expect(refused.nextActionKey).not.toBe(rendered);
+    // The dialog's next submission sends the new key (ConfirmDialog's useActionKey: actionKeyAfter).
+    const next = actionKeyAfter(rendered, refused);
+    expect(next).toBe(refused.nextActionKey);
+
+    const corrected = await cancelBooking(refused, cancelAmountForm(next, "90.00"));
+
+    expect(corrected).toEqual({ ok: true, message: "Booking cancelled." });
+    expect(keysSent(CANCEL)).toEqual([rendered, next]);
+    expect(api.sent(CANCEL).map((request) => request.body)).toMatchObject([
+      { refund: { mode: "amount", amount: { amount: "120.50", currency: "EUR" } } },
+      { refund: { mode: "amount", amount: { amount: "90.00", currency: "EUR" } } },
+    ]);
+    // The rendered key is used up: the corrected form under it would only get 409 IDEMPOTENCY_KEY_REUSED, which brings
+    // a new key too, so even then no reload is needed.
+    const reused = await cancelBooking(refused, cancelAmountForm(rendered, "90.00"));
+    expect(reused).toMatchObject({ ok: false, code: "IDEMPOTENCY_KEY_REUSED" });
+    expect(reused.nextActionKey).toMatch(UUID);
+    expect([rendered, next]).not.toContain(reused.nextActionKey);
+  });
+
+  it("[FIX-W31-OTA AC2] a 503 then a resubmit sends the same key, which runs the request once", async () => {
+    signedIn();
+    let calls = 0;
+    keyedRoute(CANCEL, () => {
+      calls += 1;
+      // `Retry-After` above 30 s ends the SDK's call at once instead of its own retries.
+      return calls === 1
+        ? apiError("SERVICE_UNAVAILABLE", 503, {}, { "Retry-After": "60" })
+        : bookingAnswer({ status: "cancelled" });
+    });
+    const rendered = randomUUID();
+    const form = cancelAmountForm(rendered, "90.00");
+
+    const busy = await cancelBooking(INITIAL_ACTION_STATE, form);
+
+    expect(busy).toMatchObject({ ok: false, code: "SERVICE_UNAVAILABLE" });
+    expect(busy.nextActionKey).toBeUndefined();
+    const again = actionKeyAfter(rendered, busy);
+    expect(again).toBe(rendered);
+    expect(await cancelBooking(busy, cancelAmountForm(again, "90.00"))).toEqual({
+      ok: true,
+      message: "Booking cancelled.",
+    });
+    expect(keysSent(CANCEL)).toEqual([rendered, rendered]);
+  });
+
+  it("[FIX-W31-OTA AC2] a 412 keeps the key, and so do a 504, a 429 and a request still running under the key", async () => {
+    signedIn();
+    const cases: [Response, string][] = [
+      [apiError("PRECONDITION_FAILED", 412, { details: { currentVersion: 4 } }), "PRECONDITION_FAILED"],
+      [apiError("SUPPLIER_TIMEOUT", 504, {}, { "Retry-After": "60" }), "SUPPLIER_TIMEOUT"],
+      [rateLimited(), "RATE_LIMITED"],
+      [apiError("CONFLICT", 409, { details: { reason: "idempotency_key_in_use" } }), "CONFLICT"],
+    ];
+    for (const [answer, code] of cases) {
+      api.on(ISSUE, () => answer.clone());
+      const rendered = randomUUID();
+      const state = await issueTickets(
+        INITIAL_ACTION_STATE,
+        formOf({
+          bookingId: BOOKING_ID,
+          version: VERSION,
+          actionKey: rendered,
+          reason: REASON,
+          notifyCustomer: "true",
+        }),
+      );
+      expect(state, code).toMatchObject({ ok: false, code });
+      expect(state.nextActionKey, code).toBeUndefined();
+      expect(actionKeyAfter(rendered, state), code).toBe(rendered);
+    }
+  });
+
+  it("[FIX-W31-OTA AC2] gives every keyed action a new key after a final 4xx, and none to a patch or a resync, which send none", async () => {
+    signedIn("owner");
+    const keyed = new Set(["issueTickets", "cancelBooking", "addNote", "capturePayment", "refundPayment"]);
+    for (const submission of SUBMISSIONS) {
+      api.on(submission.route, () =>
+        apiError("BOOKING_NOT_MODIFIABLE", 409, { details: { reason: "pending" } }),
+      );
+      const state = await submission.run();
+      expect(state, submission.name).toMatchObject({ ok: false, code: "BOOKING_NOT_MODIFIABLE" });
+      if (keyed.has(submission.name)) {
+        expect(state.nextActionKey, submission.name).toMatch(UUID);
+      } else {
+        expect(state.nextActionKey, submission.name).toBeUndefined();
+      }
+    }
+    expect(SUBMISSIONS.map((submission) => submission.name).filter((name) => keyed.has(name))).toHaveLength(
+      keyed.size,
+    );
+    // A refusal before the call used no key: it keeps the one the dialog holds.
+    const beforeTheCall = await issueTickets(INITIAL_ACTION_STATE, formOf({ bookingId: BOOKING_ID }));
+    expect(beforeTheCall).toMatchObject({ ok: false, code: "VALIDATION_FAILED" });
+    expect(beforeTheCall.nextActionKey).toBeUndefined();
   });
 });

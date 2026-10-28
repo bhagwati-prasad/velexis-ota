@@ -19,6 +19,13 @@
 // all the same), then validates the form with Zod, then makes one call. The idempotency key is the dialog's hidden
 // `actionKey`, rendered once with the page, so a double submit or a retry replays the same action instead of issuing,
 // cancelling, capturing or refunding twice; a patch has no key in the contract (`If-Match` makes its replay a `412`).
+// When the call of a keyed action (issue, cancel, note, capture, refund) ends in a final refusal that the API stores
+// under the key (a stored `4xx` but `412`; `429` and a request still running under the key are not stored) or in `409
+// IDEMPOTENCY_KEY_REUSED`, its state brings a new key (`keyedFailure`: lib/action-state.ts `withNextActionKey`,
+// `crypto.randomUUID()` here on the server), which the dialog or form sends next, so a corrected resubmission is a new
+// request; after `412`, `429`, `5xx`, a timeout or a network error the key stays, so a retry replays or waits for the
+// first request (OADR-0018 point 5, revision of 2026-10-27, FIX-W31-OTA). A refusal before the call (the form's schema,
+// a permission) used no key and keeps it.
 // Known API codes are answered here as the action's state (README §7, routes.md §1: messages of lib/errors.ts, some in
 // this action's own words, `fieldErrors` mapped to the dialog's fields, the request id), never thrown to `error.tsx`;
 // only Next.js's redirects (an ended session) and bugs are thrown. A success revalidates the booking's page, whose new
@@ -81,6 +88,7 @@ import {
   actionFailure,
   actionSuccess,
   fromZod,
+  withNextActionKey,
   type ActionState,
 } from "@/lib/action-state";
 import { fromVelexisError, isVelexisErrorLike } from "@/lib/errors";
@@ -208,6 +216,19 @@ function failure(
     message: override.message,
     fieldErrors: { ...state.fieldErrors, [override.field]: override.message },
   };
+}
+
+/**
+ * `failure` of a call that carried the form's idempotency key: with a new key for the next submission when the API
+ * stored its answer under the key or refused the key (`withNextActionKey`, see the file header).
+ */
+function keyedFailure(
+  error: unknown,
+  fields: Readonly<Record<string, string>>,
+  overrides: Overrides,
+): ActionState {
+  const state = failure(error, fields, overrides);
+  return isVelexisErrorLike(error) ? withNextActionKey(state, error) : state;
 }
 
 /** The staff context of an action, or the state of its refusal (a missing permission, an ended or refused session). */
@@ -810,7 +831,7 @@ export async function issueTickets(_previous: ActionState, form: FormData): Prom
       { idempotencyKey: actionKey },
     );
   } catch (error) {
-    return failure(error, ISSUE_POINTERS, ISSUE_OVERRIDES);
+    return keyedFailure(error, ISSUE_POINTERS, ISSUE_OVERRIDES);
   }
   revalidateBooking(bookingId);
   const status = booking.ticketing.status;
@@ -905,7 +926,7 @@ export async function cancelBooking(_previous: ActionState, form: FormData): Pro
       { idempotencyKey: actionKey },
     );
   } catch (error) {
-    return failure(error, CANCEL_POINTERS, CANCEL_OVERRIDES);
+    return keyedFailure(error, CANCEL_POINTERS, CANCEL_OVERRIDES);
   }
   revalidateBooking(bookingId);
   return actionSuccess(
@@ -997,7 +1018,7 @@ export async function addNote(_previous: ActionState, form: FormData): Promise<A
       { idempotencyKey: actionKey },
     );
   } catch (error) {
-    return failure(error, { "/text": NOTE_TEXT_FIELD }, BOOKING_OVERRIDES);
+    return keyedFailure(error, { "/text": NOTE_TEXT_FIELD }, BOOKING_OVERRIDES);
   }
   revalidateBooking(bookingId);
   return actionSuccess(STRINGS.noteAdded);
@@ -1080,7 +1101,7 @@ export async function capturePayment(_previous: ActionState, form: FormData): Pr
     );
     captured = payment.amountCaptured;
   } catch (error) {
-    return failure(error, { ...PAYMENT_POINTERS, "/reason": REASON_FIELD }, PAYMENT_OVERRIDES);
+    return keyedFailure(error, { ...PAYMENT_POINTERS, "/reason": REASON_FIELD }, PAYMENT_OVERRIDES);
   }
   revalidatePayment(paymentId, bookingId);
   return actionSuccess(STRINGS.captured(moneyText(captured)));
@@ -1126,7 +1147,7 @@ export async function refundPayment(_previous: ActionState, form: FormData): Pro
       { idempotencyKey: actionKey },
     );
   } catch (error) {
-    return failure(
+    return keyedFailure(
       error,
       { ...PAYMENT_POINTERS, "/reason": REFUND_REASON_FIELD, "/reasonNote": REASON_FIELD },
       PAYMENT_OVERRIDES,

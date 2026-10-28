@@ -58,6 +58,8 @@ import { buildCreateOrderRequest } from "../../../src/bookings/order-request.bui
 import { newId } from "../../../src/common/ids";
 import { OTA_QUEUE } from "../../../src/common/queues/queue-names";
 import { redisKeys } from "../../../src/common/redis/redis.keys";
+import { ticketingJob } from "../../../src/bookings/ticketing.processor";
+import { minuteBucket } from "../../../src/jobs/fan-out";
 import { loadWorkerConfig } from "../../../src/config";
 import { ISSUE_CAPTURE_REASON } from "../../../src/console/console-booking-actions.service";
 import { DocumentsProcessor } from "../../../src/documents/documents.processor";
@@ -1615,5 +1617,208 @@ describe("console.bookings.cancel: the departure rule and the release's requeste
         requested_by_id: agent.member.staffId,
       }),
     ]);
+  });
+});
+
+describe("the ticketing claims while a staff cancellation is undecided (FIX-W31-OTA)", () => {
+  let ticketingQueue: Queue;
+  /** The minute buckets of this block's ticketing jobs, one per run. */
+  let bucket = minuteBucket(new Date()) + 20_000;
+
+  /** Runs one ticketing attempt of the booking in the worker and answers how it ended (the job's return value). */
+  async function runTicketing(bookingId: string): Promise<JsonObject> {
+    bucket += 1;
+    const job = ticketingJob(alphaId, bookingId, bucket);
+    await ticketingQueue.add(job.name, job.data, job.opts);
+    const done = await finished(ticketingQueue, job.opts.jobId);
+    expect(await done.getState()).toBe("completed");
+    return done.returnvalue as JsonObject;
+  }
+
+  /** A booking paid in full by Stripe whose issuance retry is due now (the ticketing job would claim it). */
+  async function dueBooking(prefix: string): Promise<SeededBooking> {
+    const booking = await seedBooking(prefix, { ticketingStatus: "failed" });
+    await seedPayment(booking.id, "captured");
+    await inTenant((trx) =>
+      trx
+        .updateTable("bookings")
+        .set({
+          ticketing_attempts: 1,
+          ticketing_error_code: "TICKETING_FAILED",
+          ticketing_next_attempt_at: new Date(Date.now() - MINUTE),
+        })
+        .where("id", "=", booking.id)
+        .execute(),
+    );
+    return booking;
+  }
+
+  const claimedAtOf = async (bookingId: string): Promise<Date | null> =>
+    (
+      await inTenant((trx) =>
+        trx
+          .selectFrom("bookings")
+          .select("cancellation_claimed_at")
+          .where("id", "=", bookingId)
+          .executeTakeFirstOrThrow(),
+      )
+    ).cancellation_claimed_at;
+
+  /**
+   * The API's next Flight Order Management DELETE held by a barrier: `reached` resolves once the claim (T1) committed
+   * and the DELETE is about to leave; `pass()` lets it go to the stub with `scenario` (none: the stub's own answer).
+   */
+  function holdNextDelete(scenario?: string) {
+    const client = api.app.get(AmadeusClient, { strict: false });
+    const cancelOrder = client.cancelFlightOrder.bind(client);
+    let reach = (): void => undefined;
+    const reached = new Promise<void>((resolveReach) => {
+      reach = resolveReach;
+    });
+    let pass = (): void => undefined;
+    const passed = new Promise<void>((resolvePass) => {
+      pass = resolvePass;
+    });
+    const spy = vi
+      .spyOn(client, "cancelFlightOrder")
+      .mockImplementationOnce(async (context, req, options) => {
+        reach();
+        await passed;
+        return await cancelOrder(
+          scenario === undefined ? context : { ...context, stubScenario: scenario },
+          req,
+          options,
+        );
+      });
+    return { reached, pass, spy };
+  }
+
+  /** What the ticketing job and a staff issuance answered while the staff's DELETE was held. */
+  interface Held {
+    readonly claimedAt: Date | null;
+    readonly job: JsonObject;
+    readonly issue: Response;
+    readonly cancelled: Response;
+  }
+
+  /** The owner cancels `booking`; while the DELETE is held, the ticketing job runs and the owner tries to issue. */
+  async function cancelHeld(booking: SeededBooking, scenario?: string): Promise<Held> {
+    const owner = await staff("owner");
+    const etag = await etagOf(owner, booking.id);
+    const held = holdNextDelete(scenario);
+    try {
+      const cancelling = owner
+        .cancel(booking.id, etag, { reasonCode: "customer_request", reason: "Customer asked by phone" })
+        .then((res) => res);
+      await held.reached;
+      stub.clearRequests();
+      const claimedAt = await claimedAtOf(booking.id);
+      const job = await runTicketing(booking.id);
+      // The claim moved the version: the issuance is sent with the ETag of the booking as it is now.
+      const issue = await owner.issue(booking.id, await etagOf(owner, booking.id), {});
+      expect(amadeusCalls("issueFlightOrder")).toEqual([]);
+      expect(amadeusCalls("getFlightOrder")).toEqual([]);
+      held.pass();
+      return { claimedAt, job, issue, cancelled: await cancelling };
+    } finally {
+      held.pass();
+      held.spy.mockRestore();
+    }
+  }
+
+  beforeAll(() => {
+    ticketingQueue = worker.get<Queue>(getQueueToken(OTA_QUEUE.ticketing), { strict: false });
+  });
+
+  it("[FIX-W31-OTA AC1] holds the ticketing job and a staff issuance while the staff's DELETE is in flight, and treats the cancelled booking as before", async () => {
+    const booking = await dueBooking("hold.cancelled");
+
+    const held = await cancelHeld(booking);
+
+    expect(held.claimedAt).toBeInstanceOf(Date);
+    expect(held.job).toMatchObject({ outcome: "skipped", reason: "cancellation_pending" });
+    expect(answer(held.issue)).toEqual([409, "BOOKING_NOT_MODIFIABLE"]);
+    expectResponseToMatch("consoleIssueBooking", held.issue);
+    expect(held.issue.body.error.details).toMatchObject({ reason: "cancellation_pending" });
+    expect(answer(held.cancelled)).toEqual([200, undefined]);
+    expect(await bookingRow(booking.id)).toMatchObject({ status: "cancelled", cancelled_by: "staff" });
+    expect(await claimedAtOf(booking.id)).toBeNull();
+    // After the outcome, as before: the job skips a cancelled booking and the staff cannot issue it.
+    expect(await runTicketing(booking.id)).toMatchObject({ outcome: "skipped", reason: "not_confirmed" });
+    const owner = await staff("owner");
+    const issued = await owner.issue(booking.id, await etagOf(owner, booking.id), {});
+    expect(answer(issued)).toEqual([409, "BOOKING_ALREADY_CANCELLED"]);
+    expect(amadeusCalls("issueFlightOrder")).toEqual([]);
+  });
+
+  it("[FIX-W31-OTA AC1] lets the claims go on as before once the airline refused the staff's DELETE (not applied)", async () => {
+    const booking = await dueBooking("hold.refused");
+
+    const held = await cancelHeld(booking, "cancel-refused");
+
+    expect(held.job).toMatchObject({ outcome: "skipped", reason: "cancellation_pending" });
+    expect(held.issue.body.error.details).toMatchObject({ reason: "cancellation_pending" });
+    expect(answer(held.cancelled)).toEqual([422, "SUPPLIER_REJECTED"]);
+    // The refusal released the claim's marker: the order is live and the staff issue it.
+    expect(await claimedAtOf(booking.id)).toBeNull();
+    const owner = await staff("owner");
+    const issued = await owner.issue(booking.id, await etagOf(owner, booking.id), {});
+    expect(answer(issued)).toEqual([200, undefined]);
+    expectResponseToMatch("consoleIssueBooking", issued);
+    expect(await bookingRow(booking.id)).toMatchObject({ status: "ticketed", ticketing_status: "issued" });
+  });
+
+  it("[FIX-W31-OTA AC1] holds both while a staff DELETE without an answer is undecided, and lets them go on once the worker found the order active", async () => {
+    const owner = await staff("owner");
+    const booking = await dueBooking("hold.undecided");
+    nextCallWith("cancelFlightOrder", "timeout-lost");
+    const timedOut = await owner.cancel(booking.id, await etagOf(owner, booking.id), {
+      reasonCode: "customer_request",
+      reason: "Customer asked by phone",
+    });
+    expect(answer(timedOut)).toEqual([504, "SUPPLIER_TIMEOUT"]);
+    // The flag took over from the claim's marker in its transaction.
+    expect(await claimedAtOf(booking.id)).toBeNull();
+    stub.clearRequests();
+
+    expect(await runTicketing(booking.id)).toMatchObject({
+      outcome: "skipped",
+      reason: "cancellation_pending",
+    });
+    const refused = await owner.issue(booking.id, await etagOf(owner, booking.id), {});
+    expect(answer(refused)).toEqual([409, "BOOKING_NOT_MODIFIABLE"]);
+    expect(refused.body.error.details).toMatchObject({ reason: "cancellation_pending" });
+    expect(amadeusCalls("issueFlightOrder")).toEqual([]);
+
+    const check = await runCheck(booking.id);
+    expect(check.returnvalue).toMatchObject({ outcome: "not_applied" });
+    expect(await runTicketing(booking.id)).toMatchObject({ outcome: "ticketed", via: "issue" });
+  });
+
+  it("[FIX-W31-OTA AC1] refuses a staff issuance while a cancellation's claim is fresh, and issues once it is abandoned (5 minutes)", async () => {
+    const owner = await staff("owner");
+    const booking = await dueBooking("hold.abandoned");
+    const claimAt = (at: Date) =>
+      inTenant((trx) =>
+        trx
+          .updateTable("bookings")
+          .set({ cancellation_claimed_at: at })
+          .where("id", "=", booking.id)
+          .execute(),
+      );
+    await claimAt(new Date());
+    stub.clearRequests();
+    const refused = await owner.issue(booking.id, await etagOf(owner, booking.id), {});
+    expect(answer(refused)).toEqual([409, "BOOKING_NOT_MODIFIABLE"]);
+    expect(refused.body.error.details).toMatchObject({ reason: "cancellation_pending" });
+    expect(stub.requests()).toEqual([]);
+
+    // A request that stopped mid-DELETE left its marker: 5 minutes later it holds nothing back. The issuance reads the
+    // order first, as always (an order the DELETE removed would answer 422 here, never be issued).
+    await claimAt(new Date(Date.now() - 6 * MINUTE));
+    const issued = await owner.issue(booking.id, await etagOf(owner, booking.id), {});
+    expect(answer(issued)).toEqual([200, undefined]);
+    expect(amadeusCalls("getFlightOrder").map((call) => call.status)).toEqual([200]);
+    expect(amadeusCalls("issueFlightOrder").map((call) => call.status)).toEqual([200]);
   });
 });

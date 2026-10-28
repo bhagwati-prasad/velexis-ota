@@ -60,6 +60,11 @@ const TENANT_MIGRATION_0004 = {
   file: "0004_add_payment_card_fee_lines.sql",
   id: "0004_add_payment_card_fee_lines",
 };
+/** Then migration 0005 (FIX-W31-OTA), one column of `bookings` and two CHECKs replaced, no table. */
+const TENANT_MIGRATION_0005 = {
+  file: "0005_add_cancellation_claim_tighten_calling_codes.sql",
+  id: "0005_add_cancellation_claim_tighten_calling_codes",
+};
 
 function testUrls(): { admin: string; migrator: string } {
   loadDevEnvFiles({ appDir: PACKAGE_DIR });
@@ -534,6 +539,7 @@ describe("migrateTenantSchema and migrate.js tenant on PostgreSQL", () => {
     const migrationChecksum = await sha256(join(TENANT_DIR, TENANT_MIGRATION_0002.file));
     const syncClaimChecksum = await sha256(join(TENANT_DIR, TENANT_MIGRATION_0003.file));
     const cardFeeLinesChecksum = await sha256(join(TENANT_DIR, TENANT_MIGRATION_0004.file));
+    const cancellationClaimChecksum = await sha256(join(TENANT_DIR, TENANT_MIGRATION_0005.file));
     expect(run.events).toEqual([
       {
         set: "tenant",
@@ -583,6 +589,18 @@ describe("migrateTenantSchema and migrate.js tenant on PostgreSQL", () => {
         transaction: true,
         executionMs: expect.any(Number),
       },
+      {
+        set: "tenant",
+        schema: "tenant_demo",
+        file: TENANT_MIGRATION_0005.file,
+        id: TENANT_MIGRATION_0005.id,
+        kind: "numbered",
+        phase: "contract",
+        status: "applied",
+        checksum: cancellationClaimChecksum,
+        transaction: true,
+        executionMs: expect.any(Number),
+      },
     ]);
 
     expect(await ddlTables("tenant.sql")).toHaveLength(42);
@@ -597,6 +615,7 @@ describe("migrateTenantSchema and migrate.js tenant on PostgreSQL", () => {
       [TENANT_MIGRATION_0002.id, migrationChecksum, "expand", "applied"],
       [TENANT_MIGRATION_0003.id, syncClaimChecksum, "expand", "applied"],
       [TENANT_MIGRATION_0004.id, cardFeeLinesChecksum, "expand", "applied"],
+      [TENANT_MIGRATION_0005.id, cancellationClaimChecksum, "contract", "applied"],
     ]);
 
     // velexis_ota_app: USAGE and DML on every table, nothing more, and inserts into customers.
@@ -677,6 +696,7 @@ describe("migrateTenantSchema and migrate.js tenant on PostgreSQL", () => {
       [TENANT_MIGRATION_0002.id, "applied"],
       [TENANT_MIGRATION_0003.id, "applied"],
       [TENANT_MIGRATION_0004.id, "applied"],
+      [TENANT_MIGRATION_0005.id, "applied"],
     ]);
     expect(await tablesOf("tenant_prov")).toEqual(await repositoryTenantTables());
     expect(await ownersOf("tenant_prov")).toEqual([PROVISIONER]);
@@ -915,13 +935,13 @@ describe("migrateTenantSchema and migrate.js tenant on PostgreSQL", () => {
       await expect.poll(waiting, { timeout: 4_000, interval: 20 }).toBe(2);
       await holder.query("SELECT pg_advisory_unlock(hashtext('tenant_twice'))");
       const results = await Promise.all(runs);
-      // The first applies the baseline, 0002, 0003 and 0004; the second, once it gets the lock, finds nothing pending.
+      // The first applies the baseline and 0002 to 0005; the second, once it gets the lock, finds nothing pending.
       expect(results.map((result) => [result.created, result.applied.length]).sort()).toEqual([
         [false, 0],
-        [true, 4],
+        [true, 5],
       ]);
     });
-    expect(await ledger("tenant_twice")).toHaveLength(4);
+    expect(await ledger("tenant_twice")).toHaveLength(5);
     expect(await ownersOf("tenant_twice")).toEqual([PROVISIONER]);
   });
 });
@@ -988,6 +1008,7 @@ describe("migrateTenantSchema beforeCommit on PostgreSQL (OADR-0007 item 2)", ()
       TENANT_MIGRATION_0002.id,
       TENANT_MIGRATION_0003.id,
       TENANT_MIGRATION_0004.id,
+      TENANT_MIGRATION_0005.id,
     ]);
     expect(seen).toEqual([
       {
@@ -1013,7 +1034,7 @@ describe("migrateTenantSchema beforeCommit on PostgreSQL (OADR-0007 item 2)", ()
 
     // A re-run applies nothing, still reaches the callback, and reports the schema as existing.
     const second = await migrate();
-    expect(second).toMatchObject({ created: false, applied: [], upToDate: 4 });
+    expect(second).toMatchObject({ created: false, applied: [], upToDate: 5 });
     expect(seen.map(({ created, emails }) => [created, emails])).toEqual([
       [true, ["hook0@example.com"]],
       [false, ["hook0@example.com", "hook1@example.com"]],

@@ -3,6 +3,7 @@
 **Status:** Accepted
 **Date:** 2026-10-12
 **Deciders:** OTA backend tech lead. Decided during planning; revisit when a custom domain becomes primary and sessions must follow the redirect (ADR-0018 follow-up), or when the storefront moves to a framework with server rendering.
+**Revisions:** 2026-10-27 (lead decision (3), accepted as built): point 3 records that a visitor without a session gets `401` before the CSRF check on an operation that needs a customer (dated note).
 
 ## Context
 
@@ -21,7 +22,7 @@
    | `__Host-vx_bt` | yes | 30 days | Updated on guest booking and lookup |
 
    `SameSite=Lax` (not `Strict`) so that links from e-mails to the booking page carry the session.
-3. **CSRF check** (`CsrfGuard`) on every edge `POST`, `PUT`, `PATCH`, `DELETE`, including anonymous ones (search, checkout, lookup): `X-CSRF-Token` must equal the `__Host-vx_csrf` cookie (constant-time) **and** `Origin` (or, when absent, `Sec-Fetch-Site: same-origin`) must match `https://<X-Velexis-Host>`. Failure: `403 CSRF_TOKEN_INVALID`. GET and HEAD never change state. The CSRF value is random, not tied to the session, and is not a credential.
+3. **CSRF check** (`CsrfGuard`) on every edge `POST`, `PUT`, `PATCH`, `DELETE`, including anonymous ones (search, checkout, lookup): `X-CSRF-Token` must equal the `__Host-vx_csrf` cookie (constant-time) **and** `Origin` (or, when absent, `Sec-Fetch-Site: same-origin`) must match `https://<X-Velexis-Host>`. Failure: `403 CSRF_TOKEN_INVALID`. GET and HEAD never change state. The CSRF value is random, not tied to the session, and is not a credential. **2026-10-27 (lead decision (3), accepted as built):** the customer guard runs before `CsrfGuard`, so a visitor without a session on a state-changing operation that needs a customer (`account.update`, `account.delete`) gets `401 UNAUTHENTICATED` before the CSRF check; an anonymous write that needs no customer (search, checkout, sign-in, sign-up, lookup) is checked as above (`test/integration/m3/csrf-matrix.int.test.ts`).
 4. **Response bodies in edge mode** never contain tokens:
    - `signIn`, `refreshSession`, `changePassword` return `AuthSessionInfo` (the schema of `auth.getSession`) instead of `AuthSessionResult`; the OpenAPI response becomes `oneOf` of the two. This is a type change that [ADR-0006](../../../docs/mvp/adr/0006-contract-first-openapi.md) allows only with an ADR: **this ADR approves it**, because no external client exists before launch and token-mode callers keep receiving `AuthSessionResult` unchanged.
    - `signUp` and `resetPassword` return `session: null` (already nullable).

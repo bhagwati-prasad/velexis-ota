@@ -4,13 +4,21 @@
 // routes.md §3.2): issue, cancel, capture, refund, import, resync and settings deletes. It shows a summary of the
 // effect (amount, refund mode, environment), asks for the required reason that the API stores in `staff_actions`,
 // repeats "LIVE" in the live environment, and carries a hidden idempotency key that the page rendered once: a double
-// click, a resubmission after an error or a retry after a timeout all send the same key, so the API replays the action
-// instead of issuing or refunding twice.
+// click, a retry after a timeout, a network error, a `412` or a `5xx` all send the same key, so the API replays the
+// action (or waits for it) instead of issuing or refunding twice.
+//
+// After a final refusal that the API stores under the key (a stored `4xx` but `412`; `429` and a request still running
+// under the key are not stored) and after `409 IDEMPOTENCY_KEY_REUSED`, the action's state brings a new key
+// (`nextActionKey`, lib/action-state.ts `withNextActionKey`), which the dialog sends from then on (`useActionKey`): a
+// corrected resubmission, an amount lowered after a `422` say, is a new request instead of a `409
+// IDEMPOTENCY_KEY_REUSED` that only a reload would end (OADR-0018 point 5, revision of 2026-10-27, FIX-W31-OTA). Every
+// dialog built on this one gets it; the note form of a booking uses the same hook.
 //
 // The action is a server action for `useActionState` (`(state, formData) => Promise<ActionState>`). It receives the
 // form's fields: the hidden `fields` (`bookingId`, `version`), the inputs of `children`, the trimmed `reason` and the
 // key as `actionKey`. It must validate the reason again (Zod) and start with `requireStaff(permission)`; after a
-// success it revalidates the page, whose new render brings a new key for the next action.
+// success it revalidates the page, whose new render brings a new key for the next action; after the failure of a call
+// that carried the key it answers `withNextActionKey(state, error)`.
 import { LoaderCircleIcon, TriangleAlertIcon } from "lucide-react";
 import {
   startTransition,
@@ -43,6 +51,7 @@ import {
   REASON_FIELD,
   REASON_MAX_LENGTH,
   REASON_MIN_LENGTH,
+  actionKeyAfter,
   fieldError,
   fieldErrorId,
   type ActionState,
@@ -51,6 +60,27 @@ import type { StaffEnvironment } from "@/lib/permissions";
 
 // The field names and the reason's bounds live in lib/action-state.ts, which server actions can import too.
 export { ACTION_KEY_FIELD, REASON_FIELD, REASON_MAX_LENGTH, REASON_MIN_LENGTH };
+
+/**
+ * The idempotency key of a dialog's or form's next submission (OADR-0018 point 5, revision of 2026-10-27): the key the
+ * page rendered (`rendered`) until an action's state brings a new one (`nextActionKey`, after a final refusal the API
+ * stored under the key), which every later submission sends until the next one comes; a state without a new key (a
+ * retry after a timeout, a `412`, a `5xx`, the form's own validation) keeps the current key. A new render of the page
+ * (after a success, which revalidates it, or a reload) brings a new `rendered` key, which replaces it.
+ */
+export function useActionKey(rendered: string, state: ActionState): string {
+  const [current, setCurrent] = useState({ rendered, state, key: rendered });
+  if (current.rendered !== rendered) {
+    setCurrent({ rendered, state, key: rendered });
+    return rendered;
+  }
+  if (current.state !== state) {
+    const key = actionKeyAfter(current.key, state);
+    setCurrent({ rendered, state, key });
+    return key;
+  }
+  return current.key;
+}
 
 export const CONFIRM_STRINGS = Object.freeze({
   reasonLabel: "Reason",
@@ -113,7 +143,7 @@ export interface ConfirmDialogProps {
   readonly action: ConfirmAction;
   /**
    * The idempotency key, rendered once with the page (`crypto.randomUUID()` in the server component): the same for
-   * every submission of this render.
+   * every submission of this render, until the action's state brings a new one (`useActionKey`).
    */
   readonly idempotencyKey: string;
   /** Hidden fields of the action (`bookingId`, `version` for `ifMatch`). */
@@ -151,6 +181,8 @@ export function ConfirmDialog({
 }: ConfirmDialogProps) {
   const [open, setOpen] = useState(false);
   const [state, dispatch, pending] = useActionState(action, INITIAL_ACTION_STATE);
+  // Kept here, not in the form, so a dialog closed and opened again goes on with the key it was last given.
+  const actionKey = useActionKey(idempotencyKey, state);
   // The state already seen when the dialog was last opened: its message is not shown again.
   const [seen, setSeen] = useState<ActionState>(INITIAL_ACTION_STATE);
   const fresh = state !== seen;
@@ -187,7 +219,7 @@ export function ConfirmDialog({
           <ConfirmForm
             confirmLabel={confirmLabel}
             environment={environment}
-            idempotencyKey={idempotencyKey}
+            idempotencyKey={actionKey}
             fields={fields}
             reasonMinLength={reasonMinLength}
             reasonMaxLength={reasonMaxLength}

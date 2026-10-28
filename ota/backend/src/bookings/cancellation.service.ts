@@ -44,7 +44,14 @@
 //      again against the locked row (and the quote's `version`), then `version + 1`, its marker. A second request with
 //      the same ETag (another key, another tab) answers `503` while T1 holds the booking and `412` once it committed, so
 //      Flight Order Management DELETE is sent once per version. In `request_only` mode T1 records the request itself
-//      (below) and answers `202`.
+//      (below) and answers `202`. Since FIX-W31-OTA (lead decision (1) of 2026-10-27) the claim of a DELETE also writes
+//      `bookings.cancellation_claimed_at` (`CancellationRepository.claim`), which every outcome step clears: the record
+//      of the cancellation (`markCancelled`), of a request (`bumpVersion`), the flag of an unknown outcome (whose
+//      `undecided` state holds from then on) and the release of a DELETE that applied nothing (Amadeus's 2552, a request
+//      that never reached it, the staff cancellation's refusal: `releaseClaim`, this claim's marker only). From T1's
+//      commit until then the ticketing job skips the booking (`cancellation_pending`) and console.bookings.issue refuses
+//      it (cancellation-state.ts `cancellationHoldOf`), so no Flight Order Issue goes to an order being deleted; a
+//      marker 5 minutes old (a request that stopped mid-DELETE) holds nothing back.
 //   4. `release` and `void`: Flight Order Management DELETE with no transaction open (OADR-0003 point 1):
 //      - `204`: the record step (T2, `CancellationRecorder.recordCancelled`) and the money step in the same
 //        transaction, then `200`; a T2 that fails (the order is gone, nothing was recorded) is answered and decided like
@@ -812,6 +819,8 @@ export class CancellationRepository {
         ticketing_status: sql<string>`case when ticketing_status in ('pending', 'in_progress', 'failed',
           'manual_review') then 'not_applicable' else ticketing_status end`,
         ticketing_next_attempt_at: null,
+        // The outcome of the cancellation's claim (FIX-W31-OTA): recorded.
+        cancellation_claimed_at: null,
         updated_at: values.now,
         version: sql`version + 1`,
       })
@@ -842,13 +851,44 @@ export class CancellationRepository {
     return Number(voided.numUpdatedRows);
   }
 
-  /** `version + 1` (the claim of a cancellation, and the record of a request). */
+  /**
+   * The claim of a cancellation (T1, see the file header): `version + 1`, its marker, and `cancellation_claimed_at =
+   * now`, which holds the ticketing claims back until the outcome is recorded (FIX-W31-OTA, cancellation-state.ts
+   * `cancellationHoldOf`). The caller locked the booking `FOR NO KEY UPDATE`; the key columns stay as they are.
+   */
+  async claim(trx: TenantTransaction, bookingId: string, now: Date): Promise<void> {
+    await trx
+      .updateTable("bookings")
+      .set({ updated_at: now, version: sql`version + 1`, cancellation_claimed_at: now })
+      .where("id", "=", bookingId)
+      .execute();
+  }
+
+  /** `version + 1` (the record of a request, an outcome: the cancellation's claim, if any, ends with it). */
   async bumpVersion(trx: TenantTransaction, bookingId: string, now: Date): Promise<void> {
     await trx
       .updateTable("bookings")
-      .set({ updated_at: now, version: sql`version + 1` })
+      .set({ updated_at: now, version: sql`version + 1`, cancellation_claimed_at: null })
       .where("id", "=", bookingId)
       .execute();
+  }
+
+  /**
+   * Ends a cancellation's claim without another change (FIX-W31-OTA): the flag of a DELETE without an answer (whose
+   * `undecided` state holds the ticketing claims from then on), or a DELETE that applied nothing (Amadeus's 2552, a
+   * request that never reached it, a refusal of the airline that the staff's cancellation answers). With `claimedAt`,
+   * only that claim (a later claim's marker stays). `version` and `updated_at` stay as they are.
+   */
+  async releaseClaim(trx: TenantTransaction, bookingId: string, claimedAt?: Date): Promise<void> {
+    let update = trx
+      .updateTable("bookings")
+      .set({ cancellation_claimed_at: null })
+      .where("id", "=", bookingId)
+      .where("cancellation_claimed_at", "is not", null);
+    if (claimedAt !== undefined) {
+      update = update.where("cancellation_claimed_at", "=", claimedAt);
+    }
+    await update.execute();
   }
 }
 
@@ -1460,6 +1500,9 @@ export class CancellationRecorder {
       requestId: tenant.requestId,
       now,
     });
+    // The claim ends with its flag: the flag's `undecided` state holds the ticketing claims from here until the
+    // worker decides (FIX-W31-OTA), in the same transaction, so there is no moment without either.
+    await this.repository.releaseClaim(trx, booking.id);
     return until;
   }
 
@@ -1908,6 +1951,8 @@ type Claim =
       readonly kind: "claimed";
       readonly booking: BookingRow;
       readonly orderId: string;
+      /** `bookings.cancellation_claimed_at` of the claim (FIX-W31-OTA). */
+      readonly claimedAt: Date;
     };
 
 /** Where the cancellation of a stored `504` stands for a same-key replay (`decideReplay`). */
@@ -2204,8 +2249,9 @@ export class CancellationService {
       if (orderId === null) {
         throw notCancellable("pending");
       }
-      await this.repository.bumpVersion(trx, bookingId, this.clock.now());
-      return { kind: "claimed", booking: booking.row, orderId };
+      const claimedAt = this.clock.now();
+      await this.repository.claim(trx, bookingId, claimedAt);
+      return { kind: "claimed", booking: booking.row, orderId, claimedAt };
     });
     if (claim.kind === "requested") {
       return await this.answer(bookingId, 202, this.pendingCancellation(bookingId, ask, quote));
@@ -2235,8 +2281,10 @@ export class CancellationService {
         return await this.answer(bookingId, 202, this.pendingCancellation(bookingId, ask, quote));
       }
       case "version_conflict":
+        await this.releaseClaim(bookingId, claim.claimedAt);
         throw outcome.error;
       case "not_sent":
+        await this.releaseClaim(bookingId, claim.claimedAt);
         throw unsentAnswer(outcome.error);
       case "unknown":
         throw await this.unknownOutcome(
@@ -2273,6 +2321,19 @@ export class CancellationService {
       this.logger.error({ bookingId, err: error }, "bookings.cancellation_check_not_scheduled");
     }
     return cancellationTimeout(bookingId, cause);
+  }
+
+  /**
+   * Ends the claim of a cancellation whose DELETE applied nothing (FIX-W31-OTA; `CancellationRepository.releaseClaim`,
+   * this claim's marker only), so the ticketing claims go on at once. Never throws: a release that fails is logged,
+   * and the marker holds the ticketing claims back until it is 5 minutes old.
+   */
+  private async releaseClaim(bookingId: string, claimedAt: Date): Promise<void> {
+    try {
+      await this.tx.run((trx) => this.repository.releaseClaim(trx, bookingId, claimedAt));
+    } catch (error) {
+      this.logger.error({ bookingId, err: error }, "bookings.cancel_claim_release_failed");
+    }
   }
 
   /**
@@ -2410,11 +2471,12 @@ export class CancellationService {
     } catch (error) {
       throw unsentAnswer(error);
     }
-    // 3. The claim: the checks again under the booking's lock, then `version + 1`.
+    // 3. The claim: the checks again under the booking's lock, then `version + 1` and the claim's marker.
     const claim = await this.tx.run(async (trx) => {
       const checked = await this.staffCheck(trx, tenant, bookingId, ifMatch, request, requestedAt, true);
-      await this.repository.bumpVersion(trx, bookingId, this.clock.now());
-      return checked;
+      const claimedAt = this.clock.now();
+      await this.repository.claim(trx, bookingId, claimedAt);
+      return { ...checked, claimedAt };
     });
     const ctenant = this.cancellationTenant(tenant);
     const before = {
@@ -2450,10 +2512,13 @@ export class CancellationService {
       case "refused":
         // The staff asked: nothing is handed to them as a request. The airline's refusal, with its supplier issue.
         this.logger.info({ bookingId, code: outcome.code }, "bookings.staff_cancel_refused");
+        await this.releaseClaim(bookingId, claim.claimedAt);
         throw staffRefusalOf(failure);
       case "version_conflict":
+        await this.releaseClaim(bookingId, claim.claimedAt);
         throw outcome.error;
       case "not_sent":
+        await this.releaseClaim(bookingId, claim.claimedAt);
         throw unsentAnswer(outcome.error);
       case "unknown":
         throw await this.unknownOutcome(

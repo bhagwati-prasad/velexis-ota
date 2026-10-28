@@ -48,10 +48,11 @@ const DML = ["SELECT", "INSERT", "UPDATE", "DELETE"];
 /** SQLSTATE admin_shutdown: the provisioning connection was terminated. */
 const ADMIN_SHUTDOWN = "57P01";
 /**
- * The last file of migrations/tenant: the version a new schema reaches (0004_add_payment_card_fee_lines,
- * FIX-W28-CANCEL, after 0003_add_booking_sync_claim of FIX-W27-SYNC and 0002_add_mvp_tenant_deltas of OBE-008).
+ * The last file of migrations/tenant: the version a new schema reaches (0005_add_cancellation_claim_tighten_calling_codes,
+ * FIX-W31-OTA, after 0004_add_payment_card_fee_lines of FIX-W28-CANCEL, 0003_add_booking_sync_claim of FIX-W27-SYNC and
+ * 0002_add_mvp_tenant_deltas of OBE-008).
  */
-const SCHEMA_VERSION = "0004_add_payment_card_fee_lines";
+const SCHEMA_VERSION = "0005_add_cancellation_claim_tighten_calling_codes";
 /** The tables of a complete tenant schema: the 42 of the baseline and the 2 that migration 0002 adds (OBE-008). */
 const TENANT_TABLE_COUNT = 44;
 

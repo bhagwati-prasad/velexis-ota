@@ -514,6 +514,38 @@ describe("NoteForm", () => {
     ]).toEqual([BOOKING_ID, KEY, "Called the traveller.", null]);
     await waitFor(() => expect(text.value).toBe(""), UI_WAIT);
   });
+
+  it("[FIX-W31-OTA AC2] sends the new key the action hands back after a final refusal, and keeps the key after a transient failure", async () => {
+    actions.addNote
+      .mockResolvedValueOnce({
+        ok: false,
+        code: "BOOKING_NOT_MODIFIABLE",
+        message: "A cancellation of this booking is still being decided.",
+        nextActionKey: OTHER_KEY,
+      } satisfies ActionState)
+      .mockResolvedValueOnce({
+        ok: false,
+        code: "SERVICE_UNAVAILABLE",
+        message: "The OTA API is unavailable right now.",
+      } satisfies ActionState);
+    render(<NoteForm bookingId={BOOKING_ID} idempotencyKey={KEY} />);
+    const text = screen.getByLabelText(NOTE_STRINGS.label) as HTMLTextAreaElement;
+    fireEvent.change(text, { target: { value: "Called the traveller." } });
+    const submit = screen.getByRole("button", { name: NOTE_STRINGS.submit });
+
+    fireEvent.click(submit);
+    await screen.findByText("A cancellation of this booking is still being decided.", {}, UI_WAIT);
+    fireEvent.click(submit);
+    await screen.findByText("The OTA API is unavailable right now.", {}, UI_WAIT);
+    fireEvent.click(submit);
+    await waitFor(() => expect(actions.addNote).toHaveBeenCalledTimes(3), UI_WAIT);
+
+    expect(actions.addNote.mock.calls.map((call) => (call[1] as FormData).get("actionKey"))).toEqual([
+      KEY,
+      OTHER_KEY,
+      OTHER_KEY,
+    ]);
+  });
 });
 
 describe("no card input", () => {

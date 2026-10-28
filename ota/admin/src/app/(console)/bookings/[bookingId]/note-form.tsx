@@ -4,7 +4,9 @@
 // (`addNote`, `bookings:write`), internal by default, shown to the customer too only when the staff member ticks it. The
 // form carries the idempotency key the page rendered with it, so a double click or a retry adds one note; the button is
 // disabled while the note is being saved. A success empties the text, and the page's new render brings a new key for
-// the next note. The note is never sent to Amadeus and changes no booking version.
+// the next note; a final refusal the API stored under the key brings a new one with the action's state, which the next
+// submission sends (`useActionKey` of the confirmation dialog, OADR-0018 point 5 revised on 2026-10-27, FIX-W31-OTA).
+// The note is never sent to Amadeus and changes no booking version.
 import { LoaderCircleIcon } from "lucide-react";
 import { startTransition, useActionState, useEffect, useId, useState, type FormEvent } from "react";
 
@@ -14,6 +16,7 @@ import {
   NOTE_VISIBLE_FIELD,
 } from "@/app/(console)/bookings/[bookingId]/action-rules";
 import { addNote } from "@/app/(console)/bookings/[bookingId]/actions";
+import { useActionKey } from "@/components/confirm-dialog";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
@@ -36,13 +39,14 @@ export const NOTE_MAX_LENGTH = 2000;
 
 export interface NoteFormProps {
   readonly bookingId: string;
-  /** The idempotency key rendered with the page. */
+  /** The idempotency key rendered with the page (replaced by a new one an action's state brings: `useActionKey`). */
   readonly idempotencyKey: string;
 }
 
 /** The note form of the Timeline and notes tab. */
 export function NoteForm({ bookingId, idempotencyKey }: NoteFormProps) {
   const [state, dispatch, pending] = useActionState(addNote, INITIAL_ACTION_STATE);
+  const actionKey = useActionKey(idempotencyKey, state);
   const [text, setText] = useState("");
   const [problem, setProblem] = useState<string | undefined>(undefined);
   const id = useId();
@@ -70,7 +74,7 @@ export function NoteForm({ bookingId, idempotencyKey }: NoteFormProps) {
   return (
     <form noValidate onSubmit={submit} aria-label={NOTE_STRINGS.title} className="grid max-w-2xl gap-2">
       <input type="hidden" name={BOOKING_ID_FIELD} value={bookingId} />
-      <input type="hidden" name={ACTION_KEY_FIELD} value={idempotencyKey} />
+      <input type="hidden" name={ACTION_KEY_FIELD} value={actionKey} />
       <Label htmlFor={id}>{NOTE_STRINGS.label}</Label>
       <p id={hintId} className="text-xs text-muted-foreground">
         {NOTE_STRINGS.hint}

@@ -7,6 +7,13 @@
 // The reads are tenant queries that take the `tenantTx` transaction first and never name a tenant schema, like every
 // tenant repository; the rest is pure.
 //
+// The hold of the ticketing claims (lead decision (1) of 2026-10-27, FIX-W31-OTA, OADR-0014 point 6): the ticketing job
+// (ticketing.service.ts `claimSkip`, reason `cancellation_pending`) and console.bookings.issue (`409
+// BOOKING_NOT_MODIFIABLE`, `details.reason = cancellation_pending`) leave a booking alone from the commit of a
+// cancellation's claim until its outcome is recorded (`bookings.cancellation_claimed_at`, tenant migration 0005,
+// fresh for CANCELLATION_CLAIM_TTL_MS) and while its cancellation state is `undecided` (`cancellationHoldOf`), so no
+// Flight Order Issue goes to an order whose DELETE may have removed it.
+//
 // The money facts of a cancelled booking (`CancellationFacts.payments`): the payments its `booking.cancelled` event
 // names, the authorisation voided after the commit (`voidPaymentId`) and the authorisation the cancellation captured
 // the kept amount of (`capturePaymentId`, lead decision (1) of 2026-10-23, second batch): their status, and for the
@@ -142,6 +149,51 @@ export function cancellationStateOf(events: readonly CancellationEventRow[]): Ca
 /** Whether a cancellation of the live booking is undecided or waits for the staff: no second one until it is settled. */
 export function cancellationPendingOf(state: CancellationState): boolean {
   return state.kind === "undecided" || state.kind === "requested";
+}
+
+// ---- The ticketing claims and an undecided cancellation (FIX-W31-OTA) ---------------------------------------------
+
+/**
+ * How long a cancellation's claim (`bookings.cancellation_claimed_at`, written by T1 of bookings.cancel and
+ * console.bookings.cancel) holds the ticketing claims back at most: the ticketing claim's own 5 minutes
+ * (ticketing.service.ts TICKETING_CLAIM_TTL_MS, which holds a cancellation back as long). A request that died while
+ * its DELETE was in flight leaves the column behind; past this age it holds nothing back, and the next ticketing
+ * attempt starts with its resync GET, which finds an order the DELETE removed (a failed attempt, never an issuance).
+ */
+export const CANCELLATION_CLAIM_TTL_MS = 5 * 60_000;
+
+/** What the ticketing claims read of a booking's cancellation, under the booking's lock. */
+export interface CancellationHoldFacts {
+  /** `bookings.cancellation_claimed_at`: a cancellation's claim whose outcome is not recorded yet. */
+  readonly cancellationClaimedAt: Date | null;
+  /** The booking's cancellation state is `undecided` (cancellationStateOf: a DELETE without an answer). */
+  readonly cancellationUndecided: boolean;
+}
+
+/** Why the ticketing claims leave a booking alone: a cancellation's DELETE in flight, or one without an answer. */
+export type CancellationHold = "claimed" | "undecided";
+
+/** Whether a cancellation's claim (`bookings.cancellation_claimed_at`) is fresh at `now`. */
+export function cancellationClaimFresh(claimedAt: Date | null, now: Date): boolean {
+  return claimedAt !== null && now.getTime() - claimedAt.getTime() <= CANCELLATION_CLAIM_TTL_MS;
+}
+
+/**
+ * Whether a cancellation holds the ticketing claims back (lead decision (1) of 2026-10-27, FIX-W31-OTA, OADR-0014
+ * point 6): from the commit of a cancellation's claim (T1) until its outcome is recorded (`claimed`: the column is
+ * fresh), and while a DELETE without an answer is undecided (`undecided`: the flag, then the staff's review of one the
+ * worker could not read, which only the staff settle). `undefined` when nothing holds it.
+ */
+export function cancellationHoldOf(facts: CancellationHoldFacts, now: Date): CancellationHold | undefined {
+  if (facts.cancellationUndecided) {
+    return "undecided";
+  }
+  return cancellationClaimFresh(facts.cancellationClaimedAt, now) ? "claimed" : undefined;
+}
+
+/** Whether the booking's cancellation state is `undecided` (its events read in `trx`, after the booking's lock). */
+export async function cancellationUndecidedOf(trx: TenantTransaction, bookingId: string): Promise<boolean> {
+  return cancellationStateOf(await cancellationEventsOf(trx, bookingId)).kind === "undecided";
 }
 
 // ---- Reads -------------------------------------------------------------------------------------------------------
