@@ -26,7 +26,7 @@ Common commands: backend `pnpm --filter @velexis/ota-backend test` and `test:int
 | M3 Book & pay | OBE-029 … OBE-057, SDK-008 … SDK-010, OFE-009 … OFE-019 | Guest and customer bookings paid by Stripe (3-D Secure) or by airline card (test), tickets, e-mails and PDFs, my bookings, guest lookup, change contacts, cancel with refund (OF-03 … OF-08). |
 | M4 OTA admin | OBE-058 … OBE-075, OBE-090, OBE-091, SDK-011 … SDK-014, OAD-002 … OAD-017, OFE-020 | "Open console" in the portal lands in the OTA admin; staff issue, cancel, import a PNR, read queues, capture and refund, change markups, branding, pages and templates (OF-09, OF-10). |
 | M5 Monetisation & self-service | OBE-076 … OBE-083, OAD-018, OFE-021, OFE-022 | The same code serves an OTA on its own Stripe (Connect or keys) and its own Amadeus credentials, a custom domain, and the live environment after go-live (OF-12). |
-| M6 Hardening & launch | OBE-084 … OBE-089, OFE-023 … OFE-026, OAD-019, SDK-015 | Security review and PCI evidence closed, airline card live-ready, erasure job, performance measured, nightly suites green, SDK 1.0.0 published. |
+| M6 Hardening & launch | OBE-084 … OBE-089, OBE-092, OFE-023 … OFE-026, OAD-019, SDK-015 | Security review and PCI evidence closed, airline card live-ready, erasure job, performance measured, nightly suites green, SDK 1.0.0 published. |
 
 ## M0 — Foundations
 
@@ -613,7 +613,8 @@ The OTA backend gets its contract extensions, request pipeline, tenancy, Amadeus
   - No recorded fixture contains personal data (the stub's fixture scan passes).
 - **Verify:** `pnpm --filter @velexis/ota-backend test -- amadeus && pnpm --filter @velexis/amadeus-stub test`
 
-### OBE-028 · Load-test search against the stub and tune the Amadeus buckets
+### OBE-028 · Load-test search against the stub and tune the Amadeus buckets ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-backend
 - **Milestone:** M2
 - **Depends on:** OBE-026
@@ -2636,6 +2637,22 @@ Security review, the PCI controls of the airline-card flow and the gate for live
 - **Acceptance:**
   - Each runbook names the signals (logs, `/health/ready`, console views), the commands and the escalation; the developer walks through the checklist and records the date.
 - **Verify:** `test -f ota/docs/runbooks/launch-checklist.md && test -f ota/docs/runbooks/supplier-timeout-and-reconciliation.md`
+
+### OBE-092 · Cut the API's CPU per search so answers of 250 offers meet the search budget
+- **Component:** ota-backend
+- **Milestone:** M6
+- **Depends on:** OBE-028
+- **Size:** M
+- **Read first:** ota/docs/performance.md §2 and §4; ota/docs/adr/0001-amadeus-client-design.md (point 9); ota/docs/adr/0002-offer-and-priced-offer-caching.md; ota/backend/test/load/README.md
+- **Files:** `ota/backend/src/amadeus/supplier-requests.repository.ts`, `ota/backend/src/amadeus/supplier-requests.repository.test.ts`, `ota/backend/src/shopping/searches.service.ts`, `ota/backend/src/shopping/facets.ts`, `ota/backend/src/shopping/facets.test.ts`, `ota/docs/performance.md`
+- **Steps:**
+  1. Added by OBE-028: with answers of 250 offers (what Amadeus answers at most, and what the API asks for unless a storefront sets a lower `maxResults`), the API spends about 150 ms of CPU per search, so 10 concurrent visitors queue on the event loop and the `flights.search` p95 without the stub delay is about 1 s (performance.md §2). Profile it again (`search-load.mjs --offers 250`, the API under the inspector or `--cpu-prof`) and confirm the shares of performance.md §2: the `supplier_requests` copy of the answer (the redactor and the contact masking walk the whole answer before the row is cut to 64 KB), facets and highlights, `decimal.js` in pricing and facets, the database driver for the 250-row insert, garbage collection.
+  2. Cut the largest shares without changing what any operation answers or stores in the offer tables: for example build the stored copy of a search answer from no more of it than the 64 KB row keeps, so the redactor runs on less (it still runs on everything stored, OADR-0001 point 9), and compute facets and highlights with fewer `Decimal` objects. Add unit tests for every new path.
+  3. Run the load test again with `--offers 250` and record the run and the profile in performance.md.
+- **Acceptance:**
+  - With `--visitors 10 --searches 200 --offers 250`, the p95 of `flights.search` without the stub delay is below 500 ms, or performance.md records why not and the decision it needs (a lower default `maxResults`, a worker thread, a second API process).
+  - Every stored `supplier_requests` body is still redacted and cut to 64 KB (the repository's redaction tests pass unchanged), and the search and price integration tests pass unchanged.
+- **Verify:** `pnpm --filter @velexis/ota-backend test supplier-requests facets && node ota/backend/test/load/search-load.mjs --visitors 10 --searches 200 --offers 250`
 
 ### OFE-024 · Run the accessibility and performance pass on the storefront
 - **Component:** ota-frontend
