@@ -11,6 +11,10 @@
 // - Refund, for a captured Stripe payment (`payments:refund`): an amount up to what is still refundable, a reason
 //   category, and the dialog's reason as the refund's note. The API records it `pending`; Stripe completes it. An
 //   airline-card payment has no refund dialog: the airline refunds its card (`refund_via_airline`).
+//
+// The payment's own page `/payments/[paymentId]` (OAD-011, routes.md §7) renders the same dialogs with its own actions
+// (`action`: `[paymentId]/actions.ts`, which run these and revalidate the payments pages too), and without `bookingId`
+// for a payment whose checkout has no booking yet.
 import {
   AMOUNT_FIELD,
   BOOKING_ID_FIELD,
@@ -22,7 +26,7 @@ import {
 } from "@/app/(console)/bookings/[bookingId]/action-rules";
 import { capturePayment, refundPayment } from "@/app/(console)/bookings/[bookingId]/actions";
 import { SelectField, TextField } from "@/app/(console)/bookings/[bookingId]/patch-form";
-import { ConfirmDialog } from "@/components/confirm-dialog";
+import { ConfirmDialog, type ConfirmAction } from "@/components/confirm-dialog";
 import { Money, type MoneyValue } from "@/components/money";
 import { Button } from "@/components/ui/button";
 import type { StaffEnvironment } from "@/lib/permissions";
@@ -46,11 +50,24 @@ export const PAYMENT_STRINGS = Object.freeze({
 
 interface PaymentDialogBase {
   readonly paymentId: string;
-  /** The booking whose page shows the payment (revalidated after a success). */
-  readonly bookingId: string;
+  /**
+   * The booking the payment pays, whose page is revalidated after a success; none for a payment without a booking
+   * (the action then revalidates the payment's own page).
+   */
+  readonly bookingId?: string | undefined;
   readonly environment: StaffEnvironment;
   /** The idempotency key rendered with the page. */
   readonly idempotencyKey: string;
+  /**
+   * The server action: the booking page's `capturePayment` / `refundPayment` unless the page passes its own (the
+   * payment's page passes the actions of `payments/[paymentId]/actions.ts`, which run these).
+   */
+  readonly action?: ConfirmAction | undefined;
+}
+
+/** The hidden `bookingId` of a payment that has a booking; nothing for one that has none. */
+function bookingField(bookingId: string | undefined): Record<string, string> {
+  return bookingId === undefined ? {} : { [BOOKING_ID_FIELD]: bookingId };
 }
 
 export interface CaptureDialogProps extends PaymentDialogBase {
@@ -66,6 +83,7 @@ export function CaptureDialog({
   bookingId,
   environment,
   idempotencyKey,
+  action,
   version,
   authorized,
 }: CaptureDialogProps) {
@@ -87,12 +105,12 @@ export function CaptureDialog({
       }
       confirmLabel={PAYMENT_STRINGS.capture}
       environment={environment}
-      action={capturePayment}
+      action={action ?? capturePayment}
       idempotencyKey={idempotencyKey}
       destructive={false}
       fields={{
         [PAYMENT_ID_FIELD]: paymentId,
-        [BOOKING_ID_FIELD]: bookingId,
+        ...bookingField(bookingId),
         [VERSION_FIELD]: String(version),
         [CURRENCY_FIELD]: authorized.currency,
       }}
@@ -113,7 +131,10 @@ export function CaptureDialog({
 }
 
 export interface RefundDialogProps extends PaymentDialogBase {
-  /** What is still refundable: captured less refunded (action-rules.ts `refundableOf`). */
+  /**
+   * What is still refundable: captured less refunded (action-rules.ts `refundableOf`) on the booking page; on the
+   * payment's own page also less the refunds still on their way to Stripe, as the API counts it.
+   */
   readonly refundable: MoneyValue;
 }
 
@@ -123,6 +144,7 @@ export function RefundDialog({
   bookingId,
   environment,
   idempotencyKey,
+  action,
   refundable,
 }: RefundDialogProps) {
   return (
@@ -143,11 +165,11 @@ export function RefundDialog({
       }
       confirmLabel={PAYMENT_STRINGS.refund}
       environment={environment}
-      action={refundPayment}
+      action={action ?? refundPayment}
       idempotencyKey={idempotencyKey}
       fields={{
         [PAYMENT_ID_FIELD]: paymentId,
-        [BOOKING_ID_FIELD]: bookingId,
+        ...bookingField(bookingId),
         [CURRENCY_FIELD]: refundable.currency,
       }}
     >

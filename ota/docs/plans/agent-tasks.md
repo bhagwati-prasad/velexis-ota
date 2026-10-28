@@ -2227,7 +2227,8 @@ The console API (staff sign-in by portal token, bookings, PNR import, queues, cu
   - The page never calls `flights.*` (a test asserts no request to `/v1/flight-searches`).
 - **Verify:** `pnpm --filter @velexis/ota-admin test`
 
-### OAD-011 · Build the payments pages
+### OAD-011 · Build the payments pages ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-admin
 - **Milestone:** M4
 - **Depends on:** OAD-004, OBE-068

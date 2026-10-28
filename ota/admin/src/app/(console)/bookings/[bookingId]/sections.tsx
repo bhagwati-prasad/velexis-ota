@@ -271,7 +271,7 @@ export function humanize(value: string): string {
 }
 
 /** The label of `value` in `labels`, else the value in words. */
-function labelOf(labels: Readonly<Record<string, string>>, value: string): string {
+export function labelOf(labels: Readonly<Record<string, string>>, value: string): string {
   return Object.hasOwn(labels, value) ? (labels[value] ?? value) : humanize(value);
 }
 
@@ -293,7 +293,8 @@ const CHANNEL_LABELS: Readonly<Record<string, string>> = {
   import: "Imported",
 };
 
-const PROVIDER_LABELS: Readonly<Record<string, string>> = {
+/** Payment providers in words (the payments pages use them too). */
+export const PROVIDER_LABELS: Readonly<Record<string, string>> = {
   stripe: "Stripe",
   adyen: "Adyen",
   checkout_com: "Checkout.com",
@@ -302,7 +303,8 @@ const PROVIDER_LABELS: Readonly<Record<string, string>> = {
   airline: "Airline",
 };
 
-const METHOD_LABELS: Readonly<Record<string, string>> = {
+/** Payment methods in words (the payments pages use them too). */
+export const METHOD_LABELS: Readonly<Record<string, string>> = {
   card: "Card",
   airline_card: "Airline card",
   apple_pay: "Apple Pay",
@@ -1904,8 +1906,8 @@ function formOfPaymentText(form: FormOfPayment): string {
   }
 }
 
-/** The card of a payment: brand and last 4 only. */
-function cardText(payment: BookingPayment): string | undefined {
+/** The card of a payment: brand and last 4 only (never the expiry the provider reports). */
+export function cardText(payment: BookingPayment): string | undefined {
   if (payment.card !== null) {
     return `${payment.card.brand} •••• ${payment.card.last4}`;
   }
@@ -1919,7 +1921,11 @@ function refundRequester(refund: PaymentRefund): string {
     : `${humanize(requestedBy.type)} ${requestedBy.id}`;
 }
 
-function PaymentCard({
+/**
+ * One payment with its facts, and with `detail.payment` (`console.payments.get`) its events and refunds: on the booking's
+ * Payments tab, and on the payment's own page `/payments/[paymentId]` (OAD-011).
+ */
+export function PaymentCard({
   summary,
   detail,
   timeZone,
