@@ -37,8 +37,6 @@ export const PENDING_OPERATIONS: Readonly<Partial<Record<OtaOperationId, Pending
   createBookingPayment: "deferred",
   // Console: bookings
   consoleCreateBooking: "deferred",
-  consoleFindBookingByRecordLocator: "OBE-064",
-  consoleImportBooking: "OBE-064",
   // Console: queues, customers, supplier log
   consoleListQueue: "OBE-065",
   consoleListQueueSnapshots: "OBE-065",

@@ -18,7 +18,10 @@
 // console.bookings.issue and cancel (console-booking-actions.service.ts), which claim a booking for its issuance with the
 // ticketing job's TicketingRepository (a plain provider, provided here again), record tickets with BookingsModule's
 // OrderRecorder, capture through ConsolePaymentsService, cancel through BookingsModule's CancellationService, and
-// answer the same-key replays of a cancellation's `504` (ConsoleCancelBookingIdempotencyHooks).
+// answer the same-key replays of a cancellation's `504` (ConsoleCancelBookingIdempotencyHooks). Since OBE-064:
+// console.bookings.findByRecordLocator and import (pnr-import.service.ts, on the bookings controller), which read the
+// connection's offices (AmadeusModule's ConnectionResolver), price an import with the tenant's markup and fee rules
+// (PricingModule's RulesRepository) and record its order with BookingsModule's repositories and OrderRecorder.
 import { Global, Module } from "@nestjs/common";
 import { AmadeusModule } from "../amadeus/amadeus.module";
 import { BookingsModule } from "../bookings/bookings.module";
@@ -27,6 +30,7 @@ import { loadOpenApiDocument, OpenApiDocument } from "../common/http/openapi-val
 import { RequestContext } from "../common/http/request-context";
 import { QueuesModule } from "../common/queues/queues.module";
 import { PaymentGatewayModule } from "../payments/payment-gateway.module";
+import { PricingModule } from "../pricing/pricing.module";
 import { RefundsRepository } from "../payments/refunds.repository";
 import { TenancyModule } from "../tenancy/tenancy.module";
 import { TicketingRepository } from "../bookings/ticketing.service";
@@ -39,11 +43,19 @@ import { ConsoleBookingsRepository } from "./console-bookings.repository";
 import { ConsoleBookingsService } from "./console-bookings.service";
 import { ConsolePaymentsController } from "./console-payments.controller";
 import { ConsolePaymentsService } from "./console-payments.service";
+import { PnrImportRepository, PnrImportService } from "./pnr-import.service";
 import { StaffActionsWriter } from "./staff-actions.writer";
 
 @Global()
 @Module({
-  imports: [TenancyModule.forApi(), AmadeusModule, BookingsModule, PaymentGatewayModule, QueuesModule],
+  imports: [
+    TenancyModule.forApi(),
+    AmadeusModule,
+    BookingsModule,
+    PaymentGatewayModule,
+    QueuesModule,
+    PricingModule,
+  ],
   controllers: [ConsoleBookingsController, ConsolePaymentsController],
   providers: [
     StaffActionsWriter,
@@ -61,6 +73,8 @@ import { StaffActionsWriter } from "./staff-actions.writer";
     TicketingRepository,
     ConsolePaymentsService,
     RefundsRepository,
+    PnrImportService,
+    PnrImportRepository,
   ],
   exports: [StaffActionsWriter, StaffRefusalAudit],
 })

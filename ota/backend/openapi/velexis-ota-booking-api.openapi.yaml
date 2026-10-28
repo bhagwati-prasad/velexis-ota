@@ -13252,10 +13252,15 @@ paths:
         console.bookings.import). `include=bags` adds Amadeus `included.bags` (extra bag options).
 
 
-        The PNR may belong to any office the OTA's credentials can read (e.g. created in a GDS terminal); no tenant
-        booking data is changed — use console.bookings.resync for attached bookings. Amadeus 400 (477 INVALID FORMAT,
-        572 INVALID OPTION, 4926) → `422 SUPPLIER_REJECTED`; no order → `404 NOT_FOUND` (`error.supplier` set). Not
-        cached (PNR contents change); Next.js `cache: "no-store"`.
+        The PNR may have been created outside Velexis (e.g. in a GDS terminal), but only orders of the OTA's own
+        offices are answered (OF-09, ADR-0012 office isolation): an order whose owner office (its queuing office when
+        Amadeus gives no owner office) is not one of the offices of the OTA's supplier connection is left out (and
+        `included` and `dictionaries`, which describe every order Amadeus answered, are `null` then), and when no
+        order is left the answer is `403 OFFICE_NOT_ALLOWED`; the order data of another office is not kept in the
+        OTA's `supplier_requests` either. No tenant booking data is changed — use console.bookings.resync for
+        attached bookings. Amadeus 400 (477 INVALID FORMAT, 572 INVALID OPTION, 4926) → `422 SUPPLIER_REJECTED`; no
+        order → `404 NOT_FOUND` (`error.supplier` set). Not cached (PNR contents change); Next.js `cache:
+        "no-store"`.
 
 
         Audited: `staff_actions` (`pnr.lookup`, record locator) and `supplier_requests` (redacted). Permission
@@ -13293,6 +13298,7 @@ paths:
         - TENANT_SUSPENDED
         - STAFF_MEMBERSHIP_INACTIVE
         - ENVIRONMENT_NOT_ALLOWED
+        - OFFICE_NOT_ALLOWED
         - NOT_FOUND
         - SUPPLIER_REJECTED
         - SUPPLIER_NOT_CONFIGURED
@@ -13360,7 +13366,14 @@ paths:
         **Amadeus.** **Get Flight Order By Record Locator** (`reference`, `originSystemCode`, `include=bags`) finds the
         order; with several matches pass `flightOrderId` (otherwise `422 UNPROCESSABLE`, `details.flightOrderIds`). Then
         **Flight Order Management GET** (getFlightOrder, `include=bags`) loads the complete order (by-reference
-        responses may be partial).
+        responses may be partial). Only orders of the OTA's own offices are imported (OF-09, ADR-0012 office
+        isolation): an order whose owner office (its queuing office when Amadeus gives no owner office) is not one of
+        the offices of the OTA's supplier connection answers `403 OFFICE_NOT_ALLOWED`, before the Management GET and
+        before anything is written. A known record locator is refused before Amadeus is called.
+
+
+        **Customer.** `customerId` must name a customer of this OTA (`404 NOT_FOUND`); a customer who deleted their
+        account or was disabled answers `409 CONFLICT` with `details.reason` `customer_deleted` or `customer_disabled`.
 
 
         **Persist.** Already attached (`bookings.amadeus_order_id`) → `409 ORDER_ALREADY_IMPORTED`. Otherwise one
@@ -13373,7 +13386,11 @@ paths:
         `booking_access_tokens` (guest import), `staff_actions` (`booking.import`), `supplier_requests`. `contact_email`
         comes from `contactEmail`, the order contacts, the first traveller's contact or the customer (`422
         UNPROCESSABLE` when none). No payment is recorded (`paymentStatus = not_applicable`); no e-mail is sent unless
-        `sendConfirmation=true`.
+        `sendConfirmation=true`. An order without tickets is imported with `ticketing.status = manual_review` (nothing
+        was paid through Velexis, so the ticketing job leaves it to the staff: console.bookings.issue). In the MVP the
+        order's booked services stay in its price (`pricing.netServices`) without `booking_ancillaries` rows, as for
+        every booking, and a guest import issues no booking access token: the guest reaches the booking through
+        bookings.lookup (reference and last name).
 
 
         **Idempotency.** Required; retries return the stored `201`. Permission `bookings:write`.
@@ -13427,7 +13444,9 @@ paths:
         - TENANT_SUSPENDED
         - STAFF_MEMBERSHIP_INACTIVE
         - ENVIRONMENT_NOT_ALLOWED
+        - OFFICE_NOT_ALLOWED
         - NOT_FOUND
+        - CONFLICT
         - IDEMPOTENCY_KEY_REUSED
         - ORDER_ALREADY_IMPORTED
         - UNPROCESSABLE

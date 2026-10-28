@@ -1809,7 +1809,8 @@ The console API (staff sign-in by portal token, bookings, PNR import, queues, cu
   - Cancel with `refund.mode = amount` creates one refund row and one Stripe refund.
 - **Verify:** `pnpm --filter @velexis/ota-backend test:int console`
 
-### OBE-064 · Implement PNR lookup and import
+### OBE-064 · Implement PNR lookup and import ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-backend
 - **Milestone:** M4
 - **Depends on:** OBE-061
