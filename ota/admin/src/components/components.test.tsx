@@ -214,6 +214,21 @@ describe("DataTable", () => {
     expect(screen.queryByRole("link", { name: "Next page" })).toBeNull();
   });
 
+  it("[FIX-W31-PLATFORM AC4] scrolls a wide table in a container that takes the keyboard focus and shows it", () => {
+    render(<DataTable caption="Bookings" columns={COLUMNS} data={[]} page={{ nextCursor: null }} />);
+
+    // axe `scrollable-region-focusable` (WCAG 2.1.1): the arrow keys scroll what the keyboard can focus, as the
+    // portal's table does since PFE-015.
+    const container = screen.getByRole("table", { name: "Bookings" }).parentElement as HTMLElement;
+    expect(container.dataset["slot"]).toBe("table-container");
+    expect(container.getAttribute("tabindex")).toBe("0");
+    expect(container.className.split(/\s+/)).toEqual(
+      expect.arrayContaining(["overflow-x-auto", "focus-visible:ring-[3px]", "focus-visible:ring-ring/50"]),
+    );
+    container.focus();
+    expect(document.activeElement).toBe(container);
+  });
+
   it("builds list URLs that keep repeated parameters and drop emptied ones", () => {
     const current = new URLSearchParams("status=confirmed&status=ticketed&q=x&cursor=c_9");
     expect(listHref("/bookings", current, { q: null, cursor: null })).toBe(

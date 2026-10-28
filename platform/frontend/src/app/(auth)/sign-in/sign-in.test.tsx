@@ -63,6 +63,13 @@ const RECOVERY_CODE = "7KQ4-M2XP-9TRW-H5ZD";
 const RESET_TOKEN = "pr_Pr2xL9qW5mT8vK3cN7bZ4hY1dF6sJ0aG2eU8iO5rQ1k";
 const FORWARDED_FOR = "198.51.100.23, 203.0.113.7";
 const USER_AGENT = "Mozilla/5.0 (PFE-006 test)";
+/**
+ * How long a test waits for the focus that the error summary takes after a server action answered: React commits the
+ * answer, then runs the summary's focus effect, outside the test's own act(). Testing Library's 1 s default is enough
+ * on an idle machine, not on a loaded CI runner (the same check of the sign-up form ran out once). The test's own 5 s
+ * budget is unchanged.
+ */
+const ACTION_WAIT = { timeout: 3_000 } as const;
 /** Return paths whose dot segments the URL parser turns into the protocol-relative `//evil.example` (FIX-W26-SECURITY). */
 const DOT_SEGMENT_REDIRECTS = [
   "/.//evil.example",
@@ -259,12 +266,13 @@ describe("/sign-in: SignInForm and the signIn action", () => {
     type(SIGN_IN_STRINGS.passwordLabel, PASSWORD);
     submit(SIGN_IN_STRINGS.submit);
 
-    const summary = await screen.findByRole("alert");
+    const summary = await screen.findByRole("alert", {}, ACTION_WAIT);
     // 840 seconds of Retry-After: 14 minutes.
     expect(within(summary).getByRole("listitem").textContent).toBe(SIGN_IN_STRINGS.lockedFor(840));
     expect(summary.textContent).toContain("try again in 14 minutes");
     expect(summary.textContent).not.toContain("The API's own text");
-    expect(document.activeElement).toBe(summary);
+    // The summary takes the focus in an effect, which may run after the render the wait above saw.
+    await waitFor(() => expect(document.activeElement).toBe(summary), ACTION_WAIT);
     // The address stays, the password does not; nothing was stored and nobody was redirected.
     expect(input(SIGN_IN_STRINGS.emailLabel).value).toBe(EMAIL);
     expect(input(SIGN_IN_STRINGS.passwordLabel).value).toBe("");
@@ -604,10 +612,12 @@ describe("/sign-in/mfa: MfaForm and the verifyMfa action", () => {
     render(await MfaPage());
     type(MFA_STRINGS.codeLabel, "123456");
     submit(MFA_STRINGS.submit);
-    await waitFor(() =>
-      expect(descriptionsOf(input(MFA_STRINGS.codeLabel))).toContain(ERROR_MESSAGES.MFA_CODE_INVALID),
+    await waitFor(
+      () => expect(descriptionsOf(input(MFA_STRINGS.codeLabel))).toContain(ERROR_MESSAGES.MFA_CODE_INVALID),
+      ACTION_WAIT,
     );
-    expect(document.activeElement).toBe(screen.getByRole("alert"));
+    // The summary takes the focus in an effect, which may run after the render the wait above saw.
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("alert")), ACTION_WAIT);
 
     fetchMock.mockClear();
     type(MFA_STRINGS.codeLabel, "12345");

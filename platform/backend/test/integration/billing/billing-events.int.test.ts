@@ -11,11 +11,13 @@
 // files on the same Redis server never match), delivers one event at a time and waits until its inbox row is done.
 // The tests of FIX-W30-PLATFORM (the last block) deliver two events at once, which the worker (concurrency 2) runs
 // together, and hold one of them at a barrier: a re-fetch whose answer reaches the handler only when the test says,
-// or a repository call inside a transaction; the admin's manual edit runs through the API at the same time.
+// or a repository call inside a transaction; the admin's manual edit runs through the API at the same time. The tests
+// of FIX-W31-PLATFORM (after them) run the API's CheckoutService.start beside a `checkout.session.completed` of the same
+// pending row, one of them held at a barrier inside its transaction.
 // Nothing answers `ota-tenant-ops` here: a dispatched job stays `running`, and its message waits in the queue, where
 // the tests count it. The job schedulers are not registered (JobSchedulerRegistry replaced), so the reconciler never
 // dispatches anything behind the tests' backs. The Stripe keys are the development values of `.env.example`.
-import { randomBytes } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { getQueueToken } from "@nestjs/bullmq";
 import { DiscoveryService } from "@nestjs/core";
 import { Test, type TestingModule } from "@nestjs/testing";
@@ -27,6 +29,7 @@ import {
   validateJob,
   type InvalidationEvent,
 } from "@velexis/api-types/jobs";
+import { sql } from "@velexis/db";
 import { expectResponseToMatch, responseChecker } from "@velexis/testing";
 import { uniqueEmail } from "@velexis/testing/mailpit";
 import { signedStripeEvent, stripeFixture } from "@velexis/testing/stripe";
@@ -34,7 +37,9 @@ import type { Queue } from "bullmq";
 import { Redis } from "ioredis";
 import type Stripe from "stripe";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import type { PlatformTransaction } from "../../../src/audit/audit.repository";
 import { TokenService } from "../../../src/auth/token.service";
+import { CheckoutService, type CheckoutPlan } from "../../../src/billing/checkout.service";
 import { SubscriptionsRepository } from "../../../src/billing/subscriptions.repository";
 import { Clock } from "../../../src/common/clock";
 import { PLATFORM_POOL, type PlatformPool } from "../../../src/common/database";
@@ -1427,5 +1432,235 @@ describe("events of one subscription at once, and the manual edit beside billing
     expect(await auditOf(tenant.id, "subscription.manually_updated")).toEqual([
       expect.objectContaining({ target_id: manual.id }),
     ]);
+  });
+});
+
+// ---- FIX-W31-PLATFORM: the Checkout's start beside billing sync, on the same pending row --------------------------
+
+/** The new Checkout of the tests below: the plan of `arrangeNewOta`, monthly, as `createCheckoutSession` starts it. */
+const GROWTH_MONTHLY: CheckoutPlan = Object.freeze({
+  code: GROWTH.code,
+  interval: "month",
+  priceId: GROWTH.month,
+  trialDays: 14,
+});
+
+/** How `CheckoutService.start` ended: its Session, or what it threw. */
+type StartOutcome = { readonly session: { readonly id: string } } | { readonly error: unknown };
+
+/**
+ * An OTA created in M5 whose owner paid the Checkout of `ids` (its subscription `trialing` at Stripe, the pending row
+ * still `incomplete`), with the Customer that Checkout made stored (`billing_customers`), so a new Checkout reuses it.
+ */
+async function arrangePaidPendingOta(ids: StripeIds) {
+  const ota = await arrangeNewOta(ids, "trialing");
+  await insertRow(pool, "billing_customers", {
+    tenant_id: ota.tenant.id,
+    provider_customer_id: ids.customerId,
+    livemode: false,
+  });
+  return ota;
+}
+
+/**
+ * The owner starts a new Checkout of the pending row meanwhile (a second tab: `createCheckoutSession` carries the
+ * `incomplete` row it read): the API's CheckoutService.start, settled so that a failure is the test's to report.
+ */
+function startCheckout(ota: Awaited<ReturnType<typeof arrangePaidPendingOta>>): Promise<StartOutcome> {
+  return t.app
+    .get(CheckoutService)
+    .start({
+      tenantId: ota.tenant.id,
+      accountId: ota.owner.id,
+      plan: GROWTH_MONTHLY,
+      subscriptionId: ota.row.id,
+      requestKey: randomUUID(),
+    })
+    .then(
+      (session) => ({ session }),
+      (error: unknown) => ({ error }),
+    );
+}
+
+/** The PostgreSQL backend of the transaction `trx`: the session whose locks the tests below wait on. */
+async function backendOf(trx: PlatformTransaction): Promise<number> {
+  const { rows } = await sql<{ pid: number }>`SELECT pg_backend_pid() AS pid`.execute(trx);
+  const pid = rows[0]?.pid;
+  if (pid === undefined) {
+    throw new Error("backendOf: pg_backend_pid() answered nothing");
+  }
+  return pid;
+}
+
+/**
+ * Waits until a session of this database waits for a lock that the session `holder` holds: the other side of the test
+ * has reached it (not any session left waiting by an earlier test).
+ */
+async function aSessionWaitsFor(holder: number): Promise<void> {
+  await vi.waitFor(async () => {
+    const waiting = await rowsOf("SELECT pid FROM pg_stat_activity WHERE $1 = ANY (pg_blocking_pids(pid))", [
+      holder,
+    ]);
+    expect(waiting.length).toBeGreaterThanOrEqual(1);
+  }, WAIT);
+}
+
+/** The `billing.checkout_started` audit rows of `tenantId`: the Session each one names. */
+async function checkoutsStarted(tenantId: string): Promise<unknown[]> {
+  return (await auditOf(tenantId, "billing.checkout_started")).map(
+    (row) => (row["details"] as { checkoutSessionId?: unknown }).checkoutSessionId,
+  );
+}
+
+describe("the Checkout's start beside a completed Checkout of the same pending row (FIX-W31-PLATFORM)", () => {
+  it("[FIX-W31-PLATFORM AC1] a new Checkout waits for billing sync that holds the tenant, holding nothing, and neither deadlocks", async () => {
+    const ids = stripeIds();
+    const ota = await arrangePaidPendingOta(ids);
+    // Billing sync stops inside its transaction, holding the tenant's row (and the OTA's Customer row), before it locks
+    // the pending row.
+    const syncHolds = gate();
+    const syncGoes = gate();
+    let syncBackend = 0;
+    const lockPendingStripe = SubscriptionsRepository.prototype.lockPendingStripe;
+    vi.spyOn(SubscriptionsRepository.prototype, "lockPendingStripe").mockImplementationOnce(async function (
+      this: SubscriptionsRepository,
+      ...args: Parameters<SubscriptionsRepository["lockPendingStripe"]>
+    ) {
+      syncBackend = await backendOf(args[0]);
+      syncHolds.open();
+      await syncGoes.opened;
+      return lockPendingStripe.apply(this, args);
+    });
+    const delivery = checkoutEvent(ids.sessionId);
+    await post(delivery);
+    await syncHolds.opened;
+
+    // The owner starts a new Checkout meanwhile: its transaction waits for the tenant's row first, so the pending row
+    // stays free for billing sync. A start that wrote the row before it (the reverse order) would hold it here, and
+    // this probe would fail at once (55P03) where billing sync would deadlock.
+    const started = startCheckout(ota);
+    let probed: number | null;
+    try {
+      await aSessionWaitsFor(syncBackend);
+      probed = (
+        await pool.query("SELECT id FROM platform.subscriptions WHERE id = $1 FOR UPDATE NOWAIT", [
+          ota.row.id,
+        ])
+      ).rowCount;
+    } finally {
+      // Billing sync goes on whatever the probe found, so a failure here leaves no transaction behind.
+      syncGoes.open();
+    }
+    expect(probed).toBe(1);
+
+    expect(await doneWith(delivery)).toMatchObject({
+      status: "processed",
+      attempts: 1,
+      tenant_id: ota.tenant.id,
+    });
+    const outcome = await started;
+    expect(outcome).toEqual({ session: expect.objectContaining({ id: expect.stringMatching(/^cs_/) }) });
+    const newSessionId = "session" in outcome ? outcome.session.id : "";
+    expect(newSessionId).not.toBe(ids.sessionId);
+    // Billing sync committed first and filled the row with the paid Checkout; the new Checkout found it filled and
+    // left it as it was (only a pending row records a Session). Its start is audited all the same.
+    expect(await subscriptionsOf(ota.tenant.id)).toEqual([
+      expect.objectContaining({
+        id: ota.row.id,
+        status: "trialing",
+        provider_subscription_id: ids.subscriptionId,
+        checkout_session_id: ids.sessionId,
+        version: ota.row.version + 1,
+      }),
+    ]);
+    expect(await statusTrail(ota.tenant.id, ota.row.id)).toEqual([
+      { eventId: delivery.eventId, before: "incomplete", after: "trialing" },
+    ]);
+    expect(await checkoutsStarted(ota.tenant.id)).toEqual([newSessionId]);
+    // Provisioning started once, on the paid Checkout.
+    expect(await jobsOf(ota.tenant.id)).toEqual([
+      expect.objectContaining({ id: ota.job.id, status: "running", attempt: 1 }),
+    ]);
+    expect(await messagesOf(ota.job.id)).toEqual([{ name: "tenant.provision", attempt: 1 }]);
+  });
+
+  it("[FIX-W31-PLATFORM AC1] billing sync waits for a new Checkout that holds the tenant and the pending row, then fills the row, and neither deadlocks", async () => {
+    const ids = stripeIds();
+    const ota = await arrangePaidPendingOta(ids);
+    // The new Checkout stops inside its transaction once it has recorded its Session on the pending row: it holds the
+    // tenant's row and the pending row, and its audit row is still to come.
+    const startHolds = gate();
+    const startGoes = gate();
+    let startBackend = 0;
+    const recordCheckoutSession = SubscriptionsRepository.prototype.recordCheckoutSession;
+    vi.spyOn(SubscriptionsRepository.prototype, "recordCheckoutSession").mockImplementationOnce(
+      async function (
+        this: SubscriptionsRepository,
+        ...args: Parameters<SubscriptionsRepository["recordCheckoutSession"]>
+      ) {
+        const recorded = await recordCheckoutSession.apply(this, args);
+        startBackend = await backendOf(args[0]);
+        startHolds.open();
+        await startGoes.opened;
+        return recorded;
+      },
+    );
+    const started = startCheckout(ota);
+    await startHolds.opened;
+
+    // The paid Checkout's event comes meanwhile: billing sync waits for the tenant's row, holding no row of its own. A
+    // start that had not locked the tenant first would let it lock the tenant, and its audit row would then wait for
+    // billing sync while billing sync waits for the pending row: a deadlock.
+    const delivery = checkoutEvent(ids.sessionId);
+    let keyShareProbe: unknown;
+    try {
+      // The start holds the tenant's row in billing sync's mode, FOR UPDATE: the one row lock that refuses even a
+      // KEY SHARE (FOR NO KEY UPDATE, FOR SHARE or FOR KEY SHARE would let this probe through).
+      keyShareProbe = await pool
+        .query("SELECT id FROM platform.tenants WHERE id = $1 FOR KEY SHARE NOWAIT", [ota.tenant.id])
+        .then(
+          () => "locked without waiting",
+          (error: unknown) => error,
+        );
+      await post(delivery);
+      await aSessionWaitsFor(startBackend);
+    } finally {
+      // The new Checkout goes on whatever happened, so a failure here leaves no transaction behind.
+      startGoes.open();
+    }
+    expect(keyShareProbe).toMatchObject({ code: "55P03" });
+
+    const outcome = await started;
+    expect(outcome).toEqual({ session: expect.objectContaining({ id: expect.stringMatching(/^cs_/) }) });
+    const newSessionId = "session" in outcome ? outcome.session.id : "";
+    expect(await doneWith(delivery)).toMatchObject({
+      status: "processed",
+      attempts: 1,
+      tenant_id: ota.tenant.id,
+    });
+    // The new Checkout committed first (its Session on the pending row); billing sync then filled the row with the
+    // paid Checkout's subscription and Session.
+    expect(await subscriptionsOf(ota.tenant.id)).toEqual([
+      expect.objectContaining({
+        id: ota.row.id,
+        status: "trialing",
+        provider_subscription_id: ids.subscriptionId,
+        checkout_session_id: ids.sessionId,
+        version: ota.row.version + 2,
+      }),
+    ]);
+    const [synced] = (await auditOf(ota.tenant.id, "subscription.updated")).filter(
+      (row) => row["target_id"] === ota.row.id,
+    );
+    expect(synced?.["details"]).toMatchObject({
+      eventId: delivery.eventId,
+      before: { status: "incomplete", checkoutSessionId: newSessionId },
+      after: { status: "trialing", checkoutSessionId: ids.sessionId },
+    });
+    expect(await checkoutsStarted(ota.tenant.id)).toEqual([newSessionId]);
+    expect(await jobsOf(ota.tenant.id)).toEqual([
+      expect.objectContaining({ id: ota.job.id, status: "running", attempt: 1 }),
+    ]);
+    expect(await messagesOf(ota.job.id)).toEqual([{ name: "tenant.provision", attempt: 1 }]);
   });
 });

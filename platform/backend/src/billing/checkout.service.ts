@@ -21,8 +21,15 @@
 //    `<PUBLIC_PORTAL_URL>/otas/<id>/setup?checkout=success` and cancel URL `<PUBLIC_PORTAL_URL>/otas/<id>/billing?
 //    checkout=canceled`; Stripe idempotency key `checkout:<tenantId>:<requestKey>` (the request's `Idempotency-Key`,
 //    or the retry's new job id), so a retried request gets the same Session.
-// 3. One transaction records the Session id (with the plan and interval) on the pre-inserted `incomplete` row, if any,
-//    and audits `billing.checkout_started` (the Session id, never its URL).
+// 3. One transaction locks the tenant's row first (`FOR UPDATE`, `SubscriptionsRepository.lockTenant`), then records the
+//    Session id (with the plan and interval) on the pre-inserted `incomplete` row, if any, and audits
+//    `billing.checkout_started` (the Session id, never its URL). The tenant's row comes first because that is billing's
+//    lock order (subscription-billing flow §D, PADR-0002 item 5 revision of 2026-10-27; FIX-W31-PLATFORM, lead decision
+//    (2) of 2026-10-27): billing sync and the admin's manual edit lock the tenant's row before its subscription rows,
+//    and the audit row's foreign key takes a KEY SHARE lock on the tenant's row. Without it, the row's update and then
+//    the audit row would lock in the reverse order, and a `checkout.session.completed` of the same pending row that
+//    held the tenant could deadlock with it. A row that a completed Checkout filled meanwhile is left as it is
+//    (`recordCheckoutSession` changes only the pending row).
 //
 // A Stripe failure throws `502 PROVIDER_ERROR` (`details.provider = stripe`); what was stored before it stays (the
 // Customer is reused next time). createTenant turns it into `checkoutError` instead (lifecycle.service.ts).
@@ -178,6 +185,10 @@ export class CheckoutService {
         idempotencyKey("checkout", `${tenantId}:${input.requestKey}`),
       );
       await runInTransaction(this.db, async (trx) => {
+        // Billing's lock order (file header, step 3): the tenant's row before the subscription's and the audit row.
+        if (!(await this.subscriptions.lockTenant(trx, tenantId))) {
+          throw new Error("CheckoutService: the tenant of the Checkout does not exist");
+        }
         const now = this.clock.now();
         if (subscriptionId !== null) {
           await this.subscriptions.recordCheckoutSession(trx, {

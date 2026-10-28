@@ -4,7 +4,8 @@
 // before M5), PBE-044 the `incomplete` Stripe row of an OTA created in M5 and the reads and write of Checkout, PBE-045
 // the reads and writes of the Stripe Billing sync (a Stripe subscription copied into its row, by its provider id or the
 // pre-inserted row it names, and the current row it replaces), FIX-W30-PLATFORM the subscription's tenant that the
-// manual edit locks first (billing's lock order). Kysely on the API's `PLATFORM_DB` (ADR-0005).
+// manual edit locks first (billing's lock order), FIX-W31-PLATFORM the tenant's row that Checkout locks before it writes
+// the pre-inserted row (`lockTenant`, the same order). Kysely on the API's `PLATFORM_DB` (ADR-0005).
 import { Inject, Injectable } from "@nestjs/common";
 import { sql, type PlatformDatabase, type Selectable } from "@velexis/db";
 import type { PlatformTransaction } from "../audit/audit.repository";
@@ -420,6 +421,25 @@ export class SubscriptionsRepository {
       .where("tenant_id", "=", tenantId)
       .where("billing_provider", "=", "stripe")
       .where("provider_subscription_id", "is not", null)
+      .executeTakeFirst();
+    return row !== undefined;
+  }
+
+  /**
+   * Locks the row of the tenant `tenantId` in `trx` for the rest of the transaction (`FOR UPDATE`, the mode of
+   * `TenantsRepository.lockForUpdate` that billing sync and the admin's manual edit take): billing's lock order puts the
+   * tenant's row before its subscription rows (subscription-billing flow §D, PADR-0002 item 5), so Checkout takes it
+   * before it writes the pre-inserted row (FIX-W31-PLATFORM, lead decision (2) of 2026-10-27). It reads the id only and
+   * writes nothing: `tenants` is TenantsModule's table, and BillingModule may not import that module of its own layer
+   * (architecture §2.2), so the lock is taken here, as the other billing reads join `tenants`. False when no such
+   * tenant exists.
+   */
+  async lockTenant(trx: PlatformTransaction, tenantId: string): Promise<boolean> {
+    const row = await trx
+      .selectFrom("platform.tenants")
+      .select("id")
+      .where("id", "=", tenantId)
+      .forUpdate()
       .executeTakeFirst();
     return row !== undefined;
   }

@@ -44,6 +44,7 @@ import { SideNav } from "@/components/side-nav";
 import { StatusBadge } from "@/components/status-badge";
 import { StepUpDialog, useStepUpAction } from "@/components/step-up-dialog";
 import { TenantBanner } from "@/components/tenant-banner";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import type { ApiError } from "@/lib/api";
 import type { AccountMembership, MilestoneFeatures, TenantRole } from "@/lib/roles";
@@ -834,5 +835,36 @@ describe("DataTable", () => {
   it("says so when there is nothing to list", () => {
     render(<DataTable caption="Invoices" columns={columns} data={[]} emptyMessage="No invoices yet." />);
     expect(within(screen.getByRole("table")).getByText("No invoices yet.")).toBeTruthy();
+  });
+
+  it("[FIX-W31-PLATFORM AC4] scrolls a wide table in a container that takes the keyboard focus and shows it", () => {
+    render(<DataTable caption="Invoices" columns={columns} data={[]} />);
+
+    // axe `scrollable-region-focusable` (WCAG 2.1.1): the arrow keys scroll what the keyboard can focus (PFE-015).
+    const container = screen.getByRole("table").parentElement as HTMLElement;
+    expect(container.dataset["slot"]).toBe("table-container");
+    expect(container.getAttribute("tabindex")).toBe("0");
+    expect(container.className.split(/\s+/)).toEqual(
+      expect.arrayContaining(["overflow-x-auto", "focus-visible:ring-[3px]", "focus-visible:ring-ring/50"]),
+    );
+    container.focus();
+    expect(document.activeElement).toBe(container);
+  });
+});
+
+describe("Alert", () => {
+  it("[FIX-W31-PLATFORM AC4] colours a destructive description in the full destructive colour, never a lighter one", () => {
+    render(
+      <Alert variant="destructive">
+        <AlertTitle>The payment failed</AlertTitle>
+        <AlertDescription>Stripe refused the card.</AlertDescription>
+      </Alert>,
+    );
+
+    // text-destructive/90 on the card is 4.49:1, under the 4.5:1 of WCAG 1.4.3 (found by the PFE-015 journeys).
+    const classes = screen.getByRole("alert").className.split(/\s+/);
+    expect(classes).toContain("*:data-[slot=alert-description]:text-destructive");
+    expect(classes.filter((name) => /text-destructive\/\d+$/.test(name))).toEqual([]);
+    expect(screen.getByText("Stripe refused the card.").dataset["slot"]).toBe("alert-description");
   });
 });

@@ -54,6 +54,7 @@ import { ReasonDialog, reasonLength, reasonProblem } from "@/components/reason-d
 import { REVEAL_DURATION_MS, RevealPanel } from "@/components/reveal-panel";
 import { StatusBadge } from "@/components/status-badge";
 import { StepUpDialog, useStepUpAction } from "@/components/step-up-dialog";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import type { ApiError } from "@/lib/api";
 import { ACCESS_TOKEN_COOKIE, REFRESH_TOKEN_COOKIE, type AdminSession } from "@/lib/session";
@@ -916,6 +917,38 @@ describe("DataTable", () => {
     render(<DataTable caption="Tenants" columns={columns} data={[]} page={{ nextCursor: null }} />);
     expect(within(screen.getByRole("table")).getByText(TABLE_STRINGS.empty)).toBeTruthy();
     expect(screen.queryByRole("navigation")).toBeNull();
+  });
+
+  it("[FIX-W31-PLATFORM AC4] scrolls a wide table in a container that takes the keyboard focus and shows it", () => {
+    render(<DataTable caption="Tenants" columns={columns} data={rows} getRowId={(row) => row.id} />);
+
+    // axe `scrollable-region-focusable` (WCAG 2.1.1): the arrow keys scroll what the keyboard can focus, as the
+    // portal's table does since PFE-015.
+    const container = screen.getByRole("table", { name: "Tenants" }).parentElement as HTMLElement;
+    expect(container.dataset["slot"]).toBe("table-container");
+    expect(container.getAttribute("tabindex")).toBe("0");
+    expect(container.className.split(/\s+/)).toEqual(
+      expect.arrayContaining(["overflow-x-auto", "focus-visible:ring-[3px]", "focus-visible:ring-ring/50"]),
+    );
+    container.focus();
+    expect(document.activeElement).toBe(container);
+  });
+});
+
+describe("Alert", () => {
+  it("[FIX-W31-PLATFORM AC4] colours a destructive description in the full destructive colour, never a lighter one", () => {
+    render(
+      <Alert variant="destructive">
+        <AlertTitle>The plan could not be saved</AlertTitle>
+        <AlertDescription>Try again in a moment.</AlertDescription>
+      </Alert>,
+    );
+
+    // text-destructive/90 on the card is 4.49:1, under the 4.5:1 of WCAG 1.4.3 (the portal's fix of PFE-015).
+    const classes = screen.getByRole("alert").className.split(/\s+/);
+    expect(classes).toContain("*:data-[slot=alert-description]:text-destructive");
+    expect(classes.filter((name) => /text-destructive\/\d+$/.test(name))).toEqual([]);
+    expect(screen.getByText("Try again in a moment.").dataset["slot"]).toBe("alert-description");
   });
 });
 

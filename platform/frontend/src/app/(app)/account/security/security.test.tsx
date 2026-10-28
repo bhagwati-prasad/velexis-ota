@@ -579,7 +579,8 @@ describe("/account", () => {
 
     const summary = await screen.findByRole("alert", {}, ACTION_WAIT);
     expect(summary.textContent).toContain(ACCOUNT_STRINGS.stale);
-    expect(document.activeElement).toBe(summary);
+    // The summary takes the focus in an effect, which may run after the render the wait above saw.
+    await waitFor(() => expect(document.activeElement).toBe(summary), ACTION_WAIT);
     const reload = screen.getByRole("link", { name: ACCOUNT_STRINGS.reload });
     expect(reload.getAttribute("href")).toBe("/account");
     // What was typed stays, and so does the version: a save after a reload is checked against the current one.
