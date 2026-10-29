@@ -1,9 +1,13 @@
 // Runtime parity of the SDK with the working OpenAPI document (OADR-0016 point 4, ota/sdk/docs/types-and-builds.md §4
-// point 5, ota/sdk/README.md §6 point 5, task SDK-006): the set of `x-sdk-method` names of the document (without
-// `x-internal` and `x-sdk-exclude` operations) equals the set of methods of a client instance, except what an entry of
-// pending-namespaces.js covers; `withOptions` and `request` are the only other members. The pending list itself is
-// checked: every entry names an SDK task, covers at least one method of the document, is a whole namespace or one
-// method of an implemented namespace, and still has something to add. SDK-013 empties the list.
+// point 5, ota/sdk/README.md §6 point 5, tasks SDK-006 and SDK-013): the set of `x-sdk-method` names of the document
+// (without `x-internal` and `x-sdk-exclude` operations) equals the set of methods of a client instance, all 128 of them;
+// `withOptions` and `request` are the only other members.
+//
+// Until the M4 exit the document grew ahead of the SDK, and an entry of pending-namespaces.js could cover what an SDK
+// task had not written yet (`parity` below, with the rules the list followed: every entry names an SDK task, covers at
+// least one method of the document, is a whole namespace or one method of an implemented namespace, and still has
+// something to add). Since SDK-013 the check is strict (`strictParity`): the list must be empty, any entry is refused
+// however well-formed, and no entry covers a missing method.
 import { execFile } from "node:child_process";
 import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -28,6 +32,15 @@ const CLIENT_FUNCTIONS = ["request", "withOptions"];
 const SDK_TASK = /^SDK-\d{3}$/;
 /** A fake key with the right shape; it works nowhere, and no test sends a request. */
 const PK = "pk_test_sdk006_fake";
+/**
+ * The client's methods at the M4 exit (OADR-0016, SDK-013): one per `x-sdk-method` of the completed document, whose 135
+ * operations include five `x-internal` ones and two `x-sdk-exclude` ones (implementation-plan.md §8, "Contract
+ * rollout"). A change that adds an `x-sdk-method` to the document writes its SDK method and raises this count.
+ */
+const SDK_METHOD_COUNT = 128;
+/** Why the strict check refuses an entry of pending-namespaces.js since SDK-013. */
+const CLOSED =
+  "pending-namespaces.js is closed since SDK-013 (the M4 exit); the change that adds an x-sdk-method writes its SDK method";
 
 /**
  * Parsing the working document takes about half a second alone, and more than Vitest's 10 s hook default while
@@ -138,6 +151,19 @@ function parity({ documentMethods, clientMethods, pending }) {
   return { missing, extra, problems };
 }
 
+/**
+ * The parity check since SDK-013: the document's methods the client lacks and the client's methods the document lacks,
+ * compared as if the pending list were empty, and one problem for every entry of the list, even one that the rules of
+ * `parity` accept, so a non-empty list always fails.
+ */
+function strictParity({ documentMethods, clientMethods, pending }) {
+  const { missing, extra } = parity({ documentMethods, clientMethods, pending: [] });
+  const problems = pending.map(
+    (item) => `${typeof item?.entry === "string" ? item.entry : JSON.stringify(item)}: ${CLOSED}`,
+  );
+  return { missing, extra, problems };
+}
+
 let documentMethods = [];
 
 beforeAll(() => {
@@ -145,13 +171,17 @@ beforeAll(() => {
 }, PARSE_TIMEOUT_MS);
 
 describe("the client and the working document", () => {
-  it("have the same methods, except what pending-namespaces.js lists [SDK-006 AC2]", () => {
+  it("have the same 128 methods, with nothing pending [SDK-006 AC2] [SDK-013 AC1]", () => {
     const { methods } = membersOf(createVelexisClient({ publishableKey: PK }));
-    expect(parity({ documentMethods, clientMethods: methods, pending: PENDING })).toEqual({
+    expect(strictParity({ documentMethods, clientMethods: methods, pending: PENDING })).toEqual({
       missing: [],
       extra: [],
       problems: [],
     });
+    // The same sets: both lists are sorted, and neither names a method twice.
+    expect(methods).toEqual(documentMethods);
+    expect(new Set(documentMethods).size).toBe(documentMethods.length);
+    expect(documentMethods).toHaveLength(SDK_METHOD_COUNT);
   });
 
   it("has withOptions and request as the only members besides the namespaces", () => {
@@ -210,16 +240,37 @@ describe("the parity check", () => {
     });
   }, 2 * CHILD_TIMEOUT_MS);
 
-  it("fails when a method is removed from flights.js [SDK-006 AC2]", () => {
+  /** The methods of the client that the child process printed. */
+  const removedMethods = () => {
     expect(removed.status, removed.stderr).toBe(0);
     const client = JSON.parse(removed.stdout, (key, value) => (value === FUNCTION ? () => undefined : value));
-    const { methods } = membersOf(client);
+    return membersOf(client).methods;
+  };
+
+  it("fails when a method is removed from flights.js [SDK-006 AC2]", () => {
+    const methods = removedMethods();
     expect(methods).toContain("flights.search");
     expect(methods).not.toContain("flights.getFareRules");
-    expect(parity({ documentMethods, clientMethods: methods, pending: PENDING })).toEqual({
+    expect(strictParity({ documentMethods, clientMethods: methods, pending: PENDING })).toEqual({
       missing: ["flights.getFareRules"],
       extra: [],
       problems: [],
+    });
+  });
+
+  it("fails when a method is removed from flights.js, even with a pending entry for it [SDK-013 AC1]", () => {
+    const methods = removedMethods();
+    const pending = [{ entry: "flights.getFareRules", task: "SDK-005" }];
+    // Until SDK-013 such an entry excused the missing method.
+    expect(parity({ documentMethods, clientMethods: methods, pending })).toEqual({
+      missing: [],
+      extra: [],
+      problems: [],
+    });
+    expect(strictParity({ documentMethods, clientMethods: methods, pending })).toEqual({
+      missing: ["flights.getFareRules"],
+      extra: [],
+      problems: [`flights.getFareRules: ${CLOSED}`],
     });
   });
 
@@ -229,7 +280,49 @@ describe("the parity check", () => {
   const CLIENT_METHODS = ["alpha.get", "alpha.list", "beta.get"];
   const check = (pending, clientMethods = CLIENT_METHODS) =>
     parity({ documentMethods: DOCUMENT_METHODS, clientMethods, pending });
+  const strictCheck = (pending, clientMethods = CLIENT_METHODS) =>
+    strictParity({ documentMethods: DOCUMENT_METHODS, clientMethods, pending });
+  /** A list that the rules of `parity` accept for CLIENT_METHODS: it covers every method the client lacks. */
+  const WELL_FORMED = [
+    { entry: "beta.list", task: "SDK-012" },
+    { entry: "beta.sub.get", task: "SDK-012" },
+    { entry: "gamma", task: "SDK-011" },
+  ];
 
+  it("passes a client with every method of the document and an empty pending list [SDK-013 AC1]", () => {
+    expect(strictCheck([], DOCUMENT_METHODS)).toEqual({ missing: [], extra: [], problems: [] });
+  });
+
+  it("refuses every pending entry, even a list that the rules until SDK-013 accept [SDK-013 AC1]", () => {
+    expect(check(WELL_FORMED)).toEqual({ missing: [], extra: [], problems: [] });
+    expect(strictCheck(WELL_FORMED)).toEqual({
+      missing: ["beta.list", "beta.sub.get", "gamma.get"],
+      extra: [],
+      problems: [`beta.list: ${CLOSED}`, `beta.sub.get: ${CLOSED}`, `gamma: ${CLOSED}`],
+    });
+  });
+
+  it("refuses a pending entry with a complete client, and a malformed one by what it is [SDK-013 AC1]", () => {
+    expect(strictCheck([{ entry: "alpha", task: "SDK-005" }], DOCUMENT_METHODS)).toEqual({
+      missing: [],
+      extra: [],
+      problems: [`alpha: ${CLOSED}`],
+    });
+    expect(strictCheck([{ task: "SDK-012" }], DOCUMENT_METHODS).problems).toEqual([
+      `{"task":"SDK-012"}: ${CLOSED}`,
+    ]);
+  });
+
+  it("fails strictly on a method of the client that the document does not have [SDK-013 AC1]", () => {
+    expect(strictCheck([], [...DOCUMENT_METHODS, "alpha.teleport"])).toEqual({
+      missing: [],
+      extra: ["alpha.teleport"],
+      problems: [],
+    });
+  });
+
+  // The rules the pending list followed until SDK-013 (`parity`); the contract project's type-level rules in
+  // client.contract.ts mirror them, and contract.test.js proves those on a scratch copy of the list.
   it("passes when every method the client lacks is covered by a namespace or a method entry", () => {
     expect(
       check([
@@ -319,6 +412,10 @@ describe("the parity check", () => {
 });
 
 describe("pending-namespaces.js", () => {
+  it("is empty: the pending list is closed since the M4 exit [SDK-013 AC1]", () => {
+    expect(PENDING).toEqual([]);
+  });
+
   it("is frozen", () => {
     expect(Object.isFrozen(PENDING)).toBe(true);
     for (const entry of PENDING) {

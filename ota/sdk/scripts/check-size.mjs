@@ -13,6 +13,10 @@
 // missing bundle also exits 1, so the check never passes by measuring nothing. When the budget is exceeded, the
 // console namespace moves to its own entry point, `@velexis/ota-sdk/console` (the ADR-0019 follow-up, OADR-0016
 // Follow-ups); the budget is never raised to make a build pass.
+//
+// SDK-013 checked the budget at the M4 exit, with all 128 methods of the client in the one entry (the parity test
+// proves the client has every `x-sdk-method` of the document): the ESM bundle keeps well within it, so there is no
+// separate console entry. ota/sdk/docs/types-and-builds.md §7 records the printed size.
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";

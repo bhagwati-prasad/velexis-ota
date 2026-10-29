@@ -2,7 +2,8 @@
 // writes the ESM bundle, the IIFE (`window.Velexis`) and the declarations, scripts/check-size.mjs holds the ESM bundle
 // to 25 KB min+gzip, and package.json exports them. These tests run both scripts the way `pnpm --filter
 // @velexis/ota-sdk build` runs them, into a scratch copy of the package: they need no earlier build and never read a
-// stale dist/ (CI runs `pnpm test` before `pnpm build`).
+// stale dist/ (CI runs `pnpm test` before `pnpm build`). Since SDK-013 they also prove that the bundle the size check
+// measures holds every method of the route table, the console namespace included.
 //
 // - Node imports the ESM bundle natively, by the package name, in a child process: a fresh global environment whose
 //   globals, built-in prototypes, `fetch` and timers are compared before and after the import.
@@ -33,8 +34,9 @@ import ts from "typescript";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { GLOBAL_NAME, OUTPUTS, bundleOptions } from "../../scripts/build.mjs";
-import { BUDGET_BYTES, KB } from "../../scripts/check-size.mjs";
+import { BUDGET_BYTES, KB, measure } from "../../scripts/check-size.mjs";
 import * as source from "../../src/index.js";
+import { op } from "../../src/internal/operations.js";
 
 const SDK_ROOT = fileURLToPath(new URL("../..", import.meta.url));
 const BUILD = join(SDK_ROOT, "scripts", "build.mjs");
@@ -208,6 +210,19 @@ if (typeof ns.createVelexisClient === "function") {
   });
   report.result = await client.storefront.get();
   report.requests = requests;
+  // The dotted path of every method of the client's namespaces, as the parity test names them (SDK-013).
+  const methodsOf = (object, prefix) =>
+    Object.entries(object).flatMap(([name, value]) =>
+      typeof value === "function"
+        ? [prefix + name]
+        : value !== null && typeof value === "object"
+          ? methodsOf(value, prefix + name + ".")
+          : [],
+    );
+  report.methods = Object.entries(client)
+    .filter(([, value]) => value !== null && typeof value === "object")
+    .flatMap(([name, value]) => methodsOf(value, name + "."))
+    .sort();
 }
 process.stdout.write(JSON.stringify(report));
 `;
@@ -668,6 +683,24 @@ describe("the ESM bundle in Node", () => {
     expect(probes.bundle.requests).toEqual([
       { url: "https://api.ota.example.com/v1/storefront", method: "GET", credentials: "omit" },
     ]);
+  });
+
+  it("holds every method of the route table, console included, within the 25 KB budget [SDK-013 AC2]", () => {
+    // The ESM bundle that check-size.mjs measures is the whole client at the M4 exit: one method per entry of the
+    // route table, which has one per `x-sdk-method` of the document (parity.test.js proves the client has the same
+    // 128), so the console namespace stays in the one entry and there is no `@velexis/ota-sdk/console` (OADR-0016
+    // Follow-ups). The route table's keys are the method names with dots replaced by underscores.
+    const routes = Object.keys(op)
+      .map((key) => key.replaceAll("_", "."))
+      .sort();
+    expect(routes).toEqual(
+      expect.arrayContaining(["flights.search", "console.settings.assets.upload", "console.payments.refund"]),
+    );
+    expect(probes.bundle.methods).toEqual(routes);
+    expect(probes.development.methods).toEqual(routes);
+    const [esm] = measure(DIST);
+    expect(esm).toMatchObject({ kind: "ESM", missing: false, limit: BUDGET_BYTES, ok: true });
+    expect(esm.gzip).toBeLessThanOrEqual(BUDGET_BYTES);
   });
 });
 
