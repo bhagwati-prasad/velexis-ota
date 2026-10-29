@@ -1,12 +1,21 @@
 // The server actions of the PNR lookup `/pnr` (OAD-009; routes.md §4, console-operations flow §3 step 4, README §7,
-// OADR-0018 points 4 and 5): attaching an Amadeus order that Velexis did not create to the OTA as a booking, and the
-// customer search of the import dialog, each through the SDK's console namespace with the client `requireStaff` hands
-// back (the staff token of the request, the service key, the environment of the switch, the end-user headers).
+// OADR-0018 points 4 and 5): attaching an Amadeus order that Velexis did not create to the OTA as a booking, the
+// customer search of the import dialog, and the raw reads of the Advanced panel (OAD-010), each through the SDK's
+// console namespace with the client `requireStaff` hands back (the staff token of the request, the service key, the
+// environment of the switch, the end-user headers).
 //
 //   importBooking     console.bookings.import   bookings:write    idempotency key; the pricing mode (`markup_rules`,
 //                                                                   `net`, or `override` with a selling total in the
 //                                                                   order's currency); the match's `flightOrderId`
 //   searchCustomers   console.customers.list    customers:read    `q`, active accounts only, at most 8
+//   readRawOrders     console.amadeus.getFlightOrderByReference   amadeus:read   the record locator (GDS)
+//   readRawOrder      console.amadeus.getFlightOrder              amadeus:read   one Amadeus order id
+//
+// The two raw reads (OBE-067, routes.md §4 "Advanced") answer Amadeus's verbatim orders, already redacted by the API,
+// with net prices and the call's facts, for support. Each is an Amadeus call and an audited read (`amadeus.<operationId>`
+// in staff_actions), so it runs only when staff press its button, never while the page renders; neither writes anything
+// or carries a key. A value the API would refuse (a record locator outside `^[A-Z0-9]{5,8}$`, an order id outside
+// `^[A-Za-z0-9=_-]{8,200}$`) is refused before any call.
 //
 // `importBooking` starts with `requireStaff("bookings:write")` (a forged POST fails before any call; the API decides and
 // audits all the same), then validates the dialog's form with Zod, then makes one call with the dialog's hidden
@@ -30,7 +39,13 @@
 // The bookings pages need nothing either: they are dynamic, so every navigation to them reads the API afresh.
 "use server";
 
-import type { ConsoleBooking, ConsoleImportBookingParams, StaffPermission } from "@velexis/ota-sdk";
+import type {
+  ConsoleAmadeusFlightOrderResult,
+  ConsoleAmadeusFlightOrdersByReferenceResult,
+  ConsoleBooking,
+  ConsoleImportBookingParams,
+  StaffPermission,
+} from "@velexis/ota-sdk";
 import { z } from "zod";
 
 import { TYPED_AMOUNT_PATTERN, isPositiveAmount } from "@/app/(console)/bookings/[bookingId]/action-rules";
@@ -44,7 +59,7 @@ import {
   withNextActionKey,
   type ActionState,
 } from "@/lib/action-state";
-import { fromVelexisError, isVelexisErrorLike } from "@/lib/errors";
+import { GENERIC_ERROR_MESSAGE, fromVelexisError, isVelexisErrorLike } from "@/lib/errors";
 import { requireStaff, type StaffContext } from "@/lib/session";
 
 import {
@@ -64,6 +79,7 @@ import {
   TAGS_FIELD,
   TAGS_MAX,
   TAG_MAX_LENGTH,
+  normalizeRecordLocator,
   tagsOf,
   type CustomerChoice,
   type CustomerSearchState,
@@ -507,5 +523,98 @@ export async function searchCustomers(query: unknown): Promise<CustomerSearchSta
       message: state.message ?? STRINGS.customer,
       ...(state.requestId === undefined ? {} : { requestId: state.requestId }),
     };
+  }
+}
+
+// ---- The Advanced panel's raw reads (OAD-010) -----------------------------------------------------------------------
+
+/** What a raw read of the Advanced panel answers: Amadeus's verbatim answer with the call's facts, or the refusal. */
+export type RawReadState<Result> =
+  | { readonly ok: true; readonly result: Result }
+  | (ActionState & { readonly ok: false; readonly message: string });
+
+export type RawOrdersState = RawReadState<ConsoleAmadeusFlightOrdersByReferenceResult>;
+export type RawOrderState = RawReadState<ConsoleAmadeusFlightOrderResult>;
+
+/**
+ * An Amadeus order id as consoleAmadeusGetFlightOrder takes it in its path (`flightOrderId` of the OTA document: 8 to
+ * 200 letters, digits, `=`, `_` or `-`); the API refuses any other value with `400 VALIDATION_FAILED`.
+ */
+const FLIGHT_ORDER_ID_PATTERN = /^[A-Za-z0-9=_-]{8,200}$/;
+
+const RAW_STRINGS = Object.freeze({
+  invalidReference: "Enter 5 to 8 letters and digits, like L2P9XC.",
+  invalidOrder:
+    "The API cannot read this order id: it takes 8 to 200 letters, digits, equals signs, underscores or hyphens.",
+  noOrders: "No order with this record locator in your offices.",
+  noOrder: "Amadeus has no order with this id (any more).",
+  officeNotAllowed:
+    "This order belongs to an Amadeus office outside this OTA: Velexis shows only the orders of its own offices.",
+});
+
+/** The state of a failed raw read: lib/errors.ts's message (or this panel's words) and the request id. */
+function rawFailure(error: unknown, notFound: string): RawReadState<never> {
+  const state = fromVelexisError(error);
+  const code = isVelexisErrorLike(error) ? error.code : undefined;
+  const message =
+    code === "NOT_FOUND"
+      ? notFound
+      : code === "OFFICE_NOT_ALLOWED"
+        ? RAW_STRINGS.officeNotAllowed
+        : (state.message ?? GENERIC_ERROR_MESSAGE);
+  return { ...state, ok: false, message };
+}
+
+/** A refused raw read: no session, no permission, or a value the API would refuse. */
+async function rawReader(): Promise<
+  { readonly context: StaffContext } | { readonly state: RawReadState<never> }
+> {
+  const staff = await staffFor("amadeus:read");
+  return "state" in staff
+    ? { state: { ...staff.state, ok: false, message: staff.state.message ?? GENERIC_ERROR_MESSAGE } }
+    : staff;
+}
+
+/**
+ * "Read the raw orders" of the Advanced panel: Get Flight Order By Record Locator (`console.amadeus.getFlightOrderByReference`,
+ * `amadeus:read`, origin system `GDS`): the verbatim orders of the OTA's offices with the record locator, and which of them
+ * are bookings of this OTA (`matches`). Net prices.
+ */
+export async function readRawOrders(reference: unknown): Promise<RawOrdersState> {
+  const staff = await rawReader();
+  if ("state" in staff) {
+    return staff.state;
+  }
+  const value = typeof reference === "string" ? normalizeRecordLocator(reference) : "";
+  if (!RECORD_LOCATOR_PATTERN.test(value)) {
+    return { ok: false, code: "VALIDATION_FAILED", message: RAW_STRINGS.invalidReference };
+  }
+  try {
+    return {
+      ok: true,
+      result: await staff.context.console.amadeus.getFlightOrderByReference({ reference: value }),
+    };
+  } catch (error) {
+    return rawFailure(error, RAW_STRINGS.noOrders);
+  }
+}
+
+/**
+ * "Read this order" of the Advanced panel: Flight Order Management GET (`console.amadeus.getFlightOrder`, `amadeus:read`)
+ * of one order of the lookup: the verbatim order, the booking of this OTA attached to it, if any. It changes no booking.
+ * Net prices.
+ */
+export async function readRawOrder(flightOrderId: unknown): Promise<RawOrderState> {
+  const staff = await rawReader();
+  if ("state" in staff) {
+    return staff.state;
+  }
+  if (typeof flightOrderId !== "string" || !FLIGHT_ORDER_ID_PATTERN.test(flightOrderId)) {
+    return { ok: false, code: "VALIDATION_FAILED", message: RAW_STRINGS.invalidOrder };
+  }
+  try {
+    return { ok: true, result: await staff.context.console.amadeus.getFlightOrder({ flightOrderId }) };
+  } catch (error) {
+    return rawFailure(error, RAW_STRINGS.noOrder);
   }
 }

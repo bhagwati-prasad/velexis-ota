@@ -38,12 +38,14 @@ import {
   TENANT_COOKIE,
 } from "@/lib/session";
 
-import { importBooking, searchCustomers } from "./actions";
+import { importBooking, readRawOrder, readRawOrders, searchCustomers } from "./actions";
 import { importedBookingOf, type ImportState } from "./import-rules";
 
 const ME = "GET /v1/console/auth/me";
 const IMPORT = "POST /v1/console/bookings/imports";
 const CUSTOMERS = "GET /v1/console/customers";
+const RAW_BY_REFERENCE = "GET /v1/console/amadeus/v1/booking/flight-orders/by-reference";
+const RAW_ORDER = "GET /v1/console/amadeus/v1/booking/flight-orders/eJzTd9cPNfX09DUFAAsGAkT";
 
 const REFERENCE = "L2P9XC";
 const FLIGHT_ORDER_ID = "eJzTd9cPNfX09DUFAAsGAkT";
@@ -546,6 +548,139 @@ describe("searchCustomers", () => {
       ok: false,
       message: "The OTA API is unavailable right now. Try again in a moment.",
       requestId: "req_fake_1",
+    });
+  });
+});
+
+// ---- The Advanced panel's raw reads (OAD-010) ---------------------------------------------------------------------
+
+/** The facts of a raw read's Amadeus call (`ConsoleAmadeusCall`, dummy). */
+function rawCall(amadeusApi: string, path: string) {
+  return {
+    supplierRequestId: "sreq_01JA4H9Z1B3D5F7H9K1M3P5R7T",
+    environment: "test",
+    officeId: "OSLN12345",
+    amadeusApi,
+    amadeusOperationId: "getFlightOrder",
+    httpMethod: "GET",
+    path,
+    httpStatus: 200,
+    durationMs: 980,
+    correlationId: null,
+    staffActionId: "sact_01JA4H1A4D6F8H0K2M4P6R8T0W",
+  };
+}
+
+describe("readRawOrders and readRawOrder", () => {
+  it("read the raw Get Flight Order By Record Locator and Flight Order Management answers in the switch's environment", async () => {
+    signedIn("agent", "live");
+    const byReference = {
+      call: rawCall("GetFlightOrderByRecordLocator", "/v1/booking/flight-orders/by-reference"),
+      matches: [{ flightOrderId: FLIGHT_ORDER_ID, bookingId: null }],
+      amadeus: { data: [{ type: "flight-order", id: FLIGHT_ORDER_ID, queuingOfficeId: "OSLN12345" }] },
+    };
+    const order = {
+      call: rawCall("FlightOrderManagement", `/v1/booking/flight-orders/${FLIGHT_ORDER_ID}`),
+      flightOrderId: FLIGHT_ORDER_ID,
+      bookingId: EXISTING_BOOKING_ID,
+      bookingSynced: false,
+      amadeus: { data: { type: "flight-order", id: FLIGHT_ORDER_ID } },
+    };
+    api.on(RAW_BY_REFERENCE, () => Response.json(byReference, { headers: { "X-Request-Id": "req_raw_1" } }));
+    api.on(RAW_ORDER, () => Response.json(order, { headers: { "X-Request-Id": "req_raw_2" } }));
+
+    expect(await readRawOrders(" l2p9xc ")).toEqual({ ok: true, result: byReference });
+    expect(await readRawOrder(FLIGHT_ORDER_ID)).toEqual({ ok: true, result: order });
+
+    const lookup = only(RAW_BY_REFERENCE);
+    expect(Object.fromEntries(lookup.url.searchParams)).toEqual({
+      reference: REFERENCE,
+      originSystemCode: "GDS",
+    });
+    for (const sent of [lookup, only(RAW_ORDER)]) {
+      expect(sent.headers.get("X-Velexis-Environment")).toBe("live");
+      expect(sent.headers.get("X-Api-Key")).toBe(TEST_CONFIG.OTA_ADMIN_SERVICE_KEY);
+      expect(sent.headers.get("Idempotency-Key")).toBeNull();
+    }
+    // Raw reads only: no customer-scope operation, nothing revalidated (no new lookup, no new audited read).
+    expect(actionRequests().map((request) => `${request.method} ${request.url.pathname}`)).toEqual([
+      RAW_BY_REFERENCE,
+      RAW_ORDER,
+    ]);
+    expect(revalidated()).toEqual([]);
+  });
+
+  it("refuse a role without amadeus:read, and a value the API would refuse, before any call", async () => {
+    for (const role of ["finance", "viewer"] as const) {
+      signedIn(role);
+      expect(await readRawOrders(REFERENCE)).toEqual({
+        ok: false,
+        code: "FORBIDDEN",
+        message: "You do not have permission to do this (amadeus:read).",
+      });
+      expect(await readRawOrder(FLIGHT_ORDER_ID)).toMatchObject({ ok: false, code: "FORBIDDEN" });
+    }
+
+    signedIn("agent");
+    expect(await readRawOrders("L2-P9")).toEqual({
+      ok: false,
+      code: "VALIDATION_FAILED",
+      message: "Enter 5 to 8 letters and digits, like L2P9XC.",
+    });
+    expect(await readRawOrders(undefined)).toMatchObject({ ok: false, code: "VALIDATION_FAILED" });
+    // The API's `flightOrderId`: 8 to 200 of `A-Z a-z 0-9 = _ -`. Too short, too long, a space, base64's `/` and `+`, a
+    // URL-encoded `%3D`, not a text.
+    for (const id of [
+      "",
+      "eJzTd9c",
+      "x".repeat(201),
+      "eJzTd9cP NfX09",
+      "eJyLcHUy/MbdwNDT",
+      "eJyLcHUy+MbdwNDT",
+      `${FLIGHT_ORDER_ID}%3D`,
+      42,
+    ]) {
+      expect(await readRawOrder(id)).toEqual({
+        ok: false,
+        code: "VALIDATION_FAILED",
+        message:
+          "The API cannot read this order id: it takes 8 to 200 letters, digits, equals signs, underscores or hyphens.",
+      });
+    }
+    expect(actionRequests()).toEqual([]);
+
+    // The shortest and the longest ids it takes, Amadeus's `=` padding too, reach the API (the fake answers 404).
+    expect(await readRawOrder("eJzTd9c=")).toMatchObject({ ok: false, code: "NOT_FOUND" });
+    expect(await readRawOrder("x".repeat(200))).toMatchObject({ ok: false, code: "NOT_FOUND" });
+    expect(actionRequests().map((request) => request.url.pathname)).toEqual([
+      "/v1/console/amadeus/v1/booking/flight-orders/eJzTd9c%3D",
+      `/v1/console/amadeus/v1/booking/flight-orders/${"x".repeat(200)}`,
+    ]);
+  });
+
+  it("answer Amadeus's not found and another office's order in the panel's words, with the request id", async () => {
+    signedIn("agent");
+    api.on(RAW_BY_REFERENCE, () => apiError("NOT_FOUND", 404));
+    api.on(RAW_ORDER, () => apiError("OFFICE_NOT_ALLOWED", 403));
+
+    expect(await readRawOrders(REFERENCE)).toEqual({
+      ok: false,
+      code: "NOT_FOUND",
+      message: "No order with this record locator in your offices.",
+      requestId: "req_fake_1",
+    });
+    expect(await readRawOrder(FLIGHT_ORDER_ID)).toEqual({
+      ok: false,
+      code: "OFFICE_NOT_ALLOWED",
+      message:
+        "This order belongs to an Amadeus office outside this OTA: Velexis shows only the orders of its own offices.",
+      requestId: "req_fake_1",
+    });
+
+    api.on(RAW_ORDER, () => apiError("NOT_FOUND", 404));
+    expect(await readRawOrder(FLIGHT_ORDER_ID)).toMatchObject({
+      ok: false,
+      message: "Amadeus has no order with this id (any more).",
     });
   });
 });

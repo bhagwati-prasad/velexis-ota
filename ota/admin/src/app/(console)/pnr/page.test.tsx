@@ -24,6 +24,7 @@ import {
   type SentRequest,
 } from "@/test/fake-ota-api";
 
+import type * as AdvancedPanelModule from "./advanced-panel";
 import type * as ImportDialogModule from "./import-dialog";
 
 // ---- Mocks: the request scope and navigation of Next.js and the configuration ------------------------------------
@@ -45,6 +46,11 @@ vi.mock("./import-dialog", async (importOriginal) => {
   const real = await importOriginal<typeof ImportDialogModule>();
   return { ...real, ImportDialog: vi.fn(real.ImportDialog) };
 });
+// The real Advanced panel (OAD-010), watched: the page must hand it the record locator and the matches' orders.
+vi.mock("./advanced-panel", async (importOriginal) => {
+  const real = await importOriginal<typeof AdvancedPanelModule>();
+  return { ...real, AdvancedPanel: vi.fn(real.AdvancedPanel) };
+});
 
 import {
   ENVIRONMENT_COOKIE,
@@ -53,6 +59,7 @@ import {
   TENANT_COOKIE,
 } from "@/lib/session";
 
+import { AdvancedPanel } from "./advanced-panel";
 import { ImportDialog, type ImportDialogProps } from "./import-dialog";
 import PnrPage from "./page";
 
@@ -200,6 +207,7 @@ beforeEach(() => {
   nextHeaders.headers.mockResolvedValue(new Headers({ "User-Agent": "Mozilla/5.0 Test" }));
   signedIn();
   vi.mocked(ImportDialog).mockClear();
+  vi.mocked(AdvancedPanel).mockClear();
 });
 
 describe("/pnr", () => {
@@ -352,5 +360,42 @@ describe("/pnr", () => {
     expect(await redirectOf(() => renderPage("recordLocator=L2P9XC"))).toBe(
       `${TEST_PORTAL_URL}/console?tenant=${TENANT_ID}`,
     );
+  });
+  it("offers amadeus:read the Advanced panel's raw reads of the record locator and its orders, and reads nothing raw itself", async () => {
+    lookupAnswers([match()]);
+
+    const page = await renderPage("recordLocator=L2P9XC");
+
+    expect(vi.mocked(AdvancedPanel).mock.calls.map(([props]) => props)).toEqual([
+      { reference: "L2P9XC", flightOrderIds: [FLIGHT_ORDER_ID] },
+    ]);
+    const panel = within(page).getByRole("region", { name: "Advanced: raw Amadeus answers" });
+    expect(panel.textContent).toContain(
+      "Their prices are Amadeus net prices, before this OTA's markup and fees.",
+    );
+    expect(within(panel).getByRole("button", { name: "Read the orders of L2P9XC" })).toBeTruthy();
+    expect(within(panel).getByRole("button", { name: `Read order ${FLIGHT_ORDER_ID}` })).toBeTruthy();
+    // The raw reads run from their buttons only: the render is the lookup and nothing raw, nothing customer-scope.
+    expect(api.requests.map((request) => `${request.method} ${request.url.pathname}`)).toEqual([ME, LOOKUP]);
+
+    // Also when the lookup found nothing: support may need Amadeus's own answer most then.
+    vi.mocked(AdvancedPanel).mockClear();
+    api.on(LOOKUP, () => apiError("NOT_FOUND", 404));
+    await renderPage("recordLocator=L2P9XC");
+    expect(vi.mocked(AdvancedPanel).mock.calls.map(([props]) => props)).toEqual([
+      { reference: "L2P9XC", flightOrderIds: [] },
+    ]);
+  });
+
+  it("shows no Advanced panel without amadeus:read, nor without a valid record locator", async () => {
+    staffOf("finance");
+    lookupAnswers([match()]);
+    const page = await renderPage("recordLocator=L2P9XC");
+    expect(within(page).queryByRole("region", { name: "Advanced: raw Amadeus answers" })).toBeNull();
+
+    staffOf("agent");
+    await renderPage("recordLocator=L2-P9");
+    await renderPage();
+    expect(AdvancedPanel).not.toHaveBeenCalled();
   });
 });

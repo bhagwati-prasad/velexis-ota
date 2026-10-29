@@ -4,7 +4,10 @@
 // order of the OTA's offices: its record locators, travellers, flights, tickets, last ticketing date, queuing office and
 // net total, and its link to the OTA: the booking it already is (a link, with its status), or "Import as a booking"
 // (import-dialog.tsx, `console.bookings.import`, `bookings:write`) with an idempotency key rendered here once per match
-// and render. Staff with `amadeus:read` also get the verbatim order (already redacted by the API) in a JSON view.
+// and render. Staff with `amadeus:read` also get the verbatim order (already redacted by the API) in a JSON view, and,
+// under a valid record locator whatever the lookup answered, the Advanced panel (advanced-panel.tsx, OAD-010): the raw
+// `console.amadeus.getFlightOrderByReference` and `getFlightOrder` reads, each run by its button in a server action,
+// never while this page renders.
 //
 // The URL is the state: `/pnr?recordLocator=L2P9XC` (the form is a plain GET form to this page, and an orphan PNR of
 // a queue links here, queues/queue-views.tsx); `reference` is read too, the API's own name of the parameter. The value
@@ -52,6 +55,7 @@ import { redirectOnSessionError } from "@/lib/session";
 import { cn } from "@/lib/utils";
 import { getConsoleRequest, type ConsoleRequest } from "@/lib/velexis";
 
+import { AdvancedPanel } from "./advanced-panel";
 import { ImportDialog } from "./import-dialog";
 import {
   PNR_PATH,
@@ -120,7 +124,7 @@ const MUTED = "text-sm text-muted-foreground";
 const READ_PERMISSION = "bookings:read";
 /** The permission of an import. */
 const IMPORT_PERMISSION = "bookings:write";
-/** The permission of the verbatim order (routes.md §4 "Advanced"). */
+/** The permission of the verbatim order and of the Advanced panel's raw reads (routes.md §4 "Advanced"). */
 const RAW_PERMISSION = "amadeus:read";
 /** The permission of the import dialog's customer search. */
 const CUSTOMERS_PERMISSION = "customers:read";
@@ -541,12 +545,19 @@ export default async function PnrPage({ searchParams }: Readonly<{ searchParams:
   }
 
   const lookup = await lookUp(request, reference, here);
+  // The Advanced panel's raw reads (`amadeus:read`), under whatever the lookup answered: support may need Amadeus's own
+  // answer most when the lookup found nothing or failed.
+  const advanced = (flightOrderIds: readonly string[]) =>
+    can(staff, RAW_PERMISSION) ? (
+      <AdvancedPanel reference={reference} flightOrderIds={flightOrderIds} />
+    ) : null;
   if (!lookup.ok) {
     const { error } = lookup;
     if (error.code === "NOT_FOUND") {
       return (
         <PnrShell value={reference}>
           <NoMatch />
+          {advanced([])}
         </PnrShell>
       );
     }
@@ -554,6 +565,7 @@ export default async function PnrPage({ searchParams }: Readonly<{ searchParams:
       return (
         <PnrShell value={reference}>
           <OfficeNotAllowed error={error} staff={staff} />
+          {advanced([])}
         </PnrShell>
       );
     }
@@ -565,6 +577,7 @@ export default async function PnrPage({ searchParams }: Readonly<{ searchParams:
             {PAGE_STRINGS.retry}
           </a>
         </ErrorState>
+        {advanced([])}
       </PnrShell>
     );
   }
@@ -576,6 +589,7 @@ export default async function PnrPage({ searchParams }: Readonly<{ searchParams:
       ) : (
         <LookupResult result={lookup.result} staff={staff} environment={environment} />
       )}
+      {advanced(lookup.result.matches.map((match) => match.flightOrderId))}
     </PnrShell>
   );
 }

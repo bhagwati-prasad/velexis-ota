@@ -2222,7 +2222,8 @@ The console API (staff sign-in by portal token, bookings, PNR import, queues, cu
   - Orphan queue items link to `/pnr?recordLocator=…`.
 - **Verify:** `pnpm --filter @velexis/ota-admin test`
 
-### OAD-010 · Build shopping on behalf
+### OAD-010 · Build shopping on behalf ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-admin
 - **Milestone:** M4
 - **Depends on:** OAD-004, OBE-067
