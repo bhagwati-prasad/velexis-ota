@@ -2270,7 +2270,8 @@ The console API (staff sign-in by portal token, bookings, PNR import, queues, cu
   - The customer detail lists that customer's bookings through `console.bookings.list({ customerId })` (server test with a fake `fetch`).
 - **Verify:** `pnpm --filter @velexis/ota-admin test`
 
-### OAD-013 · Build markup and fee rule settings
+### OAD-013 · Build markup and fee rule settings ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-admin
 - **Milestone:** M4
 - **Depends on:** OAD-004, OBE-069, SDK-012

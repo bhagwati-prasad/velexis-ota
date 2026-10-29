@@ -21,6 +21,10 @@
 // key as `actionKey`. It must validate the reason again (Zod) and start with `requireStaff(permission)`; after a
 // success it revalidates the page, whose new render brings a new key for the next action; after the failure of a call
 // that carried the key it answers `withNextActionKey(state, error)`.
+//
+// `askReason={false}` (OAD-013) is for an operation whose contract takes no reason (the settings deletes: a markup or
+// fee rule's `DELETE` has no body): the dialog then shows no reason field and posts none, because a reason the API
+// never stores would only pretend to be audited; the confirmation, the environment badge and the key stay.
 import { LoaderCircleIcon, TriangleAlertIcon } from "lucide-react";
 import {
   startTransition,
@@ -159,6 +163,11 @@ export interface ConfirmDialogProps {
   /** Bounds of the reason; 3 to 500 characters by default. */
   readonly reasonMinLength?: number;
   readonly reasonMaxLength?: number;
+  /**
+   * Ask for the reason (the default). `false` for an operation whose contract takes none (the settings deletes): no
+   * reason field is shown or posted.
+   */
+  readonly askReason?: boolean;
   /** Style the confirming button as destructive (the default: these actions change bookings and money). */
   readonly destructive?: boolean;
 }
@@ -180,6 +189,7 @@ export function ConfirmDialog({
   children,
   reasonMinLength = REASON_MIN_LENGTH,
   reasonMaxLength = REASON_MAX_LENGTH,
+  askReason = true,
   destructive = true,
 }: ConfirmDialogProps) {
   const [open, setOpen] = useState(false);
@@ -226,6 +236,7 @@ export function ConfirmDialog({
             fields={fields}
             reasonMinLength={reasonMinLength}
             reasonMaxLength={reasonMaxLength}
+            askReason={askReason}
             destructive={destructive}
             pending={pending}
             state={fresh ? state : INITIAL_ACTION_STATE}
@@ -252,6 +263,7 @@ interface ConfirmFormProps {
   readonly fields: Readonly<Record<string, string>>;
   readonly reasonMinLength: number;
   readonly reasonMaxLength: number;
+  readonly askReason: boolean;
   readonly destructive: boolean;
   readonly pending: boolean;
   readonly state: ActionState;
@@ -268,6 +280,7 @@ function ConfirmForm({
   fields,
   reasonMinLength,
   reasonMaxLength,
+  askReason,
   destructive,
   pending,
   state,
@@ -286,6 +299,10 @@ function ConfirmForm({
 
   function submit(event: FormEvent<HTMLFormElement>): void {
     event.preventDefault();
+    if (!askReason) {
+      onSubmit(new FormData(event.currentTarget));
+      return;
+    }
     const found = reasonProblem(reason, reasonMinLength, reasonMaxLength);
     if (found !== undefined) {
       setProblem(found);
@@ -313,42 +330,44 @@ function ConfirmForm({
         </p>
       ) : null}
       {typeof children === "function" ? children(state) : children}
-      <div className="grid gap-2">
-        <Label htmlFor={reasonId}>{CONFIRM_STRINGS.reasonLabel}</Label>
-        <p id={hintId} className="text-sm text-muted-foreground">
-          {CONFIRM_STRINGS.reasonHint}
-        </p>
-        <Textarea
-          ref={reasonInput}
-          id={reasonId}
-          name={REASON_FIELD}
-          value={reason}
-          rows={3}
-          required
-          autoFocus
-          aria-describedby={reasonError === undefined ? hintId : `${hintId} ${errorId}`}
-          {...(reasonError === undefined ? {} : { "aria-invalid": true })}
-          onChange={(event) => {
-            const value = event.currentTarget.value;
-            setReason(value);
-            // A corrected reason clears the message; the next submission checks it again.
-            if (
-              problem !== undefined &&
-              reasonProblem(value, reasonMinLength, reasonMaxLength) === undefined
-            ) {
-              setProblem(undefined);
-            }
-          }}
-        />
-        <p className="text-xs text-muted-foreground tabular-nums" aria-hidden="true">
-          {CONFIRM_STRINGS.counter(reasonLength(reason), reasonMaxLength)}
-        </p>
-        {reasonError === undefined ? null : (
-          <p id={errorId} className="text-sm font-medium text-destructive">
-            {reasonError}
+      {askReason ? (
+        <div className="grid gap-2">
+          <Label htmlFor={reasonId}>{CONFIRM_STRINGS.reasonLabel}</Label>
+          <p id={hintId} className="text-sm text-muted-foreground">
+            {CONFIRM_STRINGS.reasonHint}
           </p>
-        )}
-      </div>
+          <Textarea
+            ref={reasonInput}
+            id={reasonId}
+            name={REASON_FIELD}
+            value={reason}
+            rows={3}
+            required
+            autoFocus
+            aria-describedby={reasonError === undefined ? hintId : `${hintId} ${errorId}`}
+            {...(reasonError === undefined ? {} : { "aria-invalid": true })}
+            onChange={(event) => {
+              const value = event.currentTarget.value;
+              setReason(value);
+              // A corrected reason clears the message; the next submission checks it again.
+              if (
+                problem !== undefined &&
+                reasonProblem(value, reasonMinLength, reasonMaxLength) === undefined
+              ) {
+                setProblem(undefined);
+              }
+            }}
+          />
+          <p className="text-xs text-muted-foreground tabular-nums" aria-hidden="true">
+            {CONFIRM_STRINGS.counter(reasonLength(reason), reasonMaxLength)}
+          </p>
+          {reasonError === undefined ? null : (
+            <p id={errorId} className="text-sm font-medium text-destructive">
+              {reasonError}
+            </p>
+          )}
+        </div>
+      ) : null}
       {state.ok === false && state.message !== undefined ? (
         <div role="alert" className="grid gap-1 rounded-md border border-destructive/40 px-3 py-2 text-sm">
           <p className="font-medium text-destructive">{state.message}</p>
