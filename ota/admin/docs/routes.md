@@ -37,6 +37,13 @@ Tiles link to pre-filtered lists. Each tile renders only with its permission.
 | Last queue snapshot | `console.queues.listSnapshots({ limit: 1 })` (`queues:read`) |
 | Latest bookings | `console.bookings.list({ sort: "-created", limit: 10 })` |
 
+How (OAD-005, `(console)/page.tsx` makes the calls, `(console)/dashboard-tiles.tsx` renders them and holds their parameters):
+
+- **Tiles per permission.** The needs-attention counts and the latest bookings need `bookings:read`, the authorised payments `payments:read`, the last queue read `queues:read` (`visibleTiles`, `can()`): a tile the role cannot read is neither requested nor rendered, so a finance user or a viewer sees the payments but no queue and sends no `listSnapshots`. The reads run in parallel; none calls Amadeus or is audited.
+- **Counts link their filters.** Each count is a saved view of the bookings list (`bookings/views.ts`): "Ticketing failed or in manual review" (`ticketing-problems`), "Ticketing deadline within 24 h" (`deadline-24h`) and "Outcome unknown (reconciling)" (`reconciling`, `status=pending`). Its request is the view's filters as `/bookings` sends them for the view's link (`listParams`: `deadlineWithin=24h` becomes `ticketingDeadlineBefore` = now + 24 h) with `limit: 1` and no sort, and its card links that view (`viewHref`), so the count and the list it opens ask the API the same question. The card shows `totalCount` ("10,000+" for `null`; without a `totalCount`, the rows read with a `+` when there is a next page) and is highlighted when it is not zero.
+- **The other tiles.** "Authorised, not captured" lists up to 5 payments (the payment, its booking or "No booking yet", the authorised amount, the creation time in the OTA's time zone), says when more wait, and links `/payments?status=authorized`. "Last queue read" shows the newest stored snapshot (queue, office, category, time, reader, PNRs) with "Open queue N" (`/queues/N?officeId=…&category=…`, the stored read, no Amadeus call) and "All queues", or says that no queue was read yet. "Latest bookings" lists the newest 10 (reference with "Guest booking", booking and ticketing status, lead traveller, route and departure, total, created) and links `/bookings`.
+- **Errors on the server** (§1): `TOKEN_EXPIRED` from any read → `/auth/refresh?next=/`, an ended session → the portal; any other API error is shown in its tile's place (the console's message, the request id and "Try again"; a count reads "Not counted" and still links its list), and the other tiles stay.
+
 ## 3. Bookings
 
 ### 3.1 List: `/bookings`

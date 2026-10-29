@@ -2142,7 +2142,8 @@ The console API (staff sign-in by portal token, bookings, PNR import, queues, cu
   - The confirmation dialog cannot be submitted without a reason and keeps the same idempotency key on a double submit (component test).
 - **Verify:** `pnpm --filter @velexis/ota-admin test && pnpm --filter @velexis/ota-admin build`
 
-### OAD-005 · Build the dashboard
+### OAD-005 · Build the dashboard ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-admin
 - **Milestone:** M4
 - **Depends on:** OAD-004, OBE-061, OBE-068, OBE-065
