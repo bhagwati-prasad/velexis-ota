@@ -28,7 +28,11 @@
 // (customers.controller.ts, customers.service.ts, customers.repository.ts), which read the customers and, for their
 // statistics and recent bookings, the bookings and payments of the environment (through ConsoleBookingsRepository and
 // BookingsModule's PaymentsRepository), and console.supplierRequests.list (supplier-log.controller.ts,
-// supplier-log.repository.ts), the redacted Amadeus call log.
+// supplier-log.repository.ts), the redacted Amadeus call log. Since OBE-067: the eight raw Amadeus reads
+// `console.amadeus.*` (raw-amadeus.controller.ts, raw-amadeus.service.ts), which call AmadeusModule's client with the
+// connection's offices, keep another office's orders out of the answer and of the tenant's supplier log (OBE-064's
+// office rule), link order reads to bookings with PnrImportRepository and keep Queue List reads as `queue_snapshots`
+// rows (QueueSnapshotsRepository); the four raw writes stay deferred (501).
 import { Global, Module } from "@nestjs/common";
 import { AmadeusModule } from "../amadeus/amadeus.module";
 import { BookingsModule } from "../bookings/bookings.module";
@@ -57,6 +61,8 @@ import { PnrImportRepository, PnrImportService } from "./pnr-import.service";
 import { QueueSnapshotsRepository } from "./queue-snapshots.repository";
 import { QueuesController } from "./queues.controller";
 import { QueuesService } from "./queues.service";
+import { RawAmadeusController } from "./raw-amadeus.controller";
+import { RawAmadeusRepository, RawAmadeusService } from "./raw-amadeus.service";
 import { StaffActionsWriter } from "./staff-actions.writer";
 import { ConsoleSupplierLogController } from "./supplier-log.controller";
 import { SupplierLogRepository } from "./supplier-log.repository";
@@ -77,6 +83,7 @@ import { SupplierLogRepository } from "./supplier-log.repository";
     QueuesController,
     ConsoleCustomersController,
     ConsoleSupplierLogController,
+    RawAmadeusController,
   ],
   providers: [
     StaffActionsWriter,
@@ -101,6 +108,8 @@ import { SupplierLogRepository } from "./supplier-log.repository";
     ConsoleCustomersRepository,
     ConsoleCustomersService,
     SupplierLogRepository,
+    RawAmadeusService,
+    RawAmadeusRepository,
   ],
   exports: [StaffActionsWriter, StaffRefusalAudit],
 })

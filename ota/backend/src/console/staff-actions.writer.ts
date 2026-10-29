@@ -398,9 +398,10 @@ export class StaffActionsWriter implements StaffRefusalAudit {
 
   /**
    * Writes the row of `entry` in the use case's transaction `trx` (see the file header), and marks the request as
-   * audited. Throws a `TypeError` when the entry names no actor and the request has none.
+   * audited. Returns the row's id (`sact_…`, which the raw Amadeus reads answer as `call.staffActionId`). Throws a
+   * `TypeError` when the entry names no actor and the request has none.
    */
-  async record(trx: TenantTransaction, entry: StaffActionEntry): Promise<void> {
+  async record(trx: TenantTransaction, entry: StaffActionEntry): Promise<string> {
     const actor = entry.actor ?? this.requestActor();
     if (actor === undefined) {
       throw new TypeError("StaffActionsWriter.record: the request has no actor; name one in the entry");
@@ -417,14 +418,16 @@ export class StaffActionsWriter implements StaffRefusalAudit {
     if (this.cls.isActive()) {
       this.cls.set(RECORDED_KEY, true);
     }
+    return row.id;
   }
 
-  /** Writes the row of `entry` in a short transaction of its own (audited reads, denials). */
-  async recordAlone(entry: StaffActionEntry): Promise<void> {
-    await this.tx.run((trx) => this.record(trx, entry));
+  /** Writes the row of `entry` in a short transaction of its own (audited reads, denials); returns its id. */
+  async recordAlone(entry: StaffActionEntry): Promise<string> {
+    const id = await this.tx.run((trx) => this.record(trx, entry));
     if (this.cls.isActive()) {
       this.cls.set(COMMITTED_KEY, true);
     }
+    return id;
   }
 
   /** True when the current request wrote its row already (in any transaction, which may still roll back). */

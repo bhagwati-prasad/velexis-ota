@@ -37,15 +37,7 @@ export const PENDING_OPERATIONS: Readonly<Partial<Record<OtaOperationId, Pending
   createBookingPayment: "deferred",
   // Console: bookings
   consoleCreateBooking: "deferred",
-  // Console: raw Amadeus (reads in M4, writes deferred)
-  consoleAmadeusGetFlightOffers: "OBE-067",
-  consoleAmadeusSearchFlightOffers: "OBE-067",
-  consoleAmadeusSearchFlightAvailabilities: "OBE-067",
-  consoleAmadeusUpsellAirOffers: "OBE-067",
-  consoleAmadeusQuoteAirOffers: "OBE-067",
-  consoleAmadeusGetFlightOrder: "OBE-067",
-  consoleAmadeusGetFlightOrderByReference: "OBE-067",
-  consoleAmadeusGetQueue: "OBE-067",
+  // Console: raw Amadeus writes (the eight reads: OBE-067; OADR-0011 point 7)
   consoleAmadeusCreateFlightOrders: "deferred",
   consoleAmadeusIssueFlightOrder: "deferred",
   consoleAmadeusCancelFlightOrder: "deferred",

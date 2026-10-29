@@ -1862,7 +1862,8 @@ The console API (staff sign-in by portal token, bookings, PNR import, queues, cu
   - The supplier log never shows a full card number or document number (seeded redacted rows checked).
 - **Verify:** `pnpm --filter @velexis/ota-backend test:int console`
 
-### OBE-067 · Implement the read-only raw Amadeus console operations
+### OBE-067 · Implement the read-only raw Amadeus console operations ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-backend
 - **Milestone:** M4
 - **Depends on:** OBE-060
