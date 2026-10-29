@@ -1282,17 +1282,18 @@ function createConsoleStorefrontAssetsApi(core) {
      * shown in the console; by default the name of the `file` part, which is the `File`'s own name or `blob` for a
      * plain `Blob`) and `file` (the image, a `Blob` or `File`: PNG, JPEG or WebP, ICO for a `favicon`, at most 1 MB, no
      * SVG). The server reads the type from the bytes and stores the file unchanged (metadata such as EXIF stays in
-     * it). The SDK leaves the `Content-Type` and its boundary to `fetch`. A same-key retry returns the stored asset;
-     * reference the asset from the storefront settings or a page body by its `id`.
+     * it). The SDK leaves the `Content-Type` and its boundary to `fetch`. A same-key retry returns the stored asset,
+     * and so does the same file uploaded again for the same kind (one asset holds one file); reference the asset from
+     * the storefront settings or a page body by its `id`.
      * `POST /v1/console/settings/assets` with a generated `Idempotency-Key`; `settings:write`.
      * @param {ConsoleUploadStorefrontAssetParams} params
      * @param {RequestOptions} [options]
      * @returns {Promise<StorefrontAsset>}
      * @throws {TypeError} without a `Blob` or `File` as `file` or without `kind`, before any request
-     * @throws {ValidationError} `VALIDATION_FAILED` (400: a missing, empty or unknown part), `ASSET_INVALID` (422: `details.reason` `type`, `size` or `dimensions`)
+     * @throws {ValidationError} `VALIDATION_FAILED` (400: a missing, empty or unknown part), `INVALID_REQUEST` (400: a body that is not well-formed `multipart/form-data`), `ASSET_INVALID` (422: `details.reason` `type`, `size` or `dimensions`)
      * @throws {AuthenticationError} `UNAUTHENTICATED`, `INVALID_API_KEY`, `TOKEN_EXPIRED` (401)
      * @throws {PermissionError} `FORBIDDEN`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `STAFF_MEMBERSHIP_INACTIVE`, `ENVIRONMENT_NOT_ALLOWED` (403)
-     * @throws {ConflictError} `IDEMPOTENCY_KEY_REUSED` (409)
+     * @throws {ConflictError} `IDEMPOTENCY_KEY_REUSED`, `CONFLICT` (409, `details.reason` `asset_exists`: the same file is already the asset `details.assetId` of another `details.kind`)
      * @throws {RateLimitError} `RATE_LIMITED` (429)
      * @throws {ServerError} `INTERNAL_ERROR` (500)
      */
