@@ -639,6 +639,29 @@ describe("search form: passengers and dates", () => {
     expect(field('input[type="hidden"][name="from"]').disabled).toBe(false);
   });
 
+  it("[OFE-019] typing a date sets no limit that stays the same, which would drop the digits being typed", () => {
+    // Chromium rebuilds a date field's month, day and year whenever its `min` attribute is set, even to the value it
+    // has: the digits of the year being typed were lost, so a keyboard user could not type a departure date (found by
+    // the keyboard-only journey, tools/e2e/specs/storefront/keyboard-checkout.e2e.ts).
+    mountForm();
+    const depart = field("#search-depart");
+    const ret = field("#search-return");
+    const observer = new MutationObserver(() => undefined);
+    observer.observe(depart, { attributeFilter: ["min"] });
+    observer.observe(ret, { attributeFilter: ["min"] });
+
+    setDate(depart, "0002-12-27");
+    // The departure's limit stays today, and the return's too: a year 2 is before today.
+    expect(observer.takeRecords()).toEqual([]);
+    setDate(depart, "2026-12-27");
+    expect(observer.takeRecords().map((record) => record.target)).toEqual([ret]);
+    expect(ret.min).toBe("2026-12-27");
+    setDate(depart, "2026-12-27");
+    expect(observer.takeRecords()).toEqual([]);
+    observer.disconnect();
+    expect(depart.min).toBe(TODAY);
+  });
+
   it("[OFE-004] multi-city has 2 to 6 flights; removing one renumbers the rest and keeps the focus nearby", () => {
     const { announce } = mountForm("trip=multi");
     const add = /** @type {HTMLButtonElement} */ (form().querySelector('[data-action="add-leg"]'));

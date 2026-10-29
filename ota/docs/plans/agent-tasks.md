@@ -1646,7 +1646,8 @@ Checkout, customer accounts in cookies, Stripe on the Velexis account, the airli
   - Success, decline, attempt limit and timeout pass with every leak guard green [OF-05 AC1, AC2].
 - **Verify:** `E2E_WITH_OTA=1 pnpm test:e2e -- --project=storefront specs/storefront/checkout-airline-card.e2e.ts`
 
-### OFE-019 · Write the account, bookings and keyboard-only journeys
+### OFE-019 · Write the account, bookings and keyboard-only journeys ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-frontend
 - **Milestone:** M3
 - **Depends on:** OFE-016, OFE-010, OFE-014, OFE-017
