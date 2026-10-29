@@ -5,6 +5,9 @@ import { join } from "node:path";
 import { ConfigError } from "@velexis/config";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
+  ADMIN_SUSPENSION_STOREFRONT_HOST,
+  ADMIN_SUSPENSION_STOREFRONT_URL,
+  ADMIN_SUSPENSION_TENANT_KEY,
   assertBuilt,
   assertPortsFree,
   childEnv,
@@ -27,6 +30,7 @@ import {
   STOREFRONT_URL,
   SUSPENDED_STOREFRONT_HOST,
   SUSPENDED_STOREFRONT_URL,
+  SUSPENDED_TENANT_KEY,
   type SeedCommand,
   type ServiceName,
   type ServiceSpec,
@@ -59,6 +63,7 @@ const ALL_SERVICES: readonly ServiceName[] = [
   "ota-cli",
   "storefront",
   "suspended-storefront",
+  "admin-suspension-storefront",
 ];
 
 /** The processes and commands that get no DSN at all: the Next.js apps, the stub and the storefront previews. */
@@ -68,6 +73,7 @@ const WITHOUT_DSN = [
   "amadeus-stub",
   "storefront",
   "suspended-storefront",
+  "admin-suspension-storefront",
 ] as const;
 
 describe("readStackSettings", () => {
@@ -329,10 +335,31 @@ describe("serviceEnv", () => {
     expect(DEMO_STOREFRONT_HOST).toBe("demo.ota.example.com");
     expect(SUSPENDED_STOREFRONT_HOST).toBe("suspended.ota.example.com");
     // The seed, the API and the previews agree on the base domain of the storefront hosts.
-    for (const name of ["ota-api", "ota-cli", "storefront", "suspended-storefront"] as const) {
+    for (const name of [
+      "ota-api",
+      "ota-cli",
+      "storefront",
+      "suspended-storefront",
+      "admin-suspension-storefront",
+    ] as const) {
       expect(serviceEnv(name, context)["STOREFRONT_BASE_DOMAIN"]).toBe("ota.example.com");
     }
     expect(api).toMatchObject({ PORT: "4000" });
+  });
+
+  it("serves the storefront of the OTA the platform admin suspends on a third preview, with its own host [PAD-011 AC1]", () => {
+    // specs/admin-suspension-storefront.e2e.ts creates this OTA through the portal API; the preview is there before it.
+    expect(serviceEnv("admin-suspension-storefront", context)).toMatchObject({
+      OTA_API_URL,
+      STOREFRONT_PREVIEW_PORT: "4175",
+      STOREFRONT_DEV_HOST: ADMIN_SUSPENSION_STOREFRONT_HOST,
+      VELEXIS_EDGE_SECRET: serviceEnv("ota-api", context)["VELEXIS_EDGE_SECRET"],
+    });
+    expect(ADMIN_SUSPENSION_STOREFRONT_HOST).toBe("suspension.ota.example.com");
+    expect(ADMIN_SUSPENSION_STOREFRONT_URL).toBe("http://127.0.0.1:4175");
+    // A key `createTenant` accepts (`TenantKey`: a DNS label of 3 to 30 characters), and not the other preview's.
+    expect(ADMIN_SUSPENSION_TENANT_KEY).toMatch(/^[a-z][a-z0-9]{2,29}$/);
+    expect(ADMIN_SUSPENSION_TENANT_KEY).not.toBe(SUSPENDED_TENANT_KEY);
   });
 
   it("points every process at the stack's Redis database, Mailpit, ports and 127.0.0.1 public URLs", () => {
@@ -421,13 +448,14 @@ describe("stackServices", () => {
       "ota-api",
       "storefront",
       "suspended-storefront",
+      "admin-suspension-storefront",
     ]);
     expect(new Set(withOta.map((service) => service.port)).size).toBe(withOta.length);
   });
 
   it("waits for /health/ready with 200, for the stub's 404 and for each preview's home page [OFE-008 AC1]", () => {
     const services = stackServices(stackContext(settings({ E2E_WITH_OTA: "1" }), DATABASE));
-    const previews: readonly string[] = ["storefront", "suspended-storefront"];
+    const previews: readonly string[] = ["storefront", "suspended-storefront", "admin-suspension-storefront"];
     for (const service of services) {
       expect(service.readyUrl).toBe(
         `http://127.0.0.1:${service.port}${previews.includes(service.name) ? "/" : "/health/ready"}`,
@@ -441,12 +469,19 @@ describe("stackServices", () => {
     expect(services.find((service) => service.name === "suspended-storefront")?.readyUrl).toBe(
       `${SUSPENDED_STOREFRONT_URL}/`,
     );
+    expect(services.find((service) => service.name === "admin-suspension-storefront")?.readyUrl).toBe(
+      `${ADMIN_SUSPENSION_STOREFRONT_URL}/`,
+    );
   });
 
   it("runs the built apps with node, and `vite preview` of the built storefront on 127.0.0.1 [OFE-008 AC1]", () => {
     const services = stackServices(stackContext(settings({ E2E_WITH_OTA: "1" }), DATABASE));
     for (const service of services) {
-      if (service.name === "storefront" || service.name === "suspended-storefront") {
+      if (
+        service.name === "storefront" ||
+        service.name === "suspended-storefront" ||
+        service.name === "admin-suspension-storefront"
+      ) {
         expect(service.argv).toEqual([
           "ota/frontend/node_modules/vite/bin/vite.js",
           "preview",

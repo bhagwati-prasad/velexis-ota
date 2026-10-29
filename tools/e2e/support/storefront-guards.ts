@@ -13,8 +13,9 @@
 //
 //   1. any `securitypolicyviolation` in any frame: the build has no inline script or style, and the preview sends the
 //      Caddyfile's CSP, so a violation is a bug (a listener added to every document before its own scripts run);
-//   2. any request to a host other than the storefront's own (STOREFRONT_URL, SUSPENDED_STOREFRONT_URL): Stripe's hosts
-//      are allowed on `/checkout/pay-card.html` only (the page and the frames inside it), and nothing else anywhere;
+//   2. any request to a host other than the storefront's own (STOREFRONT_URL, SUSPENDED_STOREFRONT_URL,
+//      ADMIN_SUSPENSION_STOREFRONT_URL): Stripe's hosts are allowed on `/checkout/pay-card.html` only (the page and the
+//      frames inside it), and nothing else anywhere;
 //   3. a cookie that page JavaScript can read other than `__Host-vx_csrf`: the names of `document.cookie` of every
 //      storefront document, when it has loaded and when it is left, and every cookie of the context that is not
 //      httpOnly at the end. Values never leave the page: the CSRF token is no credential, but it stays out of reports.
@@ -31,7 +32,7 @@
 import { type BrowserContext, type Page, type Request } from "@playwright/test";
 import { expectNoSeriousA11yViolations } from "./a11y";
 import { test as base } from "./fixtures";
-import { STOREFRONT_URL, SUSPENDED_STOREFRONT_URL } from "./stack";
+import { ADMIN_SUSPENSION_STOREFRONT_URL, STOREFRONT_URL, SUSPENDED_STOREFRONT_URL } from "./stack";
 
 export { expect } from "./fixtures";
 
@@ -50,6 +51,7 @@ export const STRIPE_JS_COOKIES: readonly string[] = Object.freeze(["__stripe_mid
 export const FIRST_PARTY_ORIGINS: readonly string[] = Object.freeze([
   STOREFRONT_URL,
   SUSPENDED_STOREFRONT_URL,
+  ADMIN_SUSPENSION_STOREFRONT_URL,
 ]);
 
 /** The card payment page, the only page with Stripe.js (OADR-0015 point 9; Caddy's try_files serves both paths). */

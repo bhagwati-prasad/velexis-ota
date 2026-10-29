@@ -13,8 +13,9 @@
 //   4. start the BUILT apps on their ports of docs/mvp/architecture.md §3: the platform API (3100) and worker (3101),
 //      the portal (3000) and the platform admin (3001) from their Next.js standalone servers, and with E2E_WITH_OTA=1
 //      the Amadeus stub (4900), the OTA worker (4001), the OTA API (4000) and `vite preview` of the built storefront
-//      twice (OFE-008): on 4173 for the demo OTA's host and on 4174 for the host of the OTA a journey suspends, each
-//      with the preview proxy to the OTA API and the production headers of the Caddyfile (OADR-0015 point 11);
+//      three times: on 4173 for the demo OTA's host and on 4174 for the host of the OTA a journey suspends (OFE-008),
+//      and on 4175 for the host of the OTA that the platform admin suspends and resumes (PAD-011), each with the
+//      preview proxy to the OTA API and the production headers of the Caddyfile (OADR-0015 point 11);
 //   5. wait until each answers GET /health/ready with 200 (the stub, which has no health route, with its 404; a
 //      storefront preview with its home page);
 //   6. with E2E_WITH_OTA=1, run the platform's and then the OTA backend's `dev:seed` from their built CLIs: the
@@ -75,6 +76,8 @@ export const STACK_PORTS = Object.freeze({
   storefront: 4173,
   /** A second `vite preview` of the same build, for the host of SUSPENDED_TENANT_KEY. */
   suspendedStorefront: 4174,
+  /** A third one, for the host of ADMIN_SUSPENSION_TENANT_KEY (PAD-011). */
+  adminSuspensionStorefront: 4175,
   amadeusStub: 4900,
 } as const);
 
@@ -109,10 +112,21 @@ export const DEMO_STOREFRONT_HOST = `${DEMO_TENANT_KEY}.${STOREFRONT_BASE_DOMAIN
 export const SUSPENDED_TENANT_KEY = "suspended";
 /** The X-Velexis-Host that the preview on SUSPENDED_STOREFRONT_URL sends. */
 export const SUSPENDED_STOREFRONT_HOST = `${SUSPENDED_TENANT_KEY}.${STOREFRONT_BASE_DOMAIN}`;
+/**
+ * The key of the OTA of specs/admin-suspension-storefront.e2e.ts (PAD-011): its owner creates it through the portal
+ * API (`createTenant`) and the OTA worker sets it up, then the platform admin suspends and resumes it. A key of its own
+ * (no other journey takes it, and the stack's database is new for each run), so that its storefront can be served
+ * before the OTA exists; the journey creates the tenant.
+ */
+export const ADMIN_SUSPENSION_TENANT_KEY = "suspension";
+/** The X-Velexis-Host that the preview on ADMIN_SUSPENSION_STOREFRONT_URL sends. */
+export const ADMIN_SUSPENSION_STOREFRONT_HOST = `${ADMIN_SUSPENSION_TENANT_KEY}.${STOREFRONT_BASE_DOMAIN}`;
 /** The built storefront for the demo OTA: base URL of the `storefront` project (E2E_WITH_OTA=1). */
 export const STOREFRONT_URL = origin(STACK_PORTS.storefront);
 /** The same build for the host of SUSPENDED_TENANT_KEY (E2E_WITH_OTA=1). */
 export const SUSPENDED_STOREFRONT_URL = origin(STACK_PORTS.suspendedStorefront);
+/** The same build for the host of ADMIN_SUSPENSION_TENANT_KEY (E2E_WITH_OTA=1). */
+export const ADMIN_SUSPENSION_STOREFRONT_URL = origin(STACK_PORTS.adminSuspensionStorefront);
 
 /** The name of every database this harness creates: `velexis_e2e_<runId>`. */
 export const E2E_DATABASE_PREFIX = "velexis_e2e_";
@@ -332,7 +346,8 @@ export type ServiceName =
   | "ota-api"
   | "ota-cli"
   | "storefront"
-  | "suspended-storefront";
+  | "suspended-storefront"
+  | "admin-suspension-storefront";
 
 /** The `.env.example` files of each process, root first: a later file wins, as `<app>/.env.local` does. */
 const EXAMPLE_ENV_FILES: Readonly<Record<ServiceName, readonly string[]>> = {
@@ -347,6 +362,7 @@ const EXAMPLE_ENV_FILES: Readonly<Record<ServiceName, readonly string[]>> = {
   "ota-cli": [".env.example", "ota/backend/.env.example"],
   storefront: [".env.example", "ota/frontend/.env.example"],
   "suspended-storefront": [".env.example", "ota/frontend/.env.example"],
+  "admin-suspension-storefront": [".env.example", "ota/frontend/.env.example"],
 };
 
 /**
@@ -490,6 +506,11 @@ function serviceOverrides(name: ServiceName, context: StackContext): Record<stri
         STOREFRONT_PREVIEW_PORT: String(STACK_PORTS.suspendedStorefront),
         STOREFRONT_DEV_HOST: SUSPENDED_STOREFRONT_HOST,
       };
+    case "admin-suspension-storefront":
+      return {
+        STOREFRONT_PREVIEW_PORT: String(STACK_PORTS.adminSuspensionStorefront),
+        STOREFRONT_DEV_HOST: ADMIN_SUSPENSION_STOREFRONT_HOST,
+      };
   }
 }
 
@@ -566,7 +587,10 @@ export function stackServices(context: StackContext): readonly ServiceSpec[] {
   };
   // `vite preview` of the built storefront with the preview proxy and the production headers (vite.config.js), bound to
   // 127.0.0.1 (Vite's default `localhost` may resolve to ::1 only). Ready when it serves the home page.
-  const storefront = (name: "storefront" | "suspended-storefront", port: number): ServiceSpec =>
+  const storefront = (
+    name: "storefront" | "suspended-storefront" | "admin-suspension-storefront",
+    port: number,
+  ): ServiceSpec =>
     service(name, {
       entry: "ota/frontend/dist/index.html",
       build: "pnpm --filter @velexis/ota-frontend build",
@@ -628,6 +652,7 @@ export function stackServices(context: StackContext): readonly ServiceSpec[] {
     }),
     storefront("storefront", STACK_PORTS.storefront),
     storefront("suspended-storefront", STACK_PORTS.suspendedStorefront),
+    storefront("admin-suspension-storefront", STACK_PORTS.adminSuspensionStorefront),
   ];
 }
 

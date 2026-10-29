@@ -4,7 +4,7 @@
 import { runInNewContext } from "node:vm";
 import type { Page, Request } from "@playwright/test";
 import { describe, expect, it } from "vitest";
-import { STOREFRONT_URL, SUSPENDED_STOREFRONT_URL } from "../support/stack";
+import { ADMIN_SUSPENSION_STOREFRONT_URL, STOREFRONT_URL, SUSPENDED_STOREFRONT_URL } from "../support/stack";
 import {
   CSRF_COOKIE,
   formatProblems,
@@ -26,6 +26,8 @@ describe("isThirdPartyRequest", () => {
   it("allows the storefront's own origins and local schemes [OFE-008 AC2]", () => {
     expect(isThirdPartyRequest(`${STOREFRONT_URL}/api/v1/storefront`, HOME)).toBe(false);
     expect(isThirdPartyRequest(`${SUSPENDED_STOREFRONT_URL}/assets/index.js`, HOME)).toBe(false);
+    // The preview of the OTA that the platform admin suspends (PAD-011) is one of them.
+    expect(isThirdPartyRequest(`${ADMIN_SUSPENSION_STOREFRONT_URL}/api/v1/storefront`, HOME)).toBe(false);
     expect(isThirdPartyRequest("data:image/gif;base64,R0lGODlhAQABAAAAACw=", HOME)).toBe(false);
     expect(isThirdPartyRequest(`blob:${STOREFRONT_URL}/1234`, HOME)).toBe(false);
   });

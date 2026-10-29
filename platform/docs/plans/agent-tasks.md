@@ -1223,7 +1223,8 @@ The OTA group builds tenancy, shopping and the storefront in M2. The platform pr
   - A suspension is visible on the OTA API within one second (60 seconds is the documented bound) [PF-82].
 - **Verify:** `pnpm --filter @velexis/platform-backend test:int invalidation-coverage && pnpm --filter @velexis/platform-backend test:xb`
 
-### PAD-011 · Prove that a suspension reaches the storefront
+### PAD-011 · Prove that a suspension reaches the storefront ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-admin
 - **Milestone:** M2
 - **Depends on:** PAD-010, PBE-036
