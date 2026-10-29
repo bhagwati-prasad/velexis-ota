@@ -2203,7 +2203,8 @@ The console API (staff sign-in by portal token, bookings, PNR import, queues, cu
   - No form in the admin has a card-number field (test greps the built pages).
 - **Verify:** `pnpm --filter @velexis/ota-admin test && pnpm --filter @velexis/ota-admin build`
 
-### OAD-009 · Build PNR lookup and import and the queue pages
+### OAD-009 · Build PNR lookup and import and the queue pages ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-admin
 - **Milestone:** M4
 - **Depends on:** OAD-004, OBE-064, OBE-065
