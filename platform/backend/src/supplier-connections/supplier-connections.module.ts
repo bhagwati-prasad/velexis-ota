@@ -6,7 +6,8 @@
 // - `SupplierConnectionsModule.forApi()` (AdminModule) adds the platform admin's use cases, exported for its
 //   controllers: the Velexis Amadeus accounts (AmadeusAccountsService) and the office pool (AmadeusOfficesService)
 //   (PBE-020). They queue the verification job on `platform-connections` (QueuesModule). It also carries the portal's
-//   Amadeus connection routes (ConnectionsController: `listAmadeusConnections`, PBE-027).
+//   Amadeus connection routes (ConnectionsController over ConnectionsService: `listAmadeusConnections`, PBE-027, and
+//   the settings update `updateAmadeusConnection`, PBE-040).
 // - `SupplierConnectionsModule.forWorker()` (WorkerModule) adds the worker's side: the Amadeus token check
 //   (AmadeusOAuthGateway), the one processor of `platform-connections` (VerificationProcessor) and the
 //   `amadeus.pool_level` handler of the `platform-maintenance` processor (PoolLevelScheduler), in a module of its own,
@@ -24,6 +25,7 @@ import { AmadeusOAuthGateway } from "./amadeus-oauth.gateway";
 import { AmadeusOfficesRepository } from "./amadeus-offices.repository";
 import { AmadeusOfficesService } from "./amadeus-offices.service";
 import { ConnectionsController } from "./connections.controller";
+import { ConnectionsService } from "./connections.service";
 import { PoolLevelScheduler } from "./pool-level.scheduler";
 import { SupplierConnectionsRepository } from "./supplier-connections.repository";
 import { VerificationProcessor } from "./verification.processor";
@@ -52,7 +54,7 @@ export class SupplierConnectionsModule {
       module: SupplierConnectionsModule,
       imports: [AuditModule, QueuesModule],
       controllers: [ConnectionsController],
-      providers: [AmadeusAccountsService, AmadeusOfficesService],
+      providers: [AmadeusAccountsService, AmadeusOfficesService, ConnectionsService],
       exports: [AmadeusAccountsService, AmadeusOfficesService],
     };
   }

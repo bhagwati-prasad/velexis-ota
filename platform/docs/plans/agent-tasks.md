@@ -1308,7 +1308,8 @@ The OTA group builds the OTA admin and the console in M4. The platform issues th
   - The token never appears in logs or in idempotency storage.
 - **Verify:** `pnpm --filter @velexis/platform-backend test && pnpm --filter @velexis/platform-backend test:int memberships`
 
-### PBE-040 · Implement the Amadeus connection settings update
+### PBE-040 · Implement the Amadeus connection settings update ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-backend
 - **Milestone:** M4
 - **Depends on:** PBE-037, PBE-027

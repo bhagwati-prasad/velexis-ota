@@ -601,6 +601,36 @@ const COVERAGE: readonly CoverageRow[] = [
     },
   },
   {
+    // PBE-040: the owner's settings of the Amadeus connection (flows/amadeus-connection.md §E).
+    change: "Amadeus connection settings (office defaults, ticketing defaults, monitored queues)",
+    operationId: "updateAmadeusConnection",
+    publishes: ["connection"],
+    async arrange() {
+      const owner = await person();
+      const { tenant } = await ota({ members: [[owner, "owner"]] });
+      const connection = await insertSupplierConnection(pool, tenant, {
+        id: ids.new("sc"),
+        office_ids: ["NCE1A0955", "PAR1A0001"],
+        default_office_id: "NCE1A0955",
+        status: "active",
+      });
+      const headers = await portal(owner.id);
+      return {
+        send: () =>
+          t.http
+            .patch(`/v1/tenants/${tenant.id}/amadeus-connections/test`)
+            .set(headers)
+            .set("If-Match", `"${connection.version}"`)
+            .send({
+              defaultOfficeId: "PAR1A0001",
+              monitoredQueues: [{ officeId: "PAR1A0001", queueId: 8, category: 0 }],
+            }),
+        status: 200,
+        events: [{ v: 1, type: "connection", tenantId: tenant.id }],
+      };
+    },
+  },
+  {
     change: "payment connection statement descriptor",
     operationId: "updatePaymentConnection",
     publishes: ["connection"],

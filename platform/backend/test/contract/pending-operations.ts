@@ -33,8 +33,8 @@ export const PENDING_OPERATIONS: readonly PendingOperation[] = Object.freeze([
   // bound (the Amadeus accounts and offices since PBE-020, the accounts, platform admins and audit since PBE-032, the
   // plans and subscriptions since PBE-033).
 
-  // PBE-037: the M4 Amadeus settings (createConsoleToken is bound since PBE-039, updatePaymentConnection since PBE-038).
-  { operationId: "updateAmadeusConnection", task: "PBE-040" },
+  // PBE-037: the M3–M4 connection updates and the console token are all bound (updatePaymentConnection since PBE-038,
+  // createConsoleToken since PBE-039, updateAmadeusConnection since PBE-040).
 
   // PBE-041: the M5 tenant resources (go-live, custom domains, own Amadeus credentials, Stripe Connect and API keys,
   // the payout account and settlements, and invoices). createCheckoutSession and createCustomerPortalSession are bound

@@ -88,6 +88,8 @@ The `assign_amadeus_office` post-step of [`provisioning.md`](provisioning.md) ta
 
 `updateAmadeusConnection` edits default, queuing and owner offices (each must be in `office_ids`), `ticketing_defaults` (`{ticketingAgreement: {option, delay}, automatedProcess, issue}` as in the baseline comment) and `monitored_queues` (`[{officeId, queueId, category}]`), with `If-Match`, then publishes `vx:invalidate connection`.
 
+Since PBE-040: the `officeId` of each `automatedProcess` entry and of each monitored queue must be in `office_ids` too ([ADR-0012](../../../docs/mvp/adr/0012-amadeus-account-model.md) office isolation; `400 VALIDATION_FAILED` at the field, as [`../api-inventory-resources.md`](../api-inventory-resources.md) §3 says). The tenant's row is read `FOR SHARE` before the connection is locked, so a suspension waits for the change or the change sees it (`409 TENANT_NOT_ACTIVE`, [PADR-0014](../adr/0014-tenant-suspension-and-resume.md) item 5); a body that changes nothing writes, audits and publishes nothing. The "Amadeus connection settings" section of [`../../backend/README.md`](../../backend/README.md) has the details.
+
 ## Failure handling
 
 | Failure | Behaviour |
@@ -108,3 +110,4 @@ The `assign_amadeus_office` post-step of [`provisioning.md`](provisioning.md) ta
 
 - Integration: verification success and failure against the Amadeus stub's token endpoint (no secret in logs or rows after the job); concurrent provisionings get different offices; the composite foreign key refuses a live connection on the test account; own-credential apply flips the source, re-encrypts, releases the office and erases the submission's secret; a rejected submission leaves the connection unchanged.
 - Admin UI: pool view, assign and release.
+- Integration (PBE-040, `platform/backend/test/integration/connections/amadeus-settings.int.test.ts`): a valid settings change writes `version + 1`, one `amadeus.settings_updated` audit row and one `connection` invalidation; an office outside `office_ids`, a stale `If-Match` and a suspended OTA change nothing.

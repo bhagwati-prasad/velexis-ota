@@ -69,7 +69,7 @@ class ValidationTestController {
     return "handled";
   }
 
-  // Pending until PBE-040 binds it in the API: bound here only to run its request validation.
+  // Bound here only to run its request validation (the API binds it in ConnectionsController since PBE-040).
   @Patch("tenants/:tenantId/amadeus-connections/:environment")
   @OpenApiOperation("updateAmadeusConnection")
   updateAmadeusConnection(): string {
