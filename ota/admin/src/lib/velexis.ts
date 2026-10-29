@@ -30,7 +30,7 @@ import { getConfig } from "@/config";
 import { isVelexisErrorLike } from "@/lib/errors";
 import { canOpenEnvironment, type StaffEnvironment } from "@/lib/permissions";
 import { dedupRefresh, type DedupRefresh, type StaffRefreshOutcome } from "@/lib/refresh-dedup";
-import { readSession, redirectOnSessionError, redirectToRefresh } from "@/lib/session";
+import { pagePathOf, readSession, redirectOnSessionError, redirectToRefresh } from "@/lib/session";
 
 // ---- End user ---------------------------------------------------------------------------------------------------
 
@@ -197,7 +197,8 @@ export interface ConsoleRequest {
  * The console of this request (React `cache`: once per server request), for server components: the client, the staff
  * profile and the environment the request works in. Without a session it redirects to the portal; with a refresh
  * token only (the middleware could not refresh) it redirects to `/auth/refresh`, because a server component cannot
- * write the rotated tokens.
+ * write the rotated tokens, with the page's path as `?next=` (`pagePathOf`: the middleware's header, a same-origin path
+ * only, checked as `/auth/refresh` checks it; FIX-W33-OTA), so the staff member comes back to the same page.
  *
  * `console.auth.me` runs first, in the environment of the cookie. When that is `live` and the API refuses it
  * (`403 ENVIRONMENT_NOT_ALLOWED`: the OTA is no longer live, or the role became one that never opens live), or the
@@ -209,11 +210,13 @@ export interface ConsoleRequest {
  */
 export const getConsoleRequest = cache(async (): Promise<ConsoleRequest> => {
   const session = await readSession();
+  const incoming = await headers();
+  // The page to come back to after `/auth/refresh` (the middleware's `PAGE_PATH_HEADER`, a same-origin path only).
+  const here = pagePathOf(incoming);
   const { accessToken } = session;
   if (accessToken === undefined) {
-    redirectToRefresh();
+    redirectToRefresh(here);
   }
-  const incoming = await headers();
   const clientIn = (environment: StaffEnvironment): ConsoleApi =>
     createConsoleClient({ accessToken, environment, incoming });
 
@@ -224,7 +227,7 @@ export const getConsoleRequest = cache(async (): Promise<ConsoleRequest> => {
     staff = await client.auth.me();
   } catch (error) {
     if (wanted !== "live" || !isVelexisErrorLike(error) || error.code !== "ENVIRONMENT_NOT_ALLOWED") {
-      return redirectOnSessionError(error);
+      return redirectOnSessionError(error, here);
     }
   }
   if (staff !== undefined && canOpenEnvironment(staff, wanted)) {
@@ -235,7 +238,7 @@ export const getConsoleRequest = cache(async (): Promise<ConsoleRequest> => {
   try {
     staff = await testClient.auth.me();
   } catch (error) {
-    return redirectOnSessionError(error);
+    return redirectOnSessionError(error, here);
   }
   return { console: testClient, staff, environment: "test", liveRefused: true };
 });

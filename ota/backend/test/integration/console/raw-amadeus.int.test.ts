@@ -615,9 +615,14 @@ describe("console.amadeus shopping reads", () => {
     });
     // Net prices: Amadeus's offers as they are, although alpha sells with a 10 % markup.
     expect(res.body.amadeus.data).toEqual(searchFixture["data"]);
+    // Every dictionary, `locations` and `currencies` with the `key` the document's entries require: their first code
+    // (FIX-W33-OTA), so the answer conforms (expectResponseToMatch above).
+    const fixtureDictionaries = searchFixture["dictionaries"] as JsonObject;
     expect(res.body.amadeus.dictionaries).toEqual({
-      carriers: (searchFixture["dictionaries"] as JsonObject)["carriers"],
-      aircraft: (searchFixture["dictionaries"] as JsonObject)["aircraft"],
+      carriers: fixtureDictionaries["carriers"],
+      aircraft: fixtureDictionaries["aircraft"],
+      locations: { key: "MAD", ...(fixtureDictionaries["locations"] as JsonObject) },
+      currencies: { key: "EUR", ...(fixtureDictionaries["currencies"] as JsonObject) },
     });
     expect(amadeusCalls("searchFlightOffers")).toHaveLength(1);
     expect(await supplierRequestsOf("tenant_alpha", agent.member.staffId)).toEqual([

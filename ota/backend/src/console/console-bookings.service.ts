@@ -26,7 +26,11 @@ import { Injectable } from "@nestjs/common";
 import type { operations } from "@velexis/api-types";
 import { AppError } from "@velexis/errors";
 import { allowedActionsOf } from "../bookings/allowed-actions";
-import { cancellationFactsOf, cancellationPendingOf } from "../bookings/cancellation-state";
+import {
+  cancellationFactsOf,
+  cancellationPendingOf,
+  staffCancellationPendingOf,
+} from "../bookings/cancellation-state";
 import {
   fareConditionsOf,
   snapshotOffersOf,
@@ -263,7 +267,7 @@ export class ConsoleBookingsService {
     const storedRules = storedFareRulesOf(stored.orderIncluded);
     const wantsFareRules = options.fareRules !== undefined && options.fareRules.length > 0;
     // The cancellation block and canCancel follow the cancellation's state (FIX-W28-CANCEL).
-    const cancellationFacts = await cancellationFactsOf(trx, bookingId);
+    const cancellationFacts = await cancellationFactsOf(trx, bookingId, now);
     const syncStatus =
       refreshed ??
       storedConsoleSyncStatusOf({
@@ -290,7 +294,7 @@ export class ConsoleBookingsService {
         documentsReady: documents.some((document) => document.status === "ready"),
         features: featuresOf(settingsRow?.features),
         lastRefreshAt: stored.lastRefreshAt,
-        cancellationPending: cancellationPendingOf(cancellationFacts.state),
+        cancellationPending: cancellationPendingOf(cancellationFacts),
         now,
       }),
       ancillaries: await this.bookings.ancillaries(trx, bookingId),
@@ -356,6 +360,9 @@ export class ConsoleBookingsService {
           lastArrivalAt: booking.lastArrivalAt,
           segments: children.segments,
           lastRefreshAt: stored.lastRefreshAt,
+          // console.bookings.cancel's `pending` refusal (FIX-W33-OTA): an undecided cancellation, or another one's
+          // DELETE in flight.
+          cancellationPending: staffCancellationPendingOf(cancellationFacts),
           now,
           can: (permission) => this.can(permission),
         }),

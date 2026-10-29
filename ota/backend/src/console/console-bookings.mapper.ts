@@ -578,6 +578,12 @@ export interface ConsoleActionsInput {
   readonly segments: readonly { readonly departureAt: Date; readonly isFlown: boolean }[];
   /** The last refresh claim or sync (`bookingDetails.lastRefreshAt`). */
   readonly lastRefreshAt: Date | null;
+  /**
+   * A cancellation is undecided or another one's DELETE is in flight (cancellation-state.ts
+   * `staffCancellationPendingOf`): console.bookings.cancel refuses with `pending`, canCancel shows it (FIX-W33-OTA).
+   * Absent: none.
+   */
+  readonly cancellationPending?: boolean;
   readonly now: Date;
   /** Whether the caller holds a permission (the staff member's role, or a key-only call's scopes). */
   readonly can: (permission: StaffPermission) => boolean;
@@ -635,7 +641,9 @@ export function consoleActionsOf(input: ConsoleActionsInput): ConsoleBookingActi
       "canCancel",
       "bookings:cancel",
       live() ??
-        // Without a window the rule answers `flown` or nothing.
+        // console.bookings.cancel's order of checks: an undecided cancellation or another one's DELETE in flight
+        // (`pending`, FIX-W33-OTA), then the departure rule, which without a window answers `flown` or nothing.
+        (input.cancellationPending === true ? "pending" : undefined) ??
         (cancelDepartureReasonOf(input.segments, input.now, STAFF_CANCEL_CUTOFF_MS) === undefined
           ? undefined
           : "flown"),

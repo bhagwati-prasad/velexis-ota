@@ -284,6 +284,30 @@ export function safeNextPath(next: string | null | undefined): string | undefine
   return url.origin === NEXT_PATH_BASE && isOwnOriginPath(path) ? path : undefined;
 }
 
+/**
+ * The request header the middleware sets on every request it lets through: the page's path and query as the browser
+ * asked for it (`pagePathOfUrl`), so a server component that sends the staff member to `/auth/refresh` comes back to
+ * the same page (`pagePathOf`; FIX-W33-OTA, lead decision (1l) of 2026-10-29). The middleware always overwrites it, so
+ * a value the browser sent never reaches a page; it is still read through `safeNextPath`.
+ */
+export const PAGE_PATH_HEADER = "x-velexis-page-path";
+
+/** Next.js's own query parameter of a client navigation's server-component request: not part of the page's address. */
+const RSC_QUERY_PARAMETER = "_rsc";
+
+/** The path and query of `url` as the page's address (`PAGE_PATH_HEADER`), without Next.js's `_rsc` parameter. */
+export function pagePathOfUrl(url: Pick<URL, "pathname" | "searchParams">): string {
+  const query = new URLSearchParams(url.searchParams);
+  query.delete(RSC_QUERY_PARAMETER);
+  const search = query.toString();
+  return search === "" ? url.pathname : `${url.pathname}?${search}`;
+}
+
+/** The page of this request (`PAGE_PATH_HEADER`) when it is a safe path on the admin (`safeNextPath`), else `undefined`. */
+export function pagePathOf(incoming: Pick<Headers, "get">): string | undefined {
+  return safeNextPath(incoming.get(PAGE_PATH_HEADER));
+}
+
 /** `/auth/refresh`, with `?next=` when `next` is a safe relative path. */
 export function refreshPath(next?: string | null): string {
   const path = safeNextPath(next);

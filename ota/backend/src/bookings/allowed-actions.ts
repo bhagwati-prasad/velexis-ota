@@ -7,8 +7,9 @@
 //   canCancel                    live¹, the departure rule (`cancelDepartureReasonOf`: nothing departed, `flown`;
 //                                more than 3 h before the first departure, `too_close_to_departure`), self-service
 //                                cancellation on (`disabled_by_ota`), an Amadeus order and no cancellation undecided
-//                                or waiting for the staff (`pending`): the rules of the cancellation quote and of
-//                                bookings.cancel (cancellation-mode.ts, FIX-W28-CANCEL)
+//                                or waiting for the staff, nor another one's DELETE in flight (`pending`; the fresh
+//                                claim since FIX-W33-OTA: cancellation-state.ts `cancellationPendingOf`): the rules of
+//                                the cancellation quote and of bookings.cancel (cancellation-mode.ts, FIX-W28-CANCEL)
 //   canModifyContacts            live¹, the last flight has not landed (`flown`)
 //   canAddRemarks                as canModifyContacts
 //   canModifyTravelerDocuments   never in the MVP (`disabled_by_ota`: bookings.update answers travellers' changes
@@ -94,8 +95,9 @@ export interface AllowedActionsInput {
   /** The last refresh or sync of the booking (claim time), or `null`. */
   readonly lastRefreshAt: Date | null;
   /**
-   * A cancellation of the booking is undecided (a DELETE without an answer) or waits for the staff (a request):
-   * cancellation-state.ts `cancellationPendingOf`. Absent: none.
+   * A cancellation of the booking is undecided (a DELETE without an answer), waits for the staff (a request), or has
+   * its DELETE in flight (another cancellation's fresh claim, FIX-W33-OTA): cancellation-state.ts
+   * `cancellationPendingOf`. Absent: none.
    */
   readonly cancellationPending?: boolean;
   readonly now: Date;

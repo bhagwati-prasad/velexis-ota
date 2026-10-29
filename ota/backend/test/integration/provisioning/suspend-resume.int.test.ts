@@ -70,10 +70,11 @@ import {
 } from "../../../src/jobs/fan-out";
 import { FAN_OUT_JOB } from "../../../src/jobs/schedulers";
 import { NotificationsProcessor } from "../../../src/notifications/notifications.processor";
-import type {
-  HousekeepingSkipped,
-  ResumeOutcome,
-  SuspendOutcome,
+import {
+  DELETE_CUT_OFF_IF_UNCHANGED,
+  type HousekeepingSkipped,
+  type ResumeOutcome,
+  type SuspendOutcome,
 } from "../../../src/provisioning/housekeeping.service";
 import { seedStorefrontSettings } from "../../../src/provisioning/seeds/storefront-settings.seed";
 import type { TenantOpsJobResult } from "../../../src/provisioning/tenant-ops.processor";
@@ -1188,5 +1189,24 @@ describe("tenant.resume", () => {
     expect(
       await maintenance.getJobState(tenantJobId(QUEUES_POLL_JOB, tenantIds.alpha, pollAfterResume)),
     ).not.toBe("unknown");
+  });
+});
+
+describe("the staff cut-off's compare-and-delete in Redis (FIX-W33-OTA)", () => {
+  it("[FIX-W33-OTA] [OBE-074] deletes the cut-off only while it holds the value the handler read, as one script", async () => {
+    // A tenant of its own: the scenarios above never see this key.
+    const key = redisKeys.staffDenyTenant(newId("ten")).key;
+    const read = String(Date.now() - 60_000);
+    const newer = String(Date.now());
+    await redis.client.set(key, newer, "EX", STAFF_DENY_TTL_SECONDS);
+
+    // A newer suspension's cut-off replaced the value the handler read: it stays, with its expiry.
+    expect(await redis.client.eval(DELETE_CUT_OFF_IF_UNCHANGED, 1, key, read)).toBe(0);
+    expect(await redis.client.get(key)).toBe(newer);
+    expect(await redis.client.ttl(key)).toBeGreaterThan(0);
+    // The value the handler read is deleted; without a key nothing happens.
+    expect(await redis.client.eval(DELETE_CUT_OFF_IF_UNCHANGED, 1, key, newer)).toBe(1);
+    expect(await redis.client.exists(key)).toBe(0);
+    expect(await redis.client.eval(DELETE_CUT_OFF_IF_UNCHANGED, 1, key, newer)).toBe(0);
   });
 });

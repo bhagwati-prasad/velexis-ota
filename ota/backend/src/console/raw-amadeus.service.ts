@@ -25,8 +25,9 @@
 // otherwise, before any call). The answer is Amadeus's, with the call's facts in `call` (ConsoleAmadeusCall): net
 // prices (console scope, never shown to customers), full traveller documents of the order reads (never logged), the
 // forms of payment of an order through the shared redactor (no card number reaches the console, OADR-0018 point 8),
-// and the dictionaries reduced to `carriers` and `aircraft` (`dictionariesOf`: the document's AmadeusLocationEntry and
-// AmadeusCurrencyEntry require a member Amadeus's maps by code never have, as console.bookings.retrieve answers them).
+// and the dictionaries as console.bookings.retrieve answers them (`consoleDictionariesOf`: `carriers` and `aircraft`,
+// and since FIX-W33-OTA `locations` and `currencies` with the `key` member the document's AmadeusLocationEntry and
+// AmadeusCurrencyEntry require, which Amadeus's maps by code never have: their own first code).
 // Nothing is stored besides `supplier_requests`, `staff_actions` and, for Queue List, `queue_snapshots`.
 //
 // Office isolation on the shared account (ADR-0012, scope OF-09 AC3, lead addition of 2026-10-28). Every OTA's
@@ -89,7 +90,7 @@ import type { AmadeusCallContext } from "../amadeus/call-context";
 import { ConnectionResolver, type ResolvedAmadeusConnection } from "../amadeus/connection-resolver";
 import { AmadeusCallError } from "../amadeus/error-mapper";
 import { AMADEUS_OPERATIONS, type AmadeusOperationName } from "../amadeus/limits";
-import { dictionariesOf } from "../bookings/bookings.mapper";
+import { consoleDictionariesOf } from "../bookings/bookings.mapper";
 import { Clock } from "../common/clock";
 import { IdGenerator } from "../common/ids";
 import { TenantContext, type RequestTenant } from "../tenancy/tenant-context";
@@ -213,12 +214,12 @@ export const RAW_AMADEUS_CACHE_CONTROL = "private, no-store";
 // ---- Answers --------------------------------------------------------------------------------------------------------
 
 /**
- * An Amadeus answer as a raw read returns it (see the file header): verbatim, its dictionaries reduced to `carriers`
- * and `aircraft` (left out when none of those is left).
+ * An Amadeus answer as a raw read returns it (see the file header): verbatim, its dictionaries through
+ * `consoleDictionariesOf` (left out when none is left).
  */
 export function rawReplyOf(body: JsonObject): JsonObject {
   const { dictionaries: raw, ...rest } = body;
-  const dictionaries = dictionariesOf(raw);
+  const dictionaries = consoleDictionariesOf(raw);
   return dictionaries === null ? rest : { ...rest, dictionaries };
 }
 
@@ -966,8 +967,8 @@ function recordsOfOrders(
 
 /**
  * The by-reference answer (ConsoleAmadeusFlightOrdersByReferenceResult.amadeus): the tenant's orders verbatim (forms
- * of payment through the shared redactor), and, when no order was withheld, `included` and the dictionaries reduced to
- * carriers and aircraft.
+ * of payment through the shared redactor), and, when no order was withheld, `included` and the dictionaries
+ * (`consoleDictionariesOf`).
  */
 export function byReferenceReplyOf(
   body: JsonObject,
@@ -975,7 +976,7 @@ export function byReferenceReplyOf(
   anyWithheld: boolean,
 ): RawFlightOrdersByReferenceResult["amadeus"] {
   const { included, dictionaries: raw, data: _data, ...rest } = body;
-  const dictionaries = anyWithheld ? null : dictionariesOf(raw);
+  const dictionaries = anyWithheld ? null : consoleDictionariesOf(raw);
   return {
     ...rest,
     data: allowed.map(consoleOrderOf),

@@ -492,6 +492,7 @@ describe("the cancellation of a booking (FIX-W28-CANCEL)", () => {
   const facts = (patch: Partial<CancellationFacts> = {}): CancellationFacts => ({
     cancelled: undefined,
     state: { kind: "none" },
+    claimPending: false,
     payments: new Map(),
     ...patch,
   });

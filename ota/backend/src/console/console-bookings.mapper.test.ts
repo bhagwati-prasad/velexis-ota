@@ -76,3 +76,26 @@ describe("consoleActionsOf: canCancel (FIX-W30-OTA)", () => {
     ).toBe("no_permission");
   });
 });
+
+describe("consoleActionsOf: a cancellation in progress (FIX-W33-OTA)", () => {
+  it("[FIX-W33-OTA] [OBE-061] refuses canCancel with pending while a cancellation is undecided or another one's DELETE is in flight", () => {
+    const pending = consoleActionsOf(input({ cancellationPending: true }));
+    expect([pending.canCancel, pending.reasons["canCancel"]]).toEqual([false, "pending"]);
+    // Nothing else waits for it: a patch, a note and a resync are still offered.
+    expect(pending).toMatchObject({ canPatch: true, canAddNote: true, canRetrieve: true });
+    // console.bookings.cancel's order of checks: the state and the permission, then pending, then the departure rule.
+    const departed = [{ departureAt: at(-HOUR), isFlown: false }];
+    expect(
+      consoleActionsOf(input({ cancellationPending: true, segments: departed })).reasons["canCancel"],
+    ).toBe("pending");
+    expect(
+      consoleActionsOf(input({ cancellationPending: true, status: "cancelled" })).reasons["canCancel"],
+    ).toBe("cancelled");
+    expect(
+      consoleActionsOf(
+        input({ cancellationPending: true, can: (permission) => permission !== "bookings:cancel" }),
+      ).reasons["canCancel"],
+    ).toBe("no_permission");
+    expect(consoleActionsOf(input({ cancellationPending: false })).canCancel).toBe(true);
+  });
+});

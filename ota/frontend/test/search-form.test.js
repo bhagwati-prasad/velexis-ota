@@ -662,6 +662,34 @@ describe("search form: passengers and dates", () => {
     expect(depart.min).toBe(TODAY);
   });
 
+  it("[OFE-004] [FIX-W33-OTA] typing a multi-city flight's date sets no limit that stays the same", () => {
+    // The multi-city rows set each date's `min` from the row above on every `change` (`renumber`): set again to the
+    // value it had, Chromium would rebuild the field and drop the digits being typed, as in the departure field above.
+    mountForm("trip=multi");
+    const first = legInputs(0).date;
+    const second = legInputs(1).date;
+    const observer = new MutationObserver(() => undefined);
+    observer.observe(first, { attributeFilter: ["min"] });
+    observer.observe(second, { attributeFilter: ["min"] });
+
+    setDate(second, "0002-12-27");
+    // Typing into the second flight's date changes no limit: both stay today.
+    expect(observer.takeRecords()).toEqual([]);
+    expect(second.value).toBe("0002-12-27");
+    setDate(second, "2026-12-29");
+    expect(observer.takeRecords()).toEqual([]);
+    expect(second.value).toBe("2026-12-29");
+    // A date in the first flight moves the second one's limit once, and typing it again moves nothing.
+    setDate(first, "2026-12-27");
+    expect(observer.takeRecords().map((record) => record.target)).toEqual([second]);
+    expect(second.min).toBe("2026-12-27");
+    setDate(first, "2026-12-27");
+    setDate(second, "2026-12-29");
+    expect(observer.takeRecords()).toEqual([]);
+    observer.disconnect();
+    expect([first.min, second.value]).toEqual([TODAY, "2026-12-29"]);
+  });
+
   it("[OFE-004] multi-city has 2 to 6 flights; removing one renumbers the rest and keeps the focus nearby", () => {
     const { announce } = mountForm("trip=multi");
     const add = /** @type {HTMLButtonElement} */ (form().querySelector('[data-action="add-leg"]'));

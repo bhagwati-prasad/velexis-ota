@@ -17,12 +17,12 @@
 // A token that is presented must be valid, also on an optional operation: `401 TOKEN_EXPIRED` for an expired customer
 // token of this tenant (the SDK in cookie mode then calls auth.refresh once and retries), `401 UNAUTHENTICATED` for
 // anything else, a token of another tenant included (`tid` must equal the tenant the tenant guard resolved; OF-01
-// AC2). A required operation without a token is `401 UNAUTHENTICATED`; an optional one goes on as a guest. Refusals are
-// logged as `customer.token_refused` with the reason, never the token. One exception (OBE-033): on auth.signOut an
-// expired token of this tenant counts as no token, because the document ends the session of the refresh token "when
-// the access token has already expired" (`EXPIRED_TOKEN_AS_GUEST`); the guard records that it saw one
-// (`CustomerContext.presentedExpiredToken`), and the handler answers `401 TOKEN_EXPIRED` itself when no refresh token
-// comes with it either.
+// AC2). A required operation without a token is `401 UNAUTHENTICATED`; an optional one goes on as a guest (but for the
+// edge's refresh cookie without an access cookie: below). Refusals are logged as `customer.token_refused` with the
+// reason, never the token. One exception (OBE-033): on auth.signOut an expired token of this tenant counts as no
+// token, because the document ends the session of the refresh token "when the access token has already expired"
+// (`EXPIRED_TOKEN_AS_GUEST`); the guard records that it saw one (`CustomerContext.presentedExpiredToken`), and the
+// handler answers `401 TOKEN_EXPIRED` itself when no refresh token comes with it either.
 //
 // A verified token makes the customer the request's actor (`TenantContext.setActor`, `customer`/`cus_…`) and puts
 // `{customerId, sessionId, accessTokenExpiresAt}` into the request context (`CustomerContext`), where services read
@@ -37,6 +37,18 @@
 // client whose answer was lost learns that its account is deleted, and a new deletion is refused by the service with
 // the same `401 UNAUTHENTICATED`.
 //
+// The edge without an access cookie but with a refresh cookie (FIX-W33-OTA, lead decision (1a) of 2026-10-29, OADR-0006
+// point 5 as revised that day): the browser drops `__Host-vx_at` itself when its `Max-Age` of 900 s ends, the moment
+// its token expires, and keeps sending `__Host-vx_rt` (12 hours, 30 days with `rememberMe`). Such a request presents
+// an expired session, not none: on every operation that reads the customer, a required or an optional one, a refresh
+// cookie of the contract's form (`REFRESH_TOKEN_PATTERN`; nothing is looked up) without an access cookie answers
+// `401 TOKEN_EXPIRED` (logged as `customer.token_refused` with the reason `access_cookie_missing`), so the SDK in
+// cookie mode calls auth.refresh once and retries the call, and a signed-in customer is not signed out after 15 idle
+// minutes. A refresh that the API refuses clears both cookies (auth.controller.ts), so a refresh cookie that no longer
+// opens a session costs one refused call and is gone. auth.signOut (`EXPIRED_TOKEN_AS_GUEST`) goes on as a guest:
+// it ends the session of the refresh cookie itself. Neither cookie: `401 UNAUTHENTICATED` on a required operation, a
+// guest on an optional one, as before. Key callers' cookies are ignored as always (OADR-0006 point 1).
+//
 // In console scope (the scope guard marked it: a `console:automation` key, later a staff token) the bearer token is a
 // staff token, which the staff guards of OBE-059 and OBE-060 check; this guard leaves such requests alone.
 import { Injectable, type CanActivate, type ExecutionContext } from "@nestjs/common";
@@ -46,6 +58,7 @@ import type { Request } from "express";
 import { ClsService } from "nestjs-cls";
 import { InjectPinoLogger, PinoLogger } from "nestjs-pino";
 import { CustomerAccess } from "../../identity/customer-access";
+import { REFRESH_TOKEN_PATTERN } from "../../identity/sessions.service";
 import { bearerTokenOf, TokenService } from "../../identity/token.service";
 import { CallerContext } from "../../tenancy/caller-resolver";
 import { TenantContext } from "../../tenancy/tenant-context";
@@ -55,6 +68,9 @@ import { RequestContext } from "../http/request-context";
 
 /** The cookie of the edge's customer access token (OADR-0006 point 2; `STOREFRONT_COOKIES.accessToken`). */
 export const CUSTOMER_ACCESS_COOKIE = "__Host-vx_at";
+
+/** The cookie of the edge's customer refresh token (OADR-0006 point 2; `STOREFRONT_COOKIES.refreshToken`). */
+export const CUSTOMER_REFRESH_COOKIE = "__Host-vx_rt";
 
 /** Whether an operation needs a signed-in customer, for one kind of caller. */
 export type CustomerRequirement = "required" | "optional" | "none";
@@ -203,6 +219,15 @@ function accessCookieOf(cookies: unknown): string | undefined {
   return typeof value === "string" && value !== "" ? value : undefined;
 }
 
+/**
+ * True when the edge's request carries a refresh cookie of the contract's form (`rt_…`, `REFRESH_TOKEN_PATTERN`): what a
+ * browser sends once the access cookie's 15 minutes have ended. Only the form is checked; auth.refresh looks it up.
+ */
+function hasRefreshCookie(cookies: unknown): boolean {
+  const value = isObject(cookies) ? cookies[CUSTOMER_REFRESH_COOKIE] : undefined;
+  return typeof value === "string" && REFRESH_TOKEN_PATTERN.test(value);
+}
+
 @Injectable()
 export class CustomerGuard implements CanActivate {
   private readonly requirements: ReadonlyMap<string, CustomerRequirements>;
@@ -251,6 +276,18 @@ export class CustomerGuard implements CanActivate {
     const req = execution.switchToHttp().getRequest<Request>();
     const token = caller.type === "edge" ? accessCookieOf(req.cookies) : bearerTokenOf(req.headers);
     if (token === undefined) {
+      if (caller.type === "edge" && hasRefreshCookie(req.cookies)) {
+        if (requirement === "optional" && EXPIRED_TOKEN_AS_GUEST.has(operationId)) {
+          // auth.signOut ends the session of the refresh cookie itself.
+          return true;
+        }
+        // The browser dropped the access cookie when its token expired: refresh, then retry (OADR-0006 point 5).
+        this.logger.info(
+          { reason: "access_cookie_missing", callerType: caller.type },
+          "customer.token_refused",
+        );
+        throw new AppError("TOKEN_EXPIRED");
+      }
       if (requirement === "optional") {
         return true;
       }

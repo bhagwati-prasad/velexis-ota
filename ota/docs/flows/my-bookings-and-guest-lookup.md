@@ -66,7 +66,7 @@ sequenceDiagram
 3. **Sign-in.** Argon2id verification; 5 failures lock the identity for 15 minutes (`423 ACCOUNT_LOCKED`). The session family lasts 12 hours, or 30 days with `rememberMe`. The CSRF cookie is rotated, so a value planted before sign-in is useless.
 4. **Lists.** `bookings.list` with `timeframe` `upcoming`, `past` or `cancelled` uses the three customer indexes of db README §10, newest departure first for past and cancelled. Only bookings of the storefront's environment are listed.
 5. **Detail.** `bookings.get` reads the stored booking; `refresh=true` triggers a Flight Order Management GET (rate limited, at most once a minute per booking). `allowedActions` drives the buttons (change contacts, cancel, documents).
-6. **Refresh.** On `401 TOKEN_EXPIRED` the SDK calls `auth.refresh` once with cookies and retries the original call; reuse of an old refresh token revokes the whole family (`401 REFRESH_TOKEN_REUSED`, cookies cleared).
+6. **Refresh.** On `401 TOKEN_EXPIRED` the SDK calls `auth.refresh` once with cookies and retries the original call; reuse of an old refresh token revokes the whole family (`401 REFRESH_TOKEN_REUSED`, cookies cleared). The browser drops `__Host-vx_at` when its 15 minutes end and keeps `__Host-vx_rt`: a call with the refresh cookie and no access cookie answers `401 TOKEN_EXPIRED` too, so a customer who comes back after an idle period is refreshed, not signed out ([OADR-0006](../adr/0006-storefront-cookie-sessions-and-csrf.md) point 5 as revised on 2026-10-29, FIX-W33-OTA).
 7. **Sign-out.** `auth.signOut` revokes the session (or all sessions with `scope: all`) and clears the cookies.
 8. **Guest access.** After a guest booking, `checkout.complete` adds `bkg_<id>.<token>` to `__Host-vx_bt` (at most 5 bookings, newest first). The booking page reads `bookingId` from the URL; the backend finds the matching token in the cookie. Lost cookie → lookup.
 9. **Account deletion.** `account.delete` soft-deletes the customer at once (db README §7), revokes sessions, clears cookies; bookings stay with `customer_id` kept until the M6 erasure job anonymises them. A booking that still waits for payment, tickets or a refund holds the deletion back (`409 ACCOUNT_DELETION_BLOCKED`): live bookings always, test bookings from the test environment, and a `pending` booking whatever its environment (its checkout stays open for the reconciliation, OADR-0003 point 10; lead decision (3) of 2026-10-24, FIX-W29-OTA). The same transaction queues the confirmation `account.deleted` to the address before it was replaced ([OADR-0013](../adr/0013-notifications-and-booking-documents.md) point 4 as revised on 2026-10-24).
@@ -79,7 +79,7 @@ sequenceDiagram
 | Wrong password | `401 INVALID_CREDENTIALS`; after 5, `423 ACCOUNT_LOCKED` |
 | Unverified e-mail when verification is required before booking | `403 EMAIL_NOT_VERIFIED` on checkout |
 | Missing or stale CSRF header | `403 CSRF_TOKEN_INVALID` |
-| Expired access token | `401 TOKEN_EXPIRED` → automatic refresh |
+| Expired access token, or the refresh cookie without the access cookie (2026-10-29) | `401 TOKEN_EXPIRED` → automatic refresh |
 | Refresh token reused | `401 REFRESH_TOKEN_REUSED`, family revoked, cookies cleared |
 | Booking of another customer or tenant | `404 NOT_FOUND` |
 | Lookup brute force | `429 RATE_LIMITED` with `Retry-After` |

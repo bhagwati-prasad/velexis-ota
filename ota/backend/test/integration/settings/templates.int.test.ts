@@ -45,6 +45,7 @@ import { redisKeys } from "../../../src/common/redis/redis.keys";
 import { loadWorkerConfig } from "../../../src/config";
 import type { NotificationRow } from "../../../src/notifications/outbox.repository";
 import { OutboxService } from "../../../src/notifications/outbox.service";
+import { TemplateService } from "../../../src/notifications/template.service";
 import { TEMPLATE_KEYS, type TemplateKey } from "../../../src/notifications/templates/registry";
 import { seedNotificationTemplates, seedStorefrontSettings } from "../../../src/provisioning/seeds";
 import { TenantContext, type RequestTenant } from "../../../src/tenancy/tenant-context";
@@ -346,7 +347,7 @@ afterAll(async () => {
 }, OPENAPI_SETUP_TIMEOUT_MS);
 
 describe("console.settings.templates.list and get", () => {
-  it("lists every key for every supported locale: the seeded rows customised, the code defaults not, to a viewer, unaudited", async () => {
+  it("lists every key for every supported locale, to a viewer, unaudited: the seeded rows with their versions but not customised [FIX-W33-OTA]", async () => {
     const viewer = await signIn(alpha, "viewer");
 
     const res = await viewer.get(TEMPLATES);
@@ -359,14 +360,16 @@ describe("console.settings.templates.list and get", () => {
       [...TEMPLATE_KEYS].sort().flatMap((key) => [`${key}/en`, `${key}/fr`]),
     );
     for (const item of data) {
-      expect(item["customised"], `${String(item["key"])}/${String(item["locale"])}`).toBe(
-        item["locale"] === "en",
-      );
+      const where = `${String(item["key"])}/${String(item["locale"])}`;
+      // The en rows are the code defaults provisioning seeded (`is_system`): rows with a version, not customised
+      // (FIX-W33-OTA); fr has none, and fr's language is fr: the code default.
+      expect([item["customised"], item["inheritedFrom"]], where).toEqual([false, null]);
+      expect(item["version"], where).toBe(item["locale"] === "en" ? 1 : null);
     }
     expect(await staffActions("tenant_alpha", viewer.member.staffId)).toEqual([]);
   });
 
-  it("gets the OTA's row with its ETag, and the code default of a locale without one with none", async () => {
+  it("gets the OTA's row with its ETag, a seeded one not customised [FIX-W33-OTA], and the code default of a locale without one with none", async () => {
     const viewer = await signIn(alpha, "viewer");
 
     const own = await viewer.get(templatePath("booking.ticketed", "en"));
@@ -377,7 +380,7 @@ describe("console.settings.templates.list and get", () => {
       expectResponseToMatch("consoleGetNotificationTemplate", res);
       expect(res.headers["cache-control"]).toBe("private, no-store");
     }
-    expect(own.body).toMatchObject({ customised: true, isActive: true, version: 1 });
+    expect(own.body).toMatchObject({ customised: false, inheritedFrom: null, isActive: true, version: 1 });
     expect(own.headers["etag"]).toBe('"1"');
     expect(fallback.body).toMatchObject({ locale: "fr", customised: false, version: null, updatedAt: null });
     expect(fallback.body.subject).toBe(own.body.subject);
@@ -736,5 +739,136 @@ describe("tenant isolation", () => {
     expect(await templateRow("tenant_alpha", "staff.manual_review", "fr")).toMatchObject({
       subject: "Alpha review {{booking.reference}}",
     });
+  });
+});
+
+describe("console.settings.templates: the template that serves a locale without a row of its own (FIX-W33-OTA)", () => {
+  const CUSTOM = {
+    subject: "Cancellation asked for {{booking.reference}}",
+    bodyHtml: "<p>We asked the airline to cancel {{booking.reference}}.</p>",
+    bodyText: "We asked the airline to cancel {{booking.reference}}.",
+  };
+
+  /** Alpha's storefront offers en-GB too while this block runs: a locale whose e-mails use the `en` rows. */
+  async function supportLocales(locales: readonly string[]): Promise<void> {
+    await tenantTx(tenantDb, "tenant_alpha", (trx) =>
+      trx
+        .updateTable("storefront_settings")
+        .set({ supported_locales: [...locales] })
+        .execute(),
+    );
+  }
+
+  /** The template an e-mail of `key` in `locale` uses, as the worker reads it (template.service.ts `effective`). */
+  async function effectiveTemplate(key: TemplateKey, locale: string) {
+    const tenants = api.app.get(TenantContext, { strict: false });
+    const tx = api.app.get(TenantTx, { strict: false });
+    const templates = api.app.get(TemplateService, { strict: false });
+    return await tenants.run({ ...alpha, requestId: newId("req") }, () =>
+      tx.run((trx) => templates.effective(trx, key, locale)),
+    );
+  }
+
+  beforeAll(async () => {
+    await supportLocales(["en", "en-GB", "fr"]);
+  });
+
+  afterAll(async () => {
+    await supportLocales(["en", "fr"]);
+  });
+
+  it("[FIX-W33-OTA] [OBE-073] shows the language's seeded row that e-mails in en-GB use, as inherited and not customised, in get and list", async () => {
+    const viewer = await signIn(alpha, "viewer");
+    const key: TemplateKey = "staff.ticketing_failed";
+    const languageRow = await templateRow("tenant_alpha", key, "en");
+
+    const got = await viewer.get(templatePath(key, "en-GB"));
+    const list = await viewer.get(TEMPLATES);
+
+    expect(answer(got)).toEqual([200, undefined]);
+    expectResponseToMatch("consoleGetNotificationTemplate", got);
+    expect(got.body).toMatchObject({
+      key,
+      locale: "en-GB",
+      subject: languageRow?.["subject"],
+      inheritedFrom: "en",
+      customised: false,
+      isActive: true,
+      version: null,
+      updatedAt: null,
+    });
+    // No row of en-GB: no ETag, so a put creates the locale's own row.
+    expect(got.headers["etag"]).toBeUndefined();
+    expect((await effectiveTemplate(key, "en-GB")).templateId).toBe(languageRow?.["id"]);
+    expect(answer(list)).toEqual([200, undefined]);
+    expectResponseToMatch("consoleListNotificationTemplates", list);
+    const data = list.body.data as Json[];
+    expect(data.map((item) => `${String(item["key"])}/${String(item["locale"])}`)).toEqual(
+      [...TEMPLATE_KEYS].sort().flatMap((each) => [`${each}/en`, `${each}/en-GB`, `${each}/fr`]),
+    );
+    expect(data.find((item) => item["key"] === key && item["locale"] === "en-GB")).toEqual(got.body);
+  });
+
+  it("[FIX-W33-OTA] [OBE-073] shows the language's edited row in en-GB, writes en-GB's own row on put, and answers the language's row after a reset", async () => {
+    const owner = await signIn(alpha, "owner");
+    const key: TemplateKey = "booking.cancellation_requested";
+
+    const edited = await owner.put(templatePath(key, "en"), CUSTOM, '"1"');
+    const inherited = await owner.get(templatePath(key, "en-GB"));
+    const preview = await owner.post(templatePath(key, "en-GB", "preview"));
+    const usedBefore = await effectiveTemplate(key, "en-GB");
+    // An inherited template has no version: If-Match names a row en-GB does not have.
+    const withIfMatch = await owner.put(templatePath(key, "en-GB"), GOOD, '"2"');
+    const own = await owner.put(templatePath(key, "en-GB"), GOOD);
+    const usedAfter = await effectiveTemplate(key, "en-GB");
+    const reset = await owner.post(templatePath(key, "en-GB", "reset"));
+
+    expect(answer(edited)).toEqual([200, undefined]);
+    expect(edited.body).toMatchObject({ customised: true, version: 2 });
+    expect(inherited.body).toMatchObject({
+      locale: "en-GB",
+      subject: CUSTOM.subject,
+      inheritedFrom: "en",
+      customised: true,
+      version: null,
+    });
+    expect(answer(preview)).toEqual([200, undefined]);
+    expect(preview.body.subject).toBe("Cancellation asked for VX7K2M9Q");
+    expect(usedBefore).toMatchObject({ origin: "tenant", locale: "en", version: 2 });
+    expect(answer(withIfMatch)).toEqual([412, "PRECONDITION_FAILED"]);
+    expect(answer(own)).toEqual([200, undefined]);
+    expectResponseToMatch("consolePutNotificationTemplate", own);
+    expect(own.body).toMatchObject({ locale: "en-GB", inheritedFrom: null, customised: true, version: 1 });
+    expect(usedAfter).toMatchObject({ origin: "tenant", locale: "en-GB", version: 1 });
+    // The language's row is untouched by the locale's put.
+    expect(await templateRow("tenant_alpha", key, "en")).toMatchObject({
+      subject: CUSTOM.subject,
+      version: 2,
+    });
+    expect(answer(reset)).toEqual([200, undefined]);
+    expectResponseToMatch("consoleResetNotificationTemplate", reset);
+    expect(reset.body).toMatchObject({
+      locale: "en-GB",
+      subject: CUSTOM.subject,
+      inheritedFrom: "en",
+      customised: true,
+      version: null,
+    });
+    expect(await templateRow("tenant_alpha", key, "en-GB")).toBeUndefined();
+  });
+
+  it("[FIX-W33-OTA] [OBE-073] resets a row provisioning seeded: the code default serves the language and its locales from then on", async () => {
+    const owner = await signIn(alpha, "owner");
+    const key: TemplateKey = "account.deleted";
+    expect(await templateRow("tenant_alpha", key, "en")).toMatchObject({ is_system: true, version: 1 });
+
+    const reset = await owner.post(templatePath(key, "en", "reset"));
+    const regional = await owner.get(templatePath(key, "en-GB"));
+
+    expect(answer(reset)).toEqual([200, undefined]);
+    expect(reset.body).toMatchObject({ locale: "en", customised: false, inheritedFrom: null, version: null });
+    expect(await templateRow("tenant_alpha", key, "en")).toBeUndefined();
+    expect(regional.body).toMatchObject({ locale: "en-GB", inheritedFrom: null, version: null });
+    expect((await effectiveTemplate(key, "en-GB")).origin).toBe("default");
   });
 });

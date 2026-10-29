@@ -262,7 +262,7 @@ export class CustomerBookingsService {
       const storedRules = storedFareRulesOf(details.orderIncluded);
       const wantsFareRules = options.fareRules !== undefined && options.fareRules.length > 0;
       // The cancellation block and canCancel follow the cancellation's state (FIX-W28-CANCEL).
-      const cancellationFacts = await cancellationFactsOf(trx, bookingId);
+      const cancellationFacts = await cancellationFactsOf(trx, bookingId, now);
       return toCustomerBooking({
         booking,
         children,
@@ -280,7 +280,7 @@ export class CustomerBookingsService {
           documentsReady: documents.some((document) => document.status === "ready"),
           features: settings.features,
           lastRefreshAt: details.lastRefreshAt,
-          cancellationPending: cancellationPendingOf(cancellationFacts.state),
+          cancellationPending: cancellationPendingOf(cancellationFacts),
           now,
         }),
         ancillaries: await this.repository.ancillaries(trx, bookingId),

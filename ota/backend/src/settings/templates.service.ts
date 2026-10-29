@@ -6,19 +6,27 @@
 // (notifications/template.service.ts: the safe Handlebars subset, the key's allow-list of templates/registry.ts, strict
 // mode).
 //
-// The template of a key, channel and locale (`NotificationTemplate`):
-//   - the tenant's row of exactly that key, channel and locale when it exists, active or not (`customised: true`, its
-//     version and `ETag: "<version>"`). A row the provisioning seed copied from a code default (`is_system`) is a row
-//     of the OTA as well: shown, edited and reset as any other;
+// The template of a key, channel and locale (`NotificationTemplate`, `templateViewOf`), the one e-mails in that locale
+// use (FIX-W33-OTA, lead decision (1k) of 2026-10-29), so staff edit what the e-mails send:
+//   - the tenant's row of exactly that key, channel and locale when it exists, active or not (its version and
+//     `ETag: "<version>"`). `customised` is whether the OTA edited it: a row the provisioning seed copied from a code
+//     default (`is_system`) answers `customised: false` until a put makes it the OTA's own (`is_system` false), yet it
+//     is a row: it has its version and `ETag`, a put needs `If-Match` on it, and a reset deletes it;
+//   - else the active row of the locale's language (`en` for `en-GB`), which e-mails in the locale use: its subject
+//     and bodies under the locale asked for, `inheritedFrom` its locale, `customised` as for its own row, `isActive`
+//     true, `version` and `updatedAt` null and no `ETag` (the locale has no row: a put creates it, without
+//     `If-Match`, and never writes the language's row);
 //   - else the code default of the key (`customised: false`, `isActive: true`, `version` and `updatedAt` null, no
 //     `ETag`): English in the MVP, shown under the locale asked for.
-// An e-mail takes the active row of its locale, else of its language (`en` for `en-GB`), else the code default
-// (template.service.ts `effective`, read at every send): a row with `isActive: false` is kept and shown, and the e-mail
-// uses the default; after a reset the next e-mail uses the default (or the row of the locale's language).
+// An e-mail takes the active row of its locale, else of its language, else the code default (template.service.ts
+// `effective` and `servingRowOf`, read at every send): a row with `isActive: false` is kept and shown, and the e-mail
+// uses the language's active row or the default; after a reset the next e-mail uses the language's row or the
+// default, which the reset answers.
 //
 //   list     every key of TEMPLATE_KEYS for every locale of the storefront settings' `locales.supported`, by key, then
-//            locale (a missing settings row → `403 TENANT_SUSPENDED`: the tenant is not ready).
-//   get      the template of the path (any locale the schema allows).
+//            locale, each as above, read with the rows of those locales and of their languages (a missing settings row
+//            → `403 TENANT_SUSPENDED`: the tenant is not ready).
+//   get      the template of the path (any locale the schema allows), as above.
 //   put      the subject, HTML and text are checked against the key first (every problem at once →
 //            `422 TEMPLATE_INVALID`, `details.errors[{part, line, message}]`, `part` one of `subject`, `bodyHtml`,
 //            `bodyText` as the body names them); then, in one transaction: the locale must be one of the settings'
@@ -30,13 +38,15 @@
 //            the `staff_actions` row (`settings.templates.put`, target `notification_template`
 //            `<key>/<channel>/<locale>`) holds the template before (null for a new row) and after. `isActive` absent
 //            is true: a put replaces the template.
-//   preview  renders without storing anything: the template of the path with the parts the body sends in place of its
-//            own (a draft, checked as put checks it → `422 TEMPLATE_INVALID`), with the key's sample data (registry.ts;
+//   preview  renders without storing anything: the template of the path as get shows it (an inherited one included)
+//            with the parts the body sends in place of its own (a draft, checked as put checks it → `422
+//            TEMPLATE_INVALID`), with the key's sample data (registry.ts;
 //            the provisioning seed and put copy it into `sample_data`, and the registry stays the source, so a release
 //            that adds a variable has its sample value) or, with `variables`, the sample data with the values sent in
 //            their place (`previewData`; a value outside the allow-list or of the wrong kind → `400 VALIDATION_FAILED`
 //            at `/variables/…`). Not audited: a read (`settings:read`).
-//   reset    deletes the row (without one nothing changes) and answers the code default; the `staff_actions` row
+//   reset    deletes the row of exactly that locale (without one nothing changes) and answers the template the locale
+//            has then, as get shows it: the language's active row, else the code default; the `staff_actions` row
 //            (`settings.templates.reset`, same target) holds the deleted template, or null.
 //
 // The HTML part is rendered with Handlebars' HTML escaping always on (the subset has no triple braces), so no value of
@@ -54,6 +64,8 @@ import { MAX_VARIABLE_LENGTH } from "../notifications/renderer";
 import {
   checkTemplateSources,
   compileTemplate,
+  servingRowOf,
+  templateLocales,
   TemplateInvalidError,
   TemplateMissingError,
   TemplateRenderError,
@@ -165,7 +177,10 @@ function variablesOf(key: TemplateKey): ConsoleNotificationTemplate["variables"]
   }));
 }
 
-/** The template of a tenant's row of `key`. */
+/**
+ * The template of a tenant's row of `key` in its own locale: `customised` unless the provisioning seed copied it from
+ * the code default and nobody edited it since (`is_system`, FIX-W33-OTA); its version and `updatedAt` either way.
+ */
 export function templateOfRow(key: TemplateKey, row: NotificationTemplateRow): ConsoleNotificationTemplate {
   return {
     key,
@@ -175,10 +190,30 @@ export function templateOfRow(key: TemplateKey, row: NotificationTemplateRow): C
     bodyHtml: row.body_html,
     bodyText: row.body_text,
     variables: variablesOf(key),
-    customised: true,
+    customised: !row.is_system,
+    inheritedFrom: null,
     isActive: row.is_active,
     version: row.version,
     updatedAt: row.updated_at.toISOString(),
+  };
+}
+
+/**
+ * The template of `locale`, which has no row of its own, from the active row of its language that e-mails in it use
+ * (`row`, `en` for `en-GB`): `inheritedFrom` that row's locale, no version (a put creates the locale's row).
+ */
+export function templateOfInherited(
+  key: TemplateKey,
+  locale: string,
+  row: NotificationTemplateRow,
+): ConsoleNotificationTemplate {
+  return {
+    ...templateOfRow(key, row),
+    locale,
+    inheritedFrom: row.locale,
+    isActive: true,
+    version: null,
+    updatedAt: null,
   };
 }
 
@@ -197,10 +232,48 @@ export function templateOfDefault(
     bodyText: sources.text,
     variables: variablesOf(key),
     customised: false,
+    inheritedFrom: null,
     isActive: true,
     version: null,
     updatedAt: null,
   };
+}
+
+/** Which template of a key a locale shows (see the file header): its own row, its language's, or the code default. */
+export type TemplateSource =
+  | { readonly kind: "own"; readonly row: NotificationTemplateRow }
+  | { readonly kind: "inherited"; readonly row: NotificationTemplateRow }
+  | { readonly kind: "default" };
+
+/**
+ * The template `locale` shows among `rows` (the tenant's rows of one key in the locale and its language, any state):
+ * the locale's own row, else the row e-mails in it use (`servingRowOf`, the rule of `effective`), else the default.
+ */
+export function templateSourceOf(rows: readonly NotificationTemplateRow[], locale: string): TemplateSource {
+  const own = rows.find((row) => row.locale === locale);
+  if (own !== undefined) {
+    return { kind: "own", row: own };
+  }
+  const serving = servingRowOf(rows, locale);
+  return serving === undefined ? { kind: "default" } : { kind: "inherited", row: serving };
+}
+
+/** The template of `key` that `locale` shows (`templateSourceOf`), with the code default's `sources`. */
+export function templateViewOf(
+  key: TemplateKey,
+  locale: string,
+  rows: readonly NotificationTemplateRow[],
+  defaults: TemplateSources,
+): ConsoleNotificationTemplate {
+  const source = templateSourceOf(rows, locale);
+  switch (source.kind) {
+    case "own":
+      return templateOfRow(key, source.row);
+    case "inherited":
+      return templateOfInherited(key, locale, source.row);
+    case "default":
+      return templateOfDefault(key, locale, defaults);
+  }
 }
 
 /** What `staff_actions` keeps of a row: the template, without the allow-list (code, not state). */
@@ -411,8 +484,6 @@ function checkedChannel(address: TemplateAddress): void {
   }
 }
 
-const rowId = (key: string, locale: string): string => `${key}\u0000${locale}`;
-
 @Injectable()
 export class TemplateSettingsService {
   constructor(
@@ -429,18 +500,19 @@ export class TemplateSettingsService {
     const { locales, rows } = await this.tx.run(async (trx) => {
       const supported = await this.supportedLocales(trx);
       const sorted = [...new Set(supported)].sort();
-      return { locales: sorted, rows: await this.templates.tenantRows(trx, sorted) };
+      // The rows of the locales and of their languages, which serve a locale without a row of its own.
+      const read = [...new Set(sorted.flatMap((locale) => templateLocales(locale)))];
+      return { locales: sorted, rows: await this.templates.tenantRows(trx, read) };
     });
-    const byId = new Map(rows.map((row) => [rowId(row.key, row.locale), row]));
+    const byKey = new Map<string, NotificationTemplateRow[]>();
+    for (const row of rows) {
+      byKey.set(row.key, [...(byKey.get(row.key) ?? []), row]);
+    }
     const data: ConsoleNotificationTemplate[] = [];
     for (const key of [...TEMPLATE_KEYS].sort()) {
+      const defaults = (await this.codeDefault(key)).template.sources;
       for (const locale of locales) {
-        const row = byId.get(rowId(key, locale));
-        data.push(
-          row === undefined
-            ? templateOfDefault(key, locale, (await this.codeDefault(key)).template.sources)
-            : templateOfRow(key, row),
-        );
+        data.push(templateViewOf(key, locale, byKey.get(key) ?? [], defaults));
       }
     }
     return { data };
@@ -449,10 +521,13 @@ export class TemplateSettingsService {
   /** console.settings.templates.get. */
   async get(address: TemplateAddress): Promise<ConsoleNotificationTemplate> {
     checkedChannel(address);
-    const row = await this.tx.run((trx) => this.templates.tenantRow(trx, address.key, address.locale));
-    return row === undefined
-      ? templateOfDefault(address.key, address.locale, (await this.codeDefault(address.key)).template.sources)
-      : templateOfRow(address.key, row);
+    const rows = await this.tx.run((trx) => this.rowsServing(trx, address));
+    return templateViewOf(
+      address.key,
+      address.locale,
+      rows,
+      (await this.codeDefault(address.key)).template.sources,
+    );
   }
 
   /** console.settings.templates.put with the `If-Match` of the request (see the file header). */
@@ -539,7 +614,7 @@ export class TemplateSettingsService {
     const { key, locale } = address;
     // The default is read first: a key without one (a bug of a release) deletes nothing.
     const fallback = await this.codeDefault(key);
-    await this.tx.run(async (trx) => {
+    const rows = await this.tx.run(async (trx) => {
       const deleted = await this.templates.deleteRow(trx, key, locale);
       await this.writer.record(trx, {
         action: consoleAction("consoleResetNotificationTemplate"),
@@ -548,20 +623,32 @@ export class TemplateSettingsService {
         before: deleted === undefined ? null : auditViewOf(deleted),
         after: null,
       });
+      // What the locale shows now: its language's active row, else the default (FIX-W33-OTA).
+      return await this.rowsServing(trx, address);
     });
-    return templateOfDefault(key, locale, fallback.template.sources);
+    return templateViewOf(key, locale, rows, fallback.template.sources);
+  }
+
+  /** The tenant's rows of the address's key in its locale and in its language, any state. */
+  private async rowsServing(
+    trx: TenantTransaction,
+    address: TemplateAddress,
+  ): Promise<NotificationTemplateRow[]> {
+    return await this.templates.tenantRows(trx, templateLocales(address.locale), address.key);
   }
 
   /**
-   * The compiled template a preview renders: the template of the path (the tenant's row, active or not, else the code
-   * default) with the draft parts of `draft` in place of its own. Throws `422 TEMPLATE_INVALID`.
+   * The compiled template a preview renders: the template of the path as get shows it (the locale's row, active or
+   * not, else its language's active row, else the code default) with the draft parts of `draft` in place of its own.
+   * Throws `422 TEMPLATE_INVALID`.
    */
   private async previewTemplate(
     address: TemplateAddress,
     draft: NotificationTemplatePreviewRequest,
   ): Promise<CompiledTemplate> {
     const { key, locale } = address;
-    const row = await this.tx.run((trx) => this.templates.tenantRow(trx, key, locale));
+    const source = templateSourceOf(await this.tx.run((trx) => this.rowsServing(trx, address)), locale);
+    const row = source.kind === "default" ? undefined : source.row;
     const stored: EffectiveTemplate =
       row === undefined
         ? (await this.codeDefault(key)).template

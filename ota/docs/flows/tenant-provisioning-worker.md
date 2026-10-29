@@ -57,7 +57,7 @@ sequenceDiagram
 |---|---|---|
 | `tenant.migrate {targetVersion?}` | Same transaction as step 4 without creating the schema or seeding; applies pending files up to `targetVersion` | `tenant.migrated` / `tenant.migration_failed` |
 | `tenant.suspend {reason}` | Re-reads `tenants.status`; if still `suspended`: expires `open`/`payment_pending` checkouts and enqueues `payment.void` for their authorisations (except a checkout whose booking is `pending`: the order may exist, so its authorisation is left to the reconciliation, [OADR-0003](../adr/0003-booking-orchestration-and-supplier-timeout-recovery.md) point 10 and [OADR-0007](../adr/0007-tenant-migration-runner-and-provisioning-worker.md) point 8; the booking is checked again after the checkout row is locked, so a claim that commits meanwhile is never expired), writes `staffdeny:tenant:<tenantId>` (epoch ms, 30 days) so existing staff refreshes fail, and skips the tenant in the queue poller. Ticketing, sync, refunds and transactional e-mails continue ([PADR-0014](../../../platform/docs/adr/0014-tenant-suspension-and-resume.md)). No-op if the tenant is active again. | `tenant.suspended` |
-| `tenant.resume` | Re-reads the status; if `active`: deletes `staffdeny:tenant:<tenantId>`; schedulers pick the tenant up on their next run | `tenant.resumed` |
+| `tenant.resume` | Re-reads the status; if `active`: deletes `staffdeny:tenant:<tenantId>` (the value it read, by a compare-and-delete, so a cut-off a newer suspension writes meanwhile stays; the suspension's own clean-up after a resume deletes the same way, FIX-W33-OTA); schedulers pick the tenant up on their next run | `tenant.resumed` |
 
 ## 4. Deploy fan-out
 

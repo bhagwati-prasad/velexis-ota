@@ -8,16 +8,26 @@
 // them; they are described by a local date-time pattern, not `format: date-time` (RFC 3339, offset required), which
 // made twelve examples and real Amadeus data invalid (OBE-010).
 //
+// The Amadeus dictionaries of the console's raw answers (FIX-W33-OTA): Amadeus's `locations` and `currencies` maps
+// lack the `key` member the document's AmadeusLocationEntry and AmadeusCurrencyEntry require; the raw reads and
+// console.bookings.retrieve answer them with it (`consoleDictionariesOf`), and the answers conform.
+//
 // Every validation of the document's examples runs in a setup hook with its own budget (the lead's test timing rule;
 // FIX-W28-FOLLOWUPS: the request, parameter and schema examples took up to 2.5 s inside their tests while every
 // package's tests ran at once); the tests assert on each outcome the hooks recorded.
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { otaOperations, type OtaOperationId } from "@velexis/api-types/operations";
 import { expectResponseToMatch } from "@velexis/testing";
 import { beforeAll, describe, expect, it } from "vitest";
+import { consoleDictionariesOf } from "../../src/bookings/bookings.mapper";
 import {
   loadOpenApiDocument,
   type OpenApiDocument,
 } from "../../src/common/http/openapi-validation.interceptor";
+import { APP_DIR } from "../../src/config";
+import { consoleOrderReplyOf } from "../../src/console/console-booking-actions.service";
+import { rawReplyOf } from "../../src/console/raw-amadeus.service";
 
 type JsonObject = Record<string, unknown>;
 
@@ -379,5 +389,75 @@ describe("Amadeus local date-times", () => {
     ]) {
       expect([value, validate(value)]).toEqual([value, false]);
     }
+  });
+});
+
+/** The body of one documented response example (the first of `operationId`'s `status` answer), as a fresh copy. */
+function exampleBody(operationId: string, status: number): JsonObject {
+  const response = document.resolve(
+    (rawOperations().get(operationId)?.["responses"] as JsonObject)[String(status)],
+  );
+  const media = ((response as JsonObject)["content"] as JsonObject)["application/json"] as JsonObject;
+  const [example] = examplesOf(media, operationId);
+  if (example === undefined || !isObject(example.value)) {
+    throw new Error(`${operationId} ${status} has no example`);
+  }
+  return structuredClone(example.value);
+}
+
+/** What `expectResponseToMatch` said of a body: `"ok"`, or its message. */
+function verdictOf(operationId: OtaOperationId, status: number, body: unknown): string {
+  try {
+    expectResponseToMatch(operationId, { status, body });
+    return "ok";
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
+  }
+}
+
+describe("the Amadeus dictionaries of the console's raw answers (FIX-W33-OTA)", () => {
+  /** The verdicts, computed once in the hook (each compiles the operation's response validator). */
+  let verdicts: Record<string, string>;
+
+  // The dictionaries of the stub's Flight Offers Search answer, as Amadeus sends them: `locations` and `currencies`
+  // are maps by code without the `key` the document's AmadeusLocationEntry and AmadeusCurrencyEntry require.
+  beforeAll(() => {
+    const amadeus = JSON.parse(
+      readFileSync(
+        join(APP_DIR, "../../tools/amadeus-stub/fixtures/flight-offers-search/success.json"),
+        "utf8",
+      ),
+    ) as { body: JsonObject };
+    const search = exampleBody("consoleAmadeusSearchFlightOffers", 200);
+    const retrieve = exampleBody("consoleRetrieveFlightOrder", 200);
+    const verbatim = { ...(search["amadeus"] as JsonObject), dictionaries: amadeus.body["dictionaries"] };
+    verdicts = {
+      verbatim: verdictOf("consoleAmadeusSearchFlightOffers", 200, { ...search, amadeus: verbatim }),
+      raw: verdictOf("consoleAmadeusSearchFlightOffers", 200, {
+        ...search,
+        amadeus: rawReplyOf(amadeus.body),
+      }),
+      retrieve: verdictOf("consoleRetrieveFlightOrder", 200, {
+        ...retrieve,
+        amadeus: consoleOrderReplyOf({
+          ...(retrieve["amadeus"] as JsonObject),
+          dictionaries: amadeus.body["dictionaries"],
+        }),
+      }),
+      keys: JSON.stringify(consoleDictionariesOf(amadeus.body["dictionaries"])),
+    };
+  }, 60_000);
+
+  it("[FIX-W33-OTA] [OBE-067] [OBE-061] answers locations and currencies with the key their schemas require, and conforms", () => {
+    // Amadeus's maps as they are do not: the reason the dictionaries were left out before.
+    expect(verdicts["verbatim"]).toMatch(/key/);
+    expect(verdicts["raw"]).toBe("ok");
+    expect(verdicts["retrieve"]).toBe("ok");
+    const dictionaries = JSON.parse(verdicts["keys"] ?? "null") as JsonObject;
+    expect(dictionaries["locations"]).toMatchObject({
+      key: "MAD",
+      MAD: { cityCode: "MAD", countryCode: "ES" },
+    });
+    expect(dictionaries["currencies"]).toEqual({ key: "EUR", EUR: "EURO" });
   });
 });

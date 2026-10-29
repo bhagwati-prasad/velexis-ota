@@ -421,6 +421,53 @@ export function dictionariesOf(value: unknown): NonNullable<BookingAmadeus["dict
   return Object.keys(kept).length === 0 ? null : (kept as NonNullable<BookingAmadeus["dictionaries"]>);
 }
 
+/** A location of Amadeus's `locations` dictionary (AmadeusLocationValue): its codes, strings when present. */
+function isLocationValue(value: unknown): value is JsonObject {
+  return (
+    isRecord(value) &&
+    ["cityCode", "countryCode"].every((name) => value[name] === undefined || typeof value[name] === "string")
+  );
+}
+
+/**
+ * A dictionary by code (`locations`, `currencies`) as the document's AmadeusLocationEntry and AmadeusCurrencyEntry
+ * describe it: Amadeus's entries whose values are `valid`, and the member `key` those schemas require, which
+ * Amadeus's maps never have, from the dictionary's own first code in Amadeus's order (`MAD`, `EUR`). `undefined`
+ * when no entry is left.
+ */
+function keyedDictionaryOf(map: unknown, valid: (value: unknown) => boolean): JsonObject | undefined {
+  if (!isRecord(map)) {
+    return undefined;
+  }
+  const entries = Object.entries(map).filter(([code, value]) => code !== "key" && valid(value));
+  const first = entries[0];
+  return first === undefined ? undefined : { key: first[0], ...Object.fromEntries(entries) };
+}
+
+/**
+ * The Amadeus dictionaries as the console's raw answers carry them: the raw reads (console.amadeus.*) and
+ * console.bookings.retrieve (FIX-W33-OTA, lead decision (1j) of 2026-10-29). `carriers` and `aircraft` as
+ * `dictionariesOf` keeps them, and `locations` and `currencies` too, each with the `key` member the document's
+ * AmadeusLocationEntry and AmadeusCurrencyEntry require (`keyedDictionaryOf`), so both conform without a contract
+ * change. `null` when nothing is left. The other booking answers keep `dictionariesOf`: their itineraries name the
+ * airports already.
+ */
+export function consoleDictionariesOf(value: unknown): NonNullable<BookingAmadeus["dictionaries"]> | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+  const kept: JsonObject = { ...dictionariesOf(value) };
+  const locations = keyedDictionaryOf(value["locations"], isLocationValue);
+  if (locations !== undefined) {
+    kept["locations"] = locations;
+  }
+  const currencies = keyedDictionaryOf(value["currencies"], (name) => typeof name === "string");
+  if (currencies !== undefined) {
+    kept["currencies"] = currencies;
+  }
+  return Object.keys(kept).length === 0 ? null : (kept as NonNullable<BookingAmadeus["dictionaries"]>);
+}
+
 // ---- Fare rules ----------------------------------------------------------------------------------------------------
 
 /** One offer's Amadeus `fareRules` as `bookings.order_included.fareRules` keeps them (net amounts included). */

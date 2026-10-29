@@ -405,7 +405,7 @@ export { createConsoleApi } from "./namespaces/console.js";
 /** Body of `ConsoleSettingsPagesApi.update`: any subset of `kind`, `title`, `bodyMarkdown`, `isPublished`, `showInFooter`, `sortOrder`. @typedef {import("./types.js").Schemas["StorefrontPageUpdate"]} StorefrontPageUpdate */
 /** An uploaded storefront image (`ast_…`, `storefront_assets`) with its public `url`. @typedef {import("./types.js").Schemas["StorefrontAsset"]} StorefrontAsset */
 /** What an image is for: `logo`, `logo_dark`, `logo_square`, `favicon`, `og_image`, `page_image`. @typedef {import("./types.js").Schemas["StorefrontAssetKind"]} StorefrontAssetKind */
-/** The effective e-mail template of a key, channel and locale (the OTA's own or the code default). @typedef {import("./types.js").Schemas["NotificationTemplate"]} NotificationTemplate */
+/** The effective e-mail template of a key, channel and locale (the locale's own row, its language's that its e-mails use, or the code default). @typedef {import("./types.js").Schemas["NotificationTemplate"]} NotificationTemplate */
 /** Result of `ConsoleSettingsTemplatesApi.list`: every effective template (`data`, not paginated). @typedef {import("./types.js").Schemas["NotificationTemplateList"]} NotificationTemplateList */
 /** A notification template key of the MVP (`auth.verify_email`, `booking.confirmed`, `staff.manual_review` …). @typedef {import("./types.js").Schemas["NotificationTemplateKey"]} NotificationTemplateKey */
 /** Delivery channel of a template: `email` in the MVP. @typedef {import("./types.js").Schemas["NotificationChannel"]} NotificationChannel */

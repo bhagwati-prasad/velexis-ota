@@ -1316,9 +1316,15 @@ describe("notification templates (api-changes part 2 §2.6; OADR-0013)", () => {
       "bodyText",
       "variables",
       "customised",
+      // FIX-W33-OTA (lead decision (1k) of 2026-10-29): the locale of the language's row a locale without one shows.
+      "inheritedFrom",
       "isActive",
       "version",
       "updatedAt",
+    ]);
+    expect(objectAt(template, "properties", "inheritedFrom")["anyOf"]).toEqual([
+      { $ref: "#/components/schemas/LocaleCode" },
+      { type: "null" },
     ]);
     expect(objectAt(template, "properties", "variables", "items")).toEqual({
       $ref: "#/components/schemas/NotificationTemplateVariable",

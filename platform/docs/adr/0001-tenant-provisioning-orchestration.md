@@ -3,7 +3,7 @@
 **Status:** Accepted
 **Date:** 2026-10-12
 **Deciders:** Platform tech lead. Decided during planning; revisit when provisioning needs more steps on the OTA side than one transaction, or when more than one platform worker process runs.
-**Revisions:** 2026-10-12 (planning review): the OTA worker provisions as `velexis_provisioner` ([ADR-0004](../../../docs/mvp/adr/0004-postgresql-schema-per-tenant.md) revision); point 7 makes the effect of a failure depend on the job kind, so only a `provision` job can set a tenant `failed`.
+**Revisions:** 2026-10-12 (planning review): the OTA worker provisions as `velexis_provisioner` ([ADR-0004](../../../docs/mvp/adr/0004-postgresql-schema-per-tenant.md) revision); point 7 makes the effect of a failure depend on the job kind, so only a `provision` job can set a tenant `failed`. 2026-10-29 (lead decision (1m), recording FIX-W33-OTA): a dated note under point 7, the OTA worker handles `tenant.suspend` and `tenant.resume` since OBE-074, so the interim case of point 7 (no OTA consumer yet) is over. Docs only.
 
 ## Context
 
@@ -32,6 +32,8 @@
    | `suspend`, `resume` | None; the status switch already took effect ([PADR-0014](0014-tenant-suspension-and-resume.md)) | `ops.alert` |
 
    Only a `provision` job ever writes `tenants.status = 'failed'`, and only from `provisioning`, so a lost or rejected `tenant.suspend` can never turn a suspended tenant into a failed one. This matters until the OTA consumer for `tenant.suspend` and `tenant.resume` exists: the OTA worker rejects unknown job names as unrecoverable, and the reconciler then counts the job as failed. Retries by owners (portal) or admins create a **new** job row; failed rows stay as history. A failed tenant's schema is never dropped automatically (db README §3).
+
+   **2026-10-29 (lead decision (1m), FIX-W33-OTA): the OTA consumer exists.** Since OBE-074 the OTA worker handles `tenant.suspend` and `tenant.resume` on `ota-tenant-ops` ([OADR-0007](../../../ota/docs/adr/0007-tenant-migration-runner-and-provisioning-worker.md) point 8, `ota/backend/src/provisioning/housekeeping.service.ts`): it re-reads the tenant, expires the open checkouts and writes the staff cut-off on a suspension, removes the cut-off on a resume, and answers `tenant.suspended` and `tenant.resumed`; a message that no longer matches the tenant's status is a no-op it still answers ([PADR-0014](0014-tenant-suspension-and-resume.md) item 7). Such a job is no longer rejected as an unknown job name. It still ends `failed` with an `ops.alert` when the OTA worker is down through every attempt or its housekeeping keeps failing, and the table above still holds: the tenant keeps its status, since only a `provision` job writes `failed`.
 8. **Other job kinds** reuse the same machinery: `migrate` (admin), `suspend` and `resume` ([PADR-0014](0014-tenant-suspension-and-resume.md)). `export` and `delete` stay post-MVP.
 9. **Message contracts** live in `@velexis/api-types/jobs` with JSON Schemas: every message has `v`, `jobId`, `tenantId`, `requestedAt`, `requestId`; payloads carry ids only ([`../architecture.md`](../architecture.md) §6.1).
 

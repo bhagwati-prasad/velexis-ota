@@ -31,6 +31,7 @@ vi.mock("next/navigation", () => ({ redirect: vi.fn(fakeRedirect) }));
 import { createRefreshDedup } from "./refresh-dedup";
 import {
   ENVIRONMENT_COOKIE,
+  PAGE_PATH_HEADER,
   STAFF_ACCESS_TOKEN_COOKIE,
   STAFF_REFRESH_TOKEN_COOKIE,
   TENANT_COOKIE,
@@ -256,6 +257,35 @@ describe("SDK clients", () => {
     nextHeaders.cookies.mockResolvedValue(new CookieJar({ [TENANT_COOKIE]: TENANT_ID }));
     expect(await redirectOf(() => getConsole())).toBe(`${TEST_PORTAL_URL}/console?tenant=${TENANT_ID}`);
     expect(api.requests).toEqual([]);
+  });
+
+  it("[FIX-W33-OTA] [OAD-002] sends a server component to /auth/refresh with the page's path as ?next=, a same-origin path only", async () => {
+    const page = "/bookings?status=confirmed&q=VX7K2Q";
+    const withPage = (value: string) =>
+      nextHeaders.headers.mockResolvedValue(
+        new Headers({ "X-Forwarded-For": STAFF_IP, "User-Agent": BROWSER_AGENT, [PAGE_PATH_HEADER]: value }),
+      );
+    const back = `/auth/refresh?${new URLSearchParams({ next: page }).toString()}`;
+
+    // A refresh token only (the middleware could not refresh).
+    withPage(page);
+    const jar = signedIn(900);
+    jar.entries.delete(STAFF_ACCESS_TOKEN_COOKIE);
+    expect(await redirectOf(() => getConsole())).toBe(back);
+    // An access token the API refuses as expired.
+    signedIn(900);
+    api.on("GET /v1/console/auth/me", () => apiError("TOKEN_EXPIRED", 401));
+    expect(await redirectOf(() => getStaff())).toBe(back);
+    // Anything but a path on the admin is dropped, as /auth/refresh drops it.
+    for (const unsafe of [
+      "https://evil.example/",
+      "//evil.example/bookings",
+      "/\\evil.example",
+      "/a/..//evil.example",
+    ]) {
+      withPage(unsafe);
+      expect(await redirectOf(() => getStaff()), unsafe).toBe("/auth/refresh");
+    }
   });
 
   it("getStaff() is console.auth.me, and sends an expired or ended session away", async () => {

@@ -1326,8 +1326,10 @@ function createConsoleStorefrontAssetsApi(core) {
 function createConsoleNotificationTemplatesApi(core) {
   return {
     /**
-     * Lists the effective template of every key and supported locale: the OTA's own (`customised: true`) or the code
-     * default (`customised: false`), each with the variables its key allows; by key, then locale, not paginated.
+     * Lists the effective template of every key and supported locale: the locale's own row, else the active row of its
+     * language that its e-mails use (`inheritedFrom`, `version: null`), else the code default; `customised` is false
+     * for the code default and for a row seeded from it until the OTA edits it. Each comes with the variables its key
+     * allows; by key, then locale, not paginated.
      * `GET /v1/console/settings/notification-templates`; `settings:read`.
      * @param {ConsoleListNotificationTemplatesParams} [params]
      * @param {RequestOptions} [options]
@@ -1341,8 +1343,9 @@ function createConsoleNotificationTemplatesApi(core) {
     list: (params, options) => core.call(op.console_settings_templates_list, params, live(options)),
 
     /**
-     * Gets the effective template of one key, channel (`email`) and locale; a customised one has a `version`, the
-     * `ifMatch` of `put` (the code default has `version: null`).
+     * Gets the effective template of one key, channel (`email`) and locale, as `list` shows it; the locale's own row
+     * has a `version`, the `ifMatch` of `put`, whether `customised` or seeded from the code default (an inherited
+     * template and the code default have `version: null`).
      * `GET /v1/console/settings/notification-templates/{templateKey}/{channel}/{locale}`; `settings:read`.
      * @param {ConsoleNotificationTemplateRefParams} params
      * @param {RequestOptions} [options]
@@ -1357,8 +1360,9 @@ function createConsoleNotificationTemplatesApi(core) {
 
     /**
      * Creates or replaces the OTA's template of one key, channel and locale (`subject`, `bodyHtml`, `bodyText`,
-     * `isActive`). Pass `ifMatch` (its `version` or ETag) when the OTA already has its own template and leave it out
-     * when it has none; a malformed `ifMatch` is a `TypeError`. The server compiles the template in strict mode
+     * `isActive`): the row of exactly that locale, never its language's. Pass `ifMatch` (its `version` or ETag) when
+     * the locale has its own row (a `version` that is not null, a seeded row included) and leave it out when it has
+     * none; a malformed `ifMatch` is a `TypeError`. The server compiles the template in strict mode
      * against the key's variables. `PUT /v1/console/settings/notification-templates/{templateKey}/{channel}/{locale}`,
      * with `If-Match` when given (safe to repeat); `settings:write`.
      * @param {ConsolePutNotificationTemplateParams} params
@@ -1392,8 +1396,8 @@ function createConsoleNotificationTemplatesApi(core) {
     preview: (params, options) => core.call(op.console_settings_templates_preview, params, live(options)),
 
     /**
-     * Deletes the OTA's template of one key, channel and locale, so the code default applies again, and resolves with
-     * that default (`customised: false`). Safe to repeat.
+     * Deletes the OTA's template of one key, channel and locale, and resolves with what the locale shows then: the
+     * active row of its language (`inheritedFrom`), else the code default (`customised: false`). Safe to repeat.
      * `POST /v1/console/settings/notification-templates/{templateKey}/{channel}/{locale}/reset`; `settings:write`.
      * @param {ConsoleNotificationTemplateRefParams} params
      * @param {RequestOptions} [options]

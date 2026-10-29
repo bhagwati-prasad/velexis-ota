@@ -137,9 +137,13 @@ describe("office isolation of the order reads [OF-09 AC3]", () => {
     });
     expect(complete).toMatchObject({
       included: { bags: {} },
-      dictionaries: { carriers: DICTIONARIES.carriers, aircraft: DICTIONARIES.aircraft },
+      dictionaries: {
+        carriers: DICTIONARIES.carriers,
+        aircraft: DICTIONARIES.aircraft,
+        locations: { key: "MAD", ...DICTIONARIES.locations },
+        currencies: { key: "EUR", ...DICTIONARIES.currencies },
+      },
     });
-    expect(complete.dictionaries).not.toHaveProperty("locations");
     // No card number reaches the console, whatever the order holds (OADR-0018 point 8).
     expect(JSON.stringify(complete)).not.toContain("4111111111111111");
     expect(JSON.stringify(complete)).not.toContain("TESTA SAMPLE");
@@ -178,19 +182,44 @@ describe("office isolation of Queue List [OF-09 AC3]", () => {
 });
 
 describe("the answers of the raw reads", () => {
-  it("answers Amadeus's body verbatim, its dictionaries reduced to carriers and aircraft", () => {
+  it("[FIX-W33-OTA] [OBE-067] answers Amadeus's body verbatim, every dictionary with the key its schema requires", () => {
     const offers = [
       { type: "flight-offer", id: "1", price: { currency: "EUR", total: "98.47", grandTotal: "98.47" } },
     ];
+    // `locations` and `currencies` get the `key` of AmadeusLocationEntry and AmadeusCurrencyEntry from their own first
+    // code in Amadeus's order, and keep every code Amadeus sent.
     expect(rawReplyOf({ meta: { count: 1 }, data: offers, dictionaries: DICTIONARIES })).toEqual({
       meta: { count: 1 },
       data: offers,
-      dictionaries: { carriers: DICTIONARIES.carriers, aircraft: DICTIONARIES.aircraft },
+      dictionaries: {
+        carriers: DICTIONARIES.carriers,
+        aircraft: DICTIONARIES.aircraft,
+        locations: {
+          key: "MAD",
+          MAD: { cityCode: "MAD", countryCode: "ES" },
+          ORY: { cityCode: "PAR", countryCode: "FR" },
+        },
+        currencies: { key: "EUR", EUR: "EURO" },
+      },
     });
     expect(
       rawReplyOf({ data: { flightOffers: offers }, dictionaries: { locations: DICTIONARIES.locations } }),
     ).toEqual({
       data: { flightOffers: offers },
+      dictionaries: { locations: { key: "MAD", ...DICTIONARIES.locations } },
+    });
+    // Entries of another shape are left out, and an empty dictionary with them; nothing left, no dictionaries.
+    expect(
+      rawReplyOf({
+        data: [],
+        dictionaries: {
+          locations: { MAD: "Madrid", CDG: { cityCode: 7 }, ORY: { cityCode: "PAR" } },
+          currencies: { EUR: { name: "EURO" } },
+        },
+      }),
+    ).toEqual({ data: [], dictionaries: { locations: { key: "ORY", ORY: { cityCode: "PAR" } } } });
+    expect(rawReplyOf({ data: [], dictionaries: { locations: {}, currencies: { EUR: 1 } } })).toEqual({
+      data: [],
     });
   });
 

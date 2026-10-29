@@ -153,7 +153,7 @@ import {
 import { VELEXIS_REMARK_PREFIX, velexisRemarkText } from "../bookings/booking-reference";
 import {
   bookingEtagOf,
-  dictionariesOf,
+  consoleDictionariesOf,
   offerFareRulesOf,
   type FareRuleType,
   type StoredFareRules,
@@ -945,9 +945,9 @@ export function keptOrderDataOf(data: JsonObject): JsonObject {
 
 /**
  * The Amadeus answer as console.bookings.retrieve returns it: verbatim, except that its forms of payment pass the
- * shared redactor (no card number, OADR-0018 point 8) and its dictionaries keep `carriers` and `aircraft` only, as
- * every booking answer does (`dictionariesOf`: the document's AmadeusLocationEntry and AmadeusCurrencyEntry require a
- * member that Amadeus's maps by code never have).
+ * shared redactor (no card number, OADR-0018 point 8) and its dictionaries go through `consoleDictionariesOf`:
+ * `carriers` and `aircraft`, and since FIX-W33-OTA `locations` and `currencies` with the `key` member the document's
+ * AmadeusLocationEntry and AmadeusCurrencyEntry require (Amadeus's maps by code never have it).
  */
 export function consoleOrderReplyOf(body: JsonObject): JsonObject {
   const { dictionaries: raw, ...rest } = body;
@@ -956,7 +956,7 @@ export function consoleOrderReplyOf(body: JsonObject): JsonObject {
   if (isRecord(data) && data["formOfPayments"] !== undefined) {
     reply["data"] = { ...data, formOfPayments: redactPayload(data["formOfPayments"]) };
   }
-  const dictionaries = dictionariesOf(raw);
+  const dictionaries = consoleDictionariesOf(raw);
   if (dictionaries !== null) {
     reply["dictionaries"] = dictionaries;
   }

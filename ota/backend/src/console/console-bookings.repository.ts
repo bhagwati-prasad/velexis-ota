@@ -218,6 +218,9 @@ export const CANCELLATION_REQUESTED_EVENT = "booking.cancellation_requested";
 /** The event type of a staff note (console.bookings.addNote, OBE-062): the text is `data.text`. */
 export const STAFF_NOTE_EVENT = "staff.note";
 
+/** `customers.status` of a deleted account, whose kept names are never shown as an event's actor (FIX-W33-OTA). */
+const DELETED_CUSTOMER_STATUS = "deleted";
+
 /** How many events, Amadeus calls and staff actions the detail shows (the document's limits). */
 export const DETAIL_LIMITS = Object.freeze({
   events: 100,
@@ -575,7 +578,13 @@ export class ConsoleBookingsRepository {
         "e.visible_to_customer as visibleToCustomer",
         "e.supplier_request_id as supplierRequestId",
         "e.created_at as createdAt",
-        sql<string | null>`nullif(trim(concat_ws(' ', c.first_name, c.last_name)), '')`.as("actorName"),
+        // A deleted account keeps its names until the erasure job, but they are never shown, on the timeline either
+        // (FIX-W33-OTA, lead decision (1d) of 2026-10-29; ConsoleCustomerRef's rule of FIX-W32-OTA): `null`, which
+        // the contract's ConsoleActor.name allows.
+        sql<
+          string | null
+        >`CASE WHEN c.status = ${DELETED_CUSTOMER_STATUS} OR c.deleted_at IS NOT NULL THEN NULL
+          ELSE nullif(trim(concat_ws(' ', c.first_name, c.last_name)), '') END`.as("actorName"),
       ])
       .where("e.booking_id", "=", bookingId);
     if (page.types !== undefined) {

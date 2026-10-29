@@ -7,35 +7,27 @@
 // storage blocked throws on `window.sessionStorage` itself, and a full or private-mode storage throws on `setItem`.
 // Without storage the page simply asks the API. The entry holds only the public configuration (no secrets, no
 // session data). Errors (`TENANT_SUSPENDED`, `HOST_NOT_ALLOWED`, …) are never cached: boot() renders their state.
+// Since FIX-W33-OTA (OADR-0015 point 7 as revised on 2026-10-29) any API call that answers `403 TENANT_SUSPENDED`
+// drops the cached entry too (lib/client.js), so an open tab that still holds it asks storefront.get again on its next
+// page and shows the unavailable state instead of the cached storefront.
 
 import { client as storefrontClient } from "./client.js";
+import { CONFIG_STORAGE_KEY, clearCachedConfig, pageStorage } from "./config-cache.js";
 
-/** The sessionStorage key of the cached configuration. */
-export const CONFIG_STORAGE_KEY = "vx.storefront.config";
+export { CONFIG_STORAGE_KEY, clearCachedConfig };
+
 /** How long a cached configuration is used: 5 minutes. */
 export const CONFIG_TTL_MS = 5 * 60 * 1000;
 
 /** @typedef {import("@velexis/ota-sdk").VelexisClient} VelexisClient */
 /** @typedef {Awaited<ReturnType<VelexisClient["storefront"]["get"]>>} StorefrontConfig */
-/** @typedef {Pick<Storage, "getItem" | "setItem" | "removeItem">} ConfigStorage */
+/** @typedef {import("./config-cache.js").ConfigStorage} ConfigStorage */
 
 /**
  * @param {unknown} value
  * @returns {value is Record<string, unknown>}
  */
 const isRecord = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
-
-/**
- * The page's sessionStorage, or `null` when the browser refuses access to it.
- * @returns {ConfigStorage | null}
- */
-function pageStorage() {
-  try {
-    return globalThis.sessionStorage ?? null;
-  } catch {
-    return null;
-  }
-}
 
 /**
  * The cached configuration when it is younger than 5 minutes, else `null` (and a stale or unreadable entry removed).
@@ -107,16 +99,4 @@ export async function loadConfig({
   const config = await client.storefront.get();
   writeCached(storage, config, now());
   return config;
-}
-
-/**
- * Forgets the cached configuration (for example after a "Retry" on a full-page state).
- * @param {ConfigStorage | null} [storage]
- */
-export function clearCachedConfig(storage = pageStorage()) {
-  try {
-    storage?.removeItem(CONFIG_STORAGE_KEY);
-  } catch {
-    // Storage refused: there is nothing to forget.
-  }
 }

@@ -7,7 +7,10 @@
 // **Quote** (`quote`). The booking's order is read again first, with its refund fare rules: the refresh of
 // CustomerBookingsService (Flight Order Management GET `fareRules=refunds`, throttled to one per booking and minute
 // with bookings.get and getFareRules; a throttled call uses the stored order), which records the snapshot and the
-// tickets. Then, read in one transaction: the mode (cancellation-mode.ts), the payment the money step would act on
+// tickets. Then, read in one transaction: the mode (cancellation-mode.ts; `not_allowed` with `pending` while another
+// cancellation is undecided, waits for the staff or has its DELETE in flight, the refusal of step 1 below:
+// cancellation-state.ts `cancellationPendingOf` and `cancellationClaimPendingOf`, the fresh claim since FIX-W33-OTA, lead
+// decision (1e) of 2026-10-29, so the quote never offers what the cancellation refuses), the payment the money step would act on
 // (`moneyOf`: a Stripe payment `captured`/`partially_refunded`, else one `authorized`, else an airline-card payment),
 // the booking's non-refundable fees (its priced offer's pricing snapshot, `keptFeesOf`; every OTA fee of the booking
 // when the snapshot cannot be read), the `cancellation` fees of the markup and fee engine on the booking total
@@ -286,8 +289,9 @@ import {
 } from "./cancellation-mode";
 import {
   CANCELLATION_EVENTS,
-  cancellationClaimFresh,
+  cancellationClaimPendingOf,
   cancellationEventsOf,
+  cancellationPendingOf,
   cancellationStateOf,
   cancelledEventOf,
   flagOf,
@@ -921,19 +925,6 @@ export class CancellationRepository {
       .where("id", "=", bookingId)
       .where("cancellation_claimed_at", "=", claimedAt)
       .execute();
-  }
-
-  /**
-   * `bookings.cancellation_claimed_at` of the booking (a cancellation's claim whose outcome is not recorded yet), or
-   * `null`; read in a statement after the caller's lock in T1, so it holds what another cancellation's T1 committed.
-   */
-  async cancellationClaimedAt(trx: TenantTransaction, bookingId: string): Promise<Date | null> {
-    const row = await trx
-      .selectFrom("bookings")
-      .select("cancellation_claimed_at as claimedAt")
-      .where("id", "=", bookingId)
-      .executeTakeFirst();
-    return row?.claimedAt ?? null;
   }
 }
 
@@ -2144,9 +2135,12 @@ export class CancellationService {
       now,
     });
     const state = cancellationStateOf(await this.repository.cancellationEvents(trx, bookingId));
-    // A cancellation that is undecided or waits for the staff allows no second one.
+    // A cancellation that is undecided, waits for the staff or has its DELETE in flight (another cancellation's fresh
+    // claim, the check bookings.cancel refuses with: FIX-W33-OTA, lead decision (1e) of 2026-10-29) allows no second
+    // one.
+    const claimPending = await cancellationClaimPendingOf(trx, bookingId, now);
     const mode =
-      computed.mode !== "not_allowed" && (state.kind === "undecided" || state.kind === "requested")
+      computed.mode !== "not_allowed" && cancellationPendingOf({ state, claimPending })
         ? { mode: "not_allowed" as const, notAllowedReason: "pending" as const, voidDeadlineAt: null }
         : computed;
     const rows: PaymentRow[] = [];
@@ -2468,8 +2462,8 @@ export class CancellationService {
    * (a request that stopped mid-DELETE) holds nothing back, as for the ticketing claims.
    */
   private async refuseWhileClaimed(trx: TenantTransaction, bookingId: string): Promise<void> {
-    const claimedAt = await this.repository.cancellationClaimedAt(trx, bookingId);
-    if (cancellationClaimFresh(claimedAt, this.clock.now())) {
+    // The function bookings.quoteCancellation and canCancel show it with (FIX-W33-OTA).
+    if (await cancellationClaimPendingOf(trx, bookingId, this.clock.now())) {
       throw cancellationPending();
     }
   }

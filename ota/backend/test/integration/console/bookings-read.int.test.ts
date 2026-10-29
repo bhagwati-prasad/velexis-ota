@@ -1145,6 +1145,85 @@ describe("console.bookings.list and get of a deleted customer's booking (FIX-W32
       }
     }
   });
+
+  it("[FIX-W33-OTA] [OBE-061] never shows a deleted customer's name as an actor of the timeline, while another customer's stays", async () => {
+    const agent = await staffSession(alphaId, "agent");
+    // Names found nowhere else in the answer (the traveller is TESTA SAMPLE).
+    const kept = { firstName: "Ragnhild", lastName: "Oksvold" };
+    const other = { firstName: "Sigrun", lastName: "Haldorsen" };
+    const [deletedId, otherId] = [newId("cus"), newId("cus")];
+    const email = `${deletedId.toLowerCase()}@example.com`;
+    await inTenant("tenant_alpha", (trx) =>
+      trx
+        .insertInto("customers")
+        .values([
+          {
+            id: deletedId,
+            email,
+            email_verified_at: new Date(),
+            first_name: kept.firstName,
+            last_name: kept.lastName,
+          },
+          {
+            id: otherId,
+            email: `${otherId.toLowerCase()}@example.com`,
+            email_verified_at: new Date(),
+            first_name: other.firstName,
+            last_name: other.lastName,
+          },
+        ])
+        .execute(),
+    );
+    const bookingId = await seedBooking({ customerId: deletedId });
+    // Events the customer caused before deleting the account, and one of another customer (a guest booking claimed
+    // later, say): the timeline names the actor from the customers row.
+    const byDeleted = await seedEvent(bookingId, {
+      type: "booking.contacts_updated",
+      actorType: "customer",
+      actorId: deletedId,
+      visible: true,
+      agoMs: 2 * HOUR,
+    });
+    const byOther = await seedEvent(bookingId, {
+      type: "booking.cancellation_requested",
+      actorType: "customer",
+      actorId: otherId,
+      visible: true,
+      agoMs: HOUR,
+    });
+    await inTenant("tenant_alpha", (trx) =>
+      new AccountRepository().markDeleted(trx, {
+        customerId: deletedId,
+        placeholder: deletedAddress(email, randomBytes(DELETED_ADDRESS_KEY_BYTES)),
+        now: new Date(),
+      }),
+    );
+
+    const got = await agent.get(`/v1/console/bookings/${bookingId}`);
+
+    expect(answer(got)).toEqual([200, undefined]);
+    expectResponseToMatch("consoleGetBooking", got);
+    const actors = new Map(
+      (got.body.events as JsonObject[]).map((event) => [event["id"], event["actor"] as JsonObject]),
+    );
+    expect(actors.get(byDeleted)).toEqual({
+      type: "customer",
+      id: deletedId,
+      name: null,
+      email: null,
+      role: null,
+    });
+    expect(actors.get(byOther)).toEqual({
+      type: "customer",
+      id: otherId,
+      name: `${other.firstName} ${other.lastName}`,
+      email: null,
+      role: null,
+    });
+    for (const value of [kept.firstName, kept.lastName, email]) {
+      expect(got.text).not.toContain(value);
+    }
+  });
 });
 
 describe("console.bookings.get", () => {

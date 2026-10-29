@@ -148,9 +148,30 @@ export function cancellationStateOf(events: readonly CancellationEventRow[]): Ca
   return { kind: "none" };
 }
 
-/** Whether a cancellation of the live booking is undecided or waits for the staff: no second one until it is settled. */
-export function cancellationPendingOf(state: CancellationState): boolean {
-  return state.kind === "undecided" || state.kind === "requested";
+/**
+ * Whether a cancellation of the live booking is undecided, waits for the staff, or has its Flight Order Management
+ * DELETE in flight (`claimPending`: another cancellation's fresh claim, `cancellationClaimPendingOf`): no second one
+ * until it is settled. bookings.cancel refuses each with `409 BOOKING_NOT_MODIFIABLE`, `details.reason = "pending"`,
+ * and bookings.quoteCancellation and canCancel show the same refusal (FIX-W33-OTA, lead decision (1e) of 2026-10-29),
+ * so no screen offers a cancellation that the cancellation refuses.
+ */
+export function cancellationPendingOf(facts: {
+  readonly state: CancellationState;
+  readonly claimPending: boolean;
+}): boolean {
+  return facts.state.kind === "undecided" || facts.state.kind === "requested" || facts.claimPending;
+}
+
+/**
+ * The same for a staff cancellation (console.bookings.cancel `staffCheck`, OBE-063): an undecided cancellation or
+ * another cancellation's fresh claim; a customer's request waiting for the staff is what the staff finish. The console's
+ * canCancel shows it (FIX-W33-OTA).
+ */
+export function staffCancellationPendingOf(facts: {
+  readonly state: CancellationState;
+  readonly claimPending: boolean;
+}): boolean {
+  return facts.state.kind === "undecided" || facts.claimPending;
 }
 
 // ---- The ticketing claims and an undecided cancellation (FIX-W31-OTA) ---------------------------------------------
@@ -193,6 +214,37 @@ export function cancellationHoldOf(facts: CancellationHoldFacts, now: Date): Can
   return cancellationClaimFresh(facts.cancellationClaimedAt, now) ? "claimed" : undefined;
 }
 
+/**
+ * `bookings.cancellation_claimed_at` of the booking (a cancellation's claim whose outcome is not recorded yet), or
+ * `null`; read in a statement of its own, so after the caller's lock in T1 it holds what another cancellation's T1
+ * committed.
+ */
+export async function cancellationClaimedAtOf(
+  trx: TenantTransaction,
+  bookingId: string,
+): Promise<Date | null> {
+  const row = await trx
+    .selectFrom("bookings")
+    .select("cancellation_claimed_at as claimedAt")
+    .where("id", "=", bookingId)
+    .executeTakeFirst();
+  return row?.claimedAt ?? null;
+}
+
+/**
+ * Whether another cancellation's claim of the booking is fresh at `now` (its DELETE in flight, its outcome not recorded:
+ * FIX-W32-OTA, lead decision (1b) of 2026-10-28). The one check of bookings.cancel and console.bookings.cancel
+ * (cancellation.service.ts `refuseWhileClaimed`), of bookings.quoteCancellation and of the facts canCancel is built
+ * from (`cancellationFactsOf`; FIX-W33-OTA, lead decision (1e) of 2026-10-29).
+ */
+export async function cancellationClaimPendingOf(
+  trx: TenantTransaction,
+  bookingId: string,
+  now: Date,
+): Promise<boolean> {
+  return cancellationClaimFresh(await cancellationClaimedAtOf(trx, bookingId), now);
+}
+
 /** Whether the booking's cancellation state is `undecided` (its events read in `trx`, after the booking's lock). */
 export async function cancellationUndecidedOf(trx: TenantTransaction, bookingId: string): Promise<boolean> {
   return cancellationStateOf(await cancellationEventsOf(trx, bookingId)).kind === "undecided";
@@ -207,13 +259,8 @@ export async function cancellationHoldFactsOf(
   trx: TenantTransaction,
   bookingId: string,
 ): Promise<CancellationHoldFacts> {
-  const row = await trx
-    .selectFrom("bookings")
-    .select("cancellation_claimed_at as cancellationClaimedAt")
-    .where("id", "=", bookingId)
-    .executeTakeFirst();
   return {
-    cancellationClaimedAt: row?.cancellationClaimedAt ?? null,
+    cancellationClaimedAt: await cancellationClaimedAtOf(trx, bookingId),
     cancellationUndecided: await cancellationUndecidedOf(trx, bookingId),
   };
 }
@@ -265,6 +312,8 @@ export interface CancellationFacts {
   readonly cancelled: CancellationEventRow | undefined;
   /** The state of a live booking's cancellation. */
   readonly state: CancellationState;
+  /** Another cancellation's claim is fresh: its DELETE is in flight (`cancellationClaimPendingOf`, FIX-W33-OTA). */
+  readonly claimPending: boolean;
   /** The payments the `booking.cancelled` event names (`voidPaymentId`, `capturePaymentId`), by id. */
   readonly payments: ReadonlyMap<string, CancellationPaymentFact>;
 }
@@ -277,13 +326,15 @@ function namedPaymentIds(event: CancellationEventRow | undefined): string[] {
   );
 }
 
-/** The facts of the booking's `cancellation` block (see the file header), read in `trx`. */
+/** The facts of the booking's `cancellation` block and of its canCancel (see the file header), read in `trx` at `now`. */
 export async function cancellationFactsOf(
   trx: TenantTransaction,
   bookingId: string,
+  now: Date,
 ): Promise<CancellationFacts> {
   const cancelled = await cancelledEventOf(trx, bookingId);
   const state = cancellationStateOf(await cancellationEventsOf(trx, bookingId));
+  const claimPending = await cancellationClaimPendingOf(trx, bookingId, now);
   const payments = new Map<string, CancellationPaymentFact>();
   for (const id of namedPaymentIds(cancelled)) {
     const row = await trx
@@ -306,7 +357,7 @@ export async function cancellationFactsOf(
         .executeTakeFirst()) !== undefined;
     payments.set(id, { status: row.status, captureReviewed: reviewed });
   }
-  return { cancelled, state, payments };
+  return { cancelled, state, claimPending, payments };
 }
 
 /** A live booking whose cancellation flag is still undecided (the reconcile scan's sweep of lost checks). */

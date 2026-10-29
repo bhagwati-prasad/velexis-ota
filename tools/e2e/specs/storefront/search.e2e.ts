@@ -147,13 +147,15 @@ test.describe("the M2 search journey", () => {
     // `- radio "FLEXIBLE €189.47 in total €91.00 more than your fare"`: the family's total comes first.
     const flexibleLabel = await flexible.ariaSnapshot();
     await flexible.check();
-    await expect(page.getByText(/^Selected fare: FLEXIBLE, /)).toBeVisible();
+    // In `main`: the page's live region repeats the selection a moment later (tools/e2e/README.md, "Texts are looked
+    // for in `main`").
+    await expect(page.getByRole("main").getByText(/^Selected fare: FLEXIBLE, /)).toBeVisible();
     await page.getByRole("button", { name: "Continue with this fare" }).click();
 
     // Price: the confirmed price of the chosen fare, held for a while.
     await page.waitForURL(/\/price\.html\?priced=prc_/);
     await expect(page.getByRole("heading", { level: 1, name: "Your price" })).toBeVisible();
-    await expect(page.getByText("Fare: FLEXIBLE")).toBeVisible();
+    await expect(page.getByRole("main").getByText("Fare: FLEXIBLE")).toBeVisible();
     const total = page.getByRole("complementary", { name: "Total" });
     await expect(total.getByRole("timer")).toHaveText(/^Price held for \d+:\d{2}$/);
     await expect(total.getByRole("button", { name: "Continue to checkout" })).toBeEnabled();

@@ -313,14 +313,18 @@ describe("the projection of an order", () => {
 });
 
 describe("consoleOrderReplyOf", () => {
-  it("passes the answer through, card numbers cut to their last 4 and the dictionaries a booking answer can carry", () => {
+  it("[FIX-W33-OTA] [OBE-061] passes the answer through, card numbers cut to their last 4 and every dictionary with the key its schema requires", () => {
     const reply = consoleOrderReplyOf({
       data: {
         id: "eJzT",
         travelers: [{ documents: [{ number: "PX1234567" }] }],
         formOfPayments: [{ creditCard: { number: TEST_CARD, securityCode: "123" } }],
       },
-      dictionaries: { locations: { MAD: { cityCode: "MAD" } }, carriers: { IB: "IBERIA" } },
+      dictionaries: {
+        locations: { MAD: { cityCode: "MAD" }, CDG: { cityCode: "PAR", countryCode: "FR" } },
+        carriers: { IB: "IBERIA" },
+        currencies: { EUR: "EURO" },
+      },
       included: { bags: {} },
     });
 
@@ -330,7 +334,13 @@ describe("consoleOrderReplyOf", () => {
         travelers: [{ documents: [{ number: "PX1234567" }] }],
         formOfPayments: [{ creditCard: { number: TEST_CARD.slice(-4) } }],
       },
-      dictionaries: { carriers: { IB: "IBERIA" } },
+      // `locations` and `currencies` keep every code, with the `key` of AmadeusLocationEntry and AmadeusCurrencyEntry
+      // taken from their own first code (FIX-W33-OTA; they were left out before).
+      dictionaries: {
+        carriers: { IB: "IBERIA" },
+        locations: { key: "MAD", MAD: { cityCode: "MAD" }, CDG: { cityCode: "PAR", countryCode: "FR" } },
+        currencies: { key: "EUR", EUR: "EURO" },
+      },
       included: { bags: {} },
     });
   });

@@ -26,9 +26,9 @@
 // link), and the subject is collapsed to one line.
 //
 // The console's template settings (OBE-073) read and write the tenant's rows through this service too (`tenantRow`,
-// `tenantRows`, `insertRow`, `updateRow`, `deleteRow`), in the caller's TenantTx transaction: the console shows and
-// edits the row of exactly one key, channel and locale, active or not, while an e-mail takes the active row of its
-// locale or language as above. The rows are read at every send (only the code defaults are cached), so a saved or
+// `tenantRows`, `insertRow`, `updateRow`, `deleteRow`), in the caller's TenantTx transaction: the console edits the
+// row of exactly one key, channel and locale, active or not, while an e-mail takes the active row of its locale or
+// language as above (`servingRowOf`), which the console shows for a locale without a row of its own (FIX-W33-OTA). The rows are read at every send (only the code defaults are cached), so a saved or
 // reset template applies to the next e-mail.
 //
 // Errors name templates, parts, lines and variable names, never a value of the render data.
@@ -446,6 +446,25 @@ export function templateLocales(locale: string): string[] {
   return [...new Set([locale, language].filter((value) => value !== ""))];
 }
 
+/**
+ * The tenant's row that e-mails of one key in `locale` use, among `rows` (rows of that key, any state): the active row
+ * of the locale, else of its language (`templateLocales`), with a subject; `undefined` when the code default serves.
+ * The rule of `effective`, which the console's template settings show too (settings/templates.service.ts: the
+ * language's row of a locale without one of its own, `inheritedFrom`; FIX-W33-OTA).
+ */
+export function servingRowOf(
+  rows: readonly NotificationTemplateRow[],
+  locale: string,
+): NotificationTemplateRow | undefined {
+  for (const candidate of templateLocales(locale)) {
+    const row = rows.find((entry) => entry.locale === candidate && entry.is_active && entry.subject !== null);
+    if (row !== undefined) {
+      return row;
+    }
+  }
+  return undefined;
+}
+
 /** Injection token of the folder of the code defaults (the registry's, unless a test gives its own). */
 export const NOTIFICATION_TEMPLATES_DIR = "NOTIFICATION_TEMPLATES_DIR";
 
@@ -476,20 +495,17 @@ export class TemplateService {
    * code default (English). Throws `TemplateMissingError` when neither exists.
    */
   async effective(trx: TenantTransaction, key: TemplateKey, locale: string): Promise<EffectiveTemplate> {
-    const locales = templateLocales(locale);
-    const rows = await this.repository.activeTemplates(trx, key, TEMPLATE_CHANNEL, locales);
-    for (const candidate of locales) {
-      const row = rows.find((entry) => entry.locale === candidate && entry.subject !== null);
-      if (row !== undefined && row.subject !== null) {
-        return Object.freeze({
-          key,
-          origin: "tenant",
-          locale: row.locale,
-          templateId: row.id,
-          version: row.version,
-          sources: Object.freeze({ subject: row.subject, html: row.body_html, text: row.body_text }),
-        });
-      }
+    const rows = await this.repository.activeTemplates(trx, key, TEMPLATE_CHANNEL, templateLocales(locale));
+    const row = servingRowOf(rows, locale);
+    if (row !== undefined && row.subject !== null) {
+      return Object.freeze({
+        key,
+        origin: "tenant",
+        locale: row.locale,
+        templateId: row.id,
+        version: row.version,
+        sources: Object.freeze({ subject: row.subject, html: row.body_html, text: row.body_text }),
+      });
     }
     const fallback = await this.codeDefault(key);
     if (fallback === undefined) {
@@ -553,19 +569,27 @@ export class TemplateService {
     return await (options.forUpdate === true ? query.forUpdate() : query).executeTakeFirst();
   }
 
-  /** The tenant's rows (channel `email`) in any of `locales`, active or not, by key and locale. */
-  async tenantRows(trx: TenantTransaction, locales: readonly string[]): Promise<NotificationTemplateRow[]> {
+  /**
+   * The tenant's rows (channel `email`) in any of `locales`, active or not, by key and locale; of `key` only when it is
+   * given.
+   */
+  async tenantRows(
+    trx: TenantTransaction,
+    locales: readonly string[],
+    key?: TemplateKey,
+  ): Promise<NotificationTemplateRow[]> {
     if (locales.length === 0) {
       return [];
     }
-    return await trx
+    let query = trx
       .selectFrom("notification_templates")
       .selectAll()
       .where("channel", "=", TEMPLATE_CHANNEL)
-      .where("locale", "in", [...locales])
-      .orderBy("key")
-      .orderBy("locale")
-      .execute();
+      .where("locale", "in", [...locales]);
+    if (key !== undefined) {
+      query = query.where("key", "=", key);
+    }
+    return await query.orderBy("key").orderBy("locale").execute();
   }
 
   /**

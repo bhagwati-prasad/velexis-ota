@@ -598,6 +598,53 @@ describe("edge mode: cookies, never a token in a body", () => {
     expect(setCookies(retry).get("__Host-vx_rt")?.value).toBe(rotated.get("__Host-vx_rt")?.value);
     expect(setCookies(retry).get("__Host-vx_at")?.value).toBe(rotated.get("__Host-vx_at")?.value);
   });
+
+  it("answers 401 TOKEN_EXPIRED to the refresh cookie without the access cookie, so one refresh and one retry keep the customer signed in [FIX-W33-OTA] [OBE-031]", async () => {
+    const email = newAddress("idle");
+    await insertCustomer("tenant_alpha" as TenantSchema, email);
+    const visitor = new Visitor();
+    const signIn = await visitor.post("/v1/auth/sign-in", { email, password: PASSWORD });
+    expect(signIn.status).toBe(200);
+    // The browser drops the access cookie when its Max-Age of 900 s ends and keeps sending the refresh cookie.
+    visitor.jar.delete("__Host-vx_at");
+
+    const idle = await visitor.get("/v1/auth/session");
+    expect([idle.status, idle.body.error.code]).toEqual([401, "TOKEN_EXPIRED"]);
+    expect(idle.headers["set-cookie"]).toBeUndefined();
+    expectResponseToMatch("getSession", idle);
+    // What the SDK in cookie mode does next (OADR-0006 point 5): one auth.refresh with the cookie, then the call again.
+    const refresh = await visitor.post("/v1/auth/refresh", {});
+    expect(refresh.status).toBe(200);
+    expect(setCookies(refresh).get("__Host-vx_at")?.value).toEqual(expect.any(String));
+    const retried = await visitor.get("/v1/auth/session");
+    expect([retried.status, retried.body.session.id]).toEqual([200, signIn.body.session.id]);
+    const refused = api.sink.records().filter((line) => line["msg"] === "customer.token_refused");
+    expect(refused.map((line) => line["reason"])).toContain("access_cookie_missing");
+  });
+
+  it("keeps 401 UNAUTHENTICATED without either cookie, and a refresh cookie that opens no session costs one refused refresh [FIX-W33-OTA] [OBE-031]", async () => {
+    const visitor = new Visitor();
+
+    const neither = await visitor.get("/v1/auth/session");
+    expect([neither.status, neither.body.error.code]).toEqual([401, "UNAUTHENTICATED"]);
+    expectResponseToMatch("getSession", neither);
+
+    // A refresh token of the contract's form that no family has: the guard does not look it up.
+    visitor.jar.set("__Host-vx_rt", `rt_${randomBytes(32).toString("base64url")}`);
+    const unknown = await visitor.get("/v1/auth/session");
+    expect([unknown.status, unknown.body.error.code]).toEqual([401, "TOKEN_EXPIRED"]);
+    // The refresh is refused and clears both session cookies, so the next call is a visitor's again.
+    const refresh = await visitor.post("/v1/auth/refresh", {});
+    expect([refresh.status, refresh.body.error.code]).toEqual([401, "REFRESH_TOKEN_INVALID"]);
+    expect(visitor.jar.has("__Host-vx_rt")).toBe(false);
+    const after = await visitor.get("/v1/auth/session");
+    expect([after.status, after.body.error.code]).toEqual([401, "UNAUTHENTICATED"]);
+
+    // A value of another form is no refresh cookie at all.
+    visitor.jar.set("__Host-vx_rt", "not-a-refresh-token");
+    const malformed = await visitor.get("/v1/auth/session");
+    expect([malformed.status, malformed.body.error.code]).toEqual([401, "UNAUTHENTICATED"]);
+  });
 });
 
 describe("bearer mode: tokens in the body, never a cookie", () => {

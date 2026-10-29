@@ -6,13 +6,15 @@
 //   sign up → verify the address through the Mailpit link → sign out and sign in → two trips booked for the customer
 //   through the API with the airline card (no Stripe), one moved into the past → the upcoming, past and cancelled tabs
 //   → change the contact details → cancel with the refund preview → the cancelled tab → the e-mails of the change and
-//   the cancellation → the access token expires and the next call refreshes the session silently
+//   the cancellation → the access cookie ends and the next page refreshes the session silently → an expired token in
+//   the access cookie is refreshed the same way
 //
-// The OTA backend has neither a test clock nor a configurable token lifetime, so the expiry is made on the token: the
-// session's own access token, issued 16 minutes earlier and signed again with the stack's development key, goes back
-// into its httpOnly cookie (support/ota.ts `expireAccessToken`), which is what the API sees of that cookie once its
-// clock is 16 minutes later. A browser drops the cookie itself when its Max-Age of 900 s ends, at the moment the token
-// expires; that case is not this journey's (tools/e2e/README.md, "Tests of OFE-019").
+// The OTA backend has neither a test clock nor a configurable token lifetime, so the 15 minutes are made on the
+// cookies: the access cookie is removed from the browser, as the browser removes it when its Max-Age of 900 s ends,
+// and the API answers the refresh cookie alone with `401 TOKEN_EXPIRED` (OADR-0006 point 5 as revised on 2026-10-29,
+// FIX-W33-OTA). Then the session's own access token, issued 16 minutes earlier and signed again with the stack's
+// development key, goes back into its httpOnly cookie (support/ota.ts `expireAccessToken`): what the API sees of a
+// cookie that a browser whose clock runs behind still sends (tools/e2e/README.md, "Tests of OFE-019").
 //
 // Then, each in a browser of its own: a guest finds the past trip by its reference (a wrong name and a wrong reference
 // first, which answer the same), and failed lookups are refused for a while.
@@ -489,11 +491,15 @@ test.describe("the account and bookings journey", () => {
     expect(cancelled.Text).toContain(upcoming.reference);
   });
 
-  test("the access token expires, and the next call refreshes the session silently [OFE-019 AC1] [OFE-019 AC2] [OF-03 AC1]", async () => {
+  /**
+   * Opens My bookings' cancelled tab after `expire` took the session's access away, and checks that the API refused it
+   * with `401 TOKEN_EXPIRED`, that the SDK refreshed once through the refresh cookie and sent the calls again, that the
+   * customer is still signed in, and that both session cookies rotated without a token in any answer of the page.
+   */
+  async function expectSilentRefresh(expire: (context: BrowserContext) => Promise<void>): Promise<void> {
     const { context, page, guards } = journey;
     const before = await storefrontCookies(context);
-    // The token in the access cookie as the API sees it 16 minutes later (support/ota.ts `expireAccessToken`).
-    await expireAccessToken(context);
+    await expire(context);
     const seen = recordApiAnswers(page);
     await page.goto("/bookings.html?tab=cancelled");
     await expect.poll(() => listedReferences(page)).toEqual([upcoming.reference]);
@@ -507,7 +513,7 @@ test.describe("the account and bookings journey", () => {
       code,
     }));
 
-    // The API refused the expired token, the SDK refreshed once through the refresh cookie and sent the call again.
+    // The API refused the session's access, the SDK refreshed once through the refresh cookie and sent the call again.
     expect(answers.filter((answer) => answer.code === "TOKEN_EXPIRED").length).toBeGreaterThan(0);
     expect(answers.filter((answer) => answer.path === "/v1/auth/refresh")).toEqual([
       { method: "POST", path: "/v1/auth/refresh", status: 200, code: undefined },
@@ -519,6 +525,7 @@ test.describe("the account and bookings journey", () => {
     const after = await storefrontCookies(context);
     const access = after.get(ACCESS_COOKIE)?.value;
     const refresh = after.get(REFRESH_COOKIE)?.value;
+    expect(access === undefined, `${ACCESS_COOKIE} set again`).toBe(false);
     expect(access === before.get(ACCESS_COOKIE)?.value, `${ACCESS_COOKIE} rotated`).toBe(false);
     expect(refresh === before.get(REFRESH_COOKIE)?.value, `${REFRESH_COOKIE} rotated`).toBe(false);
     expect(attributesOf(after.get(ACCESS_COOKIE))).toEqual(SESSION_COOKIE_ATTRIBUTES);
@@ -529,6 +536,20 @@ test.describe("the account and bookings journey", () => {
       expectNoTokenIn(answer.body, `${answer.method} ${answer.path} (${answer.status})`, [access, refresh]);
     }
     await guards.checkA11y(page);
+  }
+
+  test("the access cookie ends after its 15 minutes, and the next page refreshes the session silently [OFE-019 AC1] [OFE-019 AC2] [OF-03 AC1] [FIX-W33-OTA]", async () => {
+    // What the browser does when the access cookie's Max-Age of 900 s ends: it drops the cookie and keeps sending the
+    // refresh cookie, which the API answers with 401 TOKEN_EXPIRED (OADR-0006 point 5 as revised on 2026-10-29).
+    await expectSilentRefresh(async (context) => {
+      await context.clearCookies({ name: ACCESS_COOKIE });
+    });
+  });
+
+  test("an expired token in the access cookie is refreshed the same way [OFE-019 AC1] [OFE-019 AC2] [OF-03 AC1]", async () => {
+    // The token in the access cookie as the API sees it 16 minutes later (support/ota.ts `expireAccessToken`): a
+    // browser whose clock runs behind the API's still sends it.
+    await expectSilentRefresh(expireAccessToken);
   });
 
   test("a guest finds the past trip by its reference after a wrong name and a wrong reference [OFE-019 AC1] [OF-07 AC2]", async ({

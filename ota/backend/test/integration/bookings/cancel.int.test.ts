@@ -3263,6 +3263,44 @@ describe("a second cancellation while another one's DELETE is in flight (FIX-W32
     expect(await claimedAtOf(booking.id)).toEqual(other);
   });
 
+  it("[FIX-W33-OTA] [OBE-049] shows the pending refusal in the quote and in bookings.get's canCancel while another claim is fresh, and nothing once it is abandoned", async () => {
+    const { booking, credential } = await cancellableBooking("cancel.quote_while_claimed");
+    const claimAt = (at: Date) =>
+      inTenant((trx) =>
+        trx
+          .updateTable("bookings")
+          .set({ cancellation_claimed_at: at })
+          .where("id", "=", booking.id)
+          .execute(),
+      );
+    const read = () =>
+      request(api.server).get(`/v1/bookings/${booking.id}`).set(credentialHeaders(credential));
+    // Another cancellation's DELETE in flight: its claim committed and its outcome is not recorded yet.
+    await claimAt(new Date());
+
+    const quoted = await quote(booking.id, credential);
+    const got = await read();
+
+    expect(answer(quoted)).toEqual([200, undefined]);
+    expectResponseToMatch("quoteBookingCancellation", quoted);
+    expect(quoted.body).toMatchObject({ mode: "not_allowed", notAllowedReason: "pending" });
+    expect(answer(got)).toEqual([200, undefined]);
+    expect(got.body.allowedActions).toMatchObject({ canCancel: false, reasons: { canCancel: "pending" } });
+    // What both show is what bookings.cancel answers (FIX-W32-OTA): no screen offers what the cancellation refuses.
+    const refused = await cancel(booking.id, credential, '"1"', cancellation(quoted.body.estimatedRefund));
+    expect(answer(refused)).toEqual([409, "BOOKING_NOT_MODIFIABLE"]);
+    expect(refused.body.error.details).toMatchObject({ reason: "pending" });
+
+    // A claim 5 minutes old (a request that stopped mid-DELETE) holds nothing back, here either.
+    await claimAt(new Date(Date.now() - 6 * MINUTE));
+    const requoted = await quote(booking.id, credential);
+    const reread = await read();
+    expect(answer(requoted)).toEqual([200, undefined]);
+    expect(requoted.body.mode).not.toBe("not_allowed");
+    expect(reread.body.allowedActions).toMatchObject({ canCancel: true });
+    expect(reread.body.allowedActions.reasons).not.toHaveProperty("canCancel");
+  });
+
   it("[FIX-W32-OTA AC2] lets a cancellation claim once the other claim is abandoned (5 minutes)", async () => {
     const { booking, credential } = await cancellableBooking("cancel.second_abandoned");
     await inTenant((trx) =>

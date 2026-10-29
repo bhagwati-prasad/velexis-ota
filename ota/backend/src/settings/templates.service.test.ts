@@ -89,8 +89,12 @@ class MemoryTemplates extends TemplateService {
     return Promise.resolve(this.rows.get(rowKey(key, locale)));
   }
 
-  override tenantRows(_trx: TenantTransaction, locales: readonly string[]) {
-    return Promise.resolve([...this.rows.values()].filter((row) => locales.includes(row.locale)));
+  override tenantRows(_trx: TenantTransaction, locales: readonly string[], key?: TemplateKey) {
+    return Promise.resolve(
+      [...this.rows.values()].filter(
+        (row) => locales.includes(row.locale) && (key === undefined || row.key === key),
+      ),
+    );
   }
 
   override insertRow(
@@ -239,9 +243,13 @@ const GOOD_INPUT = {
  * ---------------------------------------------------------------------------------------------- */
 
 describe("console.settings.templates.list and get", () => {
-  it("lists every key the code knows for every supported locale, by key then locale, the OTA's rows customised and the code defaults not", async () => {
+  it("lists every key the code knows for every supported locale, by key then locale, the OTA's edited rows customised, the seeded rows and the code defaults not [FIX-W33-OTA]", async () => {
     const { service, templates } = harness({ supportedLocales: ["fr", "en", "fr"] });
+    // Seeded by provisioning from the code default (`is_system`) and never edited: a row, yet not customised.
     const seeded = templates.add(storedRow({ key: "booking.confirmed", locale: "en" }));
+    const edited = templates.add(
+      storedRow({ key: "booking.cancelled", locale: "en", is_system: false, version: 2 }),
+    );
     // A row of a locale the storefront does not offer is not listed.
     templates.add(storedRow({ key: "booking.confirmed", locale: "de" }));
 
@@ -254,11 +262,19 @@ describe("console.settings.templates.list and get", () => {
     );
     const confirmedEn = list.data.find((item) => item.key === "booking.confirmed" && item.locale === "en");
     expect(confirmedEn).toMatchObject({
-      customised: true,
+      customised: false,
+      inheritedFrom: null,
       isActive: true,
       version: 1,
       subject: seeded.subject,
       updatedAt: SEEDED.toISOString(),
+    });
+    const cancelledEn = list.data.find((item) => item.key === "booking.cancelled" && item.locale === "en");
+    expect(cancelledEn).toMatchObject({
+      customised: true,
+      inheritedFrom: null,
+      version: 2,
+      subject: edited.subject,
     });
     const confirmedFr = list.data.find((item) => item.key === "booking.confirmed" && item.locale === "fr");
     const fallback = await SHARED_DEFAULTS.codeDefault("booking.confirmed");
@@ -274,6 +290,7 @@ describe("console.settings.templates.list and get", () => {
         description,
       })),
       customised: false,
+      inheritedFrom: null,
       isActive: true,
       version: null,
       updatedAt: null,
@@ -288,7 +305,9 @@ describe("console.settings.templates.list and get", () => {
 
   it("gets the OTA's row, active or not, else the code default under the locale asked for", async () => {
     const { service, templates } = harness();
-    templates.add(storedRow({ key: "booking.confirmed", locale: "en", is_active: false, version: 4 }));
+    templates.add(
+      storedRow({ key: "booking.confirmed", locale: "en", is_active: false, is_system: false, version: 4 }),
+    );
 
     const own = await service.get(CONFIRMED_EN);
     const fallback = await service.get({ ...CONFIRMED_EN, locale: "pt-BR" });
@@ -296,9 +315,127 @@ describe("console.settings.templates.list and get", () => {
     for (const body of [own, fallback]) {
       expect(checker.check("consoleGetNotificationTemplate", { status: 200, body })).toEqual([]);
     }
-    expect(own).toMatchObject({ customised: true, isActive: false, version: 4 });
-    expect(fallback).toMatchObject({ locale: "pt-BR", customised: false, isActive: true, version: null });
+    expect(own).toMatchObject({ customised: true, inheritedFrom: null, isActive: false, version: 4 });
+    expect(fallback).toMatchObject({
+      locale: "pt-BR",
+      customised: false,
+      inheritedFrom: null,
+      isActive: true,
+      version: null,
+    });
     expect(fallback.subject).toBe("Your booking {{booking.reference}} with {{brand.name}} is confirmed");
+  });
+
+  it("[FIX-W33-OTA] [OBE-073] answers a seeded row as not customised, with its version, until a put with If-Match makes it the OTA's", async () => {
+    const { service, templates } = harness();
+    templates.add(storedRow({ key: "booking.confirmed", locale: "en", version: 1 }));
+
+    const seeded = await service.get(CONFIRMED_EN);
+
+    expect(checker.check("consoleGetNotificationTemplate", { status: 200, body: seeded })).toEqual([]);
+    expect(seeded).toMatchObject({ customised: false, inheritedFrom: null, version: 1 });
+    // Still a row: a put without If-Match is refused, and with it the row becomes the OTA's own.
+    expect((await refusal(service.put(CONFIRMED_EN, GOOD_INPUT, undefined))).code).toBe(
+      "PRECONDITION_FAILED",
+    );
+    expect(await service.put(CONFIRMED_EN, GOOD_INPUT, '"1"')).toMatchObject({
+      customised: true,
+      version: 2,
+    });
+  });
+});
+
+describe("console.settings.templates: the template that serves a locale without a row of its own (FIX-W33-OTA)", () => {
+  const CONFIRMED_GB: TemplateAddress = { ...CONFIRMED_EN, locale: "en-GB" };
+
+  it("[FIX-W33-OTA] [OBE-073] shows the language's active row that e-mails in the locale use, marked as inherited, in get and list", async () => {
+    const { service, templates } = harness({ supportedLocales: ["en-GB", "fr"] });
+    const language = templates.add(
+      storedRow({
+        key: "booking.confirmed",
+        locale: "en",
+        subject: "Booked {{booking.reference}}!",
+        is_system: false,
+      }),
+    );
+    const seededLanguage = templates.add(storedRow({ key: "booking.cancelled", locale: "en" }));
+
+    const got = await service.get(CONFIRMED_GB);
+    const list = await service.list();
+
+    expect(checker.check("consoleGetNotificationTemplate", { status: 200, body: got })).toEqual([]);
+    expect(checker.check("consoleListNotificationTemplates", { status: 200, body: list })).toEqual([]);
+    expect(got).toMatchObject({
+      locale: "en-GB",
+      subject: language.subject,
+      bodyHtml: language.body_html,
+      inheritedFrom: "en",
+      customised: true,
+      isActive: true,
+      version: null,
+      updatedAt: null,
+    });
+    // What an e-mail in en-GB uses: the same row (template.service.ts `effective`, through `servingRowOf`).
+    const effective = await new TemplateService({
+      activeTemplates: (_trx: TenantTransaction, key: string) =>
+        Promise.resolve([...templates.rows.values()].filter((row) => row.key === key && row.is_active)),
+    } as unknown as OutboxRepository).effective(TRX, "booking.confirmed", "en-GB");
+    expect(effective).toMatchObject({ origin: "tenant", templateId: language.id, locale: "en" });
+    expect(list.data.find((item) => item.key === "booking.confirmed" && item.locale === "en-GB")).toEqual(
+      got,
+    );
+    // A seeded language row is inherited too, and not customised.
+    expect(
+      list.data.find((item) => item.key === "booking.cancelled" && item.locale === "en-GB"),
+    ).toMatchObject({
+      inheritedFrom: "en",
+      customised: false,
+      subject: seededLanguage.subject,
+    });
+    // Without a row of the locale or its language: the code default.
+    expect(list.data.find((item) => item.key === "booking.confirmed" && item.locale === "fr")).toMatchObject({
+      inheritedFrom: null,
+      customised: false,
+    });
+  });
+
+  it("[FIX-W33-OTA] [OBE-073] shows the code default when the language's row is inactive, and the locale's own row when it has one", async () => {
+    const { service, templates } = harness({ supportedLocales: ["en-GB"] });
+    templates.add(storedRow({ key: "booking.confirmed", locale: "en", is_active: false, is_system: false }));
+
+    const inactiveLanguage = await service.get(CONFIRMED_GB);
+    templates.add(storedRow({ key: "booking.confirmed", locale: "en-GB", is_system: false, version: 3 }));
+    const own = await service.get(CONFIRMED_GB);
+
+    expect(inactiveLanguage).toMatchObject({ inheritedFrom: null, customised: false, version: null });
+    expect(inactiveLanguage.subject).toBe(
+      "Your booking {{booking.reference}} with {{brand.name}} is confirmed",
+    );
+    expect(own).toMatchObject({ locale: "en-GB", inheritedFrom: null, customised: true, version: 3 });
+  });
+
+  it("[FIX-W33-OTA] [OBE-073] writes the locale's own row on put without If-Match, never the language's, and previews what the locale shows", async () => {
+    const { service, templates } = harness({ supportedLocales: ["en-GB"] });
+    const language = templates.add(
+      storedRow({
+        key: "booking.confirmed",
+        locale: "en",
+        subject: "Booked {{booking.reference}}!",
+        is_system: false,
+      }),
+    );
+
+    const preview = await service.preview(CONFIRMED_GB, undefined);
+    const withIfMatch = await refusal(service.put(CONFIRMED_GB, GOOD_INPUT, '"1"'));
+    const saved = await service.put(CONFIRMED_GB, GOOD_INPUT, undefined);
+
+    expect(preview.subject).toBe("Booked VX7K2M9Q!");
+    expect(withIfMatch.code).toBe("PRECONDITION_FAILED");
+    expect(saved).toMatchObject({ locale: "en-GB", inheritedFrom: null, customised: true, version: 1 });
+    expect(templates.rows.get(rowKey("booking.confirmed", "en"))).toEqual(language);
+    expect(templates.rows.get(rowKey("booking.confirmed", "en-GB"))).toMatchObject({
+      subject: GOOD_INPUT.subject,
+    });
   });
 });
 
@@ -705,6 +842,7 @@ describe("console.settings.templates.reset", () => {
   });
 
   it("deletes the OTA's row and answers the code default, recording the deleted template", async () => {
+    // A row seeded from the code default (`is_system`) is reset as any other (FIX-W33-OTA).
     const row = h.templates.add(storedRow({ key: "booking.confirmed", locale: "en", version: 2 }));
 
     const answer = await h.service.reset(CONFIRMED_EN);
@@ -726,7 +864,31 @@ describe("console.settings.templates.reset", () => {
   it("changes nothing without a row and still answers the default (safe to repeat)", async () => {
     const answer = await h.service.reset({ ...CONFIRMED_EN, locale: "fr" });
 
-    expect(answer).toMatchObject({ locale: "fr", customised: false });
+    expect(answer).toMatchObject({ locale: "fr", customised: false, inheritedFrom: null });
     expect(h.audit).toMatchObject([{ action: "settings.templates.reset", before: null, after: null }]);
+  });
+
+  it("[FIX-W33-OTA] [OBE-073] deletes the locale's own row only and answers the language's row that e-mails use from then on", async () => {
+    const language = h.templates.add(
+      storedRow({
+        key: "booking.confirmed",
+        locale: "en",
+        subject: "Booked {{booking.reference}}!",
+        is_system: false,
+      }),
+    );
+    h.templates.add(storedRow({ key: "booking.confirmed", locale: "en-GB", is_system: false, version: 5 }));
+
+    const answer = await h.service.reset({ ...CONFIRMED_EN, locale: "en-GB" });
+
+    expect(checker.check("consoleResetNotificationTemplate", { status: 200, body: answer })).toEqual([]);
+    expect(answer).toMatchObject({
+      locale: "en-GB",
+      inheritedFrom: "en",
+      subject: language.subject,
+      customised: true,
+      version: null,
+    });
+    expect([...h.templates.rows.values()]).toEqual([language]);
   });
 });

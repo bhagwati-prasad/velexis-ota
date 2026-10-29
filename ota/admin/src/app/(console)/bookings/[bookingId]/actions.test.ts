@@ -451,7 +451,8 @@ describe("cancelBooking", () => {
       ),
     ).toMatchObject({
       ok: false,
-      fieldErrors: { amount: "The amount is above what can still be refunded. Reload the page to see it." },
+      // The API's figure, as the refund dialog says it (FIX-W33-OTA; the reload message before it).
+      fieldErrors: { amount: "The amount is above what can still be refunded: at most €100.00." },
     });
 
     api.on(CANCEL, () => apiError("BOOKING_ALREADY_CANCELLED", 409));
@@ -460,6 +461,47 @@ describe("cancelBooking", () => {
       code: "BOOKING_ALREADY_CANCELLED",
       message: "This booking is already cancelled. Reload the page to see its current state.",
     });
+  });
+
+  it("[FIX-W33-OTA] [OAD-008] says how much can still be refunded when the cancellation's amount is above it (the API's details.refundable), through the refund dialog's helper", async () => {
+    signedIn();
+    api.on(CANCEL, () =>
+      apiError("UNPROCESSABLE", 422, {
+        details: { reason: "amount_exceeds_captured", refundable: { amount: "36.50", currency: "EUR" } },
+      }),
+    );
+
+    const state = await cancelBooking(
+      INITIAL_ACTION_STATE,
+      cancelForm(randomUUID(), { refundMode: "amount", amount: "120.50" }),
+    );
+
+    const message = "The amount is above what can still be refunded: at most €36.50.";
+    expect(state).toMatchObject({
+      ok: false,
+      code: "UNPROCESSABLE",
+      message,
+      fieldErrors: { amount: message },
+    });
+    // A final refusal the API keeps under the key: the corrected amount goes with a new one (FIX-W31-OTA).
+    expect(state.nextActionKey).toMatch(/^[0-9a-f-]{36}$/);
+
+    // Without a readable figure, the reload message, as for a refund.
+    for (const details of [
+      { reason: "amount_exceeds_captured" },
+      { reason: "amount_exceeds_captured", refundable: { amount: 36.5, currency: "EUR" } },
+    ]) {
+      api.on(CANCEL, () => apiError("UNPROCESSABLE", 422, { details }));
+      expect(
+        await cancelBooking(
+          INITIAL_ACTION_STATE,
+          cancelForm(randomUUID(), { refundMode: "amount", amount: "120.50" }),
+        ),
+      ).toMatchObject({
+        ok: false,
+        fieldErrors: { amount: "The amount is above what can still be refunded. Reload the page to see it." },
+      });
+    }
   });
 });
 
@@ -1282,7 +1324,8 @@ describe("the idempotency key after a refusal (OADR-0018 point 5, revision of 20
     expect(refused).toMatchObject({
       ok: false,
       code: "UNPROCESSABLE",
-      fieldErrors: { amount: "The amount is above what can still be refunded. Reload the page to see it." },
+      // The API's figure since FIX-W33-OTA, as the refund dialog says it.
+      fieldErrors: { amount: "The amount is above what can still be refunded: at most €100.00." },
     });
     expect(refused.nextActionKey).toMatch(UUID);
     expect(refused.nextActionKey).not.toBe(rendered);

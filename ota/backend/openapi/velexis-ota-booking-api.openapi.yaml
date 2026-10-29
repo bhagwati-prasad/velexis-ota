@@ -33,7 +33,9 @@ info:
     answer `AuthSessionInfo`, and `session`, `bookingToken` and `bookingTokenExpiresAt` are `null` elsewhere. Every
     `POST`, `PUT`, `PATCH` and `DELETE` needs `X-CSRF-Token` equal to the `__Host-vx_csrf` cookie and an `Origin` of the
     storefront host (`403 CSRF_TOKEN_INVALID`). An expired access cookie answers `401 TOKEN_EXPIRED`: call auth.refresh
-    once and retry. Key and bearer callers never get `Set-Cookie`, and cookies sent to the API host are ignored.
+    once and retry. So does the refresh cookie without the access cookie, which the browser drops when its 15 minutes
+    end, on every operation that accepts `customerCookie` but auth.signOut. Key and bearer callers never get
+    `Set-Cookie`, and cookies sent to the API host are ignored.
 
 
     **OTA admin service key.** The first-party OTA admin calls console operations with its service key in `X-Api-Key`,
@@ -9393,8 +9395,10 @@ paths:
         cancellation fee from `fee_rules`; markup refund per storefront policy); `request_only` when the airline gives
         no refund preview but taxes are refundable (the OTA processes it, booking `Cancellation.status = pending`);
         `not_allowed` (flown, cancelled, pending, too close to departure, or self-service cancellation disabled in
-        storefront settings). Customer scope never sees Amadeus net amounts: `refundEstimate` and `lines` are
-        selling-currency estimates.
+        storefront settings). `pending` is the refusal bookings.cancel answers while another cancellation is in
+        progress: an earlier one undecided or waiting for the staff, or another cancellation's Flight Order
+        Management DELETE in flight (claimed less than 5 minutes ago). Customer scope never sees Amadeus net amounts:
+        `refundEstimate` and `lines` are selling-currency estimates.
 
 
         **Cache.** The quote is cached in Redis (`cxq:{bookingId}`, 10 minutes, `expiresAt`) and reused by
@@ -14309,7 +14313,7 @@ paths:
         outcome, Amadeus error codes, latency, Amadeus correlation id (`ama-request-id`, quote it to Amadeus support),
         the Velexis `X-Request-Id`, and the related booking/search/staff. `includeBodies=true` adds the redacted request
         and response bodies (card numbers, CVV, document numbers, e-mails and phones masked before storage; bodies above
-        256 KB truncated; `limit` ≤ 20 then).
+        64 KB truncated; `limit` ≤ 20 then).
 
 
         Filters: `bookingId`, `searchId`, `amadeusApi`, `amadeusOperationId`, `outcome`, `httpStatus`, `errorCode`
@@ -14543,8 +14547,7 @@ paths:
         sell an offer to a customer use flights.search / flights.price; to book a raw offer either price it with
         flights.price (`amadeusFlightOffers`, console scope → `prc_…`) and book it with console.bookings.create (markup,
         tables, notifications), or stay raw with console.amadeus.quoteAirOffers then console.amadeus.createFlightOrders.
-        Permission `amadeus:read`; raw access can be disabled per OTA (`403 FEATURE_DISABLED`). Rate limit 30 calls/min
-        per staff member.
+        Permission `amadeus:read`. Rate limit: the console's, 600 requests per minute per staff session or key.
 
 
         **Idempotent by design**: a search has no side effect at Amadeus; retries are safe without `Idempotency-Key`.
@@ -14568,6 +14571,7 @@ paths:
           method: POST
           path: /v2/shopping/flight-offers
       x-tenant-tables:
+        - bookings
         - supplier_requests
         - staff_actions
       x-error-codes:
@@ -14780,6 +14784,7 @@ paths:
           method: GET
           path: /v2/shopping/flight-offers
       x-tenant-tables:
+        - bookings
         - supplier_requests
         - staff_actions
       x-error-codes:
@@ -15053,6 +15058,7 @@ paths:
           method: POST
           path: /v1/shopping/availability/flight-availabilities
       x-tenant-tables:
+        - bookings
         - supplier_requests
         - staff_actions
       x-error-codes:
@@ -15220,6 +15226,7 @@ paths:
           method: POST
           path: /v1/shopping/flight-offers/upselling
       x-tenant-tables:
+        - bookings
         - supplier_requests
         - staff_actions
       x-error-codes:
@@ -15437,6 +15444,7 @@ paths:
           method: POST
           path: /v1/shopping/flight-offers/pricing
       x-tenant-tables:
+        - bookings
         - supplier_requests
         - staff_actions
       x-error-codes:
@@ -16905,7 +16913,7 @@ paths:
                   amadeusApi: QueueList
                   amadeusOperationId: GET/office/queues/{queue-id}
                   httpMethod: GET
-                  path: /office/queues/50?max=5&category=0&officeId=NCE1A0950
+                  path: /v1/office/queues/50?max=5&category=0&officeId=NCE1A0950
                   httpStatus: 200
                   durationMs: 980
                   correlationId: 0005K2DL5V4YZT
@@ -18837,9 +18845,12 @@ paths:
       summary: List the notification templates
       description: >-
         Lists the **effective** e-mail template of every template key the code knows, for every locale of the
-        storefront settings' `locales.supported`: the OTA's own row of `notification_templates` when it exists
-        (`customised: true`), otherwise the code default (`customised: false`; the English default where the code has
-        none for the locale), each with the variables its key allows. Ordered by key, then locale; not paginated.
+        storefront settings' `locales.supported`: the OTA's row of `notification_templates` of exactly that locale
+        when it exists, active or not; otherwise the active row of the locale's language (`en` for `en-GB`), which
+        e-mails in that locale use, marked `inheritedFrom` with its locale (`version` and `updatedAt` null: the locale
+        has no row of its own); otherwise the code default (the English default where the code has none for the
+        locale). `customised` is false for the code default and for a row provisioning seeded from it until the OTA
+        edits it. Each comes with the variables its key allows. Ordered by key, then locale; not paginated.
         OADR-0013 point 3.
 
 
@@ -18910,11 +18921,14 @@ paths:
       operationId: consoleGetNotificationTemplate
       summary: Get a notification template
       description: >-
-        Returns the effective template of one key, channel and locale: the OTA's row when it exists (`customised:
-        true`, with `ETag` = `"<version>"` to pass as `If-Match` to console.settings.templates.put), otherwise the code
-        default (`customised: false`, `version` null, no `ETag`; the English default where the code has none for the
-        locale). `variables` lists what the key's templates may use. No Amadeus call. Permission `settings:read`. Not
-        audited per call.
+        Returns the effective template of one key, channel and locale: the OTA's row of exactly that locale when it
+        exists, active or not (with `ETag` = `"<version>"` to pass as `If-Match` to console.settings.templates.put;
+        `customised: false` while it is the row provisioning seeded from the code default, `true` once the OTA edited
+        it); otherwise the active row of the locale's language (`en` for `en-GB`), which e-mails in that locale use
+        (`inheritedFrom` its locale, `version` null, no `ETag`: a put creates the locale's own row, without
+        `If-Match`); otherwise the code default (`customised: false`, `version` null, no `ETag`; the English default
+        where the code has none for the locale). `variables` lists what the key's templates may use. No Amadeus call.
+        Permission `settings:read`. Not audited per call.
 
 
         **Key-only calls.** Without a staff token the secret key must carry the `console:automation` scope and this
@@ -18984,9 +18998,10 @@ paths:
       operationId: consolePutNotificationTemplate
       summary: Create or replace a notification template
       description: >-
-        Creates or replaces the OTA's template of one key, channel and locale (upsert of `notification_templates`).
-        `If-Match` is required when the OTA already has a row for them (its `ETag`; missing or stale → `412
-        PRECONDITION_FAILED`) and must be absent when it has none.
+        Creates or replaces the OTA's template of one key, channel and locale (upsert of `notification_templates`):
+        the row of exactly that locale, never the row of its language that an inherited template shows. `If-Match` is
+        required when the OTA already has a row for them, the row provisioning seeded included (its `ETag`; missing or
+        stale → `412 PRECONDITION_FAILED`), and must be absent when it has none.
 
 
         **Compilation.** The server compiles `subject`, `bodyHtml` and `bodyText` with Handlebars in strict mode and
@@ -18996,9 +19011,10 @@ paths:
         (`details.reason = "locale_not_supported"`).
 
 
-        The answer is the saved template (`customised: true`, new `version` and `ETag`); e-mails rendered from then on
-        use it (OADR-0013 point 3). `isActive: false` keeps the row but sends the default. No Amadeus call. Permission
-        `settings:write`; `staff_actions` records the template before and after.
+        The answer is the saved template (`customised: true`, `inheritedFrom` null, new `version` and `ETag`); e-mails
+        rendered from then on use it (OADR-0013 point 3). `isActive: false` keeps the row, and e-mails use the active
+        row of the locale's language, else the default. No Amadeus call. Permission `settings:write`; `staff_actions`
+        records the template before and after.
 
 
         **Key-only calls.** Without a staff token the secret key must carry the `console:automation` scope and this
@@ -19102,8 +19118,9 @@ paths:
       operationId: consolePreviewNotificationTemplate
       summary: Preview a notification template
       description: >-
-        Renders a template without saving or sending anything: the effective template of the key, channel and locale,
-        or the `subject`, `bodyHtml` and `bodyText` given in the body (a draft), with the template's sample data, or
+        Renders a template without saving or sending anything: the effective template of the key, channel and locale
+        (as console.settings.templates.get shows it, an inherited one included), or the `subject`, `bodyHtml` and
+        `bodyText` given in the body (a draft), with the template's sample data, or
         with `variables` when given. Compiled exactly like console.settings.templates.put (strict mode, the key's
         allow-list): a draft that does not compile answers `422 TEMPLATE_INVALID` with `details.errors`.
 
@@ -19204,10 +19221,11 @@ paths:
       operationId: consoleResetNotificationTemplate
       summary: Reset a notification template to the default
       description: >-
-        Deletes the OTA's template of one key, channel and locale, so the code default applies again (OADR-0013 point
-        3), and returns that default (`customised: false`). Safe to repeat (`x-idempotent-by-design`): without a row it
-        changes nothing and returns the default. No Amadeus call. Permission `settings:write`; `staff_actions` records
-        the deleted template.
+        Deletes the OTA's template of one key, channel and locale (the row of exactly that locale, the one provisioning
+        seeded included), so the template e-mails used before it applies again (OADR-0013 point 3): the active row of
+        the locale's language (`inheritedFrom`), else the code default (`customised: false`), which it returns. Safe
+        to repeat (`x-idempotent-by-design`): without a row it changes nothing and returns that template. No Amadeus
+        call. Permission `settings:write`; `staff_actions` records the deleted template.
 
 
         **Key-only calls.** Without a staff token the secret key must carry the `console:automation` scope and this
@@ -20388,7 +20406,10 @@ components:
       description: >-
         Customer access token in an httpOnly cookie (edge mode only), valid 15 minutes; the rotating refresh token is
         in `__Host-vx_rt`, which auth.refresh reads. An expired access token answers `401 TOKEN_EXPIRED`: the SDK in
-        cookie mode calls auth.refresh once and retries the call.
+        cookie mode calls auth.refresh once and retries the call. The browser drops this cookie when its 15 minutes
+        end; a request with `__Host-vx_rt` and without this cookie answers `401 TOKEN_EXPIRED` as well (but
+        auth.signOut, which ends the refresh cookie's session), and `401 UNAUTHENTICATED` without either where a
+        customer is required.
     bookingCookie:
       type: apiKey
       in: cookie
@@ -37391,7 +37412,8 @@ components:
             bookings.cancel (self-service cancellation enabled, nothing departed (no segment flown or past its
             departure time: reason `flown`), not cancelled, more than 3 h before the first departure (reason
             `too_close_to_departure`), an Amadeus order, and no earlier cancellation undecided or waiting for the
-            staff: reason `pending`). bookings.cancel refuses on the same rule.
+            staff, nor another cancellation whose Flight Order Management DELETE is in flight: reason `pending`).
+            bookings.cancel refuses on the same rule.
         canModifyContacts:
           type: boolean
           description: bookings.update contacts.
@@ -40210,7 +40232,7 @@ components:
           description: PII/card data stripped.
         truncated:
           type: boolean
-          description: Bodies truncated to 256 KB.
+          description: Bodies truncated to 64 KB.
         createdAt:
           type: string
           format: date-time
@@ -40247,7 +40269,10 @@ components:
           description: console.bookings.patch.
         canCancel:
           type: boolean
-          description: console.bookings.cancel.
+          description: >-
+            console.bookings.cancel (`bookings:cancel`, an Amadeus order, not cancelled, no cancellation undecided
+            nor another cancellation whose Flight Order Management DELETE is in flight: reason `pending`, and no
+            segment departed: reason `flown`). console.bookings.cancel refuses on the same rule.
         canResync:
           type: boolean
           description: console.bookings.resync.
@@ -44505,13 +44530,15 @@ components:
         - bodyText
         - variables
         - customised
+        - inheritedFrom
         - isActive
         - version
         - updatedAt
       description: >-
-        The effective template of a key, channel and locale: the OTA's row of `notification_templates`
-        (`customised: true`) or the code default (`customised: false`). Templates are Handlebars, compiled in strict
-        mode with the key's variable allow-list (OADR-0013 point 3).
+        The effective template of a key, channel and locale: the OTA's row of `notification_templates` of exactly
+        that locale, else the active row of its language that e-mails in the locale use (`inheritedFrom`), else the
+        code default (`customised: false`). Templates are Handlebars, compiled in strict mode with the key's variable
+        allow-list (OADR-0013 point 3).
       properties:
         key:
           $ref: '#/components/schemas/NotificationTemplateKey'
@@ -44539,22 +44566,37 @@ components:
           description: The variables templates of this key may use (the allow-list), with descriptions.
         customised:
           type: boolean
-          description: The OTA has its own row; false for the code default.
+          description: >-
+            The template shown is the OTA's own edit: false for the code default and for a row provisioning seeded
+            from it, until the OTA edits that row (such a row still has its `version` and `ETag`: a put needs
+            `If-Match`).
+        inheritedFrom:
+          anyOf:
+            - $ref: '#/components/schemas/LocaleCode'
+            - type: 'null'
+          description: >-
+            The locale of the row shown when the asked locale has no row of its own and e-mails in it use the active
+            row of its language (`en` for `en-GB`); `version` and `updatedAt` are then null, and a put creates the
+            locale's own row. Null for the locale's own row and for the code default.
         isActive:
           type: boolean
-          description: When false the OTA's row is kept but the default is sent.
+          description: >-
+            When false the OTA's row is kept, and e-mails use the active row of the locale's language, else the
+            default.
         version:
           type:
             - integer
             - 'null'
           minimum: 1
-          description: Optimistic-locking counter of the OTA's row (`ETag` `"<version>"`); null for the code default.
+          description: >-
+            Optimistic-locking counter of the locale's own row (`ETag` `"<version>"`); null for the code default and
+            for an inherited template.
         updatedAt:
           type:
             - string
             - 'null'
           format: date-time
-          description: Last change of the OTA's row; null for the code default.
+          description: Last change of the locale's own row; null for the code default and for an inherited template.
     NotificationTemplateList:
       type: object
       required:
@@ -49329,6 +49371,7 @@ components:
           - name: booking.contact.firstName
             description: First name of the booking contact.
         customised: true
+        inheritedFrom: null
         isActive: true
         version: 2
         updatedAt: '2026-10-13T15:40:00Z'
@@ -49351,6 +49394,7 @@ components:
           - name: booking.contact.firstName
             description: First name of the booking contact.
         customised: false
+        inheritedFrom: null
         isActive: true
         version: null
         updatedAt: null
@@ -49372,6 +49416,7 @@ components:
               - name: verifyUrl
                 description: Link to /account/verify.html with the verification token, on the storefront host.
             customised: false
+            inheritedFrom: null
             isActive: true
             version: null
             updatedAt: null
@@ -49389,9 +49434,28 @@ components:
               - name: booking.contact.firstName
                 description: First name of the booking contact.
             customised: true
+            inheritedFrom: null
             isActive: true
             version: 2
             updatedAt: '2026-10-13T15:40:00Z'
+          - key: booking.confirmed
+            channel: email
+            locale: en-GB
+            subject: 'Your trip {{booking.reference}} is confirmed'
+            bodyHtml: '<p>Hello {{booking.contact.firstName}},</p><p>Your booking {{booking.reference}} is confirmed.</p>'
+            bodyText: |-
+              Hello {{booking.contact.firstName}},
+              Your booking {{booking.reference}} is confirmed.
+            variables:
+              - name: booking.reference
+                description: Booking reference shown to the traveller.
+              - name: booking.contact.firstName
+                description: First name of the booking contact.
+            customised: true
+            inheritedFrom: en
+            isActive: true
+            version: null
+            updatedAt: null
     ConsolePaymentExample:
       summary: >-
         Authorised Stripe card payment of a confirmed booking under the manual_review policy, waiting for a capture

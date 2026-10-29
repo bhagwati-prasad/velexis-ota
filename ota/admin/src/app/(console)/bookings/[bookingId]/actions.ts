@@ -27,7 +27,8 @@
 // revision of 2026-10-27, FIX-W31-OTA). After `409 IDEMPOTENCY_KEY_REUSED` the key stays too and the message asks for a
 // reload (revision of 2026-10-28, FIX-W32-OTA): an earlier request under the key may still be running, and a new key
 // could refund or capture twice. A refusal before the call (the form's schema, a permission) used no key and keeps it.
-// A refund above what can still be refunded says the API's `details.refundable` (FIX-W32-OTA).
+// A refund above what can still be refunded says the API's `details.refundable` (FIX-W32-OTA), and so does the cancel
+// dialog's refund amount (FIX-W33-OTA).
 // Known API codes are answered here as the action's state (README §7, routes.md §1: messages of lib/errors.ts, some in
 // this action's own words, `fieldErrors` mapped to the dialog's fields, the request id), never thrown to `error.tsx`;
 // only Next.js's redirects (an ended session) and bugs are thrown. A success revalidates the booking's page, whose new
@@ -887,11 +888,40 @@ const CANCEL_POINTERS: Readonly<Record<string, string>> = Object.freeze({
   "/refund/amount/currency": AMOUNT_FIELD,
 });
 
+/** A `Money` of an error's `details` as the API answers it, or `undefined` when it is not one. */
+function moneyOfDetail(value: unknown): MoneyValue | undefined {
+  if (typeof value !== "object" || value === null) {
+    return undefined;
+  }
+  const { amount, currency } = value as Record<string, unknown>;
+  return typeof amount === "string" &&
+    /^[0-9]{1,12}(?:\.[0-9]{1,4})?$/.test(amount) &&
+    typeof currency === "string" &&
+    /^[A-Z]{3}$/.test(currency)
+    ? { amount, currency }
+    : undefined;
+}
+
+/**
+ * A refund above what can still be refunded (`422 UNPROCESSABLE`, `amount_exceeds_captured`) says how much can (the
+ * API's `details.refundable`: captured less refunded less the refunds still on their way to Stripe), so staff correct
+ * the amount without a reload (FIX-W32-OTA, lead decision (1h) of 2026-10-28); without the figure, the reload message.
+ * The cancel dialog's refund amount says it the same way since FIX-W33-OTA (lead decision (1f) of 2026-10-29):
+ * console.bookings.cancel answers the same refusal with the same `details.refundable`.
+ */
+function refundableRefusal(details: Readonly<Record<string, unknown>>): string {
+  const refundable = moneyOfDetail(details["refundable"]);
+  return refundable === undefined
+    ? STRINGS.amountExceedsCaptured
+    : STRINGS.amountExceedsRefundable(moneyText(refundable));
+}
+
 const CANCEL_OVERRIDES: Overrides = Object.freeze({
   ...BOOKING_OVERRIDES,
   SUPPLIER_REJECTED: STRINGS.cancelRejected,
   "UNPROCESSABLE:refund_via_airline": { message: STRINGS.refundViaAirline, field: REFUND_MODE_FIELD },
-  "UNPROCESSABLE:amount_exceeds_captured": { message: STRINGS.amountExceedsCaptured, field: AMOUNT_FIELD },
+  // The API's `details.refundable`, as the refund dialog says it (FIX-W33-OTA).
+  "UNPROCESSABLE:amount_exceeds_captured": { message: refundableRefusal, field: AMOUNT_FIELD },
   "UNPROCESSABLE:amount_exceeds_authorized": {
     message: STRINGS.amountExceedsAuthorized,
     field: AMOUNT_FIELD,
@@ -1062,32 +1092,6 @@ const PAYMENT_OVERRIDES: Overrides = Object.freeze({
   "CONFLICT:payment_not_refundable": STRINGS.notRefundable,
   "CONFLICT:payment_not_capturable": STRINGS.notCapturable,
 });
-
-/** A `Money` of an error's `details` as the API answers it, or `undefined` when it is not one. */
-function moneyOfDetail(value: unknown): MoneyValue | undefined {
-  if (typeof value !== "object" || value === null) {
-    return undefined;
-  }
-  const { amount, currency } = value as Record<string, unknown>;
-  return typeof amount === "string" &&
-    /^[0-9]{1,12}(?:\.[0-9]{1,4})?$/.test(amount) &&
-    typeof currency === "string" &&
-    /^[A-Z]{3}$/.test(currency)
-    ? { amount, currency }
-    : undefined;
-}
-
-/**
- * A refund above what can still be refunded (`422 UNPROCESSABLE`, `amount_exceeds_captured`) says how much can (the
- * API's `details.refundable`: captured less refunded less the refunds still on their way to Stripe), so staff correct
- * the amount without a reload (FIX-W32-OTA, lead decision (1h) of 2026-10-28); without the figure, the reload message.
- */
-function refundableRefusal(details: Readonly<Record<string, unknown>>): string {
-  const refundable = moneyOfDetail(details["refundable"]);
-  return refundable === undefined
-    ? STRINGS.amountExceedsCaptured
-    : STRINGS.amountExceedsRefundable(moneyText(refundable));
-}
 
 /** The overrides of a refund: a payment's, with the refundable amount in the refusal of a too large one. */
 const REFUND_OVERRIDES: Overrides = Object.freeze({

@@ -1848,6 +1848,39 @@ describe("a second staff cancellation while another one's DELETE is in flight (F
     return { reached, pass, spy };
   }
 
+  it("[FIX-W33-OTA] [OBE-061] shows the pending refusal in console.bookings.get's canCancel while another claim is fresh, as console.bookings.cancel answers", async () => {
+    const owner = await staff("owner");
+    const booking = await seedBooking("cancel.staff_shown_pending");
+    await seedPayment(booking.id, "captured");
+    const claimAt = (at: Date) =>
+      inTenant((trx) =>
+        trx
+          .updateTable("bookings")
+          .set({ cancellation_claimed_at: at })
+          .where("id", "=", booking.id)
+          .execute(),
+      );
+    // Another cancellation's DELETE in flight, the customer's or the staff's.
+    await claimAt(new Date());
+
+    const read = await owner.get(`${BOOKINGS}/${booking.id}`);
+
+    expect(answer(read)).toEqual([200, undefined]);
+    expectResponseToMatch("consoleGetBooking", read);
+    expect(read.body.consoleActions).toMatchObject({ canCancel: false, reasons: { canCancel: "pending" } });
+    stub.clearRequests();
+    const refused = await owner.cancel(booking.id, read.headers["etag"] as string, body);
+    expect(answer(refused)).toEqual([409, "BOOKING_NOT_MODIFIABLE"]);
+    expect(refused.body.error.details).toMatchObject({ reason: "pending" });
+    expect(amadeusCalls("cancelFlightOrder")).toEqual([]);
+
+    // A claim 5 minutes old holds nothing back.
+    await claimAt(new Date(Date.now() - 6 * MINUTE));
+    const reread = await owner.get(`${BOOKINGS}/${booking.id}`);
+    expect(reread.body.consoleActions).toMatchObject({ canCancel: true });
+    expect(reread.body.consoleActions.reasons).not.toHaveProperty("canCancel");
+  });
+
   it("[FIX-W32-OTA AC2] refuses a second staff cancellation sent with the ETag the first one's claim left: 409 pending, one DELETE", async () => {
     const owner = await staff("owner");
     const booking = await seedBooking("cancel.staff_second");

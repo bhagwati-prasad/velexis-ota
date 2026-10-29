@@ -27,10 +27,15 @@
 //      queued by the next `checkouts.expire` run, which runs for suspended tenants too and re-reads the checkouts
 //      expired in the last 24 hours; BullMQ holds one job per payment under that id, so no void runs twice;
 //   4. reads the tenant again: a resume that committed meanwhile (the worker runs two `ota-tenant-ops` jobs at once, so
-//      its message may have deleted the cut-off before step 1 wrote it) removes the cut-off again.
+//      its message may have deleted the cut-off before step 1 wrote it) removes the cut-off again. The value of the
+//      cut-off is read first and the tenant after it, and only that value is deleted, by a compare-and-delete (one Lua
+//      script: `DEL` only while the key still holds it; FIX-W33-OTA, lead decision (1g) of 2026-10-29): a suspension
+//      that commits after the re-read writes a cut-off of its own, which a plain `DEL` between the re-read and the
+//      delete would have removed while its tenant was suspended.
 //
-// `resume`, for a tenant `active` again: deletes the cut-off, then reads the tenant again and writes it again (now) if
-// the tenant was suspended once more meanwhile, so the cut-off always follows the latest status a handler saw.
+// `resume`, for a tenant `active` again: deletes the cut-off it reads after the tenant (the same compare-and-delete,
+// so a cut-off that a newer suspension writes meanwhile stays), then reads the tenant again and writes it again (now)
+// if the tenant was suspended once more meanwhile, so the cut-off always follows the latest status a handler saw.
 // Schedulers need nothing: each fan-out reads the tenants' statuses when it runs (jobs/schedulers.ts), so the queue
 // poller, the only schedule that skips suspended tenants (OADR-0014 point 4), picks the tenant up on its next run, and
 // ticketing, sync, reconciliation, refunds, checkout expiry and the transactional e-mails never stopped.
@@ -58,6 +63,13 @@ import { PlatformReadRepository } from "../tenancy/platform-read.repository";
 import type { PlatformTenant, TenantStatus } from "../tenancy/platform-read.types";
 import { TenantContext } from "../tenancy/tenant-context";
 import { TenantTx } from "../tenancy/tenant-tx";
+
+/**
+ * Deletes the key only while it still holds the value the caller read (KEYS[1], ARGV[1]): 1 when it deleted it, else 0.
+ * The staff cut-off's compare-and-delete (see the file header).
+ */
+export const DELETE_CUT_OFF_IF_UNCHANGED = `if redis.call("GET", KEYS[1]) == ARGV[1] then return redis.call("DEL", KEYS[1]) end
+return 0`;
 
 /** The checkouts one suspension transaction locks and expires at most: the batch of `checkouts.expire`. */
 export const SUSPENSION_EXPIRY_BATCH = JOB_BATCH_LIMITS.checkoutExpiry;
@@ -129,10 +141,12 @@ export class HousekeepingService {
       jobTenant(tenant, { id: request.requestId, name: "tenant.suspend" }),
       () => this.expireCheckouts(tenant, now),
     );
+    // The cut-off as it is before the re-read: only that value is deleted (step 4).
+    const seen = await this.cutOffOf(tenant.id);
     const current = await this.platform.tenantById(tenant.id);
     const staffDenied = current?.status === "suspended";
     if (!staffDenied) {
-      await this.allowStaff(tenant.id);
+      await this.allowStaff(tenant.id, seen);
     }
     return { status: "applied", ...counts, staffDenied };
   }
@@ -143,7 +157,7 @@ export class HousekeepingService {
     if (tenant === null || tenant.status !== "active") {
       return skipped(tenant);
     }
-    await this.allowStaff(tenant.id);
+    await this.allowStaff(tenant.id, await this.cutOffOf(tenant.id));
     const current = await this.platform.tenantById(tenant.id);
     const staffDenied = current?.status === "suspended";
     if (staffDenied) {
@@ -185,10 +199,21 @@ export class HousekeepingService {
     await this.redis.set(cutOff.key, String(now.getTime()), "EX", cutOff.ttlSeconds);
   }
 
-  /** Deletes the staff cut-off of the tenant. */
-  private async allowStaff(tenantId: string): Promise<void> {
+  /** The staff cut-off of the tenant as it is now (epoch ms as written), or `null` when there is none. */
+  private async cutOffOf(tenantId: string): Promise<string | null> {
+    return await this.redis.get(redisKeys.staffDenyTenant(tenantId).key);
+  }
+
+  /**
+   * Deletes the staff cut-off of the tenant while it still holds `seen`, the value read before (see the file header):
+   * a cut-off written since, by a newer suspension, stays. Nothing to delete when there was none.
+   */
+  private async allowStaff(tenantId: string, seen: string | null): Promise<void> {
+    if (seen === null) {
+      return;
+    }
     const cutOff = redisKeys.staffDenyTenant(tenantId);
-    await this.redis.del(cutOff.key);
+    await this.redis.eval(DELETE_CUT_OFF_IF_UNCHANGED, 1, cutOff.key, seen);
   }
 }
 

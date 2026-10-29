@@ -74,7 +74,7 @@ components:
 | `signOut`, `deleteAccount` | Edge mode: `Set-Cookie` clearing `__Host-vx_at`, `__Host-vx_rt` and rotating `__Host-vx_csrf`; `AuthSignOutRequest.refreshToken` comes from the cookie. |
 | `completeCheckout`, `completeCheckoutWithAirlineCard` | Edge mode, guests: the token is added to `__Host-vx_bt`; `bookingToken` and `bookingTokenExpiresAt` are `null` in the body (already nullable for customers). |
 | `lookupBooking` | Edge mode: the token is added to `__Host-vx_bt`. `BookingLookupResult.bookingToken` becomes nullable and is `null` in edge mode (same OADR-0006 approval). |
-| Every customer-scope operation | Edge mode: `401 TOKEN_EXPIRED` tells the SDK to call `auth.refresh` once with cookies and retry. |
+| Every customer-scope operation | Edge mode: `401 TOKEN_EXPIRED` tells the SDK to call `auth.refresh` once with cookies and retry. It answers an expired access cookie and, on an operation that reads the customer (but `auth.signOut`), a refresh cookie without an access cookie (OADR-0006 point 5 as revised on 2026-10-29). |
 
 ### 2.3 Cookies
 

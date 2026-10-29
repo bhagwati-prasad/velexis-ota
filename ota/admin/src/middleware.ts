@@ -18,6 +18,9 @@
 //    the request headers and puts the nonce on the scripts it renders; `x-nonce` hands it to a server component that
 //    renders a script of its own. It replaces the static `frame-ancestors 'none'` policy of next.config.ts, which
 //    stays for the answers the middleware does not see (static files, health routes).
+// 3. The page's address (`x-velexis-page-path`, lib/session.ts `PAGE_PATH_HEADER`: path and query, without Next.js's
+//    `_rsc`), set on every request it lets through, so a server component that sends the staff member to
+//    `/auth/refresh` passes it as `?next=` (FIX-W33-OTA).
 import "server-only";
 
 import { NextResponse, type NextRequest } from "next/server";
@@ -25,11 +28,13 @@ import { NextResponse, type NextRequest } from "next/server";
 import { getConfig } from "@/config";
 import { SIGNED_OUT_PATH, SIGN_OUT_PATH, SSO_PATH } from "@/lib/auth-routes";
 import {
+  PAGE_PATH_HEADER,
   REFRESH_PATH,
   STAFF_ACCESS_TOKEN_COOKIE,
   accessTokenExpiry,
   accessTokenNeedsRefresh,
   clearedSessionCookies,
+  pagePathOfUrl,
   portalConsoleUrl,
   readSessionCookies,
   staffSessionCookies,
@@ -209,6 +214,9 @@ export async function middleware(request: NextRequest): Promise<NextResponse> {
     }
     // Next.js reads the policy from the request headers and puts its nonce on the scripts it renders.
     forwarded.set(NONCE_HEADER, nonce);
+    // The page's address, for the `?next=` of a server component's redirect to /auth/refresh (lib/velexis.ts
+    // `getConsoleRequest`); always set here, so a value the browser sent never reaches a page.
+    forwarded.set(PAGE_PATH_HEADER, pagePathOfUrl(request.nextUrl));
     forwarded.set("content-security-policy", csp);
     response = NextResponse.next({ request: { headers: forwarded } });
   } else {

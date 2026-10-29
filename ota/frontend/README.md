@@ -32,7 +32,7 @@ flowchart LR
 
 1. **Tenant by host.** The storefront never knows a tenant key at build time. Caddy forwards the host; the OTA API resolves it to the tenant and its storefront environment (test until the OTA goes live) ([OADR-0009](../docs/adr/0009-caller-and-tenant-resolution.md)).
 2. **Same origin.** All API calls go to `/api/*` on the page's own host, so there is no CORS, cookies are host-only, and no key or token is ever in JavaScript ([OADR-0006](../docs/adr/0006-storefront-cookie-sessions-and-csrf.md)).
-3. **Runtime configuration.** Each page calls `storefront.get` once (cached in `sessionStorage` for 5 minutes, which is per origin, so tenants never mix). It returns branding, locales, currencies, features, legal links, support details, SEO defaults and the payment configuration ([OADR-0012](../docs/adr/0012-storefront-settings-assets-and-pages.md)).
+3. **Runtime configuration.** Each page calls `storefront.get` once (cached in `sessionStorage` for 5 minutes, which is per origin, so tenants never mix; any API call that answers `403 TENANT_SUSPENDED` drops the cached copy, so an open tab's next page shows the unavailable state: `storefrontFetch` of `lib/client.js`, [OADR-0015](../docs/adr/0015-storefront-build-urls-and-hosting.md) point 7 as revised on 2026-10-29, FIX-W33-OTA). It returns branding, locales, currencies, features, legal links, support details, SEO defaults and the payment configuration ([OADR-0012](../docs/adr/0012-storefront-settings-assets-and-pages.md)).
 4. **States from the API**, not from build flags: `environment = test` shows a permanent "Test mode" banner and `noindex`; `403 TENANT_SUSPENDED` shows a "temporarily unavailable" page; `403 HOST_NOT_ALLOWED` shows "this storefront does not exist".
 5. **Custom domains** need nothing from the storefront ([ADR-0018](../../docs/mvp/adr/0018-hosted-storefront-custom-domains.md)).
 
@@ -57,8 +57,9 @@ ota/frontend/
   src/
     pages/<page>.js           one entry module per HTML page
     boot.js                   shared start-up of every page (§5.1); renderState for the shared page states
-    lib/client.js             the single SDK client (cookie mode)
+    lib/client.js             the single SDK client (cookie mode); drops the cached configuration on 403 TENANT_SUSPENDED
     lib/config.js             storefront.get with the 5-minute sessionStorage cache
+    lib/config-cache.js       the cache's sessionStorage key and clearCachedConfig (shared by config.js and client.js)
     lib/dom.js                $, $$, clone(templateId), fill(el, data) via textContent and allowlisted attributes, on()
     lib/format.js             money, dates, durations with Intl
     lib/forms.js              serialisation, fieldErrors → fields, error summary, submit state

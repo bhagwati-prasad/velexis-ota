@@ -1519,7 +1519,7 @@ export interface paths {
          *
          *     **Amadeus call.** **Flight Order Management** `GET /v1/booking/flight-orders/{id}?fareRules=refunds` (getFlightOrder) → per flight offer `fareRules.rules[]` with REFUND / CANCELLATION categories, `notApplicable`, `maxPenaltyAmount`, `isChargeable` and `refundingPreview` (farePaid, fareUsed, fareRefund, totalRefund, cancellationPenalty, totalTax per ticket). The response also refreshes the stored order (`order_snapshot`, tickets).
          *
-         *     **Computation (NestJS `CancellationQuoteService`).** `mode`: `release` when nothing is ticketed (order cancelled, authorisation voided or payment refunded in full minus non-refundable OTA fees); `void` when every ticket was issued today in the office time zone (`voidDeadlineAt`); `refund` when the fare rules allow a refund (refund = selling amount paid − airline penalty converted from `cancellationPenalty`/`maxPenaltyAmount` − OTA cancellation fee from `fee_rules`; markup refund per storefront policy); `request_only` when the airline gives no refund preview but taxes are refundable (the OTA processes it, booking `Cancellation.status = pending`); `not_allowed` (flown, cancelled, pending, too close to departure, or self-service cancellation disabled in storefront settings). Customer scope never sees Amadeus net amounts: `refundEstimate` and `lines` are selling-currency estimates.
+         *     **Computation (NestJS `CancellationQuoteService`).** `mode`: `release` when nothing is ticketed (order cancelled, authorisation voided or payment refunded in full minus non-refundable OTA fees); `void` when every ticket was issued today in the office time zone (`voidDeadlineAt`); `refund` when the fare rules allow a refund (refund = selling amount paid − airline penalty converted from `cancellationPenalty`/`maxPenaltyAmount` − OTA cancellation fee from `fee_rules`; markup refund per storefront policy); `request_only` when the airline gives no refund preview but taxes are refundable (the OTA processes it, booking `Cancellation.status = pending`); `not_allowed` (flown, cancelled, pending, too close to departure, or self-service cancellation disabled in storefront settings). `pending` is the refusal bookings.cancel answers while another cancellation is in progress: an earlier one undecided or waiting for the staff, or another cancellation's Flight Order Management DELETE in flight (claimed less than 5 minutes ago). Customer scope never sees Amadeus net amounts: `refundEstimate` and `lines` are selling-currency estimates.
          *
          *     **Cache.** The quote is cached in Redis (`cxq:{bookingId}`, 10 minutes, `expiresAt`) and reused by bookings.cancel to check `expectedRefund`.
          *
@@ -2277,7 +2277,7 @@ export interface paths {
         };
         /**
          * List the Amadeus call log
-         * @description Lists `supplier_requests` (newest first): every Amadeus call made for this OTA in the key's environment — customer flows (search, pricing, checkout, bookings sync), console operations, raw pass-through calls and background jobs — with operation, Amadeus API and operationId, method, path, office, HTTP status, classified outcome, Amadeus error codes, latency, Amadeus correlation id (`ama-request-id`, quote it to Amadeus support), the Velexis `X-Request-Id`, and the related booking/search/staff. `includeBodies=true` adds the redacted request and response bodies (card numbers, CVV, document numbers, e-mails and phones masked before storage; bodies above 256 KB truncated; `limit` ≤ 20 then).
+         * @description Lists `supplier_requests` (newest first): every Amadeus call made for this OTA in the key's environment — customer flows (search, pricing, checkout, bookings sync), console operations, raw pass-through calls and background jobs — with operation, Amadeus API and operationId, method, path, office, HTTP status, classified outcome, Amadeus error codes, latency, Amadeus correlation id (`ama-request-id`, quote it to Amadeus support), the Velexis `X-Request-Id`, and the related booking/search/staff. `includeBodies=true` adds the redacted request and response bodies (card numbers, CVV, document numbers, e-mails and phones masked before storage; bodies above 64 KB truncated; `limit` ≤ 20 then).
          *
          *     Filters: `bookingId`, `searchId`, `amadeusApi`, `amadeusOperationId`, `outcome`, `httpStatus`, `errorCode` (Amadeus code, e.g. 4926), `staffId`, `requestId`, `correlationId`, `createdFrom`/`createdTo`. Retention 90 days. No Amadeus call. Permission `supplier_requests:read` (owner, admin, agent, finance).
          *
@@ -2311,7 +2311,7 @@ export interface paths {
          * Raw Flight Offers Search (POST)
          * @description **Raw pass-through** of Amadeus **Flight Offers Search** `POST /v2/shopping/flight-offers` (searchFlightOffers). `amadeus` is the complete getFlightOffersQuery — `currencyCode`, `originDestinations` (id, originLocationCode, destinationLocationCode, originRadius, destinationRadius, alternativeOriginsCodes, alternativeDestinationsCodes, departureDateTimeRange / arrivalDateTimeRange with date, time, dateWindow, timeWindow, includedConnectionPoints, excludedConnectionPoints), `travelers` (id, travelerType, associatedAdultId, fareOptions, loyaltyPrograms), `sources` (GDS, LTC, PYTON, EAC, NDC) and `searchCriteria` (excludeAllotments, addOneWayOffers, maxFlightOffers, maxPrice, allowAlternativeFareOptions, oneFlightOfferPerDay, additionalInformation, pricingOptions, flightFilters incl. carrier, cabin and connection restrictions) — forwarded verbatim with `X-HTTP-Method-Override: GET`.
          *
-         *     **Behaviour common to console.amadeus.*.** NestJS authenticates with the OTA's Amadeus connection of the key's environment (OAuth2 client credentials from platform.supplier_connections, token cached in Redis until 60 s before expiry) and adds nothing else to the Amadeus request; the verbatim Amadeus response is returned in `amadeus` with `call` (supplier request id, office, status, latency, correlation id). Amadeus 4xx → `422 SUPPLIER_REJECTED` (verbatim `errors[]` in `details.errors`), 5xx → `502 SUPPLIER_ERROR`, unavailable → `503`, timeout (30 s for shopping, 60 s for orders) → `504`. Every call writes `supplier_requests` (redacted; `bookingId` links it to a booking) and `staff_actions` (`amadeus.<operationId>`, `reason`). Prices are **net supplier prices** (no markup) and are never shown to customers. Raw results are not stored in flight_offers: to sell an offer to a customer use flights.search / flights.price; to book a raw offer either price it with flights.price (`amadeusFlightOffers`, console scope → `prc_…`) and book it with console.bookings.create (markup, tables, notifications), or stay raw with console.amadeus.quoteAirOffers then console.amadeus.createFlightOrders. Permission `amadeus:read`; raw access can be disabled per OTA (`403 FEATURE_DISABLED`). Rate limit 30 calls/min per staff member.
+         *     **Behaviour common to console.amadeus.*.** NestJS authenticates with the OTA's Amadeus connection of the key's environment (OAuth2 client credentials from platform.supplier_connections, token cached in Redis until 60 s before expiry) and adds nothing else to the Amadeus request; the verbatim Amadeus response is returned in `amadeus` with `call` (supplier request id, office, status, latency, correlation id). Amadeus 4xx → `422 SUPPLIER_REJECTED` (verbatim `errors[]` in `details.errors`), 5xx → `502 SUPPLIER_ERROR`, unavailable → `503`, timeout (30 s for shopping, 60 s for orders) → `504`. Every call writes `supplier_requests` (redacted; `bookingId` links it to a booking) and `staff_actions` (`amadeus.<operationId>`, `reason`). Prices are **net supplier prices** (no markup) and are never shown to customers. Raw results are not stored in flight_offers: to sell an offer to a customer use flights.search / flights.price; to book a raw offer either price it with flights.price (`amadeusFlightOffers`, console scope → `prc_…`) and book it with console.bookings.create (markup, tables, notifications), or stay raw with console.amadeus.quoteAirOffers then console.amadeus.createFlightOrders. Permission `amadeus:read`. Rate limit: the console's, 600 requests per minute per staff session or key.
          *
          *     **Idempotent by design**: a search has no side effect at Amadeus; retries are safe without `Idempotency-Key`.
          *
@@ -2857,7 +2857,7 @@ export interface paths {
         };
         /**
          * List the notification templates
-         * @description Lists the **effective** e-mail template of every template key the code knows, for every locale of the storefront settings' `locales.supported`: the OTA's own row of `notification_templates` when it exists (`customised: true`), otherwise the code default (`customised: false`; the English default where the code has none for the locale), each with the variables its key allows. Ordered by key, then locale; not paginated. OADR-0013 point 3.
+         * @description Lists the **effective** e-mail template of every template key the code knows, for every locale of the storefront settings' `locales.supported`: the OTA's row of `notification_templates` of exactly that locale when it exists, active or not; otherwise the active row of the locale's language (`en` for `en-GB`), which e-mails in that locale use, marked `inheritedFrom` with its locale (`version` and `updatedAt` null: the locale has no row of its own); otherwise the code default (the English default where the code has none for the locale). `customised` is false for the code default and for a row provisioning seeded from it until the OTA edits it. Each comes with the variables its key allows. Ordered by key, then locale; not paginated. OADR-0013 point 3.
          *
          *     No Amadeus call. Permission `settings:read`. Not audited per call.
          *
@@ -2881,18 +2881,18 @@ export interface paths {
         };
         /**
          * Get a notification template
-         * @description Returns the effective template of one key, channel and locale: the OTA's row when it exists (`customised: true`, with `ETag` = `"<version>"` to pass as `If-Match` to console.settings.templates.put), otherwise the code default (`customised: false`, `version` null, no `ETag`; the English default where the code has none for the locale). `variables` lists what the key's templates may use. No Amadeus call. Permission `settings:read`. Not audited per call.
+         * @description Returns the effective template of one key, channel and locale: the OTA's row of exactly that locale when it exists, active or not (with `ETag` = `"<version>"` to pass as `If-Match` to console.settings.templates.put; `customised: false` while it is the row provisioning seeded from the code default, `true` once the OTA edited it); otherwise the active row of the locale's language (`en` for `en-GB`), which e-mails in that locale use (`inheritedFrom` its locale, `version` null, no `ETag`: a put creates the locale's own row, without `If-Match`); otherwise the code default (`customised: false`, `version` null, no `ETag`; the English default where the code has none for the locale). `variables` lists what the key's templates may use. No Amadeus call. Permission `settings:read`. Not audited per call.
          *
          *     **Key-only calls.** Without a staff token the secret key must carry the `console:automation` scope and this operation's permission in `platform.api_keys.scopes` — otherwise `403 SCOPE_NOT_ALLOWED` (`details.requiredScope`) or `403 FORBIDDEN` (`details.requiredPermission`); such calls are audited as the API key (see ConsoleApiKeyScope). A key scoped `storefront` is refused even with a staff token.
          */
         get: operations["consoleGetNotificationTemplate"];
         /**
          * Create or replace a notification template
-         * @description Creates or replaces the OTA's template of one key, channel and locale (upsert of `notification_templates`). `If-Match` is required when the OTA already has a row for them (its `ETag`; missing or stale → `412 PRECONDITION_FAILED`) and must be absent when it has none.
+         * @description Creates or replaces the OTA's template of one key, channel and locale (upsert of `notification_templates`): the row of exactly that locale, never the row of its language that an inherited template shows. `If-Match` is required when the OTA already has a row for them, the row provisioning seeded included (its `ETag`; missing or stale → `412 PRECONDITION_FAILED`), and must be absent when it has none.
          *
          *     **Compilation.** The server compiles `subject`, `bodyHtml` and `bodyText` with Handlebars in strict mode and checks every variable against the key's allow-list (`variables`): a template that does not compile or uses another variable answers `422 TEMPLATE_INVALID` with `details.errors[{part, line, message}]`, and nothing is saved. A locale outside the storefront settings' `locales.supported` answers `422 UNPROCESSABLE` (`details.reason = "locale_not_supported"`).
          *
-         *     The answer is the saved template (`customised: true`, new `version` and `ETag`); e-mails rendered from then on use it (OADR-0013 point 3). `isActive: false` keeps the row but sends the default. No Amadeus call. Permission `settings:write`; `staff_actions` records the template before and after.
+         *     The answer is the saved template (`customised: true`, `inheritedFrom` null, new `version` and `ETag`); e-mails rendered from then on use it (OADR-0013 point 3). `isActive: false` keeps the row, and e-mails use the active row of the locale's language, else the default. No Amadeus call. Permission `settings:write`; `staff_actions` records the template before and after.
          *
          *     **Key-only calls.** Without a staff token the secret key must carry the `console:automation` scope and this operation's permission in `platform.api_keys.scopes` — otherwise `403 SCOPE_NOT_ALLOWED` (`details.requiredScope`) or `403 FORBIDDEN` (`details.requiredPermission`); such calls are audited as the API key (see ConsoleApiKeyScope). A key scoped `storefront` is refused even with a staff token.
          */
@@ -2915,7 +2915,7 @@ export interface paths {
         put?: never;
         /**
          * Preview a notification template
-         * @description Renders a template without saving or sending anything: the effective template of the key, channel and locale, or the `subject`, `bodyHtml` and `bodyText` given in the body (a draft), with the template's sample data, or with `variables` when given. Compiled exactly like console.settings.templates.put (strict mode, the key's allow-list): a draft that does not compile answers `422 TEMPLATE_INVALID` with `details.errors`.
+         * @description Renders a template without saving or sending anything: the effective template of the key, channel and locale (as console.settings.templates.get shows it, an inherited one included), or the `subject`, `bodyHtml` and `bodyText` given in the body (a draft), with the template's sample data, or with `variables` when given. Compiled exactly like console.settings.templates.put (strict mode, the key's allow-list): a draft that does not compile answers `422 TEMPLATE_INVALID` with `details.errors`.
          *
          *     The answer is `{subject, html, text}`. Show `html` only in a sandboxed `iframe` without scripts (the OTA admin does). Safe to repeat (`x-idempotent-by-design`): nothing is stored. No Amadeus call. Permission `settings:read`. Not audited per call.
          *
@@ -2939,7 +2939,7 @@ export interface paths {
         put?: never;
         /**
          * Reset a notification template to the default
-         * @description Deletes the OTA's template of one key, channel and locale, so the code default applies again (OADR-0013 point 3), and returns that default (`customised: false`). Safe to repeat (`x-idempotent-by-design`): without a row it changes nothing and returns the default. No Amadeus call. Permission `settings:write`; `staff_actions` records the deleted template.
+         * @description Deletes the OTA's template of one key, channel and locale (the row of exactly that locale, the one provisioning seeded included), so the template e-mails used before it applies again (OADR-0013 point 3): the active row of the locale's language (`inheritedFrom`), else the code default (`customised: false`), which it returns. Safe to repeat (`x-idempotent-by-design`): without a row it changes nothing and returns that template. No Amadeus call. Permission `settings:write`; `staff_actions` records the deleted template.
          *
          *     **Key-only calls.** Without a staff token the secret key must carry the `console:automation` scope and this operation's permission in `platform.api_keys.scopes` — otherwise `403 SCOPE_NOT_ALLOWED` (`details.requiredScope`) or `403 FORBIDDEN` (`details.requiredPermission`); such calls are audited as the API key (see ConsoleApiKeyScope). A key scoped `storefront` is refused even with a staff token.
          */
@@ -10008,7 +10008,7 @@ export interface components {
         };
         /** @description Self-service actions available to this caller now (status, flown segments, ticketing state, storefront settings). */
         BookingAllowedActions: {
-            /** @description bookings.cancel (self-service cancellation enabled, nothing departed (no segment flown or past its departure time: reason `flown`), not cancelled, more than 3 h before the first departure (reason `too_close_to_departure`), an Amadeus order, and no earlier cancellation undecided or waiting for the staff: reason `pending`). bookings.cancel refuses on the same rule. */
+            /** @description bookings.cancel (self-service cancellation enabled, nothing departed (no segment flown or past its departure time: reason `flown`), not cancelled, more than 3 h before the first departure (reason `too_close_to_departure`), an Amadeus order, and no earlier cancellation undecided or waiting for the staff, nor another cancellation whose Flight Order Management DELETE is in flight: reason `pending`). bookings.cancel refuses on the same rule. */
             canCancel: boolean;
             /** @description bookings.update contacts. */
             canModifyContacts: boolean;
@@ -11295,7 +11295,7 @@ export interface components {
             staffId: string | null;
             /** @description PII/card data stripped. */
             redacted: boolean;
-            /** @description Bodies truncated to 256 KB. */
+            /** @description Bodies truncated to 64 KB. */
             truncated: boolean;
             /**
              * Format: date-time
@@ -11317,7 +11317,7 @@ export interface components {
             canIssue: boolean;
             /** @description console.bookings.patch. */
             canPatch: boolean;
-            /** @description console.bookings.cancel. */
+            /** @description console.bookings.cancel (`bookings:cancel`, an Amadeus order, not cancelled, no cancellation undecided nor another cancellation whose Flight Order Management DELETE is in flight: reason `pending`, and no segment departed: reason `flown`). console.bookings.cancel refuses on the same rule. */
             canCancel: boolean;
             /** @description console.bookings.resync. */
             canResync: boolean;
@@ -13222,7 +13222,7 @@ export interface components {
             /** @description What the variable holds. */
             description: string;
         };
-        /** @description The effective template of a key, channel and locale: the OTA's row of `notification_templates` (`customised: true`) or the code default (`customised: false`). Templates are Handlebars, compiled in strict mode with the key's variable allow-list (OADR-0013 point 3). */
+        /** @description The effective template of a key, channel and locale: the OTA's row of `notification_templates` of exactly that locale, else the active row of its language that e-mails in the locale use (`inheritedFrom`), else the code default (`customised: false`). Templates are Handlebars, compiled in strict mode with the key's variable allow-list (OADR-0013 point 3). */
         NotificationTemplate: {
             key: components["schemas"]["NotificationTemplateKey"];
             channel: components["schemas"]["NotificationChannel"];
@@ -13235,15 +13235,17 @@ export interface components {
             bodyText: string;
             /** @description The variables templates of this key may use (the allow-list), with descriptions. */
             variables: components["schemas"]["NotificationTemplateVariable"][];
-            /** @description The OTA has its own row; false for the code default. */
+            /** @description The template shown is the OTA's own edit: false for the code default and for a row provisioning seeded from it, until the OTA edits that row (such a row still has its `version` and `ETag`: a put needs `If-Match`). */
             customised: boolean;
-            /** @description When false the OTA's row is kept but the default is sent. */
+            /** @description The locale of the row shown when the asked locale has no row of its own and e-mails in it use the active row of its language (`en` for `en-GB`); `version` and `updatedAt` are then null, and a put creates the locale's own row. Null for the locale's own row and for the code default. */
+            inheritedFrom: components["schemas"]["LocaleCode"] | null;
+            /** @description When false the OTA's row is kept, and e-mails use the active row of the locale's language, else the default. */
             isActive: boolean;
-            /** @description Optimistic-locking counter of the OTA's row (`ETag` `"<version>"`); null for the code default. */
+            /** @description Optimistic-locking counter of the locale's own row (`ETag` `"<version>"`); null for the code default and for an inherited template. */
             version: number | null;
             /**
              * Format: date-time
-             * @description Last change of the OTA's row; null for the code default.
+             * @description Last change of the locale's own row; null for the code default and for an inherited template.
              */
             updatedAt: string | null;
         };
@@ -25547,7 +25549,7 @@ export interface operations {
                      *         "amadeusApi": "QueueList",
                      *         "amadeusOperationId": "GET/office/queues/{queue-id}",
                      *         "httpMethod": "GET",
-                     *         "path": "/office/queues/50?max=5&category=0&officeId=NCE1A0950",
+                     *         "path": "/v1/office/queues/50?max=5&category=0&officeId=NCE1A0950",
                      *         "httpStatus": 200,
                      *         "durationMs": 980,
                      *         "correlationId": "0005K2DL5V4YZT",

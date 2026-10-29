@@ -32,6 +32,7 @@ import type { PlatformTenant, TenantStatus } from "../tenancy/platform-read.type
 import type { RequestTenant, TenantContext } from "../tenancy/tenant-context";
 import type { TenantTransaction, TenantTx } from "../tenancy/tenant-tx";
 import {
+  DELETE_CUT_OFF_IF_UNCHANGED,
   HousekeepingService,
   SUSPENSION_EXPIRY_BATCH,
   type ResumeOutcome,
@@ -116,10 +117,25 @@ interface Harness {
 }
 
 /**
+ * The keys the Redis double holds: `set` writes, `get` reads, and `eval` of the cut-off's compare-and-delete deletes a
+ * key only while it holds the value it is given, as the Lua script does in Redis.
+ */
+const store = vi.hoisted(() => new Map<string, string>());
+
+/**
+ * What another handler does while the service runs: after the tenant read of an index (0 the first), or after the
+ * service's read of the cut-off, before the service goes on (a Redis write that lands in a window, say).
+ */
+interface Interleaving {
+  readonly afterRead?: Readonly<Record<number, () => void>>;
+  readonly afterGet?: () => void;
+}
+
+/**
  * The service with doubles. `statuses` are the answers of the successive tenant reads (`null`: no such tenant); the
  * last one repeats.
  */
-function harness(statuses: ReadonlyArray<TenantStatus | null>): Harness {
+function harness(statuses: ReadonlyArray<TenantStatus | null>, interleaving: Interleaving = {}): Harness {
   const reads: string[] = [];
   const contexts: RequestTenant[] = [];
   let read = 0;
@@ -127,8 +143,9 @@ function harness(statuses: ReadonlyArray<TenantStatus | null>): Harness {
     tenantById: (id: string) => {
       reads.push(id);
       const status = statuses[Math.min(read, statuses.length - 1)] ?? null;
-      read += 1;
       journal.push(`read tenant ${status ?? "none"}`);
+      interleaving.afterRead?.[read]?.();
+      read += 1;
       return Promise.resolve(status === null ? null : tenant(status));
     },
   } as unknown as PlatformReadRepository;
@@ -154,11 +171,23 @@ function harness(statuses: ReadonlyArray<TenantStatus | null>): Harness {
   const redis = {
     set: (key: string, value: string, mode: string, ttl: number) => {
       journal.push(`set ${key} ${value} ${mode} ${ttl}`);
+      store.set(key, value);
       return Promise.resolve("OK");
     },
-    del: (key: string) => {
-      journal.push(`del ${key}`);
-      return Promise.resolve(1);
+    get: (key: string) => {
+      const value = store.get(key) ?? null;
+      journal.push(`get ${key} ${value ?? "nil"}`);
+      interleaving.afterGet?.();
+      return Promise.resolve(value);
+    },
+    eval: (lua: string, keys: number, key: string, value: string) => {
+      expect([lua, keys]).toEqual([DELETE_CUT_OFF_IF_UNCHANGED, 1]);
+      const deleted = store.get(key) === value ? 1 : 0;
+      if (deleted === 1) {
+        store.delete(key);
+      }
+      journal.push(`compare-and-delete ${key} ${value} -> ${deleted}`);
+      return Promise.resolve(deleted);
     },
   } as unknown as Redis;
   const payments = {
@@ -186,6 +215,7 @@ const cutOffWrite = (at: Date): string => `set ${CUT_OFF_KEY} ${at.getTime()} EX
 
 beforeEach(() => {
   journal.length = 0;
+  store.clear();
   script.locked = [];
   script.held = new Set();
   script.voidable = new Map();
@@ -229,7 +259,8 @@ describe("HousekeepingService.suspend", () => {
       "voidable of 2",
       "commit",
       `queue payment.void:payment-void-${paymentId(2)},payment.void:payment-void-${paymentId(3)}`,
-      // The tenant read again: still suspended, so the cut-off stays.
+      // The cut-off's value, then the tenant read again: still suspended, so the cut-off stays.
+      `get ${CUT_OFF_KEY} ${NOW.getTime()}`,
       "read tenant suspended",
     ]);
     expect(STAFF_DENY_TTL_SECONDS).toBe(30 * 24 * 60 * 60);
@@ -309,7 +340,39 @@ describe("HousekeepingService.suspend", () => {
     const outcome = await service.suspend(REQUEST);
 
     expect(outcome).toMatchObject({ status: "applied", expired: 1, staffDenied: false });
-    expect(journal.slice(-2)).toEqual(["read tenant active", `del ${CUT_OFF_KEY}`]);
+    expect(journal.slice(-3)).toEqual([
+      `get ${CUT_OFF_KEY} ${NOW.getTime()}`,
+      "read tenant active",
+      `compare-and-delete ${CUT_OFF_KEY} ${NOW.getTime()} -> 1`,
+    ]);
+    expect(store.has(CUT_OFF_KEY)).toBe(false);
+  });
+
+  it("[FIX-W33-OTA] [OBE-074] keeps the cut-off a newer suspension writes between the re-read and the delete", async () => {
+    // The tenant was resumed, then suspended again: that suspension's handler writes its own cut-off right after this
+    // handler's re-read saw the tenant active, before this handler deletes.
+    const newer = String(NOW.getTime() + 60_000);
+    const { service } = harness(["suspended", "active"], {
+      afterRead: {
+        1: () => {
+          store.set(CUT_OFF_KEY, newer);
+          journal.push("another handler writes its cut-off");
+        },
+      },
+    });
+
+    const outcome = await service.suspend(REQUEST);
+
+    expect(outcome).toMatchObject({ status: "applied", staffDenied: false });
+    expect(journal.slice(-4)).toEqual([
+      `get ${CUT_OFF_KEY} ${NOW.getTime()}`,
+      "read tenant active",
+      "another handler writes its cut-off",
+      // Only the value read before the re-read is deleted: the newer suspension's cut-off stays.
+      `compare-and-delete ${CUT_OFF_KEY} ${NOW.getTime()} -> 0`,
+    ]);
+    expect(store.get(CUT_OFF_KEY)).toBe(newer);
+    expect(journal.filter((entry) => entry.startsWith("del "))).toEqual([]);
   });
 
   it("fails with the statement's error, rolls the batch back and keeps the voids of the batches committed before", async () => {
@@ -330,12 +393,47 @@ describe("HousekeepingService.suspend", () => {
 
 describe("HousekeepingService.resume", () => {
   it("deletes the staff cut-off of a tenant that is active again [OBE-074 AC3]", async () => {
+    const written = String(NOW.getTime() - 60_000);
+    store.set(CUT_OFF_KEY, written);
     const { service, contexts } = harness(["active"]);
 
     expect(await service.resume(REQUEST)).toEqual<ResumeOutcome>({ status: "applied", staffDenied: false });
-    expect(journal).toEqual(["read tenant active", `del ${CUT_OFF_KEY}`, "read tenant active"]);
+    expect(journal).toEqual([
+      "read tenant active",
+      `get ${CUT_OFF_KEY} ${written}`,
+      `compare-and-delete ${CUT_OFF_KEY} ${written} -> 1`,
+      "read tenant active",
+    ]);
+    expect(store.has(CUT_OFF_KEY)).toBe(false);
     // Nothing of the tenant's own data changes: no tenant transaction.
     expect(contexts).toEqual([]);
+  });
+
+  it("[FIX-W33-OTA] [OBE-074] keeps a cut-off that a newer suspension writes between its read and its delete", async () => {
+    const written = String(NOW.getTime() - 60_000);
+    const newer = String(NOW.getTime() + 60_000);
+    store.set(CUT_OFF_KEY, written);
+    // The tenant is suspended again, and that suspension's handler writes its cut-off right after this handler read
+    // the old one.
+    const { service } = harness(["active", "suspended"], {
+      afterGet: () => {
+        store.set(CUT_OFF_KEY, newer);
+        journal.push("another handler writes its cut-off");
+      },
+    });
+
+    expect(await service.resume(REQUEST)).toEqual<ResumeOutcome>({ status: "applied", staffDenied: true });
+    expect(journal).toEqual([
+      "read tenant active",
+      `get ${CUT_OFF_KEY} ${written}`,
+      "another handler writes its cut-off",
+      // The newer cut-off is never deleted, not even for a moment: the staff of the new suspension stay refused.
+      `compare-and-delete ${CUT_OFF_KEY} ${written} -> 0`,
+      "read tenant suspended",
+      cutOffWrite(NOW),
+    ]);
+    expect(store.get(CUT_OFF_KEY)).toBe(String(NOW.getTime()));
+    expect(newer).not.toBe(written);
   });
 
   it.each([
@@ -354,7 +452,8 @@ describe("HousekeepingService.resume", () => {
     expect(await service.resume(REQUEST)).toEqual<ResumeOutcome>({ status: "applied", staffDenied: true });
     expect(journal).toEqual([
       "read tenant active",
-      `del ${CUT_OFF_KEY}`,
+      // No cut-off to delete: the suspension's handler has not written it yet.
+      `get ${CUT_OFF_KEY} nil`,
       "read tenant suspended",
       cutOffWrite(NOW),
     ]);

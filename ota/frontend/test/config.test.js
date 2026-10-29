@@ -188,4 +188,81 @@ describe("the storefront client", () => {
     // Cookie mode refuses tokens, so none can be passed to the storefront client by mistake.
     expect(() => client.withOptions({ accessToken: "not-a-real-token" })).toThrow(TypeError);
   });
+
+  /** The API's error answer: `status` with `code`. */
+  const errorAnswer = (/** @type {number} */ status, /** @type {string} */ code) =>
+    new Response(JSON.stringify({ error: { code, message: code, status, requestId: "req_test" } }), {
+      status,
+      headers: { "content-type": "application/json" },
+    });
+
+  /** A cached configuration, as a page left it in sessionStorage a minute ago. */
+  function cacheConfig() {
+    sessionStorage.setItem(
+      CONFIG_STORAGE_KEY,
+      JSON.stringify({ storedAt: Date.now() - 60_000, config: CONFIG }),
+    );
+  }
+
+  it("[OFE-003] [FIX-W33-OTA] drops the cached storefront.get copy when any call answers 403 TENANT_SUSPENDED", async () => {
+    cacheConfig();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => errorAnswer(403, "TENANT_SUSPENDED")),
+    );
+
+    // Not storefront.get: any call of an open tab (here the airports' names).
+    await expect(client.reference.airports.get({ iataCode: "MAD" })).rejects.toMatchObject({
+      code: "TENANT_SUSPENDED",
+      status: 403,
+    });
+
+    expect(sessionStorage.getItem(CONFIG_STORAGE_KEY)).toBeNull();
+    // The next page asks storefront.get again, which answers the suspension: loadConfig throws it, boot renders it.
+    await expect(loadConfig()).rejects.toMatchObject({ code: "TENANT_SUSPENDED" });
+  });
+
+  it("[OFE-003] [FIX-W33-OTA] keeps the cached copy for any other refusal, a 403 of another code included", async () => {
+    for (const [status, code] of /** @type {const} */ ([
+      [403, "FEATURE_DISABLED"],
+      [403, "CSRF_TOKEN_INVALID"],
+      [404, "NOT_FOUND"],
+    ])) {
+      cacheConfig();
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => errorAnswer(status, code)),
+      );
+      await expect(client.reference.airports.get({ iataCode: "MAD" })).rejects.toMatchObject({ code });
+      expect(sessionStorage.getItem(CONFIG_STORAGE_KEY)).toContain('"tenantKey":"demo"');
+    }
+    // A 403 whose body is not the API's JSON (a proxy's page) changes nothing either.
+    cacheConfig();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response("<h1>Forbidden</h1>", { status: 403, headers: { "content-type": "text/html" } }),
+      ),
+    );
+    await expect(client.reference.airports.get({ iataCode: "MAD" })).rejects.toMatchObject({ status: 403 });
+    expect(sessionStorage.getItem(CONFIG_STORAGE_KEY)).toContain('"tenantKey":"demo"');
+  });
+
+  it("[OFE-003] [FIX-W33-OTA] drops nothing and still answers the call when the browser refuses storage", async () => {
+    Object.defineProperty(globalThis, "sessionStorage", {
+      configurable: true,
+      get() {
+        throw new DOMException("Access is denied for this document.", "SecurityError");
+      },
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => errorAnswer(403, "TENANT_SUSPENDED")),
+    );
+
+    await expect(client.reference.airports.get({ iataCode: "MAD" })).rejects.toMatchObject({
+      code: "TENANT_SUSPENDED",
+    });
+  });
 });
