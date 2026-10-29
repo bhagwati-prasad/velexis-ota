@@ -6,7 +6,8 @@
 // - helmet: the security headers of a JSON API, aligned with Caddy's `security_headers` so the answer is the same
 //   with or without the proxy; Caddy replaces them on the public hosts anyway.
 // - cookie-parser: `req.cookies`, unsigned (the storefront session cookies are opaque, OADR-0006).
-// - body parsers (body-parsers.ts): raw on `/webhooks/*`, JSON with 256 KB elsewhere, the per-route limits of main.ts.
+// - body parsers (body-parsers.ts): raw on `/webhooks/*`, multipart on the routes of main.ts (the asset upload), JSON
+//   with 256 KB elsewhere, the per-route limits of main.ts.
 // - the OpenAPI validation interceptor and the error filter are global (`APP_INTERCEPTOR`, `APP_FILTER`).
 // - the idempotency interceptor (OBE-014) is global too, registered after the validation interceptor so it runs after
 //   it: a request is validated before its key is claimed in `idempotency_keys`. It needs the tenant transaction of the
@@ -62,7 +63,7 @@ export const HELMET_OPTIONS: Readonly<HelmetOptions> = Object.freeze<HelmetOptio
 
 @Module({})
 export class HttpModule implements NestModule {
-  /** The pipeline with the options the entry point decides (per-route JSON body limits). */
+  /** The pipeline with the options the entry point decides (per-route JSON body limits, the multipart routes). */
   static forRoot(options: HttpPipelineOptions = {}): DynamicModule {
     return {
       module: HttpModule,

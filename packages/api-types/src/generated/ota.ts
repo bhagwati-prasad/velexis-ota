@@ -127,11 +127,11 @@ export interface paths {
          * Get an uploaded storefront image (plain image URL)
          * @description Serves an image the OTA's staff uploaded (`storefront_assets`, console.settings.assets.upload) at a plain image URL: the logo, favicon and Open Graph URLs of storefront.get, the `image` blocks of storefront.getPage and `StorefrontAsset.url` of the console point here. Not an SDK method (`x-sdk-exclude`): use the URL in `<img>`, `<link rel="icon">` or `og:image`.
          *
-         *     **No credential.** The OTA is the path's `tenantKey`, the file the one stored at upload (`tenant_<key>/assets/<sha256>.<ext>` of the StorageAdapter, never re-encoded). A credential that comes with the request is checked as on every route but does not choose the OTA: Caddy adds the edge header to every `/api/*` request of a storefront host, where the hosted storefront loads `/api/v1/assets/…` same-origin.
+         *     **No credential.** The OTA is the path's `tenantKey`, the file the one stored at upload (`tenant_<key>/assets/<sha256>.<ext>` of the StorageAdapter, never re-encoded). A credential that comes with the request is checked as on every route (a wrong key is `401 INVALID_API_KEY`, a publishable key from an origin it does not list `403 ORIGIN_NOT_ALLOWED`, the edge header beside a key `400 INVALID_REQUEST`, and `X-Velexis-Scope: console` the scope rules' `403 SCOPE_NOT_ALLOWED`) but neither chooses nor refuses the OTA: Caddy adds the edge header to every `/api/*` request of a storefront host, where the hosted storefront loads `/api/v1/assets/…` same-origin, also on a suspended OTA's maintenance page. `503 SERVICE_UNAVAILABLE` when the platform's tenants cannot be read.
          *
          *     **Availability.** Served while the OTA is `active` or `suspended` (a suspended storefront still shows its logo on its maintenance page). An unknown OTA, an OTA in any other status, an unknown asset and an `ext` other than the asset's answer `404 NOT_FOUND`. A deleted asset answers `404` from then on; browsers and caches may still show their copy for its cache lifetime.
          *
-         *     **Headers.** `Content-Type` is the type sniffed at upload; `Cache-Control: public, max-age=31536000, immutable` (an id never changes content: a new image is a new asset), `X-Content-Type-Options: nosniff`, `Content-Security-Policy: default-src 'none'` and `Content-Disposition: inline`, so a file opened directly runs nothing (no SVG is ever stored; OADR-0012 points 2 and 3). Rate limit 120 per minute per IP. No Amadeus call.
+         *     **Headers.** `Content-Type` is the type sniffed at upload; `Cache-Control: public, max-age=31536000, immutable` (an id never changes content: a new image is a new asset), `X-Content-Type-Options: nosniff`, `Content-Security-Policy: default-src 'none'` and `Content-Disposition: inline`, so a file opened directly runs nothing (no SVG is ever stored; OADR-0012 points 2 and 3), and `Cross-Origin-Resource-Policy: cross-origin`, so a key caller's own site can show the absolute URL. The bytes are checked against the SHA-256 stored at upload before they are sent. Rate limit 120 per minute per IP, counted with the document downloads (downloadFile). No Amadeus call.
          */
         get: operations["getPublicAsset"];
         put?: never;
@@ -2803,17 +2803,19 @@ export interface paths {
         put?: never;
         /**
          * Upload a storefront image
-         * @description Uploads an image as `multipart/form-data` (StorefrontAssetUpload): the parts `file` (the image) and `kind` (what it is for), and optionally `fileName` (the name shown in the console; by default the file part's own file name). A missing, empty or unknown part answers `400 VALIDATION_FAILED`. The server reads the type from the file's first bytes, never from the declared `Content-Type` or the file name, and the dimensions from the file header (OADR-0012 point 2), then refuses with `422 ASSET_INVALID` and `details.reason`:
+         * @description Uploads an image as `multipart/form-data` (StorefrontAssetUpload): the parts `file` (the image) and `kind` (what it is for), and optionally `fileName` (the name shown in the console; by default the file part's own file name). A missing, empty, repeated or unknown part, a `file` part that is no file and a `kind` or `fileName` part that is one answer `400 VALIDATION_FAILED` (`fieldErrors` at `/file`, `/kind`, `/fileName` or `/<part name>`); a body that is not `multipart/form-data`, or not well-formed, answers `400 INVALID_REQUEST` (`details.reason` `unsupported_media_type` or `malformed_multipart`). The multipart body is parsed on this route only. The server reads the type from the file's first bytes, never from the declared `Content-Type` or the file name, and the dimensions from the file header (OADR-0012 point 2), then refuses with `422 ASSET_INVALID` and `details.reason`, in this order:
          *
+         *     - `size`: more than 1 MB (1 048 576 bytes), and any request body larger than 1 MB and 16 KB (1 064 960 bytes, room for the other parts), which is not read further;
          *     - `type`: anything but PNG, JPEG or WebP, or ICO for the kind `favicon` (no SVG, no CSS), and a file whose header cannot be read;
-         *     - `size`: more than 1 MB (1 048 576 bytes);
          *     - `dimensions`: a logo (`logo`, `logo_dark`, `logo_square`) larger than 2000 × 2000 pixels.
          *
          *     **Effect.** The file is stored unchanged under `tenant_<key>/assets/<sha256>.<ext>` of the StorageAdapter (it is not re-encoded, so metadata such as EXIF stays in it; the OTA admin tells staff) and an immutable `storefront_assets` row is written: a new image is always a new asset, with a new id and URL. The answer is the asset with its public `url`. Reference it from the storefront settings (`branding.logoAssetId` and the other `…AssetId` fields of its kind, console.settings.storefront.update) or, for a `page_image`, from a page body (`![alt text](ast_…)`).
          *
+         *     **The same file again.** The storage key is the file's SHA-256, and one asset holds one file: the same bytes uploaded again for the same kind answer that asset (`201`, its id, URL and `createdAt`; no second row), and for another kind `409 CONFLICT` with `details.reason = "asset_exists"`, `details.assetId` and `details.kind` (the asset the file already is). Delete that asset first, or upload a different file.
+         *
          *     **Idempotency.** `Idempotency-Key` required (`idempotency_keys`, 24 h): a retry with the same key, file and parts returns the stored asset; the same key with another upload → `409 IDEMPOTENCY_KEY_REUSED`.
          *
-         *     No Amadeus call. Permission `settings:write`; `staff_actions` records the new asset's metadata, never the file.
+         *     No Amadeus call. Permission `settings:write`; `staff_actions` records the asset's metadata, never the file.
          *
          *     **Key-only calls.** Without a staff token the secret key must carry the `console:automation` scope and this operation's permission in `platform.api_keys.scopes` — otherwise `403 SCOPE_NOT_ALLOWED` (`details.requiredScope`) or `403 FORBIDDEN` (`details.requiredPermission`); such calls are audited as the API key (see ConsoleApiKeyScope). A key scoped `storefront` is refused even with a staff token.
          */
@@ -15733,7 +15735,7 @@ export interface components {
                 "application/json": components["schemas"]["ErrorResponse"];
             };
         };
-        /** @description The asset change conflicts with the OTA's settings or pages. Possible codes: CONFLICT (`details.reason = "asset_in_use"`: the storefront settings reference the asset, `details.settingsPaths`, or a page shows it, `details.pageIds`), IDEMPOTENCY_KEY_REUSED. */
+        /** @description The asset change conflicts with the OTA's settings, pages or assets. Possible codes: CONFLICT (delete: `details.reason = "asset_in_use"`, the storefront settings reference the asset, `details.settingsPaths`, or a page shows it, `details.pageIds`; upload: `details.reason = "asset_exists"`, the same file is already the asset `details.assetId` of the kind `details.kind`), IDEMPOTENCY_KEY_REUSED. */
         StorefrontAssetConflict: {
             headers: {
                 "X-Request-Id": components["headers"]["X-Request-Id"];
@@ -16525,6 +16527,8 @@ export interface operations {
                     "Content-Security-Policy"?: string;
                     /** @description `inline`. */
                     "Content-Disposition"?: string;
+                    /** @description `cross-origin`: the image may be shown by any site. */
+                    "Cross-Origin-Resource-Policy"?: string;
                     [name: string]: unknown;
                 };
                 content: {
@@ -16536,9 +16540,11 @@ export interface operations {
             };
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
             429: components["responses"]["RateLimited"];
             500: components["responses"]["InternalError"];
+            503: components["responses"]["ServiceUnavailable"];
         };
     };
     signUp: {

@@ -1935,7 +1935,8 @@ The console API (staff sign-in by portal token, bookings, PNR import, queues, cu
   - `paymentTiming: pay_later` answers 422; `enabledLive: true` with the switch off answers 403.
 - **Verify:** `pnpm --filter @velexis/ota-backend test -- settings && pnpm --filter @velexis/ota-backend test:int settings`
 
-### OBE-071 · Implement asset upload, list, delete and public download
+### OBE-071 · Implement asset upload, list, delete and public download ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-backend
 - **Milestone:** M4
 - **Depends on:** OBE-070, OBE-091

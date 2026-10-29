@@ -108,9 +108,14 @@ describe("the operations of each limit", () => {
     expect(unused.sort()).toEqual(["lookupFailuresPerIp", "lookupFailuresPerReference"]);
   });
 
-  it("count the signed document downloads against the public downloads limit, the public images not yet (OBE-071) [OBE-054]", () => {
+  it("count the signed document downloads against the public downloads limit [OBE-054]", () => {
     expect(rateLimitsOf("downloadFile")).toEqual(["publicDownloads"]);
-    expect(rateLimitsOf("getPublicAsset")).toEqual([]);
+  });
+
+  it("count the public images against the same public downloads limit, 120 per minute per IP [OBE-071]", () => {
+    expect(rateLimitsOf("getPublicAsset")).toEqual(["publicDownloads"]);
+    expect(RATE_LIMITS.publicDownloads).toMatchObject({ limit: 120, windowSeconds: 60, by: "ip" });
+    expect(RATE_LIMITS.publicDownloads.callers).toEqual(["anonymous", "edge", "publishable", "secret"]);
   });
 });
 

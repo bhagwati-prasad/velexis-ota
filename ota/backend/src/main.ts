@@ -6,15 +6,17 @@
 // the application through Nest's shutdown hooks.
 //
 // The request pipeline (architecture §3; src/common/http/): `trust proxy` from TRUST_PROXY (`loopback`: Caddy),
-// helmet, cookie-parser, the raw body on /webhooks/*, JSON bodies up to 256 KB elsewhere and up to the limits of
-// JSON_BODY_LIMITS below on their routes, OpenAPI validation, the error envelope, and 501 for pending operations.
+// helmet, cookie-parser, the raw body on /webhooks/*, `multipart/form-data` on the routes of MULTIPART_BODY_LIMITS
+// below and nowhere else, JSON bodies up to 256 KB elsewhere and up to the limits of JSON_BODY_LIMITS below on their
+// routes, OpenAPI validation, the error envelope, and 501 for pending operations.
 import type { NestExpressApplication } from "@nestjs/platform-express";
 import type { EnvSource } from "@velexis/config";
 import { createLogger } from "@velexis/logger";
 import type { DestinationStream } from "pino";
 import { AppModule, createApiApp, createApiLogger } from "./app.module";
-import type { JsonBodyLimits } from "./common/http/body-parsers";
+import type { JsonBodyLimits, MultipartBodyLimits } from "./common/http/body-parsers";
 import { API_APP, loadApiConfig, type ApiConfig } from "./config";
+import { ASSET_UPLOAD_BODY_LIMIT_BYTES } from "./settings/assets.service";
 
 /** The interface the API listens on. Never a public address: Caddy is the only client. */
 export const API_HOST = "127.0.0.1";
@@ -28,6 +30,15 @@ export const AIRLINE_CARD_BODY_LIMIT_BYTES = 10 * 1024;
  */
 export const JSON_BODY_LIMITS: JsonBodyLimits = Object.freeze({
   completeCheckoutWithAirlineCard: AIRLINE_CARD_BODY_LIMIT_BYTES,
+});
+
+/**
+ * The routes whose body is `multipart/form-data`, with their body limits in bytes (architecture §3, step 2: multipart
+ * on the asset upload only, OBE-071): the 1 MB image and 16 KB for the framing and the other parts. No other route
+ * parses a multipart body.
+ */
+export const MULTIPART_BODY_LIMITS: MultipartBodyLimits = Object.freeze({
+  consoleUploadStorefrontAsset: ASSET_UPLOAD_BODY_LIMIT_BYTES,
 });
 
 export interface StartApiOptions {
@@ -58,7 +69,14 @@ export async function startApi(options: StartApiOptions = {}): Promise<NestExpre
   const logger = createApiLogger(config, options.logDestination);
   let app: NestExpressApplication | undefined;
   try {
-    app = await createApiApp(config, AppModule.forRoot(config, { logger, jsonBodyLimits: JSON_BODY_LIMITS }));
+    app = await createApiApp(
+      config,
+      AppModule.forRoot(config, {
+        logger,
+        jsonBodyLimits: JSON_BODY_LIMITS,
+        multipartBodyLimits: MULTIPART_BODY_LIMITS,
+      }),
+    );
     await app.listen(config.PORT, API_HOST);
     logger.info({ host: API_HOST, port: config.PORT }, "api.listening");
     return app;

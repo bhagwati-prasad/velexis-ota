@@ -1,7 +1,7 @@
 // Test support: the API's module graph in process, for Supertest (OBE-010). The application is `AppModule.forRoot`
-// exactly as `main.ts` builds it (the same request pipeline, the JSON body limits of main.ts), with optional extra
-// controllers around it, and its log lines in a MemorySink. It is initialised, not listening: Supertest drives
-// `app.getHttpServer()`.
+// exactly as `main.ts` builds it (the same request pipeline, the JSON and multipart body limits of main.ts), with
+// optional extra controllers around it, and its log lines in a MemorySink. It is initialised, not listening:
+// Supertest drives `app.getHttpServer()`.
 //
 // Unit and contract tests pass no services: the configuration then holds dummy DSNs, and nothing connects (the health
 // probes connect on the first readiness check only). The dummy Redis is a port where nothing listens: the API connects
@@ -22,7 +22,7 @@ import type { TestDatabase, TestRedis } from "@velexis/testing";
 import { AppModule, createApiApp, createApiLogger } from "../../src/app.module";
 import type { JsonBodyLimits } from "../../src/common/http/body-parsers";
 import { loadApiConfig, type ApiConfig } from "../../src/config";
-import { JSON_BODY_LIMITS } from "../../src/main";
+import { JSON_BODY_LIMITS, MULTIPART_BODY_LIMITS } from "../../src/main";
 import { testApiVariables } from "../helpers/api-env";
 import { MemorySink } from "../helpers/log-sink";
 import { unreachableRedisUrl } from "../helpers/ports";
@@ -75,6 +75,7 @@ export async function createTestApp(options: TestAppOptions = {}): Promise<TestA
   const appModule = AppModule.forRoot(config, {
     logger: createApiLogger(config, sink),
     jsonBodyLimits: options.jsonBodyLimits ?? JSON_BODY_LIMITS,
+    multipartBodyLimits: MULTIPART_BODY_LIMITS,
   });
 
   @Module({

@@ -8,7 +8,8 @@
 // 2. `storefrontFor` adds the caller-specific parts on every request, so whichever caller fills the cache first never
 //    decides what the others get: asset URLs as same-origin `/api/v1/assets/…` paths for the hosted storefront's edge
 //    (its CSP allows images from its own origin only) and absolute `PUBLIC_OTA_API_URL` URLs for key callers
-//    (OADR-0012 point 3), the payment account (OBE-038, below) and the airline card (OBE-050, below).
+//    (OADR-0012 point 3; both answered by getPublicAsset since OBE-071), the payment account (OBE-038, below) and the
+//    airline card (OBE-050, below).
 //
 // The contract requires values the settings row of a new tenant does not have yet (the OTA admin edits them from M4,
 // OBE-070). Each has a documented default, so the configuration of a freshly provisioned tenant is complete and valid:
@@ -951,9 +952,10 @@ export function localesOf(entry: CachedStorefront): string[] {
  * ---------------------------------------------------------------------------------------------- */
 
 /**
- * The public URL of an asset (`getPublicAsset`, OADR-0012 point 3): `/api/v1/assets/<key>/<id>.<ext>` on the
- * storefront's own origin for the edge (Caddy proxies `/api/*` to the API), `<PUBLIC_OTA_API_URL>/v1/assets/…`
- * for key callers.
+ * The public URL of an asset (`getPublicAsset`, OADR-0012 point 3; served since OBE-071 by
+ * storefront/public-assets.controller.ts): `/api/v1/assets/<key>/<id>.<ext>` on the storefront's own origin for the
+ * edge (Caddy proxies `/api/*` to the API), `<PUBLIC_OTA_API_URL>/v1/assets/…` for key callers and for the console's
+ * `StorefrontAsset.url` (settings/assets.service.ts).
  */
 export function assetUrl(tenantKey: string, asset: AssetRef, audience: StorefrontAudience): string {
   const path = `/v1/assets/${tenantKey}/${asset.id}.${asset.extension}`;

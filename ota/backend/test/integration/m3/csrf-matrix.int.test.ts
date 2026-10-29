@@ -466,10 +466,12 @@ beforeAll(async () => {
     ),
   );
   // The response validators of every operation compile on their first check: here, for the statuses checked below.
+  // The file and image downloads answer 200 with no JSON (a PDF, an image: OBE-054, OBE-071), which no check judges.
   const checker = responseChecker("ota");
+  const withoutJsonOk: ReadonlySet<string> = new Set(["downloadFile", "getPublicAsset"]);
   for (const operation of [...STATE_CHANGING, ...READS]) {
     for (const status of [200, 201, 202, 204, 400, 401, 403, 404, 409, 422]) {
-      if (operation.operationId !== "downloadFile" || status !== 200) {
+      if (!withoutJsonOk.has(operation.operationId) || status !== 200) {
         checker.check(operation.operationId, { status, body: {} });
       }
     }

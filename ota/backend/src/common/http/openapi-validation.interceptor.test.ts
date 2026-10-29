@@ -438,6 +438,40 @@ describe("body parsing", () => {
     }
   });
 
+  it("parses multipart/form-data on the asset upload's route only, on every spelling of it [OBE-071]", async () => {
+    // Not well-formed: the multipart parser refuses it before any guard, wherever it runs.
+    const broken = (call: request.Test): request.Test =>
+      call
+        .set("Content-Type", "multipart/form-data; boundary=velexis")
+        .send(`--velexis\r\nContent-Disposition: form-data; name="kind"\r\n\r\n${SECRET}`);
+    const asset = "/v1/console/settings/assets/ast_01JA7P4R6T8V0X2Z4B6D8F0H2K";
+
+    const answers = await Promise.all([
+      broken(request(api.server).post("/v1/console/settings/assets")),
+      broken(request(api.server).post("/V1/Console/Settings/Assets/")),
+      // A well-formed body is parsed and the guards then refuse the missing credential.
+      request(api.server).post("/v1/console/settings/assets").field("kind", "logo"),
+      // No other route parses it: an unbound route gets no body, an operation with a JSON body refuses the media
+      // type, and the asset's own delete leaves it to the guards.
+      broken(request(api.server).post("/__probe/unbound")),
+      broken(request(api.server).post("/__probe/sign-in").set("Idempotency-Key", IDEMPOTENCY_KEY)),
+      broken(request(api.server).delete(asset)),
+    ]);
+
+    expect(answers.map((res) => [res.status, res.body.error?.code, res.body.error?.details?.reason])).toEqual(
+      [
+        [400, "INVALID_REQUEST", "malformed_multipart"],
+        [400, "INVALID_REQUEST", "malformed_multipart"],
+        [401, "INVALID_API_KEY", undefined],
+        [201, undefined, undefined],
+        [400, "INVALID_REQUEST", "unsupported_media_type"],
+        [401, "INVALID_API_KEY", undefined],
+      ],
+    );
+    expect(answers[3]?.body.body).toBeUndefined();
+    expect(answers.map((res) => res.text).join("\n")).not.toContain(SECRET);
+  });
+
   it("refuses a JSON limit for an operation the document does not have", async () => {
     await expect(
       createTestApp({ jsonBodyLimits: { notAnOperation: 10 } as unknown as Record<"signIn", number> }),
