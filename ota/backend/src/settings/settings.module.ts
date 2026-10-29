@@ -3,7 +3,9 @@
 // the storefront context's repository (StorefrontModule exports it; it never imports this module). Since OBE-069: the
 // markup and fee rules (console.settings.markupRules.* and feeRules.*, pricing-rules.service.ts), which read and write
 // the rows through the pricing context's repository (PricingModule exports it), the one the engine loads them with.
-// Assets (OBE-071), content pages (OBE-072) and notification templates (OBE-073) join here. The console audit
+// Since OBE-073: the notification templates (console.settings.templates.*, templates.service.ts), which read, check,
+// render and write the rows through the notifications module's TemplateService (global, NotificationsModule.forApi),
+// the engine e-mails are rendered with. Assets (OBE-071) and content pages (OBE-072) join here. The console audit
 // (StaffActionsWriter) is global (console.module.ts). API only; the worker never imports it.
 import { Module } from "@nestjs/common";
 import { PricingModule } from "../pricing/pricing.module";
@@ -14,10 +16,17 @@ import { MarkupRulesController } from "./markup-rules.controller";
 import { PricingRulesService } from "./pricing-rules.service";
 import { StorefrontSettingsController } from "./storefront-settings.controller";
 import { StorefrontSettingsService } from "./storefront-settings.service";
+import { NotificationTemplatesController } from "./templates.controller";
+import { TemplateSettingsService } from "./templates.service";
 
 @Module({
   imports: [TenancyModule.forApi(), StorefrontModule, PricingModule],
-  controllers: [StorefrontSettingsController, MarkupRulesController, FeeRulesController],
-  providers: [StorefrontSettingsService, PricingRulesService],
+  controllers: [
+    StorefrontSettingsController,
+    MarkupRulesController,
+    FeeRulesController,
+    NotificationTemplatesController,
+  ],
+  providers: [StorefrontSettingsService, PricingRulesService, TemplateSettingsService],
 })
 export class SettingsModule {}

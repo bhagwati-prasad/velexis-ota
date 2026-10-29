@@ -1968,7 +1968,8 @@ The console API (staff sign-in by portal token, bookings, PNR import, queues, cu
   - A published page appears in `storefront.listPages` within the cache window; an unpublished one answers 404.
 - **Verify:** `pnpm --filter @velexis/ota-backend test -- storefront && pnpm --filter @velexis/ota-backend test:int settings`
 
-### OBE-073 · Implement notification template settings with preview and reset
+### OBE-073 · Implement notification template settings with preview and reset ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-backend
 - **Milestone:** M4
 - **Depends on:** OBE-060, OBE-055

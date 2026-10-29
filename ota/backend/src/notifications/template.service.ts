@@ -18,15 +18,23 @@
 //   - nothing else: no triple braces (HTML escaping always on), helpers, partials, decorators, sub-expressions,
 //     literals, `@data` variables or block parameters.
 // A template that breaks a rule is refused with every problem at once (`TemplateInvalidError`: part, line, message;
-// the console's `422 TEMPLATE_INVALID` of OBE-073 lists them as they are). It is then compiled in an isolated Handlebars
-// environment in strict mode: a variable missing from the render data fails (`TemplateRenderError`), it never renders
-// as an empty string. The HTML part is HTML-escaped; the subject and the text part are not HTML and are not escaped (a
-// link stays a working link), and the subject is collapsed to one line.
+// `checkTemplateSources` returns them without throwing). The console's `422 TEMPLATE_INVALID` of OBE-073
+// (settings/templates.service.ts) lists every one of them, each part named as the API names it (`subject`, `bodyHtml`,
+// `bodyText`). It is then compiled in an isolated Handlebars environment in strict mode: a variable missing from the
+// render data fails (`TemplateRenderError`, with the line Handlebars names), it never renders as an empty string. The
+// HTML part is HTML-escaped; the subject and the text part are not HTML and are not escaped (a link stays a working
+// link), and the subject is collapsed to one line.
+//
+// The console's template settings (OBE-073) read and write the tenant's rows through this service too (`tenantRow`,
+// `tenantRows`, `insertRow`, `updateRow`, `deleteRow`), in the caller's TenantTx transaction: the console shows and
+// edits the row of exactly one key, channel and locale, active or not, while an e-mail takes the active row of its
+// locale or language as above. The rows are read at every send (only the code defaults are cached), so a saved or
+// reset template applies to the next e-mail.
 //
 // Errors name templates, parts, lines and variable names, never a value of the render data.
 import { Inject, Injectable, Optional } from "@nestjs/common";
 import Handlebars from "handlebars";
-import { OutboxRepository } from "./outbox.repository";
+import { OutboxRepository, type NotificationTemplateRow } from "./outbox.repository";
 import {
   DEFAULT_TEMPLATE_LOCALE,
   DEFAULT_TEMPLATES_DIR,
@@ -106,7 +114,9 @@ export class TemplateRenderError extends Error {
     readonly origin: TemplateOrigin,
     readonly part: TemplatePart,
     /** Handlebars' message: a variable name and a position, never a value. */
-    reason: string,
+    readonly reason: string,
+    /** The 1-based line of the failing expression in that part; `null` when Handlebars named none. */
+    readonly line: number | null = null,
   ) {
     super(
       `The ${origin === "tenant" ? "tenant" : "code default"} template ${key} failed to render its ${part}: ${reason}`,
@@ -375,19 +385,31 @@ function oneLine(text: string): string {
 }
 
 /**
- * Checks every part of `template` against its key (all problems at once, `TemplateInvalidError`) and compiles it in
- * strict mode.
+ * Every problem of the three parts of a template of `key` (subject, HTML, text, in that order; a missing HTML part has
+ * none): `checkTemplate` of each. An empty list means the template is valid for its key.
  */
-export function compileTemplate(template: EffectiveTemplate): CompiledTemplate {
-  const { key, origin, sources } = template;
+export function checkTemplateSources(key: TemplateKey, sources: TemplateSources): TemplateProblem[] {
   const parts: ReadonlyArray<[TemplatePart, string | null]> = [
     ["subject", sources.subject],
     ["html", sources.html],
     ["txt", sources.text],
   ];
-  const problems = parts.flatMap(([part, source]) =>
-    source === null ? [] : checkTemplate(key, part, source),
-  );
+  return parts.flatMap(([part, source]) => (source === null ? [] : checkTemplate(key, part, source)));
+}
+
+/** The line Handlebars gives a runtime error (`lineNumber`), or `null`. */
+function runtimeLineOf(error: unknown): number | null {
+  const line = (error as { lineNumber?: unknown } | null)?.lineNumber;
+  return typeof line === "number" && Number.isInteger(line) && line > 0 ? line : null;
+}
+
+/**
+ * Checks every part of `template` against its key (all problems at once, `TemplateInvalidError`) and compiles it in
+ * strict mode.
+ */
+export function compileTemplate(template: EffectiveTemplate): CompiledTemplate {
+  const { key, origin, sources } = template;
+  const problems = checkTemplateSources(key, sources);
   if (problems.length > 0) {
     throw new TemplateInvalidError(key, origin, template.locale, problems);
   }
@@ -403,7 +425,7 @@ export function compileTemplate(template: EffectiveTemplate): CompiledTemplate {
       return compiled(data);
     } catch (error) {
       const reason = error instanceof Error ? (error.message.split("\n")[0] ?? "") : "";
-      throw new TemplateRenderError(key, origin, part, reason);
+      throw new TemplateRenderError(key, origin, part, reason, runtimeLineOf(error));
     }
   };
   return Object.freeze({
@@ -426,6 +448,17 @@ export function templateLocales(locale: string): string[] {
 
 /** Injection token of the folder of the code defaults (the registry's, unless a test gives its own). */
 export const NOTIFICATION_TEMPLATES_DIR = "NOTIFICATION_TEMPLATES_DIR";
+
+/** What the console writes into a tenant's row (channel `email`). */
+export interface TemplateRowValues {
+  /** The three sources; `html` is always set by the console. */
+  readonly subject: string;
+  readonly html: string;
+  readonly text: string;
+  readonly isActive: boolean;
+  /** `updated_at`, and `created_at` of a new row. */
+  readonly now: Date;
+}
 
 /** Finds, checks, compiles and renders the template of an e-mail (see the file header). */
 @Injectable()
@@ -497,6 +530,122 @@ export class TemplateService {
     data: Readonly<Record<string, unknown>>,
   ): Promise<RenderedTemplate> {
     return (await this.compile(template)).render(data);
+  }
+
+  // ---- The tenant's rows as the console edits them (OBE-073; see the file header) --------------------------------
+
+  /**
+   * The tenant's row of `key` (channel `email`) in exactly `locale`, active or not, or `undefined`; locked
+   * `FOR UPDATE` with `forUpdate`.
+   */
+  async tenantRow(
+    trx: TenantTransaction,
+    key: TemplateKey,
+    locale: string,
+    options: { readonly forUpdate?: boolean } = {},
+  ): Promise<NotificationTemplateRow | undefined> {
+    const query = trx
+      .selectFrom("notification_templates")
+      .selectAll()
+      .where("key", "=", key)
+      .where("channel", "=", TEMPLATE_CHANNEL)
+      .where("locale", "=", locale);
+    return await (options.forUpdate === true ? query.forUpdate() : query).executeTakeFirst();
+  }
+
+  /** The tenant's rows (channel `email`) in any of `locales`, active or not, by key and locale. */
+  async tenantRows(trx: TenantTransaction, locales: readonly string[]): Promise<NotificationTemplateRow[]> {
+    if (locales.length === 0) {
+      return [];
+    }
+    return await trx
+      .selectFrom("notification_templates")
+      .selectAll()
+      .where("channel", "=", TEMPLATE_CHANNEL)
+      .where("locale", "in", [...locales])
+      .orderBy("key")
+      .orderBy("locale")
+      .execute();
+  }
+
+  /**
+   * Inserts the tenant's row `id` of `key` in `locale` at version 1 (not a system row; the key's sample data for the
+   * console preview), or nothing when the key, channel and locale have a row already (a concurrent insert): then
+   * `undefined`.
+   */
+  async insertRow(
+    trx: TenantTransaction,
+    id: string,
+    key: TemplateKey,
+    locale: string,
+    values: TemplateRowValues,
+  ): Promise<NotificationTemplateRow | undefined> {
+    return await trx
+      .insertInto("notification_templates")
+      .values({
+        id,
+        key,
+        channel: TEMPLATE_CHANNEL,
+        locale,
+        subject: values.subject,
+        body_html: values.html,
+        body_text: values.text,
+        // jsonb is written as JSON text (conventions §1).
+        sample_data: JSON.stringify(TEMPLATE_REGISTRY[key].sampleData),
+        is_system: false,
+        is_active: values.isActive,
+        version: 1,
+        created_at: values.now,
+        updated_at: values.now,
+      })
+      .onConflict((conflict) => conflict.columns(["key", "channel", "locale"]).doNothing())
+      .returningAll()
+      .executeTakeFirst();
+  }
+
+  /**
+   * Replaces the sources and the active flag of the row `id` at `version`, which becomes `version + 1`; the row is the
+   * OTA's own from then on (`is_system` false). `undefined` when the row is gone or at another version.
+   */
+  async updateRow(
+    trx: TenantTransaction,
+    id: string,
+    version: number,
+    values: TemplateRowValues,
+  ): Promise<NotificationTemplateRow | undefined> {
+    return await trx
+      .updateTable("notification_templates")
+      .set({
+        subject: values.subject,
+        body_html: values.html,
+        body_text: values.text,
+        is_active: values.isActive,
+        is_system: false,
+        version: version + 1,
+        updated_at: values.now,
+      })
+      .where("id", "=", id)
+      .where("version", "=", version)
+      .returningAll()
+      .executeTakeFirst();
+  }
+
+  /**
+   * Deletes the tenant's row of `key` (channel `email`) in exactly `locale` and returns it, or `undefined` when there
+   * is none. The e-mails it was used for keep their key (`notifications.template_id` becomes null).
+   */
+  async deleteRow(
+    trx: TenantTransaction,
+    key: TemplateKey,
+    locale: string,
+  ): Promise<NotificationTemplateRow | undefined> {
+    return await trx
+      .deleteFrom("notification_templates")
+      .where("key", "=", key)
+      .where("channel", "=", TEMPLATE_CHANNEL)
+      .where("locale", "=", locale)
+      .returningAll()
+      .executeTakeFirst();
   }
 
   private async loadDefault(key: TemplateKey): Promise<CompiledTemplate | undefined> {

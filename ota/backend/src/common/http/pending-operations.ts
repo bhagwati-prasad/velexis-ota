@@ -51,12 +51,6 @@ export const PENDING_OPERATIONS: Readonly<Partial<Record<OtaOperationId, Pending
   consoleListStorefrontAssets: "OBE-071",
   consoleUploadStorefrontAsset: "OBE-071",
   consoleDeleteStorefrontAsset: "OBE-071",
-  // Console settings (OBE-058): notification templates (the storefront settings: OBE-070; markup and fee rules: OBE-069)
-  consoleListNotificationTemplates: "OBE-073",
-  consoleGetNotificationTemplate: "OBE-073",
-  consolePutNotificationTemplate: "OBE-073",
-  consolePreviewNotificationTemplate: "OBE-073",
-  consoleResetNotificationTemplate: "OBE-073",
   // Stripe webhooks of the Connect and API-key modes (OBE-090 documents them in M4; served from M5)
   receiveStripeConnectWebhook: "OBE-078",
   receiveStripeConnectionWebhook: "OBE-078",
